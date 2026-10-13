@@ -48,5 +48,7 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
-        fp32_mode>(per_core_block_cnt);
+        fp32_mode,
+        compute_kernel_lib::tilize_config::RemapMode::Configure,
+        compute_kernel_lib::tilize_config::ChunkPairing::Paired>(per_core_block_cnt);
 }

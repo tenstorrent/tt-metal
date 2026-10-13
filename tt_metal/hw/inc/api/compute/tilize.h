@@ -324,7 +324,8 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {
     PACK((llk_pack_fast_tilize_uninit<is_fp32_dest_acc_en>(ocb)));
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+// pair_chunks (Blackhole): two chunks share a DEST section and its hand-off, the second in the first one's gap rows.
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool pair_chunks = false>
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
 #ifdef ARCH_BLACKHOLE
@@ -345,29 +346,61 @@ ALWI void fast_tilize_block(
 
         PACK((llk_pack_fast_tilize_row_begin(ocb, output_tile_index)));
 
-        while (tiles_done < block) {
-            // BH fast-tilize MOP supports unit_dim 2, 3, 4 (not 1).
-            // Avoid chunk=1 by splitting: remaining=5 → 2+3 instead of 4+1.
-            // Matches LLK decompose_row order.
-            uint32_t remaining = block - tiles_done;
-            uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
+        if constexpr (!pair_chunks) {
+            while (tiles_done < block) {
+                // BH fast-tilize MOP supports unit_dim 2, 3, 4 (not 1).
+                // Avoid chunk=1 by splitting: remaining=5 → 2+3 instead of 4+1.
+                // Matches LLK decompose_row order.
+                uint32_t remaining = block - tiles_done;
+                uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
 
-            MATH((llk_math_wait_for_dest_available()));
-            PACK((llk_packer_wait_for_math_done()));
+                MATH((llk_math_wait_for_dest_available()));
+                PACK((llk_packer_wait_for_math_done()));
 
-            if (chunk != prev_chunk) {
-                UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
-                PACK((llk_pack_fast_tilize_reinit_unit_dim<is_fp32_dest_acc_en>(icb, ocb, chunk)));
-                prev_chunk = chunk;
+                if (chunk != prev_chunk) {
+                    UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
+                    PACK((llk_pack_fast_tilize_reinit_unit_dim<is_fp32_dest_acc_en>(icb, ocb, chunk)));
+                    prev_chunk = chunk;
+                }
+                UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
+                MATH((llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, icb, 4)));
+                PACK((llk_pack_fast_tilize_row_chunk(0, ocb, chunk)));
+
+                MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
+                PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
+
+                tiles_done += chunk;
             }
-            UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
-            MATH((llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, icb, 4)));
-            PACK((llk_pack_fast_tilize_row_chunk(0, ocb, chunk)));
-
-            MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
-            PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
-
-            tiles_done += chunk;
+        } else {
+            // Pairs are taken from the row's end. A 32-bit input binds the unpacker, and rows of 4+4+4 or 4+2+3 tiles
+            // read slower paired: those keep one chunk per section.
+            const uint32_t num_chunks = (block + 3) / 4;
+            bool pair = num_chunks > 1 && !(num_chunks == 3 && (block & 3) < 2);
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH) || defined(TRISC_PACK)
+            pair = pair && unpack_src_format[icb] != (uint32_t)DataFormat::Float32;
+#endif
+            uint32_t chunks_left = num_chunks;
+            while (tiles_done < block) {
+                const uint32_t slots = (pair && (chunks_left & 1) == 0) ? 2 : 1;
+                MATH((llk_math_wait_for_dest_available()));
+                PACK((llk_packer_wait_for_math_done()));
+                for (uint32_t slot = 0; slot < slots; slot++) {
+                    const uint32_t remaining = block - tiles_done;
+                    const uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
+                    if (chunk != prev_chunk) {
+                        UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
+                        PACK((llk_pack_fast_tilize_reinit_unit_dim<is_fp32_dest_acc_en>(icb, ocb, chunk)));
+                        prev_chunk = chunk;
+                    }
+                    UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
+                    MATH((llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, icb, 4, slot != 0)));
+                    PACK((llk_pack_fast_tilize_row_chunk(0, ocb, chunk, slot != 0)));
+                    tiles_done += chunk;
+                }
+                chunks_left -= slots;
+                MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
+                PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
+            }
         }
 
         PACK((llk_pack_fast_tilize_row_end()));
@@ -473,7 +506,7 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, [[maybe_unused]] uint32
     tilize_uninit(icb, ocb);
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool pair_chunks = false>
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
     tilize_block<is_fp32_dest_acc_en>(icb, block, ocb, input_tile_index, output_tile_index);

@@ -94,11 +94,11 @@ inline void llk_pack_fast_tilize_row_begin(const std::uint32_t output, const std
 }
 
 inline void llk_pack_fast_tilize_row_chunk(
-    const std::uint32_t tile_index, const std::uint32_t output, const std::uint32_t unit_dim) {
+    const std::uint32_t tile_index, const std::uint32_t output, const std::uint32_t unit_dim, const bool gap_rows = false) {
     SAN_HOOK(unsupported());
     const std::uint8_t output_id = get_output_id(output);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    _llk_pack_fast_tilize_row_chunk_(tile_index, unit_dim, num_faces);
+    _llk_pack_fast_tilize_row_chunk_(tile_index, unit_dim, num_faces, gap_rows);
 }
 
 inline void llk_pack_fast_tilize_row_end() {

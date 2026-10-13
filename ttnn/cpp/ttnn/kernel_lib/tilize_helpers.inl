@@ -62,7 +62,8 @@ template <
     tilize_config::WaitMode wait_mode,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
     tilize_config::Fp32Mode fp32_mode,
-    tilize_config::RemapMode remap_mode>
+    tilize_config::RemapMode remap_mode,
+    tilize_config::ChunkPairing chunk_pairing>
 ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages) {
     // Compile-time validation
     static_assert(block_width_tiles > 0, "block_width_tiles must be greater than 0");
@@ -182,7 +183,8 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         out_dfb.reserve_back(block_width_tiles);
 
         if constexpr (use_fast) {
-            fast_tilize_block(input_dfb, block_width_tiles, output_dfb);
+            fast_tilize_block<DST_ACCUM_MODE, chunk_pairing == tilize_config::ChunkPairing::Paired>(
+                input_dfb, block_width_tiles, output_dfb);
         } else {
             tilize_block(input_dfb, block_width_tiles, output_dfb);
         }

@@ -24,6 +24,19 @@ std::uint32_t math_sync_tile_dst_index = 0;
 // Each unit produces the same DEST layout (stale gaps for unused W positions).
 constexpr std::uint32_t MAX_UNITS_PER_ROW = 16;
 
+// As fast_tilize_block: two units share a DEST section, paired from the row's end, except for a 32-bit input and rows
+// of 4+4+4 or 4+2+3 tiles.
+inline bool pair_units(const std::uint32_t ct_dim, const std::uint32_t units)
+{
+    return static_cast<std::uint32_t>(formats.unpack_A_src) != static_cast<std::uint32_t>(DataFormat::Float32) && units > 1 &&
+           !(units == 3 && (ct_dim & 3) < 2);
+}
+
+inline std::uint32_t section_units(const bool pair, const std::uint32_t units_left)
+{
+    return (pair && (units_left & 1) == 0) ? 2 : 1;
+}
+
 inline std::uint32_t decompose_row(const std::uint32_t ct_dim, std::uint32_t unit_dims[MAX_UNITS_PER_ROW])
 {
     std::uint32_t n4  = ct_dim / 4;
@@ -252,14 +265,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else
         {
             // Math is completely unchanged — same MOP for all unit_dims.
-            // Each unit consumes 4 dvalids and fills a full DEST half-bank.
+            // Each unit consumes 4 dvalids and fills 8 of every 16 rows of a DEST half-bank.
+            const bool pair = pair_units(BLOCK_CT_DIM, units_per_row);
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t u = 0; u < units_per_row; u++)
+                for (std::uint32_t u = 0; u < units_per_row;)
                 {
+                    const std::uint32_t units = section_units(pair, units_per_row - u);
                     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                    _llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, formats.math, unit_dim);
+                    for (std::uint32_t s = 0; s < units; s++)
+                    {
+                        _llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, formats.math, unit_dim, 4, s != 0);
+                    }
                     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    u += units;
                 }
             }
         }
@@ -359,7 +378,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
-                for (std::uint32_t i = 0; i < units_per_row * LOOP_FACTOR; i++)
+                const std::uint32_t sections_per_row = pair_units(BLOCK_CT_DIM, units_per_row) ? (units_per_row + 1) / 2 : units_per_row;
+                for (std::uint32_t i = 0; i < sections_per_row * LOOP_FACTOR; i++)
                 {
                     _llk_packer_wait_for_math_done_();
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -369,26 +389,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 // Row-scoped pack: program destination once per row, stream chunks.
                 std::uint32_t prev_udim = unit_dims[0];
+                const bool pair         = pair_units(BLOCK_CT_DIM, units_per_row);
 
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
                     _llk_pack_fast_tilize_row_begin_(L1_ADDRESS(buffer_Res[0]));
 
-                    for (std::uint32_t u = 0; u < units_per_row; u++)
+                    for (std::uint32_t u = 0; u < units_per_row;)
                     {
-                        std::uint32_t udim = unit_dims[u];
-
-                        if (udim != prev_udim)
-                        {
-                            _llk_pack_fast_tilize_reinit_unit_dim_<is_fp32_dest_acc_en>(formats.pack_dst, udim, input_32b);
-                            prev_udim = udim;
-                        }
-
+                        const std::uint32_t units = section_units(pair, units_per_row - u);
                         if constexpr (!pack_free_runs)
                         {
                             _llk_packer_wait_for_math_done_();
                         }
-                        _llk_pack_fast_tilize_row_chunk_(0 /* tile_index */, udim, 4 /* num_faces */);
+                        for (std::uint32_t s = 0; s < units; s++, u++)
+                        {
+                            std::uint32_t udim = unit_dims[u];
+
+                            if (udim != prev_udim)
+                            {
+                                _llk_pack_fast_tilize_reinit_unit_dim_<is_fp32_dest_acc_en>(formats.pack_dst, udim, input_32b);
+                                prev_udim = udim;
+                            }
+                            _llk_pack_fast_tilize_row_chunk_(0 /* tile_index */, udim, 4 /* num_faces */, s != 0);
+                        }
                         if constexpr (!pack_free_runs)
                         {
                             _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

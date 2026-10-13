@@ -317,14 +317,25 @@ inline void _llk_pack_fast_tilize_row_begin_(const std::uint32_t address)
     program_packer_destination(address);
 }
 
+// gap_rows: the second chunk of a DEST section; W = 4 starts its tiles 8 rows down, in the first chunk's gap rows.
 inline void _llk_pack_fast_tilize_row_chunk_(
-    [[maybe_unused]] const std::uint32_t tile_index, [[maybe_unused]] const std::uint32_t unit_dim, [[maybe_unused]] const std::uint32_t num_faces = 4)
+    [[maybe_unused]] const std::uint32_t tile_index,
+    [[maybe_unused]] const std::uint32_t unit_dim,
+    [[maybe_unused]] const std::uint32_t num_faces = 4,
+    const bool gap_rows                             = false)
 {
     // Only W needs resetting per chunk — it accumulates via W_Cr across tiles
     // (last_inner/last_outer each fire ADDRCRZW W+=1, and start_op restores W=W_Cr).
     // Z=0 naturally after every tile (ADDR_MOD_1: z_src={clr:1}); no reset needed.
     // X=0 and Y=0 naturally at chunk boundaries (see row_begin comment).
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0010); // reset W only (mask bit1=W)
+    if (gap_rows)
+    {
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 4, 0, 0b0010);
+    }
+    else
+    {
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0010); // reset W only (mask bit1=W)
+    }
     ckernel::ckernel_template::run();
 }
 
