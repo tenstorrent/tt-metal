@@ -17,8 +17,11 @@ ffn_residual).
   caused compounding FP error (~6e-8/layer) that flipped MoE routing at L23. Rewrote
   experts_forward to sort by expert, per-expert F.linear, inverse-permute, reshape+sum.
 
-- **route() returns packed tensor.** Returns `[S, K, 2]` (weights, expert_ids as float)
-  instead of a tuple, avoiding a separate dense_routing step.
+- **route() returns dense [S, 128] tensor.** Returns a dense routing-weight tensor with
+  zeros except top-8 weights scattered at their expert indices. The previous packed
+  `[S, K, 2]` format carried expert indices as floats, which the component harness
+  corrupted during perturbation sweeps (mixed permutes, small rescales, big x2).
+  experts_forward() now derives selection via `torch.topk(dense, k=top_k)`.
 
 - **MKL_CBWR=COMPATIBLE removed.** Previously set at import time in gemma4_ref.py for
   deterministic sgemm. Lint forbids environment reads/writes in the package. Removed; R.2

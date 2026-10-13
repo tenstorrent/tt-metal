@@ -16,7 +16,7 @@ Block (30 layers, two attention types, every layer has dense MLP + MoE in parall
     ffn_norm       = rms(h_mid) * w                                  pre_feedforward_layernorm
     mlp_out        = down(gelu_tanh(gate(x)) * up(x))                dense MLP (2112)
     mlp_post_norm  = rms(mlp_out) * w                                post_feedforward_layernorm_1
-    router         = dense routing weights [S, 128] from h_mid       (top-8, renormalized, * per_expert_scale)
+    router         = dense [S, 128] routing weights from h_mid        (top-8 scattered, renormalized, * per_expert_scale)
     moe_norm       = rms(h_mid) * w                                  pre_feedforward_layernorm_2
     experts_out    = sum_e router[:, e] * expert_e(moe_norm)         128 experts (704), gelu_tanh
     moe_post_norm  = rms(experts_out) * w                            post_feedforward_layernorm_2
@@ -198,25 +198,27 @@ def chunk_attention(
 
 
 def route(x: torch.Tensor, w: "LayerWeights", cfg: Gemma4TextConfig) -> torch.Tensor:
-    """Gemma-4 router: returns packed [S, K, 2] tensor (weights, expert_ids as float) in topk-probability order."""
+    """Gemma-4 router: returns dense [S, E] routing weights (zeros except top-k, renormalized * per_expert_scale)."""
     h = rms_norm(x, None, cfg.rms_norm_eps)
     h = h * w.router_scale * (cfg.hidden_size**-0.5)
     probs = F.softmax(F.linear(h, w.router_proj), dim=-1)
     tw, ti = torch.topk(probs, k=cfg.top_k_experts, dim=-1)
     tw = tw / tw.sum(dim=-1, keepdim=True)
     tw = tw * w.per_expert_scale[ti]
-    return torch.stack([tw, ti.float()], dim=-1)
+    dense = torch.zeros(x.shape[0], cfg.num_experts, dtype=tw.dtype, device=tw.device)
+    dense.scatter_(1, ti, tw)
+    return dense
 
 
 def experts_forward(
-    x: torch.Tensor, router_packed: torch.Tensor, gate_up: torch.Tensor, down: torch.Tensor
+    x: torch.Tensor, router_dense: torch.Tensor, gate_up: torch.Tensor, down: torch.Tensor, top_k: int = 8
 ) -> torch.Tensor:
     """Match HF's grouped_mm accumulation: sort S*K pairs by expert, compute per-expert, restore original order,
-    reshape+sum. router_packed: [S, K, 2] from route(); gate_up: [E, 2I, H]; down: [E, H, I]."""
-    S, K = router_packed.shape[:2]
-    tw = router_packed[:, :, 0]
-    ti = router_packed[:, :, 1].long()
+    reshape+sum. router_dense: [S, E] dense routing weights from route(); gate_up: [E, 2I, H]; down: [E, H, I]."""
+    S = router_dense.shape[0]
     num_experts = gate_up.shape[0]
+    tw, ti = torch.topk(router_dense, k=top_k, dim=-1)
+    K = top_k
 
     sample_weights = tw.reshape(-1)
     expert_ids = ti.reshape(-1)
@@ -403,7 +405,7 @@ class Gemma4Reference:
             "post_mlp_norm": norm(w.post_ffn_norm_1),
             "router": lambda ctx, x: route(x, w, cfg),
             "moe_norm": norm(w.pre_ffn_norm_2),
-            "experts": lambda ctx, x, r: experts_forward(x, r, w.e_gate_up, w.e_down),
+            "experts": lambda ctx, x, r: experts_forward(x, r, w.e_gate_up, w.e_down, cfg.top_k_experts),
             "post_moe_norm": norm(w.post_ffn_norm_2),
             "ffn_combine": lambda ctx, a, b: a + b,
             "post_ffn_norm": norm(w.post_ffn_norm),
