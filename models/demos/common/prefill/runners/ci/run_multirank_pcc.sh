@@ -32,11 +32,7 @@ CHUNK_SIZE=5120
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 GOLDEN_LEN=56320
-# Off unless set here or found in perf_baselines.json. Reads the runner-side probe in
-# summarize_ci_run.py's perf JSON, not the producer's log line, which times the push schedule and
-# returns long before the model is done.
 EXPECTED_TPS="${PREFILL_EXPECTED_TPS:-}"
-EXPECTED_PROBE=""
 PERF_BASELINES="${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_baselines.json"
 # Demand a measurement even before a baseline exists, so a leg being calibrated cannot pass green
 # on nothing.
@@ -163,15 +159,15 @@ MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
 
 RESOLVED_HOSTS=$(awk 'NF && $1 !~ /^#/ {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
 
-# Throughput tracks the galaxies' power budget, so the baseline is picked per power class.
-BASELINE_MARGIN=""
-if [ -z "${EXPECTED_TPS}" ] && [ -f "${PERF_BASELINES}" ]; then
-  read -r EXPECTED_TPS EXPECTED_PROBE BASELINE_MARGIN < <(
+PERF_BASELINE=""
+if [ -n "${EXPECTED_TPS}" ]; then
+  PERF_BASELINE="{\"metrics\": {\"throughput_tok_s\": [${EXPECTED_TPS}, 0.15]}}"
+elif [ -f "${PERF_BASELINES}" ]; then
+  PERF_BASELINE=$(
     python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_baseline.py" \
       "${PERF_BASELINES}" "${MODEL}" "${CONFIG}" "${RESOLVED_HOSTS}"
   ) || true
 fi
-PERF_MARGIN="${PREFILL_PERF_MARGIN:-${BASELINE_MARGIN:-0.15}}"
 TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
 mkdir -p "${TTRUN_CWD}"
 
@@ -364,16 +360,16 @@ if [ "${PROD_RC}" -eq 0 ]; then
   fi
 fi
 
-TPS_GATE_RC=0
-if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ]; then
+PERF_GATE_RC=0
+if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${PERF_BASELINE}" ]; then
   # The summary normally runs in the EXIT trap, after this point; force it early so the gate has
   # a file to read. The trap's own call is a no-op once this one has run.
   emit_summary
-  python3 - "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" "${EXPECTED_TPS}" "${PERF_MARGIN}" \
-    "${EXPECTED_PROBE}" <<'TPSPY' || TPS_GATE_RC=$?
+  python3 - "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" "${PERF_BASELINE}" \
+    "${PREFILL_PERF_MARGIN:-}" <<'PERFPY' || PERF_GATE_RC=$?
 import json, sys
 
-path, expected, margin, expected_probe = sys.argv[1], sys.argv[2], float(sys.argv[3]), sys.argv[4]
+path, baseline, margin_override = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
     rec = json.load(open(path))
 except Exception as e:
@@ -388,26 +384,46 @@ if label is None:
     print(f"TPS GATE FAIL: {path} has no throughput probes; the run measured nothing", file=sys.stderr)
     sys.exit(1)
 
-tps = probes[label]
-if not expected:
-    print(f"TPS: {tps:,.0f} tok/s {label} (no PREFILL_EXPECTED_TPS set -- reporting, not gating)")
+if not baseline:
+    print(f"TPS: {probes[label]:,.0f} tok/s {label} (no PREFILL_EXPECTED_TPS set -- reporting, not gating)")
     sys.exit(0)
 
+baseline = json.loads(baseline)
+expected_probe = baseline.get("probe")
 if expected_probe and label != expected_probe:
     print(f"TPS GATE FAIL: baseline is for {expected_probe} but the deepest probe is {label}; "
           f"the context length changed, so re-measure and update perf_baselines.json", file=sys.stderr)
     sys.exit(1)
 
-expected = float(expected)
-lo, hi = expected * (1 - margin), expected * (1 + margin)
-print(f"TPS GATE {label}: {tps:,.0f} tok/s vs {expected:,.0f} +/- {margin * 100:.0f}% [{lo:,.0f}, {hi:,.0f}]")
-if tps < lo:
-    print(f"TPS GATE FAIL: {tps:,.0f} below {lo:,.0f}", file=sys.stderr)
-    sys.exit(1)
-if tps > hi:
-    print(f"TPS GATE WARN: {tps:,.0f} above {hi:,.0f}; raise the baseline if this holds")
-print("TPS GATE PASS")
-TPSPY
+METRICS = {
+    "throughput_tok_s": ("TPS", "tok/s", ",.0f", True),
+    "ttft_s": ("TTFT", "s", ",.2f", False),
+    "chunk_time_ms": ("CHUNK TIME", "ms", ",.0f", False),
+}
+failed = False
+for metric, (expected, margin) in baseline["metrics"].items():
+    name, unit, fmt, higher_is_better = METRICS[metric]
+    margin = float(margin_override or margin)
+    value = (rec.get(metric) or {}).get(label)
+    if value is None:
+        print(f"{name} GATE FAIL: {path} has no {metric} at {label}", file=sys.stderr)
+        failed = True
+        continue
+    lo, hi = expected * (1 - margin), expected * (1 + margin)
+    print(f"{name} GATE {label}: {value:{fmt}} {unit} vs {expected:{fmt}} +/- {margin * 100:.0f}% "
+          f"[{lo:{fmt}}, {hi:{fmt}}]")
+    slow, fast = (value < lo, value > hi) if higher_is_better else (value > hi, value < lo)
+    if slow:
+        side, bound = ("below", lo) if higher_is_better else ("above", hi)
+        print(f"{name} GATE FAIL: {value:{fmt}} {side} {bound:{fmt}}", file=sys.stderr)
+        failed = True
+        continue
+    if fast:
+        side, bound = ("above", hi) if higher_is_better else ("below", lo)
+        print(f"{name} GATE WARN: {value:{fmt}} {side} {bound:{fmt}}; update the baseline if this holds")
+    print(f"{name} GATE PASS")
+sys.exit(1 if failed else 0)
+PERFPY
 fi
 
 PCC_GATE_RC=0
@@ -468,7 +484,7 @@ if [ "${RUNNER_RC}" -ne 0 ]; then
   echo "runner exited non-zero after producer success (rc=${RUNNER_RC})" >&2
   exit "${RUNNER_RC}"
 fi
-if [ "${TPS_GATE_RC}" -ne 0 ]; then
-  exit "${TPS_GATE_RC}"
+if [ "${PERF_GATE_RC}" -ne 0 ]; then
+  exit "${PERF_GATE_RC}"
 fi
 exit "${PCC_GATE_RC}"
