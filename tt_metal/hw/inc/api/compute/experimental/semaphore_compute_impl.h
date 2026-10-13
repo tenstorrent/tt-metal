@@ -51,7 +51,7 @@
 //    at 0 until a SEMPOST arrives, holding back the thread's later instructions (PACR/UNPACR included).
 //    Nothing is dropped, unlike Blackhole, so a count mismatch hangs instead of losing credits. This
 //    keeps the count right but cannot replace either wait: it happens after the slot access.
-//  - settle() is a CSR poll of the Sync busy bit (wait_sync_idle()) instead of tensix_sync.
+//  - semaphore_settle() is a CSR poll of the Sync busy bit (wait_sync_idle()) instead of tensix_sync.
 
 // The compute semaphore's Max: host-baked from SemaphoreAdvancedOptions::max_value when set, else the
 // hardware ceiling. Every SEMINIT in this file programs it.
@@ -98,9 +98,11 @@ __attribute__((always_inline)) inline std::uintptr_t sem_l1_offset(std::uint32_t
 
 #if (defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)) && (defined(TRISC_UNPACK) || defined(TRISC_PACK))
 
-// Per-arch Tensix primitives. post/get are STALLWAIT(my engine idle) + SEMPOST/SEMGET, so up()/down() are
-// ordered after this thread's engine work. wait_on_zero/wait_on_max are a SEMWAIT that blocks only this
-// thread's engine instructions. settle() retires this thread's queued Sync Unit ops before a RISC read.
+// Per-arch Tensix primitives. The t6_semaphore_* names mirror ckernel::t6_semaphore_*, with this thread's
+// engine-idle stall baked in. t6_semaphore_post/get are STALLWAIT(my engine idle) + SEMPOST/SEMGET, so
+// up()/down() are ordered after this thread's engine work. t6_semaphore_wait_on_zero/wait_on_max are a
+// SEMWAIT that blocks only this thread's engine instructions. semaphore_settle() retires this thread's queued
+// Sync Unit ops before a RISC read.
 namespace hw {
 
 #if defined(ARCH_QUASAR)
@@ -118,19 +120,23 @@ inline constexpr std::uint32_t kIdle2 = ckernel::p_stall::NOTHING;
 inline constexpr std::uint32_t kBlock = ckernel::p_stall::STALL_PACK;
 #endif
 
-__attribute__((always_inline)) inline void post(std::uint8_t idx) { _llk_sync_post_<kIdle0, kIdle1, kIdle2>(idx); }
-__attribute__((always_inline)) inline void get(std::uint8_t idx) { _llk_sync_get_<kIdle0, kIdle1, kIdle2>(idx); }
-__attribute__((always_inline)) inline void wait_on_zero(std::uint8_t idx) {
+__attribute__((always_inline)) inline void t6_semaphore_post(std::uint8_t idx) {
+    _llk_sync_post_<kIdle0, kIdle1, kIdle2>(idx);
+}
+__attribute__((always_inline)) inline void t6_semaphore_get(std::uint8_t idx) {
+    _llk_sync_get_<kIdle0, kIdle1, kIdle2>(idx);
+}
+__attribute__((always_inline)) inline void t6_semaphore_wait_on_zero(std::uint8_t idx) {
     _llk_sync_wait_<kBlock, ckernel::p_stall::STALL_ON_ZERO>(idx);
 }
-__attribute__((always_inline)) inline void wait_on_max(std::uint8_t idx) {
+__attribute__((always_inline)) inline void t6_semaphore_wait_on_max(std::uint8_t idx) {
     _llk_sync_wait_<kBlock, ckernel::p_stall::STALL_ON_MAX>(idx);
 }
-__attribute__((always_inline)) inline void init(std::uint8_t idx, std::uint8_t value) {
+__attribute__((always_inline)) inline void t6_semaphore_init(std::uint8_t idx, std::uint8_t value) {
     ckernel::trisc::t6_semaphore_init<kIdle0, kIdle1, kIdle2>(idx, value, kComputeSemaphoreMax);
 }
 // CSR poll of the Sync busy bit: clear once this thread's SEMPOST/SEMGET (queued or in flight) retired.
-__attribute__((always_inline)) inline void settle() { ckernel::wait_sync_idle(); }
+__attribute__((always_inline)) inline void semaphore_settle() { ckernel::wait_sync_idle(); }
 
 #else  // ARCH_BLACKHOLE
 
@@ -142,18 +148,20 @@ inline constexpr std::uint32_t kIdle = ckernel::p_stall::PACK;         // C3: pa
 inline constexpr std::uint32_t kBlock = ckernel::p_stall::STALL_PACK;  // B2: block PACR
 #endif
 
-__attribute__((always_inline)) inline void post(std::uint8_t idx) { ckernel::t6_semaphore_post<kIdle>(idx); }
-__attribute__((always_inline)) inline void get(std::uint8_t idx) { ckernel::t6_semaphore_get<kIdle>(idx); }
-__attribute__((always_inline)) inline void wait_on_zero(std::uint8_t idx) {
+__attribute__((always_inline)) inline void t6_semaphore_post(std::uint8_t idx) {
+    ckernel::t6_semaphore_post<kIdle>(idx);
+}
+__attribute__((always_inline)) inline void t6_semaphore_get(std::uint8_t idx) { ckernel::t6_semaphore_get<kIdle>(idx); }
+__attribute__((always_inline)) inline void t6_semaphore_wait_on_zero(std::uint8_t idx) {
     ckernel::t6_semaphore_wait_on_zero<kBlock>(idx);
 }
-__attribute__((always_inline)) inline void wait_on_max(std::uint8_t idx) {
+__attribute__((always_inline)) inline void t6_semaphore_wait_on_max(std::uint8_t idx) {
     ckernel::t6_semaphore_wait_on_max<kBlock>(idx);
 }
-__attribute__((always_inline)) inline void init(std::uint8_t idx, std::uint8_t value) {
+__attribute__((always_inline)) inline void t6_semaphore_init(std::uint8_t idx, std::uint8_t value) {
     ckernel::t6_semaphore_init<kIdle>(idx, value, kComputeSemaphoreMax);
 }
-__attribute__((always_inline)) inline void settle() { ckernel::tensix_sync(); }
+__attribute__((always_inline)) inline void semaphore_settle() { ckernel::tensix_sync(); }
 
 #endif  // ARCH_QUASAR
 
@@ -168,7 +176,7 @@ __attribute__((always_inline)) inline std::uint32_t load(std::uintptr_t index, S
 // wait on) before reading.
 template <ProgrammableCoreType core_type>
 __attribute__((always_inline)) inline std::uint32_t current(std::uintptr_t index, SemScope scope) {
-    hw::settle();
+    hw::semaphore_settle();
     return load(index, scope);
 }
 
@@ -177,7 +185,7 @@ __attribute__((always_inline)) inline void up(std::uintptr_t index, SemScope sco
     ASSERT(scope == SemScope::COMPUTE_ATOMIC);
     const std::uint8_t idx = static_cast<std::uint8_t>(index);
     for (std::uint32_t i = 0; i < value; ++i) {
-        hw::post(idx);
+        hw::t6_semaphore_post(idx);
     }
 }
 
@@ -186,7 +194,7 @@ __attribute__((always_inline)) inline void down(std::uintptr_t index, SemScope s
     ASSERT(scope == SemScope::COMPUTE_ATOMIC);
     const std::uint8_t idx = static_cast<std::uint8_t>(index);
     for (std::uint32_t i = 0; i < value; ++i) {
-        hw::get(idx);
+        hw::t6_semaphore_get(idx);
     }
 }
 
@@ -195,7 +203,7 @@ __attribute__((always_inline)) inline void wait(std::uintptr_t index, SemScope s
     ASSERT(scope == SemScope::COMPUTE_ATOMIC);
     // No SEMWAIT condition for "== v": RISC poll, after retiring this thread's own posted ops.
     WAYPOINT("NSW");
-    hw::settle();
+    hw::semaphore_settle();
     while (load(index, scope) != value) {
     }
     WAYPOINT("NSD");
@@ -207,11 +215,11 @@ __attribute__((always_inline)) inline void wait_min(std::uintptr_t index, SemSco
     if (value == 1) {
         // Tensix-side: hold this thread's engine instructions while Value == 0. In order with this
         // thread's own SEMGETs, so a just-consumed credit is never counted again. The RISC returns.
-        hw::wait_on_zero(static_cast<std::uint8_t>(index));
+        hw::t6_semaphore_wait_on_zero(static_cast<std::uint8_t>(index));
         return;
     }
     WAYPOINT("NSMW");
-    hw::settle();
+    hw::semaphore_settle();
     while (load(index, scope) < value) {
     }
     WAYPOINT("NSMD");
@@ -225,12 +233,12 @@ template <ProgrammableCoreType core_type>
 __attribute__((always_inline)) inline void wait_not_full(std::uintptr_t index, SemScope scope, std::uint32_t n) {
     ASSERT(scope == SemScope::COMPUTE_ATOMIC);
     if (n == 1) {
-        hw::wait_on_max(static_cast<std::uint8_t>(index));
+        hw::t6_semaphore_wait_on_max(static_cast<std::uint8_t>(index));
         return;
     }
     ASSERT(n <= kComputeSemaphoreMax);
     WAYPOINT("NFW");
-    hw::settle();
+    hw::semaphore_settle();
     while (load(index, scope) > kComputeSemaphoreMax - n) {
     }
     WAYPOINT("NFD");
@@ -243,7 +251,7 @@ __attribute__((always_inline)) inline void set(std::uintptr_t index, SemScope sc
     ASSERT(value <= kComputeSemaphoreMax);
     // Absolute assignment via SEMINIT (Max re-programmed to the host-baked capacity), ordered after this
     // thread's engine work for the same reason as up()/down().
-    hw::init(static_cast<std::uint8_t>(index), static_cast<std::uint8_t>(value));
+    hw::t6_semaphore_init(static_cast<std::uint8_t>(index), static_cast<std::uint8_t>(value));
 }
 
 #else  // unsupported compute target: not Blackhole/Quasar, or the MATH / isolate-SFPU thread

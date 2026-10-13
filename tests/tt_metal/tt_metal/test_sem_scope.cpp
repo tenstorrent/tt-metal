@@ -511,6 +511,7 @@ protected:
     }
 
     // TODO @RT: port over to the Metal 2.0 tests (metal2_host_api/integration_tests) after Quasar has been ported.
+    // https://github.com/tenstorrent/tt-metal/issues/60164
     // Pattern D (`in` non-empty) also adds a DM reader and writer, moves the input tiles through DRAM and dataflow
     // buffers, and returns the output tiles in `out`.
     static constexpr uint32_t kComputeDepth = 4;  // kernel kDepth, passed as the semaphore's max_value

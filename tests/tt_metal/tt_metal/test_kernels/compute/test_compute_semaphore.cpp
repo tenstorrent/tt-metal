@@ -30,6 +30,7 @@
 
 #include "api/compute/common.h"
 // TODO @RT: drop the Quasar includes and use the 2.0 ones after the Quasar compute API has been ported to Metal 2.0.
+// https://github.com/tenstorrent/tt-metal/issues/60164
 #ifdef ARCH_QUASAR
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack.h"
@@ -207,10 +208,10 @@ void kernel_main() {
     }
 #elif defined(PATTERN_D_DFB)
     // TODO @RT: delete this branch and run the LLKOperand path above on Quasar after the Quasar compute API has
-    // been ported to Metal 2.0.
+    // been ported to Metal 2.0. https://github.com/tenstorrent/tt-metal/issues/60164
     // Quasar: LLKOperand is Blackhole-only, so `in`, `mid` and `out` are dataflow buffers and the Quasar
     // Compute API addresses them by id.
-    //  - Seed: the id-based compute_kernel_hw_startup does not seed the semaphore; PACK set(0)s it.
+    //  - Seed: the id-based compute_kernel_hw_startup seeds the semaphore on PACK, as on Blackhole.
     //  - Negative control: nosync=1 also drops PACK's up(). Blackhole posts saturate at 15, so its 8
     //    unconsumed posts are harmless; a Quasar post at Max (kDepth) stalls until a down() that never
     //    comes, so the 5th up() would hang the kernel instead of corrupting the output.
@@ -227,7 +228,6 @@ void kernel_main() {
         const std::uint32_t out_id = dfb_out.get_id();
 
         compute_kernel_hw_startup(in_id, out_id);
-        PACK(sem.set(0);)
 
         for (std::uint32_t i = 0; i < num_iters; ++i) {
             const std::uint32_t slot = i % kDepth;
