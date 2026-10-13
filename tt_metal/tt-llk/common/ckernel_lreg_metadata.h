@@ -9,6 +9,10 @@
 // the allocator protection. Callers explicitly carrying values between raw
 // operations can instead use SFPI's public l_reg reads and assignments.
 // An independent l_reg[R].in_use() at each endpoint is not that lifetime.
+// The older __builtin_rvtt_sfprawlreg_access is NOT a fallback: its first
+// mask releases a value, whereas the effect builtin's first mask is a read.
+// Access-only and older compilers therefore get the explicit no-op below;
+// define TT_LLK_REQUIRE_RAW_LREG_METADATA to reject them instead.
 #ifndef TT_LLK_SFPRAWLREG_EFFECT
 #if defined(__riscv_xtt_sfprawlreg_effect)
 #define TT_LLK_SFPRAWLREG_EFFECT(r, w) __builtin_rvtt_sfprawlreg_effect((r), (w))
@@ -21,6 +25,9 @@
 #endif
 #endif
 #ifndef TT_LLK_SFPRAWLREG_EFFECT
+#if defined(TT_LLK_REQUIRE_RAW_LREG_METADATA)
+#error "raw-LREG effect metadata required, but this compiler has no effect builtin"
+#endif
 #define TT_LLK_SFPRAWLREG_EFFECT(r, w) ((void)0)
 #endif
 
