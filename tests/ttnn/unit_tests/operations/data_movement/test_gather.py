@@ -638,14 +638,16 @@ def test_gather_rank_gt_4_index_larger_on_merged_dim(device, expect_error):
     [
         ([3, 4, 64], [1, 3, 4, 32]),
         ([1, 2, 3, 4, 64], [2, 3, 4, 64]),
+        ([], [1]),
+        ([2], []),
     ],
 )
 def test_gather_rank_mismatch(input_shape, index_shape, device, expect_error):
     ttnn_input = ttnn.from_torch(
-        torch.randn(input_shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        torch.randn(input_shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
     ttnn_index = ttnn.from_torch(
-        torch.randint(0, input_shape[-1], index_shape), ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device
+        torch.zeros(index_shape, dtype=torch.int32), ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
     with expect_error(RuntimeError, "same number of dimensions"):
         ttnn.gather(ttnn_input, -1, index=ttnn_index)
