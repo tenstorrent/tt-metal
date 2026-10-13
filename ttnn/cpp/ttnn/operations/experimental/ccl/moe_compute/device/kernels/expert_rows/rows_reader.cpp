@@ -102,7 +102,7 @@ void kernel_main() {
     constexpr uint32_t BB = BT * TB;
     constexpr uint32_t PT = (BT + BP - 1) / BP;  // tiles per NoC packet of a block
     static_assert(PT * TB <= NOC_MAX_BURST_SIZE, "a block's packets fit a NoC burst each");
-    static_assert(K >= 1 && K <= 32, "top-k");
+    static_assert(K >= 1 && K <= 32, "top-k (kMaxTopK in moe_expert_rows.cpp)");
     constexpr uint32_t ME = K;              // local entries per token at most (one per k)
     constexpr uint32_t KST = IDX_PAGE / 2;  // u16 per index page
 
