@@ -29,6 +29,7 @@
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/binary_comp.h"
+#include "api/compute/binary_remainder.h"
 // SFPU op headers NOT yet ported to Quasar: they unconditionally pull in WH/BH-only ckernel impls or
 // symbols (InstrModLoadStore, DataFormat::UInt32, ckernel_sfpu_div_int32_floor.h, ...) absent from the
 // Quasar ckernel tree, so they only compile off-Quasar. The float SFPU binary ops this kernel runs on
@@ -39,7 +40,6 @@
 #include "api/compute/sub_int_sfpu.h"
 #include "api/compute/div_int32_floor.h"
 #include "api/compute/div_int32_sfpu.h"
-#include "api/compute/binary_remainder.h"
 #include "api/compute/binary_fmod.h"
 #include "api/compute/quantization.h"
 #include "api/compute/gcd.h"
