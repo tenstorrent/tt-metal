@@ -65,7 +65,8 @@ bool is_native_L1_sharding(
 
 namespace {
 
-// Compute-bound ops: on small tensors, deeper reads only delay their first tiles.
+// Ops whose compute per tile is at least the DRAM time per tile (~1.1 µs per core for a 2 KB page on Blackhole
+// p100a): on small tensors deeper reads only delay their first tiles, on large ones the SFPU sets their time.
 bool is_heavy_op(const EltwiseUnaryWithParam& op) {
     switch (op.type()) {
         case UnaryOpType::ELU:
@@ -91,9 +92,11 @@ DramShardPlan get_dram_shard_plan(
     uint32_t num_dram_banks) {
     // Below this, main's order already saturates DRAM (Blackhole p100a has ~16 cores per bank, Wormhole n300 ~5).
     constexpr uint32_t kMinCoresPerDramBank = 8;
+    // Smaller pages (bfp8, bfp4) leave most ops compute-bound, and the flows did not beat main's order for them.
+    constexpr uint32_t kMinPageBytes = 2048;
     // Below this the queue has too little to balance: 128 pages is 8 chunks of the minimum size.
     constexpr uint64_t kMinPagesPerCoreForQueue = 128;
-    // Compute-bound ops read one page at a time below this; the queue only pays off for them on larger tensors.
+    // Below this, heavy ops read one page at a time.
     constexpr uint64_t kMinPagesPerCoreForQueueHeavy = 512;
     // Chunk = 1/150 of a core's share: smaller loads the scheduler, larger leaves a tail.
     constexpr uint64_t kChunksPerCore = 150;
@@ -108,6 +111,7 @@ DramShardPlan get_dram_shard_plan(
                mc.shard_spec().has_value();
     };
     if (op_chain.empty() || num_cores == 0 || num_cores < kMinCoresPerDramBank * num_dram_banks ||
+        input_spec.compute_page_size_bytes() < kMinPageBytes || output_spec.compute_page_size_bytes() < kMinPageBytes ||
         !is_dram_sharded(input_spec) || !is_dram_sharded(output_spec) ||
         input_spec.memory_config().memory_layout() != output_spec.memory_config().memory_layout()) {
         return {};
@@ -144,16 +148,22 @@ DramShardPlan get_dram_shard_plan(
 
     const uint64_t pages_per_core = total_pages / num_cores;
     const bool queue_kernel = utils::compute_kernel_supports_work_queue(op_chain[0].type(), input_spec.data_type());
-    const bool bf16 = input_spec.data_type() == DataType::BFLOAT16 && output_spec.data_type() == DataType::BFLOAT16;
     const bool heavy = std::any_of(op_chain.begin(), op_chain.end(), is_heavy_op);
-    const uint64_t queue_from = heavy ? kMinPagesPerCoreForQueueHeavy : kMinPagesPerCoreForQueue;
-    if (heavy && pages_per_core < queue_from) {
+    if (heavy && pages_per_core < kMinPagesPerCoreForQueueHeavy) {
+        // On small width shards main's order already crosses banks; one page would only delay the first tiles.
+        if (pages_per_core < kMinPagesPerCoreForQueue && shard_width != row_pages) {
+            return {};
+        }
         plan.flow = DramShardFlow::StaticOnePage;
         return plan;
     }
+    // Heavy ops on 2 KB pages are bound by the SFPU here, so any flow only adds overhead to main's path.
+    if (heavy && input_spec.compute_page_size_bytes() <= kMinPageBytes) {
+        return {};
+    }
     plan.read_burst = kReadBurst;
     plan.write_burst = kWriteBurst;
-    if (pages_per_core >= queue_from && queue_kernel && bf16 && num_cores <= dram_shard::kMaxWorkers) {
+    if (pages_per_core >= kMinPagesPerCoreForQueue && queue_kernel && num_cores <= dram_shard::kMaxWorkers) {
         plan.flow = DramShardFlow::WorkQueue;
         plan.chunk_pages = static_cast<uint32_t>(
             std::clamp<uint64_t>((pages_per_core + kChunksPerCore / 2) / kChunksPerCore, kMinChunkPages, 256));

@@ -25,12 +25,10 @@ def dram_sharded(shape, layout, num_shards, shard_width=None):
     return ttnn.MemoryConfig(layout, ttnn.BufferType.DRAM, spec)
 
 
-def run_against_interleaved(op, a, device, memory_config):
-    sharded = ttnn.from_torch(
-        a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
-    )
+def run_against_interleaved(op, a, device, memory_config, dtype=ttnn.bfloat16):
+    sharded = ttnn.from_torch(a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
     interleaved = ttnn.from_torch(
-        a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     out = op(sharded)
     assert out.memory_config().memory_layout == memory_config.memory_layout
@@ -104,6 +102,27 @@ def test_fewer_tiles_than_cores(device, layout):
     shape = [1, 1, 64, 1024]
     run_against_interleaved(ttnn.relu, random_input(shape), device, dram_sharded(shape, layout, 2))
     run_against_interleaved(ttnn.elu, random_input(shape), device, dram_sharded(shape, layout, 2))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat8_b], ids=["fp32", "bfp8"])
+@pytest.mark.parametrize("op_name", ["identity", "relu", "silu", "hardswish", "gelu_accurate"])
+@pytest.mark.parametrize("layout", [HEIGHT, WIDTH], ids=["height", "width"])
+@pytest.mark.parametrize("large", [False, True], ids=["small", "large"])
+def test_other_formats(device, dtype, op_name, layout, large):
+    width = 1024 if layout == HEIGHT else 7 * 1024
+    rows = large_rows(device, width, 32 * 7) if large else (7 * 1024 if layout == HEIGHT else 1024)
+    shape = [1, 1, rows, width]
+    a = random_input(shape).to(torch.float32)
+    run_against_interleaved(OPS[op_name], a, device, dram_sharded(shape, layout, 7), dtype)
+
+
+@pytest.mark.parametrize("layout", [HEIGHT, WIDTH], ids=["height", "width"])
+def test_int32_relu(device, layout):
+    width = 1024 if layout == HEIGHT else 7 * 1024
+    shape = [1, 1, large_rows(device, width, 32 * 7), width]
+    torch.manual_seed(0)
+    a = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    run_against_interleaved(ttnn.relu, a, device, dram_sharded(shape, layout, 7), ttnn.int32)
 
 
 def test_width_sharded_uneven(device):
