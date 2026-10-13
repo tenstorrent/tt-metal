@@ -51,7 +51,8 @@ constexpr uint32_t prefetch_h_max_credits = PREFETCH_H_MAX_CREDITS;
 constexpr uint32_t packed_write_max_unicast_sub_cmds =
     PACKED_WRITE_MAX_UNICAST_SUB_CMDS;  // Number of cores in compute grid
 constexpr uintptr_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
-constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;  // maximum number of worker semaphores
+constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;                  // maximum number of sub-devices
+constexpr uint32_t max_num_completion_counters = MAX_NUM_COMPLETION_COUNTERS;  // worker completion counters per CQ
 constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
 constexpr uint32_t distributed_dispatcher = DISTRIBUTED_DISPATCHER;
 constexpr uint32_t host_completion_q_wr_ptr = HOST_COMPLETION_Q_WR_PTR;
@@ -1203,6 +1204,7 @@ void process_go_signal_mcast_cmd() {
     go_signal.all = load_aligned<uint32_t>(&cmd->mcast.go_signal);
     uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
     uint32_t wait_count = load_aligned<uint32_t>(&cmd->mcast.wait_count);
+    const uint32_t sync_index = cmd->mcast.sub_device_index;
     // Per-sub-device GO counter override (mirrors cq_dispatch_subordinate.cpp). When dispatch_s is disabled, dispatch_d
     // sends the go signal directly, so it must supply the worker's go_count: the byte in the command is a placeholder,
     // replaced here with this dispatcher's incrementing per-sub-device count (worker runs while go_count !=
@@ -1213,7 +1215,6 @@ void process_go_signal_mcast_cmd() {
     // A sub-device reconfig RESET re-baselines the target's counter to 0 so the bump yields a deterministic
     // go_count = 1 (paired with the host zeroing go_processed), which the worker always detects (1 != 0).
     const bool go_count_reset = go_signal.signal == RUN_MSG_RESET_READ_PTR;
-    const uint32_t sync_index = stream - first_stream_used;
     ASSERT(sync_index < max_num_worker_sems);
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
@@ -1294,7 +1295,8 @@ void process_notify_dispatch_s_go_signal_cmd() {
 
 // Processes CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR on the dispatch_d-direct path (dispatch_s disabled): reseeds this
 // sub-device's per-sync GO-counter baseline and writes the done-return address (go_msg_t word 1) to the sub-device's
-// workers via tensix mcast, leaving the per-go word 0 untouched. See the matching handler in cq_dispatch_subordinate.cpp.
+// workers via tensix mcast, leaving the per-go word 0 untouched. See the matching handler in
+// cq_dispatch_subordinate.cpp.
 FORCE_INLINE
 void process_set_go_signal_noc_addr_cmd() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
@@ -1608,8 +1610,7 @@ FORCE_INLINE NocCounterSnapshot snapshot_dispatch_d_noc_counters() {
         .nonposted_writes_num_issued = noc_nonposted_writes_num_issued[noc_index],
         .nonposted_writes_acked = noc_nonposted_writes_acked[noc_index],
         .nonposted_atomics_acked = noc_nonposted_atomics_acked[noc_index],
-        .posted_writes_num_issued = noc_posted_writes_num_issued[noc_index]
-    };
+        .posted_writes_num_issued = noc_posted_writes_num_issued[noc_index]};
 }
 
 // dispatch_d writes to the NOC1 core, but dispatch_s holds dedicated noc status on it. L1 noc counters
@@ -1640,8 +1641,7 @@ void publish_dispatch_d_noc_count(const NocCounterSnapshot& snapshot) {
         upstream_noc_index, nonposted_writes_acked_delta);
     set_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
         upstream_noc_index, nonposted_atomics_acked_delta);
-    set_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(
-        upstream_noc_index, posted_writes_delta);
+    set_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(upstream_noc_index, posted_writes_delta);
 
     Semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id).set(1);
 }
@@ -1674,7 +1674,7 @@ void kernel_main() {
         dispatch_d_noc_counter_start = snapshot_dispatch_d_noc_counters<upstream_noc_index>();
     }
 
-    for (size_t i = 0; i < max_num_worker_sems; i++) {
+    for (size_t i = 0; i < max_num_completion_counters; i++) {
         const uint32_t index = i + first_stream_used;
 #ifdef ARCH_QUASAR
         *worker_completion_sem_addr(index, first_stream_used, completion_counter_offset) = 0;

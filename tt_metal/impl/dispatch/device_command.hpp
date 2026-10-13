@@ -117,10 +117,13 @@ public:
         const void* data = nullptr,
         uint32_t write_offset_index = 0);
 
+    // wait_stream is the completion counter the dispatcher waits on before sending; sub_device_index selects the
+    // sub-device's go counter and dispatch_s sync semaphore.
     void add_dispatch_go_signal_mcast(
         uint32_t wait_count,
         uint32_t go_signal,
         uint32_t wait_stream,
+        uint8_t sub_device_index,
         uint8_t multicast_go_offset,
         DispatcherSelect dispatcher_type);
 

@@ -402,10 +402,11 @@ constexpr uint8_t CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET = 0xff;
 struct CQDispatchGoSignalMcastCmd {
     uint8_t multicast_go_offset;  // Index of the multicast go to write to. CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET - no
                                   // multicast gos.
-    uint16_t pad1;
+    uint8_t sub_device_index;     // Sub-device the go targets: selects its go counter and dispatch_s sync semaphore
+    uint8_t pad1;
     uint32_t go_signal;
     uint32_t wait_count;
-    uint32_t wait_stream;  // Index of the stream to wait on
+    uint32_t wait_stream;  // Completion counter (stream index) to wait on before sending the go
 } __attribute__((packed));
 
 struct CQDispatchNotifySubordinateGoSignalCmd {
@@ -443,7 +444,7 @@ struct CQDispatchSetGoSignalNocAddrCmd {
     uint8_t go_count;             // host-authoritative go_count baseline for this sub-device
     uint8_t master_x;             // owning dispatcher coords written into go_msg_t word 1
     uint8_t master_y;
-    uint8_t offset;  // completion-stream offset written into go_msg_t word 1
+    uint8_t offset;  // completion counter index (base slot) written into go_msg_t word 1
 } __attribute__((packed));
 
 struct CQDispatchCmd {

@@ -48,7 +48,8 @@ constexpr uint32_t distributed_dispatcher =
     DISTRIBUTED_DISPATCHER;  // dispatch_s and dispatch_d running on different cores
 constexpr uint32_t first_stream_used = FIRST_STREAM_USED;
 constexpr uint32_t completion_counter_offset = COMPLETION_COUNTER_OFFSET;
-constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;
+constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;                  // maximum number of sub-devices
+constexpr uint32_t max_num_completion_counters = MAX_NUM_COMPLETION_COUNTERS;  // worker completion counters per CQ
 constexpr uintptr_t dispatch_telemetry_control_addr = DISPATCH_TELEMETRY_CONTROL_ADDR;
 constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
 constexpr uintptr_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
@@ -203,7 +204,7 @@ constexpr uint32_t stream_width = MEM_WORD_ADDR_WIDTH;
 // When dispatch_d and dispatch_s run on separate cores, dispatch_s gets the go signal update from workers.
 // dispatch_s is responsible for sending the latest worker completion count to dispatch_d.
 // To minimize the number of writes from dispatch_s to dispatch_d, locally track dispatch_d's copy.
-static uint32_t worker_count_update_for_dispatch_d[max_num_worker_sems] = {0};
+static uint32_t worker_count_update_for_dispatch_d[max_num_completion_counters] = {0};
 
 static uint32_t num_worker_sems = 1;
 
@@ -662,7 +663,7 @@ FORCE_INLINE void wait_for_workers_and_send_go_signal(
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
-    uint32_t sync_index = load_aligned<uint32_t>(&cmd->mcast.wait_stream) - first_stream_used;
+    const uint32_t sync_index = cmd->mcast.sub_device_index;
     ASSERT(sync_index < max_num_worker_sems);
     // Get semaphore that will be update by dispatch_d, signalling that it's safe to send a go signal
 
@@ -727,16 +728,14 @@ void process_go_signal_mcast_cmd() {
 
     if (telemetry_enabled) {
         static uint32_t local_launch_seq_counter = 0;
-        const uint32_t stream_index = wait_stream - first_stream_used;
-        ASSERT(stream_index < max_num_worker_sems);
         auto dispatch_telemetry =
             reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
                 dispatch_telemetry_base);
 
-        dispatch_telemetry_control->launched_work_sequence_counter[stream_index] = ++local_launch_seq_counter;
-        dispatch_telemetry->last_work_launch_timestamp[stream_index] = get_timestamp();
-        dispatch_telemetry_control->launched_work_start_stream_sem[stream_index] = wait_count;
-        dispatch_telemetry_control->launched_work_sequence_counter[stream_index] = ++local_launch_seq_counter;
+        dispatch_telemetry_control->launched_work_sequence_counter[sync_index] = ++local_launch_seq_counter;
+        dispatch_telemetry->last_work_launch_timestamp[sync_index] = get_timestamp();
+        dispatch_telemetry_control->launched_work_start_stream_sem[sync_index] = wait_count;
+        dispatch_telemetry_control->launched_work_sequence_counter[sync_index] = ++local_launch_seq_counter;
     }
 
 #if DEVICE_PRINT_DISPATCH_ENABLED
@@ -761,6 +760,7 @@ void process_dispatch_s_wait_cmd() {
         distributed_dispatcher);
     uint32_t stream = load_aligned<uint16_t>(&cmd->wait.stream);
     uint32_t index = stream - first_stream_used;
+    ASSERT(index < max_num_completion_counters);
     volatile uint32_t* worker_sem = reinterpret_cast<volatile uint32_t*>(
         static_cast<uintptr_t>(STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
 
@@ -785,7 +785,7 @@ FORCE_INLINE
 void set_num_worker_sems() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
     num_worker_sems = load_aligned<uint32_t>(&cmd->set_num_worker_sems.num_worker_sems);
-    ASSERT(num_worker_sems <= max_num_worker_sems);
+    ASSERT(num_worker_sems <= max_num_completion_counters);
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
@@ -900,7 +900,7 @@ void kernel_main() {
     dispatch_s_atomic_cmd_buf_init();
     init_fds_signalling();
     if constexpr (distributed_dispatcher) {
-        for (size_t i = 0; i < max_num_worker_sems; i++) {
+        for (size_t i = 0; i < max_num_completion_counters; i++) {
             uint32_t index = i + first_stream_used;
 
             NOC_STREAM_WRITE_REG(

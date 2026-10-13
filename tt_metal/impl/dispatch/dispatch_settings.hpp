@@ -88,6 +88,9 @@ public:
 
     static constexpr uint32_t DISPATCH_MESSAGE_ENTRIES = ::DISPATCH_MAX_MESSAGE_ENTRIES;
 
+    // Worker completion counters per CQ; programs report done into one, selected by sub-device and completion slot.
+    static constexpr uint32_t DISPATCH_COMPLETION_COUNTERS = ::DISPATCH_MAX_COMPLETION_COUNTERS;
+
     // correctness asserted in .cpp
     static constexpr uint32_t DISPATCH_MESSAGES_MAX_OFFSET = 255;
 

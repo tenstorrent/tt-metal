@@ -110,14 +110,14 @@ void issue_record_event_commands(
             command_sequence.add_dispatch_wait_with_prefetch_stall(
                 wait_flags,
                 0,
-                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
+                metal_ctx.dispatch_mem_map().get_completion_stream(offset_index),
                 expected_num_workers_completed[offset_index],
                 cq_id);
         } else {
             command_sequence.add_dispatch_wait(
                 wait_flags,
                 0,
-                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
+                metal_ctx.dispatch_mem_map().get_completion_stream(offset_index),
                 expected_num_workers_completed[offset_index],
                 cq_id);
         }

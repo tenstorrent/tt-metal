@@ -109,7 +109,8 @@ void issue_trace_commands(
             // done-return address (word 1) already points at this CQ: the replay sends SET_GO_SIGNAL_NOC_ADDR first
             // whenever another CQ last configured the slot.
             metal_ctx.hal().make_go_msg_u32(0, dev_msgs::RUN_MSG_REPLAY_TRACE),
-            metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
+            metal_ctx.dispatch_mem_map().get_completion_stream(index),
+            static_cast<uint8_t>(index),
             desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
                 ? index
                 : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
@@ -130,7 +131,7 @@ void issue_trace_commands(
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
                 0,
-                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
+                metal_ctx.dispatch_mem_map().get_completion_stream(index),
                 expected_num_workers,
                 cq_id,
                 1);
@@ -138,7 +139,7 @@ void issue_trace_commands(
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
-            metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
+            metal_ctx.dispatch_mem_map().get_completion_stream(index),
             expected_num_workers,
             cq_id);
     }

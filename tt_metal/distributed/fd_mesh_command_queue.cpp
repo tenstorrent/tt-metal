@@ -537,7 +537,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     {
         const auto& dispatch_mem_map = MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map();
         const uint8_t offset = static_cast<uint8_t>(
-            dispatch_mem_map.get_dispatch_message_update_offset(*sub_device_id) +
+            dispatch_mem_map.get_completion_counter_index(*sub_device_id) +
             dispatch_mem_map.get_completion_counter_offset(static_cast<uint8_t>(this->id_)));
         // The address belongs to the sub-device's workers, not this workload: it must reach them even when this
         // workload sends them no go (e.g. an empty program), since the next go on this CQ will not resend it.
@@ -1224,7 +1224,7 @@ void FDMeshCommandQueue::prepare_go_slots_for_reset(IDevice* device, uint32_t ac
     const auto& dispatch_mem_map = MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map();
     auto done_offset = [&](uint32_t sd) {
         return static_cast<uint8_t>(
-            dispatch_mem_map.get_dispatch_message_update_offset(sd) +
+            dispatch_mem_map.get_completion_counter_index(sd) +
             dispatch_mem_map.get_completion_counter_offset(static_cast<uint8_t>(id_)));
     };
     // go_msg_t word 1 ({master_x, master_y, offset, 0}) per active slot, matching what SET_GO_SIGNAL_NOC_ADDR writes.
@@ -1462,7 +1462,7 @@ void FDMeshCommandQueue::submit_replay_buffer(
             // enqueue_mesh_workload).
             const bool mcast = mesh_device_->impl().has_noc_mcast_txns(sub_device_id);
             const uint8_t offset = static_cast<uint8_t>(
-                dispatch_mem_map.get_dispatch_message_update_offset(*sub_device_id) +
+                dispatch_mem_map.get_completion_counter_index(*sub_device_id) +
                 dispatch_mem_map.get_completion_counter_offset(static_cast<uint8_t>(this->id_)));
             for (auto* device : mesh_device_->get_devices()) {
                 auto& mirror = device->sysmem_manager().worker_go_mirror(*sub_device_id);

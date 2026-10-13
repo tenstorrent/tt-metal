@@ -144,10 +144,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_wait(
     if (!ctx.hal().has_stream_registers() &&
         (flags & (CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM))) {
         const auto& mem_map = ctx.dispatch_mem_map();
-        const uint32_t first_stream = mem_map.get_dispatch_stream_index(0);
-        const uint32_t completion_counter_offset = mem_map.get_completion_counter_offset(cq_id);
-        address = mem_map.get_dispatch_message_addr_start() + completion_counter_offset * this->l1_alignment +
-                  mem_map.get_sync_offset(stream - first_stream);
+        address = mem_map.get_completion_counter_addr(cq_id, stream - mem_map.get_dispatch_stream_index(0));
         uint32_t new_flags = flags & ~(CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM);
         new_flags |= CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY;
         if (flags & CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM) {
@@ -553,6 +550,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
     uint32_t wait_count,
     uint32_t go_signal,
     uint32_t wait_stream,
+    uint8_t sub_device_index,
     uint8_t multicast_go_offset,
     DispatcherSelect dispatcher_type) {
     uint32_t lengthB = sizeof(CQDispatchCmd);
@@ -567,6 +565,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         mcast_cmd->mcast.wait_count = wait_count;
         mcast_cmd->mcast.multicast_go_offset = multicast_go_offset;
         mcast_cmd->mcast.wait_stream = wait_stream;
+        mcast_cmd->mcast.sub_device_index = sub_device_index;
     };
     CQDispatchCmd* mcast_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
 

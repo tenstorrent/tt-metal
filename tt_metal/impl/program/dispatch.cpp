@@ -705,7 +705,7 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
     program_command_sequence.stall_command_sequences[UncachedStallSequenceIdx].add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
         0,
-        metal_ctx.dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
+        metal_ctx.dispatch_mem_map().get_completion_stream(*sub_device_id),
         0,
         /*cq_id=*/0);
     // Empty wait command initialized here. Will get updated when program is enqueued.
@@ -714,7 +714,7 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
     program_command_sequence.stall_command_sequences[CachedStallSequenceIdx].add_dispatch_wait(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
         0,
-        metal_ctx.dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
+        metal_ctx.dispatch_mem_map().get_completion_stream(*sub_device_id),
         0,
         /*cq_id=*/0);
 }
@@ -2360,7 +2360,8 @@ public:
             // go_signal carries only go_msg_t word 0 ({signal, go_count}); go_count is a dispatcher-overridden
             // placeholder. The done-return address (word 1) is written separately by SET_GO_SIGNAL_NOC_ADDR.
             metal_ctx.hal().make_go_msg_u32(0, dev_msgs::RUN_MSG_GO),
-            metal_ctx.dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
+            metal_ctx.dispatch_mem_map().get_completion_stream(sub_device_index),
+            sub_device_index,
             has_multicast_launch_cmds ? sub_device_index : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
             dispatcher_for_go_signal);
 
@@ -2369,7 +2370,7 @@ public:
             "Go Signal (MCAST): dispatcher={}, sub_device_idx={}, stream_idx={}",
             dispatcher_for_go_signal == DispatcherSelect::DISPATCH_MASTER ? "MASTER" : "SUBORDINATE",
             sub_device_index,
-            metal_ctx.dispatch_mem_map().get_dispatch_stream_index(sub_device_index));
+            metal_ctx.dispatch_mem_map().get_completion_stream(sub_device_index));
 
         program_command_sequence.mcast_go_signal_cmd_ptr =
             &(reinterpret_cast<CQDispatchCmd*>(
@@ -2423,8 +2424,7 @@ void assemble_device_commands(
         metal_ctx, mesh_device, constants, program, batched_transfers, absolute_cross_node_config_transfers);
 
     PrefetcherPipeCommandGenerator prefetcher_pipe_command_generator;
-    prefetcher_pipe_command_generator.construct_commands(
-        metal_ctx, mesh_device, constants, program, batched_transfers);
+    prefetcher_pipe_command_generator.construct_commands(metal_ctx, mesh_device, constants, program, batched_transfers);
 
     BatchedTransferGenerator batched_transfer_generator;
     batched_transfer_generator.construct_commands(metal_ctx, batched_transfers, program_config_buffer_calculator);
@@ -2768,9 +2768,7 @@ void update_program_dispatch_commands(
     if (!metal_ctx.hal().has_stream_registers()) {
         const auto& mem_map = metal_ctx.dispatch_mem_map();
         const uint32_t wait_addr =
-            mem_map.get_dispatch_message_addr_start() +
-            mem_map.get_completion_counter_offset(cq_id) * metal_ctx.hal().get_alignment(HalMemType::L1) +
-            mem_map.get_sync_offset(*sub_device_id);
+            mem_map.get_completion_counter_addr(cq_id, mem_map.get_completion_counter_index(*sub_device_id));
         cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
             wait_addr_offset, &wait_addr, sizeof(uint32_t));
     }
@@ -2938,9 +2936,8 @@ void update_traced_program_dispatch_commands(
     // when this arch waits via a NOC stream register instead of an L1 address.
     if (!hal.has_stream_registers()) {
         const auto& mem_map = metal_ctx.dispatch_mem_map();
-        const uint32_t wait_addr = mem_map.get_dispatch_message_addr_start() +
-                                   mem_map.get_completion_counter_offset(cq_id) * hal.get_alignment(HalMemType::L1) +
-                                   mem_map.get_sync_offset(*sub_device_id);
+        const uint32_t wait_addr =
+            mem_map.get_completion_counter_addr(cq_id, mem_map.get_completion_counter_index(*sub_device_id));
         cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
             wait_addr_offset, &wait_addr, sizeof(uint32_t));
     }
@@ -3438,7 +3435,8 @@ void reset_worker_dispatch_state_on_device(
                 // go_signal word 0: RESET_READ_PTR control (go_count is a dispatcher-overridden placeholder). The
                 // done-return address (word 1) is written by the GO slot clear that precedes this reset.
                 metal_ctx.hal().make_go_msg_u32(0, dev_msgs::RUN_MSG_RESET_READ_PTR),
-                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(i),
+                metal_ctx.dispatch_mem_map().get_completion_stream(i),
+                static_cast<uint8_t>(i),
                 mesh_device->impl().has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
                 dispatcher_for_go_signal);
         }
@@ -3457,7 +3455,7 @@ void reset_worker_dispatch_state_on_device(
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
                 0,
-                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(i),
+                metal_ctx.dispatch_mem_map().get_completion_stream(i),
                 expected_num_workers,
                 cq_id,
                 1);
@@ -3465,7 +3463,7 @@ void reset_worker_dispatch_state_on_device(
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
-            metal_ctx.dispatch_mem_map().get_dispatch_stream_index(i),
+            metal_ctx.dispatch_mem_map().get_completion_stream(i),
             expected_num_workers,
             cq_id);
     }
@@ -3618,7 +3616,7 @@ void clear_worker_go_messages_on_device(
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
-            metal_ctx.dispatch_mem_map().get_dispatch_stream_index(i),
+            metal_ctx.dispatch_mem_map().get_completion_stream(i),
             expected_num_workers_completed[i],
             cq_id);
     }
@@ -3672,7 +3670,7 @@ void reset_expected_num_workers_completed_on_device(
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
-            metal_ctx.dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
+            metal_ctx.dispatch_mem_map().get_completion_stream(*sub_device_id),
             num_expected_workers,
             cq_id,
             dispatcher_type);

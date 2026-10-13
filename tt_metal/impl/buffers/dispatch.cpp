@@ -742,7 +742,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
-                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
+                metal_ctx.dispatch_mem_map().get_completion_stream(offset_index),
                 dispatch_params.expected_num_workers_completed[offset_index],
                 dispatch_params.cq_id);
         }
@@ -991,7 +991,7 @@ void issue_buffer_dispatch_command_sequence(
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
-                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
+                metal_ctx.dispatch_mem_map().get_completion_stream(offset_index),
                 dispatch_params.expected_num_workers_completed[offset_index],
                 dispatch_params.cq_id);
         }
@@ -1522,7 +1522,7 @@ void issue_read_buffer_dispatch_command_sequence(
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
-            MetalContext::instance(context_id).dispatch_mem_map().get_dispatch_stream_index(offset_index),
+            MetalContext::instance(context_id).dispatch_mem_map().get_completion_stream(offset_index),
             dispatch_params.expected_num_workers_completed[offset_index],
             dispatch_params.cq_id);
     }
@@ -1530,7 +1530,7 @@ void issue_read_buffer_dispatch_command_sequence(
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
         0,
-        MetalContext::instance(context_id).dispatch_mem_map().get_dispatch_stream_index(offset_index),
+        MetalContext::instance(context_id).dispatch_mem_map().get_completion_stream(offset_index),
         dispatch_params.expected_num_workers_completed[offset_index],
         dispatch_params.cq_id);
 
@@ -1875,8 +1875,7 @@ void copy_completion_queue_data_into_user_space(
     }
 }
 
-ttsl::Span<const SubDeviceId> select_sub_device_ids(
-    IDevice* device, ttsl::Span<const SubDeviceId> sub_device_ids) {
+ttsl::Span<const SubDeviceId> select_sub_device_ids(IDevice* device, ttsl::Span<const SubDeviceId> sub_device_ids) {
     if (sub_device_ids.empty()) {
         return device->get_sub_device_stall_group();
     }
