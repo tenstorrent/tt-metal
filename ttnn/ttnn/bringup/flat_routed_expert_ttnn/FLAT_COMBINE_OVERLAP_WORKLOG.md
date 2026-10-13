@@ -769,6 +769,12 @@ NOC by column half / by core parity; `DRB_DROT=1` down cores rotating), us per c
   max worst 1533 -> 1525. Dream's uniform cases: -2..-7% on 7 of 8 (DSv3 635 -> 605, K2.7 860 -> 801, K3
   1317 -> 1265, GLM 5.3 568 -> 555, Mistral-S4 214 -> 202, DSv4-Flash 352 -> 335, DSv4-Pro 1136 -> 1111,
   MiniMax-M3 415 -> 419). So the bench's -8.8% (bytes only) is -2..-7% in the op, at small M only.
+- **In this tree (06cf966ebb3, cherry-picked, default on):** overlap accuracy 4 / 4, all 8 overlap calls
+  bit-identical to flat then combine (twice: 120 s and the default 5 s dispatch timeout). Overlap perf, us
+  (MIMO_FL_DW_ROT=0 -> default): Kimi bal 1141.4 -> 1136.8, hot 1658.5 -> 1652.2; GLM bal 810.2 -> 809.3, hot
+  1455.5 -> 1454.2 (-0.1..-0.4%: the overlap's flat runs on rows 1-9 at np 2 with 47 down cores and is not DRAM-bound
+  the way the full-grid small-M sweep is). One accuracy run before these hung once on its first call (5 s timeout,
+  then a fabric router sync timeout at the reset); not reproduced in two reruns.
 
 ## 9. How to run (PR tree)
 ```
