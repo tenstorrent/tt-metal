@@ -594,13 +594,17 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceH) {
         if (math_fid == 1) {
             continue;
         }
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
+            continue;
+        }
         for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
              reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
-                          math_fid == std::uint8_t(MathFidelity::HiFi4))) {
+                          math_fid == std::uint8_t(MathFidelity::LoFi))) {
                         // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
@@ -632,6 +636,10 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceW) {
          math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
         if (math_fid == 1) {
+            continue;
+        }
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
             continue;
         }
         for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
@@ -669,6 +677,10 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHW) {
         if (math_fid == 1) {
             continue;
         }
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
+            continue;
+        }
         for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
              reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
@@ -679,7 +691,7 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHW) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
-                          math_fid == std::uint8_t(MathFidelity::HiFi4))) {
+                          math_fid == std::uint8_t(MathFidelity::LoFi))) {
                         // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
@@ -717,13 +729,17 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHMathOnly) {
         if (math_fid == 1) {
             continue;
         }
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
+            continue;
+        }
         for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
              reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
-                          math_fid == std::uint8_t(MathFidelity::HiFi4))) {
+                          math_fid == std::uint8_t(MathFidelity::LoFi))) {
                         // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
@@ -758,13 +774,17 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWMathOnly) {
         if (math_fid == 1) {
             continue;
         }
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
+            continue;
+        }
         for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
              reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
-                          math_fid == std::uint8_t(MathFidelity::HiFi4))) {
+                          math_fid == std::uint8_t(MathFidelity::LoFi))) {
                         // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
@@ -799,6 +819,10 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHWMathOnly) {
         if (math_fid == 1) {
             continue;
         }
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
+            continue;
+        }
         for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
              reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
@@ -809,7 +833,7 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHWMathOnly) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
-                          math_fid == std::uint8_t(MathFidelity::HiFi4))) {
+                          math_fid == std::uint8_t(MathFidelity::LoFi))) {
                         // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
