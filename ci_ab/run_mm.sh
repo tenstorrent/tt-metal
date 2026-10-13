@@ -6,7 +6,7 @@
 # package (the JIT reads headers and kernels from both); each variant has its own fresh JIT cache.
 # Items: i0b tt_transformers test_model quick/accuracy (Llama 3.1 8B decode, one layer, random weights, 6 iterations,
 # the accuracy precision: DRAM-sharded QKV, WO, FF1, FF3, FF2 and the LM head), i1 Llama 3.1 8B prefill QKV and WO at
-# 128 tokens. Order per item M H H2 H2 H M, two blocks.
+# 128 tokens (left out of this repeat). Order per item M H H2 H2 H M, three blocks.
 set +e +o pipefail
 R=$(git rev-parse --show-toplevel); S=$R/ci_ab; cd $R
 export TT_METAL_HOME=$R TRACY_NO_WEB_SERVER=1 PYTHONPATH=$R:$S HF_MODEL=meta-llama/Llama-3.1-8B-Instruct HF_HUB_OFFLINE=1 \
@@ -32,10 +32,9 @@ use() {
 }
 ITEMS=(
   'i0b|["models/tt_transformers/tests/test_model.py", "-k", "quick and accuracy"]'
-  'i1|["ci_ab/test_ra_mm.py::test_ra_llama8b_prefill128_attn"]'
 )
 declare -A SEEN
-for blk in 1 2; do
+for blk in 1 2 3; do
   for it in "${ITEMS[@]}"; do
     tag=${it%%|*}; args=${it#*|}
     for v in M H H2 H2 H M; do
@@ -47,7 +46,12 @@ for blk in 1 2; do
       echo "== run $tag $v $r rc=$? $(date -u +%T) $(grep -aE '[0-9]+ (passed|failed|skipped)' $o.log | tail -1)"
       [[ $blk == 1 && $v == M && $r == 1a ]] && grep -a -m4 -E "FAILED|Error|error:" $o.log | cut -c1-240
       python3 $S/tools/sum_ops.py $tag $v $r $o
-      if [[ -z ${SEEN[elf$v]} ]]; then SEEN[elf$v]=1; python3 $S/tools/elfsum.py $v $TT_METAL_CACHE; fi
+      if [[ -z ${SEEN[elf$v]} ]]; then SEEN[elf$v]=1; python3 $S/tools/elfsum.py $v $TT_METAL_CACHE | tee $O/rae_$v.txt; fi
+      if [[ $v == H2 && -z ${SEEN[guard]} ]]; then SEEN[guard]=1
+        pk() { grep -o 'trisc2:[^ ]*' $O/rae_$1.txt; }
+        if [[ -z $(pk M) || $(pk M) == $(pk H) || $(pk H) != $(pk H2) ]]; then echo "== GUARD FAIL: M $(pk M) H $(pk H) H2 $(pk H2)"; exit 1; fi
+        echo "== GUARD ok: pack thread M $(pk M), H $(pk H), H2 $(pk H2)"
+      fi
       rm -rf $o
     done
   done
