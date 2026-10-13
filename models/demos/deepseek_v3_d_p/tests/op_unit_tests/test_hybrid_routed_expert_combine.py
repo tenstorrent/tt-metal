@@ -24,6 +24,7 @@ TtMoe runs this overlap in every traced Blackhole prefill, so CI runs the 8x4 ac
 """
 
 import heapq
+import os
 import time
 from types import SimpleNamespace
 
@@ -172,9 +173,11 @@ _TRACE_REGION_SIZE = 64 * 1024 * 1024
 def _device_params(fabric_cfg, model_id):
     params = dict(fabric_to_device_params(fabric_cfg))
     # The payload TtMoe opens the mesh with, so combine sends each token in two halves as the model does.
-    params["fabric_router_config"] = create_fabric_router_config(
-        max_payload_size=moe_fabric_payload_size(_MODELS[model_id])
-    )
+    payload = moe_fabric_payload_size(_MODELS[model_id])
+    # A/B knob: "full" fits a whole bf16 token per packet, so combine never splits one.
+    if os.environ.get("RE_COMBINE_PAYLOAD") == "full":
+        payload = 2 * _MODELS[model_id].EMB_SIZE + 64
+    params["fabric_router_config"] = create_fabric_router_config(max_payload_size=payload)
     params["trace_region_size"] = _TRACE_REGION_SIZE
     return params
 
@@ -674,11 +677,13 @@ def test_hybrid_routed_expert_combine_overlap_perf(mesh_device, device_params, t
     if variant == "8x1-submesh":
         mesh_device = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
     case = _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=variant == "dg0-only")
+    logger.info(f"fabric payload {device_params['fabric_router_config'].max_packet_payload_size_bytes} B")
 
     case.solo_routed_expert()
     re_trace, traced_re_out = _capture(mesh_device, case.solo_routed_expert)
     try:
         traced_re_us = _replay_us(mesh_device, re_trace, _PERF_ITERS)
+        ttnn.ReadDeviceProfiler(mesh_device)
     finally:
         ttnn.release_trace(mesh_device, re_trace)
 
@@ -688,6 +693,7 @@ def test_hybrid_routed_expert_combine_overlap_perf(mesh_device, device_params, t
     combine_trace, combine_out = _capture(mesh_device, lambda: case.combine(widened, widen=False))
     try:
         traced_combine_us = _replay_us(mesh_device, combine_trace, _PERF_ITERS)
+        ttnn.ReadDeviceProfiler(mesh_device)
     finally:
         ttnn.release_trace(mesh_device, combine_trace)
         del traced_re_out, widened, combine_out
@@ -696,6 +702,7 @@ def test_hybrid_routed_expert_combine_overlap_perf(mesh_device, device_params, t
     overlap_trace, overlap_out = _capture(mesh_device, case.overlapped)
     try:
         traced_overlap_us = _replay_us(mesh_device, overlap_trace, _PERF_ITERS)
+        ttnn.ReadDeviceProfiler(mesh_device)
     finally:
         ttnn.release_trace(mesh_device, overlap_trace)
         del overlap_out

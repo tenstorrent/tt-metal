@@ -534,6 +534,29 @@
   budget_type: e2e
   category: dp_op_unit_tests
 
+- name: RE+combine overlap payload A/B (LB)
+  cmd: |
+    export TT_METAL_DEVICE_PROFILER=1
+    T=models/demos/deepseek_v3_d_p/tests/op_unit_tests
+    args=""
+    for cell in kimi-k27-8x1-balanced glm-53-8x1-balanced kimi-k27-8x1-hot-expert glm-53-8x1-hot-expert; do
+      for payload in half full; do
+        d=/tmp/reab/$payload/$cell
+        rm -rf $d && mkdir -p $d
+        echo "=== $cell payload=$payload"
+        RE_COMBINE_PAYLOAD=$payload TT_METAL_PROFILER_DIR=$d pytest $T/test_hybrid_routed_expert_combine.py -vvv --tb=short -k "test_hybrid_routed_expert_combine_overlap_perf and $cell" || echo "FAILED $cell payload=$payload"
+        args="$args $cell/$payload=$d/.logs/profile_log_device.csv"
+      done
+    done
+    python3 $T/re_combine_tail.py $args
+  skus:
+    bh_loudbox:
+      timeout: 90
+  owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
+  budget_type: e2e
+  category: re_combine_payload_ab
+
 - name: Disaggregated prefill op unit tests (P150)
   cmd: |
     exit_code=0
