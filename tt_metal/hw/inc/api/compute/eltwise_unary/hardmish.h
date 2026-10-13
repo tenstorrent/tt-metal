@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_hardmish.h"
@@ -32,11 +33,21 @@ namespace ckernel {
  * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ *
+ * | Template Parameter | Description                                                                   | Type       | Valid Range                  | Default    |
+ * |--------------------|-------------------------------------------------------------------------------|------------|------------------------------|------------|
+ * | DEST_16BIT_FORMAT  | Format a 16-bit DST holds; Float16_b results are rounded to nearest-even      | DataFormat | Float16_b, Float16           | Float16_b  |
  */
 // clang-format on
-ALWI void hardmish_tile(uint32_t idst) {
+template <DataFormat DEST_16BIT_FORMAT = DataFormat::Float16_b>
+ALWI void hardmish_tile(std::uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, hardmish, (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        hardmish,
+        (APPROX, DST_ACCUM_MODE, DEST_16BIT_FORMAT, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC));
 }
 
 /**
