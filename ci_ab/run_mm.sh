@@ -4,9 +4,9 @@
 # Variants: M (main f0832760bf5's 27 device files that #58816 changes), H (the head 96dde2a4fcb's), H2 (H's files again
 # under its own cache: the A/A pair). Before each run the variant's files go into the checkout and the installed ttnn
 # package (the JIT reads headers and kernels from both); each variant has its own fresh JIT cache.
-# Items: i0 tt_transformers test_model quick/performance (Llama 3.1 8B decode, one layer, random weights, 6 iterations:
-# DRAM-sharded QKV, WO, FF1, FF3, FF2 and the LM head), i1 Llama 3.1 8B prefill QKV and WO at 128 tokens, i2 and i3 ViT-base
-# attention and feed-forward (Blackhole configs). Order per item M H H2 H2 H M, two blocks.
+# Items: i0b tt_transformers test_model quick/accuracy (Llama 3.1 8B decode, one layer, random weights, 6 iterations,
+# the accuracy precision: DRAM-sharded QKV, WO, FF1, FF3, FF2 and the LM head), i1 Llama 3.1 8B prefill QKV and WO at
+# 128 tokens. Order per item M H H2 H2 H M, two blocks.
 set +e +o pipefail
 R=$(git rev-parse --show-toplevel); S=$R/ci_ab; cd $R
 export TT_METAL_HOME=$R TRACY_NO_WEB_SERVER=1 PYTHONPATH=$R:$S HF_MODEL=meta-llama/Llama-3.1-8B-Instruct HF_HUB_OFFLINE=1 \
@@ -31,10 +31,8 @@ use() {
   export TT_METAL_CACHE=$HOME/ra_cache_$v; mkdir -p $TT_METAL_CACHE
 }
 ITEMS=(
-  'i0|["models/tt_transformers/tests/test_model.py", "-k", "quick and performance"]'
+  'i0b|["models/tt_transformers/tests/test_model.py", "-k", "quick and accuracy"]'
   'i1|["ci_ab/test_ra_mm.py::test_ra_llama8b_prefill128_attn"]'
-  'i2|["ci_ab/test_ra_mm.py::test_ra_vit_attention"]'
-  'i3|["ci_ab/test_ra_mm.py::test_ra_vit_feedforward"]'
 )
 declare -A SEEN
 for blk in 1 2; do

@@ -13,7 +13,6 @@ N_CALLS = 7
 # ---- tt_transformers Llama 3.1 8B prefill at 128 tokens on a P150, the model's own weights tensors, memory and program
 # configs (attention.py:1069-1077 QKV, 1309-1316 WO; performance precision), HF_MODEL=meta-llama/Llama-3.1-8B-Instruct ----
 @pytest.mark.parametrize("mesh_device", [len(ttnn.get_device_ids())], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_ra_llama8b_prefill128_attn(mesh_device):
     from models.tt_transformers.tt.attention import Attention
     from models.tt_transformers.tt.ccl import TT_CCL
@@ -43,41 +42,3 @@ def test_ra_llama8b_prefill128_attn(mesh_device):
                         dtype=att.activation_dtype or ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         program_config=args.get_attn_wo_program_config(Mode.PREFILL, 128, None))
         ttnn.deallocate(y)
-
-
-# ---- ViT-base on Blackhole, the model's attention and feed-forward with random weights at batch 10
-# (vit/blackhole/tt/ttnn_optimized_sharded_vit_bh.py: QKV, Q K^T, P V, self output, FF1, FF2) ----
-def _vit(device):
-    from types import SimpleNamespace as NS
-    import transformers
-    from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
-    from models.demos.vision.classification.vit.blackhole.tt import ttnn_optimized_sharded_vit_bh as vit
-
-    torch.manual_seed(0)
-    config = vit.update_model_config(transformers.ViTConfig(), 10)
-    lin = lambda o, i: NS(weight=ttnn.to_device(preprocess_linear_weight(torch.randn(o, i), dtype=ttnn.bfloat8_b), device),
-                          bias=ttnn.to_device(preprocess_linear_bias(torch.randn(o), dtype=ttnn.bfloat8_b), device))
-    h = ttnn.from_torch(torch.rand(10, 224, config.hidden_size) * 2 - 1, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT,
-                        device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    mc = ttnn.create_sharded_memory_config(h.shape, core_grid=config.core_grid, strategy=ttnn.ShardStrategy.BLOCK,
-                                           orientation=ttnn.ShardOrientation.ROW_MAJOR)
-    return vit, config, lin, NS, h, mc
-
-
-def test_ra_vit_attention(device):
-    vit, config, lin, NS, h, mc = _vit(device)
-    p = NS(attention=NS(query_key_value=lin(3 * config.hidden_size, config.hidden_size)),
-           output=NS(dense=lin(config.hidden_size, config.hidden_size)))
-    for _ in range(N_CALLS):
-        x = ttnn.to_memory_config(h, memory_config=mc, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(vit.vit_attention(config, x, parameters=p))
-
-
-def test_ra_vit_feedforward(device):
-    vit, config, lin, NS, h, mc = _vit(device)
-    p = NS(intermediate=NS(dense=lin(config.intermediate_size, config.hidden_size)),
-           output=NS(dense=lin(config.hidden_size, config.intermediate_size)))
-    for _ in range(N_CALLS):
-        x = ttnn.to_memory_config(h, memory_config=mc, dtype=ttnn.bfloat8_b)
-        r = ttnn.to_memory_config(h, memory_config=mc, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(vit.vit_feedforward(config, x, r, parameters=p))
