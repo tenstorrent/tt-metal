@@ -101,6 +101,12 @@ def read(paths: list[Path]) -> RawRun:
     return run
 
 
+def unreported_metrics(run: RawRun) -> list[str]:
+    """Declared metrics that no case reported. Each case may report only some of them."""
+    reported = {m for per_case in (*run.samples.values(), *run.aggregated.values()) for m in per_case}
+    return sorted(set(run.metrics) - reported)
+
+
 def _read_rows(rows: list, run: RawRun, path: Path) -> None:
     for row in rows:
         if not isinstance(row, dict) or not isinstance(row.get("name"), str):
