@@ -1240,6 +1240,19 @@ def test_untilize_zero_volume_host_tensor_is_rejected(shape, expect_error):
         ttnn.untilize(host_tensor)
 
 
+@pytest.mark.parametrize("placement", ["host", "deallocated"])
+def test_untilize_device_less_tensor_is_rejected(device, placement, expect_error):
+    torch_input = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+    if placement == "host":
+        tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    else:
+        tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn.deallocate(tensor)
+
+    with expect_error(RuntimeError, "must be allocated on a device"):
+        ttnn.untilize(tensor, use_multicore=False)
+
+
 # Unpadding only ever shrinks, so no output extent may exceed the padded input. Volume alone does
 # not catch that: [0, 64] with inclusive ends [0, UINT32_MAX] is zero-volume but shaped [1, 0].
 def test_untilize_with_unpadding_zero_volume_rejects_grown_extent(device, expect_error):
