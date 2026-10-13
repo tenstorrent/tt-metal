@@ -35,8 +35,8 @@ constexpr std::uint32_t FAST_UNTILIZE_UNIT_DIM =
     FAST_UNTILIZE_FACE_PASSES ? ckernel::FAST_UNTILIZE_MAX_PASS_UNIT_DIM : ckernel::fast_untilize_max_unit_dim<FULL_CT_DIM, DST_ACCUM_MODE>();
 constexpr bool FAST_UNTILIZE_SINGLE_UNIT             = FULL_CT_DIM <= FAST_UNTILIZE_UNIT_DIM;
 constexpr std::uint32_t MAX_UNITS_PER_ROW            = (FULL_CT_DIM + FAST_UNTILIZE_UNIT_DIM - 1) / FAST_UNTILIZE_UNIT_DIM;
-constexpr std::uint32_t FAST_UNTILIZE_FIRST_UNIT_DIM = FAST_UNTILIZE_FACE_PASSES ? ckernel::fast_untilize_next_pass_row_unit(FULL_CT_DIM)
-                                                                                 : ckernel::fast_untilize_next_unit_dim<FAST_UNTILIZE_UNIT_DIM>(FULL_CT_DIM);
+constexpr std::uint32_t FAST_UNTILIZE_FIRST_UNIT_DIM =
+    FAST_UNTILIZE_FACE_PASSES ? ckernel::fast_untilize_first_pass_unit(FULL_CT_DIM) : ckernel::fast_untilize_next_unit_dim<FAST_UNTILIZE_UNIT_DIM>(FULL_CT_DIM);
 // Mirror production fast_untilize: test both ambient dest_sync values while
 // running the private fast region with half-sync double buffering.
 constexpr auto FAST_UNTILIZE_INTERNAL_DEST_SYNC = ckernel::FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE;
@@ -63,14 +63,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
         if constexpr (FAST_UNTILIZE_FACE_PASSES)
         {
-            if constexpr (ckernel::fast_untilize_unit_uses_passes(FAST_UNTILIZE_FIRST_UNIT_DIM))
-            {
-                ckernel::_llk_unpack_fast_untilize_pass_init_(formats.unpack_A_src, formats.unpack_A_dst, FAST_UNTILIZE_FIRST_UNIT_DIM);
-            }
-            else
-            {
-                ckernel::_llk_unpack_fast_untilize_init_<DST_ACCUM_MODE>(formats.unpack_A_src, formats.unpack_A_dst, FAST_UNTILIZE_FIRST_UNIT_DIM);
-            }
+            ckernel::_llk_unpack_fast_untilize_pass_init_(formats.unpack_A_src, formats.unpack_A_dst, FAST_UNTILIZE_FIRST_UNIT_DIM);
         }
         else
         {
@@ -91,9 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (FAST_UNTILIZE_FACE_PASSES)
         {
-            std::uint32_t prev_unit_dim = ckernel::fast_untilize_unit_uses_passes(FAST_UNTILIZE_FIRST_UNIT_DIM)
-                                              ? (FAST_UNTILIZE_FIRST_UNIT_DIM | ckernel::FAST_UNTILIZE_PASS_MOP_KEY)
-                                              : FAST_UNTILIZE_FIRST_UNIT_DIM;
+            std::uint32_t prev_unit_dim = FAST_UNTILIZE_FIRST_UNIT_DIM | ckernel::FAST_UNTILIZE_PASS_MOP_KEY;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
@@ -116,12 +107,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         }
                         else
                         {
-                            if (unit_dim != prev_unit_dim)
-                            {
-                                ckernel::_llk_unpack_fast_untilize_reinit_unit_dim_<DST_ACCUM_MODE>(unit_dim);
-                                prev_unit_dim = unit_dim;
-                            }
-                            ckernel::_llk_unpack_fast_untilize_block_(address, unit_dim);
+                            ckernel::_llk_unpack_fast_untilize_rest_block_(address, unit_dim);
                         }
                         chunk_col += unit_dim;
                     }

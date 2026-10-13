@@ -5,7 +5,7 @@
 # variant has its own fresh JIT cache. usage: run_hr_op.sh <plan file>, lines "<tag> <variant> <test file>"
 set -uo pipefail
 export HWLOCK_HELD=ci TRACY_NO_WEB_SERVER=1
-R=$(git rev-parse --show-toplevel); S=$R/scratch_hr; cd $R
+R=$(git rev-parse --show-toplevel); S=$R/scratch_hr; PLAN=$(readlink -f "$1"); cd $R
 SP=$(python -c "import ttnn, os; print(os.path.dirname(os.path.dirname(os.path.abspath(ttnn.__file__))))")
 echo "== checkout $R head $(git rev-parse HEAD), package root $SP"
 export PYTHONPATH="$S/tools:$R${PYTHONPATH:+:$PYTHONPATH}"
@@ -23,7 +23,7 @@ place() {
 while read -r rel; do suf=$(echo "$rel" | awk -F/ '{n=NF; print $(n-3)"/"$(n-2)"/"$(n-1)"/"$n}'); echo "== $rel -> $(find "$SP" -path "*/$suf" -type f 2>/dev/null | wc -l) package copies"; done < $S/variants/head/files.txt
 elfsum() {
   local c=$1
-  for k in $(ls -d $c/*/kernels/* 2>/dev/null | xargs -n1 basename | sort -u); do
+  for k in $(ls -d $c/*/kernels/* 2>/dev/null | xargs -r -n1 basename | sort -u); do
     h=$(for e in $(ls $c/*/kernels/$k/*/trisc[012]/trisc[012].elf 2>/dev/null | sort); do
           if [[ -n $OBJ ]]; then $OBJ -O binary -j .text "$e" /tmp/elf.bin 2>/dev/null && md5sum < /tmp/elf.bin; else md5sum < "$e"; fi
         done | md5sum | cut -c1-12)
@@ -45,8 +45,8 @@ while read -r tag v tests; do
   printf '%s\n' "${T[@]}" > $OUTD/nodes_${i}.txt
   HR_NODES=$OUTD/nodes_${i}.txt timeout -s INT -k 60 ${CI_LIMIT:-1800} python -m tracy -r -p --no-web-server -o $OUT $S/tools/run_nodes.py > $OUTD/log_${tag}_${i}_$v.txt 2>&1
   rc=$?; echo "== $tag $v ($i) rc=$rc $(date -u +%T): $(grep -E 'passed|failed' $OUTD/log_${tag}_${i}_$v.txt | tail -1)"
-  if [[ $rc -ne 0 ]] || ! grep -q passed $OUTD/log_${tag}_${i}_$v.txt; then grep -a -m8 -E "error:|undefined reference|Error" $OUTD/log_${tag}_${i}_$v.txt; grep -a -E "^(FAILED|ERROR)" $OUTD/log_${tag}_${i}_$v.txt | head -20; fi
-done < "$1"
+  if [[ $rc -ne 0 ]] || ! grep -q passed $OUTD/log_${tag}_${i}_$v.txt; then grep -a -m8 -E "error:|undefined reference|Error" $OUTD/log_${tag}_${i}_$v.txt; grep -a -E "^(FAILED|ERROR)" $OUTD/log_${tag}_${i}_$v.txt | head -20; tail -40 $OUTD/log_${tag}_${i}_$v.txt; fi
+done < "$PLAN"
 place $S/variants/head
 echo "== GUARD: compute ELF hashes per variant (17_CI_AB.md)"
 for v in main head fp; do elfsum $HOME/hrcache_$v > $OUTD/elfsum_$v.txt; echo "== ELFs of $v: $(wc -l < $OUTD/elfsum_$v.txt) kernels"; cat $OUTD/elfsum_$v.txt; done
@@ -54,7 +54,7 @@ for p in "head fp" "main head"; do
   set -- $p; n=$(join $OUTD/elfsum_$1.txt $OUTD/elfsum_$2.txt | awk '$2 != $3' | wc -l)
   echo "GUARD $1 against $2: $n kernels differ"; [[ $n == 0 ]] && echo "GUARD FAIL $1 and $2 read the same builds"
 done
-for tag in $(awk '!/^#/ && NF {print $1}' "$1" | sort -u); do
+for tag in $(awk '!/^#/ && NF {print $1}' "$PLAN" | sort -u); do
   echo "== reduce $tag (base main)"; PROF_BASE=main python $S/tools/prof_reduce.py $OUTD $tag 2>&1
   echo "== reduce $tag (base head)"; PROF_BASE=head python $S/tools/prof_reduce.py $OUTD $tag 2>&1
 done

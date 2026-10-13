@@ -68,7 +68,7 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
                                            : four_tile_chunks
                                                ? FAST_UNTILIZE_MAX_UNIT_DIM
                                                : fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
-    constexpr std::uint32_t first_unit_dim = face_passes ? fast_untilize_next_pass_row_unit(full_ct_dim)
+    constexpr std::uint32_t first_unit_dim = face_passes ? fast_untilize_first_pass_unit(full_ct_dim)
                                                          : fast_untilize_next_unit_dim<max_unit_dim>(full_ct_dim);
 
     // Fast-untilize can run immediately after other LLKs (for example matmul
@@ -139,10 +139,8 @@ ALWI void fast_untilize_block(
         four_tile_chunks ? FAST_UNTILIZE_MAX_UNIT_DIM : fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
 
     if constexpr (dense_input && !four_tile_chunks && fast_untilize_face_passes<full_ct_dim, is_fp32_dest_acc_en>()) {
-        constexpr std::uint32_t first_unit_dim = fast_untilize_next_pass_row_unit(full_ct_dim);
-        [[maybe_unused]] std::uint32_t prev_unpack_unit_dim = fast_untilize_unit_uses_passes(first_unit_dim)
-                                                                  ? (first_unit_dim | FAST_UNTILIZE_PASS_MOP_KEY)
-                                                                  : first_unit_dim;
+        constexpr std::uint32_t first_unit_dim = fast_untilize_first_pass_unit(full_ct_dim);
+        [[maybe_unused]] std::uint32_t prev_unpack_unit_dim = first_unit_dim | FAST_UNTILIZE_PASS_MOP_KEY;
         [[maybe_unused]] std::uint32_t prev_pack_unit_dim = 0;
 
         for (std::uint32_t tiles_done = 0; tiles_done < full_ct_dim;) {
@@ -162,8 +160,7 @@ ALWI void fast_untilize_block(
                 }
             } else if constexpr (full_ct_dim > FAST_UNTILIZE_MAX_PASS_UNIT_DIM) {
                 MATH((_llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
-                UNPACK((llk_unpack_fast_untilize_block<is_fp32_dest_acc_en>(
-                    icb, input_tile_index + tiles_done, unit_dim, prev_unpack_unit_dim)));
+                UNPACK((llk_unpack_fast_untilize_rest_block(icb, input_tile_index + tiles_done, unit_dim)));
                 MATH((llk_math_fast_untilize_block<is_fp32_dest_acc_en, FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST>(
                     0, unit_dim)));
                 MATH((_llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
