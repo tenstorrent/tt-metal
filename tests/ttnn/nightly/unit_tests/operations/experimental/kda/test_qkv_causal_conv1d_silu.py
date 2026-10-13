@@ -437,7 +437,7 @@ def test_qkv_causal_conv1d_silu_rejects_unsupported_compute_config(
 def test_qkv_causal_conv1d_silu_production_performance(
     zero_actual_start, device: ttnn.Device, case: _BenchmarkCase
 ) -> None:
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         pytest.fail("Real-time profiler must be active for QKV causal Conv1D plus SiLU performance checks")
 
     _, (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, widths=case.widths)
@@ -500,7 +500,7 @@ _K3_EXPECTED_DURATION_NS = 61_130
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_qkv_causal_conv1d_silu_kimi_k3_performance(zero_actual_start, device: ttnn.Device) -> None:
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         pytest.fail("Real-time profiler must be active for QKV causal Conv1D plus SiLU performance checks")
 
     (inputs, history, taps), (_, history_tt, taps_tt) = qkv_device_inputs(device, sequence=_K3_ROWS, widths=_K3_WIDTHS)

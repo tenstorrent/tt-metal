@@ -131,7 +131,7 @@ def _build_validate_argv(args: argparse.Namespace, report_json: Path) -> list[st
 
 def _record_to_row(record) -> dict:
     return {
-        "program_id": record.program_id,
+        "program_id": record.runtime_id,
         "chip_id": record.chip_id,
         "start_timestamp": record.start_timestamp,
         "end_timestamp": record.end_timestamp,
@@ -149,36 +149,59 @@ def _register_rt_profiler(jsonl_path: Path | None):
     except Exception:
         return None, []
 
-    register = getattr(getattr(ttnn, "device", None), "RegisterProgramRealtimeProfilerCallback", None)
-    if register is None:
+    ttnn_device = getattr(ttnn, "device", None)
+    register = getattr(ttnn_device, "RegisterProgramRealtimeProfilerCallback", None)
+    unregister = getattr(ttnn_device, "UnregisterProgramRealtimeProfilerCallback", None)
+    if register is None or unregister is None:
         return None, []
+
+    from models.experimental.audiox.demo import tt_demo as tt_demo_mod
 
     jsonl_path.parent.mkdir(parents=True, exist_ok=True)
     out = jsonl_path.open("w", encoding="utf-8")
     lock = threading.Lock()
     rows = []
+    handles = {}
 
-    def on_record(record):
-        row = _record_to_row(record)
+    def on_batch(batch):
+        new_rows = [_record_to_row(record) for record in batch.records]
         with lock:
-            rows.append(row)
-            out.write(json.dumps(row) + "\n")
+            for row in new_rows:
+                rows.append(row)
+                out.write(json.dumps(row) + "\n")
             out.flush()
 
-    handle = register(on_record)
-    return (ttnn, handle, out), rows
+    # The callback is scoped to a MeshDevice, and validate_mod opens/closes the device internally,
+    # so hook tt_demo's open/close to register right after open and unregister after close (close
+    # drains the final records into the callback first).
+    original_open = tt_demo_mod.open_tt_device
+    original_close = tt_demo_mod.close_tt_device
+
+    def open_with_rt_profiler(*args, **kwargs):
+        device = original_open(*args, **kwargs)
+        handles[id(device)] = register(device, on_batch)
+        return device
+
+    def close_with_rt_profiler(device):
+        try:
+            original_close(device)
+        finally:
+            handle = handles.pop(id(device), None)
+            if handle is not None:
+                unregister(device, handle)
+
+    tt_demo_mod.open_tt_device = open_with_rt_profiler
+    tt_demo_mod.close_tt_device = close_with_rt_profiler
+    return (tt_demo_mod, original_open, original_close, out), rows
 
 
 def _unregister_rt_profiler(registration) -> None:
     if registration is None:
         return
-    ttnn, handle, out = registration
-    try:
-        unregister = getattr(getattr(ttnn, "device", None), "UnregisterProgramRealtimeProfilerCallback", None)
-        if unregister is not None:
-            unregister(handle)
-    finally:
-        out.close()
+    tt_demo_mod, original_open, original_close, out = registration
+    tt_demo_mod.open_tt_device = original_open
+    tt_demo_mod.close_tt_device = original_close
+    out.close()
 
 
 def _kernel_label(kernel_sources: list[str], program_id: int) -> str:

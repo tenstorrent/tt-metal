@@ -436,17 +436,17 @@ struct RealtimeProfilerSession {
     std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord> records;
     std::optional<tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle> handle;
 
-    void register_callback() {
+    void register_callback(distributed::MeshDevice& mesh) {
         handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
-            [this](const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
+            mesh, [this](const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
                 std::lock_guard<std::mutex> lock(mutex);
                 records.insert(records.end(), batch.records.begin(), batch.records.end());
             });
     }
 
-    void unregister_and_drain() {
+    void unregister_and_drain(distributed::MeshDevice& mesh) {
         if (handle.has_value()) {
-            tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(*handle);
+            tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(mesh, *handle);
             handle.reset();
         }
     }
@@ -513,7 +513,7 @@ struct RealtimeProfilerDrainGuard {
             return;
         }
         session = std::make_unique<RealtimeProfilerSession>();
-        session->register_callback();
+        session->register_callback(*mesh);
         log_info(LogTest, "Real-time profiler: callback registered for timed section.");
     }
 
@@ -526,7 +526,7 @@ struct RealtimeProfilerDrainGuard {
         }
         mesh->quiesce_devices();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        session->unregister_and_drain();
+        session->unregister_and_drain(*mesh);
         const auto records = session->copy_records();
         log_realtime_program_go_done(records);
         log_realtime_op_to_op_gaps(records);
@@ -1084,7 +1084,7 @@ int main(int argc, char** argv) {
             distributed::Finish(cq);
         }
 
-        const bool rt_profiler_active = tt::tt_metal::experimental::IsProgramRealtimeProfilerActive();
+        const bool rt_profiler_active = tt::tt_metal::experimental::IsProgramRealtimeProfilerActive(*mesh_device);
 
         long long elapsed_us = 0;
         const char* mode_label = nullptr;

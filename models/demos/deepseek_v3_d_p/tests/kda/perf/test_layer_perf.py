@@ -370,7 +370,7 @@ def test_synthetic_kimi_k3_perf(
         _GALAXY_HEADS_PER_CHIP,
     ), f"{layout} must run Galaxy's per-chip workload"
     if device_reference_ms is not None:
-        require_realtime_profiler(f"the {layout} device-time gate")
+        require_realtime_profiler(mesh_device, f"the {layout} device-time gate")
     if device_reference_ms is not None:
         samples_ms, device_samples_ms = _trace_device_samples_ms(
             mesh_device, layer, hidden_tt, actual_start=actual_start, actual_end=actual_end

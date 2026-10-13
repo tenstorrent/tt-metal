@@ -285,7 +285,7 @@ def test_topk_large_indices_production_perf_check(
     expected_duration_ns,
 ):
     """Check production-shape duration on the marker-selected host-IOMMU perf runner."""
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         pytest.fail("Real-time profiler must be active for topk_large_indices perf checks (needs IOMMU)")
 
     torch_input = _make_large_index_input(num_rows=num_rows, n=n, k=k)
@@ -321,7 +321,7 @@ def test_topk_large_indices_production_perf_check(
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_topk_large_indices_metadata_trace_production_perf(device):
     """Compare traced scalar and metadata bounds for the production decode shape."""
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         pytest.fail("Real-time profiler must be active for topk_large_indices perf checks (needs IOMMU)")
 
     num_rows = 160
