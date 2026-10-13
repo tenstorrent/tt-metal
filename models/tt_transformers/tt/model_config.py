@@ -4570,7 +4570,12 @@ class ModelArgs:
     def reference_decoder(self, load_checkpoint=False):
         model = self.reference_transformer(wrap=False, load_checkpoint=load_checkpoint)
         layer = model.model.layers[0]
-        use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in ("phi-4",)
+        # Remote Phi-3 computes RoPE internally, while native Transformers 5.x requires the caller to supply it.
+        use_position_embeddings = (
+            layer.__class__.__name__ != "Phi3DecoderLayer"
+            or "position_embeddings" in inspect.signature(layer.forward).parameters
+            or self.base_model_name in ("phi-4",)
+        )
         if hasattr(model.model, "rotary_emb_local"):
             rotary_emb_local = model.model.rotary_emb_local
         else:
