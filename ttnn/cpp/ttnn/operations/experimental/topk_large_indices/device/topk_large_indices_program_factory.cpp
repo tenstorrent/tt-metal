@@ -248,7 +248,11 @@ std::vector<CoreRowAssignment> derive_core_row_assignments(
         const uint64_t num_units = static_cast<uint64_t>(split_rows) * num_segments;
         for (uint64_t unit = 0; unit < cores.size(); ++unit) {
             CoreRowAssignment assignment{
-                .core = cores[unit], .start_row = static_cast<uint32_t>(unit * whole_rounds), .num_rows = whole_rounds};
+                .core = cores[unit],
+                .start_row = static_cast<uint32_t>(unit * whole_rounds),
+                .num_rows = whole_rounds,
+                .seg_first_chunk = 0,
+                .seg_end_chunk = std::numeric_limits<uint32_t>::max()};
             if (unit < num_units) {
                 const uint32_t segment = static_cast<uint32_t>(unit % num_segments);
                 // The last segment's last chunk carries the row tail.
