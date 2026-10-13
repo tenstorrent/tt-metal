@@ -1,0 +1,39 @@
+# Dream-RSI campaign: expert-selection accuracy of moe_grouped_topk (prefill MoE gate) on one Blackhole chip.
+name: moe-grouped-topk-accuracy
+description: moe_grouped_topk expert-selection accuracy vs an fp32 golden on 6 production gates (640 tokens/chip), device time held within 5% of baseline, one Blackhole chip
+machine: local          # 4x BH p300c visible; the test uses 1 chip
+
+editable:
+  - ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/*
+  - tt_metal/hw/ckernels/blackhole/*
+brief: brief.md
+rules:
+  - "The objective is accuracy: fewer fp32-golden experts missed by the device selection. Device kernel time must stay within 5% of the baseline on every case (gate slowdown <= 1.05)."
+  - "Weights must stay accurate: on rows whose expert set matches, max |weight error| <= 0.004 (gate set_weights_max_abs)."
+  - "Do not lower precision anywhere: MathFidelity::HiFi4, fp32_dest_acc_en=true and math_approx_mode=false stay; no approximate SFPU modes, no bf16/bfp8 intermediates. Raising precision (e.g. full-fp32 sort keys, more exact sigmoid/softplus/sqrt) is in scope."
+  - "Keep the op's interface and contracts: stable_sort lowest-index-first tie order, padding_config sentinel rows (index == n_experts), the optional biased_scores debug output, TILE and ROW_MAJOR weights layouts, fp32 and bf16 inputs, n_groups > 1 grouped routing and n_groups == 1 plain top-k."
+  - "moe_gate_common_compute.hpp is also compiled into moe_hash_gate, and the Blackhole LLKs are shared by many ops: in-place changes must keep their interfaces and accuracy. The eval runs the moe_grouped_topk and moe_hash_gate correctness suites; any failure invalidates the attempt."
+  - "Do not special-case the test's shapes, seeds or data; the improvement must hold for any input."
+forbidden_patterns:
+  - 'math_approx_mode\s*=\s*true'
+  - '\.math_fidelity\s*=\s*MathFidelity::(HiFi3|HiFi2|LoFi)'   # the op's ComputeConfigDescriptor; LLK headers name LoFi as defaults
+
+eval:
+  # Writes per case: value = miss_pct + 0.001 (minimized), duration_us, slowdown vs perf_baseline.json;
+  # then runs the correctness suites (~2.5 min).
+  command: python agent_orch/campaigns/moe-grouped-topk-accuracy/eval.py
+  direction: minimize
+  unit: "% missed"
+  # Baseline miss_pct 0.25-0.42 per case; set_weights_max_abs <= 0.0022; device time reproducible to ~0.1%.
+  gates: ["slowdown <= 1.05", "set_weights_max_abs <= 0.004"]
+  timeout_s: 2400
+
+budget: {max_attempts: 60, max_hours: 8, max_usd: 300}
+search:
+  policy: fresh
+  W: 4
+  R: 4
+  beta: 0.6
+  max_rounds: 6
+  round_root: origin
+dreaming: {revisions: 5, cost_per_attempt: 0.005, parallel_bonus: 0.01}

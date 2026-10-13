@@ -9,9 +9,11 @@ TtMoEGatePrefill._device_grouped_gate_fp32 calls it: [PREFILL_CHUNK_TOKENS_PER_C
 bf16 logits in L1 (the all-reduce output), the per-expert correction bias broadcast to the same
 shape in DRAM, a right-padding config, stable_sort=True and ROW_MAJOR weights.
 
-The op is called ``warmup + measured`` times; the device kernel duration is read from the profiler
-by the caller. Accuracy of the last output vs an fp32 golden (recall, exact sorted rows, weight PCC
-and max error) is logged as a DREAM_METRIC line; the asserts are loose floors against a broken op.
+The op is called ``warmup + measured`` times, each call on a fresh random input of the same shape;
+the device kernel duration is read from the profiler by the caller. Accuracy vs an fp32 golden is
+pooled over all calls (~8k tokens per case) and logged as a DREAM_METRIC line: ``miss_pct`` (% of
+golden experts not selected), recall, exact sorted rows, weight PCC and max error. The asserts are
+loose floors against a broken op.
 """
 
 from dataclasses import dataclass
@@ -105,35 +107,33 @@ _CASES = [
 def test_moe_grouped_topk_prefill_perf(device, case: GateCase, seq_len: int):
     torch.manual_seed(0)
     n_experts, k = case.n_experts, case.k
-
-    # bf16-exact inputs so the fp32 golden sees exactly what the device sees (the op upcasts).
-    logits = _distinct_bf16_logits(seq_len, n_experts)
     expert_bias = (torch.randn(n_experts) * 0.1).to(torch.bfloat16).float()
     bias = expert_bias.repeat(seq_len).view(seq_len, n_experts)
-
-    ref_indices, ref_weights = grouped_gate_golden_act(
-        logits.view(1, 1, seq_len, n_experts),
-        bias.view(1, 1, seq_len, n_experts),
-        case.route_scale,
-        _EPSILON,
-        case.n_groups,
-        case.summed_experts_per_group,
-        case.topk_groups,
-        k,
-        case.score_func,
-        stable=True,
-    )
-
-    tt_logits = ttnn.from_torch(
-        logits, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
     tt_bias = ttnn.from_torch(
         bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     padding_config = build_padding_config(device, seq_len)
 
-    def run_once():
-        return ttnn.experimental.deepseek_prefill.moe_grouped_topk(
+    all_tt_idx, all_tt_w, all_ref_idx, all_ref_w = [], [], [], []
+    for _ in range(_WARMUP_ITERS + _MEASURE_ITERS):
+        # bf16-exact inputs so the fp32 golden sees exactly what the device sees (the op upcasts).
+        logits = _distinct_bf16_logits(seq_len, n_experts)
+        ref_indices, ref_weights = grouped_gate_golden_act(
+            logits.view(1, 1, seq_len, n_experts),
+            bias.view(1, 1, seq_len, n_experts),
+            case.route_scale,
+            _EPSILON,
+            case.n_groups,
+            case.summed_experts_per_group,
+            case.topk_groups,
+            k,
+            case.score_func,
+            stable=True,
+        )
+        tt_logits = ttnn.from_torch(
+            logits, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        tt_weights, tt_indices = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
             tt_logits,
             tt_bias,
             n_groups=case.n_groups,
@@ -147,22 +147,19 @@ def test_moe_grouped_topk_prefill_perf(device, case: GateCase, seq_len: int):
             padding_config=padding_config,
             weights_layout=ttnn.ROW_MAJOR_LAYOUT if k <= 32 else ttnn.TILE_LAYOUT,
         )
+        all_tt_w.append(ttnn.to_torch(tt_weights).float().reshape(-1, tt_weights.shape[-1])[:seq_len, :k])
+        all_tt_idx.append(ttnn.to_torch(tt_indices).long().reshape(-1, tt_indices.shape[-1])[:seq_len, :k])
+        all_ref_idx.append(ref_indices.reshape(-1, k).long())
+        all_ref_w.append(ref_weights.reshape(-1, k).float())
+        for t in (tt_logits, tt_weights, tt_indices):
+            ttnn.deallocate(t)
 
-    outputs = []
-    for _ in range(_WARMUP_ITERS + _MEASURE_ITERS):
-        outputs.append(run_once())
-        if len(outputs) > 1:
-            for t in outputs.pop(0):
-                ttnn.deallocate(t)
-    ttnn.synchronize_device(device)
-    tt_weights, tt_indices = outputs[-1]
-
-    tt_weights = ttnn.to_torch(tt_weights).float().reshape(-1, tt_weights.shape[-1])[:seq_len, :k]
-    tt_indices = ttnn.to_torch(tt_indices).long().reshape(-1, tt_indices.shape[-1])[:seq_len, :k]
-    ref_indices = ref_indices.reshape(-1, k).long()
-    ref_weights = ref_weights.reshape(-1, k).float()
+    tt_indices, tt_weights = torch.cat(all_tt_idx), torch.cat(all_tt_w)
+    ref_indices, ref_weights = torch.cat(all_ref_idx), torch.cat(all_ref_w)
+    tokens = tt_indices.shape[0]
 
     recall = calculate_average_recall(tt_indices, ref_indices)
+    miss_pct = 100.0 * (1.0 - recall)
     exact_rows = (tt_indices == ref_indices).all(dim=-1).float().mean().item()
     _, weights_pcc = comp_pcc(ref_weights, tt_weights)
     weights_max_abs = (ref_weights - tt_weights).abs().max().item()
@@ -175,18 +172,19 @@ def test_moe_grouped_topk_prefill_perf(device, case: GateCase, seq_len: int):
     )
 
     logger.info(
-        f"moe_grouped_topk prefill probe model={case.model_cfg.__name__} seq_len={seq_len} "
+        f"moe_grouped_topk prefill probe model={case.model_cfg.__name__} seq_len={seq_len} tokens={tokens} "
         f"experts={n_experts} groups={case.n_groups} topk_groups={case.topk_groups} k={k} "
-        f"score_func={case.score_func} recall={recall:.6f} exact_rows={exact_rows:.6f} "
+        f"score_func={case.score_func} miss_pct={miss_pct:.6f} recall={recall:.6f} exact_rows={exact_rows:.6f} "
         f"weights_pcc={weights_pcc:.6f} weights_max_abs={weights_max_abs:.6f} "
         f"set_weights_max_abs={set_weights_max_abs:.6f}"
     )
     print(
-        f"DREAM_METRIC recall={recall:.6f} exact_rows={exact_rows:.6f} weights_pcc={weights_pcc:.6f} "
-        f"weights_max_abs={weights_max_abs:.6f} set_weights_max_abs={set_weights_max_abs:.6f}",
+        f"DREAM_METRIC miss_pct={miss_pct:.6f} recall={recall:.6f} exact_rows={exact_rows:.6f} "
+        f"weights_pcc={weights_pcc:.6f} weights_max_abs={weights_max_abs:.6f} "
+        f"set_weights_max_abs={set_weights_max_abs:.6f}",
         flush=True,
     )
 
-    # Loose floors that only catch a broken op; the campaign gates hold accuracy at the baseline.
+    # Loose floors that only catch a broken op; the campaign scores and gates accuracy itself.
     assert recall >= 0.98, f"recall {recall:.6f} < 0.98"
     assert weights_pcc >= 0.9, f"weights PCC {weights_pcc:.6f} < 0.9"
