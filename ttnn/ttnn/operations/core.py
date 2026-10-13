@@ -5,6 +5,7 @@
 import math
 import os
 import pathlib
+import uuid
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import ttnn.decorators
@@ -826,6 +827,7 @@ def as_tensor(
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
+    cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
 ) -> ttnn.Tensor:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
@@ -844,6 +846,11 @@ def as_tensor(
 
             - For Grayskull, the on-device tilizer will truncate mantissa bits for bfp* formats.
             - For Wormhole, the on-device tilizer will raise a runtime error (RTE) for bfp8 but will truncate for bfp4/2 formats.
+        cache_dump_mode (ttnn.DumpTensorMode, optional): How a cache miss writes ``cache_file_name``. Defaults to
+            ``ttnn.DumpTensorMode.DISTRIBUTED_GATHER``, a collective that every rank must reach with the same tensor.
+            Use ``ttnn.DumpTensorMode.LOCAL`` when ranks own different tensors (e.g. one pipeline stage per rank):
+            with ``DISTRIBUTED_GATHER`` their cache misses never pair up and a cold fill deadlocks. ``LOCAL`` writes
+            each rank's host-local tensor, so cache files must not be shared between ranks.
 
     Returns:
         ttnn.Tensor: The resulting `ttnn` tensor.
@@ -899,7 +906,18 @@ def as_tensor(
             f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
         )
         pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
-        ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
+        if cache_dump_mode == ttnn.DumpTensorMode.LOCAL:
+            # Every rank writes its own file here. Publish it with a rename from a temp file unique to this fill, so a
+            # concurrent reader or filler never sees a partial file, and a failed dump leaves nothing behind.
+            tmp_file_name = f"{cache_file_name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+            try:
+                ttnn._ttnn.tensor.dump_tensor_flatbuffer(tmp_file_name, tensor, cache_dump_mode)
+                os.replace(tmp_file_name, cache_file_name)
+            except BaseException:
+                pathlib.Path(tmp_file_name).unlink(missing_ok=True)
+                raise
+        else:
+            ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor, cache_dump_mode)
         if device is not None:
             tensor = tensor.to(device, memory_config)
         return tensor

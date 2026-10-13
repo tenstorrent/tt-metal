@@ -64,10 +64,10 @@ public:
     static tt::tt_metal::ClusterType get_cluster_type_from_cluster_desc(
         const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc = nullptr);
     static bool is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type);
-    // The chips UMD opens from the simulator build in simulator_dir. A partitioned build (one with an
-    // ip_layout.yaml) states its own devices, so it gets none and UMD opens all of them, or the ones
-    // TT_VISIBLE_DEVICES selects. Any other build is a single chip, 0.
-    static std::unordered_set<ChipId> simulator_target_devices(const std::filesystem::path& simulator_dir);
+    // Non-Quasar .so simulators and builds with ip_layout.yaml return an empty target set,
+    // leaving chip discovery and TT_VISIBLE_DEVICES filtering to UMD.
+    // Other builds, including Quasar .so simulators without a layout, target chip 0.
+    static std::unordered_set<ChipId> simulator_target_devices(const std::filesystem::path& simulator_dir, tt::ARCH arch);
     Cluster& operator=(const Cluster&) = delete;
     Cluster& operator=(Cluster&& other) noexcept = delete;
     Cluster(const Cluster&) = delete;
