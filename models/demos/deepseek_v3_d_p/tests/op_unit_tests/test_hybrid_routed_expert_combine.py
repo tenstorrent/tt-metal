@@ -23,13 +23,11 @@ TtMoe runs this overlap in every traced Blackhole prefill, so CI runs the 8x4 ac
 (Disaggregated prefill op unit tests); the perf cases, the 8x1 cases and dg0-only are run by hand.
 """
 
+import heapq
+import time
 from types import SimpleNamespace
 
-import time
-
 import pytest
-import heapq
-
 import torch
 from loguru import logger
 
@@ -44,15 +42,17 @@ from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import fabric_to_device
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
+    create_fabric_router_config,
     extract_mesh_config,
     get_ep_mesh_composer,
     get_ep_mesh_mapper,
     get_expert_token_counts_mesh_mapper,
     get_gate_outputs,
     initialize_test_inputs,
+    moe_fabric_payload_size,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import validate_combine_output
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import validate_combine_output
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 _FULL_MESH = (8, 4)
@@ -169,8 +169,12 @@ def _scaled_model(mesh, model_id):
 _TRACE_REGION_SIZE = 64 * 1024 * 1024
 
 
-def _device_params(fabric_cfg):
+def _device_params(fabric_cfg, model_id):
     params = dict(fabric_to_device_params(fabric_cfg))
+    # The payload TtMoe opens the mesh with, so combine sends each token in two halves as the model does.
+    params["fabric_router_config"] = create_fabric_router_config(
+        max_payload_size=moe_fabric_payload_size(_MODELS[model_id])
+    )
     params["trace_region_size"] = _TRACE_REGION_SIZE
     return params
 
@@ -188,7 +192,7 @@ def _mesh_params():
                 params.append(
                     pytest.param(
                         mesh,
-                        _device_params(fabric_cfg),
+                        _device_params(fabric_cfg, model_id),
                         threshold_id,
                         model_id,
                         None,  # variant
@@ -204,7 +208,7 @@ def _mesh_params():
             params.append(
                 pytest.param(
                     _FULL_MESH,
-                    _device_params(_MESHES[_FULL_MESH]),
+                    _device_params(_MESHES[_FULL_MESH], model_id),
                     threshold_id,
                     model_id,
                     "8x1-submesh",
@@ -220,7 +224,7 @@ def _mesh_params():
             params.append(
                 pytest.param(
                     _FULL_MESH,
-                    _device_params(_MESHES[_FULL_MESH]),
+                    _device_params(_MESHES[_FULL_MESH], model_id),
                     threshold_id,
                     model_id,
                     "dg0-only",
