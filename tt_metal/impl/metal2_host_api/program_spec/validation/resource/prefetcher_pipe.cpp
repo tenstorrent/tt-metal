@@ -51,11 +51,12 @@ void ValidatePrefetcherPipeParameter(const PrefetcherPipeParameter& pipe, uint32
 // slot on every node the kernel runs on, so one binary serves them all):
 //  2. The binding kernel is a data-movement kernel (compute reaches the ring via a relay DFB).
 //  3. Tiling: the group's pipes agree on ring_size / entry_size and their receiver sets are
-//     pairwise disjoint. The kernel's nodes equal EITHER the union of the receiver sets
-//     (receiver role) OR avoid every receiver and number one per pipe (sender role); mixed or
-//     partial coverage is rejected. Per pipe, at most one kernel plays sender and at most one
-//     plays receiver, so exactly one kernel instance owns the credit counters on each node. Roles
-//     may be split across Programs (sender op vs consumer op).
+//     pairwise disjoint. The kernel's nodes include EITHER the whole union of the receiver sets
+//     (receiver role) OR avoid every receiver and number at least one per pipe (sender role); its
+//     other nodes are extra nodes. Covering only part of the receivers is rejected. Per pipe, at
+//     most one kernel plays sender and at most one plays receiver, so exactly one kernel instance
+//     owns the credit counters on each node. Roles may be split across Programs (sender op vs
+//     consumer op).
 PrefetcherPipeRoles ValidatePrefetcherPipeRoles(const ValidationContext& ctx) {
     const ProgramSpec& spec = ctx.spec;
     const CollectedSpecData& collected = ctx.collected;
@@ -117,8 +118,8 @@ PrefetcherPipeRoles ValidatePrefetcherPipeRoles(const ValidationContext& ctx) {
                 group_receivers = group_receivers.merge(receivers);
             }
 
-            // Role: the kernel's nodes are exactly the group's receivers, or one sender node per
-            // pipe, none of them a receiver.
+            // Role: the kernel's nodes include all of the group's receivers, or at least one node per
+            // pipe and none of the receivers.
             const size_t num_pipes = binding.pipe_parameter_names.size();
             const bool is_receiver_role = is_prefetcher_pipe_receiver_role(nodes, group_receivers);
             const bool is_sender_role =
@@ -126,10 +127,10 @@ PrefetcherPipeRoles ValidatePrefetcherPipeRoles(const ValidationContext& ctx) {
             if (!is_sender_role && !is_receiver_role) {
                 const uint32_t on_receivers = nodes.intersection(group_receivers).num_cores();
                 TT_THROW(
-                    "Kernel '{}' accessor '{}' ({} pipe(s)): the kernel's WorkUnitSpec nodes must equal either the "
-                    "union of the group's receiver nodes (receiver role) or be {} node(s) outside them, one per pipe "
-                    "(sender role). Kernel covers {} node(s): {} of the {} receiver node(s), {} outside the "
-                    "receivers. A role cannot be partial, mixed with the other role, or spill onto extra nodes.",
+                    "Kernel '{}' accessor '{}' ({} pipe(s)): the kernel's WorkUnitSpec nodes must include either all "
+                    "of the group's receiver nodes (receiver role) or none of them and at least {} node(s), one per "
+                    "pipe (sender role). Kernel covers {} node(s): {} of the {} receiver node(s), {} outside the "
+                    "receivers. A role cannot cover only part of the receivers.",
                     kernel.unique_id,
                     binding.accessor_name,
                     num_pipes,
@@ -170,8 +171,8 @@ PrefetcherPipeRoles ValidatePrefetcherPipeRoles(const ValidationContext& ctx) {
 //     entry_size * num_entries is the pipe's
 //     whole entries: ring_size rounded down to a multiple of the pipe's entry_size (the DFB is
 //     exactly the ring the pipe uses; the pipe skips any trailing gap at the wrap).
-//  6. The relayed pipes' receiver sets are pairwise disjoint and their union equals the DFB's
-//     node set; every PRODUCER kernel binds exactly the relayed pipe set under one accessor (so
+//  6. The relayed pipes' receiver sets are pairwise disjoint and the DFB's node set includes
+//     their union; every PRODUCER kernel binds exactly the relayed pipe set under one accessor (so
 //     it is those pipes' receiver kernel and can drive the protocol the relay depends on).
 void ValidatePrefetcherPipeLanesAndRelays(
     const ValidationContext& ctx, const PrefetcherPipeRoles& roles, tt::ARCH arch) {
@@ -318,15 +319,15 @@ void ValidatePrefetcherPipeLanesAndRelays(
 
         const NodeRangeSet& dfb_nodes = collected.dfb_node_set.at(dfb.unique_id);
         TT_FATAL(
-            same_node_set(dfb_nodes, relayed_receivers),
-            "DFB '{}' relays PrefetcherPipe(s) whose receiver nodes do not match the DFB's node set (union of its "
-            "bound kernels' WorkUnitSpec nodes). The relay must live on exactly the receiver nodes.",
+            dfb_nodes.contains(relayed_receivers),
+            "DFB '{}' relays PrefetcherPipe(s) whose receiver nodes are not all in the DFB's node set (union of its "
+            "bound kernels' WorkUnitSpec nodes). The relay must cover every receiver node.",
             dfb.unique_id);
 
         // Every PRODUCER must be the relayed pipes' receiver kernel: it binds exactly this pipe
         // set under one accessor. (Binding implies data-movement by rule 2; the tiling rule then
-        // makes its nodes the receiver union, i.e. the DFB's nodes.) Without the binding the
-        // producer could not drive the pipe protocol the relay depends on.
+        // puts the receiver union in its nodes.) Without the binding the producer could not drive
+        // the pipe protocol the relay depends on.
         const std::unordered_set<PrefetcherPipeParamName> relayed_set(
             dfb.advanced_options.prefetcher_pipe_relays.begin(), dfb.advanced_options.prefetcher_pipe_relays.end());
         for (const auto& rec : collected.dfb_endpoints.at(dfb.unique_id).producers) {

@@ -138,17 +138,18 @@ inline bool same_node_set(const NodeRangeSet& a, const NodeRangeSet& b) {
 
 // Role of a kernel binding a PrefetcherPipe accessor group, from its nodes and the group's receiver
 // sets alone (the spec does not name senders; a pipe's sender is the pipe object's). The kernel is
-// the group's receiver when its nodes are exactly the union of the receiver sets, and its sender
-// when its nodes avoid every receiver and number one per pipe (which node hosts which pipe is
-// settled when the pipes are supplied). ValidateProgramSpec and ReservePrefetcherPipeSlots both
-// derive the role through these two definitions.
+// the group's receiver when its nodes include the whole union of the receiver sets, and its sender
+// when its nodes avoid every receiver and number at least one per pipe (which node hosts which pipe
+// is settled when the pipes are supplied). Its other nodes are extra nodes, which take no part in
+// the pipes. ValidateProgramSpec and ReservePrefetcherPipeSlots both derive the role through these
+// two definitions.
 inline bool is_prefetcher_pipe_receiver_role(const NodeRangeSet& kernel_nodes, const NodeRangeSet& group_receivers) {
-    return same_node_set(kernel_nodes, group_receivers);
+    return kernel_nodes.contains(group_receivers);
 }
 
 inline bool is_prefetcher_pipe_sender_role(
     const NodeRangeSet& kernel_nodes, const NodeRangeSet& group_receivers, size_t num_pipes) {
-    return !kernel_nodes.intersects(group_receivers) && kernel_nodes.num_cores() == num_pipes;
+    return !kernel_nodes.intersects(group_receivers) && kernel_nodes.num_cores() >= num_pipes;
 }
 
 // Helper: return a DFB's alias-with list.
