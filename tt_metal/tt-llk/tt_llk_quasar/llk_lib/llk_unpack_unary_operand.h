@@ -117,18 +117,15 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
     if constexpr (EN_32BIT_DEST && (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_B))
     {
         const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
-        if constexpr (UNP_SEL == p_unpacr::UNP_A)
-        {
-            // A source bank's format tag is updated only by a real write; CLRSRC/ZEROSRC zero the data but keep the
-            // old tag. If SrcB was last written in a packed format (e.g. MxFp4_2x_B by a 2x matmul), ELWADD reads
-            // the cleared bank through the packed path and adds non-zero garbage. Unpack into SrcB first (no
-            // dvalid, no index increment) so the bank takes unpacker B's output format, then clear it.
-            temp.set_end_ops(TT_OP_UNPACR1_TILE_INC(0 /*Dst_Tile_Idx_Inc*/, 0 /*Src_Tile_Idx_Inc*/, buf_desc_id, 0 /*SetDatValid*/), clr_unused_unpacr_engine);
-        }
-        else
-        {
-            temp.set_end_op(clr_unused_unpacr_engine);
-        }
+        // A source bank's format tag is updated only by a real write; CLRSRC/ZEROSRC zero the data but keep the old
+        // tag. If the cleared register was last written in a packed format (e.g. MxFp4_2x_B by a 2x matmul), ELWADD
+        // reads it through the packed path and adds non-zero garbage. Unpack one row into the cleared register first
+        // (no dvalid, no index increment) so its bank takes that unpacker's output format, then clear it.
+        constexpr bool retag_srcb = (UNP_SEL == p_unpacr::UNP_A);
+        const std::uint32_t retag_instrn =
+            retag_srcb ? TT_OP_UNPACR1_ROW(0 /*Dst_Row_Idx*/, 0 /*Src_Row_Idx*/, 0 /*Dst_Face_Idx*/, 0 /*Src_Face_Idx*/, 0, 0, buf_desc_id, 0 /*SetDatValid*/)
+                       : TT_OP_UNPACR0_ROW(0 /*Dst_Row_Idx*/, 0 /*Src_Row_Idx*/, 0 /*Dst_Face_Idx*/, 0 /*Src_Face_Idx*/, 0, 0, buf_desc_id, 0 /*SetDatValid*/);
+        temp.set_end_ops(retag_instrn, clr_unused_unpacr_engine);
     }
 
     temp.program_bank0_sw_cntl(instrn_buffer);
