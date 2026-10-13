@@ -29,3 +29,20 @@ logs "T466 summary: ring_joint_sdpa gain X%, layer gain Y%" and PCC between arms
 - Log: /var/tmp/fasth3/t466/out_mb/run.log (grep 'T466'); broker log /var/log/tt-device-broker/2026-10-13_062903_103.log.
 - Next: read "T466 summary: ring_joint_sdpa gain X%". <10% -> stop (knob stays opt-in). >=10% -> e2e A/B needs weights
   (cap 150 GB on blx01, now 48 GB used) -> ask for cap raise.
+
+## 2026-10-13 06:45 UTC (10-12 23:45 PDT): microbench result (blx01 job 103, e02052af0ee, 900 MHz clamp, relative only)
+- One ring SDPA layer, 10 s fl2va shape, 4x8, 3 interleaved rounds (tt-project/t466/mb1_summary.log):
+  hifi2: layer best 47.18 ms, ring_joint_sdpa best 39.54 ms; lofi: layer best 40.75 ms, ring_joint_sdpa best 33.37 ms.
+  Gain: ring_joint_sdpa 15.6%, layer 13.6%. LoFi vs HiFi2 output PCC 99.90%, CCC 99.75%, RMSE/sigma 6.9%.
+  Passes the 10% gate -> e2e A/B is next.
+- No drops.
+
+## e2e A/B is waiting on blx03
+- Needs MiniMax-H3 (135 GB) + dit-h3hf cache (152 GB) + JIT cache (17 GB): ~305 GB. blx01 holds 49 GB of ours and its
+  cap is 150 GB (memory, after #463), so it cannot fit there. The only known copy of the weights and cache is on
+  blx03 /var/tmp/fasth3, and blx03 is out (no route since 2026-10-11 22:37Z; g14blx03-device paused, trays #364).
+- Plan when blx03 returns: run the A/B on blx03 itself through its serial runner (data already there), arms
+  base = t460 head dbd6d66048f build, lofi = same build + MINIMAX_H3_SDPA_MM_FIDELITY=lofi (needs this branch's
+  cherry-picks built there). Order: 10 s seed 0 pair, 6 s seed 0 pair, then 6 s seeds 1-4 pairs, each one job.
+  Alternative if the user raises blx01's cap to ~360 GB: copy from blx03 to blx01 under ionice/nice/--bwlimit=100M.
+- blx01 leftovers of this task: /var/tmp/fasth3/t466 (build b + jit). Keep the build until the A/B host is decided.
