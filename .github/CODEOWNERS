@@ -271,7 +271,7 @@ tt_metal/tt-llk/docs/performance_counters/ @mvlahovicTT @skrsmanovicTT @nvelicko
 tt_metal/tt-llk/tools/include/perf_counters/ @mvlahovicTT @skrsmanovicTT @nvelickovicTT
 tt_metal/tt-llk/tools/python/tt_llk_perf/ @mvlahovicTT @skrsmanovicTT @nvelickovicTT
 # ── LLK perf infrastructure: restricted ownership
-tt_metal/tt-llk/perf/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @skrsmanovicTT @sstanisicTT @mvlahovicTT
+tt_metal/tt-llk/perf/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @skrsmanovicTT @sstanisicTT @mvlahovicTT @nstojicTT
 tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/python_tests/**/test_perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
