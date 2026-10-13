@@ -83,17 +83,27 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     std::vector<uint32_t> tensor_block_num_tiles;
     std::vector<std::vector<uint32_t>> tensor_shapes(num_tensors, std::vector<uint32_t>(2));
     std::vector<uint32_t> tensor_tile_sizes;
+    // The shard height is padded up to a multiple of num_blocks; the reader must not read the pad rows from DRAM
+    // (they lie past the end of the shard) and delivers them as zeros instead. num_full_blocks blocks lie entirely
+    // inside the shard; the next block holds partial_block_num_tiles real tiles (possibly 0); the rest are all pad.
+    std::vector<uint32_t> tensor_num_full_blocks;
+    std::vector<uint32_t> tensor_partial_block_num_tiles;
     tensor_block_num_tiles.reserve(num_tensors);
     tensor_tile_sizes.reserve(num_tensors);
+    tensor_num_full_blocks.reserve(num_tensors);
+    tensor_partial_block_num_tiles.reserve(num_tensors);
     for (uint32_t t = 0; t < num_tensors; t++) {
         uint32_t height_in_tiles = tensor_buffers[t]->shard_spec().shape()[0] / tensor_tiles[t].get_tile_shape()[0];
         uint32_t width_in_tiles = tensor_buffers[t]->shard_spec().shape()[1] / tensor_tiles[t].get_tile_shape()[1];
 
-        height_in_tiles = tt::round_up(height_in_tiles, num_blocks);
-        tensor_shapes[t][0] = height_in_tiles;
+        uint32_t padded_height_in_tiles = tt::round_up(height_in_tiles, num_blocks);
+        uint32_t block_height_in_tiles = padded_height_in_tiles / num_blocks;
+        tensor_shapes[t][0] = padded_height_in_tiles;
         tensor_shapes[t][1] = width_in_tiles;
-        tensor_block_num_tiles.push_back(height_in_tiles * width_in_tiles / num_blocks);
+        tensor_block_num_tiles.push_back(padded_height_in_tiles * width_in_tiles / num_blocks);
         tensor_tile_sizes.push_back(tensor_tiles[t].get_tile_size(tensor_data_formats[t]));
+        tensor_num_full_blocks.push_back(height_in_tiles / block_height_in_tiles);
+        tensor_partial_block_num_tiles.push_back((height_in_tiles % block_height_in_tiles) * width_in_tiles);
     }
     uint32_t max_block_tiles = *std::max_element(tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
     auto max_tile_size_iterator = std::max_element(tensor_tile_sizes.begin(), tensor_tile_sizes.end());
@@ -137,6 +147,17 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     uint32_t tensor_addrs_cb_size = num_layers * num_tensors * tensor_addrs_single_tile_size;
 
     uint32_t tensor_addrs_cb_index = tt::CBIndex::c_1;
+
+    /* zero cb setup */
+    // Zeroed source the reader copies the pad rows of padded tensors from. Only allocated when some tensor's shard
+    // height is not a multiple of num_blocks (zero_cb_size == 0 tells the reader there is none). 4 KB is one NoC
+    // packet on WH (8 KB max) and BH, so a pad block costs only a few local reads.
+    const bool any_tensor_padded =
+        std::any_of(tensor_num_full_blocks.begin(), tensor_num_full_blocks.end(), [num_blocks](uint32_t n) {
+            return n < num_blocks;
+        });
+    uint32_t zero_cb_index = tt::CBIndex::c_2;
+    uint32_t zero_cb_size = any_tensor_padded ? 4096 : 0;
 
     /* remote cb setup */
     uint32_t remote_cb_size = global_cb.size();
@@ -189,6 +210,18 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
         .global_circular_buffer = std::addressof(global_cb),
     });
 
+    if (any_tensor_padded) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = zero_cb_size,
+            .core_ranges = reader_core_range,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(zero_cb_index),
+                .data_format = tt::DataFormat::Float16_b,
+                .page_size = zero_cb_size,
+            }}},
+        });
+    }
+
     // Reader kernel
     std::vector<uint32_t> reader_ct_args = {
         num_layers,
@@ -202,6 +235,10 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
         sync_cb_index,
     };
     reader_ct_args.push_back(static_cast<uint32_t>(enable_performance_mode));
+    // Zero CB for the pad rows. Kept after the base args: those sit at fixed positions in the kernel's arg layout, and
+    // a reader that does not use these trailing args ignores them.
+    reader_ct_args.push_back(zero_cb_index);
+    reader_ct_args.push_back(zero_cb_size);
 
     // Writer kernel
     std::vector<uint32_t> writer_ct_args = {
@@ -227,6 +264,11 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
     coalesced_page_sizes.reserve(num_tensors);
     coalesced_num_pages.reserve(num_tensors);
 
+    std::vector<uint32_t> partial_block_page_sizes;
+    std::vector<uint32_t> partial_block_num_pages;
+    partial_block_page_sizes.reserve(num_tensors);
+    partial_block_num_pages.reserve(num_tensors);
+
     uint32_t max_page_size = 8192;
 
     for (uint32_t t = 0; t < num_tensors; t++) {
@@ -234,6 +276,12 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
             max_page_size, tensor_block_num_tiles[t], tt::tile_size(tensor_data_formats[t]));
         page_sizes.push_back(page_size);
         block_num_pages.push_back(num_pages);
+
+        // 0 pages when the partially-real block has no real rows
+        auto [partial_page_size, partial_num_pages] = get_max_page_size_and_num_pages(
+            max_page_size, tensor_partial_block_num_tiles[t], tt::tile_size(tensor_data_formats[t]));
+        partial_block_page_sizes.push_back(partial_page_size);
+        partial_block_num_pages.push_back(partial_num_pages);
 
         uint32_t block_width_in_tiles = tensor_shapes[t][1];
         auto [coalesced_page_size, coalesced_num_page] = get_max_page_size_and_num_pages(
@@ -288,11 +336,17 @@ ProgramDescriptor DramPrefetcherOperation::create_descriptor(
         }
 
         std::vector<uint32_t> reader_rt_args;
-        reader_rt_args.reserve(3 + 3 * num_tensors);
+        reader_rt_args.reserve(3 + 6 * num_tensors);
         reader_rt_args.insert(reader_rt_args.end(), {bank_id, vc, total_num_blocks_in_buffer});
         reader_rt_args.insert(reader_rt_args.end(), page_sizes.begin(), page_sizes.end());
         reader_rt_args.insert(reader_rt_args.end(), block_num_pages.begin(), block_num_pages.end());
         reader_rt_args.insert(reader_rt_args.end(), tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
+        // Per-tensor padding layout (see the padding contract in reader_dram.cpp). Kept after the base args: those
+        // sit at fixed positions in the kernel's arg layout, and a reader that does not use these trailing args
+        // ignores them.
+        reader_rt_args.insert(reader_rt_args.end(), tensor_num_full_blocks.begin(), tensor_num_full_blocks.end());
+        reader_rt_args.insert(reader_rt_args.end(), partial_block_page_sizes.begin(), partial_block_page_sizes.end());
+        reader_rt_args.insert(reader_rt_args.end(), partial_block_num_pages.begin(), partial_block_num_pages.end());
 
         reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
 
