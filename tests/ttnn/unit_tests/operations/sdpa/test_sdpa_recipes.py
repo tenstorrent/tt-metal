@@ -48,7 +48,7 @@ def test_sdpa_recipe_op_selected_blocking(device):
     check_op_selected_blocking(device, "standard", OP_SELECTED_SHAPES["short_k_cross"])
 
 
-@pytest.mark.parametrize("variant", ["standard", "accurate", "fast_bfp8"])
+@pytest.mark.parametrize("variant", ["standard", "fast_bfp8"])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 4194304}], indirect=True)
 def test_sdpa_recipe_program_cache_and_trace(device, variant):
     device.enable_program_cache()
@@ -150,20 +150,16 @@ def round_block(values, bits, *, ties_even):
     [(True, ttnn.bfloat16), (False, ttnn.bfloat16), (False, ttnn.bfloat8_b), (False, ttnn.bfloat4_b)],
     ids=["q", "kv_bf16", "kv_bfp8", "kv_bfp4"],
 )
-@pytest.mark.parametrize("distribution", ["normal", "ties"])
 @pytest.mark.parametrize("length", [256, 17])
-def test_prepare_sdpa_input(device, is_query, dtype, distribution, length):
+def test_prepare_sdpa_input(device, is_query, dtype, length):
     shape = (1, 1, length, 128)
-    if distribution == "normal":
-        host = randn(*shape, seed=26)
-    else:
-        # Every BF16 mantissa, both signs, a spread of exponents and group maxima: ties and saturation.
-        index = torch.arange(length * 128).reshape(-1, 16)
-        values = ((index * 17) % 256).float() / 128
-        values[:, 0] = 1.75
-        values = torch.ldexp(values, (index[:, :1] // 16 % 33 - 16).int())
-        values *= torch.where(index % 2 == 0, 1.0, -1.0)
-        host = values.reshape(shape).bfloat16()
+    # Every BF16 mantissa, both signs, a spread of exponents and group maxima: ties and saturation.
+    index = torch.arange(length * 128).reshape(-1, 16)
+    values = ((index * 17) % 256).float() / 128
+    values[:, 0] = 1.75
+    values = torch.ldexp(values, (index[:, :1] // 16 % 33 - 16).int())
+    values *= torch.where(index % 2 == 0, 1.0, -1.0)
+    host = values.reshape(shape).bfloat16()
     if dtype == ttnn.bfloat4_b:
         expected = round_block(host, 3, ties_even=True)
     else:

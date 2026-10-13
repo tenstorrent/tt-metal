@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <compare>
 #include <cstdint>
 #include <tt_stl/assert.hpp>
 
@@ -13,14 +14,11 @@ namespace ttnn::operations::transformer::sdpa::detail {
 // Recipe B-E is SDPAPrecision STANDARD, BALANCED, ACCURATE, FAST.
 enum class Recipe : uint8_t { B, C, D, E };
 enum class KVStorage : uint8_t { BF16, BFP8, BFP4 };
-// Online-softmax running state (row max, row sum, output accumulator) between K chunks.
-// ReferenceMaxFP32: BF16 scores against a reference row max, O and l accumulated in FP32 in L1.
-enum class RecurrentState : uint8_t { ReferenceMaxFP32, FP32 };
 
 struct RecipeSelection {
     Recipe recipe;
     KVStorage kv_storage = KVStorage::BF16;
-    bool operator==(const RecipeSelection&) const = default;
+    auto operator<=>(const RecipeSelection&) const = default;
 };
 
 // The numerical choices the host passes to the recipe kernels. QK fidelity, exp and
@@ -29,9 +27,9 @@ struct RecipeSelection {
 struct PrecisionPolicy {
     RecipeSelection selection;
     tt::tt_metal::MathFidelity pv_fidelity;  // compute-config fidelity; C runs QK at HiFi4 in-kernel
+    // False (STANDARD, FAST): BF16 scores against a reference row max, O and l accumulated in FP32 in L1.
     bool fp32_destination;
-    RecurrentState recurrent_state;
-    bool operator==(const PrecisionPolicy&) const = default;
+    auto operator<=>(const PrecisionPolicy&) const = default;
 };
 
 constexpr PrecisionPolicy resolve_precision_policy(RecipeSelection selection) {
@@ -40,10 +38,10 @@ constexpr PrecisionPolicy resolve_precision_policy(RecipeSelection selection) {
         TT_THROW("Only FAST accepts BFP8/BFP4 K/V; other SDPA recipes require BF16 K/V");
     }
     switch (selection.recipe) {
-        case Recipe::B: return {selection, Fidelity::HiFi2, false, RecurrentState::ReferenceMaxFP32};
-        case Recipe::C: return {selection, Fidelity::HiFi2, true, RecurrentState::FP32};
-        case Recipe::D: return {selection, Fidelity::HiFi4, true, RecurrentState::FP32};
-        case Recipe::E: return {selection, Fidelity::LoFi, false, RecurrentState::ReferenceMaxFP32};
+        case Recipe::B: return {selection, Fidelity::HiFi2, false};
+        case Recipe::C: return {selection, Fidelity::HiFi2, true};
+        case Recipe::D: return {selection, Fidelity::HiFi4, true};
+        case Recipe::E: return {selection, Fidelity::LoFi, false};
     }
     TT_THROW("Unknown SDPA precision recipe");
 }

@@ -35,8 +35,7 @@ def test_sdpa_recipe_accuracy(device, variant, shape):
     check_accuracy(device, variant, shape)
 
 
-# Long K with small logits: a BF16 running state would swamp (the legacy kernel: about 3.9%); STANDARD's FP32
-# state does not (about 1.7%).
+# Long K with small logits: a BF16 running state swamps here (tech report, Accuracy); the FP32 state does not.
 LONG_K_BOUND = {**L2_PCT_BOUND, "standard": 2.2, "fast_bf16": 2.6, "fast_bfp8": 2.7}
 
 
@@ -84,11 +83,10 @@ def test_sdpa_recipe_op_selected_blocking(device, variant, shape):
     check_op_selected_blocking(device, variant, shape)
 
 
-# Odd Q chunks (a single-row tail group) at D64 with logits about 8x the unit-variance case (Q scaled by 8): the
-# reference max moves in middle K chunks, so the unfused chunk (QK subblock width 1: K160, K32; or every chunk with
-# an attn_mask) rescales the tail group's O and l from their own row. Q96/K128 is the QK/PV width 4/2 build that
-# used to stop the SFPI compiler. FAST's LoFi QK error grows with the logits (about 5.6% here at every chunk size,
-# vs 2.9% unscaled); a wrong tail row gives 50% to 1e10%.
+# Odd Q chunks (a single-row tail group) at D64 with large logits (Q scaled by 8): the reference max moves in middle
+# K chunks, so the unfused chunk (QK subblock width 1: K160, K32; or every chunk with an attn_mask) rescales the tail
+# group's O and l from their own row. Q96/K128 is the QK/PV width 4/2 build (SFPI ICE regression). FAST's LoFi QK
+# error grows with the logits; a wrong tail row gives errors of 50% and more.
 ODD_Q_LARGE_LOGIT_BOUND = {"standard": 5.0, "fast_bf16": 7.0, "fast_bfp8": 7.0}
 
 

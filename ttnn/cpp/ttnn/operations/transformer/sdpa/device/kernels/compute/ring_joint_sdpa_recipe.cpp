@@ -18,13 +18,12 @@
 #define SDPA_RECIPE_RING 1
 
 // Optimization: unpack and pack at -O3, math at -O2. Even-row Q chunks (the host rounds a paired recipe's odd Q
-// chunk up) keep every recipe inside the kernel config buffer (70656 B at the default Blackhole worker L1);
-// -O3 on unpack/pack is worth 10-25% of ring SDPA time over -Os, -O3 on math nothing. Watcher builds are
-// size-optimized on every thread.
+// chunk up) keep every recipe inside the kernel config buffer (70656 B at the default Blackhole worker L1).
+// Watcher builds are size-optimized on every thread.
 #if defined(WATCHER_ENABLED)
 #pragma GCC optimize("Os")
 #elif defined(TRISC_MATH) || defined(SDPA_RECIPE_FUSED)
-// Fused FAST chunks add enough code that -O3 unpack/pack overflows the kernel config buffer.
+// Fused chunks (STANDARD, FAST) add enough code that -O3 unpack/pack overflows the kernel config buffer.
 #pragma GCC optimize("O2")
 #else
 #pragma GCC optimize("O3")

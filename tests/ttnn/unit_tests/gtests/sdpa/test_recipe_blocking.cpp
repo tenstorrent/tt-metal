@@ -44,7 +44,7 @@ RecipeBlockingProblem problem(
 uint32_t tiles(uint32_t chunk) { return chunk / 32; }
 
 void expect_valid(const RecipeBlockingProblem& p, const RecipeBlocking& choice) {
-    EXPECT_TRUE(recipe_geometry_supported(p.op, p.policy, tiles(choice.q_chunk_size), tiles(choice.k_chunk_size), p.d_tiles));
+    EXPECT_TRUE(recipe_geometry_supported(tiles(choice.q_chunk_size), tiles(choice.k_chunk_size), p.d_tiles));
     EXPECT_LE(choice.l1.minimum, p.l1_bytes);
 }
 
@@ -121,7 +121,7 @@ TEST(SDPARecipeBlocking, AttnMaskCircularBufferIsBudgeted) {
         const auto policy = resolve_precision_policy(selection);
         const auto plain = recipe_l1_bytes(RecipeOp::Dense, policy, 8, 16, 4);
         const auto masked = recipe_l1_bytes(RecipeOp::Dense, policy, 8, 16, 4, {.mask_page_bytes = page});
-        const uint64_t group = uint64_t{recipe_mask_group_rows(policy, 8)} * 16 * page;
+        const uint64_t group = uint64_t{recipe_mask_group_rows(policy)} * 16 * page;
         EXPECT_EQ(masked.minimum - plain.minimum, group);
         EXPECT_EQ(masked.preferred - plain.preferred, 2 * group);
         // A budget that only just holds the unmasked Q256/K512 layout: the masked choice must still fit.
