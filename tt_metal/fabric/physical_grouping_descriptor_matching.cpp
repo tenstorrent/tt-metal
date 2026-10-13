@@ -1227,7 +1227,7 @@ std::string PlacementSolveStats::to_string() const {
         "  candidates generated: {}  inner solutions: {}\n"
         "  slowest inner: {} {}x{} in {} us\n"
         "  master (SAT joint placement): attempted {}  success {}  candidates {}  growth rounds {}  attempts {}  "
-        "lists complete {}  zero-link fallback {}  hard-seam precheck infeasible {}\n"
+        "lists complete {}  zero-link fallback {}\n"
         "  master SAT: {} vars  {} clauses  enumerate {} us  encode {} us  solve {} us\n"
         "  total: {} us ({:.3f} ms)",
         success,
@@ -1253,7 +1253,6 @@ std::string PlacementSolveStats::to_string() const {
         master_sat_attempts,
         candidate_lists_complete,
         zero_link_fallback_engaged,
-        hard_seams_precheck_infeasible,
         master_sat_vars,
         master_sat_clauses,
         master_enumeration_elapsed.count(),
@@ -3215,139 +3214,6 @@ void SatPlacementEnumerationSession::finish_init(
     grow_sat_placement_pools(*pools_, kGrowBudgetPerVariant, stats_);
     master_solve_ = std::make_unique<MasterSolve>(this);
     ready_ = true;
-
-    if (auto violation = hard_seams_provably_infeasible(); violation.has_value()) {
-        hard_seams_infeasible_ = true;
-        hard_seams_infeasible_reason_ = std::move(*violation);
-        if (stats_ != nullptr) {
-            stats_->hard_seams_precheck_infeasible = true;
-            stats_->hard_seams_precheck_reason = hard_seams_infeasible_reason_;
-        }
-    }
-}
-
-// Hard seams need a physical link per mesh-level edge, so a connected component of the logical mesh graph
-// must fit inside ONE physical connected component (footprints are disjoint). Using the full physical graph
-// and each mesh's smallest variant only weakens the bound, so a violation is a sound UNSAT proof. Without
-// it a disconnected cluster burns the whole growth budget before the zero-link fallback can engage.
-std::optional<std::string> SatPlacementEnumerationSession::hard_seams_provably_infeasible() const {
-    // Physical connected components (undirected BFS) -> largest component size.
-    std::size_t largest_physical_component = 0;
-    {
-        std::unordered_set<AsicID> seen;
-        for (const AsicID& start : physical_graph_.get_nodes()) {
-            if (!seen.insert(start).second) {
-                continue;
-            }
-            std::size_t component_size = 0;
-            std::vector<AsicID> frontier{start};
-            while (!frontier.empty()) {
-                const AsicID asic = frontier.back();
-                frontier.pop_back();
-                ++component_size;
-                for (const AsicID& neighbor : physical_graph_.get_neighbors(asic)) {
-                    if (seen.insert(neighbor).second) {
-                        frontier.push_back(neighbor);
-                    }
-                }
-            }
-            largest_physical_component = std::max(largest_physical_component, component_size);
-        }
-    }
-
-    // Smallest footprint this mesh can seat with: enumerated candidates first, else the variants' sizes.
-    const auto min_mesh_chips = [&](const GlobalMeshId& mesh_id) -> std::optional<std::size_t> {
-        std::optional<std::size_t> chips;
-        const auto consider = [&](std::size_t count) {
-            if (count == 0) {
-                return;
-            }
-            chips = chips.has_value() ? std::min(*chips, count) : count;
-        };
-        if (pools_ != nullptr) {
-            if (const auto it = pools_->find(mesh_id); it != pools_->end() && it->second != nullptr) {
-                for (const Candidate& candidate : it->second->candidates()) {
-                    consider(candidate.asics().size());
-                }
-            }
-        }
-        if (!chips.has_value()) {
-            if (const auto it = global_mesh_groupings_.find(mesh_id); it != global_mesh_groupings_.end()) {
-                for (const GroupingInfo& grouping : it->second) {
-                    consider(grouping.asic_count);
-                    consider(grouping.mesh_node_to_asic_position.size());
-                }
-            }
-            if (const auto it = mgd_fallback_by_mesh_.find(mesh_id); it != mgd_fallback_by_mesh_.end()) {
-                consider(it->second.asic_count);
-                consider(it->second.mesh_node_to_asic_position.size());
-            }
-        }
-        return chips;
-    };
-
-    // Logical connected components over the (symmetric) mesh-level graph.
-    std::set<GlobalMeshId> visited;
-    for (const GlobalMeshId& start : mesh_level_graph_.get_nodes()) {
-        if (visited.contains(start)) {
-            continue;
-        }
-        std::vector<GlobalMeshId> component;
-        std::vector<GlobalMeshId> frontier{start};
-        visited.insert(start);
-        while (!frontier.empty()) {
-            const GlobalMeshId mesh_id = frontier.back();
-            frontier.pop_back();
-            component.push_back(mesh_id);
-            for (const GlobalMeshId& neighbor : mesh_level_graph_.get_neighbors(mesh_id)) {
-                if (visited.insert(neighbor).second) {
-                    frontier.push_back(neighbor);
-                }
-            }
-        }
-        if (component.size() < 2) {
-            continue;  // no hard seam involved
-        }
-        std::size_t required_chips = 0;
-        bool all_sizes_known = true;
-        for (const GlobalMeshId& mesh_id : component) {
-            const auto chips = min_mesh_chips(mesh_id);
-            if (!chips.has_value()) {
-                all_sizes_known = false;
-                break;
-            }
-            required_chips += *chips;
-        }
-        log_debug(
-            tt::LogFabric,
-            "SAT joint placement: hard-seam pre-check: {} inter-mesh-connected mesh(es) need {} chips (sizes {}); "
-            "largest physical connected component {} of {} chip(s)",
-            component.size(),
-            required_chips,
-            all_sizes_known ? "known" : "UNKNOWN",
-            largest_physical_component,
-            physical_graph_.get_nodes().size());
-        if (!all_sizes_known) {
-            continue;  // cannot bound this component; leave it to the solver
-        }
-        if (required_chips > largest_physical_component) {
-            std::vector<uint32_t> ids;
-            ids.reserve(component.size());
-            for (const GlobalMeshId& mesh_id : component) {
-                ids.push_back(*mesh_id);
-            }
-            std::sort(ids.begin(), ids.end());
-            return fmt::format(
-                "the {} inter-mesh-connected mesh(es) [{}] need {} chips inside ONE physically connected component, "
-                "but the largest connected component of the physical graph has {} chip(s) (the requested inter-mesh "
-                "connections cannot all be realized by physical links)",
-                component.size(),
-                fmt::join(ids, ", "),
-                required_chips,
-                largest_physical_component);
-        }
-    }
-    return std::nullopt;
 }
 
 bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, bool drop_cap, bool zero_link_mode) {
@@ -3594,7 +3460,7 @@ bool SatPlacementEnumerationSession::enable_zero_link_tolerance() {
         return false;  // nothing to relax
     }
     zero_link_tolerance_ = true;
-    // Re-solve over the already grown pools; MasterSolve::next rebuilds the encoding (matches() fails).
+    // Re-solve over the current pools; MasterSolve::next rebuilds the encoding (matches() fails).
     solved_ = false;
     pending_.clear();
     pending_index_ = 0;
@@ -3626,23 +3492,6 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
     if (solved_) {
         return {};
     }
-    if (hard_seams_infeasible_ && !zero_link_tolerance_) {
-        // Provably UNSAT with hard seams: skip the solve loop (RELAXED callers engage the zero-link fallback).
-        solved_ = true;
-        if (stats_ != nullptr) {
-            stats_->master_growth_rounds = cycle_;
-            stats_->master_candidates_enumerated = count_sat_placement_candidates(*pools_);
-            stats_->candidate_lists_complete = true;  // the verdict needs no enumeration
-            stats_->master_sat_attempts = attempts_;
-        }
-        log_warning(
-            tt::LogFabric,
-            "SAT joint placement: no placement can realize every requested inter-mesh connection with physical "
-            "links -- {}; skipping the hard-seam solve",
-            hard_seams_infeasible_reason_);
-        return {};
-    }
-
     // Same mode and host cap: next() is another model from the live session. The growth loop uses ONLY the
     // normal PGD candidates -- MGD fallbacks are a strict last resort below, never mixed into the pool while
     // the normal enumeration can still grow or has an untried solve.
@@ -3654,7 +3503,7 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
     // large grow budget could blow past the smallest solvable pool (e.g. ~192 seats) straight into a much bigger
     // one (~320 seats) whose capped solve hangs -- the end-of-loop drop_cap was never reached. Doing it per round
     // makes the solve converge at the first solvable size regardless of grow budget.
-    auto solve_capped_then_dropped = [&]() -> MappingResult<MeshId, const Candidate*> {
+    auto solve_capped_then_dropped_once = [&]() -> MappingResult<MeshId, const Candidate*> {
         MappingResult<MeshId, const Candidate*> r = master_solve_->next(/*drop_cap=*/false);
         if (!r.success) {
             r = master_solve_->next(/*drop_cap=*/true);
@@ -3664,6 +3513,16 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
                     "SAT joint placement: no placement under the HARD host-count cap at this pool size; placed with "
                     "the cap dropped (meshes may now span more hosts / use cross-host seats)");
             }
+        }
+        return r;
+    };
+    // Zero-link fallback (#56762): with hard seams UNSAT at this pool, switch to soft seams rather than grow
+    // the pool (growth is a failure-path mechanism; it never rescued a hard seating in practice). Growth
+    // below then only runs in soft mode, i.e. when even a disjoint seating does not exist yet.
+    auto solve_capped_then_dropped = [&]() -> MappingResult<MeshId, const Candidate*> {
+        MappingResult<MeshId, const Candidate*> r = solve_capped_then_dropped_once();
+        if (!r.success && zero_link_allowed_ && !zero_link_tolerance_ && enable_zero_link_tolerance()) {
+            r = solve_capped_then_dropped_once();
         }
         return r;
     };

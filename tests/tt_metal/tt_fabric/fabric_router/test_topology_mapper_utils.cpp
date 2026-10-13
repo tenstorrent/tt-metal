@@ -650,8 +650,6 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_RelaxedZeroLink_Succeeds)
         verify_bidirectional_consistency(result);
         EXPECT_TRUE(result.stats.placement_zero_link_fallback)
             << "the seating is only reachable with inter-mesh seams soft";
-        // Two 2-chip components cannot host two linked 2-chip meshes: the pre-check skips the hard solve.
-        EXPECT_TRUE(result.stats.placement_hard_seams_precheck_infeasible);
         EXPECT_THAT(
             mapped_asic_footprints(result, psd),
             ::testing::UnorderedElementsAre(std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103}));
@@ -688,7 +686,6 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_RelaxedZeroLink_HardPathF
     ASSERT_EQ(result.fabric_node_to_physical.size(), 4u);
     EXPECT_FALSE(result.stats.placement_zero_link_fallback)
         << "a fully linked seating exists, so the hard-seam solve must find it without relaxing";
-    EXPECT_FALSE(result.stats.placement_hard_seams_precheck_infeasible) << "the 4-chip component fits both meshes";
     EXPECT_THAT(
         mapped_asic_footprints(result, psd),
         ::testing::UnorderedElementsAre(std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103}))
@@ -717,8 +714,6 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_RelaxedZeroLink_Maximizes
         ASSERT_EQ(result.fabric_node_to_physical.size(), 6u);
         verify_bidirectional_consistency(result);
         EXPECT_TRUE(result.stats.placement_zero_link_fallback);
-        // Three linked 2-chip meshes need 6 chips in one component; the largest has 4.
-        EXPECT_TRUE(result.stats.placement_hard_seams_precheck_infeasible);
 
         const std::set<uint64_t> pair_a{100, 101};
         const std::set<uint64_t> pair_b{102, 103};
