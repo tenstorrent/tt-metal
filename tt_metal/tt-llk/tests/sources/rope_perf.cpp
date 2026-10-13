@@ -117,24 +117,29 @@ inline void token_math(RUNTIME_PARAMETERS params)
     }
 }
 
-void run_kernel(RUNTIME_PARAMETERS params)
+// Out of line and ahead of run_kernel, so the INIT code and its addresses do not depend on the rope body; without
+// caller saves, the value it keeps across its call is saved before the zone.
+__attribute__((noinline, optimize("no-caller-saves"))) void math_init(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    START_PERF_MEASURE("INIT")
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+    _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
+        TILE_NUM_FACES, formats.math);
+    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    sfpu::sfpu_rope_configure_addrmod();
+    PROFILER_SYNC();
+}
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
 #endif
-    {
-        START_PERF_MEASURE("INIT")
-        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
-        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-            TILE_NUM_FACES, formats.math);
-        _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-        sfpu::sfpu_rope_configure_addrmod();
-        PROFILER_SYNC();
-    }
+    math_init(params);
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
