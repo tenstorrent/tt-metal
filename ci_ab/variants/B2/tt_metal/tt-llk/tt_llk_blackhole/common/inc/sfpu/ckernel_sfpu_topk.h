@@ -2253,26 +2253,35 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                     {
                         if constexpr (STRAIGHT_LINE && TOPK_STEP_LOADMACRO && !STABLE_SORT)
                         {
-                            // Later calls with this m_iter replay all three windows, so the first records them together.
-                            if (init_rebuild)
+                            // Later calls with this m_iter replay every window, so the first records the reversed one too.
+                            const bool record = init_rebuild;
+                            if (record)
                             {
-                                load_replay_buf<NoExec>(8, 8, [] { bitonic_topk_ph3_after_first_swaps(); });
-                                load_replay_buf<NoExec>(17, ldst_count, [] { bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8); });
                                 load_replay_buf<NoExec>(TOPK_REBUILD_PH3_REV_REPLAY_START, 5, [] { bitonic_topk_ph3_half_body<true, false>(); });
-                                init_rebuild = false;
                             }
                             if (dir == static_cast<bool>(SortDir::ArgMin))
                             {
+                                if (record)
+                                {
+                                    load_replay_buf<NoExec>(8, 8, [] { bitonic_topk_ph3_after_first_swaps(); });
+                                    init_rebuild = false;
+                                }
                                 bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8);
                                 lltt::replay(TOPK_REBUILD_PH3_REV_REPLAY_START, 5);
                                 lltt::replay(TOPK_REBUILD_PH3_REV_REPLAY_START, 5);
                             }
                             else
                             {
-                                bitonic_topk_load16_first_swaps<is_fp32_dest_acc_en, FUSED, RANK_STAMPED, false>();
-                                lltt::replay(8, 8);
+                                bitonic_topk_ph3_group_first_swaps<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(init_rebuild, 8);
                             }
-                            lltt::replay(17, ldst_count);
+                            if (record)
+                            {
+                                load_replay_buf<Exec>(17, ldst_count, [] { bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8); });
+                            }
+                            else
+                            {
+                                lltt::replay(17, ldst_count);
+                            }
                         }
                         else if (init_rebuild)
                         {

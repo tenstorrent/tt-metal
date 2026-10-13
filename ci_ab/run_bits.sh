@@ -37,7 +37,12 @@ for a in B A; do
   for s in $DUMPS; do dump $a $s; done
   dump $a ab_dump_gates DUMP_ROW_DISPATCH=1
   E[$a]=$(elfsum $TT_METAL_CACHE)
+  (cd $TT_METAL_CACHE && find . -path '*/kernels/*' -name '*.elf' ! -name '*.xip.elf' | sort | while read -r e; do
+     k=$(echo "$e" | sed 's|.*/kernels/||'); echo "$($OBJ -O binary -j .text "$e" /dev/stdout 2>/dev/null | md5sum | cut -c1-12) $k"; done) > $OUT/elf_$a.txt
 done
+# Per kernel build: the .text of A and B side by side; a kernel name is the build's kernels/<name>/<hash>/<elf> path.
+join -j2 <(sort -k2 $OUT/elf_A.txt) <(sort -k2 $OUT/elf_B.txt) | awk '{k=$1; sub(/\/.*/, "", k); s=($2==$3)?"same":"diff"; n[k" "s]++} END {for (x in n) print "TBITS ELFK", x, n[x]}' | sort
+echo "TBITS ELFN A=$(wc -l < $OUT/elf_A.txt) B=$(wc -l < $OUT/elf_B.txt) unmatched=$(join -v1 -v2 -j2 <(sort -k2 $OUT/elf_A.txt) <(sort -k2 $OUT/elf_B.txt) | wc -l)"
 echo "TBITS GUARD A=${E[A]} B=${E[B]}"
 [[ ${E[A]} == "${E[B]}" ]] && { echo "TBITS GUARD FAIL: A and B built the same compute kernels"; fail=1; }
 use B B
