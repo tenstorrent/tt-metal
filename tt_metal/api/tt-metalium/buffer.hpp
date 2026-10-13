@@ -90,7 +90,7 @@ struct ShardSpecBuffer {
     DeviceAddr num_pages() const;
 };
 
-struct [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-11-09.")]] BufferConfig {
+struct [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-11-13.")]] BufferConfig {
     IDevice* device;
     DeviceAddr size;       // Size in bytes
     DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
@@ -100,7 +100,7 @@ struct [[deprecated("Use distributed::MeshBuffer instead. This API will be remov
 // copied from above instead of using inheritance such that we can use
 // designator constructor
 struct [[deprecated(
-    "Use distributed::MeshBuffer instead. This API will be removed after 2026-11-09.")]] ShardedBufferConfig {
+    "Use distributed::MeshBuffer instead. This API will be removed after 2026-11-13.")]] ShardedBufferConfig {
     IDevice* device{};
     DeviceAddr size{};       // Size in bytes
     DeviceAddr page_size{};  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
