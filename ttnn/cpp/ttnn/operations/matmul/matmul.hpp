@@ -79,7 +79,8 @@ Tensor linear(
     std::optional<Tensor> optional_output_tensor = std::nullopt,
     const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
-    const PrefetcherPipeList& prefetcher_pipes = {});
+    const PrefetcherPipeList& prefetcher_pipes = {},
+    std::optional<uint32_t> in0_column_offset = std::nullopt);
 
 void addmm_validate(
     const Tensor& input_tensor, const Tensor& mat1_tensor, const Tensor& mat2_tensor, float alpha, float beta);
