@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include "llk_binary_src_dvalid.h"
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_binary.h"
 #include "sanitizer/api.h"
@@ -20,7 +21,8 @@ template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
     MathFidelity math_fidelity,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void llk_math_eltwise_binary_init_impl(
     const ckernel::TensorShape& tensor_shape, const std::uint32_t acc_to_dest) {
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
@@ -35,8 +37,12 @@ inline void llk_math_eltwise_binary_init_impl(
         StateVal<OperationFpuEltwiseBinary::NumFaces>(tensor_shape.total_num_faces()),
         StateVal<OperationFpuEltwiseBinary::NumFacesCDim>(tensor_shape.num_faces_c_dim)));
 
-    _llk_math_eltwise_binary_init_<eltwise_binary_type, src_b_bcast_type, effective_math_fidelity, binary_reuse_dest>(
-        tensor_shape, acc_to_dest);
+    _llk_math_eltwise_binary_init_<
+        eltwise_binary_type,
+        src_b_bcast_type,
+        effective_math_fidelity,
+        binary_reuse_dest,
+        src_dvalid>(tensor_shape, acc_to_dest);
 }
 
 template <
@@ -44,7 +50,8 @@ template <
     BroadcastType src_b_bcast_type,
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void llk_math_eltwise_binary_impl(
     const ckernel::TensorShape& tensor_shape, std::uint32_t dst_index, const bool clear_fp32_dst_acc) {
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
@@ -55,7 +62,8 @@ inline void llk_math_eltwise_binary_impl(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         effective_math_fidelity,
-        binary_reuse_dest>(tensor_shape, dst_index, clear_fp32_dst_acc);
+        binary_reuse_dest,
+        src_dvalid>(tensor_shape, dst_index, clear_fp32_dst_acc);
 }
 
 /**
@@ -68,14 +76,15 @@ inline void llk_math_eltwise_binary_impl(
  *     when input is Tf32 format. Only applicable for ELWMUL operations.
  * @tparam binary_reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB
  * @param operand_A: Logical dataflow buffer id for input A, used to derive the tensor / tile shape
- * @param operand_B: Unused.
+ * @param operand_B: Logical dataflow buffer id for input B, read for a row or column broadcast with SrcDvalid::PerTile.
  * @param acc_to_dest: Flag to control if the result should be accumulated with the current dest.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
     MathFidelity math_fidelity,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void llk_math_eltwise_binary_init(
     const std::uint32_t operand_A,
     [[maybe_unused]] const std::uint32_t operand_B,
@@ -83,7 +92,18 @@ inline void llk_math_eltwise_binary_init(
     const std::uint32_t operand_id = get_operand_id(operand_A);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
-    llk_math_eltwise_binary_init_impl<eltwise_binary_type, src_b_bcast_type, math_fidelity, binary_reuse_dest>(
+    if constexpr (eltwise_binary_bcast_per_tile<src_b_bcast_type, src_dvalid>) {
+        if (ELTWISE_BINARY_B_TILE_NOT_FULL(get_operand_id(operand_B))) {
+            llk_math_eltwise_binary_init_impl<
+                eltwise_binary_type,
+                src_b_bcast_type,
+                math_fidelity,
+                binary_reuse_dest,
+                SrcDvalid::PerFace>(tensor_shape, acc_to_dest);
+            return;
+        }
+    }
+    llk_math_eltwise_binary_init_impl<eltwise_binary_type, src_b_bcast_type, math_fidelity, binary_reuse_dest, src_dvalid>(
         tensor_shape, acc_to_dest);
 }
 
@@ -92,7 +112,8 @@ template <
     BroadcastType src_b_bcast_type,
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void llk_math_eltwise_binary(std::uint32_t dst_index, const bool clear_fp32_dst_acc = true) {
     // DPRINT("llk_math_eltwise_binary: dst_index = {}, max dest tiles = {}\n",
     //     dst_index,
@@ -118,7 +139,8 @@ inline void llk_math_eltwise_binary(std::uint32_t dst_index, const bool clear_fp
         src_b_bcast_type,
         is_fp32_dest_acc_en,
         math_fidelity,
-        binary_reuse_dest>(ckernel::DEFAULT_TENSOR_SHAPE, dst_index, clear_fp32_dst_acc);
+        binary_reuse_dest,
+        src_dvalid>(ckernel::DEFAULT_TENSOR_SHAPE, dst_index, clear_fp32_dst_acc);
 }
 
 template <
@@ -126,7 +148,8 @@ template <
     BroadcastType src_b_bcast_type,
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void llk_math_eltwise_binary(
     const std::uint32_t operand_A,
     const std::uint32_t operand_B,
@@ -157,10 +180,23 @@ inline void llk_math_eltwise_binary(
         StateDiscard<std::uint32_t>(dst_index),
         StateDiscard<bool>(clear_fp32_dst_acc)));
 
+    if constexpr (eltwise_binary_bcast_per_tile<src_b_bcast_type, src_dvalid>) {
+        if (ELTWISE_BINARY_B_TILE_NOT_FULL(get_operand_id(operand_B))) {
+            llk_math_eltwise_binary_impl<
+                eltwise_binary_type,
+                src_b_bcast_type,
+                is_fp32_dest_acc_en,
+                math_fidelity,
+                binary_reuse_dest,
+                SrcDvalid::PerFace>(tensor_shape, dst_index, clear_fp32_dst_acc);
+            return;
+        }
+    }
     llk_math_eltwise_binary_impl<
         eltwise_binary_type,
         src_b_bcast_type,
         is_fp32_dest_acc_en,
         math_fidelity,
-        binary_reuse_dest>(tensor_shape, dst_index, clear_fp32_dst_acc);
+        binary_reuse_dest,
+        src_dvalid>(tensor_shape, dst_index, clear_fp32_dst_acc);
 }

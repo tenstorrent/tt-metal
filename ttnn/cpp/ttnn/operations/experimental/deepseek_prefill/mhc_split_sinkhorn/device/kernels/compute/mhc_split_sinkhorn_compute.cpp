@@ -10,6 +10,7 @@
 // Sinkhorn normalizations are same-shape `m / (m @ K)` divides (K = RB row-sum / CB col-sum),
 // so the whole op is matmul + SFPU tiles. Validated bit-for-bit against the torch reference.
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"

@@ -23,7 +23,8 @@ template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest = false>
+    bool unpack_to_dest = false,
+    SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void llk_unpack_A_init_impl(
     const std::uint32_t transpose_of_faces,
     const std::uint32_t within_face_16x16_transpose,
@@ -51,7 +52,7 @@ inline void llk_unpack_A_init_impl(
         StateDiscard<std::uint32_t>(transpose_of_faces),
         StateDiscard<std::uint32_t>(within_face_16x16_transpose)));
 
-    _llk_unpack_A_init_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+    _llk_unpack_A_init_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, src_dvalid>(
         transpose_of_faces, within_face_16x16_transpose, tensor_shape, src_format, dst_format);
 }
 
@@ -72,13 +73,14 @@ template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest = false>
+    bool unpack_to_dest = false,
+    SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void llk_unpack_A_init(
     const std::uint32_t transpose_of_faces,
     const std::uint32_t within_face_16x16_transpose,
     const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    llk_unpack_A_init_impl<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+    llk_unpack_A_init_impl<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, src_dvalid>(
         transpose_of_faces,
         within_face_16x16_transpose,
         get_operand_tensor_shape(operand_id),
