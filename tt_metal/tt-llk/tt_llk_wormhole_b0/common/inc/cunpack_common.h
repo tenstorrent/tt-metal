@@ -931,6 +931,13 @@ inline void config_unpacker_x_end(const std::uint32_t face_r_dim)
     LLK_ASSERT(
         face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == FACE_R_DIM, "face_r_dim must be 1, 2, 4, 8, or FACE_R_DIM");
 
+    // Full faces stay on the straight path: as the switch's default they ran out of line, a jump away and back mid init
+    if (__builtin_expect(face_r_dim == FACE_R_DIM, true))
+    {
+        TTI_SETADCXX(UNP_SEL, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+        return;
+    }
+
     switch (face_r_dim)
     {
         case 1:
