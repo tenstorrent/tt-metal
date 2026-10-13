@@ -53,6 +53,29 @@ def _resolve_target(target: str, repo_root: Path):
     return d.resolve() if d else None
 
 
+def _resolve_test_node(node: str, repo_root: Path) -> str:
+    """Spell a `path::test` node through the same symlinks _resolve_target follows for the model.
+
+    The isolation worktree stages the model under its RESOLVED path only. emit-e2e links its demo
+    from a second folder, so a --pcc-test spelled through that link named a file the worktree never
+    had (Mistral-Small-4-119B-2603, 2026-10-13: the model resolved to the link's target, the gate
+    stayed on the link, and discovery stopped with `--pcc-test file ... not found`).
+
+    A relative node stays repo-relative and an absolute one stays absolute. A file that does not
+    exist, or lies outside the repo, keeps its own spelling so the engine reports it as before."""
+    file_part, sep, rest = str(node).partition("::")
+    p = Path(file_part)
+    f = p if p.is_absolute() else repo_root / p
+    if not f.is_file():
+        return node
+    real = f.resolve()
+    try:
+        rel = real.relative_to(repo_root.resolve())
+    except ValueError:
+        return node
+    return (str(real) if p.is_absolute() else rel.as_posix()) + sep + rest
+
+
 # What classify_pipeline answers. Named because a branch now DEPENDS on the answer (topology is left
 # to an emitted demo), and a typed string literal at the comparison site is how that silently stops
 # matching if the wording ever changes.
@@ -931,6 +954,8 @@ def cmd_optimize(args) -> int:
     repo_root = _repo_root()
     model_dir = getattr(args, "model_dir", None)
     pcc_test = getattr(args, "pcc_test", None)
+    if pcc_test:
+        pcc_test = _resolve_test_node(pcc_test, repo_root)
     target = model_dir or args.target
     if not target:
         print("  [optimize] need a target (model_id / demo dir) or --model-dir.")
