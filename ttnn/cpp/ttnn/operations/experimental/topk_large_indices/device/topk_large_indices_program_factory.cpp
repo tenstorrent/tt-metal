@@ -197,10 +197,12 @@ uint32_t column_segments_for(uint32_t num_rows, uint32_t num_chunks, uint64_t nu
 
 }  // namespace
 
-ComputeBodyMode compute_body_mode(uint32_t k, uint32_t num_rows, uint32_t input_last_dim, uint32_t num_cores) {
-    // The column body (k <= 64) pays from four chunks per row segment on Blackhole.
+ComputeBodyMode compute_body_mode(
+    uint32_t k, uint32_t num_rows, uint32_t input_last_dim, uint32_t num_cores, std::optional<uint32_t> valid_length) {
+    // The column body (k <= 64) pays from four chunks per row segment on Blackhole. A scalar valid_length can
+    // search far fewer chunks than the width holds and stays out of the program hash, so it keeps the K 512 body.
     constexpr uint32_t column_body_min_chunks = 4;
-    if (k <= 64) {
+    if (k <= 64 && !valid_length.has_value()) {
         const uint32_t chunks = tt::div_up(input_last_dim, to_uint32(LlkTargetK::K1024));
         if (chunks / column_segments_for(num_rows, chunks, num_cores) >= column_body_min_chunks) {
             return ComputeBodyMode::ColumnSegmented;
@@ -297,7 +299,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         k,
         flattened_rows_excluding_last_dim(input.logical_shape()),
         input.logical_shape()[-1],
-        static_cast<uint32_t>(cores.size()));
+        static_cast<uint32_t>(cores.size()),
+        operation_attributes.valid_length);
     const uint32_t llk_k = body_mode == ComputeBodyMode::ColumnSegmented ? to_uint32(LlkTargetK::K1024)
                                                                          : to_uint32(snap_to_llk_target_k(k));
     const uint32_t tiles_per_sequence = (llk_k + tt::constants::TILE_HW - 1) / tt::constants::TILE_HW;
@@ -386,6 +389,10 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
+    const uint32_t tree = row_split_possible(
+                              flattened_rows_excluding_last_dim(input.logical_shape()), static_cast<uint32_t>(cores.size()))
+                              ? 1u
+                              : 0u;
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k, static_cast<uint32_t>(body_mode)};
     compute_compile_args.push_back(has_meta ? 1u : 0u);
     compute_compile_args.push_back(has_meta ? cb_meta : 0u);
@@ -394,7 +401,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     // Landed survivors are raw 32-bit words; the default Float32 unpack path would round them through Tf32.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    unpack_to_dest_mode[cb_landing] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    if (tree) {
+        unpack_to_dest_mode[cb_landing] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",
@@ -405,7 +414,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             // K=2048 multi-chunk merge uses DEST slots 0..7; FP32 half-sync mode exposes only 4 tiles.
             .dst_full_sync_en = true,
             .unpack_to_dest_mode = unpack_to_dest_mode,
-            .compile_args = compute_compile_args});
+            .compile_args = compute_compile_args,
+            .named_compile_args = {{"tree", tree}}});
 
     std::vector<uint32_t> writer_compile_args = {
         cb_indices,
@@ -426,7 +436,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_args, {}, {{"tree", tree}}));
 
     TopkLargeIndicesSharedVariables shared{
         .reader_kernel_id = reader_kernel,

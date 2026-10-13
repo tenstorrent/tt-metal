@@ -260,8 +260,9 @@ void kernel_main() {
     const uint32_t num_rows = get_arg_val<uint32_t>(topk_core_args::compute_num_rows);
     const uint32_t seg_first_chunk = get_arg_val<uint32_t>(topk_core_args::compute_seg_first_chunk);
     const uint32_t seg_end_chunk = get_arg_val<uint32_t>(topk_core_args::compute_seg_end_chunk);
-    const uint32_t num_recv_rounds = get_arg_val<uint32_t>(topk_core_args::compute_num_recv_rounds);
-    const bool sends_survivor = get_arg_val<uint32_t>(topk_core_args::compute_sends_survivor) != 0;
+    constexpr bool tree = get_named_compile_time_arg_val("tree") != 0;
+    const uint32_t num_recv_rounds = tree ? get_arg_val<uint32_t>(topk_core_args::compute_num_recv_rounds) : 0;
+    const bool sends_survivor = tree && get_arg_val<uint32_t>(topk_core_args::compute_sends_survivor) != 0;
     const uint32_t search_len = get_common_arg_val<uint32_t>(topk_common_args::compute_search_length);
 
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);

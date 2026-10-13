@@ -109,8 +109,9 @@ void kernel_main() {
     const uint32_t indices_addr = get_common_arg_val<uint32_t>(topk_common_args::output_address);
     const uint32_t start_row = get_arg_val<uint32_t>(topk_core_args::writer_start_row);
     const uint32_t num_rows = get_arg_val<uint32_t>(topk_core_args::writer_num_rows);
-    const uint32_t num_recv_rounds = get_arg_val<uint32_t>(topk_core_args::writer_num_recv_rounds);
-    const bool sends_survivor = get_arg_val<uint32_t>(topk_core_args::writer_sends_survivor) != 0;
+    constexpr bool tree = get_named_compile_time_arg_val("tree") != 0;
+    const uint32_t num_recv_rounds = tree ? get_arg_val<uint32_t>(topk_core_args::writer_num_recv_rounds) : 0;
+    const bool sends_survivor = tree && get_arg_val<uint32_t>(topk_core_args::writer_sends_survivor) != 0;
     const uint32_t parent_noc_x = get_arg_val<uint32_t>(topk_core_args::writer_parent_noc_x);
     const uint32_t parent_noc_y = get_arg_val<uint32_t>(topk_core_args::writer_parent_noc_y);
 
@@ -180,5 +181,7 @@ void kernel_main() {
     }
 
     noc.async_write_barrier();
-    noc.async_atomic_barrier();
+    if constexpr (tree) {
+        noc.async_atomic_barrier();
+    }
 }

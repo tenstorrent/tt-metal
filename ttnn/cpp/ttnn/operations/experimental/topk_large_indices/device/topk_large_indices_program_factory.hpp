@@ -61,6 +61,16 @@ struct TopkLargeIndicesProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-ComputeBodyMode compute_body_mode(uint32_t k, uint32_t num_rows, uint32_t input_last_dim, uint32_t num_cores);
+// A row splits across cores only when two cores per row are free, so other programs carry no tree code.
+inline bool row_split_possible(uint32_t num_rows, uint32_t num_cores) {
+    return 2ull * num_rows <= num_cores;
+}
+
+ComputeBodyMode compute_body_mode(
+    uint32_t k,
+    uint32_t num_rows,
+    uint32_t input_last_dim,
+    uint32_t num_cores,
+    std::optional<uint32_t> valid_length = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program

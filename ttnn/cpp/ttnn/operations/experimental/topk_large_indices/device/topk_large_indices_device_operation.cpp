@@ -193,7 +193,10 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
             attrs.k,
             flattened_rows_excluding_last_dim(input.logical_shape()),
             input.logical_shape()[-1],
-            attrs.resolved_worker_core_grid.num_cores())));
+            attrs.resolved_worker_core_grid.num_cores(),
+            attrs.valid_length)),
+        program::row_split_possible(
+            flattened_rows_excluding_last_dim(input.logical_shape()), attrs.resolved_worker_core_grid.num_cores()));
 }
 
 spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(
