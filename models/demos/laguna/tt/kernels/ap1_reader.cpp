@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Decode attention prologue (batch 1, or up to 8 rows), reader (Laguna). Role 0 = q, role 1 = k (+ v); the core's
-// logical x is its token row b. The fused qkv matmul output is [32, W] bf16 TILE with rows 0..B-1 real; head h's
+// Decode attention prologue (1..32 rows), reader (Laguna). Role 0 = q, role 1 = k (+ v); each core handles one
+// token row b (and, for q, one part of its heads). The fused qkv matmul output is [32, W] bf16 TILE with rows 0..B-1 real; head h's
 // 128 values are row b of tiles off + 4h .. off + 4h + 3 (16 values in face (b / 16) * 2 at byte (b % 16) * 32, 16 in
 // the next face). They become row h of a [32, 128] head-major block of 4 tiles (rows 0-15 in faces 0/1, rows 16-31
 // in faces 2/3), zero elsewhere. Also pushes the norm weight row (4 tiles), row b's cos / sin (tiles b * rd / 32 ..,
@@ -42,7 +42,11 @@ void kernel_main() {
     constexpr uint32_t w_page = get_compile_time_arg_val(5);
     constexpr uint32_t cs_page = get_compile_time_arg_val(6);
     constexpr uint32_t total_heads = get_compile_time_arg_val(7);  // q heads in all (role 0); nheads = per part
-    constexpr auto qkv_args = TensorAccessorArgs<8>();
+    // this role's cores are the row-major core indices base .. base + rows * parts - 1: row = L / parts, part = L % parts
+    constexpr uint32_t grid_x = get_compile_time_arg_val(8);
+    constexpr uint32_t base = get_compile_time_arg_val(9);
+    constexpr uint32_t parts = get_compile_time_arg_val(10);
+    constexpr auto qkv_args = TensorAccessorArgs<11>();
     constexpr auto w_args = TensorAccessorArgs<qkv_args.next_compile_time_args_offset()>();
     constexpr auto cos_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
@@ -52,9 +56,10 @@ void kernel_main() {
     const auto cs = TensorAccessor(cos_args, get_common_arg_val<uint32_t>(1), cs_page);
     const auto sn = TensorAccessor(sin_args, get_common_arg_val<uint32_t>(2), cs_page);
     const auto sc = TensorAccessor(sc_args, get_common_arg_val<uint32_t>(3), 2048);
-    const uint32_t row = get_absolute_logical_x();
-    // q split over parts (core y = part): this core's heads [h0, h0 + n) keep their rows of the block
-    const uint32_t part = role == 0 ? get_absolute_logical_y() : 0;
+    const uint32_t L = get_absolute_logical_y() * grid_x + get_absolute_logical_x() - base;
+    const uint32_t row = L / parts;
+    // q split over parts: this core's heads [h0, h0 + n) keep their rows of the block
+    const uint32_t part = role == 0 ? L % parts : 0;
     const uint32_t h0 = part * nheads;
     const uint32_t n = role == 0 ? (h0 >= total_heads ? 0 : (total_heads - h0 < nheads ? total_heads - h0 : nheads)) : nheads;
 

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Decode attention prologue (batch 1, or up to 8 rows: the DFlash verify) as one generic_op (Laguna;
+"""Decode attention prologue (1..32 rows: batch 1, the DFlash verify, batch-32 decode) as one generic_op (Laguna;
 kernels/ap1_*.cpp).
 
 Replaces the head split of the fused qkv matmul output, the per-head q / k RMSNorms, the HF rotate_half RoPE and
@@ -30,6 +30,17 @@ def _cb(grid, i, fmt, page, pages):
     )
 
 
+def _core_ranges(gx, start, count):
+    """CoreRangeSet of the row-major core indices [start, start + count)."""
+    ranges, i = set(), start
+    while i < start + count:
+        y, x = divmod(i, gx)
+        n = min(gx - x, start + count - i)
+        ranges.add(ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x + n - 1, y)))
+        i += n
+    return ttnn.CoreRangeSet(ranges)
+
+
 def reduce_scaler(device, head_dim, mesh_mapper=None):
     """bf16 tile of 1 / head_dim (the row-reduce scaler: the reduced sum is the mean)."""
     return ttnn.from_torch(
@@ -46,7 +57,7 @@ def attn_prologue1(qkv, cos, sin, q_norm, k_norm, scaler, nq, nkv, rd, eps, k_me
     hd = 128
     assert qkv.dtype == ttnn.bfloat16 and qkv.padded_shape[-1] >= (nq + 2 * nkv) * hd and nq <= 32 and nkv <= 32
     assert rd in (64, 128), rd
-    assert 1 <= rows <= 8, rows
+    assert 1 <= rows <= 32, rows
     q = ttnn.allocate_tensor_on_device(ttnn.Shape([1, rows, nq, hd]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device,
                                        ttnn.DRAM_MEMORY_CONFIG)
     k = ttnn.allocate_tensor_on_device(ttnn.Shape([1, rows, nkv, hd]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, k_mem)
@@ -56,13 +67,17 @@ def attn_prologue1(qkv, cos, sin, q_norm, k_norm, scaler, nq, nkv, rd, eps, k_me
     w_page, cs_page = _tile_bytes(q_norm.dtype), _tile_bytes(cos.dtype)
     kernels, cbs = [], []
     # q heads over QP cores per row (core y = part, TT_LAGUNA_AP1_QPARTS; even head counts per part), k on y = QP
-    qp = max(1, int(os.environ.get("TT_LAGUNA_AP1_QPARTS", "3")))
+    gs = device.compute_with_storage_grid_size()
+    # q heads over qp cores per row (TT_LAGUNA_AP1_QPARTS; even head counts per part), then one k core per row; the
+    # cores are consecutive row-major indices (q: [0, rows * qp), k: the next rows)
+    qp = max(1, int(os.environ.get("TT_LAGUNA_AP1_QPARTS", "3" if rows <= 8 else "2")))
     hp = -(-nq // qp)
     hp += hp % 2
     qp = -(-nq // hp)
+    assert rows * (qp + 1) <= gs.x * gs.y, (rows, qp)
     for role, (w, nh, off, out) in enumerate(((q_norm, nq, 0, q), (k_norm, nkv, nq * 4, k))):
-        y0, y1 = (0, qp - 1) if role == 0 else (qp, qp)
-        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, y0), ttnn.CoreCoord(rows - 1, y1))})
+        base, parts = (0, qp) if role == 0 else (rows * qp, 1)
+        grid = _core_ranges(gs.x, base, rows * parts)
         per_part = hp if role == 0 else nh
         acc = []
         for t in (qkv, w, cos, sin, scaler):
@@ -71,7 +86,8 @@ def attn_prologue1(qkv, cos, sin, q_norm, k_norm, scaler, nq, nkv, rd, eps, k_me
             kernel_source=str(_KDIR / "ap1_reader.cpp"),
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=grid,
-            compile_time_args=[role, per_part, off, (nq + nkv) * 4, rd_tiles, w_page, cs_page, nq] + acc,
+            compile_time_args=[role, per_part, off, (nq + nkv) * 4, rd_tiles, w_page, cs_page, nq, gs.x, base, parts]
+            + acc,
             common_runtime_args=[qkv.buffer_address(), cos.buffer_address(), sin.buffer_address(),
                                  scaler.buffer_address(), w.buffer_address()],
             config=ttnn.ReaderConfigDescriptor(),
@@ -80,7 +96,8 @@ def attn_prologue1(qkv, cos, sin, q_norm, k_norm, scaler, nq, nkv, rd, eps, k_me
             kernel_source=str(_KDIR / "ap1_writer.cpp"),
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=grid,
-            compile_time_args=[role, hp, nq, qp if role == 0 else 1] + list(ttnn.TensorAccessorArgs(out).get_compile_time_args())
+            compile_time_args=[role, hp, nq, qp if role == 0 else 1, gs.x, base]
+            + list(ttnn.TensorAccessorArgs(out).get_compile_time_args())
             + list(ttnn.TensorAccessorArgs(v).get_compile_time_args()),
             common_runtime_args=[out.buffer_address(), v.buffer_address()],
             config=ttnn.WriterConfigDescriptor(),

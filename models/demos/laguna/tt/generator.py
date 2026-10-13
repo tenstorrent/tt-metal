@@ -69,6 +69,8 @@ class _LagunaSampling1D(Sampling1D):
 
 
 BLOCK_SIZE = 32
+# greedy picks with the greedy_pick kernels instead of the batch sampler's top-k path (TT_LAGUNA_GREEDY_PICK=0: sampler)
+_GREEDY_PICK = __import__("os").environ.get("TT_LAGUNA_GREEDY_PICK", "1") == "1"
 # The standalone KV cache length must be a whole number of SDPA K chunks, not just of BLOCK_SIZE: decode
 # reads the cache in k_chunk_size blocks (64; prefill and the verify option use 128), and a final chunk
 # that runs past the last page-table entry reads unrelated memory as K/V. Found on Laguna-S: a 336-token
@@ -279,6 +281,16 @@ class LagunaGenerator(ReadinessGenerator):
         return torch.as_tensor(self._read_token(tok_buf, batch), dtype=torch.int64)
 
     def _greedy_sample(self, logit_shards, batch, tt_out_tok):
+        if _GREEDY_PICK and logit_shards.layout == ttnn.TILE_LAYOUT and int(logit_shards.shape[-2]) <= 32:
+            # the greedy pick kernels (greedy_pick.py): the argmax over every chip's vocabulary shard (~78 vs ~170 us
+            # for the sampler's top-k + sampling at 32 rows), same ids
+            from .greedy_pick import chip_offsets, greedy_pick
+
+            if getattr(self, "_pick_offsets", None) is None:  # made at the first (eager) call, before any capture
+                self._pick_offsets = chip_offsets(self.mesh_device, int(logit_shards.shape[-1]))
+            x = logit_shards if logit_shards.dtype == ttnn.bfloat16 else ttnn.typecast(logit_shards, ttnn.bfloat16)
+            greedy_pick(x, tt_out_tok, self._pick_offsets, rows_out=batch)
+            return tt_out_tok
         sampler = self._sampler(batch)
         k, p, t = self._greedy_params[batch]
         sampler.decode_forward(logit_shards, k=k, p=p, temp=t, tt_out_tok=tt_out_tok)

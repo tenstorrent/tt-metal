@@ -303,12 +303,16 @@ class MultichipDecoder(OptimizedDecoder):
         self._ap1_scaler = None
         # attn_prologue1 also for the sequential-KV verify rows (2..8, DFlash); 0 keeps it batch-1 only
         self._ap1_rows = _parse_binary_env("TT_LAGUNA_AP1_ROWS", True)
+        # ... and at 32 rows (one row per core: q over 2 cores, k / v over 1; replaces the head-split op, the q / k
+        # norms, the two RoPEs and ~8 layout moves)
+        self._ap1_32 = _parse_binary_env("TT_LAGUNA_AP1_32", True)
         # DFlash context K/V (dflash_kv_rows) from a K/V-only slice of the fused QKV weight
         self._dflash_kv_only = _parse_binary_env("TT_LAGUNA_DFLASH_KV_ONLY", True)
         # 32-row draft head split / join as one multi-core tile copy (tile_regroup) instead of nlp_create_qkv_heads /
         # nlp_concat_heads (one core each: ~37 / ~30 -> ~3 us)
         self._dflash_regroup = _parse_binary_env("TT_LAGUNA_DFLASH_REGROUP", True)
         self._router_1d = _parse_binary_env("TT_LAGUNA_ROUTER_1D", True)  # see _router_scores
+        self._router_ksplit = _parse_binary_env("TT_LAGUNA_ROUTER_KSPLIT", True)  # see _router_scores
         # multi-row verify KV writes through the fused K+V op (share_cache group mode) instead of one op per K / V
         self._seq_kv_fused = _parse_binary_env("TT_LAGUNA_SEQ_KV_FUSED", True)
         # draft query rows: the gate logits from the decode path's fused [Q|K|V|G] DRAM-sharded matmul instead of a
@@ -477,9 +481,10 @@ class MultichipDecoder(OptimizedDecoder):
                 x, len(x.shape) - 2, cluster_axis=self.tp_axis, topology=self.ccl_topology, num_links=self.num_links
             )
         ccl = getattr(self.policy, "ccl", ttnn.bfloat16)
-        if self._ag_reduce and len(x.shape) == 4 and x.shape[0] * x.shape[1] == 1 and x.shape[-2] <= TILE:
-            # Decode-sized partial (<= 1 tile row): ONE all_gather of the D partials + a local sum beats the
-            # composite all_reduce's two dependent collectives (reduce_scatter -> all_gather).
+        if self._ag_reduce and len(x.shape) == 4 and x.shape[0] * x.shape[1] == 1 and x.shape[-2] <= 3 * TILE:
+            # Decode-sized partial (<= 3 tile rows: decode and the batched DFlash verify): ONE all_gather of the D
+            # partials + a local sum beats the composite all_reduce's two dependent collectives (reduce_scatter ->
+            # all_gather): traced 22.6 vs 38.0 us at 32 rows, 39.7 vs 47.5 us at 96 rows on p150x4
             xin = ttnn.typecast(x, ccl) if x.dtype != ccl else x
             # a width-sharded matmul output is gathered directly into L1-interleaved (no separate s2i)
             gathered = ttnn.all_gather(
@@ -1514,6 +1519,18 @@ class MultichipDecoder(OptimizedDecoder):
         sig = ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
         kt = H // TILE
         T = int(x.shape[-2])
+        if self._router_ksplit and T % TILE == 0 and T > TILE and kt % 12 == 0:
+            # the batched DFlash verify: K-split over 96 cores (router_mm.py), up to 96 rows per call (traced: 38 vs
+            # 66 us at 96 rows, 29 vs 45 us at 64). At 32 rows the 96-core program's dispatch outweighs its shorter
+            # kernel (23 vs 21 us traced), so batch-32 decode keeps the DRAM-sharded matmul below
+            from .router_mm import router_scores
+
+            if T <= 3 * TILE:
+                return router_scores(x, self.w["gate_w"])
+            parts = [router_scores(ttnn.slice(x, [0, 0, r0, 0], [1, 1, min(T, r0 + 3 * TILE), H],
+                                              memory_config=ttnn.L1_MEMORY_CONFIG), self.w["gate_w"])
+                     for r0 in range(0, T, 3 * TILE)]  # fmt: skip
+            return ttnn.concat(parts, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
         if T > TILE:  # the batched DFlash verify: the 32-row DRAM-sharded matmul per 32-row chunk
             parts = [self._router_scores(ttnn.slice(x, [0, 0, r0, 0], [1, 1, r0 + TILE, H],
                                                     memory_config=ttnn.L1_MEMORY_CONFIG))
@@ -2327,7 +2344,11 @@ class MultichipDecoder(OptimizedDecoder):
         if (
             self._ap1
             and fold_g
-            and ((B == 1 and not sequential_kv_write) or (1 < B <= 8 and sequential_kv_write and self._ap1_rows))
+            and (
+                (B == 1 and not sequential_kv_write)
+                or (1 < B <= 8 and sequential_kv_write and self._ap1_rows)
+                or (B == TILE and self._ap1_32)  # batch-32 decode and the batched DFlash verify's 32-row chunks
+            )
             and qkv.dtype == ttnn.bfloat16
             and cfg.head_dim == 128
             and cfg.rotary_dim in (64, 128)
