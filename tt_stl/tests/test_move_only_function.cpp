@@ -15,7 +15,7 @@
 namespace ttsl {
 namespace {
 
-// Asserted at build time so a change to the backing type cannot quietly regress them.
+// Asserted at build time so a change to the implementation cannot quietly regress them.
 static_assert(!std::is_copy_constructible_v<move_only_function<void()>>, "must be move-only");
 static_assert(!std::is_copy_assignable_v<move_only_function<void()>>, "must be move-only");
 // A non-const lvalue is the case a greedy forwarding constructor would swallow.
@@ -37,19 +37,16 @@ static_assert(std::is_same_v<move_only_function<int(char)>::result_type, int>);
 static_assert(!std::is_invocable_v<const move_only_function<void()>&>, "R(Args...) is not const-callable");
 static_assert(!std::is_constructible_v<move_only_function<void()>, int>, "must reject non-callables");
 static_assert(!std::is_constructible_v<move_only_function<void()>, void (*)(int)>, "must reject a wrong signature");
-static_assert(
-    !std::is_convertible_v<move_only_function<void()>&, detail::MoveOnlyFunctionBase<void()>&>,
-    "the backing type must not be reachable");
-// Concepts, so the private base's inaccessible members read as unsatisfied rather than an error.
+// Concepts, so inaccessible members read as unsatisfied rather than an error.
 template <typename F>
 concept ExposesHasValue = requires(F& f) { f.has_value(); };
 template <typename F>
 concept ExposesReset = requires(F& f) { f.reset(); };
 template <typename F>
 concept ExposesType = requires(F& f) { f.type(); };
-static_assert(!ExposesHasValue<move_only_function<void()>>, "zoo's accessors must not leak");
-static_assert(!ExposesReset<move_only_function<void()>>, "zoo's accessors must not leak");
-static_assert(!ExposesType<move_only_function<void()>>, "zoo's accessors must not leak");
+static_assert(!ExposesHasValue<move_only_function<void()>>, "no accessors beyond std::move_only_function's");
+static_assert(!ExposesReset<move_only_function<void()>>, "no accessors beyond std::move_only_function's");
+static_assert(!ExposesType<move_only_function<void()>>, "no accessors beyond std::move_only_function's");
 
 TEST(MoveOnlyFunctionTest, CPU_InvokesLambda) {
     int calls = 0;
@@ -80,8 +77,8 @@ TEST(MoveOnlyFunctionTest, CPU_EmptyByDefault) {
 }
 
 TEST(MoveOnlyFunctionTest, CPU_EngagedReportsNonEmpty) {
-    // Captureless, hence trivially destructible: the case that misreports as empty if the RTTI
-    // affordance is ever dropped (#57444).
+    // Captureless, hence trivially destructible and stored with every fast-path bit set: the case
+    // most likely to be mistaken for the empty state.
     move_only_function<void()> f{[]() {}};
     EXPECT_TRUE(static_cast<bool>(f));
     EXPECT_FALSE(f == nullptr);
@@ -113,8 +110,8 @@ TEST(MoveOnlyFunctionTest, CPU_HoldsCaptureLargerThanInlineBuffer) {
     EXPECT_EQ(f(), 8u);
 }
 
-// std::function and std::move_only_function both yield an empty wrapper here. The backing type
-// would store the null pointer as an ordinary target, report engaged, and then call through it.
+// std::function and std::move_only_function both yield an empty wrapper here, rather than storing
+// the null pointer as an ordinary target, reporting engaged and then calling through it.
 TEST(MoveOnlyFunctionTest, CPU_NullFunctionPointerIsEmpty) {
     void (*fp)() = nullptr;
     move_only_function<void()> f{fp};
@@ -134,8 +131,8 @@ TEST(MoveOnlyFunctionTest, CPU_NonNullFunctionPointerIsEngaged) {
     EXPECT_EQ(f(), 5);
 }
 
-// The backing type leaves a moved-from wrapper engaged, so operator bool lies and calling it
-// dereferences null.
+// A moved-from wrapper must be empty; otherwise operator bool would report engaged and a call would
+// run a target that has been moved out.
 TEST(MoveOnlyFunctionTest, CPU_MovedFromIsEmpty) {
     move_only_function<int()> src{[]() { return 42; }};
     move_only_function<int()> dst{std::move(src)};
@@ -192,7 +189,7 @@ TEST(MoveOnlyFunctionTest, CPU_SelfMoveAssignIsSafe) {
     EXPECT_EQ(f(), 1u);
 }
 
-// std::move_only_function yields an empty wrapper here; the backing type would store it engaged.
+// std::move_only_function yields an empty wrapper here, not an engaged one.
 TEST(MoveOnlyFunctionTest, CPU_EmptyStdFunctionIsEmpty) {
     std::function<void()> empty;
     move_only_function<void()> f{empty};
@@ -257,6 +254,54 @@ TEST(MoveOnlyFunctionTest, CPU_InPlaceConstructsTarget) {
 TEST(MoveOnlyFunctionTest, CPU_CallingEmptyThrows) {
     move_only_function<void()> f;
     EXPECT_THROW(f(), std::bad_function_call);
+}
+
+// Counts live instances, so every relocate and destroy is accounted for.
+struct InstanceCounter {
+    static inline int live = 0;
+    InstanceCounter() noexcept { ++live; }
+    InstanceCounter(const InstanceCounter&) noexcept { ++live; }
+    InstanceCounter(InstanceCounter&&) noexcept { ++live; }
+    ~InstanceCounter() { --live; }
+};
+
+// Inline but not trivially movable: moves go through the per-type relocate, and each moved-out
+// copy must be destroyed exactly once.
+TEST(MoveOnlyFunctionTest, CPU_NonTrivialInlineTargetIsDestroyedOnce) {
+    InstanceCounter::live = 0;
+    {
+        move_only_function<int()> a{[c = InstanceCounter{}]() { return 1; }};
+        EXPECT_EQ(InstanceCounter::live, 1);
+        move_only_function<int()> b{std::move(a)};
+        EXPECT_EQ(InstanceCounter::live, 1);
+        move_only_function<int()> c{[]() { return 2; }};
+        c = std::move(b);
+        EXPECT_EQ(InstanceCounter::live, 1);
+        EXPECT_EQ(c(), 1);
+    }
+    EXPECT_EQ(InstanceCounter::live, 0);
+}
+
+// Heap targets move by pointer: the target is neither copied nor destroyed by a move, and the one
+// being replaced is destroyed.
+TEST(MoveOnlyFunctionTest, CPU_HeapTargetMovesWithoutCopying) {
+    struct Big {
+        InstanceCounter counter;
+        std::uint64_t data[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    };
+    static_assert(sizeof(Big) > detail::kMoveOnlyFunctionInlinePointers * sizeof(void*));
+    InstanceCounter::live = 0;
+    {
+        move_only_function<std::uint64_t()> a{[big = Big{}]() { return big.data[7]; }};
+        move_only_function<std::uint64_t()> b{[big = Big{}]() { return big.data[0]; }};
+        EXPECT_EQ(InstanceCounter::live, 2);
+        b = std::move(a);
+        EXPECT_EQ(InstanceCounter::live, 1);
+        move_only_function<std::uint64_t()> c{std::move(b)};
+        EXPECT_EQ(InstanceCounter::live, 1);
+        EXPECT_EQ(c(), 8u);
+    }
+    EXPECT_EQ(InstanceCounter::live, 0);
 }
 
 }  // namespace

@@ -226,7 +226,6 @@ if(TT_INSTALL)
             enchantum
             TracyClient
             tt-logger
-            zoo
         EXPORT Metalium
         FILE_SET
         api
