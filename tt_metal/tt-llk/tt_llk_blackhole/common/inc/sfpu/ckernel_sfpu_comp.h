@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <limits>
 
+#include "ckernel_addrmod.h"
 #include "ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_is_fp16_zero.h"
 #include "llk_sfpu_types.h"
@@ -342,13 +343,12 @@ sfpi_inline void _comp_unary_int_lt_rows_(const sfpi::vInt s)
         const sfpi::vInt diff = v - s;
         if constexpr (SCALAR_NEGATIVE)
         {
-            sfpi::dst_reg[0] = _int_sign_bit_(v & diff);
+            sfpi::dst_reg[0].mode(ADDR_MOD_6) = _int_sign_bit_(v & diff);
         }
         else
         {
-            sfpi::dst_reg[0] = _int_sign_bit_(v | diff);
+            sfpi::dst_reg[0].mode(ADDR_MOD_6) = _int_sign_bit_(v | diff);
         }
-        sfpi::dst_reg++;
     }
 }
 
@@ -364,19 +364,25 @@ sfpi_inline void _comp_unary_int_gt_rows_(const sfpi::vInt s)
         const sfpi::vInt diff  = s - v;
         if constexpr (SCALAR_NEGATIVE)
         {
-            sfpi::dst_reg[0] = _int_sign_bit_(not_v | diff);
+            sfpi::dst_reg[0].mode(ADDR_MOD_6) = _int_sign_bit_(not_v | diff);
         }
         else
         {
-            sfpi::dst_reg[0] = _int_sign_bit_(not_v & diff);
+            sfpi::dst_reg[0].mode(ADDR_MOD_6) = _int_sign_bit_(not_v & diff);
         }
-        sfpi::dst_reg++;
     }
+}
+
+// The ordered compares store through ADDR_MOD_6, which steps Dest; an op that reads it after them runs its own init first.
+sfpi_inline void _comp_unary_int_set_store_step_()
+{
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 template <bool IS_GT, int ITERATIONS>
 sfpi_inline void _comp_unary_int_ordered_(const int scalar)
 {
+    _comp_unary_int_set_store_step_();
     const sfpi::vInt s = scalar;
     if (scalar < 0)
     {
@@ -406,12 +412,12 @@ sfpi_inline void _comp_unary_int_ordered_(const int scalar)
 template <int ITERATIONS>
 sfpi_inline void _comp_unary_int_all_true_()
 {
+    _comp_unary_int_set_store_step_();
     const sfpi::vInt one = 1;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::dst_reg[0] = one;
-        sfpi::dst_reg++;
+        sfpi::dst_reg[0].mode(ADDR_MOD_6) = one;
     }
 }
 
