@@ -1,0 +1,8 @@
+ID=t466-ab6s0
+TASK=t466
+CONFIG=t466-turbo-ab6s0
+TIMEOUT=600
+WORKDIR=/var/tmp/fasth3/t466/b
+ENV=/var/tmp/fasth3/t466/env466.yaml
+CMD=bash /var/tmp/fasth3/t466/run466.sh ab6s0 6 0 base lofi
+NEEDS=/var/tmp/fasth3/t466/b/build_Release

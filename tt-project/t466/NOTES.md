@@ -128,3 +128,24 @@ logs "T466 summary: ring_joint_sdpa gain X%, layer gain Y%" and PCC between arms
 - Change: cold specs now pass T286_WARM_DEADLINE_S=520 (py timeout 560, -t 600) to get more compile per job; added a cold
   lofi job (spec_c10s0l: the lofi SDPA kernels are new compiles, would blow the A/B's 280 s arm timeout).
   chain468.sh: cold base <= 5 tries, cold lofi <= 3, then ab10s0 <= 2. Relaunched from run 1777.
+
+## 2026-10-13 14:20 UTC (07:20 PDT, #468 attempt 2, run 1778): 10 s A/B done; 6 s chain + VBench running
+- chain468 (run 1777) rc 0: cold base 157 (exit 1, warm deadline 520 s in Denoising: still compiling), 160 (ok),
+  cold lofi 161 (ok), A/B ab10s0 162 (both arms PASS, 482 s). JIT 6628/6628 hits in 162.
+- 10 s seed 0, job 162, same job/box/clock (900 MHz clamp, relative only), verbatim stage lines:
+  base: Text 0.6956 | VAE Enc 0.5111 | Denoise 11.8441 (2.9610/step) | VAE Dec 1.9900 | Audio 0.1033 | Total 15.1948
+  lofi: Text 0.5700 | VAE Enc 0.0895 | Denoise 10.5715 (2.6429/step) | VAE Dec 1.9879 | Audio 0.0989 | Total 13.3518
+  Denoise -10.7%; total -12.1% (-9.7% without the base arm's VAE-encode outlier 0.51 s vs 0.09 s).
+- Quality first pass (mp4 lofi vs base, state/t468/v10): PSNR avg 25.57 dB (Y 23.95), SSIM 0.902. Above the
+  ~19 dB Turbo drift floor (#457: k_chunk reorder alone gives 23 dB). Stills s0_{base,lofi}_t{5,9}.png look the same.
+  lofi mp4 is 11% larger (7.57 vs 6.78 MB) - watch for added grain in the 6 s seeds.
+- Drop (not caused by us): ~13:36 UTC blx01, chip 3 left PCIe, found by the broker's post-job fabric check right after
+  our job 150 ended (exit 1 on the warm deadline, before the drop); broker holds 151-156 (bridge-reset chip 3,
+  glx_reset, fabric-check), ready again 13:40 UTC. 157 then ran fine (until its own deadline).
+- Started chain468b.sh (ttp detach, run 1778): cold 6 s base (spec_c6s0, <= 3 tries), cold 6 s lofi (spec_c6s0l, <= 3),
+  then ab6s0..ab6s4 (one pair per job, <= 2 tries; a seed that fails twice is skipped). Device-lint exit 0 for all
+  three new commands. First job: blx01 163.
+- vb468.sh (ttp detach, run 1778): waits for chain468b.rc, copies the 6 s mp4s to state/t468/vb/{base,lofi}/s<N>.mp4,
+  writes state/t468/psnr6s.txt and stills, runs ltx_eval batch (lofi cand, base ref) -> state/t468/vbench.
+- Next: when vb468.rc exists, read the 6 s timing tables (out_c6s0_*, out_ab6s*_*/run.log), psnr6s.txt, vbench,
+  look at stills; then clean up blx01 (models/MiniMax-H3, t466/cache, t466/jit), report final du.
