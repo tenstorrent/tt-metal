@@ -27,8 +27,7 @@ show_help() {
     echo "  -b, --build-type build_type      Set the build type. Default is Release."
     echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
     echo "  --disable-profiler               Disable Tracy profiler (enabled by default)."
-    echo "  --build-tracy-wasm-viewer        Build the Tracy profiler WASM viewer. Default is ON where emsdk supports the build host (x86_64, aarch64), OFF otherwise."
-    echo "  --no-build-tracy-wasm-viewer     Do not build the Tracy profiler WASM viewer."
+    echo "  --tracy-wasm-viewer ON|OFF       Build the Tracy profiler WASM viewer. Defaults to ON where emsdk supports the build host (x86_64, aarch64), OFF otherwise."
     echo "  --build-perf-debug <categories>  Tracy debug-verbosity categories to compile in: off (default), all, or a comma-separated list of ${valid_perf_categories}."
     echo "  --install-prefix                 Where to install build artifacts."
     echo "  --build-dir                      Build directory."
@@ -127,8 +126,7 @@ enable-ccache
 enable-time-trace
 build-type:
 disable-profiler
-build-tracy-wasm-viewer
-no-build-tracy-wasm-viewer
+tracy-wasm-viewer:
 build-perf-debug:
 install-prefix:
 build-dir:
@@ -194,10 +192,13 @@ while true; do
             build_type="$2";shift;;
         --disable-profiler)
             disable_profiler="ON";;
-        --build-tracy-wasm-viewer)
-            tracy_wasm_viewer="ON";;
-        --no-build-tracy-wasm-viewer)
-            tracy_wasm_viewer="OFF";;
+        --tracy-wasm-viewer)
+            tracy_wasm_viewer="$2"
+            if [ "$tracy_wasm_viewer" != "ON" ] && [ "$tracy_wasm_viewer" != "OFF" ]; then
+                echo "ERROR: --tracy-wasm-viewer expects ON or OFF, got '$tracy_wasm_viewer'" >&2
+                exit 1
+            fi
+            shift;;
         --build-perf-debug)
             perf_debug_categories="$2";shift;;
         --install-prefix)
