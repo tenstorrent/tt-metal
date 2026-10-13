@@ -61,7 +61,8 @@ python -m pytest --noconftest -p tests.perf.plugin "tests/perf/test_suites.py::t
 
 A case fails when it is more than `regression_pct` worse (REGRESSION) or more than `improvement_pct` better
 (STALE, the golden needs updating). Cases outside tolerance are re-run once and only fail if the re-run agrees.
-When more than a quarter of the suite is outside tolerance the shift is systematic, so nothing is re-run.
+Nothing is re-run when more than a quarter of the suite is outside tolerance, since that shift is systematic, or
+in `enforce: false` suites. If the re-run itself fails, the first run's statuses stand and the report says so.
 NEW, MISSING and ERROR cases also fail. Suites with `enforce: false` report without failing on REGRESSION or
 STALE until their noise is understood.
 
@@ -74,9 +75,11 @@ python -m tests.perf update --from-run <github-run-id> [--suite NAME] [--force]
 python -m pytest ... --perf-update [--force]
 ```
 
-Only cases outside tolerance in both the run and its re-run are written, using the value nearer the old golden.
-In-band cases are never rewritten, so small regressions cannot accumulate. Without `--force` the update writes
-nothing if any case regressed, errored, is new, or (on an unfiltered run) is missing. With `--force` those are
+Only cases outside tolerance are written. When a case was re-run, both runs must agree and the value nearer the old
+golden is written. When there was no re-run (a systematic shift, an `enforce: false` suite, or a re-run that
+failed), the single run's value is written, so review those diffs for outliers. In-band cases are never rewritten,
+so small regressions cannot accumulate. Without `--force` the update writes nothing if any case regressed,
+errored, is new, or (on an unfiltered run) is missing. With `--force` those are
 accepted: regressions and new cases are written, missing cases are removed. Filtered runs never remove cases.
 
 ## Comparing two runs
