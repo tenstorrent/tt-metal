@@ -1,0 +1,6 @@
+# Test plan for porting fabric_reduce_scatter with scripts/native_migration/run_native_migration.sh.
+# golden: the op's existing tests, run on the source first and again on the port (they must keep passing).
+# acceptance_source skill: the flow's test writer writes the acceptance suite before translating.
+golden:
+  - models/demos/mimo_v2_d_p/tests/perf/test_fabric_rs.py
+acceptance_source: skill
