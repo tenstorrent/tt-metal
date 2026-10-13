@@ -48,7 +48,7 @@ INSTANTIATE_TEST_SUITE_P(
                 tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
                 ttnn::BufferType::DRAM,
                 tt::tt_metal::ShardSpec(
-                    CoreRangeSet{std::set<CoreRange>{CoreRange{tt::tt_metal::CoreCoord{1, 2}, tt::tt_metal::CoreCoord{7, 4}}}},
+                    tt::tt_metal::CoreRangeSet{std::set<tt::tt_metal::CoreRange>{tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{1, 2}, tt::tt_metal::CoreCoord{7, 4}}}},
                     {32, 128},
                     tt::tt_metal::ShardOrientation::ROW_MAJOR
                 )

@@ -10,7 +10,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "dm_common.hpp"
-#include <distributed/mesh_device_impl.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <chrono>
 
 namespace tt::tt_metal {
@@ -35,10 +35,8 @@ struct PCIeWriteBwConfig {
 /// @param mesh_device Mesh device for execution
 /// @param test_config Configuration for the test
 /// @return true if test passes, false otherwise
-bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeWriteBwConfig& test_config) {
-    // Get the actual device for this single-device test
-    IDevice* device = mesh_device->impl().get_device(0);
-    auto device_id = device->id();
+bool run_dm(distributed::MeshDevice& mesh_device, const PCIeWriteBwConfig& test_config) {
+    auto device_id = mesh_device.get_device_ids().front();
 
     // Program
     Program program = CreateProgram();
@@ -66,7 +64,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeWr
     uint64_t pcie_l1_local_addr = dev_pcie_base + pcie_offset;
 
     // Compile-time arguments for kernels
-    uint32_t clock_freq_mhz = device->get_clock_rate_mhz();
+    uint32_t clock_freq_mhz = mesh_device.get_clock_rate_mhz();
     vector<uint32_t> compile_args = {
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.bytes_per_transaction,
@@ -97,7 +95,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeWr
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate({0, 0}));
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
 
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     distributed::Finish(cq);
@@ -109,15 +107,12 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeWr
 
 /* ========== Sweep 1M transactions with varying transaction sizes; Test id = 604 ========== */
 TEST_F(UnitMeshFastDispatchFixture, PCIeWriteBandwidthSweep) {
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
 
     // Max transaction size: 16 kB for BH, 8 kB for WH (NOC max packet size)
-    uint32_t max_transaction_size_bytes = device->arch() == tt::ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;
+    uint32_t max_transaction_size_bytes = this->device().arch() == tt::ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;
 
     // Cap to L1 available size
     max_transaction_size_bytes = std::min(max_transaction_size_bytes, max_transmittable_bytes);
@@ -136,7 +131,7 @@ TEST_F(UnitMeshFastDispatchFixture, PCIeWriteBandwidthSweep) {
             .noc_id = NOC::RISCV_0_default,
         };
 
-        EXPECT_TRUE(unit_tests::dm::pcie_write_bw::run_dm(mesh_device, test_config));
+        EXPECT_TRUE(unit_tests::dm::pcie_write_bw::run_dm(this->device(), test_config));
     }
 }
 
@@ -144,9 +139,8 @@ TEST_F(UnitMeshFastDispatchFixture, PCIeWriteBandwidthSweep) {
 TEST_F(UnitMeshFastDispatchFixture, PCIeHostWriteBandwidthSweep) {
     // Remove GTEST_SKIP to run the test
     GTEST_SKIP() << "Skipping: CLI timeout with large iteration count";
-    auto mesh_device = get_mesh_device();
     auto device_coord = distributed::MeshCoordinate(0, 0);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = this->device().mesh_command_queue();
 
     constexpr uint32_t page_size = 4096;
     constexpr uint32_t num_iterations = 1000000;
@@ -158,7 +152,7 @@ TEST_F(UnitMeshFastDispatchFixture, PCIeHostWriteBandwidthSweep) {
             distributed::ReplicatedBufferConfig{.size = buf_size},
             distributed::DeviceLocalBufferConfig{
                 .page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false},
-            mesh_device.get());
+            &this->device());
 
         vector<uint32_t> src(buf_size / sizeof(uint32_t), 0xDEADBEEF);
 

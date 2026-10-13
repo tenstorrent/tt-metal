@@ -198,6 +198,10 @@ std::string get_default_root_path() {
     return "/tmp/tt-metal-cache/";
 }
 
+std::string get_cache_root(const llrt::RunTimeOptions& rtoptions) {
+    return rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
+}
+
 JitBuildEnv::JitBuildEnv() = default;
 
 void JitBuildEnv::init(
@@ -208,10 +212,10 @@ void JitBuildEnv::init(
     this->rtoptions_ = &rtoptions;
     // Paths
     this->root_ = rtoptions.get_root_dir();
-    this->out_root_ = rtoptions.is_cache_dir_specified() ? rtoptions.get_cache_dir() : get_default_root_path();
+    this->out_root_ = get_cache_root(rtoptions);
 
     this->arch_ = config.arch;
-    this->max_cbs_ = config.max_cbs;
+    this->max_dfbs_ = config.max_dfbs;
 
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
@@ -333,6 +337,14 @@ void JitBuildEnv::init(
             "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC "
             "drainer, which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
         this->defines_ += "-DPROFILE_KERNEL=1 -DPROFILE_STREAMING=1 ";
+        if (rtoptions.get_streaming_profiler_sync_events_enabled()) {
+            // Enable synchronization-event instrumentation (tools/profiler/synchronization_event_profiler.hpp)
+            // Note: only enabled with streaming profiler.
+            this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
+        }
+        if (rtoptions.get_streaming_profiler_inline_enabled()) {
+            this->defines_ += "-DPROFILE_INLINE_ENABLED=1 ";
+        }
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled
@@ -482,19 +494,8 @@ void JitBuildEnv::init(
         // Do not hash compiler version when generating compiler logs
         // so that we may compare them between different compilers
         // without undue difficulty.
-    } else if (FILE* pipe = popen(fmt::format("exec {} --version", this->gpp_).c_str(), "r")) {
-        // Read the sfpi compiler version directly from the compiler
-        // we're using.  Compiler changes invalidate the cache.
-
-        // First line is typically about 65 chars on a branch (and
-        // less on main):
-
-        // riscv-tt-elf-g++ (tenstorrent/sfpi:7.40.0-dce-27298[490]) 15.1.0
-        char buf[100];
-        if (fgets(buf, sizeof(buf), pipe)) {
-            hasher.update(std::string_view{buf});
-        }
-        pclose(pipe);
+    } else {
+        hasher.update(tt::jit_build::utils::compiler_version(gpp_));
     }
 
     build_key_ = hasher.digest();
@@ -550,6 +551,14 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
             fmt::format_to(it, "-I{}{} ", env_.root_, include);
         }
     }
+    if (build_config.is_fw && build_config.core_type == HalProgrammableCoreType::TENSIX &&
+        build_config.processor_class == HalProcessorClassType::DM && build_config.processor_id == 0 &&
+        env_.get_rtoptions().get_brisc_firmware_variant() == llrt::BriscFirmwareVariant::Blaze) {
+        fmt::format_to(
+            std::back_inserter(this->includes_),
+            "-I{} ",
+            std::filesystem::path(env_.get_rtoptions().get_brisc_firmware_header()).parent_path().string());
+    }
     // Defines
     {
         auto it = std::back_inserter(this->defines_);
@@ -557,6 +566,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
             fmt::format_to(it, "-D{} ", define);
         }
         fmt::format_to(it, "-DDISPATCH_MESSAGE_ADDR={} ", build_config.dispatch_message_addr);
+        if (build_config.fds_signalling) {
+            fmt::format_to(it, "-DFDS_SIGNALLING=1 ");
+        }
     }
     if (this->is_fw_) {
         this->defines_ += "-DFW_BUILD ";
@@ -767,7 +779,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         recipe.compiler_opt_level,
         recipe.cflags,
         recipe.pch_umbrella,
-        fs::path(env_.out_root_) / std::to_string(env_.build_key_) / "pch");
+        fs::path(env_.out_root_) / "pch");
 
     // Preserve the recipe's defines for watcher logging.
     std::vector<std::string> defines = recipe.defines;

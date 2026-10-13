@@ -29,6 +29,39 @@
 #define PROCESS_ACTIVATIONS_(op) PROCESS_##op##_ACTIVATIONS
 #define HAS_ACTIVATIONS(op) P_COMPL(IS_EMPTY(PROCESS_ACTIVATIONS(op, 0)))
 
+// Physical LHS means the tensor in c_0, not necessarily the mathematical LHS.
+// This is a FORMAT reference, not necessarily the buffer supplying the next tile:
+// binary_ng_program_factory gives the LHS broadcast temporary (c_5) the same
+// format as the original LHS (c_0). With LHS activation, use its intermediate
+// (c_3), whose format can differ from c_0 (e.g. LOGADDEXP).
+#define BINARY_PHYSICAL_LHS_FORMAT_CB (HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : tt::CBIndex::c_0)
+
+// FPU scalar-first kernels start SrcA from physical RHS (the scalar), and keep
+// that operand order in binary_tiles_init. Host activation defines are already
+// mapped to physical slots, so RHS selects c_1/c_4 here, not the logical RHS.
+// SFPU scalar-first kernels instead load c_0 first and swap DST operand indices;
+// their preprocessing must continue to restore BINARY_PHYSICAL_LHS_FORMAT_CB.
+#if SCALAR_IS_LHS
+#define BINARY_FPU_SRCA_FORMAT_CB (HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : tt::CBIndex::c_1)
+#else
+#define BINARY_FPU_SRCA_FORMAT_CB BINARY_PHYSICAL_LHS_FORMAT_CB
+#endif
+
+#if defined(TRISC_UNPACK) && !HAS_ACTIVATIONS(LHS) && HAS_ACTIVATIONS(RHS)
+// With only RHS activation, preprocessing restores SrcA using c_0's settings,
+// even when LHS broadcast tiles are in c_5. If c_5 exists, its formats and tile
+// geometry must match c_0 so that restoration is safe. The 0xff value means
+// c_5 is unused, so there is nothing to check.
+static_assert(
+    unpack_src_format[5] == 0xff ||
+        (unpack_src_format[0] == unpack_src_format[5] && unpack_dst_format[0] == unpack_dst_format[5] &&
+         unpack_tile_num_faces[0] == unpack_tile_num_faces[5] &&
+         unpack_tile_face_r_dim[0] == unpack_tile_face_r_dim[5] && unpack_partial_face[0] == unpack_partial_face[5] &&
+         unpack_narrow_tile[0] == unpack_narrow_tile[5] && unpack_tile_r_dim[0] == unpack_tile_r_dim[5] &&
+         unpack_tile_c_dim[0] == unpack_tile_c_dim[5] && unpack_tile_size[0] == unpack_tile_size[5]),
+    "binary_ng: LHS broadcast buffer no longer matches the shared SrcA format reference");
+#endif
+
 #define BCAST_OP P_CAT(BCAST_OP_, BCAST_INPUT)
 #define OTHER_OP P_CAT(BCAST_OP_, P_COMPL(BCAST_INPUT))
 #define BCAST_OP_0 LHS

@@ -13,6 +13,12 @@ set_target_properties(
             api
 )
 
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.h
+)
+
 target_sources(
     ttnn_op_experimental_deepseek_moe_moe_gate_mm
     PUBLIC
@@ -20,11 +26,25 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_MOE_MOE_GATE_MM_API_HEADERS}
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_MOE_MOE_GATE_MM_SRCS}
 )
 
 target_link_libraries(ttnn_op_experimental_deepseek_moe_moe_gate_mm PRIVATE TT::Metalium PUBLIC TTNN::Core)
+
+install(
+    TARGETS
+        ttnn_op_experimental_deepseek_moe_moe_gate_mm
+    FILE_SET
+    kernels
+        DESTINATION
+            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm
+        COMPONENT ttnn-runtime
+)
 
 install(TARGETS ttnn_op_experimental_deepseek_moe_moe_gate_mm FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)
 

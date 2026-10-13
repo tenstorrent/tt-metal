@@ -4,7 +4,7 @@ emoji: 🔷
 engine:
   id: copilot
   max-continuations: 6
-model: claude-sonnet-5
+model: claude-sonnet-5.5
 features:
   gh-aw-detection: true
 cache:

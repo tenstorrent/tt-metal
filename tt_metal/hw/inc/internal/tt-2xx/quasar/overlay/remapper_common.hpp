@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 // Version: FFN1.3.0
-#ifndef __DM__REMAPPER_COMMON_HPP__
-#define __DM__REMAPPER_COMMON_HPP__
+#ifndef DM_REMAPPER_COMMON_HPP
+#define DM_REMAPPER_COMMON_HPP
 
 // Base addresses for 64 pairs of ClientL/ClientR config registers
 #define REMAP_CLIENT_R_CONFIG_REG_BASE_ADDR32 0x01842000
@@ -28,6 +28,7 @@
 #define REMAP_CLIENT_L_STATUS_REG_ADDR32(pair_idx) \
     (REMAP_CLIENT_L_STATUS_REG_BASE_ADDR32 + ((pair_idx) * REMAP_REG_PAIR_STRIDE))
 
+// NOLINTBEGIN(modernize-use-using)
 namespace overlay {
 
 typedef enum clientTypes { DM_0, DM_1, DM_2, DM_3, NEO_0, NEO_1, NEO_2, NEO_3 } tClientTypes;
@@ -125,5 +126,6 @@ typedef union {
 // Removed: Single register pointers replaced with pair-indexed access
 
 }  // namespace overlay
+// NOLINTEND(modernize-use-using)
 
-#endif  // __DM__REMAPPER_COMMON_HPP__
+#endif  // DM_REMAPPER_COMMON_HPP

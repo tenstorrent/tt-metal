@@ -21,6 +21,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace tt {
@@ -178,13 +179,19 @@ public:
         const std::string& root_dir,
         tt::tt_fabric::FabricType fabric_type = tt::tt_fabric::FabricType::MESH);
 
-    // Generate a mesh graph of a specific shape (used by topology mapper)
+    // Generate a mesh graph of a specific shape (used by topology mapper). Builds the MGD via
+    // MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape, then initializes connectivity.
     static MeshGraph generate_mesh_graph_of_shape(
         MeshShape mesh_shape,
         tt::tt_fabric::FabricType fabric_type,
         tt::tt_fabric::FabricReliabilityMode reliability_mode,
         tt::ARCH arch,
         std::uint32_t num_connections_per_direction);
+
+    explicit MeshGraph(
+        const MeshGraphDescriptor& mesh_graph_descriptor,
+        std::optional<FabricConfig> fabric_config = std::nullopt,
+        bool is_ubb_galaxy = false);
 
     // Get the number of active channels the user has requested between meshes
     const RequestedIntermeshConnections& get_requested_intermesh_connections() const;
@@ -213,15 +220,14 @@ public:
     // explicit inter-mesh policy; multi-MGD rank binding should not treat it as STRICT when merging.
     bool is_inter_mesh_policy_specified() const;
 
-    // Get the MeshGraphDescriptor instance (if available)
-    // Returns nullptr if MeshGraph was created via generate_mesh_graph_of_shape()
+    bool has_mesh_graph_descriptor() const { return mesh_graph_descriptor_.has_value(); }
+
     const MeshGraphDescriptor& get_mesh_graph_descriptor() const {
         TT_FATAL(mesh_graph_descriptor_.has_value(), "MeshGraphDescriptor not available");
         return mesh_graph_descriptor_.value();
     }
 
-    // Get the Mesh Graph Descriptor file path (if available)
-    // Returns empty path if MeshGraph was created via generate_mesh_graph_of_shape()
+    // File path when the graph was loaded from textproto; unset for programmatic / auto-discovered MGDs.
     std::optional<std::filesystem::path> get_mesh_graph_descriptor_path() const { return mesh_graph_desc_file_path_; }
 
 private:

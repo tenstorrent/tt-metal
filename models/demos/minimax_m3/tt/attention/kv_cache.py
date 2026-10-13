@@ -40,6 +40,12 @@ class MiniMaxKVCache(KvCaches):
     max_seq_len: int
     sp: int
 
+    def deallocate(self) -> None:
+        """Free the three device caches (e.g. to re-allocate at a different ``max_seq_len`` while the
+        model stays resident). The handle is dead afterwards; do not pass it into the runtime again."""
+        for t in (self.k, self.v, self.index_k):
+            ttnn.deallocate(t)
+
 
 def allocate_kv_caches(
     mesh_device,

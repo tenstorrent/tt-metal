@@ -12,9 +12,11 @@
 namespace tt::tt_fabric {
 
 StaticSizedChannelConnectionWriterAdapter::StaticSizedChannelConnectionWriterAdapter(
+    const FabricBuilderContext& builder_context,
     FabricStaticSizedChannelsAllocator& /*allocator*/,
     tt::tt_fabric::Topology topology,
     eth_chan_directions my_direction) :
+    builder_context_(builder_context),
     is_2D_routing(topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus),
     my_direction(my_direction) {}
 
@@ -75,9 +77,8 @@ void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
     this->relay_connection_info.worker_registration_address = adapter_spec.edm_connection_handshake_addr;
     this->relay_connection_info.worker_location_info_address = adapter_spec.edm_worker_location_info_addr;
 
-    // Get relay-specific info from fabric context
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
+    // Get relay-specific info from the builder context
+    const auto& tensix_config = builder_context_.get_tensix_config();
 
     // Store free slots stream ID
     constexpr uint32_t relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
@@ -174,9 +175,8 @@ void StaticSizedChannelConnectionWriterAdapter::pack_adaptor_to_relay_rt_args(st
     if (!this->relay_connection_info.is_connected) {
         args_out.push_back(0u);  // has_local_tensix_relay_connection = false
     } else {
-        // Query the fabric router config from fabric context
-        const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-        const auto& fabric_router_config = fabric_context.get_builder_context().get_fabric_router_config();
+        // Query the fabric router config from the builder context
+        const auto& fabric_router_config = builder_context_.get_fabric_router_config();
 
         // Pack full relay connection info
         // Query connection_buffer_index_id from fabric router config (consistent with other adapter connections)

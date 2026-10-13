@@ -16,7 +16,7 @@ struct TilizeParams {
     bool enough_space_width = false;
     bool enough_space_height = false;
     const bool use_low_perf = false;
-    const std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
+    const std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt;
 };
 
 struct TilizeInputs {

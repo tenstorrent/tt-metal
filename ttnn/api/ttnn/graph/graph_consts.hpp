@@ -24,6 +24,7 @@ constexpr auto kShape = "shape";
 constexpr auto kDtype = "dtype";
 constexpr auto kMemoryConfig = "memory_config";
 constexpr auto kBufferType = "buffer_type";
+constexpr auto kStorageType = "storage_type";      // "HOST" or "DEVICE"; tensor nodes only
 constexpr auto kDeviceTensors = "device_tensors";  // Per-device buffer placement for multi-device (mesh) tensors
 constexpr auto kMeshDeviceId = "mesh_device_id";
 constexpr auto kNumCores = "num_cores";

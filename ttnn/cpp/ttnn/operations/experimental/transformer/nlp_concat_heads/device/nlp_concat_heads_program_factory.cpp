@@ -89,8 +89,6 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
 
-    const auto arch = a.device()->arch();
-
     KernelSpec reader_spec;
     KernelSpec writer_spec;
     if (in_sharded) {
@@ -137,7 +135,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
             .compile_time_args = compile_time_args,
             .runtime_arg_schema =
                 {.runtime_arg_names = {"nheads", "start_read_offset_bytes", "start_write_offset_bytes"}},
-            .hw_config = create_reader_datamovement_config(arch),
+            .hw_config = create_reader_datamovement_config(),
         };
         writer_spec = KernelSpec{
             .unique_id = WRITER,
@@ -148,7 +146,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
             .compile_time_args = std::move(compile_time_args),
             .runtime_arg_schema =
                 {.runtime_arg_names = {"nheads", "start_read_offset_bytes", "start_write_offset_bytes"}},
-            .hw_config = create_writer_datamovement_config(arch),
+            .hw_config = create_writer_datamovement_config(),
         };
     } else {
         reader_spec = KernelSpec{
@@ -173,7 +171,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
                     {"in0_HtWt", in0_HtWt},
                 },
             .runtime_arg_schema = {.runtime_arg_names = {"num_blocks", "in0_h_dim", "in0_tensor_tile_id"}},
-            .hw_config = create_reader_datamovement_config(arch),
+            .hw_config = create_reader_datamovement_config(),
         };
         // The interleaved writer reuses the shared Metal 2.0 fork of
         // writer_unary_interleaved_start_id.cpp; its binding vocabulary (dfb::out, tensor::dst,
@@ -193,7 +191,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
                 .accessor_name = "dst",
             }},
             .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-            .hw_config = create_writer_datamovement_config(arch),
+            .hw_config = create_writer_datamovement_config(),
         };
     }
 

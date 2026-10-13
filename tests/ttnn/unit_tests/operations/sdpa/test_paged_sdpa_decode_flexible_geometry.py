@@ -183,7 +183,7 @@ def test_override_matches_alloc_is_noop(device):
         q_padded = torch.nn.functional.pad(q, (0, 0, 0, 32 - num_q_heads), "constant", 0)
         return q, q_padded, cur_pos
 
-    q_torch, q_padded, cur_pos = _build_q()
+    _, q_padded, cur_pos = _build_q()
     cur_pos_tt = ttnn.Tensor(cur_pos, ttnn.int32).to(device)
     scale = 1.0 / (head_dim**0.5)
     program_config = ttnn.SDPAProgramConfig(

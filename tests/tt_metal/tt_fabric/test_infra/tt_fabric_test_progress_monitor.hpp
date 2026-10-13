@@ -88,7 +88,7 @@ struct EndpointIdHash {
 
 struct EndpointHungState {
     uint64_t last_packet_count = 0;
-    std::chrono::steady_clock::time_point last_progress_time{};
+    std::chrono::steady_clock::time_point last_progress_time;
     uint32_t consecutive_stall_rounds = 0;
     bool confirmed_hung = false;
     bool emitted = false;

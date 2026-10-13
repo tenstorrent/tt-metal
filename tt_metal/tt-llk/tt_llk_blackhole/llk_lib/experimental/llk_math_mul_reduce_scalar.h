@@ -124,6 +124,9 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::
     else if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)
     {
         math::srcb_bank_wait();
+        // dst may have been written by the SFPU just before this move (e.g. a fill). The MATH bit in the
+        // bank wait only tracks FPU writes, so also drain the SFPU before the FPU copies dst into SrcB.
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
 
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_BD);
 
@@ -212,6 +215,8 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ck
     const bool is_narrow_tile         = tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim;
     const std::uint32_t num_row_tiles = tensor_shape.num_faces_r_dim;
 
+    // dst[dst_index] may have just been zeroed through the SFPU; GAPOOL accumulates into it, so drain first.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 

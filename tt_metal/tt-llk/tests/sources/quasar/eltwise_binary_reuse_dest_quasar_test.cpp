@@ -136,7 +136,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         DataFormat src_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(src_format, src_format);
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
 
         PROFILER_SYNC();
     }
@@ -178,8 +178,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         for (int tile = 0; tile < tiles_in_block; tile++)
                         {
                             const int global_tile_idx = block * tiles_in_block + tile;
-                            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, REUSE_DEST_TYPE>(
-                                global_tile_idx, ckernel::DEFAULT_TENSOR_SHAPE, is_fp32_dest_acc_en /*clear_fp32_mode*/);
+                            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, REUSE_DEST_TYPE>(global_tile_idx, ckernel::DEFAULT_TENSOR_SHAPE);
                         }
                     }
                     if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
@@ -227,10 +226,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+        const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
             ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
+        _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
         PROFILER_SYNC();
     }
     {

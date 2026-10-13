@@ -455,7 +455,6 @@ def test_ring_joint_sdpa_mochi_model_config(mesh_device, reset_seeds, fp32_dest_
 
 # WH T3K grid constants (logical, before harvesting)
 WH_T3K_GRID_COLS = 8
-WH_T3K_GRID_ROWS = 8
 WH_T3K_CCL_COLUMN = 1  # Last column reserved for CCL
 
 PERF_Q_CHUNK_SIZES = [128, 256]
@@ -660,6 +659,8 @@ def test_ring_joint_sdpa_create_perf_table(model_id):
     ],
     ids=["sp2"],
 )
+# scalar = host int, tensor = single-valued device tensors (trace-dynamic transport); both must agree.
+@pytest.mark.parametrize("logical_as_tensor", [False, True], ids=["scalar", "tensor"])
 def test_ring_joint_sdpa_sharded_prompt(
     mesh_device,
     num_links,
@@ -671,6 +672,7 @@ def test_ring_joint_sdpa_sharded_prompt(
     d,
     q_chunk_size,
     k_chunk_size,
+    logical_as_tensor,
     all_gather_topology,
     reset_seeds,
 ):
@@ -695,5 +697,6 @@ def test_ring_joint_sdpa_sharded_prompt(
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         num_links=num_links,
+        logical_as_tensor=logical_as_tensor,
         topology=all_gather_topology,
     )

@@ -4,16 +4,18 @@
 
 #pragma once
 
-#include <variant>
-#include <type_traits>
-#include <vector>
-#include <string>
-#include <optional>
-#include <string_view>
-#include <sstream>
 #include <concepts>
+#include <functional>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt::tt_metal {
 
@@ -66,7 +68,7 @@ private:
     std::variant<RemoteDevice, T> value_;
 
     // Private constructor for RemoteDevice
-    explicit MaybeRemote(RemoteDevice);
+    explicit MaybeRemote(RemoteDevice /*remote*/);
     explicit MaybeRemote(T value);
 
     // Helper for throwing remote access errors
@@ -134,7 +136,7 @@ using MaybeRemoteDevice = MaybeRemote<IDevice*>;
 // ============================================================================
 
 template <typename T>
-MaybeRemote<T>::MaybeRemote(RemoteDevice) : value_(RemoteDevice{}) {}
+MaybeRemote<T>::MaybeRemote(RemoteDevice /*remote*/) : value_(RemoteDevice{}) {}
 
 template <typename T>
 MaybeRemote<T>::MaybeRemote(T value) : value_(std::move(value)) {}

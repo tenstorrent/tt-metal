@@ -9,7 +9,7 @@
 #include <cstdlib>
 #include <vector>
 
-#include "impl/streaming_profiler/streaming_profiler_decode.hpp"
+#include "impl/streaming_profiler/decode.hpp"
 
 using namespace tt::tt_metal;
 namespace kp = kernel_profiler;

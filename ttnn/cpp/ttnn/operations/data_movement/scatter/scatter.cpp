@@ -143,42 +143,23 @@ void check_support(
         source_shape[dim]);
 }
 
-Tensor pre_scatter_transform_tensor(
-    const Tensor& input_tensor,
-    const int8_t dim,
-    const bool is_dim_last_idx,
-    const bool is_rank_le_4d,
-    const std::optional<Shape>& index_shape = std::nullopt) {
-    if (input_tensor.logical_shape() == ttnn::Shape{1} || input_tensor.logical_shape() == ttnn::Shape{0}) {
-        return input_tensor;
-    }
-
-    Tensor processed_tensor = input_tensor;
-    if (index_shape.has_value()) {
-        const ttsl::SmallVector<uint32_t> start(index_shape->rank(), 0);
-        const ttsl::SmallVector<uint32_t> steps(index_shape->rank(), 1);
-        const ttsl::SmallVector<uint32_t> end(index_shape->cbegin(), index_shape->cend());
-        processed_tensor = ttnn::slice(processed_tensor, start, end, steps, processed_tensor.memory_config());
-    }
-    // if layout is tile, convert to row-major first
-    if (processed_tensor.layout() != Layout::ROW_MAJOR) {
-        processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
-    }
-    // transposing a row-major tensor here
-    processed_tensor = reduction_common::perform_transpose(processed_tensor, is_dim_last_idx, dim, -1);
-    processed_tensor = reduction_common::transform_to_4d_tensor(processed_tensor, is_rank_le_4d);
-
-    return processed_tensor;
+// The reader maps each leading axis of the input onto the same axis of the index, so the two must
+// line up per axis. Prepending 1s keeps that; folding rank > 4 down to 4D does not, because each
+// tensor fuses its leading dims with its own extents. See #56876.
+Tensor pad_rank_up_to_4d(const Tensor& input_tensor) {
+    return (input_tensor.logical_shape().rank() < 4) ? ttnn::operations::core::unsqueeze_to_4D(input_tensor)
+                                                     : input_tensor;
 }
 
 Tensor pre_scatter_transform_tensor(
     const Tensor& input_tensor,
-    Shape& after_transpose_shape,
     const int8_t dim,
     const bool is_dim_last_idx,
-    const bool is_rank_le_4d,
     const std::optional<Shape>& index_shape = std::nullopt) {
-    if (input_tensor.logical_shape() == ttnn::Shape{1} || input_tensor.logical_shape() == ttnn::Shape{0}) {
+    // Shape{1} is deliberately not short-circuited: this runs once per operand, and every operand
+    // has to reach the kernel at the same rank (#56876). The Shape{0} arm is inert - a zero last
+    // dim divides by zero in the factory whether or not this returns early (#56881).
+    if (input_tensor.logical_shape() == ttnn::Shape{0}) {
         return input_tensor;
     }
 
@@ -195,27 +176,24 @@ Tensor pre_scatter_transform_tensor(
     }
     // transposing a row-major tensor here
     processed_tensor = reduction_common::perform_transpose(processed_tensor, is_dim_last_idx, dim, -1);
-    after_transpose_shape = processed_tensor.logical_shape();
-    processed_tensor = reduction_common::transform_to_4d_tensor(processed_tensor, is_rank_le_4d);
+    processed_tensor = pad_rank_up_to_4d(processed_tensor);
 
     return processed_tensor;
 }
 
 Tensor post_scatter_transform_tensor(
     Tensor& output_tensor,
-    const Shape& after_transpose_shape,
     const int32_t dim,
     const bool is_dim_last_idx,
     const Shape& original_logical_shape,
     const Layout& original_layout) {
     const auto orig_rank = original_logical_shape.rank();
 
+    // Only the padding applied on the way in needs undoing; rank >= 4 went through untouched.
     if (orig_rank == 1) {
         output_tensor = ttnn::reshape(output_tensor, original_logical_shape);
     } else if (orig_rank < 4) {
         output_tensor = ttnn::squeeze_from_4D(output_tensor, orig_rank);
-    } else if (orig_rank > 4) {
-        output_tensor = ttnn::reshape(output_tensor, after_transpose_shape);
     }
 
     // transposing a row-major tensor here
@@ -301,25 +279,19 @@ Tensor scatter(
 
     // index and source tensors should have same rank as input tensor
     const bool input_tensor_is_dim_last_idx = (normalized_dim == input_tensor_rank - 1);
-    const bool input_tensor_is_rank_le_4d = input_tensor_rank <= 4;
 
     // tensors sent to the device operation must be:
     // - row-major
     // - transposed to have the last dimension as last axis
-    // - (un)squeezed to 4D
-    Shape after_transpose_shape;
-    Tensor transformed_input_tensor = pre_scatter_transform_tensor(
-        input_tensor, after_transpose_shape, normalized_dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
+    // - unsqueezed to 4D if of a lower rank (a higher rank is passed through as-is)
+    Tensor transformed_input_tensor =
+        pre_scatter_transform_tensor(input_tensor, normalized_dim, input_tensor_is_dim_last_idx);
 
-    Tensor transformed_index_tensor = pre_scatter_transform_tensor(
-        index_tensor, normalized_dim, input_tensor_is_dim_last_idx, input_tensor_is_rank_le_4d);
+    Tensor transformed_index_tensor =
+        pre_scatter_transform_tensor(index_tensor, normalized_dim, input_tensor_is_dim_last_idx);
 
     Tensor transformed_source_tensor = pre_scatter_transform_tensor(
-        source_tensor,
-        normalized_dim,
-        input_tensor_is_dim_last_idx,
-        input_tensor_is_rank_le_4d,
-        index_tensor.logical_shape());
+        source_tensor, normalized_dim, input_tensor_is_dim_last_idx, index_tensor.logical_shape());
 
     const MemoryConfig final_memory_config{
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
@@ -335,12 +307,7 @@ Tensor scatter(
         reduction,
         sub_core_grid);
     output = post_scatter_transform_tensor(
-        output,
-        after_transpose_shape,
-        normalized_dim,
-        input_tensor_is_dim_last_idx,
-        original_input_tensor_lshape,
-        original_layout);
+        output, normalized_dim, input_tensor_is_dim_last_idx, original_input_tensor_lshape, original_layout);
     return output;
 }
 

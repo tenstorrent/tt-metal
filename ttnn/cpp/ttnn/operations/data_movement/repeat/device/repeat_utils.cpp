@@ -4,6 +4,7 @@
 #include "ttnn/operations/data_movement/repeat/device/repeat_utils.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
@@ -203,32 +204,44 @@ std::optional<ShardSpec> generate_repeat_shard_spec(
         return std::nullopt;
     }
 
+    const auto input_orientation = input_tensor.shard_spec().has_value()
+                                       ? std::optional{input_tensor.shard_spec()->orientation}
+                                       : std::nullopt;
     auto spec = common::synthesize_output_shard_spec(
+        compute_grid_size,
+        tensor_height,
+        tensor_width,
+        memory_layout,
+        {.is_tile = (input_tensor.layout() == tt::tt_metal::Layout::TILE),
+         .orientation_hint = orientation_hint,
+         .input_orientation = input_orientation,
+         .caller_tag = "Repeat"});
+
+    // RM WIDTH_SHARDED: shrink num_cores to the largest tensor_width divisor with L1-aligned page (else nullopt).
+    auto adjusted = common::shrink_shard_for_rm_page_alignment(
+        spec, input_tensor.layout(), input_tensor.element_size(), tensor_width, compute_grid_size, memory_layout);
+    if (adjusted.has_value()) {
+        return adjusted;
+    }
+
+    // Strict shrink can't repair RM {BLOCK,HEIGHT}_SHARDED unaligned pages; retry with tile-inflated synth
+    // to match main's pre-#57644 behavior for the non-fixable case (else caller drops to interleaved).
+    auto tile_spec = common::synthesize_output_shard_spec(
         compute_grid_size,
         tensor_height,
         tensor_width,
         memory_layout,
         {.is_tile = true,
          .orientation_hint = orientation_hint,
-         .input_orientation = input_tensor.shard_spec().has_value()
-                                  ? std::optional{input_tensor.shard_spec()->orientation}
-                                  : std::nullopt,
-         .caller_tag = "Repeat"});
-
-    // RM-only dispatch guards (page-size L1 alignment + exact width divisibility); not shard-shape math.
-    if (input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-        const uint64_t page_size_bytes =
-            static_cast<uint64_t>(spec.shape[1]) * static_cast<uint64_t>(input_tensor.element_size());
-        constexpr uint64_t kL1Alignment = 16;
-        if (page_size_bytes == 0 || (page_size_bytes % kL1Alignment) != 0) {
-            return std::nullopt;
-        }
-        if (tensor_width % spec.shape[1] != 0) {
-            return std::nullopt;
-        }
+         .input_orientation = input_orientation,
+         .caller_tag = "Repeat (tile fallback)"});
+    const uint64_t l1_page_align = static_cast<uint64_t>(tt::tt_metal::hal::get_l1_alignment());
+    const uint64_t page_size_bytes =
+        static_cast<uint64_t>(tile_spec.shape[1]) * static_cast<uint64_t>(input_tensor.element_size());
+    if (page_size_bytes == 0 || (page_size_bytes % l1_page_align) != 0 || tensor_width % tile_spec.shape[1] != 0) {
+        return std::nullopt;
     }
-
-    return spec;
+    return tile_spec;
 }
 
 }  // namespace ttnn::operations::data_movement::repeat

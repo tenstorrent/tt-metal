@@ -241,3 +241,29 @@ def random_input_ids(
                 input_ids[row, seqlen - n_pad :] = config.pad_token_id
                 attention_mask[row, seqlen - n_pad :] = 0
     return input_ids, attention_mask
+
+
+def slice_state_dict(state_dict: dict, prefix: str) -> dict:
+    """Extract one submodule's weights, with the prefix stripped.
+
+    The TTNN modules take the full state dict plus a prefix, so they can read their own keys;
+    a torch reference submodule wants the same tensors keyed as it names them internally. This
+    matches on the key text rather than zipping two key orders together, so a structural
+    mismatch raises from load_state_dict(strict=True) instead of silently loading the wrong
+    tensor into the right-shaped slot.
+
+    Args:
+        state_dict: Full checkpoint.
+        prefix: Dotted prefix to match, trailing dot included.
+
+    Returns:
+        dict: The matching entries, each key with prefix removed.
+
+    Raises:
+        KeyError: If no key carries the prefix, which would otherwise load an empty dict into a
+            reference module and leave it at its random initialization.
+    """
+    sliced = {key[len(prefix) :]: value for key, value in state_dict.items() if key.startswith(prefix)}
+    if not sliced:
+        raise KeyError(f"no checkpoint keys start with {prefix!r}")
+    return sliced

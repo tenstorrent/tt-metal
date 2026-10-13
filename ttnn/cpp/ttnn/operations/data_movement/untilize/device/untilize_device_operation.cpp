@@ -269,7 +269,7 @@ UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_ou
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto& input_tensor = tensor_args.input;
-    DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
+    DataType output_dtype = ttnn::operations::data_movement::untilize_output_dtype(input_tensor.dtype());
 
     return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
@@ -327,7 +327,10 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         identical_shard_specs |= input_tensor_a.nd_shard_spec().has_value() &&
                                  output_tensor.nd_shard_spec().has_value() &&
                                  input_tensor_a.nd_shard_spec().value() == output_tensor.nd_shard_spec().value();
-        if (identical_shard_specs) {
+        // The ND-identical factory is a Gen1 (ProgramDescriptor / DataMovementKernel) zero-copy path not
+        // ported to Quasar; on Quasar fall through to the general ND-shard-input factory (ported, non
+        // zero-copy) selected below.
+        if (identical_shard_specs && input_tensor_a.device()->arch() != tt::ARCH::QUASAR) {
             return UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory{};
         }
     }

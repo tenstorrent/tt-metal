@@ -18,11 +18,10 @@ restore and no such flag; the fused caller is expected to pair ``pack_block_cont
 with its own uninit instead. The MOP-restore coverage is therefore gone, because the
 behaviour is gone, and what replaces it is a test that the uninit does *not* touch the MOP.
 
-Note what the driver does NOT do: it replicates the uninit body rather than calling either
-compute-API function, because a tt-llk test cannot include tt_metal/hw/inc/api/compute. So
-this pins the behaviour the two headers share, and a divergence between them is what it
-cannot catch. ``test_custom_mm_uninit_parity.py`` guards that textually;
-catching it properly needs a metal-side test calling the real entry points.
+The driver calls the same raw PACK init/uninit helper as both compute APIs, because a
+tt-llk test cannot include tt_metal/hw/inc/api/compute. The stride implementation is shared
+rather than copied into the driver. ``test_custom_mm_uninit_parity.py`` guards that both
+compute APIs and the driver continue delegating to that helper.
 
 How it works
 ------------
@@ -74,12 +73,9 @@ FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=
 # than one tile while staying inside DEST half-sync capacity at fp32 (4 tiles).
 NUM_TILES = 4
 
-# The two uninits have identical bodies, and custom_mm_uninit_restore_test.cpp
-# replicates that shared body rather than calling either compute-API function (a tt-llk
-# test cannot include tt_metal/hw/inc/api/compute). So there is deliberately no
-# per-family axis: it would build the identical ELF twice and could not catch the one
-# thing it would exist to catch, a future divergence between the two headers. Guarding
-# that divergence needs a test on the metal side that calls the real entry points.
+# Both compute uninits and the driver call the same raw PACK helper. A per-family
+# axis would build the identical ELF twice; the static parity test guards delegation
+# from each compute API to the implementation exercised here.
 
 
 def _run(formats, dest_acc, dense_packing, skip_uninit, block_mop_num_faces=4):
@@ -143,7 +139,7 @@ def _run(formats, dest_acc, dense_packing, skip_uninit, block_mop_num_faces=4):
 #
 # The canonical writer, cpack_common.h set_packer_strides, computes
 #     w_stride = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * datum_size_in_bytes(fmt)
-# while both compute-API headers spell the same expression with a literal `* 2`:
+# while the shared custom-mm PACK helper retains the literal `* 2`:
 #     init   dense:   (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2   = 1024
 #     uninit restore:  TILE_NUM_FACES      * FACE_C_DIM * FACE_R_DIM * 2   = 2048
 # For a Float32 pack source datum_size_in_bytes is 4, so the correct values are 2048 and

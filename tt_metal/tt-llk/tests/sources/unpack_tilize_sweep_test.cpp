@@ -50,6 +50,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         read_offset += params.BLOCK_CT_DIM;
     }
+    _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, num_faces);
 }
 
 #endif

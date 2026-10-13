@@ -14,8 +14,9 @@
 
 namespace ckernel::sfpu {
 
+// Unlike the general SDPA helper, FW always refines the reciprocal, independent of APPROX.
 template <bool is_fp32_dest_acc_en>
-inline void calculate_recip_first_column() {
+inline void calculate_sdpa_fw_recip_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];

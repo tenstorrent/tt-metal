@@ -38,7 +38,7 @@ void kernel_main() {
             break;
         }
 
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, group_id);
+        overlay::FdsNeo::fds_done(group_id);
 
         if (!fds_kernel::wait_de_status(go_inst, 0, poll_iterations)) {
             result = kTimeoutGoClear;

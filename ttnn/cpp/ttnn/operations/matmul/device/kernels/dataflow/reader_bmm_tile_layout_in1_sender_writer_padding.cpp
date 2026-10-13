@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// reader_bmm_tile_layout_in1_sender_writer_padding_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this
+// file serves the consumers still on the legacy API. Until the last of them migrates and this
+// file is retired, changes here likely belong in the fork too.
+
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
@@ -111,6 +116,11 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     // in3 mcast args
     const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+#ifdef BIAS_PER_GROUP
+    constexpr bool bias_per_group = true;
+#else
+    constexpr bool bias_per_group = false;
+#endif
     const uint32_t in3_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 
     constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(29);
@@ -298,10 +308,18 @@ void kernel_main() {
         [[maybe_unused]] const uint32_t out_base_tile_id = out_tensor_start_tile_id;
 
         for (uint32_t bB = 0; bB < batch_loop_lim; ++bB) {
+#ifdef BIAS_PER_GROUP
+            // Per-group fused bias (sparse matmul, indexed mode): tile row `group_id` of the bias tensor,
+            // i.e. out_tensor_stride_h (= Nt) tiles per group.
+            uint32_t in3_group_tile_offset = 0;
+#endif
             if constexpr (use_indices) {
                 // Gather: jump straight to group indices[bB]'s weight block, scatter its result to
                 // compact output slot bB. Every iterated group is active, so nothing is skipped.
                 const uint32_t group_id = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB];
+#ifdef BIAS_PER_GROUP
+                in3_group_tile_offset = group_id * out_tensor_stride_h;
+#endif
                 // The ids are device-resident, so the host can only bound their count, not their
                 // values. An out-of-range id would silently read an unrelated weight block; assert
                 // loudly (under watcher) instead, as the in0 sender does for the exact-nnz contract.
@@ -324,7 +342,11 @@ void kernel_main() {
                 uint32_t in1_tensor_current_w_dim_block_tile_id = in1_tensor_current_h_dim_block_tile_id;
                 uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
 #ifdef FUSE_BIAS
+#ifdef BIAS_PER_GROUP
+                uint32_t in3_tensor_current_w_dim_block_tile_id = in3_tensor_start_tile_id + in3_group_tile_offset;
+#else
                 uint32_t in3_tensor_current_w_dim_block_tile_id = in3_tensor_start_tile_id;
+#endif  // BIAS_PER_GROUP
 #endif  // FUSE_BIAS
                 for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                     uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
@@ -530,8 +552,9 @@ void kernel_main() {
                     }
 #endif
 #ifdef FUSE_BIAS
-                    // Only read bias on first batch, or we have multiple output blocks
-                    if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
+                    // Only read bias on first batch, or we have multiple output blocks; a per-group bias
+                    // is re-read for every group (the compute kernel pops it after each group).
+                    if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                         // Operand 1
 #ifndef BIAS_SHARDED
                         dfb_in3.reserve_back(in1_block_w);
@@ -752,8 +775,11 @@ void kernel_main() {
     }
 
 #ifdef OUT_SHARDED
-    dfb_out.wait_front(static_cast<uint16_t>(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h));
+    const uint16_t out_num_tiles = static_cast<uint16_t>(
+        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    dfb_out.wait_front(out_num_tiles);
+    // Pop the same number of tiles that were waited for.
+    dfb_out.pop_front(out_num_tiles);
 #endif
 #ifdef ENABLE_GLOBAL_CB
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
@@ -764,4 +790,11 @@ void kernel_main() {
     // Barrier both, unconditionally, mirroring the CCL reader fix in #53595.
     noc.async_atomic_barrier();
     noc.async_write_barrier();
+
+    // The sparsity slot is reserved once to take its base address and is re-read by this kernel
+    // alone; it is never handed to a consumer, so complete the handshake here rather than leaving
+    // the reserve dangling. The guard matches the one on the reserve.
+    if constexpr (batchB > 0) {
+        dfb_sparsity.push_back(1);
+    }
 }

@@ -323,5 +323,5 @@ foreach(
         test_addrgen_write
         test_bandwidth_telemetry_validation
 )
-    target_precompile_headers(${_fabric_test_target} REUSE_FROM metal_test_pch)
+    tt_reuse_precompile_headers(${_fabric_test_target} metal_test_pch)
 endforeach()

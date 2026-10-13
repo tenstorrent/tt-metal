@@ -15,7 +15,7 @@ git submodule update --init --recursive
 source python_env/bin/activate
 ```
 Prereqs on every host: same clone path + commit, a populated tilized weight cache, and the golden trace
-(the adapter defaults to `/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_10240`;
+(the adapter defaults to `/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_10240`;
 `PREFILL_TRACE_DIR` overrides).
 
 ## Allocate the galaxies (slurm)
@@ -129,7 +129,7 @@ Then, on that node:
 cd $TT_METAL_HOME && source python_env/bin/activate
 LOGURU_LEVEL=INFO \
 PREFILL_MODEL=minimax_m3 \
-PREFILL_TRACE_DIR=/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_56320 \
+PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_56320 \
 PREFILL_H2D_SERVICE_ID=ds_prefill \
 PREFILL_SP=8 PREFILL_TP=4 PREFILL_NUM_LAYERS=60 \
 PREFILL_CHUNK_SIZE=5120 PREFILL_MAX_SEQ_LEN=56320 \
@@ -176,7 +176,7 @@ Three prerequisites specific to this mode:
   `tensor_cache_bfp8_MeshShape([4, 4])` / `([2, 4])`, which the default checkpoint dir does not carry
   (populating takes ~1 h per shape, once; the ranks populate their own slices in parallel). Point
   `TT_CACHE_PATH` at a root that has them — both shapes are currently populated at
-  `/data/zbaczewski/m3_pp_cache` (its `[8, 4]` dir is empty, so do NOT use it for whole-galaxy runs).
+  `/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill` (its `[8, 4]` dir is empty, so do NOT use it for whole-galaxy runs).
 - **PRTE slot fix.** Multi-rank on one host under a Slurm allocation fails with "All nodes which are
   allocated for this job are already filled" (the galaxy advertises `CPUTot=1`). Before launching:
   ```bash

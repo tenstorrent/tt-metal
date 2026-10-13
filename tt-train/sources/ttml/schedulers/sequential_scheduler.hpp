@@ -24,9 +24,9 @@ public:
 
     void step() override;
 
+    // Delegates to the active child scheduler (base default would return only
+    // this chain's own recorded LR).
     [[nodiscard]] float get_last_lr() const override;
-
-    [[nodiscard]] float get_current_lr() const override;
 
     [[nodiscard]] serialization::StateDict get_state_dict() const override;
     void set_state_dict(const serialization::StateDict &dict) override;
@@ -36,7 +36,6 @@ private:
     std::vector<size_t> m_milestones;
     size_t m_current_scheduler_index = 0;
     int m_current_step_in_scheduler = 0;
-    float m_last_lr = 0.F;
 };
 
 }  // namespace ttml::schedulers

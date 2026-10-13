@@ -45,7 +45,8 @@ void kernel_main() {
     constexpr auto sin_interm_dfb = dfb::sin_interm;
     constexpr auto out_dfb = dfb::out;
     constexpr auto Wt = get_arg(args::Wt);
-    constexpr auto n_heads = get_arg(args::n_heads);
+    // Indexed RoPE supplies a per-core runtime head count; other callers keep a compile-time count.
+    const auto n_heads = get_arg(args::n_heads);
     constexpr auto rotary_Ht = get_arg(args::rotary_Ht);
     constexpr auto bulk_block_input = [](auto dfb_id) {
         return ckl::input(

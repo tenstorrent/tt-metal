@@ -79,7 +79,7 @@ void kernel_main() {
     }
 
     overlay::FdsDispatch::fds_clear_go();
-    overlay::FdsDispatch::fds_go(/*ad_enable=*/false, kGroupId);
+    overlay::FdsDispatch::fds_go(kGroupId);
 
     // Waited out on status rather than on the count, because status is ungated by the enable mask
     // and so reports the lanes whether or not the group was ever configured to count them. Every

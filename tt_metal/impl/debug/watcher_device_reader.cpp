@@ -230,6 +230,16 @@ string get_l1_target_str(
     return out;
 }
 
+// Quasar: each global semaphore is a 0x40-byte alias window where a read at +4*(inc+8) posts `inc`
+// and returns the pre-increment value (see api/debug/ring_buffer.h, which posts 1 from the device).
+// Reading the base is therefore a GET of 8, not a peek: it decrements the MPSC head and raises
+// GLOBAL_SEMAPHORES (GET_UNDERFLOW / GET_ON_UNINITIALIZED). inc == 0 is the non-mutating read.
+constexpr uint64_t watcher_ring_buf_sem_peek_addr =
+    TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR + 4 * (0 + 8);
+
+// A NOC sanitize record still partially written after this many consecutive polls is reported as corruption.
+constexpr uint32_t max_partial_sanitize_polls = 3;
+
 dev_msgs::launch_msg_t::ConstView get_valid_launch_message(dev_msgs::mailboxes_t::ConstView mbox_data) {
     uint32_t launch_msg_read_ptr = mbox_data.launch_msg_rd_ptr();
     TT_FATAL(
@@ -407,7 +417,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     TT_ASSERT(this->f != nullptr);
 
     if (f != stdout && f != stderr) {
-        log_info(tt::LogMetal, "Watcher checking device {}", device_id);
+        log_debug(tt::LogMetal, "Watcher checking device {}", device_id);
     }
 
     DumpData dump_data;
@@ -595,14 +605,16 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
         l1_read_buf.data(), l1_read_buf.size(), {static_cast<size_t>(reader.device_id), virtual_coord}, mailbox_addr);
 
     // Quasar's MPSC head lives in a semaphore register rather than the mailbox. Read it here with the
-    // rest of the snapshot.
+    // rest of the snapshot. Gated on the same condition as DumpRingBuffer(), the only consumer: with
+    // the ring buffer disabled the device firmware never initializes semaphore 31, so touching it at
+    // all would fault.
     uint32_t sem_head = 0;
-    if (hal.get_arch() == tt::ARCH::QUASAR) {
+    if (hal.get_arch() == tt::ARCH::QUASAR && !rtoptions.watcher_ring_buffer_disabled()) {
         reader.env.get_cluster().read_core(
             &sem_head,
             sizeof(sem_head),
             {static_cast<size_t>(reader.device_id), virtual_coord},
-            TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR);
+            watcher_ring_buf_sem_peek_addr);
     }
 
     return Core(
@@ -726,21 +738,47 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
     auto san = mbox_data_.watcher().sanitize()[noc];
     string error_msg;
 
+    // Quasar DMs publish this record through the cache and flush it to L1 a 64B line at a time, so a
+    // poll can see it partially written. Re-check a partial record on later polls instead of failing.
+    // A published value never equals its field's sentinel.
+    const bool all_sentinel =
+        san.noc_addr() == DEBUG_SANITIZE_SENTINEL_OK_64 && san.l1_addr() == DEBUG_SANITIZE_SENTINEL_OK_32 &&
+        san.len() == DEBUG_SANITIZE_SENTINEL_OK_32 && san.which_risc() == DEBUG_SANITIZE_SENTINEL_OK_16 &&
+        san.is_multicast() == DEBUG_SANITIZE_SENTINEL_OK_8 && san.is_write() == DEBUG_SANITIZE_SENTINEL_OK_8 &&
+        san.is_target() == DEBUG_SANITIZE_SENTINEL_OK_8;
+    const bool no_sentinel =
+        san.noc_addr() != DEBUG_SANITIZE_SENTINEL_OK_64 && san.l1_addr() != DEBUG_SANITIZE_SENTINEL_OK_32 &&
+        san.len() != DEBUG_SANITIZE_SENTINEL_OK_32 && san.which_risc() != DEBUG_SANITIZE_SENTINEL_OK_16 &&
+        san.is_multicast() != DEBUG_SANITIZE_SENTINEL_OK_8 && san.is_write() != DEBUG_SANITIZE_SENTINEL_OK_8 &&
+        san.is_target() != DEBUG_SANITIZE_SENTINEL_OK_8;
+    const bool complete = san.return_code() == dev_msgs::DebugSanitizeOK ? all_sentinel : no_sentinel;
+    const std::pair<CoreCoord, int> record_key{virtual_coord_, noc};
+    if (!complete) {
+        if (++reader_.partial_sanitize_polls_[record_key] < max_partial_sanitize_polls) {
+            return;
+        }
+        error_msg = fmt::format(
+            "Watcher unexpected noc debug state on core {}, partially written record noc{} risc {} {{0x{:08x}, {} }} "
+            "return code {}",
+            virtual_coord_.str(),
+            noc,
+            san.which_risc(),
+            san.noc_addr(),
+            san.len(),
+            san.return_code());
+        error_msg += " (corrupted noc sanitization state - sanitization memory overwritten)";
+        log_warning(tt::LogMetal, "Watcher detected NOC error and stopped device:");
+        log_warning(tt::LogMetal, "{}: {}", core_str_, error_msg);
+        DumpWaypoints(true);
+        DumpRingBuffer(true);
+        LogRunningKernels();
+        reader_.watcher_server.set_exception_message(fmt::format("{}: {}", core_str_, error_msg));
+        TT_THROW("{}: {}", core_str_, error_msg);
+    }
+    reader_.partial_sanitize_polls_.erase(record_key);
+
     switch (san.return_code()) {
-        case dev_msgs::DebugSanitizeOK:
-            if (san.noc_addr() != DEBUG_SANITIZE_SENTINEL_OK_64 || san.l1_addr() != DEBUG_SANITIZE_SENTINEL_OK_32 ||
-                san.len() != DEBUG_SANITIZE_SENTINEL_OK_32 || san.which_risc() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
-                san.is_multicast() != DEBUG_SANITIZE_SENTINEL_OK_8 || san.is_write() != DEBUG_SANITIZE_SENTINEL_OK_8 ||
-                san.is_target() != DEBUG_SANITIZE_SENTINEL_OK_8) {
-                error_msg = fmt::format(
-                    "Watcher unexpected noc debug state on core {}, reported valid got noc{}{{0x{:08x}, {} }}",
-                    virtual_coord_.str(),
-                    san.which_risc(),
-                    san.noc_addr(),
-                    san.len());
-                error_msg += " (corrupted noc sanitization state - sanitization memory overwritten)";
-            }
-            break;
+        case dev_msgs::DebugSanitizeOK: break;
         case dev_msgs::DebugSanitizeNocAddrUnderflow:
             error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += string(san.is_target() ? " (NOC target" : " (Local L1") + " address underflow).";
@@ -1163,11 +1201,11 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
 
     if (hal.has_stream_registers()) {
         uint32_t operand_start_stream = hal.get_operand_start_stream();
-        uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+        uint32_t max_dfbs = hal.get_num_dataflow_buffers();
 
         // Read back all of the stream state, most of it is unused
         std::vector<uint32_t> data;
-        for (uint32_t operand = 0; operand < max_cbs; operand++) {
+        for (uint32_t operand = 0; operand < max_dfbs; operand++) {
             uint32_t base = hal.get_noc_overlay_start_addr() +
                             ((operand_start_stream + operand) * hal.get_noc_stream_reg_space_size());
 

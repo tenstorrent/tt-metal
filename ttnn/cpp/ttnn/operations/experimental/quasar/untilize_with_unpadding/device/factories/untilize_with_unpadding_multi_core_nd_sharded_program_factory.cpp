@@ -127,8 +127,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
              {"num_shards", num_shards},
              {"num_cores", num_compute_cores}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_shard_id"}},
-        .hw_config =
-            ttnn::create_reader_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ------------------------------------------------------------------------
@@ -189,8 +188,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
              {"output_tensor_height", output_tensor_height},
              {"tensor_rank", static_cast<uint32_t>(input.padded_shape().rank())}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_shard_id"}},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
         .advanced_options =
             KernelAdvancedOptions{
                 .num_common_runtime_varargs = static_cast<uint32_t>(writer_common_runtime_args.size())},
@@ -206,10 +204,9 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
 
     ttnn::ComputeKernelConfig compute_config{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
-    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(input.device()->arch(), compute_config);
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_config);
     if (fp32_dest_acc_en) {
-        std::visit(
-            [&](auto& c) { c.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
+        compute_hw.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
     }
 
     KernelSpec compute{

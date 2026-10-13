@@ -20,8 +20,8 @@ bool can_use_sharded_optimized_factory(const TypecastParams& args, const Typecas
     }
     const auto& shard_spec = input.shard_spec().value();
 
-    tt::DataFormat act_df = datatype_to_dataformat_converter(args.input_dtype);
-    tt::DataFormat out_df = datatype_to_dataformat_converter(args.output_dtype);
+    tt::DataFormat act_df = cb_dataformat_for(args.input_dtype);
+    tt::DataFormat out_df = cb_dataformat_for(args.output_dtype);
 
     if (tt::tile_size(act_df) != tt::tile_size(out_df)) {
         return false;
@@ -95,6 +95,18 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.buffer() != nullptr,
         "Operands to Typecast need to be allocated in buffers on the device. Buffer is null.");
+
+    // Quasar: UInt32/UInt16 are not supported DFB formats (is_supported_quasar, tt_backend_api_types.cpp), and
+    // the generic Quasar typecast LLK path has no uint32/uint16 store mode. Remapping the output DFB to the
+    // byte-size-equal RawUInt32/RawUInt16 lets the program build but the SFPU->pack conversion produces WRONG
+    // values (verified: all-zero for uint32, bit-garbage for uint16). Reject here with a clear message instead
+    // of silent wrong output. Cast to INT32 instead (supported on Quasar), or add a uint32/uint16 SFPU store
+    // mode to the Quasar LLK. INT32/FLOAT32/BFLOAT16 outputs are unaffected.
+    TT_FATAL(
+        !(input_tensor.device()->arch() == tt::ARCH::QUASAR &&
+          (args.output_dtype == DataType::UINT32 || args.output_dtype == DataType::UINT16)),
+        "Typecast to {} is not supported on Quasar (no uint32/uint16 LLK store mode); cast to INT32 instead.",
+        args.output_dtype);
 
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(

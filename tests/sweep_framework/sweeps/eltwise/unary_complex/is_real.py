@@ -57,8 +57,12 @@ def run(
     )(input_shape)
 
     torch_input_tensor_ac = gen_func_with_cast_tt(
-        partial(torch_random, low=100, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
+
+    # is_real is true only where the imaginary part is zero, so the imaginary part has to
+    # actually reach zero for this sweep to exercise the op.
+    torch_input_tensor_ac[..., ::2] = 0
 
     torch_output_tensor = torch.isreal(
         torch.complex(torch_input_tensor_ar.to(torch.float32), torch_input_tensor_ac.to(torch.float32))

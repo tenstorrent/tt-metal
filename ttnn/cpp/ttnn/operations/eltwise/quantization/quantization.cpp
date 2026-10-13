@@ -180,8 +180,8 @@ std::variant<ttnn::Tensor, T> reshape_per_channel_arg(
     return reshape_per_channel_vector_args(*tensor_p, input_shape, axis.value(), out_dtype);
 }
 
-// Widen quantized input to f32 for the composite paths. Use dequantize as the widening step
-// for int8 until typecast(int8 -> int32) is enabled (#50401).
+// Widen quantized input to f32 for the composite paths. int8 still routes through dequantize, but this
+// detour can use typecast now that it supports int8.
 ttnn::Tensor widen_quantized_input_to_f32(const ttnn::Tensor& input) {
     if (input.dtype() != ttnn::DataType::INT8) {
         return ttnn::typecast(input, ttnn::DataType::FLOAT32);
@@ -189,8 +189,9 @@ ttnn::Tensor widen_quantized_input_to_f32(const ttnn::Tensor& input) {
     return ttnn::dequantize(input, 1.0f, 0, /*axis=*/std::nullopt, ttnn::DataType::FLOAT32, std::nullopt, std::nullopt);
 }
 
-// Narrow composite's fp result to the output dtype. Use quantize as the narrowing step
-// for int8 until typecast(int32 -> int8) is enabled (#50401).
+// Narrow composite's fp result to the output dtype. int8 goes through quantize instead of typecast for
+// saturation since the QUANT kernel clamps to [-128, 127] while typecast wraps modulo 256 (callers here
+// pass unbounded floats).
 ttnn::Tensor narrow_composite_result(
     const ttnn::Tensor& shifted,
     ttnn::DataType c_dtype,
@@ -295,7 +296,9 @@ Tensor quantize(
 
                 return ttnn::prim::binary_ng(
                     input_a,
-                    ttnn::reciprocal(scale),
+                    // QUANT LLK's scale operand B must be float32.
+                    ttnn::reciprocal(
+                        scale.dtype() == DataType::FLOAT32 ? scale : ttnn::typecast(scale, DataType::FLOAT32)),
                     operations::binary::BinaryOpType::QUANT,
                     c_dtype,
                     memory_config,
@@ -613,7 +616,8 @@ Tensor dequantize(
                     static_cast<float>(-zero_point) - dequant_int8_in_offset}};
                 return ttnn::prim::binary_ng(
                     input_tensor,
-                    scale,
+                    // DEQUANT LLK's scale operand B must be float32.
+                    scale.dtype() == DataType::FLOAT32 ? scale : ttnn::typecast(scale, DataType::FLOAT32),
                     operations::binary::BinaryOpType::DEQUANT,
                     c_dtype,
                     memory_config,

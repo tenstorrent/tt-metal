@@ -57,11 +57,11 @@ jobs:
         run: pip3 install PyYAML
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
 
   fetch-ttsim:
     needs: load-test-matrix
@@ -149,8 +149,7 @@ jobs:
 
       # Installs <root>/sim/libttsim.so + soc_descriptor.yaml and exports TT_METAL_SIMULATOR.
       # run_ttsim_regression.sh trusts a pre-exported TT_METAL_SIMULATOR and skips its own
-      # download, so the simulator comes from tt_metal/ttsim-version like every other sim
-      # pipeline rather than from tt_metal/tt-llk/tests/ttsim-version.
+      # download; both read the same tt_metal/ttsim-version pin.
       - name: ⬇️  Setup TTSim
         uses: ./.github/actions/setup-ttsim
         timeout-minutes: 5

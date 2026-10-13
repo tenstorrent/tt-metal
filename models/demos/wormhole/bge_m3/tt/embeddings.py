@@ -22,6 +22,9 @@ class BgeM3EmbeddingsConfig:
     mesh_device: ttnn.MeshDevice | None = None
     embedding_dtype: ttnn.DataType | None = None
     embedding_memcfg: ttnn.MemoryConfig | None = None
+    # Placement of the looked-up activations (default: embedding_memcfg, which also
+    # places the weight tables).
+    output_memcfg: ttnn.MemoryConfig | None = None
 
 
 class BgeM3Embedding(LightweightModule):
@@ -125,18 +128,19 @@ class BgeM3Embedding(LightweightModule):
             batch_size, seq_len = input_ids.shape
             position_ids = self._build_position_ids(batch_size=batch_size, seq_len=seq_len)
 
+        out_memcfg = self.config.output_memcfg or self.config.embedding_memcfg
         word_embeddings = ttnn.embedding(
             input_ids,
             weight=self.word_embeddings_weight,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=self.config.embedding_memcfg,
+            memory_config=out_memcfg,
             padding_idx=self.config.pad_token_id,
         )
         position_embeddings = ttnn.embedding(
             position_ids,
             weight=self.position_embeddings_weight,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=self.config.embedding_memcfg,
+            memory_config=out_memcfg,
         )
 
         if self._fold_token_type:
@@ -147,7 +151,7 @@ class BgeM3Embedding(LightweightModule):
                 token_type_ids,
                 weight=self.token_type_embeddings_weight,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=self.config.embedding_memcfg,
+                memory_config=out_memcfg,
             )
             main = ttnn.add(word_embeddings, token_type_embeddings)
             ttnn.deallocate(word_embeddings)

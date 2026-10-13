@@ -73,7 +73,7 @@ ALWI void unary_bcast_init(uint32_t icb) {
             false /*acc_to_dest*/,
             EltwiseBinaryReuseDestType::NONE,
             false /*unpack_to_dest*/>(false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/, icb)));
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, false /*EN_32BIT_DEST*/, bcast_type>(icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::B2D, is_fp32_dest_acc_en, bcast_type>(icb)));
 #endif
 #endif
 }
@@ -124,7 +124,8 @@ ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_in
         (dst_format == (std::uint32_t)DataFormat::Float32) || (dst_format == (std::uint32_t)DataFormat::Int32);
     LLK_ASSERT(!enable_unpack_to_dest, "32-bit unary broadcast (unpack-to-dest) not supported on Quasar");
     UNPACK((llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, false>(icb, in_tile_index)));
-    MATH((llk_math_eltwise_unary_datacopy<DataCopyType::B2D, false, bcast_type, false>(dst_tile_index, icb)));
+    MATH((llk_math_eltwise_unary_datacopy<DataCopyType::B2D, is_fp32_dest_acc_en, bcast_type, false>(
+        dst_tile_index, icb)));
 #endif
 #endif
 }

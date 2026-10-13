@@ -82,6 +82,8 @@ class DispatcherCoreData:
     # Inspector/control-plane-sourced block type for this core. Used by callers to reason about
     # active-vs-idle ETH without re-consulting the cluster descriptor.
     block_type: BlockType | None = None
+    # ProgrammableCoreType from the firmware ELF; indexes per-core-type kernel_config arrays such as sem_offset.
+    programmable_core_type: int | None = None
     # Whether kernel_config.enables turned this specific risc on. False => idle by design (no kernel
     # launched on it). None => unknown (read failed / corrupt), so callers must not hide the core.
     risc_enabled_by_kernel: bool | None = None
@@ -699,6 +701,7 @@ class DispatcherData:
             subordinate_sync=subordinate_sync,
             watcher_enabled=watcher_enabled,
             block_type=block_type,
+            programmable_core_type=programmable_core_type,
             risc_enabled_by_kernel=risc_enabled_by_kernel,
             kernel_lookup_warning=kernel_lookup_warning,
         )

@@ -63,7 +63,7 @@ way run_prefill_perf.sh does:
 
 Manual equivalent:
   cd $TT_METAL_HOME && source python_env/bin/activate && export PYTHONPATH=$TT_METAL_HOME
-  export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref
+  export HF_MODEL=/mnt/weka/model-weights/llm/minimax/MiniMax-M3
   export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
   PROFILE_CACHE=25600 PREFILL_TRACE_DIR=<golden> \
     python3 -m tracy -v -r -p models/demos/minimax_m3/tests/perf/profile_prefill.py
@@ -93,6 +93,7 @@ from loguru import logger  # noqa: E402
 
 import ttnn  # noqa: E402
 from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE  # noqa: E402
+from models.demos.minimax_m3.tt.moe import shared_overlap  # noqa: E402
 from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env  # noqa: E402
 
 
@@ -412,6 +413,7 @@ def main():
     finally:
         # Sub-mesh first: closing the parent runs a final profiler read on the parent's command queue,
         # and MeshDevice::close then refuses to close a mesh whose child still holds an in-use queue.
+        shared_overlap.release_all()
         for sub in galaxy.get_submeshes():
             ttnn.close_mesh_device(sub)
         ttnn.close_mesh_device(galaxy)

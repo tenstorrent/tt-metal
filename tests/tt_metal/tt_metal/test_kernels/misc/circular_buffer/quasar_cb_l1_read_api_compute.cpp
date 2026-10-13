@@ -4,7 +4,9 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "dev_mem_map.h"
+#include "experimental/kernel_args.h"
 
 // Minimal exercise of ckernel::read_tile_value / ckernel::get_tile_address (cb_api.h) on Quasar.
 //
@@ -25,7 +27,8 @@ constexpr std::uint32_t VALUES_PER_THREAD = 5;
 constexpr int RESULT_SLOT_NONE = -1;
 
 void kernel_main() {
-    const std::uint32_t buf_id = get_compile_time_arg_val(0);
+    DataflowBuffer dfb_in(dfb::in);
+    const std::uint32_t buf_id = dfb_in.get_id();
 
     // Reading tile_index 1 exercises the per-tile stride term that is always zero for tile 0.
     const std::uint32_t v0 = read_tile_value(buf_id, 0 /*tile_index*/, 0 /*element_offset*/);
@@ -42,7 +45,7 @@ void kernel_main() {
     PACK(slot = 2;)
 
     if (slot != RESULT_SLOT_NONE) {
-        const std::uint32_t result_l1_addr = get_arg_val<std::uint32_t>(0);
+        const std::uint32_t result_l1_addr = get_arg(args::result_l1_addr);
         volatile tt_l1_ptr std::uint32_t* const result =
             reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(result_l1_addr) + slot * VALUES_PER_THREAD;
         result[0] = v0;

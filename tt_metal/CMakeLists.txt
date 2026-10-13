@@ -39,6 +39,16 @@ target_sources(
         ${TT_METAL_SOURCES}
         ${API_GENERATED_HEADERS}
 )
+
+# clang-tidy reads configuration relative to the generated translation unit,
+# not the included header. Overlay the API checks only for this verification
+# target; the parent build directory's .clang-tidy supplies the normal checks.
+configure_file(
+    "${PROJECT_SOURCE_DIR}/cmake/clang-tidy.d/metalium-api/.clang-tidy"
+    "${CMAKE_CURRENT_BINARY_DIR}/tt_metal_verify_interface_header_sets/.clang-tidy"
+    COPYONLY
+)
+
 set_source_files_properties(
     api/tt-metalium/serialized_descriptors/mesh_coordinate.fbs
     PROPERTIES
@@ -138,6 +148,9 @@ if(TT_METAL_USE_EMULE)
     # PRIVATE: only libtt_metal.so itself needs -rdynamic (to export TLS symbols
     # for dlopen'd JIT kernels). No need to propagate to all consumers.
     target_link_options(tt_metal PRIVATE -rdynamic)
+    # tt-emule::runtime is the emulation engine's OBJECT library; link its objects into
+    # libtt_metal.so so the -rdynamic export above promotes their dlsym surface.
+    target_link_libraries(tt_metal PRIVATE tt-emule::runtime)
 endif()
 
 add_dependencies(tt_metal hw_toolchain)

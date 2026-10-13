@@ -1073,8 +1073,11 @@ class TtTransformer(LightweightModule):
         if mode == "decode" and self.use_prefetcher:
             ttnn.deallocate(garbage_tensor)
 
-        if mode == "decode":
-            # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
+        if mode == "decode" and not getattr(self.args, "is_blackhole", False):
+            # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring. Blackhole
+            # decode reduces the LM head with line_all_reduce_gather_reduce, which does not take
+            # this buffer; allocating it there every step only left 82 KB of L1 stranded below the
+            # prefetcher's global circular buffer.
             self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(
                 self.tt_ccl.tt_lm_head_buffer, self.tt_ccl.lm_head_buffer_mem_cfg
             )

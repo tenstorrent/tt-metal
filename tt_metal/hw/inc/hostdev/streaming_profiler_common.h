@@ -12,8 +12,8 @@
 // producer for this backend is tools/profiler/kernel_profiler_streaming.hpp, selected by -DPROFILE_STREAMING.
 //
 // Consumers: the SPSC producer (kernel_profiler_streaming.hpp), the DRISC relay kernel
-// (tools/profiler/kernels/streaming_profiler_relay.cpp) and the host receiver
-// (impl/streaming_profiler/streaming_profiler_receiver.cpp, spsc_marker_decode.hpp).
+// (impl/streaming_profiler/kernels/drisc_relay.cpp) and the host receiver
+// (impl/streaming_profiler/receiver.cpp, spsc_marker_decode.hpp).
 
 #include <cstdint>
 
@@ -89,10 +89,8 @@ static_assert(
         SPSC_STATE_PROG_0 + 3 == SPSC_RING_TAIL_0 && spsc_state_prog_word(PROFILER_SPSC_TENSIX_RISC - 1) < 32,
     "lane state must fill the unowned words of the tails' 64 B block");
 
-// Host->relay stop word: quiesce drains everything with every wait still holding, release is the kill
-// switch that abandons the waits and hands the NIU back.
+// Host->relay stop word: quiesce drains everything with every wait still holding, then the relay exits.
 static constexpr std::uint32_t kRelayStopQuiesce = 1;
-static constexpr std::uint32_t kRelayStopRelease = 2;
 // Relay->host completion words; the host matches the high half. Drained: the relay's last page is out and the host
 // may return every credit. Done follows the socket barrier.
 static constexpr std::uint32_t kRelayDrainedWord = 0xD09D0000u;

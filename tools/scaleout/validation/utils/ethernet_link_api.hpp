@@ -34,6 +34,8 @@ struct ResetLink {
 // Consolidated helpers (should be arch agnostic)
 // ============================================================================
 
+void send_port_down_msg_to_links(const std::vector<ResetLink>& links_to_reset);
+
 void send_reset_msg_to_links(const std::vector<ResetLink>& links_to_reset);
 
 }  // namespace tt::scaleout_tools

@@ -179,15 +179,16 @@ TEST(QuasarAttAddressAether, WorkerAndDramEncodeThroughTheRemoteWindow) {
     static_assert(*Address::worker(0, 1, 0).encode<AETHER>() == 0x1000000000ull);
     // Logical DRAM bank 1 -> selector 3 (aether_utils configure_aether_dram).
     static_assert(*Address::dram(1, 0x2000).encode<AETHER>() == (0x1000000000ull | (3ull << 26) | 0x2000));
-    // The UMD-visible dispatch tile (1,2) -> tile selector 4.
-    static_assert(*Address::dispatch(1, 2, 0).encode<AETHER>() == (0x1000000000ull | (4ull << 26)));
+    // The UMD-visible dispatch tile (0,2) -> tile selector 4 (endpoint word 0x80).
+    static_assert(*Address::dispatch(0, 2, 0).encode<AETHER>() == (0x1000000000ull | (4ull << 26)));
 }
 
 TEST(QuasarAttAddressAether, OutOfMapIdentitiesAreRejected) {
     static_assert(!Address::worker(2, 1, 0).encode<AETHER>().has_value());
     static_assert(!Address::worker(0, 0, 0).encode<AETHER>().has_value());
     static_assert(!Address::dram(2, 0).encode<AETHER>().has_value());
-    static_assert(!Address::dispatch(0, 2, 0).encode<AETHER>().has_value());
+    static_assert(!Address::dispatch(1, 2, 0).encode<AETHER>().has_value());
+    static_assert(!Address::dispatch(2, 2, 0).encode<AETHER>().has_value());
 }
 
 TEST(QuasarAttAddressAether, SelfDetectionUsesThePatchedEntryZero) {

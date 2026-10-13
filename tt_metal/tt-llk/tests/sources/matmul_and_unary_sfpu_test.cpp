@@ -88,6 +88,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     _llk_math_matmul_<MATH_FIDELITY>(0);
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_math_matmul_uninit_();
 
     // Start of second math kernel to perform matmul on now tilized input data
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
@@ -101,12 +102,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         0, formats_array[run].math, formats_array[run].math);
 
     // calculation of sfpu operation on dest
-    test_utils::call_unary_sfpu_operation_init<SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, 32 /* iterations */>();
+    test_utils::call_unary_sfpu_operation_init<SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, 32 /* iterations */>(formats_array[run].math);
 
     // calling sfpu function from ckernel
     // this part is where parametrization of operation takes part
     test_utils::call_unary_sfpu_operation<DstSync::SyncHalf, is_fp32_dest_acc_en, SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, 32 /* iterations */>(
-        0 /* dst_index */);
+        0 /* dst_index */, formats_array[run].math);
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 

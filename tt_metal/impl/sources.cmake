@@ -2,6 +2,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/core_subset_write/mesh_command_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/core_subset_write/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chunk_address_table.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chunk_table_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/umd_dram_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blaze/named_kernel_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/reload_table.cpp
@@ -39,10 +40,12 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/drisc_l1_arena.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/dram_sender_topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/tensor_prefetcher_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/cross_node_dfb.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/prefetcher_pipe.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/prefetcher_pipe_dram_sender.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat2.cpp
@@ -58,10 +61,12 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mxfp6.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mxfp8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/mxint.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/hw_data_format.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/uint8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dataflow_buffer/dataflow_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/llk_metadata.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_run_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/tensor_spec_relaxations.cpp
@@ -74,6 +79,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/l1_banking_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/trace_allocation_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/program/slow_dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/kernel_compile_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_descriptors.cpp
@@ -94,6 +100,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/debug_tools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/host_runtime_commands.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/host_device_transfer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command_calculator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_query_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_common.cpp
@@ -171,12 +178,7 @@ if(TT_METAL_USE_EMULE)
     list(
         APPEND
         IMPL_SRC
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_deferred_mesh_dispatch.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_multi_rank_runtime.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_fiber_scheduler.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_descriptor_builder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/emulation/host_sanitizers.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_asan_panic.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_sanitizers.cpp
     )
 endif()

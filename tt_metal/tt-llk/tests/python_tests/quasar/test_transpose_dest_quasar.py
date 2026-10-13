@@ -27,6 +27,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     select_perf_input_dimensions,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -202,11 +203,12 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ],
-)
+    # The MX pair here is on the output side: the transpose happens inside Dest at
+    # math precision, so the packer re-derives the block exponents from the
+    # post-transpose layout. That interaction is specific to this test -- the pack
+    # test never transposes -- so it is the pair worth keeping.
+) + quasar_mx_smoke(DataFormat.Float16_b, DataFormat.MxInt8)
 PERF_TRANSPOSE_DEST_COMBINATIONS = generate_qsr_transpose_dest_combinations(
     TRANSPOSE_DEST_FORMATS,
     is_perf=True,

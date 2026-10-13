@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 
 import pytest
@@ -14,14 +13,19 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    assert_matches_reference,
     check_kimi_k3_accuracy,
     collect_mesh_accuracy_and_determinism_results,
     make_kimi_k3_device_case,
     make_kimi_k3_test_case,
     make_synthetic_kimi_k3_test_case,
+    mla_row_permutation,
+    to_sp_input,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 pytestmark = [run_for_blackhole(), pytest.mark.timeout(900)]
 
@@ -38,6 +42,7 @@ _PCC_THRESHOLD = 0.9995
             fabric_1d_device_params(),
             id="SP2xTP4-fabric-1d",
         ),
+        pytest.param((2, 4), 0, fabric_1d_device_params(), id="SP4xTP2-fabric-1d"),
         pytest.param(
             (8, 4),
             1,
@@ -48,19 +53,19 @@ _PCC_THRESHOLD = 0.9995
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize("start_kind", ["baseline", "split-rank0", "boundary-rank1", "split-rank1"])
 def test_synthetic_kimi_k3_accuracy_and_determinism(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
     device_params: dict,
+    start_kind: str,
 ) -> None:
     """Gate K3 dimensions against Torch and compare three device runs bit-for-bit."""
     mesh_shape = tuple(mesh_device.shape)
     sequence_parallel_axis = 1 - tensor_parallel_axis
     layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
     case = make_synthetic_kimi_k3_test_case(sequence=_SEQUENCE)
-    reference_start = time.perf_counter()
-    golden_output, golden_state = kda_forward_reference(case.hidden, case.state_dict, case.config)
-    reference_seconds = time.perf_counter() - reference_start
+    golden_output, golden_state, reference_seconds = load_or_compute_cpu_reference(case)
     layer, hidden_tt = make_kimi_k3_device_case(
         mesh_device,
         case,
@@ -68,24 +73,36 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
         cache_weights=False,
     )
 
+    local_rows = _SEQUENCE // mesh_shape[sequence_parallel_axis]
+    actual_start = {"baseline": 0, "split-rank0": 32, "boundary-rank1": local_rows, "split-rank1": local_rows + 32}[
+        start_kind
+    ]
+    permutation = mla_row_permutation(actual_start, mesh_shape[sequence_parallel_axis], local_rows)
+    ttnn.deallocate(hidden_tt)
+    hidden_tt = to_sp_input(case.hidden[:, permutation, :], mesh_device, sequence_parallel_axis)
+    actual_start_tt = make_actual_start(layer.device, actual_start)
+
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         initial_state = layer.allocate_state(batch_size=1)
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            output, state = layer.forward(hidden_tt, initial_state)
+            output, state = layer.forward(hidden_tt, initial_state, actual_start_tt)
         return output, state.recurrent, state.convolution
 
     (output, recurrent, convolution), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
     state = KdaState(recurrent=recurrent, convolution=convolution)
     try:
-        pcc = check_kimi_k3_accuracy(
-            f"Synthetic Kimi-K3 T=5120 {layout}",
-            case,
-            golden_output,
-            golden_state,
-            state,
-            output,
-            mesh_device,
-            tensor_parallel_axis,
+        assert_matches_reference(
+            output_tt=output,
+            state=state,
+            permutation=permutation,
+            expected_output=golden_output.bfloat16(),
+            expected_state=golden_state,
+            mesh_device=mesh_device,
+            sp_axis=sequence_parallel_axis,
+            tp_axis=tensor_parallel_axis,
+            config=case.config,
+            label=f"Synthetic Kimi-K3 T5120 {layout} start={actual_start}",
+            state_linf_threshold=None,
             pcc_threshold=_PCC_THRESHOLD,
         )
         assert all(
@@ -100,7 +117,8 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
                     "weights": "deterministic synthetic",
                     "reference": "independent pure-Torch FP32 CPU reference",
                     "cpu_reference_seconds": reference_seconds,
-                    "pcc": pcc,
+                    "actual_start": actual_start,
+                    "pcc_threshold": _PCC_THRESHOLD,
                     "determinism_repetitions": 3,
                     "bit_identical": True,
                 },
@@ -111,6 +129,8 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
         ttnn.deallocate(output)
         ttnn.deallocate(recurrent)
         ttnn.deallocate(convolution)
+        ttnn.deallocate(hidden_tt)
+        ttnn.deallocate(actual_start_tt)
 
 
 @pytest.mark.parametrize(
@@ -151,7 +171,7 @@ def test_kimi_k3_layer_1_real_weights_accuracy(
     )
     state = layer.allocate_state(batch_size=1)
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output, state = layer.forward(hidden_tt, state)
+        output, state = layer.forward(hidden_tt, state, make_actual_start(layer.device))
     ttnn.synchronize_device(mesh_device)
 
     mesh_shape = tuple(mesh_device.shape)

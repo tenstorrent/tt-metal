@@ -10,6 +10,7 @@
 #include <optional>
 #include <string_view>
 
+#include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -17,7 +18,6 @@
 #include "device/device_impl.hpp"
 #include "common/executor.hpp"
 #include "impl/context/context_descriptor.hpp"
-#include "context/metal_context.hpp"
 
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
@@ -34,10 +34,9 @@ using tt::tt_fabric::chan_id_t;
 using tt::tt_fabric::EDMStatus;
 
 // Emule teleports cross-chip traffic at the fabric client-API shim and never runs the ERISC router,
-// so its launch/sync handshake would never complete — skip it (as for Mock). See tt-emule
-// docs/fabric-ccl-emulation.md.
-bool skip_fabric_fw_for_emule() {
-    return MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
+// so its launch/sync handshake would never complete — skip it (as for Mock).
+bool skip_fabric_fw_for_emule(const Cluster& cluster) {
+    return cluster.get_target_device_type() == tt::TargetDevice::Emule;
 }
 
 static_assert(static_cast<uint32_t>(EDMStatus::STARTED) != 0);
@@ -288,7 +287,7 @@ void FabricFirmwareInitializer::init(
     }
 
     // Emule compiles kernels to x86 and never links an erisc binary.
-    if (skip_fabric_fw_for_emule()) {
+    if (skip_fabric_fw_for_emule(cluster_)) {
         log_info(tt::LogMetal, "Skipping fabric initialization for emule devices");
         return;
     }
@@ -305,6 +304,18 @@ void FabricFirmwareInitializer::init(
     }
 
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+        // Reject fabric launch on a single-host mesh with fewer than 2 opened chips.
+        // Multi-host meshes with 1 local chip per rank are unaffected: peers live on other ranks.
+        const auto local_mesh_ids = control_plane_.get_local_mesh_id_bindings();
+        const size_t num_hosts = control_plane_.get_mesh_graph().get_host_ranks(local_mesh_ids.front()).size();
+        TT_FATAL(
+            devices_.size() > 1 || num_hosts > 1,
+            "Fabric config {} requires at least 2 participating chips, but the opened mesh has {} "
+            "local device(s) on a single host. Either open a larger mesh (e.g. a MeshShape with >= 2 "
+            "devices) or call SetFabricConfig(FabricConfig::DISABLED) before opening a 1-chip mesh.",
+            enchantum::to_string(fabric_config),
+            devices_.size());
+
         log_info(tt::LogMetal, "Initializing Fabric");
 #if defined(TT_UMD_BUILD_SIMULATION)
         if (rtoptions_.get_simulator_enabled()) {
@@ -335,7 +346,7 @@ void FabricFirmwareInitializer::init(
 
 void FabricFirmwareInitializer::configure() {
     // Mock/Emule: no router ever runs, so the sync below would spin to its timeout and throw.
-    if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule()) {
+    if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule(cluster_)) {
         log_info(tt::LogMetal, "Skipping fabric configure (router sync) for mock/emule devices");
         initialized_.test_and_set();
         return;
@@ -350,7 +361,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     TT_FATAL(
         !init_done.contains(InitializerKey::Dispatch),
         "FabricFirmwareInitializer must be torn down after DispatchKernelInitializer");
-    if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule()) {
+    if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule(cluster_)) {
         log_info(tt::LogMetal, "Skipping fabric teardown for mock/emule devices");
         init_done.erase(key);
         return;

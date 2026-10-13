@@ -275,6 +275,31 @@ def msa_sp_attention_nocache(
     )
 
 
+def msa_cache_read_extent(cached_len, chunk_local, sp, block_size):
+    """(kv_len, n_rows) for the cross-chunk MSA read after the chunk at ``cached_len`` has been written.
+
+    The KV writer places global position g on SP rank (g // chunk_local) % sp, so a chunk that starts
+    mid-slab (``cached_len`` not a whole number of ``chunk_local * sp`` chunks, e.g. a multi-turn resume at a
+    32-token boundary) leaves the ranks unevenly filled. ``n_rows`` is the FULLEST rank's local row count
+    covering the written prefix [0, cached_len + chunk_global) -- rank 0, which owns the first block of every
+    slab -- since ``high_bw_all_gather`` gathers the same local prefix from every rank. ``kv_len`` is that prefix
+    rounded up to whole ``block_size`` blocks (the indexer pools and top-k selects in blocks). Positions past a
+    rank's written prefix -- including [end, kv_len) -- hold zeros or stale finite KV in the persistent gather
+    buffer (zeroed at allocation, see CCLManager.get_high_bw_gather_buffer), all future to every query of the
+    chunk, so the indexer's causal mask and sparse_sdpa_msa's diagonal-block mask never attend them.
+    """
+    assert (
+        cached_len % ttnn.TILE_SIZE == 0
+    ), f"cached_len={cached_len} must be a multiple of {ttnn.TILE_SIZE} (the KV writer's tile grid)"
+    assert chunk_local % block_size == 0, f"chunk_local={chunk_local} must be a whole number of {block_size} blocks"
+    chunk_global = chunk_local * sp
+    end = cached_len + chunk_global  # the chunk (incl. its pad tail) is written up to here
+    kv_len = (end + block_size - 1) // block_size * block_size
+    full_slabs, rem = divmod(end, chunk_global)
+    n_rows = full_slabs * chunk_local + min(rem, chunk_local)
+    return kv_len, n_rows
+
+
 def msa_sp_attention_cache_read(
     q,
     index_q,
@@ -307,13 +332,10 @@ def msa_sp_attention_cache_read(
     # cluster_axis < that rank, so the SP gather only works with SP on mesh axis 0.
     assert sp_axis == 0, f"msa_sp_attention_cache_read needs sp_axis == 0 (got {sp_axis})"
     seq_local = kv_cache.k.shape[2]  # per-device cache capacity (rows)
-    chunk_global = chunk_local * sp
+    kv_len, n_rows = msa_cache_read_extent(cached_len, chunk_local, sp, block_size)
     assert (
-        cached_len % chunk_global == 0
-    ), f"cached_len={cached_len} must be a whole number of {chunk_global}-token chunks"
-    n_rows = cached_len // sp + chunk_local  # per-device rows written so far (incl. the current chunk)
-    assert n_rows <= seq_local, f"cache read past capacity: {n_rows} rows > {seq_local}"
-    kv_len = cached_len + chunk_global  # natural-position valid prefix (== n_rows * sp)
+        n_rows <= seq_local and kv_len <= seq_local * sp
+    ), f"cache read past capacity: {n_rows} rows / kv_len {kv_len} > {seq_local} rows x {sp}"
 
     def gather(key, cache_t):
         buf = ccl_manager.get_high_bw_gather_buffer(key, (1, 1, seq_local * sp, cache_t.shape[3]), cache_t.dtype)

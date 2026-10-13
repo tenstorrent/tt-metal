@@ -36,9 +36,10 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     collect_accuracy_and_determinism_results,
 )
 
+
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.use_module_device({"l1_small_size": 24576, "trace_region_size": 2_000_000}),
+    pytest.mark.use_module_device({"l1_small_size": 24576}),
 ]
 
 
@@ -159,6 +160,7 @@ def test_summarize_chunk_recurrence_work_golden() -> None:
     ],
 )
 def test_summarize_chunk_recurrence_contract_trace_and_semantics(
+    zero_actual_start,
     device: ttnn.Device,
     batch_heads: int,
     num_chunks: int,
@@ -172,10 +174,10 @@ def test_summarize_chunk_recurrence_contract_trace_and_semantics(
     first = assert_runtime_contract(
         device,
         inputs,
-        lambda: run_summary(inputs),
+        lambda: run_summary(inputs, actual_start=zero_actual_start),
         expected,
         names=("affine_a", "affine_b"),
-        dtypes=(ttnn.float32, ttnn.float32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat16),
         shapes=((batch_heads, dim, dim), (batch_heads, dim, dim)),
     )
     assert_summary_reconstructs_state(host_inputs, ttnn.to_torch(first[0]), ttnn.to_torch(first[1]))
@@ -249,40 +251,48 @@ def _log_summary_subtraction_conditioning(
 
 
 @pytest.mark.parametrize("case_id", ["regression", "production"])
-def test_summarize_chunk_recurrence_subtraction_conditioning(device: ttnn.Device, case_id: str) -> None:
+def test_summarize_chunk_recurrence_subtraction_conditioning(
+    zero_actual_start, device: ttnn.Device, case_id: str
+) -> None:
     if case_id == "production":
         host_inputs, inputs = _production_protocol(device, seed=117)
-        outputs = run_summary(inputs, compute_kernel_config=_production_compute_config(device))
+        outputs = run_summary(
+            inputs, compute_kernel_config=_production_compute_config(device), actual_start=zero_actual_start
+        )
     else:
         host_inputs, inputs = _regression_protocol(device, seed=117)
-        outputs = run_summary(inputs)
+        outputs = run_summary(inputs, actual_start=zero_actual_start)
     _log_summary_subtraction_conditioning(case_id, summary_oracle(host_inputs), outputs)
 
 
-def test_summarize_chunk_recurrence_is_device_deterministic(device: ttnn.Device) -> None:
+def test_summarize_chunk_recurrence_is_device_deterministic(zero_actual_start, device: ttnn.Device) -> None:
     host_inputs, inputs = _regression_protocol(device, seed=1441)
-    reference, outputs, mismatch_marker = collect_accuracy_and_determinism_results(device, lambda: run_summary(inputs))
+    reference, outputs, mismatch_marker = collect_accuracy_and_determinism_results(
+        device, lambda: run_summary(inputs, actual_start=zero_actual_start)
+    )
     assert_equal(
         torch.zeros_like(mismatch_marker),
         mismatch_marker,
         name="summary outputs device-side exact-value determinism marker",
     )
     for name, golden, output in zip(("affine_a", "affine_b"), summary_oracle(host_inputs), outputs, strict=True):
-        assert_accurate(golden, output, name=f"deterministic summary reference {name}", pcc_threshold=0.999)
+        assert_accurate(
+            golden.float(), output.float(), name=f"deterministic summary reference {name}", pcc_threshold=0.999
+        )
     assert_summary_reconstructs_state(host_inputs, outputs[0], outputs[1])
     for output in reference:
         ttnn.deallocate(output)
 
 
 def test_summarize_chunk_recurrence_cache_hit_rebinds_fresh_tensors(
-    device: ttnn.Device, isolated_program_cache: None
+    zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
     host_a, inputs_a = _regression_protocol(device, seed=1911)
     host_b, inputs_b = _regression_protocol(device, seed=1912)
-    outputs_a = run_summary(inputs_a)
+    outputs_a = run_summary(inputs_a, actual_start=zero_actual_start)
     ttnn.synchronize_device(device)
     entries = device.num_program_cache_entries()
-    outputs_b = run_summary(inputs_b)
+    outputs_b = run_summary(inputs_b, actual_start=zero_actual_start)
     ttnn.synchronize_device(device)
 
     assert device.num_program_cache_entries() == entries
@@ -303,10 +313,10 @@ def test_summarize_chunk_recurrence_cache_hit_rebinds_fresh_tensors(
 
 
 def test_summarize_chunk_recurrence_default_compute_config_matches_explicit_defaults(
-    device: ttnn.Device, isolated_program_cache: None
+    zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
     _, inputs = _regression_protocol(device, seed=817)
-    implicit = run_summary(inputs)
+    implicit = run_summary(inputs, actual_start=zero_actual_start)
     entries = device.num_program_cache_entries()
     explicit_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -317,17 +327,17 @@ def test_summarize_chunk_recurrence_default_compute_config_matches_explicit_defa
         dst_full_sync_en=False,
         throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
     )
-    explicit = run_summary(inputs, compute_kernel_config=explicit_config)
+    explicit = run_summary(inputs, compute_kernel_config=explicit_config, actual_start=zero_actual_start)
     assert device.num_program_cache_entries() == entries
     for name, implicit_tt, explicit_tt in zip(("affine_a", "affine_b"), implicit, explicit, strict=True):
         assert_bit_identical(ttnn.to_torch(implicit_tt), ttnn.to_torch(explicit_tt), name=f"{name} explicit defaults")
 
 
 def test_summarize_chunk_recurrence_approximate_math_uses_distinct_accurate_program(
-    device: ttnn.Device, isolated_program_cache: None
+    zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
     host_inputs, inputs = _regression_protocol(device, seed=818)
-    exact = run_summary(inputs)
+    exact = run_summary(inputs, actual_start=zero_actual_start)
     entries = device.num_program_cache_entries()
     approximate_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -336,7 +346,7 @@ def test_summarize_chunk_recurrence_approximate_math_uses_distinct_accurate_prog
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
-    approximate = run_summary(inputs, compute_kernel_config=approximate_config)
+    approximate = run_summary(inputs, compute_kernel_config=approximate_config, actual_start=zero_actual_start)
     assert device.num_program_cache_entries() == entries + 1
     expected = summary_oracle(host_inputs)
     assert_outputs_accurate(expected, exact, names=("affine_a", "affine_b"), context="exact summary math")
@@ -349,7 +359,7 @@ def test_summarize_chunk_recurrence_approximate_math_uses_distinct_accurate_prog
 
 
 def test_summarize_chunk_recurrence_rejects_unsupported_compute_config(
-    device: ttnn.Device, expect_error: Callable
+    zero_actual_start, device: ttnn.Device, expect_error: Callable
 ) -> None:
     _, inputs = _regression_protocol(device, seed=819)
     unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
@@ -357,20 +367,20 @@ def test_summarize_chunk_recurrence_rejects_unsupported_compute_config(
         packer_l1_acc=True,
     )
     with expect_error(RuntimeError, "packer_l1_acc=true is unsupported"):
-        run_summary(inputs, compute_kernel_config=unsupported_config)
+        run_summary(inputs, compute_kernel_config=unsupported_config, actual_start=zero_actual_start)
 
 
 @pytest.mark.requires_host_iommu
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_summarize_chunk_recurrence_regression_performance(device: ttnn.Device) -> None:
+def test_summarize_chunk_recurrence_regression_performance(zero_actual_start, device: ttnn.Device) -> None:
     case = _REGRESSION_CASE
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for recurrence-summary performance checks")
     _, inputs = _regression_protocol(device, seed=117)
 
     def run() -> list[ttnn.Tensor]:
-        return run_summary(inputs)
+        return run_summary(inputs, actual_start=zero_actual_start)
 
     outputs, perf_record = profile_realtime_program(device, run)
     duration_ns = perf_record["duration_ns"]
@@ -400,7 +410,7 @@ def test_summarize_chunk_recurrence_regression_performance(device: ttnn.Device) 
 @pytest.mark.requires_host_iommu
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_summarize_chunk_recurrence_production_performance(device: ttnn.Device) -> None:
+def test_summarize_chunk_recurrence_production_performance(zero_actual_start, device: ttnn.Device) -> None:
     case = _PRODUCTION_CASE
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for recurrence-summary performance checks")
@@ -409,7 +419,9 @@ def test_summarize_chunk_recurrence_production_performance(device: ttnn.Device) 
     compute_config = _production_compute_config(device)
 
     def run() -> list[ttnn.Tensor]:
-        return run_summary(inputs, memory_config=output_memory, compute_kernel_config=compute_config)
+        return run_summary(
+            inputs, memory_config=output_memory, compute_kernel_config=compute_config, actual_start=zero_actual_start
+        )
 
     outputs, perf_record = profile_realtime_program(device, run)
     duration_ns = perf_record["duration_ns"]
@@ -437,7 +449,7 @@ def test_summarize_chunk_recurrence_production_performance(device: ttnn.Device) 
     )
 
 
-def test_summarize_chunk_recurrence_height_sharded_l1_output(device: ttnn.Device) -> None:
+def test_summarize_chunk_recurrence_height_sharded_l1_output(zero_actual_start, device: ttnn.Device) -> None:
     batch_heads, num_chunks, dim = 4, 2, 32
     host_inputs = host_protocol(batch_heads, num_chunks, dim, dim, seed=812)
     expected = summary_oracle(host_inputs)
@@ -447,10 +459,10 @@ def test_summarize_chunk_recurrence_height_sharded_l1_output(device: ttnn.Device
     first = assert_runtime_contract(
         device,
         inputs,
-        lambda: run_summary(inputs, memory_config=output_memory),
+        lambda: run_summary(inputs, memory_config=output_memory, actual_start=zero_actual_start),
         expected,
         names=("affine_a", "affine_b"),
-        dtypes=(ttnn.float32, ttnn.float32),
+        dtypes=(ttnn.bfloat16, ttnn.bfloat16),
         shapes=((batch_heads, dim, dim), (batch_heads, dim, dim)),
         expected_memory_config=output_memory,
     )
@@ -459,7 +471,7 @@ def test_summarize_chunk_recurrence_height_sharded_l1_output(device: ttnn.Device
 
 @pytest.mark.parametrize("host_index", range(7))
 def test_summarize_chunk_recurrence_rejects_host_protocol_inputs(
-    device: ttnn.Device, expect_error: Callable, host_index: int
+    zero_actual_start, device: ttnn.Device, expect_error: Callable, host_index: int
 ) -> None:
     host_inputs = host_protocol(2, 2, 32, 32)
     inputs = list(device_protocol(host_inputs, device))
@@ -467,7 +479,7 @@ def test_summarize_chunk_recurrence_rejects_host_protocol_inputs(
     dtype = ttnn.bfloat16 if host.dtype == torch.bfloat16 else ttnn.float32
     inputs[host_index] = ttnn.from_torch(host, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     with expect_error(RuntimeError, f"{PROTOCOL_NAMES[host_index]} must be an allocated device tensor"):
-        run_summary(tuple(inputs))
+        run_summary(tuple(inputs), actual_start=zero_actual_start)
 
 
 @pytest.mark.parametrize(
@@ -479,7 +491,7 @@ def test_summarize_chunk_recurrence_rejects_host_protocol_inputs(
     ],
 )
 def test_summarize_chunk_recurrence_rejects_invalid_inputs(
-    device: ttnn.Device, expect_error: Callable, case: str, message: str
+    zero_actual_start, device: ttnn.Device, expect_error: Callable, case: str, message: str
 ) -> None:
     host_inputs = list(host_protocol(2, 2, 32, 32))
     inputs = list(device_protocol(host_inputs, device))
@@ -492,7 +504,7 @@ def test_summarize_chunk_recurrence_rejects_invalid_inputs(
     elif case == "intra_dtype":
         inputs[3] = to_device(host_inputs[3], device, dtype=ttnn.bfloat16)
     with expect_error(RuntimeError, message):
-        run_summary(tuple(inputs), memory_config=memory_config)
+        run_summary(tuple(inputs), memory_config=memory_config, actual_start=zero_actual_start)
 
 
 @pytest.mark.parametrize(
@@ -500,8 +512,10 @@ def test_summarize_chunk_recurrence_rejects_invalid_inputs(
     ["chunk_size", "initial_state", "state_only", "identity_tile", "summary_pair", "output_bf16", "raw_seed"],
 )
 def test_summarize_chunk_recurrence_does_not_expose_prototype_modes(
-    device: ttnn.Device, expect_error: Callable, removed_keyword: str
+    zero_actual_start, device: ttnn.Device, expect_error: Callable, removed_keyword: str
 ) -> None:
     inputs = device_protocol(host_protocol(2, 2, 32, 32), device)
     with expect_error(TypeError, "incompatible function arguments"):
-        ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, **{removed_keyword: True})
+        ttnn.experimental.kda.summarize_chunk_recurrence(
+            *inputs, actual_start=zero_actual_start, **{removed_keyword: True}
+        )

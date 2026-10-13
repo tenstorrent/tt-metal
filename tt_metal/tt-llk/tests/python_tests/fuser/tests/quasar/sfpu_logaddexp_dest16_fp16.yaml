@@ -1,0 +1,69 @@
+# Binary logaddexp(a, b) and logaddexp2(a, b) (max(a, b) + log1p(exp(-|a - b|)), resp. base 2): both
+# signs, gaps from 0 (equal inputs give max + ln 2, resp. + 1) through 88 (the bf16 exp cap) to 400,
+# and arguments past the overflow point of the composed log(exp(a) + exp(b)) (|x| > 88.7, resp. 127).
+# The shared points make equal inputs common: each point is drawn about as often as a unit of range.
+#
+# Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
+# dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
+# the FPU datacopy path, and stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN).
+# Special points sit outside the random ranges, so each is drawn about as often as a unit of range.
+
+dest_acc: false
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16]
+    stimuli:
+      include:
+        - [-200.0, -100.5]
+        - [-99.5, -10.0]
+        - [-9.5, -1.25]
+        - [-0.75, -0.01]
+        - [0.01, 0.75]
+        - [1.25, 9.5]
+        - [10.0, 87.5]
+        - [88.5, 99.5]
+        - [100.5, 200.0]
+        - -100.0
+        - -1.0
+        - 0.0
+        - 1.0
+        - 88.0
+        - 100.0
+  - name: "input_B"
+    dims: [32, 32]
+    format: [Float16]
+    stimuli:
+      include:
+        - [-200.0, -100.5]
+        - [-99.5, -10.0]
+        - [-9.5, -1.25]
+        - [-0.75, -0.01]
+        - [0.01, 0.75]
+        - [1.25, 9.5]
+        - [10.0, 87.5]
+        - [88.5, 99.5]
+        - [100.5, 200.0]
+        - -100.0
+        - -1.0
+        - 0.0
+        - 1.0
+        - 88.0
+        - 100.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float16_b
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32], indexes: {in0: 0, dest: 0}}
+      - {type: "Fpu", in0: "input_B", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32], indexes: {in0: 0, dest: 1}}
+      - type: "BinarySfpu"
+        operation: [SfpuLogaddexp, SfpuLogaddexp2]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {src0: 0, src1: 1, dest: 2}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 2, out: 0}}

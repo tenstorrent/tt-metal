@@ -410,7 +410,9 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
                     resolve_uploaded_firmware_path(request.build_key, resolved_target).string();
             }
             std::string out_dir = target_cache_dir(request.build_key, request.kernel_name, target.target_name);
-            const fs::path pch_root = fs::path(g_server_cache_root) / std::to_string(request.build_key) / "pch";
+            // Shared across build keys: the PCH is keyed on compiler, optimization level, cflags
+            // and umbrella text, so one copy per cache root serves every build key.
+            const fs::path pch_root = fs::path(g_server_cache_root) / "pch";
             build_target(request.gpp, resolved_target, out_dir, pch_root, response);
         }
 

@@ -29,6 +29,12 @@ bool check_min_connection_count_satisfied(
     uint32_t min_connections,
     std::vector<std::pair<std::pair<AsicId, AsicId>, uint32_t>>& insufficient_connections);
 
+// Extract all golden Ethernet connections from a Factory System Descriptor (FSD) proto.
+// Returns the full set of expected physical channel connections (sorted endpoint pairs),
+// independent of whether the links were discovered/trained. Duplicate connections in the
+// FSD collapse into a single set entry.
+std::set<PhysicalChannelConnection> get_all_fsd_connections(const fsd::proto::FactorySystemDescriptor& fsd_proto);
+
 // Common utility function for validating FSD against discovered GSD
 // Validates that the Factory System Descriptor (FSD) matches the Global System Descriptor (GSD)
 // Parameters:

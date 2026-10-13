@@ -60,7 +60,6 @@ struct GroupNormInputs {
     std::optional<Tensor> beta;
     std::optional<Tensor> input_mask;
     std::optional<Tensor> negative_mask;
-    std::optional<Tensor> reciprocals;
 };
 
 }  // namespace ttnn::prim

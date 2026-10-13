@@ -45,6 +45,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include "llrt/hal_types.hpp"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;

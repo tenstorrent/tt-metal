@@ -16,22 +16,16 @@ struct SliceTileProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
 
-    // Cache-hit hook: the tensor bindings plus the per-core scalars, which are hash-excluded.
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
-        const SliceParams& args,
-        const SliceInputs& tensor_args,
-        Tensor& output,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
-};
+    struct shared_variables_t {
+        // Keep the named scalar assignments, not pointers into enqueue/trace runtime storage.
+        tt::tt_metal::experimental::ProgramRunArgs run_args;
+    };
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-// Per-core scalars are hash-excluded; a divergent-partition cache hit leaves them stale -> all-zero output (#52651).
-// Returns the reader and writer KernelRunArgs entries carrying those scalars, for the named kernels.
-tt::tt_metal::experimental::Group<tt::tt_metal::experimental::KernelRunArgs> slice_tile_run_args(
-    const SliceParams& args,
-    const SliceInputs& tensor_args,
-    const Tensor& output,
-    uint32_t start_offset,
-    const tt::tt_metal::experimental::KernelSpecName& reader_kernel,
-    const tt::tt_metal::experimental::KernelSpecName& writer_kernel);
+    static cached_program_t create(const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program, const SliceParams& args, const SliceInputs& tensor_args, Tensor& output);
+};
 
 }  // namespace ttnn::prim

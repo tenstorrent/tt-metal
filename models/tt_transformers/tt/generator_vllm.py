@@ -398,6 +398,9 @@ def initialize_vllm_text_transformer(
         ), f"The model specified in vLLM ({hf_config._name_or_path}) does not match the model name ({model_args_i.model_name}) with model weights ({model_args_i.CKPT_DIR})."
         if n_layers is not None:
             model_args_i.n_layers = n_layers
+        # vLLM path: same-seed requests must reproduce identically (n>1 children already
+        # arrive with distinct seeds), so keep SeedManager salting off, as llama3_70b_galaxy does.
+        model_args_i.salt_duplicate_seeds = False
 
         model_args.append(model_args_i)
 
@@ -857,6 +860,65 @@ class QwenForCausalLM(Generator):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
+class CohereForCausalLM(Generator):
+    """Command-R / Command-A family (HF model_type "cohere").
+
+    Minimal text-only dense wrapper, same shape as QwenForCausalLM. All
+    Cohere-specific behaviour (parallel decoder block, LayerNorm instead of
+    RMSNorm, LM-head logit_scale 0.0625, tied embeddings) is handled by the
+    model_type=="cohere" family dispatch in model.py / model_config.py (P5a).
+    Canada Quant Labs (org-internal) - bounty tt-metal#49307 track.
+    """
+
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": True,
+        "supports_async_decode": True,
+        "supports_sample_on_device": True,
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
+    ):
+        tt_model, model_args = initialize_vllm_text_transformer(
+            hf_config,
+            tt_data_parallel,
+            mesh_device,
+            max_batch_size,
+            max_seq_len=max_seq_len,
+            n_layers=n_layers,
+            dtype=ttnn.bfloat8_b,
+            optimizations=DecodersPrecision.from_string(optimizations)
+            if optimizations is not None
+            else DecodersPrecision.performance,
+        )
+        return cls(tt_model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    def prefill_forward(self, *args, **kwargs):
+        return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
 class MistralForCausalLM(Generator):
     decode_input_update_contract = 1
 
@@ -1222,10 +1284,36 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
         "supports_async_decode": True,
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
+        "supports_compact_host_logits": True,
+        "supports_selective_host_readback": True,
     }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        if (
+            "gpt-oss-120b" in model_name.lower()
+            and num_devices == 32
+            and tt_data_parallel == 4
+            and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
+        ):
+            # Allow two long contexts in each BH Galaxy lane. The plugin
+            # adds its per-user block padding to this per-lane token budget.
+            return 262_144
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
         # While hybrid KV cache groups are disabled (one full-attention group

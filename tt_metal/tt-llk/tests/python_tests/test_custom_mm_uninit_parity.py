@@ -1,30 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Static guard: the two custom_mm uninit bodies, and the driver's copy of them.
+"""Keep custom-mm compute APIs and the LLK restore driver on one PACK helper.
 
-``test_custom_mm_uninit_restore.py`` covers what ``custom_mm_block_uninit`` and
-``compressed_custom_mm_block_uninit`` do, but it does it by **replicating** their shared
-body in ``sources/custom_mm_uninit_restore_test.cpp`` -- a tt-llk driver cannot include
-``tt_metal/hw/inc/api/compute``. Two blind spots follow, and neither is visible to any
-runtime test:
+The device tests call the production ``llk_pack_custom_mm.h`` helper directly and
+check stride restoration, including skip-uninit and caller-MOP negative controls.
+This static guard catches either compute family or the driver bypassing that
+shared implementation. It does not replace device coverage of its behavior.
 
-1. **Divergence.** The two compute-API bodies are currently identical, so one driver covers
-   both. If they diverge, every existing test keeps passing and the driver silently stops
-   describing one of them.
-2. **Staleness.** The driver hardcodes the W-stride expressions rather than deriving them.
-   If a header's constants change, the driver keeps asserting the old behaviour and still
-   passes.
-
-This file closes both textually. It is the cheap interim guard for what really wants a
-metal-side test calling the real entry points -- one that can include
-``tt_metal/hw/inc/api/compute``, which a tt-llk test cannot; it
-does not replace that, because a text match cannot tell you the functions *work* -- only
-that they still say the same thing.
-
-Static and device-free, in the same spirit as ``test_perf_header_gate.py``. It reaches
-outside the tt-llk tree to read the compute API, which no other test here does, so it skips
-cleanly when those headers are absent -- as they are in a standalone tt-llk checkout.
+Skip in standalone tt-llk checkouts, where the compute API headers are absent.
 """
 
 import re
@@ -41,7 +25,7 @@ _DRIVER = (
     / "custom_mm_uninit_restore_test.cpp"
 )
 
-# (header, uninit function) pairs whose bodies must stay in lockstep.
+# Both compute APIs must delegate to the helper exercised by the device tests.
 _UNINIT_PAIR = [
     ("custom_mm.h", "custom_mm_block_uninit"),
     ("compressed_custom_mm.h", "compressed_custom_mm_block_uninit"),
@@ -60,15 +44,15 @@ def _normalize(text):
     return " ".join(_strip_comments(text).split())
 
 
-def _extract_body(source, function):
+def _extract_body(source, function, offset=0):
     """Return the brace-delimited body of `function`, by brace matching.
 
     Deliberately not a C++ parse: the bodies here are a handful of statements, and a
     dependency-free matcher keeps this test cheap enough to be a static gate.
     """
-    match = re.search(
-        rf"\bALWI\s+void\s+{re.escape(function)}\s*\([^)]*\)\s*\{{", source
-    )
+    match = re.compile(
+        rf"\bALWI\s+void\s+{re.escape(function)}\s*\([^)]*\)\s*\{{"
+    ).search(source, offset)
     assert match, f"could not find 'ALWI void {function}(...)' -- has it been renamed?"
 
     depth = 0
@@ -94,55 +78,59 @@ def _read_headers():
 
 
 def test_custom_mm_uninit_bodies_have_not_diverged():
-    """The two uninit bodies must stay identical, because one driver covers both."""
+    """Both uninits must consist only of the shared PACK-helper call."""
     sources = _read_headers()
-    bodies = {
-        function: _normalize(_extract_body(sources[header], function))
-        for header, function in _UNINIT_PAIR
-    }
-
-    (first_fn, first), (second_fn, second) = bodies.items()
-    assert first == second, (
-        f"{first_fn} and {second_fn} no longer share a body, so "
-        "custom_mm_uninit_restore_test.cpp -- which replicates that shared body rather than "
-        "calling either function -- now describes at most one of them, while continuing to "
-        "pass for both.\n\n"
-        f"  {first_fn}:\n    {first}\n\n"
-        f"  {second_fn}:\n    {second}\n\n"
-        "Either restore the shared body, or split the driver and its test so each family "
-        "is covered on its own -- properly, that means a metal-side test that includes the "
-        "compute API headers and calls both entry points, which a tt-llk test cannot do."
-    )
+    expected = "PACK((_llk_pack_custom_mm_uninit_<dense_packing>()));"
+    for header, function in _UNINIT_PAIR:
+        body = _normalize(_extract_body(sources[header], function))
+        assert body == expected, (
+            f"{function} no longer delegates only to the shared PACK helper. "
+            "The LLK restore driver must exercise the same implementation as both "
+            f"compute APIs. Found: {body}"
+        )
 
 
-def test_driver_wstride_constants_match_the_compute_api():
-    """The driver's replicated W-stride expressions must still be the header's.
-
-    The driver spells these out so a change on either side shows up as a diff; this asserts
-    the diff is actually noticed. Without it the driver can keep asserting a stride the
-    compute API no longer programs -- and pass, since it programs that stride itself.
-    """
+def test_driver_and_compute_apis_use_the_shared_pack_helper():
+    """The driver and all compute variants must use the same stride setup."""
     sources = _read_headers()
     if not _DRIVER.is_file():
         pytest.skip(f"driver not found: {_DRIVER}")
     driver = _normalize(_DRIVER.read_text())
 
-    # As spelled in custom_mm_uninit_restore_test.cpp, and in both headers.
-    expressions = {
-        "DENSE_WSTRIDE": "(TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2",
-        "DEFAULT_WSTRIDE": "TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2",
-    }
-
-    for name, expression in expressions.items():
-        assert f"{name} = {expression}" in driver, (
-            f"custom_mm_uninit_restore_test.cpp no longer defines {name} as "
-            f"'{expression}'. If that is deliberate, update this test and check the "
-            "headers agree; if not, the driver has drifted from the compute API."
+    assert '#include "experimental/llk_pack_custom_mm.h"' in driver
+    for operation in ("init", "uninit"):
+        call = f"_llk_pack_custom_mm_{operation}_<UNINIT_DENSE_PACKING>();"
+        assert call in driver, (
+            f"The restore driver no longer calls {call}; its coverage must exercise "
+            "the same PACK helper as the compute APIs."
         )
-        for header in sources:
-            assert expression in _normalize(sources[header]), (
-                f"{header} no longer contains the W-stride expression '{expression}' that "
-                f"the driver replicates as {name}. The driver is now asserting a stride "
-                "the compute API does not program, and will keep passing because it "
-                "programs that stride itself. Reconcile the two."
+
+    # Typed overloads inherit the legacy header's PACK-helper include.
+    for header in list(sources):
+        typed_header = _COMPUTE_API / "2_0" / header
+        if typed_header.is_file():
+            sources[f"2_0/{header}"] = typed_header.read_text()
+    for header, source in sources.items():
+        code = _strip_comments(source)
+        function = f"{Path(header).stem}_block_init"
+        overloads = list(
+            re.finditer(
+                rf"\bALWI\s+void\s+({re.escape(function)}(?:_short)?)\s*\(", code
             )
+        )
+        assert overloads, f"{header} has no custom-mm init overloads to check."
+        for index, match in enumerate(overloads):
+            body = _normalize(_extract_body(code, match.group(1), match.start()))
+            assert (
+                body.count("PACK((_llk_pack_custom_mm_init_<dense_packing>()));") == 1
+            ), (
+                f"{header}: {match.group(1)} overload {index + 1} must configure "
+                "the stride exactly once through the shared PACK helper."
+            )
+
+    # Duplicating the register write would restore the old blind spot: the driver
+    # could pass while a compute API programs a different stride.
+    for name, source in {**sources, _DRIVER.name: driver}.items():
+        assert "PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW" not in _strip_comments(
+            source
+        ), f"{name} writes the stride directly instead of using the shared PACK helper."

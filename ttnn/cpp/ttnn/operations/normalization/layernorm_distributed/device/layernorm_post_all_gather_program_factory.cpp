@@ -111,7 +111,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
     const auto& stats_mesh = stats.mesh_tensor();
     const auto& output_mesh = output.mesh_tensor();
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
@@ -384,7 +384,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
              {"Wt", tiles_per_core_y},
              {"reduce_factor", reduce_factor}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     if (gamma.has_value()) {
         reader.dfb_bindings.push_back(m2::DFBBinding{
@@ -407,7 +407,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = POST_OUTPUT_T, .accessor_name = "dst"}},
         .compile_time_args = {{"blk", block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     m2::KernelSpec compute{
@@ -439,10 +439,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
              {"stats_tiles_cols", stats_tiles_cols},
              {"fp32_dtype", static_cast<uint32_t>(fp32_dest_acc_en)},
              {"float32_reduction", static_cast<uint32_t>(float32_reduction)},
-             {"legacy_rsqrt", static_cast<uint32_t>(program_config.legacy_rsqrt)},
              {"dfb_length", cb_length}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
-        .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
+        .hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config),
     };
     // Every intermediate below is private to the compute kernel: it packs into the buffer and
     // unpacks it back, so it is that buffer's only endpoint on both sides.
@@ -467,7 +466,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
         compute.dfb_bindings.push_back(m2::DFBBinding{
             .dfb_spec_name = POST_BETA, .accessor_name = "beta", .endpoint_type = m2::DFBEndpointType::CONSUMER});
     }
-    auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+    auto& compute_gen1 = gen1_compute_config(device->arch(), std::get<m2::ComputeHardwareConfig>(compute.hw_config));
     // With the 32-bit Dest register enabled, every Float32 buffer the compute kernel consumes needs an
     // explicit unpack mode. In this kernel every consumed buffer is read by an FPU op (the stats row
     // reduce, mul_tiles / sub_tiles / add_tiles for the variance, and the broadcast multiplies and adds

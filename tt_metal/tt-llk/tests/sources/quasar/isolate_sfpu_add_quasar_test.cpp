@@ -72,19 +72,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::make_tensor_shape(static_cast<std::uint8_t>(PARAM_SRCS_YDIM), PARAM_SRCS_XDIM, PARAM_SRCS_ZDIM, PARAM_SRCS_ZDIM);
 
     // Unpack BD 0: L1 input A -> SrcS slice 0
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(srcs_shape, L1_ADDRESS(params.buffer_A[0]), formats.unpack_S_src);
+    const auto bfd_unpack_0 =
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(srcs_shape, L1_ADDRESS(params.buffer_A[0]), formats.unpack_S_src);
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(static_cast<DataFormat>(formats.unpack_S_dst));
 
     // Unpack BD 1: L1 input B -> SrcS slice 1
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice1>(srcs_shape, L1_ADDRESS(params.buffer_B[0]), formats.unpack_S_src);
+    const auto bfd_unpack_1 =
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice1>(srcs_shape, L1_ADDRESS(params.buffer_B[0]), formats.unpack_S_src);
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(static_cast<DataFormat>(formats.unpack_S_dst));
 
-    const std::uint8_t bfd_unpack_0 = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp2_Slice0>();
-    const std::uint8_t bfd_unpack_1 = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp2_Slice1>();
-
     // Pack BD: SrcS slice 2 -> L1 output
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack1>(srcs_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_S_dst);
-    const std::uint8_t bfd_pack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack1>();
+    const auto bfd_pack =
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack1>(srcs_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_S_dst);
     _llk_pack_hw_configure_<p_pacr::PACK1, false /*EN_32BIT_DEST*/>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
 
     // Implied math format disable for SrcS (unpacker). Load/store decode uses explicit sfpmem.

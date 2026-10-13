@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_moe_hash_gate
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_moe_hash_gate REUSE_FROM TTNN::PCHFull)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_prefill_moe_hash_gate TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_moe_hash_gate)
 
 set_target_properties(

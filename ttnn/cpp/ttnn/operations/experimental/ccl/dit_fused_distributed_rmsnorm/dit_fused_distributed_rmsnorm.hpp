@@ -26,9 +26,10 @@ enum class DitFusedNormType : uint8_t { RMS = 0, LAYERNORM = 1 };
 // Fused distributed RMSNorm for DiT attention: per-row sum-of-squares stats,
 // fabric all-gather of the partial stats across `cluster_axis`, then post-allgather
 // RMSNorm with optional head split / RoPE / dtype cast — all in one fused device op.
+// cluster_axis == std::nullopt normalizes locally on every device (no gather).
 ttnn::Tensor dit_fused_distributed_rmsnorm(
     const ttnn::Tensor& input_tensor,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
@@ -52,7 +53,7 @@ ttnn::Tensor dit_fused_distributed_rmsnorm(
 // There is no per_head_norm knob (unlike RMSNorm).
 ttnn::Tensor dit_fused_distributed_layernorm(
     const ttnn::Tensor& input_tensor,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
@@ -76,17 +77,17 @@ ttnn::Tensor dit_fused_distributed_layernorm(
     const std::optional<const ttnn::Tensor>& reciprocals = std::nullopt);
 
 // Allocate the persistent stats DRAM scratch buffer required by the all-gather path
-// (TP>1, whole-row norm). Returns std::nullopt for shapes that don't all-gather (TP=1
-// or per_head_norm), which reduce locally and need no scratch. The caller must hold
-// this tensor across launches (a mesh-coherent MeshBuffer, which the fabric mcast needs)
-// and pass it back via `persistent_output_buffer`.
+// (TP>1, whole-row norm). Returns std::nullopt for shapes that don't all-gather (TP=1,
+// cluster_axis == std::nullopt, or per_head_norm), which reduce locally and need no scratch.
+// The caller must hold this tensor across launches (a mesh-coherent MeshBuffer, which the
+// fabric mcast needs) and pass it back via `persistent_output_buffer`.
 //
 // There are separate RMS / LayerNorm variants because LayerNorm transports 2 stats/token
 // (mean+var, 256 B sticks) vs RMS's 1 (128 B) -> the stats scratch page is 2x wider. Using
 // the wrong variant's buffer silently corrupts the gather.
 std::optional<ttnn::Tensor> dit_fused_distributed_rmsnorm_create_stats_buffer(
     const ttnn::Tensor& input_tensor,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     uint32_t num_heads_per_device = 1,
     bool per_head_norm = false,
@@ -100,7 +101,7 @@ std::optional<ttnn::Tensor> dit_fused_distributed_rmsnorm_create_stats_buffer(
 
 std::optional<ttnn::Tensor> dit_fused_distributed_layernorm_create_stats_buffer(
     const ttnn::Tensor& input_tensor,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     uint32_t num_heads_per_device = 1,
     uint32_t num_links = 1,

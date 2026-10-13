@@ -19,10 +19,10 @@ struct ReduceOpDeviceGridValidationOptions {
     bool num_cores_use_last_core_divider = false;
 
     const tt::tt_metal::CoreRangeSet* sub_grid_contained_in_device_grid = nullptr;
-    std::string_view sub_grid_label = {};
+    std::string_view sub_grid_label;
 
     const tt::tt_metal::MemoryConfig* shard_grid_contained_in_device_grid = nullptr;
-    std::string_view memory_config_label = {};
+    std::string_view memory_config_label;
 };
 
 void validate_reduce_op_tensor(
@@ -34,7 +34,7 @@ void validate_reduce_op_tensor(
 
 struct ReduceOpProgramGridShardedTensor {
     const ttnn::Tensor* tensor = nullptr;
-    std::string_view label = {};
+    std::string_view label;
 };
 
 void validate_reduce_op_program_grid(

@@ -147,6 +147,10 @@ FORCE_INLINE uint32_t read_chunk(
         uint32_t tiles_in_band = chunk_width * band_h * mm_cores_y;
         uint32_t worker_tiles_in_band =
             (tiles_in_band / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_band % ag_worker_cores)) ? 1 : 0);
+        // This worker has no tiles here. Later bands can still have some.
+        if (worker_tiles_in_band == 0) {
+            continue;
+        }
         uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_band);
         uint32_t packets_in_band = div_up(worker_tiles_in_band, num_tiles_per_packet);
         uint32_t band_tile_iter = 0;
@@ -258,8 +262,13 @@ FORCE_INLINE uint32_t write_chunk(
         uint32_t tiles_in_band = chunk_width * band_h * mm_cores_y;
         uint32_t worker_tiles_in_band =
             (tiles_in_band / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_band % ag_worker_cores)) ? 1 : 0);
-        uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_band);
-        uint32_t packets_in_band = div_up(worker_tiles_in_band, num_tiles_per_packet);
+        // Skip the packet loop when this worker has no tiles. The matmul signal below still counts the band.
+        uint32_t num_tiles_per_packet = 0;
+        uint32_t packets_in_band = 0;
+        if (worker_tiles_in_band != 0) {
+            num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_band);
+            packets_in_band = div_up(worker_tiles_in_band, num_tiles_per_packet);
+        }
         uint32_t band_tile_iter = 0;
 
         // Subchunk tracker for this band: band_h rows of injector 0, starting band_lo rows into the chunk

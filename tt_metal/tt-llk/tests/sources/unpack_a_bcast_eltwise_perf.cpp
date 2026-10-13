@@ -55,12 +55,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            return;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             _perf_unpack_loop_set_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
-            return;
         }
         else
         {
@@ -71,6 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    _llk_unpack_bcastA_B_uninit_(formats.unpack_A_dst);
 }
 
 #endif

@@ -66,9 +66,6 @@ def main():
             self.prefix = prefix
             self.num_heads = num_heads
 
-            # Scale factor for attention scores: 1/sqrt(head_dim) for numerical stability
-            self.scale = 1.0 / math.sqrt(num_heads)
-
             self.q_proj_weight = state_dict[f"{prefix}.q_proj.weight"]
             self.q_proj_bias = state_dict[f"{prefix}.q_proj.bias"]
             self.k_proj_weight = state_dict[f"{prefix}.k_proj.weight"]
@@ -77,6 +74,12 @@ def main():
             self.v_proj_bias = state_dict[f"{prefix}.v_proj.bias"]
             self.out_proj_weight = state_dict[f"{prefix}.out_proj.weight"]
             self.out_proj_bias = state_dict[f"{prefix}.out_proj.bias"]
+
+            # Scale factor for attention scores: 1/sqrt(head_dim) for numerical stability.
+            # q_proj.weight is [hidden_size, hidden_size], and hidden_size is split evenly
+            # across the heads, so head_dim = hidden_size // num_heads.
+            head_size = self.q_proj_weight.shape[0] // num_heads
+            self.scale = 1.0 / math.sqrt(head_size)
 
         def forward(self, hidden_states):
             sequence_size, batch_size, hidden_size = hidden_states.shape

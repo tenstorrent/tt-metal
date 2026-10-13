@@ -3,6 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include <functional>
+
+#include <algorithm>
+#include <array>
+
+#include <tt-metalium/runtime_args_data.hpp>
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 #include <tt_stl/reflection.hpp>
 
 #include <cstdint>
@@ -19,16 +27,25 @@
 
 namespace ttnn::experimental::prim {
 
-// Shared struct for program artifacts - used for caching kernel handles and core info
+// Common argument bindings shared by standalone and fused CCL programs.
 struct ReduceScatterProgramArtifacts {
-    tt::tt_metal::KernelHandle reader_kernel_id;
-    tt::tt_metal::KernelHandle writer_kernel_id;
-    std::vector<tt::tt_metal::CoreCoord> all_cores;
-    uint32_t num_directions_per_link;
-    uint32_t num_workers_per_direction;
-    uint32_t num_mux_cores_per_direction_per_link;
-    uint32_t num_cores_per_link;
-    uint32_t normalized_dim;
+    // Cache the binding objects, not their payload pointers: dispatch may relocate data().
+    std::reference_wrapper<tt::tt_metal::RuntimeArgsData> reader_common_args;
+    std::reference_wrapper<tt::tt_metal::RuntimeArgsData> writer_common_args;
+    using RuntimeArgs = std::array<uint32_t, ttnn::ccl::ReduceScatterCommonArgs::count>;
+    static RuntimeArgs collect_runtime_args(
+        bool is_ring,
+        const std::optional<GlobalSemaphore>& barrier,
+        const std::vector<GlobalSemaphore>& semaphores,
+        const Tensor& input,
+        const Tensor& intermediate,
+        const Tensor& output,
+        const std::optional<Tensor>& penult = std::nullopt);
+
+    void override_runtime_arguments(const RuntimeArgs& args) const {
+        std::copy(args.begin(), args.end(), reader_common_args.get().data());
+        std::copy(args.begin(), args.end(), writer_common_args.get().data());
+    }
 };
 
 struct ReduceScatterMinimalAsyncParams {
@@ -48,6 +65,9 @@ struct ReduceScatterMinimalAsyncParams {
     std::optional<uint32_t> num_buffers_per_channel;
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
+    std::optional<ttnn::MeshShape> mesh_shape;
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_nodes;
+
     // Compile-time attributes drive the default program-cache reflection hash and the canonical key
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dim",
@@ -63,23 +83,24 @@ struct ReduceScatterMinimalAsyncParams {
         "chunks_per_sync",
         "num_workers_per_link",
         "num_buffers_per_channel",
-        "compute_kernel_config");
+        "compute_kernel_config",
+        "mesh_shape",
+        "fabric_nodes");
     auto attribute_values() const {
-        return std::make_tuple(
-            dim,
-            num_links,
-            ring_size,
-            output_mem_config,
-            optional_intermediate_mem_config,
-            topology,
-            barrier_semaphore.has_value(),
-            using_persistent_buffers,
-            sub_device_id,
-            cluster_axis,
-            chunks_per_sync,
-            num_workers_per_link,
-            num_buffers_per_channel,
-            compute_kernel_config);
+        // Reference stored attributes; the computed presence flag must remain an owned value.
+        return std::tuple_cat(
+            std::tie(dim, num_links, ring_size, output_mem_config, optional_intermediate_mem_config, topology),
+            std::make_tuple(barrier_semaphore.has_value()),
+            std::tie(
+                using_persistent_buffers,
+                sub_device_id,
+                cluster_axis,
+                chunks_per_sync,
+                num_workers_per_link,
+                num_buffers_per_channel,
+                compute_kernel_config,
+                mesh_shape,
+                fabric_nodes));
     }
 };
 

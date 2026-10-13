@@ -9,6 +9,7 @@
 #include <cstdint>
 #include "api/compile_time_args.h"
 
+#include "overlay/fds_signalling.hpp"
 #include "quasar_fds_common.h"
 
 using fds_auto_pacing::kBurstValueBase;
@@ -37,7 +38,7 @@ void kernel_main() {
     }
 
     overlay::FdsDispatch::fds_clear_go();
-    overlay::FdsDispatch::fds_go(/*ad_enable=*/false, kSessionGo);
+    overlay::FdsDispatch::fds_go(kSessionGo);
 
     if (!fds_kernel::wait_group_count_nonzero(kTokenArmed, poll_iterations)) {
         fds_kernel::finish(status, l1_address, kNumSlots, kTimeoutArmed);
@@ -52,15 +53,18 @@ void kernel_main() {
         if (i == burst_length - 1) {
             status[kSlotSawQueueFull] = overlay::FdsDispatch::fds_read_auto_dispatch_fifo_full();
         }
-        overlay::FdsDispatch::fds_go(/*ad_enable=*/true, kBurstValueBase + i);
+        while (overlay::FdsDispatch::fds_read_auto_dispatch_fifo_full() != 0) {
+        }
+        overlay::FdsDispatch::fds_go(kBurstValueBase + i);
     }
 
     const bool recorded = fds_kernel::wait_group_count_nonzero(kTokenRecorded, poll_iterations);
 
+    overlay::fds_signalling::wait_cycles(
+        overlay::auto_dispatch_drain_cycles(overlay::dispatch_auto_dispatch_queue_depth, auto_dispatch_cycles));
+
     // Back to the direct path: the wire falls back to the output register, which still holds the
-    // session go, so clear it once the direct path is active again. The pacing is left alone: the
-    // counter is mid-interval after the burst, and a cycle count it has already passed would
-    // strand the queue until a 32 bit wrap.
+    // session go, so clear it once the direct path is active again.
     overlay::FdsDispatch::fds_disable_auto_dispatch();
     overlay::FdsDispatch::fds_clear_go();
 

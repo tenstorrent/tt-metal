@@ -38,8 +38,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const auto tensor_shape = tensor_shape_from_params(params);
 
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
+    const auto bfd_a =
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+    const auto bfd_b =
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
 
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
         static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
@@ -52,13 +54,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t block = 0; block < num_blocks; block++)
     {
         // SrcB is the same single tile for every block, so its L1 tile index stays 0.
-        _llk_unpack_AB_sub_bcast_col_custom_(
-            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
-            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-            block * ct_dim,
-            0 /*start_l1_tile_idx_1*/,
-            ct_dim,
-            tensor_shape);
+        _llk_unpack_AB_sub_bcast_col_custom_(bfd_a, bfd_b, block * ct_dim, 0 /*start_l1_tile_idx_1*/, ct_dim, tensor_shape);
     }
 }
 
@@ -80,7 +76,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     const DataFormat math_format = static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(math_format, math_format);
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
 
     const auto tensor_shape = tensor_shape_from_params(params);
 
@@ -114,9 +110,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const auto tensor_shape = tensor_shape_from_params(params);
 
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
+    const auto bfd_pack =
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, 1 /*num_tiles_per_pack*/);
+    _llk_pack_init_(bfd_pack, tensor_shape, 1 /*num_tiles_per_pack*/);
 
     const std::uint32_t ct_dim     = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks = static_cast<std::uint32_t>(params.OUTPUT_NUM_BLOCKS);

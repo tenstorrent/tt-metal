@@ -92,12 +92,18 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
     spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()});
     spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()});
 
-    // Preserve the legacy processor/NOC selection (RISCV_1 / NOC_1) via an explicit Gen1Config.
+    // Preserve the legacy processor/NOC selection (RISCV_1 / NOC_1) via an explicit DataMovement1XXConfig.
     m2::DataMovementHardwareConfig reader_hw;
     if (input.device()->arch() == tt::ARCH::QUASAR) {
-        reader_hw = m2::DataMovementGen2Config{};
+        reader_hw = m2::DataMovementHardwareConfig{};
     } else {
-        reader_hw = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+        reader_hw = m2::DataMovementHardwareConfig{
+            .config_1xx =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::NOC_1,
+                },
+        };
     }
     m2::KernelSpec reader{
         .unique_id = READER,

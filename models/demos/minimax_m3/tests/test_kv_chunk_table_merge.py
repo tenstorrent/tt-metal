@@ -8,7 +8,7 @@ layout per cache — k, v, index_k) and a stub kv_cache (the merged path reads o
 addresses, fabric nodes, hosts and bank counts all come from the gathered layouts), then asserts the
 table's addressing against the layouts: per-(stage, cache) base addresses at global layer indices,
 single-member per-head device groups vs the full-row index_k replica group, and the per-(config, stage,
-row) bank-walk restart.
+row) bank-walk restart, and the index_k rows limited to the MSA layers.
 """
 
 import os
@@ -68,10 +68,11 @@ def _stub_cache(num_layers):
     def t(dtype):
         return SimpleNamespace(shape=(NUM_USERS * num_layers, 1, SEQ_LEN, HEAD_DIM), dtype=dtype)
 
-    return SimpleNamespace(k=t(ttnn.bfloat8_b), v=t(ttnn.bfloat8_b), index_k=t(ttnn.bfloat16))
+    # Migration requires a bf8 index_k (the decode peer's dtype); the builder rejects bf16.
+    return SimpleNamespace(k=t(ttnn.bfloat8_b), v=t(ttnn.bfloat8_b), index_k=t(ttnn.bfloat8_b))
 
 
-def _build(tmp_path, stage_layouts):
+def _build(tmp_path, stage_layouts, index_k_layers=None):
     path = os.path.join(str(tmp_path), "m3_merge_table.pb")
     # num_layers is THIS rank's stage count (rank 0 builds), used only for the local shape assert.
     return build_and_serialize_kv_chunk_table(
@@ -87,6 +88,7 @@ def _build(tmp_path, stage_layouts):
         head_dim=HEAD_DIM,
         path=path,
         stage_layouts=stage_layouts,
+        index_k_layers=index_k_layers,
     )
 
 
@@ -101,9 +103,11 @@ def test_configs_and_global_layer_extent(merged_table):
     total = sum(STAGE_COUNTS)
     for cfg_id in range(merged_table.num_configs()):
         assert merged_table.config(cfg_id).num_layers == total
-    # index_k carries the bf16 chunk size, K/V the bfp8 one.
-    assert merged_table.config(0).chunk_size_bytes == _chunk_size_bytes(ttnn.bfloat8_b, HEAD_DIM)
-    assert merged_table.config(2 * COLS).chunk_size_bytes == _chunk_size_bytes(ttnn.bfloat16, HEAD_DIM)
+    assert merged_table.config(2 * COLS).chunk_size_bytes == _chunk_size_bytes(ttnn.bfloat8_b, HEAD_DIM)
+    # The KV manager pairs prefill and decode configs by name: blaze names them by zero-padded position.
+    assert [merged_table.config_name(i) for i in range(merged_table.num_configs())] == [
+        f"{i:02d}" for i in range(2 * COLS + 1)
+    ]
 
 
 def test_stage_addressing_and_bank_walk(merged_table):
@@ -183,3 +187,30 @@ def test_mismatched_cache_ranges_rejected(tmp_path, expect_error):
     layouts[1][1]["first_layer"] += 1
     with expect_error(RuntimeError, "share one layer-index space"):
         _build(tmp_path, layouts)
+
+
+def test_index_k_rows_limited_to_msa_layers(tmp_path):
+    # Layers 0 and 2 (one per stage, including each stage's first) carry no index_k. Their rows must be
+    # empty, while every other row keeps the address of the unfiltered table: the dense layers' regions are
+    # still walked, so the bank walk of later layers and slots doesn't shift.
+    total = sum(STAGE_COUNTS)
+    msa = {1, 3, 4}
+    imp = ttnn.experimental.disaggregation.import_from_protobuf_file
+    (tmp_path / "full").mkdir()
+    (tmp_path / "msa").mkdir()
+    full = imp(_build(tmp_path / "full", _stage_layouts()))
+    filtered = imp(_build(tmp_path / "msa", _stage_layouts(), index_k_layers=msa))
+    for cfg_id in range(2 * COLS + 1):
+        for slot in range(NUM_USERS):
+            for layer in range(total):
+                for pos in range(0, SEQ_LEN, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                    want = full.lookup(layer, pos, slot, cfg_id)
+                    got = filtered.lookup(layer, pos, slot, cfg_id)
+                    if cfg_id == 2 * COLS and layer not in msa:
+                        assert got.size_bytes == 0, f"index_k row published on dense layer {layer}"
+                        continue
+                    assert (got.noc_addr, got.size_bytes, got.device_group_index) == (
+                        want.noc_addr,
+                        want.size_bytes,
+                        want.device_group_index,
+                    ), f"config {cfg_id} slot {slot} layer {layer} pos {pos} moved"

@@ -10,23 +10,16 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t input0_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t input1_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t input0_transpose_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t input1_transpose_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t concat_cb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t output_transpose_dfb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t output_dfb_id = get_compile_time_arg_val(6);
+    constexpr uint32_t input0_num_tiles_height = get_arg(args::input0_num_tiles_height);
+    constexpr uint32_t input0_num_tiles_width = get_arg(args::input0_num_tiles_width);
+    constexpr uint32_t input1_num_tiles_height = get_arg(args::input1_num_tiles_height);
+    constexpr uint32_t input1_num_tiles_width = get_arg(args::input1_num_tiles_width);
 
-    constexpr uint32_t input0_num_tiles_height = get_compile_time_arg_val(7);
-    constexpr uint32_t input0_num_tiles_width = get_compile_time_arg_val(8);
-    constexpr uint32_t input1_num_tiles_height = get_compile_time_arg_val(9);
-    constexpr uint32_t input1_num_tiles_width = get_compile_time_arg_val(10);
-
-    constexpr uint32_t tile_size = get_compile_time_arg_val(11);
-    constexpr uint32_t groups = get_compile_time_arg_val(12);
+    constexpr uint32_t tile_size = get_arg(args::tile_size);
+    constexpr uint32_t groups = get_arg(args::groups);
 
     constexpr uint32_t input0_stride = tile_size * input0_num_tiles_width / groups;
     constexpr uint32_t input1_stride = tile_size * input1_num_tiles_width / groups;
@@ -34,8 +27,11 @@ void kernel_main() {
     constexpr uint32_t width_len_bytes = tile_size * (input0_num_tiles_width + input1_num_tiles_width);
 
     Noc noc;
-    DataflowBuffer output_dfb(output_dfb_id);
-    DataflowBuffer output_transpose_dfb(output_transpose_dfb_id);
+    // output borrows the output tensor's shard memory. This kernel is its only toucher — it fills
+    // the resident shard and nothing downstream drains it — so the host binds this one kernel as
+    // both the buffer's producer and its consumer.
+    DataflowBuffer output_dfb(dfb::output);
+    DataflowBuffer output_transpose_dfb(dfb::output_transpose);
 
     const uint32_t base_l1_write_addr = output_dfb.get_write_ptr();
     uint32_t l1_write_addr = base_l1_write_addr;

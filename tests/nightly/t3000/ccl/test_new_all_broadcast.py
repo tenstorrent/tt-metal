@@ -158,7 +158,10 @@ def run_all_broadcast_impl(
     for i in range(num_iters):
         output_tensors = []
         for k in range(num_devices):
-            if rand_tensor:
+            if input_dtype in (ttnn.uint32, ttnn.int32):
+                # Integer rows are checked exactly; keep values below 2**31 so they survive the int32 round trip.
+                output_tensor = torch.randint(0, 2**31 - 1, output_shape, dtype=torch.int32)
+            elif rand_tensor:
                 output_tensor = torch.rand(output_shape).bfloat16()
             else:
                 output_tensor = torch.zeros(output_shape)
@@ -228,7 +231,7 @@ def run_all_broadcast_impl(
             for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensors[k])):
                 tt_output_tensor = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
                 logger.info(f"Checking for device {t.device().id()}")
-                if input_dtype == ttnn.bfloat16:
+                if input_dtype in (ttnn.bfloat16, ttnn.uint32, ttnn.int32):
                     eq, output = comp_equal(tt_output_tensor, output_tensor)
                 else:
                     eq, output = comp_pcc(tt_output_tensor, output_tensor)
@@ -283,6 +286,16 @@ def run_all_broadcast_impl(
             ttnn.ROW_MAJOR_LAYOUT,
             ttnn.bfloat16,
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ),
+        # Non-bf16 row-major row longer than the fabric max payload (5120 B > 4352 B): the row is split
+        # across packets, and each packet must still leave room for its header in the router slot.
+        (
+            8,
+            1,
+            [1, 1, 1, 1280],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.uint32,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ),
     ],
 )

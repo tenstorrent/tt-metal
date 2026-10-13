@@ -1,0 +1,7 @@
+set(TTNN_OP_EXPERIMENTAL_KDA_CHRONOLOGICAL_SELECTIONS_API_HEADERS chronological_selections.hpp)
+set(TTNN_OP_EXPERIMENTAL_KDA_CHRONOLOGICAL_SELECTIONS_SRCS
+    chronological_selections.cpp
+    device/chronological_selections_device_operation.cpp
+    device/chronological_selections_program_factory.cpp
+)
+set(TTNN_OP_EXPERIMENTAL_KDA_CHRONOLOGICAL_SELECTIONS_NANOBIND_SRCS chronological_selections_nanobind.cpp)

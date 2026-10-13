@@ -9,8 +9,11 @@
 namespace ttnn::experimental::prim {
 
 struct QkvCausalConv1dSiluProgramFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
-        const QkvCausalConv1dSiluParams&, const QkvCausalConv1dSiluInputs&, std::vector<Tensor>&);
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
+        const QkvCausalConv1dSiluParams&,
+        const QkvCausalConv1dSiluInputs&,
+        std::vector<Tensor>&,
+        const ttnn::MeshCoordinateRangeSet&);
 };
 
 }  // namespace ttnn::experimental::prim

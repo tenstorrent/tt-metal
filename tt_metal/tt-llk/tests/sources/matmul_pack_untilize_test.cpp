@@ -62,6 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_matmul_<MATH_FIDELITY>(0);
         _llk_math_dest_section_done_<sync, is_fp32_dest_acc_en>();
     }
+    _llk_math_matmul_uninit_();
 }
 
 #endif
@@ -86,6 +87,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_untilize_wrapper_<ct_dim>(L1_ADDRESS(params.buffer_Res[block]), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
         _llk_pack_dest_section_done_<sync, is_fp32_dest_acc_en>();
     }
+    _llk_pack_untilize_uninit_wrapper_(formats.pack_src, FACE_R_DIM);
 }
 
 #endif

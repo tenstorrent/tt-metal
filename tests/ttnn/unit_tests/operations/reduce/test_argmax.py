@@ -245,6 +245,7 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, dtype, error_
     assert_equal(torch_result, ttnn_result)
 
 
+@pytest.mark.merge_gate
 def test_argmax_nc_ties_first_index_wins(device):
     """Constant tensor: argmax tie-break must match PyTorch (smallest index wins)."""
     t = torch.full([4, 3, 64, 64], 1.0, dtype=torch.bfloat16)
@@ -256,6 +257,7 @@ def test_argmax_nc_ties_first_index_wins(device):
         assert_equal(ref, ttnn.to_torch(ttnn.from_device(out)).to(torch.int32))
 
 
+@pytest.mark.merge_gate
 def test_argmax_nc_preallocated_output(device):
     torch.manual_seed(0)
     t = torch.randn(2, 3, 64, 64, dtype=torch.float32)
@@ -266,6 +268,39 @@ def test_argmax_nc_preallocated_output(device):
     ttnn_out = ttnn.zeros(list(out_shape), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     result = ttnn.argmax(ttnn_in, dim=1, keepdim=True, output_tensor=ttnn_out)
     assert_equal(ref, ttnn.to_torch(ttnn.from_device(result)).to(torch.int32))
+
+
+@pytest.mark.merge_gate
+def test_argmax_nc_program_cache(device):
+    """NC argmax cache hit: a second call with a new same-spec input and preallocated output stays correct.
+
+    The max sits on a different channel in each input, so a stale reader address returns the first
+    result. Both device tensors are kept alive so the allocator cannot hand those buffers back.
+    """
+    device.clear_program_cache()
+    device.enable_program_cache()
+
+    def run(winner):
+        torch_tensor = torch.full((2, 4, 64, 64), -1.0, dtype=torch.bfloat16)
+        torch_tensor[:, winner, :, :] = 1.0
+        ref = torch.argmax(torch_tensor, dim=1, keepdim=True)
+        ttnn_in = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.TILE_LAYOUT)
+        ttnn_in = ttnn.fill_implicit_tile_padding(ttnn_in, TEST_PADDING_VALUE)
+        ttnn_out = ttnn.zeros(list(ref.shape), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        result = ttnn.argmax(ttnn_in, dim=1, keepdim=True, output_tensor=ttnn_out)
+        return ref, ttnn_in, result
+
+    base = device.num_program_cache_entries()
+    ref1, input1, output1 = run(0)
+    after_first = device.num_program_cache_entries()
+    assert after_first > base, "first NC argmax must miss the program cache"
+
+    ref2, input2, output2 = run(3)
+    assert device.num_program_cache_entries() == after_first, "second NC argmax must hit the program cache"
+    assert input1.shape == input2.shape
+
+    assert_equal(ref1, ttnn.to_torch(ttnn.from_device(output1)).to(torch.int32))
+    assert_equal(ref2, ttnn.to_torch(ttnn.from_device(output2)).to(torch.int32))
 
 
 @pytest.mark.timeout(120, method="thread")
@@ -462,3 +497,132 @@ def test_argmax_enable_secondary_dm_split_ineligible(device, expect_error, kwarg
     ttnn_in = ttnn.from_torch(t, device=device, layout=RM)
     with expect_error(RuntimeError, "enable_secondary_dm needs at least two output rows"):
         ttnn.argmax(ttnn_in, enable_secondary_dm=True, **kwargs)
+
+
+def test_argmax_preallocated_output_wrong_shape_rejected(device, expect_error):
+    """
+    A preallocated output whose page layout does not match the reduction result must be rejected.
+    """
+    torch.manual_seed(0)
+    batch, width = 32, 1024
+    t = torch.randn(1, 1, batch, width, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    bad_out = ttnn.zeros([1, 1, 1, batch], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Preallocated output tensor is not page-compatible"):
+        ttnn.argmax(ttnn_in, dim=3, keepdim=True, output_tensor=bad_out)
+
+
+def test_argmax_preallocated_output_rank4_buffer_keepdim_false(device):
+    """Verify keepdim=False accepts a physically compatible rank-4 preallocated output."""
+    torch.manual_seed(0)
+    batch, width = 32, 1024
+    t = torch.randn(1, 1, batch, width, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    out = ttnn.zeros([1, 1, 1, batch], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    result = ttnn.argmax(ttnn_in, dim=-1, keepdim=False, output_tensor=out)
+
+    got = ttnn.to_torch(ttnn.from_device(result)).reshape(-1).to(torch.int32)
+    assert_equal(torch.argmax(t, dim=-1).reshape(-1), got)
+
+
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_argmax_preallocated_output_multicore(device, keepdim):
+    """The correctly shaped preallocated output still works on the ROW_MAJOR multicore path."""
+    torch.manual_seed(0)
+    batch, width = 32, 1024
+    t = torch.randn(1, 1, batch, width, dtype=torch.bfloat16)
+    ref = torch.argmax(t, dim=3, keepdim=keepdim)
+
+    ttnn_in = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    out = ttnn.zeros(list(ref.shape), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    result = ttnn.argmax(ttnn_in, dim=3, keepdim=keepdim, output_tensor=out)
+
+    assert_equal(ref, ttnn.to_torch(ttnn.from_device(result)).to(torch.int32))
+
+
+BF16_BITS = {
+    "1.0": 0x3F80,
+    "-1.0": 0xBF80,
+    "2.0": 0x4000,
+    "+nan": 0x7FC0,
+    "-nan": 0xFFC0,
+    "+inf": 0x7F80,
+    "+0": 0x0000,
+    "-0": 0x8000,
+    "fill": 0xF14A,
+}
+FP32_BITS = {
+    "1.0": 0x3F800000,
+    "-1.0": 0xBF800000,
+    "2.0": 0x40000000,
+    "+nan": 0x7FC00000,
+    "-nan": 0xFFC00000,
+    "+inf": 0x7F800000,
+    "+0": 0x00000000,
+    "-0": 0x80000000,
+    "fill": 0xF1000000,
+}
+
+
+def _from_bits(patterns, dtype):
+    """Build a tensor with exact bit patterns; a python float cannot express a negative NaN in bf16."""
+    if dtype == torch.bfloat16:
+        signed = [p - 0x10000 if p > 0x7FFF else p for p in patterns]
+        return torch.tensor(signed, dtype=torch.int16).view(torch.bfloat16)
+    signed = [p - 0x100000000 if p > 0x7FFFFFFF else p for p in patterns]
+    return torch.tensor(signed, dtype=torch.int32).view(torch.float32)
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize(
+    "layout, dim",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, -1),
+        (ttnn.TILE_LAYOUT, -1),
+        (ttnn.TILE_LAYOUT, -2),
+    ],
+)
+@pytest.mark.parametrize(
+    "values",
+    [
+        ["1.0", "+nan", "2.0"],
+        ["1.0", "-nan", "2.0"],
+        ["+nan", "1.0"],
+        ["1.0", "+inf", "+nan"],
+        ["1.0", "+nan", "+inf"],
+        ["+nan", "-nan", "1.0"],
+        ["-nan", "+nan", "1.0"],
+        ["-0", "+0"],
+        ["+0", "-0"],
+        ["1.0", "1.0"],
+    ],
+)
+def test_argmax_nan_and_signed_zero_matches_torch(device, values, dtype, layout, dim):
+    table = BF16_BITS if dtype == torch.bfloat16 else FP32_BITS
+    height, width = 32, 64
+    patterns = [table["fill"]] * (height * width)
+    for i, v in enumerate(values):
+        patterns[i if dim == -1 else i * width] = table[v]
+    t = _from_bits(patterns, dtype).reshape(height, width)
+
+    ttnn_t = ttnn.from_torch(t, device=device, layout=layout)
+    got = ttnn.to_torch(ttnn.from_device(ttnn.argmax(ttnn_t, dim=dim))).reshape(-1)
+    assert_equal(torch.argmax(t, dim=dim), got.to(torch.int32))
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("early, late", [(16, 64), (32, 64)])
+@pytest.mark.parametrize("base, lo, hi", [("1.0", "-nan", "+nan"), ("-1.0", "-0", "+0")])
+def test_argmax_reduce_all_first_index_wins_across_cores(device, dtype, early, late, base, lo, hi):
+    """reduce_all merges in core-id order, not index order: the globally-first winner must still win."""
+    table = BF16_BITS if dtype == torch.bfloat16 else FP32_BITS
+    patterns = [table[base]] * 128
+    patterns[early] = table[lo]
+    patterns[late] = table[hi]
+    t = _from_bits(patterns, dtype).reshape(2, 64)
+
+    ttnn_t = ttnn.from_torch(t, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    got = int(ttnn.to_torch(ttnn.from_device(ttnn.argmax(ttnn_t))).reshape(-1)[0])
+    assert got == int(torch.argmax(t.reshape(-1))) == early, f"expected {early}, got {got}"

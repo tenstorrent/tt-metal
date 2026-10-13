@@ -134,20 +134,14 @@ class WarmupForwardMixin:
                 enable_trace=enable_trace,
                 read_from_device=read_from_device,
                 sampling_params=param,
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=param is not None,
+                # Warmup has no request-owned prompt/output history. The old
+                # reset_batch=False path compiled each sampling configuration
+                # without rebuilding penalty state; preserve that behavior.
+                reset_sampling_state=False,
             )
-            if getattr(self, "decode_input_update_contract", 0):
-                decode_kwargs.update(
-                    reload_inputs=True,
-                    reload_page_table=False,
-                    reload_sampling_params=param is not None,
-                    # Warmup has no request-owned prompt/output history, so
-                    # each configuration compiles without rebuilding penalty state.
-                    reset_sampling_state=False,
-                )
-            else:
-                # Adapters without the explicit decode contract (Galaxy, DeepSeek,
-                # Qwen3.6) only accept the reset_batch call shape.
-                decode_kwargs.update(reset_batch=True, prompt_tokens=tokens)
             if skip_trace_precompile:
                 decode_kwargs["skip_trace_precompile"] = True
             if not enable_trace and hasattr(self, "_prepare_decode_trace_variant"):

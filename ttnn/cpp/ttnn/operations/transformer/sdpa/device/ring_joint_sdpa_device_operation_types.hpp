@@ -173,7 +173,18 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> slot_id;
     std::optional<Tensor> kv_actual_isl;
 
+    // Trace-safe transport for logical_n / logical_l (opt-in, independent of the metadata path above):
+    // single-valued uint32/int32 device tensors read on-device each dispatch. When set, the matching
+    // RingJointSDPAParams scalar is a worst-case capacity placeholder (the padded ring total), so every
+    // host-side derivation stays valid and the kernels narrow it per dispatch.
+    std::optional<Tensor> logical_n_tensor;
+    std::optional<Tensor> logical_l_tensor;
+
     bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
+
+    bool has_logical_n_tensor() const { return logical_n_tensor.has_value(); }
+
+    bool has_logical_l_tensor() const { return logical_l_tensor.has_value(); }
 
     // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.
@@ -188,9 +199,14 @@ struct RingJointSDPAInputs {
     // whole slabs, and at least two of them, before this is read).
     uint32_t kv_slab_count() const { return local_kv_seq_len() / static_cast<uint32_t>(input_q.logical_shape()[2]); }
 
-    // Latent-V optimization: absent V means the reader reuses K's buffer
-    // and reads the first vDHt head-dim tiles (V's logical head dim).
+    // Latent V: V is omitted and read from K's rows (a prefix of K, or its last vDHt columns when packed).
     bool has_latent_v() const { return !input_v.has_value(); }
+
+    // Packed latent V: K rows are wider than Q's head dim; QK reads K's first DH columns and V its last VDH columns.
+    bool has_packed_kv() const { return has_latent_v() && input_k.logical_shape()[3] > input_q.logical_shape()[3]; }
+
+    // Latent V copied from the K chunk in L1.
+    bool v_shares_k_buffer() const { return has_latent_v() && !has_packed_kv(); }
 
     uint32_t v_num_heads() const {
         return input_v.has_value() ? static_cast<uint32_t>(input_v->logical_shape()[1])

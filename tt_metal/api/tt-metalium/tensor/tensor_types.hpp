@@ -70,6 +70,13 @@ tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat);
 
 /**
+ * Returns the format to declare a CB when moving a tensor of this dtype through the unpacker/packer.
+ *
+ *This differs from datatype_to_dataformat_converter only for INT8.
+ */
+tt::DataFormat cb_dataformat_for(DataType datatype);
+
+/**
  * Returns tile size of given data type in bytes.
  *
  * Equivalent to tt::tile_size(datatype_to_dataformat_converter(dtype)).

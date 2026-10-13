@@ -80,6 +80,9 @@ void kernel_main() {
     constexpr auto cb_out_id = tt::CBIndex::c_2;
 
     constexpr auto cb_post_lhs_id = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id;
+    static_assert(
+        cb_post_lhs_id == BINARY_FPU_SRCA_FORMAT_CB,
+        "binary_ng: FPU SrcA startup operand disagrees with the preprocessing restore reference");
     constexpr auto cb_post_rhs_id = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id;
 
     compute_kernel_hw_startup(cb_post_lhs_id, cb_post_rhs_id, cb_out_id);

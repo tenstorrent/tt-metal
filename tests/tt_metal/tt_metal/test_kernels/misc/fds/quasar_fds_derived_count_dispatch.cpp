@@ -42,7 +42,7 @@ void kernel_main() {
     }
 
     overlay::FdsDispatch::fds_clear_go();
-    overlay::FdsDispatch::fds_go(/*ad_enable=*/false, group_id);
+    overlay::FdsDispatch::fds_go(group_id);
 
     uint32_t result = kComplete;
 

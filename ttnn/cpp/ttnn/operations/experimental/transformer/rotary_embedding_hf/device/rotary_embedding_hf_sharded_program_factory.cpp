@@ -53,7 +53,7 @@ ProgramDescriptor create_single_tile_decode_descriptor(
     const uint32_t n_heads_per_batch_t = input.padded_shape()[2] / constants::TILE_HEIGHT;
     constexpr uint32_t head_dim_t = 1;
 
-    tt_metal::IDevice* device = input.device();
+    tt_metal::distributed::MeshDevice* device = input.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
@@ -242,7 +242,7 @@ ProgramDescriptor create_multi_tile_decode_descriptor(
     const uint32_t n_heads_per_batch_t = input.padded_shape()[2] / constants::TILE_HEIGHT;
     const uint32_t head_dim_t = shard_spec->shape[1] / constants::TILE_WIDTH;
 
-    tt_metal::IDevice* device = input.device();
+    tt_metal::distributed::MeshDevice* device = input.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);

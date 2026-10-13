@@ -37,7 +37,11 @@ class FabricBuilderContext;
  */
 class FabricBuilder {
 public:
-    FabricBuilder(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program, FabricContext& fabric_context);
+    FabricBuilder(
+        tt::tt_metal::IDevice* device,
+        tt::tt_metal::Program& program,
+        FabricContext& fabric_context,
+        CoreType dispatch_core_type);
 
     /**
      * Discover active ethernet channels and neighbors for this device.
@@ -121,6 +125,7 @@ private:
     tt::tt_metal::Program& program_;
     FabricContext& fabric_context_;
     FabricBuilderContext& builder_context_;
+    CoreType dispatch_core_type_;
 
     // Fabric node ID for this device (derived from device_->id())
     FabricNodeId local_node_;

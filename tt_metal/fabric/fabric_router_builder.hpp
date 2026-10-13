@@ -9,6 +9,7 @@
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>  // FabricNodeId
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>         // Topology
 #include <hostdevcommon/fabric_common.h>                                // chan_id_t
+#include <umd/device/types/core_coordinates.hpp>                        // CoreType
 
 namespace tt::tt_metal {
 class IDevice;
@@ -16,6 +17,8 @@ class Program;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
+
+class FabricContext;
 
 // ============ Router Location ============
 
@@ -63,7 +66,8 @@ struct KernelCreationContext {
  * - SwitchMeshRouterBuilder: For switch mesh routers (future, routing-only)
  *
  * Usage:
- *   auto router = FabricRouterBuilder::create(device, program, local_node, location);
+ *   auto router =
+ *       FabricRouterBuilder::create(fabric_context, dispatch_core_type, device, program, local_node, location);
  *   router->configure_connection(*other_router, link_idx, num_links, topology, is_galaxy);
  */
 class FabricRouterBuilder {
@@ -74,6 +78,8 @@ public:
      * Factory method to create the appropriate router builder.
      * Determines router type (compute mesh vs switch mesh) internally based on fabric context.
      *
+     * @param fabric_context The fabric context; must outlive the returned builder
+     * @param dispatch_core_type Core type the device's dispatch runs on
      * @param device The device to build on
      * @param program The fabric program
      * @param local_node The local fabric node ID
@@ -81,6 +87,8 @@ public:
      * @return A unique_ptr to the appropriate FabricRouterBuilder implementation
      */
     static std::unique_ptr<FabricRouterBuilder> create(
+        const FabricContext& fabric_context,
+        CoreType dispatch_core_type,
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         FabricNodeId local_node,
@@ -146,10 +154,11 @@ public:
 
 protected:
     // Protected constructor - only derived classes can construct
-    FabricRouterBuilder(FabricNodeId local_node, const RouterLocation& location) :
-        local_node_(local_node), location_(location) {}
+    FabricRouterBuilder(const FabricContext& fabric_context, FabricNodeId local_node, const RouterLocation& location) :
+        fabric_context_(fabric_context), local_node_(local_node), location_(location) {}
 
     // Common state shared by all router types
+    const FabricContext& fabric_context_;
     FabricNodeId local_node_;  // Same for all routers on a device
     RouterLocation location_;  // Per-router topological info (eth_chan, remote_node, direction, is_dispatch)
 };

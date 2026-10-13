@@ -13,14 +13,15 @@ Named runtime arguments (args::)
   source_read_size_bytes, read_start_page, read_end_page, write_start_page, write_start_offset, nop
 
 Resource bindings
-  dfb::in0, dfb::in1      -- source staging (src0) / dest staging (src1) L1 rings
+  scratch::in0, scratch::in1 -- source / dest staging L1 regions (bound to src0/src1 on the
+                               reader instance, src2/src3 on the writer instance)
   tensor::src, tensor::dst -- input / output tensors (base addresses auto-injected)
 */
 #include <stdint.h>
 #include "experimental/kernel_args.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
@@ -77,14 +78,10 @@ void kernel_main() {
     uint32_t readable = 0;
     uint32_t end_to_write = 0;
     uint32_t writable = dest_page_size_bytes - write_start_offset;
-    DataflowBuffer dfb_in0(dfb::in0);
-    DataflowBuffer dfb_in1(dfb::in1);
-    dfb_in0.reserve_back(1);
-    dfb_in1.reserve_back(1);
-    const uint32_t source_buffer = dfb_in0.get_write_ptr();
-    const uint32_t dest_buffer = dfb_in1.get_write_ptr();
-    dfb_in1.push_back(1);
-    dfb_in0.push_back(1);
+    Scratchpad<uint8_t> source_scratch(scratch::in0);
+    Scratchpad<uint8_t> dest_scratch(scratch::in1);
+    const uint32_t source_buffer = source_scratch.get_base_address();
+    const uint32_t dest_buffer = dest_scratch.get_base_address();
 
     uint64_t dst_noc_addr = d.get_noc_addr(write_page);
     uint64_t write_offset = (dst_noc_addr & OFFSET_16) + write_start_offset;
@@ -97,7 +94,7 @@ void kernel_main() {
 
     for (uint32_t i = read_start_page; i < read_end_page; i++) {
         // Drain any prior iteration's writes that read source_buffer before this iteration's read
-        // overwrites it: source_buffer is a single fixed DFB slot reused every iteration, and the
+        // overwrites it: source_buffer is a single fixed scratchpad region reused every iteration, and the
         // clean-path enhanced_noc_async_write below reads it asynchronously.  Without this flush the
         // next read can overwrite the slot while the previous write's source-read is still in flight
         // (write-after-read), corrupting the output.  Uses the object-noc flush to match the writes.

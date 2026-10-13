@@ -67,11 +67,14 @@ void kernel_main() {
     // 0 == compact (page index unchanged).
     constexpr uint32_t output_pad_h = get_compile_time_arg_val(26);
     constexpr uint32_t output_pad_w = get_compile_time_arg_val(27);
+    constexpr uint32_t cb_weight_lo_tiled = get_compile_time_arg_val(28);
+    constexpr bool operand_split = get_compile_time_arg_val(29) == 1;
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t weight_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t bias_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t weight_lo_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t c_in_block_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t c_in_block_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t c_out_block_start = get_arg_val<uint32_t>(argidx++);
@@ -101,6 +104,7 @@ void kernel_main() {
     Noc noc;
     experimental::CB cb_out(cb_matmul_result_rm);
     experimental::CB cb_weight(cb_weight_tiled);
+    experimental::CB cb_weight_lo(operand_split ? cb_weight_lo_tiled : cb_weight_tiled);
     experimental::CB cb_bias(cb_bias_tiled);
     experimental::CB cb_interm(cb_matmul_interm_tiled);
     experimental::CB cb_reduction(cb_reduction_tiled);
@@ -123,12 +127,14 @@ void kernel_main() {
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
     constexpr uint32_t partials_tile_bytes = get_tile_size(cb_matmul_interm_tiled);
-    constexpr auto out_args = TensorAccessorArgs<28>();
+    constexpr auto out_args = TensorAccessorArgs<30>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
+    constexpr auto weight_lo_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr);
     const auto weight_reader = TensorAccessor(weight_args, weight_addr);
     const auto bias_reader = TensorAccessor(bias_args, bias_addr);
+    const auto weight_lo_reader = TensorAccessor(weight_lo_args, weight_lo_addr);
 
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
@@ -262,6 +268,12 @@ void kernel_main() {
                     read_weight_block<tile_bytes, matmul_K_t, matmul_N_t, C_out_t>(
                         noc, weight_reader, cb_weight, c_in_offset_t, c_out_offset_t);
                     cb_weight.push_back(weight_tiles);
+                    if constexpr (operand_split) {
+                        cb_weight_lo.reserve_back(weight_tiles);
+                        read_weight_block<tile_bytes, matmul_K_t, matmul_N_t, C_out_t>(
+                            noc, weight_lo_reader, cb_weight_lo, c_in_offset_t, c_out_offset_t);
+                        cb_weight_lo.push_back(weight_tiles);
+                    }
                 }
 
                 if constexpr (use_bias) {

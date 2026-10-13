@@ -38,7 +38,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.use_module_device({"l1_small_size": 24576, "trace_region_size": 2_000_000}),
+    pytest.mark.use_module_device({"l1_small_size": 24576}),
 ]
 
 
@@ -188,6 +188,7 @@ def test_recurrent_chunk_scan_work_golden() -> None:
     ],
 )
 def test_recurrent_chunk_scan_contract_and_trace(
+    zero_actual_start,
     device: ttnn.Device,
     batch_heads: int,
     num_chunks: int,
@@ -206,7 +207,7 @@ def test_recurrent_chunk_scan_contract_and_trace(
     assert_runtime_contract(
         device,
         (*inputs, state),
-        lambda: run_recurrent(inputs, state, memory_config=output_memory),
+        lambda: run_recurrent(inputs, state, memory_config=output_memory, actual_start=zero_actual_start),
         expected,
         names=("token_output", "final_state"),
         dtypes=(ttnn.bfloat16, ttnn.float32),
@@ -262,12 +263,12 @@ def _production_compute_config(device: ttnn.Device) -> ttnn.DeviceComputeKernelC
     )
 
 
-def test_recurrent_chunk_scan_is_device_deterministic(device: ttnn.Device) -> None:
+def test_recurrent_chunk_scan_is_device_deterministic(zero_actual_start, device: ttnn.Device) -> None:
     case = _REGRESSION_CASE
     host_inputs, host_state, inputs, state = _regression_inputs(device, protocol_seed=1441, state_seed=1442)
     expected = recurrent_oracle(host_inputs, host_state)
     reference, outputs, mismatch_marker = collect_accuracy_and_determinism_results(
-        device, lambda: run_recurrent(inputs, state)
+        device, lambda: run_recurrent(inputs, state, actual_start=zero_actual_start)
     )
     assert_equal(
         torch.zeros_like(mismatch_marker),
@@ -287,15 +288,14 @@ def test_recurrent_chunk_scan_is_device_deterministic(device: ttnn.Device) -> No
 
 
 def test_recurrent_chunk_scan_cache_hit_rebinds_fresh_tensors(
-    device: ttnn.Device, isolated_program_cache: None
+    zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
-    case = _REGRESSION_CASE
     host_a, state_a_host, inputs_a, state_a = _regression_inputs(device, protocol_seed=1911, state_seed=1913)
     host_b, state_b_host, inputs_b, state_b = _regression_inputs(device, protocol_seed=1912, state_seed=1914)
-    outputs_a = run_recurrent(inputs_a, state_a)
+    outputs_a = run_recurrent(inputs_a, state_a, actual_start=zero_actual_start)
     ttnn.synchronize_device(device)
     entries = device.num_program_cache_entries()
-    outputs_b = run_recurrent(inputs_b, state_b)
+    outputs_b = run_recurrent(inputs_b, state_b, actual_start=zero_actual_start)
     ttnn.synchronize_device(device)
 
     assert device.num_program_cache_entries() == entries
@@ -317,11 +317,10 @@ def test_recurrent_chunk_scan_cache_hit_rebinds_fresh_tensors(
 
 
 def test_recurrent_chunk_scan_default_compute_config_matches_explicit_defaults(
-    device: ttnn.Device, isolated_program_cache: None
+    zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
-    case = _REGRESSION_CASE
     _, _, inputs, state = _regression_inputs(device, protocol_seed=817, state_seed=817)
-    implicit = run_recurrent(inputs, state)
+    implicit = run_recurrent(inputs, state, actual_start=zero_actual_start)
     entries = device.num_program_cache_entries()
     explicit_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -332,18 +331,17 @@ def test_recurrent_chunk_scan_default_compute_config_matches_explicit_defaults(
         dst_full_sync_en=False,
         throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
     )
-    explicit = run_recurrent(inputs, state, compute_kernel_config=explicit_config)
+    explicit = run_recurrent(inputs, state, compute_kernel_config=explicit_config, actual_start=zero_actual_start)
     assert device.num_program_cache_entries() == entries
     for name, implicit_tt, explicit_tt in zip(("token_output", "final_state"), implicit, explicit, strict=True):
         assert_bit_identical(ttnn.to_torch(implicit_tt), ttnn.to_torch(explicit_tt), name=f"{name} explicit defaults")
 
 
 def test_recurrent_chunk_scan_approximate_math_uses_distinct_accurate_program(
-    device: ttnn.Device, isolated_program_cache: None
+    zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
-    case = _REGRESSION_CASE
     host_inputs, host_state, inputs, state = _regression_inputs(device, protocol_seed=818, state_seed=818)
-    exact = run_recurrent(inputs, state)
+    exact = run_recurrent(inputs, state, actual_start=zero_actual_start)
     entries = device.num_program_cache_entries()
     approximate_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -352,7 +350,7 @@ def test_recurrent_chunk_scan_approximate_math_uses_distinct_accurate_program(
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
-    approximate = run_recurrent(inputs, state, compute_kernel_config=approximate_config)
+    approximate = run_recurrent(inputs, state, compute_kernel_config=approximate_config, actual_start=zero_actual_start)
     assert device.num_program_cache_entries() == entries + 1
     expected = recurrent_oracle(host_inputs, host_state)
     assert_outputs_accurate(expected, exact, names=("token_output", "final_state"), context="exact recurrent math")
@@ -364,28 +362,29 @@ def test_recurrent_chunk_scan_approximate_math_uses_distinct_accurate_program(
     )
 
 
-def test_recurrent_chunk_scan_rejects_unsupported_compute_config(device: ttnn.Device, expect_error: Callable) -> None:
-    case = _REGRESSION_CASE
+def test_recurrent_chunk_scan_rejects_unsupported_compute_config(
+    zero_actual_start, device: ttnn.Device, expect_error: Callable
+) -> None:
     _, _, inputs, state = _regression_inputs(device, protocol_seed=819, state_seed=819)
     unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         packer_l1_acc=True,
     )
     with expect_error(RuntimeError, "packer_l1_acc=true is unsupported"):
-        run_recurrent(inputs, state, compute_kernel_config=unsupported_config)
+        run_recurrent(inputs, state, compute_kernel_config=unsupported_config, actual_start=zero_actual_start)
 
 
 @pytest.mark.requires_host_iommu
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_recurrent_chunk_scan_regression_performance(device: ttnn.Device) -> None:
+def test_recurrent_chunk_scan_regression_performance(zero_actual_start, device: ttnn.Device) -> None:
     case = _REGRESSION_CASE
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for recurrent chunk-scan performance checks")
     _, _, inputs, state = _regression_inputs(device, protocol_seed=117, state_seed=117)
 
     def run() -> list[ttnn.Tensor]:
-        return run_recurrent(inputs, state)
+        return run_recurrent(inputs, state, actual_start=zero_actual_start)
 
     outputs, perf_record = profile_realtime_program(device, run)
     duration_ns = perf_record["duration_ns"]
@@ -421,7 +420,7 @@ def test_recurrent_chunk_scan_regression_performance(device: ttnn.Device) -> Non
 @pytest.mark.requires_host_iommu
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_recurrent_chunk_scan_production_performance(device: ttnn.Device) -> None:
+def test_recurrent_chunk_scan_production_performance(zero_actual_start, device: ttnn.Device) -> None:
     case = _PRODUCTION_CASE
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for recurrent chunk-scan performance checks")
@@ -434,6 +433,7 @@ def test_recurrent_chunk_scan_production_performance(device: ttnn.Device) -> Non
             state,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=compute_config,
+            actual_start=zero_actual_start,
         )
 
     outputs, perf_record = profile_realtime_program(device, run)
@@ -470,7 +470,7 @@ def test_recurrent_chunk_scan_production_performance(device: ttnn.Device) -> Non
 
 @pytest.mark.parametrize("host_index", range(7))
 def test_recurrent_chunk_scan_rejects_host_protocol_inputs(
-    device: ttnn.Device, expect_error: Callable, host_index: int
+    zero_actual_start, device: ttnn.Device, expect_error: Callable, host_index: int
 ) -> None:
     host_inputs = host_protocol(2, 2, 32, 32)
     inputs = list(device_protocol(host_inputs, device))
@@ -479,14 +479,16 @@ def test_recurrent_chunk_scan_rejects_host_protocol_inputs(
     inputs[host_index] = ttnn.from_torch(host, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     state = to_device(initial_state(2, 32, 32), device)
     with expect_error(RuntimeError, f"{PROTOCOL_NAMES[host_index]} must be an allocated device tensor"):
-        run_recurrent(tuple(inputs), state)
+        run_recurrent(tuple(inputs), state, actual_start=zero_actual_start)
 
 
-def test_recurrent_chunk_scan_rejects_host_initial_state(device: ttnn.Device, expect_error: Callable) -> None:
+def test_recurrent_chunk_scan_rejects_host_group_entry_states(
+    zero_actual_start, device: ttnn.Device, expect_error: Callable
+) -> None:
     inputs = device_protocol(host_protocol(2, 2, 32, 32), device)
     state = ttnn.from_torch(initial_state(2, 32, 32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-    with expect_error(RuntimeError, "initial_state must be an allocated device tensor"):
-        run_recurrent(inputs, state)
+    with expect_error(RuntimeError, "group_entry_states must be an allocated device tensor"):
+        run_recurrent(inputs, state, actual_start=zero_actual_start)
 
 
 @pytest.mark.parametrize(
@@ -502,14 +504,14 @@ def test_recurrent_chunk_scan_rejects_host_initial_state(device: ttnn.Device, ex
         ("key_alignment", "K and V must be positive and tile aligned"),
         ("value_alignment", "K and V must be positive and tile aligned"),
         ("sharded", "v_beta must use interleaved memory"),
-        ("state_dtype", "initial_state must be FLOAT32"),
-        ("state_rank", "initial_state must be rank 3"),
-        ("state_shape", "initial_state shape mismatch"),
+        ("state_dtype", "group_entry_states must be FLOAT32"),
+        ("state_rank", "group_entry_states must be rank 3"),
+        ("state_shape", "group_entry_states shape mismatch"),
         ("output_sharded", "output memory layout must be INTERLEAVED, got HEIGHT_SHARDED"),
     ],
 )
 def test_recurrent_chunk_scan_rejects_invalid_inputs(
-    device: ttnn.Device, expect_error: Callable, case: str, message: str
+    zero_actual_start, device: ttnn.Device, expect_error: Callable, case: str, message: str
 ) -> None:
     host_inputs = list(host_protocol(2, 2, 32, 32))
     inputs = list(device_protocol(host_inputs, device))
@@ -545,22 +547,28 @@ def test_recurrent_chunk_scan_rejects_invalid_inputs(
     elif case == "output_sharded":
         memory_config = one_core_height_sharded((128, 32))
     with expect_error(RuntimeError, message):
-        run_recurrent(tuple(inputs), state, memory_config=memory_config)
+        run_recurrent(tuple(inputs), state, memory_config=memory_config, actual_start=zero_actual_start)
 
 
-def test_recurrent_chunk_scan_requires_initial_state(device: ttnn.Device, expect_error: Callable) -> None:
+def test_recurrent_chunk_scan_requires_group_entry_states(
+    zero_actual_start, device: ttnn.Device, expect_error: Callable
+) -> None:
     inputs = device_protocol(host_protocol(2, 2, 32, 32), device)
     with expect_error(TypeError, "incompatible function arguments"):
-        ttnn.experimental.kda.recurrent_chunk_scan(*inputs)
+        ttnn.experimental.kda.recurrent_chunk_scan(
+            *inputs, actual_start=zero_actual_start, tail_entry_states=to_device(initial_state(2, 32, 32), device)
+        )
 
 
 @pytest.mark.parametrize(
     "removed_keyword", ["chunk_size", "state_only", "identity_tile", "summary_pair", "output_bf16"]
 )
 def test_recurrent_chunk_scan_does_not_expose_prototype_modes(
-    device: ttnn.Device, expect_error: Callable, removed_keyword: str
+    zero_actual_start, device: ttnn.Device, expect_error: Callable, removed_keyword: str
 ) -> None:
     inputs = device_protocol(host_protocol(2, 2, 32, 32), device)
     state = to_device(initial_state(2, 32, 32), device)
     with expect_error(TypeError, "incompatible function arguments"):
-        ttnn.experimental.kda.recurrent_chunk_scan(*inputs, state, **{removed_keyword: True})
+        ttnn.experimental.kda.recurrent_chunk_scan(
+            *inputs, state, actual_start=zero_actual_start, tail_entry_states=state, **{removed_keyword: True}
+        )

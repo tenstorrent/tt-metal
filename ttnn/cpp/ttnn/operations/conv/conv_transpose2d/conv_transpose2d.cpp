@@ -1255,6 +1255,7 @@ ConvTranspose2dResultWithOptions conv_transpose2d(
     bool return_output_dim,
     bool return_weights_and_bias) {
     using namespace operations::conv::conv_transpose2d;
+    operations::conv::validate_stride(stride);
     // Determine execution path based on configuration and input properties
     ConvT2dExecutionPath path = determine_conv_transpose2d_execution_path(input_tensor, dram_slice_config_);
 

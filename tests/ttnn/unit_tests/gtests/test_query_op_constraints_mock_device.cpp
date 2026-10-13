@@ -48,8 +48,8 @@ protected:
     std::shared_ptr<distributed::MeshDevice> mock_device_;
 
     void SetUp() override {
-        mock_env_ = std::make_unique<MetalEnv>(
-            MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)));
+        mock_env_ = std::make_unique<MetalEnv>(MetalEnvDescriptor{
+            .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)});
         auto mesh_shape = mock_env_->get_system_mesh().shape();
         mock_device_ = mock_env_->create_mesh_device(distributed::MeshDeviceConfig(mesh_shape));
         ASSERT_GT(mock_device_->num_devices(), 0u);
@@ -346,14 +346,15 @@ TEST_F(QueryOpConstraintsMockDevice, Matmul) {
         false,  // transpose_b
         ttnn::L1_MEMORY_CONFIG,
         DataType::BFLOAT16,
-        std::nullopt,   // program_config
-        std::nullopt,   // activation
-        std::nullopt,   // compute_kernel_config
-        std::nullopt,   // core_grid
-        std::nullopt,   // output_tile
-        std::nullopt,   // optional_output_tensor
-        std::nullopt,   // global_cb
-        std::nullopt);  // sub_device_id
+        std::nullopt,                 // program_config
+        std::nullopt,                 // activation
+        std::nullopt,                 // compute_kernel_config
+        std::nullopt,                 // core_grid
+        std::nullopt,                 // output_tile
+        std::nullopt,                 // optional_output_tensor
+        std::nullopt,                 // global_cb
+        std::nullopt,                 // sub_device_id
+        ttnn::PrefetcherPipeList{});  // prefetcher_pipes
 
     EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
     EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 0u);
@@ -390,14 +391,15 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulProgramConfigCaptured) {
         false,  // transpose_b
         ttnn::L1_MEMORY_CONFIG,
         DataType::BFLOAT16,
-        std::nullopt,   // program_config
-        std::nullopt,   // activation
-        std::nullopt,   // compute_kernel_config
-        std::nullopt,   // core_grid
-        std::nullopt,   // output_tile
-        std::nullopt,   // optional_output_tensor
-        std::nullopt,   // global_cb
-        std::nullopt);  // sub_device_id
+        std::nullopt,                 // program_config
+        std::nullopt,                 // activation
+        std::nullopt,                 // compute_kernel_config
+        std::nullopt,                 // core_grid
+        std::nullopt,                 // output_tile
+        std::nullopt,                 // optional_output_tensor
+        std::nullopt,                 // global_cb
+        std::nullopt,                 // sub_device_id
+        ttnn::PrefetcherPipeList{});  // prefetcher_pipes
 
     EXPECT_EQ(out.response.status, ttnn::graph::ExecutionStatus::Success)
         << "Error: " << out.response.error_message.value_or("none");
@@ -426,7 +428,8 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulProgramConfigCaptured) {
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        std::nullopt);
+        std::nullopt,
+        ttnn::PrefetcherPipeList{});
 
     EXPECT_EQ(verify.response.status, ttnn::graph::ExecutionStatus::Success)
         << "Error: " << verify.response.error_message.value_or("none");
@@ -470,14 +473,15 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedProgramConfigCaptured) {
         false,          // transpose_b
         width_sharded,  // width-sharded output memory config
         DataType::BFLOAT16,
-        std::nullopt,   // program_config — let ttnn auto-select
-        std::nullopt,   // activation
-        std::nullopt,   // compute_kernel_config
-        std::nullopt,   // core_grid
-        std::nullopt,   // output_tile
-        std::nullopt,   // optional_output_tensor
-        std::nullopt,   // global_cb
-        std::nullopt);  // sub_device_id
+        std::nullopt,                 // program_config — let ttnn auto-select
+        std::nullopt,                 // activation
+        std::nullopt,                 // compute_kernel_config
+        std::nullopt,                 // core_grid
+        std::nullopt,                 // output_tile
+        std::nullopt,                 // optional_output_tensor
+        std::nullopt,                 // global_cb
+        std::nullopt,                 // sub_device_id
+        ttnn::PrefetcherPipeList{});  // prefetcher_pipes
 
     EXPECT_EQ(out.response.status, ttnn::graph::ExecutionStatus::Success)
         << "Error: " << out.response.error_message.value_or("none");
@@ -505,7 +509,8 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedProgramConfigCaptured) {
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        std::nullopt);
+        std::nullopt,
+        ttnn::PrefetcherPipeList{});
 
     EXPECT_EQ(verify.response.status, ttnn::graph::ExecutionStatus::Success)
         << "Error: " << verify.response.error_message.value_or("none");
@@ -865,8 +870,8 @@ protected:
             silicon_env_->create_mesh_device(distributed::MeshDeviceConfig(silicon_env_->get_system_mesh().shape()));
         ASSERT_GT(real_device_->num_devices(), 0u);
 
-        mock_env_ = std::make_unique<MetalEnv>(
-            MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)));
+        mock_env_ = std::make_unique<MetalEnv>(MetalEnvDescriptor{
+            .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)});
         mock_device_ =
             mock_env_->create_mesh_device(distributed::MeshDeviceConfig(mock_env_->get_system_mesh().shape()));
         ASSERT_EQ(mock_device_->num_devices(), 1u);

@@ -17,7 +17,11 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    assert_accurate,
+    assert_bit_identical,
+    make_actual_start,
+)
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device]
 
@@ -34,7 +38,7 @@ def _hidden_to_device(hidden: torch.Tensor, device: ttnn.Device) -> ttnn.Tensor:
 
 def _forward(layer: ttKDA, hidden: torch.Tensor, state: KdaState) -> tuple[ttnn.Tensor, KdaState]:
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        return layer.forward(_hidden_to_device(hidden, layer.device), state)
+        return layer.forward(_hidden_to_device(hidden, layer.device), state, make_actual_start(layer.device))
 
 
 def _assert_state_metadata(state: KdaState, config) -> None:
@@ -60,12 +64,12 @@ def test_layer_matches_reference_and_is_deterministic(device: ttnn.Device) -> No
         torch.bfloat16
     )
     golden_output, golden_state = kda_forward_reference(hidden, weights, config)
-    layer = ttKDA(device, config, weights)
+    layer = ttKDA(device, config, weights, active_seq_len=32)
     hidden_tt = _hidden_to_device(hidden, device)
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            output, state = layer.forward(hidden_tt, layer.allocate_state())
+            output, state = layer.forward(hidden_tt, layer.allocate_state(), make_actual_start(layer.device))
         return output, state.recurrent, state.convolution
 
     (output_tt, recurrent_tt, convolution_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
@@ -87,7 +91,7 @@ def test_layer_matches_reference_and_is_deterministic(device: ttnn.Device) -> No
 
 def test_allocate_state_contract(device: ttnn.Device) -> None:
     config = make_small_kda_test_config()
-    layer = ttKDA(device, config, random_weights(config))
+    layer = ttKDA(device, config, random_weights(config), active_seq_len=32)
     first = layer.allocate_state()
     second = layer.allocate_state()
 
@@ -102,7 +106,7 @@ def test_forward_contract(device: ttnn.Device) -> None:
     weights = random_weights(config)
     hidden = torch.randn(1, 64, config.hidden_size, generator=torch.Generator().manual_seed(109)).to(torch.bfloat16)
     golden_output, golden_state = kda_forward_reference(hidden, weights, config)
-    layer = ttKDA(device, config, weights)
+    layer = ttKDA(device, config, weights, active_seq_len=32)
     input_state = layer.allocate_state()
     input_recurrent_before = ttnn.to_torch(input_state.recurrent)
     input_convolution_before = ttnn.to_torch(input_state.convolution)
@@ -159,11 +163,11 @@ def test_layer_rejects_invalid_construction(case: str, device: ttnn.Device, expe
 
     if case == "axes":
         with expect_error(ValueError, "requires distinct 2D SP/TP axes"):
-            ttKDA(device, config, state_dict, sp_axis=0, tp_axis=0)
+            ttKDA(device, config, state_dict, sp_axis=0, tp_axis=0, active_seq_len=32)
     elif case == "weight_sources":
-        weights = ttKDA(device, config, state_dict).weights
+        weights = ttKDA(device, config, state_dict, active_seq_len=32).weights
         with expect_error(ValueError, "either constructed KDAWeights or host state_dict"):
-            ttKDA(device, config, state_dict, weights=weights)
+            ttKDA(device, config, state_dict, weights=weights, active_seq_len=32)
     elif case == "grouped_nonsquare":
         nonsquare_config = replace(config, head_v_dim=64)
         base_program_config = KDAProgramConfig()
@@ -172,9 +176,15 @@ def test_layer_rejects_invalid_construction(case: str, device: ttnn.Device, expe
             recurrence=replace(base_program_config.recurrence, local_scan_strategy="grouped"),
         )
         with expect_error(ValueError, "grouped KDA affine prefix currently requires K == V"):
-            ttKDA(device, nonsquare_config, random_weights(nonsquare_config), program_config=program_config)
+            ttKDA(
+                device,
+                nonsquare_config,
+                random_weights(nonsquare_config),
+                program_config=program_config,
+                active_seq_len=32,
+            )
     else:
-        layer = ttKDA(device, config, state_dict)
+        layer = ttKDA(device, config, state_dict, active_seq_len=32)
         with expect_error(ValueError, "batch_size=1"):
             layer.allocate_state(batch_size=2)
 
@@ -183,6 +193,7 @@ def test_layer_rejects_invalid_construction(case: str, device: ttnn.Device, expe
     "case",
     [
         pytest.param("sequence", id="sequence-must-be-positive-tile-multiple"),
+        pytest.param("physical_length", id="physical-length-must-match-construction"),
         pytest.param("batch", id="forward-requires-batch-one"),
         pytest.param("hidden_width", id="hidden-width-must-match-config"),
         pytest.param("recurrent_shape", id="recurrent-state-shape"),
@@ -193,12 +204,14 @@ def test_layer_rejects_invalid_construction(case: str, device: ttnn.Device, expe
 )
 def test_layer_rejects_invalid_forward(case: str, device: ttnn.Device, expect_error) -> None:
     config = make_small_kda_test_config()
-    layer = ttKDA(device, config, random_weights(config))
+    layer = ttKDA(device, config, random_weights(config), active_seq_len=32)
     hidden_shape = (1, 32, config.hidden_size)
     state = layer.allocate_state()
 
     if case == "sequence":
         hidden_shape, error = (1, 4, config.hidden_size), r"requires local T .* divisible by 32"
+    elif case == "physical_length":
+        hidden_shape, error = (1, 64, config.hidden_size), "does not match constructed"
     elif case == "batch":
         hidden_shape, error = (2, 32, config.hidden_size), "requires batch size 1"
     elif case == "hidden_width":
@@ -254,4 +267,36 @@ def test_layer_rejects_invalid_forward(case: str, device: ttnn.Device, expect_er
 
     hidden = torch.randn(*hidden_shape, generator=torch.Generator().manual_seed(45), dtype=torch.bfloat16)
     with expect_error(ValueError, error):
-        _forward(layer, hidden, state)
+        layer.forward(
+            _hidden_to_device(hidden, device),
+            state,
+            actual_start=make_actual_start(layer.device, 32 if case == "physical_length" else 0),
+        )
+
+
+@pytest.mark.parametrize("actual_start", [0, "0"])
+def test_layer_rejects_non_tensor_actual_start(device: ttnn.Device, actual_start: int | str, expect_error) -> None:
+    config = make_small_kda_test_config()
+    layer = ttKDA(device, config, random_weights(config), active_seq_len=32)
+    hidden = _hidden_to_device(torch.zeros(1, 32, config.hidden_size, dtype=torch.bfloat16), device)
+    with expect_error(TypeError, "actual_start must be a device UINT32 scalar"):
+        layer.forward(hidden, layer.allocate_state(), actual_start=actual_start)
+
+
+@pytest.mark.parametrize(
+    "shape,dtype,layout",
+    [
+        ((2,), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+        ((1,), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        ((1, 1), ttnn.uint32, ttnn.TILE_LAYOUT),
+    ],
+)
+def test_layer_rejects_invalid_actual_start_tensor(
+    device: ttnn.Device, shape: tuple[int, ...], dtype, layout, expect_error
+) -> None:
+    config = make_small_kda_test_config()
+    layer = ttKDA(device, config, random_weights(config), active_seq_len=32)
+    hidden = _hidden_to_device(torch.zeros(1, 32, config.hidden_size, dtype=torch.bfloat16), device)
+    actual_start = ttnn.from_torch(torch.zeros(shape, dtype=torch.int64), device=device, dtype=dtype, layout=layout)
+    with expect_error(ValueError, "device actual_start must be a UINT32 row-major scalar"):
+        layer.forward(hidden, layer.allocate_state(), actual_start)

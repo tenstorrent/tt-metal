@@ -260,4 +260,5 @@ void kernel_main() {
     close_connections(fabric_connection);
 
     noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 }

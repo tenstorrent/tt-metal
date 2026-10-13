@@ -86,6 +86,12 @@ template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION>
 inline void _llk_unpack_reduce_init_(
     const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const TensorShape tensor_shape, const std::uint32_t num_tiles = NUM_TILES)
 {
+    static_assert(
+        POOL_TYPE != PoolType::MIN,
+        "The FPU reduce has no MIN: the unpacker's partial-face fill clears SrcA to zero for every "
+        "pool but MAX, which a min reduce would lose to. Use the SFPU reduce instead "
+        "(ckernel_sfpu_reduce.h::calculate_reduce).");
+
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW));
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);

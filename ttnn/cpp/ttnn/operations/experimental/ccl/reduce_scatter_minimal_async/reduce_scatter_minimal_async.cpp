@@ -31,7 +31,7 @@ ttnn::Tensor reduce_scatter_minimal_async(
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for reduce_scatter_minimal_async operation");
     uint32_t resolved_num_links =
-        num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, cluster_axis));
+        num_links.has_value() ? *num_links : ttnn::operations::ccl::common::get_num_links(*mesh_device, cluster_axis);
 
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;

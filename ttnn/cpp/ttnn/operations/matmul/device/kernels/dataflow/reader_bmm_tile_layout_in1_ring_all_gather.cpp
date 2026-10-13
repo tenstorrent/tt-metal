@@ -51,18 +51,26 @@ static void do_signaling(const Noc& noc, uint32_t& rt_args_idx) {
     const bool is_privilaged = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++)) == 1;
     if (is_privilaged) {
         const uint32_t target_sem_value = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-        const uint32_t multicast_start_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-        const uint32_t multicast_start_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-        const uint32_t multicast_end_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-        const uint32_t multicast_end_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-        const uint32_t num_signalling_semaphores = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
         const uint32_t signalling_semaphore_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+        const uint32_t num_signal_ranges = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
         Semaphore<> sig_sem(signalling_semaphore_id);
         pv_sem.wait(target_sem_value);
         pv_sem.set(1);
-        sig_sem.set(1);
-        sig_sem.set_multicast(
-            noc, multicast_start_x, multicast_start_y, multicast_end_x, multicast_end_y, num_signalling_semaphores);
+        // Only the RS cores own sig_sem, so write it per RS rectangle and never on the rectangles'
+        // bounding box: that box can hold cores of other sub-devices. This core owns no sig_sem slot
+        // either, hence the relay from pv_sem.
+        for (uint32_t r = 0; r < num_signal_ranges; ++r) {
+            const uint32_t start_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+            const uint32_t start_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+            const uint32_t end_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+            const uint32_t end_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+            const uint32_t num_dests = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+            if (num_dests == 1) {
+                pv_sem.relay_unicast(noc, sig_sem, start_x, start_y);
+            } else {
+                pv_sem.relay_multicast(noc, sig_sem, start_x, start_y, end_x, end_y, num_dests);
+            }
+        }
     } else {
         pv_sem.up(noc, pv_core_x, pv_core_y, 1);
         noc.async_atomic_barrier();

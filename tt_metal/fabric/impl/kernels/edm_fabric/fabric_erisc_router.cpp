@@ -32,7 +32,7 @@
 #include "noc_overlay_parameters.h"
 #include "api/alignment.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
-#include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdevcommon/fabric_telemetry_msgs.h"
 #ifdef FABRIC_2D
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edge_node_router.hpp"
 #endif

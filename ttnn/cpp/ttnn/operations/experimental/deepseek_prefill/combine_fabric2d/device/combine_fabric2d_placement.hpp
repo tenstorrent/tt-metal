@@ -11,17 +11,14 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/distributed/types.hpp"
+#include "kernels/dataflow/combine_fabric2d_stream.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
-// A stream is one routing plane travelled in one direction along the ring axis. Every chip runs one
-// reader+sender pair per stream, and a stream keeps its identity across chips: the pair on the next chip
-// with the same id continues in the same direction on the same plane.
-using StreamId = uint32_t;
-
-constexpr StreamId make_stream_id(uint32_t link_idx, bool is_cw) { return link_idx * 2 + (is_cw ? 0u : 1u); }
-constexpr bool stream_is_cw(StreamId stream) { return stream % 2 == 0; }
-constexpr uint32_t stream_count(uint32_t num_links) { return num_links * 2; }
+using cmbf2d::make_stream_id;
+using cmbf2d::stream_count;
+using cmbf2d::stream_is_cw;
+using cmbf2d::StreamId;
 
 struct StreamPlacement {
     tt::tt_metal::CoreCoord worker_logical;       // where this stream's kernels go

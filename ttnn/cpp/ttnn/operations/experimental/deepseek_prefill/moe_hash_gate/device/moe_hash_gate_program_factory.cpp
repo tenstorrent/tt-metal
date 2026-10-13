@@ -3,17 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moe_hash_gate_device_operation.hpp"
+
 #include <bit>
-#include <algorithm>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include "ttnn/operations/cb_utils.hpp"
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_hash_gate {
 
-MoeHashGateDeviceOperation::ProgramFactory::cached_program_t MoeHashGateDeviceOperation::ProgramFactory::create(
+tt::tt_metal::ProgramDescriptor MoeHashGateDeviceOperation::ProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -33,7 +34,7 @@ MoeHashGateDeviceOperation::ProgramFactory::cached_program_t MoeHashGateDeviceOp
 
     auto* device = scores.device();
     TT_FATAL(device != nullptr, "Device must be non-null");
-    tt::tt_metal::Program program{};
+    ProgramDescriptor desc;
 
     auto grid = device->compute_with_storage_grid_size();
     auto num_tiles = scores.buffer()->num_pages();
@@ -63,11 +64,22 @@ MoeHashGateDeviceOperation::ProgramFactory::cached_program_t MoeHashGateDeviceOp
     auto weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_weights.dtype());
     auto indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_indices.dtype());
 
-    uint32_t scores_page_size = scores.buffer()->page_size();
-    uint32_t weights_page_size = output_weights.buffer()->page_size();
-    uint32_t indices_page_size = output_indices.buffer()->page_size();
-    uint32_t input_ids_page_size = input_ids.buffer()->page_size();
-    uint32_t tid2eid_page_size = tid2eid.buffer()->page_size();
+    auto* scores_buffer = scores.buffer();
+    auto* input_ids_buffer = input_ids.buffer();
+    auto* tid2eid_buffer = tid2eid.buffer();
+    auto* weights_buffer = output_weights.buffer();
+    auto* indices_buffer = output_indices.buffer();
+    TT_FATAL(scores_buffer != nullptr, "scores buffer must be allocated on device");
+    TT_FATAL(input_ids_buffer != nullptr, "input_ids buffer must be allocated on device");
+    TT_FATAL(tid2eid_buffer != nullptr, "tid2eid buffer must be allocated on device");
+    TT_FATAL(weights_buffer != nullptr, "output weights buffer must be allocated on device");
+    TT_FATAL(indices_buffer != nullptr, "output indices buffer must be allocated on device");
+
+    uint32_t scores_page_size = scores_buffer->page_size();
+    uint32_t weights_page_size = weights_buffer->page_size();
+    uint32_t indices_page_size = indices_buffer->page_size();
+    uint32_t input_ids_page_size = input_ids_buffer->page_size();
+    uint32_t tid2eid_page_size = tid2eid_buffer->page_size();
     // Each per-token tid2eid row lookup is a separate DRAM->L1 NoC read; the destination L1 offset
     // must be DRAM-aligned or the read silently drops (odd rows landing at 32B offsets read as zero).
     // Stride the scratch by the aligned row size so every token's destination is aligned.
@@ -90,40 +102,48 @@ MoeHashGateDeviceOperation::ProgramFactory::cached_program_t MoeHashGateDeviceOp
     auto cb_padding_config = tt::CBIndex::c_12;
     auto cb_tid2eid_row = tt::CBIndex::c_13;
 
-    tt::tt_metal::create_cb(cb_in_scores, program, all_cores, scores_page_size, 2 * width_tiles, scores_data_format);
-    tt::tt_metal::create_cb(
-        cb_out_weights, program, all_cores, weights_page_size, 2 * n_activated_expert_tiles, weights_data_format);
-    tt::tt_metal::create_cb(
-        cb_out_indices, program, all_cores, indices_page_size, 2 * n_activated_expert_tiles, indices_data_format);
-    tt::tt_metal::create_cb(cb_sigmoid_scores, program, all_cores, scores_page_size, width_tiles, scores_data_format);
-    tt::tt_metal::create_cb(
-        cb_reduce_intermediate, program, all_cores, scores_page_size, 2 * n_activated_expert_tiles, scores_data_format);
-    tt::tt_metal::create_cb(cb_reduce_ones_scalar, program, all_cores, scores_page_size, 1, scores_data_format);
-    tt::tt_metal::create_cb(cb_epsilon_scalar, program, all_cores, scores_page_size, 1, scores_data_format);
-    tt::tt_metal::create_cb(cb_route_scale_scalar, program, all_cores, scores_page_size, 1, scores_data_format);
-    tt::tt_metal::create_cb(
-        cb_normalized_scores, program, all_cores, scores_page_size, 2 * n_activated_expert_tiles, scores_data_format);
-    tt::tt_metal::create_cb(
-        cb_reciprocal_sums, program, all_cores, scores_page_size, 2 * n_activated_expert_tiles, scores_data_format);
-    tt::tt_metal::create_cb(
-        cb_gathered_sigmoid, program, all_cores, scores_page_size, 2 * n_activated_expert_tiles, scores_data_format);
+    auto add_cb = [&](uint32_t cb_idx, uint32_t page_size, uint32_t num_pages, tt::DataFormat data_format) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = page_size * num_pages,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_idx),
+                .data_format = data_format,
+                .page_size = page_size,
+            }}},
+        });
+    };
+
+    add_cb(cb_in_scores, scores_page_size, 2 * width_tiles, scores_data_format);
+    add_cb(cb_out_weights, weights_page_size, 2 * n_activated_expert_tiles, weights_data_format);
+    add_cb(cb_out_indices, indices_page_size, 2 * n_activated_expert_tiles, indices_data_format);
+    add_cb(cb_sigmoid_scores, scores_page_size, width_tiles, scores_data_format);
+    add_cb(cb_reduce_intermediate, scores_page_size, 2 * n_activated_expert_tiles, scores_data_format);
+    add_cb(cb_reduce_ones_scalar, scores_page_size, 1, scores_data_format);
+    add_cb(cb_epsilon_scalar, scores_page_size, 1, scores_data_format);
+    add_cb(cb_route_scale_scalar, scores_page_size, 1, scores_data_format);
+    add_cb(cb_normalized_scores, scores_page_size, 2 * n_activated_expert_tiles, scores_data_format);
+    add_cb(cb_reciprocal_sums, scores_page_size, 2 * n_activated_expert_tiles, scores_data_format);
+    add_cb(cb_gathered_sigmoid, scores_page_size, 2 * n_activated_expert_tiles, scores_data_format);
 
     // input_ids: one ROW_MAJOR page per height tile (tile_height uint32 token ids).
-    tt::tt_metal::create_cb(cb_input_ids, program, all_cores, input_ids_page_size, 2, tt::DataFormat::UInt32);
+    add_cb(cb_input_ids, input_ids_page_size, 2, tt::DataFormat::UInt32);
     // tid2eid scratch: hold all tile_height looked-up rows for a tile before assembling the index tile.
     // Rows are strided by the DRAM-aligned size so each per-token read lands at an aligned destination.
-    tt::tt_metal::create_cb(
-        cb_tid2eid_row, program, all_cores, tile_height * tid2eid_row_stride, 1, tt::DataFormat::UInt16);
+    add_cb(cb_tid2eid_row, tile_height * tid2eid_row_stride, 1, tt::DataFormat::UInt16);
 
     // Scratch CB for the optional [num_real_tokens, pad_side] padding config row (see writer). When no
     // padding config is supplied we fall back to the output_indices buffer purely to size the CB.
     auto* padding_config_buffer =
-        tensor_args.padding_config.has_value() ? tensor_args.padding_config->buffer() : output_indices.buffer();
+        tensor_args.padding_config.has_value() ? tensor_args.padding_config->buffer() : indices_buffer;
+    TT_FATAL(padding_config_buffer != nullptr, "padding config buffer must be allocated on device");
     uint32_t padding_config_page_size = static_cast<uint32_t>(padding_config_buffer->aligned_page_size());
-    tt::tt_metal::create_cb(cb_padding_config, program, all_cores, padding_config_page_size, 1, tt::DataFormat::UInt32);
+    add_cb(cb_padding_config, padding_config_page_size, 1, tt::DataFormat::UInt32);
+    Buffer* padding_runtime_buffer =
+        tensor_args.padding_config.has_value() ? tensor_args.padding_config->buffer() : nullptr;
 
     // --- Reader: logits -> cb_in_scores; tid2eid[input_ids] -> cb_out_indices ---
-    std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
+    KernelDescriptor::NamedCompileTimeArgs reader_named_compile_time_args = {
         {"cb_in_scores", cb_in_scores},
         {"cb_out_indices", cb_out_indices},
         {"cb_input_ids", cb_input_ids},
@@ -141,19 +161,12 @@ MoeHashGateDeviceOperation::ProgramFactory::cached_program_t MoeHashGateDeviceOp
     };
 
     std::vector<uint32_t> reader_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(scores.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(input_ids.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(tid2eid.buffer()).append_to(reader_compile_time_args);
-
-    auto reader_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_hash_gate/device/kernels/dataflow/"
-        "reader_moe_hash_gate.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
+    tt::tt_metal::TensorAccessorArgs(scores_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_ids_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(tid2eid_buffer).append_to(reader_compile_time_args);
 
     // --- Compute: apply_score_func -> normalize_scores -> scale ---
-    std::unordered_map<std::string, uint32_t> compute_named_compile_time_args = {
+    KernelDescriptor::NamedCompileTimeArgs compute_named_compile_time_args = {
         {"cb_in_scores", cb_in_scores},
         {"cb_sigmoid_scores", cb_sigmoid_scores},
         {"cb_out_weights", cb_out_weights},
@@ -168,20 +181,8 @@ MoeHashGateDeviceOperation::ProgramFactory::cached_program_t MoeHashGateDeviceOp
         {"score_func", static_cast<uint32_t>(operation_attributes.score_func)},
     };
 
-    std::vector<uint32_t> compute_compile_time_args = {};
-    bool fp32_dest_acc_en = true;
-    auto compute_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_hash_gate/device/kernels/compute/"
-        "moe_hash_gate.cpp",
-        all_cores,
-        ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .compile_args = compute_compile_time_args,
-            .named_compile_args = compute_named_compile_time_args});
-
     // --- Writer: gather + sentinel patch + write ---
-    std::unordered_map<std::string, uint32_t> writer_named_compile_time_args = {
+    KernelDescriptor::NamedCompileTimeArgs writer_named_compile_time_args = {
         {"cb_out_weights", cb_out_weights},
         {"cb_out_indices", cb_out_indices},
         {"cb_sigmoid_scores", cb_sigmoid_scores},
@@ -207,26 +208,44 @@ MoeHashGateDeviceOperation::ProgramFactory::cached_program_t MoeHashGateDeviceOp
     };
 
     std::vector<uint32_t> writer_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(output_weights.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output_indices.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weights_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(indices_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(padding_config_buffer).append_to(writer_compile_time_args);
 
-    auto writer_kernel_id = CreateKernel(
-        program,
+    KernelDescriptor reader_kernel_desc;
+    reader_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_hash_gate/device/kernels/dataflow/"
-        "writer_moe_hash_gate.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_compile_time_args));
+        "reader_moe_hash_gate.cpp";
+    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.core_ranges = all_cores;
+    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_kernel_desc.named_compile_time_args = std::move(reader_named_compile_time_args);
+    reader_kernel_desc.config = ReaderConfigDescriptor{};
 
-    std::vector<uint32_t> reader_runtime_args = {
-        scores.buffer()->address(), input_ids.buffer()->address(), tid2eid.buffer()->address(), 0, 0};
-    std::vector<uint32_t> compute_runtime_args = {0, 0};
-    std::vector<uint32_t> writer_runtime_args = {
-        output_weights.buffer()->address(),
-        output_indices.buffer()->address(),
-        0,
-        0,
-        tensor_args.padding_config.has_value() ? padding_config_buffer->address() : 0};
+    bool fp32_dest_acc_en = true;
+    KernelDescriptor compute_kernel_desc;
+    compute_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_hash_gate/device/kernels/compute/"
+        "moe_hash_gate.cpp";
+    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_desc.core_ranges = all_cores;
+    compute_kernel_desc.named_compile_time_args = std::move(compute_named_compile_time_args);
+    compute_kernel_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = MathFidelity::HiFi4,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = false,
+        .math_approx_mode = false,
+    };
+
+    KernelDescriptor writer_kernel_desc;
+    writer_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_hash_gate/device/kernels/dataflow/"
+        "writer_moe_hash_gate.cpp";
+    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel_desc.core_ranges = all_cores;
+    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_kernel_desc.named_compile_time_args = std::move(writer_named_compile_time_args);
+    writer_kernel_desc.config = WriterConfigDescriptor{};
 
     uint32_t start_height_tile = 0;
     uint32_t end_height_tile = 0;
@@ -243,43 +262,17 @@ MoeHashGateDeviceOperation::ProgramFactory::cached_program_t MoeHashGateDeviceOp
         start_height_tile = end_height_tile;
         end_height_tile = start_height_tile + workload_per_core;
 
-        reader_runtime_args[3] = start_height_tile;
-        reader_runtime_args[4] = end_height_tile;
-
-        compute_runtime_args[0] = start_height_tile;
-        compute_runtime_args[1] = end_height_tile;
-
-        writer_runtime_args[2] = start_height_tile;
-        writer_runtime_args[3] = end_height_tile;
-
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+        reader_kernel_desc.emplace_runtime_args(
+            core, {scores_buffer, input_ids_buffer, tid2eid_buffer, start_height_tile, end_height_tile});
+        compute_kernel_desc.emplace_runtime_args(core, {start_height_tile, end_height_tile});
+        writer_kernel_desc.emplace_runtime_args(
+            core, {weights_buffer, indices_buffer, start_height_tile, end_height_tile, padding_runtime_buffer});
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id, cores}};
-}
-
-void MoeHashGateDeviceOperation::ProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& cores = cached_program.shared_variables.cores;
-    for (const auto& core : cores) {
-        auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
-        reader_runtime_args[0] = tensor_args.scores.buffer()->address();
-        reader_runtime_args[1] = tensor_args.input_ids.buffer()->address();
-        reader_runtime_args[2] = tensor_args.tid2eid.buffer()->address();
-        auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
-        writer_runtime_args[0] = tensor_return_value[0].buffer()->address();
-        writer_runtime_args[1] = tensor_return_value[1].buffer()->address();
-        writer_runtime_args[4] =
-            tensor_args.padding_config.has_value() ? tensor_args.padding_config->buffer()->address() : 0;
-    }
+    desc.kernels.push_back(std::move(reader_kernel_desc));
+    desc.kernels.push_back(std::move(compute_kernel_desc));
+    desc.kernels.push_back(std::move(writer_kernel_desc));
+    return desc;
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_hash_gate

@@ -46,9 +46,19 @@ def output_query_names(prefix: str = CHECKPOINT_PREFIX) -> tuple[str, ...]:
     return tuple(f"{prefix}output_attn_res_{factor}.weight" for factor in QUERY_FACTORS)
 
 
-def query_weight_names(num_layers: int = NUM_LAYERS, prefix: str = CHECKPOINT_PREFIX) -> tuple[str, ...]:
-    """Every AttnRes weight in the checkpoint, and nothing else."""
-    per_layer = tuple(name for layer_idx in range(num_layers) for name in layer_query_names(layer_idx, prefix))
+def query_weight_names(
+    num_layers: int = NUM_LAYERS, prefix: str = CHECKPOINT_PREFIX, *, first_layer_idx: int = 0
+) -> tuple[str, ...]:
+    """Every AttnRes weight in the checkpoint for one window of layers, and nothing else.
+
+    `first_layer_idx` is nonzero for a pipeline rank that does not hold layer 0; the
+    checkpoint is keyed by global layer index, so the window has to be too.
+    """
+    per_layer = tuple(
+        name
+        for layer_idx in range(first_layer_idx, first_layer_idx + num_layers)
+        for name in layer_query_names(layer_idx, prefix)
+    )
     return per_layer + output_query_names(prefix)
 
 
@@ -57,6 +67,8 @@ def validate_query_weights(
     num_layers: int = NUM_LAYERS,
     hidden_size: int = HIDDEN_SIZE,
     prefix: str = CHECKPOINT_PREFIX,
+    *,
+    first_layer_idx: int = 0,
 ) -> None:
     """Check that every query weight is present and has the shape the model declares.
 
@@ -68,7 +80,7 @@ def validate_query_weights(
     and pass a bare element count. Checking the shape is what makes this a load-time boundary
     instead of a silent reinterpretation.
     """
-    for name in query_weight_names(num_layers, prefix):
+    for name in query_weight_names(num_layers, prefix, first_layer_idx=first_layer_idx):
         try:
             weight = weights[name]
         except KeyError as error:
@@ -82,6 +94,8 @@ def fold_queries(
     weights: Mapping[str, torch.Tensor],
     num_layers: int = NUM_LAYERS,
     prefix: str = CHECKPOINT_PREFIX,
+    *,
+    first_layer_idx: int = 0,
 ) -> tuple[list[torch.Tensor], list[torch.Tensor], torch.Tensor]:
     """Fold the checkpoint's weight pairs into the queries the walk issues.
 
@@ -89,11 +103,12 @@ def fold_queries(
     folded and returned for symmetry but never issued — layer 0 has nothing sealed to read
     against, and in the checkpoint that entry is a dead constant.
     """
-    validate_query_weights(weights, num_layers, prefix=prefix)
+    validate_query_weights(weights, num_layers, prefix=prefix, first_layer_idx=first_layer_idx)
     fold = lambda name: fold_query(weights[f"{name}_norm.weight"], weights[f"{name}_proj.weight"])
     site = lambda layer_idx, part: fold(f"{prefix}layers.{layer_idx}.{part}_res")
+    layer_range = range(first_layer_idx, first_layer_idx + num_layers)
     return (
-        [site(layer_idx, "self_attention") for layer_idx in range(num_layers)],
-        [site(layer_idx, "mlp") for layer_idx in range(num_layers)],
+        [site(layer_idx, "self_attention") for layer_idx in layer_range],
+        [site(layer_idx, "mlp") for layer_idx in layer_range],
         fold(f"{prefix}output_attn_res"),
     )

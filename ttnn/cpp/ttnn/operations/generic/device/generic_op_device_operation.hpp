@@ -44,4 +44,7 @@ namespace ttnn::prim {
 ttnn::operations::generic::tensor_return_value_t generic_op(
     const std::vector<Tensor>& io_tensors,
     const ttnn::operations::generic::operation_attributes_t& operation_attributes);
+void prepare_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const ttnn::operations::generic::operation_attributes_t& operation_attributes);
 }  // namespace ttnn::prim

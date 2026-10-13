@@ -10,6 +10,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <numeric>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
@@ -26,30 +27,27 @@ namespace detail {
 
 namespace {
 
-// Run detection: largest chunk_step considered when looking for a periodic address-delta
-// sequence within a (slot, layer) row. Covers block-cyclic layouts up to 64 banks.
-constexpr uint32_t kMaxRunStep = 64;
-
-// Dual-write threshold: while the estimated payload (entries mirror + runs) stays below this,
-// STRIDED_ROWS configs also mirror every chunk into `entries` so pre-runs readers keep
-// working (they ignore `runs` and the compression tag). The threshold sits just under
-// protobuf's 2 GiB (2^31) message cap, using conservative wire estimates of 48 B/entry and
-// 72 B/run — so the mirror is dropped only when the dual-written message itself could not be
-// serialized, i.e. when no entries-only reader could have consumed the table anyway.
-// Override for tests/canary.
-constexpr uint64_t kDefaultDualWriteMaxBytes = (2ull << 30) - (64ull << 20);  // 2 GiB − 64 MiB
+// Dual-write budget, in estimated payload bytes (entries mirror + runs). While the estimate
+// stays within the budget, STRIDED_ROWS configs ALSO mirror every chunk into `entries` so
+// pre-runs readers keep working (they ignore `runs` and the compression tag).
+//
+// The budget is 0 by default to enable compression by default
+constexpr uint64_t kDefaultDualWriteMaxBytes = 0;  // compress by default
+// Ceiling on an opted-in budget: just under protobuf's 2 GiB (2^31) message cap, so a
+// dual-written message stays serializable (wire estimates below).
+constexpr uint64_t kDualWriteMaxBytesCeiling = (2ull << 30) - (64ull << 20);  // 2 GiB − 64 MiB
 constexpr uint64_t kEntryWireEstimate = 48;
 constexpr uint64_t kRunWireEstimate = 72;
 
-// Read per call on purpose: this is a test/canary override (tests re-point it between
-// exports via DualWriteEnvGuard), not a production runtime setting — export is cold-path,
-// so the getenv cost is irrelevant.
+// Read per call on purpose: this is an opt-in compatibility escape hatch (tests re-point it
+// between exports via DualWriteEnvGuard), not a production runtime setting — export is
+// cold-path, so the getenv cost is irrelevant.
 uint64_t dual_write_max_bytes() {
     if (const char* env = std::getenv("KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES")) {
         uint64_t value = 0;
         const char* end = env + std::strlen(env);
         if (std::from_chars(env, end, value).ec == std::errc{}) {
-            return value;
+            return std::min(value, kDualWriteMaxBytesCeiling);
         }
         // unparsable: fall through to the default
     }
@@ -60,36 +58,56 @@ bool is_unset(const KvCacheLocation& loc) {
     return loc.noc_addr == 0 && loc.size_bytes == 0 && *loc.device_group_index == 0;
 }
 
-// The smallest s with the row's address-delta sequence periodic (addresses affine per residue
-// class mod s), or 0 if none. s is capped at (n-1)/2 so the period is PROVEN by at least one
-// repetition — any sequence trivially "fits" a period covering it once, which would compress
-// nothing. 0 = no proven period -> the config cannot be STRIDED_ROWS.
+// Smallest p with seq[i] == seq[i - p] for every i >= p (seq.size() if nothing shorter fits),
+// from the KMP prefix function in O(n). Linear time matters: SP/TP-sharded rows cycle through
+// every device's chunks before repeating, so real periods run into the thousands of chunks.
+template <typename T>
+uint64_t min_period(const std::vector<T>& seq) {
+    const size_t n = seq.size();
+    if (n == 0) {
+        return 1;
+    }
+    std::vector<size_t> border(n, 0);
+    for (size_t i = 1; i < n; i++) {
+        size_t k = border[i - 1];
+        while (k > 0 && seq[i] != seq[k]) {
+            k = border[k - 1];
+        }
+        if (seq[i] == seq[k]) {
+            k++;
+        }
+        border[i] = k;
+    }
+    return n - border[n - 1];
+}
+
+// The smallest s with the row's address-delta sequence AND its device-group sequence both
+// s-periodic (addresses affine and group constant per residue class mod s), or 0 if none.
+// s is capped at (n-1)/2 so the period is PROVEN by at least one repetition — any sequence
+// trivially "fits" a period covering it once, which would compress nothing. 0 = no proven
+// period -> the config cannot be STRIDED_ROWS.
 //
-// Cost: O(n · min(n, kMaxRunStep)) per row, once per export per UNROLLED config (never on the
-// transfer hot path). Measured at 4.4 ms for a 61-layer x 8-slot x 4000-chunk table
-// (1.95M chunks total) — noise against the serialization it precedes.
-uint32_t delta_period(std::span<const KvCacheLocation> row) {
-    const uint32_t n = static_cast<uint32_t>(row.size());
+// Cost: O(n) per row, once per export per UNROLLED config (never on the transfer hot path).
+uint32_t row_period(std::span<const KvCacheLocation> row) {
+    const size_t n = row.size();
     if (n <= 1) {
         return 1;
     }
-    const uint32_t limit = std::min((n - 1) / 2, kMaxRunStep);
-    for (uint32_t s = 1; s <= limit; s++) {
-        bool ok = true;
-        for (uint32_t i = s; i + 1 < n && ok; i++) {
-            if (row[i + 1].noc_addr - row[i].noc_addr != row[i - s + 1].noc_addr - row[i - s].noc_addr) {
-                ok = false;
-            }
-        }
-        if (ok) {
-            return s;
+    std::vector<uint64_t> deltas(n - 1);
+    std::vector<uint32_t> groups(n);
+    for (size_t i = 0; i < n; i++) {
+        groups[i] = *row[i].device_group_index;
+        if (i + 1 < n) {
+            deltas[i] = row[i + 1].noc_addr - row[i].noc_addr;
         }
     }
-    return 0;
+    const uint64_t step = std::lcm(min_period(deltas), min_period(groups));
+    return step <= (n - 1) / 2 ? static_cast<uint32_t>(step) : 0;
 }
 
 // Newest format_version this reader knows. 0 = legacy (pre-tag) files; 1 = compression tags.
-// Bump when the wire format changes incompatibly; old readers must keep working via dual-write.
+// Bump when the wire format changes incompatibly; old readers keep working only if the
+// `entries` mirror is opted into (off by default).
 constexpr uint32_t kMaxKnownFormatVersion = 1;
 
 // Wire conversion, with fail-closed validation of the declared tag.
@@ -153,8 +171,8 @@ void emit_run(
 }
 
 // Detection pass for the UNROLLED export path: a config converts to STRIDED_ROWS iff EVERY
-// populated row is dense (no unset holes) with uniform size/group and a proven delta period
-// (see delta_period). All-unset rows are tolerated (they carry no data and read back zeroed),
+// populated row is dense (no unset holes) with uniform size and a proven period (see
+// row_period). All-unset rows are tolerated (they carry no data and read back zeroed),
 // but at least one must exist — an all-unset config would emit zero runs, which import
 // rejects as malformed, so it stays UNROLLED.
 bool config_compressible(
@@ -174,10 +192,9 @@ bool config_compressible(
                 return false;  // holes — can't cover densely
             }
             const auto& first = row.front();
-            const bool uniform = std::all_of(row.begin(), row.end(), [&](const KvCacheLocation& l) {
-                return l.size_bytes == first.size_bytes && l.device_group_index == first.device_group_index;
-            });
-            if (!uniform || delta_period(row) == 0) {
+            const bool uniform = std::all_of(
+                row.begin(), row.end(), [&](const KvCacheLocation& l) { return l.size_bytes == first.size_bytes; });
+            if (!uniform || row_period(row) == 0) {
                 return false;
             }
         }
@@ -200,20 +217,21 @@ void emit_row_runs(
         const uint32_t count = (npc - r + row.step - 1) / row.step;
         emit_run(
             pb, c, slot, layer, r, row.step, count, row.bases[r], row.strides[r], row.size_bytes,
-            *row.device_group_index);
+            *row.device_group_indices[r]);
     }
 }
 
 // Detect a populated unrolled row's strided structure as a Row. Call only when
-// config_compressible() returned true — then delta_period() is guaranteed nonzero.
+// config_compressible() returned true — then row_period() is guaranteed nonzero.
 Row detect_row(std::span<const KvCacheLocation> row) {
     Row out;
-    out.step = delta_period(row);
+    out.step = row_period(row);
     out.size_bytes = row.front().size_bytes;
-    out.device_group_index = row.front().device_group_index;
+    out.device_group_indices.resize(out.step);
     out.bases.resize(out.step);
     out.strides.resize(out.step);
     for (uint32_t r = 0; r < out.step; r++) {
+        out.device_group_indices[r] = row[r].device_group_index;
         const uint32_t count = (static_cast<uint32_t>(row.size()) - r + out.step - 1) / out.step;
         out.bases[r] = row[r].noc_addr;
         out.strides[r] = static_cast<int64_t>(count > 1 ? row[r + out.step].noc_addr - row[r].noc_addr : 0);
@@ -323,17 +341,20 @@ void emit_config_payload(
         pb.set_origin_host(hostname);
     }
 
-    // Dual-write decision needs the total size up front: entries mirror plus the runs payload.
-    // Worst case each populated row emits kMaxRunStep runs (one per residue class), so bound
-    // runs by rows * kMaxRunStep.
+    // Dual-write decision needs the total size up front: entries mirror plus the runs payload,
+    // with runs bounded by one per chunk (a row emits one run per residue, and an imported
+    // strided row may carry any step up to npc). A zero budget (the default) means
+    // never mirror — checked separately so an empty table, whose estimate is also 0, still
+    // exports runs-only.
     const uint64_t total_chunks = table.total_entries();
-    uint64_t total_rows = 0;
+    uint64_t max_runs = 0;
     for (uint32_t c = 0; c < table.num_configs(); c++) {
         const auto& cfg = table.config(c);
-        total_rows += static_cast<uint64_t>(cfg.num_slots) * cfg.num_layers;
+        max_runs += static_cast<uint64_t>(cfg.num_slots) * cfg.num_layers * table.num_position_chunks(c);
     }
+    const uint64_t dual_write_budget = dual_write_max_bytes();
     const bool dual_write =
-        total_chunks * kEntryWireEstimate + total_rows * kMaxRunStep * kRunWireEstimate <= dual_write_max_bytes();
+        dual_write_budget > 0 && total_chunks * kEntryWireEstimate + max_runs * kRunWireEstimate <= dual_write_budget;
 
     for (uint32_t c = 0; c < table.num_configs(); c++) {
         const auto& cfg = table.config(c);
@@ -387,9 +408,9 @@ void emit_config_payload(
 }
 
 KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChunkAddressTable& pb) {
-    // Fail closed on newer formats (old readers ignore this field and read the dual-written
-    // entries — the intended transition path; a runs-only file yields an empty-but-valid
-    // legacy table there, which is why rollout upgrades readers first).
+    // Fail closed on newer formats. Pre-compression readers predate this field and ignore it,
+    // so a runs-only file — the default output now — yields an empty-but-valid legacy table
+    // there rather than an error; that is why rollout upgrades readers first.
     if (pb.format_version() > kMaxKnownFormatVersion) {
         throw std::runtime_error(
             "KvChunkAddressTable format_version=" + std::to_string(pb.format_version()) +
@@ -482,8 +503,8 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
         struct RowAccum {
             uint32_t step = 0;
             uint32_t size_bytes = 0;
-            uint32_t group = 0;
-            std::vector<uint64_t> bases;  // indexed by start_chunk (residue)
+            std::vector<DeviceGroupIndex> groups;  // indexed by start_chunk (residue)
+            std::vector<uint64_t> bases;
             std::vector<int64_t> strides;
             std::vector<bool> seen;
         };
@@ -518,19 +539,18 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
             if (acc.bases.empty()) {
                 acc.step = run.chunk_step();
                 acc.size_bytes = run.size_bytes();
-                acc.group = run.device_group_index();
+                acc.groups.resize(run.chunk_step());
                 acc.bases.resize(run.chunk_step());
                 acc.strides.resize(run.chunk_step());
                 acc.seen.resize(run.chunk_step());
-            } else if (
-                acc.step != run.chunk_step() || acc.size_bytes != run.size_bytes() ||
-                acc.group != run.device_group_index()) {
+            } else if (acc.step != run.chunk_step() || acc.size_bytes != run.size_bytes()) {
                 throw std::runtime_error("inconsistent runs for one row in KvChunkAddressTable proto");
             }
             if (acc.seen[run.start_chunk()]) {
                 throw std::runtime_error("duplicate run residue in KvChunkAddressTable proto");
             }
             acc.seen[run.start_chunk()] = true;
+            acc.groups[run.start_chunk()] = DeviceGroupIndex{run.device_group_index()};
             acc.bases[run.start_chunk()] = run.base_noc_addr();
             acc.strides[run.start_chunk()] = run.addr_stride();
         }
@@ -554,7 +574,7 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
             auto& row = map.rows[static_cast<size_t>(slot) * table.config(cid).num_layers + layer];
             row.step = acc.step;
             row.size_bytes = acc.size_bytes;
-            row.device_group_index = DeviceGroupIndex{acc.group};
+            row.device_group_indices = acc.groups;
             row.bases = acc.bases;
             row.strides = acc.strides;
         }

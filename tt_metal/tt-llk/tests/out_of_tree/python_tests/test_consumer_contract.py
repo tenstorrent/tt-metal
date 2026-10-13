@@ -468,9 +468,10 @@ def test_llk_tree_include_roots_expands_one_arch_tree():
     """``-I`` is not recursive; consumers rely on this to point at a
     proprietary ``tt_llk_<arch>`` tree with one call."""
     roots = TestConfig.llk_tree_include_roots(Path("/nonexistent/tt_llk_blackhole"))
-    assert [Path(r).name for r in roots] == ["llk_lib", "inc", "sfpu"]
+    assert [Path(r).name for r in roots] == ["llk_lib", "hal", "inc", "sfpu"]
     assert [Path(r).parent.name for r in roots] == [
         "tt_llk_blackhole",
+        "llk_lib",
         "common",
         "inc",
     ]
