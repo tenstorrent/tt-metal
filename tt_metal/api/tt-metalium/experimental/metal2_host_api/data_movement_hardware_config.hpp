@@ -12,10 +12,6 @@
 
 namespace tt::tt_metal::experimental {
 
-// Whether a dedicated-NOC data movement kernel may share its NOC with the other data movement kernel on
-// its nodes. See DataMovementHardwareConfig::DataMovement1XXConfig::dedicated_noc_sharing.
-enum class DedicatedNocSharing : uint8_t { EXCLUSIVE, SHARED_DISJOINT_TRAFFIC };
-
 // ============================================================================
 //  DataMovementHardwareConfig
 // ============================================================================
@@ -52,14 +48,6 @@ struct DataMovementHardwareConfig {
         // free for fabric/CCL traffic). Dynamic mode adds cross-core coordination
         // overhead and must be set identically on both DM kernels on a node.
         tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
-
-        // DM_DEDICATED_NOC only. By default each dedicated-NOC kernel on a node needs a NOC of its own.
-        // When both DM kernels on a node set SHARED_DISJOINT_TRAFFIC they may name the same NOC, which
-        // keeps the other NOC free without dynamic mode's per-transaction overhead. The caller guarantees
-        // that no kind of NoC transaction (reads, posted writes, non-posted writes, atomics) is issued by
-        // both kernels, e.g. one only reads and the other only writes and issues atomics; a kind issued by
-        // both can let a barrier return before its transactions complete.
-        DedicatedNocSharing dedicated_noc_sharing = DedicatedNocSharing::EXCLUSIVE;
     };
     // NOTE: If this kernel is built for a 1st-gen (1xx) architecture, config_1xx
     //       cannot be default-constructed; processor and noc fields have no default.

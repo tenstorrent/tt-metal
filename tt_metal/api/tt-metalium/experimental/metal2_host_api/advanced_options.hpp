@@ -52,6 +52,10 @@ using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 //       re-declared here for use in AdvancedOptions to avoid circular dependency.
 //       This is legal so long as the declarations are identical, which is compiler-enforced.
 
+// Whether a dedicated-NOC data movement kernel may share its NOC with the other data movement kernel on
+// its nodes. See KernelAdvancedOptions::dedicated_noc_sharing.
+enum class DedicatedNocSharing : uint8_t { EXCLUSIVE, SHARED_DISJOINT_TRAFFIC };
+
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
     // Varargs
@@ -189,6 +193,21 @@ struct KernelAdvancedOptions {
         std::string accessor_name;  // pipe accessor name (used in the kernel source code)
     };
     Group<PrefetcherPipeBinding> prefetcher_pipe_bindings;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Shared dedicated NOC (TT-1.x.x data movement kernels)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // By default each DM_DEDICATED_NOC data movement kernel on a node needs a NOC of its own. When both
+    // data movement kernels on a node set SHARED_DISJOINT_TRAFFIC, they may name the same NOC
+    // (DataMovement1XXConfig::noc), which keeps the other NOC free without dynamic-NOC mode's
+    // per-transaction overhead. Ignored for other kernels.
+    //
+    // CAUTION: Nothing checks the condition this relies on. The caller guarantees that no kind of NoC
+    //          transaction (reads, posted writes, non-posted writes, atomics) is issued by both kernels,
+    //          e.g. one only reads and the other only writes and issues atomics. A kind issued by both
+    //          can let a barrier return before its transactions complete.
+    DedicatedNocSharing dedicated_noc_sharing = DedicatedNocSharing::EXCLUSIVE;
 };
 
 struct DFBAdvancedOptions {

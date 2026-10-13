@@ -171,12 +171,15 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
                         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
                         .noc = tt::tt_metal::NOC::NOC_0,
                         .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
-                        .dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC,
                     },
                 .config_2xx =
                     DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
             },
-        .advanced_options = {.num_common_runtime_varargs = static_cast<uint32_t>(reader_varargs.size())},
+        .advanced_options =
+            {
+                .num_common_runtime_varargs = static_cast<uint32_t>(reader_varargs.size()),
+                .dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC,
+            },
     };
 
     KernelSpec writer{
@@ -205,7 +208,6 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
                         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                         .noc = tt::tt_metal::NOC::NOC_0,
                         .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
-                        .dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC,
                     },
                 .config_2xx =
                     DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
@@ -216,6 +218,7 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
                 // The writer runs only on the reader cores, which host the pipes' senders and none of their
                 // receivers, so it is every pipe's sender.
                 .prefetcher_pipe_bindings = {{.pipe_parameter_names = prefetcher_pipe_names, .accessor_name = "out"}},
+                .dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC,
             },
     };
 
