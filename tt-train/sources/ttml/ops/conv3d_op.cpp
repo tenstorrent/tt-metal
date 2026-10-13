@@ -328,6 +328,27 @@ ttnn::Tensor zero_upsample_spatial_dim(
     return ttnn::reshape(view, ttnn::Shape(out_shape));
 }
 
+// The kernel tilizes one output block into TILE_HEIGHT matmul rows, so the block is sized to fill a tile: W first,
+// then H, then D, keeping the product within one tile so the circular buffers stay single-tile. Ragged edges are
+// clamped by the kernel.
+Conv3dDims output_block(
+    const ttnn::Tensor& input_row_major,
+    const Conv3dDims& kernel,
+    const Conv3dDims& stride,
+    const Conv3dDims& padding,
+    const Conv3dDims& dilation) {
+    const auto& shape = input_row_major.logical_shape();
+    Conv3dDims block{};
+    uint32_t remaining = tt::constants::TILE_HEIGHT;
+    for (size_t i = 3; i-- > 0;) {
+        const uint32_t effective_kernel = dilation[i] * (kernel[i] - 1U) + 1U;
+        const uint32_t out = (shape[i + 1] + 2U * padding[i] - effective_kernel) / stride[i] + 1U;
+        block[i] = std::min(out, remaining);
+        remaining /= block[i];
+    }
+    return block;
+}
+
 ttnn::Tensor run_ttnn_conv3d(
     const ttnn::Tensor& input_row_major,
     const PreparedWeight& prepared_weight,
@@ -337,12 +358,13 @@ ttnn::Tensor run_ttnn_conv3d(
     const Conv3dDims& stride,
     const Conv3dDims& padding,
     const Conv3dDims& dilation) {
+    const Conv3dDims block = output_block(input_row_major, kernel, stride, padding, dilation);
     const ttnn::experimental::prim::Conv3dConfig config(
         /*weights_dtype=*/input_row_major.dtype(),
         /*output_layout=*/ttnn::Layout::ROW_MAJOR,
-        /*T_out_block=*/1U,
-        /*W_out_block=*/1U,
-        /*H_out_block=*/1U,
+        /*T_out_block=*/block[0],
+        /*W_out_block=*/block[2],
+        /*H_out_block=*/block[1],
         /*C_out_block=*/kCOutBlock,
         prepared_weight.c_in_block,
         dilation,

@@ -6,18 +6,20 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
+#include <xtensor/containers/xadapt.hpp>
+#include <xtensor/core/xmath.hpp>
+#include <xtensor/generators/xbuilder.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/binary_ops.hpp"
 #include "test_utils/random_data.hpp"
+#include "test_utils/relative_l2.hpp"
 
 namespace {
 
@@ -39,6 +41,7 @@ struct Conv3dCase {
     bool weight_requires_grad = true;
     bool bias_requires_grad = true;
     ttnn::Layout layout = ttnn::Layout::ROW_MAJOR;
+    float relative_l2_tolerance = 0.F;  // > 0 compares by relative L2 instead of elementwise
 
     [[nodiscard]] Dims3 out_size() const {
         Dims3 out{};
@@ -141,56 +144,16 @@ Conv3dReference compute_reference(
     return ref;
 }
 
-ttnn::Tensor make_device_tensor(const std::vector<float>& data, const ttnn::Shape& shape, ttnn::Layout layout) {
-    auto* device = &ttml::autograd::ctx().get_device();
-    return ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(data, shape, device, layout);
+std::vector<size_t> xshape(const ttnn::Shape& shape) {
+    return {shape.cbegin(), shape.cend()};
 }
 
-double pcc(const std::vector<float>& a, const std::vector<float>& b) {
-    double mean_a = 0.0;
-    double mean_b = 0.0;
-    for (size_t i = 0; i < a.size(); ++i) {
-        mean_a += a[i];
-        mean_b += b[i];
-    }
-    mean_a /= static_cast<double>(a.size());
-    mean_b /= static_cast<double>(a.size());
-    double cov = 0.0;
-    double var_a = 0.0;
-    double var_b = 0.0;
-    for (size_t i = 0; i < a.size(); ++i) {
-        const double da = a[i] - mean_a;
-        const double db = b[i] - mean_b;
-        cov += da * db;
-        var_a += da * da;
-        var_b += db * db;
-    }
-    return cov / std::sqrt(var_a * var_b);
+xt::xarray<float> uniform(const ttnn::Shape& shape, float low, float high, uint32_t seed) {
+    return ttml::test_utils::make_uniform_xarray<float>(xshape(shape), low, high, seed);
 }
 
-// bf16 rounding is relative to the tensor's largest magnitude, so the bound is too; PCC guards small entries.
-void expect_close(
-    const std::vector<float>& actual,
-    const std::vector<float>& expected,
-    float rel_of_max,
-    float abs_floor,
-    const char* what) {
-    ASSERT_EQ(actual.size(), expected.size()) << what;
-    float max_abs_err = 0.F;
-    float max_ref = 0.F;
-    size_t worst = 0;
-    for (size_t i = 0; i < actual.size(); ++i) {
-        const float err = std::abs(actual[i] - expected[i]);
-        max_ref = std::max(max_ref, std::abs(expected[i]));
-        if (err > max_abs_err) {
-            max_abs_err = err;
-            worst = i;
-        }
-    }
-    const float tolerance = abs_floor + rel_of_max * max_ref;
-    EXPECT_LE(max_abs_err, tolerance) << what << ": worst index " << worst << " actual " << actual[worst]
-                                      << " expected " << expected[worst] << " (max |ref| " << max_ref << ")";
-    EXPECT_GT(pcc(actual, expected), 0.999) << what;
+std::vector<float> as_vector(const xt::xarray<float>& x) {
+    return {x.begin(), x.end()};
 }
 
 class Conv3dOpTest : public ::testing::Test {
@@ -217,39 +180,49 @@ void run_case(const Conv3dCase& c) {
     const ttnn::Shape weight_shape({c.C_out, c.C_in / c.groups, kD, kH, kW});
     const ttnn::Shape bias_shape = c.bias_rank1 ? ttnn::Shape({c.C_out}) : ttnn::Shape({1U, 1U, 1U, c.C_out});
     const ttnn::Shape output_shape({c.N, out[0], out[1], out[2], c.C_out});
+    auto* device = &ttml::autograd::ctx().get_device();
 
-    auto input_data = ttml::test_utils::make_uniform_vector<float>(input_shape.volume(), -1.F, 1.F, /*seed=*/1);
-    auto weight_data = ttml::test_utils::make_uniform_vector<float>(weight_shape.volume(), -0.5F, 0.5F, /*seed=*/2);
-    auto bias_data = ttml::test_utils::make_uniform_vector<float>(c.C_out, -1.F, 1.F, /*seed=*/3);
-    auto grad_output_data = ttml::test_utils::make_uniform_vector<float>(output_shape.volume(), -1.F, 1.F, /*seed=*/4);
-
-    auto input =
-        ttml::autograd::create_tensor(make_device_tensor(input_data, input_shape, c.layout), c.input_requires_grad);
-    auto weight =
-        ttml::autograd::create_tensor(make_device_tensor(weight_data, weight_shape, c.layout), c.weight_requires_grad);
+    auto input = ttml::autograd::create_tensor(
+        ttml::core::from_xtensor(uniform(input_shape, -1.F, 1.F, /*seed=*/1), device, c.layout), c.input_requires_grad);
+    auto weight = ttml::autograd::create_tensor(
+        ttml::core::from_xtensor(uniform(weight_shape, -0.5F, 0.5F, /*seed=*/2), device, c.layout),
+        c.weight_requires_grad);
     ttml::autograd::TensorPtr bias;
     if (c.with_bias) {
         // A rank-1 bias cannot be tilized on its own; the op accepts it in ROW_MAJOR.
         const auto bias_layout = c.bias_rank1 ? ttnn::Layout::ROW_MAJOR : c.layout;
-        bias =
-            ttml::autograd::create_tensor(make_device_tensor(bias_data, bias_shape, bias_layout), c.bias_requires_grad);
+        bias = ttml::autograd::create_tensor(
+            ttml::core::from_xtensor(uniform(bias_shape, -1.F, 1.F, /*seed=*/3), device, bias_layout),
+            c.bias_requires_grad);
     }
-    auto grad_output = make_device_tensor(grad_output_data, output_shape, c.layout);
+    auto grad_output = ttml::core::from_xtensor(uniform(output_shape, -1.F, 1.F, /*seed=*/4), device, c.layout);
 
     // Build the reference from the bf16-rounded values that actually live on device.
-    input_data = ttml::core::to_vector(input->get_value());
-    weight_data = ttml::core::to_vector(weight->get_value());
-    if (c.with_bias) {
-        bias_data = ttml::core::to_vector(bias->get_value());
-    }
-    grad_output_data = ttml::core::to_vector(grad_output);
-    const auto ref = compute_reference(c, input_data, weight_data, bias_data, grad_output_data);
+    const auto ref = compute_reference(
+        c,
+        as_vector(ttml::core::to_xtensor(input->get_value())),
+        as_vector(ttml::core::to_xtensor(weight->get_value())),
+        c.with_bias ? as_vector(ttml::core::to_xtensor(bias->get_value())) : std::vector<float>{},
+        as_vector(ttml::core::to_xtensor(grad_output)));
+
+    const auto expect_matches = [&](const ttnn::Tensor& actual,
+                                    const std::vector<float>& reference,
+                                    const ttnn::Shape& shape,
+                                    const char* what) {
+        const auto actual_x = ttml::core::to_xtensor(actual);
+        const xt::xarray<float> expected = xt::adapt(reference, xshape(shape));
+        if (c.relative_l2_tolerance > 0.F) {
+            EXPECT_LT(ttml::test_utils::relative_l2(actual_x, expected), c.relative_l2_tolerance) << what;
+        } else {
+            EXPECT_TRUE(xt::allclose(actual_x, expected, /*rtol=*/1e-2, /*atol=*/2e-2)) << what;
+        }
+    };
 
     auto result = ttml::ops::conv3d(input, weight, bias, c.stride, c.padding, c.dilation, c.groups);
 
     ASSERT_EQ(result->get_value().logical_shape(), output_shape);
     EXPECT_EQ(result->get_value().layout(), c.layout);
-    expect_close(ttml::core::to_vector(result->get_value()), ref.output, 1e-2F, 2e-2F, "forward");
+    expect_matches(result->get_value(), ref.output, output_shape, "forward");
 
     const bool any_grad = c.input_requires_grad || c.weight_requires_grad || (c.with_bias && c.bias_requires_grad);
     if (!any_grad) {
@@ -263,7 +236,7 @@ void run_case(const Conv3dCase& c) {
         ASSERT_TRUE(input->is_grad_initialized());
         EXPECT_EQ(input->get_grad().logical_shape(), input_shape);
         EXPECT_EQ(input->get_grad().layout(), c.layout);
-        expect_close(ttml::core::to_vector(input->get_grad()), ref.grad_input, 1e-2F, 2e-2F, "grad_input");
+        expect_matches(input->get_grad(), ref.grad_input, input_shape, "grad_input");
     } else {
         EXPECT_FALSE(input->is_grad_initialized()) << "frozen input received a gradient";
     }
@@ -271,7 +244,7 @@ void run_case(const Conv3dCase& c) {
         ASSERT_TRUE(weight->is_grad_initialized());
         EXPECT_EQ(weight->get_grad().logical_shape(), weight_shape);
         EXPECT_EQ(weight->get_grad().layout(), c.layout);
-        expect_close(ttml::core::to_vector(weight->get_grad()), ref.grad_weight, 1e-2F, 2e-2F, "grad_weight");
+        expect_matches(weight->get_grad(), ref.grad_weight, weight_shape, "grad_weight");
     } else {
         EXPECT_FALSE(weight->is_grad_initialized()) << "frozen weight received a gradient";
     }
@@ -280,7 +253,7 @@ void run_case(const Conv3dCase& c) {
             ASSERT_TRUE(bias->is_grad_initialized());
             EXPECT_EQ(bias->get_grad().logical_shape(), bias_shape);
             EXPECT_EQ(bias->get_grad().layout(), bias->get_value().layout());
-            expect_close(ttml::core::to_vector(bias->get_grad()), ref.grad_bias, 1e-2F, 2e-2F, "grad_bias");
+            expect_matches(bias->get_grad(), ref.grad_bias, bias_shape, "grad_bias");
         } else {
             EXPECT_FALSE(bias->is_grad_initialized()) << "frozen bias received a gradient";
         }
@@ -456,12 +429,14 @@ TEST_F(Conv3dOpTest, NIGHTLY_EvenCubicKernelWithStride) {
     run_case(c);
 }
 
-// dW and db reduce over M = 2 * 8 * 48 * 48 = 36864 output positions, the accumulation length of a video layer.
+// dW and db reduce over M = 2 * 8 * 48 * 48 = 36864 output positions, the accumulation length of a video layer;
+// sums that long are compared by relative L2, since elementwise bounds are unstable on them.
 TEST_F(Conv3dOpTest, NIGHTLY_VideoSizedReduction) {
     Conv3dCase c;
     c.N = 2;
     c.in_size = {8, 48, 48};
     c.padding = {1, 1, 1};
+    c.relative_l2_tolerance = 1e-2F;
     run_case(c);
 }
 
@@ -556,26 +531,20 @@ TEST_F(Conv3dOpTest, PreparedWeightsMatchOnTheFlyPreparation) {
     const ttnn::Shape input_shape({c.N, D, H, W, c.C_in});
     const ttnn::Shape weight_shape({c.C_out, c.C_in / c.groups, kD, kH, kW});
     const ttnn::Shape output_shape({c.N, 4U, 5U, 6U, c.C_out});
+    auto* device = &ttml::autograd::ctx().get_device();
 
     auto input = ttml::autograd::create_tensor(
-        make_device_tensor(
-            ttml::test_utils::make_uniform_vector<float>(input_shape.volume(), -1.F, 1.F, 21), input_shape, c.layout),
-        true);
+        ttml::core::from_xtensor(uniform(input_shape, -1.F, 1.F, 21), device, c.layout), true);
     auto weight = ttml::autograd::create_tensor(
-        make_device_tensor(
-            ttml::test_utils::make_uniform_vector<float>(weight_shape.volume(), -0.5F, 0.5F, 22),
-            weight_shape,
-            c.layout),
-        true);
-    auto grad_output = make_device_tensor(
-        ttml::test_utils::make_uniform_vector<float>(output_shape.volume(), -1.F, 1.F, 23), output_shape, c.layout);
+        ttml::core::from_xtensor(uniform(weight_shape, -0.5F, 0.5F, 22), device, c.layout), true);
+    auto grad_output = ttml::core::from_xtensor(uniform(output_shape, -1.F, 1.F, 23), device, c.layout);
 
     auto reference = ttml::ops::conv3d(input, weight, nullptr, c.stride, c.padding, c.dilation, c.groups);
     reference->set_grad(grad_output);
     reference->backward();
-    const auto ref_out = ttml::core::to_vector(reference->get_value());
-    const auto ref_dx = ttml::core::to_vector(input->get_grad());
-    const auto ref_dw = ttml::core::to_vector(weight->get_grad());
+    const auto ref_out = ttml::core::to_xtensor(reference->get_value());
+    const auto ref_dx = ttml::core::to_xtensor(input->get_grad());
+    const auto ref_dw = ttml::core::to_xtensor(weight->get_grad());
     input->set_grad(ttnn::Tensor());
     weight->set_grad(ttnn::Tensor());
     ttml::autograd::ctx().reset_graph();
@@ -596,9 +565,9 @@ TEST_F(Conv3dOpTest, PreparedWeightsMatchOnTheFlyPreparation) {
     result->set_grad(grad_output);
     result->backward();
 
-    expect_close(ttml::core::to_vector(result->get_value()), ref_out, 0.F, 1e-6F, "prepared forward");
-    expect_close(ttml::core::to_vector(input->get_grad()), ref_dx, 0.F, 1e-6F, "prepared grad_input");
-    expect_close(ttml::core::to_vector(weight->get_grad()), ref_dw, 0.F, 1e-6F, "prepared grad_weight");
+    EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(result->get_value()), ref_out))) << "prepared forward";
+    EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(input->get_grad()), ref_dx))) << "prepared grad_input";
+    EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(weight->get_grad()), ref_dw))) << "prepared grad_weight";
 
     const auto other = ttml::ops::prepare_conv3d_weight(weight->get_value(), /*groups=*/1);
     EXPECT_THROW(
@@ -619,7 +588,8 @@ TEST_F(Conv3dOpTest, PreparedWeightsMatchOnTheFlyPreparation) {
     auto lazy = ttml::ops::conv3d(input, weight, nullptr, forward_only, c.stride, c.padding, c.dilation, c.groups);
     lazy->set_grad(grad_output);
     lazy->backward();
-    expect_close(ttml::core::to_vector(input->get_grad()), ref_dx, 0.F, 1e-6F, "forward-only prepared grad_input");
+    EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(input->get_grad()), ref_dx)))
+        << "forward-only prepared grad_input";
 }
 
 // The op reads the autograd weight at bf16, so a prepared weight built from fp32 storage must match that view.
@@ -633,27 +603,21 @@ TEST_F(Conv3dOpTest, PreparedWeightsFromFloat32Storage) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     auto input = ttml::autograd::create_tensor(
-        make_device_tensor(
-            ttml::test_utils::make_uniform_vector<float>(input_shape.volume(), -1.F, 1.F, 61), input_shape, c.layout),
-        true);
+        ttml::core::from_xtensor(uniform(input_shape, -1.F, 1.F, 61), device, c.layout), true);
     auto weight = ttml::autograd::create_tensor(
-        ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(
-            ttml::test_utils::make_uniform_vector<float>(weight_shape.volume(), -0.5F, 0.5F, 62),
-            weight_shape,
-            device,
-            c.layout),
+        ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+            uniform(weight_shape, -0.5F, 0.5F, 62), device, c.layout),
         true);
-    auto grad_output = make_device_tensor(
-        ttml::test_utils::make_uniform_vector<float>(output_shape.volume(), -1.F, 1.F, 63), output_shape, c.layout);
+    auto grad_output = ttml::core::from_xtensor(uniform(output_shape, -1.F, 1.F, 63), device, c.layout);
     ASSERT_EQ(weight->get_value(ttml::autograd::PreferredPrecision::FULL).dtype(), ttnn::DataType::FLOAT32);
     ASSERT_EQ(weight->get_value().dtype(), ttnn::DataType::BFLOAT16);
 
     auto reference = ttml::ops::conv3d(input, weight, nullptr, c.stride, c.padding);
     reference->set_grad(grad_output);
     reference->backward();
-    const auto ref_out = ttml::core::to_vector(reference->get_value());
-    const auto ref_dx = ttml::core::to_vector(input->get_grad());
-    const auto ref_dw = ttml::core::to_vector(weight->get_grad());
+    const auto ref_out = ttml::core::to_xtensor(reference->get_value());
+    const auto ref_dx = ttml::core::to_xtensor(input->get_grad());
+    const auto ref_dw = ttml::core::to_xtensor(weight->get_grad());
     input->set_grad(ttnn::Tensor());
     weight->set_grad(ttnn::Tensor());
     ttml::autograd::ctx().reset_graph();
@@ -668,9 +632,12 @@ TEST_F(Conv3dOpTest, PreparedWeightsFromFloat32Storage) {
     auto result = ttml::ops::conv3d(input, weight, nullptr, prepared, c.stride, c.padding);
     result->set_grad(grad_output);
     result->backward();
-    expect_close(ttml::core::to_vector(result->get_value()), ref_out, 0.F, 1e-6F, "fp32-storage prepared forward");
-    expect_close(ttml::core::to_vector(input->get_grad()), ref_dx, 0.F, 1e-6F, "fp32-storage prepared grad_input");
-    expect_close(ttml::core::to_vector(weight->get_grad()), ref_dw, 0.F, 1e-6F, "fp32-storage prepared grad_weight");
+    EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(result->get_value()), ref_out)))
+        << "fp32-storage prepared forward";
+    EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(input->get_grad()), ref_dx)))
+        << "fp32-storage prepared grad_input";
+    EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(weight->get_grad()), ref_dw)))
+        << "fp32-storage prepared grad_weight";
 }
 
 // Every training step must hit the program cache: a miss in any of the composed ttnn ops would recompile per step.
@@ -682,30 +649,26 @@ TEST_F(Conv3dOpTest, PreparedWeightsAreASnapshotOfTheWeight) {
     const ttnn::Shape input_shape({c.N, D, H, W, c.C_in});
     const ttnn::Shape weight_shape({c.C_out, c.C_in, kD, kH, kW});
 
-    auto input = ttml::autograd::create_tensor(make_device_tensor(
-        ttml::test_utils::make_uniform_vector<float>(input_shape.volume(), -1.F, 1.F, 51), input_shape, c.layout));
-    const auto old_weight = make_device_tensor(
-        ttml::test_utils::make_uniform_vector<float>(weight_shape.volume(), -0.5F, 0.5F, 52), weight_shape, c.layout);
-    const auto new_weight = make_device_tensor(
-        ttml::test_utils::make_uniform_vector<float>(weight_shape.volume(), -0.5F, 0.5F, 53), weight_shape, c.layout);
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input =
+        ttml::autograd::create_tensor(ttml::core::from_xtensor(uniform(input_shape, -1.F, 1.F, 51), device, c.layout));
+    const auto old_weight = ttml::core::from_xtensor(uniform(weight_shape, -0.5F, 0.5F, 52), device, c.layout);
+    const auto new_weight = ttml::core::from_xtensor(uniform(weight_shape, -0.5F, 0.5F, 53), device, c.layout);
 
     auto weight = ttml::autograd::create_tensor(old_weight);
     const auto prepared = ttml::ops::prepare_conv3d_weight(weight->get_value(), c.groups);
     const auto with_old =
-        ttml::core::to_vector(ttml::ops::conv3d(input, weight, nullptr, c.stride, c.padding)->get_value());
+        ttml::core::to_xtensor(ttml::ops::conv3d(input, weight, nullptr, c.stride, c.padding)->get_value());
 
     weight->set_value(new_weight);
     const auto with_new =
-        ttml::core::to_vector(ttml::ops::conv3d(input, weight, nullptr, c.stride, c.padding)->get_value());
+        ttml::core::to_xtensor(ttml::ops::conv3d(input, weight, nullptr, c.stride, c.padding)->get_value());
     const auto stale =
-        ttml::core::to_vector(ttml::ops::conv3d(input, weight, nullptr, prepared, c.stride, c.padding)->get_value());
+        ttml::core::to_xtensor(ttml::ops::conv3d(input, weight, nullptr, prepared, c.stride, c.padding)->get_value());
 
-    expect_close(stale, with_old, 0.F, 1e-6F, "stale prepared weight equals the old weight's output");
-    float max_diff = 0.F;
-    for (size_t i = 0; i < stale.size(); ++i) {
-        max_diff = std::max(max_diff, std::abs(stale[i] - with_new[i]));
-    }
-    EXPECT_GT(max_diff, 0.1F) << "stale prepared weight must not track the updated weight";
+    EXPECT_TRUE(xt::all(xt::equal(stale, with_old))) << "stale prepared weight equals the old weight's output";
+    EXPECT_GT(xt::amax(xt::abs(stale - with_new))(), 0.1F) << "stale prepared weight must not track the updated weight";
 }
 
 TEST_F(Conv3dOpTest, ProgramCacheStableAcrossSteps) {
@@ -725,26 +688,13 @@ TEST_F(Conv3dOpTest, ProgramCacheStableAcrossSteps) {
 
     auto step = [&](uint32_t seed) {
         auto input = ttml::autograd::create_tensor(
-            make_device_tensor(
-                ttml::test_utils::make_uniform_vector<float>(input_shape.volume(), -1.F, 1.F, seed),
-                input_shape,
-                c.layout),
-            true);
+            ttml::core::from_xtensor(uniform(input_shape, -1.F, 1.F, seed), device, c.layout), true);
         auto weight = ttml::autograd::create_tensor(
-            make_device_tensor(
-                ttml::test_utils::make_uniform_vector<float>(weight_shape.volume(), -0.5F, 0.5F, seed + 1),
-                weight_shape,
-                c.layout),
-            true);
+            ttml::core::from_xtensor(uniform(weight_shape, -0.5F, 0.5F, seed + 1), device, c.layout), true);
         auto bias = ttml::autograd::create_tensor(
-            make_device_tensor(
-                ttml::test_utils::make_uniform_vector<float>(c.C_out, -1.F, 1.F, seed + 2), bias_shape, c.layout),
-            true);
+            ttml::core::from_xtensor(uniform(bias_shape, -1.F, 1.F, seed + 2), device, c.layout), true);
         auto result = ttml::ops::conv3d(input, weight, bias, c.stride, c.padding, c.dilation, c.groups);
-        result->set_grad(make_device_tensor(
-            ttml::test_utils::make_uniform_vector<float>(output_shape.volume(), -1.F, 1.F, seed + 3),
-            output_shape,
-            c.layout));
+        result->set_grad(ttml::core::from_xtensor(uniform(output_shape, -1.F, 1.F, seed + 3), device, c.layout));
         result->backward();
         ttml::autograd::ctx().reset_graph();
     };
@@ -765,21 +715,17 @@ TEST_F(Conv3dOpTest, GradientsAccumulateAcrossTwoUses) {
     const ttnn::Shape input_shape({c.N, D, H, W, c.C_in});
     const ttnn::Shape weight_shape({c.C_out, c.C_in, kD, kH, kW});
 
+    auto* device = &ttml::autograd::ctx().get_device();
+
     auto input = ttml::autograd::create_tensor(
-        make_device_tensor(
-            ttml::test_utils::make_uniform_vector<float>(input_shape.volume(), -1.F, 1.F, 11), input_shape, c.layout),
-        /*requires_grad=*/true);
+        ttml::core::from_xtensor(uniform(input_shape, -1.F, 1.F, 11), device, c.layout), /*requires_grad=*/true);
     auto weight = ttml::autograd::create_tensor(
-        make_device_tensor(
-            ttml::test_utils::make_uniform_vector<float>(weight_shape.volume(), -0.5F, 0.5F, 12),
-            weight_shape,
-            c.layout),
-        /*requires_grad=*/true);
+        ttml::core::from_xtensor(uniform(weight_shape, -0.5F, 0.5F, 12), device, c.layout), /*requires_grad=*/true);
 
     auto single = ttml::ops::conv3d(input, weight);
     single->backward();
-    const auto single_input_grad = ttml::core::to_vector(input->get_grad());
-    const auto single_weight_grad = ttml::core::to_vector(weight->get_grad());
+    const auto single_input_grad = ttml::core::to_xtensor(input->get_grad());
+    const auto single_weight_grad = ttml::core::to_xtensor(weight->get_grad());
 
     input->set_grad(ttnn::Tensor());
     weight->set_grad(ttnn::Tensor());
@@ -787,19 +733,13 @@ TEST_F(Conv3dOpTest, GradientsAccumulateAcrossTwoUses) {
 
     auto sum = ttml::ops::conv3d(input, weight) + ttml::ops::conv3d(input, weight);
     sum->backward();
-    auto doubled_input_grad = ttml::core::to_vector(input->get_grad());
-    auto doubled_weight_grad = ttml::core::to_vector(weight->get_grad());
+    const auto doubled_input_grad = ttml::core::to_xtensor(input->get_grad());
+    const auto doubled_weight_grad = ttml::core::to_xtensor(weight->get_grad());
 
-    std::vector<float> expected_input_grad(single_input_grad.size());
-    std::vector<float> expected_weight_grad(single_weight_grad.size());
-    std::transform(single_input_grad.begin(), single_input_grad.end(), expected_input_grad.begin(), [](float v) {
-        return 2.F * v;
-    });
-    std::transform(single_weight_grad.begin(), single_weight_grad.end(), expected_weight_grad.begin(), [](float v) {
-        return 2.F * v;
-    });
-    expect_close(doubled_input_grad, expected_input_grad, 1e-2F, 2e-2F, "accumulated grad_input");
-    expect_close(doubled_weight_grad, expected_weight_grad, 1e-2F, 2e-2F, "accumulated grad_weight");
+    EXPECT_TRUE(xt::allclose(doubled_input_grad, 2.F * single_input_grad, /*rtol=*/1e-2, /*atol=*/2e-2))
+        << "accumulated grad_input";
+    EXPECT_TRUE(xt::allclose(doubled_weight_grad, 2.F * single_weight_grad, /*rtol=*/1e-2, /*atol=*/2e-2))
+        << "accumulated grad_weight";
 }
 
 TEST_F(Conv3dOpTest, RejectsUnsupportedArguments) {
@@ -808,9 +748,10 @@ TEST_F(Conv3dOpTest, RejectsUnsupportedArguments) {
     const auto [kD, kH, kW] = c.kernel;
     const ttnn::Shape input_shape({c.N, D, H, W, c.C_in});
     const ttnn::Shape weight_shape({c.C_out, c.C_in, kD, kH, kW});
-    const auto zeros = [](const ttnn::Shape& shape) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto zeros = [device](const ttnn::Shape& shape) {
         return ttml::autograd::create_tensor(
-            make_device_tensor(std::vector<float>(shape.volume(), 0.F), shape, ttnn::Layout::ROW_MAJOR));
+            ttml::core::from_xtensor<float>(xt::zeros<float>(xshape(shape)), device, ttnn::Layout::ROW_MAJOR));
     };
     auto input = zeros(input_shape);
     auto weight = zeros(weight_shape);
@@ -863,9 +804,8 @@ TEST_F(Conv3dOpTest, RejectsUnsupportedArguments) {
         std::invalid_argument);
     // float tensors are read at bf16, so only a non-float dtype can mismatch
     {
-        auto* device = &ttml::autograd::ctx().get_device();
-        auto weight_u32 = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-            std::vector<uint32_t>(weight_shape.volume(), 0U), weight_shape, device, ttnn::Layout::ROW_MAJOR));
+        auto weight_u32 = ttml::autograd::create_tensor(ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+            xt::zeros<uint32_t>(xshape(weight_shape)), device, ttnn::Layout::ROW_MAJOR));
         EXPECT_THROW(ttml::ops::conv3d(input, weight_u32), std::invalid_argument);
     }
     EXPECT_THROW(ttml::ops::conv3d(input, weight, zeros(ttnn::Shape({1U, c.C_out + 1U}))), std::invalid_argument);
@@ -882,8 +822,8 @@ TEST_F(Conv3dOpTest, RejectsHostDeallocatedAndMistypedTensors) {
     const ttnn::Shape bias_shape({1U, 1U, 1U, c.C_out});
     auto* device = &ttml::autograd::ctx().get_device();
 
-    const auto zeros_value = [](const ttnn::Shape& shape) {
-        return make_device_tensor(std::vector<float>(shape.volume(), 0.F), shape, ttnn::Layout::ROW_MAJOR);
+    const auto zeros_value = [device](const ttnn::Shape& shape) {
+        return ttml::core::from_xtensor<float>(xt::zeros<float>(xshape(shape)), device, ttnn::Layout::ROW_MAJOR);
     };
     const auto wrap = [](const ttnn::Tensor& value) { return ttml::autograd::create_tensor(value); };
     // Copies share the buffer, so each deallocated tensor is built fresh.
@@ -893,8 +833,8 @@ TEST_F(Conv3dOpTest, RejectsHostDeallocatedAndMistypedTensors) {
         return value;
     };
     const auto u32_value = [&](const ttnn::Shape& shape, ttnn::Layout layout) {
-        return ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-            std::vector<uint32_t>(shape.volume(), 0U), shape, device, layout);
+        return ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+            xt::zeros<uint32_t>(xshape(shape)), device, layout);
     };
 
     auto input = wrap(zeros_value(input_shape));
