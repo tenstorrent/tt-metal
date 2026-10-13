@@ -78,6 +78,26 @@ def _to_mesh(mesh, t, spec):
     )
 
 
+def _weight_memory_config(mesh, wspec, name, n_dim):
+    """DRAM placement of one weight whose free dim is n_dim: interleaved, or the op's DRAM ND-sharded layout (one
+    tile-row tall, per_core_N = ceil(N tiles / core grid x) tiles wide, round-robin over every DRAM bank)."""
+    if wspec.get("memory") != "DRAM_ND_SHARDED":
+        return ttnn.DRAM_MEMORY_CONFIG
+    width = wspec["shard_width"][name]
+    grid_x = ttnn.bringup.UNIFIED_ROUTED_EXPERT_CORE_GRID.x
+    per_core_n = (n_dim // ttnn.TILE_SIZE + grid_x - 1) // grid_x
+    assert width == per_core_n * ttnn.TILE_SIZE, f"{name}: shard width {width} is not the op's per_core_N for N {n_dim}"
+    dram = mesh.dram_grid_size()
+    return ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=ttnn.Shape([ttnn.TILE_SIZE, width]),
+            grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram.x - 1, dram.y - 1))]),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+
 def _pcc(a, b):
     a, b = a.double().flatten(), b.double().flatten()
     a, b = a - a.mean(), b - b.mean()
@@ -119,7 +139,8 @@ def test_unified_routed_expert_moe(mesh_device, device_params, case):
                 w = w * c["gate_up_scale"]
             t = ttnn.from_torch(w, dtype=wdt, layout=wlay, mesh_mapper=_shard(mesh_device))
             host[name] = ttnn.to_torch(t, mesh_composer=compose).reshape(n_dev, *shape)
-            tt_w[name].append(ttnn.to_device(t, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            mem = _weight_memory_config(mesh_device, wspec, name, shape[1])
+            tt_w[name].append(ttnn.to_device(t, mesh_device, memory_config=mem))
         for d in range(n_dev):
             e = int(chip_experts[d][le])
             r, n = int(regions[d][e]), int(counts[d][e])
