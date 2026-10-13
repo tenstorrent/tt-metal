@@ -402,6 +402,13 @@ jobs:
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
+          # Requests that omit top_k (vllm bench serve sends none) otherwise get
+          # the model default, which is unbounded for Llama and GPT-OSS and 64
+          # for Gemma. With temperature > 0 the plugin samples those on host, so
+          # every decode step reads back full-vocab logits. 32 is the device
+          # sampler's top-k cap.
+          # Placed before the per-entry args so an entry can override it.
+          VLLM_SERVER_ARGS+=(--override-generation-config '{"top_k": 32}')
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
           VLLM_SERVER_ARGS+=("${DEFAULT_CHAT_TEMPLATE_KWARGS[@]}")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_CONFIG[@]}")
