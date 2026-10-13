@@ -90,7 +90,8 @@ inline void llk_pack_fast_untilize_pass_block(
         ckernel::_llk_pack_fast_untilize_pass_block_strided_(
             output_row_address + chunk_offset, unit_dim, pass, prev_unit_dim, output_row_stride);
     } else {
-        ckernel::_llk_pack_fast_untilize_pass_block_(output_row_address, unit_dim, pass, prev_unit_dim, output_row_stride);
+        ckernel::_llk_pack_fast_untilize_pass_block_(
+            output_row_address, unit_dim, pass, prev_unit_dim, output_row_stride);
     }
 }
 

@@ -39,8 +39,8 @@ namespace ckernel {
 // exception on the unpack side because each tile must still be addressed around
 // its exponent section.
 
-// four_tile_chunks keeps the four-tile chunks with a 16-bit DEST too; dense_input (not block-float) lets rows wider than
-// eight tiles take face-pair passes. Init and block must agree on both.
+// four_tile_chunks keeps the four-tile chunks with a 16-bit DEST too; dense_input (not block-float) lets rows wider
+// than eight tiles take face-pair passes. Init and block must agree on both.
 template <
     std::uint32_t full_ct_dim,
     bool configure_remap,
@@ -64,11 +64,12 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
 
     constexpr bool face_passes =
         dense_input && !four_tile_chunks && fast_untilize_face_passes<full_ct_dim, is_fp32_dest_acc_en>();
-    constexpr std::uint32_t max_unit_dim =
-        face_passes        ? FAST_UNTILIZE_MAX_PASS_UNIT_DIM
-        : four_tile_chunks ? FAST_UNTILIZE_MAX_UNIT_DIM
-                           : fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
-    constexpr std::uint32_t first_unit_dim = fast_untilize_next_unit_dim<max_unit_dim>(full_ct_dim);
+    constexpr std::uint32_t max_unit_dim = face_passes ? FAST_UNTILIZE_MAX_PASS_UNIT_DIM
+                                           : four_tile_chunks
+                                               ? FAST_UNTILIZE_MAX_UNIT_DIM
+                                               : fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
+    constexpr std::uint32_t first_unit_dim = face_passes ? fast_untilize_next_pass_row_unit(full_ct_dim)
+                                                         : fast_untilize_next_unit_dim<max_unit_dim>(full_ct_dim);
 
     // Fast-untilize can run immediately after other LLKs (for example matmul
     // bias pack_tile into the same CB). Re-enter a known math/pack sync
@@ -115,7 +116,8 @@ template <
     bool four_tile_chunks = false,
     bool dense_input = false>
 ALWI void fast_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    fast_untilize_init_impl<full_ct_dim, false, is_fp32_dest_acc_en, four_tile_chunks, dense_input>(icb, ocb, call_line);
+    fast_untilize_init_impl<full_ct_dim, false, is_fp32_dest_acc_en, four_tile_chunks, dense_input>(
+        icb, ocb, call_line);
 }
 
 template <
@@ -137,23 +139,38 @@ ALWI void fast_untilize_block(
         four_tile_chunks ? FAST_UNTILIZE_MAX_UNIT_DIM : fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
 
     if constexpr (dense_input && !four_tile_chunks && fast_untilize_face_passes<full_ct_dim, is_fp32_dest_acc_en>()) {
-        constexpr std::uint32_t first_unit_dim = fast_untilize_next_unit_dim<FAST_UNTILIZE_MAX_PASS_UNIT_DIM>(full_ct_dim);
-        [[maybe_unused]] std::uint32_t prev_unpack_unit_dim = first_unit_dim;
+        constexpr std::uint32_t first_unit_dim = fast_untilize_next_pass_row_unit(full_ct_dim);
+        [[maybe_unused]] std::uint32_t prev_unpack_unit_dim = fast_untilize_unit_uses_passes(first_unit_dim)
+                                                                  ? (first_unit_dim | FAST_UNTILIZE_PASS_MOP_KEY)
+                                                                  : first_unit_dim;
         [[maybe_unused]] std::uint32_t prev_pack_unit_dim = 0;
 
         for (std::uint32_t tiles_done = 0; tiles_done < full_ct_dim;) {
-            const std::uint32_t unit_dim =
-                fast_untilize_next_unit_dim<FAST_UNTILIZE_MAX_PASS_UNIT_DIM>(full_ct_dim - tiles_done);
-            for (std::uint32_t pass = 0; pass < 2; ++pass) {
+            const std::uint32_t unit_dim = fast_untilize_next_pass_row_unit(full_ct_dim - tiles_done);
+            if (fast_untilize_unit_uses_passes(unit_dim)) {
+                for (std::uint32_t pass = 0; pass < 2; ++pass) {
+                    MATH((_llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
+                    UNPACK((llk_unpack_fast_untilize_pass_block(
+                        icb, input_tile_index + tiles_done, unit_dim, pass, prev_unpack_unit_dim)));
+                    MATH((llk_math_fast_untilize_pass_block(0, unit_dim)));
+                    MATH((_llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
+
+                    PACK((llk_packer_wait_for_math_done()));
+                    PACK((llk_pack_fast_untilize_pass_block<full_ct_dim>(
+                        ocb, output_tile_index, tiles_done, unit_dim, pass, prev_pack_unit_dim)));
+                    PACK((_llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
+                }
+            } else if constexpr (full_ct_dim > FAST_UNTILIZE_MAX_PASS_UNIT_DIM) {
                 MATH((_llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE>()));
-                UNPACK((llk_unpack_fast_untilize_pass_block(
-                    icb, input_tile_index + tiles_done, unit_dim, pass, prev_unpack_unit_dim)));
-                MATH((llk_math_fast_untilize_pass_block(0, unit_dim)));
+                UNPACK((llk_unpack_fast_untilize_block<is_fp32_dest_acc_en>(
+                    icb, input_tile_index + tiles_done, unit_dim, prev_unpack_unit_dim)));
+                MATH((llk_math_fast_untilize_block<is_fp32_dest_acc_en, FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST>(
+                    0, unit_dim)));
                 MATH((_llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
 
                 PACK((llk_packer_wait_for_math_done()));
-                PACK((llk_pack_fast_untilize_pass_block<full_ct_dim>(
-                    ocb, output_tile_index, tiles_done, unit_dim, pass, prev_pack_unit_dim)));
+                PACK((llk_pack_fast_untilize_block_strided<FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST, full_ct_dim>(
+                    ocb, output_tile_index, tiles_done, unit_dim, prev_pack_unit_dim)));
                 PACK((_llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en>()));
             }
             tiles_done += unit_dim;

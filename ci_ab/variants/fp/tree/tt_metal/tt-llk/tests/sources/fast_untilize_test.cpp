@@ -35,7 +35,8 @@ constexpr std::uint32_t FAST_UNTILIZE_UNIT_DIM =
     FAST_UNTILIZE_FACE_PASSES ? ckernel::FAST_UNTILIZE_MAX_PASS_UNIT_DIM : ckernel::fast_untilize_max_unit_dim<FULL_CT_DIM, DST_ACCUM_MODE>();
 constexpr bool FAST_UNTILIZE_SINGLE_UNIT             = FULL_CT_DIM <= FAST_UNTILIZE_UNIT_DIM;
 constexpr std::uint32_t MAX_UNITS_PER_ROW            = (FULL_CT_DIM + FAST_UNTILIZE_UNIT_DIM - 1) / FAST_UNTILIZE_UNIT_DIM;
-constexpr std::uint32_t FAST_UNTILIZE_FIRST_UNIT_DIM = ckernel::fast_untilize_next_unit_dim<FAST_UNTILIZE_UNIT_DIM>(FULL_CT_DIM);
+constexpr std::uint32_t FAST_UNTILIZE_FIRST_UNIT_DIM = FAST_UNTILIZE_FACE_PASSES ? ckernel::fast_untilize_next_pass_row_unit(FULL_CT_DIM)
+                                                                                 : ckernel::fast_untilize_next_unit_dim<FAST_UNTILIZE_UNIT_DIM>(FULL_CT_DIM);
 // Mirror production fast_untilize: test both ambient dest_sync values while
 // running the private fast region with half-sync double buffering.
 constexpr auto FAST_UNTILIZE_INTERNAL_DEST_SYNC = ckernel::FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE;
@@ -62,7 +63,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
         if constexpr (FAST_UNTILIZE_FACE_PASSES)
         {
-            ckernel::_llk_unpack_fast_untilize_pass_init_(formats.unpack_A_src, formats.unpack_A_dst, FAST_UNTILIZE_FIRST_UNIT_DIM);
+            if constexpr (ckernel::fast_untilize_unit_uses_passes(FAST_UNTILIZE_FIRST_UNIT_DIM))
+            {
+                ckernel::_llk_unpack_fast_untilize_pass_init_(formats.unpack_A_src, formats.unpack_A_dst, FAST_UNTILIZE_FIRST_UNIT_DIM);
+            }
+            else
+            {
+                ckernel::_llk_unpack_fast_untilize_init_<DST_ACCUM_MODE>(formats.unpack_A_src, formats.unpack_A_dst, FAST_UNTILIZE_FIRST_UNIT_DIM);
+            }
         }
         else
         {
@@ -83,23 +91,37 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (FAST_UNTILIZE_FACE_PASSES)
         {
-            std::uint32_t prev_unit_dim = FAST_UNTILIZE_FIRST_UNIT_DIM;
+            std::uint32_t prev_unit_dim = ckernel::fast_untilize_unit_uses_passes(FAST_UNTILIZE_FIRST_UNIT_DIM)
+                                              ? (FAST_UNTILIZE_FIRST_UNIT_DIM | ckernel::FAST_UNTILIZE_PASS_MOP_KEY)
+                                              : FAST_UNTILIZE_FIRST_UNIT_DIM;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t rt = 0; rt < FULL_RT_DIM; rt++)
                 {
                     for (std::uint32_t chunk_col = 0; chunk_col < FULL_CT_DIM;)
                     {
-                        const std::uint32_t unit_dim = ckernel::fast_untilize_next_unit_dim<FAST_UNTILIZE_UNIT_DIM>(FULL_CT_DIM - chunk_col);
+                        const std::uint32_t unit_dim = ckernel::fast_untilize_next_pass_row_unit(FULL_CT_DIM - chunk_col);
                         const std::uint32_t address  = L1_ADDRESS(buffer_A[rt * FULL_CT_DIM + chunk_col]);
-                        if (unit_dim != prev_unit_dim)
+                        if (ckernel::fast_untilize_unit_uses_passes(unit_dim))
                         {
-                            ckernel::_llk_unpack_fast_untilize_pass_mop_config_(unit_dim);
-                            prev_unit_dim = unit_dim;
+                            if ((unit_dim | ckernel::FAST_UNTILIZE_PASS_MOP_KEY) != prev_unit_dim)
+                            {
+                                ckernel::_llk_unpack_fast_untilize_pass_mop_config_(unit_dim);
+                                prev_unit_dim = unit_dim | ckernel::FAST_UNTILIZE_PASS_MOP_KEY;
+                            }
+                            for (std::uint32_t pass = 0; pass < 2; pass++)
+                            {
+                                ckernel::_llk_unpack_fast_untilize_pass_block_(address, unit_dim, pass);
+                            }
                         }
-                        for (std::uint32_t pass = 0; pass < 2; pass++)
+                        else
                         {
-                            ckernel::_llk_unpack_fast_untilize_pass_block_(address, unit_dim, pass);
+                            if (unit_dim != prev_unit_dim)
+                            {
+                                ckernel::_llk_unpack_fast_untilize_reinit_unit_dim_<DST_ACCUM_MODE>(unit_dim);
+                                prev_unit_dim = unit_dim;
+                            }
+                            ckernel::_llk_unpack_fast_untilize_block_(address, unit_dim);
                         }
                         chunk_col += unit_dim;
                     }
@@ -206,15 +228,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t tiles_done = 0; tiles_done < FULL_CT_DIM;)
                     {
-                        const std::uint32_t unit_dim = ckernel::fast_untilize_next_unit_dim<FAST_UNTILIZE_UNIT_DIM>(FULL_CT_DIM - tiles_done);
+                        const std::uint32_t unit_dim = ckernel::fast_untilize_next_pass_row_unit(FULL_CT_DIM - tiles_done);
                         tiles_done += unit_dim;
-                        for (std::uint32_t pass = 0; pass < 2; pass++)
+                        const std::uint32_t sections = ckernel::fast_untilize_unit_uses_passes(unit_dim) ? 2 : 1;
+                        for (std::uint32_t pass = 0; pass < sections; pass++)
                         {
                             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                             {
                                 _llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DEST_SYNC>();
                             }
-                            llk_math_fast_untilize_pass_block(0, unit_dim);
+                            if (sections == 2)
+                            {
+                                llk_math_fast_untilize_pass_block(0, unit_dim);
+                            }
+                            else
+                            {
+                                llk_math_fast_untilize_block<is_fp32_dest_acc_en, ckernel::FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST>(0, unit_dim);
+                            }
                             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                             {
                                 _llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DEST_SYNC, is_fp32_dest_acc_en>();
@@ -365,9 +395,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t tile_row_address    = L1_ADDRESS(buffer_Res[0]) + tile_row_offset_16B;
                     for (std::uint32_t chunk_col = 0; chunk_col < FULL_CT_DIM;)
                     {
-                        const std::uint32_t unit_dim = ckernel::fast_untilize_next_unit_dim<FAST_UNTILIZE_UNIT_DIM>(FULL_CT_DIM - chunk_col);
+                        const std::uint32_t unit_dim      = ckernel::fast_untilize_next_pass_row_unit(FULL_CT_DIM - chunk_col);
                         const std::uint32_t chunk_address = tile_row_address + SCALE_DATUM_SIZE(formats.pack_dst, chunk_col * TILE_C_DIM) / 16;
-                        for (std::uint32_t pass = 0; pass < 2; pass++)
+                        const std::uint32_t sections      = ckernel::fast_untilize_unit_uses_passes(unit_dim) ? 2 : 1;
+                        for (std::uint32_t pass = 0; pass < sections; pass++)
                         {
                             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                             {
@@ -375,7 +406,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             }
                             if constexpr (FULL_CT_DIM > ckernel::FAST_UNTILIZE_MAX_PASS_UNIT_DIM)
                             {
-                                ckernel::_llk_pack_fast_untilize_pass_block_strided_(chunk_address, unit_dim, pass, prev_pack_unit_dim, output_row_stride_16B);
+                                if (sections == 2)
+                                {
+                                    ckernel::_llk_pack_fast_untilize_pass_block_strided_(
+                                        chunk_address, unit_dim, pass, prev_pack_unit_dim, output_row_stride_16B);
+                                }
+                                else
+                                {
+                                    ckernel::_llk_pack_fast_untilize_block_strided_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST, FULL_CT_DIM>(
+                                        chunk_address, unit_dim, prev_pack_unit_dim, output_row_stride_16B);
+                                }
                             }
                             else
                             {

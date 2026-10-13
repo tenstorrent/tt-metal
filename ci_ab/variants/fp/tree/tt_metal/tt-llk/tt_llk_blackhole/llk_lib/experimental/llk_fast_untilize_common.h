@@ -48,6 +48,23 @@ constexpr bool fast_untilize_face_passes()
     return !is_fp32_dest_acc_en && full_ct_dim > FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST;
 }
 
+// Sixteen-tile pass units, then the rest as a pass unit (9 to 15) or a chunk (2 to 8, too few to repay a second DEST
+// hand-off); 17 left take a chunk of 8 first so no unit of 1 remains.
+constexpr std::uint32_t fast_untilize_next_pass_row_unit(const std::uint32_t remaining_tiles)
+{
+    return remaining_tiles == FAST_UNTILIZE_MAX_PASS_UNIT_DIM + 1 ? FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST
+           : remaining_tiles > FAST_UNTILIZE_MAX_PASS_UNIT_DIM    ? FAST_UNTILIZE_MAX_PASS_UNIT_DIM
+                                                                  : remaining_tiles;
+}
+
+constexpr bool fast_untilize_unit_uses_passes(const std::uint32_t unit_dim)
+{
+    return unit_dim > FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST;
+}
+
+// MOP key of a pass unit, so a switch between pass and chunk units in one row reprograms the MOP.
+constexpr std::uint32_t FAST_UNTILIZE_PASS_MOP_KEY = 0x100;
+
 template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en>
 constexpr std::uint32_t fast_untilize_max_unit_dim()
 {
@@ -63,7 +80,7 @@ template <std::uint32_t max_unit_dim = FAST_UNTILIZE_MAX_UNIT_DIM>
 constexpr std::uint32_t fast_untilize_next_unit_dim(const std::uint32_t remaining_tiles)
 {
     // Avoid a trailing unit_dim=1, which the fast pack/math path does not support.
-    // A tail of max_unit_dim + 1 tiles is decomposed as 2 + 3 (four-tile chunks), 4 + 5 (eight) or 8 + 9 (sixteen).
+    // A tail of max_unit_dim + 1 tiles is decomposed as 2 + 3 (four-tile chunks) or 4 + 5 (eight-tile chunks).
     return (remaining_tiles > max_unit_dim + 1) ? max_unit_dim : (remaining_tiles == max_unit_dim + 1) ? (max_unit_dim + 1) / 2 : remaining_tiles;
 }
 

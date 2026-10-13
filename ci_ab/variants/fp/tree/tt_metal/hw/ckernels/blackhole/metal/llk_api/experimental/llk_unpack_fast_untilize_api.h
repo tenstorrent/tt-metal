@@ -113,8 +113,13 @@ inline void llk_unpack_fast_untilize_pass_init(const std::uint32_t operand, cons
     LLK_ASSERT(
         !llk_unpack_fast_untilize_is_bfp_b_input_format(unpack_src_format[operand_id]),
         "fast_untilize face passes need a dense input format");
-    ckernel::_llk_unpack_fast_untilize_pass_init_(
-        unpack_src_format[operand_id], unpack_dst_format[operand_id], init_unit_dim);
+    if (ckernel::fast_untilize_unit_uses_passes(init_unit_dim)) {
+        ckernel::_llk_unpack_fast_untilize_pass_init_(
+            unpack_src_format[operand_id], unpack_dst_format[operand_id], init_unit_dim);
+    } else {
+        ckernel::_llk_unpack_fast_untilize_init_<false>(
+            unpack_src_format[operand_id], unpack_dst_format[operand_id], init_unit_dim);
+    }
 }
 
 inline void llk_unpack_fast_untilize_pass_block(
@@ -125,9 +130,9 @@ inline void llk_unpack_fast_untilize_pass_block(
     std::uint32_t& prev_unit_dim) {
     SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
-    if (unit_dim != prev_unit_dim) {
+    if ((unit_dim | ckernel::FAST_UNTILIZE_PASS_MOP_KEY) != prev_unit_dim) {
         ckernel::_llk_unpack_fast_untilize_pass_mop_config_(unit_dim);
-        prev_unit_dim = unit_dim;
+        prev_unit_dim = unit_dim | ckernel::FAST_UNTILIZE_PASS_MOP_KEY;
     }
     ckernel::_llk_unpack_fast_untilize_pass_block_(
         llk_unpack_fast_untilize_tile_address(operand_id, tile_index), unit_dim, pass);
@@ -136,8 +141,12 @@ inline void llk_unpack_fast_untilize_pass_block(
 inline void llk_unpack_fast_untilize_pass_restore_unit_dim(
     const std::uint32_t init_unit_dim, const std::uint32_t prev_unit_dim) {
     SAN_HOOK(unsupported());
-    if (prev_unit_dim != init_unit_dim) {
-        ckernel::_llk_unpack_fast_untilize_pass_mop_config_(init_unit_dim);
+    if (ckernel::fast_untilize_unit_uses_passes(init_unit_dim)) {
+        if (prev_unit_dim != (init_unit_dim | ckernel::FAST_UNTILIZE_PASS_MOP_KEY)) {
+            ckernel::_llk_unpack_fast_untilize_pass_mop_config_(init_unit_dim);
+        }
+    } else if (prev_unit_dim != init_unit_dim) {
+        ckernel::_llk_unpack_fast_untilize_reinit_unit_dim_<false>(init_unit_dim);
     }
 }
 

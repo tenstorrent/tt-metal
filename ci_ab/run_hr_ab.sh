@@ -54,17 +54,18 @@ run() { # run <tag> <side> <k> <label> <rts>
   slot_in $L
   ( cd $SL/slot/tt_metal/tt-llk/tests/python_tests; mapfile -t N < $S/ids/$tag.txt
     env CHIP_ARCH=blackhole LLK_HOME=$SL/slot/tt_metal/tt-llk TT_LLK_DISABLE_ASSERTS=1 TMPDIR=$SL/slot/builds LLK_PERF_L1_MUX_GROUP=0 LLK_PERF_RUN_TYPES=$rts \
-      PERF_RUN_TAG=${tag}_${L}_$s$k PERF_KEEP_RUNS=4000 timeout -s INT -k 60 900 $PY -m pytest --compile-consumer -p no:cacheprovider \
+      PERF_RUN_TAG=${tag}${LN}_${L}_$s$k PERF_KEEP_RUNS=4000 timeout -s INT -k 60 900 $PY -m pytest --compile-consumer -p no:cacheprovider \
       --override-ini=log_cli=false -q -o timeout_method=thread "${N[@]}" < /dev/null > $log 2>&1 )
   local rc=$?
-  mkdir -p $SL/perf/$L; cp -r $SL/slot/tt_metal/tt-llk/perf_data/runs/${tag}_${L}_$s$k $SL/perf/$L/ 2>/dev/null
+  mkdir -p $SL/perf/$L; cp -r $SL/slot/tt_metal/tt-llk/perf_data/runs/${tag}${LN}_${L}_$s$k $SL/perf/$L/ 2>/dev/null
   slot_out $L
   echo "   $tag $L $s$k rc=$rc $(grep -aE '[0-9]+ (passed|failed|error)' $log | tail -1) $(date -u +%T)"
   if grep -q "TIMED OUT" $log; then echo "== TENSIX TIMED OUT in $tag $s$k, stopping"; return 1; fi
 }
-stop=0; [[ -n ${HR_DRY:-} ]] && stop=1
+stop=0; [[ -n ${HR_DRY:-} ]] && stop=1; LN=0
 while read -r tag A B rts; do
   [[ -z $tag || $tag == \#* || $stop == 1 ]] && continue
+  LN=$((LN+1))
   echo "== $tag ($A against $B, $rts) $(date -u +%T)"; k=0
   for b in 1 2; do for s in A B B A; do k=$((k+1)); L=$A; [[ $s == B ]] && L=$B; run $tag $s $k $L $rts || { stop=1; break 2; }; done; done
 done < $S/lines.txt

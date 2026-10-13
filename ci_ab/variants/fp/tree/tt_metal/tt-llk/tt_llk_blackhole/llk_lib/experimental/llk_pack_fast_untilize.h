@@ -435,7 +435,10 @@ inline void _llk_pack_fast_untilize_block_strided_(
         "BH fast untilize strided path supports block_ct_dim 2, 3, 4, or 8 (16-bit DEST)");
     static_assert(full_ct_dim > block_ct_dim, "Use the contiguous fast_untilize block when the chunk is the full row");
     LLK_ASSERT(unit_dim >= 2 && unit_dim <= block_ct_dim, "fast_untilize pack unit_dim must be in [2, block_ct_dim]");
-    LLK_ASSERT(block_ct_dim == pack_fast_untilize_init_block_ct_dim, "fast_untilize: the block's chunk width differs from the init's");
+    LLK_ASSERT(
+        block_ct_dim == pack_fast_untilize_init_block_ct_dim ||
+            (block_ct_dim == FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST && pack_fast_untilize_init_block_ct_dim == FAST_UNTILIZE_MAX_PASS_UNIT_DIM),
+        "fast_untilize: the block's chunk width differs from the init's");
 
     constexpr std::uint32_t MAX_CARRIED_OUTPUT_Y_ROW = 2 * FAST_UNTILIZE_PHASE_ROWS - 1;
 
@@ -484,18 +487,17 @@ inline void _llk_pack_fast_untilize_block_strided_(
     _llk_pack_fast_untilize_restore_pack_counters_<true>();
 }
 
-// Face-pair passes: one MOP run packs rows_per_run output rows of a pass, ceil(unit_dim / 2) PACRs per row (the last on
-// two interfaces for an odd unit_dim). A unit that is the whole row is one L1 stream per pass; inside a wider row each
-// row closes with Last and ADDR_MOD_1 steps the output row.
+// A unit that is the whole row is one L1 stream per face-pair pass; inside a wider row each output row closes with Last
+// and ADDR_MOD_1 steps to the next one.
 inline void _llk_pack_fast_untilize_pass_mop_config_(const std::uint32_t unit_dim, const std::uint32_t rows_per_run, const bool strided)
 {
     LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "fast_untilize face passes support unit_dim 2 to 16");
 
-    const std::uint32_t tail_intf      = (unit_dim & 1) ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::ALL_INTF_ACTIVE;
-    const std::uint32_t pair_pacr      = _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0, strided ? 1 : 0);
-    const std::uint32_t tail_pacr      = _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, tail_intf, strided ? 1 : 0, 0);
-    const std::uint32_t last_pacr      = _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, tail_intf, 1, 0);
-    const std::uint32_t pacrs_per_row  = (unit_dim + 1) / 2;
+    const std::uint32_t tail_intf     = (unit_dim & 1) ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::ALL_INTF_ACTIVE;
+    const std::uint32_t pair_pacr     = _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0, strided ? 1 : 0);
+    const std::uint32_t tail_pacr     = _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, tail_intf, strided ? 1 : 0, 0);
+    const std::uint32_t last_pacr     = _llk_pack_fast_untilize_row_pacr_(ADDR_MOD_1, tail_intf, 1, 0);
+    const std::uint32_t pacrs_per_row = (unit_dim + 1) / 2;
     if (pacrs_per_row == 1)
     {
         ckernel_template tmp(rows_per_run, 1, tail_pacr);
@@ -517,16 +519,20 @@ inline void _llk_pack_fast_untilize_pass_mop_config_(const std::uint32_t unit_di
 // One face-pair pass of a unit that is the whole row: output rows 16 * pass to 16 * pass + 15 from `address`, the row's
 // start (16B units); output_row_stride_16B is the row's size.
 inline void _llk_pack_fast_untilize_pass_block_(
-    const std::uint32_t address, const std::uint32_t unit_dim, const std::uint32_t pass, std::uint32_t& prev_unit_dim, const std::uint32_t output_row_stride_16B)
+    const std::uint32_t address,
+    const std::uint32_t unit_dim,
+    const std::uint32_t pass,
+    std::uint32_t& prev_unit_dim,
+    const std::uint32_t output_row_stride_16B)
 {
     LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "fast_untilize face passes support unit_dim 2 to 16");
     LLK_ASSERT(pass < 2, "fast_untilize has two face-pair passes");
     LLK_ASSERT(pack_fast_untilize_init_block_ct_dim == FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "fast_untilize: the init did not program face-pair passes");
 
-    if (unit_dim != prev_unit_dim)
+    if ((unit_dim | FAST_UNTILIZE_PASS_MOP_KEY) != prev_unit_dim)
     {
         _llk_pack_fast_untilize_pass_mop_config_(unit_dim, FAST_UNTILIZE_PHASE_ROWS, false);
-        prev_unit_dim = unit_dim;
+        prev_unit_dim = unit_dim | FAST_UNTILIZE_PASS_MOP_KEY;
     }
     program_packer_destination(address + pass * FAST_UNTILIZE_PHASE_ROWS * output_row_stride_16B);
     _llk_pack_fast_untilize_select_phase_<FAST_UNTILIZE_PACK_BOTTOM_STRIP_DEST_TARGET_OFFSET>();
@@ -537,7 +543,11 @@ inline void _llk_pack_fast_untilize_pass_block_(
 
 // One face-pair pass of a unit inside a wider row; `address` is the unit's column in output row 0.
 inline void _llk_pack_fast_untilize_pass_block_strided_(
-    const std::uint32_t address, const std::uint32_t unit_dim, const std::uint32_t pass, std::uint32_t& prev_unit_dim, const std::uint32_t output_row_stride_16B)
+    const std::uint32_t address,
+    const std::uint32_t unit_dim,
+    const std::uint32_t pass,
+    std::uint32_t& prev_unit_dim,
+    const std::uint32_t output_row_stride_16B)
 {
     LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "fast_untilize face passes support unit_dim 2 to 16");
     LLK_ASSERT(pass < 2, "fast_untilize has two face-pair passes");
@@ -550,10 +560,10 @@ inline void _llk_pack_fast_untilize_pass_block_strided_(
         rows_per_run >>= 1;
     }
 
-    if (unit_dim != prev_unit_dim)
+    if ((unit_dim | FAST_UNTILIZE_PASS_MOP_KEY) != prev_unit_dim)
     {
         _llk_pack_fast_untilize_pass_mop_config_(unit_dim, rows_per_run, true);
-        prev_unit_dim = unit_dim;
+        prev_unit_dim = unit_dim | FAST_UNTILIZE_PASS_MOP_KEY;
     }
     _llk_pack_fast_untilize_select_phase_<FAST_UNTILIZE_PACK_BOTTOM_STRIP_DEST_TARGET_OFFSET>();
     _llk_pack_fast_untilize_reset_src_counters_();
