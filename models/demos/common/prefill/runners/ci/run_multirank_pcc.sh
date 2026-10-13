@@ -60,7 +60,7 @@ case "${MODEL}" in
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
-        export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-256000-last5120;"
+        export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-256000-last5120;"
     ;;
   glm53)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm53_prefill_runner_kv}"
@@ -87,6 +87,8 @@ case "${MODEL}" in
     # the same symptom.
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
+    # Deliberately only the first 55k: the K3 golden trace is currently unreliable.
+    PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
@@ -275,8 +277,7 @@ setsid python3 "${TTRUN_PY}" \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_SYNC_PER_CHUNK=1; \
     export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
-    export PREFILL_ENABLE_MIGRATION=1; \
-    export PREFILL_MOCK_MIGRATION=1; \
+    export PREFILL_ENABLE_MIGRATION=0; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     ${RUNNER_OVERRIDES} \
     ${NUM_LAYERS_ENV} \

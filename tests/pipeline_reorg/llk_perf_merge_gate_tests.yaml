@@ -2,7 +2,8 @@
 # llk-perf-impl sets SPEED_OF_LIGHT and LLK_PERF_RUN_TYPES from its inputs; this
 # list only decides the legs. The merge gate measures the queue head and uploads
 # it as the merge baseline, so the baseline and the gate always share these legs.
-# 15 min is the gate ceiling per leg, so each arch runs in 2 legs.
+# 15 min is the gate ceiling per leg, so Wormhole runs in 2 legs and Blackhole,
+# the slower card, in 3.
 
 - name: llk_perf_merge_gate_wormhole group 1/2
   split_group: 1
@@ -28,25 +29,37 @@
       timeout: 15
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_merge_gate_blackhole group 1/2
+- name: llk_perf_merge_gate_blackhole group 1/3
   split_group: 1
   team: llk
   budget_type: merge_gate
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 2
+    ./tests/run_llk_perf_blackhole.sh {split_group} 3
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_perf_merge_gate_blackhole group 2/2
+- name: llk_perf_merge_gate_blackhole group 2/3
   split_group: 2
   team: llk
   budget_type: merge_gate
   cmd: |
     set -euo pipefail
-    ./tests/run_llk_perf_blackhole.sh {split_group} 2
+    ./tests/run_llk_perf_blackhole.sh {split_group} 3
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 15
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_perf_merge_gate_blackhole group 3/3
+  split_group: 3
+  team: llk
+  budget_type: merge_gate
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_blackhole.sh {split_group} 3
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
