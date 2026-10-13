@@ -243,7 +243,7 @@ class QwenImagePipeline(PipelineAPIMixin):
         self._ccl_managers = [
             CCLManager(d, num_links=config.num_links, topology=config.topology) for d in self._devices
         ]
-        self._combiner = CFGCombiner(self._devices)
+        self._combiner = CFGCombiner(self._devices, rescale=True)
 
         scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(config.checkpoint_name, subfolder="scheduler")
         self._solvers = [EulerSolver(scheduler=scheduler) for _ in self._devices]
