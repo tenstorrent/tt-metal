@@ -196,8 +196,7 @@ void kernel_main() {
     }
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
-    // valid_Skt_bound = min(offset_tiles + valid_Sqt, valid_Skt); cap at valid_Skt for callers that pass
-    // different valid_Sqt (e.g. ring_distributed uses full Q length in tiles).
+    // valid_Skt_bound = min(offset_tiles + valid_Sqt, valid_Skt).
 
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
@@ -317,7 +316,7 @@ void kernel_main() {
         }
         uint32_t valid_Skt_bound;
         if (chunk_start_idx_addr != 0) {
-            // Flexible or ring: cap at valid_Skt so we never read past K/V extent.
+            // Flexible chunked: cap at valid_Skt so we never read past K/V extent.
             valid_Skt_bound = std::min(chunked_q_chunk_offset * Sq_chunk_t + valid_Sqt, valid_Skt);
         } else {
             // Scalar-offset factories already include the prefix in valid_Skt.
