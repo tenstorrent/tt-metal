@@ -118,7 +118,18 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     for (uint32_t ci = 0; ci < ngu; ++ci) {
         rect_cores[p.rect_of(p.gu[ci])].push_back(ci);
     }
+    // MIMO_FL_X1=1 (prototype, read at program build): x is read from DRAM once. Rectangle 0's relays (primary +
+    // helpers) read and tilize every super-block and the primary multicasts each one into BOTH rectangles
+    // (se11_xmc.cpp's second-rectangle args), gated on all gate/up cores' freed words; rectangle 1's relays idle.
+    // (Each rectangle's relays read all of x before: 2x the x DRAM bytes; NoC trace, worklog 8e.)
+    const bool x_once = std::getenv("MIMO_FL_X1") && std::atoi(std::getenv("MIMO_FL_X1")) != 0;
+    TT_FATAL(
+        !x_once || (NR == 2 && p.nsg == 1 && !p.group_rect),
+        "MIMO_FL_X1: two rectangles, one subgrid, no M-groups by rectangle only");
     auto word_rel = [&](uint32_t ci) {
+        if (x_once) {
+            return 4 * ci;  // every gate/up core's word on rectangle 0's primary
+        }
         const auto& rc = rect_cores[p.rect_of(p.gu[ci])];
         return 4 * static_cast<uint32_t>(std::find(rc.begin(), rc.end(), ci) - rc.begin());
     };
@@ -434,15 +445,21 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             xrd_batch = static_cast<uint32_t>(std::stoul(b));
             TT_FATAL(xrd_batch > 0 && RM_CHUNKS % xrd_batch == 0, "MIMO_FL_XRD_BATCH must divide {}", RM_CHUNKS);
         }
+        std::vector<CoreCoord> xrel;  // the relays that read x (x1: rectangle 0's only)
+        for (uint32_t idx = 0; idx < p.relays.size(); ++idx) {
+            if (!x_once || idx % NR == 0) {
+                xrel.push_back(p.relays[idx]);
+            }
+        }
         const auto kxr =
             dm("se11_xrd.cpp",
-               p.relays,
+               xrel,
                DataMovementProcessor::RISCV_0,
                NOC::NOC_1,
                {0, t.x.logical_shape()[-1] * 2, E, MT, p.nsb, S, xrd_batch, idx_arg, p.H / t.x.logical_shape()[-1]},
                xrd_def);
-        const auto ktz = cp("se11_tz.cpp", p.relays, {0, 1, MT}, with(dyn_def, {{"SE_SBT", sbt}}));
-        const std::vector<CoreCoord> prim(p.relays.begin(), p.relays.begin() + NR);
+        const auto ktz = cp("se11_tz.cpp", xrel, {0, 1, MT}, with(dyn_def, {{"SE_SBT", sbt}}));
+        const std::vector<CoreCoord> prim(p.relays.begin(), p.relays.begin() + (x_once ? 1 : NR));
         const auto kxm =
             dm("se11_xmc.cpp",
                prim,
@@ -458,7 +475,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                     {"XMC_ZERO_WORDS", "1"}}));
         std::vector<KernelHandle> khl;
         for (uint32_t j = 0; j < p.nh; ++j) {
-            const std::vector<CoreCoord> hl(p.relays.begin() + NR + NR * j, p.relays.begin() + NR + NR * (j + 1));
+            const std::vector<CoreCoord> hl(
+                p.relays.begin() + NR + NR * j, p.relays.begin() + NR + NR * j + (x_once ? 1 : NR));
             const uint32_t data_sem = std::vector<uint32_t>{4, 7, 8, 10}[j];
             khl.push_back(
                 dm("se13_xhelp.cpp",
@@ -472,6 +490,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         for (uint32_t idx = 0; idx < p.relays.size(); ++idx) {
             const CoreCoord rl = p.relays[idx];
             const uint32_t k = idx % NR;
+            if (x_once && k != 0) {
+                continue;  // rectangle 1's relays: no x work
+            }
             const auto [x0, x1, y0, y1] = p.rects[k];
             Args xr;
             xr.a(AddrSrc::X).lit(p.vstride).lit(rl_off(idx)).cat(dyn).lits(sgx(k));
@@ -487,8 +508,15 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                     .lit(pk(CoreCoord(x1, y1)))
                     .lit((x1 - x0 + 1) * (y1 - y0 + 1))
                     .a(AddrSrc::Words)
-                    .lit(rect_cores[k].size())
-                    .lits({V * p.nsb, XARR, 1, 0, p.group_rect ? ((idx * MTG) | ((idx + 1) * MTG << 8)) : 0, 0, 0, 0})
+                    .lit(x_once ? ngu : static_cast<uint32_t>(rect_cores[k].size()))
+                    .lits({V * p.nsb, XARR, 1, 0, p.group_rect ? ((idx * MTG) | ((idx + 1) * MTG << 8)) : 0});
+                if (x_once) {  // the second rectangle this primary multicasts into (se11_xmc.cpp RT 11-13)
+                    const auto [u0, u1, v0, v1] = p.rects[1];
+                    xm.lit((u1 - u0 + 1) * (v1 - v0 + 1)).lit(pk(CoreCoord(u0, v0))).lit(pk(CoreCoord(u1, v1)));
+                } else {
+                    xm.lits({0, 0, 0});
+                }
+                xm
                     .lit(pk(p.relays[idx + NR]))
                     .a(AddrSrc::Arena, p.land_off)
                     .lit(p.land_slots);
@@ -569,7 +597,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                     .lit(GATH)
                     .a(AddrSrc::Arena, p.x_off)
                     .lits({0, 0, 0})
-                    .lit(pk(p.relays[p.rect_of(gc)]))
+                    .lit(pk(p.relays[x_once ? 0 : p.rect_of(gc)]))
                     .a(AddrSrc::Words, word_rel(ci))
                     .a(AddrSrc::Arena, p.h_off)
                     .lit(j % G)
