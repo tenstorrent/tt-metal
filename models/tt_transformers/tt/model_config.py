@@ -740,9 +740,7 @@ class ModelArgs:
             raise ValueError(f"Batch size {self.max_batch_size} not supported")
 
         # Load model params
-        if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
-            self.trust_remote_code_hf = True
-
+        # Do not force remote code for Phi-3. Its remote model leaves most weights randomly initialized on HF 5.x.
         self._set_hf_params(self.CKPT_DIR)
 
         # Set the max number of tokens for each prefill chunk based on the model and device
@@ -3299,14 +3297,18 @@ class ModelArgs:
     def weight_cache_path(self, dtype):
         # Keep the weight cache separate for generative and instruct weights
         if self.instruct:
-            return (
-                self.model_cache_path
-                / {ttnn.bfloat16: "tensor_cache_instruct_bf16", ttnn.bfloat8_b: "tensor_cache_instruct_bfp8"}[dtype]
-            )
+            cache_name = {
+                ttnn.bfloat16: "tensor_cache_instruct_bf16",
+                ttnn.bfloat8_b: "tensor_cache_instruct_bfp8",
+            }[dtype]
         else:
-            return (
-                self.model_cache_path / {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
-            )
+            cache_name = {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
+
+        if self.base_model_name == "Phi-3-mini-128k-instruct":
+            # Caches built before the native-loader fix may contain randomly initialized weights.
+            cache_name += "_hf_native"
+
+        return self.model_cache_path / cache_name
 
     # Name of the marker file dropped into a weight-cache directory once every weight for that
     # (model, dtype, mesh shape) has been materialized to disk. Generalizes the GPT-OSS
@@ -4568,7 +4570,12 @@ class ModelArgs:
     def reference_decoder(self, load_checkpoint=False):
         model = self.reference_transformer(wrap=False, load_checkpoint=load_checkpoint)
         layer = model.model.layers[0]
-        use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in ("phi-4",)
+        # Remote Phi-3 computes RoPE internally, while native Transformers 5.x requires the caller to supply it.
+        use_position_embeddings = (
+            layer.__class__.__name__ != "Phi3DecoderLayer"
+            or "position_embeddings" in inspect.signature(layer.forward).parameters
+            or self.base_model_name in ("phi-4",)
+        )
         if hasattr(model.model, "rotary_emb_local"):
             rotary_emb_local = model.model.rotary_emb_local
         else:
