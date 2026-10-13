@@ -62,6 +62,13 @@ constexpr bool fast_untilize_unit_uses_passes(const std::uint32_t unit_dim)
     return unit_dim > FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST;
 }
 
+// The unit the unpack pass MOP is programmed for: the row's first pass unit (a row of 17 starts with its chunk of 8).
+constexpr std::uint32_t fast_untilize_first_pass_unit(const std::uint32_t full_ct_dim)
+{
+    return full_ct_dim == FAST_UNTILIZE_MAX_PASS_UNIT_DIM + 1 ? full_ct_dim - FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST
+                                                              : fast_untilize_next_pass_row_unit(full_ct_dim);
+}
+
 // MOP key of a pass unit, so a switch between pass and chunk units in one row reprograms the MOP.
 constexpr std::uint32_t FAST_UNTILIZE_PASS_MOP_KEY = 0x100;
 
