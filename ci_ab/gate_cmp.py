@@ -20,8 +20,9 @@ def ref(lg, bias, sig, topk):
 
 
 tot = valid = 0
-same = tie = other = 0
+same = tie = other = order = 0
 maxd = 0.0
+kinds = {}
 for name, (lg, bias, w, idx) in sorted(a.items()):
     sig, topk, smax = (int(x) for x in name.split("_")[-3:])
     s, key = ref(lg, bias, sig, topk)
@@ -36,8 +37,13 @@ for name, (lg, bias, w, idx) in sorted(a.items()):
         valid += int(ok)
         if b is not None:
             w2, idx2 = b[name][2], b[name][3]
+            kd = kinds.setdefault(name.split("_")[0], [0, 0, 0, 0])
             if torch.equal(idx[t], idx2[t]) and torch.equal(w[t], w2[t]):
                 same += 1
+                kd[0] += 1
+            elif torch.equal(torch.sort(idx[t, :topk]).values, torch.sort(idx2[t, :topk]).values):
+                order += 1
+                kd[1] += 1
             else:
                 k1 = torch.sort(key[t, idx[t, :topk].long()]).values
                 k2 = torch.sort(key[t, idx2[t, :topk].long()]).values
@@ -45,8 +51,12 @@ for name, (lg, bias, w, idx) in sorted(a.items()):
                 maxd = max(maxd, d)
                 if d <= 1e-2:
                     tie += 1
+                    kd[2] += 1
                 else:
                     other += 1
+                    kd[3] += 1
 print(f"GATE VALID {arm} {valid} of {tot} tokens select a valid top-k by the exact key")
 if b is not None:
-    print(f"GATE CMP identical {same}, tie-only {tie}, other {other} of {tot} tokens; largest key gap between the two selections {maxd:.4g}")
+    print(f"GATE CMP identical {same}, same experts in another order {order}, other experts with the same keys {tie}, other {other} of {tot} tokens; largest key gap {maxd:.4g}")
+    for k, v in sorted(kinds.items()):
+        print(f"GATE KIND {k} identical {v[0]} reordered {v[1]} same-keys {v[2]} other {v[3]}")

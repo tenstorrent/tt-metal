@@ -44,8 +44,9 @@ python3 $S/gate_cmp.py $OUT/dump_A/results.pt A $OUT/dump_B/results.pt
 use B B; export TT_METAL_CACHE=$OUT/cache_T; mkdir -p $TT_METAL_CACHE
 for t in models/common/tests/modules/moe/test_generalized_moe_gate.py models/common/tests/modules/moe/test_tt_moe_gate.py; do
   t0=$(date +%s); timeout -s INT -k 60 2400 python3 -m pytest -q -p no:cacheprovider -o timeout_method=thread $t > $OUT/ut.log 2>&1
-  echo "== $(basename $t) on B rc=$? $(( $(date +%s) - t0 )) s: $(grep -aE '[0-9]+ (passed|failed)' $OUT/ut.log | tail -1)"
-  grep -aE '^(FAILED|ERROR)' $OUT/ut.log | head -10 | cut -c1-240
+  echo "== $(basename $t) on B rc=$? $(( $(date +%s) - t0 )) s: $(grep -aE '[0-9]+ (passed|failed|skipped|deselected)|no tests ran' $OUT/ut.log | tail -1)"
+  grep -aE '^(FAILED|ERROR)' $OUT/ut.log | sed 's/\[.*//' | sort | uniq -c | head -10 | cut -c1-240
+  grep -aE 'SKIPPED' $OUT/ut.log | head -3 | cut -c1-240
 done
 echo "OPS GUARD A=${ELF[A]} B=${ELF[B]} B2=${ELF[B2]}"
 [[ ${ELF[A]} == "${ELF[B]}" ]] && { echo "OPS GUARD FAIL: A and B built the same kernels"; fail=1; }
