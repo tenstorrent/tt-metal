@@ -2,25 +2,34 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bucket the device time of signposted decode windows from a Tracy ops report (ops_perf_results_*.csv).
+"""Bucket the device time of the drained decode-step windows in a device profiler run.
 
-    python profile_buckets.py <ops_perf_results.csv> [--steps N] [--device D] [--top 25] [--json out.json]
+    python profile_buckets.py <profiler dir or cpp_device_perf_report.csv> [--device D] [--top 25] [--json out.json]
 
-Each start/stop signpost pair is one window (enhancer_bench.py BENCH_PROFILE_STEPS; one per temperature, in
-BENCH_TEMPS order). Per window and device: device kernel time by op class, the gaps between ops (op-to-op
-latency), and their sum, all divided by ``--steps`` to give ms per decode step. Ops replayed from the decode
-trace carry a METAL TRACE ID; ops without one ran eagerly (the device sampler), so they form their own split.
-The table shows one device (``--device``, default the first); the spread across devices is printed below it.
+Reads the per-op device report the profiler writes (.logs/cpp_device_perf_report.csv); Tracy's ops report and
+the host signposts are not needed, which matters with every device zone on: the host capture stops at Tracy's
+32K source-location limit long before the window.
+
+Windows are found on the device timeline. test_enhancer_decode_step.py / enhancer_bench.py drain the profiler
+(several seconds) right before and right after each window, so a window is a run of ops with a gap of at
+least ``--drain-gap`` seconds on both sides that contains one complete replay of the decode trace. That run
+is exactly one decode step: the trace replay plus the eager ops of the step (the device sampler).
+
+Per window and device: device kernel time by op class (eager ops apart, summed over ops), the time some kernel
+is running (union of kernel intervals; ops can overlap, so this can be less than the sum), the rest of the
+step's span with no kernel running (launch, firmware, dispatch waits), and the span (first op start to last
+op end). Firmware intervals of consecutive ops overlap, so firmware time is not summed.
 """
 
 import argparse
 import csv
 import json
+import os
 import re
 import statistics
 from collections import defaultdict
 
-# First match wins; checked against the op code.
+# First match wins; checked against the op name.
 CLASSES = (
     ("matmul", r"matmul|linear"),
     ("ccl", r"allgather|all_gather|reducescatter|reduce_scatter|allreduce|all_reduce|broadcast|ccl|fabric"),
@@ -36,116 +45,162 @@ CLASSES = (
     ),
     ("eltwise", r"binary|unary|eltwise|ternary|where|mul|add|sub|tanh|exp|gelu|silu|clamp|reduction|reduce"),
 )
+REPORT = "cpp_device_perf_report.csv"
 
 
-def op_class(code):
-    c = code.lower()
-    for name, pattern in CLASSES:
-        if re.search(pattern, c):
-            return name
+def op_class(name):
+    n = name.lower()
+    for cls, pattern in CLASSES:
+        if re.search(pattern, n):
+            return cls
     return "other"
 
 
-def col(row, *names):
-    for n in names:
-        if n in row and row[n] not in ("", None):
-            return row[n]
-    return None
+def find_report(path):
+    if os.path.isfile(path):
+        return path
+    for root, _, files in os.walk(path):
+        if REPORT in files:
+            return os.path.join(root, REPORT)
+    raise SystemExit(f"no {REPORT} under {path}")
 
 
-def num(v):
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return 0.0
+def load(path):
+    """Rows per device with cycle timestamps, sorted by start; plus cycles per ns per device."""
+    per_dev = defaultdict(list)
+    ratios = defaultdict(list)
+    with open(path, newline="") as f:
+        for r in csv.DictReader(f):
+            if not r["DEVICE FW START CYCLE"]:
+                continue
+            start, end = int(r["DEVICE FW START CYCLE"]), int(r["DEVICE FW END CYCLE"])
+            fw_ns = float(r["DEVICE FW DURATION [ns]"] or 0)
+            if fw_ns > 1000:
+                ratios[r["DEVICE ID"]].append((end - start) / fw_ns)
+            per_dev[int(r["DEVICE ID"])].append(
+                {
+                    "name": r["OP NAME"],
+                    "trace": r["METAL TRACE ID"],
+                    "session": r["METAL TRACE REPLAY SESSION ID"],
+                    "start": start,
+                    "end": end,
+                    "k_start": int(r["DEVICE KERNEL START CYCLE"] or start),
+                    "k_end": int(r["DEVICE KERNEL END CYCLE"] or end),
+                    "fw_ns": fw_ns,
+                    "kernel_ns": float(r["DEVICE KERNEL DURATION [ns]"] or 0),
+                }
+            )
+    cyc_per_ns = {int(d): statistics.median(v) for d, v in ratios.items()}
+    for rows in per_dev.values():
+        rows.sort(key=lambda r: r["start"])
+    return per_dev, cyc_per_ns
 
 
-def windows(rows):
-    """Split rows into start..stop windows by signpost rows, in file order."""
-    out, cur = [], None
-    for r in rows:
-        if (col(r, "OP TYPE") or "").lower() == "signpost":
-            name = (col(r, "OP CODE") or "").strip()
-            if name == "start":
-                cur = []
-            elif name == "stop" and cur is not None:
-                out.append(cur)
-                cur = None
-            continue
-        if cur is not None:
-            cur.append(r)
+def windows(rows, cyc_per_ns, drain_gap_s):
+    """Runs of ops separated by drain-sized gaps that hold exactly one complete trace replay. The first and last
+    runs have a drain on one side only, so they are never windows."""
+    gap = drain_gap_s * 1e9 * cyc_per_ns
+    runs, cur = [], [rows[0]]
+    for prev, r in zip(rows, rows[1:]):
+        if r["start"] - prev["end"] > gap:
+            runs.append(cur)
+            cur = []
+        cur.append(r)
+    runs.append(cur)
+    out = []
+    for run in runs[1:-1]:
+        sessions = {(r["trace"], r["session"]) for r in run if r["trace"]}
+        if len(sessions) == 1:
+            out.append(run)
     return out
 
 
-def summarize(window, steps):
-    per_dev = defaultdict(lambda: {"kernel": defaultdict(float), "gap": 0.0, "ops": 0, "per_op": defaultdict(float)})
-    for r in window:
-        dev = col(r, "DEVICE ID")
-        if dev is None:
-            continue
-        code = col(r, "OP CODE") or "?"
-        traced = col(r, "METAL TRACE ID") not in (None, "", "nan")
-        cls = op_class(code) if traced else "eager (sampler)"
-        k = num(col(r, "DEVICE KERNEL DURATION [ns]")) / 1e6
-        d = per_dev[int(float(dev))]
-        d["kernel"][cls] += k
-        d["gap"] += num(col(r, "OP TO OP LATENCY [ns]")) / 1e6
-        d["ops"] += 1
-        d["per_op"][(cls, code)] += k
-    res = {}
-    for dev, d in per_dev.items():
-        kernel = {c: v / steps for c, v in d["kernel"].items()}
-        res[dev] = {
-            "kernel_ms": kernel,
-            "kernel_total_ms": sum(kernel.values()),
-            "gap_ms": d["gap"] / steps,
-            "total_ms": sum(kernel.values()) + d["gap"] / steps,
-            "ops_per_step": d["ops"] / steps,
-            "per_op_ms": {f"{c} | {code}": v / steps for (c, code), v in d["per_op"].items()},
-        }
-    return res
+def summarize(run, cyc_per_ns):
+    kernel = defaultdict(float)
+    per_op = defaultdict(float)
+    per_op_calls = defaultdict(int)
+    kern_total = 0.0
+    for r in run:
+        cls = op_class(r["name"]) if r["trace"] else f"eager: {op_class(r['name'])}"
+        kernel[cls] += r["kernel_ns"] / 1e6
+        per_op[f"{cls} | {r['name']}"] += r["kernel_ns"] / 1e6
+        per_op_calls[f"{cls} | {r['name']}"] += 1
+        kern_total += r["kernel_ns"] / 1e6
+    busy = 0
+    cur_s = cur_e = None
+    for a, b in sorted((r["k_start"], r["k_end"]) for r in run):
+        if cur_e is None or a > cur_e:
+            if cur_e is not None:
+                busy += cur_e - cur_s
+            cur_s, cur_e = a, b
+        else:
+            cur_e = max(cur_e, b)
+    busy += cur_e - cur_s
+    busy_ms = busy / cyc_per_ns / 1e6
+    span = (max(r["end"] for r in run) - run[0]["start"]) / cyc_per_ns / 1e6
+    traced = [r for r in run if r["trace"]]
+    trace_span = (max(r["end"] for r in traced) - min(r["start"] for r in traced)) / cyc_per_ns / 1e6
+    return {
+        "ops": len(run),
+        "traced_ops": len(traced),
+        "session": traced[0]["session"],
+        "span_ms": span,
+        "trace_span_ms": trace_span,
+        "kernel_ms": dict(kernel),
+        "kernel_total_ms": kern_total,
+        "kernel_busy_ms": busy_ms,
+        "no_kernel_ms": span - busy_ms,
+        "per_op_ms": dict(per_op),
+        "per_op_calls": dict(per_op_calls),
+    }
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("csv")
-    ap.add_argument("--steps", type=int, default=2, help="decode steps per window")
+    ap.add_argument("path")
     ap.add_argument("--device", type=int, default=None)
     ap.add_argument("--top", type=int, default=25)
+    ap.add_argument("--drain-gap", type=float, default=1.0, help="seconds; gaps this long are profiler drains")
     ap.add_argument("--json", default=None)
     a = ap.parse_args()
 
-    with open(a.csv, newline="") as f:
-        rows = list(csv.DictReader(f))
-    wins = windows(rows)
-    print(f"{len(rows)} rows, {len(wins)} signposted windows, {a.steps} steps each")
-    out = []
-    for i, w in enumerate(wins):
-        res = summarize(w, a.steps)
-        if not res:
-            print(f"window {i}: no device rows")
+    per_dev, cyc_per_ns = load(find_report(a.path))
+    devices = sorted(per_dev)
+    dev = a.device if a.device in per_dev else devices[0]
+    per_window = defaultdict(dict)
+    for d in devices:
+        for i, run in enumerate(windows(per_dev[d], cyc_per_ns[d], a.drain_gap)):
+            per_window[i][d] = summarize(run, cyc_per_ns[d])
+    print(f"devices {devices}; {len(per_window)} windows (one decode step each)")
+
+    for i, res in per_window.items():
+        if dev not in res:
             continue
-        dev = a.device if a.device in res else min(res)
-        d = res[dev]
-        print(f"\n=== window {i}: device {dev}, {d['ops_per_step']:.0f} ops/step ===")
-        print(f"{'class':18s} {'ms/step':>9s} {'share':>7s}")
-        for c, v in sorted(d["kernel_ms"].items(), key=lambda kv: -kv[1]):
-            print(f"{c:18s} {v:9.3f} {100 * v / d['total_ms']:6.1f}%")
-        print(f"{'op-to-op gaps':18s} {d['gap_ms']:9.3f} {100 * d['gap_ms'] / d['total_ms']:6.1f}%")
-        print(f"{'total':18s} {d['total_ms']:9.3f}")
-        totals = [r["total_ms"] for r in res.values()]
-        kern = [r["kernel_total_ms"] for r in res.values()]
+        s = res[dev]
+        total = s["span_ms"]
         print(
-            f"across {len(res)} devices: total ms/step min {min(totals):.3f} median {statistics.median(totals):.3f} "
-            f"max {max(totals):.3f}; kernel min {min(kern):.3f} max {max(kern):.3f}"
+            f"\n=== window {i}: device {dev}, trace session {s['session']}, {s['ops']} ops "
+            f"({s['traced_ops']} traced) ==="
         )
-        print(f"top {a.top} ops on device {dev} (ms/step):")
-        for name, v in sorted(d["per_op_ms"].items(), key=lambda kv: -kv[1])[: a.top]:
-            print(f"  {v:7.3f}  {name}")
-        out.append({"window": i, "device": dev, "devices": {str(k): v for k, v in res.items()}})
+        print(f"{'':24s} {'ms':>8s} {'share':>7s}")
+        for cls, v in sorted(s["kernel_ms"].items(), key=lambda kv: -kv[1]):
+            print(f"{cls:24s} {v:8.3f} {100 * v / total:6.1f}%")
+        print(f"{'sum of kernels':24s} {s['kernel_total_ms']:8.3f}")
+        print(f"{'some kernel running':24s} {s['kernel_busy_ms']:8.3f} {100 * s['kernel_busy_ms'] / total:6.1f}%")
+        print(f"{'no kernel running':24s} {s['no_kernel_ms']:8.3f} {100 * s['no_kernel_ms'] / total:6.1f}%")
+        print(f"{'step span':24s} {total:8.3f}   (decode trace alone {s['trace_span_ms']:.3f})")
+        spans = [r["span_ms"] for r in res.values()]
+        print(
+            f"across {len(res)} devices: step span min {min(spans):.3f} median {statistics.median(spans):.3f} "
+            f"max {max(spans):.3f} ms"
+        )
+        print(f"top {a.top} ops on device {dev} (ms summed over calls, calls, us per call):")
+        for name, v in sorted(s["per_op_ms"].items(), key=lambda kv: -kv[1])[: a.top]:
+            n = s["per_op_calls"][name]
+            print(f"  {v:7.3f}  {n:5d}  {1000 * v / n:7.2f}  {name}")
     if a.json:
         with open(a.json, "w") as f:
-            json.dump(out, f, indent=1)
+            json.dump({str(i): {str(d): v for d, v in res.items()} for i, res in per_window.items()}, f, indent=1)
 
 
 if __name__ == "__main__":
