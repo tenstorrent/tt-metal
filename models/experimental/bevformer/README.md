@@ -40,13 +40,11 @@ six DETR layers of self-attention, single-level deformable cross-attention over 
 (`TTMSDeformableAttention`) and an FFN, with 900 object queries. After each layer the
 `reg_branches` output refines the (x, y, z) reference points.
 
-- The reference points and the sampling grid built from them are float32. In bfloat16 a
-  point moves in steps of up to 0.8 px on the 200x200 base BEV grid, and the error compounds
-  through the refinement.
-- The BEV size is folded into the sampling-offset Linear when the module is built, so the
-  decoder is built for one `(bev_h, bev_w)` and its forward runs on device only.
-- Parameters come from `tt/model_preprocessing_decoder.py` and are single use: building a decoder
-  consumes them, so each decoder instance needs its own `create_decoder_parameters` call.
+- The reference points stay float32 through the refinement and into the fused MSDA op, which
+  forms the sampling location from them in fp32. In bfloat16 a point moves in steps of up to
+  0.8 px on the 200x200 base BEV grid, and the error compounds through the refinement. The
+  forward runs on device only.
+- Parameters come from `tt/model_preprocessing_decoder.py`.
 - Inputs and outputs are sequence-first by default, as in the reference; `batch_first=True` takes
   and returns batch-first tensors and skips the permutes.
 
