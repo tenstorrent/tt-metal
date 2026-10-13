@@ -235,11 +235,14 @@ uint32_t BufferDistributionSpec::contiguous_page_stride() const {
     return CMAKE_UNIQUE_NAMESPACE::tensor_stride(tensor_shape_in_pages_, contiguous_page_dim());
 }
 
+uint32_t BufferDistributionSpec::num_contiguous_pages(uint32_t page_id) const {
+    return num_contiguous_pages(page_id, tensor_shape_in_pages_.volume());
+}
+
 uint32_t BufferDistributionSpec::num_contiguous_pages(uint32_t page_id, uint32_t end_page_id) const {
     const uint32_t tensor_volume = tensor_shape_in_pages_.volume();
-    const uint32_t end = (end_page_id == 0) ? tensor_volume : end_page_id;
-    TT_FATAL(page_id < end, "page_id {} must be less than end page id {}", page_id, end);
-    TT_FATAL(end <= tensor_volume, "end_page_id {} exceeds tensor volume {}", end, tensor_volume);
+    TT_FATAL(page_id < end_page_id, "page_id {} must be less than end_page_id {}", page_id, end_page_id);
+    TT_FATAL(end_page_id <= tensor_volume, "end_page_id {} exceeds tensor volume {}", end_page_id, tensor_volume);
 
     const int d = contiguous_page_dim();
     const uint32_t stride = CMAKE_UNIQUE_NAMESPACE::tensor_stride(tensor_shape_in_pages_, d);
@@ -267,8 +270,8 @@ uint32_t BufferDistributionSpec::num_contiguous_pages(uint32_t page_id, uint32_t
         block *= extent;
     }
 
-    // end is in page ids, the run steps by stride.
-    const uint32_t room = (end - page_id - 1) / stride + 1;
+    // end_page_id is in page ids, the run steps by stride.
+    const uint32_t room = (end_page_id - page_id - 1) / stride + 1;
     return std::min(run, room);
 }
 

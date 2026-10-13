@@ -171,13 +171,17 @@ public:
     uint32_t contiguous_page_stride() const { return dspec().tensor_strides()[contiguous_page_dim()]; }
 
     // Number of pages from page_id (inclusive) contiguous in memory: page ids page_id + k * contiguous_page_stride()
-    // at get_noc_addr(page_id) + k * get_aligned_page_size(). end_page_id is an exclusive page id (0 = tensor
-    // volume), not a count. A run stops at a shard edge, even if the next shard follows in the same bank, and at
-    // the tensor edge. Use shard_pages() to cover a whole shard.
-    uint32_t num_contiguous_pages(uint32_t page_id, uint32_t end_page_id = 0) const {
-        const uint32_t end = (end_page_id == 0) ? dspec().tensor_volume() : end_page_id;
-        ASSERT(page_id < end);
-        ASSERT(end <= dspec().tensor_volume());
+    // at get_noc_addr(page_id) + k * get_aligned_page_size(). A run stops at a shard edge, even if the next shard
+    // follows in the same bank, and at the tensor edge. Use shard_pages() to cover a whole shard.
+    FORCE_INLINE
+    uint32_t num_contiguous_pages(uint32_t page_id) const {
+        return num_contiguous_pages(page_id, dspec().tensor_volume());
+    }
+
+    // As above, but the run also stops before end_page_id, an exclusive page id (not a count).
+    uint32_t num_contiguous_pages(uint32_t page_id, uint32_t end_page_id) const {
+        ASSERT(page_id < end_page_id);
+        ASSERT(end_page_id <= dspec().tensor_volume());
 
         const int d = contiguous_page_dim();
         const uint32_t stride = dspec().tensor_strides()[d];
@@ -205,8 +209,8 @@ public:
             block *= extent;
         }
 
-        // end is in page ids, the run steps by stride.
-        const uint32_t room = (end - page_id - 1) / stride + 1;
+        // end_page_id is in page ids, the run steps by stride.
+        const uint32_t room = (end_page_id - page_id - 1) / stride + 1;
         return run < room ? run : room;
     }
 

@@ -44,8 +44,9 @@ public:
     // Host twins of TensorAccessor::contiguous_page_stride() / num_contiguous_pages(), same semantics:
     // page ids page_id + k * contiguous_page_stride(), k < num_contiguous_pages(page_id), are contiguous in memory.
     uint32_t contiguous_page_stride() const;
-    // end_page_id is an exclusive page id (0 = tensor volume).
-    uint32_t num_contiguous_pages(uint32_t page_id, uint32_t end_page_id = 0) const;
+    uint32_t num_contiguous_pages(uint32_t page_id) const;
+    // As above, but the run also stops before end_page_id, an exclusive page id (not a count).
+    uint32_t num_contiguous_pages(uint32_t page_id, uint32_t end_page_id) const;
 
     size_t num_shards() const;
     size_t max_num_shards_per_core() const;

@@ -179,7 +179,7 @@ Note: In case containers size is compile-time, then shapes, strides, coords are 
 `num_contiguous_pages(page_id, end_page_id)` returns how many pages from `page_id` (inclusive) are contiguous in memory: page ids `page_id + k * contiguous_page_stride()` for `k` in `[0, pages)`, `get_aligned_page_size()` bytes apart. One transfer can then replace a run of per-page ones.
 
 ```c++
-// end_page_id defaults to tensor_volume() for sharded accessors; it is required for interleaved ones.
+// Sharded accessors also have num_contiguous_pages(page_id), which runs to the tensor edge; interleaved ones need end_page_id.
 uint32_t pages = tensor_accessor.num_contiguous_pages(page_id, end_page_id);
 pages = std::min(pages, dst_capacity_pages);
 noc.async_read(tensor_accessor, cb, pages * tensor_accessor.get_aligned_page_size(), {.page_id = page_id}, {.offset_bytes = 0});

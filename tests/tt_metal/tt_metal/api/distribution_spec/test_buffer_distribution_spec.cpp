@@ -585,6 +585,9 @@ TEST(BufferDistributionSpecContiguousPages, CPU_NumContiguousPages) {
     const auto padded = make_spec({3, 5}, {2, 2});
     EXPECT_ANY_THROW((void)padded.num_contiguous_pages(15));
     EXPECT_ANY_THROW((void)padded.num_contiguous_pages(0, 16));
+    // An empty range is an error, not shorthand for the whole tensor.
+    EXPECT_ANY_THROW((void)padded.num_contiguous_pages(0, 0));
+    EXPECT_ANY_THROW((void)padded.num_contiguous_pages(5, 5));
 
     const auto one_page_wide = make_spec({4, 6}, {4, 1});
     EXPECT_EQ(one_page_wide.contiguous_page_stride(), 6u);
