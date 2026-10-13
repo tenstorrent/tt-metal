@@ -305,13 +305,11 @@ Tensor reduce(
              (prepared_input.dtype() == tt::tt_metal::DataType::BFLOAT16 && config.fp32_dest_acc_en));
         const auto out_w_dtype = keep_w_fp32 ? tt::tt_metal::DataType::FLOAT32 : out_final_dtype;
 
-        // The H step reads the W intermediate. On the FPU, an FP32 intermediate loses its extra
-        // precision, because the FPU truncates fp32 to tf32 on the way into SrcA/SrcB.
-        // A BF16 input never selects the accurate fp32 SFPU path above. That choice looks at the input dtype.
-        // Here the H step moves to that SFPU path, under the same gates an FP32 input uses.
-        // The SFPU folds tiles with a plain add. AVG therefore lowers to SUM and applies the scaler as a post-mul.
-        const bool h_step_sfpu_fp32 = keep_w_fp32 && !use_sfpu_reduce && !fast_and_approximate_mode &&
-                                      arch != tt::ARCH::QUASAR && config.fp32_dest_acc_en;
+        // The H step reads the W intermediate. An FP32 intermediate loses its extra precision in FPU since it
+        // truncates FP32 to TF32 on the way into SrcA/SrcB. For BF16 inputs, the H step moves to the SFPU path
+        // where mean is computed as a sum followed by a multiplication by scaler.
+        const bool h_step_sfpu_fp32 =
+            keep_w_fp32 && !use_sfpu_reduce && !fast_and_approximate_mode && arch != tt::ARCH::QUASAR;
         const bool h_use_sfpu_reduce = use_sfpu_reduce || h_step_sfpu_fp32;
         const auto h_reduce_math = h_step_sfpu_fp32 ? tt::tt_metal::ReduceOpMath::SUM : prim_reduce_math;
         const auto h_scaler_mode = h_step_sfpu_fp32 ? ttnn::prim::derive_scaler_mode(
