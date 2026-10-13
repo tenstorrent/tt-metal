@@ -32,8 +32,6 @@
  *     reduce path (real max, theta select, rescale of its O and l rows); every other group keeps m_ref.
  * Same CB protocol as sdpa_inner_loop_step: scores, chunk sums, O and l banks, the max ping-pong.
  */
-// Ring kernels: unpack only issues and waits here, so its copy is size-optimized (their unpack image is the one
-// nearest the kernel config buffer limit).
 #if defined(TRISC_UNPACK) && defined(SDPA_RECIPE_RING)
 #define SDPA_FUSED_CHUNK_ATTR __attribute__((noinline, optimize("Os")))
 #else
@@ -118,9 +116,8 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     AccumulatorHalf& prev, AccumulatorHalf& cur, bool is_last_iter, bool release_q) {
     constexpr uint32_t KT = Sk_chunk_t;
     // Rows per group. Dense STANDARD (math-bound) runs a short Q chunk in one-row groups, so the lagged QK / check /
-    // PV pipeline has enough groups to overlap (1 core Q128: 1.93 -> 2.03 TF). FAST is pack-bound and keeps
-    // two-row groups (one-row groups double its per-group pack work), and so do the ring kernels (H3 4x8 ring
-    // block: one-row groups were 1-4% slower).
+    // PV pipeline has enough groups to overlap. FAST is pack-bound and keeps two-row groups (one-row groups double
+    // its per-group pack work), and so do the ring kernels.
 #if defined(SDPA_RECIPE_LOFI) || defined(SDPA_RECIPE_RING)
     constexpr uint32_t kH1MaxQTiles = 0;
 #else
@@ -176,6 +173,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             TTI_SFPCONFIG(0, 13, 0);
         })
     };
+
     auto pack_to_unpack_barrier = []() {
         PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
         UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
@@ -191,7 +189,6 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     CircularBuffer(cb_q_in).wait_front(Sq_chunk_t * DHt);
 
     // The reference max stays in prev.max for every fused chunk; a redone group updates its rows in place.
-    {
     CircularBuffer(prev.max).wait_front(Sq_chunk_t);
     // -e0 in K's format, built once per program from the column identity (the packer converts the format).
     if (!fused_neg_unit_ready) {
@@ -204,7 +201,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         tile_regs_commit();
         tile_regs_wait();
         PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_negate_tile, 0, VectorMode::None)));
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_negate_max, 0, VectorMode::None)));
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
         set_pack(neg_unit_cb);
         configure_single_tile_pack(neg_unit_cb);
@@ -215,7 +212,6 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         CircularBuffer(neg_unit_cb).push_back(sbw);
         CircularBuffer(neg_unit_cb).wait_front(sbw);
         fused_neg_unit_ready = true;
-    }
     }
 
     // QK matmul setup is kept across back-to-back subblocks of the same height (the m step's replay ends
@@ -426,7 +422,6 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     auto fold_sums = [&](uint32_t g) {
         SDPA_FUSED_LEAVE_QK();
         const uint32_t h = rows(g);
-        static_assert(H * qkt_subblock_w <= 8 || true);
         set_srca(psum_cb);
         copy_init(psum_cb);
         tile_regs_acquire();
@@ -460,7 +455,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         }
 #endif
         if (is_last_iter) {
-            normalize_row_streaming<false, vDHt, dst_size, cb_col_identity, cb_recip_scratch, cb_normalized_out>(
+            normalize_row_streaming<vDHt, dst_size, cb_col_identity, cb_recip_scratch, cb_normalized_out>(
                 cur.sum, out_cb, h);
             srca = cb_normalized_out;
             pack_cb = cb_recip_scratch;
@@ -494,7 +489,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             cur.max, prev.max, gi, true, h, KT, false, false, row0);
         pack_to_unpack_barrier();
         for (uint32_t kb = 0; kb < n_kb; ++kb) {
-            sub_exp_block_bcast_cols<false, scale_fp32>(
+            sub_exp_block_bcast_cols<scale_fp32>(
                 cb_qkt_im, cur.max, lsum_cb, KT, gi, kb * sbw, h, sbw, false, /*wait_max=*/false);
         }
         pack_cb = cb_qkt_im;
@@ -687,11 +682,9 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         PACK((llk_pack_reconfig_l1_acc(0)));
     }
     // K and Q stay until here: a redone group recomputes its scores.
-    if (true) {
-        CircularBuffer(cb_kt_in).pop_front(DHt * KT);
-        if (independent_q_release ? release_q : is_last_iter) {
-            sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
-        }
+    CircularBuffer(cb_kt_in).pop_front(DHt * KT);
+    if (independent_q_release ? release_q : is_last_iter) {
+        sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
     }
     // Chunk sums were read in place; release them as a whole (pointers wrap back to the same slots).
     CircularBuffer(lsum_cb).push_back(Sq_chunk_t);

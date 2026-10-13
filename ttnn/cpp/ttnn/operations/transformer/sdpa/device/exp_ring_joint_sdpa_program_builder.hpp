@@ -44,8 +44,8 @@ public:
     // last Q row group; nullopt lets the host choose.
     virtual std::optional<uint32_t> fixed_subblock_h() const { return std::nullopt; }
     // Matmul subblock width of a fixed compute schedule for a QK (K chunk) or PV (head dim) product of `tiles`
-    // output columns; only consulted when fixed_subblock_h is set.
-    virtual uint32_t fixed_subblock_w(uint32_t tiles) const { return tiles < 4 ? tiles : 4; }
+    // output columns; only consulted when fixed_subblock_h is set, so a variant that sets it overrides this.
+    virtual uint32_t fixed_subblock_w(uint32_t /*tiles*/) const { return 0; }
 
     // Replaces the exp-ring CBs in desc.cbs with the variant's own compute layout and adds its defines.
     // Returns false (leaving desc and defines untouched) to keep the exp-ring layout.

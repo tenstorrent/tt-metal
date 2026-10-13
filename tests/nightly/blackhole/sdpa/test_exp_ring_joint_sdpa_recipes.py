@@ -6,28 +6,25 @@ Recipes and their numerics: tech_reports/FlashAttention/SDPAPrecisionRecipes.md.
 test_ring_joint_sdpa_recipes.py.
 """
 
-import os
-
 import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_blackhole
 from tests.nightly.blackhole.sdpa.test_ring_joint_sdpa_recipes import (
+    assert_per_chip,
+    check_device_length_trace,
     close_ring_mesh,
-    host_length,
-    length_tensor,
     open_ring_mesh,
-    per_chip,
     precision_inputs,
-    randn,
 )
-from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import L2_PCT_BOUND, VARIANTS, l2_pct, reference
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import VARIANTS, blackhole_only, randn, reference
 
-pytestmark = pytest.mark.skipif(
-    not is_blackhole() or os.environ.get("TT_METAL_SIMULATOR") is not None,
-    reason="SDPA precision recipes run on Blackhole hardware",
-)
+pytestmark = blackhole_only
+
+# The op runs exactly two links, one per ring direction (one semaphore per link). Like the legacy exp ring tests it
+# needs a ring of four devices (a BH QuietBox 2): the two chips of a single P300 share only two ethernet channels.
+EXP_RING = 4
+EXP_RING_LINKS = 2
 
 
 @pytest.fixture(scope="module")
@@ -50,11 +47,6 @@ def exp_ring_mesh():
     finally:
         close_ring_mesh(mesh, manager)
 
-
-# The op runs exactly two links, one per ring direction (one semaphore per link). Like the legacy exp ring tests it
-# needs a ring of four devices (a BH QuietBox 2): the two chips of a single P300 share only two ethernet channels.
-EXP_RING = 4
-EXP_RING_LINKS = 2
 
 # heads, local rows, joint rows, logical_n (None = all rows), grid (SDPA columns + 1 MUX column, 4 rows), q_chunk.
 # Heads x Q segments over the 4 grid rows set the passes per row (1-3).
@@ -128,11 +120,7 @@ def test_exp_ring_joint_sdpa_recipe(exp_ring_mesh, variant, case):
     out = run_exp_ring(
         mesh, semaphores, inputs, joints, backing, logical_n=logical_n, precision=VARIANTS[variant][0], **kwargs
     )
-    for chip in range(EXP_RING):
-        got = per_chip(out[0])[chip]
-        if has_joint:
-            got = torch.cat([got, per_chip(out[1])[chip]], dim=2)
-        assert l2_pct(got, expected(chip)) < L2_PCT_BOUND[variant], f"chip {chip}"
+    assert_per_chip(out, expected, variant, EXP_RING, has_joint)
 
 
 @pytest.mark.parametrize("variant", ["standard", "balanced", "fast_bfp4"])
@@ -142,23 +130,7 @@ def test_exp_ring_joint_sdpa_recipe_device_lengths(exp_ring_mesh, variant):
     call = lambda n: run_exp_ring(
         mesh, semaphores, inputs, joints, backing, logical_n=n, precision=VARIANTS[variant][0], **kwargs
     )
-    lengths = [777, 2048, 1536]
-    scalar = [per_chip(call(n)[0]) for n in lengths]
-    n_tensor = length_tensor(mesh, lengths[0])
-    # The device-tensor path is its own program (worst-case placeholders); compile it before capture.
-    assert all(torch.equal(a, b) for a, b in zip(per_chip(call(n_tensor)[0]), scalar[0]))
-    trace = ttnn.begin_trace_capture(mesh, cq_id=0)
-    try:
-        traced = call(n_tensor)
-    finally:
-        ttnn.end_trace_capture(mesh, trace, cq_id=0)
-    try:
-        for i in [0, 1, 2, 0]:
-            ttnn.copy_host_to_device_tensor(host_length(mesh, lengths[i]), n_tensor)
-            ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
-            assert all(torch.equal(a, b) for a, b in zip(per_chip(traced[0]), scalar[i])), f"logical_n={lengths[i]}"
-    finally:
-        ttnn.release_trace(mesh, trace)
+    check_device_length_trace(mesh, call, [777, 2048, 1536])
 
 
 @pytest.mark.parametrize("variant", ["standard", "balanced", "fast_bfp8"])
@@ -170,5 +142,4 @@ def test_exp_ring_joint_sdpa_recipe_op_selected_blocking(exp_ring_mesh, variant)
     out = run_exp_ring(
         mesh, semaphores, inputs, joints, backing, logical_n=logical_n, precision=VARIANTS[variant][0], **kwargs
     )
-    for chip in range(EXP_RING):
-        assert l2_pct(per_chip(out[0])[chip], expected(chip)) < L2_PCT_BOUND[variant], f"chip {chip}"
+    assert_per_chip(out, expected, variant, EXP_RING, has_joint=False)
