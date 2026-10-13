@@ -476,6 +476,8 @@ bool use_dram_sharded_multicore(
     uint32_t k_logical,
     tt::tt_metal::BufferType a_buffer_type,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
+    // CI-only diagnostic for the #58923 mirror: force every call onto the pre-PR single-reader program.
+    return false;
     auto full_tile = [](const tt::tt_metal::Tile& t) {
         return t.get_height() == tt::constants::TILE_HEIGHT && t.get_width() == tt::constants::TILE_WIDTH &&
                !t.get_transpose_within_face() && !t.get_transpose_of_faces();
