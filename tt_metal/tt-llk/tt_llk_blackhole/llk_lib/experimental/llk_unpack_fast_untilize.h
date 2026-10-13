@@ -216,6 +216,35 @@ inline void _llk_unpack_fast_untilize_pass_block_(const std::uint32_t address, c
     switch_config_context(unp_cfg_context);
 }
 
+// The rest of a face-pass row (a chunk of 2 to 8 tiles) issues its UNPACRs itself, so the pass MOP stays programmed.
+inline void _llk_unpack_fast_untilize_rest_block_(const std::uint32_t address, const std::uint32_t unit_dim)
+{
+    LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST, "fast_untilize row rest supports unit_dim 2 to 8");
+
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+
+    const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
+    cfg[upk0_reg]                = address;
+
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+    for (std::uint32_t tile = 0; tile < unit_dim; tile++)
+    {
+        TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    }
+
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
+
 inline void _llk_unpack_fast_untilize_uninit_()
 {
 }
