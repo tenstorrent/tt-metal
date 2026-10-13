@@ -1,0 +1,14 @@
+# harness A/B: head (per-tile math in block sections) against v1 (one block math call per section), ABBA twice
+r head ids/hr_perf.txt -
+r v1 ids/hr_perf.txt -
+r v1 ids/hr_perf.txt -
+r head ids/hr_perf.txt -
+r head ids/hr_perf.txt -
+r v1 ids/hr_perf.txt -
+r v1 ids/hr_perf.txt -
+r head ids/hr_perf.txt -
+# counters, own builds
+c head_wc ids/hr_perf.txt - wc
+c v1_wc ids/hr_perf.txt - wc
+# bits: block math against per-tile math in block sections, every functional case, LLK asserts on
+b v1 ids/blk_bits.txt - bitsel
