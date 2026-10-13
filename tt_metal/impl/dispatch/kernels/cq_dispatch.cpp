@@ -126,7 +126,7 @@ using DispatchTelemetryBlockGuard = TelemetryBlockGuard<
     telemetry_enabled>;
 volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl* dispatch_telemetry_control =
     reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl*>(
-        dispatch_telemetry_control_addr);
+        l1_uncached_addr(dispatch_telemetry_control_addr));
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
