@@ -4,17 +4,14 @@
 # connection instead of failing control-plane init. The STRICT sibling stays a negative test.
 #
 # --- Meshes ---------------------------------------------------------------
-# NEGATIVE-TEST descriptor: engineered assign_z conflict.
 # Four 1x2 meshes wired in a 2x2 grid (same layout as t3k_1x2), one per N300 board:
 #     mesh0 - mesh1
 #       |       |
 #     mesh2 - mesh3
-# Mesh 0's right-hand chip borders BOTH mesh 1 (horizontal) and mesh 2 (vertical). Both of those boundaries
-# are marked assign_z_direction, so that one chip is asked to place Z toward two different neighbor meshes.
-# It has a single Z lane, so the second boundary cannot place any channel on Z and, being Z-only, resolves
-# zero routers -> control-plane init must fail. Driven by a hard rank binding (TT_VISIBLE_DEVICES 0..3) so the
-# placement is deterministic and does not depend on the topology mapper. Used by MultiHost.T3KAssignZConflictFatal.
-
+# Mesh 0's right-hand chip borders BOTH mesh 1 (horizontal) and mesh 2 (vertical); both boundaries are
+# assign_z_direction, so that chip's single Z lane is contended. A Z-only boundary that does not get it
+# resolves zero routers; under this RELAXED policy that is tolerated (logical-only) and init succeeds. Driven
+# by a hard rank binding (TT_VISIBLE_DEVICES 0..3). Used by MultiHost.T3KAssignZConflictLosingBoundaryResolvesZero.
 mesh_descriptors {
   name: "M0"
   arch: WORMHOLE_B0

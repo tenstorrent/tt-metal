@@ -3937,12 +3937,8 @@ void ControlPlane::validate_requested_intermesh_connections(
             for (const auto& [dst_mesh, requested_channels] : dst_to_channels) {
                 const std::size_t resolved = num_resolved_between(src_mesh, dst_mesh);
                 if (resolved == 0) {
-                    // RELAXED zero-link tolerance (issue #56762): a requested inter-mesh connection
-                    // may resolve zero routers -- the connection is logical-only and traffic rides
-                    // the host interconnect. Warn loudly instead of failing initialization. Mesh-level
-                    // connections are requested under BOTH policies, so STRICT keeps the per-pair
-                    // failure: the aggregate count check above cannot catch a single zero pair masked
-                    // by surplus links on other pairs.
+                    // RELAXED (#56762): a zero-router connection is logical-only, warn only. STRICT keeps the
+                    // per-pair failure (the aggregate check above cannot see one zero pair masked by others).
                     if (inter_mesh_relaxed) {
                         log_warning(
                             tt::LogFabric,

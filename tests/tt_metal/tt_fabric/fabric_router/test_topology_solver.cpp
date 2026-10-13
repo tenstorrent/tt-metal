@@ -1607,6 +1607,64 @@ TEST_F(TopologySolverTest, RelaxedSolveDoesNotMutatePreferredConstraints) {
     EXPECT_EQ(constraints.get_preferred_mappings(1), (std::set<TestGlobalNode>{10}));
 }
 
+// allow_unmatched_target_edges (RELAXED zero-link tolerance, issue #56762): target edges become SOFT on
+// the SAT engine and the number of realized edges is maximized. Target path a-b-c (2 edges) onto a global
+// graph with one linked pair (10-11) and two isolated nodes (12, 13): hard edges cannot map; soft edges map
+// with exactly one edge realized, which requires b and one of its neighbors on {10, 11}.
+TEST_F(TopologySolverTest, AllowUnmatchedTargetEdges_ZeroLinkMappingMaximizesRealizedEdges) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[0] = {1};
+    target_adj_map[1] = {0, 2};
+    target_adj_map[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+    global_adj_map[12] = {};
+    global_adj_map[13] = {};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Hard edges (default): no valid mapping on either engine.
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        MappingConstraints<TestTargetNode, TestGlobalNode> hard;
+        auto result = solve_topology_mapping(
+            target_graph, global_graph, hard, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        EXPECT_FALSE(result.success) << "hard target edges must not map onto a graph with one link";
+    }
+
+    // Soft edges on SAT (Auto routes to SAT when the flag is set): maps, and realizes the one possible edge.
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Auto}) {
+        MappingConstraints<TestTargetNode, TestGlobalNode> soft;
+        soft.set_allow_unmatched_target_edges(true);
+        EXPECT_TRUE(soft.allow_unmatched_target_edges());
+        auto result = solve_topology_mapping(
+            target_graph, global_graph, soft, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        ASSERT_TRUE(result.success) << result.error_message;
+        ASSERT_EQ(result.target_to_global.size(), 3u);
+        EXPECT_TRUE(result.stats.used_sat);
+        const std::set<TestGlobalNode> linked{10, 11};
+        const auto on_link = [&](TestTargetNode t) { return linked.contains(result.target_to_global.at(t)); };
+        EXPECT_TRUE(on_link(1) && (on_link(0) || on_link(2)))
+            << "maximization must realize edge 0-1 or 1-2 on the linked pair, not leave both zero-link";
+        EXPECT_FALSE(result.warnings.empty()) << "the unrealized edge must be reported as a warning";
+    }
+
+    // Explicit DFS keeps edges hard even with the flag (warned, not silently relaxed).
+    {
+        MappingConstraints<TestTargetNode, TestGlobalNode> soft;
+        soft.set_allow_unmatched_target_edges(true);
+        auto result = solve_topology_mapping(
+            target_graph,
+            global_graph,
+            soft,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Dfs);
+        EXPECT_FALSE(result.success);
+    }
+}
+
 TEST_F(TopologySolverTest, MappingValidatorSavesPartialMapping) {
     using namespace tt::tt_fabric::detail;
 

@@ -190,11 +190,8 @@ struct TopologyMappingStats {
     bool placement_attempted = false;
     bool placement_success = false;
     bool candidate_lists_complete = false;
-    // RELAXED zero-link tolerance (issue #56762): the seating was found only after inter-mesh seams were
-    // made SOFT (some requested inter-mesh connection may have resolved to zero physical links).
-    bool placement_zero_link_fallback = false;
-    // The hard-seam placement was skipped because physical connectivity alone proves it UNSAT.
-    bool placement_hard_seams_precheck_infeasible = false;
+    bool placement_zero_link_fallback = false;              ///< Seated with inter-mesh seams SOFT (#56762)
+    bool placement_hard_seams_precheck_infeasible = false;  ///< Hard-seam solve skipped (provably UNSAT)
     std::size_t meshes_total = 0;
     std::size_t meshes_placed = 0;
     std::size_t placement_candidates = 0;

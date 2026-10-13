@@ -190,15 +190,9 @@ struct PlacementSolveStats {
     std::size_t master_growth_rounds = 0;          ///< Column-generation rounds after the initial batch
     std::size_t master_sat_attempts = 0;           ///< Master SAT encode+solve attempts (tiers x rounds)
     bool candidate_lists_complete = false;
-    // RELAXED zero-link tolerance (issue #56762): true once the master solve was re-run with the
-    // mesh-level (inter-mesh) edges SOFT, i.e. the hard-seam solve found nothing and the caller asked
-    // for a best-effort seating that maximizes realized inter-mesh links but tolerates zero.
-    bool zero_link_fallback_engaged = false;
-    // Hard-seam pre-check: a connected component of the logical mesh-level graph needs one physical
-    // connected component with at least its summed chip count, else every hard-seam master solve is UNSAT.
-    // When true the hard solve was skipped entirely (fast fail / fast zero-link fallback).
-    bool hard_seams_precheck_infeasible = false;
-    std::string hard_seams_precheck_reason;  ///< Human-readable violation when the pre-check fired
+    bool zero_link_fallback_engaged = false;      ///< Master solve re-run with inter-mesh seams SOFT (#56762)
+    bool hard_seams_precheck_infeasible = false;  ///< Hard-seam solve skipped: provably UNSAT by connectivity
+    std::string hard_seams_precheck_reason;       ///< Why the pre-check fired
     std::size_t master_sat_vars = 0;     ///< Variables in the last master encoding
     std::size_t master_sat_clauses = 0;  ///< Clauses in the last master encoding
     std::chrono::microseconds master_enumeration_elapsed{};
@@ -488,19 +482,12 @@ public:
     bool exclude_mapping(const AssignedMeshes& assigned);
 
     /**
-     * @brief RELAXED zero-link tolerance (issue #56762): re-run the master solve with the mesh-level
-     *        (inter-mesh) edges SOFT.
+     * @brief Zero-link fallback (issue #56762): re-solve with inter-mesh seams SOFT.
      *
-     * The ordinary master solve requires every mesh-level edge to be realized by physical links between the
-     * two chosen seats (>= 1 link under RELAXED, >= channels.count under STRICT). When that is UNSAT the
-     * caller may engage this fallback: the seams become soft, the SAT engine MAXIMIZES the number of
-     * realized mesh-level edges (best effort), and a seating that leaves some requested inter-mesh
-     * connection with ZERO physical links (logical-only, host interconnect) is accepted. Disjointness, host
-     * caps, pinnings, rank bindings and every intra-mesh constraint stay hard.
-     *
-     * Only meaningful for a RELAXED inter-mesh policy; the caller gates on that. Returns false when the
-     * fallback is already engaged, the session is not ready, or the mesh-level graph has no edges (nothing
-     * to relax). On true, the next next() re-encodes and re-solves over the already-grown candidate pools.
+     * The master solve normally requires physical links for every mesh-level edge. Once that is UNSAT the
+     * caller (RELAXED policy only) may engage this: realized edges are maximized best-effort and a seating
+     * with zero-link (logical-only) connections is accepted. Everything else stays hard.
+     * Returns false if already engaged, not ready, or there are no mesh-level edges to relax.
      */
     bool enable_zero_link_tolerance();
     bool zero_link_tolerance() const { return zero_link_tolerance_; }
@@ -515,11 +502,8 @@ private:
     std::map<MeshId, ConnectionValidationMode> sat_intra_mesh_mode_by_mesh_;
     bool relaxed_inter_mesh_policy_ = false;
     bool unique_shapes_ = false;
-    // See enable_zero_link_tolerance(): mesh-level edges are soft in the master solve once set.
-    bool zero_link_tolerance_ = false;
-    // Set by finish_init when the hard-seam solve is provably UNSAT from physical connectivity alone
-    // (see hard_seams_provably_infeasible); next() then skips the hard solve until seams are soft.
-    bool hard_seams_infeasible_ = false;
+    bool zero_link_tolerance_ = false;    // see enable_zero_link_tolerance()
+    bool hard_seams_infeasible_ = false;  // see hard_seams_provably_infeasible(); next() skips the hard solve
     std::string hard_seams_infeasible_reason_;
 
     std::unique_ptr<std::map<MeshId, std::shared_ptr<CandidatePool>>> pools_;
@@ -559,8 +543,7 @@ private:
 
         bool relaxed = false;
         bool drop_host_cap = false;
-        // Mesh-level edges encoded SOFT (allow_unmatched_target_edges) -- zero-link tolerance fallback.
-        bool zero_link = false;
+        bool zero_link = false;  // seams encoded SOFT (allow_unmatched_target_edges)
 
     private:
         SatPlacementEnumerationSession* owner_ = nullptr;
@@ -574,7 +557,7 @@ private:
         const std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank,
         const std::set<tt::tt_metal::experimental::PhysicalNodeId>& placement_asic_allowlist);
     void invalidate_pending_solve();
-    // Sound, cheap necessary condition for the hard-seam master solve. Returns the violation, if any.
+    // Cheap necessary condition for the hard-seam solve; returns the violation if it cannot hold.
     std::optional<std::string> hard_seams_provably_infeasible() const;
     std::set<const Candidate*> seats_matching(
         MeshId mesh_id, const std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>& asics) const;

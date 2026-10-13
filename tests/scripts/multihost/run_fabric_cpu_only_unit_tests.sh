@@ -461,13 +461,9 @@ run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_des
 run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_assign_z_direction_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.T3K2x2AssignZDirectionFabric2DSanity"
 run_test tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/dual_bh_galaxy_torus_xy_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/blackhole/dual_glx_2.5d_torus/dual_glx_2.5d_torus_cluster_desc_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.BHDualGalaxyFabricConfigMismatchAcrossRanksFatal"
 
-# Conflict tests: two assign_z boundaries contend for one chip's single Z lane. Hard rank binding (4x 1x2
-# meshes, TT_VISIBLE_DEVICES 0..3) pins placement; validated on every rank (the exit maps are
-# broadcast-identical).
-#  - STRICT inter-mesh policy: a zero-resolved connection must still FAIL control-plane init (negative test;
-#    zero-link tolerance is RELAXED-only).
-#  - RELAXED inter-mesh policy: init SUCCEEDS; on this fixture neither boundary claims the contended Z lane,
-#    so BOTH connections resolve zero (logical-only, issue #56762).
+# assign_z conflict: two boundaries contend for one chip's single Z lane (hard rank binding pins placement).
+# STRICT: a zero-resolved connection must fail init. RELAXED: init succeeds, both boundaries resolve zero
+# (logical-only, #56762).
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml tt-run --rank-binding tests/tt_metal/distributed/config/t3k_assign_z_conflict_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.T3KAssignZConflictStrictFatal"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml tt-run --rank-binding tests/tt_metal/distributed/config/t3k_assign_z_conflict_relaxed_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.T3KAssignZConflictLosingBoundaryResolvesZero"
 

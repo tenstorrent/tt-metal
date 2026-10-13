@@ -38,6 +38,9 @@ static constexpr int kDefaultConflictCap = 300'000;
 // if a threshold solve exceeds this, the loop keeps the best (valid, sub-maximal) mapping found so
 // far and warns. Kept as its own constant so the two loops can diverge without silent coupling.
 static constexpr int kZeroLinkMaximizeConflictBudget = 300'000;
+// The maximization binary-searches the (monotone) realized-edge thresholds, so a pass takes O(log E) solves,
+// plus at most this many budget-exhausted (undecided) solves before it settles for the best model found.
+static constexpr int kZeroLinkMaximizeMaxUndecidedSolves = 2;
 
 struct SatSearchBackend::Impl {
     TopologySatSolver solver;
@@ -55,10 +58,8 @@ struct SatSearchBackend::Impl {
     // Zero-link tolerance (allow_unmatched_target_edges): edge_threshold_lits[j], when assumed,
     // forces at least j+1 of enc.edge_realized_lits true. Drives realized-edge maximization.
     std::vector<int> edge_threshold_lits;
-    // For the zero-link maximization loop: the global adjacency lists (owned by the session's
-    // GraphIndexData, which outlives the engine -- the TopologySatGraphView passed to start() is a
-    // temporary and must NOT be retained) and the validation mode, so the realized-edge count can be
-    // read off the decoded mapping's adjacency.
+    // Zero-link maximization: global adjacency (owned by the session's GraphIndexData; the graph VIEW passed
+    // to start() is a temporary and must not be retained) and the validation mode.
     const std::vector<std::vector<size_t>>* global_adj_idx = nullptr;
     ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED;
 };
@@ -1848,12 +1849,9 @@ bool SatSearchBackend::start(
         }
     }
 
-    // Zero-link tolerance: build per-threshold literals over the realized-edge indicators so the
-    // driver can maximize realized edges via assumptions. Unlike the preferred objective above this is
-    // NOT skipped for unique_shapes enumeration: the production placement sessions run with
-    // unique_shapes=true, and realized-link maximization is the advertised best-effort contract of the
-    // RELAXED zero-link fallback, not a ranking nicety. Shape blocking still happens after the maximized
-    // model is chosen (next() blocks the returned mapping), so every distinct shape stays reachable.
+    // Zero-link tolerance: threshold literals over the realized-edge indicators drive the maximization.
+    // Not skipped for unique_shapes (production placement uses it): maximization is the fallback's
+    // contract, not a ranking, and shapes are blocked after the maximized model is chosen.
     if (!s.enc.edge_realized_lits.empty()) {
         topology_sat_build_at_least_threshold_lits(s.solver, s.enc.edge_realized_lits, s.edge_threshold_lits);
     }
@@ -1974,12 +1972,9 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
     // solution just found, demand one more realized edge under the same objective assumptions;
     // repeat until UNSAT (proven maximum) or the conflict budget runs out (best effort).
     if (!s.edge_threshold_lits.empty()) {
-        // Realized count of the CURRENT decoded mapping. The realized literal is only forced false when
-        // support is missing; nothing forces it true when support holds, so the literal alone can
-        // under-count (which would start the ramp too low and mis-report the warning). Under RELAXED
-        // validation (adjacency is the whole support requirement) an edge is also realized when its
-        // mapped endpoints are physically adjacent. Under STRICT the support also needs the channel
-        // count, so the literal stays authoritative there (an over-count could end the ramp early).
+        // Realized count of the decoded mapping. The literal is only forced false without support, never
+        // forced true with it, so it can under-count; under RELAXED (adjacency is the whole requirement)
+        // also credit physically adjacent endpoints. STRICT needs channel counts too, so keep the literal.
         const auto count_realized = [&]() -> size_t {
             size_t realized = 0;
             for (size_t i = 0; i < s.enc.edge_realized_lits.size(); ++i) {
@@ -2007,13 +2002,9 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
         };
         const size_t n_soft_edges = s.enc.edge_realized_lits.size();
         const auto& optional_lits = s.stages[std::min(s.stage, s.stages.size() - 1)];
-        // Try to satisfy edge-realization threshold `realized+1`. The symmetry-breaking assumption
-        // (fix target 0 -> global 0) is only a search hint, and on equal-size graphs it can make a
-        // higher threshold UNSAT even when it is achievable without the hint -- so, exactly like the
-        // primary solve, attempt WITH the hint first and, on non-SAT, retry WITHOUT it before
-        // concluding the maximum is reached. Once a hinted attempt has failed, the hint is dropped for
-        // the rest of the ramp (thresholds only tighten, so it cannot start holding again); this keeps
-        // the worst case at one solve per step instead of two.
+        // Demand threshold `realized+1`. The symmetry hint (target 0 -> global 0) can make a threshold UNSAT
+        // that is achievable without it, so try with the hint, then without; once the hint fails it is
+        // dropped for the rest of the ramp (thresholds only tighten).
         bool symmetry_hint_usable = s.symmetry_lit != 0;
         const auto solve_threshold = [&](int threshold_lit) -> int {
             auto attempt = [&](bool with_symmetry_hint) -> int {
@@ -2035,16 +2026,25 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
             }
             return attempt(/*with_symmetry_hint=*/false);
         };
+        // Binary search on the threshold: ">= k realized" is monotone in k, `realized` is known SAT and
+        // `hi` is the highest candidate. An undecided (budget-exhausted) probe is treated as UNSAT.
         size_t realized = count_realized();
-        while (realized < n_soft_edges) {
-            const int status = solve_threshold(s.edge_threshold_lits[realized]);  // forces >= realized+1
-            if (status != TopologySatSolver::kSat) {
-                break;  // UNSAT (maximum proven, hint or no hint) or budget exhausted (keep best found)
+        size_t hi = n_soft_edges;
+        int undecided = 0;
+        while (realized < hi) {
+            const size_t mid = realized + (hi - realized + 1) / 2;
+            const int status = solve_threshold(s.edge_threshold_lits[mid - 1]);  // forces >= mid
+            if (status == TopologySatSolver::kSat) {
+                if (!topology_sat_decode_hard_solution(s.solver, s.enc, mapping_out)) {
+                    break;
+                }
+                realized = std::max(count_realized(), mid);
+                continue;
             }
-            if (!topology_sat_decode_hard_solution(s.solver, s.enc, mapping_out)) {
-                break;
+            hi = mid - 1;
+            if (status != TopologySatSolver::kUnsat && ++undecided >= kZeroLinkMaximizeMaxUndecidedSolves) {
+                break;  // out of budget: keep the best model found
             }
-            realized = std::max(count_realized(), realized + 1);
         }
         if (realized < n_soft_edges) {
             log_warning(

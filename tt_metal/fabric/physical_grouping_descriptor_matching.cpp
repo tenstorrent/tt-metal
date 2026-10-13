@@ -3226,15 +3226,10 @@ void SatPlacementEnumerationSession::finish_init(
     }
 }
 
-// A hard mesh-level edge needs >= 1 fabric link between the two chosen footprints, so both footprints
-// lie in the same connected component of the physical graph; by induction every mesh of a connected
-// component of the LOGICAL mesh-level graph lies in one physical component, and footprints are disjoint.
-// So each logical component with at least one edge needs a physical component with at least the sum of
-// its meshes' chip counts. Checked on the full physical graph with each mesh's SMALLEST variant, which
-// only weakens the condition (allowlists and larger variants need more), so a violation is a sound UNSAT
-// proof for every hard-seam master solve regardless of pool growth. Without it, a disconnected cluster
-// (e.g. two quads from different systems) burns the whole growth budget proving the obvious before the
-// RELAXED zero-link fallback can engage.
+// Hard seams need a physical link per mesh-level edge, so a connected component of the logical mesh graph
+// must fit inside ONE physical connected component (footprints are disjoint). Using the full physical graph
+// and each mesh's smallest variant only weakens the bound, so a violation is a sound UNSAT proof. Without
+// it a disconnected cluster burns the whole growth budget before the zero-link fallback can engage.
 std::optional<std::string> SatPlacementEnumerationSession::hard_seams_provably_infeasible() const {
     // Physical connected components (undirected BFS) -> largest component size.
     std::size_t largest_physical_component = 0;
@@ -3260,8 +3255,7 @@ std::optional<std::string> SatPlacementEnumerationSession::hard_seams_provably_i
         }
     }
 
-    // Smallest chip count any seating of this mesh could use. Prefer the enumerated footprints (exact: every
-    // candidate of a mesh instance places all of its chips); fall back to the variants' declared sizes.
+    // Smallest footprint this mesh can seat with: enumerated candidates first, else the variants' sizes.
     const auto min_mesh_chips = [&](const GlobalMeshId& mesh_id) -> std::optional<std::size_t> {
         std::optional<std::size_t> chips;
         const auto consider = [&](std::size_t count) {
@@ -3370,10 +3364,8 @@ bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, boo
     if (drop_cap) {
         owner_->constraints_.set_max_same_rank_groups_used(0);
     }
-    // RELAXED zero-link tolerance (issue #56762): the mesh-level graph is the TARGET of this session and the
-    // seat graph (parallel edges = fabric link count between two footprints) is the GLOBAL graph, so making
-    // target edges soft here is exactly "a requested inter-mesh connection may resolve to zero physical links".
-    // The SAT backend then maximizes the realized-edge count (best effort); everything else stays hard.
+    // Zero-link fallback (#56762): the target graph here IS the mesh-level graph, so soft target edges are
+    // exactly "a connection may resolve to zero links"; the SAT backend maximizes realized edges.
     owner_->constraints_.set_allow_unmatched_target_edges(zero_link_mode);
     const auto encode_start = std::chrono::steady_clock::now();
     session = std::make_unique<TopologyMappingEnumerationSession<MeshId, const Candidate*>>(
@@ -3402,9 +3394,8 @@ bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, boo
 MappingResult<MeshId, const Candidate*> SatPlacementEnumerationSession::MasterSolve::next(bool drop_cap) {
     MappingResult<MeshId, const Candidate*> failure;
     failure.success = false;
-    // Zero-link tolerance implies RELAXED seams: the caller engages it under the EFFECTIVE inter-mesh mode
-    // (a TopologyMappingConfig override may relax an MGD that says STRICT), and a soft-seam model must not be
-    // rejected by STRICT channel-count validation of the very edges it is allowed to leave unrealized.
+    // Zero-link implies RELAXED validation: a config override may relax a STRICT MGD, and soft-seam models
+    // must not be rejected by STRICT channel checks on the edges they may leave unrealized.
     const bool zero_link_mode = owner_->zero_link_tolerance_;
     const bool relaxed_mode = owner_->relaxed_inter_mesh_policy_ || zero_link_mode;
     // Unchanged mode, host cap and seam softness: this is another model from the session already encoded.
@@ -3600,11 +3591,10 @@ bool SatPlacementEnumerationSession::enable_zero_link_tolerance() {
         }
     }
     if (!has_mesh_level_edge) {
-        return false;  // no inter-mesh seams to relax: the hard verdict already covers everything
+        return false;  // nothing to relax
     }
     zero_link_tolerance_ = true;
-    // The hard-seam verdict is void under soft seams: let next() solve again over the same (already grown)
-    // pools. The live encoding has hard seams, so it is rebuilt by MasterSolve::next via matches().
+    // Re-solve over the already grown pools; MasterSolve::next rebuilds the encoding (matches() fails).
     solved_ = false;
     pending_.clear();
     pending_index_ = 0;
@@ -3614,10 +3604,9 @@ bool SatPlacementEnumerationSession::enable_zero_link_tolerance() {
     }
     log_warning(
         tt::LogFabric,
-        "SAT joint placement: no seating realizes every requested inter-mesh connection with physical links; "
-        "retrying with RELAXED zero-link tolerance (issue #56762) -- inter-mesh seams become SOFT, the number of "
-        "realized connections is maximized best-effort, and any connection left with ZERO physical links is "
-        "logical-only (traffic must use the host interconnect)");
+        "SAT joint placement: no seating realizes every inter-mesh connection with physical links; retrying with "
+        "RELAXED zero-link tolerance (#56762): realized connections are maximized best-effort, the rest are "
+        "logical-only (host interconnect)");
     return true;
 }
 
@@ -3638,8 +3627,7 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
         return {};
     }
     if (hard_seams_infeasible_ && !zero_link_tolerance_) {
-        // Provably UNSAT with hard seams (see hard_seams_provably_infeasible): skip the growth/solve loop.
-        // Under a RELAXED inter-mesh policy the caller engages enable_zero_link_tolerance() next.
+        // Provably UNSAT with hard seams: skip the solve loop (RELAXED callers engage the zero-link fallback).
         solved_ = true;
         if (stats_ != nullptr) {
             stats_->master_growth_rounds = cycle_;
@@ -3749,12 +3737,10 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
     AssignedMeshes assigned = decode_sat_placement(result);
     remember_yielded(assigned);
     if (zero_link_tolerance_) {
-        // The SAT backend already logged how many soft seams were left unrealized; name the seating here so
-        // the warning is attributable when several placements are enumerated.
         log_warning(
             tt::LogFabric,
-            "SAT joint placement: seated {} mesh(es) under RELAXED zero-link tolerance; requested inter-mesh "
-            "connections not realized by physical links are logical-only (host interconnect). See issue #56762.",
+            "SAT joint placement: seated {} mesh(es) under RELAXED zero-link tolerance (#56762); unrealized "
+            "inter-mesh connections are logical-only (host interconnect)",
             assigned.size());
     }
     if (stats_ != nullptr) {

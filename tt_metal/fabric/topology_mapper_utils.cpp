@@ -1071,11 +1071,8 @@ std::optional<std::string> add_exit_node_constraints(
             const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_logical_mesh);
             auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
             if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
-                // No physical exit nodes toward this destination mesh at all. Under RELAXED zero-link
-                // tolerance (issue #56762) this is legal even in a MIXED topology where the source mesh
-                // has links to some OTHER destination -- the requested connection to this destination
-                // stays logical-only (host interconnect). Warn and skip its exit constraint instead of
-                // failing the whole mapping. STRICT still fails.
+                // No physical exit nodes toward this destination: under RELAXED (#56762) the connection is
+                // logical-only, so warn and skip its exit constraint; STRICT still fails.
                 if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
                     log_warning(
                         tt::LogFabric,
@@ -1146,9 +1143,7 @@ std::optional<std::string> add_exit_node_constraints(
 
             if (effective_exit_pair_min_count == 0) {
                 if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
-                    // Zero-link tolerance (issue #56762): no physical links toward the mapped
-                    // destination mesh -- the requested connection stays logical-only. Warn loudly
-                    // and skip the exit cardinality constraint instead of failing the mapping.
+                    // Zero links toward the destination: logical-only under RELAXED (#56762), skip the constraint.
                     log_warning(
                         tt::LogFabric,
                         "Relaxed mode: requested inter-mesh connection toward logical mesh {} has ZERO physical "
@@ -1387,12 +1382,9 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         }
         const auto& physical_exit_node_graph = *physical_exit_node_graph_ptr;
 
-        // RELAXED zero-link tolerance (issue #56762) is INTER-MESH ONLY: intra-mesh target edges stay
-        // hard (allow_unmatched_target_edges is never set on these constraints), since a zero-link
-        // intra-mesh edge would mean an unroutable mesh interior. The TT_FATAL before the solve below
-        // fast-fails if any constraint builder on this path ever flips the (shared-type) flag.
-        // TODO(fabric-2.0): revisit intra-mesh zero-link tolerance once host-interconnect intra-mesh
-        // routing lands.
+        // Zero-link tolerance (#56762) is inter-mesh only: intra-mesh edges stay hard (a zero-link interior is
+        // unroutable); the TT_FATAL before the solve guards the shared-type flag.
+        // TODO(fabric-2.0): revisit once host-interconnect intra-mesh routing lands.
         ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::experimental::PhysicalNodeId> intra_mesh_constraints;
 
         if (!config.disable_rank_bindings) {
@@ -1466,7 +1458,6 @@ TopologyMappingResult complete_intra_mesh_for_placement(
 
         auto validation_mode = determine_intra_mesh_validation_mode(config, logical_mesh_id);
 
-        // Inter-mesh-only invariant of zero-link tolerance (see the note at the declaration above).
         TT_FATAL(
             !intra_mesh_constraints.allow_unmatched_target_edges(),
             "Intra-mesh solve must not allow unmatched target edges (zero-link tolerance is inter-mesh only); "
@@ -1779,19 +1770,15 @@ std::vector<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
     while (true) {
         AssignedMeshes seating = placement_session_->next();
         if (seating.empty()) {
-            // RELAXED zero-link fallback (issue #56762): the hard-seam placement is exhausted without a single
-            // complete mapping. Retry ONCE with the inter-mesh seams SOFT in the master solve: zero physical
-            // links tolerated per requested connection, realized connections maximized best-effort. Kept
-            // behind exhaustion so fully-cabled systems keep the fast fully-pruned hard path (identical
-            // behavior and solve cost to before). Gated on the EFFECTIVE inter-mesh validation mode (config
-            // override, else MGD policy): STRICT never relaxes.
+            // Zero-link fallback (#56762): hard-seam placement exhausted with no complete mapping -> retry
+            // once with inter-mesh seams SOFT. Kept behind exhaustion so cabled systems keep the fast hard
+            // path; gated on the effective inter-mesh mode (config override, else MGD), STRICT never relaxes.
             if (emitted_ == 0 && inter_mesh_validation_mode_ == ConnectionValidationMode::RELAXED &&
                 placement_session_->enable_zero_link_tolerance()) {
                 log_warning(
                     tt::LogFabric,
-                    "Multi-mesh mapping found no placement with all inter-mesh connections realized by physical "
-                    "links; retrying with RELAXED zero-link tolerance -- some requested inter-mesh connections may "
-                    "resolve to ZERO physical links (logical-only, host interconnect)");
+                    "Multi-mesh mapping: no placement realizes every inter-mesh connection; retrying with RELAXED "
+                    "zero-link tolerance (some connections may be logical-only)");
                 continue;
             }
             return give_up();
