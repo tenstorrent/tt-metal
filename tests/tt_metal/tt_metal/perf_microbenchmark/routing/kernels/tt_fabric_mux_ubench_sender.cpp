@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "api/debug/assert.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"

@@ -375,7 +375,7 @@ void JitBuildEnv::init(
         // Streaming profiler. Mutually exclusive with get_profiler_enabled() (rtoptions
         // TT_FATALs on both), so this branch never stacks on the one above. PROFILE_KERNEL=1 keeps every
         // DeviceZoneScopedN / DeviceTimestampedData site compiled; PROFILE_STREAMING makes
-        // tools/profiler/kernel_profiler.hpp select the SPSC producer (kernel_profiler_streaming.hpp) instead of
+        // api/debug/kernel_profiler.hpp select the SPSC producer (kernel_profiler_streaming.hpp) instead of
         // the DRAM one. No DRAM options (dispatch cores, trace-only, sum, accumulate) apply here.
         TT_FATAL(
             this->arch_ != tt::ARCH::QUASAR,
@@ -383,7 +383,7 @@ void JitBuildEnv::init(
             "drainer, which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
         this->defines_ += "-DPROFILE_KERNEL=1 -DPROFILE_STREAMING=1 ";
         if (rtoptions.get_streaming_profiler_sync_events_enabled()) {
-            // Enable synchronization-event instrumentation (tools/profiler/synchronization_event_profiler.hpp)
+            // Enable synchronization-event instrumentation (internal/profiler/synchronization_event_profiler.hpp)
             // Note: only enabled with streaming profiler.
             this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
         }
@@ -521,7 +521,6 @@ void JitBuildEnv::init(
         root_,
         root_ + "ttnn",
         root_ + "ttnn/cpp",
-        root_ + "tt_metal",
         root_ + "tt_metal/hw/inc",
         root_ + "tt_metal/tt-llk/common",
         root_ + "tt_metal/tt-llk/tools/include",
