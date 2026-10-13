@@ -85,6 +85,9 @@ def execute(suite: Suite, environment: str, case_filter: str | None = None) -> R
     """Runs the suite, re-runs cases outside tolerance once, and writes measurements.json."""
     out_dir = output_dir(suite.name, environment)
     raw = contract.read(runner.run(suite, environment, out_dir, tag="run", case_filter=case_filter))
+    # Without this, a filter that matches nothing compares an empty run against an empty selection and passes.
+    if not raw.samples and not raw.aggregated and not raw.errors:
+        raise runner.RunError(f"suite {suite.name} ran no cases; check its filter and repetitions")
     record = Record(
         suite=suite.name,
         environment=environment,
