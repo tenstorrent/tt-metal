@@ -47,6 +47,8 @@ ttnn::Tensor untilize_native(
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    // is_enough_space below dereferences the device, which is null for a host or deallocated tensor.
+    TT_FATAL(input_tensor.device() != nullptr, "untilize: input tensor must be allocated on a device");
     // If the input tensor is not sharded, and logical shape != padded shape, then unpad the input tensor.
     // conv op_slicing logic requires the padding information to be present in the input tensor.
     if (!input_tensor.is_sharded() && input_tensor.logical_shape() != input_tensor.padded_shape()) {
