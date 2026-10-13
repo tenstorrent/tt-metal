@@ -106,7 +106,7 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
     const KernelSpecName WRITER{"writer"};
     const DFBSpecName SRC0_DFB{"src0"};  // legacy c_0 (input, reused as pass-through output)
     const TensorParamName INPUT{"input"};
-    const TensorParamName DST{"dst"};  // the cache tensor (donor writer's tensor::dst)
+    const TensorParamName DST{"dst"};  // the cache tensor (writer's tensor::dst)
 
     const auto& cache_tensor = tensor_args.cache;
     const auto& input_tensor = tensor_args.input;
@@ -114,16 +114,18 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     std::uint32_t single_tile_size = tt::tile_size(data_format);
 
-    // TODO: For interleaved and kv_heads > 1, we assert that each core only gets 1 tile along seq_len
-    // For sharded, each core gets shard_shape[0] number of tiles along seq_len.
-    // For either case, assume that work doesn't spill over to next head, so we just increment by Wt within
-    // reader/writer
+    // A block is one tile row of one head. With interleaved input a core's blocks can run from one head
+    // into the next; a head spans input_Ht tile rows in the input but cache_Ht in the cache, so the
+    // writer addresses every block from its own (head, row) instead of walking the cache id with ++.
     std::uint32_t num_blocks_of_work = input_tensor.padded_shape()[1] * input_tensor.padded_shape()[-2] / TILE_HEIGHT;
 
-    // Wt is the only shape-derived geometry create_program_artifacts still needs directly; the
-    // batch_idx/update_idx-dependent cache_start_id lives in compute_fill_cache_start_ids, shared
-    // with override_runtime_arguments.
+    // Shape-derived geometry; the batch_idx/update_idx-dependent cache_start_id lives in
+    // compute_fill_cache_start_ids, shared with override_runtime_arguments.
     std::uint32_t Wt = cache_tensor.padded_shape()[-1] / TILE_WIDTH;
+    std::uint32_t input_Ht = input_tensor.padded_shape()[-2] / TILE_HEIGHT;
+    std::uint32_t cache_HtWt = cache_tensor.padded_shape()[-2] * Wt / TILE_HEIGHT;
+    // Validation keeps update_idx + the input height within the cache height, so this cannot wrap.
+    std::uint32_t cache_head_skip = cache_HtWt - (input_Ht * Wt);
     tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -165,7 +167,7 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
 
     const bool input_sharded = shard_spec.has_value();
 
-    // c_0: the input DFB, reused as the pass-through output (reader produces, donor writer consumes).
+    // c_0: the input DFB, reused as the pass-through output (reader produces, writer consumes).
     // For sharded inputs, borrow the input buffer's L1 memory (equivalent to the old
     // set_globally_allocated_address + UpdateDynamicCircularBufferAddress pair).
     const DataflowBufferSpec src0_dfb{
@@ -204,18 +206,20 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    // ---- Writer (donor Metal 2.0 fork; its interface: dfb::out CONSUMER, tensor::dst, num_pages/start_id) ----
+    // ---- Writer (dfb::out CONSUMER, tensor::dst) ----
+    // Its own kernel rather than the shared unary writer, which writes num_pages consecutive ids from
+    // start_id and so cannot follow a block across a head boundary.
     const KernelSpec writer{
         .unique_id = WRITER,
-        // Reuse the existing cross-family donor Metal 2.0 fork (shared-kernel rung 1): bind it, adopt
-        // its interface (dfb::out CONSUMER, tensor::dst, named RTAs num_pages + start_id).
         .source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-            "writer_unary_interleaved_start_id_metal2.cpp",
+            "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/"
+            "writer_fill_cache_interleaved_start_id.cpp",
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = SRC0_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
+        .compile_time_args = {{"Wt", Wt}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"input_Ht", "cache_head_skip", "num_blocks", "start_id", "start_row"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
@@ -242,7 +246,11 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
         AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             core,
-            {{"num_pages", num_blocks_per_core * Wt}, {"start_id", cache_start_id}});
+            {{"input_Ht", input_Ht},
+             {"cache_head_skip", cache_head_skip},
+             {"num_blocks", num_blocks_per_core},
+             {"start_id", cache_start_id},
+             {"start_row", num_blocks_written % input_Ht}});
         num_blocks_written += num_blocks_per_core;
     }
 
@@ -275,7 +283,8 @@ tt::tt_metal::experimental::ProgramRunArgs FillCacheMultiCoreProgramFactory::ove
     // Runs on every program-cache hit. compute_program_hash excludes batch_idx / update_idx, so the
     // writer's start_id (== cache_start_id) is NOT stable and must be re-applied. Buffer addresses
     // refresh through the typed tensor channel (the borrowed input DFB re-resolves from the INPUT
-    // TensorArgument). The reader's num_tiles / start_id are shape-derived (in the hash) — stable.
+    // TensorArgument). The reader's num_tiles / start_id and the writer's input_Ht, cache_head_skip,
+    // num_blocks and start_row are shape-derived (in the hash) — stable.
     KernelRunArgs writer_run_args{.kernel = WRITER};
     for (const auto& [core, cache_start_id] : compute_fill_cache_start_ids(operation_attributes, tensor_args)) {
         AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"start_id", cache_start_id}});
