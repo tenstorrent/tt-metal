@@ -21,3 +21,11 @@ logs "T466 summary: ring_joint_sdpa gain X%, layer gain Y%" and PCC between arms
 2. Gain < 10% on ring_joint_sdpa: stop (record, keep knob opt-in).
 3. Gain >= 10%: e2e A/B needs ~360 GB on blx01 (weights 135 + dit cache 115 + metal cache ~59 + build) vs the
    150 GB cap (memory, after #463) -> ask the user to raise the cap before re-fetching weights.
+
+## 2026-10-13 06:29 UTC (12-12 23:29 PDT): microbench submitted
+- build.rc = 0 (build done 06:25 UTC). Job script run466mb.sh + env466.yaml copied to /var/tmp/fasth3/t466
+  (JIT cache /var/tmp/fasth3/t466/jit, cold). Spec spec_mb.txt submitted via tt-project/t288/blx01-submit.sh:
+  health ok, lint ok (cold-cache warning only), blx01 broker job 103, queued behind ltx-host job 102. -t 600 (unmeasured).
+- Log: /var/tmp/fasth3/t466/out_mb/run.log (grep 'T466'); broker log /var/log/tt-device-broker/2026-10-13_062903_103.log.
+- Next: read "T466 summary: ring_joint_sdpa gain X%". <10% -> stop (knob stays opt-in). >=10% -> e2e A/B needs weights
+  (cap 150 GB on blx01, now 48 GB used) -> ask for cap raise.

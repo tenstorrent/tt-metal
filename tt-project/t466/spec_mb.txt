@@ -1,0 +1,8 @@
+ID=t466-mb1
+TASK=t466
+CONFIG=t466-ring-sdpa-fidelity-mb
+TIMEOUT=600
+WORKDIR=/var/tmp/fasth3/t466/b
+ENV=/var/tmp/fasth3/t466/env466.yaml
+CMD=bash /var/tmp/fasth3/t466/run466mb.sh
+NEEDS=/var/tmp/fasth3/t466/b/build_Release
