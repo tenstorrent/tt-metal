@@ -150,3 +150,46 @@ def test_cli_exit_code_is_the_same_in_text_and_json_mode(monkeypatch, capsys, fl
     assert code == expected
     if flags:
         json.loads(out)  # stdout is only the JSON document
+
+
+def test_cli_gh_failure_exits_1_without_a_verdict(monkeypatch, capsys):
+    def boom(args):
+        raise cwr.GhCommandError(["gh", "run", "list"], "failed to determine base repo: not a git repository")
+
+    monkeypatch.setattr(cwr, "check_prerequisites", lambda: True)
+    monkeypatch.setattr(cwr, "run_gh_command", boom)
+    monkeypatch.setattr(sys, "argv", ["compare_workflow_runs.py", "--branch", "feature", "--workflows", "sanity-tests.yaml"])
+    with pytest.raises(SystemExit) as exc:
+        cwr.main()
+    captured = capsys.readouterr()
+    assert exc.value.code == 1
+    assert "Safe to merge" not in captured.out + captured.err
+    assert "No verdict" in captured.err
+    assert "GH_REPO" in captured.err
+
+
+def test_cli_text_output_reports_unmatched_failure_and_fails_verdict(monkeypatch, capsys):
+    branch_run = run([job(ELTWISE), job(QB2, "failure")], branch="feature", event="workflow_dispatch", conclusion="failure")
+    code, out = _run_cli(monkeypatch, capsys, branch_run, run([job(ELTWISE)], run_id=10))
+    assert code == 1
+    assert "FAILED ON BRANCH, NOT FOUND ON MAIN" in out
+    assert QB2 in out
+    assert "1 failures not found on main" in out
+    assert "VERDICT: Failed jobs on branch not found in recent main runs" in out
+    assert "Safe to merge" not in out
+
+
+def test_cli_text_output_prints_the_history_baseline(monkeypatch, capsys):
+    branch_run = run([job(ELTWISE), job(QB2, "failure")], branch="feature", event="workflow_dispatch", conclusion="failure")
+    older = run([job(QB2)], run_id=5, event="schedule", created_at="2026-10-12T20:16:47Z")
+    monkeypatch.setattr(cwr, "check_prerequisites", lambda: True)
+    monkeypatch.setattr(cwr, "get_latest_run", lambda workflow, branch: run([job(ELTWISE)], run_id=10) if branch == "main" else branch_run)
+    monkeypatch.setattr(cwr, "iter_main_history", lambda workflow, exclude_run_id: iter([older]))
+    monkeypatch.setattr(sys, "argv", ["compare_workflow_runs.py", "--branch", "feature", "--workflows", "sanity-tests.yaml"])
+    with pytest.raises(SystemExit) as exc:
+        cwr.main()
+    out = capsys.readouterr().out
+    assert exc.value.code == 1
+    assert "NEW FAILURES" in out
+    assert "success on main schedule run https://example.invalid/runs/5 from 2026-10-12T20:16:47Z" in out
+    assert "VERDICT: New failures detected" in out

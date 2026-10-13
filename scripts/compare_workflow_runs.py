@@ -400,7 +400,7 @@ def print_comparison(comparison: dict):
             print(f"     ❌ {job}{describe_baseline(comparison, job)}")
 
     if comparison["unmatched_failures"]:
-        print(f"\n  ❓ FAILED ON BRANCH, NOT FOUND ON MAIN (no recent completed main run ran this job):")
+        print("\n  ❓ FAILED ON BRANCH, NOT FOUND ON MAIN (no recent completed main run ran this job):")
         for job in comparison["unmatched_failures"]:
             print(f"     ❌ {job}")
 
