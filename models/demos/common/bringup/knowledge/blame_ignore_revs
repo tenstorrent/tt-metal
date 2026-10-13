@@ -1,0 +1,3 @@
+# Mechanical commits over the knowledge files: stale.py blame looks through them (git blame --ignore-revs-file).
+# The ids on every known-issues entry (F63)
+d61193a2bf10ee1029df33915e4ba16cd1ab76fc

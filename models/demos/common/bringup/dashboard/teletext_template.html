@@ -499,6 +499,19 @@ function pDeferred(){
   return flow(lines, () => new Buf(), 4, 22).map((b, i, a) => { banner(b, "Deferred to op-gen", YEL, BLK, i, a.length, RED); return b; });
 }
 
+function pKnowledge(){
+  const K = D.knowledge, lines = [];
+  lines.push(hdrLine("Knowledge use", `${K.used}/${K.entries}`, BLU, YEL));
+  lines.push({draw(b, r){ b.t(r, 1, trunc(`${K.with_report}/${K.reports} steps reported, ${K.runs} runs`, W - 2), WHT); }});
+  lines.push(gapLine);
+  K.top.forEach(e => lines.push({draw(b, r){ b.t(r, 0, trunc(`${e.id} ${e.title}`, W - 5), CYN); b.tr(r, W - 1, String(e.uses), GRN); }}));
+  if (K.contradicted.length){ lines.push(gapLine); lines.push(hdrLine("Contradicted", String(K.contradicted.length), RED, WHT));
+    K.contradicted.forEach(c => wrap(`${c.id} ${c.title}: ${c.evidence}`, 39).slice(0, 3).forEach(l => lines.push({draw(b, r){ b.t(r, 0, l, WHT); }}))); }
+  if (K.unused.length){ lines.push(gapLine); lines.push(hdrLine("Unused 5+ runs", String(K.unused.length), YEL, BLK));
+    K.unused.forEach(u => lines.push({draw(b, r){ b.t(r, 0, trunc(`${u.id} ${u.title}`, W - 1), WHT); }})); }
+  return flow(lines, () => new Buf(), 4, 22).map((b, i, a) => { banner(b, "Knowledge use", BLU, YEL, i, a.length); return b; });
+}
+
 function pPrior(){
   const P = D.prior, lines = [], A = trunc(P.this.label, 7), B = trunc(P.prior.label, 7);
   const mk = () => { const b = new Buf(); b.t(3, 0, "THIS", CYN); b.t(3, 5, A.toUpperCase(), WHT); b.t(3, 13, "PRIOR", CYN); b.t(3, 19, B.toUpperCase(), WHT);
@@ -578,6 +591,7 @@ const PAGES = [
 if (D && D.prior) PAGES.push({n:107, name:"Versus prior", short:"Prior", build:pPrior});
 if (D && D.deferred && D.deferred.length) PAGES.push({n:108, name:"Deferred to op-gen", short:"OpGen", build:pDeferred});
 PAGES.push({n:109, name:"Final tests", short:"Final", build:pFinal});
+if (D && D.knowledge) PAGES.push({n:110, name:"Knowledge use", short:"Know", build:pKnowledge});
 function buildAll(){ const out = {};
   for (const p of PAGES){ try { out[p.n] = p.build(); }
     catch (err){ const b = new Buf(); banner(b, p.name, RED, WHT, 0, 1); b.t(4, 0, "PAGE ERROR", RED, null, 1); wrap(String(err && err.message || err), 40).slice(0, 6).forEach((l, i) => b.t(6 + i, 0, l, WHT)); out[p.n] = [b]; } }

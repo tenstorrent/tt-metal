@@ -11,7 +11,8 @@ For every entry of the shared knowledge/known_issues.md and of each model's brin
 - anchors: what its `Applies to:` (else its text) names, resolved to repo paths at HEAD: paths as written ({a,b}
   expanded) or partial ones by suffix (`testing/profiler.py`), and op names (`unified_routed_expert_moe`,
   `ttnn.bringup.mhc_pre`) to the folder that registers them (`bind_function<"name">`) or the fork of that name;
-- status: `needs-probe` (it carries `Unverified since:`: a device check is still open), `anchor-missing` (a path that
+- status: `needs-probe` (it carries `Unverified since:`: a device check is still open), `contradicted` (an agent's
+  knowledge-use report, knowledge/usage.py, says the code disagrees with it, after `since`), `anchor-missing` (a path that
   existed at `since` is gone), `changed` (an anchored path has commits in since..HEAD, listed), `method`
   (`Applies to: method ...`: testing / process knowledge, never stale with the code), `unanchored` (nothing resolved: a
   person or agent judges it from the text), or `unchanged`.
@@ -32,6 +33,7 @@ from collections import Counter
 from pathlib import Path
 
 from models.demos.common.bringup.core.spec import CODE_ROOT
+from models.demos.common.bringup.knowledge.check import entry_id, entry_title
 
 HERE = Path(__file__).resolve().parent
 PATH_RE = re.compile(r"(?:models|ttnn|tt_metal|tests|scripts)/[A-Za-z0-9_./{},*-]+")
@@ -41,6 +43,15 @@ KNOWLEDGE_FILES = (
     "known_issues_detail.md",
     "repo_map.md",
 )  # per-arch copies of an op: not where a lesson about the op lives
+
+
+# Mechanical commits over the knowledge files (the ids, F63): blame looks through them, so an entry without `Seen at:`
+# keeps the age of its last real edit.
+BLAME_IGNORE = HERE / "blame_ignore_revs"
+
+
+def blame_args() -> list[str]:
+    return ["--ignore-revs-file", str(BLAME_IGNORE)] if BLAME_IGNORE.exists() else []
 
 
 def git(*args: str, root: Path = CODE_ROOT) -> str:
@@ -130,23 +141,23 @@ def moved_ages(root: Path, rel: str) -> dict[str, str]:
     if not created:
         return {}
     shared = "models/demos/common/bringup/knowledge/known_issues.md"
-    blame = git("blame", "--line-porcelain", f"{created[-1]}^", "--", shared, root=root)
+    blame = git("blame", "--line-porcelain", *blame_args(), f"{created[-1]}^", "--", shared, root=root)
     ages, commit = {}, ""
     for line in blame.splitlines():
         m = re.match(r"^([0-9a-f]{40}) \d+ \d+", line)
         if m:
             commit = m.group(1)[:11]
         elif line.startswith("\t- **"):
-            t = re.match(r"\t- \*\*(.+?)\*\*", line)
+            t = entry_title(line[1:])
             if t:
-                ages[t.group(1)] = commit
+                ages[t] = commit
     return ages
 
 
 def entries_of(path: Path, root: Path) -> list[dict]:
     """Bullets of a knowledge file with their line, section and the commit that last touched the entry."""
     rel = str(path.relative_to(root))
-    blame = git("blame", "--line-porcelain", "--", rel, root=root)
+    blame = git("blame", "--line-porcelain", *blame_args(), "--", rel, root=root)
     line_commit = {}
     for line in blame.splitlines():
         m = re.match(r"^([0-9a-f]{40}) \d+ (\d+)", line)
@@ -163,19 +174,19 @@ def entries_of(path: Path, root: Path) -> list[dict]:
             if line.startswith("## "):
                 heading = line[3:].strip().rstrip(".")
             elif heading and line.startswith("- **"):
-                t = re.match(r"- \*\*(.+?)\*\*", line)
+                t = entry_title(line)
                 if t:
-                    original[heading] = t.group(1)
+                    original[heading] = t
                 heading = None
     out, section = [], ""
     for i, line in enumerate(path.read_text().splitlines(), 1):
         if line.startswith("## "):
             section = line[3:].strip()
         elif line.startswith("- **"):
-            t = re.match(r"- \*\*(.+?)\*\*", line)
-            title = t.group(1) if t else line[2:80]
+            title = entry_title(line) or line[2:80]
             out.append(
                 {
+                    "id": entry_id(line),
                     "file": rel,
                     "line": i,
                     "section": section,
@@ -190,7 +201,8 @@ def entries_of(path: Path, root: Path) -> list[dict]:
 FIELD_END = r"(?: Seen at:| Check:| Unverified since:| Found:|$)"
 
 
-def check_entry(e: dict, res: Resolver, head: str) -> dict:
+def check_entry(e: dict, res: Resolver, head: str, contradictions: list[dict] = ()) -> dict:
+    """contradictions: the knowledge-use reports' contradictions of this entry (usage.tally's), any age."""
     m = re.search(r"Seen at: ([0-9a-f]{7,40})", e["text"])
     since = m.group(1) if m else e["blame"]
     a = re.search(r"Applies to: (.*?)" + FIELD_END, e["text"])
@@ -213,8 +225,12 @@ def check_entry(e: dict, res: Resolver, head: str) -> dict:
                 e["older_commits"] += 1  # reordered by a rebase: written before the entry was last checked
             else:
                 e["commits"].append(f"{sha} {rest}")
+    floor = git("show", "-s", "--format=%cI", since, root=res.root).strip()[:19] if since else ""
+    e["contradictions"] = [c for c in contradictions if not floor or (c.get("t") or "") >= floor]
     if "Unverified since:" in e["text"]:
         e["status"] = "needs-probe"
+    elif e["contradictions"]:
+        e["status"] = "contradicted"
     elif missing:
         e["status"] = "anchor-missing"
     elif method:
@@ -260,12 +276,26 @@ def main(argv=None) -> int:
         )
         files += [root / f"models/demos/{m}/bringup/known_issues.md" for m in names]
         maps += [root / f"models/demos/{m}/bringup/repo_map.md" for m in names]
-    results = [check_entry(e, res, head) for f in files if f.exists() for e in entries_of(f, root)]
+    from models.demos.common.bringup.knowledge import usage
+
+    known = usage.entries(root)
+    said = {s["id"]: s["contradictions"] for s in usage.tally(known, usage.load_reports(root), {}, 0)["entries"]}
+    results = [
+        check_entry(e, res, head, said.get(e["id"], [])) for f in files if f.exists() for e in entries_of(f, root)
+    ]
     rm = [r for f in maps if f.exists() for r in repo_map_rows(f, res, root)]
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / "stale.json").write_text(json.dumps({"head": head, "entries": results, "repo_map": rm}, indent=1) + "\n")
-    order = {"needs-probe": 0, "anchor-missing": 1, "changed": 2, "unanchored": 3, "method": 4, "unchanged": 5}
+    order = {
+        "needs-probe": 0,
+        "contradicted": 1,
+        "anchor-missing": 2,
+        "changed": 3,
+        "unanchored": 4,
+        "method": 5,
+        "unchanged": 6,
+    }
     md = [
         f"# Knowledge staleness at {head}",
         "",
@@ -274,7 +304,8 @@ def main(argv=None) -> int:
     ]
     for e in sorted(results, key=lambda e: (order[e["status"]], e["file"], e["line"])):
         md.append(
-            f"| {e['status']} | `{e['file']}:{e['line']}` {e['title'][:70]} | {e['since']} | {len(e['commits'])} | "
+            f"| {e['status']} | `{e['file']}:{e['line']}` `{e['id']}` {e['title'][:70]} | {e['since']} | "
+            f"{len(e['commits'])} | "
             + ", ".join(f"`{p}`" for p in e["anchors"][:4])
             + (" ..." if len(e["anchors"]) > 4 else "")
             + " |"

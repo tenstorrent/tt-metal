@@ -93,6 +93,7 @@ from models.demos.common.bringup.core.ledger import Ledger, satisfied
 from models.demos.common.bringup.core.runs import FreezeError, agent_hashes, freeze_task
 from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
 from models.demos.common.bringup.knowledge import check as kcheck
+from models.demos.common.bringup.knowledge import usage as kusage
 from models.demos.common.bringup.plan import approvals
 from models.demos.common.bringup.plan import op_request as OR
 from models.demos.common.bringup.testing import accuracy_guard
@@ -414,6 +415,7 @@ class Orchestrator:
             f"{b}/repo_map.md",
             f"{b}/BREADCRUMBS.md",
             f"{b}/findings.yaml",
+            f"{b}/{kusage.REPORT_DIR}",  # the step's knowledge-use report (the brief names it)
         ]
 
     def allowed_paths(self, task: dict, role: str) -> list[str]:
@@ -477,6 +479,7 @@ class Orchestrator:
             "details": brief.get("details", ""),
             "repo": str(s.repo),
             "breadcrumbs": f"{rel(s, b)}/BREADCRUMBS.md",
+            "knowledge_report": rel(s, kusage.report_path(b, task["id"], role, attempt)),
             "ab_switch": ab_switch_text(task),
         }
         can_defer = defer and role == "implement" and OR.deferrable(task)  # never the debugger (it cannot defer)
@@ -669,6 +672,29 @@ class Orchestrator:
         problems += [f"known_issues.md: {e}" for e in ki]
         mki, _ = kcheck.check_model_known_issues(self.spec.bringup_dir / "known_issues.md")
         problems += [f"{rel(self.spec, self.spec.bringup_dir)}/known_issues.md: {e}" for e in mki]
+        ids, _ = kcheck.check_ids(kcheck.knowledge_files(CODE_ROOT))
+        problems += [f"knowledge ids: {e}" for e in ids]
+        # The knowledge-use report: validated and cross-checked against what the step touched; a missing or malformed
+        # one is recorded (the dashboard shows it), not a failed attempt.
+        report = kusage.report_path(self.spec.bringup_dir, tid, role, attempt)
+        touched, _ = kusage.transcript_touches(log, self.spec.repo)
+        knowledge_report = kusage.finalize(
+            report,
+            {
+                "model": self.spec.model_dir.name,
+                "run": run_name(self.led),
+                "task": tid,
+                "role": role,
+                "attempt": attempt,
+                "agent": agent,
+                "t": now(),
+            },
+            sorted(set(touched) | set(self.last_changed)),
+            info["commands"],
+            CODE_ROOT,
+        )
+        for w in knowledge_report:
+            self.echo(f"  [{tid}] knowledge report: {w}")
         # Agent definitions and brief templates live in the framework checkout (which may not be the model's repo).
         defs = (
             [AGENT_DEF, HERE / "briefs" / "brief.md", HERE / "briefs" / "roles.yaml"]
@@ -687,6 +713,7 @@ class Orchestrator:
             "brief": str(brief),
             "log": str(log),
             "problems": problems,
+            "knowledge_report": knowledge_report or "ok",
             "defs": agent_hashes(CODE_ROOT, defs),
             "t": now(),
         }

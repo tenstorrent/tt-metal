@@ -12,7 +12,8 @@ the branch's origin moved under work you depend on. It is self-contained: this f
   sections, at most 600 characters each) and `bringup/repo_map.md`. A bullet whose Fix ends with
   `Detail: known_issues_detail.md.` has its full text in that file under `## <title>`: when you rewrite or delete the
   bullet, update or delete that section too.
-- An entry is one bullet with these fields, in this order: `Symptom:`, `Cause:`, `Fix:`, `Applies to:` (the code it is
+- An entry is one bullet, `- **[<id>] <title>.**` (the id never changes: keep it when you rewrite an entry, and never
+  reuse a deleted one), with these fields, in this order: `Symptom:`, `Cause:`, `Fix:`, `Applies to:` (the code it is
   about: repo paths, partial paths such as `tt/mhc.py`, op names such as `unified_routed_expert_moe`; or the word
   `method` for testing / process knowledge that cannot go stale with the code), `Seen at:` (the commit at which it was
   last known true), optionally one `Check:` (the probe that settles it on a device), optionally
@@ -44,6 +45,7 @@ it; the lister drops them (`older_commits`) and keeps the rest.
 | Status | Meaning | Step |
 |---|---|---|
 | `needs-probe` | carries `Unverified since:`: a device check is open | 4 |
+| `contradicted` | an agent's knowledge-use report (after `since`) says the code or a device result disagrees; `contradictions` holds the evidence | 2 |
 | `anchor-missing` | a path it names existed at `since` and is gone | 2 |
 | `changed` | its anchored code has commits after `since` | 2 |
 | `unanchored` | nothing it names resolved to a path | 3 |
@@ -55,7 +57,11 @@ It also lists repo-map rows naming paths that no longer exist (step 5).
 More than ~30 candidates: split them by file (shared, then one model per worker), each worker editing only its own
 files, and merge; two workers never edit the same file.
 
-## 2. Verify each `changed` / `anchor-missing` entry
+## 2. Verify each `contradicted` / `changed` / `anchor-missing` entry
+
+A `contradicted` entry: start from the reports' evidence (`contradictions` in stale.json: task, commit, the agent's
+words), check it against the current code, and decide as below. An agent can be wrong too: "still true" with the reason
+is a valid verdict.
 
 1. Name the one claim the entry makes (an op refuses X, an option defaults to Y, a workaround is needed because Z, a
    measured number).

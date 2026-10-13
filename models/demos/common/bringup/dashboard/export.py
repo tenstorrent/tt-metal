@@ -154,6 +154,38 @@ def timing_rows(spec, task: dict, m: dict) -> list[dict]:
     return rows
 
 
+def knowledge_summary(spec) -> dict | None:
+    """This model's knowledge-use reports (knowledge/usage.py) over the shared and its own entries: report coverage,
+    most-used entries, contradictions, entries unused over 5 relevant runs, missing topics."""
+    from models.demos.common.bringup.knowledge import usage
+    from models.demos.common.bringup.knowledge.stale import Resolver
+    from models.demos.common.bringup.knowledge.stale import git as kgit
+
+    model = spec.model_dir.name
+    reps = [r for r in usage.load_reports(spec.repo) if r["meta"].get("model") == model]
+    if not reps:
+        return None
+    known = {i: e for i, e in usage.entries(spec.repo).items() if e["model"] in ("", model)}
+    res = Resolver(spec.repo, kgit("rev-parse", "--short=11", "HEAD", root=spec.repo).strip())
+    t = usage.tally(known, reps, {i: usage.anchors(e, res) for i, e in known.items()}, usage.UNUSED_RUNS)
+    by = {s["id"]: s for s in t["entries"]}
+    row = lambda i: {k: by[i][k] for k in ("id", "title", "uses", "traced", "untraced", "unchecked")}  # noqa: E731
+    return {
+        "reports": len(reps),
+        "with_report": sum(1 for r in reps if r.get("used") or r.get("contradicted") or r.get("missing")),
+        "runs": len(t["runs"]),
+        "entries": len(known),
+        "used": sum(1 for s in t["entries"] if s["uses"]),
+        "top": [row(s["id"]) for s in sorted(t["entries"], key=lambda s: -s["uses"]) if s["uses"]][:10],
+        "contradicted": [
+            {"id": i, "title": by[i]["title"], "evidence": by[i]["contradictions"][-1]["evidence"]}
+            for i in t["contradicted"]
+        ],
+        "unused": [{"id": i, "title": by[i]["title"], "runs": by[i]["relevant_runs"]} for i in t["flag_unused"]],
+        "missing": t["missing_topics"][:10],
+    }
+
+
 def build(spec) -> dict:
     led = Ledger(spec.bringup_dir)
     tasks_spec, state = led.tasks(), led.state()
@@ -290,6 +322,7 @@ def build(spec) -> dict:
         "prior": load_prior(spec),
         "deferred": deferred_rows(spec, led, state),
         "final": final_tests(spec, led, state),
+        "knowledge": knowledge_summary(spec),
         "thresholds": {k: spec.threshold(k, v) for k, v in DEFAULT_THRESHOLDS.items()},
         "source": str(spec.bringup_dir.relative_to(spec.repo)),
     }

@@ -153,7 +153,7 @@ $O resume --spec <spec>
 | `testing/` | component and swap tests, ladder, contract, serving contract, settings lint, profiler, templates |
 | `tests/` | generic pytest entry points (box, ladder, contract, profile, positions); they read `BRINGUP_SPEC` |
 | `plan/` | memory check, components map, approvals, ledger generator, opportunity list, op requests |
-| `intake/`, `knowledge/` | checkpoint check; the shared repo map and known issues every agent reads first (each model adds its own in `bringup/`), `knowledge/stale.py` (entries whose code changed), `knowledge/references/` |
+| `intake/`, `knowledge/` | checkpoint check; the shared repo map and known issues every agent reads first (each model adds its own in `bringup/`), `knowledge/stale.py` (entries whose code changed), `knowledge/usage.py` (which entries the agents' steps used, contradicted or missed: their per-step reports in `bringup/results/knowledge_use/`), `knowledge/references/` |
 | `dashboard/` | the dashboard exporter and pages |
 | `skill/bringup/SKILL.md` | the `/bringup` skill (intake and supervision) |
 | `skill/rebase-bringup/` | the `/rebase-bringup` skill (rebase, fork syncs, re-verification) and `staleness.md` |
