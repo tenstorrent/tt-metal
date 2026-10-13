@@ -288,9 +288,9 @@ private:
     //
     // A bytewise move copies the whole buffer, including bytes a small target (or the empty state)
     // never wrote. Copying indeterminate bytes as unsigned storage is well-defined, but gcc reports
-    // it as -W(maybe-)uninitialized once inlined; zeroing those bytes instead measured up to 7% slower
-    // on the job path. __builtin_memcpy keeps the copy out of glibc's fortified memcpy wrapper, so
-    // the suppression below applies to it.
+    // it as -W(maybe-)uninitialized once inlined. Zeroing those bytes instead adds a store to every
+    // construction and was not faster. __builtin_memcpy keeps the copy out of glibc's fortified memcpy
+    // wrapper, so the suppression below applies to it.
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
