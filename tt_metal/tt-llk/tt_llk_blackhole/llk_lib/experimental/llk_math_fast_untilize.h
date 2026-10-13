@@ -166,6 +166,34 @@ inline void _llk_math_fast_untilize_block_(const std::uint32_t dst_index, const 
     math::clear_dst_reg_addr();
 }
 
+// Face-pair passes: SrcA brings two faces per tile, placed at rows t * 32 and t * 32 + 16, so a pass of up to sixteen
+// tiles fills one 16-bit DEST half with the layout of a chunk's first strip.
+template <std::uint32_t tile_index>
+inline void _llk_math_fast_untilize_copy_face_pair_(const std::uint32_t unit_dim)
+{
+    if constexpr (tile_index < FAST_UNTILIZE_MAX_PASS_UNIT_DIM)
+    {
+        if (tile_index < unit_dim)
+        {
+            _llk_math_fast_untilize_copy_face_(tile_index * FAST_UNTILIZE_TILE_STRIDE_ROWS);
+            _llk_math_fast_untilize_copy_face_(tile_index * FAST_UNTILIZE_TILE_STRIDE_ROWS + FAST_UNTILIZE_PHASE_ROWS);
+            _llk_math_fast_untilize_copy_face_pair_<tile_index + 1>(unit_dim);
+        }
+    }
+}
+
+inline void _llk_math_fast_untilize_pass_block_(const std::uint32_t dst_index, const std::uint32_t unit_dim)
+{
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "BH fast-untilize face passes support unit_dim 2 to 16");
+
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+
+    _llk_math_fast_untilize_copy_face_pair_<0>(unit_dim);
+
+    math::clear_dst_reg_addr();
+}
+
 inline void _llk_math_fast_untilize_uninit_()
 {
 }

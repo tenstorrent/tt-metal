@@ -38,6 +38,33 @@ constexpr std::uint32_t FAST_UNTILIZE_PACK_BOTTOM_STRIP_DEST_TARGET_OFFSET = 0;
 // double-buffer independently of the ambient kernel sync mode.
 constexpr DstSync FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE = DstSync::SyncHalf;
 
+// Rows wider than eight tiles with a 16-bit DEST go in face-pair passes: one DEST half takes F0/F1 (then F2/F3) of up to
+// sixteen tiles, so each pass packs sixteen output rows of the whole unit.
+constexpr std::uint32_t FAST_UNTILIZE_MAX_PASS_UNIT_DIM = 16;
+
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en>
+constexpr bool fast_untilize_face_passes()
+{
+    return !is_fp32_dest_acc_en && full_ct_dim > FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST;
+}
+
+// Sixteen-tile pass units, then the rest as a pass unit (9 to 15) or a chunk (2 to 8, too few to repay a second DEST
+// hand-off); 17 left take a chunk of 8 first so no unit of 1 remains.
+constexpr std::uint32_t fast_untilize_next_pass_row_unit(const std::uint32_t remaining_tiles)
+{
+    return remaining_tiles == FAST_UNTILIZE_MAX_PASS_UNIT_DIM + 1 ? FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST
+           : remaining_tiles > FAST_UNTILIZE_MAX_PASS_UNIT_DIM    ? FAST_UNTILIZE_MAX_PASS_UNIT_DIM
+                                                                  : remaining_tiles;
+}
+
+constexpr bool fast_untilize_unit_uses_passes(const std::uint32_t unit_dim)
+{
+    return unit_dim > FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST;
+}
+
+// MOP key of a pass unit, so a switch between pass and chunk units in one row reprograms the MOP.
+constexpr std::uint32_t FAST_UNTILIZE_PASS_MOP_KEY = 0x100;
+
 template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en>
 constexpr std::uint32_t fast_untilize_max_unit_dim()
 {

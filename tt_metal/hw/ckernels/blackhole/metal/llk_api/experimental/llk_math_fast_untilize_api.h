@@ -27,6 +27,11 @@ inline void llk_math_fast_untilize_block(const std::uint32_t dst_index, const st
     ckernel::_llk_math_fast_untilize_block_<is_fp32_dest_acc_en, max_unit_dim>(dst_index, block_ct_dim);
 }
 
+inline void llk_math_fast_untilize_pass_block(const std::uint32_t dst_index, const std::uint32_t unit_dim) {
+    SAN_HOOK(unsupported());
+    ckernel::_llk_math_fast_untilize_pass_block_(dst_index, unit_dim);
+}
+
 inline void llk_math_fast_untilize_uninit() {
     SAN_HOOK(unsupported());
     ckernel::_llk_math_fast_untilize_uninit_();

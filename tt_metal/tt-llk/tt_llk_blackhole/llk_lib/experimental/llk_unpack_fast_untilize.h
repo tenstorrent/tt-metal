@@ -160,6 +160,62 @@ inline void _llk_unpack_fast_untilize_bfp_block_(const std::uint32_t address, co
     switch_config_context(unp_cfg_context);
 }
 
+// Face-pair passes (dense input, 16-bit DEST): pass 0 unpacks F0 and F1 of every tile, pass 1 F2 and F3. The second
+// UNPACR of a pair steps Z by 3, to the same face pair of the next tile.
+inline void _llk_unpack_fast_untilize_pass_mop_config_(const std::uint32_t unit_dim)
+{
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "fast_untilize face passes support unit_dim 2 to 16");
+
+    static constexpr std::uint32_t unpack_first_face  = TT_OP_UNPACR(SrcA, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_second_face = TT_OP_UNPACR(SrcA, 0b11, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+
+    ckernel_template tmp(unit_dim, 1, unpack_first_face, unpack_second_face);
+    tmp.program();
+}
+
+inline void _llk_unpack_fast_untilize_pass_init_(
+    const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t init_unit_dim)
+{
+    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, unpack_src_format, unpack_dst_format);
+    _llk_unpack_fast_untilize_pass_mop_config_(init_unit_dim);
+}
+
+inline void _llk_unpack_fast_untilize_set_pass_face_(const std::uint32_t pass)
+{
+    if (pass == 0)
+    {
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    }
+    else
+    {
+        TTI_SETADCZW(0b011, 0, 0, 0, 2, 0b1111);
+    }
+}
+
+inline void _llk_unpack_fast_untilize_pass_block_(const std::uint32_t address, const std::uint32_t unit_dim, const std::uint32_t pass)
+{
+    LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_PASS_UNIT_DIM, "fast_untilize face passes support unit_dim 2 to 16");
+    LLK_ASSERT(pass < 2, "fast_untilize has two face-pair passes");
+
+    _llk_unpack_fast_untilize_set_pass_face_(pass);
+
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+
+    const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
+    cfg[upk0_reg]                = address;
+
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+    ckernel::ckernel_template::run();
+
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
+
 inline void _llk_unpack_fast_untilize_uninit_()
 {
 }

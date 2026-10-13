@@ -44,6 +44,12 @@ constexpr bool has_supported_fast_untilize_format() {
     return supported_input && supported_output;
 }
 
+// Block-float input is unpacked tile by tile; dense input lets rows over eight tiles take face-pair passes.
+template <uint32_t input_dfb>
+constexpr bool fast_untilize_dense_input() {
+    return dfb_l1_format<input_dfb>() == static_cast<uint32_t>(DataFormat::Float16_b);
+}
+
 template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
 constexpr bool can_use_fast_untilize() {
 #ifdef ARCH_BLACKHOLE
@@ -170,9 +176,14 @@ ALWI void untilize_init() {
 
     if constexpr (dispatch::use_fast) {
         if constexpr (configure_remap) {
-            fast_untilize_init<block_width_tiles, DST_ACCUM_MODE, four_tile_chunks>(input_dfb, output_dfb);
+            fast_untilize_init<block_width_tiles, DST_ACCUM_MODE, four_tile_chunks, fast_untilize_dense_input<input_dfb>()>(
+                input_dfb, output_dfb);
         } else {
-            fast_untilize_init_skip_remap<block_width_tiles, DST_ACCUM_MODE, four_tile_chunks>(input_dfb, output_dfb);
+            fast_untilize_init_skip_remap<
+                block_width_tiles,
+                DST_ACCUM_MODE,
+                four_tile_chunks,
+                fast_untilize_dense_input<input_dfb>()>(input_dfb, output_dfb);
         }
     } else if constexpr (dispatch::use_block_based_pack_path) {
         if constexpr (configure_remap) {
@@ -300,8 +311,11 @@ ALWI void untilize(uint32_t num_blocks) {
         for (uint32_t r = 0; r < num_blocks; ++r) {
             untilize_wait_for_block<wait_mode>(in_dfb, block_width_tiles);
             out_dfb.reserve_back(block_width_tiles);
-            fast_untilize_block<block_width_tiles, DST_ACCUM_MODE, fast_chunk == untilize_config::FastChunk::FourTiles>(
-                input_dfb, output_dfb);
+            fast_untilize_block<
+                block_width_tiles,
+                DST_ACCUM_MODE,
+                fast_chunk == untilize_config::FastChunk::FourTiles,
+                fast_untilize_dense_input<input_dfb>()>(input_dfb, output_dfb);
             in_dfb.pop_front(block_width_tiles);
             out_dfb.push_back(block_width_tiles);
         }
