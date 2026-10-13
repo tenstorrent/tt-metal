@@ -761,6 +761,14 @@ NOC by column half / by core parity; `DRB_DROT=1` down cores rotating), us per c
   spread over the banks by block, se6_dw.cpp's block address rotates the bank); no new kernels. Under the (heavier
   than real) synthetic traffic it is a wash (-0.3 / -1%), so it needs the real op to tell: the small-M sweep and
   the real-routing count sets.
+- **Real op (galaxy branch d75fc72e4a9, default on, MIMO_FL_DW_ROT=0 off; not in this tree yet):** the host packs
+  down core d's block k into bank (d + k) % banks, se6_dw.cpp's read rotates the bank. Bit-identical (y at M 128,
+  three shapes); unit tests as before. us per expert at M 32 / 128 (nothing at M >= 512): GLM-5.3-Flash E36
+  34.6 / 40.9 -> 32.9 / 40.2, GLM 5.3 E12 54.3 / 63.9 -> 51.2 / 61.4, K2.7 E12 62.3 / 72.3 -> 58.2 / 68.7. Real
+  Kimi K2.6 count sets (us per call): median chip 820 -> 787, median worst 1114 -> 1074, p90 worst 1232 -> 1211,
+  max worst 1533 -> 1525. Dream's uniform cases: -2..-7% on 7 of 8 (DSv3 635 -> 605, K2.7 860 -> 801, K3
+  1317 -> 1265, GLM 5.3 568 -> 555, Mistral-S4 214 -> 202, DSv4-Flash 352 -> 335, DSv4-Pro 1136 -> 1111,
+  MiniMax-M3 415 -> 419). So the bench's -8.8% (bytes only) is -2..-7% in the op, at small M only.
 
 ## 9. How to run (PR tree)
 ```
