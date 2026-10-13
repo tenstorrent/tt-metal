@@ -37,9 +37,9 @@ def setup(tmp_path, monkeypatch):
         plan.write_text(json.dumps({"metric": METRIC, "runs": runs}))
         suite = Suite(name="fake", binary=wrapper, golden=tmp_path / "golden.json", policy=policy, repetitions=2)
         if golden_cases is not None:
-            golden = golden_io.Golden("fake", {}, {})
-            golden.metrics = {"IterationTime": session.MetricSpec("s", "lower", "min")}
-            golden.environments[ENV] = golden_io.Environment(repetitions=2, cases=golden_cases)
+            metrics = {"IterationTime": session.MetricSpec("s", "lower", "min")}
+            golden = golden_io.Golden("fake")
+            golden.environments[ENV] = golden_io.Environment(metrics=metrics, repetitions=2, cases=golden_cases)
             golden_io.save(golden, suite.golden)
         return suite
 

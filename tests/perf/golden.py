@@ -28,6 +28,9 @@ class GoldenError(ValueError):
 
 @dataclass
 class Environment:
+    # How these values were measured. Kept per environment so re-recording one environment with a new
+    # measurement leaves the others, and their own settings, intact.
+    metrics: dict[str, MetricSpec] = field(default_factory=dict)
     repetitions: int | None = None
     provenance: dict[str, str] = field(default_factory=dict)
     context: dict[str, str] = field(default_factory=dict)
@@ -37,7 +40,6 @@ class Environment:
 @dataclass
 class Golden:
     suite: str
-    metrics: dict[str, MetricSpec] = field(default_factory=dict)
     environments: dict[str, Environment] = field(default_factory=dict)
 
 
@@ -53,16 +55,18 @@ def load(path: Path, suite: str) -> Golden:
         raise GoldenError(f"golden {path} has schema_version {document.get('schema_version')!r}")
     if document.get("suite") != suite:
         raise GoldenError(f"golden {path} is for suite {document.get('suite')!r}, not {suite!r}")
-    golden = Golden(suite=suite, metrics={k: MetricSpec.from_dict(v) for k, v in document["metrics"].items()})
+    golden = Golden(suite=suite)
     for name, env in document.get("environments", {}).items():
+        metrics = {k: MetricSpec.from_dict(v) for k, v in env.get("metrics", {}).items()}
         cases = env.get("cases", {})
         for case, values in cases.items():
             for metric, value in values.items():
-                if metric not in golden.metrics:
-                    raise GoldenError(f"golden {path} case {case!r} uses undeclared metric {metric!r}")
+                if metric not in metrics:
+                    raise GoldenError(f"golden {path} {name} case {case!r} uses undeclared metric {metric!r}")
                 if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
-                    raise GoldenError(f"golden {path} case {case!r} has invalid {metric}: {value!r}")
+                    raise GoldenError(f"golden {path} {name} case {case!r} has invalid {metric}: {value!r}")
         golden.environments[name] = Environment(
+            metrics=metrics,
             repetitions=env.get("repetitions"),
             provenance=dict(env.get("provenance", {})),
             context=dict(env.get("context", {})),
@@ -81,13 +85,14 @@ def dumps(golden: Golden) -> str:
         "{",
         f'  "schema_version": {SCHEMA_VERSION},',
         f'  "suite": {json.dumps(golden.suite)},',
-        f'  "metrics": {json.dumps({k: v.as_dict() for k, v in sorted(golden.metrics.items())}, sort_keys=True)},',
         '  "environments": {',
     ]
     env_blocks = []
     for name, env in sorted(golden.environments.items()):
+        metrics = {k: v.as_dict() for k, v in sorted(env.metrics.items())}
         block = [
             f"    {json.dumps(name)}: {{",
+            f'      "metrics": {json.dumps(metrics, sort_keys=True)},',
             f'      "repetitions": {json.dumps(env.repetitions)},',
             f'      "provenance": {json.dumps(env.provenance, sort_keys=True)},',
             f'      "context": {json.dumps(env.context, sort_keys=True)},',
