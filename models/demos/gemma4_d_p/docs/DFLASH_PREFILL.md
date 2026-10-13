@@ -27,6 +27,36 @@ caches. Asynchronous collectives are optional.
   Migration adds `dflash_k_h00`–`dflash_k_h07` and corresponding V entries, plus
   stages for the two packed tensors. Existing target config IDs remain unchanged.
 
+## Prefill-to-decode migration
+
+With `PREFILL_DFLASH=1`, the published table has 52 configs: the existing 36
+target configs followed by `dflash_k_h00`–`dflash_k_h07` and
+`dflash_v_h00`–`dflash_v_h07`. Target rows remain 0–59; draft rows are 60–64.
+Each draft chunk is 32 tokens by 128 channels of BFP8, or 4352 bytes.
+
+The standalone `migration_driver` derives the draft layer extent from this
+published table and requests all 65 layers by default. It also waits for all 65
+layer acknowledgements per prefill chunk. An explicit `PREFILL_MIGRATION_LAYERS`
+subset is honored; a target-only subset does not migrate the draft. When
+`PREFILL_DFLASH=1`, a missing table or a table without draft configs is rejected
+before issuing migration. Direct `MigrationDriver.run` callers must pass
+`kv_table` to include the draft rows.
+
+The SC20/DFlash decode adapter in `tt-blaze` uses this same 52-config contract.
+Its physical layout is different: TP8 shards one head per device, with a private
+32-row proposal tile before committed history and padded, bank-striped slot
+storage. Decode's table maps logical position `p` to row `p + 32`; prefill exports
+logical position `p` directly from its CP8/TP4 packed caches. The worker copies
+4352-byte chunks between the independently described addresses. No prefill-side
+proposal padding or cache repacking is required. Both endpoints must enable the
+drafter contract before pairing.
+
+Host regressions cover the migration driver's complete layer range, explicit
+subsets, missing-table rejection, and corruption in the final draft V head.
+The sibling Blaze test `test_gemma4_dflash_prefill_contract.py` exercises both
+production table builders, protobuf I/O, and byte copies into decode's physical
+slot layout. These checks do not replace a multi-host hardware migration run.
+
 ## Weights
 
 The prepared checkpoint lives at
