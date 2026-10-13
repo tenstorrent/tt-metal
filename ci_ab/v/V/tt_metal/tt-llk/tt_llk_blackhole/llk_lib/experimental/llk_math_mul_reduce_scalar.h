@@ -18,8 +18,6 @@
 
 using namespace ckernel;
 
-namespace ckernel { struct p_movd2a_x { static constexpr std::uint32_t MOV_8_ROWS = 0x3; }; }
-
 /*************************************************************************
  * LLK MUL REDUCE SCALAR - Low-level reduce operations for fused mul+reduce
  *************************************************************************/
@@ -29,7 +27,7 @@ namespace ckernel { struct p_movd2a_x { static constexpr std::uint32_t MOV_8_ROW
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + (row_offset) * 4, ADDR_MOD_0, p_movd2a::MOV_4_ROWS, (base_offset) + (row_offset) * 4);
 
 #define MOVD2A_8_ROWS(base_offset, row_offset) \
-    TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + (row_offset) * 8, ADDR_MOD_0, p_movd2a_x::MOV_8_ROWS, (base_offset) + (row_offset) * 8);
+    TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + (row_offset) * 8, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, (base_offset) + (row_offset) * 8);
 
 #define MOVD2A_16_ROWS(base_offset) \
     MOVD2A_8_ROWS(base_offset, 0)   \
@@ -159,9 +157,11 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::
 
 inline void _llk_math_mul_reduce_scalar_move_faces_to_srca_(const std::uint32_t idst, const ckernel::TensorShape tensor_shape)
 {
+    // Later moves find the bank still valid, and MOVD2A itself waits for pending DEST writes.
     if (idst == 0)
     {
-        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base());
+        // dest_offset_id is 0 or 1 and flips every section: a shift, not a select, keeps it off the branch predictor.
+        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dest_offset_id * DEST_REGISTER_HALF_SIZE);
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         math::srca_bank_wait();
     }
