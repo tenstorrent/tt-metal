@@ -13,7 +13,7 @@ if [[ ${1:-} == --target-cxx ]]; then
     }
     target_cxx=$2
     scratch=$(mktemp -d)
-    trap 'rm -f "$scratch/WH.s" "$scratch/BH.s" "$scratch/QSR.s" "$scratch/gap.s" "$scratch/mul-int.s" "$scratch/baseline.s" "$scratch/pressure.s" "$scratch/pressure.log"; rmdir "$scratch"' EXIT
+    trap 'rm -f "$scratch/WH.s" "$scratch/BH.s" "$scratch/QSR.s" "$scratch/gap.s" "$scratch/mul-int.s" "$scratch/baseline.s" "$scratch/pressure.s" "$scratch/pressure.log" "$scratch/lut-refuse.log"; rmdir "$scratch"' EXIT
     for arch in WH BH QSR; do
         case $arch in
             WH) cpu=tt-wh-tensix ;;
@@ -41,9 +41,19 @@ if [[ ${1:-} == --target-cxx ]]; then
                 -DTEST_DEFAULT_FALLBACK -DTEST_LUT_MODES "-DTEST_$arch" \
                 -S "$source_file" -o "$scratch/$arch.s"
             count=$(grep -c '# RAWLREG_EFFECT' "$scratch/$arch.s" || true)
-            [[ $count == 25 ]] || { echo "FAIL: LUT modifier fixture emitted $count effects, expected 25" >&2; exit 1; }
+            [[ $count == 21 ]] || { echo "FAIL: LUT modifier fixture emitted $count effects, expected 21" >&2; exit 1; }
             echo "PASS: $cpu $opt LUT modifier combinations"
         done
+        if "$target_cxx" -std=c++17 -O2 -mcpu="$cpu" -DTEST_TARGET_EFFECT \
+            -DTEST_DEFAULT_FALLBACK -DTEST_RESERVED_LUT "-DTEST_$arch" \
+            -S "$source_file" -o "$scratch/$arch.s" > "$scratch/lut-refuse.log" 2>&1; then
+            echo "FAIL: $cpu accepted reserved SFPLUTFP32 modifier 8" >&2; exit 1
+        fi
+        grep -q 'unsupported raw SFPU effect' "$scratch/lut-refuse.log" || {
+            cat "$scratch/lut-refuse.log" >&2
+            echo "FAIL: $cpu reserved LUT rejection did not come from metadata gate" >&2; exit 1
+        }
+        echo "PASS: $cpu rejects reserved SFPLUTFP32 modifier 8"
     done
     "$target_cxx" -O2 -mcpu=tt-bh-tensix -DUSE_EFFECT -S \
         "$here/raw_lreg_annotation_gap.cpp" -o "$scratch/gap.s"

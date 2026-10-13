@@ -45,7 +45,8 @@ constexpr unsigned mm(unsigned x) { return (x >> 16) & 15; }
 constexpr bool supported(unsigned x) {
     if (op(x) == 0x94) return mod(x) <= 6;
     // Sign retention (4) and indirect destination (8) are independent flags.
-    if (op(x) == 0x95) return (mod(x) & 3) != 1;
+    // The ISA admits 0,2,3,4,6,7,A,E; all other modifier values are reserved.
+    if (op(x) == 0x95) return (0x44ddu & (1u << mod(x))) != 0;
     return op(x) >= 0x70 && op(x) <= 0x99;
 }
 constexpr unsigned math_r(unsigned x, bool has_c = true) {

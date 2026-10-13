@@ -137,7 +137,7 @@ constexpr bool lut_modifier_masks()
 {
     constexpr unsigned expected_reads[16] = {
         0x7f, 0, 0x7f, 0x7f, 0x7f, 0, 0x7f, 0x7f,
-        0xff, 0, 0x8f, 0x8f, 0xff, 0, 0x8f, 0x8f
+        0, 0, 0x8f, 0, 0, 0, 0x8f, 0
     };
     for (unsigned mode = 0; mode != 16; ++mode) {
         const unsigned word = TT_OP_SFPLUTFP32(4, mode);
@@ -159,12 +159,15 @@ void lut_modifier_issue()
     TTI_SFPLUTFP32(4, 4);
     TTI_SFPLUTFP32(4, 6);
     TTI_SFPLUTFP32(4, 7);
-    TTI_SFPLUTFP32(4, 8);
     TTI_SFPLUTFP32(4, 10);
-    TTI_SFPLUTFP32(4, 11);
-    TTI_SFPLUTFP32(4, 12);
     TTI_SFPLUTFP32(4, 14);
-    TTI_SFPLUTFP32(4, 15);
+}
+#endif
+
+#ifdef TEST_RESERVED_LUT
+void reserved_lut_modifier_must_refuse()
+{
+    TTI_SFPLUTFP32(4, 8);
 }
 #endif
 
