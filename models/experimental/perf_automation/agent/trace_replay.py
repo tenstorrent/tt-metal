@@ -135,6 +135,8 @@ def _affordable_iters(requested, per_iter_s, budget_s) -> int:
 # supervising us, and only that supervisor knows it. It tells us in the environment, so the beat is
 # read from there and divided; a dimensionless divisor carries no assumption about the model, the
 # stage or the box. With nothing said, fall back to the tightest cadence any caller supervises at.
+_MARK_PREFIX = "TRACE_"  # every line this module prints for a reader to parse starts with it
+_HEARTBEAT_MARK = _MARK_PREFIX + "STAGE_WAITING"  # a sign of life while a stage runs, not a result
 _HEARTBEAT_DIVISOR = 4  # beats per supervising window, so a missed beat is never the first evidence
 _STALL_WINDOW_ENVS = ("PERF_MCP_VALIDATE_STALL_SEC", "PERF_MCP_MEASURE_STALL_SEC", "PERF_MCP_ROUND_STALL_SEC")
 
@@ -185,7 +187,7 @@ class _Alive:
         def _beat():
             while not self._stop.wait(beat):
                 print(
-                    "TRACE_STAGE_WAITING[%s] %ds on device" % (self._what, int(time.monotonic() - t0)),
+                    "%s[%s] %ds on device" % (_HEARTBEAT_MARK, self._what, int(time.monotonic() - t0)),
                     flush=True,
                 )
 
@@ -610,6 +612,36 @@ def _checkpoint_for_census(pipeline=None):
     return None
 
 
+class _StdoutLines:
+    """While active, every complete line printed to sys.stdout is also kept in `.lines`; output is
+    unchanged. Python-level prints only -- which is all this module's rows are."""
+
+    def __enter__(self):
+        self.lines, self._part, self._out = [], "", sys.stdout
+        sys.stdout = self
+        return self
+
+    def write(self, text):
+        self._out.write(text)
+        self._part += text
+        while "\n" in self._part:
+            line, self._part = self._part.split("\n", 1)
+            self.lines.append(line)
+        return len(text)
+
+    def flush(self):
+        self._out.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._out, name)
+
+    def __exit__(self, *exc):
+        sys.stdout = self._out
+        if self._part:
+            self.lines.append(self._part)
+        return False
+
+
 def measure_adapter(adapter, device) -> float:
     """Trace-replay per-stage latency for WHATEVER the pipeline emitted. Traces every stage in
     adapter.stages; prints TRACE_STAGE_MS[<stage>] per stage and TRACE_PER_TOKEN_MS (the AR/decode
@@ -746,50 +778,83 @@ def measure_adapter(adapter, device) -> float:
     # EACH STAGE GETS ITS SHARE, not the whole budget: they run in sequence, so a stage that spends
     # everything leaves the ones after it nothing and the capture dies with rows missing.
     _stage_budget = _measurement_budget_s(len(stages))
+    # A RETRY OF THIS STEP KEEPS WHAT AN EARLIER ATTEMPT MEASURED (probes.stages_kept_across_retries).
+    # A board too hot to go on ends this process at a stage boundary (probes.thermal_yield); the step is
+    # re-run from a cool board, and a stage already measured is replayed from its own lines rather than
+    # measured again -- otherwise every attempt re-heats the board on the same stages and is stopped at
+    # the same place.
+    _node = os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0]
+    try:
+        from .probes import keep_stage, kept_stages
+
+        _kept = kept_stages(_node)
+    except Exception:  # noqa: BLE001 -- nothing kept is the old behaviour
+        keep_stage, _kept = None, {}
     for st in stages:
+        _k = _kept.get(st.name)
+        if _k is not None:
+            print(
+                "  [trace-replay] stage %r: measured by an earlier attempt of this step (%.4f ms); "
+                "kept, not measured again" % (st.name, float(_k["ms"])),
+                file=sys.stderr,
+                flush=True,
+            )
+            for _ln in _k["lines"]:
+                print(_ln, flush=True)
+            results.append((st.name, float(_k["ms"]), _k["path"]))
+            continue
         try:
             from .probes import thermal_yield
 
             thermal_yield(str(getattr(st, "name", "") or ""))
         except Exception:  # noqa: BLE001 -- cooling is a courtesy, never a precondition
             pass
-        # ONE STAGE THAT CANNOT BE MEASURED MUST NOT COST THE OTHERS THEIR ROW. The adapter already
-        # holds this line for the stage that cannot PREPARE its inputs; the loop that MEASURES them
-        # had no such guard, so a raise here lost every stage rather than one -- the whole replay,
-        # and with it every roofline row, for a fault in a single tower. Same rule, one step later.
-        try:
-            ms, path = _measure_stage(device, st, _stage_budget)
-        except Exception as exc:  # noqa: BLE001
-            print(
-                "  [trace-replay] stage %r could not be measured (%s: %s); it gets no row, the "
-                "others are unaffected" % (st.name, type(exc).__name__, str(exc)[:120]),
-                file=sys.stderr,
-                flush=True,
+        with _StdoutLines() as _said:
+            # ONE STAGE THAT CANNOT BE MEASURED MUST NOT COST THE OTHERS THEIR ROW. The adapter already
+            # holds this line for the stage that cannot PREPARE its inputs; the loop that MEASURES them
+            # had no such guard, so a raise here lost every stage rather than one -- the whole replay,
+            # and with it every roofline row, for a fault in a single tower. Same rule, one step later.
+            try:
+                ms, path = _measure_stage(device, st, _stage_budget)
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    "  [trace-replay] stage %r could not be measured (%s: %s); it gets no row, the "
+                    "others are unaffected" % (st.name, type(exc).__name__, str(exc)[:120]),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                continue
+            results.append((st.name, ms, path))
+            print("TRACE_STAGE_MS[%s]=%.4f path=%s" % (st.name, ms, path), flush=True)
+            # BESIDE THE TIME THAT MEASURED IT. The compute ceiling is 2 x params x items-in-the-unit,
+            # and the run recorded that number for exactly one stage -- the parser wrote it to the key
+            # "prefill", by hand -- so every other stage was priced at one item however much work it did.
+            # Printed per stage, from what the pipeline declares, so a third tower can have a real
+            # arithmetic ceiling instead of a placeholder. Silent when unstated: 1 stays the fallback.
+            _n = int(getattr(st, "items", 0) or 0)
+            if _n > 0:
+                print("TRACE_STAGE_ITEMS[%s]=%d" % (st.name, _n), flush=True)
+            # AND HOW MANY DATA-PARALLEL GROUPS SHARE THEM (stage_seams.SPLIT), so the ceiling prices what
+            # one chip does. Printed only for a stage that is split: 1 is the reader's fallback.
+            _sp = int(getattr(st, "split", 0) or 0)
+            if _sp > 1:
+                print("TRACE_STAGE_SPLIT[%s]=%d" % (st.name, _sp), flush=True)
+            # AND HOW MANY GROUPS CUT ONE REQUEST'S TOKENS in it (stage_seams.SEQ_SPLIT), for the same reason.
+            _sq = int(getattr(st, "seq_split", 0) or 0)
+            if _sq > 1:
+                print("TRACE_STAGE_SEQ_SPLIT[%s]=%d" % (st.name, _sq), flush=True)
+            # AND HOW MANY TIMES ONE REQUEST RUNS IT (stage_seams.REPEATS): the pass below times it once.
+            _rp = int(getattr(st, "repeats", 0) or 0)
+            if _rp > 1:
+                print("TRACE_STAGE_REPEATS[%s]=%d" % (st.name, _rp), flush=True)
+        if keep_stage is not None:
+            keep_stage(
+                _node,
+                st.name,
+                ms,
+                path,
+                [ln for ln in _said.lines if ln.startswith(_MARK_PREFIX) and not ln.startswith(_HEARTBEAT_MARK)],
             )
-            continue
-        results.append((st.name, ms, path))
-        print("TRACE_STAGE_MS[%s]=%.4f path=%s" % (st.name, ms, path), flush=True)
-        # BESIDE THE TIME THAT MEASURED IT. The compute ceiling is 2 x params x items-in-the-unit,
-        # and the run recorded that number for exactly one stage -- the parser wrote it to the key
-        # "prefill", by hand -- so every other stage was priced at one item however much work it did.
-        # Printed per stage, from what the pipeline declares, so a third tower can have a real
-        # arithmetic ceiling instead of a placeholder. Silent when unstated: 1 stays the fallback.
-        _n = int(getattr(st, "items", 0) or 0)
-        if _n > 0:
-            print("TRACE_STAGE_ITEMS[%s]=%d" % (st.name, _n), flush=True)
-        # AND HOW MANY DATA-PARALLEL GROUPS SHARE THEM (stage_seams.SPLIT), so the ceiling prices what
-        # one chip does. Printed only for a stage that is split: 1 is the reader's fallback.
-        _sp = int(getattr(st, "split", 0) or 0)
-        if _sp > 1:
-            print("TRACE_STAGE_SPLIT[%s]=%d" % (st.name, _sp), flush=True)
-        # AND HOW MANY GROUPS CUT ONE REQUEST'S TOKENS in it (stage_seams.SEQ_SPLIT), for the same reason.
-        _sq = int(getattr(st, "seq_split", 0) or 0)
-        if _sq > 1:
-            print("TRACE_STAGE_SEQ_SPLIT[%s]=%d" % (st.name, _sq), flush=True)
-        # AND HOW MANY TIMES ONE REQUEST RUNS IT (stage_seams.REPEATS): the pass below times it once.
-        _rp = int(getattr(st, "repeats", 0) or 0)
-        if _rp > 1:
-            print("TRACE_STAGE_REPEATS[%s]=%d" % (st.name, _rp), flush=True)
 
     # WHICH MODULES EACH STAGE RUNS, read from the pipeline's own code (stage_marks.stage_module_paths)
     # so perf_mcp can price each stage's compute from the weights it actually multiplies instead of

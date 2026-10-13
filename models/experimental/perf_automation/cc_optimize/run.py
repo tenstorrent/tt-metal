@@ -3991,31 +3991,82 @@ def _run_device_step(*args, **kwargs):
     return rerun_after_thermal_abort(_attempt, lambda: _THERMAL_ABORTED[0])
 
 
-def rerun_after_thermal_abort(attempt, was_aborted, label: str = "that step"):
+def rerun_after_thermal_abort(attempt, was_aborted, label: str = "that step", cool=None):
     """Run `attempt()`, and run it again while `was_aborted()` says the board reached the abort limit
     during it -- at most _THERMAL_ABORT_RETRIES more times, then the last result stands.
 
     The one owner of "re-run the step, not the run" (see _run_device_step), shared with emit-e2e's
-    gate steps, whose aborts are detected differently but must be retried by the same rule."""
-    for n in range(1 + _THERMAL_ABORT_RETRIES):
-        result = attempt()
-        if not was_aborted():
-            return result
-        if n >= _THERMAL_ABORT_RETRIES:
-            print(
-                "  [thermal-abort] the board reached the abort limit on every attempt (%d); "
-                "returning the last result rather than retrying forever" % (n + 1),
-                file=sys.stderr,
-                flush=True,
-            )
-            return result
+    gate steps, whose aborts are detected differently but must be retried by the same rule.
+
+    THE STEP KEEPS WHAT IT FINISHED. Every attempt runs inside one probes.stages_kept_across_retries
+    record, so a re-run replays the trace stages an earlier attempt measured instead of re-heating the
+    board on them. An attempt that kept a new stage made progress and does not use up a retry; only
+    attempts that kept nothing count against the bound, so the loop still ends -- a step has finitely
+    many stages.
+
+    AND THE RE-RUN STARTS COOL. It waited only when the board was still at the safety ceiling, so a
+    board released at 95C that had dropped to the high 80s by the time the reset finished was re-run
+    from there, and reached the limit again before measuring anything. It now cools to the cool-back
+    target first, which is what "from a cool board" always said. `cool` replaces that wait for a caller
+    that owns its own cooldown (perf_mcp, which must not load a second copy of itself to reach one)."""
+    try:
+        from agent.probes import stages_kept_across_retries as _scope
+    except Exception as exc:  # noqa: BLE001 -- without it every attempt measures every stage, as before
         print(
-            "  [thermal-abort] retrying %s from a cool board (attempt %d of %d)"
-            % (label, n + 2, _THERMAL_ABORT_RETRIES + 1),
+            "  [thermal-abort] WARNING: a re-run of %s will measure every stage again (%s: %s)"
+            % (label, type(exc).__name__, str(exc)[:120]),
             file=sys.stderr,
             flush=True,
         )
-    return result
+        _scope = None
+    if _scope is None:
+        import contextlib
+
+        _scope = lambda: contextlib.nullcontext(lambda: 0)  # noqa: E731 -- nothing kept, nothing counted
+    with _scope() as kept:
+        n = 0  # re-runs that followed an attempt which kept nothing new
+        tries = 0
+        while True:
+            before = kept()
+            tries += 1
+            result = attempt()
+            if not was_aborted():
+                return result
+            if kept() > before:
+                print(
+                    "  [thermal-abort] %s kept %d more measured stage(s) before it was ended; that attempt "
+                    "does not count against the %d retries" % (label, kept() - before, _THERMAL_ABORT_RETRIES),
+                    file=sys.stderr,
+                    flush=True,
+                )
+            elif n >= _THERMAL_ABORT_RETRIES:
+                print(
+                    "  [thermal-abort] the board reached the abort limit on every attempt (%d); "
+                    "returning the last result rather than retrying forever" % tries,
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return result
+            else:
+                n += 1
+            (cool or _cool_before_rerun)()
+            print(
+                "  [thermal-abort] retrying %s from a cool board (attempt %d; %d of %d retries without "
+                "progress used)" % (label, tries + 1, n, _THERMAL_ABORT_RETRIES),
+                file=sys.stderr,
+                flush=True,
+            )
+
+
+def _cool_before_rerun() -> None:
+    """Cool to the cool-back target before re-running a step the board ended: perf_mcp's cooldown, which
+    waits as long as physics needs. Best-effort -- a thermometer that cannot be read must not stop the
+    work."""
+    try:
+        pm = _perf_mcp()
+        pm._cooldown_after_clamp(pm._COOL_BACK_TO_C, give_up_on_plateau=False)
+    except Exception as exc:  # noqa: BLE001
+        _warn_gate_broken(exc)
 
 
 def _reset_is_mandatory_after_kill(devices, env=None) -> bool:
@@ -4104,7 +4155,7 @@ def _run_device_proc(
     proc = subprocess.Popen(
         list(cmd),
         cwd=str(cwd),
-        env=env,
+        env=_pr.with_kept_stages(env),  # env predates the step's kept-stage record
         stdout=subprocess.PIPE if _piped else None,
         stderr=subprocess.STDOUT if _piped else None,
         text=True if _piped else None,
@@ -4290,14 +4341,7 @@ def _run_device_proc(
         # A timeout means SLOW. It does not mean wedged, and the difference is cheap to establish:
         # measured on this host, a live board answers tt_smi_probe() in 0.24 s and a wedged one does
         # not answer at all. Resetting a working board is not a neutral act, so it needs evidence.
-        if reset_on_timeout and not _reset_is_mandatory_after_kill(devices, env) and _device_answers():
-            tail = "process group killed; device answered a liveness probe, so it was NOT reset"
-        else:
-            tail = (
-                _reclaim_device(devices, error_text=out, after_kill=True)
-                if reset_on_timeout
-                else "process group killed"
-            )
+        tail = _recover_after_ended_child(devices, env, out, reset_on_timeout, "process group killed")
         _lim = int(getattr(_te, "timeout", None) or timeout_s)
         _why = "no-progress stall" if _lim < timeout_s else "hard limit"
         print(
@@ -4335,8 +4379,34 @@ def _run_device_proc(
             os.killpg(proc.pid, signal.SIGKILL)
         except Exception:  # noqa: BLE001
             pass
+    # A CHILD THAT ENDED ITSELF FOR HEAT (probes.thermal_yield: it held the device at the safety ceiling,
+    # where waiting heats the board rather than cooling it) is the same event as the abort above, seen
+    # from inside: the step is re-run from a cool board, never booked as a failure. In a run whose
+    # watcher answers ABORT lines itself (emit-e2e), that watcher resets and re-runs; doing it here too
+    # would reset the board twice.
+    if _pr.ended_for_heat(rc) and not _pr.run_watcher_owns_recovery():
+        _THERMAL_ABORTED[0] = True
+        print(
+            "  [thermal-abort] %s ended itself at the safety ceiling to release the device -- %s; "
+            "the step re-runs once the board is cool"
+            % (
+                label or "device subprocess",
+                _recover_after_ended_child(devices, env, out, reset_on_timeout, "device released"),
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
     _wait_for_thermal_headroom_before_device_work("%s (post-run cooldown)" % (label or "device work"))
     return rc, out
+
+
+def _recover_after_ended_child(devices, env, out, reset_on_timeout, without_reset):
+    """After a device child ended without closing the device: reset only on evidence -- a kill of a run
+    whose fabric may be stuck (_reset_is_mandatory_after_kill), or a board that does not answer -- and
+    say what was done. `without_reset` names what happened when no reset is allowed at all."""
+    if reset_on_timeout and not _reset_is_mandatory_after_kill(devices, env) and _device_answers():
+        return "%s; device answered a liveness probe, so it was NOT reset" % without_reset
+    return _reclaim_device(devices, error_text=out, after_kill=True) if reset_on_timeout else without_reset
 
 
 def _progress_token(repo_root: Path, kernel_log: str):

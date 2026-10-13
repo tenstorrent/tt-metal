@@ -98,9 +98,17 @@ def test_an_unusable_env_value_falls_back_instead_of_raising(monkeypatch):
     assert MANDATORY("all", None) is True
 
 
+def _kill_path_source():
+    """_run_device_proc and the reset decision its kill path calls (_recover_after_ended_child, shared
+    with a child that ended itself for heat)."""
+    src = inspect.getsource(run_mod._run_device_proc)
+    assert "_recover_after_ended_child(" in src, "the kill path no longer goes through the shared decision"
+    return src + inspect.getsource(run_mod._recover_after_ended_child)
+
+
 def test_the_timeout_path_actually_consults_it():
     """A predicate nothing calls fixes nothing."""
-    src = inspect.getsource(run_mod._run_device_proc)
+    src = _kill_path_source()
     assert "_reset_is_mandatory_after_kill(devices, env)" in src
     i = src.index("_reset_is_mandatory_after_kill(devices, env)")
     window = src[i : i + 200]
@@ -110,7 +118,7 @@ def test_the_timeout_path_actually_consults_it():
 
 def test_the_reclaim_still_happens_through_the_shared_primitive():
     """No parallel reset: the kill path keeps routing through _reclaim_device."""
-    src = inspect.getsource(run_mod._run_device_proc)
+    src = _kill_path_source()
     assert "_reclaim_device(devices, error_text=out, after_kill=True)" in src
     # The predicate DECIDES; it must not act. Checked against the code, not the docstring -- which
     # legitimately explains what the liveness probe measures.

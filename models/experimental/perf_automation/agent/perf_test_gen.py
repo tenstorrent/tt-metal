@@ -577,13 +577,9 @@ def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
             return rc, (log.read_text(errors="ignore") if log.exists() else "")
         except _pr.TracyHangError as exc:
             out = log.read_text(errors="ignore") if log.exists() else ""
-            from . import device_recovery as _dr
-
             # _execute killed the run's process group: on a multi-chip fabric that kill is the
             # evidence the reset needs, whatever the telemetry says (device_recovery's own rule).
-            # Passed only when set, so every other call reaches the reset exactly as before.
-            _kill = {"fault_is_certain": True} if _dr.reset_is_mandatory_after_kill(env=env) else {}
-            ok = _pr._device_reset(error_text=out, **_kill)
+            ok = _pr.reset_after_ended_child(error_text=out, env=env)
             return 124, out + "\n[perf_test_gen] WEDGE: %s; killed process group + tt-smi -r (reset_ok=%s)\n" % (
                 exc,
                 ok,
@@ -595,7 +591,32 @@ def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
 
     ev = dict(extra_env)
     max_disrupt = int(os.environ.get("PERF_MCP_DEVICE_DISRUPT_RETRIES", "3") or "3")
+    from . import probes as _pr
+
+    # A TEST THAT ENDED ITSELF FOR HEAT (probes.thermal_yield) is re-run from a cool board by the one
+    # owner of that rule, keeping the stages it already measured -- never handed back as a failure for
+    # the correction loop to "fix". In a run whose watcher answers ABORT lines (emit-e2e), the watcher
+    # resets and re-runs the whole step, so this launcher hands the exit straight back.
+    ended_for_heat = [False]
+
+    def _attempt():
+        ended_for_heat[0] = False
+        return _settle_perf_node(_once, ev, max_disrupt, ended_for_heat)
+
+    try:
+        _rerun = _pr._cc_optimize("run").rerun_after_thermal_abort
+    except Exception as exc:  # noqa: BLE001 -- without it, one attempt and its result, as before
+        _pr._warn_thermal_inert("perf-test re-run after a heat stop", exc)
+        return _attempt()
+    return _rerun(_attempt, lambda: ended_for_heat[0], "the perf-test run")
+
+
+def _settle_perf_node(_once, ev, max_disrupt, ended_for_heat):
+    """Run the perf node until it settles: grow the trace region the device asks for, cool after a
+    throttle, reset and retry a board disruption, and stop at a heat exit (setting ended_for_heat[0])."""
     disruptions = 0
+    from . import probes as _pr
+
     while True:
         rc, out = _once(ev)
         # model/hardware-agnostic trace region: never a fixed guess. The device reports the EXACT bytes a
@@ -617,14 +638,22 @@ def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
                 break
             ev["TT_PERF_TRACE_REGION"] = str(target)
             rc, out = _once(ev)
+        if _pr.ended_for_heat(rc) and not _pr.run_watcher_owns_recovery():
+            ended_for_heat[0] = True
+            print(
+                "      · the test ended itself at the safety ceiling to release the device (held, the board "
+                "heats rather than cools) -- reset (ok=%s); it re-runs from a cool board"
+                % _pr.reset_after_ended_child(error_text=out),
+                file=sys.stderr,
+                flush=True,
+            )
+            return rc, out
         # THE BUILD PHASE LISTENS TO THE CHIP TOO. detect_overheat had exactly two callers, the
         # profiling path and the full-pipeline gate -- both of which read a FINISHED measurement's
         # log. This phase is 30-60 minutes of continuous device work per attempt and is where this
         # board actually cooks (57C -> 103C, measured), and it scanned for everything except the
         # device saying it had throttled. Cooling here does not reclassify anything: the disruption
         # branch below keeps its own narrow rules, deliberately excluding the post-reset AICLK line.
-        from . import probes as _pr
-
         try:
             if _pr.detect_overheat(out):
                 print(

@@ -36,6 +36,7 @@ def _stub(mod, hot_for):
         return ("rc%d" % calls["n"], "out")
 
     mod._run_device_proc = once
+    mod._cool_before_rerun = lambda: None  # the real one waits on the real board's temperature
     return calls
 
 

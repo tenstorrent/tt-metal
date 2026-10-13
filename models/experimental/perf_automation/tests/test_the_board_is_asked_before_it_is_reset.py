@@ -37,8 +37,13 @@ _PROBES = (_PA / "agent" / "probes.py").read_text()
 
 
 def _timeout_handler():
+    """The timeout handler, followed by the reset decision it calls -- _recover_after_ended_child, which
+    it shares with a child that ended itself for heat, so the rule is written once."""
     i = _RUN.index("except subprocess.TimeoutExpired")
-    return _RUN[i : i + 2500]
+    body = _RUN[i : i + 2500]
+    assert "_recover_after_ended_child(" in body, "the timeout path no longer goes through the shared decision"
+    j = _RUN.index("def _recover_after_ended_child(")
+    return body + _RUN[j : j + 1200]
 
 
 def test_a_timeout_no_longer_resets_unconditionally():

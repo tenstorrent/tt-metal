@@ -1425,10 +1425,145 @@ def thermal_yield(label: str = "") -> None:
         if now - _thermal_yield_last[0] < _THERMAL_YIELD_MIN_GAP_S:
             return
         _thermal_yield_last[0] = now
-        _cc_optimize("perf_mcp").cool_if_over_safety_ceiling(label or "next unit")
+        pm = _cc_optimize("perf_mcp")
+        # A PROCESS THAT HOLDS THE DEVICE CANNOT COOL IT BY WAITING. Measured on a 4-chip p300c,
+        # 2026-10-13, nothing else on the box: the mesh opened and left idle -- no op running -- took
+        # every chip from 20 W to 85-91 W and the board from 58C to 92.5C in fifteen minutes. Closed,
+        # the same chips idle at ~20 W, and the board fell from 95C to 65C in about twelve minutes,
+        # every time today's runs ended a holder. So the wait below, done with the device open, was
+        # not a cooldown: Devstral's perf test sat in it for forty-five minutes climbing 91.5C -> 94.7C
+        # until the abort limit ended it, and on 2026-10-11 the same wait went 87.6C -> 95.1C.
+        # Ending the process is what releases the device; whoever started it re-runs the step from a
+        # cool board, and the stages this step already measured are kept (stages_kept_across_retries).
+        try:
+            from .thermal_pytest_plugin import end_for_heat, holds_device
+        except Exception as exc:  # noqa: BLE001 -- without it, the wait below is still the old behaviour
+            _warn_thermal_inert("thermal_yield handoff", exc)
+            end_for_heat, holds_device = None, lambda: False
+        if holds_device():
+            hot, cur = pm.board_over_safety_ceiling()
+            if hot:
+                end_for_heat(
+                    "[thermal-handoff] %s: board at %.1fC, at or above the %.1fC safety ceiling, and this "
+                    "process holds the device -- which keeps the board heating, not cooling. Ending it so the "
+                    "device is released; the step re-runs from a cool board and keeps what it already measured."
+                    % (label or "next unit", cur, pm._SAFETY_CEILING_C),
+                    cur,
+                    "handoff",
+                )
+        pm.cool_if_over_safety_ceiling(label or "next unit")
     except Exception as exc:  # noqa: BLE001 -- a thermometer that cannot be read must never stop the work
         _warn_thermal_inert("thermal_yield", exc)
         return
+
+
+def ended_for_heat(rc) -> bool:
+    """Whether a child's exit status says it ended ITSELF to protect the board (end_for_heat) -- not a
+    failure, and not a measurement: the step is re-run from a cool board."""
+    from .thermal_pytest_plugin import ABORT_EXIT_CODE
+
+    return rc == ABORT_EXIT_CODE
+
+
+def run_watcher_owns_recovery() -> bool:
+    """See thermal_pytest_plugin.run_watcher_owns_recovery: a launcher in such a run leaves a child that
+    ended for heat to the run's watcher."""
+    from .thermal_pytest_plugin import run_watcher_owns_recovery as _owns
+
+    return _owns()
+
+
+def reset_after_ended_child(error_text: str = "", env=None) -> bool:
+    """Reset after a device process ended without closing the device -- killed, or ended for heat --
+    under the one rule for that (device_recovery.reset_is_mandatory_after_kill: a multi-chip run's
+    fabric may be left stuck whatever the telemetry says). Returns whether the device came back."""
+    from . import device_recovery as _dr
+
+    _kill = {"fault_is_certain": True} if _dr.reset_is_mandatory_after_kill(env=env) else {}
+    return _device_reset(error_text=error_text, **_kill)
+
+
+# A RETRIED STEP KEEPS THE STAGES IT ALREADY MEASURED. The owner of a retried device step names a file
+# here; trace_replay appends each stage it finishes and, on the next attempt of the SAME step, replays
+# that stage's lines instead of measuring it again. Without it every attempt after a heat stop starts
+# from the first stage, heats the board the same way and is stopped at the same place.
+STAGES_KEPT_ENV = "TT_TRACE_REPLAY_KEPT"
+
+
+class stages_kept_across_retries:
+    """Context manager for the owner of a retried device step: names a fresh record in STAGES_KEPT_ENV
+    for every child launched inside it, and removes it after. Nested owners share the outermost one's
+    record, so one step's stages are never split across two. `as` gives kept_stage_count."""
+
+    def __enter__(self):
+        self._path = None
+        if not os.environ.get(STAGES_KEPT_ENV):
+            import tempfile
+
+            fd, self._path = tempfile.mkstemp(prefix="trace_replay_kept_", suffix=".jsonl")
+            os.close(fd)
+            os.environ[STAGES_KEPT_ENV] = self._path
+        return kept_stage_count
+
+    def __exit__(self, *exc):
+        if self._path is not None:
+            if os.environ.get(STAGES_KEPT_ENV) == self._path:
+                os.environ.pop(STAGES_KEPT_ENV, None)
+            try:
+                os.unlink(self._path)
+            except OSError:
+                pass
+        return False
+
+
+def _kept_records() -> list:
+    path = os.environ.get(STAGES_KEPT_ENV, "")
+    if not path:
+        return []
+    out = []
+    try:
+        with open(path) as fh:
+            for ln in fh:
+                try:
+                    rec = json.loads(ln)
+                except ValueError:
+                    continue  # a line cut short by an ended process is not a measurement
+                if isinstance(rec, dict) and {"node", "stage", "ms", "path", "lines"} <= set(rec):
+                    out.append(rec)
+    except OSError:
+        return []
+    return out
+
+
+def with_kept_stages(env: dict) -> dict:
+    """`env` carrying this step's kept-stage record when one is open -- for a launcher handed an env built
+    before the step began. The caller's dict is not changed."""
+    rec = os.environ.get(STAGES_KEPT_ENV, "")
+    if not rec or env.get(STAGES_KEPT_ENV):
+        return env
+    return {**env, STAGES_KEPT_ENV: rec}
+
+
+def kept_stage_count() -> int:
+    """How many stages this step has kept so far: an attempt that raised it made progress."""
+    return len(_kept_records())
+
+
+def kept_stages(node: str) -> dict:
+    """{stage: record} that an earlier attempt of this step measured for `node` (its pytest node id)."""
+    return {r["stage"]: r for r in _kept_records() if r["node"] == node}
+
+
+def keep_stage(node: str, stage: str, ms: float, path: str, lines: list) -> None:
+    """Record a finished stage for the next attempt of this step. Best-effort; one line per stage."""
+    rec_path = os.environ.get(STAGES_KEPT_ENV, "")
+    if not rec_path:
+        return
+    try:
+        with open(rec_path, "a") as fh:
+            fh.write(json.dumps({"node": node, "stage": stage, "ms": ms, "path": path, "lines": list(lines)}) + "\n")
+    except OSError:
+        pass
 
 
 def detect_overheat(log_text: str) -> str | None:
@@ -1732,6 +1867,7 @@ def _execute(
     progress is what let one hide for ten hours. `timeout_s` remains as a generous
     ABSOLUTE backstop (hard ceiling `timeout_s * _HARD_CEILING_MULT`)."""
     _therm_label = "generated-test run"
+    env = with_kept_stages(env)
     try:
         _run = _cc_optimize("run")
         _thermal_watch_new = _run._thermal_watch_new

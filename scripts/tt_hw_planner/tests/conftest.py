@@ -86,7 +86,7 @@ def _no_thermal_watcher_from_this_suite(monkeypatch):
     holders. A test that reaches cmd_emit_e2e would otherwise start a watcher thread that outlives the
     test and export the run tag and PYTEST_PLUGINS into every later test's subprocesses; a test that
     reaches a gate step would wait on the real board's temperature, and have its failure judged by it.
-    All are replaced for the whole suite. test_emit_e2e_thermal_protection exercises the real functions
+    All are replaced for the whole suite, including run.py's cooldown before a re-run. test_emit_e2e_thermal_protection exercises the real functions
     against a fake thermometer."""
     try:
         from scripts.tt_hw_planner import e2e_thermal
@@ -96,6 +96,9 @@ def _no_thermal_watcher_from_this_suite(monkeypatch):
     monkeypatch.setattr(e2e_thermal, "install", lambda recover=None: "")
     monkeypatch.setattr(e2e_thermal, "hold_if_hot", lambda label: None)
     monkeypatch.setattr(e2e_thermal, "_peak_during", lambda run_once: (run_once(), None))
+    run = e2e_thermal.thermal_owner("run")
+    if run is not None:  # the cooldown before a re-run waits on the real board too
+        monkeypatch.setattr(run, "_cool_before_rerun", lambda: None)
     monkeypatch.delenv(e2e_thermal.RUN_ENV, raising=False)
     yield
 

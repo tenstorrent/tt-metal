@@ -3393,6 +3393,12 @@ def _run_full_pipeline_ms():
                     pass
         if r is None:
             continue
+        # ENDED ITSELF FOR HEAT (agent.probes.thermal_yield): no reading, and no reason to take the next
+        # sample on a board this hot -- _measure_full_pipeline_guarded re-runs it from a cool board.
+        if _ended_for_heat(r.returncode):
+            globals()["_LAST_RUN_ENDED_FOR_HEAT"] = True
+            last_err = "the run ended itself at the safety ceiling to release the device"
+            break
         out = (r.stdout or "") + "\n" + (r.stderr or "")
         # GROW THE TRACE REGION, same as the builder does. The generated test carries a
         # TT_PERF_TRACE_REGION default that the BUILDER derived while validating at the coverage
@@ -4133,12 +4139,25 @@ def board_over_abort_limit():
     95C, five degrees above the hold and three or four below where this board has actually lost chips
     (98.7C and 98.8C), so an abort has room to land before the silicon stops answering.
     """
+    return _board_at_or_over(_ABORT_CEILING_C)
+
+
+def board_over_safety_ceiling():
+    """(over, temp) -- is the board at the safety ceiling, where work is held until it cools? For a caller
+    that must decide HOW to cool rather than wait here: a process that holds the device cannot cool it
+    by waiting (see probes.thermal_yield)."""
+    return _board_at_or_over(_SAFETY_CEILING_C)
+
+
+def _board_at_or_over(limit_c):
+    """(cur >= limit_c, cur), or (False, None) when the thermometer cannot be read -- which must never stop
+    the work."""
     try:
         cur = _read_die_temp_c()
         if cur is None:
             return False, None
-        return cur >= _ABORT_CEILING_C, cur
-    except Exception:  # noqa: BLE001 -- a thermometer that cannot be read must never stop the work
+        return cur >= limit_c, cur
+    except Exception:  # noqa: BLE001
         return False, None
 
 
@@ -4300,7 +4319,41 @@ def _headroom_poll(t0, limit, cur):
     return False, cur
 
 
+def _ended_for_heat(rc) -> bool:
+    """A full-pipeline child that ended itself to release the device at the safety ceiling, outside a run
+    whose own watcher answers that (agent.probes)."""
+    try:
+        from agent.probes import ended_for_heat, run_watcher_owns_recovery
+
+        return ended_for_heat(rc) and not run_watcher_owns_recovery()
+    except Exception:  # noqa: BLE001 -- unreadable: an ordinary exit status, as before
+        return False
+
+
+_LAST_RUN_ENDED_FOR_HEAT = False
+
+
 def _measure_full_pipeline_guarded():
+    """_measure_full_pipeline_attempt, re-run from a cool board when the run ended itself for heat --
+    through run.rerun_after_thermal_abort, the one owner of that rule, which also keeps the stages an
+    ended attempt already measured. One attempt, as before, when run.py cannot be loaded."""
+
+    def _attempt():
+        globals()["_LAST_RUN_ENDED_FOR_HEAT"] = False
+        return _measure_full_pipeline_attempt()
+
+    run = _run_module()
+    if run is None:
+        return _attempt()
+    return run.rerun_after_thermal_abort(
+        _attempt,
+        lambda: bool(globals().get("_LAST_RUN_ENDED_FOR_HEAT")),
+        "full-pipeline measurement",
+        cool=lambda: _cooldown_after_clamp(_COOL_BACK_TO_C, give_up_on_plateau=False),
+    )
+
+
+def _measure_full_pipeline_attempt():
     """One reading of the pipeline; return (ms, method, err, path).
 
     ONE reading, not a median. Repeating the measurement was tried and removed: the board clamps
@@ -4339,6 +4392,13 @@ def _measure_full_pipeline_guarded():
         globals()["_LAST_RUN_CLAMPED"] = False
         ms, method, err, path = _run_full_pipeline_ms()
         if ms is None:
+            if globals().get("_LAST_RUN_ENDED_FOR_HEAT"):
+                try:
+                    from agent.probes import reset_after_ended_child
+
+                    reset_after_ended_child(error_text=err or "")
+                except Exception:  # noqa: BLE001 -- the re-run's own device open says if it is needed
+                    pass
             return None, method, err, path
         # Teach the board profile what this start temperature produced, so the threshold is derived
         # from THIS hardware rather than the p300c the gate was written on.

@@ -125,20 +125,39 @@ def _watch_loop(record_path: str) -> None:
             continue
         if not hot:
             continue
-        msg = (
+        end_for_heat(
             "[thermal-abort] pytest pid %d: board at %.1fC, at or above the %.1fC abort limit -- ending this "
             "run to protect the hardware. This is NOT a code failure: re-run it; the next run waits for the "
-            "board to cool first." % (os.getpid(), cur if cur is not None else -1.0, pm._ABORT_CEILING_C)
+            "board to cool first." % (os.getpid(), cur if cur is not None else -1.0, pm._ABORT_CEILING_C),
+            cur,
+            "pytest-plugin",
+            record_path,
         )
-        for stream in (sys.stderr, sys.stdout):
-            try:
-                print(msg, file=stream, flush=True)
-            except Exception:  # noqa: BLE001
-                pass
-        record_abort(
-            record_path, "%s pid=%d temp=%s by=pytest-plugin t=%d" % (ABORT_MARK, os.getpid(), cur, time.time())
-        )
-        os._exit(ABORT_EXIT_CODE)
+
+
+def end_for_heat(msg: str, cur, by: str, record_path=None) -> None:
+    """Say why, add an ABORT line to the run's record (when the run keeps one), and end THIS process with
+    ABORT_EXIT_CODE. Never returns. Ending is how a device holder gets the board cooled: it releases the
+    device, and whoever started it re-runs the step from a cool board (see run.rerun_after_thermal_abort).
+    `record_path` defaults to this process's RUN_ENV."""
+    for stream in (sys.stderr, sys.stdout):
+        try:
+            print(msg, file=stream, flush=True)
+        except Exception:  # noqa: BLE001
+            pass
+    record_abort(
+        os.environ.get(RUN_ENV, "") if record_path is None else record_path,
+        "%s pid=%d temp=%s by=%s t=%d" % (ABORT_MARK, os.getpid(), cur, by, time.time()),
+    )
+    os._exit(ABORT_EXIT_CODE)
+
+
+def run_watcher_owns_recovery() -> bool:
+    """Whether this process belongs to a run whose watcher answers every ABORT line itself -- resets the
+    board and re-runs the step (emit-e2e: scripts/tt_hw_planner/e2e_thermal.py). A launcher inside such
+    a run must leave a child that ended for heat to that watcher: recovering it too would reset the board
+    a second time, under the watcher's own retry."""
+    return bool(os.environ.get(RUN_ENV, ""))
 
 
 @pytest.hookimpl(tryfirst=True)
