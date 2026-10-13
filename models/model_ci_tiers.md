@@ -301,10 +301,10 @@ To add a model:
    the budget. The QB2 Tier 3 budget is:
 
    - **Llama3.1-8B:** 12 minutes
-   - **Gemma4 26B A4B:** 40 minutes
+   - **Gemma4 26B A4B:** 50 minutes
    - **Gemma4 31B:** 40 minutes
    - **Qwen3.8-27B:** 50 minutes
-   - **Total:** 12 + 40 + 40 + 50 = 142 minutes
+   - **Total:** 12 + 50 + 40 + 50 = 152 minutes
 
    The initial Llama allowance came from the following measurement. The [10-minute validation run](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
    passed all 24 model tests and completed 54 of 56 serving requests before its

@@ -380,7 +380,10 @@
   model_family: Gemma
   skus:
     bh_quietbox_2:
-      timeout: 40
+      # Exact-head run 38319478476 reached server readiness in 10m44s and
+      # completed all API tests in 14m58s before its GPQA cohort hit 40m.
+      # Match the Qwen3.8 QB2 allowance for this serving-and-eval workload.
+      timeout: 50
       tier: 3
   owner_id: U08BGTAMU1W # Marina Vasiljevic
   team: models
