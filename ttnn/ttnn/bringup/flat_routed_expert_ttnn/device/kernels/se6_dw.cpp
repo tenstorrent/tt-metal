@@ -42,6 +42,16 @@ void kernel_main() {
 #endif
     const uint64_t src =
         get_noc_addr_from_bank_id<true>(get_arg_val<uint32_t>(1), get_arg_val<uint32_t>(0) + get_arg_val<uint32_t>(2));
+#ifdef SE_DW_ROT
+    // block k of this core's sequence sits in bank (bank + k) % SE_DW_ROT at offset + (k / SE_DW_ROT) blocks (the host
+    // packs it so: flat_weight_regions with the plan's dw_rot), so every core's reads rotate over the banks
+    const uint32_t rot_bank = get_arg_val<uint32_t>(1), rot_addr = get_arg_val<uint32_t>(0) + get_arg_val<uint32_t>(2);
+    auto wsrc = [&](uint32_t k) {
+        return get_noc_addr_from_bank_id<true>((rot_bank + k) % SE_DW_ROT, rot_addr + (k / SE_DW_ROT) * slot * tile_bytes);
+    };
+#else
+    auto wsrc = [&](uint32_t k) { return src + k * slot * tile_bytes; };
+#endif
 #ifdef SE_DYN
     // only the active experts' blocks (CT 6 NUM_E: BLOCKS / NUM_E per expert; RT 3.. se_dyn.hpp args, CB 7 scratch)
     constexpr uint32_t num_e = get_compile_time_arg_val(6);
@@ -120,7 +130,7 @@ void kernel_main() {
         }
         for (uint32_t i = 0; i < n; ++i) {
 #ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
-            noc_async_read(src + blk(b + i) * slot * tile_bytes, l1[i], slot * tile_bytes);
+            noc_async_read(wsrc(blk(b + i)), l1[i], slot * tile_bytes);
 #endif
         }
         while (!ncrisc_noc_reads_flushed(noc_index)) {

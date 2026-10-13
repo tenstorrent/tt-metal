@@ -73,6 +73,8 @@ nb::dict plan_dict(
     d["nblk_r"] = p->nblk_r;
     d["rem_cols"] = p->rem_cols;
     d["banks"] = p->banks;
+    d["dw_rot"] = p->dw_rot;
+    d["wd_rot_tiles"] = p->w_tile ? p->wd_rot_region / p->w_tile : 0;
     d["x_slots"] = p->x_slots;
     d["hbuf"] = p->hbuf;
     d["hu"] = p->hu;

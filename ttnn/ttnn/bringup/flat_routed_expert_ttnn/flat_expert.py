@@ -328,7 +328,7 @@ def flat_weight_shapes(H, I, E, lay):
 # plan fields that decide where every weight tile is packed (flat_weight_regions, _bank_sharded)
 WEIGHT_LAYOUT_KEYS = (
     "banks", "kblk", "rg", "np", "n_rd", "n_rd_sg", "nk_gu", "nd", "pcds", "col0s",
-    "rdown", "kd_r", "n_rdn", "pcd_r", "rem_cols", "nblk_r", "nsg",
+    "rdown", "kd_r", "n_rdn", "pcd_r", "rem_cols", "nblk_r", "nsg", "dw_rot",
 )  # fmt: skip
 
 
@@ -410,6 +410,20 @@ def flat_weight_regions(W_l, lay):
         )
 
     dregs = [dreg(d) for d in range(lay["nd"])]
+    if lay.get("dw_rot"):
+        # the plan's dw_rot: down core d's block k in bank (d + k) % banks, at d * wd_rot_tiles + (k // banks) blocks,
+        # i.e. region d * banks + j (which _bank_sharded puts in bank j at offset d * region) holds the blocks
+        # k = j - d (mod banks) in order
+        banks, sub = lay["banks"], lay["wd_rot_tiles"]
+        rot = []
+        for d, r_ in enumerate(dregs):
+            k_ = _kd_of(pcds[d], it)
+            blocks = r_.reshape(-1, k_ * pcds[d], 32, 32)
+            for j in range(banks):
+                mine = blocks[[k for k in range(blocks.shape[0]) if (d + k) % banks == j]].reshape(-1, 32, 32)
+                pad = torch.zeros(sub - mine.shape[0], 32, 32, dtype=mine.dtype, device=mine.device)
+                rot.append(torch.cat([mine, pad]))
+        dregs = rot
     n_max = max(r_.shape[0] for r_ in dregs)
     dregs = [torch.cat([r_, torch.zeros(n_max - r_.shape[0], 32, 32, dtype=r_.dtype, device=r_.device)]) for r_ in dregs]
     rregs = None
@@ -1836,7 +1850,8 @@ class FlatRoutedExpert:
         if cache_prefix is not None:
             # keyed on what decides the packing (flat_weight_regions, _bank_sharded) only: the capacity, sub-block
             # size, h buffers or x / h formats' L1 choices change the plan, not where a weight tile goes
-            layout = {k: lay[k] for k in WEIGHT_LAYOUT_KEYS if k in lay}
+            # (dw_rot only when on: existing caches keep their keys)
+            layout = {k: lay[k] for k in WEIGHT_LAYOUT_KEYS if k in lay and (k != "dw_rot" or lay[k])}
             key = hashlib.sha1(repr((sorted(layout.items()), gids, n_dev)).encode()).hexdigest()[:12]
             files = {n: f"{cache_prefix}.flat.{wdtype}.lay{key}.{n}.tensorbin" for n in names}
             _adopt_legacy(cache_prefix, wdtype, files)
