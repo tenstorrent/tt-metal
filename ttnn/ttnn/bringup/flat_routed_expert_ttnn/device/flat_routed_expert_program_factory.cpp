@@ -627,7 +627,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                DataMovementProcessor::RISCV_1,
                dn_noc0 ? NOC::NOC_1 : NOC::NOC_0,
                {1, slot, w_tile, E * nblk, DW_BATCH, cfg.weights_bf8 ? 1u : 0u, E, 0, 0, 0, MTD, pw, Ht},
-               y_nc ? plus(plus(yrm_def(dyn_def, pw), ync), cmb_def) : dyn_def);
+               plus(y_nc ? plus(plus(yrm_def(dyn_def, pw), ync), cmb_def) : dyn_def,
+                    p.dw_rot ? Defines{{"SE_DW_ROT", std::to_string(banks)}} : Defines{}));
         const auto kc =
             cp("se6_dcompute.cpp",
                cores,
@@ -657,7 +658,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 .lits(sgx(sg));
             add_rt(kr, dc, y_nc ? a : add_writer_rt(kr, dc, a));
             Args w;
-            w.a(AddrSrc::Down).lit(d % banks).lit((d / banks) * p.wd_region).cat(dyn).lits(sgx(sg));
+            w.a(AddrSrc::Down)
+                .lit(d % banks)
+                .lit(p.dw_rot ? d * p.wd_rot_region : (d / banks) * p.wd_region)
+                .cat(dyn)
+                .lits(sgx(sg));
             if (y_nc) {
                 w.a(AddrSrc::Y).lit(p.col0s[d]);
             }
