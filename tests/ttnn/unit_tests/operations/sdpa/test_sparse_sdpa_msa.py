@@ -10,6 +10,8 @@ coverage lives in:
 tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py
 """
 
+from contextlib import contextmanager
+
 import pytest
 import torch
 
@@ -141,11 +143,40 @@ def _work_split(total_work, num_cores):
 
 def _assert_kv_cache_parity(device, q, k, v, indices, **kw):
     gold = sparse_attention_ref_msa(q, k, v, indices, _D**-0.5, causal=kw.get("chunk_start_idx") is not None)
+    # Cleared so the count below sees only this pair: K/V length is not hashed, so an earlier case can own the program.
+    device.clear_program_cache()
     off = run_op_msa_native(q, k, v, indices, device, **kw)
+    entries = device.num_program_cache_entries()
     on = run_op_msa_native(q, k, v, indices, device, enable_kv_block_cache=True, **kw)
+    # Fewer than topk slots fitting would rerun the cache-off program and pass parity without testing the cache.
+    assert device.num_program_cache_entries() == entries + 1, "the cache did not engage"
     assert pcc(off, gold) > (FP8_Q_DEVICE_PCC if kw.get("q_dtype") == ttnn.fp8_e4m3 else DEVICE_PCC)
     assert torch.equal(off, on), "cache-on is not byte-identical to cache-off"
     return off, on
+
+
+# Per bank, for H=16, d=128, bf16 K/V: room for the base CBs (~68 KiB) plus exactly topk=16 bf16 slots (64 KiB each),
+# with less than one slot to spare. Holds for a base footprint anywhere in (36, 100] KiB.
+_BF16_SLOT = 2 * BLK_KV * _D * 2  # one block of K and of V
+_TOPK_SLOTS_HEADROOM = 16 * _BF16_SLOT + 100 * 1024
+
+
+@contextmanager
+def _pin_l1(device, headroom):
+    """Fill each L1 bank from the top so only `headroom` bytes stay free below the lowest live buffer."""
+    info = ttnn._ttnn.reports.get_device_info(device)
+    tiles_per_bank = (info.l1_bank_size - headroom) // 2048
+    pinned = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+    try:
+        yield
+    finally:
+        ttnn.deallocate(pinned)
 
 
 @run_for_blackhole()
@@ -207,52 +238,33 @@ def test_msa_native_kv_cache_program_cache(device):
     assert device.num_program_cache_entries() == 2
     again = run_op_msa_native(q, k, v, indices, device, enable_kv_block_cache=True)
     assert device.num_program_cache_entries() == 2, "a repeated on call must hit its cached program"
-    info = ttnn._ttnn.reports.get_device_info(device)
-    keep = 512 * 1024  # per bank: room for the base CBs plus a few 64 KiB bf16 slots, far fewer than roomy got
-    tiles_per_bank = (info.l1_bank_size - keep) // 2048
-    pinned = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-        device,
-        ttnn.L1_MEMORY_CONFIG,
-    )
-    try:
+    with _pin_l1(device, _TOPK_SLOTS_HEADROOM):  # topk slots, fewer than roomy got
         tight = run_op_msa_native(q, k, v, indices, device, enable_kv_block_cache=True)
         assert device.num_program_cache_entries() == 3, "less free L1 must select a new program, not hit"
-    finally:
-        ttnn.deallocate(pinned)
     for out in (roomy, again, tight):
         assert torch.equal(off, out)
 
 
 @run_for_blackhole()
-def test_msa_native_kv_cache_no_room(device):
-    # L1 pinned so the streamed program fits but two slots do not: the cache request resolves to zero slots, which
-    # hashes like the cache-off program, so it hits the warmed streamed program instead of building one. One slot
-    # would still fit here (the streamed kernels need the same L1 as one slot), which is why two is the minimum.
-    d, H, S, topk, nblk = _D, 16, 64, 16, 20
+def test_msa_native_kv_cache_topk_slot_floor(device):
+    # The tightest cache that can run: exactly topk slots, so one query's selection fills it and the protected-slot
+    # skip has the fewest victims to choose from. Evicting selection over several tokens per core.
+    # One slot less resolves to zero slots, which hashes like the cache-off program and reuses it; that a cache
+    # program is built at the headroom but not one slot below proves exactly topk slots resolved there.
+    d, H, S, topk, nblk = _D, 16, 1024, 16, 400
     T = nblk * BLK_KV
     q, k, v, indices = make_msa_inputs(H, 1, S, T, topk, d, causal=False, seed=19)
     device.clear_program_cache()
     off = run_op_msa_native(q, k, v, indices, device)
     assert device.num_program_cache_entries() == 1
-    info = ttnn._ttnn.reports.get_device_info(device)
-    headroom = 160 * 1024  # per bank: the ~68 KiB base CBs plus one 64 KiB bf16 block fit, a second block does not
-    tiles_per_bank = (info.l1_bank_size - headroom) // 2048
-    pinned = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-        device,
-        ttnn.L1_MEMORY_CONFIG,
-    )
-    try:
-        on = run_op_msa_native(q, k, v, indices, device, enable_kv_block_cache=True)
-        assert device.num_program_cache_entries() == 1, "no room must alias the streamed program, not build one"
-    finally:
-        ttnn.deallocate(pinned)
-    assert torch.equal(off, on)
+    with _pin_l1(device, _TOPK_SLOTS_HEADROOM - _BF16_SLOT):
+        below = run_op_msa_native(q, k, v, indices, device, enable_kv_block_cache=True)
+        assert device.num_program_cache_entries() == 1, "below topk slots must reuse the streamed program"
+    with _pin_l1(device, _TOPK_SLOTS_HEADROOM):
+        at_floor = run_op_msa_native(q, k, v, indices, device, enable_kv_block_cache=True)
+        assert device.num_program_cache_entries() == 2, "topk slots must build the cache program"
+    assert torch.equal(off, below)
+    assert torch.equal(off, at_floor)
 
 
 def _rm(t, device, dtype):

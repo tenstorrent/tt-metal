@@ -328,8 +328,9 @@ uint32_t SparseSDPAMsaOperation::resolve_kv_cache_slots(
     // L1 buffers fill the interleaved-L1 bank top-down, so its end (not l1_size_per_core(), which also spans
     // L1_SMALL) is the bound when nothing is live. Anything this mesh-level view misses, e.g. a HYBRID allocator's
     // per-device buffers, trips the CB/buffer overlap check at program launch, which fails rather than corrupts.
-    // Fewer than KV_CACHE_SLOTS_MIN fitting selects the streamed kernels; they need the L1 of one slot, so that
-    // program fails at launch only where the cache-off op would.
+    // Fewer slots than one query selects (topk) selects the streamed kernels: each query would cycle its blocks
+    // through the slots and evict them before the next query re-selects them. The streamed kernels need the L1 of
+    // one slot, so that program fails at launch only where the cache-off op would.
     auto* device = t.q.device();
     if (device == nullptr) {  // host or deallocated q: validation runs after this and reports it
         return 0;
@@ -346,7 +347,7 @@ uint32_t SparseSDPAMsaOperation::resolve_kv_cache_slots(
     const uint64_t free_l1 = l1_top > l1_base + base_bytes ? l1_top - l1_base - base_bytes : 0;
     const uint32_t n_fit =
         static_cast<uint32_t>(std::min<uint64_t>(free_l1 / block_bytes, sparse_sdpa_msa::KV_CACHE_SLOTS_MAX));
-    return n_fit < sparse_sdpa_msa::KV_CACHE_SLOTS_MIN ? 0 : n_fit;
+    return n_fit < std::max(sparse_sdpa_msa::KV_CACHE_SLOTS_MIN, g.topk) ? 0 : n_fit;
 }
 
 ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(

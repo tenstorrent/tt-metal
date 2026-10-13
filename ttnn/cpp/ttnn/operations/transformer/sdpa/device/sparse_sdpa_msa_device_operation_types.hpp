@@ -31,7 +31,7 @@ struct SparseSDPAMsaParams {
     // Per-core L1 cache for the gathered K/V blocks: a block re-selected by a later query on the same core is read
     // from L1 instead of DRAM; byte-identical to the streamed kernels. The slot count is resolved per call from the
     // allocator's lowest live L1 address (as many as fit after the op's own CBs, at most KV_CACHE_SLOTS_MAX; fewer
-    // than KV_CACHE_SLOTS_MIN runs the streamed kernels) and is part of the program-cache key. It is an estimate,
+    // than topk runs the streamed kernels) and is part of the program-cache key. It is an estimate,
     // not a reservation: a constraint that mesh-level view cannot see fails the CB/buffer overlap check at launch
     // rather than shrinking the cache, and a trace replays the captured count without that check, so the L1 that
     // was free at capture must be free at replay.

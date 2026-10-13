@@ -35,7 +35,7 @@ namespace ttnn::transformer {
 // of the caller reordering to natural order. sp is read from the mesh on that axis; chunk_local is the per-shard
 // chunk length (= chunk_size_global / sp), which must equal q_isl or tp*q_isl.
 // `enable_kv_block_cache`: per-core L1 cache for re-selected K/V blocks, sized from the free L1 at call time (the
-// streamed kernels run when fewer than two slots fit). Output is identical either way; full contract on
+// streamed kernels run when fewer than topk slots fit). Output is identical either way; full contract on
 // SparseSDPAMsaParams::enable_kv_block_cache.
 ttnn::Tensor sparse_sdpa_msa(
     const ttnn::Tensor& q,
