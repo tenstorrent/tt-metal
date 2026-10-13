@@ -24,6 +24,8 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 
+#include <cstdlib>
+
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal::experimental;
@@ -627,7 +629,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
 
     // ---- Dataflow buffers ----
     const tt::tt_metal::Tile C_tile = C.tensor_spec().tile();
-    log_debug(
+    // Plan-only tree (emulator perf study, not for merge): the plan line at info level; QMM_PLAN_ONLY=1 stops here.
+    log_info(
         tt::LogOp,
         "MatmulUnifiedProgramConfig: borrow A={} B={} C={} (C slice {}x{}, subblock {}x{}, K chunk {} of {} tiles, "
         "{} compute threads, {} reader threads, {} writer threads, {} A / B slices and {} C slices in flight, A / B "
@@ -648,6 +651,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         plan.C_buffer_depth,
         plan.A_mcast_num_dests,
         plan.B_mcast_num_dests);
+    TT_FATAL(std::getenv("QMM_PLAN_ONLY") == nullptr, "QMM_PLAN_ONLY: plan logged, program not created");
     if (C.is_sharded() && !plan.borrow_C) {
         log_warning(
             tt::LogOp,
