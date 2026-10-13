@@ -307,6 +307,16 @@ from ttnn.types import (
     FaceGeometry,
     compute_program_descriptor_hash,
     TensorAccessorArgs,
+    attach_absent_mcast,
+    TransferMode,
+    Mcast,
+    McastCoreOrder,
+    McastSenderPlacement,
+    McastFixedSenderConfig,
+    McastExplicitFixedSenderConfig,
+    McastRotatingSenderConfig,
+    McastConfig,
+    McastDataReady,
 )
 
 from ttnn.device import (
@@ -528,6 +538,7 @@ from ttnn.operations.reduction import (
 from ttnn.operations.ccl import (
     Topology,
     get_usable_topology,
+    get_num_links,
     DispatchAlgorithm,
     WorkerMode,
     MMSignalAggregatorMode,

@@ -12,6 +12,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -50,7 +51,7 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         "where "
         "M <= 32 and N is a multiple of 32");
     TT_FATAL(
-        (tt::tt_metal::hal::get_arch_name() != "blackhole") || (a.memory_config().buffer_type() != BufferType::DRAM),
+        (a.device()->arch() != tt::ARCH::BLACKHOLE) || (a.memory_config().buffer_type() != BufferType::DRAM),
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
         "by the fabric api");
 

@@ -23,7 +23,9 @@ GRID = SimpleNamespace(x=11, y=10)
         (256, False, (64, 256, 3, True)),
         (512, False, (128, 256, 3, True)),
         (1024, False, (96, 256, 1, True)),
-        (256, True, (128, 128, 1, False)),
+        (256, True, (128, 128, 3, False)),
+        (512, True, (128, 128, 3, False)),
+        (1024, True, (128, 128, 1, False)),
         # A quarter slab that is not whole tiles falls back to one tile.
         (64, False, (32, 256, 3, True)),
         (160, False, (32, 256, 3, True)),
@@ -37,6 +39,20 @@ GRID = SimpleNamespace(x=11, y=10)
 )
 def test_ring_sdpa_chunk_sizes(slab, sliding, expected):
     assert ring_sdpa_chunk_sizes(slab, sliding, num_heads=8, num_cores=110) == expected
+
+
+@pytest.mark.parametrize(
+    "slab, num_heads, num_cores, k_splits",
+    [
+        # Three bands of every (head, q 128 chunk) unit must fit on the cores.
+        (512, 8, 96, 3),
+        (512, 8, 95, 1),
+        (256, 16, 96, 3),
+        (512, 16, 110, 1),
+    ],
+)
+def test_ring_sdpa_sliding_k_splits(slab, num_heads, num_cores, k_splits):
+    assert ring_sdpa_chunk_sizes(slab, True, num_heads=num_heads, num_cores=num_cores)[2] == k_splits
 
 
 @pytest.mark.parametrize(
@@ -76,8 +92,9 @@ def test_1d_matmul_config_reads_sharded_activation_one_shard_per_k_block():
         _tensor(256, 5376, shard_cols=256), _tensor(5376, 5376), GRID, per_core_n=4
     )
     assert (config.in0_block_w, config.per_core_N) == (8, 4)
-    # fp32 dest: at most 4 tiles per output subblock.
+    # fp32 dest: at most 4 tiles per output subblock, shaped so the output can be width-sharded.
     assert config.out_subblock_h * config.out_subblock_w <= 4
+    assert config.out_subblock_w == config.per_core_N or config.out_subblock_h == 1
 
 
 @pytest.mark.parametrize(

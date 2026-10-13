@@ -38,9 +38,29 @@ TT_KERNEL void derive() {
             words[i] = 0;
         }
         if (row == selection::local_final_history) {
-            const uint32_t history_end = topology.valid_rows == 0 ? selection::history_rows : topology.valid_rows;
+            // The end segment is the separated tail when it holds valid rows, else the
+            // rank's prefix. With fewer than three valid rows, the history reaches into
+            // the tokens preceding that segment: the layer carry before the logical
+            // start, or the exchanged predecessor history otherwise.
+            const bool tail = topology.has_valid_tail();
+            const uint32_t segment_begin = tail ? topology.head_rows : 0;
+            const uint32_t segment_rows = topology.valid_rows - segment_begin;
+            const uint32_t carried = segment_rows < selection::history_rows ? segment_rows : selection::history_rows;
+            // Words [0, history_rows): local rows starting at the earliest valid row kept.
+            // With fewer than three valid rows, rows past the end are never chosen below.
+            const uint32_t local_begin = topology.valid_rows - carried;
             for (uint32_t i = 0; i < selection::history_rows; ++i) {
-                words[i] = history_end - selection::history_rows + i;
+                words[i] = local_begin + i;
+            }
+            // Words [history_rows, 2 * history_rows): rows of the candidate table
+            // [layer history; predecessor history; local rows].
+            const uint32_t preceding = topology.rank == topology.first_rank && !tail ? 0 : selection::history_rows;
+            for (uint32_t i = 0; i < selection::history_rows; ++i) {
+                const uint32_t position = carried + i;
+                words[selection::history_rows + i] =
+                    position < selection::history_rows
+                        ? preceding + position
+                        : 2 * selection::history_rows + position - selection::history_rows;
             }
         } else if (row < selection::final_state) {
             uint32_t base;

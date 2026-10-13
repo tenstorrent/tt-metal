@@ -693,22 +693,13 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
             return;
         }
 
-        // Local helper for reading the current prefetch_q entry.
-        uint32_t prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
-        uint32_t fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
-        bool stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
-
 #if ENABLE_PREFETCH_DPRINTS
-        DPRINT(
-            "fetch_q_get_cmds: STATE cmd_ready={} fetch_size={} stall_flag={} inflight_count={}\n",
-            cmd_ready,
-            fetch_size,
-            stall_flag,
-            inflight_count);
+        DPRINT("fetch_q_get_cmds: STATE cmd_ready={} inflight_count={}\n", cmd_ready, inflight_count);
 #endif
 
         // Issue tagged reads (up to MAX_OUTSTANDING_READS) whenever host has work and there is capacity.
         // Stop once we encounter a stall_flag entry (do not prefetch beyond it).
+        // The next entry is polled only when there is room to issue it, since a full window would discard the poll.
         if (!has_pending_stall_after) {
 #ifdef ARCH_BLACKHOLE
             // Nothing between issues here touches read_cmd_buf, so PCIe routing is programmed once on the
@@ -716,8 +707,14 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
             // idle_erisc has no room for the extra inlined helpers elsewhere.
             bool pcie_state_set = false;
 #endif
-            while ((fetch_size != 0U) &&
-                   (inflight_count < tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS)) {
+            while (inflight_count < tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS) {
+                const uint32_t prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
+                const uint32_t fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
+                if (fetch_size == 0U) {
+                    break;
+                }
+                const bool stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
+
                 const uint32_t this_trid = PREFETCH_TRIDS[next_trid_idx];
                 uint32_t total_size = 0U;
                 const uint32_t idx = (inflight_head + inflight_count) & INFLIGHT_MASK;
@@ -798,11 +795,6 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 if (stall_flag) {
                     break;
                 }
-
-                // Refresh host state for potential next issue.
-                prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
-                fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
-                stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
             }
 
 #ifdef ARCH_BLACKHOLE
@@ -876,12 +868,12 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 WAYPOINT("HQW");
                 uint32_t heartbeat = 0U;
 
-                if ((fetch_size = *prefetch_q_rd_ptr) == 0U) {
+                if (*prefetch_q_rd_ptr == 0U) {
                     PrefetchTelemetryBlockGuard block_guard;
                     do {
                         invalidate_l1_cache();
                         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-                    } while ((fetch_size = *prefetch_q_rd_ptr) == 0U);
+                    } while (*prefetch_q_rd_ptr == 0U);
                 }
                 // Host has work now; restart without recursion.
                 continue;
