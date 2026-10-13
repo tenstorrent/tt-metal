@@ -1,4 +1,0 @@
-perf_sfpu_ternary.py::test_perf_sfpu_addcdiv[formats:Float16_b->Float16_b-dest_acc:No-loop_factor:16-iterations:32-input_dimensions:[128, 64]]
-perf_sfpu_ternary.py::test_perf_sfpu_addcdiv[formats:Float16_b->Float16_b-dest_acc:Yes-loop_factor:16-iterations:32-input_dimensions:[128, 64]]
-perf_sfpu_ternary.py::test_perf_sfpu_lerp[formats:Float16_b->Float16_b-dest_acc:No-loop_factor:16-iterations:32-input_dimensions:[128, 64]]
-perf_sfpu_ternary.py::test_perf_sfpu_lerp[formats:Float16_b->Float16_b-dest_acc:Yes-loop_factor:16-iterations:32-input_dimensions:[128, 64]]

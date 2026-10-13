@@ -1,3 +1,0 @@
-tt_metal/tt-llk/tests/python_tests/perf_sfpu_ternary.py
-tt_metal/tt-llk/tests/sources/sfpu_binary_test.cpp
-tt_metal/tt-llk/tests/sources/sfpu_ternary_perf.cpp
