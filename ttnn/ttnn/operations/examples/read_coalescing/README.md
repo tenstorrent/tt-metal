@@ -111,7 +111,10 @@ All four variants use the same active cores, CB capacity, bytes copied, output
 layout, and NoC selection (reader NoC0, writer NoC1). The active core count is
 rounded down to whole bank groups. Default performance shapes give exactly
 equal work per core under both assignments. Ragged and short shapes are also
-correctness-tested, but their maximum work per core can differ between splits.
+correctness-tested. With `G` groups of `B` banks and `R` row blocks, both splits
+have the same maximum of `ceil(R / G)` blocks per core: the baseline divides
+`R * B` blocks among `G * B` cores, while affinity divides `R` blocks among
+`G` cores per bank.
 
 The benchmark prints `affinity_ns / both_ns` to show what coalescing adds after
 affinity, and `coalesce_ns / both_ns` to show what affinity adds after coalescing.
