@@ -776,6 +776,26 @@ NOC by column half / by core parity; `DRB_DROT=1` down cores rotating), us per c
   the way the full-grid small-M sweep is). One accuracy run before these hung once on its first call (5 s timeout,
   then a fabric router sync timeout at the reset); not reproduced in two reruns.
 
+### 8e. NoC trace + tt-npe, single x read, reader-down for GLM-Flash (2026-10-13, galaxy branch)
+- **Trace tooling.** tt-npe built in /localdev/mstaletovic/tt-npe (its ENV_SETUP is bash-only: under zsh it cd'd into the
+  main tree; set PYTHONPATH=install/lib:install/bin and TT_NPE_DEVICE_MODEL_CONFIG_DIR by hand). Traces were wrong
+  three ways: NoC event sizes clipped at 8160 B (8-bit chunk count; fixed upstream since, 12 bits), events past ~968
+  per RISC dropped (TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000), se9_rdown.cpp (reader tails) records no NoC events
+  at all (unexplained; use a shape without reader tails). Tracing perturbs M 2048 (8.5 vs 5.3 ms), not M 128.
+- **GLM-5.3-Flash E12 M128, complete trace** (npe within 3.1% of measured time): DRAM ~88% of npe peak, even over the 8
+  controllers (rotation); NoC links avg 9.4% / max 32%, congestion impact 0%: small M is DRAM-bound, not NoC-bound.
+  x is read twice (4 relays x 3072 x 2 KB = 25 MB for 12.6 MB of x); y leaves as 36,864 writes of 320 B.
+- **Single x read (MIMO_FL_X1, probe, off; galaxy dbc98a3806d):** rectangle 0's primary multicasts into both rectangles.
+  Bit-identical. K2.7 E12 us/expert M 32/128/512/2048: 58.1/68.8/123.4/442.9 -> 57.4/66.3/202.9/754.7 (GLM 5.3 similar):
+  one multicaster bounds large M. A version that keeps both multicasters (rectangle 0's relays forward tilized
+  super-blocks to rectangle 1's primary) is not built. (A shadowed `x1` in the first build hung the default path twice;
+  fixed before these numbers.)
+- **Reader-down for GLM-5.3-Flash** (Codex: H 4096 down 320 vs gate/up 256 tile-products per M tile, so 6-7 readers
+  taking down columns should balance it): MIMO_FL_RDOWN=1, E36 cap 8192, us/expert M 32/128/512/2048, bit-identical:
+  default 32.9/40.1/70.6/273.4; 7 readers x 6 columns 33.8/41.4/87.1/345.2; x 4 columns (max 4 everywhere)
+  33.8/40.0/80.5/281.7. Worse: a reader's down columns are slower than a down core's (its BRISC also streams and its
+  NCRISC forwards), so tile-product balance is not the model; Flash's ~76% math at M 2048 is not a down-capacity limit.
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
