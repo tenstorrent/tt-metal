@@ -12,7 +12,7 @@ import pytest
 
 from tests.perf import compare as cmp
 from tests.perf import golden as golden_io
-from tests.perf import runner, session, update
+from tests.perf import registry, runner, session, update
 from tests.perf.registry import Suite
 from tests.perf.unit.expect import expect_error  # noqa: F401
 
@@ -176,3 +176,20 @@ def test_crashed_rerun_keeps_the_first_run_results(setup):
     assert saved.cases == record.cases and saved.retry_error == record.retry_error
     golden_doc, comparison = session.evaluate(record, suite)
     assert session.failures(record, suite, golden_doc, comparison) == ["1 REGRESSION"]
+
+
+def test_a_filter_that_matches_nothing_fails_instead_of_passing(setup, expect_error):
+    make, _ = setup
+    suite = make([{"BM/a/k:1/manual_time": 1e-6}])
+    with expect_error(runner.RunError, "ran no cases"):
+        session.execute(suite, ENV, case_filter="no_such_case")
+
+
+@pytest.mark.parametrize("field", ["repetitions: 0", "process_repetitions: 0"])
+def test_suites_must_run_at_least_one_repetition(expect_error, tmp_path, field):
+    path = tmp_path / "suites.yaml"
+    path.write_text(
+        f"s:\n  binary: b\n  golden: g.json\n  {field}\n  policy: {{regression_pct: 5, improvement_pct: 5}}\n"
+    )
+    with expect_error(registry.RegistryError, "at least one repetition"):
+        registry.load(path)
