@@ -8,9 +8,8 @@
 // default) or Y = H_128 * x (normalize=false) using the FPU/MM path.
 // See llk_math_hadamard.h for the algorithmic derivation.
 //
-// The unpackers run on a single-face [16, 16] config; h16 and out are
-// 1-face [16, 16] tiles, and the input is 128 contiguous datums (see
-// in_cb below). The inputs are bfloat16 and the result is
+// h16 and out are 1-face [16, 16] tiles, the input is 128 contiguous
+// datums (see in_cb below); the inputs are bfloat16 and the result is
 // packed out as bfp8 (bfloat8_b). The math is a custom
 // narrow MOP: one (LoFi) or two (high-fidelity) MVMULs per matmul pass
 // with a MOVD2B bridge, then an SFPU element-wise scale when normalize
@@ -23,12 +22,10 @@
 //   h16_cb : single [16, 16] bfloat16 tile. H_16 fills the entire face.
 //            Routed to srcB face (0, 0).
 //
-//   in_cb  : bfloat16. 128 real input values contiguous at the tile
-//            address, read as rows [0..8), cols [0..16) of srcA face (0, 0).
-//            The input tile must be a single face (e.g. [16, 16], data in
-//            the top 8 rows) or have one-row faces (e.g. 4x[1, 32] pages);
-//            taller multi-face tiles are stored face-major and would
-//            permute the vector. The unpack path zeroes rows
+//   in_cb  : bfloat16. 128 input values contiguous at the tile address,
+//            read as rows [0..8) of srcA face (0, 0). The tile must be a
+//            single face (e.g. [16, 16]) or have one-row faces (e.g.
+//            4x[1, 32] pages). The unpack path zeroes rows
 //            [8..16) itself (ZEROSRC over the full srcA span, see
 //            llk_unpack_hadamard.h), so callers need not pad them.
 //

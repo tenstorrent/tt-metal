@@ -4,16 +4,13 @@
 
 // LLK unpack primitives for the H128 (1x128) Hadamard transform.
 //
-// Operand layout (matches hadamard.h):
+// Tile geometry (matches hadamard.h):
 //   h16   ([16, 16], 1 face): H_16 fills face (0, 0). -> srcB face 0.
-//   input: 128 contiguous datums at the tile address, from a single-face
-//          tile or one with one-row faces (e.g. the top 8 rows of a
-//          [16, 16] tile, or 4x[1, 32] pages).
-//          Read as rows 0..7 of srcA face 0; the unpack zeros rows 8..15.
+//   input: 128 contiguous values (single-face or one-row-face tiles, e.g.
+//          4x[1, 32]). -> srcA face 0 rows 0..7; rows 8..15 zeroed.
 //
-// Single-face unpack: the unpackers are configured for one 16x16 face
-// regardless of the input CB's tile shape, and each phase issues exactly
-// one UNPACR per src register.
+// Single-face unpack: each phase issues exactly one UNPACR per src
+// register, reading one 16x16 face per operand.
 //
 // Both phases are issued back-to-back on the unpack thread inside
 // _llk_unpack_hadamard_h128_ (MM1 runs concurrently on the math thread):

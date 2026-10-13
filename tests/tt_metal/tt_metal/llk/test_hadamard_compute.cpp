@@ -20,9 +20,6 @@
 namespace tt::tt_metal {
 namespace {
 
-// input_tile/input_pages set how c_0 carries each 128-datum vector: one
-// [16, 16] page (data in the top 8 rows), or four [1, 32] pages (two faces
-// each). The unpack reads 128 contiguous datums either way.
 void run_hadamard_reconfiguration(
     distributed::MeshDevice& mesh,
     MathFidelity fidelity,
@@ -168,9 +165,6 @@ TEST_F(LLKBlackholeSingleCardFixture, HadamardShortInitPreservesDestState) {
     }
 }
 
-// Regression: each input vector arrives as four [1, 32] pages (two faces per
-// tile), as from a RoPE stage. The unpack ignores the input's tile shape, so
-// this must match the [16, 16] result and pass with LLK asserts on.
 TEST_F(LLKBlackholeSingleCardFixture, HadamardMultiFaceInput) {
     for (const auto fidelity : {MathFidelity::LoFi, MathFidelity::HiFi4}) {
         for (const bool normalize : {false, true}) {

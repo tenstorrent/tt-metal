@@ -11,7 +11,6 @@
 void kernel_main() {
     constexpr std::uint32_t count = get_compile_time_arg_val(0);
     constexpr bool normalize = get_compile_time_arg_val(1) != 0;
-    // c_0 pages holding one 128-datum input vector.
     constexpr std::uint32_t input_pages = get_compile_time_arg_val(2);
     CircularBuffer input(tt::CBIndex::c_0);
     CircularBuffer weights(tt::CBIndex::c_1);

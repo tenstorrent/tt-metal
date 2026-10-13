@@ -6,9 +6,6 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/circular_buffer.h"
 
-// Reader for the Hadamard tests. Like reader_binary with LOAD_BUF2_DATA, but
-// each Hadamard input vector spans input_pages c_0 pages (one [16, 16] page,
-// or four [1, 32] pages), pushed together so the 128 datums are contiguous.
 void kernel_main() {
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t weights_addr = get_arg_val<uint32_t>(1);
@@ -25,7 +22,6 @@ void kernel_main() {
     const uint32_t weights_bytes = weights.get_tile_size();
     const uint32_t copy_bytes = copy_input.get_tile_size();
 
-    // c_0/c_1 hold every vector, so load them before streaming c_2.
     for (uint32_t i = 0; i < count; ++i) {
         input.reserve_back(input_pages);
         weights.reserve_back(1);
