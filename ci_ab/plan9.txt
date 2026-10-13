@@ -1,0 +1,15 @@
+q6 main pertile_dedup.txt -
+q6 hL pertile_dedup.txt -
+q6 x5 pertile_dedup.txt -
+q6 x5 pertile_dedup.txt -
+q6 hL pertile_dedup.txt -
+q6 main pertile_dedup.txt -
+p6 main probe1.txt -
+p6 hL probe1.txt -
+p6 x5 probe1.txt -
+p6 x5 probe1.txt -
+p6 hL probe1.txt -
+p6 main probe1.txt -
+bits3 head bits.txt - bitsel
+bits3 hL bits.txt - bitsel
+bits3 x5 bits.txt - bitsel
