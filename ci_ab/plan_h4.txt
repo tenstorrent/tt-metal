@@ -1,0 +1,18 @@
+# H4: B (the round's head before the rebuild change) against B10 (reversed rebuild groups by mode 9 up to K 32), B11 = A/A
+# copy of B10; TopK perf modules B B10 B11 B11 B10 B twice, then the unary TopK rows B B10 B10 B twice.
+r B ids/h1.txt -
+r B10 ids/h1.txt -
+r B11 ids/h1.txt -
+r B11 ids/h1.txt -
+r B10 ids/h1.txt -
+r B ids/h1.txt -
+r B ids/h1.txt -
+r B10 ids/h1.txt -
+r B11 ids/h1.txt -
+r B11 ids/h1.txt -
+r B10 ids/h1.txt -
+r B ids/h1.txt -
+r B ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B10 ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B10 ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
+r B ids/u_sort_rb.txt MATH_ISOLATE,L1_TO_L1
