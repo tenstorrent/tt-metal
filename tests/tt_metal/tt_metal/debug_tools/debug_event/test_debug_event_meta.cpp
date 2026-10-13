@@ -6,8 +6,7 @@
 // (hostdev/debug_event_meta.h), checked on the host with no device and no device compiler. The rules are
 // static_asserts on the header's predicates, so breaking one fails this file's build; the round trips are gtests.
 // Not covered here: the device compiler's view (its spelling of type names, the asm it emits, the error text a
-// user sees) -- that is the offline-compile layer -- and base classes, which a structured binding rejects with a
-// hard error before any predicate can answer.
+// user sees) -- that is the offline-compile layer, test_debug_event_meta_compile.cpp.
 
 #include <gtest/gtest.h>
 
@@ -109,6 +108,20 @@ struct StyleFirst {
     Style style;
     const char* name;
 };
+struct NameBase {
+    const char* name;
+};
+struct WithBase : NameBase {
+    uint32_t color;
+};
+struct EmptyBase {};
+struct WithEmptyBase : EmptyBase {
+    const char* name;
+};
+struct NestedBase {
+    const char* name;
+    WithBase inner;
+};
 
 namespace {
 struct InAnonymousNamespace {
@@ -120,8 +133,9 @@ struct InAnonymousNamespace {
 // is not also told its first field is wrong.
 template <class T>
 constexpr int rules_broken() {
-    return !is_simple_aggregate_v<T> + !has_no_arrays<T>() + !field_count_ok<T>() + !has_no_const_members<T>() +
-           !fields_supported<T>() + !has_portable_name<T>() + (shape_ok<T>() && !first_field_is_name<T>());
+    return !is_simple_aggregate_v<T> + !has_no_bases<T>() + !has_no_arrays<T>() + !field_count_ok<T>() +
+           !has_no_const_members<T>() + !fields_supported<T>() + !has_portable_name<T>() +
+           (shape_ok<T>() && !first_field_is_name<T>());
 }
 
 // ---- The rules ---------------------------------------------------------------------------------------------------
@@ -130,6 +144,10 @@ static_assert(is_valid_site_type<ZoneMeta>() && is_valid_site_type<ZoneColorMeta
 static_assert(is_valid_site_type<Plain>() && is_valid_site_type<Nested>() && is_valid_site_type<AllWidths>());
 static_assert(is_valid_site_type<Defaulted>() && is_valid_site_type<Templated<uint32_t>>());
 
+static_assert(!has_no_bases<WithBase>() && rules_broken<WithBase>() == 1);
+static_assert(!has_no_bases<WithEmptyBase>() && rules_broken<WithEmptyBase>() == 1);
+static_assert(!has_no_bases<NestedBase>() && rules_broken<NestedBase>() == 1);
+static_assert(has_no_bases<Nested>() && has_no_bases<AllWidths>());
 static_assert(!has_no_arrays<WithArray>() && rules_broken<WithArray>() == 1);
 static_assert(!has_no_arrays<NestedArray>() && rules_broken<NestedArray>() == 1);
 static_assert(!has_no_const_members<WithConst>() && rules_broken<WithConst>() == 1);
