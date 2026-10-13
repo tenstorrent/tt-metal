@@ -469,10 +469,12 @@ def sfpu_binary(
     # variant near its tolerance fail unreproducibly.
     torch.manual_seed(0)
 
-    # SfpuElwpowTile is pow through the body power_binary_tile runs: pow's stimuli, golden and contract.
-    golden_op = (
-        MathOperation.SfpuElwpow if mathop == MathOperation.SfpuElwpowTile else mathop
-    )
+    # SfpuElwpowTile and SfpuElwmulTile are pow and mul through the bodies power_binary_tile and mul_binary_tile run:
+    # their ops' stimuli, golden and contract.
+    golden_op = {
+        MathOperation.SfpuElwpowTile: MathOperation.SfpuElwpow,
+        MathOperation.SfpuElwmulTile: MathOperation.SfpuElwmul,
+    }.get(mathop, mathop)
 
     # FP32 destination tiles occupy twice the register space. Keep four full destination
     # blocks for those formats and four blocks of eight tiles for the remaining formats.
@@ -852,6 +854,27 @@ def test_eltwise_binary_sfpu_pow_tile(formats, dest_acc, **run_kwargs):
         formats,
         dest_acc,
         MathOperation.SfpuElwpowTile,
+        broadcast_type=LlkBroadcastType.None_,
+        **run_kwargs,
+    )
+
+
+# The body mul_binary_tile runs, apart from SfpuElwmul's generic loop arm in FLOAT_SWEEP.
+MUL_TILE_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float32, DataFormat.Float16_b], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@blackhole_only
+@parametrize(**MUL_TILE_SWEEP)
+def test_eltwise_binary_sfpu_mul_tile(formats, dest_acc, **run_kwargs):
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuElwmulTile,
         broadcast_type=LlkBroadcastType.None_,
         **run_kwargs,
     )
@@ -1513,14 +1536,6 @@ def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
     pairs = _edge_pairs_for_class(
         mathop, formats, edge_class, dest_acc, specials=specials
     )
-
-    if mathop == MathOperation.SfpuElwmul and dest_acc == DestAccumulation.No:
-        # The bf16 multiply returns 0 for 0 * inf and 0 * NaN, where the golden says NaN.
-        pairs = [
-            (a, b)
-            for a, b in pairs
-            if not ((a == 0 and not math.isfinite(b)) or (b == 0 and not math.isfinite(a)))
-        ]
 
     if not pairs and TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         # The compile-producer pass must not skip on a runtime-only axis: one item per compile

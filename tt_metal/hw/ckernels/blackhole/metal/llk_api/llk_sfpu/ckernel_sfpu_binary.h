@@ -131,6 +131,35 @@ inline void calculate_sfpu_binary(
     // bf16 RNE addend, hoisted out of the row loop. Unconditional on purpose: the arms that do
     // not round never read it, and the compiler emits no SFPLOADI for it there (see log_c above).
     const sfpi::vUInt rne_bias = bf16_rne_bias();
+    if constexpr (
+        (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !is_fp32_dest_acc_en &&
+        dst_rounding_mode == DstRoundingMode::NearestEven && ITERATIONS % 2 == 0) {
+        // Two rows at a time, so the second row's add covers the first's latency before its rounding reads it.
+        auto op = [](const sfpi::vFloat a, const sfpi::vFloat b) __attribute__((always_inline)) {
+            if constexpr (BINOP == BinaryOp::ADD) {
+                return a + b;
+            } else if constexpr (BINOP == BinaryOp::SUB) {
+                return a - b;
+            } else {
+                return b - a;
+            }
+        };
+        constexpr std::uint32_t dst_tile_size_sfpi = 32;
+#pragma GCC unroll 4
+        for (int d = 0; d < ITERATIONS; d += 2) {
+            const sfpi::vFloat a0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+            const sfpi::vFloat b0 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+            const sfpi::vFloat a1 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi + 1];
+            const sfpi::vFloat b1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi + 1];
+            sfpi::vFloat r0 = op(a0, b0);
+            sfpi::vFloat r1 = op(a1, b1);
+            r0 = float32_to_bf16_rne_for_store(r0, rne_bias);
+            r1 = float32_to_bf16_rne_for_store(r1, rne_bias);
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_6) = r0;
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_6) = r1;
+        }
+        return;
+    }
     // SFPU microcode
     auto row = [&]() __attribute__((always_inline)) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -247,6 +276,27 @@ inline void calculate_sfpu_binary_mul(
     const sfpi::vUInt rne_bias = bf16_rne_bias();
     // The store steps Dest; an op that reads ADDR_MOD_6 after this one runs its own init first.
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS % 2 == 0) {
+        // Two rows at a time, so the second row's multiply covers the first's latency before its rounding reads it.
+#pragma GCC unroll 4
+        for (int d = 0; d < ITERATIONS; d += 2) {
+            const sfpi::vFloat a0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+            const sfpi::vFloat b0 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+            const sfpi::vFloat a1 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi + 1];
+            const sfpi::vFloat b1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi + 1];
+            const sfpi::vUInt bits0 = sfpi::as<sfpi::vUInt>(a0 * b0);
+            const sfpi::vUInt bits1 = sfpi::as<sfpi::vUInt>(a1 * b1);
+            sfpi::vUInt rounded0 = rne_bias;
+            v_if(a0 != 0 && b0 != 0) { rounded0 += bits0 + ((bits0 << 15) >> 31); }
+            v_endif;
+            sfpi::vUInt rounded1 = rne_bias;
+            v_if(a1 != 0 && b1 != 0) { rounded1 += bits1 + ((bits1 << 15) >> 31); }
+            v_endif;
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_6) = sfpi::as<sfpi::vFloat>(rounded0);
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode(ADDR_MOD_6) = sfpi::as<sfpi::vFloat>(rounded1);
+        }
+        return;
+    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];

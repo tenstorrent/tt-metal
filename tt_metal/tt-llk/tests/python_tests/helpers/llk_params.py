@@ -266,6 +266,7 @@ class MathOperation(Enum):
     SfpuElwpow = OpSpec("POW", MathOpType.SFPU_BINARY)
     # Blackhole only: the body power_binary_tile runs. SfpuElwpow runs the generic loop's POW arm.
     SfpuElwpowTile = OpSpec("POW_TILE", MathOpType.SFPU_BINARY)
+    SfpuElwmulTile = OpSpec("MUL_TILE", MathOpType.SFPU_BINARY)
     SfpuLogaddexp = OpSpec("LOGADDEXP", MathOpType.SFPU_BINARY)
     SfpuLogaddexp2 = OpSpec("LOGADDEXP2", MathOpType.SFPU_BINARY)
     SfpuElwmulInt = OpSpec("MUL", MathOpType.SFPU_BINARY_INT)
