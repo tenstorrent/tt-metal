@@ -59,5 +59,7 @@ void kernel_main() {
             tile_regs_release();
         }
     }
+    // Release the scaler, so its producer's DataflowBuffer can drain when it goes out of scope (Quasar).
+    dfb_in_scaler.pop_front(onetile);
     reduce_uninit();
 }
