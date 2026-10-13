@@ -131,6 +131,8 @@ def test_gpqa_artifacts_and_logs_contain_only_metadata(monkeypatch, tmp_path, ca
     async def complete(client, payload, *, chat):
         nonlocal active, max_active
         assert chat and payload["messages"][0]["content"] == prompt
+        assert payload["seed"] == benchmark.GPQA_SEED
+        assert payload["repetition_detection"] == benchmark.GPQA_REPETITION_DETECTION
         active += 1
         max_active = max(max_active, active)
         await asyncio.sleep(0)
@@ -164,6 +166,8 @@ def test_gpqa_artifacts_and_logs_contain_only_metadata(monkeypatch, tmp_path, ca
     assert summary["gpqa_result"]["accuracy"] == 1
     assert summary["gpqa_result"]["concurrency"] == 1
     assert summary["gpqa_result"]["mean_decode_tokens_per_s"] == 40
+    assert summary["gpqa"]["seed"] == benchmark.GPQA_SEED
+    assert summary["gpqa"]["repetition_detection"] == benchmark.GPQA_REPETITION_DETECTION
     capture = capsys.readouterr()
     public_output = capture.out + capture.err + "".join(p.read_text() for p in tmp_path.iterdir())
     assert all(secret not in public_output for secret in (prompt, answer, reasoning))

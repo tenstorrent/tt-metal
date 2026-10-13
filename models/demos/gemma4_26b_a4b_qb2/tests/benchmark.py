@@ -20,9 +20,15 @@ DATASET_REVISION = "633f5ee89ab8ad4522a9f850766b73f62147ffdd"
 HARNESS_REVISION = "321e3bb68cb750a58c76606ab57832533302be73"
 GPQA_TOKENS = 32768
 GPQA_COUNT = 10
-# The fixed subset has two long generations. Serial requests match the validated
-# TTI protocol and avoid padding all ten requests to the 32-slot serving path.
+# Match the validated TTI release policy: serialize long-thinking requests and
+# stop degenerate repeated reasoning without reducing the 32K output allowance.
 GPQA_CONCURRENCY = 1
+GPQA_SEED = 9472
+GPQA_REPETITION_DETECTION = {
+    "min_pattern_size": 16,
+    "max_pattern_size": 1024,
+    "min_count": 8,
+}
 GPQA_THRESHOLD = 0.8
 
 
@@ -130,7 +136,8 @@ async def run_gpqa(client, output_dir, task, cases):
             "temperature": 1.0,
             "top_p": 0.95,
             "top_k": 20,
-            "seed": 42,
+            "seed": GPQA_SEED,
+            "repetition_detection": GPQA_REPETITION_DETECTION,
             "chat_template_kwargs": {"enable_thinking": True},
             "stop": [],
         }
@@ -261,10 +268,11 @@ async def main(args):
             "temperature": 1.0,
             "top_p": 0.95,
             "top_k": 20,
-            "seed": 42,
+            "seed": GPQA_SEED,
             "thinking": True,
             "max_output_tokens": GPQA_TOKENS,
             "concurrency": GPQA_CONCURRENCY,
+            "repetition_detection": GPQA_REPETITION_DETECTION,
             "accuracy_threshold": GPQA_THRESHOLD,
         },
         "performance": {

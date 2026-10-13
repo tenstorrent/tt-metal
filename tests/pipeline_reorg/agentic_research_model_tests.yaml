@@ -380,9 +380,9 @@
   model_family: Gemma
   skus:
     bh_quietbox_2:
-      # Exact-head run 38319478476 reached server readiness in 10m44s and
-      # completed all API tests in 14m58s before its GPQA cohort hit 40m.
-      # Match the Qwen3.8 QB2 allowance for this serving-and-eval workload.
+      # Run 38339750190 reached GPQA in 15m and completed three unguarded 32K
+      # generations before 50m. The harness now matches the release repetition
+      # guard while retaining the Qwen3.8-sized allowance.
       timeout: 50
       tier: 3
   owner_id: U08BGTAMU1W # Marina Vasiljevic
