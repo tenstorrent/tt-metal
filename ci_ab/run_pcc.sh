@@ -23,7 +23,9 @@ for v in head main4 main4 head; do
   echo "== run $i $v $(date -u +%T)"
   timeout -s INT -k 60 1500 python -m pytest -p no:cacheprovider -q -rfE "$NODE" > $V/log_${i}_$v.txt 2>&1
   echo "== run $i $v rc=$? $(grep -E 'passed|failed' $V/log_${i}_$v.txt | tail -1)"
-  grep -E "^(FAILED|ERROR) |PCC: " $V/log_${i}_$v.txt | sed -E 's/.*(test_ring_joint_balanced[^ ]*).*/\1/' | cut -c1-200 | head -40
+  grep -E "^(FAILED|ERROR) " $V/log_${i}_$v.txt | cut -c1-300 | head -10
+  grep -E "PCC: " $V/log_${i}_$v.txt | grep -oE "ring[a-z_]* output.*PCC: [0-9.]+" | head -10
+  [[ $i == 1 ]] && grep -m30 -E "^E   |Error|error:" $V/log_${i}_$v.txt | cut -c1-300
 done
 place $V/head.hpp
 H=$(elfsum $HOME/pcc_cache_head); M=$(elfsum $HOME/pcc_cache_main4); echo "== sdpa compute ELFs: head $H main4 $M"
