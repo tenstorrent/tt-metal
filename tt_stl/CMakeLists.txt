@@ -41,7 +41,6 @@ target_link_libraries(
     tt_stl
     INTERFACE
         Reflect::Reflect
-        Zoo::Zoo
         enchantum::enchantum
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only
