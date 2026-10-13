@@ -393,7 +393,12 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
         // increments / decrements the reference count on the memory pin; the last decrement to the pin should be
         // triggered from the nanobind caller thread, which will correctly decrement the `nb::object` reference count
         // while holding GIL.
-        tt::tt_metal::MemoryPin pydata_pin(std::make_shared<nb::ndarray<nb::array_api>>(contiguous_py_tensor));
+        // May drop without the GIL; reacquire to decref.
+        tt::tt_metal::MemoryPin pydata_pin(std::shared_ptr<nb::ndarray<nb::array_api>>(
+            new nb::ndarray<nb::array_api>(contiguous_py_tensor), [](nb::ndarray<nb::array_api>* pinned) {
+                nb::gil_scoped_acquire gil;
+                delete pinned;
+            }));
         T* typed_py_ptr = const_cast<T*>(static_cast<const T*>(contiguous_py_tensor.data()));
         return HostBuffer(ttsl::Span<T>(typed_py_ptr, contiguous_py_tensor.size()), pydata_pin);
     };
@@ -711,14 +716,19 @@ void pytensor_module(nb::module_& mod) {
                     (dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT8_B);
                 auto layout_ = layout.value_or(tile_layout_by_default ? Layout::TILE : Layout::ROW_MAJOR);
 
+                const auto shape = CMAKE_UNIQUE_NAMESPACE::ndarray_shape_to_ttnn(dlpack_tensor);
+                const auto memory_config = mem_config.value_or(MemoryConfig());
+                // Tile, pack and place without the GIL.
+                nb::gil_scoped_release release;
                 new (t) Tensor(ttnn::convert_python_tensor_to_tt_tensor(
-                    CMAKE_UNIQUE_NAMESPACE::ndarray_shape_to_ttnn(dlpack_tensor),
+                    shape,
                     dst_dtype,
                     layout_,
                     tile,
-                    mem_config.value_or(MemoryConfig()),
+                    memory_config,
                     src_dtype,
                     [&](DataType dtype) -> HostBuffer {
+                        nb::gil_scoped_acquire gil;
                         return CMAKE_UNIQUE_NAMESPACE::convert_py_tensor_to_host_buffer(dlpack_tensor, dtype);
                     },
                     device,
