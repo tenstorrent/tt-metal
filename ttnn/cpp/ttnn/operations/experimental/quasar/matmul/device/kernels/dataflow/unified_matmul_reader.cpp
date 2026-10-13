@@ -46,7 +46,8 @@ template <
     uint32_t B_borrowed,
     uint32_t num_reader_threads,  // more than one only with copied A and B
     uint32_t A_mcast_num_dests,   // cores an A sender multicasts to (its row minus itself); 0 = no A multicast
-    uint32_t B_mcast_num_dests>   // cores a B sender multicasts to (its column minus itself); 0 = no B multicast
+    uint32_t B_mcast_num_dests,   // cores a B sender multicasts to (its column minus itself); 0 = no B multicast
+    uint32_t calib_skip_reads>  // [emulator perf ablation] 1 = push credits without reading (compute-bound calibration)
 TT_KERNEL void reader(
     uint32_t first_C_slice,
     uint32_t num_C_slices,
@@ -120,7 +121,7 @@ TT_KERNEL void reader(
             const uint32_t C_slice_first_M_tile = ((first_C_slice + MN_chunk) / C_slices_across_N) * C_slice_M_tiles;
             const uint32_t C_slice_first_N_tile = ((first_C_slice + MN_chunk) % C_slices_across_N) * C_slice_N_tiles;
             for (uint32_t K_chunk = thread; K_chunk < K_chunks_per_C_slice_padded; K_chunk += num_reader_threads) {
-                if (K_chunk >= K_chunks_per_C_slice) {
+                if (calib_skip_reads || K_chunk >= K_chunks_per_C_slice) {
                     A_slice.reserve_back(A_slice_tiles);
                     A_slice.push_back(A_slice_tiles);
                     B_slice.reserve_back(B_slice_tiles);

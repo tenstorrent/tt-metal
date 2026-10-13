@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -77,6 +78,15 @@ static_assert(
 static_assert(
     std::max(MIN_OPERAND_BUFFER_DEPTH, QUASAR_NUM_READER_THREADS) % QUASAR_NUM_READER_THREADS == 0,
     "each reader thread owns whole A and B slices");
+
+// [emulator perf ablation, not for merge] Env overrides of the DM tunables above; unset = the PR's behavior.
+//   QMM_MAX_READER_THREADS (1..4), QMM_NUM_WRITER_THREADS (1|2), QMM_C_BUFFER_DEPTH (1|2), QMM_NO_MCAST=1,
+//   QMM_CALIB_NO_READ=1 (readers push credits without reading: compute-bound calibration, wrong results).
+// Read at program creation; the caller must clear the program cache between settings.
+uint32_t ablation_env(const char* name, uint32_t default_value) {
+    const char* value = std::getenv(name);
+    return value != nullptr && *value != '\0' ? static_cast<uint32_t>(std::stoul(value)) : default_value;
+}
 
 // True when every sized DFB fits the extent cap and their total fits the L1 budget.
 bool dfbs_fit(const UnifiedMatmulPlan& plan, uint64_t l1_budget) {
@@ -243,8 +253,10 @@ UnifiedMatmulPlan plan_unified_matmul(
         base.num_compute_threads);
 
     // ---- Writer threads: thread t writes the shares of compute threads t, t + num_writer_threads, ... ----
+    const uint32_t ablation_writer_threads = ablation_env("QMM_NUM_WRITER_THREADS", QUASAR_NUM_WRITER_THREADS);
+    TT_FATAL(ablation_writer_threads == 1 || ablation_writer_threads == 2, "QMM_NUM_WRITER_THREADS must be 1 or 2");
     base.num_writer_threads =
-        is_quasar && base.num_compute_threads % QUASAR_NUM_WRITER_THREADS == 0 ? QUASAR_NUM_WRITER_THREADS : 1;
+        is_quasar && base.num_compute_threads % ablation_writer_threads == 0 ? ablation_writer_threads : 1;
     // The C slice, subblock and K chunk are chosen with one reader thread and one C slice in flight; more are added
     // at the end only where they fit.
     base.num_reader_threads = 1;
@@ -342,8 +354,9 @@ UnifiedMatmulPlan plan_unified_matmul(
             core_ranges.size() == 1 && plan.cores.size() == plan.C_slices_per_batch &&
             core_ranges[0].grid_size().x == C_slices_across_N && core_ranges[0].grid_size().y == C_slices_down_M &&
             (config.orientation == ShardOrientation::ROW_MAJOR || C_slices_across_N == 1 || C_slices_down_M == 1);
-        plan.A_mcast_num_dests = cores_tile_C && !A_shard_borrowable ? C_slices_across_N - 1 : 0;
-        plan.B_mcast_num_dests = cores_tile_C && !B_shard_borrowable ? C_slices_down_M - 1 : 0;
+        const bool ablation_no_mcast = ablation_env("QMM_NO_MCAST", 0) != 0;
+        plan.A_mcast_num_dests = cores_tile_C && !A_shard_borrowable && !ablation_no_mcast ? C_slices_across_N - 1 : 0;
+        plan.B_mcast_num_dests = cores_tile_C && !B_shard_borrowable && !ablation_no_mcast ? C_slices_down_M - 1 : 0;
 
         // ---- Subblock: the C slice's tiles accumulated in DST at once ----
         // A candidate is viable when it voids no achievable borrow and its DFBs fit L1, sized at the K
@@ -542,10 +555,16 @@ UnifiedMatmulPlan plan_unified_matmul(
     // Several reader threads each own part of the A and B DFBs, which a borrowed shard cannot be split into, and
     // reader threads beyond the K chunks of a C slice would only carry padding.
     UnifiedMatmulPlan buffered = plan;
-    buffered.num_reader_threads = is_quasar && !plan.borrow_A && !plan.borrow_B
-                                      ? std::min(QUASAR_NUM_READER_THREADS, plan.K_chunks_per_C_slice)
-                                      : 1;
-    buffered.C_buffer_depth = (uint64_t)plan.batch_size * plan.max_C_slices_per_core > 1 ? C_BUFFER_DEPTH : 1;
+    const uint32_t ablation_max_readers = ablation_env("QMM_MAX_READER_THREADS", QUASAR_NUM_READER_THREADS);
+    TT_FATAL(
+        ablation_max_readers >= 1 && ablation_max_readers <= QUASAR_NUM_READER_THREADS,
+        "QMM_MAX_READER_THREADS must be 1..{}",
+        QUASAR_NUM_READER_THREADS);
+    const uint32_t ablation_C_buffer_depth = ablation_env("QMM_C_BUFFER_DEPTH", C_BUFFER_DEPTH);
+    TT_FATAL(ablation_C_buffer_depth == 1 || ablation_C_buffer_depth == 2, "QMM_C_BUFFER_DEPTH must be 1 or 2");
+    buffered.num_reader_threads =
+        is_quasar && !plan.borrow_A && !plan.borrow_B ? std::min(ablation_max_readers, plan.K_chunks_per_C_slice) : 1;
+    buffered.C_buffer_depth = (uint64_t)plan.batch_size * plan.max_C_slices_per_core > 1 ? ablation_C_buffer_depth : 1;
     buffered = size_dfbs(
         std::move(buffered),
         plan.K_chunk_tiles,
@@ -557,6 +576,33 @@ UnifiedMatmulPlan plan_unified_matmul(
     if (dfbs_fit(buffered, l1_budget)) {
         plan = std::move(buffered);
     }
+    log_info(
+        tt::LogOp,
+        "QMM_PLAN borrow_A={} borrow_B={} borrow_C={} C_slice={}x{} subblock={}x{} K_chunk={} K_tiles={} "
+        "compute_threads={} reader_threads={} writer_threads={} operand_depth={} C_depth={} A_mcast={} B_mcast={} "
+        "cores={} max_C_slices_per_core={} packer_l1_acc={} alias_partials={} l1_bytes={} l1_budget={}",
+        plan.borrow_A,
+        plan.borrow_B,
+        plan.borrow_C,
+        plan.C_slice_M_tiles,
+        plan.C_slice_N_tiles,
+        plan.subblock_M_tiles,
+        plan.subblock_N_tiles,
+        plan.K_chunk_tiles,
+        plan.K_tiles,
+        plan.num_compute_threads,
+        plan.num_reader_threads,
+        plan.num_writer_threads,
+        plan.operand_buffer_depth,
+        plan.C_buffer_depth,
+        plan.A_mcast_num_dests,
+        plan.B_mcast_num_dests,
+        plan.cores.size(),
+        plan.max_C_slices_per_core,
+        plan.packer_l1_acc_en,
+        plan.alias_C_partials_onto_C_slice,
+        plan.l1_bytes,
+        l1_budget);
 
     // ---- Sharded output: one C slice per core, batch 1, and a grid the accessor maps the same way ----
     if (attributes.output_mem_config.is_sharded()) {
@@ -741,6 +787,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"num_reader_threads", plan.num_reader_threads},
                 {"A_mcast_num_dests", plan.A_mcast_num_dests},
                 {"B_mcast_num_dests", plan.B_mcast_num_dests},
+                {"calib_skip_reads", ablation_env("QMM_CALIB_NO_READ", 0) != 0 ? 1u : 0u},
             },
         .runtime_arg_schema =
             {.runtime_arg_names =
