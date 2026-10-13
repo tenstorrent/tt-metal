@@ -55,7 +55,7 @@ State& state() {
 
 // Resolve a device VMA in .tt_observability_event_str to a string inside the mapped section, rebased by the section's
 // own address so a non-ALLOC orphan at sh_addr 0 works too.
-const char* resolve(std::span<std::byte> str_bytes, uint64_t str_vma, uint32_t ptr) {
+const char* resolve(std::span<const std::byte> str_bytes, uint64_t str_vma, uint32_t ptr) {
     if (ptr < str_vma) {
         return nullptr;
     }
@@ -71,7 +71,76 @@ const char* resolve(std::span<std::byte> str_bytes, uint64_t str_vma, uint32_t p
     return base + off;
 }
 
+// The field codes after the signature's last ':', with a nested struct's braces balanced; nullptr if malformed.
+const char* field_codes(const char* sig) {
+    const char* colon = sig != nullptr ? std::strrchr(sig, ':') : nullptr;
+    if (colon == nullptr) {
+        return nullptr;
+    }
+    int depth = 0;
+    for (const char* c = colon + 1; *c != 0; c++) {
+        depth += *c == '{' ? 1 : *c == '}' ? -1 : 0;
+        if (depth < 0) {
+            return nullptr;
+        }
+    }
+    return depth == 0 ? colon + 1 : nullptr;
+}
+
 }  // namespace
+
+ParsedMetaRecords parse_meta_records(
+    std::span<const std::byte> meta, std::span<const std::byte> str, uint64_t str_vma) {
+    ParsedMetaRecords out;
+    size_t off = 0;
+    while (off + sizeof(RecordHeader) <= meta.size()) {
+        RecordHeader h{};
+        std::memcpy(&h, meta.data() + off, sizeof(h));
+        const char* sig = resolve(str, str_vma, h.signature_ptr);
+        const char* codes = field_codes(sig);
+        if (codes == nullptr) {
+            out.stopped_early = true;  // cannot size this record, so nothing after it can be found either
+            return out;
+        }
+        ObservabilityEventMetaEntry e{.event_id = h.event_id, .line = h.line};
+        const char* file = resolve(str, str_vma, h.file_ptr);
+        e.file = file != nullptr ? file : "";
+        e.meta.signature = sig;
+        size_t pos = off + sizeof(RecordHeader);
+        for (const char* c = codes; *c != 0; c++) {
+            if (*c == '{' || *c == '}') {
+                continue;  // a nested struct's bounds; its fields are laid out in place
+            }
+            const size_t bytes = tt::debug_event::detail::code_bytes(*c);
+            if (bytes == 0) {
+                out.stopped_early = true;  // a field code this reader does not know
+                return out;
+            }
+            pos = align_up(pos, bytes < 4 ? bytes : 4);
+            if (pos + bytes > meta.size()) {
+                out.stopped_early = true;
+                return out;
+            }
+            tt::debug_event::FieldValue v{.code = *c};
+            std::memcpy(&v.bits, meta.data() + pos, bytes);  // little-endian host and device
+            if (*c == 's') {
+                v.s = resolve(str, str_vma, static_cast<uint32_t>(v.bits));
+                if (v.s == nullptr) {
+                    out.stopped_early = true;
+                    return out;
+                }
+                if (e.name.empty()) {
+                    e.name = v.s;
+                }
+            }
+            e.meta.fields.push_back(v);
+            pos += bytes;
+        }
+        off = align_up(pos, 4);
+        out.entries.push_back(std::move(e));
+    }
+    return out;
+}
 
 ObservabilityEventMetaRegistry& ObservabilityEventMetaRegistry::instance() {
     static ObservabilityEventMetaRegistry inst;
@@ -133,55 +202,18 @@ void ObservabilityEventMetaRegistry::ingest_elf(const std::string& elf_path, ll_
                 elf_path);
             skipped_foreign = true;
         }
-        size_t off = 0;
-        while (!skipped_foreign && off + sizeof(RecordHeader) <= meta.size()) {
-            RecordHeader h{};
-            std::memcpy(&h, meta.data() + off, sizeof(h));
-            const char* sig = resolve(strs, str_vma, h.signature_ptr);
-            const char* colon = sig != nullptr ? std::strrchr(sig, ':') : nullptr;
-            if (colon == nullptr) {
-                skipped_foreign = true;  // cannot size this record, so nothing after it can be found either
-                break;
-            }
-            ObservabilityEventMetaEntry e{.event_id = h.event_id, .line = h.line};
-            const char* file = resolve(strs, str_vma, h.file_ptr);
-            e.file = file != nullptr ? file : "";
-            e.meta.signature = sig;
-            size_t pos = off + sizeof(RecordHeader);
-            bool ok = true;
-            for (const char* c = colon + 1; *c != 0; c++) {
-                if (*c == '{' || *c == '}') {
-                    continue;  // a nested struct's bounds; its fields are laid out in place
+        if (!skipped_foreign) {
+            ParsedMetaRecords records = parse_meta_records(meta, strs, str_vma);
+            skipped_foreign = records.stopped_early;
+            for (ObservabilityEventMetaEntry& e : records.entries) {
+                // Every record's id is a handle in this image's block; anything else is a layout we do not
+                // understand.
+                if (e.name.empty() || e.event_id < base || e.event_id >= base + count) {
+                    malformed++;
+                    continue;
                 }
-                const size_t bytes = tt::debug_event::detail::code_bytes(*c);
-                pos = align_up(pos, bytes < 4 ? bytes : 4);
-                if (bytes == 0 || pos + bytes > meta.size()) {
-                    ok = false;
-                    break;
-                }
-                tt::debug_event::FieldValue v{.code = *c};
-                std::memcpy(&v.bits, meta.data() + pos, bytes);  // little-endian host and device
-                if (*c == 's') {
-                    v.s = resolve(strs, str_vma, static_cast<uint32_t>(v.bits));
-                    ok = ok && v.s != nullptr;
-                    if (e.name.empty() && v.s != nullptr) {
-                        e.name = v.s;
-                    }
-                }
-                e.meta.fields.push_back(v);
-                pos += bytes;
+                parsed.push_back(std::move(e));
             }
-            if (!ok) {
-                skipped_foreign = true;
-                break;
-            }
-            off = align_up(pos, 4);
-            // Every record's id is a handle in this image's block; anything else is a layout we do not understand.
-            if (e.name.empty() || e.event_id < base || e.event_id >= base + count) {
-                malformed++;
-                continue;
-            }
-            parsed.push_back(std::move(e));
         }
     } catch (const std::exception& e) {
         // Non-fatal: a kernel whose events cannot be named still profiles, rendering as "Zone_<id>".
