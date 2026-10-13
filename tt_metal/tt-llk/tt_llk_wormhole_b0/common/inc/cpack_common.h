@@ -810,13 +810,6 @@ inline void configure_pack(
     // PACK_COUNTERS_SEC0_pack_reads_per_xy_plane = cfg_reg_array[3][8 +: 8];
     // PACK_COUNTERS_SEC0_pack_xys_per_tile = cfg_reg_array[3][16 +: 7];
     // PACK_COUNTERS_SEC0_pack_yz_transposed = cfg_reg_array[3][23 +: 1];
-    // The stores below are RISC MMIO writes. Nothing in the Tensix instruction stream orders a RISC store
-    // against a PACR that is still executing, and the packer reads pack_per_xy_plane live inside its row
-    // loop, so a store that CHANGED these fields while a previous op's pack was in flight would corrupt
-    // that pack. This function always writes the steady-state values (counters 0/1, edge mask 0xffff, row
-    // set mapping 0) that every op leaves behind (the reduce clear restores them in-stream behind a packer
-    // drain), so the stores are value-invariant for an in-flight pack; they rely on that, not on ordering.
-    // A caller that needs different values here mid-kernel must drain the packer (RISC-blocking) first.
     pack_counters_u pack_counters;
     pack_counters.val = 0;
     pack_counters.f.pack_reads_per_xy_plane =
