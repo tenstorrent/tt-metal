@@ -196,12 +196,13 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         """Returns config-specific all-user KV-cache token capacity."""
         devices_per_dp_cache = num_devices // tt_data_parallel
         # 72B on a 1x8 Wormhole cache: the bfp8 KV cache costs 22 KB per token per chip, and the DRAM left after
-        # the weights is shared between this pool and the vision tower's working set, which peaks at the
-        # processor's largest image (3584x3584, ~14k tokens). Measured with 8k prefill chunks: a pool for 80k
-        # tokens serves every image size, 88k and above run out of DRAM in the vision MLP on the largest ones
-        # (a 128k pool already fails on an A4 page). TTFT and TPOT are unchanged from the former 64k pool.
+        # the weights (~8.5 GB of the 12 GB: text 7.0, embedding/LM head 0.6, vision tower 0.76) is shared between
+        # this pool and the vision tower's activation peak, 0.99 GB at the largest image the processor accepts
+        # (3344x3344, ~14k tokens) with the row-chunked vision MLP/QKV. A 96k pool (2.0 GB) leaves 0.4 GB of margin
+        # at that image; 112k leaves none and 128k is 0.4 GB short. The 8k T3K prefill chunk keeps the text
+        # working set small; TTFT and TPOT are unchanged from the former 64k pool.
         if "Qwen2.5-VL-72B" in model_name and devices_per_dp_cache == 8 and is_wormhole_b0():
-            return 81_920
+            return 98_304
         # 32B on a 1x8 Wormhole cache: ~4.5 GB of the 12 GB DRAM holds weights (bfp4 MLPs / bfp8 attention), the
         # bfp8 KV cache costs 17 KB per token per chip, so 256k tokens (4.5 GB) still leave room for the prefill
         # working set of the full 128k context.

@@ -12,6 +12,14 @@ from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
+def _slice_rows(t, start, end):
+    """Rows [start, end) along the second-to-last dim, for any rank."""
+    begins = [0] * len(t.shape)
+    ends = list(t.shape)
+    begins[-2], ends[-2] = start, end
+    return ttnn.slice(t, begins, ends)
+
+
 class VisionAttention(LightweightModule):
     def __init__(self, *args, **kwargs):
         kwargs["causal_mask"] = False
@@ -357,19 +365,13 @@ class VisionAttention(LightweightModule):
             fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
         )
 
-    def forward_prefill(
-        self,
-        x_11SH,
-        cu_seqlens,
-        rot_mats,
-        user_id: int = 0,
-        page_table=None,
-        chunk_page_table=None,
-        chunk_start_idx=None,
-        kv_cache=None,
-    ):
+    # Rows per QKV pass (see forward_prefill)
+    MAX_ROWS_PER_PASS = 8192
+
+    def _qkv_rows(self, x_11SH, rot_mats):
+        """Fused QKV projection, head split, (optional) q/k norm, rotary embedding and bfp8 typecast for
+        the rows in ``x_11SH`` (consumed). ``rot_mats`` cover exactly these rows, head dim already padded."""
         seq_len = x_11SH.shape[-2]
-        assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
         # QKV matmuls
         ###
@@ -411,8 +413,6 @@ class VisionAttention(LightweightModule):
         q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
         k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
 
-        # last_five_unpadded = lambda x, mesh_device: first_five(x, mesh_device, start=-(96 - 80) - 5, end=-(96 - 80))
-
         ttnn.deallocate(xqkv_fused)
 
         ###
@@ -421,15 +421,6 @@ class VisionAttention(LightweightModule):
 
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
-
-        # workaround until rotary embeddings support sub-tile head dims
-        if self.head_dim != self.padded_head_dim:
-            pad_head_dim = lambda x, v: ttnn.pad(
-                x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), v
-            )
-            # pad with cos = 1, sin = 0
-            rot_mats = [pad_head_dim(rot_mats[0], 1.0), pad_head_dim(rot_mats[1], 0.0)]
-            # print(f'{rot_mats[0].shape=}')
 
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
@@ -460,6 +451,55 @@ class VisionAttention(LightweightModule):
 
         v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(v_heads_1VSD)
+        return q_heads_1QSD_8b, k_heads_1KSD_8b, v_heads_1VSD_8b
+
+    def forward_prefill(
+        self,
+        x_11SH,
+        cu_seqlens,
+        rot_mats,
+        user_id: int = 0,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        kv_cache=None,
+    ):
+        seq_len = x_11SH.shape[-2]
+        assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
+
+        # workaround until rotary embeddings support sub-tile head dims
+        if self.head_dim != self.padded_head_dim:
+            pad_head_dim = lambda x, v: ttnn.pad(
+                x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), v
+            )
+            # pad with cos = 1, sin = 0
+            rot_mats = [pad_head_dim(rot_mats[0], 1.0), pad_head_dim(rot_mats[1], 0.0)]
+
+        # The QKV projection, head split and rotary embedding are row-wise, so a long patch sequence
+        # runs through them in slices: the fused bf16 QKV output and the three bf16 head tensors of a
+        # full-size image (~57k rows) would otherwise hold ~1 GB of DRAM per chip at once, which with a
+        # large KV pool (72B, 128k context) does not fit. Only the bfp8 Q/K/V the SDPA reads are kept
+        # whole. Numerics are unchanged.
+        if seq_len > self.MAX_ROWS_PER_PASS and seq_len % 1024 == 0:
+            q_parts, k_parts, v_parts = [], [], []
+            for start in range(0, seq_len, self.MAX_ROWS_PER_PASS):
+                end = min(start + self.MAX_ROWS_PER_PASS, seq_len)
+                x_rows = _slice_rows(x_11SH, start, end)
+                rot_rows = [_slice_rows(m, start, end) for m in rot_mats]
+                q, k, v = self._qkv_rows(x_rows, rot_rows)  # consumes x_rows
+                for m in rot_rows:
+                    ttnn.deallocate(m)
+                q_parts.append(q)
+                k_parts.append(k)
+                v_parts.append(v)
+            ttnn.deallocate(x_11SH)
+            q_heads_1QSD_8b = ttnn.concat(q_parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            k_heads_1KSD_8b = ttnn.concat(k_parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            v_heads_1VSD_8b = ttnn.concat(v_parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for t in q_parts + k_parts + v_parts:
+                ttnn.deallocate(t)
+        else:
+            q_heads_1QSD_8b, k_heads_1KSD_8b, v_heads_1VSD_8b = self._qkv_rows(x_11SH, rot_mats)
 
         # SDPA
         if chunk_start_idx is not None:

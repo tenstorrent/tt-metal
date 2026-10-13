@@ -64,6 +64,11 @@ class MLP(LightweightModule):
         self.w2_bias = as_bias_tensor("w2_bias", pad=False)
         self.w3_bias = as_bias_tensor("w3_bias", pad=True)
 
+    # Rows per MLP pass. The MLP is row-wise, so a long patch sequence is run in slices: the two bf16
+    # projections of a full 3584x3584 image (67k rows x 3456) would otherwise hold ~0.9 GB of DRAM per
+    # chip at once, which with a large KV pool (72B, 128k context) does not fit. Numerics are unchanged.
+    MAX_ROWS_PER_PASS = 8192
+
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
         w1 -> gate_proj
@@ -71,6 +76,22 @@ class MLP(LightweightModule):
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
+        seq_len = x.shape[-2]
+        if seq_len > self.MAX_ROWS_PER_PASS and seq_len % 1024 == 0:
+            hidden = x.shape[-1]
+            outs = []
+            for start in range(0, seq_len, self.MAX_ROWS_PER_PASS):
+                end = min(start + self.MAX_ROWS_PER_PASS, seq_len)
+                x_chunk = ttnn.slice(x, [0, 0, start, 0], [1, 1, end, hidden])
+                outs.append(self._forward_rows(x_chunk, mode))  # consumes x_chunk
+            ttnn.deallocate(x)
+            out = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for o in outs:
+                ttnn.deallocate(o)
+            return out
+        return self._forward_rows(x, mode)
+
+    def _forward_rows(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         seq_len = x.shape[-2]
         if seq_len >= 1024:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
