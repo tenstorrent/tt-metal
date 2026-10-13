@@ -4,11 +4,12 @@
 
 """BEVFormer's MSDA module against the PyTorch reference.
 
-`TTMSDeformableAttention` computes its core attention with a single device op,
-`ttnn.experimental.fused_msda_from_offsets`, which generates the sampling
-locations inside the reader. This file is what says that swap did not change the
-model's numerics: same weights, same inputs, compared against the reference
-module rather than against another TT implementation.
+`TTMSDeformableAttention` computes its core attention with a single
+`ttnn.experimental.fused_msda_from_offsets`. The sampling position is formed on
+the SFPU from the reference point and the raw offset.
+
+Same weights, same inputs, compared against the reference module rather than
+against another TT implementation.
 
 Complements `test_ms_deformable_attention.py`, which checks the same module with
 the repo's usual tolerance bundle; here the gate is a tighter PCC across several

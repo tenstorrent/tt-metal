@@ -19,25 +19,22 @@ time is in:
 ``test_fused_msda_kernel_perf``
     Only ``ttnn.experimental.fused_msda_from_offsets``. The projections and the
     softmax run once, before the signpost, so the measured region is the op and
-    nothing else. Three variants isolate the design questions that are still
-    open on #55198:
+    nothing else. Three variants:
 
-    * ``packed_multi``  -- the production contract: packed value/offsets/attn,
-      one call covering all levels.
+    * ``packed_multi`` -- packed value/offsets/attn, one call covering all
+      levels. This is the production contract.
     * ``canonical_multi`` -- the rank-4 / rank-6 / rank-5 operand forms the op
-      also accepts. The delta against ``packed_multi`` is what byte-offset
-      addressing (#55232-#55236) buys, measured rather than assumed.
-    * ``packed_per_level`` -- L single-level calls accumulated on device, which
-      is the contract #55201 replaced. Operands are pre-sliced on the host
-      outside the measured region, so this is a *lower bound* on the per-level
-      cost: it counts L launches plus L-1 adds, but not the slicing that a real
-      per-level path would also pay.
+      also accepts. The delta against ``packed_multi`` is the cost of one page
+      per sample instead of a byte offset into a packed stick.
+    * ``packed_per_level`` -- L single-level calls accumulated on device.
+      Operands are pre-sliced on the host outside the measured region, so this
+      is a lower bound on the per-level cost: it counts L launches plus L-1
+      adds, but not the slicing a per-level path would also pay.
 
 Read the signposted rows only, and attribute the fused op separately from the
-Linears around it. For kernel work ``CB-COMPUTE-WAIT-FRONT`` is the number that
-decides #55231: while the reader derives sampling geometry in soft float on a
-core with no FPU, that counter approaches the op's whole duration and no amount
-of compute-side work matters.
+Linears around it. Sampling geometry runs on the SFPU, so
+``CB-COMPUTE-WAIT-FRONT`` on the compute kernel is the reader not having pushed
+the next corner tiles.
 """
 
 import subprocess
@@ -173,8 +170,8 @@ def _canonical_operands(value, offsets, attn, model):
 
     Every split here widens the operand into an axis the op would otherwise
     reach by byte offset, and narrows its ROW_MAJOR page in the process: a
-    2-wide offsets page is 4 B of data in a 32 B allocation. That is the tax
-    #55232 is about, and the reason to measure it rather than argue it.
+    2-wide offsets page is 4 B of data in a 32 B allocation. That padding is
+    why the delta against the packed form is worth measuring.
     """
     bs, num_keys, _ = value.shape
     num_queries = offsets.shape[1]
@@ -190,8 +187,8 @@ def _per_level_operands(device, value, offsets, attn, model, spatial_shapes):
 
     Sliced through torch rather than ``ttnn.slice`` on purpose: this runs
     outside the measured region, and a host round trip has no device cost to
-    attribute, whereas a device slice would land inside the A/B and confuse the
-    launch-overhead question #55201 asks.
+    attribute, whereas a device slice would land inside the measured region and
+    be counted as launch overhead.
 
     ``reference_points`` is not sliced. In ``reference_mode="pillar"`` the
     reference index is ``p % R``, independent of the level, so each single-level
@@ -246,7 +243,7 @@ def _call_one(value, refs, offsets, attn, spatial_shapes):
 
 
 def _call_per_level(refs, per_level):
-    """L single-level launches, accumulated on device. The pre-#55201 shape."""
+    """L single-level launches, accumulated on device."""
     acc = None
     for (height, width), value_l, offsets_l, attn_l in per_level:
         out = ttnn.experimental.fused_msda_from_offsets(

@@ -27,11 +27,9 @@
 // arithmetic on either. reference_points are bf16, or float32 when REF_FP32
 // is defined. A bf16 point in [0, 1] moves in steps of up to 2^-8 (~0.8 px at
 // W = 200), and that rounding would already be in the tile before the SFPU
-// multiply. Offsets stay bf16.
-//
-// The gather and the input-tile contract live in
-// fused_msda_reader_common.hpp. REF_FP32 changes only the reference operand's
-// tile width there; V1 never defines it.
+// multiply. Offsets stay bf16. The gather and the input-tile contract live in
+// fused_msda_reader_common.hpp, compiled with FROM_OFFSETS set. REF_FP32
+// changes only the reference operand's tile width there; V1 never defines it.
 
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/dataflow/fused_msda_reader_common.hpp"
 

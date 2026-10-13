@@ -73,11 +73,8 @@ struct AxisConstants {
 constexpr uint32_t kAxisConstantsPerLevel = 6;  // (primary, secondary, bias) x (x, y)
 
 AxisConstants axis_constants(uint32_t extent, bool align_corners, bool grid_space, bool from_offsets) {
-    // The from-offsets branch has no grid-space row. Today that is unreachable
-    // because the V2 prim hardcodes locations_in_grid_space = false, but this
-    // function is the single source of truth for the whole coordinate mapping,
-    // and silently applying the [0, 1] mapping to a grid-space caller would be
-    // a wrong sample rather than a failure.
+    // The from-offsets branch has no grid-space row. Silently applying the
+    // [0, 1] mapping to a grid-space caller would sample the wrong pixel.
     TT_FATAL(
         !(from_offsets && grid_space),
         "fused_msda: grid-space sampling offsets are not supported; there is no from-offsets row for "

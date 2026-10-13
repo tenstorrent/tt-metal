@@ -4,42 +4,21 @@
 
 // Sampling geometry for fused multi-scale deformable attention, on the SFPU.
 //
-// Why the geometry runs here
-// --------------------------
-// It is per-point float work over 32 query rows: vector work. The dataflow RISC
-// has no FPU, so evaluating it there costs ~140 cycles per operation in
-// soft-float emulation. The SFPU evaluates the same expression across the tile.
+// The dataflow RISC has no FPU, so the same per-point float work there costs
+// ~140 cycles per operation in soft-float emulation. The SFPU evaluates it
+// across the tile.
 //
-// What one point costs
-// --------------------
-// Per sampling point (one (level, point) pair) and a block of up to 32 queries:
+// align_corners, locations_in_grid_space and from_offsets are folded into the
+// three per-level constants on the host, so this kernel does not branch on
+// them. See fused_msda_program_factory.cpp::axis_constants.
 //
-//   px   = primary * primary_scale + secondary * secondary_scale + bias
-//   x0   = floor(px)
-//   dx   = px - x0
-//   w_c  = corner(dx, dy) * attn                        for the four corners
+// x0/y0 leave as bf16. The reader decodes them with integer shifts and does the
+// bounds test. bf16 holds every integer up to 256, so each level's H and W must
+// be at or below that; derive_shapes rejects anything larger.
 //
-// `primary` is the normalized x (V1) or the reference point's x (V2);
-// `secondary` is the raw sampling offset and exists only for V2. The
-// (align_corners, locations_in_grid_space, from_offsets) variants are folded
-// into the three per-level constants on the host, so this kernel is branch-free
-// on them — see fused_msda_program_factory.cpp::axis_constants.
-//
-// Queries occupy tile rows and only column 0 carries meaning, which is what
-// `mul_tiles_bcast<COL>` consumes in the reduction: a scalar tile is 32 useful
-// values out of 1024.
-//
-// x0/y0 leave as bf16 and the reader decodes them with integer shifts, doing the
-// corner indexing and the bounds test itself. Nothing here needs int32 tiles, a
-// typecast, or a sentinel for an out-of-bounds corner. The constraint that buys
-// is exactness: bf16 holds every integer up to 256, so each level's H and W must
-// be at or below that. `derive_shapes` in fused_msda_device_operation.cpp
-// rejects anything larger.
-//
-// fp32_dest_acc_en is required, not an optimization. px reaches the feature
-// map's extent, and bf16's ulp at 200 is 1.0 — in a 16-bit destination
-// floor(px) on the 200x113 level rounds to the wrong integer and the fraction it
-// feeds collapses, degrading bilinear sampling to nearest-neighbour.
+// fp32_dest_acc_en is required. px reaches the feature map's extent, and bf16's
+// ulp at 200 is 1.0 — in a 16-bit destination floor(px) rounds to the wrong
+// integer and the fraction collapses.
 
 #pragma once
 

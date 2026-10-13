@@ -2,46 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Shared compute kernel for fused multi-scale deformable attention. Used
-// unchanged by both the V1 and the V2 reader — the readers differ only in which
-// operands they stage, never in what the sample stream means.
+// Shared compute kernel. The two readers differ only in which operands they stage.
 //
-// Two phases, interleaved (see below), per output block of up to 32 queries of
-// one (batch, head), spanning n_d_tiles tiles side by side for D > 32:
-//
-//   GEOMETRY   msda_geometry.hpp, on the SFPU. Per sampling point it turns the
-//              staged (location | reference + offset) and attn column-0 tiles
-//              into floor(px), floor(py) — handed back to the reader, which
-//              bounds-tests them and gathers the corners — and the four
-//              `attn * bilinear_corner_coefficient` scalar tiles.
-//
-//   REDUCTION  for each of 4 * L * P (input_tiles, scalar_tile) groups:
-//                for each d-tile k:
-//                  dest[row, col] = input_tile_k[row, col] * scalar_tile[row, 0]
-//                  pack into output_cb slot k, accumulating in L1
-//
-// The four consecutive corner groups of a point therefore sum to the
-// bilinear-interpolated, attention-weighted sample, and the L * P points sum
-// into the same accumulator. That accumulator is the op's output: no per-sample
-// value is ever written back to DRAM, and no [B, Q, H, L, P, D] tensor exists at
-// any point. The scalar tile is shared across a group's d-tiles — the weight is
-// per query row and independent of D.
-//
-// Why the geometry is interleaved with the reduction
-// --------------------------------------------------
 // The reader cannot gather point j's corners until this kernel has floored
 // them, and this kernel cannot reduce point j until the reader has gathered
-// them. Solving one point ahead of the reduction is what keeps both busy: while
-// the reader gathers point j, the SFPU is already solving point j+1.
+// them. Solving one point ahead of the reduction is what keeps both busy.
 //
-// Reader contract (see fused_msda_reader_common.hpp):
+// Reader contract (fused_msda_reader_common.hpp):
 //   * geom / offset / attn tiles: column 0 holds one query per row, bf16 0 past
 //     v_rows; columns 1..31 are zeroed once per CB slot.
-//   * input_tile: rows that are in range AND in bounds hold the gathered value
-//     stick, every other row is zeroed. This kernel builds the scalar and so
+//   * input_tile: rows that are in range and in bounds hold the gathered value
+//     stick; every other row is zeroed. This kernel builds the scalar and so
 //     cannot mask an out-of-bounds corner itself.
 //
-// fp32_dest_acc_en is required — see the header note in msda_geometry.hpp.
+// fp32_dest_acc_en is required. See msda_geometry.hpp.
 
 #include <cstdint>
 
@@ -120,9 +94,7 @@ void kernel_main() {
     CircularBuffer output_cb(output_cb_index);
 
     // Seeded with what startup left SrcA on (icb0), so the first geometry copy
-    // reconfigures rather than comparing a CB against itself. Every CB in this
-    // op is bf16, so the reconfigurations are no-ops today; the tracking exists
-    // so that can stop being true safely.
+    // reconfigures rather than comparing a CB against itself.
     uint32_t srca_cb = input_cb_index;
 
     for (uint32_t out = 0; out < num_output_tiles; ++out) {
