@@ -3911,6 +3911,28 @@ def _run_full_pipeline_ms():
                         )
         except Exception:  # noqa: BLE001 -- a pin that cannot be written must not cost a measurement
             pass
+        # PER-STAGE BASELINE, write-once: pin each declared stage's end-to-end ms the FIRST time
+        # the gate measures it. A stage the whole-model BEFORE bookend could not time -- e.g. a
+        # prefill trace_replay reports as n/a on the first reading -- would otherwise never get a
+        # baseline, so the dashboard showed a current bar with no baseline for it. The value is the
+        # correct-scale trace_replay per-stage ms (the tracy profile's per-stage sum is a capped
+        # capture, not a full reading), stage names come from the measured split (not literals),
+        # and write-once keeps it the STARTING value (a resumed run never refiles it). The
+        # whole-model BEFORE is pinned separately, and run.py still pins the bookend split too;
+        # this only fills stages that reading missed, via the same shared anchor.
+        try:
+            for _sn, _sv in (stage_ms or {}).items():
+                if _sn and isinstance(_sv, (int, float)) and _sv > 0:
+                    _ledger().anchor(
+                        _ledger().KIND_STAGE_E2E,
+                        float(_sv),
+                        depth=str(_sn).strip().lower(),
+                        mode=(stage_paths or {}).get(_sn) or "trace+1cq",
+                        source="trace_replay per-stage e2e (first measured)",
+                        model=_MODEL_ROOT.name if _MODEL_ROOT else "",
+                    )
+        except Exception:  # noqa: BLE001 -- a pin that cannot be written must not cost a measurement
+            pass
         _pin_stage_params_and_tp(stage_modules, tp)
         # PIN THE BASELINE READ SET, where it is produced. Measuring the bytes made them right; it did
         # not stop them moving, and the dtype rung moves them by construction: bf16 -> bf8_b halves a
