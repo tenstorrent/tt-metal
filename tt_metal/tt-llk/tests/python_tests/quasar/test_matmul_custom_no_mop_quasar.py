@@ -298,7 +298,7 @@ MATMUL_2X_DIMENSIONS = [
     math_fidelity=lambda formats: get_valid_math_fidelities(formats),
     formats=MATMUL_2X_FORMATS,
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    dimensions=MATMUL_2X_DIMENSIONS,
+    dimensions=runtime(MATMUL_2X_DIMENSIONS),
 )
 def test_matmul_custom_no_mop_quasar_mxfp4_2x(
     math_fidelity,

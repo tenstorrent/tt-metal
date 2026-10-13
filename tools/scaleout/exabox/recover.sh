@@ -133,7 +133,7 @@ EOF
 HOSTS=""
 CONFIG="4x32"
 DOCKER_IMAGE=""
-DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20260930"
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/exabox-tools:latest"
 NUM_ITERATIONS=5
 MAX_ATTEMPTS=1
 MAX_RETRAINS=5

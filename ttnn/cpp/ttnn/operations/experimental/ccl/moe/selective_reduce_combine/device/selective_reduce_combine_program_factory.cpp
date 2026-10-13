@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <limits>
 #include <ranges>
 #include <vector>
 
@@ -17,10 +18,71 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::experimental::prim {
 namespace detail {
+
+FusedSourceBufferLayout compute_fused_source_buffer_layout(
+    const uint32_t source_shard_height,
+    const uint32_t source_shard_width,
+    const uint32_t token_segment_width,
+    const uint32_t source_buffer_size_bytes,
+    const uint32_t token_segment_size_bytes,
+    const uint32_t num_buffers) {
+    TT_FATAL(source_shard_height > 0, "Fused source shard height must be positive");
+    TT_FATAL(source_shard_width > 0, "Fused source shard width must be positive");
+    TT_FATAL(token_segment_width > 0, "Fused source token segment width must be positive");
+    TT_FATAL(source_buffer_size_bytes > 0, "Fused source buffer size must be positive");
+    TT_FATAL(token_segment_size_bytes > 0, "Fused source token segment size must be positive");
+    TT_FATAL(num_buffers > 0, "Fused source buffer count must be positive");
+    TT_FATAL(
+        source_shard_height % num_buffers == 0,
+        "Fused source shard height ({}) must be divisible by the buffer count ({})",
+        source_shard_height,
+        num_buffers);
+    TT_FATAL(
+        source_shard_width % token_segment_width == 0,
+        "Fused source shard width ({}) must be divisible by the token segment width ({})",
+        source_shard_width,
+        token_segment_width);
+    TT_FATAL(
+        token_segment_size_bytes % token_segment_width == 0,
+        "Fused source token segment size ({} B) must be a whole number of bytes per element over its width ({})",
+        token_segment_size_bytes,
+        token_segment_width);
+
+    // A ring entry is source_shard_height / num_buffers shard rows; each shard row is
+    // source_shard_width / token_segment_width token segments. Producer and writer both
+    // step through the shard in token-segment rows, so that is the unit of rows_per_buffer.
+    const uint64_t segments_per_shard_row = source_shard_width / token_segment_width;
+    const uint64_t rows_per_buffer = (source_shard_height / num_buffers) * segments_per_shard_row;
+    const uint64_t buffer_block_size_bytes = rows_per_buffer * token_segment_size_bytes;
+    const uint64_t circular_buffer_size_bytes = buffer_block_size_bytes * num_buffers;
+    const uint64_t element_size_bytes = token_segment_size_bytes / token_segment_width;
+    const uint64_t shard_size_bytes = uint64_t(source_shard_height) * source_shard_width * element_size_bytes;
+    TT_FATAL(
+        circular_buffer_size_bytes == shard_size_bytes,
+        "Fused source ring ({} B) must cover the shard exactly ({} B)",
+        circular_buffer_size_bytes,
+        shard_size_bytes);
+    TT_FATAL(
+        circular_buffer_size_bytes <= source_buffer_size_bytes,
+        "Fused source circular buffer size ({} B) exceeds its L1 buffer bank ({} B)",
+        circular_buffer_size_bytes,
+        source_buffer_size_bytes);
+    TT_FATAL(
+        circular_buffer_size_bytes <= std::numeric_limits<uint32_t>::max(),
+        "Fused source circular buffer size ({} B) exceeds uint32_t",
+        circular_buffer_size_bytes);
+
+    return {
+        .rows_per_buffer = static_cast<uint32_t>(rows_per_buffer),
+        .buffer_block_size_bytes = static_cast<uint32_t>(buffer_block_size_bytes),
+        .circular_buffer_size_bytes = static_cast<uint32_t>(circular_buffer_size_bytes),
+    };
+}
 
 std::vector<uint32_t> data_parallel_split(
     uint32_t token_size_bytes, const uint32_t max_packet_size_bytes, const uint32_t num_data_parallel_cores) {
@@ -42,7 +104,27 @@ std::vector<uint32_t> data_parallel_split(
         }
     }
 
+    TT_FATAL(
+        token_size_bytes == 0,
+        "selective_reduce_combine: {} data-parallel core(s) cannot cover the token: {} bytes left over "
+        "(each segment is limited to {} bytes by the fabric packet size); increase num_data_parallel_cores",
+        num_data_parallel_cores,
+        token_size_bytes,
+        max_segment_size_bytes);
+
     return data_parallel_sizes_bytes;
+}
+
+// Writer runtime args for a double-buffered (fused moe_compute) source: the number of compute
+// cores feeding this combine core, followed by their physical (x, y) coordinates.
+void append_compute_core_rt_args(
+    const MeshDevice& mesh_device, const std::vector<CoreCoord>& compute_cores, std::vector<uint32_t>& rt_args) {
+    rt_args.push_back(static_cast<uint32_t>(compute_cores.size()));
+    for (const auto& core : compute_cores) {
+        const auto physical = mesh_device.worker_core_from_logical_core(core);
+        rt_args.push_back(physical.x);
+        rt_args.push_back(physical.y);
+    }
 }
 
 SelectiveReduceCombineWorkerLayout compute_worker_layout(
@@ -338,13 +420,12 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const std::optional<GlobalSemaphore>& cross_device_semaphore,
     const uint32_t metadata_sync_semaphore_id,
     const uint32_t compute_sync_semaphore_id,
-    const uint32_t compute_cores_per_combine_core,
-    const std::optional<std::vector<CoreCoord>>& compute_cores_by_ring_id) {
+    const std::optional<std::vector<std::vector<CoreCoord>>>& compute_cores_by_combine_column) {
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
 
-    // 0 when the caller has no semaphore (fused moe_compute FullLocal path: the writer
+    // 0 when the caller has no semaphore (fused moe_compute SingleDevice path: the writer
     // compiles out all init/final barrier handling under LOCAL_COMBINE).
     const uint32_t init_semaphore_addr = init_semaphore.has_value() ? init_semaphore->address() : 0;
     const uint32_t cross_device_semaphore_addr =
@@ -375,7 +456,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
     const uint32_t num_devices_total = mesh_view.num_devices();
-    const bool double_buffer_source = compute_cores_by_ring_id.has_value();
+    const bool double_buffer_source = compute_cores_by_combine_column.has_value();
 
     // physical experts per device, replicated shared experts are counted per device
     const uint32_t experts_per_device = dense_token_maps_tensor.logical_shape()[0];
@@ -420,27 +501,28 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto token_segment_buffer_size_bytes =
         *std::max_element(data_parallel_sizes_bytes.begin(), data_parallel_sizes_bytes.end());
 
-    constexpr auto double_buffer = 2;
-    const auto num_buffers = (double_buffer_source) ? double_buffer : experts_per_device;
-
     // TODO (AFM) this is an ugly kludge until we can get GPT-OSS on the mainline op #43645
     uint32_t expert_token_segment_buffer_block_size_bytes;
+    uint32_t buffer_size_bytes;
     if (double_buffer_source) {
-        // slightly awkward. we want the token dimension but the underlying shape might not represent the data layout.
-        //  This is in line with the assumption that tokens are split across the entirety of the shard, regardless of
-        //  number of tokens
-        const auto input_shards = input_tensor.memory_config().shard_spec()->grid.num_cores();
-        const auto token_expert_row_offset = input_tensor.logical_shape().volume() / input_shards /
-                                             (hidden_size / num_data_parallel_cores / double_buffer) /
-                                             num_token_parallel_cores;
-
-        expert_token_segment_buffer_block_size_bytes = token_segment_buffer_size_bytes * token_expert_row_offset;
+        constexpr uint32_t num_buffers = 2;
+        const auto& source_shard_shape = input_tensor.memory_config().shard_spec()->shape;
+        // Block stride in token-segment rows (hidden_size / num_data_parallel_cores wide), the unit
+        // the writer and moe_compute's dm1 both step in; must match the producer's call.
+        const auto fused_source_layout = detail::compute_fused_source_buffer_layout(
+            source_shard_shape[0],
+            source_shard_shape[1],
+            hidden_size / num_data_parallel_cores,
+            input_tensor.buffer()->aligned_size_per_bank(),
+            token_segment_buffer_size_bytes,
+            num_buffers);
+        expert_token_segment_buffer_block_size_bytes = fused_source_layout.buffer_block_size_bytes;
+        buffer_size_bytes = fused_source_layout.circular_buffer_size_bytes;
     } else {
         expert_token_segment_buffer_block_size_bytes =
             token_segment_buffer_size_bytes * total_tokens / num_token_parallel_cores;
+        buffer_size_bytes = expert_token_segment_buffer_block_size_bytes * experts_per_device;
     }
-
-    const auto buffer_size_bytes = expert_token_segment_buffer_block_size_bytes * num_buffers;
 
     const auto input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     // input sharded buffer
@@ -575,7 +657,6 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
             {"dense_token_maps_stride_elm", dense_token_maps_stride_elm},
             {"alignment", l1_alignment},
             {"compute_sync_semaphore_id", writer_compute_sync_semaphore_id},
-            {"compute_cores_per_combine_core", compute_cores_per_combine_core},
             {"double_buffer_source", double_buffer_source},
         };
 
@@ -600,9 +681,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         uint32_t token_parallel_idx = 0;
         uint32_t dest_token_segment_offset_bytes = 0;
         auto data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
-        auto compute_cores_by_ring_iter = (compute_cores_by_ring_id.has_value())
-                                              ? std::make_optional(compute_cores_by_ring_id->cbegin())
-                                              : std::nullopt;
+        auto compute_cores_by_column_iter = (compute_cores_by_combine_column.has_value())
+                                                ? std::make_optional(compute_cores_by_combine_column->cbegin())
+                                                : std::nullopt;
         for (const auto& sender_core : sender_cores) {
             const bool is_init_sync_core = sender_core == sender_cores.at(0);
 
@@ -628,15 +709,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
             // Double-buffered source (fused moe_compute): add compute core coordinates for
             // semaphore increments upon release of buffer segment.
-            if (compute_cores_by_ring_iter.has_value()) {
-                auto coords =
-                    std::ranges::subrange(
-                        *compute_cores_by_ring_iter, (*compute_cores_by_ring_iter) + compute_cores_per_combine_core) |
-                    std::views::transform(
-                        [&](const auto& c) { return mesh_device->worker_core_from_logical_core(c); }) |
-                    std::ranges::views::transform([](const auto& c) { return std::array{c.x, c.y}; }) |
-                    std::ranges::views::join;
-                std::ranges::copy(coords, std::back_inserter(writer_runtime_args));
+            if (compute_cores_by_column_iter.has_value()) {
+                detail::append_compute_core_rt_args(*mesh_device, **compute_cores_by_column_iter, writer_runtime_args);
             }
 
             SetRuntimeArgs(program, unary_writer_kernel_id, sender_core, writer_runtime_args);
@@ -645,13 +719,13 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
                 data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
                 dest_token_segment_offset_bytes = 0;
                 ++token_parallel_idx;
-                if (compute_cores_by_ring_iter.has_value()) {
-                    compute_cores_by_ring_iter = std::make_optional(compute_cores_by_ring_id->cbegin());
+                if (compute_cores_by_column_iter.has_value()) {
+                    compute_cores_by_column_iter = std::make_optional(compute_cores_by_combine_column->cbegin());
                 }
             } else {
                 dest_token_segment_offset_bytes += source_token_segment_size_bytes;
-                if (compute_cores_by_ring_iter.has_value()) {
-                    (*compute_cores_by_ring_iter) += compute_cores_per_combine_core;
+                if (compute_cores_by_column_iter.has_value()) {
+                    ++(*compute_cores_by_column_iter);
                 }
             }
         }
@@ -720,8 +794,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"topology", static_cast<uint32_t>(topology)},
         {"num_mux_workers_per_link", neighbors.size()},
         {"compute_sync_semaphore_id", writer_compute_sync_semaphore_id},
-        {"compute_cores_per_combine_core", compute_cores_per_combine_core},
-        {"double_buffer_source", compute_cores_by_ring_id.has_value()}};
+        {"double_buffer_source", double_buffer_source}};
 
     std::vector<uint32_t> writer_compile_time_args;
     ttnn::ccl::fabric_mux_connection_ct_args(
@@ -765,8 +838,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     uint32_t link_worker_idx = 0, token_parallel_idx = 0, dest_token_segment_offset_bytes = 0;
     auto core_map_iter = mux_neigbor_core_maps.cbegin();
     auto data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
-    auto compute_cores_by_ring_iter =
-        (compute_cores_by_ring_id.has_value()) ? std::make_optional(compute_cores_by_ring_id->cbegin()) : std::nullopt;
+    auto compute_cores_by_column_iter = (compute_cores_by_combine_column.has_value())
+                                            ? std::make_optional(compute_cores_by_combine_column->cbegin())
+                                            : std::nullopt;
     for (const auto& sender_core : sender_cores) {
         const bool is_init_sync_core = sender_core == sender_cores.at(0);
         std::vector<uint32_t> reader_runtime_args = {
@@ -789,15 +863,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
         // if the input is double buffered, coming from fused moe_compute, add the core coordinates of the compute cores
         // which get semaphore increments upon release of buffer segment.
-        if (compute_cores_by_ring_iter.has_value()) {
-            auto coords =
-                std::ranges::subrange(
-                    *compute_cores_by_ring_iter, (*compute_cores_by_ring_iter) + compute_cores_per_combine_core) |
-                std::views::transform([&](const auto& c) { return mesh_device->worker_core_from_logical_core(c); }) |
-                std::ranges::views::transform([](const auto& c) { return std::array{c.x, c.y}; }) |
-                std::ranges::views::join;
-
-            std::ranges::copy(coords, std::back_inserter(writer_runtime_args));
+        if (compute_cores_by_column_iter.has_value()) {
+            detail::append_compute_core_rt_args(*mesh_device, **compute_cores_by_column_iter, writer_runtime_args);
         }
 
         const bool is_termination_master = (sender_core == *termination_master_core_iter);
@@ -830,14 +897,13 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
             data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
             dest_token_segment_offset_bytes = 0;
             ++token_parallel_idx;
-            if (compute_cores_by_ring_iter.has_value()) {
-                compute_cores_by_ring_iter = std::make_optional(compute_cores_by_ring_id->cbegin());
+            if (compute_cores_by_column_iter.has_value()) {
+                compute_cores_by_column_iter = std::make_optional(compute_cores_by_combine_column->cbegin());
             }
-
         } else {
             dest_token_segment_offset_bytes += source_token_segment_size_bytes;
-            if (compute_cores_by_ring_iter.has_value()) {
-                (*compute_cores_by_ring_iter) += compute_cores_per_combine_core;
+            if (compute_cores_by_column_iter.has_value()) {
+                ++(*compute_cores_by_column_iter);
             }
         }
 

@@ -1032,3 +1032,44 @@ def test_simulated_distributed_norm_non_tile_aligned_width(device, is_rmsnorm, w
     exclusion is verified directly by test_simulated_distributed_norm_pre_all_gather_non_tile_aligned_width.
     """
     _run_simulated_distributed_norm(device, is_rmsnorm, w, eps)
+
+
+# The fused residual add of the pre-all-gather stage writes x + r back into the input buffer. The residual is
+# read in its own dtype, which may differ from the input's.
+@pytest.mark.parametrize("is_rmsnorm", [False, True])
+@pytest.mark.parametrize(
+    "input_df, residual_df",
+    [
+        (ttnn.bfloat16, ttnn.float32),
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.float32, ttnn.bfloat16),
+        (ttnn.float32, ttnn.bfloat8_b),
+        (ttnn.bfloat8_b, ttnn.bfloat16),
+        (ttnn.bfloat8_b, ttnn.float32),
+        (ttnn.bfloat16, ttnn.bfloat16),
+        (ttnn.float32, ttnn.float32),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b),
+    ],
+)
+def test_pre_allgather_residual_dtype_differs_from_input(device, is_rmsnorm, input_df, residual_df):
+    input_width, core_grid = 2048, (8, 4)
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, 32, input_width)
+    r = torch.randn(1, 1, 32, input_width)
+    tt_x = create_tt_tensors(x, device, input_df, core_grid, input_width)
+    tt_r = create_tt_tensors(r, device, residual_df, core_grid, input_width)
+    # Reference on the values as stored on device (bfloat8_b / bfloat16 quantize the inputs).
+    expected_sum = ttnn.to_torch(tt_x).double() + ttnn.to_torch(tt_r).double()
+
+    tt_stats = compute_pre_allgather_stats(tt_x, core_grid, input_width, is_rmsnorm, tt_r)
+    stats = ttnn.to_torch(tt_stats).double()
+    summed = ttnn.to_torch(tt_x).double()
+
+    sum_err = (summed - expected_sum).abs().max().item()
+    # Statistics against the written-back sum, so that its quantization (bfloat8_b input) is not counted twice.
+    ex2 = summed.pow(2).mean(-1, keepdim=True)
+    ex2_err = ((stats[..., :1] if is_rmsnorm else stats[..., 32:33]) - ex2).abs().max().item()
+    ex_err = 0.0 if is_rmsnorm else (stats[..., :1] - summed.mean(-1, keepdim=True)).abs().max().item()
+    assert sum_err < 0.1, f"x + r written back: max abs error {sum_err:.3e}"
+    assert ex_err < 0.01, f"E[x]: max abs error {ex_err:.3e}"
+    assert ex2_err < 0.05, f"E[x^2]: max abs error {ex2_err:.3e}"

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
 import os
 import struct
 from itertools import chain, product
@@ -29,7 +30,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.sfpu_accuracy_budget import accuracy_contract
+from helpers.sfpu_accuracy_budget import FLUSH_SUBNORMAL_OUTPUTS, accuracy_contract
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     SHIFT_EDGE_AMOUNTS,
@@ -45,7 +46,7 @@ from helpers.sfpu_domains import (
     specials_safe,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
@@ -54,6 +55,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_POLYGAMMA_ORDER,
     SFPU_RELU_MAX_THRESHOLD,
     SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
@@ -1051,6 +1053,55 @@ def test_eltwise_unary_sfpu_int_shift(
     )
 
 
+# Every polygamma order ttnn accepts. psi^(n)(x) ~ (n-1)! / x^n for large x, so each order is
+# swept from 0.5 up to where the result is 2^-125, just inside the normal range. The bottom of
+# that range is where the unscaled partial sums sit n! below the result, and atol is 0 because
+# any absolute tolerance would accept a zero there.
+_POLYGAMMA_ORDERS = list(range(1, 12))
+
+
+def _polygamma_stimuli_spec(order):
+    high = (math.factorial(order - 1) * 2.0**125) ** (1.0 / order)
+    return StimuliSpec(distribution=DistributionKind.LOG_UNIFORM, low=0.5, high=high)
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    polygamma_order=_POLYGAMMA_ORDERS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_polygamma_order(
+    formats: InputOutputFormat,
+    polygamma_order: int,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    _skip_bh_unless_fp32(formats, dest_acc)
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip(
+            reason="Float32 reaches a 16-bit Dest as Float16_b, which is swept already"
+        )
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        MathOperation.Polygamma,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_polygamma_stimuli_spec(polygamma_order),
+        custom_atol=0.0,
+        # atol is 0 so a flushed lane fails outright at a relative error of 1. The rtol is loose
+        # because the sweep reaches the last binades before underflow, where the Euler-Maclaurin
+        # corrections themselves flush: measured worst case there is 2.0% for float32 at order 11
+        # and 1.4% for bfloat16, against 32.6 float32 ULP and 0.74 bfloat16 ULP above 2^-100.
+        custom_rtol=0.05 if formats.output_format == DataFormat.Float32 else 0.02,
+        polygamma_order=polygamma_order,
+    )
+
+
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     approx_mode=[ApproximationMode.No],
@@ -1077,6 +1128,7 @@ def test_eltwise_unary_sfpu_signbit(
         FastMode.No,
         input_dimensions,
         spec_A=spec_A,
+        gate_on_step_budget=True,
     )
 
 
@@ -1176,32 +1228,67 @@ ISINF_ISNAN_MATHOPS = [
 ]
 
 
-# The predicates a bf16 input at dest_acc=Yes cannot answer. That unpack path delivers both
-# NaN and -inf to the LREG as +inf, and which predicates that breaks follows from it rather
-# than being a blanket property of the pipeline: is_nan reads 0 where the golden says 1,
-# is_neg_inf reads 0 where it says 1, and is_inf reads 1 where it says 0. The other two
-# survive precisely because +inf is what arrives -- is_pos_inf is untouched, and is_finite
-# agrees by luck of the mapping, since isfinite(+inf) and isfinite(NaN) are both 0.
+# The predicates a bf16 input at dest_acc=Yes cannot answer. That unpack path hands the
+# SFPU a NaN as the infinity of its own sign (measured on Wormhole with both NaN signs
+# driven: Identity writes +inf on every +NaN lane and -inf on every -NaN lane, while +inf
+# and -inf arrive intact), and which predicates that breaks follows from it rather than
+# being a blanket property of the pipeline: is_nan reads 0 on every NaN lane, is_inf 1,
+# is_pos_inf 1 on +NaN and is_neg_inf 1 on -NaN, where the golden says the opposite. Only
+# is_finite survives, being 0 for an infinity and a NaN alike. (A stimulus of one NaN sign
+# hides half of that: torch's bf16 cast gives 0xFFFF, and is_pos_inf then read clean.)
 #
-# Skipping the whole op list here withheld those two as well; they are swept now, so a
-# regression in the +inf path is caught on a bf16 input instead of only on Float32.
+# Skipping the whole op list here withheld is_finite as well; it is swept now, so a
+# regression in the inf path is caught on a bf16 input instead of only on Float32.
 _ISINF_ISNAN_BF16_DEST_UNSUPPORTED = [
     MathOperation.Isinf,
     MathOperation.Isneginf,
     MathOperation.Isnan,
+    MathOperation.Isposinf,
 ]
+
+
+def isinf_isnan_skip_reason(formats, mathop, dest_acc):
+    """Why the isinf/isnan sweep skips this variant, or ``None``. The driver and the
+    exact-op guard in test_sfpu_accuracy_budget.py both ask it, so the guard's
+    exclusions cannot drift from the skip."""
+    if (
+        formats.input_format == DataFormat.Float16_b
+        and dest_acc == DestAccumulation.Yes
+        and mathop in _ISINF_ISNAN_BF16_DEST_UNSUPPORTED
+    ):
+        return (
+            "bf16->fp32 dest unpack delivers a NaN as the infinity of its sign, so "
+            "this predicate cannot be evaluated on this pipeline"
+        )
+    return None
+
+
+#: A positive quiet NaN's bit pattern in each stimulus dtype, as the signed integer view
+#: of that width. The NaNs are written as bits because neither a cast nor a negation says
+#: which sign the kernel is fed: torch's fp32 -> bfloat16 cast canonicalises every NaN to
+#: 0xFFFF, sign set, and bfloat16 arithmetic drops a NaN's sign.
+_QUIET_NAN_BITS = {
+    torch.bfloat16: (torch.int16, 0x7FC0),
+    torch.float32: (torch.int32, 0x7FC00000),
+}
 
 
 def _isinf_isnan_stimuli_spec():
     def dist(size, dtype, generator):
-        # Finite ramp in [-5, 5] with regular +inf / -inf / nan injected so every
-        # face carries all special classes plus finite values.
+        # Finite ramp in [-5, 5] with regular +inf / -inf / NaN injected so every
+        # face carries all special classes plus finite values. The NaN lanes alternate
+        # +NaN and -NaN: the bf16 -> 32-bit Dest unpack turns a NaN into the infinity of
+        # its sign, so one sign alone would hide what half the predicates see.
         idx = torch.arange(size, dtype=torch.float32)
-        x = (idx % 11) - 5.0
+        x = ((idx % 11) - 5.0).to(dtype)
         x[0::7] = float("inf")
         x[1::7] = float("-inf")
-        x[2::7] = float("nan")
-        return x.to(dtype)
+        int_dtype, positive_nan = _QUIET_NAN_BITS[dtype]
+        sign_bit = 1 << (torch.iinfo(int_dtype).bits - 1)
+        bits = x.view(int_dtype)
+        bits[2::14] = positive_nan
+        bits[9::14] = positive_nan - sign_bit  # the same pattern with the sign bit set
+        return x
 
     return StimuliSpec(distribution=dist, seed=0)
 
@@ -1222,18 +1309,12 @@ def test_eltwise_unary_sfpu_isinf_isnan(
 ):
     _skip_bh_unless_fp32(formats, dest_acc)
 
-    # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) delivers NaN and -inf as
-    # +inf, which only the three predicates below can see; the rest are swept here.
+    # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) delivers a NaN as the
+    # infinity of its sign, which every predicate but is_finite can see; it is swept here.
     # See _ISINF_ISNAN_BF16_DEST_UNSUPPORTED.
-    if (
-        formats.input_format == DataFormat.Float16_b
-        and dest_acc == DestAccumulation.Yes
-        and mathop in _ISINF_ISNAN_BF16_DEST_UNSUPPORTED
-    ):
-        pytest.skip(
-            reason="bf16->fp32 dest unpack delivers NaN and -inf as +inf, so this "
-            "predicate cannot be evaluated on this pipeline"
-        )
+    reason = isinf_isnan_skip_reason(formats, mathop, dest_acc)
+    if reason:
+        pytest.skip(reason=reason)
 
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
@@ -1244,6 +1325,7 @@ def test_eltwise_unary_sfpu_isinf_isnan(
         FastMode.No,
         input_dimensions,
         spec_A=_isinf_isnan_stimuli_spec(),
+        gate_on_step_budget=True,
     )
 
 
@@ -1319,6 +1401,7 @@ def test_eltwise_unary_sfpu_threshold(
         FastMode.No,
         input_dimensions,
         spec_A=_threshold_op_stimuli_spec(mathop),
+        gate_on_step_budget=True,
     )
 
 
@@ -1334,8 +1417,13 @@ def eltwise_unary_sfpu(
     shift_amount=None,
     relu_min_int_threshold=None,
     relu_max_threshold=None,
+    polygamma_order=None,
     twos_complement=False,
+    gate_on_step_budget=False,
 ):
+    """*gate_on_step_budget* is for a caller whose hand-built stimulus the op's step
+    budget was measured on (``MEASURED_ON_SWEEP`` in test_sfpu_accuracy_budget.py): it
+    gates on the whole contract rather than only its tolerance arm."""
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
 
@@ -1382,6 +1470,7 @@ def eltwise_unary_sfpu(
             if relu_max_threshold is None
             else {"relu_max_threshold": relu_max_threshold}
         ),
+        **({} if polygamma_order is None else {"polygamma_order": polygamma_order}),
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -1414,6 +1503,11 @@ def eltwise_unary_sfpu(
                 []
                 if relu_max_threshold is None
                 else [SFPU_RELU_MAX_THRESHOLD(relu_max_threshold)]
+            ),
+            *(
+                []
+                if polygamma_order is None
+                else [SFPU_POLYGAMMA_ORDER(polygamma_order)]
             ),
         ],
         runtimes=[
@@ -1454,10 +1548,12 @@ def eltwise_unary_sfpu(
     # CUSTOM_TOLERANCES used to be read in the test bodies; keeping it in the driver
     # means all eight call sites pick it up at once, and a change is a registry edit.
     #
-    # Tolerance only, deliberately. A step budget measured over every value the format
-    # has -- which is what the nightly sweep measures -- is much wider than one measured
+    # Tolerance only by default. A step budget measured over every value the format has
+    # -- which is what the exhaustive sweep measures -- is much wider than one measured
     # over this driver's sampled domain, so enforcing it here would replace a gate that
-    # binds with one that does not. The budgets are enforced where they were measured.
+    # binds with one that does not. The budgets are enforced where they were measured:
+    # the signbit, isinf/isnan and threshold sweeps' predicates were measured on these
+    # very stimuli, so those three pass gate_on_step_budget.
     contract = accuracy_contract(
         mathop,
         output_format=formats.output_format,
@@ -1470,7 +1566,11 @@ def eltwise_unary_sfpu(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.tolerance_kwargs(),
+        **(
+            contract.passed_test_kwargs(flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS)
+            if gate_on_step_budget
+            else contract.tolerance_kwargs()
+        ),
     ), "Assert against golden failed"
 
     # For callers that want a stricter gate than the op's tolerance (an exact-bits check on

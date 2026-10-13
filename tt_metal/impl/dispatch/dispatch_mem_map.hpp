@@ -47,6 +47,14 @@ public:
 
     uint32_t prefetch_q_entry_size_bytes() const;
 
+    // True on Quasar when the prefetcher polls fetch queue entries through its cache. Entries then carry a per-lap
+    // phase bit and are never cleared, and the prefetcher invalidates queue lines itself to see new host writes.
+    // Only enabled on the RTL simulator so far, so ttsim and silicon poll uncached.
+    bool prefetch_q_cached() const;
+
+    // DM core cache line size. The cached fetch queue must cover whole lines.
+    static constexpr uint32_t PREFETCH_Q_CACHE_LINE_BYTES = 64;
+
     uint32_t prefetch_q_size() const;
 
     uint32_t max_prefetch_command_size() const;
@@ -118,6 +126,8 @@ private:
     std::vector<uint32_t> device_cq_addrs_;
 
     DispatchSettings settings;
+
+    bool prefetch_q_cached_ = false;
 
     uint32_t num_cqs_per_core_ = 0;
     uint32_t cq_zone_stride_ = 0;
