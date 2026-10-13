@@ -77,16 +77,18 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         int8_t mcast_end_dst_y;
         NocType noc_type : 4;
         NocVirtualChannel noc_vc : 4;
-        uint8_t payload_chunks;
+        uint8_t payload_chunks;  // low 8 bits of the 32 B chunk count
         uint8_t posted : 1;
-        uint8_t reserved : 7;
+        uint8_t payload_chunks_hi : 7;  // high 7 bits (the count was 8 bits: transfers over 8160 B were clipped)
 
         void setAttributes(uint32_t num_bytes, bool p) {
             uint32_t bytes_rounded_up = (num_bytes + PAYLOAD_CHUNK_SIZE - 1) / PAYLOAD_CHUNK_SIZE;
-            payload_chunks = std::min(uint32_t(std::numeric_limits<uint8_t>::max()), bytes_rounded_up);
+            const uint32_t chunks = std::min(uint32_t(0x7FFF), bytes_rounded_up);
+            payload_chunks = chunks & 0xFF;
+            payload_chunks_hi = chunks >> 8;
             posted = p;
         }
-        uint32_t getNumBytes() const { return payload_chunks * PAYLOAD_CHUNK_SIZE; }
+        uint32_t getNumBytes() const { return ((uint32_t(payload_chunks_hi) << 8) | payload_chunks) * PAYLOAD_CHUNK_SIZE; }
     };
 
     // Expected to come after a LocalNocEvent when NoC Debug Mode is enabled.
