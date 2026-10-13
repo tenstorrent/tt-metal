@@ -38,7 +38,8 @@ inline void calculate_tanhshrink() {
     // loop by itself, so each fp32 literal otherwise costs an SFPLOADI pair per row). bf16: Q0/Q1/P0 are in
     // Prgm0/1/2 from tanhshrink_init and q2, q3, p1 here. fp32: the row already fills all eight LRegs, so
     // nothing is hoisted here; its exp reads log2(e) and -ln2_hi from Prgm1/2 instead (see the init).
-    HoistedIf<!is_fp32_dest_acc_en> q2 = TANHSHRINK_BF16_Q2, q3 = TANHSHRINK_BF16_Q3, p1 = TANHSHRINK_BF16_P1;
+    HoistedIf<sfpu_unary_registered_constants && !is_fp32_dest_acc_en> q2 = TANHSHRINK_BF16_Q2, q3 = TANHSHRINK_BF16_Q3,
+                                                                       p1 = TANHSHRINK_BF16_P1;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
@@ -60,7 +61,11 @@ inline void calculate_tanhshrink() {
                 -2.5107525289e-03f,
                 4.2079269770e-04f);
         } else {
-            Q = PolynomialEvaluator::eval(u, sfpi::vConstFloatPrgm0, sfpi::vConstFloatPrgm1, q2, q3);
+            if constexpr (sfpu_unary_registered_constants) {
+                Q = PolynomialEvaluator::eval(u, sfpi::vConstFloatPrgm0, sfpi::vConstFloatPrgm1, q2, q3);
+            } else {
+                Q = PolynomialEvaluator::eval(u, TANHSHRINK_BF16_Q0, TANHSHRINK_BF16_Q1, q2, q3);
+            }
         }
         sfpi::vFloat result = x * u * Q;  // default = small path
 
@@ -82,8 +87,13 @@ inline void calculate_tanhshrink() {
                 // tanh(|x|) via a degree-3 minimax fit on [1,3.3].
                 // The poly crosses 1.0 monotonically near x~3.12 and stays >1 beyond, so the
                 // clamp to 1.0 holds the saturation tail exactly (including +/-inf).
-                sfpi::vFloat p =
-                    PolynomialEvaluator::eval(ax, sfpi::vConstFloatPrgm2, p1, TANHSHRINK_BF16_P2, TANHSHRINK_BF16_P3);
+                sfpi::vFloat p;
+                if constexpr (sfpu_unary_registered_constants) {
+                    p = PolynomialEvaluator::eval(
+                        ax, sfpi::vConstFloatPrgm2, p1, TANHSHRINK_BF16_P2, TANHSHRINK_BF16_P3);
+                } else {
+                    p = PolynomialEvaluator::eval(ax, TANHSHRINK_BF16_P0, p1, TANHSHRINK_BF16_P2, TANHSHRINK_BF16_P3);
+                }
                 p = sfpi::min(p, 1.0f);
                 sfpi::vFloat tanhx = sfpi::copysgn(p, x);  // tanh(-x) = -tanh(x)
                 result = x - tanhx;
@@ -109,7 +119,7 @@ inline void tanhshrink_init() {
         sfpu_reciprocal_init<false>();
         sfpi::vConstFloatPrgm1 = EXP_FP32_LOG2E;
         sfpi::vConstFloatPrgm2 = EXP_FP32_NEG_LN2_HI;
-    } else {
+    } else if constexpr (sfpu_unary_registered_constants) {
         // The bf16 path runs no reciprocal, so all three registers hold polynomial coefficients:
         // Q0, Q1 of the small-|x| fit and P0 of the tanh fit (the rest live in LRegs, see the loop).
         sfpi::vConstFloatPrgm0 = TANHSHRINK_BF16_Q0;
