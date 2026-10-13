@@ -166,6 +166,7 @@ class TTTRolloutSampler(RolloutSampler):
             # new top-K LogProbsResult path. _generate_impl still expects a plain
             # torch.Tensor of scalars.
             num_logprobs=[0] * n,
+            log_probs_enable_temperature=[True] * n,
         )
         self._sampling_warmed_up = False
 
