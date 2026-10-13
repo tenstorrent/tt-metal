@@ -265,21 +265,13 @@ tt_metal/tt-llk/.claude/ @nstamatovicTT @njokovicTT
 tt_metal/tt-llk/.cursor/ @nstamatovicTT @njokovicTT
 tt_metal/tt-llk/.github/ @fvranicTT @nvelickovicTT
 tt_metal/tt-llk/common/ @amahmudTT @fvranicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01
-tt_metal/tt-llk/tests/ @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT
+tt_metal/tt-llk/tests/ @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT @mvlahovicTT
 tt_metal/tt-llk/tests/python_tests/fuser/ @fvranicTT @markoradosavljevicTT @ndivnicTT
-tt_metal/tt-llk/docs/performance_counters/ @mvlahovicTT
-tt_metal/tt-llk/perf/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @mvlahovicTT
-tt_metal/tt-llk/tests/helpers/include/ @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT @mvlahovicTT
-tt_metal/tt-llk/tests/python_tests/helpers/ @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT @mvlahovicTT
-tt_metal/tt-llk/tests/run_llk_perf_*.sh @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT @mvlahovicTT
-tt_metal/tt-llk/tests/sources/**/*_perf.cpp @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT @mvlahovicTT
-tt_metal/tt-llk/tools/include/perf_counters/ @mvlahovicTT
-tt_metal/tt-llk/tools/python/tt_llk_perf/ @mvlahovicTT
-# ── LLK perf infrastructure: restricted ownership ──
-# Later than the broad tt_metal/tt-llk/tests/ and .github/ rules and the helpers/ line above, so these
-# win for perf paths only (CODEOWNERS = last match wins). Layout-agnostic:
-# helpers/perf* matches both today's flat modules and the future helpers/perf/
-# package.
+tt_metal/tt-llk/docs/performance_counters/ @mvlahovicTT @skrsmanovicTT @nvelickovicTT
+tt_metal/tt-llk/tools/include/perf_counters/ @mvlahovicTT @skrsmanovicTT @nvelickovicTT
+tt_metal/tt-llk/tools/python/tt_llk_perf/ @mvlahovicTT @skrsmanovicTT @nvelickovicTT
+# ── LLK perf infrastructure: restricted ownership
+tt_metal/tt-llk/perf/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @skrsmanovicTT @sstanisicTT @mvlahovicTT
 tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/python_tests/**/test_perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
