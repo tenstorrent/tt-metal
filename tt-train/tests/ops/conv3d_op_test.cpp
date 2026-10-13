@@ -32,9 +32,7 @@ struct Conv3dCase {
     uint32_t C_out = 32;
     Dims3 kernel{3, 3, 3};
     Dims3 stride{1, 1, 1};
-    Dims3 padding{0, 0, 0};
     Dims3 dilation{1, 1, 1};
-    uint32_t groups = 1;
     bool with_bias = true;
     bool bias_rank1 = false;  // pass the bias as [C_out] instead of [1, 1, 1, C_out]
     bool input_requires_grad = true;
@@ -47,7 +45,7 @@ struct Conv3dCase {
         Dims3 out{};
         for (size_t i = 0; i < 3; ++i) {
             const uint32_t effective_kernel = dilation[i] * (kernel[i] - 1) + 1;
-            out[i] = (in_size[i] + 2 * padding[i] - effective_kernel) / stride[i] + 1;
+            out[i] = (in_size[i] - effective_kernel) / stride[i] + 1;
         }
         return out;
     }
@@ -57,7 +55,7 @@ struct Conv3dCase {
 struct Conv3dReference {
     std::vector<float> output;       // [N, D_out, H_out, W_out, C_out]
     std::vector<float> grad_input;   // [N, D, H, W, C_in]
-    std::vector<float> grad_weight;  // [C_out, C_in / groups, kD, kH, kW]
+    std::vector<float> grad_weight;  // [C_out, C_in, kD, kH, kW]
     std::vector<float> grad_bias;    // [C_out]
 };
 
@@ -83,11 +81,8 @@ Conv3dReference compute_reference(
     auto output_index = [&](uint32_t n, uint32_t d, uint32_t h, uint32_t w, uint32_t co) {
         return (((static_cast<size_t>(n) * out[0] + d) * out[1] + h) * out[2] + w) * c.C_out + co;
     };
-    const uint32_t C_in_per_group = c.C_in / c.groups;
-    const uint32_t C_out_per_group = c.C_out / c.groups;
-    // ci_local indexes the group's own input channels.
-    auto weight_index = [&](uint32_t co, uint32_t ci_local, uint32_t kd, uint32_t kh, uint32_t kw) {
-        return (((static_cast<size_t>(co) * C_in_per_group + ci_local) * kD + kd) * kH + kh) * kW + kw;
+    auto weight_index = [&](uint32_t co, uint32_t ci, uint32_t kd, uint32_t kh, uint32_t kw) {
+        return (((static_cast<size_t>(co) * c.C_in + ci) * kD + kd) * kH + kh) * kW + kw;
     };
 
     for (uint32_t n = 0; n < c.N; ++n) {
@@ -97,37 +92,19 @@ Conv3dReference compute_reference(
                     for (uint32_t co = 0; co < c.C_out; ++co) {
                         const size_t o_idx = output_index(n, od, oh, ow, co);
                         const float dy = grad_output[o_idx];
-                        const uint32_t ci_begin = (co / C_out_per_group) * C_in_per_group;
                         float acc = c.with_bias ? bias[co] : 0.F;
                         if (c.with_bias) {
                             ref.grad_bias[co] += dy;
                         }
                         for (uint32_t kd = 0; kd < kD; ++kd) {
-                            const int64_t id = static_cast<int64_t>(od) * c.stride[0] + kd * c.dilation[0] -
-                                               static_cast<int64_t>(c.padding[0]);
-                            if (id < 0 || id >= static_cast<int64_t>(D)) {
-                                continue;
-                            }
+                            const uint32_t id = od * c.stride[0] + kd * c.dilation[0];
                             for (uint32_t kh = 0; kh < kH; ++kh) {
-                                const int64_t ih = static_cast<int64_t>(oh) * c.stride[1] + kh * c.dilation[1] -
-                                                   static_cast<int64_t>(c.padding[1]);
-                                if (ih < 0 || ih >= static_cast<int64_t>(H)) {
-                                    continue;
-                                }
+                                const uint32_t ih = oh * c.stride[1] + kh * c.dilation[1];
                                 for (uint32_t kw = 0; kw < kW; ++kw) {
-                                    const int64_t iw = static_cast<int64_t>(ow) * c.stride[2] + kw * c.dilation[2] -
-                                                       static_cast<int64_t>(c.padding[2]);
-                                    if (iw < 0 || iw >= static_cast<int64_t>(W)) {
-                                        continue;
-                                    }
-                                    for (uint32_t ci_local = 0; ci_local < C_in_per_group; ++ci_local) {
-                                        const size_t i_idx = input_index(
-                                            n,
-                                            static_cast<uint32_t>(id),
-                                            static_cast<uint32_t>(ih),
-                                            static_cast<uint32_t>(iw),
-                                            ci_begin + ci_local);
-                                        const size_t w_idx = weight_index(co, ci_local, kd, kh, kw);
+                                    const uint32_t iw = ow * c.stride[2] + kw * c.dilation[2];
+                                    for (uint32_t ci = 0; ci < c.C_in; ++ci) {
+                                        const size_t i_idx = input_index(n, id, ih, iw, ci);
+                                        const size_t w_idx = weight_index(co, ci, kd, kh, kw);
                                         acc += input[i_idx] * weight[w_idx];
                                         ref.grad_input[i_idx] += dy * weight[w_idx];
                                         ref.grad_weight[w_idx] += dy * input[i_idx];
@@ -177,7 +154,7 @@ void run_case(const Conv3dCase& c) {
     const auto [kD, kH, kW] = c.kernel;
 
     const ttnn::Shape input_shape({c.N, D, H, W, c.C_in});
-    const ttnn::Shape weight_shape({c.C_out, c.C_in / c.groups, kD, kH, kW});
+    const ttnn::Shape weight_shape({c.C_out, c.C_in, kD, kH, kW});
     const ttnn::Shape bias_shape = c.bias_rank1 ? ttnn::Shape({c.C_out}) : ttnn::Shape({1U, 1U, 1U, c.C_out});
     const ttnn::Shape output_shape({c.N, out[0], out[1], out[2], c.C_out});
     auto* device = &ttml::autograd::ctx().get_device();
@@ -218,7 +195,7 @@ void run_case(const Conv3dCase& c) {
         }
     };
 
-    auto result = ttml::ops::conv3d(input, weight, bias, c.stride, c.padding, c.dilation, c.groups);
+    auto result = ttml::ops::conv3d(input, weight, bias, c.stride, c.dilation);
 
     ASSERT_EQ(result->get_value().logical_shape(), output_shape);
     EXPECT_EQ(result->get_value().layout(), c.layout);
@@ -264,7 +241,6 @@ void run_case(const Conv3dCase& c) {
 
 TEST_F(Conv3dOpTest, ForwardBackwardWithBias) {
     Conv3dCase c;
-    c.padding = {1, 1, 1};
     run_case(c);
 }
 
@@ -274,21 +250,18 @@ TEST_F(Conv3dOpTest, ForwardBackwardNoBias) {
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, BatchStrideAndPadding) {
+TEST_F(Conv3dOpTest, BatchAndStride) {
     Conv3dCase c;
     c.N = 2;
     c.in_size = {5, 6, 7};
     c.stride = {2, 2, 2};
-    c.padding = {1, 1, 1};
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, NIGHTLY_AsymmetricStrideAndPadding) {
+TEST_F(Conv3dOpTest, NIGHTLY_AsymmetricStride) {
     Conv3dCase c;
     c.in_size = {6, 7, 8};
-    c.kernel = {3, 3, 3};
     c.stride = {1, 2, 3};
-    c.padding = {0, 1, 2};
     run_case(c);
 }
 
@@ -296,20 +269,15 @@ TEST_F(Conv3dOpTest, Dilation) {
     Conv3dCase c;
     c.in_size = {6, 7, 8};
     c.dilation = {2, 2, 2};
-    c.padding = {2, 2, 2};
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, NIGHTLY_DilationWithGroupsStrideAndPadding) {
+TEST_F(Conv3dOpTest, NIGHTLY_DilationWithStrideAndBatch) {
     Conv3dCase c;
     c.N = 2;
     c.in_size = {7, 8, 9};
-    c.C_in = 64;
-    c.C_out = 64;
-    c.groups = 2;
     c.dilation = {2, 1, 2};
     c.stride = {1, 2, 1};
-    c.padding = {2, 1, 2};
     run_case(c);
 }
 
@@ -317,63 +285,18 @@ TEST_F(Conv3dOpTest, NIGHTLY_PerAxisDilation) {
     Conv3dCase c;
     c.in_size = {6, 8, 10};
     c.dilation = {1, 2, 3};
-    c.padding = {1, 2, 3};
-    run_case(c);
-}
-
-// span = dil * (k - 1) = 4 on every axis; padding 5 exceeds it, so dX takes the crop path with a dilated kernel.
-TEST_F(Conv3dOpTest, NIGHTLY_DilationWithPaddingBeyondSpan) {
-    Conv3dCase c;
-    c.in_size = {5, 6, 7};
-    c.dilation = {2, 2, 2};
-    c.padding = {5, 5, 5};
-    run_case(c);
-}
-
-TEST_F(Conv3dOpTest, NIGHTLY_GroupsWithDilationAndUnalignedChannels) {
-    Conv3dCase c;
-    c.in_size = {5, 6, 7};
-    c.C_in = 24;
-    c.C_out = 40;
-    c.groups = 4;
-    c.dilation = {1, 2, 2};
-    c.padding = {1, 2, 2};
-    run_case(c);
-}
-
-TEST_F(Conv3dOpTest, PaddingLargerThanKernelSpanPointwise) {
-    Conv3dCase c;
-    c.kernel = {1, 1, 1};
-    c.padding = {1, 1, 1};
-    run_case(c);
-}
-
-// span 2 with padding above it: the dX crop path, unreachable from the pointwise case (span 0).
-TEST_F(Conv3dOpTest, PaddingLargerThanKernelSpan) {
-    Conv3dCase c;
-    c.padding = {3, 4, 3};
-    run_case(c);
-}
-
-TEST_F(Conv3dOpTest, NIGHTLY_PaddingLargerThanKernelSpanWithStride) {
-    Conv3dCase c;
-    c.N = 2;
-    c.stride = {2, 2, 2};
-    c.padding = {3, 3, 3};
     run_case(c);
 }
 
 TEST_F(Conv3dOpTest, NIGHTLY_OutputChannelsNotTileAligned) {
     Conv3dCase c;
     c.C_out = 40;
-    c.padding = {1, 1, 1};
     run_case(c);
 }
 
 TEST_F(Conv3dOpTest, NIGHTLY_InputChannelsNotTileAligned) {
     Conv3dCase c;
     c.C_in = 12;
-    c.padding = {1, 1, 1};
     run_case(c);
 }
 
@@ -383,16 +306,6 @@ TEST_F(Conv3dOpTest, InputAndOutputChannelsNotTileAligned) {
     c.C_out = 40;
     c.N = 2;
     c.stride = {2, 1, 2};
-    c.padding = {1, 1, 1};
-    run_case(c);
-}
-
-TEST_F(Conv3dOpTest, NIGHTLY_GroupsWithUnalignedChannels) {
-    Conv3dCase c;
-    c.C_in = 24;
-    c.C_out = 16;
-    c.groups = 2;
-    c.padding = {1, 1, 1};
     run_case(c);
 }
 
@@ -418,7 +331,6 @@ TEST_F(Conv3dOpTest, PatchEmbedKernel) {
 TEST_F(Conv3dOpTest, NIGHTLY_AsymmetricOddKernel) {
     Conv3dCase c;
     c.kernel = {1, 3, 3};
-    c.padding = {0, 1, 1};
     run_case(c);
 }
 
@@ -429,49 +341,25 @@ TEST_F(Conv3dOpTest, NIGHTLY_EvenCubicKernelWithStride) {
     run_case(c);
 }
 
-// dW and db reduce over M = 2 * 8 * 48 * 48 = 36864 output positions, the accumulation length of a video layer;
+// dW and db reduce over M = 2 * 6 * 46 * 46 = 25392 output positions, the accumulation length of a video layer;
 // sums that long are compared by relative L2, since elementwise bounds are unstable on them.
 TEST_F(Conv3dOpTest, NIGHTLY_VideoSizedReduction) {
     Conv3dCase c;
     c.N = 2;
     c.in_size = {8, 48, 48};
-    c.padding = {1, 1, 1};
     c.relative_l2_tolerance = 1e-2F;
-    run_case(c);
-}
-
-TEST_F(Conv3dOpTest, NIGHTLY_Groups) {
-    Conv3dCase c;
-    c.C_in = 64;
-    c.C_out = 32;
-    c.groups = 2;
-    c.padding = {1, 1, 1};
-    run_case(c);
-}
-
-TEST_F(Conv3dOpTest, NIGHTLY_GroupsWithStrideAndBatch) {
-    Conv3dCase c;
-    c.N = 2;
-    c.C_in = 64;
-    c.C_out = 64;
-    c.groups = 4;
-    c.stride = {2, 2, 2};
-    c.padding = {1, 1, 1};
-    c.in_size = {5, 6, 7};
     run_case(c);
 }
 
 TEST_F(Conv3dOpTest, TileLayoutTensors) {
     Conv3dCase c;
     c.layout = ttnn::Layout::TILE;
-    c.padding = {1, 1, 1};
     run_case(c);
 }
 
 TEST_F(Conv3dOpTest, OneDimensionalBias) {
     Conv3dCase c;
     c.bias_rank1 = true;
-    c.padding = {1, 1, 1};
     run_case(c);
 }
 
@@ -479,18 +367,15 @@ TEST_F(Conv3dOpTest, NIGHTLY_LargerChannelCounts) {
     Conv3dCase c;
     c.C_in = 128;
     c.C_out = 128;
-    c.padding = {1, 1, 1};
     run_case(c);
 }
 
-TEST_F(Conv3dOpTest, TileLayoutUnalignedGroupedBatch) {
+TEST_F(Conv3dOpTest, TileLayoutUnalignedChannelsWithBatch) {
     Conv3dCase c;
     c.layout = ttnn::Layout::TILE;
     c.N = 2;
     c.C_in = 24;
     c.C_out = 40;
-    c.groups = 2;
-    c.padding = {1, 1, 1};
     run_case(c);
 }
 
@@ -498,14 +383,12 @@ TEST_F(Conv3dOpTest, FrozenWeightAndBias) {
     Conv3dCase c;
     c.weight_requires_grad = false;
     c.bias_requires_grad = false;
-    c.padding = {1, 1, 1};
     run_case(c);
 }
 
 TEST_F(Conv3dOpTest, FrozenInput) {
     Conv3dCase c;
     c.input_requires_grad = false;
-    c.padding = {1, 1, 1};
     run_case(c);
 }
 
@@ -525,12 +408,13 @@ TEST_F(Conv3dOpTest, NoGradientsRequested) {
 }
 
 TEST_F(Conv3dOpTest, PreparedWeightsMatchOnTheFlyPreparation) {
-    const Conv3dCase c{.C_in = 64, .C_out = 40, .padding = {1, 1, 1}, .groups = 2};
+    const Conv3dCase c{.C_in = 64, .C_out = 40};
+    const auto out = c.out_size();
     const auto [D, H, W] = c.in_size;
     const auto [kD, kH, kW] = c.kernel;
     const ttnn::Shape input_shape({c.N, D, H, W, c.C_in});
-    const ttnn::Shape weight_shape({c.C_out, c.C_in / c.groups, kD, kH, kW});
-    const ttnn::Shape output_shape({c.N, 4U, 5U, 6U, c.C_out});
+    const ttnn::Shape weight_shape({c.C_out, c.C_in, kD, kH, kW});
+    const ttnn::Shape output_shape({c.N, out[0], out[1], out[2], c.C_out});
     auto* device = &ttml::autograd::ctx().get_device();
 
     auto input = ttml::autograd::create_tensor(
@@ -539,7 +423,7 @@ TEST_F(Conv3dOpTest, PreparedWeightsMatchOnTheFlyPreparation) {
         ttml::core::from_xtensor(uniform(weight_shape, -0.5F, 0.5F, 22), device, c.layout), true);
     auto grad_output = ttml::core::from_xtensor(uniform(output_shape, -1.F, 1.F, 23), device, c.layout);
 
-    auto reference = ttml::ops::conv3d(input, weight, nullptr, c.stride, c.padding, c.dilation, c.groups);
+    auto reference = ttml::ops::conv3d(input, weight, nullptr, c.stride, c.dilation);
     reference->set_grad(grad_output);
     reference->backward();
     const auto ref_out = ttml::core::to_xtensor(reference->get_value());
@@ -549,19 +433,17 @@ TEST_F(Conv3dOpTest, PreparedWeightsMatchOnTheFlyPreparation) {
     weight->set_grad(ttnn::Tensor());
     ttml::autograd::ctx().reset_graph();
 
-    const auto prepared = ttml::ops::prepare_conv3d_weight(weight->get_value(), c.groups);
-    ASSERT_EQ(prepared.forward.size(), c.groups);
-    ASSERT_EQ(prepared.transposed.size(), c.groups);
+    // C_in block 32 for an odd kernel volume: 64 input channels stay, 40 output channels pad to 64 in both roles.
+    const auto prepared = ttml::ops::prepare_conv3d_weight(weight->get_value());
     const uint32_t kvol = kD * kH * kW;
-    for (uint32_t g = 0; g < c.groups; ++g) {
-        EXPECT_EQ(prepared.forward[g].logical_shape(), ttnn::Shape({kvol * 32U, 32U}));
-        EXPECT_EQ(prepared.forward[g].layout(), ttnn::Layout::TILE);
-        EXPECT_EQ(prepared.transposed[g].logical_shape(), ttnn::Shape({kvol * 32U, 32U}));
-        EXPECT_EQ(prepared.transposed[g].layout(), ttnn::Layout::TILE);
-        EXPECT_TRUE(ttnn::is_device_tensor(prepared.forward[g]));
-    }
     EXPECT_EQ(prepared.c_in_block, 32U);
-    auto result = ttml::ops::conv3d(input, weight, nullptr, prepared, c.stride, c.padding, c.dilation, c.groups);
+    EXPECT_EQ(prepared.forward.logical_shape(), ttnn::Shape({kvol * 64U, 64U}));
+    EXPECT_EQ(prepared.forward.layout(), ttnn::Layout::TILE);
+    EXPECT_TRUE(ttnn::is_device_tensor(prepared.forward));
+    ASSERT_TRUE(prepared.transposed.has_value());
+    EXPECT_EQ(prepared.transposed->logical_shape(), ttnn::Shape({kvol * 64U, 64U}));
+    EXPECT_EQ(prepared.transposed->layout(), ttnn::Layout::TILE);
+    auto result = ttml::ops::conv3d(input, weight, nullptr, prepared, c.stride, c.dilation);
     result->set_grad(grad_output);
     result->backward();
 
@@ -569,23 +451,20 @@ TEST_F(Conv3dOpTest, PreparedWeightsMatchOnTheFlyPreparation) {
     EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(input->get_grad()), ref_dx))) << "prepared grad_input";
     EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(weight->get_grad()), ref_dw))) << "prepared grad_weight";
 
-    const auto other = ttml::ops::prepare_conv3d_weight(weight->get_value(), /*groups=*/1);
-    EXPECT_THROW(
-        ttml::ops::conv3d(input, weight, nullptr, other, c.stride, c.padding, c.dilation, c.groups),
-        std::invalid_argument);
+    const ttnn::Shape other_shape({c.C_out + 32U, c.C_in, kD, kH, kW});
+    const auto other = ttml::ops::prepare_conv3d_weight(
+        ttml::core::from_xtensor(uniform(other_shape, -0.5F, 0.5F, 24), device, c.layout));
+    EXPECT_THROW(ttml::ops::conv3d(input, weight, nullptr, other, c.stride, c.dilation), std::invalid_argument);
     // raw rank-5 weight smuggled into the struct
     auto tampered = prepared;
-    tampered.forward[0] = weight->get_value();
-    EXPECT_THROW(
-        ttml::ops::conv3d(input, weight, nullptr, tampered, c.stride, c.padding, c.dilation, c.groups),
-        std::invalid_argument);
-    const auto forward_only =
-        ttml::ops::prepare_conv3d_weight(weight->get_value(), c.groups, /*with_transposed=*/false);
-    EXPECT_TRUE(forward_only.transposed.empty());
+    tampered.forward = weight->get_value();
+    EXPECT_THROW(ttml::ops::conv3d(input, weight, nullptr, tampered, c.stride, c.dilation), std::invalid_argument);
+    const auto forward_only = ttml::ops::prepare_conv3d_weight(weight->get_value(), /*with_transposed=*/false);
+    EXPECT_FALSE(forward_only.transposed.has_value());
     input->set_grad(ttnn::Tensor());
     weight->set_grad(ttnn::Tensor());
     ttml::autograd::ctx().reset_graph();
-    auto lazy = ttml::ops::conv3d(input, weight, nullptr, forward_only, c.stride, c.padding, c.dilation, c.groups);
+    auto lazy = ttml::ops::conv3d(input, weight, nullptr, forward_only, c.stride, c.dilation);
     lazy->set_grad(grad_output);
     lazy->backward();
     EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(input->get_grad()), ref_dx)))
@@ -594,12 +473,13 @@ TEST_F(Conv3dOpTest, PreparedWeightsMatchOnTheFlyPreparation) {
 
 // The op reads the autograd weight at bf16, so a prepared weight built from fp32 storage must match that view.
 TEST_F(Conv3dOpTest, PreparedWeightsFromFloat32Storage) {
-    const Conv3dCase c{.padding = {1, 1, 1}};
+    const Conv3dCase c;
+    const auto out = c.out_size();
     const auto [D, H, W] = c.in_size;
     const auto [kD, kH, kW] = c.kernel;
     const ttnn::Shape input_shape({c.N, D, H, W, c.C_in});
     const ttnn::Shape weight_shape({c.C_out, c.C_in, kD, kH, kW});
-    const ttnn::Shape output_shape({c.N, 4U, 5U, 6U, c.C_out});
+    const ttnn::Shape output_shape({c.N, out[0], out[1], out[2], c.C_out});
     auto* device = &ttml::autograd::ctx().get_device();
 
     auto input = ttml::autograd::create_tensor(
@@ -612,7 +492,7 @@ TEST_F(Conv3dOpTest, PreparedWeightsFromFloat32Storage) {
     ASSERT_EQ(weight->get_value(ttml::autograd::PreferredPrecision::FULL).dtype(), ttnn::DataType::FLOAT32);
     ASSERT_EQ(weight->get_value().dtype(), ttnn::DataType::BFLOAT16);
 
-    auto reference = ttml::ops::conv3d(input, weight, nullptr, c.stride, c.padding);
+    auto reference = ttml::ops::conv3d(input, weight);
     reference->set_grad(grad_output);
     reference->backward();
     const auto ref_out = ttml::core::to_xtensor(reference->get_value());
@@ -622,14 +502,12 @@ TEST_F(Conv3dOpTest, PreparedWeightsFromFloat32Storage) {
     weight->set_grad(ttnn::Tensor());
     ttml::autograd::ctx().reset_graph();
 
-    const auto prepared =
-        ttml::ops::prepare_conv3d_weight(weight->get_value(ttml::autograd::PreferredPrecision::FULL), c.groups);
-    ASSERT_EQ(prepared.forward.size(), 1U);
-    ASSERT_EQ(prepared.transposed.size(), 1U);
-    EXPECT_EQ(prepared.forward[0].dtype(), ttnn::DataType::BFLOAT16);
-    EXPECT_EQ(prepared.transposed[0].dtype(), ttnn::DataType::BFLOAT16);
+    const auto prepared = ttml::ops::prepare_conv3d_weight(weight->get_value(ttml::autograd::PreferredPrecision::FULL));
+    ASSERT_TRUE(prepared.transposed.has_value());
+    EXPECT_EQ(prepared.forward.dtype(), ttnn::DataType::BFLOAT16);
+    EXPECT_EQ(prepared.transposed->dtype(), ttnn::DataType::BFLOAT16);
 
-    auto result = ttml::ops::conv3d(input, weight, nullptr, prepared, c.stride, c.padding);
+    auto result = ttml::ops::conv3d(input, weight, nullptr, prepared);
     result->set_grad(grad_output);
     result->backward();
     EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(result->get_value()), ref_out)))
@@ -640,10 +518,9 @@ TEST_F(Conv3dOpTest, PreparedWeightsFromFloat32Storage) {
         << "fp32-storage prepared grad_weight";
 }
 
-// Every training step must hit the program cache: a miss in any of the composed ttnn ops would recompile per step.
 // A prepared weight is a snapshot: after the parameter's value changes it computes with the old values.
 TEST_F(Conv3dOpTest, PreparedWeightsAreASnapshotOfTheWeight) {
-    const Conv3dCase c{.padding = {1, 1, 1}};
+    const Conv3dCase c;
     const auto [D, H, W] = c.in_size;
     const auto [kD, kH, kW] = c.kernel;
     const ttnn::Shape input_shape({c.N, D, H, W, c.C_in});
@@ -657,27 +534,24 @@ TEST_F(Conv3dOpTest, PreparedWeightsAreASnapshotOfTheWeight) {
     const auto new_weight = ttml::core::from_xtensor(uniform(weight_shape, -0.5F, 0.5F, 53), device, c.layout);
 
     auto weight = ttml::autograd::create_tensor(old_weight);
-    const auto prepared = ttml::ops::prepare_conv3d_weight(weight->get_value(), c.groups);
-    const auto with_old =
-        ttml::core::to_xtensor(ttml::ops::conv3d(input, weight, nullptr, c.stride, c.padding)->get_value());
+    const auto prepared = ttml::ops::prepare_conv3d_weight(weight->get_value());
+    const auto with_old = ttml::core::to_xtensor(ttml::ops::conv3d(input, weight)->get_value());
 
     weight->set_value(new_weight);
-    const auto with_new =
-        ttml::core::to_xtensor(ttml::ops::conv3d(input, weight, nullptr, c.stride, c.padding)->get_value());
-    const auto stale =
-        ttml::core::to_xtensor(ttml::ops::conv3d(input, weight, nullptr, prepared, c.stride, c.padding)->get_value());
+    const auto with_new = ttml::core::to_xtensor(ttml::ops::conv3d(input, weight)->get_value());
+    const auto stale = ttml::core::to_xtensor(ttml::ops::conv3d(input, weight, nullptr, prepared)->get_value());
 
     EXPECT_TRUE(xt::all(xt::equal(stale, with_old))) << "stale prepared weight equals the old weight's output";
     EXPECT_GT(xt::amax(xt::abs(stale - with_new))(), 0.1F) << "stale prepared weight must not track the updated weight";
 }
 
+// Every training step must hit the program cache: a miss in any of the composed ttnn ops would recompile per step.
 TEST_F(Conv3dOpTest, ProgramCacheStableAcrossSteps) {
     auto* device = &ttml::autograd::ctx().get_device();
     Conv3dCase c;
     c.N = 2;
     c.C_out = 40;
     c.stride = {1, 2, 2};
-    c.padding = {1, 1, 1};
     const auto out = c.out_size();
     const auto [D, H, W] = c.in_size;
     const auto [kD, kH, kW] = c.kernel;
@@ -693,7 +567,7 @@ TEST_F(Conv3dOpTest, ProgramCacheStableAcrossSteps) {
             ttml::core::from_xtensor(uniform(weight_shape, -0.5F, 0.5F, seed + 1), device, c.layout), true);
         auto bias = ttml::autograd::create_tensor(
             ttml::core::from_xtensor(uniform(bias_shape, -1.F, 1.F, seed + 2), device, c.layout), true);
-        auto result = ttml::ops::conv3d(input, weight, bias, c.stride, c.padding, c.dilation, c.groups);
+        auto result = ttml::ops::conv3d(input, weight, bias, c.stride, c.dilation);
         result->set_grad(ttml::core::from_xtensor(uniform(output_shape, -1.F, 1.F, seed + 3), device, c.layout));
         result->backward();
         ttml::autograd::ctx().reset_graph();
@@ -757,51 +631,16 @@ TEST_F(Conv3dOpTest, RejectsUnsupportedArguments) {
     auto weight = zeros(weight_shape);
 
     const Dims3 unit{1, 1, 1};
-    const Dims3 none{0, 0, 0};
 
-    // weight has 32 input columns, so groups=2 would need 64 input channels
-    EXPECT_THROW(
-        ttml::ops::conv3d(input, weight, nullptr, /*stride=*/unit, /*padding=*/none, /*dilation=*/unit, /*groups=*/0),
-        std::invalid_argument);
-    EXPECT_THROW(
-        ttml::ops::conv3d(input, weight, nullptr, /*stride=*/unit, /*padding=*/none, /*dilation=*/unit, /*groups=*/2),
-        std::invalid_argument);
-    EXPECT_THROW(
-        ttml::ops::conv3d(
-            zeros(ttnn::Shape({c.N, D, H, W, 96U})),
-            zeros(weight_shape),
-            nullptr,
-            /*stride=*/unit,
-            /*padding=*/none,
-            /*dilation=*/unit,
-            /*groups=*/3),
-        std::invalid_argument);
-    EXPECT_THROW(
-        ttml::ops::conv3d(
-            input, weight, nullptr, /*stride=*/unit, /*padding=*/none, /*dilation=*/unit, /*groups=*/1, "replicate"),
-        std::invalid_argument);
     EXPECT_THROW(ttml::ops::conv3d(input, weight, nullptr, /*stride=*/{0, 1, 1}), std::invalid_argument);
     EXPECT_THROW(
-        ttml::ops::conv3d(input, weight, nullptr, /*stride=*/unit, /*padding=*/none, /*dilation=*/{1, 0, 1}),
-        std::invalid_argument);
-    // dilation 3 makes the effective kernel 7 > D = 4 with no padding
+        ttml::ops::conv3d(input, weight, nullptr, /*stride=*/unit, /*dilation=*/{1, 0, 1}), std::invalid_argument);
+    // dilation 3 makes the effective kernel 7 > D = 4
     EXPECT_THROW(
-        ttml::ops::conv3d(input, weight, nullptr, /*stride=*/unit, /*padding=*/none, /*dilation=*/{3, 1, 1}),
-        std::invalid_argument);
+        ttml::ops::conv3d(input, weight, nullptr, /*stride=*/unit, /*dilation=*/{3, 1, 1}), std::invalid_argument);
     EXPECT_THROW(ttml::ops::conv3d(zeros(ttnn::Shape({D, H, W, c.C_in})), weight), std::invalid_argument);
     EXPECT_THROW(ttml::ops::conv3d(input, zeros(ttnn::Shape({c.C_out, c.C_in, kD, kH}))), std::invalid_argument);
     EXPECT_THROW(ttml::ops::conv3d(input, zeros(ttnn::Shape({c.C_out, 64U, kD, kH, kW}))), std::invalid_argument);
-    // consistent weight shape, C_in not divisible by groups
-    EXPECT_THROW(
-        ttml::ops::conv3d(
-            zeros(ttnn::Shape({c.N, D, H, W, 30U})),
-            zeros(ttnn::Shape({c.C_out, 15U, kD, kH, kW})),
-            nullptr,
-            /*stride=*/unit,
-            /*padding=*/none,
-            /*dilation=*/unit,
-            /*groups=*/4),
-        std::invalid_argument);
     // float tensors are read at bf16, so only a non-float dtype can mismatch
     {
         auto weight_u32 = ttml::autograd::create_tensor(ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
@@ -860,17 +699,18 @@ TEST_F(Conv3dOpTest, RejectsHostDeallocatedAndMistypedTensors) {
 
     const auto prepared = ttml::ops::prepare_conv3d_weight(weight->get_value());
     EXPECT_NO_THROW(ttml::ops::conv3d(input, weight, bias, prepared));
-    const ttnn::Shape form_shape = prepared.forward[0].logical_shape();
+    const ttnn::Shape form_shape = prepared.forward.logical_shape();
 
     auto host_form = prepared;
-    host_form.forward[0] = prepared.forward[0].cpu();
+    host_form.forward = prepared.forward.cpu();
     EXPECT_THROW(ttml::ops::conv3d(input, weight, bias, host_form), std::invalid_argument);
 
     auto freed_form = ttml::ops::prepare_conv3d_weight(weight->get_value());
-    freed_form.transposed[0].deallocate();
+    ASSERT_TRUE(freed_form.transposed.has_value());
+    freed_form.transposed->deallocate();
     EXPECT_THROW(ttml::ops::conv3d(input, weight, bias, freed_form), std::invalid_argument);
 
     auto mistyped_form = prepared;
-    mistyped_form.forward[0] = u32_value(form_shape, ttnn::Layout::TILE);
+    mistyped_form.forward = u32_value(form_shape, ttnn::Layout::TILE);
     EXPECT_THROW(ttml::ops::conv3d(input, weight, bias, mistyped_form), std::invalid_argument);
 }
