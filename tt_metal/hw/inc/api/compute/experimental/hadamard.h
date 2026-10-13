@@ -8,8 +8,10 @@
 // default) or Y = H_128 * x (normalize=false) using the FPU/MM path.
 // See llk_math_hadamard.h for the algorithmic derivation.
 //
-// All operands are 1-face [16, 16] tiles; the inputs are bfloat16 and
-// the result is packed out as bfp8 (bfloat8_b). The math is a custom
+// The unpackers run on a single-face [16, 16] config; h16 and out are
+// 1-face [16, 16] tiles, and the input is 128 contiguous datums in any
+// tile shape (see in_cb below). The inputs are bfloat16 and the result is
+// packed out as bfp8 (bfloat8_b). The math is a custom
 // narrow MOP: one (LoFi) or two (high-fidelity) MVMULs per matmul pass
 // with a MOVD2B bridge, then an SFPU element-wise scale when normalize
 // is true. H_16 is streamed into srcA bank 1 by the unpack thread
@@ -68,7 +70,7 @@ namespace ckernel {
  *
  * | Argument         | Description                                                            | Type     | Valid Range            | Required              |
  * |------------------|------------------------------------------------------------------------|----------|------------------------|-----------------------|
- * | in_cb_id         | The 1x128 input vector tile ([16, 16]; padding auto-zeroed on unpack)  | uint32_t | 0 to 31                | True                  |
+ * | in_cb_id         | The 1x128 input vector (128 contiguous bf16; any tile shape)           | uint32_t | 0 to 31                | True                  |
  * | h16_cb_id        | The H_16 weight tile ([16, 16], H_16 fills the single face)            | uint32_t | 0 to 31                | True                  |
  * | out_cb_id        | The 1x128 output vector tile ([16, 16], result in rows 0..7)           | uint32_t | 0 to 31                | True                  |
  * | fp32_dest_acc_en | Whether to enable fp32 accumulation in dest                            | bool     | true/false             | False (default off)   |
@@ -114,9 +116,9 @@ ALWI void hadamard_h128_init_short(const uint32_t in_cb_id, const uint32_t h16_c
  *
  * | Argument         | Description                                                  | Type     | Valid Range                                    | Required              |
  * |------------------|--------------------------------------------------------------|----------|------------------------------------------------|-----------------------|
- * | in_cb_id         | CB holding the 1x128 input tile (padding auto-zeroed)        | uint32_t | 0 to 31                                        | True                  |
+ * | in_cb_id         | CB holding the 1x128 input (128 contiguous bf16)             | uint32_t | 0 to 31                                        | True                  |
  * | h16_cb_id        | CB holding the H_16 weight tile (H_16 fills the face)        | uint32_t | 0 to 31                                        | True                  |
- * | in_tile_index    | Index of the input tile within in_cb_id                      | uint32_t | < CB size                                      | True                  |
+ * | in_tile_index    | Page index where the input vector starts in in_cb_id         | uint32_t | < CB size                                      | True                  |
  * | h16_tile_index   | Index of the H_16 tile within h16_cb_id                      | uint32_t | < CB size                                      | True                  |
  * | dst_index        | DST register index that will receive the result Y            | uint32_t | < acquired DST size                            | True                  |
  */

@@ -20,14 +20,25 @@
 namespace tt::tt_metal {
 namespace {
 
+// input_tile/input_pages set how c_0 carries each 128-datum vector: one
+// [16, 16] page (data in the top 8 rows), or four [1, 32] pages (two faces
+// each). The unpack reads 128 contiguous datums either way.
 void run_hadamard_reconfiguration(
-    distributed::MeshDevice& mesh, MathFidelity fidelity, bool normalize, bool fp32_dest, bool full_sync) {
+    distributed::MeshDevice& mesh,
+    MathFidelity fidelity,
+    bool normalize,
+    bool fp32_dest,
+    bool full_sync,
+    const Tile& input_tile = Tile({16, 16}),
+    std::uint32_t input_pages = 1) {
     constexpr std::uint32_t count = 3;
     constexpr std::uint32_t face_elements = 256;
     constexpr std::uint32_t vector_length = 128;
     const Tile face({16, 16});
     const Tile full_tile;
-    const auto input_bytes = face.get_tile_size(tt::DataFormat::Float16_b);
+    const auto input_bytes = input_pages * input_tile.get_tile_size(tt::DataFormat::Float16_b);
+    const auto input_elements = input_bytes / sizeof(bfloat16);
+    const auto weights_bytes = face.get_tile_size(tt::DataFormat::Float16_b);
     const auto output_bytes = face.get_tile_size(tt::DataFormat::Bfp8_b);
     const auto copy_bytes = full_tile.get_tile_size(tt::DataFormat::Float16_b);
     const CoreCoord core{0, 0};
@@ -40,7 +51,7 @@ void run_hadamard_reconfiguration(
             &mesh);
     };
     auto input = buffer(input_bytes);
-    auto weights = buffer(input_bytes);
+    auto weights = buffer(weights_bytes);
     auto copy_input = buffer(copy_bytes);
     auto output = buffer(output_bytes);
     auto copy_output = buffer(copy_bytes);
@@ -53,9 +64,9 @@ void run_hadamard_reconfiguration(
                 .set_page_size(index, bytes)
                 .set_tile_dims(index, shape));
     };
-    // reader_binary loads c_0/c_1 first, then c_2. They must fit in their
+    // reader_hadamard loads c_0/c_1 first, then c_2. They must fit in their
     // entirety, and H16 must remain resident while its address is in unpacker context 1.
-    cb(tt::CBIndex::c_0, tt::DataFormat::Float16_b, face, count);
+    cb(tt::CBIndex::c_0, tt::DataFormat::Float16_b, input_tile, count * input_pages);
     cb(tt::CBIndex::c_1, tt::DataFormat::Float16_b, face, count);
     cb(tt::CBIndex::c_2, tt::DataFormat::Float16_b, full_tile, 1);
     cb(tt::CBIndex::c_16, tt::DataFormat::Bfp8_b, face, 1);
@@ -63,12 +74,9 @@ void run_hadamard_reconfiguration(
 
     const auto reader = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_hadamard.cpp",
         core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .defines = {{"LOAD_BUF2_DATA", "1"}}});
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     const auto writer = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_binary.cpp",
@@ -83,9 +91,9 @@ void run_hadamard_reconfiguration(
             .fp32_dest_acc_en = fp32_dest,
             .dst_full_sync_en = full_sync,
             .math_approx_mode = false,
-            .compile_args = {count, static_cast<std::uint32_t>(normalize)}});
+            .compile_args = {count, static_cast<std::uint32_t>(normalize), input_pages}});
 
-    std::vector<bfloat16> inputs(count * face_elements);
+    std::vector<bfloat16> inputs(count * input_elements);
     std::vector<bfloat16> h16(count * face_elements);
     std::vector<bfloat16> copies(count * 1024);
     std::vector<float> golden(count * face_elements, 0.0f);
@@ -94,9 +102,11 @@ void run_hadamard_reconfiguration(
         // Distinct Walsh basis vectors have a single H128 output at the
         // corresponding row. This golden does not duplicate the two-pass LLK.
         const float sign = tile % 2 == 0 ? 1.0f : -1.0f;
-        for (std::uint32_t i = 0; i < face_elements; ++i) {
-            inputs[tile * face_elements + i] =
+        for (std::uint32_t i = 0; i < input_elements; ++i) {
+            inputs[tile * input_elements + i] =
                 bfloat16(i < vector_length ? sign * (std::popcount(i & rows[tile]) % 2 == 0 ? 1.0f : -1.0f) : 7.0f);
+        }
+        for (std::uint32_t i = 0; i < face_elements; ++i) {
             h16[tile * face_elements + i] = bfloat16(std::popcount((i / 16) & (i % 16)) % 2 == 0 ? 1.0f : -1.0f);
         }
         const auto expected = sign * (normalize ? std::sqrt(128.0f) : 128.0f);
@@ -118,7 +128,7 @@ void run_hadamard_reconfiguration(
     distributed::EnqueueWriteMeshBuffer(cq, weights, pack_bfloat16_vec_into_uint32_vec(h16), true);
     distributed::EnqueueWriteMeshBuffer(cq, copy_input, packed_copies, true);
     SetRuntimeArgs(
-        program, reader, core, {input->address(), 0, weights->address(), 0, count, copy_input->address(), 0});
+        program, reader, core, {input->address(), weights->address(), copy_input->address(), count, input_pages});
     SetRuntimeArgs(
         program,
         writer,
@@ -154,6 +164,26 @@ TEST_F(LLKBlackholeSingleCardFixture, HadamardShortInitPreservesDestState) {
                     run_hadamard_reconfiguration(*devices_.at(0), fidelity, normalize, fp32_dest, full_sync);
                 }
             }
+        }
+    }
+}
+
+// Regression: each input vector arrives as four [1, 32] pages (two faces per
+// tile), as from a RoPE stage. The unpack ignores the input's tile shape, so
+// this must match the [16, 16] result and pass with LLK asserts on.
+TEST_F(LLKBlackholeSingleCardFixture, HadamardMultiFaceInput) {
+    for (const auto fidelity : {MathFidelity::LoFi, MathFidelity::HiFi4}) {
+        for (const bool normalize : {false, true}) {
+            SCOPED_TRACE(
+                ::testing::Message() << "fidelity=" << static_cast<int>(fidelity) << ", normalize=" << normalize);
+            run_hadamard_reconfiguration(
+                *devices_.at(0),
+                fidelity,
+                normalize,
+                /*fp32_dest=*/false,
+                /*full_sync=*/false,
+                Tile({1, 32}),
+                /*input_pages=*/4);
         }
     }
 }
