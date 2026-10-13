@@ -87,6 +87,9 @@ W_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}[os.environ.get("GLM_ML
 # is all-gathered (one full-mesh snake, ttnn.bringup.fabric_all_gather) into one scratch shared by every layer; sparse_sdpa reads
 # it in place with the natural -> block-cyclic index remap. The chunk size is fixed per sequence.
 STRIPED = os.environ.get("GLM_MLA_STRIPED", "1") == "1"
+# local stripe rows: a multiple of every chunk's per-chip stripe (2048/5120/8192 -> 256/640/1024 rows), so the
+# cache splits into whole stripes for any chunk size (sparse_sdpa requires T/sp % chunk_local == 0)
+LATENT_LOCAL_ROWS_ALIGN = 5120
 _SCRATCH = {}  # (mesh id, rows) -> the replicated [1, 1, rows, 512] gather scratch, shared by the DSA layers
 
 
@@ -137,7 +140,7 @@ class TtMLA:
         self.qb_cfg = minimal_config(mesh, 2, 8, 8, 1, 4)
         self.striped = striped and STRIPED and self.ndev > 1
         if self.striped:
-            self.local_rows = -(-max_seq // self.ndev // 32) * 32  # per-chip stripe rows
+            self.local_rows = -(-max_seq // self.ndev // LATENT_LOCAL_ROWS_ALIGN) * LATENT_LOCAL_ROWS_ALIGN
             self.cache = striped_latent_cache(mesh, cfg, self.local_rows)
             self.chunk = None  # the sequence's chunk size, fixed by its first chunk
             self._pending = None  # natural-order prefix from load_state, striped once the chunk size is known
