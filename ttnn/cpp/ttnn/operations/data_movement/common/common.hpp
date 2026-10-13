@@ -437,9 +437,6 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor);
 // B/W-sh → shard_W*E (feeds split branch); other sharded → buffer->aligned_page_size() (16-aligned L1 stride).
 uint32_t per_shard_page_size_bytes(const ttnn::Tensor& tensor, uint32_t row_bytes);
 
-// Whether codegen programs may run on this machine. Allow-listed per arch so a new arch stays on
-// native until codegen is validated there; Quasar is excluded because it rejects the Gen1
-// DataMovementKernels codegen programs build.
 bool codegen_supported_on_arch();
 
 }  // namespace ttnn::operations::data_movement
