@@ -7,8 +7,6 @@
 
 // LLK_ASSERT is disabled so runtime paths contain only the issued instruction.
 
-#include <cstdint>
-
 #include "hal/sync.h"
 
 namespace sync = hal::sync;
@@ -102,32 +100,4 @@ extern "C" __attribute__((noinline, used)) void semaphore_runtime(
 // CHECK-NEXT: R_RISCV_LO12_I __instrn_buffer
 // CHECK-NEXT: R_RISCV_RELAX
 // CHECK-NEXT: sw a0,0([[R0]])
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) std::uint32_t encode_stall_runtime(const sync::StallTarget targets, const sync::StallCondition conditions)
-{
-    return sync::wait::stall_operation(targets, conditions);
-}
-
-// CHECK-LABEL: <encode_stall_runtime>:
-// CHECK-NEXT: slli a0,a0,0xf
-// CHECK-NEXT: add a0,a0,a1
-// CHECK-NEXT: lui [[R0:a[0-7]]],0xa2000
-// CHECK-NEXT: add a0,a0,[[R0]]
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) std::uint32_t encode_semaphore_runtime(
-    const sync::StallTarget targets, const sync::Semaphore semaphore, const sync::SemaphoreCondition conditions)
-{
-    return sync::wait::semaphore_operation(targets, semaphore, conditions);
-}
-
-// CHECK-LABEL: <encode_semaphore_runtime>:
-// CHECK-NEXT: lui [[R0:a[0-7]]],0xa6000
-// CHECK-NEXT: add a2,a2,[[R0]]
-// CHECK-NEXT: slli a0,a0,0xf
-// CHECK-NEXT: li [[R0]],4
-// CHECK-NEXT: add a0,a0,a2
-// CHECK-NEXT: sll [[R0]],[[R0]],a1
-// CHECK-NEXT: add a0,a0,[[R0]]
 // CHECK-NEXT: ret

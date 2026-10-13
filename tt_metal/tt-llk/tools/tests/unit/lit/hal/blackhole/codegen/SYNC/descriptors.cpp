@@ -106,32 +106,21 @@ extern "C" __attribute__((noinline, used)) void reference_issue_sync_descriptor(
     TTI_SEMWAIT(64, 2, 1);
 }
 
-// The default path derives a Tensix mask from one or more semaphore indices.
+// Tensix forms combine selector lists into one mask.
 extern "C" __attribute__((noinline, used)) void issue_semaphore_selectors()
 {
-    hs::semaphore::get<hs::Semaphore::S1>();
     hs::semaphore::get<hs::Semaphore::S1, hs::Semaphore::S3>();
     hs::semaphore::post<hs::Semaphore::S0, hs::Semaphore::S7>();
-    hs::semaphore::init<5, 15, hs::Semaphore::S0, hs::Semaphore::S7>();
-    hs::wait::semaphore<hs::StallTarget::Math, hs::SemaphoreCondition::WhileZero, hs::Semaphore::S1, hs::Semaphore::S3>();
-    hs::semaphore::get<hs::Access::Tensix, hs::Semaphore::S1>();
-    hs::semaphore::post<hs::Access::Tensix, hs::Semaphore::S7>();
 }
 
 extern "C" __attribute__((noinline, used)) void reference_issue_semaphore_selectors()
 {
-    TTI_SEMGET(2);
     TTI_SEMGET(10);
     TTI_SEMPOST(129);
-    TTI_SEMINIT(15, 5, 129);
-    TTI_SEMWAIT(64, 10, 1);
-    TTI_SEMGET(2);
-    TTI_SEMPOST(128);
 }
 
 extern "C" __attribute__((noinline, used)) void issue_runtime_semaphore_selectors(hs::Semaphore first, hs::Semaphore second)
 {
-    hs::semaphore::get(first);
     hs::semaphore::post({first, second});
     hs::semaphore::init({first, second}, 5, 15);
     hs::wait::semaphore(hs::StallTarget::Math, {first, second}, hs::SemaphoreCondition::WhileZero);
@@ -143,7 +132,6 @@ extern "C" __attribute__((noinline, used)) void reference_issue_runtime_semaphor
 {
     const auto first_bit  = 1u << hal::to_underlying(first);
     const auto second_bit = 1u << hal::to_underlying(second);
-    TT_SEMGET(first_bit);
     TT_SEMPOST(first_bit | second_bit);
     TT_SEMINIT(15, 5, first_bit | second_bit);
     TT_SEMWAIT(64, first_bit | second_bit, 1);

@@ -51,7 +51,17 @@ static_assert(
     hs::SemaphoreWait {hs::StallTarget::Math, hs::Semaphore::S1, hs::SemaphoreCondition::WhileZero | hs::SemaphoreCondition::WhileMaximum}.operation() ==
     0xa620000bu);
 
-// Existing accessors and execution forms remain usable.
+// Direct argument-taking encoders remain usable; descriptors cover their runtime codegen.
+static_assert(hs::mutex::acquire_operation(hs::Mutex::M4) == 0xa0000004u);
+static_assert(hs::mutex::release_operation(hs::Mutex::M3) == 0xa1000003u);
+static_assert(hs::semaphore::post_operation(hs::Semaphore::S7) == 0xa4000200u);
+static_assert(hs::semaphore::get_operation(hs::Semaphore::S7) == 0xa5000200u);
+static_assert(hs::wait::stall_operation(hs::StallTarget::Sfpu, hs::StallCondition::ConfigUnitIdle) == 0xa2801000u);
+static_assert(
+    hs::wait::semaphore_operation(hs::StallTarget::Math, hs::Semaphore::S1, hs::SemaphoreCondition::WhileZero | hs::SemaphoreCondition::WhileMaximum) ==
+    0xa620000bu);
+
+// Template encoders remain usable directly.
 static_assert(hs::mutex::acquire_operation<hs::Mutex::M4>() == 0xa0000004u);
 static_assert(
     hs::semaphore::post_operation<
