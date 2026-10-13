@@ -15,7 +15,7 @@ rules:
   - "Before committing, also run the op's existing correctness suites in tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/ (test_moe_grouped_topk.py, _stable, _ties, _state, _row_major_weights) and keep them passing."
 forbidden_patterns:
   - 'math_approx_mode\s*=\s*true'
-  - 'MathFidelity::(HiFi3|HiFi2|LoFi)'
+  - '\.math_fidelity\s*=\s*MathFidelity::(HiFi3|HiFi2|LoFi)'   # the op's ComputeConfigDescriptor; LLK headers name LoFi as defaults
 
 eval:
   command: >-
