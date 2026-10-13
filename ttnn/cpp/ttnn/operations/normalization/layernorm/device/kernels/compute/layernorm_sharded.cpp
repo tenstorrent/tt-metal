@@ -321,7 +321,10 @@ void kernel_main() {
                 dfb_ex_external.pop_front(1);
             }
             if (use_two_stage_reduce && !is_second_stage_reader) {
+                // The reader's placeholder push for the second stage this core does not combine; discard it.
+                // dummy_unpack orders the pop after the wait on Quasar (nothing unpacks these tiles).
                 dfb_ex_external.wait_front(static_cast<uint16_t>(num_blocks_second_stage - 1));
+                dummy_unpack(dfb_ex_external_id);
                 dfb_ex_external.pop_front(static_cast<uint16_t>(num_blocks_second_stage - 1));
             }
             tile_regs_commit();
@@ -490,7 +493,10 @@ void kernel_main() {
                 dfb_ex_external2.pop_front(1);
             }
             if (use_two_stage_reduce && !is_second_stage_reader) {
+                // The reader's placeholder push for the second stage this core does not combine; discard it.
+                // dummy_unpack orders the pop after the wait on Quasar (nothing unpacks these tiles).
                 dfb_ex_external2.wait_front(static_cast<uint16_t>(num_blocks_second_stage - 1));
+                dummy_unpack(dfb_ex_external2_id);
                 dfb_ex_external2.pop_front(static_cast<uint16_t>(num_blocks_second_stage - 1));
             }
             tile_regs_commit();
@@ -717,11 +723,13 @@ void kernel_main() {
     // The writer pushes one eps tile on every core, but only the cores that finish the variance read it (by
     // tile index, above). Wait and pop it here so it is consumed on every core.
     dfb_eps_obj.wait_front(1);
+    dummy_unpack(dfb_eps);
     dfb_eps_obj.pop_front(1);
 #ifdef OUT_SELF_LOOP
     // Without a write-back the output buffer has no reader: this kernel is its only producer and consumer.
     // Pop what it pushed so the buffer is left balanced.
     dfb_out.wait_front(num_tiles_per_block);
+    dummy_unpack(dfb_out_id);
     dfb_out.pop_front(num_tiles_per_block);
 #endif
 
