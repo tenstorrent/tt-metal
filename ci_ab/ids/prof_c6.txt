@@ -1,0 +1,3 @@
+tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features[output_layout=Layout.ROW_MAJOR-math_fidelity=MathFidelity.HiFi4-filter=3-padding=(1, 2, 2, 3)-packer_l1_acc=False-fp32_accum=False-input_dtype=DataType.BFLOAT16-output_dtype=DataType.BFLOAT16-output_channels=128-input_channels=128-input_height=32-input_width=32-shard_layout=TensorMemoryLayout.BLOCK_SHARDED-config=None-batch_size=2-stride=2-device_params={'l1_small_size': 16384}]
+models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_conv2d_block_sharded_sdxl
+models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_conv2d_auto_sliced_vae

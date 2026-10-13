@@ -15,7 +15,11 @@ def pytest_collection_modifyitems(session, config, items):
     if not sel:
         return
     wanted = {l.strip() for l in open(sel) if l.strip()}
-    keep = [it for it in items if it.nodeid in wanted or _base(it.nodeid) in wanted]
+    keep = [it for it in items if it.nodeid in wanted or _base(it.nodeid) in wanted or it.nodeid.split("[")[0] in wanted]
+    for it in items:
+        if "sdxl" in it.nodeid and "conv2d" in it.nodeid:
+            with open("/tmp/frsel.txt", "a") as f:
+                f.write(f"FRSEL {it in keep} {it.nodeid}\n")
     dropped = [it for it in items if it not in keep]
     if dropped:
         config.hook.pytest_deselected(items=dropped)
