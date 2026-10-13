@@ -12,6 +12,7 @@
 #include "api/compute/eltwise_unary/addcmul.h"
 #include "api/compute/eltwise_unary/addcdiv.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -75,7 +76,9 @@ void kernel_main() {
         dfb_llk_c.reserve_back(num_tiles_per_cycle);
         reconfig_data_format(dfb_in2.get_id(), dfb_in2.get_id());
         pack_reconfig_data_format(dfb_llk_c.get_id());
-        unary_bcast_init<BroadcastType::ROW>(dfb_in2.get_id());
+        if constexpr (!(BCAST_B && same_copy_init<tt::CBIndex::c_1, tt::CBIndex::c_2>())) {
+            unary_bcast_init<BroadcastType::ROW>(dfb_in2.get_id());
+        }
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(dfb_in2.get_id(), 0, 0);
         tile_regs_commit();
@@ -92,7 +95,11 @@ void kernel_main() {
         dfb_llk_a.reserve_back(num_tiles_per_cycle);
         reconfig_data_format(dfb_in0.get_id(), dfb_in0.get_id());
         pack_reconfig_data_format(dfb_llk_a.get_id());
-        unary_bcast_init<BroadcastType::ROW>(dfb_in0.get_id());
+        // The broadcast init right before (C's, else B's) programs the same when the inputs share formats
+        if constexpr (!(BCAST_C ? same_copy_init<tt::CBIndex::c_2, tt::CBIndex::c_0>()
+                                : (BCAST_B && same_copy_init<tt::CBIndex::c_1, tt::CBIndex::c_0>()))) {
+            unary_bcast_init<BroadcastType::ROW>(dfb_in0.get_id());
+        }
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(dfb_in0.get_id(), 0, 0);
         tile_regs_commit();
@@ -113,10 +120,18 @@ void kernel_main() {
         copy_init(dfb_eff_a.get_id());
         copy_tile(dfb_eff_a.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_init(dfb_eff_b.get_id());
+        if constexpr (!same_copy_init<
+                          BCAST_A ? tt::CBIndex::c_4 : tt::CBIndex::c_0,
+                          BCAST_B ? tt::CBIndex::c_5 : tt::CBIndex::c_1>()) {
+            copy_init(dfb_eff_b.get_id());
+        }
         copy_tile(dfb_eff_b.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        copy_init(dfb_eff_c.get_id());
+        if constexpr (!same_copy_init<
+                          BCAST_B ? tt::CBIndex::c_5 : tt::CBIndex::c_1,
+                          BCAST_C ? tt::CBIndex::c_6 : tt::CBIndex::c_2>()) {
+            copy_init(dfb_eff_c.get_id());
+        }
         copy_tile(dfb_eff_c.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
         TERNARY_SFPU_OP_INIT();

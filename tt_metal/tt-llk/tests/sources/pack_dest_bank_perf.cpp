@@ -69,7 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            for (int loop = 0; loop < LOOP_FACTOR; ++loop)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
                 {
@@ -134,7 +134,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            for (int loop = 0; loop < LOOP_FACTOR; ++loop)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
                 {
@@ -154,7 +154,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            for (int loop = 0; loop < LOOP_FACTOR; ++loop)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
                 {
@@ -250,6 +250,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         PROFILER_SYNC();
+    }
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    {
+        // Math posts one section more than the loop packs; release it only once it is posted.
+        _llk_packer_wait_for_math_done_();
     }
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
