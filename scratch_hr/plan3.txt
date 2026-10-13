@@ -1,0 +1,12 @@
+c main test_hr_fu_prof3.py
+c head test_hr_fu_prof3.py
+c fp test_hr_fu_prof3.py
+c fp test_hr_fu_prof3.py
+c head test_hr_fu_prof3.py
+c main test_hr_fu_prof3.py
+c main test_hr_fu_prof3.py
+c head test_hr_fu_prof3.py
+c fp test_hr_fu_prof3.py
+c fp test_hr_fu_prof3.py
+c head test_hr_fu_prof3.py
+c main test_hr_fu_prof3.py
