@@ -1166,3 +1166,8 @@ __attribute__((noinline)) void trace_only_init() {
 #ifndef DeviceZoneScopedNC
 #define DeviceZoneScopedNC(name, color) DeviceZoneScopedN(name)
 #endif
+
+// A zone with a user metadata type is recorded only by the streaming profiler; elsewhere it compiles to nothing.
+#ifndef DeviceZoneScopedWith
+#define DeviceZoneScopedWith(...) (void(sizeof(__VA_ARGS__)))
+#endif
