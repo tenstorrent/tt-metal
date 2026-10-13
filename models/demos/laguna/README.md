@@ -6,28 +6,48 @@
 [`poolside/Laguna-S-2.1`](https://huggingface.co/poolside/Laguna-S-2.1) (117.6B parameters, 8.45B active, 1M-token
 context) as an OpenAI-compatible vLLM server on four Blackhole ASICs (a TT-QuietBox 2 or four P150 cards).
 
-## Status (2026-10-10)
+## Status (2026-10-13)
+
+The first version of this branch (2026-10-06, commit `8a556f0422e`) vs now, both measured on 2026-10-13 with the
+same test, `demo/perf_direct.py` (no vLLM: device time plus reading the token back; the first version's model code run
+with this tree's tt-metal build). DFlash numbers: decode over the first 256 generated tokens.
+
+| | First version | Now | Speedup |
+|---|---:|---:|---:|
+| Batch-1 decode, 128 / 8K-token input | 18.6 / 18.3 tok/s | 90.0 / 84.8 tok/s | 4.8x / 4.6x |
+| Batch-1 TTFT, 128-token prompt | 199 ms | 60.5 ms | 3.3x |
+| Batch-1 TTFT, 8K-token prompt | 10.95 s | 0.72 s | 15x |
+| Batch-32 decode, 128 / 8K-token input | 12.3 / 11.1 tok/s/user | 32.6 / 25.1 tok/s/user | 2.7x / 2.3x |
+| Batch-32 TTFT (last of 32 users), 128 / 8K-token prompts | 6.41 / 350 s | 0.42 / 23.4 s | 15x / 15x |
+| Batch-1 DFlash, AIME24 / real text 128-8K | 28.4 / 17.8-20.6 tok/s | 172.4 / 117.4-126.5 tok/s | 6.1x / 6.1-6.7x |
+| Batch-32 DFlash, real text 128-8K | - (batch 1 only) | 25.2-33.8 tok/s/user | |
+
+The first version prefilled a batch-32 request one prompt at a time (no packed prefill); the test does the same for
+it.
 
 Against the targets (50% of speed of light, measured without vLLM, tables below):
 
-- Met: batch-1 TTFT at 128 tokens (61 ms vs 66 ms) and batch-32 decode at every length (25-32 vs 18-20 tok/s/user).
+- Met: batch-1 TTFT at 128 tokens (60.5 ms vs 66 ms) and batch-32 decode at every length (25-33 vs 18-20
+  tok/s/user).
 - Unhittable on this machine: each needs less time than work that cannot be removed already takes.
-  - Batch-1 decode without DFlash (83-88 vs 152-158 tok/s): needs 6.3-6.6 ms per token; weight reads at the best
+  - Batch-1 decode without DFlash (85-90 vs 152-158 tok/s): needs 6.3-6.6 ms per token; weight reads at the best
     measured 357 GB/s (4.5 ms), 96 all-reduces (1.3 ms), attention (1.1 ms) and LM head (0.4 ms) already take 7.3 ms.
-  - Batch-1 TTFT from 1K tokens up (140 vs 66 ms at 1K): each chip reads all 64 local experts' weights every layer
+  - Batch-1 TTFT from 1K tokens up (139 vs 66 ms at 1K): each chip reads all 64 local experts' weights every layer
     (~42 ms), plus prefill collectives (~20 ms) and attention (~7 ms).
   - Batch-32 TTFT (11.6 vs 1.60 s at 4K): prefill collectives alone take ~58 ms per 4K tokens, so for 32 prompts
     they exceed the target at every length (0.46 / 0.93 / 1.86 / 3.7 s vs 0.39 / 0.78 / 1.60 / 3.31 s at 1K-8K). At
     128 tokens the 32 prompts are one 4K-token prefill: 58 ms of collectives plus 31 ms of expert matmuls vs 66 ms.
-- DFlash speculative decoding reaches the batch-1 decode target at every input length over a 2048-token answer
-  (188 / 200 / 194 / 202 / 160 vs 158 / 157 / 156 / 155 / 152 tok/s at 128 / 1K / 2K / 4K / 8K; over 1024 tokens at
-  1K-4K). Over 1024 tokens it is 3% short at 128 and 8K (154 vs 158, 147 vs 152), judged unhittable: the same
-  128-token prompt gives 154-173 tok/s between runs (near-tie token flips change acceptance), and the one larger
-  lever, a check attention in which the checked rows share one cache read, is worth about 3% at 8K only.
-  Over only the first 256 tokens the draft accepts 1.15-1.5 tokens per round on real text: even at the cost of a
-  1-row check every round (2.5 + 12.2 ms) that caps 1K / 2K / 8K at 152 / 153 / 146 tok/s, under target.
-  About 7x faster than on 2026-10-09 (25 -> 171 tok/s on AIME24 and 21-25 -> 107-132 tok/s on real text over the
-  first 256 tokens).
+- Batch-1 DFlash speculative decoding over a 2048-token answer, this run: above the batch-1 decode target at 128 /
+  1K / 4K (175 / 216 / 204 vs 158 / 157 / 155 tok/s), below it at 2K / 8K (142 / 138 vs 156 / 152); over 1024
+  tokens at 1K / 4K only. A round costs the same as on 2026-10-10 (draft 2.3 ms + check 16.5-19.2 ms); what moves
+  is acceptance, because near-tie token flips change the answer between runs: 2K accepted 1.9 drafts per round here
+  vs 3.2 on 2026-10-10, when all five 2048-token cells were above target (188 / 200 / 194 / 202 / 160 tok/s). Over
+  only the first 256 tokens the draft accepts 1.2-1.5 per round on real text, under target at every length.
+- Batch-32 DFlash (new; in the model, not yet in the server) is no faster than plain batch-32 decode: 25.2-33.8 vs
+  25.1-32.6 tok/s/user. Batch-32 decode already reads each expert's weights once for all 32 users, so checking
+  several tokens per user saves little: checking 96 rows (3 per user) touches more of each chip's 64 experts
+  (~62 vs ~46 if tokens routed at random), does 3x the per-row attention work and costs 65-80 ms, about 2x a decode
+  step (31-40 ms), while a round commits 2.2-2.5 tokens per user (1.2-1.5 drafts accepted early in an answer).
 
 ## Results
 
@@ -35,66 +55,80 @@ Against the targets (50% of speed of light, measured without vLLM, tables below)
 
 Laguna's next-token predictions vs the original model in fp32, over the AIME24 prompt (235 tokens, or cut to 128)
 plus a fixed 100-token answer; batch 32 is the worst of 32 identical users. "top-1, traced" is the same top-1 check
-through the traced decode path the server runs (token picked on device). `tests/test_accuracy.py`, 2026-10-10.
+through the traced decode path the server runs (token picked on device). `tests/test_accuracy.py`, 2026-10-13.
 
 | Prompt (AIME24) | Batch | top-1 | top-5 | top-100 | top-1, traced | PCC |
 |---|---:|---:|---:|---:|---:|---:|
 | 235 tokens | 1 | 0.98 | 1.00 | 1.00 | 0.99 | 0.97 |
-| 235 tokens | 32 | 0.98 | 1.00 | 1.00 | 0.99 | 0.97 |
+| 235 tokens | 32 | 1.00 | 1.00 | 1.00 | 1.00 | 0.97 |
 | 128 tokens | 1 | 0.96 | 1.00 | 1.00 | 0.97 | 0.97 |
-| 128 tokens | 32 | 0.96 | 1.00 | 1.00 | 0.98 | 0.97 |
+| 128 tokens | 32 | 0.97 | 1.00 | 1.00 | 0.97 | 0.96 |
 | Bar | | >= 0.90 | >= 0.98 | 1.00 | >= 0.90 | >= 0.95 |
 
 ### Performance
 
 Target = 50% of speed of light (SoL), the roofline limit from [All About Transformer
 Inference](https://jax-ml.github.io/scaling-book/inference/) computed by `demo/roofline.py`. Measured with
-`demo/perf_direct.py`: no vLLM, device time plus reading the token back, 2026-10-10. Batch 32: 32 prompts arrive
+`demo/perf_direct.py`: no vLLM, device time plus reading the token back, 2026-10-13. Batch 32: 32 prompts arrive
 together; TTFT is the last user's; total decode throughput is 32x the per-user speed.
 
 Decode, tok/s per user (measured / target):
 
 | Input tokens | Batch 1 | Batch 32 |
 |---:|---:|---:|
-| 128 | 88.2 / 158 | 31.7 / 20 |
-| 1,024 | 85.1 / 157 | 30.1 / 20 |
-| 2,048 | 84.8 / 156 | 28.9 / 19 |
-| 4,096 | 83.8 / 155 | 26.7 / 19 |
-| 8,192 | 83.2 / 152 | 25.1 / 18 |
+| 128 | 90.0 / 158 | 32.6 / 20 |
+| 1,024 | 86.8 / 157 | 30.5 / 20 |
+| 2,048 | 86.5 / 156 | 29.5 / 19 |
+| 4,096 | 85.4 / 155 | 28.6 / 19 |
+| 8,192 | 84.8 / 152 | 25.1 / 18 |
 
 Time to first token (measured / target):
 
 | Input tokens | Batch 1 | Batch 32 |
 |---:|---:|---:|
-| 128 | 60.6 ms / 66 ms | 0.42 s / 0.066 s |
-| 1,024 | 140 ms / 66 ms | 2.89 s / 0.39 s |
-| 2,048 | 238 ms / 66 ms | 5.82 s / 0.78 s |
+| 128 | 60.5 ms / 66 ms | 0.42 s / 0.066 s |
+| 1,024 | 139 ms / 66 ms | 2.90 s / 0.39 s |
+| 2,048 | 238 ms / 66 ms | 5.83 s / 0.78 s |
 | 4,096 | 386 ms / 66 ms | 11.6 s / 1.60 s |
-| 8,192 | 714 ms / 103 ms | 23.4 s / 3.31 s |
+| 8,192 | 716 ms / 103 ms | 23.4 s / 3.31 s |
 
 DFlash speculative decoding, batch 1: decode tok/s over the first 256 / 1024 / 2048 generated tokens (normal decode is
-83-88 tok/s at these lengths; the draft accepts more later in an answer). DFlash runs one request at a time (the
-server needs `--max-num-seqs 1`), so there is no batch-32 DFlash number. A round
+85-90 tok/s at these lengths; the draft accepts more later in an answer). The server runs DFlash for one request at a
+time (`--max-num-seqs 1`); batch-32 DFlash (below) runs in the model only so far. A round
 drafts 15 tokens, then checks up to the first 5 in Laguna in one step (a 3-row check when 2 or fewer are checked) and keeps the matching ones plus one of
 Laguna's own. It checks fewer when the draft is unsure (once the product of its top-1 probabilities drops below 0.2),
-which reads fewer expert weights. 18-21 ms per round (draft 2.5 ms, check 16.0-18.4 ms) vs 11.3-12.0 ms per token
+which reads fewer expert weights. 18-22 ms per round (draft 2.3-2.4 ms, check 15.9-19.2 ms) vs 11.1-11.8 ms per token
 for normal decode, so DFlash wins when more than ~0.9 drafts per round are accepted:
 
 | Prompt | Input tokens | 256 tokens | 1024 tokens | 2048 tokens | Target |
 |---|---:|---:|---:|---:|---:|
-| AIME24 | 235 | 171.4 (2.5) | 194.9 (3.1) | 178.1 (2.9) | |
-| Real text | 128 | 131.5 (1.5) | 154.2 (2.1) | 188.4 (2.9) | 158 |
-| Real text | 1,024 | 112.9 (1.2) | 164.4 (2.4) | 199.8 (3.3) | 157 |
-| Real text | 2,048 | 115.1 (1.3) | 156.8 (2.2) | 194.1 (3.2) | 156 |
-| Real text | 4,096 | 125.9 (1.5) | 169.1 (2.6) | 202.4 (3.4) | 155 |
-| Real text | 8,192 | 107.4 (1.2) | 147.2 (2.1) | 159.6 (2.4) | 152 |
+| AIME24 | 235 | 172.4 (2.4) | 200.0 (3.1) | 181.3 (2.7) | |
+| Real text | 128 | 126.5 (1.3) | 135.0 (1.6) | 174.8 (2.5) | 158 |
+| Real text | 1,024 | 121.5 (1.4) | 184.5 (2.9) | 215.5 (3.7) | 157 |
+| Real text | 2,048 | 126.5 (1.5) | 136.0 (1.7) | 141.5 (1.9) | 156 |
+| Real text | 4,096 | 124.1 (1.4) | 169.5 (2.5) | 203.6 (3.4) | 155 |
+| Real text | 8,192 | 117.4 (1.3) | 129.5 (1.6) | 137.6 (1.8) | 152 |
 
 tok/s (drafts accepted per round); target = the batch-1 decode target.
+
+DFlash speculative decoding, batch 32 (`tt/dflash_batched.py`): 32 users with different real-text prompts (other
+stretches of the same reports) each draft 7 tokens, then one Laguna step checks 96 rows: every user's own next token
+plus the 64 drafts the draft model is most confident in (product of its top-1 probabilities). Decode tok/s per user
+over the first 256 tokens (the users' average), next to plain batch-32 decode:
+
+| Input tokens | Batch-32 DFlash | Plain batch-32 decode | ms per round (draft + check) | Drafts accepted per round |
+|---:|---:|---:|---:|---:|
+| 128 | 33.8 | 32.6 | 74.2 (9.1 + 64.9) | 1.51 |
+| 1,024 | 30.3 | 30.5 | 76.8 (9.1 + 67.5) | 1.32 |
+| 2,048 | 28.9 | 29.5 | 78.0 (8.9 + 68.8) | 1.26 |
+| 4,096 | 27.5 | 28.6 | 81.9 (9.3 + 72.4) | 1.25 |
+| 8,192 | 25.2 | 25.1 | 89.0 (9.2 + 79.5) | 1.24 |
 
 Real text = a "summarize this document" request over a technical report. With the AIME24 answer fed in, the device
 draft accepts 2.6-2.7 drafts per round, as the draft model does on CPU (2.64): the acceptance rate is the draft
 model's own. Single runs vary by about +-10%, since the output (and so the acceptance) shifts with near-tie tokens
-(AIME24 over 256 tokens: 144-174 tok/s at 2.1-2.6 drafts per round across the 2026-10-10 runs).
+(AIME24 over 256 tokens: 144-174 tok/s at 2.1-2.6 drafts per round across the 2026-10-10 runs; real text at 2K over
+2048 tokens: 194 tok/s at 3.2 drafts per round on 2026-10-10, 142 at 1.9 on 2026-10-13).
 
 ## Quick start
 
@@ -158,7 +192,20 @@ cd /tmp && env -u TT_METAL_HOME PYTHONPATH=$REPO \
 ```bash
 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/perf_direct.py   # performance tables, ~10 min
 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/perf_direct.py --modes dflash --dflash-prompt aime,text   # DFlash table (256 tokens; --dflash-tokens 1024 / 2048 for the other columns)
+PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/perf_direct.py --modes dflash32   # batch-32 DFlash table
 PYTHONPATH=$REPO $MODEL_DIR/.venv/bin/python $MODEL_DIR/demo/roofline.py      # SoL and targets, no device
+```
+
+The first-version column of the status table: the same script against commit `8a556f0422e`'s `models/` tree (with
+this tree's `demo/perf_direct.py` and `demo/roofline.py` copied in), ahead of this repository on `PYTHONPATH`, run
+from outside the repository:
+
+```bash
+mkdir -p /tmp/laguna-first && git archive 8a556f0422e models | tar -x -C /tmp/laguna-first
+cp $MODEL_DIR/demo/perf_direct.py $MODEL_DIR/demo/roofline.py /tmp/laguna-first/models/demos/laguna/demo/
+ln -s $REPO/tech_reports /tmp/laguna-first/tech_reports
+cd /tmp && PYTHONPATH=/tmp/laguna-first:$REPO $MODEL_DIR/.venv/bin/python \
+  /tmp/laguna-first/models/demos/laguna/demo/perf_direct.py           # and --modes dflash --dflash-prompt aime,text
 ```
 
 ## Serving options

@@ -17,6 +17,11 @@ script drives the model directly in one process and times only device work plus 
                        which prefills all 32 prompts in one pass
     decode tok/s       1000 / (time per step of the captured decode trace at a context of L tokens), averaged over
                        --decode-steps steps; batch 32 decodes 32 users with distinct tokens
+    --modes dflash32   batch 32 with DFlash (tt/dflash_batched.BatchedDFlash): 32 users with distinct real-text prompts
+                       of L tokens (different stretches of tech_reports/*.md) draft --dflash-drafts tokens each, then one
+                       target step checks --dflash-rows rows (every user's own next token plus the drafts it is most
+                       confident in). Decode tok/s/user = committed tokens / 32 / time, rounds until the users average
+                       --dflash-tokens; the 32 prompts are prefilled one by one first (not timed as TTFT)
     --modes dflash     batch 1 with DFlash speculative decoding, through the server's own model class (the one vLLM
                        loads: prefill, then one committed token per decode call, DFlash rounds inside) without vLLM.
                        TTFT = its prefill call; decode tok/s = tokens / time over --dflash-tokens decode calls. KV is
@@ -27,6 +32,7 @@ script drives the model directly in one process and times only device work plus 
     python models/demos/laguna/demo/perf_direct.py                         # batch 1 and 32, 128 .. 8K tokens
     python models/demos/laguna/demo/perf_direct.py --batch 1 --input-lens 128,1024
     python models/demos/laguna/demo/perf_direct.py --modes dflash
+    python models/demos/laguna/demo/perf_direct.py --modes dflash32
 """
 
 from __future__ import annotations
@@ -53,7 +59,7 @@ for _key, _value in {
     "TT_LAGUNA_DECODE_MAXCORES": "16",
 }.items():
     os.environ.setdefault(_key, _value)  # serve_vllm.sh's p150x4 settings, before any Laguna import reads them
-if "dflash" in " ".join(__import__("sys").argv):
+if "dflash" in " ".join(__import__("sys").argv) and "dflash32" not in " ".join(__import__("sys").argv):
     # serve_vllm.sh's DFlash settings (read when the serving class is imported)
     for _key, _value in {"TT_LAGUNA_DFLASH": "1", "LAGUNA_ALLOW_EXPERIMENTAL_OVERRIDES": "1", "TT_LAGUNA_HYBRID_KV": "0",
                          "TT_LAGUNA_PREFIX_CACHE": "0"}.items():  # fmt: skip
@@ -159,7 +165,7 @@ def ttft_batch32(gen, mesh, length, batch):
     bpu = gen._kv_cache[0]["blocks_per_user"]
     table = torch.arange(batch * bpu, dtype=torch.int32).reshape(batch, bpu)
     n = 1
-    if length <= PACK_MAX_LEN:
+    if length <= PACK_MAX_LEN and hasattr(m, "prefill_layers_packed"):  # older trees prefill one prompt at a time
         while n * 2 <= batch and n * 2 * length <= PACK_ROWS:
             n *= 2
     groups = [list(range(i, min(i + n, batch))) for i in range(0, batch, n)]
@@ -197,16 +203,16 @@ def ttft_batch32(gen, mesh, length, batch):
 DFLASH_MAX_MODEL_LEN = 1048512  # serve_vllm.sh config with TT_LAGUNA_DFLASH=1
 
 
-def text_prompt(tokenizer, length):
+def text_prompt(tokenizer, length, offset=0):
     """A real request of exactly ``length`` tokens: the chat template around "Summarize this document." and the
-    start of the repository's tech_reports/*.md. DFlash's speed depends on how predictable the answer is; random
-    tokens make Laguna repeat one token, which the draft predicts perfectly."""
+    repository's tech_reports/*.md from token ``offset`` on. DFlash's speed depends on how predictable the answer is;
+    random tokens make Laguna repeat one token, which the draft predicts perfectly."""
     docs = sorted((REPO_ROOT / "tech_reports").rglob("*.md"))
     text = "\n\n".join(d.read_text(errors="ignore") for d in docs)
     doc = tokenizer(text, add_special_tokens=False)["input_ids"]
 
     def build(n):
-        msg = [{"role": "user", "content": "Summarize this document.\n\n" + tokenizer.decode(doc[:n])}]
+        msg = [{"role": "user", "content": "Summarize this document.\n\n" + tokenizer.decode(doc[offset : offset + n])}]
         rendered = tokenizer.apply_chat_template(msg, add_generation_prompt=True, tokenize=False)
         return tokenizer(rendered, add_special_tokens=False)["input_ids"]
 
@@ -308,6 +314,59 @@ def run_dflash(lens, tokens_out, prompt="text"):
     return rows
 
 
+def run_dflash32(lens, tokens_out, drafts, rows_checked):
+    """Batch-32 DFlash (tt/dflash_batched.py), no vLLM. Returns {L: row}."""
+    from transformers import AutoTokenizer
+
+    from models.demos.laguna.tt.dflash_batched import BatchedDFlash
+    from models.demos.laguna.tt.dflash_tt import DFlashTTCore
+
+    U = 32
+    # a round commits 1 .. drafts + 1 tokens per user, and runs until the users average tokens_out
+    horizon = -(-(max(lens) + tokens_out * (drafts + 1) + 256) // 128) * 128
+    mesh = open_mesh(ttnn, resolve_profile("p150x4", trace_region_size=200_000_000))
+    out = {}
+    gen = None
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(os.environ["TT_LAGUNA_MODEL"])
+        gen = LagunaGenerator.from_pretrained(mesh, max_seq_len=horizon + 128)
+        gen._ensure_cache(U, horizon)
+        core = DFlashTTCore.from_checkpoint(mesh, max_seq_len=horizon + 128, enable_experimental=True)
+        for length in lens:
+            prompts = [text_prompt(tokenizer, length, offset=u * 997) for u in range(U)]
+            bd = BatchedDFlash(gen, core, U, drafts, rows_checked)
+            prefill_s = bd.prefill(prompts)
+            bd.capture_traces()
+            per_user = [0] * U
+            rounds = 0
+            start = time.perf_counter()
+            while sum(per_user) < U * tokens_out and rounds < tokens_out:
+                for u, c in enumerate(bd.round()):
+                    per_user[u] += len(c)
+                rounds += 1
+            total = sum(per_user)
+            seconds = time.perf_counter() - start
+            row = {"decode_tok_s": total / U / seconds, "rounds": rounds, "ms_per_round": seconds / rounds * 1e3,
+                   "accepted_mean": statistics.mean(sum(s["accepted"]) / U for s in bd.stats),
+                   "draft_ms_mean": statistics.mean(s["draft_s"] for s in bd.stats) * 1e3,
+                   "verify_ms_mean": statistics.mean(s["verify_s"] for s in bd.stats) * 1e3, "prefill_32_s": prefill_s,
+                   "tokens_per_user_min_max": [min(per_user), max(per_user)]}  # fmt: skip
+            for tid in (bd._tid_d, bd._tid_v):
+                ttnn.release_trace(mesh, tid)
+            for k, v in bd.rings.values():
+                ttnn.deallocate(k)
+                ttnn.deallocate(v)
+            out[length] = row
+            print(f"[perf direct] dflash32 input {length:>6,}: decode {row['decode_tok_s']:6.1f} tok/s/user | {rounds} "
+                  f"rounds, {row['ms_per_round']:.1f} ms per round (draft {row['draft_ms_mean']:.1f} + verify "
+                  f"{row['verify_ms_mean']:.1f}), {row['accepted_mean']:.2f} drafts accepted per round", flush=True)
+    finally:
+        if gen is not None:
+            gen.teardown()
+        close_mesh(ttnn, mesh)
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--input-lens", default=None, help="comma-separated (default 128,1024,2048,4096,8192)")
@@ -316,10 +375,25 @@ def main() -> int:
     parser.add_argument("--output", default=None, help="JSON results path")
     parser.add_argument("--modes", default="normal", help="normal (default) or dflash (batch 1, DFlash decoding)")
     parser.add_argument("--dflash-tokens", type=int, default=256, help="tokens decoded per input length with DFlash")
+    parser.add_argument("--dflash-drafts", type=int, default=7, help="dflash32: drafts proposed per user per round")
+    parser.add_argument("--dflash-rows", type=int, default=96, help="dflash32: rows checked per round (all users)")
     parser.add_argument("--dflash-prompt", default="text",
                         help="text: summarize request over tech_reports (each length); aime: the accuracy test prompt; "
                         "or both, comma-separated")
     args = parser.parse_args()
+    if args.modes == "dflash32":
+        lens = [int(v) for v in args.input_lens.split(",")] if args.input_lens else DEFAULT_INPUT_LENS
+        rows = run_dflash32(lens, args.dflash_tokens, args.dflash_drafts, args.dflash_rows)
+        print(f"\nBatch 32, DFlash speculative decoding ({args.dflash_drafts} drafts per user, {args.dflash_rows} rows "
+              f"checked per round; no vLLM):\n")
+        print("| Input tokens | Decode tok/s/user | ms per round (draft + verify) | Drafts accepted per round |")
+        print("|---:|---:|---:|---:|")
+        for length, r in rows.items():
+            print(f"| {length} | {r['decode_tok_s']:.1f} | {r['ms_per_round']:.1f} ({r['draft_ms_mean']:.1f} + "
+                  f"{r['verify_ms_mean']:.1f}) | {r['accepted_mean']:.2f} |")  # fmt: skip
+        if args.output:
+            Path(args.output).write_text(json.dumps({"dflash32": {str(k): v for k, v in rows.items()}}, indent=1))
+        return 0
     if args.modes == "dflash":
         lens = [int(v) for v in args.input_lens.split(",")] if args.input_lens else DEFAULT_INPUT_LENS
         rows = run_dflash(lens, args.dflash_tokens, args.dflash_prompt)
