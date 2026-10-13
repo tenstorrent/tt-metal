@@ -179,8 +179,10 @@ std::optional<tt::tt_metal::TensorTopology> over_storage_ring_order(
 // non-trivial axis, and a scatter along an axis that itself holds a Shard of another dim (each device would hold a
 // piece of two dims on one axis), are refusals (reduce_scatter consumes both). A stale Shard dim left by a
 // rank-changing op (#52331) matches nothing, which the gather and reduce rules treat as harmless, but counts as a
-// Shard of another dim here, so a partition refuses it. No op in this change calls these two; the stacked changes
-// that move mesh_partition, all_to_all_async and their fused variants onto the helper do, which is why they live here.
+// Shard of another dim here, so a partition refuses it. No op in this change calls these two. mesh_partition keeps
+// its own inline hook (#58915), so mesh_partition_output_topology has no caller yet: it is the helper-side spelling
+// of the partition rules, should that hook ever move here. all_to_all_output_topology is what the stacked
+// experimental-CCL change calls for all_to_all_async and its fused variants, which is why both live here.
 std::optional<tt::tt_metal::TensorTopology> mesh_partition_output_topology(
     const tt::tt_metal::TensorTopology& in,
     std::optional<uint32_t> cluster_axis,
