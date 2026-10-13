@@ -1832,14 +1832,16 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_
         usable_ring_size,
         slot.ring_size,
         slot.entry_size);
+    // The relay covers the slot's receivers and may extend over its extra nodes, like the receiver kernel.
     const CoreRangeSet& relay_cores = relay_dfb->core_ranges;
     TT_FATAL(
-        relay_cores.num_cores() > 0 &&
-            slot.receiver_cores.intersection(relay_cores).num_cores() == relay_cores.num_cores(),
-        "Relay DFB core ranges {} must be receiver cores of PrefetcherPipe slot {} ({})",
+        relay_cores.contains(slot.receiver_cores) && slot.cores.contains(relay_cores),
+        "Relay DFB core ranges {} must include every receiver core of PrefetcherPipe slot {} ({}) and lie within "
+        "the slot's cores ({})",
         relay_cores.str(),
         prefetcher_pipe_id,
-        slot.receiver_cores.str());
+        slot.receiver_cores.str(),
+        slot.cores.str());
     TT_FATAL(
         relay_dfb->device_slot < std::numeric_limits<uint8_t>::max(),
         "Relay DFB device slot {} cannot be represented in PrefetcherPipe receiver metadata",
@@ -1983,15 +1985,59 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
     }
 
     // Pass 2: commit.
+    std::set<uint8_t> bound_slots;
     for (const Checked& checked : to_commit) {
         for (const auto& slot_cores : checked.binding->slots) {
             commit_prefetcher_pipe_slot_bind(
                 slot_cores.prefetcher_pipe_id,
                 prefetcher_pipe_slot_bind_cores(*checked.name, slot_cores, *checked.pipe),
                 *checked.pipe);
+            bound_slots.insert(slot_cores.prefetcher_pipe_id);
         }
         checked.binding->bound_pipe = checked.pipe;
         checked.binding->bound_pipe_identity = checked.pipe->identity();
+    }
+    for (const uint8_t prefetcher_pipe_id : bound_slots) {
+        bind_prefetcher_pipe_extra_nodes(prefetcher_pipe_id);
+    }
+}
+
+void detail::ProgramImpl::bind_prefetcher_pipe_extra_nodes(uint8_t prefetcher_pipe_id) {
+    const PrefetcherPipeSlot& slot = get_prefetcher_pipe_slot(prefetcher_pipe_id);
+    experimental::PrefetcherPipeImpl* record_pipe = nullptr;
+    CoreRangeSet participant_cores;
+    for (const std::string& name : get_registered_prefetcher_pipe_parameter_names()) {
+        const PrefetcherPipeParameterBinding& binding = prefetcher_pipe_parameters_.at(name);
+        for (const auto& slot_cores : binding.slots) {
+            if (slot_cores.prefetcher_pipe_id != prefetcher_pipe_id) {
+                continue;
+            }
+            if (binding.bound_pipe == nullptr) {
+                return;  // Another of the slot's pipes is still unbound; its participants are not known yet.
+            }
+            participant_cores =
+                participant_cores.merge(prefetcher_pipe_slot_bind_cores(name, slot_cores, *binding.bound_pipe));
+            if (record_pipe == nullptr) {
+                record_pipe = binding.bound_pipe;
+            }
+        }
+    }
+    if (record_pipe == nullptr) {
+        return;
+    }
+    for (const CoreCoord& core : corerange_to_cores(slot.cores.subtract(participant_cores))) {
+        auto& records = per_core_prefetcher_pipes_.at(core);
+        auto record = std::find_if(records.begin(), records.end(), [prefetcher_pipe_id](const auto& a) {
+            return a.prefetcher_pipe_id == prefetcher_pipe_id;
+        });
+        TT_FATAL(
+            record != records.end(),
+            "Internal error: PrefetcherPipe slot {} missing on core {}",
+            prefetcher_pipe_id,
+            core.str());
+        record->pipe = record_pipe;
+        record->config_page_addr = record_pipe->config_address();
+        record->extra_node = true;
     }
 }
 

@@ -180,6 +180,12 @@ struct KernelAdvancedOptions {
     // against the group's receiver sets; see prefetcher_pipe_parameter.hpp. Compute kernels
     // cannot bind a pipe; they consume through a relay DFB (DFBAdvancedOptions::prefetcher_pipe_relays).
     //
+    // The kernel may also run on extra nodes, which are none of the group's pipes' senders or
+    // receivers, e.g. to cover a rectangle. Their slot entry is the same as a participant's, so one
+    // multicast configures every node. On an extra node the kernel must not construct the
+    // PrefetcherPipe, nor a relay DataflowBuffer for it; it tells extra nodes apart with its own
+    // runtime arguments.
+    //
     // CAUTION: PrefetcherPipe is experimental and its protocol is user-managed (a pipe outlives
     //          the Programs that use it; peers must agree on entry sizes and lane counts).
     struct PrefetcherPipeBinding {
@@ -258,8 +264,9 @@ struct DFBAdvancedOptions {
     //  - mutually exclusive with borrowed_from
     //  - entry_size == pipe entry_size and entry_size * num_entries == pipe ring_size, for every
     //    named pipe (all named pipes share ring_size and entry_size)
-    //  - the DFB's node set (union of its bound kernels' nodes) equals the union of the named
-    //    pipes' receiver nodes, and those receiver sets are pairwise disjoint
+    //  - the DFB's node set (union of its bound kernels' nodes) includes the union of the named
+    //    pipes' receiver nodes, and those receiver sets are pairwise disjoint. Other nodes are the
+    //    receiver kernel's extra nodes (see KernelAdvancedOptions::PrefetcherPipeBinding)
     //  - every PRODUCER kernel binds exactly this pipe set under one accessor
     //    (KernelAdvancedOptions::prefetcher_pipe_bindings); it is the pipes' receiver kernel, and
     //    its num_threads is the pipes' receiver-side credit lane count
