@@ -4,7 +4,7 @@
 # its own reduce header (ci_ab/hdr/<v>.h: main, head, n) compiled into its own build dir, so all sides run from one tree
 # path. Fresh build dirs and JIT cache per job; both sides in one job, alternated; the A/A pair is main built twice (ma).
 # The ELF guard stops the job when the new side's UInt32 and four-tile row kernels equal the head's (a void A/B).
-# usage: run_fl.sh f1   sweep (PR module + UInt32 rows) ABBA twice for main, ma, head, n; counters of the targets for
+# usage: run_fl.sh f1|f2   sweep (PR module + UInt32 rows) ABBA twice for main, ma, head, n; counters of the targets for
 #                       head and n; row and UInt32 bits of main and n; the four reduce modules with LLK asserts on and
 #                       test_sfpu_reduce.py without load macros, on n
 set +e +o pipefail
@@ -55,7 +55,7 @@ run() {  # run <slot> <build> <ids> <tag> [pytest args]; RTS, ASSERTS and EXTRA 
 }
 STOP=0
 mkslot slot
-if [[ $JOB == f1 ]]; then
+if [[ $JOB == f1 || $JOB == f2 ]]; then
   build slot main ra_m sweep; build slot main ra_ma sweep; build slot head ra_h sweep; build slot n ra_n sweep
   RTS=MATH_ISOLATE build slot head wc_h wc --dump-perf-counters; RTS=MATH_ISOLATE build slot n wc_n wc --dump-perf-counters
   ASSERTS=1 build slot main rb_m rowb; ASSERTS=1 build slot n rb_n rowb

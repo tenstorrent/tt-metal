@@ -1351,24 +1351,14 @@ inline void perform_reduce_row_sum_avg(std::uint32_t block_ct_dim, std::uint32_t
                 0, tile_store_mode, divide_in_tile, recip);
             return;
         }
-        if (tile_stepped) {
-            set_tile_step_addrmod();
-            mark_dest_base();
-            init_row_sum_load_macros();
-            for (std::uint32_t j = 0; j < block_ct_dim; j++) {
-                perform_reduce_row_sum_tile<INSTRUCTION_MODE, clear_high_bits, is_avg, true>(
-                    0, tile_store_mode, false, recip, TILE_STEP_ADDR_MOD);
-            }
-            return_to_dest_base();
-            sum_first_columns_across_tiles<INSTRUCTION_MODE, clear_high_bits, pack_low16, is_avg>(
-                0, block_ct_dim, recip, true);
-            return;
-        }
     }
 
     if (tile_stepped) {
         set_tile_step_addrmod();
         mark_dest_base();
+    }
+    if constexpr (use_load_macros) {
+        init_row_sum_load_macros();
     }
 
     for (std::uint32_t i = 0; i < block_rt_dim; i++) {
@@ -1377,7 +1367,7 @@ inline void perform_reduce_row_sum_avg(std::uint32_t block_ct_dim, std::uint32_t
         // Step 1: Reduce each tile individually (horizontal reduction within each tile)
         for (std::uint32_t j = 0; j < block_ct_dim; j++) {
             std::uint32_t tile_offset = tile_row_offset + (ROWS_PER_TILE * j);
-            perform_reduce_row_sum_tile<INSTRUCTION_MODE, clear_high_bits, is_avg>(
+            perform_reduce_row_sum_tile<INSTRUCTION_MODE, clear_high_bits, is_avg, use_load_macros>(
                 tile_stepped ? 0 : tile_offset,
                 tile_store_mode,
                 divide_in_tile,
