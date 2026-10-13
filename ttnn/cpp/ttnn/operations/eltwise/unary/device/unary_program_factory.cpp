@@ -709,7 +709,8 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         fmt::format("ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}", compute_kernel);
     // A chain's op-major block on a native L1 shard of 12 or more tiles, 16-bit DEST: the tiles half of DEST holds.
     uint32_t chain_block = 1;
-    if (compute_kernel == "eltwise_sfpu.cpp" && input.device()->arch() == tt::ARCH::BLACKHOLE) {
+    if ((compute_kernel == "eltwise_sfpu.cpp" || compute_kernel == "eltwise_sfpu_metal2.cpp") &&
+        input.device()->arch() == tt::ARCH::BLACKHOLE) {
         if (src_num_tiles_per_shard.value_or(0) >= 12 && dst_num_tiles_per_shard.value_or(0) >= 12 &&
             !operation_attributes.fp32_dest_acc_en) {
             chain_block = 8;
