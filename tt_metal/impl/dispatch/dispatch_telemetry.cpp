@@ -437,8 +437,8 @@ public:
         const double avg_work_runtime_per_core = delta_total_work_runtime / static_cast<double>(total_number_of_cores);
         const float core_efficiency = static_cast<float>(avg_work_runtime_per_core / delta_elapsed_device_time);
 
-        // ACTIVE_ETH cores still contribute worker-cycles while N is tensix-only, so the raw
-        // ratio can exceed 1.0. Clamp rather than treating that as a telemetry error.
+        TT_ASSERT(
+            core_efficiency <= 1.0f, "If core_efficiency is greater than 100%, there is an issue with the telemetry");
         TT_ASSERT(core_efficiency >= 0.0f, "If core_efficiency is less than 0%, there is an issue with the telemetry");
         return std::clamp(core_efficiency, 0.0f, 1.0f);
     }
