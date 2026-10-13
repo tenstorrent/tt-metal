@@ -218,9 +218,9 @@ auto result = solve_topology_mapping(
 ### Helper Functions
 
 ```cpp
-// Build logical graphs from MeshGraph
+// Build logical graphs from the MeshGraphDescriptor
 std::map<MeshId, AdjacencyGraph<FabricNodeId>> logical_graphs =
-    build_adjacency_graph_logical(mesh_graph);
+    build_adjacency_graph_logical(mesh_graph_descriptor);
 
 // Build physical graphs from PhysicalSystemDescriptor
 std::map<MeshId, AdjacencyGraph<AsicID>> physical_graphs =

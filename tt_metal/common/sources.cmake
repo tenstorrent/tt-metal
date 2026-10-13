@@ -1,11 +1,10 @@
+# mesh_coord.cpp and shape_base.cpp are compiled into TT::ScaleoutTopology (tt_metal/fabric/sources.cmake).
 set(COMMON_SOURCES
     core_assignment.cpp
     core_coord.cpp
     filesystem_utils.cpp
-    mesh_coord.cpp
     shape.cpp
     shape2d.cpp
-    shape_base.cpp
     stable_hash.cpp
     tt_backend_api_types.cpp
     work_split.cpp

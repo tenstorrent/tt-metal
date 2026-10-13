@@ -59,12 +59,9 @@ foreach(PROTO_FILE ${FABRIC_PROTO_SCHEMAS})
 endforeach()
 
 # ---------------------------------------------------------------------------
-# TT::ScaleoutTopology — the topology sources grouped into their own library: MGD + PSD + PGD (proto + class),
-# the topology solver, the topology mapper UTILS, and the offline FSD->PSD builder. mesh_graph + the runtime
-# TopologyMapper class stay in fabric. fabric links this lib so its objects land in libtt_metal.so and its
-# symbols are exported from there (default visibility) exactly as before the split — in-tree consumers keep
-# reaching these symbols via tt_metal, unchanged. Linking this lib standalone (Fabric Manager without the metal
-# runtime) is a follow-up once it is fully runtime-free; see TOPOLOGY_LIB_PLAN.md.
+# TT::ScaleoutTopology — runtime-free topology library: MGD + PSD + PGD (proto + class), the topology solver, the
+# topology mapper utils and the offline FSD->PSD builder. It links no tt_metal runtime target. fabric links it so its objects also land in libtt_metal.so for in-tree consumers; external consumers
+# (e.g. Fabric Manager) can link TT::ScaleoutTopology from the installed tt-metalium package without libtt_metal.
 # ---------------------------------------------------------------------------
 add_library(
     scaleout_topology
@@ -73,6 +70,7 @@ add_library(
     ${TOPOLOGY_GENERATED_PROTO_SRCS}
 )
 add_library(TT::ScaleoutTopology ALIAS scaleout_topology)
+set_target_properties(scaleout_topology PROPERTIES EXPORT_NAME ScaleoutTopology) # installed name == in-tree alias
 set_source_files_properties(
     ${TOPOLOGY_GENERATED_PROTO_SRCS}
     PROPERTIES
@@ -92,8 +90,11 @@ endif()
 
 target_include_directories(
     scaleout_topology
+    PUBLIC
+        "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/tt_metal/api>" # public headers (installed by tt_metal's api file set)
+        "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
     PRIVATE
-        "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>" # tt-metalium public headers (incl physical_descriptor_builder.hpp)
+        "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>" # llrt/, tt_metal/ relative includes
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scaleout # board/board.hpp
     SYSTEM
@@ -101,32 +102,60 @@ target_include_directories(
         ${CMAKE_CURRENT_BINARY_DIR} # this lib's generated proto headers
         ${Metalium_BINARY_DIR}/tools/scaleout # scaleout-generated FSD proto header (for physical_descriptor_builder)
 )
+# PUBLIC deps are used by the public headers and are all in the Metalium export. Private deps: cadical is bundled
+# into the archive below (no consumer has it). protobuf and yaml-cpp are declared on the installed target by NAME
+# (protobuf::libprotobuf / yaml-cpp::yaml-cpp): the consumer provides those two targets (its own build or packages)
+# and CMake then orders them after the archive on its link line. The names are split with $<1:> so the export does
+# not resolve them to this build's in-tree targets, which cannot be exported. (yaml-cpp is not bundled: a consumer
+# that links its own copy would get every symbol twice.)
 target_link_libraries(
     scaleout_topology
     PUBLIC
         TT::STL
+        TT::Metalium::HostDevCommon
+        enchantum::enchantum
+        tt-logger::tt-logger
         umd::tt-umd
     PRIVATE
         TT::ScaleoutTools
-        TT::Metalium::HostDevCommon
-        enchantum::enchantum
         fmt::fmt-header-only
-        tt-logger::tt-logger
-        yaml-cpp::yaml-cpp
-        protobuf::libprotobuf
-        cadical::cadical
+        $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>$<INSTALL_INTERFACE:$<1:yaml-cpp>::$<1:yaml-cpp>>
+        $<BUILD_INTERFACE:protobuf::libprotobuf>$<INSTALL_INTERFACE:$<1:protobuf>::$<1:libprotobuf>>
+        $<BUILD_INTERFACE:cadical::cadical>
+        $<BUILD_INTERFACE:Boost::asio> # boost/move header used by common/mesh_coord.cpp
 )
 target_compile_features(scaleout_topology PUBLIC cxx_std_20)
 # Repo build accelerators (match fabric / scaleout_tools): unity build + shared PCH. Generated proto sources are
 # already excluded from unity above via SKIP_UNITY_BUILD_INCLUSION.
 TT_ENABLE_UNITY_BUILD(scaleout_topology)
 tt_reuse_precompile_headers(scaleout_topology TT::CommonPCH)
-# Default visibility (NOT hidden): fabric links this lib into libtt_metal.so, so its symbols are exported from
-# the .so exactly as they were before the topology sources were split out of fabric. In-tree consumers keep
-# resolving MGD/PSD/PGD/solver symbols through libtt_metal.so (linking tt_metal) and must NOT also link this
-# archive directly, or the descriptor protos would register twice ("File already exists in database"). Linking
-# the archive standalone (e.g. Fabric Manager without libtt_metal) is a follow-up once the lib is fully
-# runtime-free (see TOPOLOGY_LIB_PLAN.md); until then it is consumed only via libtt_metal.so.
+# Default visibility (NOT hidden): fabric links this lib into libtt_metal.so, so its symbols are exported from the .so
+# exactly as before the split. A consumer must link EITHER tt_metal OR TT::ScaleoutTopology, never both: the
+# descriptor protos would register twice ("File already exists in database").
+# Bundle cadical (SAT solver) object files into the archive so an external consumer does not need to build it.
+# In-tree, libtt_metal.so links libcadical.a itself; the archive members are then never pulled, so nothing is
+# defined twice.
+target_sources(scaleout_topology PRIVATE $<TARGET_OBJECTS:cadical>)
+install(TARGETS scaleout_topology EXPORT Metalium ARCHIVE COMPONENT metalium-dev)
+# The archive carries the compiled MGD/PSD/PGD protos, so a consumer must use these generated headers rather than
+# compile the .proto schemas again (two copies register twice: "File already exists in database").
+set(TOPOLOGY_GENERATED_PROTO_HDRS ${TOPOLOGY_GENERATED_PROTO_SRCS})
+list(FILTER TOPOLOGY_GENERATED_PROTO_HDRS INCLUDE REGEX "\\.pb\\.h$")
+install(
+    FILES
+        ${TOPOLOGY_GENERATED_PROTO_HDRS}
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metalium/protobuf
+    COMPONENT metalium-dev
+)
+# physical_descriptor_builder.cpp is the only TU that reaches into TT::ScaleoutTools (FSD proto + board lookup).
+# Keep it out of the unity batch so a consumer that never calls the FSD->PSD builder does not pull the FSD proto
+# objects (and a second registration of that schema) into its link.
+set_source_files_properties(
+    physical_descriptor_builder.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            TRUE
+)
 
 # --- fabric: remaining runtime protos + link the topology lib -------
 add_custom_target(fabric_generated_protos DEPENDS ${FABRIC_GENERATED_PROTO_SRCS})
@@ -157,11 +186,16 @@ target_include_directories(
         ${Metalium_BINARY_DIR}/tools/scaleout # FSD proto header for physical_descriptor_builder.cpp
 )
 
+# libtt_metal.so must carry every topology object (tools, tests and external consumers reach these symbols through
+# tt_metal), so link the library's objects directly rather than relying on which archive members fabric's own
+# objects happen to reference. (Whole-archive is not an option: scaleout_tools is an OBJECT library whose objects
+# are embedded in the archive and also linked into tt_metal directly.)
 target_link_libraries(
     fabric
     PUBLIC
         TT::ScaleoutTopology
     PRIVATE
+        $<TARGET_OBJECTS:scaleout_topology>
         TT::ScaleoutTools
         Metalium::Metal::LLRT
         umd::tt-umd

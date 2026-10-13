@@ -17,11 +17,10 @@ set(FABRIC_JIT_API_HEADERS
 )
 
 # Runtime-free topology sources — compiled into the lean TT::ScaleoutTopology static library
-# (see tt_metal/fabric/CMakeLists.txt). NOTE: mesh_graph.cpp and topology_mapper.cpp stay in FABRIC_SOURCES
-# below (MeshGraph + the runtime TopologyMapper class stay in fabric).
+# (see tt_metal/fabric/CMakeLists.txt). NOTE: mesh_graph.cpp, routing_table_generator.cpp and topology_mapper.cpp
+# stay in FABRIC_SOURCES below (MeshGraph, the routing-table builder and the runtime TopologyMapper stay in fabric).
 set(TOPOLOGY_SOURCES
     mesh_graph_descriptor.cpp
-    routing_table_generator.cpp
     physical_system_descriptor.cpp
     physical_system_descriptor_diff.cpp
     physical_node_id.cpp
@@ -34,17 +33,20 @@ set(TOPOLOGY_SOURCES
     physical_grouping_descriptor_graph_building.cpp
     physical_grouping_descriptor_matching.cpp
     physical_descriptor_builder.cpp
+    # Runtime-free TUs the library needs for a standalone link: the strong-type formatters/operators and the
+    # MeshShape/MeshCoordinate implementations (owned by common, compiled here instead so libscaleout_topology.a
+    # is self-contained; libtt_metal.so still gets exactly one copy via fabric -> scaleout_topology).
+    fabric_types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../common/mesh_coord.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../common/shape_base.cpp
 )
 
 set(FABRIC_SOURCES
     control_plane.cpp
+    routing_table_generator.cpp
     axis_route_topology.cpp
     mcast_reverse_tree.cpp
     mesh_graph.cpp
-    # fabric_types.cpp stays in fabric (NOT the topology lib): it defines formatters/hashes/operators for
-    # ubiquitous strong types (FabricNodeId, MeshId, AsicID, ...) that must be exported from libtt_metal.so for
-    # downstream consumers. It carries no protobuf symbols, so it does not need the topology lib's hidden visibility.
-    fabric_types.cpp
     erisc_datamover_builder.cpp
     fabric_router_builder.cpp
     compute_mesh_router_builder.cpp
