@@ -2366,12 +2366,12 @@ void sdpa_joint(
         false,  // is_chunked (not used)
         scale_fp32,
         0,      // sliding_window_size (not used)
-        false,
+        false,  // lightweight_mask_enabled (not used)
         false,  // chunked_enabled (not used)
         0,      // chunked_q_local_padded_Nt (not used)
         0,      // chunked_chunk_size_t (not used)
-        false,
-        0,
+        false,  // use_windowed_narrowing (not used)
+        0,      // cb_windowed_k_range (not used)
         qk_row_mop,
         out_row_mop>(
         Skt,

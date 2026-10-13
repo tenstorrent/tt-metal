@@ -77,7 +77,7 @@ ALWI void matmul_block_math_dynamic_throttle(
                 in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 0;
         }
-        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, 4, row_mop>(idst, ct_dim, rt_dim)));
+        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, /*num_faces=*/4, row_mop>(idst, ct_dim, rt_dim)));
     }
 #endif
 }
