@@ -175,6 +175,7 @@ ALWI void generalized_moe_gate_fpu_copy4rows() {
 // remain those of the shared generalized gate.
 // sfpu_sort (Blackhole, ungrouped single block): the generic gate's SFPU-only sort replaces the merge tree and
 // finalize_sorted the finalize; the output keeps the layout above, and step2 transposes scores and indices only.
+// identity_indices (with sfpu_sort): the sort writes the expert ids 0-255 itself, so the caller copies no indices.
 template <
     bool ungrouped_top8,
     bool enable_sigmoid = false,
@@ -188,12 +189,14 @@ template <
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool do_extra_scale = false,
     uint32_t output_tiles = 3,
-    bool sfpu_sort = false>
+    bool sfpu_sort = false,
+    bool identity_indices = false>
 ALWI void generalized_moe_gate(
     uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale, uint32_t extra_scale = 0x3f800000) {
     static_assert(!do_extra_scale || !ungrouped_top8, "extra scaling is supported by the grouped gate");
     static_assert(output_tiles == 3 || (!ungrouped_top8 && output_tiles == 2), "only grouped output may omit bias");
     static_assert(!sfpu_sort || (ungrouped_top8 && !produce_run), "sfpu_sort replaces the single-block ungrouped sort");
+    static_assert(!identity_indices || sfpu_sort, "identity_indices is the sfpu_sort route's");
     if constexpr (enable_sigmoid) {
         // Transpose wh (FPU)
         transpose_tile<is_fp32_dest_acc_en>(icb0, 0, 0);
@@ -225,7 +228,7 @@ ALWI void generalized_moe_gate(
 #if defined(ARCH_BLACKHOLE)
     if constexpr (sfpu_sort) {
         // Full sort, no normalize: the descending top-8 lands down column 0 of rows 0-7 for finalize_sorted.
-        MATH((sfpu::llk_math_sfpu_generic_moe_gate_topk<false, 8, 256, false, true, false>(0, 0)));
+        MATH((sfpu::llk_math_sfpu_generic_moe_gate_topk<false, 8, 256, false, true, identity_indices>(0, 0)));
         MATH((SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,

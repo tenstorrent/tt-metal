@@ -732,7 +732,7 @@ def test_generalized_moe_gate_sfpu_sort(topk, softmax, sigmoid):
         payload, bias, _ = _gate_stimuli(seed=31 + topk + int(softmax))
         tiles = _gate_tiles(payload, ids)
 
-    def gate(sfpu_sort):
+    def gate(sfpu_sort, identity_indices=False):
         return _config(
             GENERALIZED_MOE_GATE(
                 mode=MODE_GATE,
@@ -742,16 +742,19 @@ def test_generalized_moe_gate_sfpu_sort(topk, softmax, sigmoid):
                 eps=_bits(EPS),
                 scale=_bits(SCALE),
                 sfpu_sort=sfpu_sort,
+                identity_indices=identity_indices,
             ),
-            tiles,
+            # The identity route writes the ids itself, so it gets no id tile.
+            [tiles[0], _zeros(), *tiles[2:]] if identity_indices else tiles,
             src_b=bias,
         )
 
-    tree, sort = _run(gate(False), gate(True))
+    tree, sort, identity = _run(gate(False), gate(True), gate(True, True))
     for region in (SCORES, IDS):
-        assert torch.equal(
-            sort[region][0, :8], tree[region][0, :8]
-        ), f"region {region}: {sort[region][0, :8].tolist()} vs the merge tree's {tree[region][0, :8].tolist()}"
+        for name, faces in (("sfpu sort", sort), ("identity ids", identity)):
+            assert torch.equal(
+                faces[region][0, :8], tree[region][0, :8]
+            ), f"{name} region {region}: {faces[region][0, :8].tolist()} vs the merge tree's {tree[region][0, :8].tolist()}"
 
 
 # Ties: which tied expert wins is not in the contract (the two sorts break ties differently), the eight largest keys,

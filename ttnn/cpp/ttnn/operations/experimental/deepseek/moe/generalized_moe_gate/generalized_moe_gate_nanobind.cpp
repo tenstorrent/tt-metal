@@ -87,6 +87,9 @@ void bind_generalized_moe_gate(nb::module_& mod) {
             grouped: Run the DeepSeek grouped gate (8 groups × 32 -> top-2-sum per group -> top-4 groups ->
                 top-8) instead of the ungrouped global top-k. Single 256-block (num_blocks == 1) only; forces
                 top-8 + linear renormalization, so ``topk`` and ``output_softmax`` are ignored (default: False).
+            identity_indices: ``input_indices_tensor`` holds the expert ids 0-255 in the op's layout (the
+                transposed arange). On Blackhole the ungrouped single-block gate then writes them itself
+                instead of copying the tensor; elsewhere the flag is ignored (default: False).
 
         Returns:
             Tuple ``(output_tensor, output_indices_tensor)`` — the normalized top-``topk`` scores and the
@@ -104,7 +107,8 @@ void bind_generalized_moe_gate(nb::module_& mod) {
         nb::arg("enable_sigmoid") = false,
         nb::arg("topk") = 8,
         nb::arg("output_softmax") = false,
-        nb::arg("grouped") = false);
+        nb::arg("grouped") = false,
+        nb::arg("identity_indices") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::generalized_moe_gate::detail

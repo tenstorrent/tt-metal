@@ -3,7 +3,8 @@
 
 // Perf kernel of the gate path of the Blackhole generalized MoE gate, one token per iteration. PERF_STAGE 0 runs the
 // binary front end only, 1 adds sum_top2 and step0, 2 the whole gate; MATH_ISOLATE keeps the real unpack, drops the pack.
-// The SFPU-sort path (the op's Blackhole one-block route) runs the generic sort at stage 1, then finalize and step2.
+// The SFPU-sort path (the op's Blackhole one-block route) runs the generic sort at stage 1, then finalize and step2;
+// GMG_IDENTITY_INDICES is that route writing the ids on the SFPU, with no id tile unpacked or copied.
 
 #include <cstdint>
 
@@ -58,12 +59,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* skip_int8 */>(
-                    ID_FORMAT, ID_FORMAT, TILE_SIZE_UNPACK_A);
-                _llk_unpack_A_init_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                    0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, ID_FORMAT, ID_FORMAT);
-                _llk_unpack_A_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                    L1_ADDRESS(buffer_A[IDS_TILE]), ID_FORMAT, ID_FORMAT);
+                if constexpr (!GMG_IDENTITY_INDICES)
+                {
+                    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* skip_int8 */>(
+                        ID_FORMAT, ID_FORMAT, TILE_SIZE_UNPACK_A);
+                    _llk_unpack_A_init_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, ID_FORMAT, ID_FORMAT);
+                    _llk_unpack_A_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                        L1_ADDRESS(buffer_A[IDS_TILE]), ID_FORMAT, ID_FORMAT);
+                }
                 _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false /* skip_int8 */>(
                     formats.unpack_A_src, formats.unpack_A_dst, TILE_SIZE_UNPACK_A);
                 _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, GATE_UNPACK_TRANSPOSE);
@@ -103,7 +107,7 @@ static inline void run_gate()
 {
     if constexpr (GMG_SFPU_SORT)
     {
-        GMG_SFPU_CALL(_generic_moe_gate_topk_, (false, 8, 256, false, true, false), 0u, 0u, 0u);
+        GMG_SFPU_CALL(_generic_moe_gate_topk_, (false, 8, 256, false, true, GMG_IDENTITY_INDICES), 0u, 0u, 0u);
         if constexpr (PERF_STAGE == 1)
         {
             return;
@@ -159,11 +163,18 @@ static inline void token_math(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t num_faces = params.num_faces;
 #endif
-    _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false /* skip_int8 */>(ID_FORMAT);
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        num_faces, ID_FORMAT);
-    _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-        IDS_TILE, ID_FORMAT, ID_FORMAT);
+    if constexpr (!GMG_IDENTITY_INDICES)
+    {
+        _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false /* skip_int8 */>(ID_FORMAT);
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<
+            DataCopyType::A2D,
+            is_fp32_dest_acc_en,
+            BroadcastType::NONE,
+            false /* is_int_fpu_en */,
+            PackMode::Default>(num_faces, ID_FORMAT);
+        _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+            IDS_TILE, ID_FORMAT, ID_FORMAT);
+    }
     _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false /* skip_int8 */>(formats.math);
 
     _llk_math_generalized_moe_gate_eltwise_binary_init_<ELTWISE_BINARY_OP, BINARY_MODE, MATH_FIDELITY>(num_faces, ACC_TO_DEST);

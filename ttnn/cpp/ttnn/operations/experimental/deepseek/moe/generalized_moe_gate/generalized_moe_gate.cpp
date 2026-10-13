@@ -20,7 +20,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> generalized_moe_gate(
     bool enable_sigmoid,
     uint32_t topk,
     bool output_softmax,
-    bool grouped) {
+    bool grouped,
+    bool identity_indices) {
     auto [operation_attributes, tensors_args] =
         ttnn::operations::experimental::deepseek::moe::generalized_moe_gate::GeneralizedMoeGateDeviceOperation::invoke(
             input_tensor,
@@ -33,7 +34,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> generalized_moe_gate(
             enable_sigmoid,
             topk,
             output_softmax,
-            grouped);
+            grouped,
+            identity_indices);
 
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::deepseek::moe::generalized_moe_gate::GeneralizedMoeGateDeviceOperation>(

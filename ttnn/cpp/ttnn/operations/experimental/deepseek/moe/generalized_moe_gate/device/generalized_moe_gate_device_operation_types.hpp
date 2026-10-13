@@ -21,6 +21,8 @@ struct operation_attributes_t {
                                  // grouped gate (8 groups × 32 → top-2-sum → top-4 groups → top-8): single 256-block,
                                  // forced top-8 + linear renorm (topk/output_softmax ignored). Selects the kernel's
                                  // grouped path via the moe_gate_ungrouped_top8=0 named compile-time arg (see builder).
+    bool identity_indices{false};  // input_indices_tensor holds 0-255 in the op's layout; Blackhole's one-block
+                                   // route then writes the ids on the SFPU instead of copying the tensor.
 };
 
 struct tensor_args_t {
