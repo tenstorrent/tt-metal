@@ -425,6 +425,7 @@ void kernel_main() {
     // tile of every row (by both the fused and the non-fused path); pop it once here so the buffer is
     // left balanced. Wait first: a zero-work core never waited for it.
     dfb_mask_padded_obj.wait_front(1);
+    dummy_unpack(dfb_mask_padded);
     dfb_mask_padded_obj.pop_front(1);
 #endif
 }
