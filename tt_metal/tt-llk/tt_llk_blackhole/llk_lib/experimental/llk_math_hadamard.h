@@ -121,6 +121,17 @@ inline void _llk_math_hadamard_h128_init_()
         // persists across all 4 SFPU row groups for the program lifetime.
         sfpu::_init_sfpu_config_reg();
         sfpu::_sfpu_load_config32_(p_sfpu::LREG12, (kH128NormBits >> 16) & 0xFFFF, kH128NormBits & 0xFFFF);
+#ifndef DISABLE_SFPLOADMACRO
+        if constexpr (is_high_fidelity(math_fidelity))
+        {
+            // Macro 0: multiply the loaded rows by LREG12 on the next cycle, store them two cycles later in the load's format.
+            TTI_SFPMUL(p_sfpu::LREG12, 0, p_sfpu::LCONST_0, 12, 0);
+            TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (0x80 | (0 << 3) | 4) << 8);
+            TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, ((2 << 3) | 3) << 8);
+            TTI_SFPCONFIG(0, 4 + 0, 0);
+            TTI_SFPCONFIG(0x010, 8, 1);
+        }
+#endif
     }
 }
 
@@ -204,20 +215,36 @@ inline void _llk_math_hadamard_h128_(std::uint32_t dst_index)
         // pipeline latency — each group of 4 fills one pipeline depth.
         constexpr auto kFP16B = InstrModLoadStore::FP16B;
 
-        TTI_SFPLOAD(p_sfpu::LREG0, kFP16B, ADDR_MOD_7, 0); // rows 0..1
-        TTI_SFPLOAD(p_sfpu::LREG1, kFP16B, ADDR_MOD_7, 2); // rows 2..3
-        TTI_SFPLOAD(p_sfpu::LREG2, kFP16B, ADDR_MOD_7, 4); // rows 4..5
-        TTI_SFPLOAD(p_sfpu::LREG3, kFP16B, ADDR_MOD_7, 6); // rows 6..7
+#ifndef DISABLE_SFPLOADMACRO
+        // At LoFi one vector per section is paced by the unpack, where the macro form reads no faster.
+        if constexpr (high_fidelity)
+        {
+            TTI_SFPLOADMACRO((0 << 2) | p_sfpu::LREG0, kFP16B, ADDR_MOD_7, 0);
+            TTI_SFPLOADMACRO((0 << 2) | p_sfpu::LREG1, kFP16B, ADDR_MOD_7, 2);
+            TTI_SFPLOADMACRO((0 << 2) | p_sfpu::LREG2, kFP16B, ADDR_MOD_7, 4);
+            TTI_SFPLOADMACRO((0 << 2) | p_sfpu::LREG3, kFP16B, ADDR_MOD_7, 6);
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+        }
+        else
+#endif
+        {
+            TTI_SFPLOAD(p_sfpu::LREG0, kFP16B, ADDR_MOD_7, 0); // rows 0..1
+            TTI_SFPLOAD(p_sfpu::LREG1, kFP16B, ADDR_MOD_7, 2); // rows 2..3
+            TTI_SFPLOAD(p_sfpu::LREG2, kFP16B, ADDR_MOD_7, 4); // rows 4..5
+            TTI_SFPLOAD(p_sfpu::LREG3, kFP16B, ADDR_MOD_7, 6); // rows 6..7
 
-        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-        TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
-        TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
-        TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+            TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+            TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+            TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
 
-        TTI_SFPSTORE(p_sfpu::LREG0, kFP16B, ADDR_MOD_7, 0);
-        TTI_SFPSTORE(p_sfpu::LREG1, kFP16B, ADDR_MOD_7, 2);
-        TTI_SFPSTORE(p_sfpu::LREG2, kFP16B, ADDR_MOD_7, 4);
-        TTI_SFPSTORE(p_sfpu::LREG3, kFP16B, ADDR_MOD_7, 6);
+            TTI_SFPSTORE(p_sfpu::LREG0, kFP16B, ADDR_MOD_7, 0);
+            TTI_SFPSTORE(p_sfpu::LREG1, kFP16B, ADDR_MOD_7, 2);
+            TTI_SFPSTORE(p_sfpu::LREG2, kFP16B, ADDR_MOD_7, 4);
+            TTI_SFPSTORE(p_sfpu::LREG3, kFP16B, ADDR_MOD_7, 6);
+        }
     }
 }
 
@@ -225,7 +252,7 @@ inline void _llk_math_hadamard_h128_uninit_()
 {
     // Intentionally empty -- but NOT because the init left no state behind. _llk_math_hadamard_h128_init_
     // programs ADDR_MOD_0/1/2/7 and, under normalize, resets the shared SFPU config registers and writes
-    // kH128NormScale into LREG12 (vConstFloatPrgm0). Neither is undone here:
+    // kH128NormScale into LREG12 (vConstFloatPrgm0), at high fidelity also SFPLOADMACRO macro 0. None is undone here:
     //   - addrmods: every math LLK reprograms the mods it needs in its own init (see the
     //     _configure_addrmod_ call at the top of each), so a stale Hadamard mod is overwritten before use.
     //   - LREG12: persists for the program lifetime by design; a later SFPU op that expects a different
