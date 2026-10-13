@@ -85,6 +85,7 @@ tests/pipeline_reorg/models_sweep_tests.yaml @tenstorrent/metalium-models-mainta
 tests/pipeline_reorg/models_unit_tests.yaml @tenstorrent/metalium-models-maintainers @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/vllm_model_tests.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
 tests/pipeline_reorg/ttsim-skip-list.yaml @roseli-TT @tdowdallTT @mcraigheadTT @tenstorrent-github-bot @dpopovTT
+tests/pipeline_reorg/llk_pr_gate_tests.yaml @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT
 tests/scripts/ @tenstorrent/metalium-developers-infra
 tests/scripts/quasar @kstevensTT @fvranicTT @tenstorrent/metalium-developers-infra
 tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_tune.py @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @tenstorrent/metalium-developers-infra
@@ -694,5 +695,6 @@ tech_reports/real_time_profiler/ @mo-tenstorrent @yusufbashiTT
 tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/python_tests/**/test_perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
+tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 
 /models/experimental/qwen_image_2_1/ @changh95 @uaydonat @mtairum
