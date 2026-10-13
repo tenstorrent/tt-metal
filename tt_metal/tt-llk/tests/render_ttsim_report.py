@@ -33,8 +33,12 @@ except ImportError:
     sys.stderr.write("ERROR: junitparser not installed. Run: pip install junitparser\n")
     sys.exit(2)
 
-
-_TTSIM_ERR_RE = re.compile(r"^\[\d+\] ERROR: (\w+): (\w+): (.*)$", re.MULTILINE)
+# python_tests/ is not a package root for this script (it is invoked by path).
+# Import the shared parser without loading helpers/__init__.py.
+_PYTHON_TESTS = Path(__file__).resolve().parent / "python_tests"
+if str(_PYTHON_TESTS) not in sys.path:
+    sys.path.insert(0, str(_PYTHON_TESTS))
+from ttsim_error import parse_ttsim_error  # noqa: E402
 
 
 @dataclass
@@ -141,13 +145,9 @@ def parse(xml_path: Path) -> tuple[list[FileStats], list[Case], RunMeta]:
             stdout = "\n".join(stdout_parts)
 
             ttsim_cat = ttsim_func = ttsim_detail = None
-            m = _TTSIM_ERR_RE.search(stdout)
-            if m:
-                ttsim_cat, ttsim_func, ttsim_detail = (
-                    m.group(1),
-                    m.group(2),
-                    m.group(3).strip(),
-                )
+            parsed = parse_ttsim_error(stdout)
+            if parsed:
+                ttsim_cat, ttsim_func, ttsim_detail = parsed
 
             c = Case(
                 classname=classname,
@@ -272,6 +272,11 @@ def pct(n: int, d: int) -> float:
     return 100.0 * n / d if d else 0.0
 
 
+def count_nonpassing(failed: int, errored: int, crashed: int) -> int:
+    """Crashed tests count as non-passing: the worker died before a result was recorded."""
+    return failed + errored + crashed
+
+
 def _fmt_dur(seconds: float) -> str:
     if seconds < 60:
         return f"{seconds:.1f}s"
@@ -311,15 +316,17 @@ def render(
 
     # Group failed tests by their exact failure signature. Numeric /hex
     # operands matter (different format codes => different bugs), so we
-    # do NOT normalize. For ttsim crashes the signature is
-    # "[Category] func: detail"; for other failures it's the test's
+    # do NOT normalize. For ttsim errors the signature is
+    # "[Category] func[: detail]"; for other failures it's the test's
     # short failure headline.
     failed_for_sig = [c for c in all_cases if c.outcome in ("failed", "errored")]
     sig_count: Counter[str] = Counter()
     sig_meta: dict[str, dict] = {}
     for c in failed_for_sig:
         if c.ttsim_category:
-            sig = f"[{c.ttsim_category}] {c.ttsim_func or '?'}: {c.ttsim_detail or ''}"
+            sig = f"[{c.ttsim_category}] {c.ttsim_func or '?'}"
+            if c.ttsim_detail:
+                sig = f"{sig}: {c.ttsim_detail}"
             cat = c.ttsim_category
         else:
             sig = c.short.strip().splitlines()[0] if c.short.strip() else "<no message>"
@@ -340,7 +347,7 @@ def render(
 
     # Crashed tests count as non-passing: they were supposed to run but the
     # worker died before recording a result.
-    bad = failed + errored + crashed
+    bad = count_nonpassing(failed, errored, crashed)
     ran = passed + bad
     pass_pct = pct(passed, ran)
     fail_pct = pct(bad, ran)
@@ -455,7 +462,9 @@ def render(
             chip = f"<span class='pill bad'>{html.escape(c.ttsim_category)}</span> "
         headline = html.escape(c.short)
         if c.ttsim_category:
-            headline = f"{chip}<code>{html.escape(c.ttsim_func or '')}</code>: {html.escape(c.ttsim_detail or '')}"
+            headline = f"{chip}<code>{html.escape(c.ttsim_func or '')}</code>"
+            if c.ttsim_detail:
+                headline += f": {html.escape(c.ttsim_detail)}"
         rows_fail.append(
             f"<details class='case'>"
             f"<summary>"

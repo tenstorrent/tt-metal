@@ -333,6 +333,7 @@ void py_module(nb::module_& mod) {
         nb::arg("host_tensor"),
         nb::arg("device_tensor"),
         nb::arg("cq_id") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
         Copies a tensor from host to device.
 
@@ -375,6 +376,7 @@ void py_module(nb::module_& mod) {
         nb::arg("device_tensor"),
         nb::arg("logical_core_filter"),
         nb::arg("cq_id") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
         Copies host tensor data into the pre-allocated device tensor, writing only shards mapped to
         cores in ``logical_core_filter``. The device tensor must use a sharded buffer layout.
