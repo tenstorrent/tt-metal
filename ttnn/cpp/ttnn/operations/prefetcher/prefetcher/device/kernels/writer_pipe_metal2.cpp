@@ -27,6 +27,11 @@
 #include "api/dataflow/prefetcher_pipe.h"
 #include "experimental/kernel_args.h"
 
+// DramPrefetcherPipeSpecFactory runs this kernel and the reader on NOC 0 as a dedicated-NOC pair with
+// disjoint traffic (this kernel only issues posted writes and atomics); the counter re-sync at exit relies
+// on it.
+static_assert(noc_mode == DM_DEDICATED_NOC, "writer_pipe_metal2 shares a dedicated NOC with the reader");
+
 void kernel_main() {
     constexpr uint32_t num_layers = get_arg(args::num_layers);
     constexpr uint32_t num_tensors = get_arg(args::num_tensors);
@@ -67,9 +72,7 @@ void kernel_main() {
     // On a dedicated NOC each RISC compares its own transaction counts with the NOC's hardware counters,
     // which also count the reader's reads. The reader has read every block this kernel sent, so take its
     // reads in now, for the firmware's end-of-kernel checks.
-    if (noc_mode == DM_DEDICATED_NOC) {
-        ncrisc_noc_counters_init();
-    }
+    ncrisc_noc_counters_init();
     sync.reserve_back(1);
     sync.push_back(1);
 }
