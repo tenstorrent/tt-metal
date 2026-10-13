@@ -272,6 +272,46 @@ def get_op_sub_device_lookup_key(op: OpDict, device_id: int) -> Tuple[int, int, 
     return (op_device_id, runtime_id, trace_id, trace_id_counter)
 
 
+# Device CSV columns of the sub-device lookup: PCIe slot, run host ID, trace id, trace id counter, meta data.
+_SUB_DEVICE_LOOKUP_COLUMNS = (0, 7, 8, 9, 14)
+_DEVICE_CSV_COLUMN_COUNT = 15
+
+
+def _distinct_sub_device_rows(device_log_path: Path):
+    """The distinct (PCIe slot, run host ID, trace id, trace id counter, meta data) rows that carry meta data, as
+    strings, ordered by their last occurrence in the device CSV.
+
+    The device CSV has one row per device marker (about 10^8 for a full-model capture) but few distinct rows in these
+    columns, so they are reduced before any meta data is parsed."""
+    try:
+        import numpy as np
+        import pyarrow as pa
+        import pyarrow.compute as pc
+        import pyarrow.csv as pa_csv
+    except ImportError:
+        pa = None
+    if pa is not None:
+        names = [f"c{i}" for i in range(_DEVICE_CSV_COLUMN_COUNT)]
+        keep = [names[i] for i in _SUB_DEVICE_LOOKUP_COLUMNS]
+        table = pa_csv.read_csv(
+            device_log_path,
+            read_options=pa_csv.ReadOptions(skip_rows=2, column_names=names),
+            convert_options=pa_csv.ConvertOptions(
+                include_columns=keep, column_types={name: pa.string() for name in keep}, strings_can_be_null=False
+            ),
+        )
+        table = table.filter(pc.not_equal(table[keep[-1]], ""))
+        table = table.append_column("row", pa.array(np.arange(table.num_rows, dtype=np.int64)))
+        distinct = table.group_by(keep).aggregate([("row", "max")]).sort_by("row_max")
+        return zip(*(distinct[name].to_pylist() for name in keep))
+
+    df = pd.read_csv(
+        device_log_path, skiprows=1, header=0, usecols=list(_SUB_DEVICE_LOOKUP_COLUMNS), dtype=str, na_filter=False
+    )
+    df = df[df.iloc[:, -1] != ""].drop_duplicates(keep="last")
+    return df.itertuples(index=False, name=None)
+
+
 def build_sub_device_id_lookup_from_device_csv(
     device_log_path: Path,
 ) -> Dict[Tuple[int, int, int, int], int]:
@@ -282,18 +322,17 @@ def build_sub_device_id_lookup_from_device_csv(
     if not device_log_path.is_file():
         return lookup
 
-    df = pd.read_csv(device_log_path, skiprows=1, header=0, na_filter=False)
-    for row in df.itertuples():
-        meta_data = parse_device_csv_meta_data(row[15])
+    for device_id, run_host_id, trace_id, trace_id_counter, meta_data_str in _distinct_sub_device_rows(device_log_path):
+        meta_data = parse_device_csv_meta_data(meta_data_str)
         if meta_data is None or "sub_device_id" not in meta_data:
             continue
 
         sub_device_id = int(meta_data["sub_device_id"])
         key = (
-            int(row[1]),
-            int(row[8]),
-            normalize_device_csv_trace_field(row[9]),
-            normalize_device_csv_trace_field(row[10]),
+            int(device_id),
+            int(run_host_id),
+            normalize_device_csv_trace_field(trace_id),
+            normalize_device_csv_trace_field(trace_id_counter),
         )
         if key in lookup and lookup[key] != sub_device_id:
             logger.warning(
@@ -421,6 +460,12 @@ def csv_header_format(header: str) -> str:
     """Convert snake_case header strings into the canonical CSV header format."""
 
     return header.replace("_", " ").upper()
+
+
+# csv_header_format(column) -> column, over the ops CSV columns; the first column wins, as a linear search would.
+_OPS_CSV_HEADER_BY_FORMAT: Dict[str, str] = {}
+for _header in OPS_CSV_HEADER + PERF_COUNTER_CSV_HEADERS:
+    _OPS_CSV_HEADER_BY_FORMAT.setdefault(csv_header_format(_header), _header)
 
 
 def import_tracy_op_logs(
@@ -1465,14 +1510,9 @@ def generate_reports(
                     active_op_record = host_op_record
 
                 for field, fieldData in active_op_record.items():
-                    headerField = csv_header_format(field)
-                    # Check if headerField (uppercase) matches any header in OPS_CSV_HEADER (case-insensitive)
+                    # Check if the field matches any header in OPS_CSV_HEADER (case-insensitive)
                     # If it matches, use the original case from OPS_CSV_HEADER to preserve previous commit's format
-                    matching_header = None
-                    for ops_header in OPS_CSV_HEADER + PERF_COUNTER_CSV_HEADERS:
-                        if headerField == csv_header_format(ops_header):
-                            matching_header = ops_header
-                            break
+                    matching_header = _OPS_CSV_HEADER_BY_FORMAT.get(csv_header_format(field))
 
                     if matching_header:
                         csv_row[matching_header] = fieldData
