@@ -1,0 +1,1 @@
+perf_sfpu_quant_scalar.py::test_perf_sfpu_quant_scalar[quant_op:quant-scale_form:tile-loop_factor:16-input_dimensions:[128, 64]]
