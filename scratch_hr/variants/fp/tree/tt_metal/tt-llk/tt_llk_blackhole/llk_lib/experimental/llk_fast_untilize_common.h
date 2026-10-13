@@ -48,13 +48,16 @@ constexpr bool fast_untilize_face_passes()
     return !is_fp32_dest_acc_en && full_ct_dim > FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST;
 }
 
-// Sixteen-tile pass units, then the rest as a pass unit (9 to 15) or a chunk (2 to 8, too few to repay a second DEST
-// hand-off); 17 left take a chunk of 8 first so no unit of 1 remains.
+// Sixteen-tile pass units; a rest of 2 to 8 goes first as a chunk (too few tiles to repay a second DEST hand-off) and a
+// rest of 9 to 15 last as a pass unit. 17 left take a chunk of 8 first, so no unit of 1 remains.
 constexpr std::uint32_t fast_untilize_next_pass_row_unit(const std::uint32_t remaining_tiles)
 {
-    return remaining_tiles == FAST_UNTILIZE_MAX_PASS_UNIT_DIM + 1 ? FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST
-           : remaining_tiles > FAST_UNTILIZE_MAX_PASS_UNIT_DIM    ? FAST_UNTILIZE_MAX_PASS_UNIT_DIM
-                                                                  : remaining_tiles;
+    constexpr std::uint32_t pass = FAST_UNTILIZE_MAX_PASS_UNIT_DIM;
+    const std::uint32_t rest     = remaining_tiles % pass;
+    return (remaining_tiles > pass && rest >= 2 && rest <= FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST) ? rest
+           : remaining_tiles == pass + 1                                                          ? FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST
+           : remaining_tiles > pass                                                               ? pass
+                                                                                                  : remaining_tiles;
 }
 
 constexpr bool fast_untilize_unit_uses_passes(const std::uint32_t unit_dim)
@@ -62,11 +65,11 @@ constexpr bool fast_untilize_unit_uses_passes(const std::uint32_t unit_dim)
     return unit_dim > FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST;
 }
 
-// The unit the unpack pass MOP is programmed for: the row's first pass unit (a row of 17 starts with its chunk of 8).
+// The unit the unpack pass MOP is programmed for: the row's first pass unit.
 constexpr std::uint32_t fast_untilize_first_pass_unit(const std::uint32_t full_ct_dim)
 {
-    return full_ct_dim == FAST_UNTILIZE_MAX_PASS_UNIT_DIM + 1 ? full_ct_dim - FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST
-                                                              : fast_untilize_next_pass_row_unit(full_ct_dim);
+    const std::uint32_t first = fast_untilize_next_pass_row_unit(full_ct_dim);
+    return fast_untilize_unit_uses_passes(first) ? first : fast_untilize_next_pass_row_unit(full_ct_dim - first);
 }
 
 // MOP key of a pass unit, so a switch between pass and chunk units in one row reprograms the MOP.
