@@ -62,6 +62,9 @@ for v in main mj256 head mj512 mj1024 main2 main2 mj1024 mj512 head mj256 main m
 done
 echo "== reduce pf (base main)"; PROF_BASE=main python $S/tools/prof_reduce.py $OUTD pf 2>&1
 echo "== reduce pf (base main2)"; PROF_BASE=main2 python $S/tools/prof_reduce.py $OUTD pf 2>&1
+for c in "DEVICE KERNEL DURATION PER CORE AVG [ns]" "DEVICE TRISC0 KERNEL DURATION [ns]" "DEVICE TRISC1 KERNEL DURATION [ns]" "DEVICE TRISC2 KERNEL DURATION [ns]" "DEVICE BRISC KERNEL DURATION [ns]" "DEVICE NCRISC KERNEL DURATION [ns]"; do
+  echo "== reduce pf (base main) col $c"; PROF_BASE=main python $S/tools/prof_reduce.py $OUTD pf --col "$c" --ops Conv2dDeviceOperation,HaloDeviceOperation,MoveDeviceOperation,PadDeviceOperation 2>&1
+done
 
 cd $R; place head
 echo "== DONE $(date -u +%T)"
