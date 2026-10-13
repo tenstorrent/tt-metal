@@ -87,7 +87,6 @@ static std::vector<std::string> dispatch_kernel_file_names = {
 // E.g., Changing fabric mode from Disabled to Enabled constructs a new control plane
 using GetControlPlaneFn = std::function<tt::tt_fabric::ControlPlane&()>;
 using GetDispatchQueryManagerFn = std::function<const DispatchQueryManager&()>;
-using GetMaxNumEthCoresFn = std::function<uint32_t()>;
 using GetReadsDispatchCoresFn = std::function<bool(ChipId)>;
 
 // Top-level class describing a Fast Dispatch Kernel (kernel running on a specific core). All FD kernels should inherit
@@ -104,7 +103,6 @@ public:
         dispatch_core_manager& dispatch_core_manager,
         const GetControlPlaneFn& get_control_plane = {},
         const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
-        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
         const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {}) :
         device_id_(device_id),
         servicing_device_id_(servicing_device_id),
@@ -115,7 +113,6 @@ public:
         dispatch_core_manager_(dispatch_core_manager),
         get_control_plane_(get_control_plane),
         get_dispatch_query_manager_(get_dispatch_query_manager),
-        get_max_num_eth_cores_(get_max_num_eth_cores),
         get_reads_dispatch_cores_(get_reads_dispatch_cores) {}
     virtual ~FDKernel() = default;
 
@@ -151,7 +148,6 @@ public:
         int tunnel_index = -1,
         const GetControlPlaneFn& get_control_plane = {},
         const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
-        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
         const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
 
     // Translate core coord using the chip_id from the logical_cxy
@@ -183,7 +179,6 @@ public:
 
     tt::tt_fabric::ControlPlane& get_control_plane_ref() const;
     const DispatchQueryManager& get_dispatch_query_manager_ref() const;
-    uint32_t get_max_num_eth_cores() const;
 
 protected:
     const DispatchMemMap& get_dispatch_mem_map() const;
@@ -239,7 +234,6 @@ protected:
     dispatch_core_manager& dispatch_core_manager_;
     GetControlPlaneFn get_control_plane_;
     GetDispatchQueryManagerFn get_dispatch_query_manager_;
-    GetMaxNumEthCoresFn get_max_num_eth_cores_;
     GetReadsDispatchCoresFn get_reads_dispatch_cores_;
 };
 

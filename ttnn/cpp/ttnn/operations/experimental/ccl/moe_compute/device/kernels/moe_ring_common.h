@@ -201,6 +201,16 @@ constexpr bool w2_last_a2a_iter_half(uint32_t Ht, uint32_t n_cores, uint32_t til
     return tiles_per_txn != DEFAULT_TILES_PER_TXN && last != 0 && last <= W2_HALF_A2A_ITER_TILES_W;
 }
 
+// Combine columns [begin, end) fed by a ring core whose w2 width slice is `tiles` tiles starting at tile `offset`,
+// where a combine column is `col_tiles` tiles wide. A slice may straddle columns, since the ring size need not be a
+// multiple of the column count. A core with an empty slice (hidden_tiles < ring size, so the shard_tiles distribution
+// leaves it nothing) feeds no column: begin == end, so it signals no one and is in no contributor list. dm1 and the
+// program factory must agree on this, so both call these rather than restating the arithmetic.
+constexpr uint32_t w2_combine_col_begin(uint32_t offset, uint32_t col_tiles) { return offset / col_tiles; }
+constexpr uint32_t w2_combine_col_end(uint32_t offset, uint32_t tiles, uint32_t col_tiles) {
+    return tiles == 0 ? w2_combine_col_begin(offset, col_tiles) : (offset + tiles - 1) / col_tiles + 1;
+}
+
 // W2 blocks one ring core reads per (layer, expert): each full a2a iteration is ceil(K / block_tiles_h) blocks of
 // 4 x block_tiles_h, a half last iteration ceil(K / half_block_tiles_h) blocks of 2 x half_block_tiles_h, with
 // K = w2_dram_tiles_h (intermediate tiles, plus one with bias).

@@ -725,7 +725,6 @@ def test_moe_compute_single_card_flash_next(mesh_device, mesh_shape, compute_onl
     12-core Wormhole ring 2 or 1.
     """
     hidden_size = 2560
-    ring_n = effective_matmul_ring_size(mesh_device)
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -735,7 +734,7 @@ def test_moe_compute_single_card_flash_next(mesh_device, mesh_shape, compute_onl
         N=640,
         hidden_size=hidden_size,
         output_height_shard_dim=4,
-        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SILU,
         has_bias=False,
@@ -768,7 +767,6 @@ _MOE_OTHER_SHAPES = {
 def test_moe_compute_single_card_other_shapes(mesh_device, mesh_shape, shape):
     """Single-card MoE compute on a 1x1 mesh for other public expert shapes (compute_only)."""
     hidden_size, intermediate, k, experts, activation, has_bias = _MOE_OTHER_SHAPES[shape]
-    ring_n = effective_matmul_ring_size(mesh_device)
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -778,7 +776,7 @@ def test_moe_compute_single_card_other_shapes(mesh_device, mesh_shape, shape):
         N=intermediate,
         hidden_size=hidden_size,
         output_height_shard_dim=4,
-        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
         dtype=ttnn.bfloat16,
         activation_type=activation,
         has_bias=has_bias,
