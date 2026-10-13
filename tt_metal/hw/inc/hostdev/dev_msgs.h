@@ -169,8 +169,10 @@ struct kernel_config_msg_t {
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[MaxProcessorsPerCoreType];
-    volatile uint8_t mode;     // dispatch mode host/dev
-    volatile uint8_t pad2;     // CODEGEN:skip — align cross_node_dfb_offset
+    volatile uint8_t mode;  // dispatch mode host/dev
+    // Completion slot this program reports done into, relative to the sub-device's base slot (go_msg_t::offset).
+    // Assigned by the host; the worker range-checks it against go_msg_t::max_completion_slot.
+    volatile uint8_t completion_slot;
     // Byte offset of CrossNodeDFB kernel-config region from kernel_config_base.
     // REMOTE_DFB_OFFSET_NONE (0xFF) means no CrossNodeDFBs on this launch.
     // Valid offsets are L1-aligned and therefore never equal 0xFF. Region layout:
@@ -229,9 +231,9 @@ static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t)
 // A go_message slot carries both the run-state signal and the dispatch return address, updated by DISJOINT partial
 // writes so the two never clobber each other: the per-go write touches only {signal, go_count} (bytes 0-1); the
 // reconfigure write (CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR, sent on CQ-ownership change) and the sub-device reset's GO
-// slot clear touch the return address {master_x, master_y, offset} (bytes 4-6). This lets two command queues bounce
-// work to the same workers without a per-go address overwriting the other owner's address. One slot per
-// go_message_index; the worker reads its own slot for both the GO decision and the done-return address.
+// slot clear touch the return address {master_x, master_y, offset, max_completion_slot} (bytes 4-7). This lets two
+// command queues bounce work to the same workers without a per-go address overwriting the other owner's address. One
+// slot per go_message_index; the worker reads its own slot for both the GO decision and the done-return address.
 struct go_msg_t {
     // Word 0 (bytes 0-3): the per-go payload, overwritten by the 4-byte go write each launch.
     union {
@@ -251,8 +253,9 @@ struct go_msg_t {
         struct {
             uint8_t master_x;  // byte 4: owning dispatcher coords (done-return core).
             uint8_t master_y;  // byte 5.
-            uint8_t offset;    // byte 6: completion-stream index for this core's sub-device.
-            uint8_t pad1_;
+            uint8_t offset;    // byte 6: completion-counter index of this core's sub-device's base slot.
+            uint8_t max_completion_slot;  // byte 7: the sub-device's highest completion slot (slot count - 1). A
+                                          // program reports done into counter offset + its launch's completion_slot.
         };
     };
 } __attribute__((packed));

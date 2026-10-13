@@ -227,8 +227,9 @@ extern "C" uint32_t _start1() {
                 if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                     launch_msg_address->kernel_config.enables = 0;
                     launch_msg_address->kernel_config.preload = 0;
-                    uint64_t dispatch_addr =
-                        calculate_dispatch_addr(&mailboxes->go_messages[mailboxes->go_message_index]);
+                    uint64_t dispatch_addr = calculate_program_dispatch_addr(
+                        &mailboxes->go_messages[mailboxes->go_message_index],
+                        launch_msg_address->kernel_config.completion_slot);
                     DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                     CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                     notify_dispatch_core_done(dispatch_addr, noc_index);

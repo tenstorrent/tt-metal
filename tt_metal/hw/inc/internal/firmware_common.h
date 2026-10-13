@@ -234,6 +234,7 @@ void zero_semaphore_regions() {
 
 #if !defined(COMPILE_FOR_TRISC)
 #include "noc_address_backend.h"
+#include "api/debug/assert.h"
 
 // The dispatch return address (where "done" flows back to) is built from the owning dispatcher's coords and the
 // sub-device completion offset carried in the worker's go_message slot (bytes written by the reconfigure command when
@@ -251,6 +252,30 @@ FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_msg) {
     go_msg_t go_msg_snapshot;
     go_msg_snapshot.addr_all = go_msg->addr_all;
     const uint32_t local_addr = DISPATCH_MESSAGE_ADDR + dispatch_message_stride * go_msg_snapshot.offset;
+    return noc_address_backend::dispatch_address(go_msg_snapshot.master_x, go_msg_snapshot.master_y, local_addr);
+}
+
+// The completion slot a program reports done into: the host-assigned launch message slot, range-checked against the
+// sub-device's highest slot (go_msg_t::max_completion_slot). An out-of-range slot is a host bug; watcher asserts on
+// it, and otherwise the program reports into the sub-device's base slot (0).
+FORCE_INLINE uint32_t checked_completion_slot(uint32_t completion_slot, uint32_t max_completion_slot) {
+    ASSERT(completion_slot <= max_completion_slot);
+    return completion_slot <= max_completion_slot ? completion_slot : 0;
+}
+
+// The done-return address for a program: like calculate_dispatch_addr, but the counter is the sub-device's base slot
+// (go_msg_t::offset) plus the program's checked completion slot. Control acks use calculate_dispatch_addr (base slot).
+FORCE_INLINE uint64_t calculate_program_dispatch_addr(volatile go_msg_t* go_msg, uint32_t completion_slot) {
+#ifdef ARCH_QUASAR
+    constexpr uint32_t dispatch_message_stride = L1_ALIGNMENT;
+#else
+    constexpr uint32_t dispatch_message_stride = NOC_STREAM_REG_SPACE_SIZE;
+#endif
+    go_msg_t go_msg_snapshot;
+    go_msg_snapshot.addr_all = go_msg->addr_all;
+    const uint32_t counter =
+        go_msg_snapshot.offset + checked_completion_slot(completion_slot, go_msg_snapshot.max_completion_slot);
+    const uint32_t local_addr = DISPATCH_MESSAGE_ADDR + dispatch_message_stride * counter;
     return noc_address_backend::dispatch_address(go_msg_snapshot.master_x, go_msg_snapshot.master_y, local_addr);
 }
 

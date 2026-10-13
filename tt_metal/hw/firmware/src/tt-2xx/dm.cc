@@ -240,15 +240,17 @@ inline void wait_subordinates() {
 inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
 // Tells the dispatcher this worker reached done: an FDS launch signals over the HW done-wire, a NOC launch
-// notifies over the go-signal return address. worker_completion_group is the FDS group for this launch, or 0
-// when the launch is on the NOC. The caller advances go_processed (the host-facing done marker) first.
-inline void signal_dispatch_core_done(uint32_t worker_completion_group) {
+// notifies over the go-signal return address into its completion slot's counter. worker_completion_group is the FDS
+// group for this launch, or 0 when the launch is on the NOC; completion_slot is the launch message's slot (0 for a
+// control ack). The caller advances go_processed (the host-facing done marker) first.
+inline void signal_dispatch_core_done(uint32_t worker_completion_group, uint32_t completion_slot) {
     if (worker_completion_group != 0) {
         DPRINT("DM0-FW: completion FDS\n");
         signal_worker_completion(worker_completion_group);
     } else {
         DPRINT("DM0-FW: completion NOC\n");
-        const uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[mailboxes->go_message_index]);
+        const uint64_t dispatch_addr =
+            calculate_program_dispatch_addr(&mailboxes->go_messages[mailboxes->go_message_index], completion_slot);
         DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
         notify_dispatch_core_done(dispatch_addr, noc_index);
     }
@@ -355,7 +357,7 @@ extern "C" uint32_t _start1() {
                         // GO, which sets noc_index to a valid value (initialized to 0 so no invalid NOC txn issues).
                         // dispatch_s puts program GOs on the FDS wire, so a reset always returns over the NOC.
                         mailboxes->go_processed = go_snapshot.go_count;
-                        signal_dispatch_core_done(/*worker_completion_group=*/0);
+                        signal_dispatch_core_done(/*worker_completion_group=*/0, /*completion_slot=*/0);
                     } else {
                         // RESET_READ_PTR_FROM_HOST: host-driven, no dispatcher notify.
                         mailboxes->go_processed = go_snapshot.go_count;
@@ -470,7 +472,7 @@ extern "C" uint32_t _start1() {
                 // launch messages in the ring buffer. Must be executed before signalling completion, as after that
                 // the launch message is no longer owned by us.
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                signal_dispatch_core_done(worker_completion_group);
+                signal_dispatch_core_done(worker_completion_group, launch_msg_address->kernel_config.completion_slot);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
             // Non-dispatch mode needs no explicit done publish: the host polls go_processed, already advanced above.

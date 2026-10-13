@@ -126,8 +126,9 @@ inline void init_go_signalling(tt_l1_ptr mailboxes_t* const mailboxes) {
 }
 
 // Readies this launch's FDS done: waits for the go if asked, then queues idle on the done wire so the
-// previous launch's done is not taken for this one. Returns the done group (sub-device index + 1), or 0
-// when the launch completes over the NOC instead.
+// previous launch's done is not taken for this one. Returns the done group, or 0 when the launch completes over the
+// NOC instead. Each sub-device owns a block of (max_completion_slot + 1) groups, indexed by sub-device, and the launch
+// reports into its checked completion slot within that block; group 0 is the idle value on the wire.
 inline uint32_t prepare_worker_completion_signal(
     tt_l1_ptr mailboxes_t* const mailboxes, launch_msg_t* launch_message, bool wait_for_go) {
     if (launch_message->kernel_config.mode != DISPATCH_MODE_DEV) {
@@ -145,7 +146,12 @@ inline uint32_t prepare_worker_completion_signal(
     }
 
     overlay::fds_signalling::worker_clear_done();
-    return go_message_index + 1;
+    go_msg_t go_msg_snapshot;
+    go_msg_snapshot.addr_all = mailboxes->go_messages[go_message_index].addr_all;
+    const uint32_t num_completion_slots = go_msg_snapshot.max_completion_slot + 1;
+    return go_message_index * num_completion_slots +
+           checked_completion_slot(launch_message->kernel_config.completion_slot, go_msg_snapshot.max_completion_slot) +
+           1;
 }
 
 // Sends this launch's done to dispatch by queueing its group on the FDS done wire, where it stays until
