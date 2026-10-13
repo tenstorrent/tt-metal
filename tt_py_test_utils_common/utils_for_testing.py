@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import itertools
 import json
 import time
 
+import pytest
 from loguru import logger
 from tt_py_test_utils_common.utility_functions import comp_pcc, comp_allclose, comp_ulp, comp_equal, divup, roundup
 from tt_py_test_utils_common.utility_functions import ulp as compute_ulp
@@ -56,6 +58,29 @@ TORCH_INTEGER_DTYPES = [
     torch.uint8,
 ]
 NP_INTEGER_DTYPES = [np.byte, np.int16, np.int32, np.int64, np.uint16, np.uint32, np.uint64]
+
+
+def merge_gate_subset(axes, keep):
+    """Cross product of `axes` for a single `pytest.mark.parametrize`, marking `merge_gate` only where `keep(**case)` is true.
+
+    Marks on stacked parametrize decorators combine as a union across axes, so a subset of the cross
+    product can only be gated from one parametrize. `axes` maps each argname to its values, or to a
+    dict of id -> value for an axis that needs explicit ids. List the axes in test-ID order: IDs use the
+    `argname=value` format of tests/ttnn/conftest.py, so they match the IDs of the equivalent stacked
+    decorators, whose bottom decorator comes first.
+
+    Usage: @pytest.mark.parametrize(*merge_gate_subset({...}, keep=lambda **case: ...))
+    """
+    id_to_value_per_axis = [
+        values if isinstance(values, dict) else {f"{name}={value}": value for value in values}
+        for name, values in axes.items()
+    ]
+    params = []
+    for case in itertools.product(*(id_to_value.items() for id_to_value in id_to_value_per_axis)):
+        ids, values = zip(*case)
+        marks = [pytest.mark.merge_gate] if keep(**dict(zip(axes, values))) else []
+        params.append(pytest.param(*values, id="-".join(ids), marks=marks))
+    return list(axes), params
 
 
 def make_disjoint_dram_core_range_set(device):
