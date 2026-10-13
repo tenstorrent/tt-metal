@@ -10,6 +10,7 @@ rendered comment says for a synthetic run.
 """
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -259,6 +260,29 @@ SQUARE = [
     "tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_square.h",
 ]
 PLAN = SimpleNamespace(tool_sha="c" * 40, base_sha="b" * 40, head_sha="a" * 40, applied=SQUARE, not_applied=[])
+
+
+@pytest.fixture
+def one_commit_repo(tmp_path):
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True, text=True).stdout
+
+    git("init", "-q")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "c")
+    return tmp_path, git("rev-parse", "HEAD").strip()
+
+
+@pytest.mark.parametrize("ref", ["--output=/tmp/x", "-p", "HEAD --output=/tmp/x", "no-such-ref", ""])
+def test_a_ref_that_is_not_a_commit_never_reaches_git_as_an_option(one_commit_repo, ref):
+    repo, _ = one_commit_repo
+    with pytest.raises(SystemExit):
+        overlay.commit_sha(repo, ref)
+
+
+def test_refs_resolve_to_full_shas(one_commit_repo):
+    repo, sha = one_commit_repo
+    assert overlay.commit_sha(repo, "HEAD") == sha
+    assert overlay.commit_sha(repo, sha[:10]) == sha
 
 
 def test_a_patch_conflict_names_the_conflicted_files():

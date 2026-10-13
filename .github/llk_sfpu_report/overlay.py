@@ -19,6 +19,7 @@ moves on (a kernel removed on main is still called by an old sfpu_operations.h).
 """
 
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -84,10 +85,25 @@ class Plan:
     not_applied: list = field(default_factory=list)
 
 
+def commit_sha(repo, ref):
+    """The commit ``ref`` names, as a full SHA.
+
+    Refs come from the command line; past this point git only sees SHAs, so no
+    ref can be read as an option (``--output=...``).
+    """
+    sha = "" if ref.startswith("-") else git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha):
+        raise SystemExit(f"not a commit in {repo}: {ref!r}")
+    return sha
+
+
 def make_plan(repo, head, base=None, main_ref="origin/main"):
     repo = Path(repo).resolve()
-    head_sha = git(repo, "rev-parse", f"{head}^{{commit}}")
-    base_sha = git(repo, "rev-parse", f"{base}^{{commit}}") if base else git(repo, "merge-base", main_ref, head_sha)
+    head_sha = commit_sha(repo, head)
+    if base:
+        base_sha = commit_sha(repo, base)
+    else:
+        base_sha = commit_sha(repo, git(repo, "merge-base", commit_sha(repo, main_ref), head_sha, check=False))
     changed = git(repo, "diff", "--name-only", base_sha, head_sha).splitlines()
     return Plan(
         repo=repo,
