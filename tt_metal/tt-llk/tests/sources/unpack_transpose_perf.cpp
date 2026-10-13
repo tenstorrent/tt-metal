@@ -61,11 +61,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
 #ifdef UNPACK_TRANSPOSE_BLOCK
-            // One block per DEST section, as the math and pack threads below take them
-            const std::uint32_t tile_stride = PERF_ADDRESS(PERF_INPUT_A, 1) - PERF_ADDRESS(PERF_INPUT_A, 0);
+            // One block per DEST section, as the math and pack threads below take them, its tiles back to back as in a CB
+            const std::uint32_t tile_stride = GET_L1_HEADERLESS_TILE_SIZE(formats.unpack_A_src);
             for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
             {
-                _llk_unpack_A_transpose_block_(PERF_ADDRESS(PERF_INPUT_A, block_start), std::min(TILE_CNT - block_start, MAX_TILES_DEST), tile_stride);
+                _llk_unpack_A_transpose_block_(
+                    PERF_ADDRESS(PERF_INPUT_A, 0) + block_start * tile_stride, std::min(TILE_CNT - block_start, MAX_TILES_DEST), tile_stride);
             }
 #else
             for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
@@ -178,6 +179,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
 
                 _llk_packer_wait_for_math_done_();
+#ifdef UNPACK_TRANSPOSE_BLOCK
+                // One block pack per DEST section; block-float outputs close every tile
+                if (IS_BFP_FORMAT(formats.pack_dst))
+                {
+                    _llk_pack_block_closed_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                        0, PERF_ADDRESS(PERF_OUTPUT, block_start), block_tiles, (PERF_ADDRESS(PERF_OUTPUT, 1) - PERF_ADDRESS(PERF_OUTPUT, 0)) << 4);
+                }
+                else
+                {
+                    _llk_pack_block_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, PERF_ADDRESS(PERF_OUTPUT, block_start), block_tiles);
+                }
+#else
                 for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                 {
                     LLK_ASSERT(
@@ -185,6 +198,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         "Block tile index exceeds maximum destination tiles");
                     _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(block_tile, PERF_ADDRESS(PERF_OUTPUT, block_start + block_tile));
                 }
+#endif
                 _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
         }
