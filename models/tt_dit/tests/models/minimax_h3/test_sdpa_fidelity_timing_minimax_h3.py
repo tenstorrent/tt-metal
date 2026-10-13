@@ -106,12 +106,10 @@ def test_ring_sdpa_matmul_fidelity_timing_10s(
     )
 
     arms = {}
-    for name, env in (("hifi2", None), ("lofi", "lofi")):
-        if env is None:
-            monkeypatch.delenv(am.SDPA_MM_FIDELITY_ENV, raising=False)
-        else:
-            monkeypatch.setenv(am.SDPA_MM_FIDELITY_ENV, env)
+    for name, fidelity in (("hifi2", ttnn.MathFidelity.HiFi2), ("lofi", ttnn.MathFidelity.LoFi)):
+        monkeypatch.setenv(am.SDPA_MM_FIDELITY_ENV, name)
         arms[name] = _model(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, state)
+        assert arms[name].sdpa_matmul_fidelity == fidelity, f"{name} arm runs {arms[name].sdpa_matmul_fidelity}"
         logger.info(f"T466 {name}: sdpa_matmul_fidelity={arms[name].sdpa_matmul_fidelity}")
 
     def forward(model):
