@@ -39,6 +39,11 @@ for s in ab_dump_tli ab_dump_tli2 ab_dump_tli5 ab_dump_tli1024; do dump A $s; do
 EA=$(elfsum $TT_METAL_CACHE)
 use B B
 echo "TBITS GUARD A=$EA B=$EB"
+export TT_METAL_CACHE=$OUT/cache_T; mkdir -p $TT_METAL_CACHE; t0=$(date +%s)
+timeout -s INT -k 60 3000 python3 -m pytest -q -p no:cacheprovider -o timeout_method=thread \
+  tests/ttnn/nightly/unit_tests/operations/experimental/test_topk_large_indices.py > $OUT/tli_test.log 2>&1
+echo "== test_topk_large_indices.py on B rc=$? $(( $(date +%s) - t0 )) s: $(grep -aE '[0-9]+ (passed|failed)' $OUT/tli_test.log | tail -1)"
+grep -aE '^(FAILED|ERROR)' $OUT/tli_test.log | head -20 | cut -c1-240
 [[ $EA == "$EB" ]] && { echo "TBITS GUARD FAIL: A and B built the same compute kernels"; fail=1; }
 echo "== done $(date -u +%FT%TZ)"
 exit $fail
