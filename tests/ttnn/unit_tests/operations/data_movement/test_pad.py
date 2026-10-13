@@ -1940,6 +1940,21 @@ def test_pad_codegen_program_cache(device):
         )
 
 
+def test_pad_codegen_matches_native_bitwise_for_unrepresentable_value(device):
+    # 0.1 has no exact bfloat16 form, so both routes must round it the same way in the input's partial-tile lanes
+    # and in the new tiles. Each route fills its input's partial tiles in place, hence one input per route.
+    shape = [1, 2, 45, 70]
+    padding = [[0, 0], [0, 0], [0, 19], [0, 26]]
+    value = 0.1
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    native_input = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    codegen_input = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    native = ttnn.to_torch(_pad_force_native(native_input, padding, value))
+    codegen = ttnn.to_torch(_pad_force_codegen(codegen_input, padding, value))
+    assert native.shape == codegen.shape
+    assert torch.equal(native.view(torch.int16), codegen.view(torch.int16))
+
+
 def test_pad_codegen_declines_input_padded_past_tile_grid(device, expect_error):
     # The codegen kernels index tiles from the logical shape, so an input whose padded shape holds extra
     # tiles must stay on native. Native is the reference here because the contract is the routing.
@@ -1958,8 +1973,8 @@ def test_pad_codegen_declines_input_padded_past_tile_grid(device, expect_error):
         _pad_force_codegen(xt, padding, 0.0)
 
 
-def test_pad_partial_tile_fill_with_thousands_of_border_tiles_per_core(device):
-    """Every core walks at least 1365 border tiles: more than a per-tile runtime-arg list fits in the 4094-arg cap."""
+def test_pad_partial_tile_input_with_thousands_of_border_tiles_per_core(device):
+    """Every plane has a partial border tile, at least 1365 per core: all must be filled before the pad copies them."""
     grid = device.compute_with_storage_grid_size()
     c = 1024
     n = -(-1365 * grid.x * grid.y // c)

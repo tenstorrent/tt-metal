@@ -22,20 +22,14 @@ uint32_t cb_depth(uint32_t read_batch, uint32_t write_batch);
 // Aligned bytes of one TILE page.
 uint32_t tile_page_bytes(const Tensor& input);
 
-// Pages of the fill pass's tile scratch CB.
-inline constexpr uint32_t kFillScratchPages = 2;
-
-// Bytes of the fill pass's pad-value CB: one face.
-uint32_t fill_face_bytes(const Tensor& input);
-
 // Page batching of the tile pad's reader and writer.
 struct BatchPlan {
     uint32_t read_batch = 1;
     uint32_t write_batch = 1;
 };
 
-// Per-core CB bytes of the program for `attrs` at `batches` (the fill pass has no batching). The single footprint
-// both the routing gate and the program factory plan against.
+// Per-core CB bytes of the program for `attrs` at `batches`. The single footprint both the routing gate and the
+// program factory plan against.
 uint64_t cb_footprint_bytes(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, const BatchPlan& batches);
 
 // Largest batching whose footprint fits `budget`, halving from the default down to one page each; nullopt when even
@@ -69,9 +63,6 @@ std::optional<ttnn::prim::PadCodegenParams> plan_codegen(
     std::span<const uint32_t> after,
     float value,
     const tt::tt_metal::MemoryConfig& output_mem_config);
-
-// Attributes for the in-place pass that fills the unused lanes of a TILE input's partial border tiles.
-ttnn::prim::PadCodegenParams make_fill_partial_tile_params(const Tensor& input, float value);
 
 // True when the input has a partial border tile.
 bool has_partial_tile(const Tensor& input);

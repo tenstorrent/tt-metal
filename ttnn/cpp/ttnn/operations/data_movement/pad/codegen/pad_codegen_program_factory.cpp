@@ -216,57 +216,6 @@ ProgramDescriptor build_pad_tiled(
     return desc;
 }
 
-ProgramDescriptor build_fill_partial_tile(
-    const PadCodegenParams& attrs, const Tensor& input, Tensor& output, tt::DataFormat format) {
-    Buffer* buffer = output.buffer();
-
-    const auto tile = input.tensor_spec().tile();
-    const uint32_t tile_h = tile.get_height();
-    const uint32_t tile_w = tile.get_width();
-    const uint32_t tile_bytes = operations::data_movement::pad_codegen::tile_page_bytes(input);
-    const uint32_t elem = input.element_size();
-    const uint32_t face_bytes = operations::data_movement::pad_codegen::fill_face_bytes(input);
-
-    const uint32_t Ht = tt::div_up(attrs.H_out, tile_h);
-    const uint32_t Wt = tt::div_up(attrs.W_out, tile_w);
-    const uint32_t h_mod = attrs.H_out % tile_h;
-    const uint32_t w_mod = attrs.W_out % tile_w;
-    const uint32_t planes = attrs.N_out * attrs.C_out;
-
-    // Border tiles of one plane: the bottom tile row when H is partial, then the right tile column when W is
-    // partial, the corner counted once in the row. The kernel walks the same order from each core's range.
-    const uint32_t bottom = (h_mod != 0) ? Wt : 0;
-    const uint32_t right = (w_mod != 0) ? ((h_mod != 0) ? Ht - 1 : Ht) : 0;
-    const uint32_t total = planes * (bottom + right);
-
-    const CoreSplit split = split_work(input, total);
-
-    ProgramDescriptor desc;
-    desc.cbs.push_back(make_cb(
-        split.all_cores, kCbOut, format, tile_bytes, operations::data_movement::pad_codegen::kFillScratchPages));
-    desc.cbs.push_back(make_cb(split.all_cores, kCbPad, format, face_bytes, 1));
-
-    std::vector<uint32_t> ct_args = {kCbOut, tile_bytes, elem, attrs.packed_pad_value, kCbPad};
-    TensorAccessorArgs(*buffer).append_to(ct_args);
-
-    KernelDescriptor kernel_desc;
-    kernel_desc.kernel_source = "ttnn/cpp/ttnn/operations/data_movement/pad/codegen/kernels/fill_partial_tile.cpp";
-    kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    kernel_desc.core_ranges = split.all_cores;
-    kernel_desc.compile_time_args = std::move(ct_args);
-    kernel_desc.config = WriterConfigDescriptor{};
-
-    uint32_t start = 0;
-    for (const auto& core : split.cores_in_order) {
-        const uint32_t n = work_for_core(split, core);
-        kernel_desc.emplace_runtime_args(core, RtArgs{buffer, start, n, Ht, Wt, h_mod, w_mod});
-        start += n;
-    }
-
-    desc.kernels.push_back(std::move(kernel_desc));
-    return desc;
-}
-
 }  // namespace
 
 // The batching follows the L1 free right now, sampled after the output is allocated; compute_program_hash keys the
@@ -286,9 +235,6 @@ ProgramDescriptor PadCodegenProgramFactory::create_descriptor(
     }
 
     const tt::DataFormat format = datatype_to_dataformat_converter(input.dtype());
-    if (operation_attributes.fill_partial_tile) {
-        return build_fill_partial_tile(operation_attributes, input, tensor_return_value, format);
-    }
     return build_pad_tiled(operation_attributes, *batches, input, tensor_return_value, format);
 }
 

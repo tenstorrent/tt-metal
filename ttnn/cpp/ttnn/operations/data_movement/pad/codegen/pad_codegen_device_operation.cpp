@@ -31,12 +31,10 @@ void validate_tensors(const PadCodegenParams& operation_attributes, const PadCod
         TT_FATAL(optional_output->storage_type() == ttnn::StorageType::DEVICE, "Output of pad needs to be on device!");
         TT_FATAL(optional_output->buffer() != nullptr, "Output of pad needs to be allocated in a buffer on device!");
         TT_FATAL(optional_output->device() == input.device(), "Input and output of pad must be on the same device");
-        if (!operation_attributes.fill_partial_tile) {
-            TT_FATAL(
-                optional_output->tensor_spec() ==
-                    ttnn::operations::data_movement::pad_codegen::codegen_output_spec(input, operation_attributes),
-                "Output tensor spec does not match the spec pad builds for this input");
-        }
+        TT_FATAL(
+            optional_output->tensor_spec() ==
+                ttnn::operations::data_movement::pad_codegen::codegen_output_spec(input, operation_attributes),
+            "Output tensor spec does not match the spec pad builds for this input");
     }
 }
 

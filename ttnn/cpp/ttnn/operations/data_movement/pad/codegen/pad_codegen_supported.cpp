@@ -51,7 +51,7 @@ bool tile_geometry_ok(const Tensor& input) {
 }
 
 // Tile ids are derived from the logical shape, so a padded shape with extra tiles (e.g. from
-// tilize_with_val_padding or a view) would be read and filled at the wrong pages.
+// tilize_with_val_padding or a view) would be read at the wrong pages.
 bool padded_shape_is_tile_rounded(const Tensor& input) {
     if (input.layout() != ttnn::TILE_LAYOUT) {
         return true;
@@ -76,25 +76,10 @@ bool dtype_ok(const Tensor& input) {
 }
 
 bool output_matches(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, const Tensor& output) {
-    if (attrs.fill_partial_tile) {
-        return output.buffer() == input.buffer();
-    }
     const auto expected = codegen_output_spec(input, attrs);
     return output.layout() == expected.layout() && output.dtype() == expected.data_type() &&
            same_tile(output.tensor_spec().tile(), expected.tile()) &&
            output.logical_shape() == expected.logical_shape() && output.memory_config() == expected.memory_config();
-}
-
-bool fill_supported(const Tensor& input) {
-    if (!has_partial_tile(input)) {
-        return false;
-    }
-    const auto dtype = input.dtype();
-    if (dtype == DataType::BFLOAT8_B) {
-        return false;
-    }
-    const auto elem = input.element_size();
-    return elem == 2 || elem == 4;
 }
 
 // The gate must not depend on what happens to be allocated right now: routing and the prim's validate evaluate it at
@@ -108,9 +93,6 @@ uint64_t static_l1_ceiling(const Tensor& input) {
 }
 
 uint64_t l1_output_reservation(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
-    if (attrs.fill_partial_tile) {
-        return 0;
-    }
     if (composes_via_bf16(input, attrs)) {
         // The pad runs on a bfloat16 copy of the input, which stays allocated next to the bfloat16 output.
         return static_cast<uint64_t>(get_pending_l1_output_reservation(
@@ -157,17 +139,13 @@ bool structurally_supported(const Tensor& input, const tt::tt_metal::MemoryConfi
 }
 
 bool padding_supported_and_fits(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, uint64_t reserved) {
-    if (attrs.fill_partial_tile) {
-        return fill_supported(input) && tile_fits_l1(input, attrs, reserved);
-    }
     const bool front_padded = attrs.front_n != 0 || attrs.front_c != 0 || attrs.front_h != 0 || attrs.front_w != 0;
     if (front_padded) {
         return false;
     }
+    // Filling block-float partial tiles costs a bfloat16 round trip on top of the pad; this route has not been
+    // measured against native for it.
     if (input.dtype() == DataType::BFLOAT8_B && has_partial_tile(input)) {
-        return false;
-    }
-    if (has_partial_tile(input) && !fill_supported(input)) {
         return false;
     }
     return tile_fits_l1(input, attrs, reserved);
@@ -208,23 +186,15 @@ ttnn::prim::PadCodegenParams base_params(
 
 uint32_t tile_page_bytes(const Tensor& input) { return tile_page_bytes_as(input, input.dtype()); }
 
-uint32_t fill_face_bytes(const Tensor& input) {
-    const auto face_shape = input.tensor_spec().tile().get_face_shape();
-    return face_shape[0] * face_shape[1] * input.element_size();
-}
-
 uint64_t cb_footprint_bytes(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, const BatchPlan& batches) {
     // A composed block-float pad builds its program for the bfloat16 copy.
     const uint64_t tile_bytes =
         tile_page_bytes_as(input, composes_via_bf16(input, attrs) ? DataType::BFLOAT16 : input.dtype());
-    if (attrs.fill_partial_tile) {
-        return kFillScratchPages * tile_bytes + fill_face_bytes(input);
-    }
     return (static_cast<uint64_t>(cb_depth(batches.read_batch, batches.write_batch)) + 1) * tile_bytes;
 }
 
 std::optional<BatchPlan> plan_batches(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, uint64_t budget) {
-    BatchPlan batches = attrs.fill_partial_tile ? BatchPlan{1, 1} : BatchPlan{kReadBatch, kWriteBatch};
+    BatchPlan batches{kReadBatch, kWriteBatch};
     while (cb_footprint_bytes(input, attrs, batches) > budget) {
         if (batches.read_batch == 1 && batches.write_batch == 1) {
             return std::nullopt;
@@ -290,24 +260,7 @@ std::optional<ttnn::prim::PadCodegenParams> plan_codegen(
     return p;
 }
 
-ttnn::prim::PadCodegenParams make_fill_partial_tile_params(const Tensor& input, float value) {
-    const auto& shape = input.logical_shape();
-    ttnn::prim::PadCodegenParams p;
-    p.output_logical_shape = shape;
-    p.N_out = shape[0];
-    p.C_out = shape[1];
-    p.H_out = shape[2];
-    p.W_out = shape[3];
-    p.packed_pad_value = pack_pad_value(input.dtype(), value);
-    p.fill_partial_tile = true;
-    p.output_mem_config = input.memory_config();
-    return p;
-}
-
 tt::tt_metal::TensorSpec codegen_output_spec(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
-    if (attrs.fill_partial_tile) {
-        return input.tensor_spec();
-    }
     return tt::tt_metal::TensorSpec(
         attrs.output_logical_shape,
         tt::tt_metal::TensorLayout(
@@ -341,9 +294,6 @@ bool tile_pad_adds_no_tiles(const Tensor& input, const ttnn::prim::PadCodegenPar
 }
 
 bool is_demoted(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
-    if (attrs.fill_partial_tile) {
-        return false;
-    }
     return tile_pad_adds_no_tiles(input, attrs);
 }
 

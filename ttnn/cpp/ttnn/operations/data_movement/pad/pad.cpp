@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/fill_pad/device/fill_pad_device_operation.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/pad/codegen/pad_codegen_device_operation.hpp"
 #include "ttnn/operations/data_movement/pad/codegen/pad_codegen_supported.hpp"
@@ -507,11 +508,15 @@ std::optional<ttnn::Tensor> pad_tile_codegen(
         return ttnn::experimental::view(encoded, requested_logical_shape, requested_padded_shape);
     }
 
-    // The pad kernel copies whole tiles, so the unused lanes of partial border tiles are filled first.
+    // The pad kernel copies whole tiles, so the unused lanes of partial border tiles are filled first. This is the
+    // device op native's fill_implicit_tile_padding launches, with the same value and memory config, so those lanes
+    // hold the same bits on either route. The gate admits only interleaved, non-block-float inputs, for which that
+    // wrapper adds just a rank-3 view; fill_pad folds every leading dim into its slice count, so rank 4 is equivalent.
+    ttnn::Tensor source = input_4d;
     if (pc::has_partial_tile(input_4d)) {
-        ttnn::prim::pad_codegen(input_4d, pc::make_fill_partial_tile_params(input_4d, value), input_4d);
+        source = ttnn::prim::fill_pad(input_4d, value, memory_config_arg.value_or(input_tensor.memory_config()));
     }
-    auto output = ttnn::prim::pad_codegen(input_4d, params);
+    auto output = ttnn::prim::pad_codegen(source, params);
     return ttnn::experimental::view(output, requested_logical_shape, requested_padded_shape);
 }
 
