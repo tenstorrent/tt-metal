@@ -204,6 +204,8 @@ Notes:
   a multi-hour sweep.
 - Writes `<output-root>/power_cases.txt` (overridable with `--cases-file-name`), then calls
   `compare_runs2.py -i <output-root> -c <output-root>/power_cases.txt`.
+- To recreate the published results, `export LONG_MATMUL_MODE=legacy` first; every run inherits
+  it. The default (`updated`) changes how cases 1–5 load the writer; see `long_matmul`'s README.
 
 See [`long_matmul`'s README](../../tt_metal/programming_examples/long_matmul/README.md#power_case--the-six-canonical-scenarios)
 for what each `POWER_CASE` actually disables or amplifies in the kernels.
