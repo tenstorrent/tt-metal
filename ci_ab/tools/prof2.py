@@ -1,4 +1,4 @@
-# Op-level device time of COL reduces with one input tile per output (Qwen 3.6 MoE routing max), one side per process.
+# Op-level device time and logical output bits of reduces over H (Qwen 3.6 MoE routing max and others), one side per process.
 # usage: python -m tracy -r -p --no-web-server -o OUT prof2.py <side> <run>
 import hashlib
 import sys
@@ -9,20 +9,23 @@ from tracy import signpost
 
 REPS = 6
 CASES = [
-    ("q36_prefill4096_max_1x128x32x64", (1, 128, 32, 64), "max"),
-    ("q36_prefill2048_max_1x64x32x64", (1, 64, 32, 64), "max"),
-    ("q36_decode_b32_max_1x1x32x64", (1, 1, 32, 64), "max"),
-    ("colsum_1x1x32x8192", (1, 1, 32, 8192), "sum"),
+    ("q36_prefill4096_max_1x128x32x64", (1, 128, 32, 64), "max", ttnn.bfloat16),
+    ("q36_prefill2048_max_1x64x32x64", (1, 64, 32, 64), "max", ttnn.bfloat16),
+    ("q36_decode_b32_max_1x1x32x64", (1, 1, 32, 64), "max", ttnn.bfloat16),
+    ("colsum_1x1x32x8192", (1, 1, 32, 8192), "sum", ttnn.bfloat16),
+    ("colsum_fp32_1x1x32x8192", (1, 1, 32, 8192), "sum", ttnn.float32),
+    ("colsum_ht4_1x1x128x4096", (1, 1, 128, 4096), "sum", ttnn.bfloat16),
+    ("colmean_1x1x1024x768", (1, 1, 1024, 768), "mean", ttnn.bfloat16),
 ]
 
 
 def main():
     side, run = sys.argv[1], sys.argv[2]
     device = ttnn.open_device(device_id=0)
-    for name, shape, op in CASES:
+    for name, shape, op, dt in CASES:
         torch.manual_seed(58709)
-        x = ttnn.from_torch(torch.rand(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        fn = ttnn.max if op == "max" else ttnn.sum
+        x = ttnn.from_torch(torch.randn(shape), dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
+        fn = {"max": ttnn.max, "sum": ttnn.sum, "mean": ttnn.mean}[op]
         y = None
         for k in range(REPS):
             ttnn.synchronize_device(device)

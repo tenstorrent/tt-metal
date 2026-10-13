@@ -32,6 +32,9 @@ for d in sorted(glob.glob(f"{O}/prof_*_*")):
             pass
     for n, reps in acc.items():
         per[n][side][int(run)] = statistics.median(reps.values())
+for n in names:
+    for side, runs in sorted(per[n].items()):
+        print("RAW", n, side, " ".join(f"{k}:{v:.0f}" for k, v in sorted(runs.items())))
 print("| case | H ns (runs) | H2 A/A % | " + " | ".join(f"{v} ns | {v} % | {v} blocks" for v in VS) + " |")
 print("|---|---|---|" + "---|---|---|" * len(VS))
 for n in names:
@@ -49,7 +52,7 @@ for n in names:
         hs, vs = sorted(s["H"].items()), sorted(s[v].items())
         # block b holds runs 2b-1 and 2b of every side
         signs = []
-        for b in (1, 2):
+        for b in sorted({(k + 1) // 2 for k, _ in hs}):
             a = [x for k, x in hs if (k + 1) // 2 == b]
             c = [x for k, x in vs if (k + 1) // 2 == b]
             if a and c:
