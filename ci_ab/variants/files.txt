@@ -8,3 +8,4 @@ tt_metal/tt-llk/tt_llk_blackhole/llk_lib/experimental/llk_pack_fast_tilize.h
 tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_tilize.h
 ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp
 ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/compute/bilinear.cpp
+ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp
