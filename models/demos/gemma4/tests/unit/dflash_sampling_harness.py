@@ -13,6 +13,7 @@ def sampling_functions():
     from models.tt_transformers.tt.generator import Generator
 
     return {
+        "_get_sampling_dp": Generator._get_sampling_dp,
         "_prepare_decode_sampling_state": Generator._prepare_decode_sampling_state,
         "_apply_sampling_slot_remap": Generator._apply_sampling_slot_remap,
         **{
@@ -106,6 +107,7 @@ def attach_sampling_state(model):
     model.sampling_commands = []
     for target in model.model:
         target.sampling = RecordingSampler(getattr(target, "sampling_dp", 1))
+    model._get_sampling_dp = MethodType(production["_get_sampling_dp"], model)
     model._apply_sampling_slot_remap = MethodType(production["_apply_sampling_slot_remap"], model)
 
     def prepare(self, sampling_params, **kwargs):

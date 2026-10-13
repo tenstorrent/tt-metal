@@ -2700,6 +2700,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 "submission; restart the model runner before sampling again"
             )
 
+    def _get_sampling_dp(self):
+        # Sampling groups can follow mesh rows even when data_parallel is 1.
+        sampling_dp_values = [getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel)]
+        assert (
+            len(set(sampling_dp_values)) == 1
+        ), f"All model instances must have the same sampling_dp, got {sampling_dp_values}"
+        # Data parallelism and row-sharded sampling are mutually exclusive.
+        return max(self.data_parallel, sampling_dp_values[0])
+
     def _prepare_decode_sampling_state(
         self,
         sampling_params,
@@ -2717,13 +2726,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         start_pos contains one position tensor per model. The return value
         contains each model's active seed slots for the next actual sample.
         """
-        # Sampling groups can follow mesh rows even when data_parallel is 1.
-        sampling_dp_values = [getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel)]
-        assert (
-            len(set(sampling_dp_values)) == 1
-        ), f"All model instances must have the same sampling_dp, got {sampling_dp_values}"
-        # Data parallelism and row-sharded sampling are mutually exclusive.
-        sampling_dp = max(self.data_parallel, sampling_dp_values[0])
+        sampling_dp = self._get_sampling_dp()
         sampling_params_list = chunk_sampling_params(sampling_params, sampling_dp)
         prompt_chunks = (
             torch.chunk(prompt_tokens, sampling_dp, 0) if prompt_tokens is not None else [None] * sampling_dp
@@ -2770,6 +2773,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # remap, so retire seed state that no longer belongs to a live row.
             if active_seed_slots is not None:
                 sampling_module.seed_manager.deactivate_slots_except(active_seed_slots)
+            # Register request seeds so SeedManager uses the requested seeded stream instead of unseeded RNG.
             # Host positions may realign RNG counters only when reload_inputs
             # makes positions authoritative or a command resets the seed slot.
             if active_seed_slots is not None and (reload_inputs or reload_sampling_params or reset_sampling_state):
@@ -2793,6 +2797,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     )
                 else:
                     reseeded_slots = []
+                # A lagging start_pos would rewind RNG counters and make seeded output timing-dependent.
                 align_slots = active_seed_slots if reload_inputs else reseeded_slots
                 if align_slots:
                     sampling_module.seed_manager.align_seed_counters_to_positions(
@@ -2819,12 +2824,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         grammar_bitmask,
     ):
         if grammar_bitmask is not None:
-            sampling_dp_values = [getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel)]
-            assert (
-                len(set(sampling_dp_values)) == 1
-            ), f"All model instances must have the same sampling_dp, got {sampling_dp_values}"
-
-            sampling_dp = max(self.data_parallel, sampling_dp_values[0])
+            sampling_dp = self._get_sampling_dp()
             if sampling_dp != self.data_parallel:
                 raise ValueError(
                     "device grammar sampling does not support row-sharded sampling: "
