@@ -80,6 +80,9 @@ class KDARecurrenceProgramConfig:
     summary_group_chunks: int = 20
     affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
     scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
+    # Gather the SP prefix summaries with high_bw_all_gather into a persistent DRAM buffer. It needs a ring or line
+    # of direct links along the SP axis; geometries without that keep ttnn.all_gather.
+    high_bw_prefix_gather: bool = False
 
     def __post_init__(self) -> None:
         if self.local_scan_strategy not in ("direct", "grouped"):
@@ -196,7 +199,10 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         # sequences; grouped scan trades P local scans of N/P chunks plus a log2(P) prefix for summary
         # overhead and requires batch_heads * P worker owners. K3 at T=5120 uses grouped scan.
         recurrence=KDARecurrenceProgramConfig(
-            local_scan_strategy="grouped", summary_group_chunks=group_chunks[active_seq_len_local]
+            local_scan_strategy="grouped",
+            summary_group_chunks=group_chunks[active_seq_len_local],
+            # Galaxy SP8xTP4 at T=5120: 136 us instead of 184 us for the 1.6 MB-per-chip summary gather.
+            high_bw_prefix_gather=active_seq_len_local == _TUNED_PROJECTION_ROWS,
         ),
         qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,
