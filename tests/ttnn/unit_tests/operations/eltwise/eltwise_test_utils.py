@@ -404,6 +404,11 @@ def to_tt_tensor(
     )
 
 
+def to_float32_tt_tensor(input_tensor, device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    """Convert a torch tensor to a ttnn.float32 tensor on device with TILE_LAYOUT and DRAM."""
+    return to_tt_tensor(input_tensor, device, dtype=ttnn.float32, layout=layout, memory_config=memory_config)
+
+
 def run_binary(device, ttnn_op, input_a, input_b, *, golden_kwargs=None, **op_kwargs):
     """Run a tensor-tensor ttnn binary op and return ``(golden, result)``.
 
