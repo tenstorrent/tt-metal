@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -41,6 +42,10 @@
 #include "watcher_device_reader.hpp"
 #include <impl/debug/watcher_server.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <umd/device/cluster.hpp>
+#include <umd/device/chip/chip.hpp>
+#include <umd/device/tt_device/tt_device.hpp>
+#include <umd/device/tt_device/remote_communication.hpp>
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 
@@ -489,6 +494,40 @@ void WatcherDeviceReader::Dump(FILE* file) {
         log_debug(tt::LogMetal, "Watcher checking device {}", device_id);
     }
 
+    // PROBE ONLY (T3K watcher dump A/B): time this device's dump and report the UMD gateway it used.
+    struct DumpTimer {
+        tt::tt_metal::MetalEnvImpl& env;
+        ChipId device_id;
+        std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+        ~DumpTimer() {
+            const double ms =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            auto& cluster = env.get_cluster();
+            const ChipId mmio = cluster.get_associated_mmio_device(device_id);
+            std::string gw = "mmio";
+            if (mmio != device_id) {
+                gw = "?";
+                try {
+                    auto* rc = cluster.get_driver()->get_chip(device_id)->get_tt_device()->get_remote_communication();
+                    const auto xy = rc->get_remote_transfer_ethernet_core();
+                    gw = fmt::format("chip{} xy({},{})", mmio, xy.x, xy.y);
+                    const auto& soc = cluster.get_soc_desc(mmio);
+                    for (uint32_t ch = 0; ch < soc.get_num_eth_channels(); ch++) {
+                        for (const auto cs : {CoordSystem::NOC0, CoordSystem::TRANSLATED, CoordSystem::LOGICAL}) {
+                            const auto c = soc.get_eth_core_for_channel(ch, cs);
+                            if (c.x == xy.x && c.y == xy.y) {
+                                gw += fmt::format(" ch{}", ch);
+                            }
+                        }
+                    }
+                } catch (const std::exception& e) {
+                    gw = fmt::format("err {}", e.what());
+                }
+            }
+            log_info(tt::LogMetal, "WDUMP dev {} {:.1f} ms gw {}", device_id, ms, gw);
+        }
+    } dump_timer{env, static_cast<ChipId>(device_id)};
+
     DumpData dump_data;
 
     // Dump worker cores
@@ -527,8 +566,8 @@ void WatcherDeviceReader::Dump(FILE* file) {
         const auto& hal = env.get_hal();
         if (hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
             const auto& soc_d = env.get_cluster().get_soc_desc(device_id);
-            for (const auto& logical_dispatch_core : tt::tt_metal::detail::get_quasar_soc_dispatch_engine_logical_cores(
-                     soc_d)) {
+            for (const auto& logical_dispatch_core :
+                 tt::tt_metal::detail::get_quasar_soc_dispatch_engine_logical_cores(soc_d)) {
                 Core::Create(logical_dispatch_core, HalProgrammableCoreType::DISPATCH, *this, dump_data).Dump();
             }
         }

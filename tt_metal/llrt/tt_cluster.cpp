@@ -86,7 +86,8 @@ std::unique_ptr<tt::umd::ClusterDescriptor> get_mock_cluster_desc(const tt::llrt
 }  // namespace
 namespace tt {
 
-std::unordered_set<ChipId> Cluster::simulator_target_devices(const std::filesystem::path& simulator_dir, tt::ARCH arch) {
+std::unordered_set<ChipId> Cluster::simulator_target_devices(
+    const std::filesystem::path& simulator_dir, tt::ARCH arch) {
     // Open every chip UMD discovery finds for wh/bh.
     const bool umd_discovers_topology = simulator_dir.extension() == ".so" && arch != tt::ARCH::QUASAR;
     std::error_code error;  // An unreadable directory counts as no layout, rather than throwing.
@@ -279,8 +280,7 @@ BoardType Cluster::get_board_type(ChipId chip_id) const { return this->get_clust
 bool Cluster::is_base_routing_fw_enabled() const { return Cluster::is_base_routing_fw_enabled(this->cluster_type_); }
 
 void Cluster::generate_cluster_descriptor() {
-    this->cluster_type_ =
-        Cluster::get_cluster_type_from_cluster_desc(this->rtoptions_, this->get_cluster_desc());
+    this->cluster_type_ = Cluster::get_cluster_type_from_cluster_desc(this->rtoptions_, this->get_cluster_desc());
     if (this->cluster_type_ == tt::tt_metal::ClusterType::CUSTOM) {
         TT_FATAL(
             this->rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified(),
@@ -331,7 +331,8 @@ void Cluster::initialize_device_drivers() {
     this->get_metal_desc_from_tt_desc();
     this->validate_harvesting_masks();
 
-    for (const auto& [mmio_device_id, controlled_devices] : this->get_cluster_desc()->get_chips_grouped_by_closest_mmio()) {
+    for (const auto& [mmio_device_id, controlled_devices] :
+         this->get_cluster_desc()->get_chips_grouped_by_closest_mmio()) {
         this->assign_mem_channels_to_devices(mmio_device_id, controlled_devices);
     }
 
@@ -432,7 +433,8 @@ void Cluster::get_metal_desc_from_tt_desc() {
     }
 }
 
-const std::unordered_map<tt::tt_metal::CoreCoord, int32_t>& Cluster::get_virtual_routing_to_profiler_flat_id(ChipId chip_id) const {
+const std::unordered_map<tt::tt_metal::CoreCoord, int32_t>& Cluster::get_virtual_routing_to_profiler_flat_id(
+    ChipId chip_id) const {
     return this->virtual_routing_to_profiler_flat_id_.at(this->get_board_type(chip_id));
 }
 
@@ -491,6 +493,41 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     }
 
     this->driver_ = std::move(device_driver);
+
+    // PROBE ONLY (T3K watcher dump A/B): log each MMIO chip's links to remote chips and optionally pin
+    // the UMD remote-transfer (gateway) ethernet core to one channel via TT_METAL_DEBUG_UMD_GATEWAY_CHAN.
+    if (this->driver_ != nullptr && this->arch_ == tt::ARCH::WORMHOLE_B0) {
+        auto* desc = this->driver_->get_cluster_description();
+        const char* pin = std::getenv("TT_METAL_DEBUG_UMD_GATEWAY_CHAN");
+        for (const auto mmio : this->driver_->get_target_mmio_device_ids()) {
+            const auto& conns = desc->get_ethernet_connections();
+            if (conns.contains(mmio)) {
+                for (const auto& [chan, peer] : conns.at(mmio)) {
+                    const auto peer_chip = std::get<0>(peer);
+                    if (!desc->is_chip_mmio_capable(peer_chip)) {
+                        const auto core =
+                            this->driver_->get_soc_descriptor(mmio).get_eth_core_for_channel(chan, CoordSystem::NOC0);
+                        log_info(
+                            tt::LogMetal,
+                            "GWPROBE link chans mmio {} ch{} noc0({},{}) -> remote chip {} ch{}",
+                            mmio,
+                            chan,
+                            core.x,
+                            core.y,
+                            peer_chip,
+                            std::get<1>(peer));
+                    }
+                }
+            }
+            if (pin != nullptr && pin[0] != '\0') {
+                const auto chan = static_cast<uint32_t>(std::stoul(pin));
+                const auto core =
+                    this->driver_->get_soc_descriptor(mmio).get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
+                this->driver_->configure_active_ethernet_cores_for_mmio_device(mmio, {core});
+                log_info(tt::LogMetal, "GWPROBE pinned gateway of mmio {} to ch{}", mmio, chan);
+            }
+        }
+    }
 }
 
 void Cluster::set_hal(const tt_metal::Hal* hal) {
@@ -557,13 +594,9 @@ ChipId Cluster::get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) c
     return 0;
 }
 
-size_t Cluster::number_of_user_devices() const {
-    return this->driver_->get_target_device_ids().size();
-}
+size_t Cluster::number_of_user_devices() const { return this->driver_->get_target_device_ids().size(); }
 
-std::set<ChipId> Cluster::user_exposed_chip_ids() const {
-    return this->driver_->get_target_device_ids();
-}
+std::set<ChipId> Cluster::user_exposed_chip_ids() const { return this->driver_->get_target_device_ids(); }
 
 const metal_SocDescriptor& Cluster::get_soc_desc(ChipId chip) const {
     if (!this->sdesc_per_chip_.contains(chip)) {
@@ -690,8 +723,8 @@ tt::tt_metal::CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates
     if (core_type == CoreType::DISPATCH) {
         const tt::tt_metal::CoreCoord noc0_coord =
             soc_desc.get_physical_dispatch_engine_core_from_logical(logical_coord);
-        tt::umd::CoreCoord translated_coord = soc_desc.translate_coord_to(
-            {noc0_coord, CoreType::DISPATCH, CoordSystem::NOC0}, CoordSystem::TRANSLATED);
+        tt::umd::CoreCoord translated_coord =
+            soc_desc.translate_coord_to({noc0_coord, CoreType::DISPATCH, CoordSystem::NOC0}, CoordSystem::TRANSLATED);
         return {translated_coord.x, translated_coord.y};
     }
 
@@ -706,7 +739,8 @@ tt_cxy_pair Cluster::get_virtual_coordinate_from_logical_coordinates(
         logical_coordinate.chip, tt::tt_metal::CoreCoord(logical_coordinate.x, logical_coordinate.y), core_type);
     return tt_cxy_pair(logical_coordinate.chip, xy_virtual_coord);
 }
-tt::tt_metal::CoreCoord Cluster::get_virtual_coordinate_from_physical_coordinates(ChipId chip_id, tt::tt_metal::CoreCoord physical_coord) const {
+tt::tt_metal::CoreCoord Cluster::get_virtual_coordinate_from_physical_coordinates(
+    ChipId chip_id, tt::tt_metal::CoreCoord physical_coord) const {
     const auto& soc_desc = this->get_soc_desc(chip_id);
     tt::umd::CoreCoord translated_coord =
         soc_desc.translate_coord_to(physical_coord, CoordSystem::NOC0, CoordSystem::TRANSLATED);
@@ -725,7 +759,8 @@ tt::tt_metal::CoreCoord Cluster::get_physical_coordinate_from_logical_coordinate
     return soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
 }
 
-tt::tt_metal::CoreCoord Cluster::get_logical_ethernet_core_from_virtual(ChipId chip, tt::tt_metal::CoreCoord core) const {
+tt::tt_metal::CoreCoord Cluster::get_logical_ethernet_core_from_virtual(
+    ChipId chip, tt::tt_metal::CoreCoord core) const {
     tt::umd::CoreCoord logical_core =
         get_soc_desc(chip).translate_coord_to(core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
     return {logical_core.x, logical_core.y};
@@ -819,7 +854,8 @@ void Cluster::write_dram_vec(
         dram_view,
         desc_to_use.get_num_dram_views());
 
-    tt::tt_metal::CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view, tt_metal::NOC::NOC_0);
+    tt::tt_metal::CoreCoord dram_core_coord =
+        desc_to_use.get_preferred_worker_core_for_dram_view(dram_view, tt_metal::NOC::NOC_0);
     tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
     size_t offset = desc_to_use.get_address_offset(dram_view);
     write_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset, ordering);
@@ -833,7 +869,8 @@ void Cluster::read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_i
         dram_view,
         desc_to_use.get_num_dram_views());
 
-    tt::tt_metal::CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view, tt_metal::NOC::NOC_0);
+    tt::tt_metal::CoreCoord dram_core_coord =
+        desc_to_use.get_preferred_worker_core_for_dram_view(dram_view, tt_metal::NOC::NOC_0);
     tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
     size_t offset = desc_to_use.get_address_offset(dram_view);
     read_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset);
@@ -1020,8 +1057,12 @@ void Cluster::noc_multicast_write(
 }
 
 void Cluster::noc_multicast_write(
-    const void* mem_ptr, uint32_t sz_in_bytes, ChipId chip_id, tt::tt_metal::CoreCoord core_start, tt::tt_metal::CoreCoord core_end, uint64_t addr)
-    const {
+    const void* mem_ptr,
+    uint32_t sz_in_bytes,
+    ChipId chip_id,
+    tt::tt_metal::CoreCoord core_start,
+    tt::tt_metal::CoreCoord core_end,
+    uint64_t addr) const {
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
@@ -1147,7 +1188,8 @@ std::unordered_map<ChipId, std::vector<tt::tt_metal::CoreCoord>> Cluster::get_et
             std::vector<tt::tt_metal::CoreCoord> active_ethernet_cores;
 
             for (const auto& channel_pair :
-                 this->get_cluster_desc()->get_directly_connected_ethernet_channels_between_chips(chip_id, other_chip_id)) {
+                 this->get_cluster_desc()->get_directly_connected_ethernet_channels_between_chips(
+                     chip_id, other_chip_id)) {
                 EthernetChannel local_chip_chan = std::get<0>(channel_pair);
                 active_ethernet_cores.emplace_back(
                     get_soc_desc(chip_id).get_eth_core_for_channel(local_chip_chan, CoordSystem::LOGICAL));
@@ -1394,7 +1436,8 @@ std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(
     return fabric_ethernet_channels;
 }
 
-std::vector<tt::tt_metal::CoreCoord> Cluster::get_fabric_ethernet_routers_between_src_and_dest(ChipId src_id, ChipId dst_id) const {
+std::vector<tt::tt_metal::CoreCoord> Cluster::get_fabric_ethernet_routers_between_src_and_dest(
+    ChipId src_id, ChipId dst_id) const {
     std::vector<tt::tt_metal::CoreCoord> fabric_ethernet_channels;
     const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(src_id);
     TT_FATAL(connected_chips.contains(dst_id), "Dst Chip {} is not connected to Src Chip {}", dst_id, src_id);
@@ -1413,7 +1456,8 @@ bool Cluster::is_ethernet_link_up(ChipId chip_id, const tt::tt_metal::CoreCoord&
     return this->get_cluster_desc()->ethernet_core_has_active_ethernet_link(chip_id, eth_chan);
 }
 
-std::tuple<ChipId, tt::tt_metal::CoreCoord> Cluster::get_connected_ethernet_core(std::tuple<ChipId, tt::tt_metal::CoreCoord> eth_core) const {
+std::tuple<ChipId, tt::tt_metal::CoreCoord> Cluster::get_connected_ethernet_core(
+    std::tuple<ChipId, tt::tt_metal::CoreCoord> eth_core) const {
     const auto& soc_desc = get_soc_desc(std::get<0>(eth_core));
     EthernetChannel eth_chan = soc_desc.logical_eth_core_to_chan_map.at(std::get<1>(eth_core));
     TT_FATAL(
@@ -1471,7 +1515,8 @@ std::vector<tt::tt_metal::CoreCoord> Cluster::get_ethernet_sockets(ChipId local_
     return local_ethernet_sockets.at(remote_chip);
 }
 
-tt::tt_metal::CoreCoord Cluster::ethernet_core_from_logical_core(ChipId chip_id, const tt::tt_metal::CoreCoord& logical_core) const {
+tt::tt_metal::CoreCoord Cluster::ethernet_core_from_logical_core(
+    ChipId chip_id, const tt::tt_metal::CoreCoord& logical_core) const {
     const metal_SocDescriptor& soc_desc = get_soc_desc(chip_id);
     return soc_desc.get_physical_ethernet_core_from_logical(logical_core);
 }
