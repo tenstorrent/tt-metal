@@ -193,5 +193,5 @@ To enable the gate:
   retuned when populating the golden.
 - The CI flow uses only the device profiler, so the gate is identical on Wormhole and
   Blackhole. The realtime profiler is optional (`--use-realtime-profiler`) and guarded by
-  `IsProgramRealtimeProfilerActive()` in the binary — if requested where it is inactive it
+  `IsProgramRealtimeProfilerActive(mesh)` in the binary — if requested where it is inactive it
   simply warns and skips, so the KERNEL-zone gate always applies.
