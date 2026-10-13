@@ -14,16 +14,24 @@ METRICS = {
 }
 
 
-def lookup(table, model, config, hosts):
+def power_class():
+    from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_tdp_limit_max, is_high_power
+
+    if is_high_power():
+        return "14kw"
+    try:
+        tdp = get_tdp_limit_max()
+    except Exception as e:
+        tdp = f"unreadable ({type(e).__name__})"
+    print(f"perf baseline: TDP_LIMIT_MAX={tdp} is below 130 W; using 8kw", file=sys.stderr)
+    return "8kw"
+
+
+def lookup(table, model, config, cls):
     entry = table["baselines"].get(model, {}).get(config)
     if entry is None:
         return None
-    power = {host: cls for cls, members in table["power"].items() for host in members}
-    names = [host.split(".")[0] for host in hosts.split(",") if host]
-    unknown = [host for host in names if host not in power]
-    if unknown:
-        print(f"perf baseline WARN: {unknown} not in the power table; treating them as 8kw", file=sys.stderr)
-    cls = "14kw" if names and all(power.get(host) == "14kw" for host in names) else "8kw"
+    cls = cls or power_class()
     if cls not in entry:
         print(f"perf baseline: none for {model} {config} on {cls}", file=sys.stderr)
         return None
@@ -65,7 +73,7 @@ def main():
     parser.add_argument("--table", default="")
     parser.add_argument("--model", default="")
     parser.add_argument("--config", default="")
-    parser.add_argument("--hosts", default="", help="comma-separated hostnames")
+    parser.add_argument("--power", default="", choices=["", "8kw", "14kw"], help="skip the tt-smi TDP probe")
     parser.add_argument("--expected-tps", default="", help="explicit tok/s target; overrides the table")
     parser.add_argument("--margin", default="", help="margin for --expected-tps (default 0.15); the table carries its own")
     parser.add_argument("--require", default="0", help="1 fails the run if nothing was measured")
@@ -76,7 +84,7 @@ def main():
         baseline, fast_fails = {"throughput_tok_s": (float(args.expected_tps), float(args.margin or 0.15))}, True
     elif args.table and os.path.isfile(args.table):
         with open(args.table) as f:
-            found = lookup(json.load(f), args.model, args.config, args.hosts)
+            found = lookup(json.load(f), args.model, args.config, args.power)
         if found is not None:
             probe, baseline = found
     if baseline is None and args.require != "1":

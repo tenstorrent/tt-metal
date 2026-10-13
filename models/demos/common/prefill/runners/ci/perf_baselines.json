@@ -4,52 +4,6 @@
     "ttft_s": 0.05,
     "chunk_time_ms": 0.1
   },
-  "power": {
-    "14kw": [
-      "bh-glx-120-d06u02",
-      "bh-glx-120-d06u08",
-      "bh-glx-120-d07u02",
-      "bh-glx-120-d07u08",
-      "bh-glx-120-d08u02",
-      "bh-glx-120-d08u08",
-      "bh-glx-120-d09u02",
-      "bh-glx-120-d09u08"
-    ],
-    "8kw": [
-      "bh-glx-120-d01u02",
-      "bh-glx-120-d01u08",
-      "bh-glx-120-d01u14",
-      "bh-glx-120-d01u20",
-      "bh-glx-120-d02u02",
-      "bh-glx-120-d02u08",
-      "bh-glx-120-d02u14",
-      "bh-glx-120-d02u20",
-      "bh-glx-120-d03u02",
-      "bh-glx-120-d03u08",
-      "bh-glx-120-d03u14",
-      "bh-glx-120-d03u20",
-      "bh-glx-120-d04u02",
-      "bh-glx-120-d04u08",
-      "bh-glx-120-d04u14",
-      "bh-glx-120-d04u20",
-      "bh-glx-120-d05u02",
-      "bh-glx-120-d05u08",
-      "bh-glx-120-d05u14",
-      "bh-glx-120-d05u20",
-      "bh-glx-120-d06u14",
-      "bh-glx-120-d06u20",
-      "bh-glx-120-d07u14",
-      "bh-glx-120-d07u20",
-      "bh-glx-120-d08u14",
-      "bh-glx-120-d08u20",
-      "bh-glx-120-d09u14",
-      "bh-glx-120-d09u20",
-      "bh-glx-120-d10u02",
-      "bh-glx-120-d10u08",
-      "bh-glx-120-d10u14",
-      "bh-glx-120-d10u20"
-    ]
-  },
   "baselines": {
     "kimi27": {
       "sc4": {

@@ -357,7 +357,7 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
   emit_summary
   python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_gate.py" \
     "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" \
-    --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" --hosts "${RESOLVED_HOSTS}" \
+    --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" \
     --expected-tps "${EXPECTED_TPS}" --margin "${PREFILL_PERF_MARGIN:-}" \
     --require "${REQUIRE_TPS}" || PERF_GATE_RC=$?
 fi
