@@ -12,8 +12,9 @@ The default eligibility is exact:
 | KV | `[8192, 1, 32, 256]` | BF8 or BF16 |
 | Recurrent | `[1, 12, 128, 128]` or `[2, 12, 128, 128]` | FP32 |
 
-These tensors use standard tiled, interleaved DRAM storage on four devices.
-Other shapes, dtypes, mesh sizes and row-major convolution history retain
+These tensors use standard tiled, interleaved DRAM storage on a Blackhole
+P300_X2 QB2 with a `(1, 4)` mesh. Other topologies, shapes, dtypes and
+row-major convolution history retain
 `ttnn.zeros`. Shape, dtype, layout and cache ownership are unchanged.
 
 For an allocation baseline, set the boolean policy before allocating a fresh

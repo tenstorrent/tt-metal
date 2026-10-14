@@ -17,7 +17,13 @@ def device_zero_eligible(shape, dtype, layout, device):
     supported = (shape == (8192, 1, 32, 256) and dtype in (ttnn.bfloat8_b, ttnn.bfloat16)) or (
         shape in ((1, 12, 128, 128), (2, 12, 128, 128)) and dtype == ttnn.float32
     )
-    return supported and device.get_num_devices() == 4
+    return (
+        supported
+        and device.get_num_devices() == 4
+        and device.arch() == ttnn.Arch.BLACKHOLE
+        and tuple(device.shape) == (1, 4)
+        and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.P300_X2
+    )
 
 
 def allocate_cache_zero(owner, shape, *, dtype):

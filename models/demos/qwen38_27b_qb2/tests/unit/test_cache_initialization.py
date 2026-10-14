@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Host-only tests of actual cache-init definitions, with an ordered TTNN double."""
 
-import ast
 import gc
 import importlib.util
+import sys
+import traceback
 import unittest
 import weakref
 from pathlib import Path
@@ -12,6 +13,16 @@ from types import SimpleNamespace as NS
 from unittest.mock import patch
 
 SOURCE = Path(__file__).resolve().parents[2] / "tt"
+
+
+def load_module(name):
+    """Import complete production modules with only their hardware dependencies mocked."""
+    qualified_name = f"models.demos.qwen38_27b_qb2.tt.{name}"
+    spec = importlib.util.spec_from_file_location(qualified_name, SOURCE / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[qualified_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class Tensor:
@@ -38,9 +49,11 @@ class Runtime:
     TILE_LAYOUT, ROW_MAJOR_LAYOUT, DRAM_MEMORY_CONFIG = "tile", "row", "dram"
     bfloat8_b, bfloat16, float32 = "bf8", "bf16", "fp32"
     Shape = tuple
+    Arch = NS(BLACKHOLE="blackhole")
 
     def __init__(self):
-        self.mesh = NS(get_num_devices=lambda: 4)
+        self.mesh = NS(get_num_devices=lambda: 4, arch=lambda: "blackhole", shape=(1, 4))
+        self.cluster = NS(ClusterType=NS(P300_X2="qb2"), get_cluster_type=lambda: "qb2")
         self.events, self.allocated = [], []
         self.fail_sync, self.fail_free = set(), set()
         self.syncs = 0
@@ -92,17 +105,15 @@ class Runtime:
 class TestCacheInitialization(unittest.TestCase):
     def setUp(self):
         self.runtime = Runtime()
-        spec = importlib.util.spec_from_file_location(
-            "cache_initialization_under_test", SOURCE / "cache_initialization.py"
-        )
-        module = importlib.util.module_from_spec(spec)
-        with patch.dict("sys.modules", {"ttnn": self.runtime}):
-            spec.loader.exec_module(module)
-        self.ns = vars(module)
+        with patch.dict("sys.modules", {"ttnn": self.runtime, "models.common.modules.tt_ccl": NS(TT_CCL=object)}):
+            self.cache_initialization = load_module("cache_initialization")
+            load_module("decode_conv")
+            self.decoder_module = load_module("decoder")
+            self.tp_module = load_module("decoder_tp")
         self.owner = NS(device=self.runtime.mesh, _cache_initialization_pending=None)
 
     def allocate(self, shape=(8192, 1, 32, 256), dtype="bf8"):
-        return self.ns["allocate_cache_zero"](self.owner, shape, dtype=dtype)
+        return self.cache_initialization.allocate_cache_zero(self.owner, shape, dtype=dtype)
 
     def test_only_proven_shapes_are_eligible(self):
         yes = [
@@ -121,11 +132,28 @@ class TestCacheInitialization(unittest.TestCase):
         for shape, dtype in yes + no:
             with self.subTest(shape=shape, dtype=dtype):
                 self.assertEqual(
-                    self.ns["device_zero_eligible"](shape, dtype, "tile", self.owner.device),
+                    self.cache_initialization.device_zero_eligible(shape, dtype, "tile", self.owner.device),
                     (shape, dtype) in yes and all(type(n) is int for n in shape),
                 )
-        self.assertFalse(self.ns["device_zero_eligible"](yes[0][0], "bf8", "row", self.owner.device))
-        self.assertFalse(self.ns["device_zero_eligible"](yes[0][0], "bf8", "tile", NS(get_num_devices=lambda: 1)))
+        self.assertFalse(self.cache_initialization.device_zero_eligible(yes[0][0], "bf8", "row", self.owner.device))
+        self.assertFalse(
+            self.cache_initialization.device_zero_eligible(yes[0][0], "bf8", "tile", NS(get_num_devices=lambda: 1))
+        )
+
+    def test_unqualified_topologies_retain_host_initialization(self):
+        for target, attribute, value in (
+            (self.runtime.mesh, "get_num_devices", lambda: 1),
+            (self.runtime.mesh, "arch", lambda: "wormhole"),
+            (self.runtime.mesh, "shape", (2, 2)),
+            (self.runtime.cluster, "get_cluster_type", lambda: "p150_x4"),
+        ):
+            with self.subTest(attribute=attribute), patch.object(target, attribute, value):
+                self.assertFalse(
+                    self.cache_initialization.device_zero_eligible((8192, 1, 32, 256), "bf8", "tile", self.runtime.mesh)
+                )
+                self.runtime.events.clear()
+                self.decoder().allocate_state(batch_size=1, num_pages=8192)
+                self.assertEqual(self.runtime.events, [("host_zero", "tile")] * 2)
 
     def test_success_finishes_before_handoff(self):
         for shape, dtype in [
@@ -153,7 +181,7 @@ class TestCacheInitialization(unittest.TestCase):
         value = self.runtime.allocated[0]
         self.assertEqual(self.runtime.events, ["allocate", "fill", "sync", ("free", value.ident)])
         self.assertTrue(value.freed)
-        self.ns["require_cache_initialization_ready"](self.owner)
+        self.cache_initialization.require_cache_initialization_ready(self.owner)
 
     def test_first_fence_failure_is_drained_and_released(self):
         self.runtime.fail_sync = {1}
@@ -161,7 +189,7 @@ class TestCacheInitialization(unittest.TestCase):
             self.allocate()
         self.assertEqual(self.runtime.syncs, 2)
         self.assertTrue(self.runtime.allocated[0].freed)
-        self.ns["require_cache_initialization_ready"](self.owner)
+        self.cache_initialization.require_cache_initialization_ready(self.owner)
 
     def test_failed_drain_stays_owned_after_exception_is_discarded(self):
         self.runtime.fail_sync = {1, 2}
@@ -187,7 +215,19 @@ class TestCacheInitialization(unittest.TestCase):
         self.assertIs(pending, self.runtime.allocated[0])
         self.assertFalse(pending.pending or pending.freed)
         with self.assertRaisesRegex(RuntimeError, "close the model mesh"):
-            self.ns["require_cache_initialization_ready"](self.owner)
+            self.cache_initialization.require_cache_initialization_ready(self.owner)
+
+    def test_cleanup_failure_keeps_original_failure_in_traceback(self):
+        self.runtime.fail_fill = True
+        self.runtime.fail_sync = {1}
+        with self.assertRaisesRegex(RuntimeError, "cleanup failed") as caught:
+            self.allocate()
+        error = caught.exception
+        self.assertEqual(str(error.__cause__), "drain failed")
+        self.assertEqual(str(error.__cause__.__context__), "fill failed")
+        rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        self.assertIn("fill failed", rendered)
+        self.assertIn("drain failed", rendered)
 
     def test_unproven_geometry_rejected_before_allocation(self):
         with self.assertRaisesRegex(ValueError, "qualified TP4"):
@@ -195,14 +235,7 @@ class TestCacheInitialization(unittest.TestCase):
         self.assertFalse(self.runtime.events)
 
     def decoder(self, kind="full_attention", policy=None):
-        tree = ast.parse((SOURCE / "decoder.py").read_text())
-        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Qwen38Decoder")
-        method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "allocate_state")
-        self.ns["DecoderState"] = NS
-        exec(compile(ast.Module(body=[method], type_ignores=[]), "<actual decoder>", "exec"), self.ns)
-        base = type("Base", (), {"allocate_state": self.ns["allocate_state"], "PAGE_SIZE": 32})
-        value = base()
-        value._cache_initialization_pending = None
+        value = self.decoder_module.Qwen38Decoder()
         value.device, value.kind = self.runtime.mesh, kind
         value.policy = {"kv_dtype": "bfloat8_b", **(policy or {})}
         value.config = NS(
@@ -258,16 +291,7 @@ class TestCacheInitialization(unittest.TestCase):
 
     def test_actual_tp_setup_failure_follows_completed_base_state(self):
         base = self.decoder(policy={"fused_input": True, "ccl_dtype": "bfloat16"})
-        tree = ast.parse((SOURCE / "decoder_tp.py").read_text())
-        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Qwen38TPDecoder")
-        method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "allocate_state")
-        subclass = ast.ClassDef(
-            name="TP", bases=[ast.Name(id="Base", ctx=ast.Load())], keywords=[], body=[method], decorator_list=[]
-        )
-        module = ast.fix_missing_locations(ast.Module(body=[subclass], type_ignores=[]))
-        self.ns["Base"] = type(base)
-        exec(compile(module, "<actual TP allocate_state>", "exec"), self.ns)
-        owner = self.ns["TP"]()
+        owner = self.tp_module.Qwen38TPDecoder()
         owner.__dict__.update(base.__dict__)
 
         def fail_extra(*args, **kwargs):
