@@ -43,7 +43,7 @@ inline void run_axis(
     auto* device = fixture.mesh->get_devices()[0];
     ttm::CoreCoord logical_core{};
     try {
-        logical_core = fixture.mesh->impl().pick_unused_dram_logical_core(0);
+        logical_core = fixture.mesh->impl().pick_unused_dram_logical_core(device, 0);
     } catch (const std::exception& error) {
         GTEST_SKIP() << "bank 0 has no free non-endpoint DRISC: " << error.what();
         return;

@@ -60,7 +60,7 @@ TEST(P2PLatencyDriscPeerTileJit, CompilesDriscKernelWithoutLaunchingIt) {
     auto* device = mesh->get_devices()[0];
     ttm::CoreCoord drisc_logical{};
     try {
-        drisc_logical = mesh->impl().pick_unused_dram_logical_core(0);
+        drisc_logical = mesh->impl().pick_unused_dram_logical_core(device, 0);
     } catch (const std::exception& error) {
         GTEST_SKIP() << "bank 0 has no free non-endpoint DRISC: " << error.what();
     }
