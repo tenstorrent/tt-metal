@@ -173,7 +173,7 @@ target_include_directories(
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
 )
 # _x280_uses_images(<target>): <target> defaults to the images this build produces (X280_IMAGE_DIR).
-# A test or tool property, not the runtime's: the runtime takes image paths from its caller.
+# A test property, not the runtime's: the runtime takes image paths from its caller.
 function(_x280_uses_images target)
     target_compile_definitions(${target} PRIVATE X280_IMAGE_DIR="${X280_IMAGE_DIR}")
     add_dependencies(${target} x280_images)
@@ -342,26 +342,3 @@ foreach(_case Unharvested Harvested Disagreement)
                 "\\[  PASSED  \\] [1-9]"
     )
 endforeach()
-
-# The operator client: opens the runtime, reports the borrowed path and composes runtime calls,
-# including boot and the pinned-input preparation and teardown images.
-add_executable(x280_runtime_cli tools/x280_runtime_cli.cpp)
-target_include_directories(
-    x280_runtime_cli
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/device
-        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-)
-target_link_libraries(
-    x280_runtime_cli
-    PRIVATE
-        x280_device
-        TT::Metalium
-)
-set_target_properties(
-    x280_runtime_cli
-    PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY
-            ${X280_TEST_OUTPUT_DIR}
-)
-_x280_uses_images(x280_runtime_cli)

@@ -128,53 +128,30 @@ ECC, boot resident idle, reset the ASIC, or flush caches.
 An operator must first establish that partition and resident idle, fresh cache
 placement for the reserved addresses, and exclusive device ownership covering
 the entire sequence of benchmark executables. Neither matching input bytes nor
-mask readback proves fresh placement. `--fresh-cache` and `--exclusive-device`
-are assertions of those external prerequisites, not mechanisms that establish
-them.
+mask readback proves fresh placement. The runtime checks neither prerequisite;
+the caller establishes both.
 
-After LIM ECC has already been prepared for the current reset lifetime, an
-authorized operator can provision the required shape and boot resident idle in
-one normal runtime invocation:
+LIM ECC is primed once per reset lifetime: run `x280_prime_test` with
+`X280_ALLOW_LIM_ECC_PRIME=1`, then `tt-smi -r`. On that primed device, open the
+runtime with `LimEccPrimingPolicy::RequirePrepared` and `LimShape{14}`, so shape
+provisioning cannot silently run the ECC primer, then boot resident idle
+(`build/x280/firmware-lim-idle.bin`) through `X280Runtime::boot_tiles` with
+`allow_reset_release` set. The runtime applies an increase-only shape only while
+every L2CPU remains in reset; it refuses a request that would expand LIM.
 
-```bash
-TT_VISIBLE_DEVICES=0 build/test/tt_metal/x280/x280_runtime_cli \
-  --chip 0 --tile 0 --lim-ways 14 --require-prepared \
-  --boot --pll 1750 --timeout 5000
-```
-
-The resident-idle image is `--idle-image`, else `$X280_IDLE_FW_IMAGE`, else the
-build's `build/x280/firmware-lim-idle.bin`. `--lim-ways` defaults to 15 and
-accepts 0 through 15. An explicit value requires
-`--require-prepared`, so shape provisioning cannot silently run the ECC primer.
-The runtime applies an increase-only shape only while every L2CPU remains in
-reset; it refuses a request that would expand LIM. Pinned-input commands reject
-`--lim-ways` because their admission profile is fixed at 14.
-
-The `x280_images` target builds the two operation-specific images. On an already
-prepared, exclusively owned device, the command sequence is:
-
-```bash
-build/test/tt_metal/x280/x280_runtime_cli --tile 0 \
-  --prepare-pinned-input --fresh-cache --exclusive-device \
-  --prepare-pinned-input-image build/x280/firmware-pinned-input-prepare.bin
-# Run the compatible pipeline configurations sequentially on the same tile.
-build/test/tt_metal/x280/x280_runtime_cli --tile 0 \
-  --teardown-pinned-input --exclusive-device \
-  --teardown-pinned-input-image build/x280/firmware-pinned-input-teardown.bin
-```
+The `x280_images` target builds the two operation-specific images. Each runs as
+an active image on a tile in confirmed healthy resident idle, with no other
+session live: prepare once, run the compatible pipeline configurations
+sequentially on the same tile, then tear down.
 
 ID 7 uses the first 96-byte header in this region at `0x0A000AC0`. Its
 `decide_plain` configuration reseeds that complete header before warmup; it
 does not allocate a source region or change the prepared policy.
 
 The operation is compiled into each image instead of supplied through a
-firmware control block. The CLI resolves preparation only from
-`--prepare-pinned-input-image` or `X280_PINNED_INPUT_PREPARE_FW_IMAGE`, and
-teardown only from `--teardown-pinned-input-image` or
-`X280_PINNED_INPUT_TEARDOWN_FW_IMAGE`. This costs two artifacts but prevents an
-automatic default from selecting the opposite operation. The trusted artifact
-path remains an operator responsibility; the operation-specific hart result is
-the final mismatch check.
+firmware control block, so the image path selects the operation. The trusted
+artifact path remains an operator responsibility; the operation-specific hart
+result is the final mismatch check.
 
 Preparation requires active mask bits `11` for every master, temporarily limits
 Hart 0's population to way 1, touches all 67 lines, and leaves active bits `01`
@@ -198,7 +175,7 @@ experiments inside this prepared sequence.
 A failed preparation, unconfirmed cleanup, or process crash aborts the prepared
 sequence. Do not continue or use normal teardown as recovery: retain exclusive
 ownership and perform explicit recovery/repreparation before reuse. Closing a
-CLI or benchmark process neither unpins the region nor preserves a device lock
+benchmark process neither unpins the region nor preserves a device lock
 for the next executable.
 
 ### Runtime ownership
