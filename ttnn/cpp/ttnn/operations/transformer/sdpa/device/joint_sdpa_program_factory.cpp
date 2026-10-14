@@ -139,7 +139,9 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
 
     // The streaming kernel and the K/V chain were measured only on Blackhole.
     const bool blackhole = device->arch() == tt::ARCH::BLACKHOLE;
-    const bool use_streaming_compute = !fp32_dest_acc_en && blackhole;
+    // Off: with fp32 DEST off the streaming kernel puts joint outputs about 38 percent further (rmse) from fp64.
+    constexpr bool joint_streaming_compute = false;
+    const bool use_streaming_compute = joint_streaming_compute && !fp32_dest_acc_en && blackhole;
     const uint32_t streaming_valid_Skt = padded_Nkt + valid_Lt;
     const uint32_t k_partial_col = use_streaming_compute ? (L % TILE_HEIGHT) : 0;
     const uint32_t n_partial_col = use_streaming_compute ? (N % TILE_HEIGHT) : 0;
