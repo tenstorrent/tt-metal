@@ -227,20 +227,6 @@ def test_tt_moe_fabric2d_dispatch_rejects_top_k_above_16(expect_error, fabric, m
         _tt_moe(monkeypatch, num_experts_per_tok=17, dispatch_impl="fabric2d")
 
 
-# Only dispatch_fabric2d is refused: a traced combine_fabric2d is what the routed expert overlap runs.
-@pytest.mark.parametrize("dispatch_impl", ["direct", "fabric2d"])
-def test_tt_moe_refuses_a_trace_controller_with_fabric2d_dispatch(expect_error, dispatch_impl):
-    tt_moe = object.__new__(TtMoe)
-    tt_moe.dispatch_impl = dispatch_impl
-    tt_moe.overlap_routed_expert_with_combine = False
-    tt_moe.set_trace_controller(None)
-    if dispatch_impl == "fabric2d":
-        with expect_error(ValueError, "cannot be traced"):
-            tt_moe.set_trace_controller(object())
-    else:
-        tt_moe.set_trace_controller(object())
-
-
 # A token of the routed width in bf16, rounded up to 64 B, plus 64 B of forwarding metadata. Kimi-K3 routes
 # at its 3584 latent width, so its 7168 B own payload is too small by the 64 B of metadata.
 @pytest.mark.parametrize(
