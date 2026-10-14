@@ -599,6 +599,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_packer_wait_for_math_done_();
                     }
+#if defined(ARCH_BLACKHOLE)
+                    if (unpack_ab_block == 1 && num_faces == 4 && !narrow_tile && output_tiles_in_block > 1)
+                    {
+                        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                            0, L1_ADDRESS(buffer_Res[block * output_tiles_in_block]), output_tiles_in_block);
+                    }
+                    else
+#endif
                     for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
                     {
                         const std::uint32_t res_tile_idx = block * output_tiles_in_block + tile;
