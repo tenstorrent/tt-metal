@@ -17,7 +17,7 @@ from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_quasar, is_wormhole_b0
 from models.tt_transformers.tt.common import (
     calculate_prefill_warmup_seq_lens,
     cap_seq_lens_to_max_prefill_chunk_size,
@@ -427,6 +427,11 @@ def determine_device_name(mesh_device):
             4: "N150x4",
             8: "T3K",
             32: "TG",
+        }
+    elif is_quasar():
+        # Only single-device Quasar targets (emulator, craq-sim) are supported.
+        dict_device_names = {
+            1: "QSR",
         }
     else:
         raise ValueError(f"Unsupported architecture: {arch_name}")
