@@ -24,7 +24,7 @@ const char* call_contract_violation(
 
 // Why the codegen program cannot run this call, or nullptr. Budgets the smallest plan against static_l1_budget only,
 // never live free L1: the op allocates its output between routing and validation, so a live read could disagree with
-// itself. Live L1 picks the plan at program creation (live_tile_rows_choice).
+// itself. Live L1 picks the plan at program creation (live_tile_rows_choice, live_rm_choice).
 const char* unsupported_reason(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
@@ -59,9 +59,8 @@ bool codegen_cb_plan_fits_live_l1(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
-// The plan for a supported call, built by prim::reshape_codegen: TILE static, which the program factory
-// shrinks to live L1; ROW_MAJOR fitted to the L1 free now. Raises with unsupported_reason's text outside the scope,
-// or when no row-major program fits live L1.
+// The static plan for a supported call; the program factory shrinks it to live L1. Raises with unsupported_reason's
+// text otherwise. Built by prim::reshape_codegen.
 LaunchPlan launch_plan(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,

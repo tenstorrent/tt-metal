@@ -131,8 +131,6 @@ std::optional<TileRowsChoice> live_tile_rows_choice(
     return plan_tile_rows_fitting(input.logical_shape(), logical_output_shape, fits);
 }
 
-uint64_t live_l1_budget(const Tensor& input) { return get_max_l1_space(input); }
-
 std::optional<RmPlan> rm_geometry(
     const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t out_aligned_page, uint32_t grid_cores) {
     const auto& in_shape = input.logical_shape();
@@ -288,6 +286,30 @@ std::optional<RmArbitraryPlan> fit_rm_arbitrary(RmArbitraryPlan plan, uint64_t l
         return std::nullopt;
     }
     return plan;
+}
+
+std::optional<RmChoice> live_rm_choice(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    tt::tt_metal::BufferType output_buffer,
+    uint32_t grid_cores,
+    const LaunchPlan& planned) {
+    const uint64_t free_l1 = get_max_l1_space(input);
+    if (planned.rm.has_value()) {
+        if (auto stick = fit_rm(*planned.rm, free_l1)) {
+            return RmChoice{std::move(*stick)};
+        }
+    }
+    auto slab =
+        planned.rm_arbitrary.has_value()
+            ? planned.rm_arbitrary
+            : rm_arbitrary_geometry(input, logical_output_shape, planned.out_aligned_page, output_buffer, grid_cores);
+    if (slab.has_value()) {
+        if (auto fitted = fit_rm_arbitrary(*slab, free_l1)) {
+            return RmChoice{std::move(*fitted)};
+        }
+    }
+    return std::nullopt;
 }
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen
