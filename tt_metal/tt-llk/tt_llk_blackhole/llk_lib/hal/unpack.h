@@ -415,7 +415,7 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const DataTransfer operation)
 {
-    ckernel::instrn_buffer[0] = get_operation(operation);
+    TT_INSN(get_operation(operation));
 }
 
 /**
@@ -467,7 +467,7 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const ContextCounterIncrement operation)
 {
-    ckernel::instrn_buffer[0] = get_operation(operation);
+    TT_INSN(get_operation(operation));
 }
 
 /**
@@ -519,7 +519,7 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const RowStartCacheFlush operation)
 {
-    ckernel::instrn_buffer[0] = get_operation(operation);
+    TT_INSN(get_operation(operation));
 }
 
 } // namespace hal::unpack
