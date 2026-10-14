@@ -25,7 +25,7 @@ Two derivative formulas are covered:
    where:
      z = beta * (x + kappa * x^3)
      beta = sqrt(2/pi), kappa = 0.044715
-   Tests: TestGeluBwTanhDerivativeAtZero, TestGeluBwTanhPositiveValues,
+   Tests: TestGeluBwTanhDerivativeAtZero, TestGeluBwTanhPositiveValues, TestGeluBwTanhNegativeValues,
           TestGeluBwTanhNearZero, TestGeluBwTanhWithGradientScaling, TestGeluBwTanhShapes
 
 Hardware Model: Tenstorrent SFPU uses DAZ+FTZ (Denormals-Are-Zero + Flush-To-Zero)
