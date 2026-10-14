@@ -12,7 +12,8 @@ taggers on it, so the runtime gate and the test-side decoration cannot drift.
 Built regimes (op_design.md): `interleaved_row_split`, `interleaved_2d_split` (the host picks the
 per-core rectangle), in-kernel pad fill (reader) for `pad_mode` auto / explicit, and the sharded
 regimes `sharded_same_spec_in_place`, `sharded_input_pinned`, `sharded_output_pinned`,
-`sharded_full_grid` (resident shards consumed / produced in place via shard-backed CBs).
+`sharded_full_grid` (resident shards consumed / produced in place via shard-backed CBs), and
+`retile_tile_input` (a TILE input at another tile height, de-faced by the reader).
 """
 
 from __future__ import annotations
@@ -212,7 +213,7 @@ SUPPORTED = {
     "pad_mode": ["none", "auto", "explicit"],
     "pad_value": ["none", "zero", "positive", "negative"],
     "tile_height": [32, 16, 8, 4, 2, 1],
-    "in_tile_height": ["none"],
+    "in_tile_height": ["none", 32, 16, 8, 4, 2, 1],
     "tile_grid": ["single_tile", "small", "tall_narrow", "short_wide", "square_large"],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned", "hw_non_aligned"],
 }
@@ -222,7 +223,9 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 
-EXCLUSIONS = []
+# retile_tile_input reads whole input tiles and de-faces them; it has no pad-fill stage (a TILE
+# input already carries its own tile padding, which becomes the output's H tail).
+EXCLUSIONS = [{"in_tile_height": h, "pad_mode": mode} for h in (32, 16, 8, 4, 2, 1) for mode in ("auto", "explicit")]
 
 
 PROPERTIES = {

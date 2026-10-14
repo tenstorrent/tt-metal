@@ -55,3 +55,17 @@
 - Golden test progress: bf16 loose slice 10/10 passing; unit test directory 79/79.
 - Issues encountered: the CSV `DEVICE KERNEL DURATION` is invalid on this board (offset timer cluster), so spans are computed from the device log. Run-to-run noise is ±3 %, so single samples cannot resolve these levers; medians of 15–30 samples are used. A `static_assert` inside a discarded `if constexpr` still fires in a non-template kernel, so the assert was made conditional.
 - Tests added: `test_tilize_knobs.py::test_tilize_coalesced_reader_knobs` (split reorder at shares 0.5/0.75 including a 16-high tile; 3- and 4-slot rings with a short first chunk, with and without the split).
+
+## Refinement 4 — Retile: TILE input at one height → TILE output at another
+- Date: 2026-10-14
+- What was done:
+  - `retile_tile_input` regime: a `retile` branch in the reader. Per unit (`max(in_tile_h, tile_h)` rows × one column block) it gets the unit's input tiles and de-faces them with 16-element local copies (one-packet write state) into the same row layout `cb_rm_sticks` has on the ROW_MAJOR path. Compute and writer are unchanged.
+  - Interleaved / non-local sources: tiles are read through a TensorAccessor into a 2-slot staging ring (`RETILE_STAGING_SLOTS`, slot 2), one read trid per slot, so the next unit's reads land while this unit is de-faced. Staging bytes count in `compute_blocking`'s per-column L1 budget.
+  - Resident TILE shards (shard holds whole units): the shard itself is the de-face source, no NoC read and no staging. Same-spec sharded retile runs fully in L1; the output shard backs `cb_tiles_out` as before.
+  - H tails: the input's own tile padding becomes the output H tail (e.g. `[1,1,16,128]` 16→32); sticks past the input's padded height are not copied.
+  - SUPPORTED `in_tile_height` += {32,16,8,4,2,1}. EXCLUSIONS: TILE input × `pad_mode` auto/explicit (no pad-fill stage on the retile path; not in the golden target).
+  - Reused: segment-reader column/row walk, CB set, compute, writer, sharded rect / regime selector, trid helpers. Added: reader retile branch, staging sizing, 8 reader CT args.
+- Accuracy achieved: bit-exact (torch.equal); PCC=1.0, rtol=0, atol=0 on every in/out tile height pair over [1,1,64,128], [1,1,16,128], [2,3,40,96], [1,1,2048,64] interleaved, and width/height/block sharded.
+- Golden test progress: bf16 retile `test_op` 6/6, translated `test_tilize_retile` 210/210 (42 same-height skips), program-cache `retile_32_to_16` 1/1. Prior bf16 `test_op` cells 59/59. The 24 fp8_e4m3 retile cells fail in the harness's `from_torch` (fp8 has no TILE form) with or without this change — not op work.
+- Issues encountered: None.
+- Tests added: `tests/ttnn/unit_tests/operations/tilize/test_tilize_retile.py` (36 interleaved height pairs × 4 shapes, 3 sharded schemes × 3 pairs).

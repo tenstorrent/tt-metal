@@ -70,7 +70,20 @@ void kernel_main() {
     constexpr uint32_t cb_copy_job = get_compile_time_arg_val(34);
     constexpr uint32_t cb_copy_done = get_compile_time_arg_val(35);
     constexpr uint32_t first_chunk_tile_rows = get_compile_time_arg_val(36);  // <= staging_tile_rows
-    constexpr auto in_args = TensorAccessorArgs<37>();
+    // retile_tile_input: the input is TILE at in_tile_h (faces in_face_h x 16). Per unit
+    // (lcm(in_tile_h, tile_h) rows of one column block) the reader gets the unit's input tiles —
+    // read into a staging slot (retile_slots ring, one trid per slot), or straight from this core's
+    // resident input shard (in_resident) — and de-faces them with local 16-element copies into the
+    // same row layout the ROW_MAJOR path pushes to cb_rm_sticks.
+    constexpr bool retile = get_compile_time_arg_val(37) != 0;
+    constexpr uint32_t in_tile_h = get_compile_time_arg_val(38);
+    constexpr uint32_t in_face_h = get_compile_time_arg_val(39);
+    constexpr uint32_t in_tile_page_bytes = get_compile_time_arg_val(40);
+    constexpr uint32_t in_tile_rows_per_image = get_compile_time_arg_val(41);
+    constexpr uint32_t in_cols_tiles = get_compile_time_arg_val(42);
+    constexpr uint32_t retile_slots = get_compile_time_arg_val(43);
+    constexpr uint32_t shard_cols_tiles = get_compile_time_arg_val(44);  // resident retile source
+    constexpr auto in_args = TensorAccessorArgs<45>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start_tile = get_arg_val<uint32_t>(1);
@@ -80,6 +93,123 @@ void kernel_main() {
     // coalesced path: < min(num_banks, chunk sticks); segment path: < tile_h (start stick)
     const uint32_t bank_stagger_offset = get_arg_val<uint32_t>(5);
     const uint32_t fill_word = get_arg_val<uint32_t>(6);            // pad value, replicated to 32 bits
+
+    if constexpr (retile) {
+        constexpr uint32_t half_bytes = tile_col_bytes / 2;                   // one face row: 16 elements
+        constexpr uint32_t face_bytes = in_face_h * half_bytes;               // one face
+        constexpr uint32_t in_padded_h = in_tile_rows_per_image * in_tile_h;  // input sticks per image
+        // Output tile-rows sharing one input tile-row (in_tile_h > tile_h), else 1.
+        constexpr uint32_t rows_per_in_row = in_tile_h > tile_h ? in_tile_h / tile_h : 1;
+        constexpr uint32_t max_unit_in_rows = tile_h > in_tile_h ? tile_h / in_tile_h : 1;
+        constexpr uint32_t unit_h = max_unit_in_rows * in_tile_h;  // lcm(in_tile_h, tile_h) rows
+        static_assert(half_bytes <= NOC_MAX_BURST_SIZE, "face row copy must be one packet");
+        static_assert(!in_resident || num_col_blocks == 1, "resident retile source: one column block");
+        static_assert(retile_slots >= 2 && retile_slots <= NOC_MAX_TRANSACTION_ID, "trid range");
+
+        const auto tile_acc = TensorAccessor(in_args, src_addr, in_tile_page_bytes);
+        // Resident source: this core's shard starts at input tile-row shard_k0 (flattened rows).
+        const uint32_t shard_k0 = row_start_tile * tile_h / in_tile_h;
+        const uint32_t staging_base = in_resident ? 0 : get_write_ptr(cb_stick_staging);
+        Noc noc;
+        noc_async_write_one_packet_set_state(get_noc_addr(src_addr), half_bytes);
+
+        for (uint32_t col_block = 0; col_block < num_col_blocks; ++col_block) {
+            const bool is_tail = has_tail && (col_block == num_col_blocks - 1);
+            const uint32_t cb_id = is_tail ? cb_rm_sticks_tail : cb_rm_sticks;
+            const uint32_t width_tiles = is_tail ? last_block_width_tiles : block_width_tiles;
+            const uint32_t seg_bytes = width_tiles * tile_col_bytes;
+            const uint32_t col0 = col_start_tile + col_block * block_width_tiles;
+            const uint32_t slot_bytes = max_unit_in_rows * width_tiles * in_tile_page_bytes;
+
+            // Unit starting at core-relative output row r: its first input tile-row k0, its input
+            // tile-row count nk, and the number of output rows it serves.
+            struct Unit {
+                uint32_t k0, nk, rows;
+            };
+            auto unit_at = [&](uint32_t r) -> Unit {
+                const uint32_t tile_row = row_start_tile + r;
+                const uint32_t image = tile_row / tile_rows_per_image;
+                const uint32_t row_in_image = tile_row - image * tile_rows_per_image;
+                const uint32_t first_h = row_in_image * tile_h;
+                const uint32_t valid = in_padded_h - first_h < tile_h ? in_padded_h - first_h : tile_h;
+                uint32_t run = rows_per_in_row - row_in_image % rows_per_in_row;
+                if (tile_rows_per_image - row_in_image < run) {
+                    run = tile_rows_per_image - row_in_image;
+                }
+                if (core_rows_tiles - r < run) {
+                    run = core_rows_tiles - r;
+                }
+                return {image * in_tile_rows_per_image + first_h / in_tile_h, (valid + in_tile_h - 1) / in_tile_h, run};
+            };
+            auto issue_unit = [&](const Unit& u, uint32_t slot) {
+                dataflow_kernel_lib::set_read_trid(noc, slot + 1);
+                uint32_t dst = staging_base + slot * slot_bytes;
+                for (uint32_t kk = 0; kk < u.nk; ++kk) {
+                    const uint32_t tile0 = (u.k0 + kk) * in_cols_tiles + col0;
+                    for (uint32_t c = 0; c < width_tiles; ++c) {
+                        noc_async_read(tile_acc.get_noc_addr(tile0 + c), dst, in_tile_page_bytes);
+                        dst += in_tile_page_bytes;
+                    }
+                }
+            };
+
+            Unit cur = unit_at(0);
+            uint32_t u_idx = 0;
+            if constexpr (!in_resident) {
+                issue_unit(cur, 0);
+            }
+            for (uint32_t r = 0; r < core_rows_tiles; ++u_idx) {
+                const uint32_t slot = u_idx % retile_slots;
+                const bool has_next = r + cur.rows < core_rows_tiles;
+                const Unit next = has_next ? unit_at(r + cur.rows) : cur;
+                // Source tile (kk, c) of the current unit: staging slot, or the resident shard.
+                uint32_t src_base;
+                uint32_t src_row_stride;
+                if constexpr (in_resident) {
+                    src_base = src_addr + (cur.k0 - shard_k0) * shard_cols_tiles * in_tile_page_bytes;
+                    src_row_stride = shard_cols_tiles * in_tile_page_bytes;
+                } else {
+                    if (has_next) {
+                        issue_unit(next, (u_idx + 1) % retile_slots);  // lands while this unit is de-faced
+                    }
+                    dataflow_kernel_lib::async_read_barrier_with_trid(noc, slot + 1);
+                    src_base = staging_base + slot * slot_bytes;
+                    src_row_stride = width_tiles * in_tile_page_bytes;
+                }
+
+                for (uint32_t j = 0; j < cur.rows; ++j, ++r) {
+                    const uint32_t tile_row = row_start_tile + r;
+                    const uint32_t row_in_image = tile_row - (tile_row / tile_rows_per_image) * tile_rows_per_image;
+                    const uint32_t first_h = row_in_image * tile_h;
+                    const uint32_t valid = in_padded_h - first_h < tile_h ? in_padded_h - first_h : tile_h;
+                    // Input row of output stick 0, relative to the unit's first input tile-row.
+                    const uint32_t h0 = first_h % unit_h;
+                    cb_reserve_back(cb_id, width_tiles);
+                    const uint32_t l1_base = get_write_ptr(cb_id);
+                    for (uint32_t i = 0; i < valid; ++i) {
+                        const uint32_t h = h0 + i;
+                        const uint32_t kk = h / in_tile_h;
+                        const uint32_t rr = h - kk * in_tile_h;
+                        const uint32_t face_row = rr / in_face_h;
+                        const uint32_t src_off = face_row * 2 * face_bytes + (rr - face_row * in_face_h) * half_bytes;
+                        uint32_t src = src_base + kk * src_row_stride + src_off;
+                        uint32_t dst = l1_base + i * seg_bytes;
+                        for (uint32_t c = 0; c < width_tiles; ++c) {
+                            noc_async_write_one_packet_with_state(src, dst);                            // left face row
+                            noc_async_write_one_packet_with_state(src + face_bytes, dst + half_bytes);  // right
+                            src += in_tile_page_bytes;
+                            dst += tile_col_bytes;
+                        }
+                    }
+                    noc_async_write_barrier();
+                    cb_push_back(cb_id, width_tiles);
+                }
+                cur = next;
+            }
+        }
+        dataflow_kernel_lib::set_read_trid(noc, 0);  // restore untagged
+        return;
+    }
 
     if constexpr (in_resident) {
         // One block = the whole resident shard (single column block): publish it in one push.

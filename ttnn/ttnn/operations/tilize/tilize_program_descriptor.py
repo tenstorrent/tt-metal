@@ -23,7 +23,7 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 # --- CB slots (semantic names) ---------------------------------------------
 CB_RM_STICKS = 0  # reader -> compute: RM stick segments, tile-sized pages
 CB_RM_STICKS_TAIL = 1  # same, for the ragged last column block (own ring quantum)
-CB_STICK_STAGING = 2  # reader-private scratch: bank-grouped sticks of one tile-row
+CB_STICK_STAGING = 2  # reader-private scratch: bank-grouped sticks (coalesced) / input tiles (retile)
 CB_PAD_FILL = 3  # reader-private: one stick segment of the pad value (source of local fill copies)
 CB_COPY_JOB = 4  # reader -> writer: split-reorder copy job per tile-row {dst, slot base, first stick}
 CB_COPY_DONE = 5  # writer -> reader: split-reorder ack per tile-row (token page)
@@ -70,6 +70,9 @@ PIN_OCCUPANCY_RATIO = 0.5
 # Fill-row source offset: src = fill_base + (dst % FILL_PHASE_BYTES) keeps every local fill copy
 # NoC-alignment congruent (any alignment <= this) and in element phase.
 FILL_PHASE_BYTES = 64
+# retile_tile_input: staging ring depth for the input tiles of one unit (lcm(in_tile_h, tile_h) rows
+# x one column block). >= 2 overlaps the next unit's tile reads with this unit's de-face copies.
+RETILE_STAGING_SLOTS = 2
 
 TILE_WIDTH = 32
 
@@ -78,9 +81,13 @@ def _align_down(x, unit):
     return (x // unit) * unit
 
 
-def compute_blocking(*, core_cols_tiles, in_page_bytes, out_page_bytes, in_elem_bytes, low_l1, read_alignment):
-    """Column blocking: (block_width_tiles, num_col_blocks, last_block_width_tiles)."""
-    per_col_tile_bytes = IN_DEPTH_TILE_ROWS * in_page_bytes + OUT_DEPTH_TILE_ROWS * out_page_bytes
+def compute_blocking(
+    *, core_cols_tiles, in_page_bytes, out_page_bytes, in_elem_bytes, low_l1, read_alignment, staging_col_bytes=0
+):
+    """Column blocking: (block_width_tiles, num_col_blocks, last_block_width_tiles).
+
+    `staging_col_bytes`: extra reader-private bytes per column tile (retile staging ring)."""
+    per_col_tile_bytes = IN_DEPTH_TILE_ROWS * in_page_bytes + OUT_DEPTH_TILE_ROWS * out_page_bytes + staging_col_bytes
     if low_l1:
         max_bw = LOW_L1_BLOCK_WIDTH_TILES
     else:
@@ -281,6 +288,21 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
     tile_h, tile_w = output_tensor.tile.tile_shape
     assert tile_w == TILE_WIDTH
 
+    # --- retile_tile_input: a TILE input at in_tile_h is de-faced by the reader into the same
+    # row layout cb_rm_sticks carries on the ROW_MAJOR path (compute / writer unchanged).
+    retile = input_tensor.layout == ttnn.TILE_LAYOUT
+    if retile:
+        assert padded_shape is None, "tilize: padding a TILE input is not supported"
+        in_tile_h = int(input_tensor.tile.tile_shape[0])
+        in_face_h = int(input_tensor.tile.face_shape[0])
+        in_tile_page_bytes = input_tensor.buffer_aligned_page_size()
+        # Input tile-rows per unit (one staging slot): a unit is lcm(in_tile_h, tile_h) rows; both
+        # are powers of two, so it is max(in_tile_h, tile_h) rows.
+        unit_in_tile_rows = max(1, tile_h // in_tile_h)
+    else:
+        in_tile_h = in_face_h = in_tile_page_bytes = 1
+        unit_in_tile_rows = 1
+
     out_shape = list(padded_shape) if padded_shape is not None else list(in_shape)
     assert len(out_shape) >= 2 and len(out_shape) >= len(in_shape)
     in_view = [1] * (len(out_shape) - len(in_shape)) + in_shape
@@ -296,6 +318,9 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
     tile_rows_per_image = math.ceil(out_shape[-2] / tile_h)
     tensor_rows_tiles = math.prod(out_shape[:-2]) * tile_rows_per_image
     tensor_cols_tiles = math.ceil(out_shape[-1] / TILE_WIDTH)
+    # retile: the input's own tile grid (per-image ceil at in_tile_h; W is tile-padded the same).
+    in_tile_rows_per_image = math.ceil(in_view[-2] / in_tile_h) if retile else 0
+    in_cols_tiles = math.ceil(in_view[-1] / TILE_WIDTH)
 
     # --- Page sizes ---------------------------------------------------------
     in_elem_bytes = input_tensor.element_size()
@@ -318,6 +343,8 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
     seg_unit_bytes = TILE_WIDTH * in_elem_bytes
     align_unit_tiles = read_alignment // math.gcd(read_alignment, seg_unit_bytes)
 
+    retile_staging_col_bytes = RETILE_STAGING_SLOTS * unit_in_tile_rows * in_tile_page_bytes if retile else 0
+
     def blocking_for(core_cols_tiles):
         return compute_blocking(
             core_cols_tiles=core_cols_tiles,
@@ -326,6 +353,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             in_elem_bytes=in_elem_bytes,
             low_l1=low_l1,
             read_alignment=read_alignment,
+            staging_col_bytes=retile_staging_col_bytes,
         )
 
     # --- Regime selector (op_design.md "Selection function") ---------------------------------
@@ -335,7 +363,13 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
     # exact prefix) and when a shard row is exactly the block's stick segment (no stride padding).
     max_block_tiles = blocking_for(FAST_TILIZE_MAX_WIDTH_TILES * align_unit_tiles)[0]
     in_shards = None
-    if not has_padding:
+    if retile:
+        # A TILE shard is the reader's de-face source in place (no NoC read); it must hold whole
+        # units (lcm(in_tile_h, tile_h) rows) so every unit's input tiles are local.
+        unit_h = max(in_tile_h, tile_h)
+        if _shard_rects(input_tensor, in_shape, unit_h, max_cols_tiles=max_block_tiles) is not None:
+            in_shards = _shard_rects(input_tensor, in_shape, tile_h, max_cols_tiles=max_block_tiles)
+    elif not has_padding:
         in_shards = _shard_rects(input_tensor, in_shape, tile_h, max_cols_tiles=max_block_tiles)
         if in_shards is not None and stick_page_bytes != in_shards[2] * seg_unit_bytes:
             in_shards = None
@@ -373,6 +407,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
     _, whole_width_blocks, _ = blocking_for(tensor_cols_tiles)
     coalesce = (
         COALESCE_BANK_READS
+        and not retile
         and cores_c == 1
         and whole_width_blocks == 1
         and not has_padding
@@ -408,7 +443,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
 
         # --- Circular buffers (per group: ring quanta = this group's block widths) ----------
         # Resident sides: the CB IS the shard (zero-copy, whole shard = one block).
-        if in_resident:
+        if in_resident and not retile:
             shard_pages = in_shards[1] * in_shards[2]
             cbs.append(_resident_cb(CB_RM_STICKS, input_tensor, in_page_bytes, shard_pages, group_cores, out_tile))
         else:
@@ -438,6 +473,11 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             )
         if coalesce:
             cbs.append(_cb(CB_STICK_STAGING, 1, staging_bytes, input_tensor.dtype, group_cores))
+        if retile and not in_resident:
+            retile_slot_bytes = unit_in_tile_rows * block_width_tiles * in_tile_page_bytes
+            cbs.append(
+                _cb(CB_STICK_STAGING, 1, RETILE_STAGING_SLOTS * retile_slot_bytes, input_tensor.dtype, group_cores)
+            )
         # Split reorder: the writer copies its share of each tile-row's sticks. Both kernels drop
         # the split (share -> 0) when a stick copy is wider than one NoC packet.
         copy_seg_bytes = block_width_tiles * seg_unit_bytes
@@ -504,6 +544,14 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             CB_COPY_JOB,
             CB_COPY_DONE,
             first_chunk_tile_rows,
+            int(retile),
+            in_tile_h,
+            in_face_h,
+            in_tile_page_bytes,
+            in_tile_rows_per_image,
+            in_cols_tiles,
+            RETILE_STAGING_SLOTS,
+            in_shards[2] if (retile and in_resident) else 0,  # resident shard width, tiles
         ]
         reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         writer_ct = [
