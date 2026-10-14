@@ -1,4 +1,6 @@
-# BEVFormer Encoder Model
+# BEVFormer
+
+This directory holds the BEVFormer-base image backbone (ResNet101-DCN) and FPN neck, and the BEVFormer encoder.
 
 BEVFormer Encoder is a transformer-based 3D object detection model that creates Bird's-Eye-View (BEV) representations from multi-camera images. The encoder uses spatiotemporal transformers to learn unified BEV representations by combining spatial cross-attention for feature extraction from camera views and temporal self-attention for modeling temporal dependencies.
 
@@ -22,6 +24,15 @@ The model processes:
 The model outputs:
 - **BEV Features**: Unified bird's-eye view representations combining spatial and temporal information
 
+### Image Backbone and FPN
+
+The multi-camera features the encoder reads come from BEVFormer-base's image backbone and neck:
+
+- **ResNet101-DCN** (`tt/tt_resnet.py`): caffe-style ResNet101 with DCNv2 (modulated deformable convolution, `tt/tt_modulated_deform_conv.py`) in layer3 and layer4. It emits C3, C4 and C5 at strides 8, 16 and 32.
+- **FPN** (`tt/tt_fpn.py`): maps C3-C5 to four 256-channel levels, the fourth from an extra stride-2 conv on the last output.
+
+It runs 6 cameras at 1600x900, padded to 1600x928. Weights are prepared in the constructors (`tt/model_preprocessing_backbone.py` preprocesses them), so the forward runs on device only.
+
 ## Project Structure
 
 ```
@@ -36,11 +47,49 @@ models/experimental/bevformer/
 
 ## Section 1: Test Files
 
-The test suite validates individual components of the BEVFormer encoder, ensuring correctness of both reference and TTNN implementations.
+The test suite validates the image backbone, the FPN and the individual components of the BEVFormer encoder, ensuring correctness of both reference and TTNN implementations.
 
 ### PCC (Pearson Correlation Coefficient) Tests
 
 Located in `models/experimental/bevformer/tests/pcc/`, these tests validate the accuracy of TTNN implementations against PyTorch reference models using PCC metrics.
+
+#### test_resnet.py
+Tests the ResNet101-DCN backbone block by block.
+
+**What it tests:**
+- The first bottleneck of layer1, layer3 (DCN) and layer4 (DCN, two 256-channel sampling chunks)
+- The whole of layer1 and layer2
+- The dtype each block emits
+
+The whole backbone is checked in `test_backbone_fpn.py`.
+
+**Usage:**
+```bash
+pytest models/experimental/bevformer/tests/pcc/test_resnet.py
+```
+
+#### test_fpn.py
+Tests the FPN neck on its own, fed random C3-C5 in the dtypes the backbone emits.
+
+**Usage:**
+```bash
+pytest models/experimental/bevformer/tests/pcc/test_fpn.py
+```
+
+#### test_backbone_fpn.py
+Runs camera images through the backbone and the FPN, end to end.
+
+**What it tests:**
+- The backbone's C3-C5 against the reference
+- The FPN's four outputs against the reference
+- The hand-off between the two (layout, dtype, memory)
+
+**Usage:**
+```bash
+pytest models/experimental/bevformer/tests/pcc/test_backbone_fpn.py
+```
+
+The backbone and FPN tests use seeded random weights (`tests/backbone_weights.py`), tuned to the output statistics of the trained backbone, and assert PCC 0.99.
 
 #### test_encoder.py
 Tests the complete BEVFormer encoder implementation.

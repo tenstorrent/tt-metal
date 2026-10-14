@@ -637,7 +637,11 @@ void check_intermesh_port_assignment_against_golden(const std::string& golden_na
         YAML::Emitter em;
         em << combined;
         std::ofstream o(combined_file);
+        // This re-emit is the intermesh golden. yaml-cpp omits the trailing newline the repo requires.
         o << em.c_str();
+        if (em.size() == 0 || em.c_str()[em.size() - 1] != '\n') {
+            o << '\n';
+        }
     }
 
     std::filesystem::path golden_file =

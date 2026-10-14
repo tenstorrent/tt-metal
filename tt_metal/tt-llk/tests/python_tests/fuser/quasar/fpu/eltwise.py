@@ -49,10 +49,11 @@ class EltwiseFpu(Fpu):
 
         if compute_unit.broadcast_type != BroadcastType.None_:
             broadcast_type = compute_unit.broadcast_type.cpp_enum_value
+            acc_to_dest = compute_unit.acc_to_dest.cpp_enum_value
             return (
                 f"// Operation {stage}: Eltwise {op} broadcast FPU\n"
                 f"_llk_math_eltwise_binary_broadcast_init_<ckernel::EltwiseBinaryType::{op}, {broadcast_type}, {math_fidelity}>"
-                f"({tensor_shape});\n"
+                f"({tensor_shape}, {acc_to_dest});\n"
             )
 
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
