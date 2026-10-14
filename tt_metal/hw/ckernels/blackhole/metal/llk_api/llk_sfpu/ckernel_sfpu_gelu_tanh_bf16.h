@@ -70,13 +70,4 @@ inline void calculate_gelu_tanh_bf16() {
     }
 }
 
-// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format.
-inline bool bf16_dest_gelu_tanh() {
-#if defined(TRISC_MATH) || defined(LLK_TRISC_MATH)
-    return ckernel::math::src_zero_flag_srcb_fmt == static_cast<std::uint32_t>(DataFormat::Float16_b);
-#else
-    return false;
-#endif
-}
-
 }  // namespace ckernel::sfpu
