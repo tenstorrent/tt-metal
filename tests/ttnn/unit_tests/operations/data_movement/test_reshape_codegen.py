@@ -333,8 +333,8 @@ def test_reshape_codegen_routes_native_when_no_plan_fits_l1(device, expect_error
     ids=["rm_split", "rm_arbitrary_bf16"],
 )
 def test_reshape_codegen_rm_cache_hit_changed_free_l1(device, path, in_shape, out_shape, dtype, layout, mem):
-    # Row-major buffers are sized from the L1 free at launch, so the same call under less free L1 must not reuse a
-    # program planned for more.
+    # Row-major buffers are sized from the L1 free at program creation, so the same call under less free L1 must not
+    # reuse a program planned for more.
     source = _make(in_shape, dtype)
     expected = source.reshape(out_shape)
     x = _to_device(device, source, dtype, layout, mem)

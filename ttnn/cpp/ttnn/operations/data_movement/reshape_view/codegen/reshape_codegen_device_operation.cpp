@@ -4,6 +4,8 @@
 
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_device_operation.hpp"
 
+#include <variant>
+
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/device_operation.hpp"
@@ -45,7 +47,7 @@ void ReshapeCodegenDeviceOperation::validate_on_program_cache_miss(
     if (input.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
             plan.rm.has_value() || plan.rm_arbitrary.has_value(),
-            "ReshapeCodegen was launched without a row-major plan");
+            "ReshapeCodegen was launched without a row-major geometry");
         return;
     }
     const auto& layout = plan.tile_rows.layout;
@@ -72,7 +74,7 @@ ReshapeCodegenDeviceOperation::tensor_return_value_t ReshapeCodegenDeviceOperati
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-// With the full tile-rows plan fitting, the hashed rung is the same constant on every call, so calls share programs
+// With the full plan fitting, the hashed rung or depth is the same constant on every call, so calls share programs
 // exactly as the attributes and tensor args alone would key them. A call no plan fits hashes rung 0, which never has
 // an entry: it misses and the program factory raises.
 ttsl::hash::hash_t ReshapeCodegenDeviceOperation::compute_program_hash(
@@ -85,19 +87,28 @@ ttsl::hash::hash_t ReshapeCodegenDeviceOperation::compute_program_hash(
         const uint32_t staged_batches = chosen ? chosen->staged_batches : 0;
         return ttsl::hash::hash_objects_with_default_seed(operation_attributes, tensor_args, max_in, staged_batches);
     }
+    const auto chosen = ttnn::operations::data_movement::reshape_codegen::live_rm_choice(
+        tensor_args.input,
+        operation_attributes.logical_output_shape,
+        operation_attributes.output_mem_config.buffer_type(),
+        ttnn::operations::data_movement::reshape_codegen::reshape_core_grid(
+            tensor_args.input, operation_attributes.sub_core_grids)
+            .num_cores(),
+        plan);
+    // Depth 0 is never built, so a call no program fits misses like a tile-rows call at rung 0.
     uint32_t cb_depth = 0;
     uint32_t push_sticks = 0;
-    // Dividing widths fall back to the slab program when the stick program does not fit live L1.
-    bool rm_arbitrary = false;
-    if (plan.rm.has_value()) {
-        cb_depth = plan.rm->cb_depth;
-        push_sticks = plan.rm->push_sticks;
-    } else if (plan.rm_arbitrary.has_value()) {
-        cb_depth = plan.rm_arbitrary->batch;
-        rm_arbitrary = true;
+    bool slab = false;
+    if (chosen.has_value()) {
+        if (const auto* stick = std::get_if<ttnn::operations::data_movement::reshape_codegen::RmPlan>(&*chosen)) {
+            cb_depth = stick->cb_depth;
+            push_sticks = stick->push_sticks;
+        } else {
+            cb_depth = std::get<ttnn::operations::data_movement::reshape_codegen::RmArbitraryPlan>(*chosen).batch;
+            slab = true;
+        }
     }
-    return ttsl::hash::hash_objects_with_default_seed(
-        operation_attributes, tensor_args, cb_depth, push_sticks, rm_arbitrary);
+    return ttsl::hash::hash_objects_with_default_seed(operation_attributes, tensor_args, cb_depth, push_sticks, slab);
 }
 
 Tensor reshape_codegen(

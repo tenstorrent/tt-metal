@@ -37,8 +37,7 @@ struct ReshapeCodegenDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    // Keys the plan live L1 selects, so a cached program never runs with buffers that no longer fit. The row-major
-    // CB depths and program are fitted to the L1 free at launch.
+    // Keys the plan live L1 selects, so a cached program never runs with buffers that no longer fit.
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
