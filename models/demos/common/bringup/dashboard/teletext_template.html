@@ -512,6 +512,18 @@ function pKnowledge(){
   return flow(lines, () => new Buf(), 4, 22).map((b, i, a) => { banner(b, "Knowledge use", BLU, YEL, i, a.length); return b; });
 }
 
+function pBoxes(){
+  const B = D.boxes, lines = [], m = x => x.join("x");
+  lines.push(hdrLine("Deployment", `${B.deploy.box} ${m(B.deploy.mesh)}`, BLU, YEL));
+  lines.push({draw(b, r){ b.t(r, 1, trunc(`${B.deploy.seq.toLocaleString()} tok, run ${B.run.box} ${B.run.mode}`, W - 2), WHT); }});
+  lines.push(gapLine);
+  B.rows.forEach(x => { lines.push({draw(b, r){ b.t(r, 0, trunc(`${x.box} ${m(x.mesh)}`, 22), x.deploy ? YEL : x.run ? GRN : CYN);
+      b.tr(r, W - 1, `${x.full.weights_gb.toFixed(1)}GB ${Math.round(x.full.longest_seq / 1024)}k`, WHT); }});
+    x.conditions.filter(c => !c.same_as_deploy).forEach(c => lines.push({draw(b, r){ b.t(r, 1, trunc(`${c.what}: ${c.path}`, W - 2), RED); }})); });
+  if (!B.rows.length) lines.push({draw(b, r){ b.t(r, 1, "Plan gate not run yet", CYN); }});
+  return flow(lines, () => new Buf(), 4, 22).map((b, i, a) => { banner(b, "Boxes", BLU, YEL, i, a.length); return b; });
+}
+
 function pPrior(){
   const P = D.prior, lines = [], A = trunc(P.this.label, 7), B = trunc(P.prior.label, 7);
   const mk = () => { const b = new Buf(); b.t(3, 0, "THIS", CYN); b.t(3, 5, A.toUpperCase(), WHT); b.t(3, 13, "PRIOR", CYN); b.t(3, 19, B.toUpperCase(), WHT);
@@ -592,6 +604,7 @@ if (D && D.prior) PAGES.push({n:107, name:"Versus prior", short:"Prior", build:p
 if (D && D.deferred && D.deferred.length) PAGES.push({n:108, name:"Deferred to op-gen", short:"OpGen", build:pDeferred});
 PAGES.push({n:109, name:"Final tests", short:"Final", build:pFinal});
 if (D && D.knowledge) PAGES.push({n:110, name:"Knowledge use", short:"Know", build:pKnowledge});
+if (D && D.boxes) PAGES.push({n:111, name:"Boxes", short:"Boxes", build:pBoxes});
 function buildAll(){ const out = {};
   for (const p of PAGES){ try { out[p.n] = p.build(); }
     catch (err){ const b = new Buf(); banner(b, p.name, RED, WHT, 0, 1); b.t(4, 0, "PAGE ERROR", RED, null, 1); wrap(String(err && err.message || err), 40).slice(0, 6).forEach((l, i) => b.t(6 + i, 0, l, WHT)); out[p.n] = [b]; } }

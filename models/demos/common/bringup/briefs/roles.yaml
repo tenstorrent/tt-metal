@@ -68,6 +68,13 @@ serving: |
 settings: |
   Role: settings audit, for $model. Follow your agent instructions (agents/settings-audit.md): every switch of the
   model's code and of the bring-up forks it calls in one place, `$model_dir/tt/settings.py`, with behaviour unchanged.
+scale: |
+  Role: scale. Make the scaled run of $model work: the reduced model whose chips hold what the deployment box's chips
+  hold (`models/demos/common/bringup/plan/scale.py`). The gate cuts the checkpoint by `$bringup_dir/scaling.yaml`
+  (which config counts to scale, and which tensors to cut along which dimension, or to keep by index) into
+  `$scaled_hf`, then runs the CPU reference on it to write the scaled golden. Fix what stops either: a cutting rule
+  that misses a tensor whose size follows a scaled count (every such tensor must be cut, or the reference fails on
+  shapes), or a reference that assumes the real dimensions instead of reading them from the checkpoint's config.
 optests: |
   Role: optests. $model calls derived bring-up ops (`ttnn.bringup.*`, see `ttnn/ttnn/bringup/INDEX.md`). Every
   distinct call it makes needs a test case in that fork's `tests/`, with random inputs (never the model's real

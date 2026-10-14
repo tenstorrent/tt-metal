@@ -15,10 +15,17 @@ Always: `export PYTHONPATH=$PWD` (the shell's default points at another checkout
 
 Ask in one message for what you cannot find out yourself, with defaults proposed:
 - **Model**: HF id. You will pin its revision (commit sha).
-- **Target**: context length and chunk size (default 56320 tokens in 5120-token chunks).
+- **Deployment box and this box**: the box the model is for (normally a Galaxy 8x4) and its context (e.g. 1M
+  tokens), and the box this bring-up runs on. When they differ, the spec gets `deploy` / `boxes` / `run` (F64,
+  `core/spec.py`): the plan is made for the deployment box and checked on every listed box. List every box the model
+  may run on (with its mesh, DRAM per chip and any overrides, e.g. 4-bit experts on a smaller box).
+- **Mode**: `partial` (the first layers that cover every layer type bring up the layout; on a box smaller than the
+  deployment box the run also goes scaled: heads and experts cut so each chip holds what a deployment chip holds) or
+  `full` (every layer at real size, every end-to-end check; only where the full model fits, which the plan gate checks).
+- **Target**: this run's context length and chunk size at real size (default 56320 tokens in 5120-token chunks).
 - **Ladder**: default four rungs: 2 chunks of 2048 with full dumps, 2 chunks of 8192, the last chunk after a golden
-  prefix, then the full target.
-- **Layer subset**, only if the model does not fit the box.
+  prefix, then the full target. A scaled run gets its own ladder at the scaled context (`scaled.ladder` overrides it).
+- **Layer subset**: in partial mode, the first layers that cover every layer type; in full mode, every layer.
 - **Owner rules** for every agent of this model (beyond the standing ones in the agent definition, such as always
   2D fabric). They go in `agents.rules` and appear in every brief.
 - **Dashboard style**: `standard` (the ERNIE look), `teletext` (a 90s teletext service on a CRT), or `both`. Goes in
@@ -108,7 +115,7 @@ the dashboards. Classify every failure before acting, and log every intervention
 | the framework (a false violation, a file not committed, a wrong rule) | pause, fix with a selftest, gate the fix in `dev/`, resume |
 | the box (device open fails, ethernet or fabric timeouts) | the orchestrator stops by itself; ask the person to reset the board, then a quick box check, then resume |
 | the input or data (implausible accuracy, degenerate generations) | stop, show the evidence, ask the person |
-| an approval point (plan, performance picks) | bring the person the plan or list; record their decision with `$B approve` |
+| an approval point (plan, performance picks) | bring the person the plan or list; record their decision with `$B approve`. With a deployment box, lead with plan.md's `## Boxes`: whether the full model fits the deployment box at its context, every per-chip path that differs on a smaller box, and the deployment-only checks |
 | an agent needs something its step does not allow (a shared file, a wider path, a framework change) | decide yourself (below) |
 | someone edits the tree while an agent step runs | the step's tree diff fails it; finish or revert the edit, then rerun the task |
 | a task became DEFERRED (the agent requested an op from op-gen) | review the evidence like a gate commit; accept it and tell the owner in one line, or reject it as cheating (below); section 5 |

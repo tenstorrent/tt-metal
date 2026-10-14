@@ -374,3 +374,36 @@ def test_final_tests_section_renders(final_records, tmp_path):
     assert "FINAL TESTS" in text and "PAGE ERROR" not in text
     assert "MODEL SMOKE" in text and "RUNNER SMOKE" in text and "bound 128 rec 80" in text
     assert "NOT RUN" in text and "kv_write" in text  # the attention contract test never ran
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="node not installed")
+def test_boxes_section_renders(fx, tmp_path):
+    """F64: a spec planned for a deployment box shows it in the header and a Boxes section (and teletext page 111)."""
+    from models.demos.common.bringup.plan.boxes import check_boxes
+    from models.demos.common.bringup.selftest.test_plan import TENSORS, boxes_spec, deploy_plan
+
+    s = boxes_spec(fx)
+    Ledger(s.bringup_dir).write_tasks(generate(s, early=True))
+    res = Ledger(s.bringup_dir).results_dir
+    res.mkdir(parents=True, exist_ok=True)
+    (res / "plan_boxes.json").write_text(json.dumps(check_boxes(s, deploy_plan(), TENSORS, {"num_key_value_heads": 4})))
+    out = tmp_path / "index.html"
+    main(["--spec", str(s.path), "--out", str(out)])
+    r = subprocess.run(["node", str(SHIM), str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    els = json.loads(r.stdout)
+    assert not els["#boxes-sec"]["hidden"] and els["#boxes tbody"]["html"] > 0
+    assert "Planned for big" in els["#boxes-sub"]["text"] and "partial mode" in els["#boxes-sub"]["text"]
+    from models.demos.common.bringup.dashboard.export import build
+
+    b = build(s)["boxes"]
+    assert b["deploy"] == {"box": "big", "mesh": [8, 4], "seq": 4096, "chunk": 1024} and b["run"]["scaled"]
+    page = main(["--spec", str(s.path), "--style", "teletext", "--out", str(tmp_path)])
+    src = page.read_text()
+    i = src.rindex("</script>")
+    probe = 'process.stderr.write("@@" + pBoxes().map(toText).join("\\n") + "@@");'
+    (tmp_path / "probe.html").write_text(src[:i] + probe + src[i:])
+    r = subprocess.run(["node", str(TELETEXT_SHIM), str(tmp_path / "probe.html"), "1"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    text = r.stderr.split("@@")[1]
+    assert "BOXES" in text and "PAGE ERROR" not in text and "dispatch" in text

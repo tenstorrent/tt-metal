@@ -17,14 +17,16 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from pathlib import Path
 
 import torch
 
 from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.core.ledger import Ledger
 from models.demos.common.bringup.plan import approvals, components
-from models.demos.common.bringup.plan.boxes import check_boxes, table
+from models.demos.common.bringup.plan.boxes import check_boxes, scaling_applies, table
 from models.demos.common.bringup.plan.memory import check_plan, checkpoint_tensors, load_plan
+from models.demos.common.bringup.plan.scale import kept_counts, load_scaling, plan_cut
 from models.demos.common.bringup.reference.golden import hf_path, load_spec
 
 
@@ -63,6 +65,16 @@ def main(argv=None):
         res["errors"] += bx["errors"]
         if not (plan_md.exists() and re.search(r"^##\s+Boxes\b", plan_md.read_text(), re.M)):
             res["errors"].append("plan.md has no '## Boxes' section (the per-box table and every path that differs)")
+        if scaling_applies(spec):  # the scaled run's cuts must fit the checkpoint (plan/scale.py)
+            cfg_path = Path(hf) / "config.json"
+            full_cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+            sc = load_scaling(spec)
+            counts, errs = kept_counts(spec, plan, full_cfg, sc)
+            if not sc.get("counts"):
+                errs.append("no scaling.yaml with counts (how the scaled run cuts heads and experts)")
+            errs += plan_cut(tensors, list(sc.get("tensors") or []), counts)[1]
+            res["errors"] += [f"scaling.yaml: {e}" for e in errs]
+            print("scaled run keeps " + ", ".join(f"{k} {b} of {a}" for k, (a, b) in counts.items()))
         dep = next((r for r in bx["rows"] if r["deploy"]), None)
         metrics.record("deploy_fits", int(bool(dep) and dep["full"]["fits_deploy_seq"]))
         metrics.record(

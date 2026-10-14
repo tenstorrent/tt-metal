@@ -212,6 +212,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     accuracy_guard.check(s)  # accuracy first: a perf pick whose frozen test failed in this attempt is not profiled
     rung_name = rung_name or profile_rung(s)
     rung = s.rung(rung_name)
+    metrics.record("scaled_run", int(getattr(s, "scaled", False)))  # F64: the reduced model of a scaled run
     g = Golden.for_rung(s, rung_name)
     layers = [i for i in s.layers() if i in g.layers]
     chunk = rung["chunk"]
