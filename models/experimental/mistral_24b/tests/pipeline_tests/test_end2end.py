@@ -375,6 +375,10 @@ def run_generation_exactly_like_test_end2end(
 
         logger.info(f" Each iteration Generated {len(results)} tokens successfully")
 
+    # Stop the decode timer the moment generation ends, before the final tokenizer
+    # decode / chat parsing / logging below, so decode_t/s reflects only the decode loop.
+    decode_elapsed_s = time.perf_counter() - decode_start
+
     # Final response (exactly like test_end2end.py)
     response = model_args.tokenizer.decode(all_outputs[0], skip_special_tokens=True)
     logger.info(f"Final Generated Response:\n{response}")
@@ -386,7 +390,6 @@ def run_generation_exactly_like_test_end2end(
 
     # Report-only perf for the CI dashboard (#58596): single-user prefill/decode rate from
     # this e2e run. No-op outside CI; device is still open for the SKU lookup.
-    decode_elapsed_s = time.perf_counter() - decode_start
     metrics = {}
     if prefill_lens[0] > 0 and prefill_elapsed_s > 0:
         metrics["prefill_t/s"] = prefill_lens[0] / prefill_elapsed_s
