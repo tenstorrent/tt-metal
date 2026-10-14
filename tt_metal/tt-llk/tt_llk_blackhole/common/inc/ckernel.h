@@ -212,6 +212,9 @@ inline void store_blocking(volatile T *ptr, U &&val)
     // - memory clobber
     //     - prevent reordering of transactions that occur after the store before the store by the COMPILER
 
+#if __has_builtin(__builtin_rvtt_store_blocking)
+    __builtin_rvtt_store_blocking(reinterpret_cast<std::uintptr_t>(ptr), raw);
+#else
     asm volatile(
         "sw %[raw], (%[ptr])\n\t"
         "lw %[raw], (%[ptr])\n\t"
@@ -219,8 +222,23 @@ inline void store_blocking(volatile T *ptr, U &&val)
         : [raw] "+r"(raw)
         : [ptr] "r"(ptr)
         : "memory");
+#endif
 }
 
+#if __has_builtin(__builtin_rvtt_store_blocking)
+// PC_BUF_BASE from tensix.h. A constant address tells the compiler this store cannot reach config.
+constexpr std::uint32_t PC_BUF_BASE_ADDR = 0xFFE80000;
+
+inline void tensix_sync()
+{
+    __builtin_rvtt_store_blocking(PC_BUF_BASE_ADDR + 4, 0);
+}
+
+inline void mop_sync()
+{
+    __builtin_rvtt_store_blocking(PC_BUF_BASE_ADDR + 8, 0);
+}
+#else
 inline void tensix_sync()
 {
     store_blocking(&pc_buf_base[1], 0);
@@ -230,6 +248,7 @@ inline void mop_sync()
 {
     store_blocking(&pc_buf_base[2], 0);
 }
+#endif
 
 inline void sync_regfile_write(const std::uint32_t index);
 
@@ -366,6 +385,13 @@ inline std::uint32_t cfg_read(std::uint32_t cfg_addr32)
 }
 
 // Return pointer to CFG with the right base address for the current state
+// Config written from the RISC-V core goes through the builtin so the compiler sees the write.
+#if __has_builtin(__builtin_rvtt_cfg_store)
+#define TT_CFG_STORE(cfg, index, value) __builtin_rvtt_cfg_store(reinterpret_cast<std::uint32_t>(cfg), (index), (value))
+#else
+#define TT_CFG_STORE(cfg, index, value) ((cfg)[index] = (value))
+#endif
+
 inline volatile std::uint32_t *tt_reg_ptr get_cfg_pointer()
 {
     if (cfg_state_id == 0)
@@ -811,7 +837,7 @@ inline void init_prng_seed(const std::uint32_t seed)
 {
     // The seed for PRNG should at least be initialized during chip boot-up time.
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
-    cfg[PRNG_SEED_Seed_Val_ADDR32]         = seed;
+    TT_CFG_STORE(cfg, PRNG_SEED_Seed_Val_ADDR32, seed);
 
     // TODO: ckernel::wait does not work properly. Use ckernel::wait when fixed.
     for (int i = 0; i < 600; i++)

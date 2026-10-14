@@ -268,6 +268,12 @@ ALWI void matmul_block(
     std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
+    reconfig_full_operand<SrcOrder::Reverse>(in0_cb_id, in1_cb_id);
+#else
+    reconfig_data_format<SrcOrder::Reverse>(in0_cb_id, in1_cb_id);
+#endif
+    matmul_block_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+#ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
 #ifdef ARCH_BLACKHOLE

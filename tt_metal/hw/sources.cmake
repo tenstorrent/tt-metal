@@ -156,12 +156,14 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/matmul_custom.h
     inc/api/compute/experimental/mul_reduce_scalar.h
     inc/api/compute/experimental/pack_block.h
+    inc/api/compute/experimental/pack_rows_custom.h
     inc/api/compute/experimental/pack_rows_to_addr.h
     inc/api/compute/experimental/rmsnorm.h
     inc/api/compute/experimental/rope_sfpu.h
     inc/api/compute/experimental/sdpa.h
     inc/api/compute/experimental/sdpa_custom_mm.h
     inc/api/compute/experimental/sdpa_custom_mm_reuse_dest_srcb.h
+    inc/api/compute/experimental/sdpa_first_column.h
     inc/api/compute/experimental/sdpa_sub_custom.h
     inc/api/compute/experimental/sdpa_weighted_reduce.h
     inc/api/compute/experimental/semaphore.h

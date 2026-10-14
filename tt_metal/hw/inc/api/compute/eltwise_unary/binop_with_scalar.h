@@ -61,6 +61,7 @@ ALWI void mul_unary_tile(uint32_t idst, uint32_t param1) {
 #ifdef ARCH_QUASAR
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, sfpu::BinopMode::Mul>(idst, param1)));
 #else
+    MATH(SFPU_UNARY_INIT(unused));
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

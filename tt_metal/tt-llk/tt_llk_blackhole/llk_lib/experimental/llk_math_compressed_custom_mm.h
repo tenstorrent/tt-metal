@@ -162,11 +162,11 @@ inline void _llk_math_compressed_custom_mm_(
     const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
-    const std::uint32_t iterations = finalize ? kt_dim - 1 : kt_dim;
-    const std::uint32_t* meta_ptr  = reinterpret_cast<const std::uint32_t*>(base_address_meta);
-    std::uint32_t index            = 0;
-    std::uint32_t meta_index       = 0;
-    std::uint32_t meta             = meta_ptr[meta_index] >> 3;
+    const std::uint32_t iterations          = finalize ? kt_dim - 1 : kt_dim;
+    const std::uint32_t tt_l1_ptr* meta_ptr = reinterpret_cast<const std::uint32_t tt_l1_ptr*>(base_address_meta);
+    std::uint32_t index                     = 0;
+    std::uint32_t meta_index                = 0;
+    std::uint32_t meta                      = meta_ptr[meta_index] >> 3;
 
     for (std::uint32_t i = 0; i < iterations; i++)
     {

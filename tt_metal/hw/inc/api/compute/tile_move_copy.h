@@ -127,11 +127,32 @@ ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::ui
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
+    reconfig_data_format_srca(in_cb_id);
+    copy_init<is_fp32_dest_acc_en>(in_cb_id);
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, in_tile_index)));
     MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
         dst_tile_index, in_cb_id)));
 }
+
+#ifndef ARCH_QUASAR
+// copy_tile into DST with the tile transposed within each 16x16 face.
+ALWI void copy_tile_custom(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
+    reconfig_data_format_srca(in_cb_id);
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+        0, true /*transpose within 16x16 face*/, in_cb_id)));
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          DataCopyType::A2D,
+          DST_ACCUM_MODE,
+          BroadcastType::NONE,
+          false,
+          PackMode::Default>(in_cb_id)));
+    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+        in_cb_id, in_tile_index)));
+    MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+        dst_tile_index, in_cb_id)));
+}
+#endif
 
 // clang-format off
 /**

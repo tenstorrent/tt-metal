@@ -90,7 +90,6 @@ void kernel_main() {
     CircularBuffer cb_identity_scale_in_obj(cb_identity_scale_in);
     CircularBuffer cb_mask_in_obj(cb_mask_in);
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_out);
-    matmul_init(cb_q_in, cb_k_in);
 
     if constexpr (is_chunked) {
         if (use_chunk_start_idx_tensor != 0) {

@@ -127,6 +127,7 @@ ALWI void binary_max_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorM
 #if defined(ARCH_QUASAR)
     MATH((llk_math_eltwise_binary_sfpu_binary_max<APPROX>(idst0, idst1, odst, vector_mode)));
 #else
+    MATH((SFPU_BINARY_INIT_FN(max, sfpu::binary_max_min_init, (true /* IS_MAX */))));
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

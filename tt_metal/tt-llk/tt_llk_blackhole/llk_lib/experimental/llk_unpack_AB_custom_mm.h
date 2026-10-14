@@ -215,14 +215,14 @@ inline void _llk_unpack_AB_custom_mm_run_(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim) {
     // Program SrcB address once, its updated using counters for up to 256 kt_dim
-    cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
+    TT_CFG_STORE(cfg, THCON_SEC1_REG3_Base_address_ADDR32, address_b);
     // Program SrcA address once, its updated using CFGSHIFTMASK
-    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
+    TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_address_ADDR32, address_a);
     // Setup CFGSHIFTMASK increments
     // block_increment moves to next tile in tile_row
-    cfg[SCRATCH_SEC0_val_ADDR32] = block_increment;
+    TT_CFG_STORE(cfg, SCRATCH_SEC0_val_ADDR32, block_increment);
     // inner_increment moves to next tile_row (next inner_dim)
-    cfg[SCRATCH_SEC1_val_ADDR32] = inner_increment;
+    TT_CFG_STORE(cfg, SCRATCH_SEC1_val_ADDR32, inner_increment);
 
     semaphore_post(semaphore::UNPACK_SYNC);
 

@@ -303,7 +303,7 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     // Apply the Y offsets of a consecutive bfp2/bfp4 pair of meta address words to the two borrowed Y
     // counters, so each context reads from the right row of its base. bfp2 counts in the math thread's ADC
     // set and bfp4 in the pack thread's, so each needs its own write. Caller holds the mutex.
-    auto set_y_off = [](const std::uint32_t* addr_pair)
+    auto set_y_off = [](const std::uint32_t tt_l1_ptr* addr_pair)
     {
         const std::uint32_t bfp2_y = addr_pair[0] >> meta_addr_y_off_shift;
         const std::uint32_t bfp4_y = addr_pair[1] >> meta_addr_y_off_shift;
@@ -339,14 +339,14 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
     // per tile math meta is 6 bits, 5 entries fit into 32bits, round up
-    const std::uint32_t math_meta_size = (kt_dim * ct_dim + 4) / 5;
-    const std::uint32_t* pre_meta_ptr  = reinterpret_cast<std::uint32_t*>(base_address_meta) + math_meta_size;
-    const std::uint32_t iters          = pre_meta_ptr[0];
-    const std::uint32_t full_iters     = iters / metas_per_index_word; // whole index words
-    const std::uint32_t rem_iters      = iters % metas_per_index_word; // metas in the trailing word
-    const std::uint32_t full_blocks    = full_iters / 16;
-    const bool odd_block               = (full_iters % 16) >= 8;
-    const std::uint32_t* meta_ptr      = pre_meta_ptr + 1 + 2 * (full_iters / 8) + 2;
+    const std::uint32_t math_meta_size          = (kt_dim * ct_dim + 4) / 5;
+    const std::uint32_t tt_l1_ptr* pre_meta_ptr = reinterpret_cast<std::uint32_t tt_l1_ptr*>(base_address_meta) + math_meta_size;
+    const std::uint32_t iters                   = pre_meta_ptr[0];
+    const std::uint32_t full_iters              = iters / metas_per_index_word; // whole index words
+    const std::uint32_t rem_iters               = iters % metas_per_index_word; // metas in the trailing word
+    const std::uint32_t full_blocks             = full_iters / 16;
+    const bool odd_block                        = (full_iters % 16) >= 8;
+    const std::uint32_t tt_l1_ptr* meta_ptr     = pre_meta_ptr + 1 + 2 * (full_iters / 8) + 2;
 
     wait_for_next_context(1);
     reset_config_context();
@@ -355,12 +355,12 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     {
         TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
     }
-    cfg[THCON_SEC0_REG3_Base_address_ADDR32]       = pre_meta_ptr[1] & meta_addr_base_mask;
-    cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[2] & meta_addr_base_mask;
+    TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_address_ADDR32, pre_meta_ptr[1] & meta_addr_base_mask);
+    TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, pre_meta_ptr[2] & meta_addr_base_mask);
     t6_mutex_acquire(mutex::THREAD2_ADC);
     set_y_off(pre_meta_ptr + 1);
     t6_mutex_release(mutex::THREAD2_ADC);
-    cfg[THCON_SEC1_REG3_Base_address_ADDR32] = base_address_b;
+    TT_CFG_STORE(cfg, THCON_SEC1_REG3_Base_address_ADDR32, base_address_b);
 
     semaphore_post(semaphore::UNPACK_SYNC);
 
@@ -374,8 +374,8 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
         {
             emit_word(meta_ptr[c]);
         }
-        cfg[THCON_SEC0_REG3_Base_cntx2_address_ADDR32] = pre_meta_ptr[3 + 4 * b] & meta_addr_base_mask;
-        cfg[THCON_SEC0_REG3_Base_cntx3_address_ADDR32] = pre_meta_ptr[4 + 4 * b] & meta_addr_base_mask;
+        TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_cntx2_address_ADDR32, pre_meta_ptr[3 + 4 * b] & meta_addr_base_mask);
+        TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_cntx3_address_ADDR32, pre_meta_ptr[4 + 4 * b] & meta_addr_base_mask);
         for (std::uint32_t i = 0; i < 4; ++i, ++c)
         {
             emit_word(meta_ptr[c]);
@@ -388,8 +388,8 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
         {
             emit_word(meta_ptr[c]);
         }
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32]       = pre_meta_ptr[5 + 4 * b] & meta_addr_base_mask;
-        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[6 + 4 * b] & meta_addr_base_mask;
+        TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_address_ADDR32, pre_meta_ptr[5 + 4 * b] & meta_addr_base_mask);
+        TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_cntx1_address_ADDR32, pre_meta_ptr[6 + 4 * b] & meta_addr_base_mask);
         for (std::uint32_t i = 0; i < 4; ++i, ++c)
         {
             emit_word(meta_ptr[c]);
@@ -406,8 +406,8 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
         {
             emit_word(meta_ptr[c]);
         }
-        cfg[THCON_SEC0_REG3_Base_cntx2_address_ADDR32] = pre_meta_ptr[3 + 4 * full_blocks] & meta_addr_base_mask;
-        cfg[THCON_SEC0_REG3_Base_cntx3_address_ADDR32] = pre_meta_ptr[4 + 4 * full_blocks] & meta_addr_base_mask;
+        TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_cntx2_address_ADDR32, pre_meta_ptr[3 + 4 * full_blocks] & meta_addr_base_mask);
+        TT_CFG_STORE(cfg, THCON_SEC0_REG3_Base_cntx3_address_ADDR32, pre_meta_ptr[4 + 4 * full_blocks] & meta_addr_base_mask);
         for (std::uint32_t i = 0; i < 4; ++i, ++c)
         {
             emit_word(meta_ptr[c]);

@@ -139,7 +139,6 @@ void kernel_main() {
     }
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
-    matmul_init(cb_q_in, cb_k_in);
 
     CircularBuffer cb_identity_scale_in_obj(cb_identity_scale_in);
     CircularBuffer cb_mask_in_obj(cb_mask_in);

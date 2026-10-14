@@ -8,6 +8,7 @@
 #include "common_globals.h"
 #include "sentinel/compute_kernel_sentinel.h"
 #include "sanitizer/api.h"
+#include "api/compute/reconfig_data_format.h"
 #ifdef TRISC_PACK
 #include "llk_pack_tile_api.h"
 #ifndef ARCH_QUASAR
@@ -87,9 +88,18 @@ ALWI void pack_init(std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE(
  */
 // clang-format on
 template <bool out_of_order_output = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t output_tile_index = 0) {
+ALWI void pack_tile(
+    std::uint32_t ifrom_dst,
+    std::uint32_t icb,
+    std::uint32_t output_tile_index = 0,
+    bool l1_acc = false,
+    ReluConfig relu = ReluConfig::none()) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
+    pack_reconfig_data_format(icb);
+    PACK((llk_pack_init<PackMode::Default, false, true, true>(icb, 1)));
+    PACK((llk_pack_reconfig_l1_acc(l1_acc ? 1 : 0)));
+    PACK((llk_pack_relu_config(relu)));
     PACK((llk_pack<is_fp32_dest_acc_en, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
 #else
     PACK((llk_pack<out_of_order_output>(ifrom_dst, icb, output_tile_index)));

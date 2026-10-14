@@ -138,23 +138,10 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
 }
 #endif  // !ARCH_QUASAR
 
-// clang-format off
-/**
- * Performs the tilize operation on a block.
- *
- * Return value: None
- *
- * | Param Type | Name             | Description                              | Type     | Valid Range | Required |
- * |----------- |------------------|------------------------------------------|----------|-------------|----------|
- * | Function   | icb              | Input circular buffer identifier         | uint32_t | 0 to 31     | True     |
- * | Function   | block            | Size of tile block to work on            | uint32_t | > 0         | True     |
- * | Function   | ocb              | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
- * | Function   | input_tile_index | Index of the input tile in the icb       | uint32_t | >= 0        | False    |
- * | Function   | output_tile_index| Index of the output tile in the ocb      | uint32_t | >= 0        | False    |
- */
-// clang-format on
+namespace tilize_detail {
+
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void tilize_block(
+ALWI void tilize_block_body(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
@@ -176,6 +163,43 @@ ALWI void tilize_block(
         MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
         PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
     }
+}
+
+}  // namespace tilize_detail
+
+ALWI void tilize_uninit(uint32_t icb, uint32_t ocb);
+
+// clang-format off
+/**
+ * Performs the tilize operation on a block.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name             | Description                              | Type     | Valid Range | Required |
+ * |----------- |------------------|------------------------------------------|----------|-------------|----------|
+ * | Function   | icb              | Input circular buffer identifier         | uint32_t | 0 to 31     | True     |
+ * | Function   | block            | Size of tile block to work on            | uint32_t | > 0         | True     |
+ * | Function   | ocb              | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
+ * | Function   | input_tile_index | Index of the input tile in the icb       | uint32_t | >= 0        | False    |
+ * | Function   | output_tile_index| Index of the output tile in the ocb      | uint32_t | >= 0        | False    |
+ * | Function   | row_ct_dim       | Width of the input row in tiles, if not block (0 = block) | uint32_t | >= 0 | False |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void tilize_block(
+    uint32_t icb,
+    uint32_t block,
+    uint32_t ocb,
+    uint32_t input_tile_index = 0,
+    uint32_t output_tile_index = 0,
+    uint32_t row_ct_dim = 0) {
+#ifndef ARCH_QUASAR
+    reconfig_data_format_srca(icb);
+    pack_reconfig_data_format(ocb);
+#endif
+    tilize_init<is_fp32_dest_acc_en>(icb, row_ct_dim ? row_ct_dim : block, ocb);
+    tilize_detail::tilize_block_body<is_fp32_dest_acc_en>(icb, block, ocb, input_tile_index, output_tile_index);
+    tilize_uninit(icb, ocb);
 }
 
 // clang-format off
@@ -348,7 +372,7 @@ ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
 #ifdef ARCH_BLACKHOLE
     if (block == 1) {
-        tilize_block<is_fp32_dest_acc_en>(icb, block, ocb, input_tile_index, output_tile_index);
+        tilize_detail::tilize_block_body<is_fp32_dest_acc_en>(icb, block, ocb, input_tile_index, output_tile_index);
         return;
     }
     ASSERT(block > 1);

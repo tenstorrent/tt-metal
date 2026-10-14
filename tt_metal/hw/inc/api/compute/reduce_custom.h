@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
+#include "api/compute/reduce.h"
 #include "tensor_shape.h"
 #ifdef TRISC_MATH
 #include "llk_math_reduce_api.h"
@@ -130,16 +131,19 @@ ALWI void reduce_block_max_row(
     MATH((llk_math_reduce_block_max_row<block_ct_dim, is_fp32_dest_acc_en>(idst, tensor_shape)));
 }
 
+template <bool respect_trigger = false>
+ALWI void reduce_block_max_row_uninit(std::uint32_t icb);
+
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
+// Also folds the reconfig, reduce init and reduce uninit into this call; requires respect_trigger == false.
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4>
 ALWI void reduce_block_max_row(
-    std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t row_start_index, std::uint32_t idst) {
-    reduce_block_max_row<block_ct_dim, respect_trigger>(
-        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces),
-        icb,
-        icb_scaler,
-        row_start_index,
-        idst);
+    std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t row_start_index, std::uint32_t idst, std::uint32_t ocb) {
+    const auto tensor_shape = ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces);
+    reconfig_data_format(icb, icb_scaler);
+    reduce_block_max_row_init<block_ct_dim, respect_trigger, num_faces>(ocb);
+    reduce_block_max_row<block_ct_dim, respect_trigger>(tensor_shape, icb, icb_scaler, row_start_index, idst);
+    reduce_block_max_row_uninit<respect_trigger>(icb);
 }
 
 #ifdef ARCH_BLACKHOLE
@@ -280,7 +284,7 @@ ALWI void reduce_block_max_row_reinit_short_runtime(
  * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | False    |
  */
 // clang-format on
-template <bool respect_trigger = false>
+template <bool respect_trigger>
 ALWI void reduce_block_max_row_uninit(std::uint32_t icb) {
 #ifdef ARCH_BLACKHOLE
     MATH((llk_math_reduce_uninit()));
@@ -360,15 +364,25 @@ ALWI void reduce_block_max_row_runtime(
     MATH((llk_math_reduce_block_max_row_runtime<is_fp32_dest_acc_en>(idst, tensor_shape)));
 }
 
+ALWI void reduce_block_max_row_uninit_runtime(
+    std::uint32_t icb, bool respect_trigger = false, bool overlap_first_half = false);
+
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
+// Also folds the reconfig, reduce init and reduce uninit into this call. The FPU_SFPU and first-half
+// trigger tokens are consumed only by the uninit of a group's last row, so group_end is false for the other rows.
 ALWI void reduce_block_max_row_runtime(
     std::uint32_t icb,
     std::uint32_t icb_scaler,
     std::uint32_t row_start_index,
     std::uint32_t idst,
-    bool respect_trigger = false,
-    bool overlap_first_half = false,
-    std::uint32_t num_faces = 4) {
+    bool respect_trigger,
+    bool overlap_first_half,
+    std::uint32_t num_faces,
+    std::uint32_t ocb,
+    std::uint32_t block_ct_dim,
+    bool group_end = true) {
+    reconfig_data_format(icb, icb_scaler);
+    reduce_block_max_row_init_runtime(ocb, block_ct_dim, icb, icb_scaler, respect_trigger, num_faces);
     reduce_block_max_row_runtime(
         ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces),
         icb,
@@ -377,10 +391,10 @@ ALWI void reduce_block_max_row_runtime(
         idst,
         respect_trigger,
         overlap_first_half);
+    reduce_block_max_row_uninit_runtime(icb, respect_trigger && group_end, overlap_first_half && group_end);
 }
 
-ALWI void reduce_block_max_row_uninit_runtime(
-    std::uint32_t icb, bool respect_trigger = false, bool overlap_first_half = false) {
+ALWI void reduce_block_max_row_uninit_runtime(std::uint32_t icb, bool respect_trigger, bool overlap_first_half) {
 #ifdef ARCH_BLACKHOLE
     MATH((llk_math_reduce_uninit()));
 #elif defined(ARCH_QUASAR)

@@ -35,6 +35,9 @@ ALWI void sub_tiles_bcast_cols_custom(
     std::uint32_t itile1,
     std::uint32_t idst,
     std::uint32_t ct_dim) {
+    reconfig_data_format(icb0, icb1);
+    MATH((llk_math_eltwise_binary_sub_bcast_cols_init_custom<MATH_FIDELITY>(icb0, icb1)));
+    UNPACK((llk_unpack_AB_sub_bcast_col_init_custom(icb0, icb1)));
     MATH((llk_math_eltwise_binary_sub_bcast_cols_custom(icb0, idst, ct_dim)));
     UNPACK((llk_unpack_AB_sub_bcast_col_custom(icb0, icb1, itile0, itile1, ct_dim)));
 }

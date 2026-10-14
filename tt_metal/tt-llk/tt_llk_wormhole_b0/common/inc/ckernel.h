@@ -220,6 +220,9 @@ inline void store_blocking(volatile T *ptr, U &&val)
     // - memory clobber
     //     - prevent reordering of transactions that occur after the store before the store by the COMPILER
 
+#if __has_builtin(__builtin_rvtt_store_blocking)
+    __builtin_rvtt_store_blocking(reinterpret_cast<std::uintptr_t>(ptr), raw);
+#else
     asm volatile(
         "sw %[raw], (%[ptr])\n\t"
         "lw %[raw], (%[ptr])\n\t"
@@ -227,8 +230,23 @@ inline void store_blocking(volatile T *ptr, U &&val)
         : [raw] "+r"(raw)
         : [ptr] "r"(ptr)
         : "memory");
+#endif
 }
 
+#if __has_builtin(__builtin_rvtt_store_blocking)
+// PC_BUF_BASE from tensix.h. A constant address tells the compiler this store cannot reach config.
+constexpr std::uint32_t PC_BUF_BASE_ADDR = 0xFFE80000;
+
+inline void tensix_sync()
+{
+    __builtin_rvtt_store_blocking(PC_BUF_BASE_ADDR + 4, 0);
+}
+
+inline void mop_sync()
+{
+    __builtin_rvtt_store_blocking(PC_BUF_BASE_ADDR + 8, 0);
+}
+#else
 inline void tensix_sync()
 {
     store_blocking(&pc_buf_base[1], 0);
@@ -238,6 +256,7 @@ inline void mop_sync()
 {
     store_blocking(&pc_buf_base[2], 0);
 }
+#endif
 
 inline void sync_regfile_write(const std::uint32_t index);
 

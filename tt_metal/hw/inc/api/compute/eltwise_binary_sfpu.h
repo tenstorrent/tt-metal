@@ -88,6 +88,10 @@ ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #endif
 }
 
+ALWI void add_binary_tile_init() {
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::ADD))));
+}
+
 /**
  * @tparam dst_rounding_mode Controls bf16 narrowing for the result. Default truncates (native SFPSTORE
  *         behavior); NearestEven applies IEEE 754 round-to-nearest-even in software before the store.
@@ -100,6 +104,9 @@ template <
     ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+#ifndef ARCH_QUASAR
+    add_binary_tile_init();
+#endif
 #ifdef ARCH_QUASAR
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -263,10 +270,6 @@ ALWI void div_binary_tile_init() {
 
 ALWI void mul_binary_tile_init() {
     MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::MUL))));
-}
-
-ALWI void add_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::ADD))));
 }
 
 ALWI void sub_binary_tile_init() {

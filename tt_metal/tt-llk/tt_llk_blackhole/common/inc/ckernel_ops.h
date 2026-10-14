@@ -3,10 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //
-// Auto-generated file, do not modify, except for the intrinsic redirect
-// block guarded by #if defined(__riscv_xtttensixbh) at the end.  That block is
-// maintained by hand and appended after the generated content; regenerating
-// this file drops it.
+// Auto-generated file, do not modify
+// sorry had to modify it for the intrinsic block at the end!!
 //
 
 #pragma once
@@ -1041,60 +1039,15 @@
 #define TT_ZEROSRC(zero_val, write_mode, bank_mask, src_mask)  TT_INSN(TT_OP_ZEROSRC(zero_val, write_mode, bank_mask, src_mask))
 #define TTI_ZEROSRC(zero_val, write_mode, bank_mask, src_mask) TTI_INSN(TT_OP_ZEROSRC(zero_val, write_mode, bank_mask, src_mask))
 
-// Only the three TRISCs are built with the Tensix extension
-// (-mcpu=tt-bh-tensix); BRISC/NCRISC use plain -mcpu=tt-bh, where these
-// builtins are not registered at all.  Those cores still issue the odd Tensix
-// instruction (boot.h's TTI_ZEROACC/TTI_SFPCONFIG) as a raw .ttinsn word,
-// which needs no codegen support, so leave the legacy macros in place there.
-// Without this guard the declarations below turn every call into an ordinary
-// extern function and the failure surfaces as an undefined reference at link.
 #if defined(__riscv_xtttensixbh) && !defined(TT_LLK_NO_INTRINSIC_REDIRECT)
 
-// The instruction-issue macros below expand to compiler builtins.  Many of
-// those expansions land inside templates, where a non-dependent name must be
-// declared at the point of definition, so pull in sfpi's declarations rather
-// than relying on the builtin being known implicitly.  Declaring a __builtin_
-// name is a redundant redeclaration of what the compiler already knows, hence
-// the suppression.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wredundant-decls"
 #include "tensix_builtins.h"
 #pragma GCC diagnostic pop
 
-// A Tensix instruction is issued by storing its word to the instruction buffer,
-// which the macros below do directly.  ckernel.h declares the buffer too, but
-// only after including headers that already issue instructions, so declare it
-// here.  std::uint32_t, not unsigned: uint32_t is long unsigned int on this
-// target and a mismatched declaration is an error.
 #include <cstdint>
 extern volatile std::uint32_t __instrn_buffer[];
-
-// --------------------------------------------------------------------------
-// Route instruction issue through the compiler's intrinsics.
-//
-// TT_<OP> (runtime issue, formerly a store to instrn_buffer) and TTI_<OP>
-// (compile-time issue, formerly .ttinsn) both become the same intrinsic call.
-// The compiler emits the immediate instruction when every operand is a
-// constant and materialises the word otherwise.  That choice used to be
-// made by hand, by picking which macro to write; now the compiler makes it.
-// Kernels are unchanged: they keep writing TTI_FOO(...) / TT_FOO(...).
-//
-// It also makes the instruction stream legible to the compiler: a .ttinsn is
-// inline asm, so every instruction issued that way was something it had to
-// assume could do anything at all.
-//
-// TT_OP_<OP> is deliberately NOT redirected: it yields the instruction
-// *word* as a value, which MOP templates and the replay buffer store rather
-// than issue.  The operands are cast because the builtins are typed and the
-// callers pass scoped enums the old arithmetic macros accepted implicitly.
-//
-// Redirected: 133 of 137.  These have no matching intrinsic or a
-// different operand shape, and keep their original definitions:
-//   RAREB, SFPLUTFP32, SFPSETMAN, TRNSPSRCA
-//
-// RAREB and TRNSPSRCA do have intrinsics, but neither is issued anywhere in
-// the LLK, so routing them buys nothing and is left for whoever needs them.
-// --------------------------------------------------------------------------
 
 #undef TT_ADDDMAREG
 #define TT_ADDDMAREG(a0, a1, a2, a3) __instrn_buffer[0] = __builtin_rvtt_adddmareg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
@@ -1288,12 +1241,6 @@ extern volatile std::uint32_t __instrn_buffer[];
 #define TT_MULDMAREG(a0, a1, a2, a3) __instrn_buffer[0] = __builtin_rvtt_muldmareg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
 #undef TTI_MULDMAREG
 #define TTI_MULDMAREG(a0, a1, a2, a3) TT_MULDMAREG(a0, a1, a2, a3)
-// TTI_NOP and TTI_DMANOP take no operands, so they are object-like macros
-// rather than function-like ones, and there is no TT_ (runtime) spelling to
-// redirect: a NOP has nothing to compute at runtime.  Routing them through
-// intrinsics still matters out of proportion to what they do: the packer pads
-// its config sequences with them, so leaving them as inline asm drops an
-// opaque instruction into the middle of every such sequence.
 #undef TTI_DMANOP
 #define TTI_DMANOP __instrn_buffer[0] = __builtin_rvtt_ttdmanop()
 #undef TTI_NOP
@@ -1642,7 +1589,6 @@ extern volatile std::uint32_t __instrn_buffer[];
 #undef TTI_TRNSPSRCB
 #define TTI_TRNSPSRCB __instrn_buffer[0] = __builtin_rvtt_trnspsrcb()
 
-// All 12 fields now, so Concat=MEGAROW from llk_pack.h survives the trip.
 #undef TT_PACR
 #define TT_PACR(CfgContext, RowPadZero, DstAccessMode, AddrMode, AddrCntContext, ZeroWrite, ReadIntfSel, OvrdThreadId, Concat, CtxtCtrl, Flush, Last) \
     __instrn_buffer[0] = __builtin_rvtt_bh_pacr(                                                                                                      \
@@ -1682,18 +1628,12 @@ extern volatile std::uint32_t __instrn_buffer[];
 #undef TTI_MOP_CFG
 #define TTI_MOP_CFG(zmask_hi16) TT_MOP_CFG(zmask_hi16)
 
-// REPLAY must be visible to pass_rvtt_replay: issued as .ttinsn it is opaque,
-// so the pass neither reserves the buffer slots this reserves nor sees that it
-// is emitting inside a recording window, and it allocates on top of whatever
-// the author recorded.  ckernel_sfpu_gcd.h captures 28 instructions this way.
 #undef TT_REPLAY
 #define TT_REPLAY(start_idx, len, execute_while_loading, load_mode) \
     __builtin_rvtt_ttreplay(ckernel::instrn_buffer, (unsigned)(len), 0, 0, (unsigned)(start_idx), (unsigned)(execute_while_loading), (unsigned)(load_mode))
 #undef TTI_REPLAY
 #define TTI_REPLAY(start_idx, len, execute_while_loading, load_mode) TT_REPLAY(start_idx, len, execute_while_loading, load_mode)
 
-// Spelled bh_sfpstochrnd, not sfp_stoch_rnd, which is why the name sweep
-// missed it.  The field order matches TT_OP_SFP_STOCH_RND exactly.
 #undef TT_SFP_STOCH_RND
 #define TT_SFP_STOCH_RND(rnd_mode, imm8_math, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
     __instrn_buffer[0] = __builtin_rvtt_bh_sfpstochrnd(                                      \

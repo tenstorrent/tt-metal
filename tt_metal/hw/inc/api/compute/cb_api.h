@@ -205,7 +205,7 @@ ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t elem
     UNPACK({
         uint32_t byte_address = get_tile_l1_byte_address(get_operand_id(cb_id), tile_index);
 
-        value = reinterpret_cast<volatile uint32_t*>(byte_address)[element_offset];
+        value = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(byte_address)[element_offset];
 
         mailbox_write(ckernel::ThreadId::MathThreadId, value);
         mailbox_write(ckernel::ThreadId::PackThreadId, value);
