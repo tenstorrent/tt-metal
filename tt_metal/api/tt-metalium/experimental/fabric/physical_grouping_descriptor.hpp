@@ -25,6 +25,7 @@
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
+#include <umd/device/types/arch.hpp>  // tt::ARCH
 
 // Forward declarations
 namespace tt::tt_metal {
