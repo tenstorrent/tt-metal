@@ -418,6 +418,16 @@ foreach(
     _x280_check_header(${_header} c++ ${_x280_shared_dir})
 endforeach()
 
+# A DRISC core_sync director is refused at compile time, on kMayDirect alone.
+add_test(
+    NAME x280_core_sync_director_refusal
+    COMMAND
+        ${CMAKE_COMMAND} "-DCOMPILER=${X280_GCC}"
+        "-DFLAGS=${X280_CFLAGS};-I${_x280_shared_dir};-std=c++17;-fno-exceptions;-fno-rtti"
+        -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/core-sync-director-check -P
+        ${CMAKE_CURRENT_SOURCE_DIR}/x280_core_sync_director_check.cmake
+)
+
 # Host-only benchmark tests: like x280_runtime_host_tests, no Metal and no device. Each family adds
 # its sources and its kernels/<family> include root.
 add_executable(
