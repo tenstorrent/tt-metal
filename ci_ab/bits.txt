@@ -1,0 +1,2 @@
+P fin.txt
+N fin.txt
