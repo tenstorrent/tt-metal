@@ -10,31 +10,15 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/operations/data_movement/concat/device/kernels/dataflow/concat_reader_common.hpp"
 
-// Issues reads of num_pages consecutive pages of input I, starting at page page_id, to consecutive
-// page-sized slots from l1_write_addr. The caller issues the read barrier.
-// Only input I's accessor is built, so stack use does not grow with the number of inputs.
+// Issues a read of page page_id of input I to l1_write_addr. The caller issues the read barrier.
+// The per-tensor page sizes are compile-time varargs.
 template <uint32_t I>
-void read_input_pages(Noc& noc, uint32_t l1_write_addr, uint32_t page_id, uint32_t num_pages) {
-    // The per-tensor page sizes are compile-time varargs.
-    constexpr uint32_t page_size = get_compile_time_vararg<I>();
+FORCE_INLINE void read_input_page(Noc& noc, uint32_t l1_write_addr, uint32_t page_id) {
     const auto accessor = TensorAccessor(std::get<I>(tensor::inputs));
-    for (uint32_t p = 0; p < num_pages; ++p) {
-        noc.async_read(accessor, CoreLocalMem<uint8_t>(l1_write_addr), page_size, {.page_id = page_id + p}, {});
-        l1_write_addr += page_size;
-    }
-}
-
-// Calls read_input_pages<tensor_idx>() for an input index known only at run time.
-template <uint32_t... Is>
-void read_input_pages(
-    uint32_t tensor_idx,
-    Noc& noc,
-    uint32_t l1_write_addr,
-    uint32_t page_id,
-    uint32_t num_pages,
-    std::integer_sequence<uint32_t, Is...>) {
-    (void)((tensor_idx == Is && (read_input_pages<Is>(noc, l1_write_addr, page_id, num_pages), true)) || ...);
+    noc.async_read(
+        accessor, CoreLocalMem<uint8_t>(l1_write_addr), get_compile_time_vararg<I>(), {.page_id = page_id}, {});
 }
 
 // Reads num_pages pages into the bound Dataflow Buffer in L1.
@@ -68,7 +52,9 @@ void kernel_main() {
         dfb_in.reserve_back(ublock_size_pages);
         uint32_t l1_write_addr = dfb_in.get_write_ptr();
         for (uint32_t j = 0; j < num_tensors; ++j) {
-            read_input_pages(j, noc, l1_write_addr, get_vararg(page_id_per_tensor_offset + j) + i, 1, tensor_indices);
+            concat_reader::with_input(j, tensor_indices, [&](auto I) {
+                read_input_page<decltype(I)::value>(noc, l1_write_addr, get_vararg(page_id_per_tensor_offset + j) + i);
+            });
             l1_write_addr += get_compile_time_vararg(j);
         }
         noc.async_read_barrier();
@@ -76,37 +62,21 @@ void kernel_main() {
     }
 #else
     // Pages are read round-robin, one block of num_pages_per_block[t] pages from each input t.
-    uint32_t curr_tensor = start_tensor;
-    uint32_t curr_tensor_id = start_tensor_id;
-    uint32_t num_wraps = 0;  // times curr_tensor wrapped from the last input back to input 0
+    concat_reader::RoundRobinCursor cursor(start_tensor, start_tensor_id);
     for (uint32_t i = 0; i < num_pages; ++i) {
-        const uint32_t num_pages_per_block = get_vararg(curr_tensor);
-
-        // Pages of curr_tensor this core has already read: one block per earlier visit, less the part
-        // of the first block skipped by starting mid-block. Inputs before start_tensor are first
-        // visited after the first wrap.
-        uint32_t pages_already_read = num_wraps * num_pages_per_block + curr_tensor_id;
-        if (curr_tensor < start_tensor) {
-            pages_already_read -= num_pages_per_block;
-        } else if (curr_tensor == start_tensor) {
-            pages_already_read -= start_tensor_id;
-        }
-        const uint32_t page_id = get_vararg(page_id_per_tensor_offset + curr_tensor) + pages_already_read;
+        const uint32_t num_pages_per_block = get_vararg(cursor.tensor);
+        const uint32_t page_id =
+            get_vararg(page_id_per_tensor_offset + cursor.tensor) + cursor.pages_already_read(num_pages_per_block);
 
         dfb_in.reserve_back(ublock_size_pages);
-        read_input_pages(curr_tensor, noc, dfb_in.get_write_ptr(), page_id, 1, tensor_indices);
+        const uint32_t l1_write_addr = dfb_in.get_write_ptr();
+        concat_reader::with_input(cursor.tensor, tensor_indices, [&](auto I) {
+            read_input_page<decltype(I)::value>(noc, l1_write_addr, page_id);
+        });
         noc.async_read_barrier();
         dfb_in.push_back(ublock_size_pages);
 
-        curr_tensor_id++;
-        if (curr_tensor_id == num_pages_per_block) {
-            curr_tensor_id = 0;
-            curr_tensor++;
-            if (curr_tensor == num_tensors) {
-                curr_tensor = 0;
-                num_wraps++;
-            }
-        }
+        cursor.advance(1, num_pages_per_block, num_tensors);
     }
 #endif
 }
