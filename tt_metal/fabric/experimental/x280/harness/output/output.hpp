@@ -260,18 +260,12 @@ public:
     template <typename T, std::enable_if_t<std::is_same_v<T, bool>, int> = 0>
     Value(T flag) : value_(flag) {}
     template <typename T, std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool>, int> = 0>
-    Value(T number) {
-        if constexpr (std::is_signed_v<T>) {
-            value_ = static_cast<int64_t>(number);
-        } else {
-            value_ = static_cast<uint64_t>(number);
-        }
-    }
+    Value(T number);
     template <typename T, std::enable_if_t<std::is_floating_point_v<T>, int> = 0>
     Value(T) = delete;
     // `text` must be non-null.
-    Value(const char* text) : value_(std::string(text)) {}
-    Value(std::string text) : value_(std::move(text)) {}
+    Value(const char* text);
+    Value(std::string text);
 
     static Value array(std::vector<Value> items);
     static Value object(std::vector<Field> fields);
@@ -311,6 +305,18 @@ struct Field {
     std::string key;
     Value value;
 };
+
+// Defined once Field is complete: constructing the variant instantiates std::vector<Field>.
+template <typename T, std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool>, int>>
+Value::Value(T number) {
+    if constexpr (std::is_signed_v<T>) {
+        value_ = static_cast<int64_t>(number);
+    } else {
+        value_ = static_cast<uint64_t>(number);
+    }
+}
+inline Value::Value(const char* text) : value_(std::string(text)) {}
+inline Value::Value(std::string text) : value_(std::move(text)) {}
 
 namespace detail {
 
