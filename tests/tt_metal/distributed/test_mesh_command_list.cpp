@@ -17,6 +17,7 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
 #include <tt-metalium/experimental/command_list.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -328,7 +329,9 @@ TEST_F(CommandListTest, AllowsTemporaryTensorLifetimeDuringBuild) {
     // Allocate the persistent output before command-list recording starts.
     MeshTensor output = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec);
     const std::vector<uint32_t> zeros(total_bytes / sizeof(uint32_t), 0);
-    ::tt::tt_metal::detail::WriteToBuffer(*output.mesh_buffer().get_reference_buffer(), zeros);
+    auto& write_cq = mesh_device_->mesh_command_queue(0);
+    ::tt::tt_metal::enqueue_write_tensor(write_cq, reinterpret_cast<const std::byte*>(zeros.data()), output);
+    Finish(write_cq);
 
     std::vector<uint32_t> expected(total_bytes / sizeof(uint32_t));
     for (size_t i = 0; i < expected.size(); ++i) {
@@ -368,7 +371,9 @@ TEST_F(CommandListTest, AllowsTemporaryTensorLifetimeDuringBuild) {
     CommandListBuilder builder(*mesh_device_);
     {
         MeshTensor temporary = MeshTensor::allocate_on_device(*mesh_device_, tensor_spec);
-        ::tt::tt_metal::detail::WriteToBuffer(*temporary.mesh_buffer().get_reference_buffer(), expected);
+        ::tt::tt_metal::enqueue_write_tensor(
+            mesh_device_->mesh_command_queue(0), reinterpret_cast<const std::byte*>(expected.data()), temporary);
+        Finish(mesh_device_->mesh_command_queue(0));
 
         m2::ProgramRunArgs args;
         args.kernel_run_args = {
@@ -396,8 +401,8 @@ TEST_F(CommandListTest, AllowsTemporaryTensorLifetimeDuringBuild) {
     auto command_list = builder.build(cq);
     EnqueueCommandList(cq, command_list, /*blocking=*/true);
 
-    std::vector<uint32_t> result;
-    ::tt::tt_metal::detail::ReadFromBuffer(*output.mesh_buffer().get_reference_buffer(), result);
+    std::vector<uint32_t> result(total_bytes / sizeof(uint32_t));
+    ::tt::tt_metal::enqueue_read_tensor(cq, output, reinterpret_cast<std::byte*>(result.data()));
     EXPECT_EQ(result, expected);
 }
 
