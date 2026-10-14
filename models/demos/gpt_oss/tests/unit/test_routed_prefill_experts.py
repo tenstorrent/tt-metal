@@ -11,6 +11,8 @@ Checks, per sequence length and layer:
   * sum of per-expert token counts == k * S, no NaN, repeat runs identical;
   * capacity worst case: every token routed to experts 0..k-1 (one device holds all of them), nothing dropped;
   * multi-chunk: S=4096 with GPT_OSS_ROUTED_PREFILL_CHUNK=1024 (4 chunks), same checks and thresholds;
+  * non-multiple-of-1024 lengths: S=8256 (a full 8192 chunk plus a 64-token last chunk); pair positions exact at
+    S=1088 (one chunk shorter than the shared prefix operator; the dense path cannot run 1088, so no MoE case);
   * supports(): batch > 1 and non-multiple-of-64 lengths run dense.
 
 Run: pytest models/demos/gpt_oss/tests/unit/test_routed_prefill_experts.py -k 1x4
@@ -137,8 +139,8 @@ def routed_env(monkeypatch):
 @parametrize_mesh_with_fabric([(1, 4)])
 @pytest.mark.parametrize(
     "seq_len, chunk",
-    [(128, None), (1024, None), (4096, None), (4096, 1024)],
-    ids=["S128", "S1024", "S4096", "S4096-chunk1024"],
+    [(128, None), (1024, None), (4096, None), (4096, 1024), (8256, None)],
+    ids=["S128", "S1024", "S4096", "S4096-chunk1024", "S8256"],
 )
 @pytest.mark.parametrize("layer_idx", [0, 12], ids=["layer0", "layer12"])
 def test_routed_prefill_experts(
@@ -181,6 +183,9 @@ def test_routed_prefill_experts(
     ), "batch > 1 must run dense"
     if chunk is not None:
         assert routed.chunk_size == chunk and seq_len // chunk > 1, f"expected a multi-chunk run, chunk {chunk}"
+    if seq_len % routed.chunk_size != 0:
+        # The last (or only) chunk is shorter than the shared prefix operator and uses its top-left block.
+        assert seq_len % routed.chunk_size < routed._prefix_tri.cmax
 
     hidden = torch.randn(1, seq_len, config.hidden_size)
 
@@ -288,6 +293,9 @@ def test_routed_prefill_layers_back_to_back(mesh_device, device_params, seq_len,
                 use_throughput_experts=False,
             )
         )
+    # One [chunk, chunk] prefix operator per device, shared by every layer.
+    holders = {id(m.routed_prefill._prefix_tri) for m in mlps}
+    assert len(holders) == 1, f"{len(holders)} prefix operators for {len(mlps)} layers, expected one shared"
     # The MoE input is RMSNorm(x) * gamma: unit-variance rows scaled by the layer's post-attention norm weight.
     hiddens = [torch.randn(1, seq_len, config.hidden_size) * _load_norm_gamma(model_path, l) for l in layers]
     results = []
@@ -322,7 +330,7 @@ def test_routed_prefill_layers_back_to_back(mesh_device, device_params, seq_len,
 
 
 @parametrize_mesh_with_fabric([(1, 4)])
-@pytest.mark.parametrize("seq_len", [128, 1024, 8192], ids=["S128", "S1024", "S8192"])
+@pytest.mark.parametrize("seq_len", [128, 1024, 1088, 8192], ids=["S128", "S1024", "S1088", "S8192"])
 def test_routed_pair_positions_exact(mesh_device, device_params, seq_len, routed_env, reset_seeds):
     """Dispatch-buffer row of every (token, slot) pair equals the integer reference on every device: region start of
     the pair's expert + its rank among that expert's pairs (token order) for local pairs, the spare tile otherwise.
@@ -359,7 +367,8 @@ def test_routed_pair_positions_exact(mesh_device, device_params, seq_len, routed
         pos_d = [ttnn.to_torch(t).reshape(-1).to(torch.int64) for t in ttnn.get_device_tensors(pos_tm)]
         # slot-major [1, k*S] -> token-major order
         pos_sm_d = [
-            ttnn.to_torch(t).reshape(k, seq_len).t().reshape(-1).to(torch.int64) for t in ttnn.get_device_tensors(pos_sm)
+            ttnn.to_torch(t).reshape(k, seq_len).t().reshape(-1).to(torch.int64)
+            for t in ttnn.get_device_tensors(pos_sm)
         ]
         reg_d = [ttnn.to_torch(t).reshape(-1)[:E].to(torch.int64) for t in ttnn.get_device_tensors(region_offsets)]
         cnt_d = [ttnn.to_torch(t).reshape(-1)[:E].to(torch.int64) for t in ttnn.get_device_tensors(counts)]
@@ -374,7 +383,9 @@ def test_routed_pair_positions_exact(mesh_device, device_params, seq_len, routed
             ).reshape(-1)
             for order, got in (("token-major", pos_d[d]), ("slot-major", pos_sm_d[d])):
                 mism = int((got != ref).sum())
-                assert mism == 0, f"{name} S={seq_len} device {d}: {mism} {order} pair positions differ from the reference"
+                assert (
+                    mism == 0
+                ), f"{name} S={seq_len} device {d}: {mism} {order} pair positions differ from the reference"
             own = list(range(d * epc, (d + 1) * epc))
             ends = [int(reg_d[d][e] + cnt_d[d][e]) for e in own]
             starts = [int(reg_d[d][e]) for e in own]

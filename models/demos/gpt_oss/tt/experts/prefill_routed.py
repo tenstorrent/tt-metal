@@ -30,6 +30,7 @@ Only one sequence per call (batch 1, leading dims all 1); anything else runs the
 
 import math
 import os
+import weakref
 from pathlib import Path
 
 import torch
@@ -105,6 +106,47 @@ def routed_prefill_supported(mesh_device, mesh_config, hf_config, use_throughput
     return prefill.tp == mesh_device.shape[1] and prefill.sp == 1 and prefill.ep == 1 and mesh_config.tp_axis == 1
 
 
+class _SharedPrefixTri:
+    """Strictly lower-triangular ones [Cmax, Cmax] bfloat8_b (row t has ones at columns < t), the exclusive
+    prefix-sum operator of _pair_positions. One per (mesh device, Cmax), shared by every layer; a chunk of C < Cmax
+    tokens uses its top-left [C, C] block, which is the same operator for C tokens. Built on first use."""
+
+    def __init__(self, mesh_device, cmax):
+        self.mesh_device = mesh_device
+        self.cmax = cmax
+        self.tensor = None
+
+    def get(self):
+        if self.tensor is None:
+            ones = ttnn.ones(
+                (self.cmax, self.cmax),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            tri = ttnn.tril(ones, diagonal=-1)
+            ttnn.deallocate(ones)
+            # 0/1 are exact in bfloat8_b.
+            self.tensor = ttnn.typecast(tri, ttnn.bfloat8_b)
+            ttnn.deallocate(tri)
+        return self.tensor
+
+
+# (mesh device id, Cmax) -> _SharedPrefixTri. Weak values: the layers hold the strong references, so the constant
+# (68 MiB per device at Cmax = 8192) lives as long as the model that uses it.
+_PREFIX_TRI_CACHE = weakref.WeakValueDictionary()
+
+
+def _shared_prefix_tri(mesh_device, cmax):
+    key = (mesh_device.id(), cmax)
+    holder = _PREFIX_TRI_CACHE.get(key)
+    if holder is None or holder.mesh_device is not mesh_device:
+        holder = _SharedPrefixTri(mesh_device, cmax)
+        _PREFIX_TRI_CACHE[key] = holder
+    return holder
+
+
 class RoutedWeightsUnavailable(RuntimeError):
     """Neither HF expert weights nor a complete routed-weight cache: the routed path cannot be built."""
 
@@ -146,6 +188,8 @@ class RoutedPrefillExperts:
         for g in range(self.num_devices):
             dispatch_table[g, g * self.experts_per_chip : (g + 1) * self.experts_per_chip] = g
         self._consts = {}
+        # The [C, C] prefix-sum operator is shared across layers (one [chunk, chunk] constant per device).
+        self._prefix_tri = _shared_prefix_tri(mesh_device, self.chunk_size)
         # fp32 dest + L1 packer accumulation keep the integer prefix sums of _pair_positions exact across K blocks.
         self._prefix_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -362,7 +406,8 @@ class RoutedPrefillExperts:
         return offsets, counts, region_offsets
 
     def _chunk_constants(self, C):
-        """Per-chunk-length constant tensors (built once per C)."""
+        """Per-chunk-length constant tensors (built once per C, < 0.3 MiB per device at C = 8192). The [C, C] prefix
+        operator is not here: it is one shared [chunk, chunk] constant (_SharedPrefixTri)."""
         consts = self._consts.get(C)
         if consts is not None:
             return consts
@@ -393,19 +438,6 @@ class RoutedPrefillExperts:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             ),
         }
-        # Strictly lower-triangular ones [C, C] (row t has ones at columns < t), built on device: the exclusive
-        # prefix-sum operator of _pair_positions. 0/1 are exact in bfloat8_b.
-        ones = ttnn.ones(
-            (C, C),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        tri = ttnn.tril(ones, diagonal=-1)
-        ttnn.deallocate(ones)
-        consts["prefix_tri"] = ttnn.typecast(tri, ttnn.bfloat8_b)
-        ttnn.deallocate(tri)
         # Region start of the non-local experts: the spare tile, [1, E] fp32 per device ((1 - local) * spare).
         nonlocal_f32 = ttnn.rsub(self.local_mask_f32, 1.0)
         consts["nonlocal_spare"] = ttnn.mul(nonlocal_f32, float(spare))
@@ -421,6 +453,7 @@ class RoutedPrefillExperts:
         distinct, so this is the pair's rank within e's region). Non-local pairs: the spare tile. All arithmetic is
         fp32 on integers < 2^24, so it is exact."""
         C = indices.shape[-2]
+        assert C <= self._prefix_tri.cmax, f"chunk of {C} tokens exceeds the prefix operator ({self._prefix_tri.cmax})"
         k = self.top_k
         E = self.num_experts
         idx_f = ttnn.typecast(indices, ttnn.float32)
@@ -449,13 +482,18 @@ class RoutedPrefillExperts:
         # Exclusive prefix over tokens (pairs of e from earlier tokens) as one multi-core matmul with the strictly
         # lower-triangular [C, C] ones matrix. Operands are 0/1 (exact in bf8 / tf32) and the sums (< C <= 2^13)
         # accumulate in the fp32 dest, so the result is exact.
+        # A chunk shorter than the shared [Cmax, Cmax] operator uses a transient copy of its top-left [C, C] block.
+        tri = self._prefix_tri.get()
+        tri_c = tri if C == self._prefix_tri.cmax else ttnn.slice(tri, (0, 0), (C, C))
         before = ttnn.matmul(
-            consts["prefix_tri"],
+            tri_c,
             per_token,
             dtype=ttnn.float32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self._prefix_compute_config,
         )
+        if tri_c is not tri:
+            ttnn.deallocate(tri_c)
         ttnn.deallocate(per_token)
         base = ttnn.add(before, region, output_tensor=before)
         ttnn.deallocate(region)
