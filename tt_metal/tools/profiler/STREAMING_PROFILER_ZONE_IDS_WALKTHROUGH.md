@@ -173,8 +173,10 @@ asm((::tt::debug_event::detail::emit_site(tt_site_meta, "__tt_observability_even
 
 `emit_site` is a `constexpr` function, so GCC runs it **during compilation** and uses the text it returns as the asm
 template. It walks the struct's fields with a C++17 structured binding (`auto& [a, b] = meta;`), finding how many
-fields there are by testing how many initializers `T{...}` accepts, and writes one directive per field. Nothing of
-it runs on the device. The text it returns for this site:
+fields there are by testing how many initializers `T{...}` accepts, and writes one directive per field. A binding
+needs a fixed number of names, so `emit_site` checks the field count and uses the binding written for it; those are
+written out for 1 to 8 fields, which is where the limit of 8 fields per struct comes from. Nothing of it runs on the
+device. The text it returns for this site:
 
 ```asm
 .ifndef __tt_observability_event_0_6_1201dff1d8be0b60
