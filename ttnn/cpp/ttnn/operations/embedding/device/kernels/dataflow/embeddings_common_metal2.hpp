@@ -8,7 +8,7 @@
 // on Metal 2.0 include this fork; the original serves the readers still on the legacy API. Until the
 // last of them migrates and the original is retired, changes here likely belong there too.
 //
-// prepare_local_cache below takes the local weight cache as a DataflowBuffer binding token and the pad
+// prepare_local_cache below takes the local weight cache as a Scratchpad binding token and the pad
 // token by value, both of which follow from its callers being on named bindings and named arguments:
 // there is no buffer index to hand it, and no positional runtime argument for it to index into.
 
@@ -37,8 +37,7 @@ uint32_t one_local_addr;
 
 // Fills the caller's local weight cache with the weight sticks that read_token_async serves out of
 // local SRAM instead of fetching per token: the pad row under PADDED, rows 0 and 1 under BINARY. The cache is
-// reserved and written but never committed, because nothing downstream drains it — the reads below
-// address it by the saved write pointer.
+// the reader's private scratchpad; the reads below address it by the saved base address.
 //
 // `pad_token_value` is the token that PADDED treats as padding. The caller supplies it because the
 // two readers take it from different arguments.
@@ -46,10 +45,9 @@ uint32_t one_local_addr;
 // `weight_col_offset_bytes` is the core's column slice of the weight row (non-zero only for
 // width-/block-sharded output); it is applied per read so that `weights` can be built on the clean
 // buffer base.
-// `local_cache` is a DataflowBuffer binding token on WH/BH and a Scratchpad binding token on Quasar
-// (Gen2 forbids the self-loop DFB the cache would otherwise be). The cache is only ever NoC-accessed —
-// filled here and replayed via a NoC loopback read in read_token_async — so the scratchpad's plain
-// (cached) base address is correct; no uncached alias is needed (unlike the RISC-read index scratch).
+// `local_cache` is a Scratchpad binding token. The cache is only ever NoC-accessed — filled here and
+// replayed via a NoC loopback read in read_token_async — so the scratchpad's plain (cached) base
+// address is correct; no uncached alias is needed (unlike the RISC-read index scratch).
 template <typename CacheToken, typename T>
 FORCE_INLINE void prepare_local_cache(
     const Noc& noc,
@@ -60,14 +58,8 @@ FORCE_INLINE void prepare_local_cache(
     uint32_t weight_col_offset_bytes = 0) {
 #if defined PADDED
     pad_token = pad_token_value;
-#ifdef ARCH_QUASAR
     Scratchpad<uint32_t> cache(local_cache);
     pad_local_addr = cache.get_base_address();
-#else
-    DataflowBuffer dfb(local_cache);
-    dfb.reserve_back(1);
-    pad_local_addr = dfb.get_write_ptr();
-#endif
     noc.async_read(
         weights,
         CoreLocalMem<uint32_t>(pad_local_addr),
@@ -76,14 +68,8 @@ FORCE_INLINE void prepare_local_cache(
         {});
     noc.async_read_barrier();
 #elif defined BINARY
-#ifdef ARCH_QUASAR
     Scratchpad<uint32_t> cache(local_cache);
     zero_local_addr = cache.get_base_address();
-#else
-    DataflowBuffer dfb(local_cache);
-    dfb.reserve_back(2);
-    zero_local_addr = dfb.get_write_ptr();
-#endif
     noc.async_read(
         weights,
         CoreLocalMem<uint32_t>(zero_local_addr),

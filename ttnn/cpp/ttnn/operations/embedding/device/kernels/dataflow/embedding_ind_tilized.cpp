@@ -39,9 +39,9 @@ void kernel_main() {
     // the face row, which is the runtime argument this kernel's host factory populates for the pad
     // token.
 #if defined PADDED
-    prepare_local_cache(noc, dfb::local_cache, weights, weight_stick_size, starting_index);
+    prepare_local_cache(noc, scratch::local_cache, weights, weight_stick_size, starting_index);
 #elif defined BINARY
-    prepare_local_cache(noc, dfb::local_cache, weights, weight_stick_size);
+    prepare_local_cache(noc, scratch::local_cache, weights, weight_stick_size);
 #endif
 
     // dfb_in0 stages one weight stick per output row; the writer kernel drains it to the output

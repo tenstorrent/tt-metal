@@ -163,10 +163,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     // The reader's private page for the block of indices it is working through.
     const ScratchpadSpecName INDEX_SCRATCH_SP{"index_scratch_sp"};
     const DFBSpecName OUTPUT{"output"};
-    const DFBSpecName WEIGHT_CACHE{"weight_cache"};
-    // On Quasar the weight cache is a node-local scratchpad, not a self-loop DFB (Gen2 forbids a DM
-    // kernel binding a DFB as both PRODUCER and CONSUMER): the reader fills it and reads tokens back out
-    // of it, both over the NoC.
+    // The reader's private copy of the weight rows it serves locally: it fills it and reads tokens
+    // back out of it, both over the NoC.
     const ScratchpadSpecName WEIGHT_CACHE_SP{"weight_cache_sp"};
 
     const TensorParamName INPUT_PARAM{"input"};
@@ -188,7 +186,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         .data_format_metadata = weights_data_format,
     });
 
-    const bool weight_cache_as_scratchpad = device->arch() == tt::ARCH::QUASAR;
     Group<ScratchpadSpec> scratchpads;
     scratchpads.push_back(
         ScratchpadSpec{.unique_id = INDEX_SCRATCH_SP, .size_per_node = TILE_HEIGHT * input_element_size_bytes});
@@ -225,17 +222,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
         // PADDED caches the single pad row; BINARY caches rows 0 and 1.
         const uint32_t cache_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u;
-        if (weight_cache_as_scratchpad) {
-            scratchpads.push_back(
-                ScratchpadSpec{.unique_id = WEIGHT_CACHE_SP, .size_per_node = cache_entries * cache_page_size});
-        } else {
-            spec.dataflow_buffers.push_back(DataflowBufferSpec{
-                .unique_id = WEIGHT_CACHE,
-                .entry_size = cache_page_size,
-                .num_entries = cache_entries,
-                .data_format_metadata = weights_data_format,
-            });
-        }
+        scratchpads.push_back(
+            ScratchpadSpec{.unique_id = WEIGHT_CACHE_SP, .size_per_node = cache_entries * cache_page_size});
     }
     uint32_t weight_block_size;
     if (output_sharded) {
@@ -277,27 +265,13 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = INDEX_SCRATCH_SP, .accessor_name = "in1"});
     if (use_local_cache) {
         // The weight cache: the reader fills it and reads tokens back out of it, with no hand-off to
-        // another kernel. On Quasar that self-loop is illegal, so bind a node-local scratchpad once
-        // instead (same "local_cache" accessor -> scratch::local_cache vs dfb::local_cache).
-        if (weight_cache_as_scratchpad) {
-            reader_scratchpad_bindings.push_back(
-                KernelSpec::ScratchpadBinding{.scratchpad_spec_name = WEIGHT_CACHE_SP, .accessor_name = "local_cache"});
-        } else {
-            reader_dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = WEIGHT_CACHE,
-                .accessor_name = "local_cache",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            });
-            reader_dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = WEIGHT_CACHE,
-                .accessor_name = "local_cache",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            });
-        }
+        // another kernel, so it is the reader's private scratchpad too.
+        reader_scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = WEIGHT_CACHE_SP, .accessor_name = "local_cache"});
     }
 
-    // These defines and the weight cache's DFB binding share one condition, the embeddings type. That
-    // is what lets the reader name the cache handle at all: a dfb:: handle exists only on the builds
+    // These defines and the weight cache's scratchpad binding share one condition, the embeddings type. That
+    // is what lets the reader name the cache handle at all: a scratch:: handle exists only on the builds
     // where the host binds it, so the reader's reference to it is compiled out under the same defines
     // on the builds where it is not.
     KernelSpec::CompilerOptions::Defines embedding_defines{
@@ -334,7 +308,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
-    // The reader's index scratchpad, plus its weight cache on Quasar.
+    // The reader's index scratchpad, plus its weight cache under PADDED / BINARY.
     spec.scratchpads = std::move(scratchpads);
 
     // -----------------------------------------------------------------------
