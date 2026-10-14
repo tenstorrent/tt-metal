@@ -181,7 +181,6 @@ template <std::uint32_t K>
 inline __attribute__((noinline)) void sfpu_stage(const std::uint32_t chunk, const std::uint32_t stage)
 {
     using namespace ckernel::sfpu;
-    constexpr int sequence_rows     = 64 * tiles_per_sequence<K>;
     const std::uint32_t tile_offset = chunk_tile<K>(chunk) << 6;
     const bool ascending            = chunk > 0;
     switch (stage)
