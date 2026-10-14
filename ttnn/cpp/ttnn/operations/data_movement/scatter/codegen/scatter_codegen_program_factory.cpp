@@ -350,57 +350,6 @@ uint32_t scatter_rm_chunk_elems(
     return chunk;
 }
 
-ScatterCodegenParams build_scatter_codegen_params(
-    const Tensor& input_tensor,
-    const Tensor& index_tensor,
-    const Tensor& src_tensor,
-    uint32_t reduction_mode,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    const bool tiled = input_tensor.layout() == Layout::TILE;
-    const auto page_map = compute_scatter_page_map(input_tensor.logical_shape(), index_tensor.logical_shape(), tiled);
-    const uint32_t value_kind = reduction_mode != 0 ? scatter_value_kind(input_tensor.dtype()) : 0;
-
-    if (tiled) {
-        const auto geometry = compute_scatter_tile_geometry(input_tensor, index_tensor, src_tensor);
-        return ScatterCodegenParams{
-            geometry.Ht,
-            geometry.Wt_output,
-            geometry.Wt_index,
-            geometry.output_logical_w,
-            geometry.idx_valid_h_last,
-            geometry.idx_valid_w_last,
-            geometry.Ht_per_batch_input,
-            geometry.Ht_per_batch_src,
-            /*num_sticks=*/0,
-            /*input_stick_elems=*/0,
-            /*index_stick_elems=*/0,
-            page_map,
-            reduction_mode,
-            value_kind,
-            output_mem_config,
-            sub_core_grids};
-    }
-    const auto geometry = compute_scatter_rm_geometry(input_tensor, index_tensor);
-    return ScatterCodegenParams{
-        /*Ht=*/0,
-        /*Wt_output=*/0,
-        /*Wt_index=*/0,
-        /*output_logical_w=*/0,
-        /*idx_valid_h_last=*/0,
-        /*idx_valid_w_last=*/0,
-        /*Ht_per_batch_input=*/0,
-        /*Ht_per_batch_src=*/0,
-        geometry.num_sticks,
-        geometry.input_stick_elems,
-        geometry.index_stick_elems,
-        page_map,
-        reduction_mode,
-        value_kind,
-        output_mem_config,
-        sub_core_grids};
-}
-
 tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryInterleaved::create_descriptor(
     const ScatterCodegenParams& attributes, const ScatterCodegenInputs& tensor_args, Tensor& output_tensor) {
     const auto& in_t = tensor_args.input_tensor;
@@ -626,9 +575,9 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryRowMajor::create_des
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = split.core_range;
     reader_desc.compile_time_args = reader_ct;
-    // Our RM scope only ever reaches this factory with reduction_mode == 0 (reduction_mode in {1,2}
-    // on ROW_MAJOR routes to the dedicated bf16-reduce factory instead -- see
-    // scatter_codegen_supported.cpp), so the 4-byte reduce-specialized reader is never selected here.
+    // A ROW_MAJOR reduce routes to ScatterCodegenProgramFactoryBf16ReduceRowMajor instead
+    // (select_program_factory), so this reader only ever runs with reduction_mode == kReductionNone
+    // and its scatter_reduce_value call is never a reduction.
     reader_desc.named_compile_time_args = {
         {"reduction_mode", attributes.reduction_mode},
         {"value_kind", attributes.value_kind},
