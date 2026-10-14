@@ -181,8 +181,8 @@ def test_reshape_codegen_rm_slab_cache_hit_new_addresses(device):
 
 # (id, in shape, out shape, dtype, layout, expected route), as in the gate's _ROUTES.
 _RM_ROUTES = [
-    # Same merge as the gate's rm_merge_demoted, in uint16, which native rejects.
-    ("rm_merge_uint16", [512, 128], [256, 256], ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
+    # The gate's demoted 256 B merge in uint16, which native rejects.
+    ("rm_merge_uint16", *gate._rm_aligned_pair(256, merge=True), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
     # A demoted merge whose stick program does not fit L1 runs the slab program, which beats native.
     ("rm_merge_slab", [64, 50001], [32, 100002], ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
     # Widths that do not divide are never demoted.
