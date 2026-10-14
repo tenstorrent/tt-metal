@@ -6,9 +6,8 @@
 
 Supports: eltwise binary (Elwadd/Elwmul/Elwsub), datacopy, matmul, reduce,
 unary SFPU, binary SFPU, eltwise broadcast (COL/ROW/SCALAR),
-unary broadcast (COL/ROW/SCALAR).
-Unsupported on Quasar: MatmulNoMop, ReduceBlockMax, ReduceBlockMaxRuntime,
-SubBcastColCustom.
+unary broadcast (COL/ROW/SCALAR), and experimental MatmulNoMop,
+ReduceBlockMaxRuntime, SubBcastColCustom.
 """
 
 from typing import Annotated, ClassVar, List, Union
@@ -35,6 +34,7 @@ from fuser.validator import (
     PACK_NO_L1_ACC,
     REDUCE_PARAMS_REQUIRED,
     SRC_A_DIMS,
+    SUB_BCAST_COL_REQUIRED,
     TRANSPOSE_WITHIN_FACE_REQUIRED,
     BinarySfpuMathSchema,
     FpuMathSchemaBase,
@@ -48,6 +48,7 @@ from fuser.validator import (
     reject,
     require_dest_tiles,
     require_src_a_tiles,
+    require_src_b_tiles,
 )
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
@@ -64,7 +65,10 @@ from pydantic import Field
 from .fpu.datacopy import DatacopyFpu
 from .fpu.eltwise import EltwiseFpu
 from .fpu.matmul import MatmulFpu
+from .fpu.matmul_no_mop import MatmulNoMopFpu
 from .fpu.reduce import ReduceFpu
+from .fpu.reduce_block_max_runtime import ReduceBlockMaxRuntimeFpu
+from .fpu.sub_bcast_col_custom import SubBcastColCustomFpu
 from .fpu.transpose_dest import TransposeDestFpu
 from .fpu.unary_broadcast import UnaryBroadcastFpu
 from .packer.matmul import MatmulPacker
@@ -76,7 +80,9 @@ from .sfpu.topk import TopKSfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
+from .unpacker.reduce_block_max_runtime import ReduceBlockMaxRuntimeUnpacker
 from .unpacker.reduce_tilize_a import UnpackReduceTilize
+from .unpacker.sub_bcast_col_custom import SubBcastColCustomUnpacker
 from .unpacker.tilize_a import UnpackerTilizeA
 from .unpacker.transpose_dest import TransposeDestUnpacker
 from .unpacker.unary_broadcast import UnaryBroadcastUnpacker
@@ -146,6 +152,25 @@ _eltwise_checks = [
 
 _eltwise_lofi_checks = [*_eltwise_checks, LOFI_ONLY]
 
+_matmul_checks = [
+    NO_REUSE_DEST,
+    NO_BROADCAST,
+    MATMUL_OPERAND_DIMS,
+    forced_unpackers("MatmulUnpacker"),
+    MATMUL_INNER_TILE_DIMS,
+]
+
+_experimental_unpacker_checks = [
+    IN0_REQUIRED,
+    IN1_REQUIRED,
+    NO_TRANSPOSE,
+    NO_UNPACK_TO_DEST,
+    reject(
+        lambda s, a, b: a.data_format.is_integer() or b.data_format.is_integer(),
+        "experimental kernels require floating-point operands",
+    ),
+]
+
 UNPACKER_MAP = {
     "UnpackerA": (
         lambda s: UnpackerA(reuse_dest=s.reuse_dest),
@@ -199,6 +224,14 @@ UNPACKER_MAP = {
         lambda s: ReduceUnpacker(s.reduce_dim, s.reduce_pool),
         [IN0_REQUIRED, IN1_REQUIRED, NO_TRANSPOSE],
     ),
+    "ReduceBlockMaxRuntimeUnpacker": (
+        lambda s: ReduceBlockMaxRuntimeUnpacker(),
+        _experimental_unpacker_checks,
+    ),
+    "SubBcastColCustomUnpacker": (
+        lambda s: SubBcastColCustomUnpacker(),
+        _experimental_unpacker_checks,
+    ),
     "TransposeDestUnpacker": (
         lambda s: TransposeDestUnpacker(),
         [],
@@ -245,12 +278,38 @@ FPU_MAP = {
     ),
     "Matmul": (
         lambda s: MatmulFpu(),
+        _matmul_checks,
+    ),
+    "MatmulNoMop": (
+        lambda s: MatmulNoMopFpu(),
+        [
+            *_matmul_checks,
+            require_src_a_tiles((32, 32)),
+            require_src_b_tiles((32, 32)),
+        ],
+    ),
+    "ReduceBlockMaxRuntime": (
+        lambda s: ReduceBlockMaxRuntimeFpu(),
         [
             NO_REUSE_DEST,
             NO_BROADCAST,
-            MATMUL_OPERAND_DIMS,
-            forced_unpackers("MatmulUnpacker"),
-            MATMUL_INNER_TILE_DIMS,
+            forced_unpackers("ReduceBlockMaxRuntimeUnpacker"),
+            reject(
+                lambda s, a, b: s._dest_acc,
+                "Quasar ReduceBlockMaxRuntime requires dest_acc: false",
+            ),
+            require_src_a_tiles((32, 32), (16, 32), (8, 32), (4, 32), (2, 32), (1, 32)),
+        ],
+    ),
+    "SubBcastColCustom": (
+        lambda s: SubBcastColCustomFpu(),
+        [
+            NO_REUSE_DEST,
+            NO_BROADCAST_ACC_TO_DEST,
+            LOFI_ONLY,
+            SUB_BCAST_COL_REQUIRED,
+            forced_unpackers("SubBcastColCustomUnpacker"),
+            require_src_a_tiles((32, 32), (16, 32)),
         ],
     ),
     "Reduce": (
@@ -327,7 +386,10 @@ OUTPUT_DIMS = {
     "Elwsub": ELTWISE_DIMS,
     "Datacopy": SRC_A_DIMS,
     "Matmul": MATMUL_DIMS,
+    "MatmulNoMop": MATMUL_DIMS,
     "Reduce": SRC_A_DIMS,
+    "ReduceBlockMaxRuntime": SRC_A_DIMS,
+    "SubBcastColCustom": SRC_A_DIMS,
     "TransposeDest": SRC_A_DIMS,
     "UnaryBroadcast": SRC_A_DIMS,
 }
@@ -415,6 +477,7 @@ UNARY_SFPU_OPS = {
     MathOperation.RemainderUint32,
     MathOperation.Rdiv,
     MathOperation.TiledProd,
+    MathOperation.Ema,
     MathOperation.Identity,
     MathOperation.CastFp32ToFp16a,
     MathOperation.AltComplexRotate90,

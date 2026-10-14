@@ -313,7 +313,11 @@ inline void _llk_math_eltwise_unary_datacopy_(
             }
         }
 
-        math::clear_dst_reg_addr();
+        // The plain A2D MOP's last move already cleared the dest counter.
+        if constexpr (type != DataCopyType::A2D || src_b_bcast_type != BroadcastType::NONE)
+        {
+            math::clear_dst_reg_addr();
+        }
     }
 }
 
@@ -386,12 +390,25 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
     // Use srcA for data movement
     if constexpr (type == DataCopyType::A2D) // Overrides BCAST_TYPE when type is A2D
     {
-        addr_mod_t {
-            .srca = {.incr = 1},
-            .srcb = {.incr = 0},
-            .dest = {.incr = 1},
+        if constexpr (bcast_type == BroadcastType::NONE)
+        {
+            // The MOP's last move clears the dest counter, so no SETRWC trails the copy into the FPU pipe.
+            addr_mod_t {
+                .srca = {.incr = 0},
+                .srcb = {.incr = 0},
+                .dest = {.incr = 0, .clr = 1},
+            }
+                .set(ADDR_MOD_0);
         }
-            .set(ADDR_MOD_0);
+        else
+        {
+            addr_mod_t {
+                .srca = {.incr = 1},
+                .srcb = {.incr = 0},
+                .dest = {.incr = 1},
+            }
+                .set(ADDR_MOD_0);
+        }
 
         // Just unpack into A and move to Dest
         addr_mod_t {
@@ -480,6 +497,7 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
         {
             // use elwadd to handle unpacking data into src A as fp16, but dest is in fp32 mode OR to handle uint8 datums
             ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0));
+            tmp.set_last_outer_loop_instr(TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_0, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program();
         }
@@ -488,12 +506,14 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
             // Typecasting uint16 to 32bit data, need data to be written to lower 16 bits without modification
             // to be consumed by SFPU easily.
             ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0));
+            tmp.set_last_outer_loop_instr(TT_OP_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program();
         }
         else
         {
             ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(p_mov::DEST_NORM, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0));
+            tmp.set_last_outer_loop_instr(TT_OP_MOVA2D(p_mov::DEST_NORM, 0, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program();
         }

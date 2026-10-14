@@ -230,8 +230,6 @@ void reduce_c(uint32_t rows, uint32_t cols) {
         out_dfb,
         compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
         compute_kernel_lib::ReduceInputBlockShape::of(rows, cols));
-
-    UNPACK(tensix_sync());  // Workaround for issue #9370
 }
 
 template <
