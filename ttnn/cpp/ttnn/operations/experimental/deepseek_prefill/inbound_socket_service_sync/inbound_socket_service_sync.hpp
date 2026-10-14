@@ -34,6 +34,7 @@ std::vector<Tensor> inbound_socket_service_sync(
     uint32_t metadata_size_bytes = 0,
     uint32_t overhang_size_bytes = 0,
     const std::optional<Tensor>& tokens_out = std::nullopt,
+    const std::optional<Tensor>& overhang_out = std::nullopt,
     const std::optional<Tensor>& metadata_out = std::nullopt);
 
 // Same op, but draining a D2DStreamServiceReceiver (disaggregated-prefill
@@ -44,6 +45,7 @@ std::vector<Tensor> inbound_socket_service_sync(
     uint32_t metadata_size_bytes = 0,
     uint32_t overhang_size_bytes = 0,
     const std::optional<Tensor>& tokens_out = std::nullopt,
+    const std::optional<Tensor>& overhang_out = std::nullopt,
     const std::optional<Tensor>& metadata_out = std::nullopt);
 
 }  // namespace ttnn::experimental

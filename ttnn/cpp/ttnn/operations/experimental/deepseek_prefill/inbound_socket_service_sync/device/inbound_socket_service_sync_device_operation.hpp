@@ -55,6 +55,7 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync(
     uint32_t metadata_size_bytes,
     uint32_t overhang_size_bytes,
     const std::optional<ttnn::Tensor>& tokens_out = std::nullopt,
+    const std::optional<ttnn::Tensor>& overhang_out = std::nullopt,
     const std::optional<ttnn::Tensor>& metadata_out = std::nullopt);
 
 // Same op, draining a D2DStreamServiceReceiver's backing tensor (disaggregated-
@@ -65,6 +66,7 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync(
     uint32_t metadata_size_bytes,
     uint32_t overhang_size_bytes,
     const std::optional<ttnn::Tensor>& tokens_out = std::nullopt,
+    const std::optional<ttnn::Tensor>& overhang_out = std::nullopt,
     const std::optional<ttnn::Tensor>& metadata_out = std::nullopt);
 
 }  // namespace ttnn::prim

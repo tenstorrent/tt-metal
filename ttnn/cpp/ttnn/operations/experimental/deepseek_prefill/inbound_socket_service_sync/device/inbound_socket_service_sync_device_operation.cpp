@@ -73,7 +73,8 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             args.page_size);
     }
 
-    if (tensor_args.tokens_out.has_value() || tensor_args.metadata_out.has_value()) {
+    if (tensor_args.tokens_out.has_value() || tensor_args.overhang_out.has_value() ||
+        tensor_args.metadata_out.has_value()) {
         const auto specs = compute_output_specs(args, tensor_args);
         if (tensor_args.tokens_out.has_value()) {
             TT_FATAL(
@@ -81,6 +82,16 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
                 "inbound_socket_service_sync: tokens_out spec must match the op's first output spec -- the service "
                 "backing per-shard spec, less the overhang tail when the split is on (the kernel copies it "
                 "page-for-page)");
+        }
+        if (tensor_args.overhang_out.has_value()) {
+            TT_FATAL(
+                args.overhang_size_bytes > 0,
+                "inbound_socket_service_sync: overhang_out requires overhang_size_bytes > 0; with the split off "
+                "there is no second output for it to receive");
+            TT_FATAL(
+                tensor_args.overhang_out->tensor_spec() == specs[1],
+                "inbound_socket_service_sync: overhang_out spec must match the op's second output spec -- the "
+                "service backing per-shard spec with its last dim cut down to the overhang tail");
         }
         if (tensor_args.metadata_out.has_value()) {
             TT_FATAL(
@@ -129,9 +140,12 @@ InboundSocketServiceSyncOperation::tensor_return_value_t InboundSocketServiceSyn
     outputs.reserve(specs.size());
     for (size_t i = 0; i < specs.size(); ++i) {
         const bool is_tokens = i == 0;
+        const bool is_overhang = args.overhang_size_bytes > 0 && i == 1;
         const bool is_metadata = args.metadata_size_bytes > 0 && i + 1 == specs.size();
         if (is_tokens && tensor_args.tokens_out.has_value()) {
             outputs.push_back(*tensor_args.tokens_out);
+        } else if (is_overhang && tensor_args.overhang_out.has_value()) {
+            outputs.push_back(*tensor_args.overhang_out);
         } else if (is_metadata && tensor_args.metadata_out.has_value()) {
             outputs.push_back(*tensor_args.metadata_out);
         } else {
@@ -159,6 +173,7 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(
     uint32_t metadata_size_bytes,
     uint32_t overhang_size_bytes,
     const std::optional<ttnn::Tensor>& tokens_out,
+    const std::optional<ttnn::Tensor>& overhang_out,
     const std::optional<ttnn::Tensor>& metadata_out) {
     using OperationType = ttnn::experimental::prim::InboundSocketServiceSyncOperation;
 
@@ -194,7 +209,7 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(
     }
 
     return ttnn::device_operation::launch<OperationType>(
-        attrs, OperationType::tensor_args_t{backing, tokens_out, metadata_out});
+        attrs, OperationType::tensor_args_t{backing, tokens_out, overhang_out, metadata_out});
 }
 
 }  // namespace
@@ -204,9 +219,10 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync(
     uint32_t metadata_size_bytes,
     uint32_t overhang_size_bytes,
     const std::optional<ttnn::Tensor>& tokens_out,
+    const std::optional<ttnn::Tensor>& overhang_out,
     const std::optional<ttnn::Tensor>& metadata_out) {
     return inbound_socket_service_sync_impl(
-        service, metadata_size_bytes, overhang_size_bytes, tokens_out, metadata_out);
+        service, metadata_size_bytes, overhang_size_bytes, tokens_out, overhang_out, metadata_out);
 }
 
 std::vector<ttnn::Tensor> inbound_socket_service_sync(
@@ -214,9 +230,10 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync(
     uint32_t metadata_size_bytes,
     uint32_t overhang_size_bytes,
     const std::optional<ttnn::Tensor>& tokens_out,
+    const std::optional<ttnn::Tensor>& overhang_out,
     const std::optional<ttnn::Tensor>& metadata_out) {
     return inbound_socket_service_sync_impl(
-        service, metadata_size_bytes, overhang_size_bytes, tokens_out, metadata_out);
+        service, metadata_size_bytes, overhang_size_bytes, tokens_out, overhang_out, metadata_out);
 }
 
 }  // namespace ttnn::prim

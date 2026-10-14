@@ -38,6 +38,8 @@ void bind_inbound_socket_service_sync(nb::module_& mod) {
                 copy simply lands in two destinations. Default: 0.
             tokens_out (ttnn.Tensor): Caller-owned destination for the tokens; the op writes
                 into it instead of allocating. Must match the first output spec. Default: None.
+            overhang_out (ttnn.Tensor): The same, for the overhang. Requires
+                ``overhang_size_bytes > 0``. Default: None.
             metadata_out (ttnn.Tensor): The same, for the metadata record. Requires
                 ``metadata_size_bytes > 0``. Default: None.
 
@@ -55,11 +57,13 @@ void bind_inbound_socket_service_sync(nb::module_& mod) {
         uint32_t,
         uint32_t,
         const std::optional<ttnn::Tensor>&,
+        const std::optional<ttnn::Tensor>&,
         const std::optional<ttnn::Tensor>&);
     using D2DReceiverFn = std::vector<ttnn::Tensor> (*)(
         const ttnn::D2DStreamServiceReceiver&,
         uint32_t,
         uint32_t,
+        const std::optional<ttnn::Tensor>&,
         const std::optional<ttnn::Tensor>&,
         const std::optional<ttnn::Tensor>&);
 
@@ -73,6 +77,7 @@ void bind_inbound_socket_service_sync(nb::module_& mod) {
             nb::arg("metadata_size_bytes") = static_cast<uint32_t>(0),
             nb::arg("overhang_size_bytes") = static_cast<uint32_t>(0),
             nb::arg("tokens_out") = std::nullopt,
+            nb::arg("overhang_out") = std::nullopt,
             nb::arg("metadata_out") = std::nullopt),
         ttnn::overload_t(
             static_cast<D2DReceiverFn>(&ttnn::experimental::inbound_socket_service_sync),
@@ -81,6 +86,7 @@ void bind_inbound_socket_service_sync(nb::module_& mod) {
             nb::arg("metadata_size_bytes") = static_cast<uint32_t>(0),
             nb::arg("overhang_size_bytes") = static_cast<uint32_t>(0),
             nb::arg("tokens_out") = std::nullopt,
+            nb::arg("overhang_out") = std::nullopt,
             nb::arg("metadata_out") = std::nullopt));
 }
 

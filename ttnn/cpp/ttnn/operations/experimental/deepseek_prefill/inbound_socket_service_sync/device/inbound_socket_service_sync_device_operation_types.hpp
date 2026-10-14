@@ -44,6 +44,7 @@ struct InboundSocketServiceSyncInputs {
     // Caller-owned destinations, one per output: when set, the op writes into
     // them instead of allocating.
     std::optional<Tensor> tokens_out;
+    std::optional<Tensor> overhang_out;
     std::optional<Tensor> metadata_out;
 };
 
