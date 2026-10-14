@@ -524,7 +524,7 @@ class TestTriage:
         assert counts == {0: (1, 0), 1: (1, 0), 2: (0, 0)}, f"Unexpected CB state on (0,0): {counts}"
 
     def test_dump_circular_buffers_content(self):
-        result = self.run_triage_script("dump_circular_buffers.py", argv=["--dump-cb-content"])
+        result = self.run_triage_script("dump_circular_buffers.py", argv=["--include-cb-content"])
         self.skip_unless_circular_buffers(result)
         assert result is not None, "Expected CB rows for the hung core"
         location = OnChipCoordinate.create("0,0", result[0].device_description.device)
