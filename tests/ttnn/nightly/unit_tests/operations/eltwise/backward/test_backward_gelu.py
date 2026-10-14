@@ -140,10 +140,12 @@ def _special_value_xfail_reason(approximate, input_value, ttnn_dtype):
 def test_gelu_bw_special_values(
     request, device, variant, approximate, input_value, expected, torch_dtype, ttnn_dtype, rtol, atol
 ):
-    # Strict, and applied as a marker so the op still runs: a fix shows up as an XPASS.
+    # Strict, and applied as a marker so the op still runs: a fix shows up as an XPASS. Every
+    # expected failure is a value assertion, so raises= keeps a crash in the op from passing
+    # as XFAIL.
     xfail_reason = _special_value_xfail_reason(approximate, input_value, ttnn_dtype)
     if xfail_reason is not None:
-        request.applymarker(pytest.mark.xfail(reason=xfail_reason, strict=True))
+        request.applymarker(pytest.mark.xfail(reason=xfail_reason, strict=True, raises=AssertionError))
 
     input_data = torch.tensor([input_value] + [0.0] * 31, dtype=torch_dtype)
     grad_data = torch.ones_like(input_data)

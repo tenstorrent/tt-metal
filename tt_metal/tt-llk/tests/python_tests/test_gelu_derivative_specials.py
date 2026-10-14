@@ -76,13 +76,24 @@ SPECIALS = {
     "-0.0": (0x80000000, 0x8000),
 }
 
-# Finite controls on either side of each region boundary. The NaN case returns x, so a
-# misfire on a control would return the control itself, which is still finite: check
-# the values. Saturated controls must be exact; the rest must match the golden within
-# CONTROL_ATOL, which covers the approx tail and the bf16 output but sits far below the
-# |x| >= 3 that a leaked NaN case would return.
-CONTROLS = [3.1719, 3.0, 5.0, 1.0e30, -3.0, -3.25, -13.0, -13.375, -20.0, -1.0e30]
-SATURATED = {5.0: "1", 1.0e30: "1", -20.0: "+0.0", -1.0e30: "+0.0"}
+# Finite controls on either side of each region boundary, each with its expected
+# classify_special() label, or None to match the golden within CONTROL_ATOL. The NaN case
+# returns x, so a misfire on a control would return the control itself, which is still
+# finite: check the values. Saturated controls must be exact; CONTROL_ATOL covers the
+# approx tail and the bf16 output but sits far below the |x| >= 3 that a leaked NaN case
+# would return.
+CONTROLS = {
+    3.1719: None,
+    3.0: None,
+    5.0: "1",
+    1.0e30: "1",
+    -3.0: None,
+    -3.25: None,
+    -13.0: None,
+    -13.375: None,
+    -20.0: "+0.0",
+    -1.0e30: "+0.0",
+}
 CONTROL_ATOL = 0.02
 
 PERIOD = len(SPECIALS) + len(CONTROLS)
@@ -102,7 +113,7 @@ def _run(in_fmt, out_fmt, dest_acc, approx):
     lane = torch.arange(flat.numel()) % PERIOD
 
     is_control = lane >= len(SPECIALS)
-    controls = torch.tensor(CONTROLS, dtype=torch.float32).to(flat.dtype)
+    controls = torch.tensor(list(CONTROLS), dtype=torch.float32).to(flat.dtype)
     flat[is_control] = controls[lane[is_control] - len(SPECIALS)]
 
     is_special = ~is_control
@@ -205,22 +216,23 @@ def _expected_specials(in_fmt, out_fmt, dest_acc):
 def test_gelu_derivative_specials(in_fmt, out_fmt, dest_acc, approx):
     x, hw, lane = _run(in_fmt, out_fmt, dest_acc, approx)
     keys = list(SPECIALS)
+    controls = list(CONTROLS.items())
     expected = _expected_specials(in_fmt, out_fmt, dest_acc)
     golden = get_golden_generator(UnarySFPUGolden)._gelu_derivative
 
     wrong = {}
-    for i, (xv, hv, li) in enumerate(zip(x, hw, lane)):
+    for xv, hv, li in zip(x, hw, lane):
         if li < len(SPECIALS):
             key = keys[li]
             got = classify_special(hv)
             ok = got in expected[key]
             want = sorted(expected[key])
         else:
-            control = CONTROLS[li - len(SPECIALS)]
+            control, label = controls[li - len(SPECIALS)]
             key = "control %g" % control
             got = classify_special(hv)
-            if control in SATURATED:
-                want = SATURATED[control]
+            if label is not None:
+                want = label
                 ok = got == want
             else:
                 ref = golden(float(xv))

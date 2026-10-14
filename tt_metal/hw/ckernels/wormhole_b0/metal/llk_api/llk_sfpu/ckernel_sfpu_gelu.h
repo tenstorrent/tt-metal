@@ -484,6 +484,8 @@ constexpr float GELU_DERIV_H8 = 4.2734988881e-09f;
 // - Zero saturation: x <= -13.375 (GELU'(x) becomes 0 in BF16)
 // - One saturation: x >= 3.1719 (GELU'(x) becomes exactly 1 in BF16)
 // Note: GELU'(x) has a "hump" exceeding 1.0 for x in [0.77, 3.16]
+// NaN: an fp32 destination returns x (NaN in, NaN out); a bf16 destination still gives
+// 1.0 / 0 by the NaN's sign, since convert<vFloat16b> could not carry a NaN anyway.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -13.375
