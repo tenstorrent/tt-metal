@@ -696,8 +696,8 @@ def _fp16_lanes(mask, x, got, limit=4):
     )
 
 
-# On a Float16 Dest, hardmish(x) is x for every positive normal fp16. dest_acc=Yes is the control;
-# Blackhole skips dest_acc=No because its SFPU does not compute on a Float16 Dest.
+# For x >= 0, hardmish(x) is x; this checks every positive normal fp16. dest_acc=Yes is a 32-bit Dest, the control.
+# Blackhole skips dest_acc=No because Float16 input with dest accumulation off is unsupported there.
 @pytest.mark.parametrize(
     "dest_acc",
     [DestAccumulation.No, DestAccumulation.Yes],
