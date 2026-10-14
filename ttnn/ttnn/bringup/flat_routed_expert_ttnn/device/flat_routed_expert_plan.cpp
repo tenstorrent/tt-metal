@@ -180,7 +180,7 @@ std::vector<Core> FlatRoutedExpertPlan::arena_cores() const {
     for (const auto* l : {&down, &relays, &gu_idle}) {
         out.insert(out.end(), l->begin(), l->end());
     }
-    if (drisc) {  // (the DRISC slots' reader cells are down cores, relays or idle)
+    if (drisc && !dual) {  // (the DRISC slots' reader cells are down cores, relays or idle; dual: still readers)
         out.push_back(launcher);
     }
     for (uint32_t r = 0; r < readers.size(); ++r) {
@@ -528,7 +528,11 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     if (p.drisc) {  // the DRISC slots' reader cells but the launcher's go to the relays / down cores
         p.drisc_n = std::min<uint32_t>(p.drisc_n, p.readers.size());
-        TT_FATAL(!p.rdown || p.readers.size() - p.drisc_n >= 7, "MIMO_FL_DRISC: reader down columns need 7 Tensix readers");
+        const char* du = std::getenv("MIMO_FL_DRISC_DUAL");
+        p.dual = (du == nullptr || std::atoi(du) != 0) && p.drisc_n < p.readers.size();
+        TT_FATAL(
+            !p.rdown || p.dual || p.readers.size() - p.drisc_n >= 7,
+            "MIMO_FL_DRISC: reader down columns need 7 non-DRISC slots (or dual slots)");
         TT_FATAL(p.drisc_n >= 1, "MIMO_FL_DRISC_SLOTS >= 1");
         // (probe MIMO_FL_DRISC_RD_SWAP=1: the reader cells' halves swapped, so the Tensix slots 8.. run on the cells
         // next to the DRAM columns)
@@ -536,11 +540,11 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             p.readers.size() == 16) {
             std::rotate(p.readers.begin(), p.readers.begin() + 8, p.readers.end());
         }
-        p.launcher = p.readers[0];
+        p.launcher = p.readers[0];  // (dual: slot 0's own Tensix reader posts the jobs)
         // the freed cells as down cores (MIMO_FL_DRISC_RD_DOWN, default: only with every slot on DRISC; next to the
         // remaining Tensix readers they slow large M: hybrid 2048 290 vs 274 idle)
         const char* rdd = std::getenv("MIMO_FL_DRISC_RD_DOWN");
-        if (rdd ? std::atoi(rdd) != 0 : p.drisc_n == p.readers.size()) {
+        if (!p.dual && (rdd ? std::atoi(rdd) != 0 : p.drisc_n == p.readers.size())) {
             for (uint32_t r = 1; r < p.drisc_n; ++r) {
                 taken.erase({p.readers[r].x, p.readers[r].y});
             }
@@ -837,7 +841,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             }
             // the forwarder: the reader (NOC1), or its DRISC (DRAM tile, writes on NOC0)
             // (perf probe MIMO_FL_DRISC_ASSIGN=0: DRISC mode with the readers' assignment)
-            const bool by_drisc = !p.tensix_reader(r) && !(std::getenv("MIMO_FL_DRISC_ASSIGN") &&
+            const bool by_drisc = p.drisc_slot(r) && !p.dual && !(std::getenv("MIMO_FL_DRISC_ASSIGN") &&
                                                std::atoi(std::getenv("MIMO_FL_DRISC_ASSIGN")) == 0);
             // (DRISC: NOC0 coordinates on both ends; a DRAM tile's translated ones are not on the NoC grid)
             const Core rp = by_drisc ? Core(flat_drisc_physical(device, r, p.banks)) : phys(p.readers[r]);
@@ -854,7 +858,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         for (uint32_t ci : per_reader[r]) {
             p.gu.push_back(gu_all[ci]);
         }
-        if (!p.tensix_reader(r) && std::getenv("MIMO_FL_DRISC_DBG")) {
+        if (p.drisc_slot(r) && std::getenv("MIMO_FL_DRISC_DBG")) {
             const Core dp = flat_drisc_physical(device, r, p.banks);
             std::string g;
             for (uint32_t ci : per_reader[r]) {
@@ -975,7 +979,8 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
                     const bool used = std::any_of(p.rdn.begin(), p.rdn.end(), [r](auto t) { return t.first == r; });
                     // (perf probe MIMO_FL_RDN_HI=1: tails among readers 8.. only, as DRISC mode's default hybrid)
                     const bool hi_only = std::getenv("MIMO_FL_RDN_HI") && r < 8;
-                    if (used || p.sg_rd(r) != k || !p.tensix_reader(r) || hi_only) {
+                    // (a DRISC slot's reader only with dual slots: its se9_rdown skips gate/up on DRISC calls)
+                    if (used || p.sg_rd(r) != k || (p.drisc_slot(r) && !p.dual) || hi_only) {
                         continue;
                     }
                     if (!best || noc_hops(phys(p.down[tail]), phys(p.readers[r]), 1) <
@@ -991,6 +996,16 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
                 p.d_pred[seg[i + 1]] = seg[i];
             }
         }
+    }
+    if (p.dual) {  // the launcher: the first DRISC slot's reader that is no down-column tail (a plain reader)
+        bool found = false;
+        for (uint32_t r = 0; r < p.drisc_n && !found; ++r) {
+            if (std::none_of(p.rdn.begin(), p.rdn.end(), [r](auto t) { return t.first == r; })) {
+                p.launcher = p.readers[r];
+                found = true;
+            }
+        }
+        TT_FATAL(found, "MIMO_FL_DRISC dual: every DRISC slot's reader is a down-column tail");
     }
     return p;
 }

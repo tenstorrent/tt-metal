@@ -116,7 +116,11 @@ struct FlatRoutedExpertPlan {
     // DRISC mode: reader slots 0 .. drisc_n - 1 stream from the DRAM cores, the rest keep their Tensix reader +
     // forwarder (MIMO_FL_DRISC_SLOTS; a DRISC tile sends one slot per bank at full rate)
     uint32_t drisc_n = 0;
-    bool tensix_reader(uint32_t r) const { return !drisc || r >= drisc_n; }
+    // dual (MIMO_FL_DRISC_DUAL, default): the DRISC slots keep their Tensix reader too; per call (every kernel the same
+    // rule) counts <= SE_DRISC_MAXCNT stream from the DRAM cores, larger ones from the Tensix readers
+    bool dual = false;
+    bool drisc_slot(uint32_t r) const { return drisc && r < drisc_n; }
+    bool tensix_reader(uint32_t r) const { return !drisc_slot(r) || dual; }
     // down
     bool rdown = false;
     uint32_t d_ch = 7, n_rdn = 0, pcd_r = 0, rem_cols = 0, kd_r = 0, nblk_r = 0, slot_dr = 0, ring_dr = 0;

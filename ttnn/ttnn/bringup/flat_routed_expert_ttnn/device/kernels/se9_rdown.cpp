@@ -98,7 +98,11 @@ void kernel_main() {
     constexpr bool small = false;
 #endif
     se_dyn_publish(dyn, tt::CBIndex::c_6, small);
+#ifdef SE_DRISC_DUAL  // a DRISC call (small counts): this slot's gate/up weights come from its DRAM core
+    const uint32_t gu_chunks = dyn.max_cnt <= SE_DRISC_MAXCNT ? 0 : dyn.n_load * gu_per_e;
+#else
     const uint32_t gu_chunks = dyn.n_load * gu_per_e;  // gate/up loads (a pinned expert's weights come once)
+#endif
 #ifdef SE_DN_REG
     const uint32_t d_blocks = small ? 0 : dyn.n_load * d_per_e, num_v = small ? 0 : dyn.num_v;  // pinned: per load
 #else
