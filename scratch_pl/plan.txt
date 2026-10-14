@@ -1,0 +1,12 @@
+o head @ids_op.txt
+o w8 @ids_op.txt
+o head2 @ids_op.txt
+o head2 @ids_op.txt
+o w8 @ids_op.txt
+o head @ids_op.txt
+o head @ids_op.txt
+o w8 @ids_op.txt
+o head2 @ids_op.txt
+o head2 @ids_op.txt
+o w8 @ids_op.txt
+o head @ids_op.txt
