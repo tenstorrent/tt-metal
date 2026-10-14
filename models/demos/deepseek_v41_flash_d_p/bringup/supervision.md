@@ -17,3 +17,10 @@ Every intervention by the supervising session: time, task, trigger, classificati
 - 16:50 framework F65 part 2 (token ids for steps keyed on them: ctx.extra tokens, device-model begin_chunk), for
   engram; selftests 379 pass; commit eb615f880ed (local). Cloned tt-d-gen (8a4a0042, no build; SC.1 reads it) to
   /localdev/dnijemcevic/tt-d-gen; it has no DeepSeek-V4.1 code.
+- 20:10 owner delegated the plan approval (PL.1) to the supervisor as well ("no plan approval from me, you do the
+  reasoning"); push still waits for the owner.
+- 20:31 R.2 passed (a953697a19d) after one attempt. Reviewed: DeepSeek's model.py / engram.py run unmodified with the
+  CPU port of kernel.py in place of the GPU kernels (as the owner's rule says); one shared tiled GEMM for oracle and
+  reference (DS41-1: fp8 / fp4 requantization turns last-bit differences into whole steps) -- accepted, both still
+  emulate the same kernels. Spec fix (supervisor's error, the reference's DS41-2): topk_idx and candidates are per
+  position and grow with the sequence; removed from state.fixed; intake re-approved on the owner's delegation.
