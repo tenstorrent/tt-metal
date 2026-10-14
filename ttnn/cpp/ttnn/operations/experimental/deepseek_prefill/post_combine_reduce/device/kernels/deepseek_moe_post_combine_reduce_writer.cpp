@@ -136,37 +136,34 @@ void kernel_main() {
                 }
             }
 
+            // All of this token's weights under one barrier; c_1 is sized for two tokens so this runs
+            // ahead of compute instead of alternating with it one tile at a time.
+            cb_weights.reserve_back(num_experts);
             for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
-                cb_weights.reserve_back(1);
-
+                const uint32_t slot_offset = expert_idx * weight_tile_size;
                 if constexpr (use_dispatch_table_skip) {
                     bool is_last = (expert_idx == num_experts - 1);
                     if (!has_local && is_last) {
                         // No local experts for this token — zero the weight tile so compute's
                         // must_zero_init multiply produces zeros regardless of combine_output.
                         volatile tt_l1_ptr uint32_t* ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_weights.get_write_ptr());
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_weights.get_write_ptr() + slot_offset);
                         for (uint32_t w = 0; w < weight_tile_size / sizeof(uint32_t); w++) {
                             ptr[w] = 0;
                         }
-                    } else {
-                        uint32_t weight_page_idx = global_token_idx * num_experts + expert_idx;
-                        noc.async_read(
-                            weight_addrg,
-                            cb_weights,
-                            weight_tile_size,
-                            {.page_id = weight_page_idx},
-                            {.offset_bytes = 0});
-                        noc.async_read_barrier();
+                        continue;
                     }
-                } else {
-                    uint32_t weight_page_idx = global_token_idx * num_experts + expert_idx;
-                    noc.async_read(
-                        weight_addrg, cb_weights, weight_tile_size, {.page_id = weight_page_idx}, {.offset_bytes = 0});
-                    noc.async_read_barrier();
                 }
-                cb_weights.push_back(1);
+                uint32_t weight_page_idx = global_token_idx * num_experts + expert_idx;
+                noc.async_read(
+                    weight_addrg,
+                    cb_weights,
+                    weight_tile_size,
+                    {.page_id = weight_page_idx},
+                    {.offset_bytes = slot_offset});
             }
+            noc.async_read_barrier();
+            cb_weights.push_back(num_experts);
         }
 
         // Phase 2: Write output tiles after compute finishes this chunk.
