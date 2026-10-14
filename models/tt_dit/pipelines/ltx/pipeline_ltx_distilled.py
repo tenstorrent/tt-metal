@@ -167,12 +167,13 @@ def build_conditioning_tensors(conds, latent_frames, latent_h, latent_w, in_chan
 # cheap, a missed corruption costs us the next occurrence.
 WHITENESS_WARN_THRESHOLD = 0.85
 
-# LTX-2.5+ distilled stage 1 uses ancestral Euler (eta=1, s_noise=1). Stage 2 stays deterministic —
-# its 3-step schedule is too short to clear freshly injected noise. Seed offset keeps the loop's
-# first randn distinct from the initial GaussianNoiser draw (same shape/dtype/seed would collide).
+# LTX-2.5+ distilled stage 1 uses ancestral Euler (eta=1, s_noise=1). Stage 2 stays deterministic by
+# default; upstream runs it ancestral too (LTX25_S2_ANCESTRAL=1 opts in). Seed offsets keep each
+# loop's first randn distinct from the initial GaussianNoiser draw (same shape/dtype/seed would collide).
 ANCESTRAL_ETA = 1.0
 ANCESTRAL_S_NOISE = 1.0
 ANCESTRAL_NOISE_SEED_OFFSET = 10000
+ANCESTRAL_S2_NOISE_SEED_OFFSET = 20000
 
 
 def _euler_ancestral_step(
