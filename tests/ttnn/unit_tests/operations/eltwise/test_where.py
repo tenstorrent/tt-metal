@@ -1208,3 +1208,89 @@ def test_where_program_cache_different_broadcast_shapes(device, variant):
 
     assert_equal(expected1, result1)
     assert_equal(expected2, result2)
+
+
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bfp8", "bfp4"])
+@pytest.mark.parametrize(
+    "c_shape, t_shape, f_shape, condition",
+    [
+        ((1, 1, 64, 1), (1, 1, 64, 64), (1, 1, 64, 64), None),  # predicate column broadcast
+        ((1, 1, 64, 64), (1, 1, 1, 64), (1, 1, 64, 64), 1),  # true-value row broadcast
+        ((1, 1, 64, 64), (1, 1, 64, 64), (1, 1, 1, 1), 0),  # false-value scalar broadcast
+    ],
+    ids=["col_bcast_predicate", "row_bcast_true", "scalar_bcast_false"],
+)
+def test_where_block_float_subtile_broadcast(device, ttnn_dtype, c_shape, t_shape, f_shape, condition):
+    """The broadcast tile is filled by the reader, which must use the block-float layout of its CB."""
+    torch.manual_seed(0)
+    if condition is None:
+        torch_c = torch.randint(0, 2, c_shape).bfloat16()
+    else:
+        torch_c = torch.full(c_shape, float(condition), dtype=torch.bfloat16)
+
+    def round_trip(t):
+        tt = ttnn.from_torch(t, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        return tt, ttnn.to_torch(tt)
+
+    tt_c, torch_c = round_trip(torch_c)
+    tt_t, torch_t = round_trip(torch.randn(t_shape).bfloat16())
+    tt_f, torch_f = round_trip(torch.randn(f_shape).bfloat16())
+
+    result = ttnn.to_torch(ttnn.where(tt_c, tt_t, tt_f))
+    # Every 16-element block of the output comes from a single operand, so block-float rounding is exact.
+    assert torch.equal(result, torch.where(torch_c.bool(), torch_t, torch_f))
+
+
+@pytest.mark.parametrize(
+    "predicate_dtype, value_dtype",
+    [(ttnn.float32, ttnn.bfloat16), (ttnn.bfloat16, ttnn.float32)],
+    ids=["float32_predicate", "float32_values"],
+)
+@pytest.mark.parametrize(
+    "c_shape, f_shape",
+    [((1, 1, 64, 64), (1, 1, 64, 64)), ((1, 1, 64, 1), (1, 1, 64, 64)), ((1, 1, 64, 64), (1, 1, 1, 1))],
+    ids=["no_bcast", "col_bcast_predicate", "scalar_bcast_false"],
+)
+def test_where_mixed_float32_bfloat16_operands(device, predicate_dtype, value_dtype, c_shape, f_shape):
+    """Any float32 operand needs a 32-bit Dest, and each operand must be unpacked with its own format."""
+    torch.manual_seed(0)
+    t_shape = (1, 1, 64, 64)
+
+    def round_trip(torch_tensor, dtype):
+        tt_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        return tt_tensor, ttnn.to_torch(tt_tensor)
+
+    tt_c, torch_c = round_trip(torch.randint(0, 2, c_shape).float(), predicate_dtype)
+    tt_t, torch_t = round_trip(torch.randn(t_shape), value_dtype)
+    tt_f, torch_f = round_trip(torch.randn(f_shape), value_dtype)
+
+    result = ttnn.to_torch(ttnn.where(tt_c, tt_t, tt_f))
+    assert torch.equal(result, torch.where(torch_c.bool(), torch_t, torch_f))
+
+
+@pytest.mark.parametrize(
+    "ttnn_dtype, scalar",
+    [
+        (ttnn.int32, 2.5),
+        (ttnn.int32, float("inf")),
+        (ttnn.int32, 2.0**31),
+        (ttnn.uint32, -1.0),
+        (ttnn.uint32, 0.5),
+        (ttnn.uint32, float("nan")),
+    ],
+)
+@pytest.mark.parametrize("variant", ["TTS", "TST"])
+def test_where_rejects_scalar_not_representable_in_int_tensor(device, expect_error, ttnn_dtype, scalar, variant):
+    """The scalar is packed with the integer tensor's dtype, which would silently truncate or wrap it."""
+    shape = (1, 1, 32, 32)
+    tt_c = ttnn.from_torch(
+        torch.ones(shape, dtype=torch.int32), dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    tt_t = ttnn.from_torch(
+        torch.ones(shape, dtype=torch.int32), dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "cannot represent the scalar"):
+        if variant == "TTS":
+            ttnn.where(tt_c, tt_t, scalar)
+        else:
+            ttnn.where(tt_c, scalar, tt_t)

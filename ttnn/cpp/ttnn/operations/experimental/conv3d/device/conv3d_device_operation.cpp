@@ -204,7 +204,7 @@ void Conv3dDeviceOperation::validate_on_program_cache_miss(
             weight_tensor.dtype(),
             weight_tensor.logical_shape());
         [[maybe_unused]] const auto [fidelity, approx, fp32_dest_acc, l1_acc, full_sync] =
-            get_compute_kernel_config_args(hal::get_arch(), args.compute_kernel_config);
+            get_compute_kernel_config_args(input_tensor_a.device()->arch(), args.compute_kernel_config);
         TT_FATAL(
             fp32_dest_acc,
             "enable_fp32_operand_split accumulates three products in fp32 DST; fp32_dest_acc_en must be set.");
