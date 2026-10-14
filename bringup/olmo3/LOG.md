@@ -55,3 +55,15 @@
 - claim: Interpretation (not proven): marginal hardware/ring-matmul behaviour on chip 14 (slot 22) cores (6,6)/(6,7) or their DRAM banks; effect is ~1 ulp on one column so output quality is unaffected but sampled continuations diverge near ties. Next: run same repro on a different Galaxy; try non-ring (DRAM-sharded) w1/w3 matmul; ask HW team if chip 14 is known flaky. Bitwise run-to-run gate cannot pass on this host until then; use per-step logit tolerance + GSM8K/AIME accuracy instead.
 - evidence: -
 - paths: models/demos/olmo_galaxy
+
+## E261014-0357-a56
+- date: 2026-10-14T03:57:57
+- commit: b0c4a50e45f
+- branch: ssinghal/olmo3-galaxy-main
+- host: UF-EV-A9-GWH02
+- track: correctness
+- status: verified
+- claim: Run-to-run decode nondeterminism is ulp-level and localized to ONE chip: replaying one decode step (same token/pos, host argmax) gives different logits in 74/2000 traced replays (3.7%, 64 layers), 9/3000 (3 layers), 1/3000 (1 layer). With per-stage probes (1 layer, eager, 11000 replays): 17/17 first-differing stages are mlp.w1_out_dram/w3_out_dram on mesh slot 22 (row5,col2 = chip 14) only; each hit = ONE output column, all 32 users, ~1 bf16 ulp (1e-3), in ring cores 0/1 (logical (6,6),(6,7); cols 94 x7, 110, 166, 206, 222). Re-running the w1 ring matmul alone on identical inputs reproduces it (only slot 22, ~1/400 reruns). Plain bf8 DRAM matmul on all 32 chips: 0 flips/2000. Weight readback from slot 22: 0 flips/300. Not the prefetcher (use_prefetcher=False), not CCL, not sampling, not KV/prefill (identical). Swapping ring cores breaks the model.
+- evidence: /home/ubuntu/ssinghal/olmo3-logs/a4d7a853746-dirty_rep_trace_gate-b32.log
+- paths: models/demos/olmo_galaxy, ttnn/cpp/ttnn/operations/transformer/sdpa_decode
+- data: {"replay_hit_rate_64l": 0.037, "device_slot": 22, "chip_id": 14}
