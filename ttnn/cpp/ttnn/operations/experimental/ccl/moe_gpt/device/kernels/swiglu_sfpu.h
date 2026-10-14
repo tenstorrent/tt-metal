@@ -31,6 +31,9 @@
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_recip.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
+#if defined(ARCH_BLACKHOLE)
+#include "ckernel_sfpu_swiglu_oai.h"
+#endif
 
 namespace ckernel::sfpu {
 
@@ -67,6 +70,16 @@ sfpi_inline sfpi::vFloat _swiglu_sigmoid_(sfpi::vFloat x) {
 //-----------------------------------------------------------------------------
 template <bool is_fp32_dest_acc_en, int ITERATIONS = 8, class Config = SwiGLUConfigGPTOSS>
 inline void calculate_swiglu(const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx) {
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (
+        !is_fp32_dest_acc_en && Config::alpha >= 1.7020000219345093f && Config::alpha <= 1.7020000219345093f &&
+        Config::clamp_limit >= 7.0f && Config::clamp_limit <= 7.0f) {
+        if (bf16_dest_swiglu_oai()) {
+            calculate_swiglu_oai<false, ITERATIONS>(gate_tile_idx, up_tile_idx, out_tile_idx);
+            return;
+        }
+    }
+#endif
     constexpr float alpha = Config::alpha;
     constexpr float clamp_limit = Config::clamp_limit;
 

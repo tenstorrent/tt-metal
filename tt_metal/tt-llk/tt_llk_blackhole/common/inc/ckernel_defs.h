@@ -370,6 +370,8 @@ enum class BinaryOp : std::uint8_t
     // tt-llk test helpers (sfpu_operations.h), `unused` in the tt-metal Compute API.
     LOGADDEXP  = 45,
     LOGADDEXP2 = 46,
+    // swiglu_oai has a Blackhole kernel only: the harness dispatches it on Blackhole.
+    SWIGLU_OAI = 47,
 };
 
 enum class PackMode : std::uint8_t

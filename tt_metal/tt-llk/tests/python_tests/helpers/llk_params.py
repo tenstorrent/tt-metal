@@ -320,6 +320,8 @@ class MathOperation(Enum):
     SfpuRemainderUint32 = OpSpec("REMAINDER_UINT32", MathOpType.SFPU_BINARY)
     SfpuLgammaStirlingFp32 = OpSpec("LGAMMA_STIRLING_FP32", MathOpType.SFPU_BINARY)
     SfpuFmodInt32 = OpSpec("FMOD_INT32", MathOpType.SFPU_BINARY)
+    # Generated from activations/products/swiglu_oai.json.
+    SfpuSwigluOai = OpSpec("SWIGLU_OAI", MathOpType.SFPU_BINARY)
 
     # =============================================================================
     # SFPU TERNARY OPERATIONS
