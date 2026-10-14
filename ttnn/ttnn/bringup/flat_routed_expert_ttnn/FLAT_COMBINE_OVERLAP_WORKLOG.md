@@ -796,6 +796,30 @@ NOC by column half / by core parity; `DRB_DROT=1` down cores rotating), us per c
   33.8/40.0/80.5/281.7. Worse: a reader's down columns are slower than a down core's (its BRISC also streams and its
   NCRISC forwards), so tile-product balance is not the model; Flash's ~76% math at M 2048 is not a down-capacity limit.
 
+### 8f. Programmable DRAM cores (DRISC) as flat's gate/up weight readers (2026-10-14)
+bh-lb-09 runs firmware 19.12.0.0, so DRISCs work (the 9 DramKernelFixture tests pass). Raw DRISC DMA, all 8 banks:
+read 472 GB/s with 1 DRISC per bank, 522 GB/s with 2; write 512 / 524 GB/s. Bench (flat_combine_tools/drisc_bench,
+C++ gtest: DRAM-core kernels need slow dispatch and are not reachable from Python program descriptors): 2 DRISCs per
+bank stream flat's gate/up weights over their DMA and write each 9216 B block straight into its gate/up core's
+landing slots (no Tensix reader), on the GLM 5.3 E8 plan's cores; the down cores read rotating as flat; a device-side
+start barrier (32 B arrival lines) replaces fast dispatch's simultaneous launch. DRAM-core and Tensix wall clocks are
+not synchronized: per-group spans only. us per call:
+
+| | DRISC senders | Tensix readers (Python bench, 8c / 8d) |
+|---|---|---|
+| gate/up alone, 2 DRISCs per bank (4 or 8 slots) | 298-303 (380 GB/s, 74%) | 222.6 (99%) |
+| gate/up alone, 1 DRISC per bank | 520-526 (215 GB/s) | |
+| down cores alone (rotating, NOC0) | 167-171 | 171.5 |
+| both together | gate/up 340-344, down 336-337 | 371.1 |
+
+- Each DRISC injects ~24-27 GB/s of NoC writes whatever its slot depth; with 2 usable subchannels per bank that caps
+  DRISC delivery near 380 GB/s, below the Tensix readers' 509 alone.
+- Under the combined load (the call's small-M regime) DRISC delivery finishes ~7% sooner than the Tensix readers +
+  forwarders (~344 vs 371 us) without 16 Tensix cores - those cells would free the LoudBox overlap layout (64 gate/up
+  in rows 1-9 next to combine) or add compute. x / h / y traffic not included; DRISC on NOC1 hung (untested further).
+- Open: why the per-DRISC write rate stops at ~25 GB/s (per-block flush, NOC2AXI, the DRISC L1 read port), and whether
+  a split (DRISCs for part of the gate/up stream or for the down weights, Tensix readers for the rest) beats both.
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
