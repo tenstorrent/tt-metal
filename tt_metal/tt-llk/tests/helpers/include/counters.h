@@ -852,7 +852,7 @@ inline std::uint32_t init_zone_end_ts[2] = {0, 0};
 
 __attribute__((always_inline)) inline void init_zone_end()
 {
-    ckernel::tensix_sync(); // the thread's own init done, as PROFILER_SYNC ends every other INIT
+    ckernel::tensix_sync(); LLK_EXP_SIG_LOOP_AT_(); // the thread's own init done, as PROFILER_SYNC ends every other INIT (+ experiment hook, final2: same line)
     read_init_end(init_zone_end_ts);
 }
 
@@ -879,6 +879,13 @@ __attribute__((noipa, section(".llk_init_tramp"))) void init_zone(const F& body)
             : "t0", "memory");
         end_lo = ZONE_END ? init_zone_end_ts[0] : init_end_ts[0];
         end_hi = ZONE_END ? init_zone_end_ts[1] : init_end_ts[1];
+#if (defined(LLK_EXP_PROBE_MOP) || defined(LLK_EXP_PROBE_SYNC)) && defined(LLK_TRISC_MATH) // experiment hook (initx): math INIT ends at the probe
+        if (ckernel::llk_exp_probe_ts[0] != 0)
+        {
+            end_lo = ckernel::llk_exp_probe_ts[0];
+            end_hi = ckernel::llk_exp_probe_ts[1];
+        }
+#endif
         if (opened)
         {
             std::uint32_t id; // fixed size lui + addi, after the end read, whatever the id's value
@@ -918,6 +925,7 @@ struct init_measurement_no_zone // START_PERF_MEASURE("INIT") in the INIT measur
         asm volatile(".rept 8\n\tnop\n\t.endr" ::: "memory");
         read_init_end(llk_barrier::init_start_ts);
 #endif
+        LLK_EXP_MATH_NOP_AT(2); // experiment hook (mathinit): top of INIT's body, after the head start
     }
 
     init_measurement_no_zone()
@@ -926,6 +934,8 @@ struct init_measurement_no_zone // START_PERF_MEASURE("INIT") in the INIT measur
 
     ~init_measurement_no_zone() // the end of INIT's body: INIT's end
     {
+        LLK_EXP_MATH_NOP_AT(8); // experiment hook (mathinit): end of INIT's body
+        LLK_EXP_SIG_LOOP_AT_(); // experiment hook (initx): the loop signal right before INIT's end read
         read_init_end(init_end_ts);
     }
 };
