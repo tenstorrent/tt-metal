@@ -109,6 +109,39 @@ _HASH_VOCAB_SIZE = 1024
 _HASH_GATE_MODES = (GateComputeMode.HASH_HOST, GateComputeMode.HASH_DEVICE)
 
 
+def _traced_forward(mesh_device, tt_moe, tt_x, replays, forward):
+    """See run_model's traced_replays. Returns the last replay's final output, on the host."""
+    if tt_moe.overlap_shared_expert_with_dispatch:
+        raise ValueError("traced_replays needs overlap_shared_expert_with_dispatch=False")
+    # The routed expert overlaps combine only while a trace controller is attached. With no shared-expert /
+    # dispatch overlap TtMoe never calls the controller, so any object stands in for one.
+    tt_moe.set_trace_controller(object())
+
+    # TtMoe frees its input, and a replay reads it where the capture left it, so the captured forward takes a
+    # copy made inside the trace and tt_x stays put. No intermediates: gathering them reads the device, which a
+    # capture cannot.
+    def forward_on_copy():
+        return forward(ttnn.clone(tt_x), return_intermediates=False)
+
+    # Warm-up: compiles every program the capture records.
+    warm = forward_on_copy()
+    ttnn.synchronize_device(mesh_device)
+    del warm
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    try:
+        final_output, _ = forward_on_copy()
+    finally:
+        # A device left mid-capture hangs on close.
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    for _ in range(replays):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    final_host = ttnn.to_torch(final_output, mesh_composer=get_tp_mesh_composer(mesh_device), dtype=torch.bfloat16)
+    ttnn.release_trace(mesh_device, trace_id)
+    tt_moe.set_trace_controller(None)
+    return final_host
+
+
 def run_model(
     variant,
     config,
@@ -147,6 +180,7 @@ def run_model(
     overlap_routed_expert_with_combine_eager=False,
     hybrid_token_threshold_model_config=None,
     overlap_shared_expert_with_dispatch=True,
+    traced_replays=0,
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -182,6 +216,12 @@ def run_model(
     ``hybrid_token_threshold_model_config`` takes the routed experts' hybrid threshold from that model's
     dimension-constants class instead of the variant's, for a row that runs one model's dims under
     another's gate. ``overlap_shared_expert_with_dispatch`` passes through to TtMoe.
+
+    ``traced_replays`` > 0 also captures the forward in a trace and replays it that many times back to back, with
+    no host sync between replays, and requires the last replay's final output to equal the eager forward's: the
+    two run the same programs. It needs overlap_shared_expert_with_dispatch off, whose sub-device swaps split a
+    capture into segments that replay with a sync each, and an eager forward that overlaps whatever the trace
+    does.
 
     ``measure`` wraps the forward for a perf caller: it is called as ``measure(forward)``,
     must invoke the thunk and return its result, and owns the device sync. The perf gates use
@@ -599,20 +639,24 @@ def run_model(
 
     tt_x = upload_tt_x()
 
-    def forward():
+    def forward(x=None, return_intermediates=run_pcc_check):
         nonlocal tt_x
-        # TtMoe frees its input, so a measure() that forwards more than once needs it uploaded again.
-        if not tt_x.is_allocated():
-            tt_x = upload_tt_x()
+        if x is None:
+            # TtMoe frees its input, so a measure() that forwards more than once needs it uploaded again.
+            if not tt_x.is_allocated():
+                tt_x = upload_tt_x()
+            x = tt_x
         return tt_moe(
-            tt_x,
-            return_intermediates=run_pcc_check,
+            x,
+            return_intermediates=return_intermediates,
             actual_isl=actual_isl,
             padding_side="right",
             input_ids=input_ids,
         )
 
     signpost(header="tt_forward_START")
+    # The traced replays run first: the eager forward below frees tt_x, which every replay reads a copy of.
+    traced_final = _traced_forward(mesh_device, tt_moe, tt_x, traced_replays, forward) if traced_replays else None
     if measure is None:
         tt_output, tt_intermediates = forward()
         ttnn.synchronize_device(mesh_device)
@@ -621,6 +665,16 @@ def run_model(
         # the sync has to happen inside it or the last programs' records are still in flight.
         tt_output, tt_intermediates = measure(forward)
     signpost(header="tt_forward_END")
+
+    if traced_final is not None:
+        eager_final = ttnn.to_torch(tt_output, mesh_composer=get_tp_mesh_composer(mesh_device), dtype=torch.bfloat16)
+        # By bit pattern: the same programs must produce the same bits, and torch.equal treats -0 and +0 as equal.
+        mismatched = int((traced_final.view(torch.int16) != eager_final.view(torch.int16)).sum())
+        assert mismatched == 0, (
+            f"the last of {traced_replays} back-to-back trace replays differs from the eager forward in "
+            f"{mismatched} of {eager_final.numel()} elements"
+        )
+        logger.info(f"the last of {traced_replays} back-to-back trace replays matches the eager forward bit for bit")
 
     profiler.end("tt_forward")
     logger.debug(f"  tt_forward: {profiler.get('tt_forward') * 1000:.2f} ms")
@@ -1080,6 +1134,10 @@ def test_ds_moe_fabric2d(
 
 # The fabric2d ops at the payload a model mesh opens with, half a token plus 64 B, so every token crosses the
 # fabric as two packets. The other fabric2d cases open the mesh at a whole token, where neither op splits one.
+# The both-traced row's trace of one MoE forward, with room to spare.
+_MOE_TRACE_REGION_SIZE = 128 * 1024 * 1024
+
+
 def _combine_fabric2d_model_payload_cases():
     cases = []
     for model_cfg, model_id in ((DeepSeekV3Config, "deepseek_v3"), (GLM53Config, "glm_5_3")):
@@ -1088,7 +1146,7 @@ def _combine_fabric2d_model_payload_cases():
             pytest.param(
                 model_cfg,
                 (8, 1),
-                torus_y_device_params(fabric_payload_size=payload),
+                torus_y_device_params(fabric_payload_size=payload, trace_region_size=_MOE_TRACE_REGION_SIZE),
                 2,
                 marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
                 id=f"{model_id}-torus-y-8x1",
@@ -1096,7 +1154,7 @@ def _combine_fabric2d_model_payload_cases():
             pytest.param(
                 model_cfg,
                 (8, 4),
-                torus_xy_device_params(fabric_payload_size=payload),
+                torus_xy_device_params(fabric_payload_size=payload, trace_region_size=_MOE_TRACE_REGION_SIZE),
                 2,
                 marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
                 id=f"{model_id}-torus-xy-8x4",
@@ -1107,10 +1165,12 @@ def _combine_fabric2d_model_payload_cases():
 
 # combine-only: direct dispatch, then the routed expert, then combine_fabric2d. both-overlapped: dispatch_fabric2d,
 # then the routed expert and combine_fabric2d as one program, run untraced so this PCC check reaches it.
+# both-traced: the same, traced as a model runs it, and replayed back to back so a chip can start the next
+# launch while its neighbour is still in the last one.
 @pytest.mark.parametrize(
-    "dispatch_impl, overlap",
-    [("direct", False), ("fabric2d", True)],
-    ids=["combine-only", "both-overlapped"],
+    "dispatch_impl, overlap, traced_replays",
+    [("direct", False, 0), ("fabric2d", True, 0), ("fabric2d", True, 8)],
+    ids=["combine-only", "both-overlapped", "both-traced"],
 )
 @pytest.mark.parametrize(
     "model_cfg, mesh_device, device_params, num_links",
@@ -1121,7 +1181,16 @@ def _combine_fabric2d_model_payload_cases():
 @pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
 @pytest.mark.timeout(900)
 def test_moe_fabric2d_model_payload(
-    variant, config_only, model_cfg, mesh_device, device_params, num_links, request, dispatch_impl, overlap
+    variant,
+    config_only,
+    model_cfg,
+    mesh_device,
+    device_params,
+    num_links,
+    request,
+    dispatch_impl,
+    overlap,
+    traced_replays,
 ):
     _run_moe_case(
         variant=variant,
@@ -1142,6 +1211,8 @@ def test_moe_fabric2d_model_payload(
         combine_impl="fabric2d",
         overlap_routed_expert_with_combine=overlap,
         overlap_routed_expert_with_combine_eager=overlap,
+        overlap_shared_expert_with_dispatch=not traced_replays,
+        traced_replays=traced_replays,
     )
 
 
