@@ -128,11 +128,20 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_co
     const CoreCoord exchange_core =
         prim::qkv_causal_conv1d_silu_exchange_core(input.device()->compute_with_storage_grid_size());
     for (uint32_t i = 0; i < exchange_semaphores.size(); ++i) {
+        const auto& semaphore = exchange_semaphores[i];
         TT_FATAL(
-            std::get<0>(exchange_semaphores[i].attribute_values()).contains(exchange_core),
+            semaphore.device() == input.device(),
+            "qkv_causal_conv1d_silu_with_carry: exchange semaphores must be on the input's device");
+        const auto [cores, buffer_type] = semaphore.attribute_values();
+        TT_FATAL(
+            cores.contains(exchange_core),
             "qkv_causal_conv1d_silu_with_carry: exchange semaphores must cover core {}",
             exchange_core);
-        params.exchange_semaphore_addresses[i] = static_cast<uint32_t>(exchange_semaphores[i].address());
+        TT_FATAL(
+            buffer_type == tt::tt_metal::BufferType::L1 || buffer_type == tt::tt_metal::BufferType::L1_SMALL,
+            "qkv_causal_conv1d_silu_with_carry: exchange semaphores must be in L1 or L1_SMALL, got {}",
+            buffer_type);
+        params.exchange_semaphore_addresses[i] = static_cast<uint32_t>(semaphore.address());
     }
     auto outputs = ttnn::device_operation::launch<prim::QkvCausalConv1dSiluOperation>(
         params,
