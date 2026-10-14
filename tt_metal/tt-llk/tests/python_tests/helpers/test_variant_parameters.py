@@ -90,7 +90,8 @@ class THROTTLE_LEVEL(TemplateParameter):
 @dataclass(init=False)
 class FAST_TILIZE_W_STEP(TemplateParameter):
     """Blackhole fast tilize: rows of three or more tiles step L1 by the packer's output W counter, as the `ttnn.tilize`
-    kernels do (tilize_helpers.inl). No dataclass field, so the perf reports keep their columns."""
+    kernels do (tilize_helpers.inl). No dataclass field, so the perf reports keep their columns.
+    """
 
     MIN_TILES = 3
 

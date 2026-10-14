@@ -84,7 +84,10 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
     configuration = TestConfig(
         "sources/fast_tilize_bh_test.cpp",
         formats,
-        templates=[PERF_RUN_TYPE(PerfRunType.L1_TO_L1), FAST_TILIZE_W_STEP(input_width_tiles)],
+        templates=[
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+            FAST_TILIZE_W_STEP(input_width_tiles),
+        ],
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_count),
@@ -193,7 +196,10 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
     configuration = TestConfig(
         "sources/fast_tilize_bh_test.cpp",
         formats,
-        templates=[PERF_RUN_TYPE(PerfRunType.L1_TO_L1), FAST_TILIZE_W_STEP(input_width_tiles)],
+        templates=[
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+            FAST_TILIZE_W_STEP(input_width_tiles),
+        ],
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_count),
@@ -272,7 +278,10 @@ def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
     configuration = TestConfig(
         "sources/fast_tilize_bh_test.cpp",
         formats,
-        templates=[PERF_RUN_TYPE(PerfRunType.L1_TO_L1), FAST_TILIZE_W_STEP(input_width_tiles)],
+        templates=[
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+            FAST_TILIZE_W_STEP(input_width_tiles),
+        ],
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_count),
