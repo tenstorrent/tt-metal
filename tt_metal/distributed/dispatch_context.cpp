@@ -212,7 +212,7 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
     for (IDevice* device : devices) {
         std::vector<distributed::MeshDevice*> views_over_device;
         for (distributed::MeshDevice* view : mesh_views) {
-            for (IDevice* view_device : view->get_view().impl().get_devices()) {
+            for (auto* view_device : view->get_view().impl().get_devices()) {
                 if (view_device->id() == device->id()) {
                     views_over_device.push_back(view);
                     break;
