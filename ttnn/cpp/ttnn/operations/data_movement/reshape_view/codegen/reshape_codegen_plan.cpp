@@ -293,8 +293,10 @@ std::optional<RmChoice> live_rm_choice(
     const ttnn::Shape& logical_output_shape,
     tt::tt_metal::BufferType output_buffer,
     uint32_t grid_cores,
-    const LaunchPlan& planned) {
-    const uint64_t free_l1 = get_max_l1_space(input);
+    const LaunchPlan& planned,
+    uint64_t reserved_l1_bytes) {
+    const uint64_t max_l1 = get_max_l1_space(input);
+    const uint64_t free_l1 = max_l1 > reserved_l1_bytes ? max_l1 - reserved_l1_bytes : 0;
     if (planned.rm.has_value()) {
         if (auto stick = fit_rm(*planned.rm, free_l1)) {
             return RmChoice{std::move(*stick)};

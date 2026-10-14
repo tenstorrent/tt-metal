@@ -209,18 +209,16 @@ bool native_rm_fits_l1(
     return kernels * per_kernel <= static_budget;
 }
 
-// Whether an rm_native_faster verdict may be taken. Native must accept the dtype and fit its scratch, and the stick
-// program rm_native_faster was measured against must fit the static L1 window. When only the slab program fits, it
-// reads a batch of windows behind one barrier, as for widths that do not divide.
+// Whether an rm_native_faster verdict may be taken once the static fit is known. Native's scratch must fit, and the
+// stick program rm_native_faster was measured against must fit the static L1 window. When only the slab program
+// fits, it reads a batch of windows behind one barrier, as for widths that do not divide.
 bool demotion_applies(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     uint64_t static_budget,
     bool stick_program_fits) {
-    // Native's device operation rejects uint16.
-    return input.dtype() != DataType::UINT16 &&
-           native_rm_fits_l1(input, logical_output_shape, output_mem_config, static_budget) && stick_program_fits;
+    return stick_program_fits && native_rm_fits_l1(input, logical_output_shape, output_mem_config, static_budget);
 }
 
 // Whether native's kernel measures faster than the ROW_MAJOR program the gate admits. Thresholds fitted on Blackhole
@@ -267,18 +265,18 @@ public:
         const Tensor& input,
         const ttnn::Shape& logical_output_shape,
         const tt::tt_metal::MemoryConfig& output_mem_config,
-        const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) :
+        uint32_t num_cores) :
         input_(input),
         logical_output_shape_(logical_output_shape),
         output_mem_config_(output_mem_config),
-        num_cores_(static_cast<uint32_t>(reshape_core_grid(input, sub_core_grids).num_cores())),
+        num_cores_(num_cores),
         output_spec_(reshape_codegen::output_spec(input, logical_output_shape, output_mem_config)),
         out_aligned_page_(output_aligned_page(input, output_spec_)),
         stick_(rm_geometry(input, logical_output_shape, out_aligned_page_, num_cores_)),
         static_budget_(static_l1_budget(input, output_spec_)) {}
 
-    uint32_t num_cores() const { return num_cores_; }
     uint64_t static_budget() const { return static_budget_; }
+    const tt::tt_metal::TensorSpec& output_spec() const { return output_spec_; }
 
     std::optional<RmPlan> fit_stick(uint64_t l1_budget) const {
         return stick_.has_value() ? fit_rm(*stick_, l1_budget) : std::nullopt;
@@ -312,6 +310,10 @@ private:
     bool slab_built_ = false;
     std::optional<RmArbitraryPlan> slab_;
 };
+
+uint32_t rm_grid_cores(const Tensor& input, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    return static_cast<uint32_t>(reshape_core_grid(input, sub_core_grids).num_cores());
+}
 
 constexpr const char* kRmStaticFitViolation = "no row-major program fits the static L1 budget";
 
@@ -349,7 +351,7 @@ const char* unsupported_reason(
         return violation;
     }
     if (input.layout() == Layout::ROW_MAJOR) {
-        RmGeometry geometry(input, logical_output_shape, output_mem_config, sub_core_grids);
+        RmGeometry geometry(input, logical_output_shape, output_mem_config, rm_grid_cores(input, sub_core_grids));
         return geometry.fits_static() ? nullptr : kRmStaticFitViolation;
     }
     const auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
@@ -377,12 +379,16 @@ bool is_demoted(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     if (input.layout() == Layout::ROW_MAJOR) {
-        RmGeometry geometry(input, logical_output_shape, output_mem_config, sub_core_grids);
+        const uint32_t num_cores = rm_grid_cores(input, sub_core_grids);
+        // The stick-size rule runs before any output spec is built; native's device operation rejects uint16.
+        if (input.dtype() == DataType::UINT16 ||
+            !rm_native_faster(input, logical_output_shape, output_mem_config, num_cores)) {
+            return false;
+        }
+        RmGeometry geometry(input, logical_output_shape, output_mem_config, num_cores);
         const uint64_t static_budget = geometry.static_budget();
-        return rm_native_faster(input, logical_output_shape, output_mem_config, geometry.num_cores()) &&
-               demotion_applies(
-                   input, logical_output_shape, output_mem_config, static_budget,
-                   geometry.fit_stick(static_budget).has_value());
+        return demotion_applies(
+            input, logical_output_shape, output_mem_config, static_budget, geometry.fit_stick(static_budget).has_value());
     }
     const auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
     return choice.has_value() && native_faster(input, *choice, reshape_core_grid(input, sub_core_grids).num_cores());
@@ -394,8 +400,20 @@ bool codegen_plan_fits_live_l1(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     if (input.layout() == Layout::ROW_MAJOR) {
-        // The program factory fits row-major CBs to the L1 free at program creation.
-        return true;
+        const uint32_t num_cores = rm_grid_cores(input, sub_core_grids);
+        RmGeometry geometry(input, logical_output_shape, output_mem_config, num_cores);
+        if (!geometry.fits_static()) {
+            return false;
+        }
+        const auto reserved = pending_output_l1_bytes(input, geometry.output_spec());
+        return live_rm_choice(
+                   input,
+                   logical_output_shape,
+                   output_mem_config.buffer_type(),
+                   num_cores,
+                   geometry.launch_plan(),
+                   reserved)
+            .has_value();
     }
     const auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
     if (!choice) {
@@ -413,7 +431,7 @@ LaunchPlan launch_plan(
     const char* violation = scope_violation(input, logical_output_shape, output_mem_config, sub_core_grids);
     TT_FATAL(violation == nullptr, "reshape_force_codegen: outside the codegen scope: {}", violation);
     if (input.layout() == Layout::ROW_MAJOR) {
-        RmGeometry geometry(input, logical_output_shape, output_mem_config, sub_core_grids);
+        RmGeometry geometry(input, logical_output_shape, output_mem_config, rm_grid_cores(input, sub_core_grids));
         TT_FATAL(geometry.fits_static(), "reshape_force_codegen: outside the codegen scope: {}", kRmStaticFitViolation);
         return geometry.launch_plan();
     }

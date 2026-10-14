@@ -339,6 +339,7 @@ tt::tt_metal::ProgramDescriptor ReshapeCodegenProgramFactory::create_descriptor(
         out_aligned_page);
     const auto grid = rcg::reshape_core_grid(input, operation_attributes.sub_core_grids);
 
+    // Routing already sent calls with no fitting program to native, so only the forced entry reaches this error.
     const auto chosen = rcg::live_rm_choice(
         input,
         operation_attributes.logical_output_shape,
