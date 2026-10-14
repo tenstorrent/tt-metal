@@ -54,7 +54,8 @@ inline std::uint8_t llk_unpack_program_bfd(const std::uint32_t operand_id) {
  * allocated from the per-TRISC partition (see llk_bfd_alloc.h) and each op's llk_unpack_*_init
  * programs its own table entry. DFB ids never double as BFD ids.
  *
- * Also the unpack thread's once-per-program DEST bank reset in the unpack-to-dest path (see below).
+ * Also the unpack thread's once-per-program unpack-to-dest init: its DEST bank reset, the seeds of the semaphores this
+ * thread posts and the startup-barrier raise (see below).
  *
  * @param operandA: The input0 operand circular buffer
  * @param operandB: The input1 operand circular buffer
@@ -74,13 +75,15 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     // loop, and a per-op reset would pin unpack to bank 0 while pack keeps alternating in SyncHalf.
     if constexpr (UnpackToDestEn) {
         _llk_unpack_dest_init_();
-        // Seed the unpack-posted semaphores on this thread, the first to wait on and post them: a SEMINIT issued from
-        // the math thread can land after the first post here and wipe it. Math seeds MATH_PACK, which it posts first,
-        // in llk_math_pack_sync_init.
+        // Seed the semaphores this thread posts, in front of its own first wait and post on them (same stream, so no
+        // post can precede its SEMINIT), then raise the startup barrier behind the seeds. Math passes the barrier in
+        // llk_math_pack_sync_init before its first SEMWAIT on UNPACK_MATH, so no SEMINIT here lands on a pending
+        // waiter; pack's first get on UNPACK_PACK follows math's first MATH_PACK post, so it is ordered too.
         constexpr std::uint32_t N = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
         _llk_sync_init_(semaphore::UNPACK_MATH, N /*max*/, 0 /*init*/);
         // DEST occupancy: unpack posts, pack gets; the unpacker's only gate, see llk_unpack_wait_for_dest_available.
         _llk_sync_init_(semaphore::UNPACK_PACK, N /*max*/, 0 /*init*/);
+        _llk_sync_barrier_raise_(semaphore::UNPACK_INIT);
     }
 }
 

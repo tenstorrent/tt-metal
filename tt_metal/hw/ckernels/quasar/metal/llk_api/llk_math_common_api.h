@@ -136,7 +136,9 @@ inline void llk_math_dest_section_done() {
 
 /**
  * @brief Initializes math–pack synchronization for the destination register.
- * Waits for any previous packs to finish, resets the dest bank id, initializes the MATH_PACK semaphore
+ * Waits for any previous packs to finish, resets the dest bank id, initializes the MATH_PACK semaphore. In the
+ * unpack-to-dest path it then passes the UNPACK_INIT startup barrier that @ref llk_unpack_hw_configure raises behind
+ * its seeds of UNPACK_MATH / UNPACK_PACK, so this thread's first wait on them cannot be armed before they exist.
  *
  * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
@@ -144,7 +146,14 @@ inline void llk_math_dest_section_done() {
  */
 inline void llk_math_pack_sync_init() {
     _llk_math_pack_sync_init_<DST_SYNC_MODE>();
-    // UNPACK_MATH / UNPACK_PACK are seeded by the unpack thread in llk_unpack_hw_configure, their first poster.
+
+    if constexpr (UnpackToDestEn) {
+        // Startup barrier: the unpack thread seeds UNPACK_MATH / UNPACK_PACK (the semaphores it posts) in
+        // llk_unpack_hw_configure and raises UNPACK_INIT behind the seeds. Pass it here, before this thread's first
+        // SEMWAIT on UNPACK_MATH, so no SEMINIT can land on a pending waiter. A RISC-side spin, see
+        // _llk_sync_barrier_pass_; it costs nothing, math has nothing to do before the unpacker's first post anyway.
+        _llk_sync_barrier_pass_(semaphore::UNPACK_INIT);
+    }
 }
 
 // Math has no per-tile data-format state on Quasar; format reconfig is unpack-only.
