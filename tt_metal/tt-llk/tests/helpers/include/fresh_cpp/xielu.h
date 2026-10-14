@@ -38,6 +38,10 @@ __attribute__((noinline)) void calculate_xielu_fresh_cpp(const std::uint32_t par
     constexpr float EPS        = -1e-6f;
     constexpr float EXPM1_EPS  = -0.0000009999995427f;
     constexpr float ONE_LN2    = 1.4426950408889634f;
+    // exp(x) - 1 rounds to -1 once x < -25 ln 2 (about -17.3).  Bounding exp's
+    // argument at -87, just above ln(2**-126), keeps exp(xe) a normal
+    // number, so the 2**k exponent written by setexp never wraps.
+    constexpr float EXP_ARG_MIN = -87.0f;
     constexpr float LN2_HI_NEG = -0.6931152343750000f;
     constexpr float LN2_LO_NEG = -3.19461832987e-05f;
     // Sollya expm1 tail (production constants), and the Taylor exp septic.
@@ -78,11 +82,10 @@ __attribute__((noinline)) void calculate_xielu_fresh_cpp(const std::uint32_t par
         {
             // exp(x) - 1 - x for large negative x, exp by Cody-Waite reduction
             // and the Taylor septic (production constants).
-            sfpi::vFloat z = x * ONE_LN2;
-            z              = sfpi::max(z, -126.5f);
+            const sfpi::vFloat xe = sfpi::max(x, EXP_ARG_MIN);
             sfpi::vInt k_int;
-            const sfpi::vFloat k = fresh_round_nearest(z, k_int);
-            const sfpi::vFloat r = k * LN2_LO_NEG + (k * LN2_HI_NEG + x);
+            const sfpi::vFloat k = fresh_round_nearest(xe * ONE_LN2, k_int);
+            const sfpi::vFloat r = k * LN2_LO_NEG + (k * LN2_HI_NEG + xe);
 
             sfpi::vFloat p = 1.0f / 5040.0f;
             p              = p * r + 1.0f / 720.0f;
