@@ -5,6 +5,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import skip_for_slow_dispatch
 
 pytestmark = pytest.mark.use_module_device
 
@@ -54,6 +55,7 @@ def test_binary_nd_sharded_operands(device, inputs_nd_sharded, preallocated_outp
     assert torch.equal(ttnn.to_torch(out), expected)
 
 
+@skip_for_slow_dispatch()
 @pytest.mark.parametrize(
     "inputs_nd_sharded, explicit_memory_config",
     [(True, False), (True, True), (False, True)],
