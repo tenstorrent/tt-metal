@@ -23,6 +23,9 @@
 
 namespace ttsl {
 
+template <typename Signature>
+class move_only_function;
+
 namespace detail {
 
 // With the table pointer, sizeof 32, as std::function on libstdc++.
@@ -35,28 +38,19 @@ template <typename T>
 struct is_in_place_type<std::in_place_type_t<T>> : std::true_type {};
 
 template <typename T>
-struct is_std_function : std::false_type {};
-template <typename R, typename... A>
-struct is_std_function<std::function<R(A...)>> : std::true_type {};
+struct is_move_only_function : std::false_type {};
+template <typename Signature>
+struct is_move_only_function<move_only_function<Signature>> : std::true_type {};
 
+// The sources std::move_only_function leaves empty when they compare equal to nullptr.
 template <typename T>
 inline constexpr bool is_nullable_callable_v =
-    std::is_pointer_v<T> || std::is_member_pointer_v<T> || is_std_function<T>::value;
+    std::is_pointer_v<T> || std::is_member_pointer_v<T> || is_move_only_function<T>::value;
 
 template <typename F, typename Self, typename R, typename... Args>
 concept MoveOnlyFunctionTarget =
     !std::is_same_v<std::remove_cvref_t<F>, Self> && !is_in_place_type<std::remove_cvref_t<F>>::value &&
     std::is_invocable_r_v<R, std::decay_t<F>, Args...> && std::is_invocable_r_v<R, std::decay_t<F>&, Args...>;
-
-template <typename T>
-    requires is_nullable_callable_v<std::decay_t<T>>
-bool is_empty_callable(const T& f) noexcept {
-    if constexpr (is_std_function<T>::value) {
-        return !static_cast<bool>(f);
-    } else {
-        return f == nullptr;
-    }
-}
 
 // A target whose move can throw goes to the heap, since this type's move is noexcept.
 template <typename T>
@@ -119,7 +113,7 @@ public:
         requires detail::MoveOnlyFunctionTarget<F, move_only_function, R, Args...>
     move_only_function(F&& f) {
         if constexpr (detail::is_nullable_callable_v<std::decay_t<F>>) {
-            if (detail::is_empty_callable(f)) {
+            if (f == nullptr) {
                 tag_ = empty_tag();
                 return;
             }
@@ -128,14 +122,17 @@ public:
     }
 
     template <typename T, typename... CArgs>
-        requires(std::is_constructible_v<T, CArgs...> && std::is_invocable_r_v<R, T&, Args...>)
+        requires(
+            std::is_constructible_v<T, CArgs...> && std::is_invocable_r_v<R, T, Args...> &&
+            std::is_invocable_r_v<R, T&, Args...>)
     explicit move_only_function(std::in_place_type_t<T>, CArgs&&... args) {
         emplace<T>(std::forward<CArgs>(args)...);
     }
 
     template <typename T, typename U, typename... CArgs>
         requires(
-            std::is_constructible_v<T, std::initializer_list<U>&, CArgs...> && std::is_invocable_r_v<R, T&, Args...>)
+            std::is_constructible_v<T, std::initializer_list<U>&, CArgs...> && std::is_invocable_r_v<R, T, Args...> &&
+            std::is_invocable_r_v<R, T&, Args...>)
     explicit move_only_function(std::in_place_type_t<T>, std::initializer_list<U> il, CArgs&&... args) {
         emplace<T>(il, std::forward<CArgs>(args)...);
     }

@@ -35,6 +35,14 @@ static_assert(std::is_same_v<move_only_function<int(char)>::result_type, int>);
 static_assert(!std::is_invocable_v<const move_only_function<void()>&>, "R(Args...) is not const-callable");
 static_assert(!std::is_constructible_v<move_only_function<void()>, int>, "must reject non-callables");
 static_assert(!std::is_constructible_v<move_only_function<void()>, void (*)(int)>, "must reject a wrong signature");
+struct LvalueOnlyCallable {
+    int operator()() & { return 0; }
+};
+static_assert(
+    !std::is_constructible_v<move_only_function<int()>, LvalueOnlyCallable>, "a target must be rvalue-callable too");
+static_assert(
+    !std::is_constructible_v<move_only_function<int()>, std::in_place_type_t<LvalueOnlyCallable>>,
+    "a target must be rvalue-callable too");
 
 TEST(MoveOnlyFunctionTest, CPU_InvokesLambda) {
     int calls = 0;
@@ -94,6 +102,24 @@ TEST(MoveOnlyFunctionTest, CPU_HoldsCaptureLargerThanInlineBuffer) {
     Big big{};
     move_only_function<std::uint64_t()> f{[big]() { return big.data[7]; }};
     EXPECT_EQ(f(), 8u);
+}
+
+TEST(MoveOnlyFunctionTest, CPU_ThrowingMoveTargetStaysOnHeap) {
+    struct Target {
+        Target() = default;
+        Target(Target&&) { throw 1; }  // NOLINT(performance-noexcept-move-constructor): the point of the test
+        int operator()() const { return 42; }
+    };
+    static_assert(sizeof(Target) <= detail::kMoveOnlyFunctionInlineSize);
+    static_assert(alignof(Target) <= detail::kMoveOnlyFunctionInlineAlign);
+    static_assert(!std::is_nothrow_move_constructible_v<Target>);
+
+    move_only_function<int()> src{std::in_place_type<Target>};
+    move_only_function<int()> dst{std::move(src)};
+    EXPECT_EQ(dst(), 42);
+    move_only_function<int()> assigned{[] { return 0; }};
+    assigned = std::move(dst);
+    EXPECT_EQ(assigned(), 42);
 }
 
 TEST(MoveOnlyFunctionTest, CPU_NullFunctionPointerIsEmpty) {
@@ -168,10 +194,27 @@ TEST(MoveOnlyFunctionTest, CPU_SelfMoveAssignIsSafe) {
     EXPECT_EQ(f(), 1u);
 }
 
-TEST(MoveOnlyFunctionTest, CPU_EmptyStdFunctionIsEmpty) {
+// As with std::move_only_function, an empty std::function is an ordinary target, not an empty source.
+TEST(MoveOnlyFunctionTest, CPU_EmptyStdFunctionIsEngaged) {
     std::function<void()> empty;
     move_only_function<void()> f{empty};
-    EXPECT_FALSE(static_cast<bool>(f));
+    EXPECT_TRUE(static_cast<bool>(f));
+    EXPECT_THROW(f(), std::bad_function_call);
+}
+
+TEST(MoveOnlyFunctionTest, CPU_EmptyOtherSignatureIsEmpty) {
+    move_only_function<int()> empty;
+    move_only_function<void()> constructed{std::move(empty)};
+    EXPECT_FALSE(static_cast<bool>(constructed));
+
+    move_only_function<int()> also_empty;
+    move_only_function<void()> assigned{[] {}};
+    assigned = std::move(also_empty);
+    EXPECT_FALSE(static_cast<bool>(assigned));
+
+    move_only_function<int()> engaged{[] { return 5; }};
+    move_only_function<long()> converted{std::move(engaged)};
+    EXPECT_EQ(converted(), 5);
 }
 
 TEST(MoveOnlyFunctionTest, CPU_NonEmptyStdFunctionIsEngaged) {
