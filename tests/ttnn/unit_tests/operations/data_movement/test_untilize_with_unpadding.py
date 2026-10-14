@@ -1240,17 +1240,42 @@ def test_untilize_zero_volume_host_tensor_is_rejected(shape, expect_error):
         ttnn.untilize(host_tensor)
 
 
-@pytest.mark.parametrize("placement", ["host", "deallocated"])
-def test_untilize_device_less_tensor_is_rejected(device, placement, expect_error):
-    torch_input = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+def _device_less_tile_tensor(device, placement, shape):
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
     if placement == "host":
-        tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    else:
-        tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        ttnn.deallocate(tensor)
+        return ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.deallocate(tensor)
+    return tensor
+
+
+@pytest.mark.parametrize("placement", ["host", "deallocated"])
+@pytest.mark.parametrize(
+    "shape, kwargs",
+    [
+        ((1, 1, 64, 64), {"use_multicore": False}),
+        ((1, 1, 64, 64), {}),
+        ((1, 1, 32, 64), {}),
+        (
+            (1, 1, 32, 64),
+            {"sub_core_grids": ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])},
+        ),
+    ],
+    ids=["single_core", "default", "single_tile_row", "sub_core_grids"],
+)
+def test_untilize_device_less_tensor_is_rejected(device, placement, shape, kwargs, expect_error):
+    tensor = _device_less_tile_tensor(device, placement, shape)
 
     with expect_error(RuntimeError, "must be allocated on a device"):
-        ttnn.untilize(tensor, use_multicore=False)
+        ttnn.untilize(tensor, **kwargs)
+
+
+@pytest.mark.parametrize("placement", ["host", "deallocated"])
+def test_untilize_with_unpadding_device_less_tensor_is_rejected(device, placement, expect_error):
+    tensor = _device_less_tile_tensor(device, placement, (1, 1, 64, 64))
+
+    with expect_error(RuntimeError, "must be allocated on a device"):
+        ttnn.untilize_with_unpadding(tensor, ttnn.Shape([0, 0, 63, 63]))
 
 
 # Unpadding only ever shrinks, so no output extent may exceed the padded input. Volume alone does
