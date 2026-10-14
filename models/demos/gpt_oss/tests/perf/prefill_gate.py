@@ -47,6 +47,24 @@ HF_MIN_PCC = 0.955
 HF_MIN_PCC_BY_LEN = {128: 0.92}
 HF_MIN_TOP5_OVERLAP = 0.4
 HF_TOP1_MARGIN = 0.5
+# Gate v2 (--mode v2, for levers that change numerics; spec set by the orchestrator 2026-10-14): the last-token PCC
+# above swings 0.97 -> 0.91 at 1K when only the layer-0 MoE output of the clean tree is scaled by 0.97 or 1.03, so
+# it cannot judge a numerics change. v2 scores the last 32 positions (the LM-head tile) at 128 / 1K / 8K against
+# HF CPU logits at the same positions (GOLDENS_DIR/hf_last32, prefill_hf_ref.py --last32): top-1 agreement, mean
+# top-5 overlap, mean full-vocab KL(HF || TT). A candidate passes against a reference run of the dense tree
+# (--v2-reference <json>) iff top1 >= ref - V2_TOP1_DROP, KL <= V2_KL_RATIO x ref KL, and no NaN/Inf.
+V2_LENGTHS = [128, 1024, 8192]
+V2_TOP1_DROP = 0.03
+V2_KL_RATIO = 1.15
+# Gate v3 (--mode v3; acceptance fixed by the orchestrator 2026-10-14): v2's 96 last-tile positions passed an SDPA x1.1
+# plant. v3 scores EVERY position of the frozen real-text prompt at 128 / 1K / 2K (3200 next-token predictions)
+# against CPU HF bf16 logits at the same positions (GOLDENS_DIR/hf_full, prefill_hf_ref.py --full): top-1 agreement
+# (TT argmax == HF argmax), top-5 hit (HF argmax in TT top-5), mean full-vocab KL(HF || TT). A candidate passes
+# against a dense-tree run (--v3-reference <json>) iff pooled top1 >= ref - V3_TOP1_DROP, pooled KL <= V3_KL_RATIO x
+# ref KL, and no NaN/Inf.
+V3_LENGTHS = [128, 1024, 2048]
+V3_TOP1_DROP = 0.01
+V3_KL_RATIO = 1.05
 # ---------------------------------------------------------------------------------------------------------------
 
 REPO = Path(__file__).resolve().parents[5]
@@ -161,6 +179,211 @@ if __name__ != "__main__":
             Path(result_path).write_text(json.dumps(report, indent=2))
         assert not all_fails, "prefill gate FAIL:\n" + "\n".join(all_fails)
 
+    @pytest.mark.timeout(4 * 3600)
+    @parametrize_mesh_with_fabric([(1, 4)])
+    def test_prefill_gate_v2(mesh_device, device_params):
+        """Gate v2 (numerics-changing levers): last-tile logits vs HF over V2_LENGTHS x 32 positions."""
+        import torch
+        from loguru import logger
+
+        from models.demos.gpt_oss.tests.perf.prefill_common import (
+            GOLDENS_DIR,
+            PREFILL_LENGTHS,
+            build_prefill_generator,
+            env_snapshot,
+            git_info,
+            load_or_build_prompt_tokens,
+            run_prefill,
+        )
+
+        result_path = os.getenv("PREFILL_GATE_RESULT")
+        ref_path = os.getenv("PREFILL_GATE_V2_REF")
+        ctx = build_prefill_generator(mesh_device, max(PREFILL_LENGTHS))
+        tokens = load_or_build_prompt_tokens(ctx["tokenizer"])
+
+        # The prefill LM head computes the whole 32-row tile holding the last token; keep all of it.
+        tt_model = ctx["generator"].model[0]
+        orig = tt_model.process_output_prefill
+        captured = {}
+
+        def capture(tt_out, last_token_idx):
+            tile = orig(tt_out, slice(None))  # [..., 32, vocab]
+            captured["tile"] = tile.reshape(-1, tile.shape[-1]).float().clone()
+            return tile[..., last_token_idx, :]
+
+        tt_model.process_output_prefill = capture
+        report = {"mode": "v2", "git": git_info(), "env": env_snapshot(), "lengths": {}}
+        top1s, top5s, kls, nan = [], [], [], False
+        try:
+            for L in V2_LENGTHS:
+                assert L % 32 == 0, L
+                captured.clear()
+                run_prefill(ctx, tokens[:L].unsqueeze(0))
+                tt = captured["tile"]
+                assert tt.shape[0] == 32, f"expected the 32-row last tile, got {tuple(tt.shape)}"
+                if os.getenv("PREFILL_GATE_V2_DUMP"):  # diagnostic: keep the TT tile
+                    torch.save(tt, Path(os.environ["PREFILL_GATE_V2_DUMP"]) / f"tt_last32_L{L}.pt")
+                ref = torch.load(GOLDENS_DIR / "hf_last32" / f"hf_last32_L{L}.pt")
+                assert ref["positions"] == list(range(L - 32, L)), "HF reference positions do not match the tile"
+                hf = ref["logits"].float()
+                n = min(tt.shape[-1], hf.shape[-1])
+                tt, hf = tt[:, :n].double(), hf[:, :n].double()
+                nan = nan or bool(torch.isnan(tt).any() or torch.isinf(tt).any())
+                top1 = (tt.argmax(-1) == hf.argmax(-1)).double()
+                t5, h5 = torch.topk(tt, 5, dim=-1).indices, torch.topk(hf, 5, dim=-1).indices
+                top5 = torch.tensor([len(set(a.tolist()) & set(b.tolist())) / 5 for a, b in zip(t5, h5)]).double()
+                lp_hf, lp_tt = torch.log_softmax(hf, -1), torch.log_softmax(tt, -1)
+                kl = (lp_hf.exp() * (lp_hf - lp_tt)).sum(-1)
+                top1s.append(top1)
+                top5s.append(top5)
+                kls.append(kl)
+                entry = {
+                    "top1": float(top1.mean()),
+                    "top5_overlap": float(top5.mean()),
+                    "kl_hf_tt": float(kl.mean()),
+                    "kl_max": float(kl.max()),
+                }
+                report["lengths"][str(L)] = entry
+                logger.info(f"[gate v2] L={L} {entry}")
+        finally:
+            tt_model.process_output_prefill = orig
+        overall = {
+            "positions": int(sum(t.numel() for t in top1s)),
+            "top1": float(torch.cat(top1s).mean()),
+            "top5_overlap": float(torch.cat(top5s).mean()),
+            "kl_hf_tt": float(torch.cat(kls).mean()),
+            "nan": nan,
+        }
+        report["overall"] = overall
+        fails = ["NaN/Inf in TT logits"] if nan else []
+        if ref_path:
+            base = json.loads(Path(ref_path).read_text())["overall"]
+            report["reference"] = {"path": ref_path, **base}
+            if overall["top1"] < base["top1"] - V2_TOP1_DROP:
+                fails.append(f"top1 {overall['top1']:.4f} < reference {base['top1']:.4f} - {V2_TOP1_DROP}")
+            if overall["kl_hf_tt"] > V2_KL_RATIO * base["kl_hf_tt"]:
+                fails.append(f"KL {overall['kl_hf_tt']:.5f} > {V2_KL_RATIO} x reference {base['kl_hf_tt']:.5f}")
+        report["fails"] = fails
+        logger.info(f"[gate v2] overall {overall} fails={fails}")
+        if result_path:
+            Path(result_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(result_path).write_text(json.dumps(report, indent=2))
+        assert not fails, "prefill gate v2 FAIL:\n" + "\n".join(fails)
+
+    @pytest.mark.timeout(4 * 3600)
+    @parametrize_mesh_with_fabric([(1, 4)])
+    def test_prefill_gate_v3(mesh_device, device_params):
+        """Gate v3 (numerics-changing levers): logits at ALL positions vs HF over V3_LENGTHS (3200 positions).
+
+        All-position logits come from the gate only: for this test, ttnn_prefill_forward is called with
+        get_last_token=-1 (no 32-row slice before the final norm + LM head) and process_output_prefill keeps every
+        row. Default model behaviour is untouched; both wrappers are removed in the finally block.
+        """
+        import torch
+        from loguru import logger
+
+        from models.demos.gpt_oss.tests.perf.prefill_common import (
+            GOLDENS_DIR,
+            PREFILL_LENGTHS,
+            build_prefill_generator,
+            compare_logits,
+            env_snapshot,
+            git_info,
+            load_or_build_prompt_tokens,
+            run_prefill,
+        )
+
+        result_path = os.getenv("PREFILL_GATE_RESULT")
+        ref_path = os.getenv("PREFILL_GATE_V3_REF")
+        ctx = build_prefill_generator(mesh_device, max(PREFILL_LENGTHS))
+        tokens = load_or_build_prompt_tokens(ctx["tokenizer"])
+
+        tt_model = ctx["generator"].model[0]
+        orig_fwd, orig_out = tt_model.ttnn_prefill_forward, tt_model.process_output_prefill
+        captured = {}
+
+        def fwd_all_positions(*a, **kw):
+            assert kw.get("batch_size", 1) == 1 and kw.get("chunk_start_idx") is None, "v3 needs unchunked batch-1"
+            kw["get_last_token"] = -1
+            return orig_fwd(*a, **kw)
+
+        def out_all_positions(tt_out, last_token_idx):
+            full = orig_out(tt_out, slice(None))
+            full = full.reshape(-1, full.shape[-1])
+            captured["full"] = full
+            return full[captured["L"] - 1]
+
+        tt_model.ttnn_prefill_forward = fwd_all_positions
+        tt_model.process_output_prefill = out_all_positions
+        report = {"mode": "v3", "git": git_info(), "env": env_snapshot(), "lengths": {}}
+        top1s, top5s, kls, nan = [], [], [], False
+        try:
+            for L in V3_LENGTHS:
+                captured.clear()
+                captured["L"] = L
+                _, last = run_prefill(ctx, tokens[:L].unsqueeze(0))
+                tt = captured.pop("full")
+                assert tt.shape[0] == L, f"expected {L} rows, got {tuple(tt.shape)}"
+                ref = torch.load(GOLDENS_DIR / "hf_full" / f"hf_full_L{L}.pt")
+                hf = ref["logits"]
+                assert ref["length"] == L and hf.shape[0] == L, (ref["length"], tuple(hf.shape))
+                n = min(tt.shape[-1], hf.shape[-1])
+                top1, top5, kl = [], [], []
+                for i in range(0, L, 256):  # float32 math, chunked over positions
+                    t, h = tt[i : i + 256, :n].float(), hf[i : i + 256, :n].float()
+                    nan = nan or not bool(torch.isfinite(t).all())
+                    h1 = h.argmax(-1)
+                    top1.append(t.argmax(-1) == h1)
+                    top5.append((torch.topk(t, 5, dim=-1).indices == h1[:, None]).any(-1))
+                    lp_h, lp_t = torch.log_softmax(h, -1), torch.log_softmax(t, -1)
+                    kl.append((lp_h.exp() * (lp_h - lp_t)).sum(-1))
+                top1, top5, kl = torch.cat(top1).float(), torch.cat(top5).float(), torch.cat(kl)
+                top1s.append(top1)
+                top5s.append(top5)
+                kls.append(kl)
+                entry = {
+                    "positions": L,
+                    "top1": float(top1.mean()),
+                    "top5_hit": float(top5.mean()),
+                    "kl_hf_tt": float(kl.mean()),
+                    "kl_max": float(kl.max()),
+                }
+                gold = GOLDENS_DIR / f"tt_L{L}.pt"
+                if gold.exists():  # sanity: the hooked last row vs the normal path's last-token golden (dense tree)
+                    entry["last_row_vs_tt_golden_pcc"] = compare_logits(last.float(), torch.load(gold)["logits"])["pcc"]
+                report["lengths"][str(L)] = entry
+                logger.info(f"[gate v3] L={L} {entry}")
+                del tt, hf, ref
+        finally:
+            tt_model.ttnn_prefill_forward, tt_model.process_output_prefill = orig_fwd, orig_out
+        overall = {
+            "positions": int(sum(t.numel() for t in top1s)),
+            "top1": float(torch.cat(top1s).mean()),
+            "top5_hit": float(torch.cat(top5s).mean()),
+            "kl_hf_tt": float(torch.cat(kls).mean()),
+            "nan": nan,
+        }
+        report["overall"] = overall
+        fails = ["NaN/Inf in TT logits"] if nan else []
+        if ref_path:
+            base = json.loads(Path(ref_path).read_text())["overall"]
+            report["reference"] = {"path": ref_path, **base}
+            if overall["top1"] < base["top1"] - V3_TOP1_DROP:
+                fails.append(f"top1 {overall['top1']:.4f} < reference {base['top1']:.4f} - {V3_TOP1_DROP}")
+            if overall["kl_hf_tt"] > V3_KL_RATIO * base["kl_hf_tt"]:
+                fails.append(f"KL {overall['kl_hf_tt']:.5f} > {V3_KL_RATIO} x reference {base['kl_hf_tt']:.5f}")
+        report["fails"] = fails
+        logger.info(f"[gate v3] overall {overall} fails={fails}")
+        if result_path:
+            Path(result_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(result_path).write_text(json.dumps(report, indent=2))
+            # per-position vectors for paired (run vs run) analysis
+            torch.save(
+                {"lengths": V3_LENGTHS, "top1": top1s, "top5": top5s, "kl": kls},
+                Path(result_path).with_suffix(".positions.pt"),
+            )
+        assert not fails, "prefill gate v3 FAIL:\n" + "\n".join(fails)
+
 
 def _run(cmd, env, log_name):
     t0 = time.time()
@@ -177,6 +400,11 @@ def main():
     ap.add_argument("--save-goldens", action="store_true")
     ap.add_argument("--no-unit", action="store_true", help="skip test_modules decoder PCC at 1x4")
     ap.add_argument("--result", default=None, help="JSON report path")
+    ap.add_argument(
+        "--mode", default="v1", choices=["v1", "v2", "v3"], help="v1: last-token gate (default); v2/v3: see V2_*/V3_*"
+    )
+    ap.add_argument("--v2-reference", default=None, help="v2: JSON report of the dense reference run to accept against")
+    ap.add_argument("--v3-reference", default=None, help="v3: JSON report of the dense reference run to accept against")
     args = ap.parse_args()
 
     env = dict(os.environ)
@@ -185,6 +413,22 @@ def main():
     if args.result:
         env["PREFILL_GATE_RESULT"] = str(Path(args.result).resolve())
     py = sys.executable
+    if args.mode in ("v2", "v3"):
+        m = args.mode
+        reference = args.v2_reference if m == "v2" else args.v3_reference
+        if reference:
+            env[f"PREFILL_GATE_{m.upper()}_REF"] = str(Path(reference).resolve())
+        rc, dt = _run(
+            [py, "-m", "pytest", "-x", "-q", str(Path(__file__).resolve()) + f"::test_prefill_gate_{m}", "-k", "1x4"],
+            env,
+            f"gate {m}",
+        )
+        verdict = "PASS" if rc == 0 else "FAIL"
+        if not reference and rc == 0:
+            verdict = "MEASURED (no reference given; NaN check only)"
+        print(f"[gate] {m}: {verdict} ({dt:.0f}s)")
+        print(f"[gate] RESULT: {'PASS' if rc == 0 else 'FAIL'}", flush=True)
+        return 0 if rc == 0 else 1
     stages = []
     rc, dt = _run(
         [py, "-m", "pytest", "-x", "-q", str(Path(__file__).resolve()) + "::test_prefill_gate", "-k", "1x4"],
