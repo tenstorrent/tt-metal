@@ -149,6 +149,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& ones,
     const std::optional<ttnn::Tensor>& masks) {
     TT_FATAL(!use_qk_l2norm, "chunk_gated_delta_rule: use_qk_l2norm not yet supported; pre-normalize q/k on host");
+    ttnn::prim::validate_gdn_chunk_size(chunk_size);
 
     auto* dev = q_in.device();
     const auto& qs = q_in.logical_shape();  // [B,T,H,K]   (or flat [B,T,H*K] under OPT-A)

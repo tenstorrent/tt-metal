@@ -346,7 +346,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             Rank 4, head-split: q/k/v carry an explicit head axis. q/k are expected L2-normalized
                 (use_qk_l2norm stays False); the op applies `scale` to q, casts q/k/v to bf16, permutes
                 them head-major, expands H -> HV for GQA and pads T to a multiple of chunk_size on the
-                host. Any chunk_size that is a multiple of 32; every device path.
+                host. chunk_size 32 or 64; every device path.
             Rank 3, flat token-major: q/k/v are the per-head concatenations a projection or the causal
                 conv emits, passed RAW (unnormalized, unscaled). No host relayout: the prep reader
                 tile-addresses each head's chunk out of the flat grid, maps value heads to key heads for
@@ -363,8 +363,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
             initial_state (ttnn.Tensor, optional): [B, HV, K, V] fp32 TILE on device (the dtype is cast
                 if not, the layout is not); zeros when omitted.
             output_final_state (bool): default False.
-            chunk_size (int): default 64; 32 is what the models use and the only value the rank-3 path
-                accepts.
+            chunk_size (int): 32 or 64, default 64; 32 is what the models use and the only value the
+                rank-3 path accepts.
             use_qk_l2norm (bool): default False and currently the only accepted value: the rank-4 path
                 expects host-normalized q/k, the rank-3 path always normalizes in the kernel.
             output_head_major (bool): default False. When True, o is returned head-major as
