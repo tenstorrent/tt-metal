@@ -67,6 +67,15 @@ EXCHANGE_ROUNDS = 2  # R2: target exchange rounds per call (interleaved); 1 = th
 GAMMA_PRESCALE = True  # x*gamma in the exchange stall (cb_xg) when it fits; False: fused gamma in normalize
 OUT_DEPTH = 2  # cb_output_tiles depth in out batches (double buffer)
 HEADER_RING = 8  # fabric packet headers in flight per port (pool holds 12 per RISC)
+# R4 knob: tag the Float32 stats CBs read only by copy_tile (the Accurate SFPU reduces' inputs) UnpackToDestFp32, so
+# the fp32 partial sums are not truncated to tf32 on the way in (needs a 32-bit DEST). Correct, but PARKED (False):
+# measured, it makes the end-to-end error WORSE (fp32 mean ULP 15k -> 19k, bf16 0.12 -> 0.18, median got/true
+# 0.9988 -> 0.9984) — the stats' downward truncation was offsetting the downward tf32 truncation of x / gamma / rstd
+# on the FPU multiplies. Turn it on together with an fp32-exact multiply path (unpack-to-DEST + SFPU mul).
+UNPACK_STATS_TO_DEST = False
+STATS_UNPACK_TO_DEST_CBS = (CB_SQ_ACC, CB_STATS_COMBINE, CB_LC)  # never an FPU operand (cb_rstd / cb_xg are)
+NUM_CIRCULAR_BUFFERS = 64
+BFP8_EXP_BYTES = 64  # Bfp8_b tile: 64 shared exponents (one per face row) ahead of the 1024 mantissa bytes
 RECORD_BYTES = 128  # one fp32 record: 32 per-row partial sums of one tile row
 WORKER_L1_BUDGET = 1 << 20  # CB bytes per worker (P_resident)
 SHARDED_LAYOUTS = (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.TensorMemoryLayout.WIDTH_SHARDED)
@@ -340,7 +349,13 @@ def _sharded_layout(mem_config, tensor_row_tiles, Wt, gx, gy):
     )
 
 
-def _fit_rounds(lay, x_dtype, gamma_dtype, n_src_tiles, budget=WORKER_L1_BUDGET):
+def xg_dtype_of(fp32_dest_acc_en):
+    """cb_xg (x*gamma, a DEST-produced intermediate) follows the DEST width: a Float32 page stores no extra bits
+    when DEST is 16-bit. The stats CBs and wire records stay Float32 regardless (the spec's fp32 exchange)."""
+    return ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
+
+
+def _fit_rounds(lay, x_dtype, gamma_dtype, n_src_tiles, budget=WORKER_L1_BUDGET, xg_dtype=ttnn.float32):
     """(rounds, prescale_fits) for the interleaved path: R2 also lifts the P_resident ceiling. With 1 + ROUND_LOOKAHEAD
     blocks in flight, more rounds shrink the resident set; take the fewest rounds (>= the split's) whose footprint
     fits, preferring the gamma-prescale path (cb_xg) over the fused-gamma fallback (measured ~2x slower)."""
@@ -356,6 +371,7 @@ def _fit_rounds(lay, x_dtype, gamma_dtype, n_src_tiles, budget=WORKER_L1_BUDGET)
             n_src_tiles=n_src_tiles,
             local_combine=False,
             lc_per=[0],
+            xg_dtype=xg_dtype,
         )
 
     prefs = [True, False] if gamma_dtype is not None and GAMMA_PRESCALE else [False]
@@ -366,7 +382,7 @@ def _fit_rounds(lay, x_dtype, gamma_dtype, n_src_tiles, budget=WORKER_L1_BUDGET)
     return lay["rounds"]  # nothing fits: run_distributed_rms_norm's footprint check reports it
 
 
-def build_plan(input_tensor, *, cluster_axis, topology, num_links, gamma_dtype=None):
+def build_plan(input_tensor, *, cluster_axis, topology, num_links, gamma_dtype=None, fp32_dest_acc_en=True):
     mesh_device = input_tensor.device()
     mesh_shape = tuple(mesh_device.shape)
     ring = topology == Topology.Ring and mesh_shape[cluster_axis] > 2
@@ -410,7 +426,10 @@ def build_plan(input_tensor, *, cluster_axis, topology, num_links, gamma_dtype=N
 
     n_src_tiles = math.ceil(G * rec_w / TILE)
     core_rows_max = max(core_rows)
-    rounds = lay["rounds"] if sharded else _fit_rounds(lay, input_tensor.dtype, gamma_dtype, n_src_tiles)
+    xg_dtype = xg_dtype_of(fp32_dest_acc_en)
+    rounds = (
+        lay["rounds"] if sharded else _fit_rounds(lay, input_tensor.dtype, gamma_dtype, n_src_tiles, xg_dtype=xg_dtype)
+    )
     block_rows = block_rows_knob(core_rows_max, rounds)
     num_blocks = max(math.ceil(r / block_rows) for r in core_rows)
     assert num_blocks == 1 or not local_combine, "R5 pre-combine runs one round"
@@ -472,6 +491,7 @@ def build_plan(input_tensor, *, cluster_axis, topology, num_links, gamma_dtype=N
         n_lc_tiles=math.ceil(S_w / TILE) if local_combine else 0,
         block_rows=block_rows,
         num_blocks=num_blocks,
+        xg_dtype=xg_dtype,
     )
 
 
@@ -490,7 +510,7 @@ def _worker_footprint(plan, x_dtype, gamma_dtype, gamma_prescale, stat_rows=None
     if has_gamma:
         f += gc * (1 if gc >= cw else 2) * _tile_bytes(gamma_dtype)
     if prescale:
-        f += nf * br * cw * T_f
+        f += nf * br * cw * _tile_bytes(plan.get("xg_dtype", ttnn.float32))
     f += _tile_bytes(ttnn.bfloat16)
     f += s * T_f * (3 + plan["n_src_tiles"])
     if plan["local_combine"]:
@@ -707,7 +727,20 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
             # one chunk held for the call, or a double-buffered stream of gamma_chunk-tile chunks
             cbs.append(cb(CB_GAMMA_TILES, gamma.dtype, gc_group * (1 if gc_group >= cw_group else 2), cores_set))
         if gamma_prescale:
-            cbs.append(cb(CB_XG, ttnn.float32, n_in_flight * block_rows * cw_group, cores_set))
+            cbs.append(cb(CB_XG, plan["xg_dtype"], n_in_flight * block_rows * cw_group, cores_set))
+
+    # ---- compute config (user knobs) + UnpackToDestFp32 tags ----
+    fp32_dest = bool(compute_kernel_config.fp32_dest_acc_en)
+    compute_config = ttnn.ComputeConfigDescriptor(
+        math_fidelity=compute_kernel_config.math_fidelity,
+        fp32_dest_acc_en=fp32_dest,
+        math_approx_mode=bool(compute_kernel_config.math_approx_mode),
+    )
+    if fp32_dest and UNPACK_STATS_TO_DEST:
+        modes = [ttnn.UnpackToDestMode.Default] * NUM_CIRCULAR_BUFFERS
+        for c in STATS_UNPACK_TO_DEST_CBS:
+            modes[c] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        compute_config.unpack_to_dest_mode = modes
 
     # ---- compile-time args ----
     x_acc = list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
@@ -735,6 +768,7 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
             SEM_LOCAL_COMBINE,
             plan["W"] % TILE,  # w_tail: valid columns of the last W tile (0 = tile-aligned, no mask)
             ROUND_LOOKAHEAD,
+            BFP8_EXP_BYTES if x_dtype == ttnn.bfloat8_b else 0,  # x_exp_bytes
         ]
         + x_acc
         + g_acc
@@ -995,11 +1029,7 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
                     core_ranges=worker_set,
                     compile_time_args=compute_ct,
                     runtime_args=compute_rt,
-                    config=ttnn.ComputeConfigDescriptor(
-                        math_fidelity=compute_kernel_config.math_fidelity,
-                        fp32_dest_acc_en=bool(compute_kernel_config.fp32_dest_acc_en),
-                        math_approx_mode=bool(compute_kernel_config.math_approx_mode),
-                    ),
+                    config=compute_config,
                 ),
                 ttnn.KernelDescriptor(
                     kernel_source=str(KERNEL_DIR / "distributed_rms_norm_port.cpp"),

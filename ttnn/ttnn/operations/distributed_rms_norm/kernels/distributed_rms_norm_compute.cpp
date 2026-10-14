@@ -27,6 +27,7 @@
 // the post-op clears that mask before the pack, and re-arms the datacopy MOP the helper's next tile expects.
 
 #include <cstdint>
+#include <type_traits>
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/transpose_dest.h"
@@ -80,14 +81,30 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_x_resident, cb_scaler, cb_output_tiles);
 
-    // Row 0 <-> col 0 in DEST, then let the packer write the whole tile again.
-    auto sumsq_post = [](uint32_t dst) {
+    // The stats CBs are Float32 in every config (fp32 records on the wire). With a 32-bit DEST the reduces run the
+    // Accurate SFPU path (copy_tile + SFPU fold, full fp32). With a 16-bit DEST the SFPU reduce would read the DEST
+    // as Float32 (its format follows the input CB), so the reduces take the FPU path (Fast) instead.
+    constexpr ReduceFp32Mode stats_mode = DST_ACCUM_MODE ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+    // Re-arm the MOP the helper's next tile expects (datacopy on the SFPU path, reduce on the FPU path), then let
+    // the packer write the whole tile again (the transposed data sits outside the reduce edge mask).
+    auto rearm = [](auto reduce_dim_tag, uint32_t cb_in, uint32_t cb_out) {
+        if constexpr (DST_ACCUM_MODE) {
+            PACK((llk_pack_reduce_mask_clear()));
+            copy_init(cb_in);
+        } else {
+            ckernel::reduce_init<PoolType::SUM, decltype(reduce_dim_tag)::value>(cb_in, cb_scaler, cb_out);
+            PACK((llk_pack_reduce_mask_clear()));  // after reduce_init, which re-programs the edge mask
+        }
+    };
+    using RowTag = std::integral_constant<ReduceDim, ReduceDim::REDUCE_ROW>;
+    using ColTag = std::integral_constant<ReduceDim, ReduceDim::REDUCE_COL>;
+    // Row 0 <-> col 0 in DEST.
+    auto sumsq_post = [rearm](uint32_t dst) {
         transpose_dest_init<DST_ACCUM_MODE, true>();
         transpose_dest<DST_ACCUM_MODE, true>(dst);
-        PACK((llk_pack_reduce_mask_clear()));
-        copy_init(cb_sq_acc);
+        rearm(RowTag{}, cb_sq_acc, cb_partial);
     };
-    auto finalize_post = [inv_w_bits, eps_bits](uint32_t dst) {
+    auto finalize_post = [inv_w_bits, eps_bits, rearm](uint32_t dst) {
         transpose_dest_init<DST_ACCUM_MODE, true>();
         transpose_dest<DST_ACCUM_MODE, true>(dst);
         binop_with_scalar_tile_init();
@@ -95,8 +112,7 @@ void kernel_main() {
         add_unary_tile(dst, eps_bits);
         rsqrt_tile_init();
         rsqrt_tile(dst);
-        PACK((llk_pack_reduce_mask_clear()));
-        copy_init(cb_stats_combine);
+        rearm(ColTag{}, cb_stats_combine, cb_rstd);
     };
 
     constexpr uint32_t cb_norm_src = gamma_prescale ? cb_xg : cb_x_resident;
@@ -185,7 +201,7 @@ void kernel_main() {
                 cb_partial,
                 ReduceInputPolicy::BulkWaitBulkPop,
                 ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-                ReduceFp32Mode::Accurate>(
+                stats_mode>(
                 ReduceInputBlockShape::of(nb, 1), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, sumsq_post);
         }
 
@@ -200,8 +216,7 @@ void kernel_main() {
                     cb_lc_out,
                     ReduceInputPolicy::WaitUpfrontNoPop,
                     ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-                    ReduceFp32Mode::Accurate>(
-                    ReduceInputBlockShape::of(n_lc_tiles, lc_rows), ReduceInputMemoryLayout::contiguous());
+                    stats_mode>(ReduceInputBlockShape::of(n_lc_tiles, lc_rows), ReduceInputMemoryLayout::contiguous());
                 cb_pop_front(cb_lc, n_lc_tiles * lc_rows);
             }
         }
@@ -250,7 +265,7 @@ void kernel_main() {
                 cb_rstd,
                 ReduceInputPolicy::WaitUpfrontNoPop,
                 ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-                ReduceFp32Mode::Accurate>(
+                stats_mode>(
                 ReduceInputBlockShape::of(n_src_tiles, nb),
                 ReduceInputMemoryLayout::contiguous(),
                 NoAccumulation{},

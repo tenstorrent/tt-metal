@@ -16,3 +16,5 @@
 {"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-10-14T13:21:45+00:00"}
 {"event":"test_run","result":"pass","detail":"R2 w_non_aligned: garbage-padding unit test 7/7, unit dir 39/39, golden slices 18/18 + 111 pass/108 skip","ts":"2026-10-14T13:27:34+00:00"}
 {"event":"refinement_done","refinement":3,"flagged_us_before":25.1,"flagged_us_after":22,"races_fixed":["local-arrival shared counter","stats-ready shared counter"],"cb_wrap_fix":"cb_x_resident whole-assignment without prescale","ts":"2026-10-14T14:15:51+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-10-14T14:27:55+00:00"}
+{"event":"test_run","result":"pass","detail":"R4 numerics 12/12, regression 55/55, golden slices 1221/1221; UNPACK_STATS_TO_DEST parked (worse end-to-end)","ts":"2026-10-14T14:57:18+00:00"}

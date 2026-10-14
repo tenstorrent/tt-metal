@@ -65,8 +65,10 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32, ttnn.bfloat16],
-    "fp32_dest_acc_en": [True],
+    # bfloat8_b: tiles pass through the reader as-is (the w_tail mask zeroes block-float mantissa bytes); the
+    # output packs to bfloat8_b. fp32_dest_acc_en=False: cb_xg narrows to Float16_b, the stats stay Float32.
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT],
     # h_non_aligned: rows are independent, so tile-padding rows only ever reach padding rows of the output.
     # w_non_aligned: the reader zeroes columns W_local%32..31 of the last W tile (CB page / resident shard) before
@@ -210,6 +212,7 @@ def distributed_rms_norm(
         topology=topology,
         num_links=num_links,
         gamma_dtype=gamma.dtype if gamma is not None else None,
+        fp32_dest_acc_en=bool(cfg.fp32_dest_acc_en),
     )
     return run_distributed_rms_norm(
         input_tensor,

@@ -43,7 +43,9 @@ void kernel_main() {
     constexpr uint32_t sem_local_combine = get_compile_time_arg_val(12);
     constexpr uint32_t w_tail = get_compile_time_arg_val(13);  // valid columns of the last W tile (0: aligned)
     constexpr uint32_t round_lookahead = get_compile_time_arg_val(14);  // rounds whose loads run ahead (host knob)
-    constexpr auto x_args = TensorAccessorArgs<15>();
+    // x tile layout: Bfp8_b = 64 B of shared exponents (one per face row), then 1 B (sign + mantissa) per element
+    constexpr uint32_t x_exp_bytes = get_compile_time_arg_val(15);  // 0: plain float (Float32 / Float16_b)
+    constexpr auto x_args = TensorAccessorArgs<16>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t half_record = record_bytes / 2;  // 16 fp32 = one face row
@@ -110,12 +112,13 @@ void kernel_main() {
     const bool owns_w_tail = (w_tail != 0) && (w_start + cw == wt_total);
     auto mask_w_tail = [&](uint32_t base_offset, uint32_t rows_n, uint32_t row_stride_tiles) {
         if constexpr (w_tail != 0) {
-            const uint32_t face_bytes = x_tile_bytes / 4;
+            // a zero mantissa byte is 0.0 whatever the shared exponent, so block-float padding zeroes in place
+            const uint32_t face_bytes = (x_tile_bytes - x_exp_bytes) / 4;
             const uint32_t elem_bytes = face_bytes / 256;
             constexpr uint32_t c0 = w_tail & 15;                    // first padding column inside the partial face
             constexpr uint32_t partial_face = w_tail < 16 ? 0 : 1;  // faces {0,2} or {1,3} hold the partial rows
             for (uint32_t j = 0; j < rows_n; ++j) {
-                const uint32_t off = base_offset + (j * row_stride_tiles + cw - 1) * x_tile_bytes;
+                const uint32_t off = base_offset + (j * row_stride_tiles + cw - 1) * x_tile_bytes + x_exp_bytes;
                 if constexpr (w_tail <= 16) {
                     noc.async_write_zeros(x_cb, face_bytes, {.offset_bytes = off + face_bytes});
                     noc.async_write_zeros(x_cb, face_bytes, {.offset_bytes = off + 3 * face_bytes});
@@ -126,6 +129,13 @@ void kernel_main() {
                         const uint32_t face_addr = tile_addr + f * face_bytes;
                         if (elem_bytes == 4) {
                             volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(face_addr);
+                            for (uint32_t r = 0; r < 16; ++r) {
+                                for (uint32_t c = c0; c < 16; ++c) {
+                                    p[r * 16 + c] = 0;
+                                }
+                            }
+                        } else if (elem_bytes == 1) {
+                            volatile tt_l1_ptr uint8_t* p = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(face_addr);
                             for (uint32_t r = 0; r < 16; ++r) {
                                 for (uint32_t c = c0; c < 16; ++c) {
                                     p[r * 16 + c] = 0;

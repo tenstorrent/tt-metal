@@ -156,7 +156,7 @@
 - **What binds now:** cross-device launch skew. In 20 calls the max device sits 2–5 µs above the min device, with occasional 10+ µs spikes. Each device's own work is ~18.8 µs against the ~9 µs DRAM floor plus the 8.8 µs program floor.
 - **Next lever:** Refinement 5's per-link stats-ready and port placement. Also: more rounds at 640×1792 would need `S_r` < 10, which raises the tiles per worker. That trade is not taken; `_rounds_split` rejects any split that raises the per-worker tile count.
 
-### [ ] Refinement 4 — Numerical configurability (bfloat8_b + fp32_dest_acc_en=False)
+### [x] Refinement 4 — Numerical configurability (bfloat8_b + fp32_dest_acc_en=False)
 
 **Goal**:
 - Add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` and `False` to `SUPPORTED["fp32_dest_acc_en"]`. `compute_kernel_config` is already exposed and `math_fidelity` is not gated.
@@ -178,6 +178,7 @@
 - Every golden cell with `dtype=bfloat8_b` and/or `fp32_dest_acc_en=False` is `supported_pass` or a documented EXCLUSION, on all placements and alignments in SUPPORTED. The golden tolerances are bf8b 0.995/0.04–0.05, bf16+False 0.999/0.015.
 - 0 supported_fail / 0 xpass_drift.
 - The precision baseline is re-run and recorded in the changelog.
+- **Outcome**: landed bf8b + fp32_dest_acc_en=False with no EXCLUSIONS beyond {float32, False}; 1221 golden target cells run (incl. bf8b x w_non_aligned / HEIGHT / WIDTH), all pass. UnpackToDestFp32 on the copy_tile-only stats CBs is implemented but parked off (measured worse end-to-end: fp32 mean ULP 15k -> 19k), see changelog.
 
 ### [ ] Refinement 5 — Speed up the perf-flagged profile (synchronization and block knobs)
 
