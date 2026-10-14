@@ -121,6 +121,35 @@ any of this: it only ever has the site's id.
 Label name: **`__tt_observability_event_0_6_1201dff1d8be0b60`**. Two different sites, or one site with two different values, must
 not share a name; nothing else depends on it.
 
+**Why the TU id and the counter are not enough.** They give a number per *place in the source*, and one place can
+carry several values:
+
+```cpp
+template <uint32_t Color>
+void colored_zone() {
+    DeviceZoneScopedNC("templated", Color);   // __COUNTER__ is expanded here, once
+}
+
+colored_zone<0xFF0000>();   // red
+colored_zone<0x00FF00>();   // green
+```
+
+The preprocessor runs before templates are instantiated, so `__COUNTER__` becomes one number when the template is
+read, and both instantiations emit the same label. Without the hash, the `.ifndef` from step 3 would skip the second
+copy's handle and record, and its `lui`/`addi` would load the first copy's id: one id, one record holding red, and
+green zones silently reported as red. With the hash, red and green get two labels, so two ids and two records, while
+copies with the same value still share one label and are deduplicated:
+
+| label made of | same value | different values |
+|---|---|---|
+| TU id + counter | one site (right) | one site, wrong values |
+| TU id + counter + value hash | one site (right) | one site per value (right) |
+
+**Collision odds.** Only values of the *same* site compete, since the TU id and counter already separate different
+sites. For a 64-bit hash, k distinct values of one site collide with probability about k² / 2⁶⁵: for **1,000**
+distinct values that is about **3 × 10⁻¹⁴** (real template sites have a handful of values). A collision would
+behave like the case without the hash, so it is not checked for.
+
 > **This step is not strictly required; it is an optimization.** The id would work without a fixed name: a site could
 > give its handle an anonymous local label and still get a correct, unique id. What the name buys is
 > deduplication. When the compiler expands one event site many times (an event inside an `inline` function or a
