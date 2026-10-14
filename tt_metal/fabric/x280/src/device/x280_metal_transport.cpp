@@ -12,7 +12,7 @@
 #include <llrt/tt_cluster.hpp>
 #include <mesh_device.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/arc/arc_telemetry_reader.hpp>
+#include <umd/device/arc/firmware_telemetry_reader.hpp>
 #include <umd/device/cluster.hpp>
 #include <umd/device/types/noc_id.hpp>
 #include <umd/device/tt_device/tt_device.hpp>
@@ -230,7 +230,7 @@ std::optional<uint32_t> X280MetalTransport::telemetry(int chip_id, uint8_t tag) 
     if (device == nullptr) {
         return std::nullopt;
     }
-    auto* reader = device->get_arc_telemetry_reader();
+    auto* reader = device->get_firmware_telemetry_reader();
     if (reader == nullptr || !reader->is_entry_available(tag)) {
         return std::nullopt;
     }

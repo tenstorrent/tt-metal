@@ -36,7 +36,7 @@
 
 #include <gtest/gtest.h>
 
-#include <umd/device/arc/arc_telemetry_reader.hpp>
+#include <umd/device/arc/firmware_telemetry_reader.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/noc_id.hpp>
 #include <umd/device/types/telemetry.hpp>
@@ -211,7 +211,7 @@ private:
 };
 
 uint32_t poll_l2cpuclk(tt::umd::TTDevice* dev, uint32_t expect_mhz, int tries = 40) {
-    auto* tel = dev->get_arc_telemetry_reader();
+    auto* tel = dev->get_firmware_telemetry_reader();
     uint32_t last = 0;
     for (int i = 0; i < tries; i++) {
         last = tel->read_entry(tt::umd::L2CPUCLK0);
@@ -288,7 +288,7 @@ TEST(X280Pll, X280PllSlew) {
             (orig_c1 >> 8) & 0xFF,
             (orig_c1 >> 16) & 0xFFFF,
             orig_c5);
-        printf("L2CPUCLK0 before = %u MHz\n", dev->get_arc_telemetry_reader()->read_entry(tt::umd::L2CPUCLK0));
+        printf("L2CPUCLK0 before = %u MHz\n", dev->get_firmware_telemetry_reader()->read_entry(tt::umd::L2CPUCLK0));
 
         ScopedPllRestore restore(cluster(), arc, orig_c1, orig_c5);
 
@@ -305,7 +305,7 @@ TEST(X280Pll, X280PllSlew) {
             cov.skip(label + ": starting PLL dividers are not a registered solution");
             continue;
         }
-        const uint32_t start_mhz = dev->get_arc_telemetry_reader()->read_entry(tt::umd::L2CPUCLK0);
+        const uint32_t start_mhz = dev->get_firmware_telemetry_reader()->read_entry(tt::umd::L2CPUCLK0);
         if (start_mhz != start->mhz) {
             ADD_FAILURE() << "divider classification says " << start->mhz << " MHz but telemetry reports " << start_mhz
                           << " MHz";
