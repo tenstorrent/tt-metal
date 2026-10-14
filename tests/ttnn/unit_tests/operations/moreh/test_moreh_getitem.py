@@ -34,6 +34,7 @@ def run_moreh_getitem_test(input_shape, layout, device, index_dims):
     assert passing, output_pcc
 
 
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "shape_index_dim, dtype, index_size",
@@ -70,18 +71,14 @@ def test_moreh_getitem_tilized(shape_index_dim, row_major_index, device):
     run_moreh_geitem_tilized_one_index(shape_index_dim, torch.bfloat16, 4, row_major_index, device)
 
 
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "input_shape, layout, index_dims",
     [
         ([10, 3, 5, 7, 80], ttnn.ROW_MAJOR_LAYOUT, [2, 3]),
         ([10, 15, 7, 80], ttnn.ROW_MAJOR_LAYOUT, [0, 1, 2]),
-        pytest.param(
-            [10, 5, 7, 70],
-            ttnn.TILE_LAYOUT,
-            [2, 3],
-            marks=skip_for_blackhole("Mismatching on Blackhole, see #12349"),
-        ),
+        ([10, 5, 7, 70], ttnn.TILE_LAYOUT, [2, 3]),
     ],
     ids=["row_major_two_indices", "row_major_three_indices", "tile_two_indices_with_w"],
 )
