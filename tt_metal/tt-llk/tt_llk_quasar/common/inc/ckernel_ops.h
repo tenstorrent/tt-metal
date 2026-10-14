@@ -646,7 +646,7 @@
     TT_OP(0x86, (((lreg_a) << 16) + ((lreg_b) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPMUL(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1)  TT_INSN(TT_OP_SFPMUL(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1))
 #define TTI_SFPMUL(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1) TTI_INSN(TT_OP_SFPMUL(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1))
-#define TT_OP_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1) TT_OP(0x98, (((lreg_a) << 16) + ((lreg_b) << 12) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_OP_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1) TT_OP(0x98, (((lreg_a) << 16) + ((lreg_b) << 12) + (9 << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1)        TT_INSN(TT_OP_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1))
 #define TTI_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1)       TTI_INSN(TT_OP_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1))
 #define TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1)      TT_OP(0x74, (((imm16_math) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))

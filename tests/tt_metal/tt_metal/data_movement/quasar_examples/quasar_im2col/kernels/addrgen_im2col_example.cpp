@@ -6,7 +6,7 @@
 //
 // The HW inner/outer loops cover one kernel patch (dilation-aware strides).
 // SW vertical and horizontal loops slide the kernel window over all output positions,
-// writing src_base before each patch — matching CMDBUF_WR_REG(...SRC_BASE...) in the original.
+// writing src_base before each patch — matching the cmdbuf_wr_reg(...SRC_BASE...) write in the original.
 //
 // HW loop structure per output position:
 //   for (outer = 0; outer < eff_kH * row_bytes; outer += row_bytes * dil_h) {  // kernel rows

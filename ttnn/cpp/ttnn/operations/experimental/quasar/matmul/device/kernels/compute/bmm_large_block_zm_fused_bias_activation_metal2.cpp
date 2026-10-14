@@ -313,13 +313,6 @@ void kernel_main() {
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
                     bool last_out = block == (num_blocks_inner_dim - 1);
-// Configure packer once for pack out without Bias
-#if not defined FUSE_BIAS and defined PACK_RELU
-                    if (last_out) {
-                        // if last block we pack the final result with relu enabled
-                        pack_relu_config(ReluConfig::zero());
-                    }
-#endif
 
                     if constexpr (in0_transpose_tile) {
                         reconfig_data_format_srca(in1_cb_id, in0_transpose_cb_id);
@@ -342,6 +335,14 @@ void kernel_main() {
                         pack_reconfig_data_format(mm_partials_cb_id);
 #endif
                     }
+
+// Enable packer ReLU only after the in0 transpose pack above, so it governs
+// matmul output packs only (not the transpose stage that packs in0_cb).
+#if not defined FUSE_BIAS and defined PACK_RELU
+                    if (last_out) {
+                        pack_relu_config(ReluConfig::zero());
+                    }
+#endif
 
                     // [DEBUG mcast2d compute stall] Which input wait does the unpacker (UPMW) block on?
                     // input waits, so the stall is later (partials reserve/wait, pack, or dest).

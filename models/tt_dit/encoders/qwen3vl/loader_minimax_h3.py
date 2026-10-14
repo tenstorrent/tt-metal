@@ -117,6 +117,8 @@ def build_minimax_h3_text_encoder(
     is_fsdp: bool = True,
     num_layers: int = MINIMAX_H3_TEXT_ENCODER_LAYER,
     load_weights: bool = True,
+    kv_gather_capacity: int | None = None,
+    use_persistent_ccl_buffers: bool = True,
 ) -> tuple[Qwen3VlTextEncoder, dict]:
     """Build the conditioner at truncated depth, tapped at its last layer, and load its weights.
 
@@ -158,6 +160,8 @@ def build_minimax_h3_text_encoder(
         # massive-activation rows 102 and 128, at no measurable cost (1184.2 vs 1183.2 ms/forward).
         # Scoped here so other Qwen3-VL users (Ideogram-4) keep the tt_dit-wide default.
         high_fidelity_linears=True,
+        kv_gather_capacity=kv_gather_capacity,
+        use_persistent_ccl_buffers=use_persistent_ccl_buffers,
     )
 
     if load_weights:
@@ -247,6 +251,8 @@ def build_minimax_h3_vision_tower(
     ccl_manager=None,
     load_weights: bool = True,
     high_fidelity_linears: bool = True,
+    kv_gather_capacity: int | None = None,
+    use_persistent_ccl_buffers: bool = True,
 ) -> tuple[Qwen3VlVisionModel, dict]:
     """Build the released vision tower and load its weights. Returns `(tower, vision_config)`.
 
@@ -277,6 +283,8 @@ def build_minimax_h3_vision_tower(
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
         high_fidelity_linears=high_fidelity_linears,
+        kv_gather_capacity=kv_gather_capacity,
+        use_persistent_ccl_buffers=use_persistent_ccl_buffers,
     )
     if load_weights:
         # Strict: `pos_embed.weight` is popped to the host by `_prepare_torch_state` and every other

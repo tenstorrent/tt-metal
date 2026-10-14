@@ -18,6 +18,8 @@ fused and phased are bit-exact by design, every path proof here rests on program
 deltas (a new prim or a new config compiles a new program; a cache hit does not).
 """
 
+import os
+
 import pytest
 import torch
 import torch.nn.functional as F
@@ -33,6 +35,11 @@ CHUNK = 32  # Ct=1: the production chunk size
 KDIM = 128
 VDIM = 128
 T_SMALL = 256  # NC=8 — enough chunks to exercise the recurrence, small enough to keep runtime down
+
+# The simulator runs much slower than silicon so the test repeats run on hardware only, as well as the large input cases.
+_SIM = bool(os.environ.get("TT_METAL_SIMULATOR"))
+_hw_only = pytest.mark.skipif(_SIM, reason="hardware test only")
+REPEATS = 0 if _SIM else 8  # extra fused runs against the first result, to give a timing race a chance to show
 
 
 def _phased(**kwargs):
@@ -112,7 +119,7 @@ def _make_inputs(device, batch, seq, num_k_heads, num_v_heads, with_initial_stat
     return (q, k, v, g, beta, s0), tensors, s0_dev
 
 
-def _run_op(device, tensors, const_tiles, initial_state, program_config=None):
+def _run_op(device, tensors, const_tiles, initial_state, program_config=None, wy_inverse=None):
     q, k, v, g, beta = tensors
     eye, tril, ones, masks = const_tiles
     o, fs = ttnn.transformer.chunk_gated_delta_rule(
@@ -125,6 +132,7 @@ def _run_op(device, tensors, const_tiles, initial_state, program_config=None):
         output_final_state=True,
         chunk_size=CHUNK,
         program_config=program_config,
+        wy_inverse=wy_inverse if wy_inverse is not None else ttnn.ChunkGdnWyInverse.AUTO,
         eye=eye,
         tril=tril,
         ones=ones,
@@ -269,16 +277,20 @@ def _cost_model_path(device, bh, nc):
     return "fused" if (nv >= 1 and pays) else "phased"
 
 
-@pytest.mark.parametrize("nc", [8, 64], ids=["NC8", "NC64"])
 @pytest.mark.parametrize(
-    "num_k_heads, num_v_heads",
+    "num_k_heads, num_v_heads, nc",
     [
-        (16, 48),  # BH=48: the single-device shape
-        (4, 12),  # BH=12: the 27B TP-4 shape
-        (1, 4),  # BH=4: chain-bound
-        (16, 64),  # BH=64: no fused geometry on a 110-core grid (needs >= 128 cores) -> phased
+        pytest.param(16, 48, 8, id="bh48-NC8"),  # BH=48: the single-device shape
+        pytest.param(16, 48, 64, id="bh48-NC64", marks=_hw_only),
+        pytest.param(4, 12, 8, id="bh12-NC8"),  # BH=12: the 27B TP-4 shape
+        pytest.param(4, 12, 64, id="bh12-NC64"),  # the production chunk count; the one NC=64 case the simulator runs
+        pytest.param(1, 4, 8, id="bh4-NC8"),  # BH=4: chain-bound
+        pytest.param(1, 4, 64, id="bh4-NC64", marks=_hw_only),
+        pytest.param(
+            16, 64, 8, id="bh64-NC8"
+        ),  # BH=64: no fused geometry on a 110-core grid (needs >= 128 cores) -> phased
+        pytest.param(16, 64, 64, id="bh64-NC64", marks=_hw_only),
     ],
-    ids=["bh48", "bh12", "bh4", "bh64"],
 )
 def test_fused_default_dispatch(device, num_k_heads, num_v_heads, nc):
     """With NO program config, the dispatcher must pick what the calibrated cost model says: fused
@@ -364,9 +376,10 @@ def test_fused_np_bit_exact_vs_phased(device, np_producers, nc):
     const_tiles = _const_tiles(device)
 
     o_ph, fs_ph = _run_op(device, tensors, const_tiles, s0, _phased())
-    o_ph2, fs_ph2 = _run_op(device, tensors, const_tiles, s0, _phased())
+    if not _SIM:  # determinism of the phased reference: pinned by test_fused_bit_exact_vs_phased, re-checked on silicon
+        o_ph2, fs_ph2 = _run_op(device, tensors, const_tiles, s0, _phased())
+        assert torch.equal(o_ph, o_ph2) and torch.equal(fs_ph, fs_ph2), "phased path is not deterministic"
     n_phased = device.num_program_cache_entries()
-    assert torch.equal(o_ph, o_ph2) and torch.equal(fs_ph, fs_ph2), "phased path is not deterministic"
 
     o_fu, fs_fu = _run_op(device, tensors, const_tiles, s0, _fused(np_producers=np_producers))
     n_fused = device.num_program_cache_entries()
@@ -498,20 +511,21 @@ def _vblock_mismatches(o_ref, o_got, hv, nv):
     return bad
 
 
-def _fused_vs_phased(device, hk, hv, nc, nv, np_producers, seed, **fused_kwargs):
+def _fused_vs_phased(device, hk, hv, nc, nv, np_producers, seed, wy_inverse=None, **fused_kwargs):
     """Run phased (twice, for cache stability), then fused with the given geometry and any further
-    fused-config fields. Returns the outputs and the program-cache delta of the fused run (must be
-    exactly 1: one fused program)."""
+    fused-config fields, both with the same WY-inverse method. Returns the outputs and the program-cache
+    delta of the fused run (must be exactly 1: one fused program)."""
     B = 1
     _, tensors, s0 = _make_inputs(device, B, nc * CHUNK, hk, hv, True, seed=seed)
     const_tiles = _const_tiles(device)
+    o_ph, fs_ph = _run_op(device, tensors, const_tiles, s0, _phased(), wy_inverse)
 
-    o_ph, fs_ph = _run_op(device, tensors, const_tiles, s0, _phased())
-    o_ph2, fs_ph2 = _run_op(device, tensors, const_tiles, s0, _phased())
+    if not _SIM:  # determinism of the phased reference: pinned by test_fused_bit_exact_vs_phased, re-checked on silicon
+        o_ph2, fs_ph2 = _run_op(device, tensors, const_tiles, s0, _phased(), wy_inverse)
+        assert torch.equal(o_ph, o_ph2) and torch.equal(fs_ph, fs_ph2), "phased path is not deterministic"
     n_phased = device.num_program_cache_entries()
-    assert torch.equal(o_ph, o_ph2) and torch.equal(fs_ph, fs_ph2), "phased path is not deterministic"
 
-    o_fu, fs_fu = _run_op(device, tensors, const_tiles, s0, _fused(nv, np_producers, **fused_kwargs))
+    o_fu, fs_fu = _run_op(device, tensors, const_tiles, s0, _fused(nv, np_producers, **fused_kwargs), wy_inverse)
     delta = device.num_program_cache_entries() - n_phased
     return (o_ph, fs_ph), (o_fu, fs_fu), delta, (tensors, const_tiles, s0)
 
@@ -525,7 +539,7 @@ def _fused_vs_phased(device, hk, hv, nc, nv, np_producers, seed, **fused_kwargs)
         (4, 2, 3),  # NC == NP+1 at NV=4: first slot wraparound with four v_beta slices
         (4, 3, 1),  # NC=1: producers 2,3 clamp away (host clamps NP<=NC); single-chunk handshake
         (4, 5, 8),  # the QB2 production geometry (12*(4+5)=108 cores), short
-        (4, 5, 64),  # the QB2 production geometry at the production chunk count (T=2048)
+        pytest.param(4, 5, 64, marks=_hw_only),  # the QB2 production geometry at the production chunk count (T=2048)
         (2, 7, 16),  # the NV=2 production candidate (12*(2+7)=108 cores)
     ],
     ids=lambda v: str(v),
@@ -550,8 +564,12 @@ def test_fused_nv_bit_exact_vs_phased(device, nv, np_producers, nc):
 @pytest.mark.parametrize(
     "nv, np_producers, nc, nbuf",
     [
-        (2, 7, 64, 3),  # BH=12 NV=2 operating point (24 receivers + 84 producers), default ring
-        (4, 5, 64, 2),  # BH=12 NV=4 gate geometry (48 + 60) at the shallowest pipelined ring (D = 1)
+        pytest.param(
+            2, 7, 64, 3, marks=_hw_only
+        ),  # BH=12 NV=2 operating point (24 receivers + 84 producers), default ring
+        pytest.param(
+            4, 5, 64, 2, marks=_hw_only
+        ),  # BH=12 NV=4 gate geometry (48 + 60) at the shallowest pipelined ring (D = 1)
         (4, 5, 8, 4),  # short chain + deeper ring: every slot index is exercised on both sides
         (2, 3, 9, 3),  # NC not a multiple of NP or nbuf
         (2, 1, 7, 3),  # single producer per head: the same word is credited for chunks c and c+nbuf
@@ -581,7 +599,7 @@ def test_fused_nv_transport_bit_exact(device, nv, np_producers, nc, nbuf, unicas
 @pytest.mark.parametrize(
     "nv, np_producers, nc",
     [
-        (2, 7, 64),  # one head per row (9 cores) + 2 heads as 2x5 blocks in columns 9-10 (1x2 receivers)
+        pytest.param(2, 7, 64, marks=_hw_only),  # one head per row (9 cores) + 2 heads as 2x5 blocks in columns 9-10
         (4, 5, 16),  # same, the leftover heads' receivers as 2x2 rectangles
         (2, 3, 9),  # L=5: leftover heads as 1x2 receivers over 6 columns, 2 rows each
         (1, 9, 8),  # NV=1: L=10, leftover width 1
@@ -628,7 +646,7 @@ def test_fused_nv_row_local_shapes_bit_exact(device, hk, hv, nv, np_producers, n
 @pytest.mark.parametrize(
     "nv, np_producers, nc, nbuf",
     [
-        (2, 7, 64, 2),  # NV=2 operating point, the default ring depth
+        pytest.param(2, 7, 64, 2, marks=_hw_only),  # NV=2 operating point, the default ring depth
         (4, 5, 8, 3),  # NV=4, short chain, D=2 in flight
         (2, 1, 7, 3),  # single producer per head
     ],
@@ -695,6 +713,7 @@ def test_fused_nv_cache_identity(device):
     assert torch.equal(fs1, fs2) and torch.equal(fs1, fs4), "final_state differs across NV values"
 
 
+@_hw_only
 def test_fused_nv_repeats(device):
     """NV-way handshake race is non-deterministic, so one comparison has little power. Re-run
     the production geometry (BH=12, NV=4, NP=5, T=2048) REPEATS times against the first result."""
@@ -706,7 +725,7 @@ def test_fused_nv_repeats(device):
     )
     assert delta == 1 and torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), "first fused run is not bit-exact"
     cfg = _fused(nv, np_producers)
-    for rep in range(8):
+    for rep in range(REPEATS):
         o_rep, fs_rep = _run_op(device, tensors, const_tiles, s0, cfg)
         assert torch.equal(o_rep, o_fu), f"fused NV=4 NP=5 o not reproducible on repeat {rep + 1}: race"
         assert torch.equal(fs_rep, fs_fu), f"fused NV=4 NP=5 final_state not reproducible on repeat {rep + 1}: race"
@@ -753,7 +772,7 @@ def test_fused_knob_cache_identity(device, field, a, b):
     [
         (4, 12, 2, 3, 8),  # BH=12: 1x2 rectangles, 5 heads per row
         (4, 12, 4, 5, 16),  # BH=12 at NV=4: 2 heads per row, 3 stranded columns per receiver row
-        (4, 12, 2, 7, 64),  # BH=12 at the model's NV/NP, production chunk count
+        pytest.param(4, 12, 2, 7, 64, marks=_hw_only),  # BH=12 at the model's NV/NP, production chunk count
         (4, 16, 4, 2, 8),  # BH=16 (397B TP-4): 8 receiver rows
         (2, 8, 4, 8, 8),  # BH=8, producer-rich
     ],
@@ -774,6 +793,7 @@ def test_fused_nv_row_major_placement_bit_exact(device, hk, hv, nv, np_producers
     assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), "row-major fused differs from phased"
 
 
+@_hw_only
 @pytest.mark.parametrize(
     "hk, hv",
     [(4, 12), (4, 16), (1, 4)],
@@ -802,7 +822,7 @@ def test_fused_default_geometry_repeats(device, hk, hv):
     bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
     assert not bad, f"fused {geom}: o differs from phased in (head, vblock) slices {bad}"
     assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), f"fused {geom} differs from phased"
-    for rep in range(8):
+    for rep in range(REPEATS):
         o_rep, fs_rep = _run_op(device, tensors, const_tiles, s0, _fused())
         assert torch.equal(o_rep, o_fu), f"fused {geom}: o not reproducible on repeat {rep + 1}: race"
         assert torch.equal(fs_rep, fs_fu), f"fused {geom}: final_state not reproducible on repeat {rep + 1}: race"
@@ -829,3 +849,141 @@ def test_fused_config_pinned_geometry_matches_free(device):
         device.num_program_cache_entries() == n_pin
     ), "a free fused config compiled a new program after its own pinned geometry: the model's pick is not the default"
     assert torch.equal(o_pin, o_free) and torch.equal(fs_pin, fs_free), "pinned and free geometries disagree"
+
+
+# ---------------------------------------------------------------------------
+# WY-inverse methods (wy_inverse = ttnn.ChunkGdnWyInverse.AUTO | HORNER | FORWARD_SUBSTITUTION; AUTO = the solve on
+# Blackhole at chunk_size 32, Horner elsewhere). The SFPU forward-substitution solve changes the arithmetic
+# of T_inv, but the phased prep and the fused producer compile the same body for a given method, so
+# fused == phased stays bit-exact for every method. Every other test in this file runs AUTO, so the solve is
+# what they exercise; the tests below pin each method explicitly. The solver's own accuracy is tested on the
+# prep prim (test_chunk_gdn_prims.py).
+# ---------------------------------------------------------------------------
+
+AUTO, HORNER, FORWARD_SUBSTITUTION = (
+    ttnn.ChunkGdnWyInverse.AUTO,
+    ttnn.ChunkGdnWyInverse.HORNER,
+    ttnn.ChunkGdnWyInverse.FORWARD_SUBSTITUTION,
+)
+
+
+@pytest.mark.parametrize("method", [HORNER, FORWARD_SUBSTITUTION], ids=["horner", "forward_substitution"])
+@pytest.mark.parametrize(
+    "hk, hv, nv, np_producers, nc, placement",
+    [
+        (4, 12, 2, 7, 64, 1),  # BH=12 (27B TP-4) at the model's geometry, T=2048
+        (4, 12, 4, 5, 16, 1),  # NV=4 receivers (Vtl=1)
+        (4, 12, 2, 3, 8, 0),  # row-major placement
+        (16, 48, 1, 1, 8, 1),  # BH=48 (single-device shape), one producer per head
+        (1, 4, 4, 7, 16, 1),  # BH=4
+    ],
+    ids=lambda v: str(v),
+)
+def test_fused_tinv_bit_exact_vs_phased(device, method, hk, hv, nv, np_producers, nc, placement):
+    """fused == phased, bit for bit, with the same WY-inverse method pinned on both paths."""
+    _skip_unless_geometry_fits(device, hv, nv, np_producers, nc, placement=placement)
+    (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
+        device, hk, hv, nc, nv, np_producers, 20261001 + hv, wy_inverse=method, row_local=bool(placement)
+    )
+    assert delta == 1, f"{method}: fused compiled {delta} new programs (expected 1)"
+    bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
+    assert not bad, f"{method} BH={hv} NV={nv} NP={np_producers}: o differs in (head, vblock) slices {bad}"
+    assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), f"{method}: fused differs from phased"
+
+
+def test_fused_tinv_vs_horner(device):
+    """End to end at the 27B TP-4 shape (BH=12, T=2048, the model's default fused geometry): the default
+    WY-inverse (AUTO, the SFPU solve on this device) against pinned Horner, and against the torch golden. The
+    T_inv difference is ~1e-3 (prims test); across the 64-chunk recurrence it must stay PCC-class."""
+    hk, hv, nc = 4, 12, 64
+    host, tensors, s0 = _make_inputs(device, 1, nc * CHUNK, hk, hv, True, seed=20261002)
+    const_tiles = _const_tiles(device)
+    o_h, fs_h = _run_op(device, tensors, const_tiles, s0, _fused(), HORNER)
+    o_s, fs_s = _run_op(device, tensors, const_tiles, s0, _fused(), AUTO)
+    assert not torch.equal(o_s, o_h), "AUTO output identical to Horner — the SFPU solve did not run"
+    q, k, v, g, beta, s0_host = host
+    o_ref, fs_ref = _golden_chunk_gdn(q.float(), k.float(), v.float(), g, beta, KDIM**-0.5, s0_host, CHUNK)
+    for name, got, horner, ref in (("o", o_s, o_h, o_ref), ("final_state", fs_s, fs_h, fs_ref)):
+        pcc_h = _pcc(horner.float(), got.float())
+        assert pcc_h >= 0.99999, f"{name}: PCC vs Horner {pcc_h} < 0.99999"
+        pcc_ref, pcc_ref_h = _pcc(ref, got.float()), _pcc(ref, horner.float())
+        assert pcc_ref >= 0.999, f"{name}: PCC vs torch golden {pcc_ref} < 0.999"
+        # no worse than the Horner reference against the golden, beyond PCC noise
+        assert pcc_ref >= pcc_ref_h - 1e-5, f"{name}: PCC vs golden {pcc_ref} < Horner's {pcc_ref_h}"
+
+
+def test_fused_tinv_cache_identity(device):
+    """Cache identity for wy_inverse on both prims: AUTO resolves to FORWARD_SUBSTITUTION on this device (the explicit form is the same
+    program and the same bits), HORNER compiles its own fused program and its own phased prep program (the
+    scan is unchanged, so phased compiles exactly one), and revisits are cache hits."""
+    hk, hv = NP_BH_KV_HEADS
+    _, tensors, s0 = _make_inputs(device, 1, T_SMALL, hk, hv, True, seed=20261003)
+    const_tiles = _const_tiles(device)
+    for cfg in (_fused(), _phased()):
+        o_def, fs_def = _run_op(device, tensors, const_tiles, s0, cfg, AUTO)
+        n = device.num_program_cache_entries()
+        o_exp, fs_exp = _run_op(device, tensors, const_tiles, s0, cfg, FORWARD_SUBSTITUTION)
+        assert (
+            device.num_program_cache_entries() == n
+        ), f"{cfg}: explicit FORWARD_SUBSTITUTION compiled a new program — AUTO must resolve to it on this device"
+        assert torch.equal(o_def, o_exp) and torch.equal(
+            fs_def, fs_exp
+        ), f"{cfg}: AUTO != explicit FORWARD_SUBSTITUTION"
+        _run_op(device, tensors, const_tiles, s0, cfg, HORNER)
+        n2 = device.num_program_cache_entries()
+        assert (
+            n2 - n == 1
+        ), f"{cfg}: FORWARD_SUBSTITUTION->HORNER compiled {n2 - n} programs (expected 1: the method must be hashed)"
+        for method in (AUTO, FORWARD_SUBSTITUTION, HORNER):
+            _run_op(device, tensors, const_tiles, s0, cfg, method)
+        assert device.num_program_cache_entries() == n2, f"{cfg}: revisiting the methods compiled new programs"
+
+
+def test_fused_tinv_chunk64(device, expect_error):
+    """The SFPU solve is a single-tile (chunk_size == 32) routine. At chunk_size 64 AUTO falls back to Horner
+    (the default is the solve wherever it is supported, and that program is the pinned-Horner one), but an
+    explicit FORWARD_SUBSTITUTION must be refused, not silently downgraded (which would make any A/B vacuous)."""
+    _, tensors, s0 = _make_inputs(device, 1, 256, 4, 12, True, seed=20261004)
+    q, k, v, g, beta = tensors
+    eye, tril, ones, masks = _const_tiles(device, chunk_size=64)
+
+    def run(wy_inverse):
+        o, fs = ttnn.transformer.chunk_gated_delta_rule(
+            q,
+            k,
+            v,
+            g,
+            beta,
+            initial_state=s0,
+            output_final_state=True,
+            chunk_size=64,
+            program_config=_phased(),
+            wy_inverse=wy_inverse,
+            eye=eye,
+            tril=tril,
+            ones=ones,
+            masks=masks,
+        )
+        return ttnn.to_torch(o), ttnn.to_torch(fs)
+
+    o_def, fs_def = run(AUTO)
+    n = device.num_program_cache_entries()
+    o_h, fs_h = run(HORNER)
+    assert device.num_program_cache_entries() == n, "chunk 64: AUTO compiled a different program than HORNER"
+    assert torch.equal(o_def, o_h) and torch.equal(fs_def, fs_h), "chunk 64: AUTO is not the Horner inverse"
+    with expect_error(RuntimeError, "needs chunk_size == 32"):
+        run(FORWARD_SUBSTITUTION)
+
+
+def test_mono_tinv_horner_only(device, expect_error):
+    """The mono program has no forward-substitution solve: AUTO resolves to Horner there (bit-identical to an
+    explicit HORNER) and an explicit FORWARD_SUBSTITUTION is refused rather than silently downgraded."""
+    hk, hv = NP_BH_KV_HEADS
+    _, tensors, s0 = _make_inputs(device, 1, T_SMALL, hk, hv, True, seed=20261005)
+    const_tiles = _const_tiles(device)
+    mono = ttnn.ChunkGdnMonoProgramConfig()
+    o_auto, fs_auto = _run_op(device, tensors, const_tiles, s0, mono, AUTO)
+    o_h, fs_h = _run_op(device, tensors, const_tiles, s0, mono, HORNER)
+    assert torch.equal(o_auto, o_h) and torch.equal(fs_auto, fs_h), "mono: AUTO is not the Horner inverse"
+    with expect_error(RuntimeError, "Horner only"):
+        _run_op(device, tensors, const_tiles, s0, mono, FORWARD_SUBSTITUTION)

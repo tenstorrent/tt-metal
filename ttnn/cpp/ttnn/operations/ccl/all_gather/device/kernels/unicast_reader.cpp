@@ -70,11 +70,11 @@ void kernel_main() {
 
     // Startup barrier: wait for downstream remote device to be ready.
     // A sink direction (num_iters == 0) has no upstream here and is never signalled, so it must not wait.
+    // Consume the credit instead of resetting, so an early handshake for the next launch is kept.
     if constexpr (do_init_barrier) {
         if (num_iters > 0) {
-            auto* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
-            noc_semaphore_wait_min(barrier_ptr, 1);
-            noc_semaphore_set(barrier_ptr, 0);
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
+            noc_semaphore_inc(get_noc_addr(barrier_sem), uint32_t{0} - 1);
         }
     }
 
@@ -138,7 +138,8 @@ void kernel_main() {
     // CLEANUP
     ///////////////////////////////////////////////////
 
-    // Completion: wait for every chunk upstream delivers (relayed + sink), then reset for reuse.
+    // Completion: wait for all chunks, then subtract only this launch's credits; a reset could drop the next's.
     noc_semaphore_wait_min(data_valid_ptr, total_chunks);
-    noc_semaphore_set(data_valid_ptr, 0);
+    noc_semaphore_inc(get_noc_addr(data_valid_sem), uint32_t{0} - total_chunks);
+    noc.async_atomic_barrier();
 }

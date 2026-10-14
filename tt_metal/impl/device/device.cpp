@@ -5,7 +5,6 @@
 #include <tt_stl/fmt.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
-#include "context/context_types.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "device_impl.hpp"
 
@@ -14,7 +13,6 @@
 #include <initializer_list>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
-#include "impl/sub_device/sub_device_impl.hpp"
 #include "impl/device/mock_allocator.hpp"
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
@@ -35,7 +33,6 @@
 #include <vector>
 
 #include "allocator.hpp"
-#include "common/env_lib.hpp"
 #include <tt_stl/assert.hpp>
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
@@ -483,28 +480,9 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         }
     }
 
-    // Precompute NOC data for go signals and set on dispatch command queues
     const auto& active_eth_cores = get_active_ethernet_cores(true);
-    std::vector<CoreRange> active_eth_core_ranges;
-    active_eth_core_ranges.reserve(active_eth_cores.size());
-    for (const auto& core : active_eth_cores) {
-        active_eth_core_ranges.emplace_back(core, core);
-    }
 
-    const NOC noc_index = context_->get_dispatch_query_manager().go_signal_noc();
-    uint32_t idx = 0U;
-    vector_aligned<uint32_t> noc_mcast_unicast_data;
-    for (uint32_t i = 0U; i < num_sub_devices(); ++i) {
-        for (const auto& core_range : active_eth_core_ranges) {
-            noc_mcast_unicast_data.resize(idx + core_range.size());
-            for (const auto& core : core_range) {
-                const auto virtual_core = virtual_core_from_logical_core(core, CoreType::ETH);
-                noc_mcast_unicast_data[idx++] = get_noc_unicast_encoding(noc_index, virtual_core);
-            }
-        }
-    }
-
-    // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
+    // Set num_worker_sems and dispatch sems on dispatch for the default sub device config
     const CoreCoord compute_grid_size = compute_with_storage_grid_size();
     if (context_->get_dispatch_query_manager().fds_signalling_enabled()) {
         TT_FATAL(active_eth_cores.empty(), "FDS worker signalling does not support ACTIVE_ETH cores");
@@ -513,15 +491,15 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         compute_grid_size.x * compute_grid_size.y + static_cast<uint32_t>(active_eth_cores.size());
     std::vector<uint32_t> workers_per_sub_device(num_sub_devices(), default_sub_device_worker_count);
     for (auto& command_queue : command_queues_) {
-        command_queue->set_go_signal_noc_data_and_dispatch_sems(
-            num_sub_devices(), noc_mcast_unicast_data, workers_per_sub_device);
+        command_queue->set_dispatch_sems(num_sub_devices(), workers_per_sub_device);
     }
 }
 
 void Device::init_command_queue_device() { TT_FATAL(false, "Call init_command_queue_device_with_topology instead"); }
 
 bool Device::compile_fabric() {
-    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(this);
+    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(
+        MetalEnvAccessor(*env_).impl(), context_->get_dispatch_core_manager().get_dispatch_core_config(), this);
     return fabric_program_ != nullptr;
 }
 
@@ -530,7 +508,7 @@ void Device::configure_fabric() {
         return;
     }
 
-    tt::tt_fabric::configure_fabric_cores(this);
+    tt::tt_fabric::configure_fabric_cores(MetalEnvAccessor(*env_).impl(), this);
 
     fabric_program_->impl().finalize_offsets(this);
 

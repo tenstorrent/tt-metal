@@ -29,7 +29,7 @@ import pytest
 import ttnn
 from models.experimental.ops.quasar.tests.gpt_oss_ops import graph_case as G
 
-_OP = ttnn.transformer.scaled_dot_product_attention
+_OP = ttnn.experimental.quasar.transformer.scaled_dot_product_attention
 
 CASES = [
     {
@@ -47,14 +47,14 @@ CASES = [
             {
                 "k": "t",
                 "shape": [1, 8, 128, 64],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
             {
                 "k": "t",
                 "shape": [1, 8, 128, 64],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
@@ -65,7 +65,7 @@ CASES = [
             "program_config": {
                 "kind": "SDPAProgramConfig",
                 "fields": {
-                    "compute_with_storage_grid_size": [8, 8],
+                    "compute_with_storage_grid_size": [8, 4],
                     "sub_core_grids": None,
                     "q_chunk_size": 32,
                     "k_chunk_size": 32,
@@ -107,14 +107,14 @@ CASES = [
             {
                 "k": "t",
                 "shape": [1, 8, 128, 64],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
             {
                 "k": "t",
                 "shape": [1, 8, 128, 64],
-                "dtype": "BFLOAT8_B",
+                "dtype": "BFLOAT16",
                 "layout": "TILE",
                 "mem": {"layout": "INTERLEAVED", "buffer": "DRAM", "shard": None},
             },
@@ -125,7 +125,7 @@ CASES = [
             "program_config": {
                 "kind": "SDPAProgramConfig",
                 "fields": {
-                    "compute_with_storage_grid_size": [8, 8],
+                    "compute_with_storage_grid_size": [8, 4],
                     "sub_core_grids": None,
                     "q_chunk_size": 32,
                     "k_chunk_size": 32,

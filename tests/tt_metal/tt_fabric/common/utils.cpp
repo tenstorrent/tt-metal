@@ -9,6 +9,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include <unistd.h>
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed_context.hpp>
@@ -636,7 +637,11 @@ void check_intermesh_port_assignment_against_golden(const std::string& golden_na
         YAML::Emitter em;
         em << combined;
         std::ofstream o(combined_file);
+        // This re-emit is the intermesh golden. yaml-cpp omits the trailing newline the repo requires.
         o << em.c_str();
+        if (em.size() == 0 || em.c_str()[em.size() - 1] != '\n') {
+            o << '\n';
+        }
     }
 
     std::filesystem::path golden_file =
@@ -1416,4 +1421,11 @@ tt::tt_fabric::FabricConfig fabric_config_for_active_mgd() {
     }
     return FabricConfig::FABRIC_2D;
 }
+
+std::string write_temp_descriptor(const std::string& name, const std::string& text_proto) {
+    const auto path = std::filesystem::temp_directory_path() / (std::to_string(::getpid()) + "_" + name);
+    std::ofstream(path) << text_proto;
+    return path.string();
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests
