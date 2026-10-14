@@ -133,10 +133,16 @@ std::unique_ptr<EriscH2HSocket> EriscH2HSocket::create(const Config& cfg, std::s
     // A LOCAL failure must not return before the collectives below: the ranks that passed would
     // wait in them for good. Every rank agrees on the verdict first.
     std::string agree_err;
-    const bool args_ok = cfg.region_base != nullptr && cfg.arenas != 0 && cfg.page_bytes != 0 && cfg.ring_pages != 0;
+    // The slot must hold a descriptor and stay slot-aligned, and the region must cover the whole
+    // layout: every offset below is derived from this geometry, so a short region puts outside it.
+    const bool page_ok = cfg.page_bytes > kBridgeDescriptorBytes && cfg.page_bytes % kBridgeSlotAlign == 0;
+    const uint64_t need =
+        page_ok ? bridge_region_bytes(cfg.arenas, cfg.ring_pages, cfg.page_bytes - kBridgeDescriptorBytes) : 0;
+    const bool args_ok = cfg.region_base != nullptr && cfg.arenas != 0 && cfg.ring_pages != 0 && page_ok &&
+                         cfg.region_bytes >= need;
     if (!RdmaWindow::agree(args_ok, agree_err)) {
         err = args_ok ? agree_err
-                      : "EriscH2HSocket::create: region_base, arenas, page_bytes and ring_pages are all required";
+                      : "EriscH2HSocket::create: bad geometry, or region_bytes is short of the bridge layout";
         return nullptr;
     }
     std::unique_ptr<EriscH2HSocket> s(new EriscH2HSocket());
@@ -180,6 +186,13 @@ std::unique_ptr<EriscH2HSocket> EriscH2HSocket::create(const Config& cfg, std::s
 bool EriscH2HSocket::submit(const BridgeSendTask& task) {
     Impl& im = *impl_;
     if (im.broken || task.arena >= im.cfg.arenas) {
+        return false;
+    }
+    // The put takes its length from the frame and its offset from the geometry, so a short page
+    // publishes a valid descriptor over incomplete payload and an out-of-range one reads past us.
+    if (task.page_bytes != im.g.slot() || task.page_offset > im.cfg.region_bytes ||
+        task.page_bytes > im.cfg.region_bytes - task.page_offset) {
+        im.fail("erisc H2H: submitted page does not match the configured slot, or lies outside the region");
         return false;
     }
     // Bounded by the FRAME limit, so a caller cannot queue past the Tx slot count and overwrite a
@@ -323,8 +336,16 @@ uint32_t EriscH2HSocket::poll(const Retire& retire, const Deliver& deliver) {
 
     // Receive. Poke first: flush completes only OUR puts and sync is a barrier, so neither
     // applies the peer's (contract §7.2d).
-    (void)im.win->poke_progress();
-    (void)im.win->sync();
+    // Marked broken like the send and credit paths: spinning on stale window memory after a
+    // failed progress call hides the real MPI error until the caller's timeout.
+    if (const std::string e = im.win->poke_progress(); !e.empty()) {
+        im.fail(e);
+        return progress;
+    }
+    if (const std::string e = im.win->sync(); !e.empty()) {
+        im.fail(e);
+        return progress;
+    }
 
     // In order from the next expected slot, so one pass delivers every frame that has landed.
     for (uint32_t a = 0; a < im.cfg.arenas; ++a) {

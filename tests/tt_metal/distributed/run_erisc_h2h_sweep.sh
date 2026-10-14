@@ -90,4 +90,8 @@ run() {  # $1 arenas, $2 packet, $3 MiB, $4 case number
     fi
     echo "# PASS $pass  FAIL $fail"
     for f in ${fails[@]+"${fails[@]}"}; do echo "# failed: $f"; done
+    ((fail == 0))
 } 2>&1 | tee "$OUT"
+# Without this the sweep exits with tee's status, so CI reads a run with failures as green.
+status=("${PIPESTATUS[@]}")
+((status[0] == 0 && status[1] == 0))

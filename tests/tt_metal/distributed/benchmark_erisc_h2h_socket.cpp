@@ -85,6 +85,9 @@ BENCHMARK_DEFINE_F(H2HFixture, Bridge)(benchmark::State& state) {
             state.SkipWithError("posix_memalign failed for the bridge region");
             return;
         }
+        // Declared before the socket, so the socket and its MPI window are torn down first,
+        // while the memory they registered still exists.
+        const std::unique_ptr<void, decltype(&std::free)> region(raw, &std::free);
         auto* base = static_cast<std::uint8_t*>(raw);
         std::memset(base, 0, static_cast<size_t>(region_bytes));
         // Tag words depend only on their index, so every Tx slot is patterned once, outside the
@@ -121,8 +124,7 @@ BENCHMARK_DEFINE_F(H2HFixture, Bridge)(benchmark::State& state) {
         std::string err;
         auto sock = EriscH2HSocket::create(cfg, err);
         if (!sock) {
-            std::free(raw);
-            state.SkipWithError(err.c_str());
+            state.SkipWithError(err);
             return;
         }
         (void)sock->barrier();
@@ -259,12 +261,11 @@ BENCHMARK_DEFINE_F(H2HFixture, Bridge)(benchmark::State& state) {
         state.counters["verified"] = verify_ ? 1.0 : 0.0;
         bb::emit_health(state, health[0], st.starved_credit, health[1]);
         if (!sock->first_error().empty()) {
-            state.SkipWithError(sock->first_error().c_str());
+            state.SkipWithError(sock->first_error());
         } else if (!stall_why.empty()) {
-            state.SkipWithError(stall_why.c_str());
+            state.SkipWithError(stall_why);
         }
         sock.reset();
-        std::free(raw);
         state.ResumeTiming();
     }
 }
