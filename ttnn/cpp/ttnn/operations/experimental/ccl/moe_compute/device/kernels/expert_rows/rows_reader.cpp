@@ -24,11 +24,17 @@
 //    number of CB blocks.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_w = get_named_compile_time_arg_val("cb_w");
-    constexpr uint32_t cb_rt = get_named_compile_time_arg_val("cb_rt");
-    constexpr uint32_t cb_ctl = get_named_compile_time_arg_val("cb_ctl");
+    CircularBuffer cb_w(get_named_compile_time_arg_val("cb_w"));
+    CircularBuffer cb_rt(get_named_compile_time_arg_val("cb_rt"));
+    CircularBuffer cb_ctl(get_named_compile_time_arg_val("cb_ctl"));
     constexpr uint32_t BT = get_named_compile_time_arg_val("block_tiles");
     constexpr uint32_t BP = get_named_compile_time_arg_val("block_packets");
     constexpr uint32_t TB = get_named_compile_time_arg_val("tile_bytes");
@@ -135,25 +141,30 @@ void kernel_main() {
     const uint32_t t0 = me * T / NP, t1 = (me + 1) * T / NP;
     const uint32_t cape = ((T + NP - 1) / NP) * ME;
     const uint32_t estr = (4 + 8 * cape + 15) & ~15u;  // area: u32 n, u16 slot[cape], tok[cape], score[cape], k[cape]
-    cb_reserve_back(cb_rt, 1);
-    const uint32_t rt = get_write_ptr(cb_rt);
+    const Noc noc;
+    cb_rt.reserve_back(1);
+    const uint32_t rt = cb_rt.get_write_ptr();
     const auto mp = TensorAccessor(map_args, map_addr, MAP_PAGE);
-    noc_async_read(mp.get_noc_addr(device_id), rt + OWN, NID * 2);
+    noc.async_read(mp, CoreLocalMem<uint32_t>(rt + OWN), NID * 2, {.page_id = device_id}, {});
     const uint32_t s_lo = t1 > t0 ? t0 / TPS : 0;
     const uint32_t s_n = t1 > t0 ? (t1 - 1) / TPS - s_lo + 1 : 0;
     for (uint32_t s = 0; s < s_n; ++s) {
-        noc_async_read(
-            mp.get_noc_addr(get_common_arg_val<uint32_t>(src_at + 1 + s_lo + s)), rt + MPO + s * NID * 2, NID * 2);
+        noc.async_read(
+            mp,
+            CoreLocalMem<uint32_t>(rt + MPO + s * NID * 2),
+            NID * 2,
+            {.page_id = get_common_arg_val<uint32_t>(src_at + 1 + s_lo + s)},
+            {});
     }
     {
         const auto idx = TensorAccessor(idx_args, idx_addr, IDX_PAGE);
         const auto sc = TensorAccessor(sc_args, sc_addr, IDX_PAGE);
         for (uint32_t t = t0; t < t1; ++t) {
-            noc_async_read(idx.get_noc_addr(t), rt + CIO + (t - t0) * IDX_PAGE, IDX_PAGE);
-            noc_async_read(sc.get_noc_addr(t), rt + CSO + (t - t0) * IDX_PAGE, IDX_PAGE);
+            noc.async_read(idx, CoreLocalMem<uint32_t>(rt + CIO + (t - t0) * IDX_PAGE), IDX_PAGE, {.page_id = t}, {});
+            noc.async_read(sc, CoreLocalMem<uint32_t>(rt + CSO + (t - t0) * IDX_PAGE), IDX_PAGE, {.page_id = t}, {});
         }
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
     // this RISC alone works on the scratch below after the reads: plain pointers
     tt_l1_ptr uint16_t* rank = reinterpret_cast<tt_l1_ptr uint16_t*>(rt + OWN);
     {
@@ -201,10 +212,11 @@ void kernel_main() {
         *reinterpret_cast<tt_l1_ptr uint32_t*>(ar) = n;
         asm volatile("" ::: "memory");
         if (!root) {
-            noc_async_write(ar, get_noc_addr(rx, ry, ar), estr);
-            noc_async_write_barrier();
-            noc_semaphore_inc(get_noc_addr(rx, ry, get_semaphore(SEM_A)), 1);
-            noc_async_atomic_barrier();
+            noc.async_write(
+                CoreLocalMem<uint32_t>(ar), UnicastEndpoint{}, estr, {}, {.noc_x = rx, .noc_y = ry, .addr = ar});
+            noc.async_write_barrier();
+            Semaphore<>(SEM_A).up(noc, rx, ry, 1);
+            noc.async_atomic_barrier();
         }
     }
     volatile tt_l1_ptr uint32_t* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rt + CTO);
@@ -213,10 +225,7 @@ void kernel_main() {
     tt_l1_ptr uint16_t* gs = reinterpret_cast<tt_l1_ptr uint16_t*>(rt + CTO + 16);
     uint32_t nj = 0;
     if (root) {
-        volatile tt_l1_ptr uint32_t* sa = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_A));
-        while (*sa < NP - 1) {
-            invalidate_l1_cache();
-        }
+        Semaphore<>(SEM_A).wait_min(NP - 1);
         invalidate_l1_cache();
         tt_l1_ptr uint16_t* list = reinterpret_cast<tt_l1_ptr uint16_t*>(rt + LSO);
         tt_l1_ptr uint16_t* ofs = reinterpret_cast<tt_l1_ptr uint16_t*>(rt + OFO);
@@ -369,7 +378,7 @@ void kernel_main() {
             run += cnt[l];
         }
         asm volatile("" ::: "memory");
-        const uint32_t sb = get_semaphore(SEM_B);
+        Semaphore<> sb(SEM_B);
         for (uint32_t w = 0; w < MW; ++w) {
             uint32_t bits = get_common_arg_val<uint32_t>(all_at + w);
             while (bits) {
@@ -379,32 +388,45 @@ void kernel_main() {
                 const uint32_t cx = get_common_arg_val<uint32_t>(vx_at + li / GH);
                 const uint32_t cy = get_common_arg_val<uint32_t>(vy_at + li % GH);
                 if (cx != rx || cy != ry) {
-                    noc_semaphore_inc(get_noc_addr(cx, cy, sb), 1);
+                    sb.up(noc, cx, cy, 1);
                 }
             }
         }
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
         const auto tab = TensorAccessor(tab_args, tab_addr, RTBS);
-        noc_async_write(rt + RTH, tab.get_noc_addr(0), RTBS);  // drained before this kernel ends
+        noc.async_write(
+            CoreLocalMem<uint32_t>(rt + RTH), tab, RTBS, {}, {.page_id = 0});  // drained before this kernel ends
     } else {
-        volatile tt_l1_ptr uint32_t* sb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_B));
-        while (*sb < 1) {
-            invalidate_l1_cache();
-        }
-        noc_async_read(get_noc_addr(rx, ry, rt + CTO), rt + CTO, CTL_BYTES);
-        noc_async_read_barrier();
+        Semaphore<>(SEM_B).wait_min(1);
+        noc.async_read(
+            UnicastEndpoint{},
+            CoreLocalMem<uint32_t>(rt + CTO),
+            CTL_BYTES,
+            {.noc_x = rx, .noc_y = ry, .addr = rt + CTO},
+            {});
+        noc.async_read_barrier();
         nj = ctl[0];
         const uint32_t nrow = ctl[2];
         if (nj) {
-            noc_async_read(get_noc_addr(rx, ry, rt + JBO), rt + JBO, (3 * nj * 2 + 15) & ~15u);
-            noc_async_read(get_noc_addr(rx, ry, rt + RWO), rt + RWO, (nrow * 2 + 15) & ~15u);
-            noc_async_read_barrier();
+            noc.async_read(
+                UnicastEndpoint{},
+                CoreLocalMem<uint32_t>(rt + JBO),
+                (3 * nj * 2 + 15) & ~15u,
+                {.noc_x = rx, .noc_y = ry, .addr = rt + JBO},
+                {});
+            noc.async_read(
+                UnicastEndpoint{},
+                CoreLocalMem<uint32_t>(rt + RWO),
+                (nrow * 2 + 15) & ~15u,
+                {.noc_x = rx, .noc_y = ry, .addr = rt + RWO},
+                {});
+            noc.async_read_barrier();
         }
     }
     asm volatile("" ::: "memory");  // every table store above is issued before the CB is pushed
-    cb_push_back(cb_rt, 1);
-    cb_reserve_back(cb_ctl, 1);
-    volatile tt_l1_ptr uint32_t* cc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_ctl));
+    cb_rt.push_back(1);
+    cb_ctl.reserve_back(1);
+    volatile tt_l1_ptr uint32_t* cc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_ctl.get_write_ptr());
     // this group's jobs (local index e): g, g + G, ... with one row tile per job, else as dealt above
     const uint32_t D = HELD ? gs[g + 1] - gs[g] : (nj > g ? (nj - g + G - 1) / G : 0);
     auto job_at = [&](uint32_t e) -> uint32_t { return HELD ? gs[g] + e : g + G * e; };
@@ -415,9 +437,9 @@ void kernel_main() {
             cc[1 + e] = (jobs[3 * job_at(e) + 2] + 31) / 32;
         }
     }
-    cb_push_back(cb_ctl, 1);
+    cb_ctl.push_back(1);
     if (D == 0) {
-        noc_async_write_barrier();  // the root's table block
+        noc.async_write_barrier();  // the root's table block
         return;
     }
 
@@ -499,7 +521,9 @@ void kernel_main() {
         }
         blocks = held ? SB : (tiles + BT - 1) / BT;
     };
-    const uint32_t slots = get_write_ptr(cb_w);
+    const uint32_t slots = cb_w.get_write_ptr();
+    // The weight stream keeps dataflow_api's stateful reads: Noc's read state carries one transaction id, and this
+    // stream changes the id every block while it keeps the bank and packet size.
     // the bank and packet size the read command buffer is set to (set_state), changed only when a packet needs others
     uint32_t state_bank = 0, state_tiles = 0, bank_lo = 0;
     auto set_read_state = [&](uint32_t bank, uint32_t tiles) {
@@ -564,7 +588,7 @@ void kernel_main() {
     static_assert(IF < TRIDS, "transaction ids");
     uint32_t issued = 0, pushed = 0;
     while (pushed < total) {
-        if (issued < total && issued - pushed < IF && cb_pages_reservable_at_back(cb_w, BT * (issued - pushed + 1))) {
+        if (issued < total && issued - pushed < IF && cb_w.pages_reservable_at_back(BT * (issued - pushed + 1))) {
             const uint32_t bslot = issued % RS;
             const uint32_t trid = issued % TRIDS + 1;
             const uint32_t nt = left < BT ? left : BT;
@@ -593,11 +617,11 @@ void kernel_main() {
             ++block;
             advance();
         }
-        if (pushed < issued && ncrisc_noc_read_with_transaction_id_flushed(noc_index, pushed % TRIDS + 1)) {
-            cb_push_back(cb_w, BT);
+        if (pushed < issued && noc.is_read_trid_flushed(pushed % TRIDS + 1)) {
+            cb_w.push_back(BT);
             ++pushed;
         }
     }
     noc_async_read_set_trid(0);
-    noc_async_write_barrier();  // the root's table block
+    noc.async_write_barrier();  // the root's table block
 }
