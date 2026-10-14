@@ -12,6 +12,7 @@
 
 #include "tt_metal/distributed/erisc_e2h_leg.hpp"
 #include "tt_metal/distributed/erisc_h2e_leg.hpp"
+#include "tt_metal/distributed/erisc_credit_relay.hpp"
 #include "tt_metal/distributed/erisc_h2h_socket.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -43,6 +44,10 @@ public:
     // 0 on a rank that owns no H2E leg, so the two ranks' counts still sum.
     std::uint64_t h2e_slot_mismatch() const { return h2e_ ? h2e_->slot_mismatch() : 0; }
     const Counters& counters() const { return counters_; }
+
+    // Fabric's own credits across the bridge, when the cable is not to be used. Not owned: the
+    // caller resolves the stream ids and the far receiver's block, which need the control plane.
+    void set_credit_relay(tt::tt_fabric::erisc_bridge::CreditRelay* relay) { relay_ = relay; }
     std::string first_error() const;
 
 private:
@@ -50,6 +55,7 @@ private:
     std::unique_ptr<E2HLeg> e2h_;
     std::unique_ptr<H2ELeg> h2e_;
     uint32_t max_per_poll_ = 0;
+    tt::tt_fabric::erisc_bridge::CreditRelay* relay_ = nullptr;
     Counters counters_{};
 };
 

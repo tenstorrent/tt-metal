@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "hostdevcommon/erisc_bridge_layout.h"
 #include "tt_metal/distributed/erisc_bridge_tasks.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -63,6 +64,14 @@ public:
     // Fabric's credits are separate and ride over the same arena as words a later leg adds.
     bool publish_credits();
     uint64_t credit_total(uint32_t arena) const;
+
+    // One credit word of an arena, put to the peer or read where the peer put it. Word 0 is the
+    // ring credit publish_credits() owns; the rest carry whatever the caller gives them meaning.
+    bool publish_word(uint32_t arena, tt::tt_fabric::BridgeCreditWord w, uint64_t value);
+    // publish_word completes LOCALLY only. Without this the peer may never see the words on a
+    // real network, and the sender starving stops the payload flush that would have carried them.
+    bool flush_words();
+    uint64_t peer_word(uint32_t arena, tt::tt_fabric::BridgeCreditWord w) const;
 
     // ROUND TRIP, not one-way: put -> the peer's credit for that frame. Two hosts share no
     // clock epoch, so a one-way figure here would be meaningless.

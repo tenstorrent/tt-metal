@@ -1172,6 +1172,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["E2H_BRIDGE_BLOCK_ADDR"] = 0;
     named_args["E2H_BRIDGE_CAPACITY"] = static_cast<uint32_t>(this->channel_buffer_size);
     named_args["E2H_BRIDGE_NO_FAR_RECEIVER"] = 0;
+    named_args["ENABLE_E2H_BRIDGE_RECV"] = 0;
+    named_args["E2H_BRIDGE_RECV_CHANNEL"] = 0;
+    named_args["E2H_BRIDGE_RECV_CREDITS_ADDR"] = 0;
     named_args["IS_HANDSHAKE_SENDER"] = is_handshake_master;
     named_args["HANDSHAKE_ADDR"] = static_cast<uint32_t>(this->handshake_address);
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);

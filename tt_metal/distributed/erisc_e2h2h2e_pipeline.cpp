@@ -50,6 +50,63 @@ uint32_t E2H2H2EPipeline::poll(const Inspect& inspect) {
             return true;
         });
     (void)h2h_->publish_credits();
+
+    // HOP 4: fabric's credits home. The far receiver recorded totals in L1 because it has no
+    // cable; this side publishes them, the other turns the difference into register writes.
+    if (relay_ != nullptr && relay_->rx) {
+        tt::tt_fabric::erisc_bridge::CreditSnapshot snap;
+        auto& env = *relay_->env;
+        if (tt::tt_fabric::erisc_bridge::sample_recv_credits(
+                env, relay_->dev, relay_->eth, relay_->recv_credits_addr, relay_->channels, snap)) {
+            std::uint64_t comp = 0;
+            std::uint64_t ack = 0;
+            for (std::uint32_t i = 0; i < relay_->channels; ++i) {
+                comp += snap.completions[i];
+                ack += snap.acks[i];
+            }
+            bool published = false;
+            if (comp != relay_->sampled_completions) {
+                relay_->sampled_completions = comp;
+                published = h2h_->publish_word(relay_->arena, tt::tt_fabric::BridgeCreditWord::EdmCompletions, comp);
+            }
+            if (ack != relay_->sampled_acks) {
+                relay_->sampled_acks = ack;
+                published = h2h_->publish_word(relay_->arena, tt::tt_fabric::BridgeCreditWord::EdmAcks, ack) || published;
+            }
+            // One flush for both words: remote completion, which publish_word does not give.
+            if (published) {
+                (void)h2h_->flush_words();
+            }
+        }
+    }
+    if (relay_ != nullptr && relay_->tx) {
+        auto& env = *relay_->env;
+        std::string err;
+        const auto comp = static_cast<std::uint32_t>(
+            h2h_->peer_word(relay_->arena, tt::tt_fabric::BridgeCreditWord::EdmCompletions));
+        const auto ack =
+            static_cast<std::uint32_t>(h2h_->peer_word(relay_->arena, tt::tt_fabric::BridgeCreditWord::EdmAcks));
+        if (relay_->use_streams) {
+            (void)tt::tt_fabric::erisc_bridge::inject_sender_credits_stream(
+                env,
+                relay_->dev,
+                relay_->eth,
+                env.get_hal(),
+                relay_->completed_stream,
+                relay_->acked_stream,
+                comp,
+                ack,
+                relay_->injected_completions,
+                relay_->injected_acks,
+                err);
+        } else {
+            (void)tt::tt_fabric::erisc_bridge::inject_sender_credits(
+                env, relay_->dev, relay_->eth, relay_->completions_addr, relay_->acks_addr, comp, ack, err);
+            relay_->injected_completions = comp;
+            relay_->injected_acks = ack;
+        }
+    }
+
     if (h2e_) {
         counters_.landed = h2e_->drained(0);  // also refreshes H2E's credit gate
     }

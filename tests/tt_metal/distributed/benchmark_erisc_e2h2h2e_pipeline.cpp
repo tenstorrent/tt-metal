@@ -53,6 +53,8 @@ constexpr std::uint32_t kUnset = 0xFFFFFFFFu;
 int g_rank = 0;
 int g_size = 0;
 std::uint32_t g_chan = kUnset;   // rank 0's bridged eth channel, from TT_BRIDGE_E2H_FORCE_CHAN
+bool g_ring = false;             // one 1x4 ring mesh instead of two 1x2 meshes; TT_BRIDGE_PIPE_RING
+std::uint32_t g_chip = 0;        // fabric node chip carrying the bridge; TT_BRIDGE_E2H_FORCE_CHIP
 std::uint64_t g_far_frames = 0;  // frames rank 1 injected in this process: the far router's cursor
 bool g_stalled = false;          // a stalled case leaves its producer holding the worker core
 
@@ -93,6 +95,7 @@ bool arm(IDevice* dev, CoreCoord eth, std::uint32_t status_addr, bool on) {
 std::unique_ptr<E2HLeg> bind_e2h(
     const std::shared_ptr<MeshDevice>& mesh,
     IDevice* dev,
+    MeshCoordinate dev_coord,
     CoreCoord eth_log,
     CoreCoord eth_noc0,
     const eb::BridgePlacement& p,
@@ -110,7 +113,7 @@ std::unique_ptr<E2HLeg> bind_e2h(
     try {
         D2HSocket::ExternalConfigBuffer ecb{p.socket_config_addr(0), HalProgrammableCoreType::ACTIVE_ETH};
         socks.push_back(
-            std::make_unique<D2HSocket>(mesh, MeshCoreCoord(MeshCoordinate(0, 0), eth_noc0), page * ring, ecb));
+            std::make_unique<D2HSocket>(mesh, MeshCoreCoord(dev_coord, eth_noc0), page * ring, ecb));
         socks.back()->set_page_size(page);
     } catch (const std::exception& e) {
         err = std::string("D2HSocket: ") + e.what();
@@ -126,7 +129,9 @@ std::unique_ptr<E2HLeg> bind_e2h(
           d.data_offset,
           d.fifo_size}},
         err);
-    if (!alias || !region.provision(mesh, MeshCoordinate(0, 0), err)) {
+    // The device's own coordinate, not (0,0): a mesh spanning two hosts puts the peer's chips
+    // at the low coordinates half the time, and provision() fatals on a remote one.
+    if (!alias || !region.provision(mesh, dev_coord, err)) {
         return nullptr;
     }
     E2HLeg::Config c;
@@ -182,16 +187,60 @@ BENCHMARK_DEFINE_F(PipeFixture, Bridge)(benchmark::State& state) {
     // Rank 0 names the cable's far end, which rank 1 needs to find the router H2E injects into.
     std::uint32_t far[4] = {0, 0, 0, 0};  // {ok, mesh, chip, chan}
     IDevice* dev = nullptr;
-    tt::tt_fabric::FabricNodeId node{tt::tt_fabric::MeshId{0}, 0};
+    MeshCoordinate dev_coord(0, 0);
+    tt::tt_fabric::FabricNodeId node{tt::tt_fabric::MeshId{0}, g_chip};
+    // Both ranks say what they hold, before anything can fail on it: with one mesh across two
+    // hosts nothing in the config states which half is whose, so it has to be observed.
+    {
+        std::string mine;
+        for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
+            if (mesh->is_local(coord)) {
+                const auto id = mesh->get_fabric_node_id(coord);
+                mine += " " + std::to_string(coord[0]) + "," + std::to_string(coord[1]) + "=" +
+                        std::to_string(*id.mesh_id) + ":" + std::to_string(id.chip_id);
+            }
+        }
+        std::fprintf(stderr, "BRIDGE rank %u owns coord=node%s\n", g_rank, mine.c_str());
+    }
     if (g_rank == 0 && err.empty()) {
-        dev = mesh->get_device(MeshCoordinate(0, 0));
-        node = cp.get_fabric_node_id_from_physical_chip_id(static_cast<ChipId>(dev->id()));
-        const auto facing = cp.get_intermesh_facing_eth_chans(node);
+        // The builder bridges fabric node {mesh 0, chip 0}; find the coordinate holding it rather
+        // than assuming (0,0), which stops being ours once one mesh spans two hosts.
+        std::string owned;
+        for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
+            // Locality matters here and only here: a mesh spanning two hosts answers get_device()
+            // with a fatal for the peer's chips, and node ids do not follow rank boundaries.
+            if (!mesh->is_local(coord)) {
+                continue;
+            }
+            const auto id = mesh->get_fabric_node_id(coord);
+            owned += " " + std::to_string(*id.mesh_id) + ":" + std::to_string(id.chip_id);
+            if (id == node && dev == nullptr) {
+                dev = mesh->get_device(coord);
+                dev_coord = coord;
+            }
+        }
+        if (dev == nullptr) {
+            err = "TT_BRIDGE_E2H_FORCE_CHIP=" + std::to_string(g_chip) +
+                  " is not one of rank 0's chips; it owns mesh:chip" + owned;
+        }
+        // Only once the chip resolved: a channel complaint about a chip we do not own would
+        // overwrite the more useful error and send the reader after the wrong thing.
+        const auto facing = err.empty() ? cp.get_intermesh_facing_eth_chans(node)
+                                        : std::vector<tt::tt_fabric::chan_id_t>{};
         const auto peer = cp.try_get_connected_mesh_chip_chan_ids(node, static_cast<tt::tt_fabric::chan_id_t>(g_chan));
-        if (std::find(facing.begin(), facing.end(), g_chan) == facing.end() || !peer) {
-            err = "set TT_BRIDGE_E2H_FORCE_CHAN to an inter-mesh channel on chip 0; candidates:";
-            for (const auto c : facing) {
-                err += " " + std::to_string(c);
+        // One mesh means no inter-mesh channels at all, so only the peer lookup can vouch for it.
+        const bool facing_ok = g_ring || std::find(facing.begin(), facing.end(), g_chan) != facing.end();
+        if (err.empty() && (!facing_ok || !peer)) {
+            // "facing" only names inter-mesh channels, of which one mesh has none -- so report
+            // every channel that actually resolves to a peer, and where each one goes.
+            err = "TT_BRIDGE_E2H_FORCE_CHAN=" + std::to_string(g_chan) + " has no peer from node " +
+                  std::to_string(*node.mesh_id) + ":" + std::to_string(node.chip_id) + "; connected channels:";
+            for (std::uint32_t c = 0; c < 32; ++c) {
+                const auto p2 = cp.try_get_connected_mesh_chip_chan_ids(node, static_cast<tt::tt_fabric::chan_id_t>(c));
+                if (p2) {
+                    err += " " + std::to_string(c) + "->" + std::to_string(*p2->first.mesh_id) + ":" +
+                           std::to_string(p2->first.chip_id);
+                }
             }
         } else {
             far[0] = 1;
@@ -225,13 +274,18 @@ BENCHMARK_DEFINE_F(PipeFixture, Bridge)(benchmark::State& state) {
         const auto noc0 = soc.get_eth_core_for_channel(g_chan, tt::CoordSystem::NOC0);
         const auto lg = soc.get_eth_core_for_channel(g_chan, tt::CoordSystem::LOGICAL);
         eth_log = CoreCoord(lg.x, lg.y);
-        e2h = bind_e2h(mesh, dev, eth_log, CoreCoord(noc0.x, noc0.y), p, cap, ring, region, alias, err);
+        e2h = bind_e2h(mesh, dev, dev_coord, eth_log, CoreCoord(noc0.x, noc0.y), p, cap, ring, region, alias, err);
     }
     std::unique_ptr<H2ELeg> h2e;
     if (g_rank == 1 && err.empty()) {
         for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
+            // By node id, not by device: a mesh spanning two hosts answers get_device() with a
+            // fatal for the peer's chips, and the walk passes over them to reach our own.
+            if (!mesh->is_local(coord) || mesh->get_fabric_node_id(coord) != far_node) {
+                continue;
+            }
             auto* d = mesh->get_device(coord);
-            if (d != nullptr && cp.get_fabric_node_id_from_physical_chip_id(static_cast<ChipId>(d->id())) == far_node) {
+            if (d != nullptr) {
                 dev = d;
                 H2ELeg::Config c;
                 c.page_bytes = tt::tt_fabric::bridge_socket_page_bytes(cap);
@@ -245,6 +299,47 @@ BENCHMARK_DEFINE_F(PipeFixture, Bridge)(benchmark::State& state) {
         }
         if (dev == nullptr) {
             err = "the bridged link's far chip is not in rank 1's mesh";
+        }
+    }
+
+    // Fabric's credits across the bridge, when the cable is not to be used. Each rank fills in the
+    // side it owns; off unless the routers were built for it, in which case the cable still carries.
+    eb::CreditRelay relay;
+    if (err.empty() && env.get_rtoptions().get_e2h_bridge_relay_credits()) {
+        relay.env = &env;
+        relay.dev = dev;
+        relay.arena = 0;
+        relay.channels = eb::kBridgeChannels;
+        const auto& soc = env.get_cluster().get_soc_desc(dev->id());
+        const auto lg = soc.get_eth_core_for_channel(g_rank == 0 ? g_chan : far[3], tt::CoordSystem::LOGICAL);
+        relay.eth = CoreCoord(lg.x, lg.y);
+        if (g_rank == 0) {
+            // Whichever form fabric chose for VC0: registers when they were allocated, counters
+            // otherwise. Either way the relay writes where the cable would have written.
+            relay.tx = true;
+            relay.use_streams = eb::sender_credits_use_streams(cp, *node.mesh_id, 0, 0);
+            if (relay.use_streams) {
+                relay.completed_stream = eb::sender_pkts_completed_stream(cp, *node.mesh_id, 0, 0);
+                relay.acked_stream = eb::sender_pkts_acked_stream(cp, *node.mesh_id, 0, 0);
+                if (!eb::stream_id_valid_for_eth(relay.completed_stream) ||
+                    !eb::stream_id_valid_for_eth(relay.acked_stream)) {
+                    err = "credit relay: sender credit stream id outside the ERISC's 32";
+                }
+            } else {
+                const auto& rc = eb::router_config(cp);
+                relay.completions_addr =
+                    static_cast<std::uint32_t>(rc.to_sender_channel_remote_completion_counters_base_addr);
+                relay.acks_addr = static_cast<std::uint32_t>(rc.to_sender_channel_remote_ack_counters_base_addr);
+                if (relay.completions_addr == 0 || relay.acks_addr == 0) {
+                    err = "credit relay: sender credit counters are not reserved in this fabric config";
+                }
+            }
+        } else {
+            relay.rx = true;
+            relay.recv_credits_addr = eb::bridge_block_addr(eb::router_config(cp), eb::kBridgeRecvCreditBytes);
+            if (relay.recv_credits_addr == 0) {
+                err = "credit relay: no room for the receive-side credit block";
+            }
         }
     }
 
@@ -268,6 +363,9 @@ BENCHMARK_DEFINE_F(PipeFixture, Bridge)(benchmark::State& state) {
         return;
     }
     E2H2H2EPipeline pipe(std::move(h2h), std::move(e2h), std::move(h2e), batch_);
+    if (relay.rx || relay.tx) {
+        pipe.set_credit_relay(&relay);
+    }
     (void)pipe.h2h().barrier();
 
     // Rank 0's producer sends to the far chip, so its frames cross the bridged router.
@@ -278,6 +376,25 @@ BENCHMARK_DEFINE_F(PipeFixture, Bridge)(benchmark::State& state) {
     if (g_rank == 0 && err.empty() && bb::bridge_router_armed(env, dev, eth_log, p.status_addr, st, err) &&
         it == fwd.end()) {
         err = "eth_chan " + std::to_string(g_chan) + " does not forward to the far chip";
+    }
+    // What fabric says actually forwards to the far chip, and which of those the producer was
+    // bound to. A producer on the wrong link leaves the bridged router with nothing to send.
+    if (g_rank == 0) {
+        std::string f;
+        for (const auto c : fwd) {
+            f += " " + std::to_string(c);
+        }
+        std::fprintf(
+            stderr,
+            "BRIDGE rank 0 node=%u:%u far=%u:%u chan=%u link_idx=%ld forwarding=%s armed=%d\n",
+            *node.mesh_id,
+            node.chip_id,
+            *far_node.mesh_id,
+            far_node.chip_id,
+            g_chan,
+            it == fwd.end() ? -1L : static_cast<long>(std::distance(fwd.begin(), it)),
+            f.empty() ? " (none)" : f.c_str(),
+            st.magic == eb::kBridgeStatusMagic ? 1 : 0);
     }
     int bad = err.empty() ? 0 : 1;
     MPI_Allreduce(MPI_IN_PLACE, &bad, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
@@ -294,7 +411,8 @@ BENCHMARK_DEFINE_F(PipeFixture, Bridge)(benchmark::State& state) {
                                         far_node,
                                         static_cast<std::uint32_t>(std::distance(fwd.begin(), it)),
                                         payload_,
-                                        frames_)
+                                        frames_,
+                                        dev_coord)
                                   : bb::Producer{};
     if (g_rank == 0 && !prod.ok) {
         state.SkipWithError(prod.err.c_str());
@@ -350,15 +468,18 @@ BENCHMARK_DEFINE_F(PipeFixture, Bridge)(benchmark::State& state) {
     double rate = g_rank == 1 && secs > 0.0 ? static_cast<double>(done() - m_meas) * payload_ / secs / 1e6 : 0.0;
     MPI_Allreduce(MPI_IN_PLACE, &rate, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
     const auto& c = pipe.counters();
-    std::uint64_t h[7] = {
+    std::uint64_t h[9] = {
         verify_fail,
         pipe.h2h().pass_stats().bad_order + c.out_of_order,
         done() < frames_ ? 1u : 0u,
         c.forwarded,
         c.injected,
         c.landed,
-        pipe.h2e_slot_mismatch()};
-    MPI_Allreduce(MPI_IN_PLACE, h, 7, MPI_UINT64_T, MPI_SUM, MPI_COMM_WORLD);
+        pipe.h2e_slot_mismatch(),
+        // Each rank owns one side of the relay, so only the sum shows both halves moved.
+        relay.sampled_completions,
+        relay.injected_completions};
+    MPI_Allreduce(MPI_IN_PLACE, h, 9, MPI_UINT64_T, MPI_SUM, MPI_COMM_WORLD);
     bb::emit_throughput(state, rate, h[5], h[5] > ring);
     state.counters["want"] = frames_;
     state.counters["forwarded"] = static_cast<double>(h[3]);
@@ -366,6 +487,9 @@ BENCHMARK_DEFINE_F(PipeFixture, Bridge)(benchmark::State& state) {
     state.counters["landed"] = static_cast<double>(h[5]);
     // Nonzero means the far-ring cursor and the RX ring disagree: the credit model did not hold.
     state.counters["slot_mismatch"] = static_cast<double>(h[6]);
+    // Proof the bridge carried them rather than the cable: both move once the relay is on.
+    state.counters["credits_relayed"] = static_cast<double>(h[7]);
+    state.counters["credits_injected"] = static_cast<double>(h[8]);
     state.counters["verified"] = verify_ ? 1.0 : 0.0;
     // Read AFTER the run on the bridged router: free_slots must MOVE. Pinned at the channel's slot
     // count means no completion ever returned and the credit was a fiction.
@@ -428,9 +552,31 @@ BENCHMARK_DEFINE_F(PipeFixture, Bridge)(benchmark::State& state) {
         state.SkipWithError(pipe.first_error().c_str());
     } else if (h[2] != 0) {
         g_stalled = true;
-        const std::string why = "stalled: forwarded " + std::to_string(h[3]) + ", injected " + std::to_string(h[4]) +
-                                ", landed " + std::to_string(h[5]) + " of " + std::to_string(frames_);
-        state.SkipWithError(why.c_str());
+        std::string why = "stalled: forwarded " + std::to_string(h[3]) + ", injected " + std::to_string(h[4]) +
+                          ", landed " + std::to_string(h[5]) + " of " + std::to_string(frames_);
+        // SkipWithError drops the counters, so the router's own account has to ride the message:
+        // frames=0 means its traffic never arrived, declined means the gate refused it.
+        if (g_rank == 0) {
+            eb::BridgeStatus sr{};
+            std::string ignored;
+            if (bb::bridge_router_armed(env, dev, eth_log, p.status_addr, sr, ignored)) {
+                why += " [router frames=" + std::to_string(sr.frames) + " opened=" + std::to_string(sr.opened) +
+                       " declined=" + std::to_string(sr.declined) + " blocked_rx=" + std::to_string(sr.blocked_rx) +
+                       " blocked_nodata=" + std::to_string(sr.blocked_nodata) +
+                       " free_slots=" + std::to_string(sr.free_slots) +
+                       " host_armed=" + std::to_string(sr.host_armed) + "]";
+            } else {
+                why += " [router status unreadable: " + ignored + "]";
+            }
+            // stage: 0 never ran, 1 in open(), 2 sending. Sent frames with a router that saw none
+            // means they took another path; stage 0 or 1 means the producer itself never got going.
+            std::vector<std::uint32_t> ps;
+            tt::tt_metal::detail::ReadFromDeviceL1(dev, CoreCoord(0, 0), bb::status_l1(dev), 8, ps);
+            if (ps.size() >= 2) {
+                why += " [producer stage=" + std::to_string(ps.at(0)) + " sent=" + std::to_string(ps.at(1)) + "]";
+            }
+        }
+        state.SkipWithError(why);
     }
 }
 
@@ -455,15 +601,20 @@ int main(int argc, char** argv) {
     if (g_chan != kUnset) {
         auto& rt = tt::tt_metal::MetalContext::instance().rtoptions();
         rt.set_e2h_bridge_enable(true);
-        rt.set_e2h_bridge_force_chan(g_chan);
+        g_chip = env_u32("TT_BRIDGE_E2H_FORCE_CHIP", 0);
+    rt.set_e2h_bridge_force_chan(g_chan);
+    rt.set_e2h_bridge_force_chip(g_chip);
     }
     // Two meshes need FABRIC_2D. TT_BRIDGE_PIPE_MAX_PAYLOAD widens the router slot past its 4352 B default.
     tt::tt_fabric::FabricRouterConfig rc;
     if (const auto max = env_u32("TT_BRIDGE_PIPE_MAX_PAYLOAD", 0); max != 0) {
         rc.max_packet_payload_size_bytes = max;
     }
+    // A RING, not a mesh, is what asks fabric for deadlock avoidance -- and with it bubble flow
+    // control. Needs the bridged link intra-mesh too, which the 1x4 descriptor provides.
+    g_ring = env_u32("TT_BRIDGE_PIPE_RING", 0) != 0;
     tt::tt_fabric::SetFabricConfig(
-        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        g_ring ? tt::tt_fabric::FabricConfig::FABRIC_1D_RING : tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
         std::nullopt,
         tt::tt_fabric::FabricTensixConfig::DISABLED,

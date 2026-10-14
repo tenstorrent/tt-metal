@@ -13,7 +13,16 @@
 set -u
 cd "$(dirname "$0")/../../.." || exit 2
 B=${B:-./build_Release/test/tt_metal/distributed/erisc_pipeline_benchmark}
-MGD=tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_dual_1x2_intermesh.textproto
+# RING=1 swaps the two 1x2 meshes for one 1x4 spanning both hosts, so the bridged link is
+# intra-mesh and FABRIC_1D_RING can turn deadlock avoidance -- and bubble flow control -- on.
+RING=${RING:-0}
+if [ "$RING" = 1 ]; then
+    MGD=tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_1x4_ring.textproto
+    MESH1=0  # one mesh: both ranks join it
+else
+    MGD=tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_dual_1x2_intermesh.textproto
+    MESH1=1
+fi
 MIB=${MIB:-256}; WARMUP=${WARMUP:-10}; BATCH=${BATCH:-32}; HANG=${HANG:-120}; VERIFY=${VERIFY:-1}
 R0=${R0:-0,2}; R1=${R1:-1,3}; CHANS=${CHANS:-"9 8"}; SIZES=${SIZES:-"1024 2048 4096"}
 RAND=${RAND:-0}; SEED=${SEED:-1337}; N=${N:-20}
@@ -24,9 +33,12 @@ OUT=${OUT:-pipe_sweep_$(date +%Y%m%d_%H%M%S).out}
 filt() { echo "PipeFixture/Bridge/total_amt:16/warmup_pct:$WARMUP/packet_size:$1/verify:$VERIFY/pace:0/sweep:0/batch:$2/"; }
 rank() {  # $1 mesh id, $2 chips; every rank gets the forced channel, only mesh 0 chip 0 bridges it
     echo "-np 1 -x TT_MESH_ID=$1 -x TT_MESH_GRAPH_DESC_PATH=$MGD -x TT_VISIBLE_DEVICES=$2 -x TT_METAL_HOME=$PWD" \
-        "-x TT_BRIDGE_E2H_FORCE_CHAN -x TT_BRIDGE_PIPE_MIB ${TT_BRIDGE_PIPE_MAX_PAYLOAD:+-x TT_BRIDGE_PIPE_MAX_PAYLOAD} $B"
+        "-x TT_BRIDGE_E2H_FORCE_CHAN -x TT_BRIDGE_PIPE_MIB -x TT_BRIDGE_PIPE_RING -x TT_BRIDGE_E2H_FORCE_CHIP" \
+        "${TT_METAL_E2H_BRIDGE_RELAY_CREDITS:+-x TT_METAL_E2H_BRIDGE_RELAY_CREDITS}" \
+        "${TT_METAL_DISABLE_MULTI_AERISC:+-x TT_METAL_DISABLE_MULTI_AERISC}" \
+        "${TT_BRIDGE_PIPE_MAX_PAYLOAD:+-x TT_BRIDGE_PIPE_MAX_PAYLOAD} $B"
 }
-KEYS='Failed to match.*|ERROR OCCURRED.*|TT_FATAL.*|(want|forwarded|injected|landed)=[0-9.]+[kMG]?|verify_fail=[0-9]+|bad_order=[0-9]+|throughput_MBps=[0-9.]+[kMG]?|(e2e_us|rtt_us)_(p50|p99)=[0-9.]+[kMG]?|slot_mismatch=[0-9]+|router_(free_slots|blocked_rx|declined)=[0-9.]+[kMG]?'
+KEYS='Failed to match.*|ERROR OCCURRED.*|TT_FATAL.*|BRIDGE rank [0-9]+ owns[^|]*|(want|forwarded|injected|landed)=[0-9.]+[kMG]?|verify_fail=[0-9]+|bad_order=[0-9]+|throughput_MBps=[0-9.]+[kMG]?|(e2e_us|rtt_us)_(p50|p99)=[0-9.]+[kMG]?|slot_mismatch=[0-9]+|router_(free_slots|blocked_rx|declined)=[0-9.]+[kMG]?|credits_(relayed|injected)=[0-9.]+[kMG]?'
 v() {  # a counter's value with google-benchmark's k/M/G suffix expanded, so printf can format it
     grep -oE "$1=[0-9.]+[kMG]?" <<<"$2" | head -1 | cut -d= -f2 |
         awk '{m = sub(/k$/, "") ? 1e3 : sub(/M$/, "") ? 1e6 : sub(/G$/, "") ? 1e9 : 1; printf "%.15g", $0 * m}'
@@ -45,8 +57,9 @@ run() {  # $1 chan, $2 packet, $3 batch, $4 MiB, $5 case number
     [ -z "${MD:-}" ] && printf "[%s] chan=%-2s ps=%-4s batch=%-2s mib=%-5s " "$5" "$1" "$2" "$3" "$4"
     f="--benchmark_filter=$(filt "$2" "$3")"
     # shellcheck disable=SC2046  # rank() is meant to split into words
-    TT_BRIDGE_E2H_FORCE_CHAN=$1 TT_BRIDGE_PIPE_MIB=$4 mpirun --oversubscribe --bind-to none \
-        $(rank 0 "$R0") "$f" : $(rank 1 "$R1") "$f" >"$LOG" 2>&1 &
+    TT_BRIDGE_E2H_FORCE_CHAN=$1 TT_BRIDGE_PIPE_MIB=$4 TT_BRIDGE_PIPE_RING=$RING \
+        TT_BRIDGE_E2H_FORCE_CHIP=${CHIP:-0} mpirun --oversubscribe --bind-to none \
+        $(rank 0 "$R0") "$f" : $(rank "$MESH1" "$R1") "$f" >"$LOG" 2>&1 &
     p=$!
     while kill -0 "$p" 2>/dev/null && [ $n -lt "$HANG" ]; do sleep 1; n=$((n + 1)); done
     if kill -0 "$p" 2>/dev/null; then  # hung: keep where each rank's threads were waiting, then kill

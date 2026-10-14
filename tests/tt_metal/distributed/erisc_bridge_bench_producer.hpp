@@ -72,12 +72,15 @@ inline bool bridge_router_armed(
 // that runs after the worker records when we got round to reading, not when frames arrived.
 inline Producer launch_t6_producer(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
-    tt::tt_metal::IDevice* dev,  // the chip at mesh (0, 0), which owns the bridged link
+    tt::tt_metal::IDevice* dev,  // the chip owning the bridged link, at dev_coord
     const tt::tt_fabric::FabricNodeId& src_node,
     const tt::tt_fabric::FabricNodeId& dst_node,  // the bridged link's peer, so frames cross it
     uint32_t link_idx,
     uint32_t payload_bytes,
-    uint32_t frames) {
+    uint32_t frames,
+    // Must be a coordinate THIS rank owns. The workload is enqueued against it, and one the rank
+    // does not own is dropped in silence -- the kernel never runs and the run stalls at stage 0.
+    const tt::tt_metal::distributed::MeshCoordinate& dev_coord = tt::tt_metal::distributed::MeshCoordinate(0, 0)) {
     using namespace tt::tt_metal;
     using namespace tt::tt_metal::distributed;
     Producer p;
@@ -85,7 +88,7 @@ inline Producer launch_t6_producer(
     const CoreCoord worker{0, 0};
     const CoreCoord dst_worker{0, 0};
 
-    const MeshCoordinateRange range(MeshCoordinate(0, 0), MeshCoordinate(0, 0));
+    const MeshCoordinateRange range(dev_coord, dev_coord);
     p.wl.add_program(range, CreateProgram());
     auto& prog = p.wl.get_programs().at(range);
 

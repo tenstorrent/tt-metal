@@ -31,6 +31,9 @@ using tt::tt_fabric::kStatusOffset;
 
 inline constexpr std::uint32_t kBridgeChannels = static_cast<std::uint32_t>(builder_config::num_max_sender_channels);
 inline constexpr std::uint32_t kBridgeBlockBytes = kBridgeStatusBytes + kBridgeChannels * kBridgeChannelStride;
+// The receiving end's credit totals: completions then acks, one uint32 per sender channel. Must
+// match kE2hRecvCreditWords in host_bridge/erisc_bridge_credit_sender.hpp.
+inline constexpr std::uint32_t kBridgeRecvCreditBytes = 2 * kBridgeChannels * sizeof(std::uint32_t);
 
 // One past the highest byte any sender or receiver channel buffer occupies. Returns 0 when the
 // allocator is not the static one -- a caller must read that as unknown, not as "nothing here".
