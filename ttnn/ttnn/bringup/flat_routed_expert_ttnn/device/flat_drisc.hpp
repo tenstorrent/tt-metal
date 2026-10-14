@@ -32,6 +32,8 @@ uint32_t flat_drisc_tiles();
 // (both NIUs in stream mode) serves both of the bank's slots (job r / banks), with two tile 1 + r / banks (index 0 is
 // the bank's NOC0 endpoint, owned by firmware)
 tt::tt_metal::CoreCoord flat_drisc_logical(tt::tt_metal::IDevice* device, uint32_t r, uint32_t banks);
+// the per-call GDDR MPFE weight word (se_drisc.hpp SD_MPFE) for a plan (with reader down columns or not)
+uint32_t flat_drisc_mpfe(bool reader_down);
 // the job index of slot r on its DRISC
 uint32_t flat_drisc_job(uint32_t r, uint32_t banks);
 // NOC0 (physical) coordinates of that tile / of a worker core

@@ -5,6 +5,7 @@
 #include "flat_drisc.hpp"
 
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <memory>
@@ -110,6 +111,20 @@ CoreCoord flat_drisc_logical(IDevice* device, uint32_t r, uint32_t banks) {
                                    : CoreCoord(r % banks, 1 + r / banks);
 }
 
+uint32_t flat_drisc_mpfe(bool reader_down) {
+    // per call, the GDDR arbitration weights (se_drisc.hpp SD_MPFE). Default: untouched, except plans with reader down
+    // columns, whose extra Tensix DRAM reads share the bank's NOC0-endpoint port and squeeze the x relays' reads (the
+    // NOC1 endpoint's port): that port gets weight 3 (K2.7 E12 us / expert M 64 / 512 / 2048: 60.7 / 133.0 / 453.2 ->
+    // 60.6 / 120.4 / 441.7; Tensix readers 62.1 / 123.8 / 442.8; on GLM-Flash, no reader down, it costs ~1%).
+    // MIMO_FL_DRISC_MPFE=w,o,x overrides (the DRISC port, the NOC0 / NOC1 endpoints', 0-7; "0" = untouched).
+    uint32_t w = 0, o = 0, x = reader_down ? 3 : 0;
+    bool on = reader_down;
+    if (const char* e = std::getenv("MIMO_FL_DRISC_MPFE")) {
+        on = std::sscanf(e, "%u,%u,%u", &w, &o, &x) == 3;
+    }
+    return on ? (1u << 31) | (w & 7) | ((o & 7) << 4) | ((x & 7) << 8) : 0;
+}
+
 uint32_t flat_drisc_job(uint32_t r, uint32_t banks) { return flat_drisc_tiles() == 1 ? r / banks : 0; }
 
 namespace {
@@ -177,16 +192,6 @@ void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t
         run.cores.emplace_back(xy.first, xy.second);
     }
     std::map<std::string, std::string> defs;
-    // perf knob: MIMO_FL_DRISC_MPFE=w[,o] - the GDDR arbitration weights (0-7) of the DRISC tiles' ports (w) and of the
-    // bank's ordinary port (o: the NOC0 endpoint's, the Tensix cores' DRAM traffic)
-    if (const char* w = std::getenv("MIMO_FL_DRISC_MPFE")) {
-        const std::string ws(w);
-        const auto comma = ws.find(',');
-        defs["SE_DRISC_MPFE"] = ws.substr(0, comma);
-        if (comma != std::string::npos) {
-            defs["SE_DRISC_MPFE_ORD"] = ws.substr(comma + 1);
-        }
-    }
     if (const char* b = std::getenv("MIMO_FL_DRISC_BURST")) {  // (probe: DMA AXI burst beats; 0 = untouched)
         defs["SE_DRISC_BURST"] = b;
     }
@@ -204,10 +209,6 @@ void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t
         // one kernel per tile
         for (const auto& c : run.cores) {
             auto d = defs;
-            if (d.contains("SE_DRISC_MPFE")) {  // MPFE port P(1 + the tile's UMD subchannel), as the tensor prefetcher
-                d["SE_DRISC_MPFE_PORT"] = std::to_string(mpfe_port(dev, c));
-                d["SE_DRISC_MPFE_ORD_PORT"] = std::to_string(mpfe_port(dev, CoreCoord(c.x, 0)));
-            }
             const auto& nocs = tile_nocs.at({c.x, c.y});
             // a bank's two tiles DMA on different streams: both on stream 0 with ~7 reads in flight each, next to heavy
             // NOC1 DRAM reads through the bank's NOC1 endpoint (MIMO_FL_DN_NOC0=1), wedged those NoC reads (3 of 3
@@ -222,6 +223,10 @@ void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t
                 DramConfig{.noc = nocs[0] ? NOC::NOC_1 : NOC::NOC_0, .defines = d});
             std::vector<uint32_t> rt{base, size, static_cast<uint32_t>(nocs.size())};
             rt.insert(rt.end(), nocs.begin(), nocs.end());
+            // MPFE ports: this tile's, the bank's NOC0 / NOC1 endpoints' (P1 + UMD subchannel, as the prefetcher)
+            rt.push_back(mpfe_port(dev, c));
+            rt.push_back(mpfe_port(dev, CoreCoord(c.x, 0)));
+            rt.push_back(mpfe_port(dev, CoreCoord(c.x, 1)));
             SetRuntimeArgs(*program, k, c, rt);
         }
         const uint32_t zero = 0;
@@ -305,13 +310,16 @@ void flat_drisc_dump(distributed::MeshDevice* mesh) {
             }
             log_info(
                 tt::LogOp,
-                "flat DRISC chip {} {} (virt {}): stop {} ready {:#x} done {}{}",
+                "flat DRISC chip {} {} (virt {}): stop {} ready {:#x} done {} mpfe P1-P3 {} {} {}{}",
                 dev->id(),
                 c.str(),
                 v.str(),
                 w[4],
                 w[8],
                 w[12],
+                w[13],
+                w[14],
+                w[15],
                 jobs);
         }
     }

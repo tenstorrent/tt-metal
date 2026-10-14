@@ -400,7 +400,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         auto* mesh = dynamic_cast<distributed::MeshDevice*>(device);
         TT_FATAL(mesh != nullptr, "MIMO_FL_DRISC: a mesh device");
         flat_drisc_ensure(mesh, p.drisc_n, banks);
-        // one launcher posts every slot's job (se_drisc_go.cpp RT: base, gate/up, landing, slots, R, per slot the
+        // one launcher posts every slot's job (se_drisc_go.cpp RT: base, gate/up, landing, slots, R, MPFE, per slot the
         // DRISC xy / job / region offset, the slots' receivers, then the dyn args)
         const auto k =
             dm("se_drisc_go.cpp",
@@ -410,7 +410,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                {p.rg * p.slot * w_tile, p.slot * w_tile, p.rg, G, p.nk_gu, GRANT, DATA, E},
                dyn_def);
         Args a;
-        a.lit(drisc_base).a(AddrSrc::GateUp).a(AddrSrc::Arena).lit(p.drisc_n).lit(p.r_);
+        a.lit(drisc_base).a(AddrSrc::GateUp).a(AddrSrc::Arena).lit(p.drisc_n).lit(p.r_).lit(flat_drisc_mpfe(p.rdown));
         for (uint32_t r = 0; r < p.drisc_n; ++r) {
             a.lit(drisc_xy(r)).lit(flat_drisc_job(r, banks)).lit((r / banks) * p.region_bytes);
         }

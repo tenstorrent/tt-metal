@@ -39,7 +39,9 @@ constexpr uint32_t SD_DATA_SEM = 8;   // the receivers' data semaphore address
 constexpr uint32_t SD_N_LOAD = 9;     // gate/up loads this call
 constexpr uint32_t SD_GRANTS = 10;    // the receivers' grant counter address (a semaphore, counts this call's grants)
 constexpr uint32_t SD_RXY = 11;       // R receiver xy (x << 16 | y)
-constexpr uint32_t SD_LOADS = SD_RXY + SE_DRISC_MAX_R;  // N_LOAD x (expert | region << 8)
+constexpr uint32_t SD_MPFE = SD_RXY + SE_DRISC_MAX_R;  // GDDR MPFE weights (job 0): 0 untouched, else bit 31 + the
+                                                      // DRISC port's (bits 0-2), the NOC0 / NOC1 endpoints' (4-6 / 8-10)
+constexpr uint32_t SD_LOADS = SD_MPFE + 1;            // N_LOAD x (expert | region << 8)
 constexpr uint32_t SD_MAX_LOADS = 128;
 static_assert((SD_LOADS + SD_MAX_LOADS) * 4 <= 640 && se_drisc_desc(2) <= SE_DRISC_SLOTS);
 
