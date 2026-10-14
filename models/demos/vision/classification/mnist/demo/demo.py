@@ -62,7 +62,7 @@ def run_demo_dataset(device, batch_size, iterations, model_location_generator):
     accuracy = correct / (batch_size * iterations)
     logger.info(f"ImageNet Inference Accuracy for {batch_size}x{iterations} Samples : {accuracy}")
     # Report-only perf for the CI dashboard (#58596). No-op outside CI.
-    report_generation_rate("mnist-mlp", inference_elapsed_s, batch_size * iterations)
+    report_generation_rate("mnist-mlp", inference_elapsed_s, batch_size * iterations, batch_size=batch_size)
     assert accuracy >= 0.96875, f"Expected accuracy : {0.96875} Actual accuracy: {accuracy}"
 
 

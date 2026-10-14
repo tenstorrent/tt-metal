@@ -111,7 +111,7 @@ def print_ltx_timing_table(
     if report_model:
         from models.demos.utils.common_demo_utils import report_generation_rate
 
-        report_generation_rate(report_model, sum(secs for _, secs in timings), num_frames)
+        report_generation_rate(report_model, sum(secs for _, secs in timings), num_frames, batch_size=1)
 
     mesh = tuple(mesh_shape)
     topo = str(topology).split(".")[-1]

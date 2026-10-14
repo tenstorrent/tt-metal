@@ -448,6 +448,7 @@ def test_pipeline_performance(
             "wan-2.2-i2v" if model_type == "i2v" else "wan-2.2-t2v",
             total_times[-1],
             num_frames,
+            batch_size=1,
         )
         benchmark_data.save_partial_run_json(
             benchmark_profiler,

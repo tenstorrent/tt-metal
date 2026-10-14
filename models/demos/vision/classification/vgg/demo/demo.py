@@ -91,7 +91,7 @@ def run_vgg_imagenet_inference_vgg(
     logger.info(f"Model {model_name}")
     logger.info(f"Accuracy for {batch_size}x{iterations} inputs: {accuracy}")
     # Report-only perf for the CI dashboard (#58596). No-op outside CI.
-    report_generation_rate("vggnet", inference_elapsed_s, batch_size * iterations)
+    report_generation_rate("vggnet", inference_elapsed_s, batch_size * iterations, batch_size=batch_size)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

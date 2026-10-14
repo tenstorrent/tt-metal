@@ -280,7 +280,7 @@ def test_mochi_pipeline_performance(
         }
         from models.demos.utils.common_demo_utils import report_generation_rate
 
-        report_generation_rate("mochi", total_times[-1], num_frames)
+        report_generation_rate("mochi", total_times[-1], num_frames, batch_size=1)
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
             run_type=device_name_map[tuple(mesh_device.shape)],

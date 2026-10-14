@@ -650,11 +650,22 @@ def report_e2e_metrics(
     )
 
 
-def report_generation_rate(model_name: str, elapsed_s: float, count: float = 1.0) -> None:
-    """Publish count/elapsed_s as the fps measurement (images, frames, or samples per second)."""
+def report_generation_rate(
+    model_name: str, elapsed_s: float, count: float = 1.0, batch_size: int | None = None
+) -> None:
+    """Publish count/elapsed_s as the fps measurement (images, frames, or samples per second).
+
+    `count` is the numerator of the rate (e.g. generated frames/images/samples), which may be
+    fractional. `batch_size` is the workload batch dimension recorded on the dashboard and used
+    by validate_perf_targets.resolve_target_entry to match a target. They coincide only when one
+    sample is produced per element of the batch; pass `batch_size` explicitly whenever `count`
+    is not the batch size (e.g. num_frames for video models, or batch_size * iterations for
+    classifiers). When omitted, batch_size falls back to `count` for backwards compatibility.
+    """
     if elapsed_s <= 0 or count <= 0:
         return
-    report_vision_fps(model_name, float(count) / float(elapsed_s), max(int(count), 1))
+    resolved_batch_size = batch_size if batch_size is not None else max(int(count), 1)
+    report_vision_fps(model_name, float(count) / float(elapsed_s), resolved_batch_size)
 
 
 def report_vision_fps(model_name: str, fps: float, batch_size: int):
