@@ -4,12 +4,12 @@
 
 #include "ternary.hpp"
 
-#include <cmath>
 #include <utility>
 #include <variant>
 #include <cstdint>
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "device/ternary_device_operation.hpp"
@@ -96,19 +96,12 @@ inline bool is_integer_dtype(DataType dtype) {
            dtype == DataType::UINT8;
 }
 
-// The scalar is packed with a static_cast to the tensor's int32/uint32 dtype, which is faithful only for a
-// finite integer inside that range. The bounds are powers of two so the float comparison cannot round them.
 void validate_where_scalar_for_integer_tensor(float scalar, DataType tensor_dtype) {
     if (tensor_dtype != DataType::INT32 && tensor_dtype != DataType::UINT32) {
         return;
     }
-    bool exact = std::isfinite(scalar) && std::trunc(scalar) == scalar;
-    if (exact) {
-        exact = tensor_dtype == DataType::INT32 ? (scalar >= -2147483648.0f && scalar < 2147483648.0f)
-                                                : (scalar >= 0.0f && scalar < 4294967296.0f);
-    }
     TT_FATAL(
-        exact,
+        ttnn::operations::binary::utils::scalar_fits_integer_dtype(scalar, tensor_dtype),
         "ttnn.where with a {} tensor cannot represent the scalar {}: only a finite integer within the range of {} "
         "survives being packed as one, and this value would be changed silently. Typecast the tensor to a "
         "floating-point dtype first.",
