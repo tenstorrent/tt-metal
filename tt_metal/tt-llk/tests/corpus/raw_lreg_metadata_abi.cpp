@@ -18,7 +18,7 @@ void raw_lreg_metadata_abi()
 // The raw L0 value must survive the intervening typed temporary. On an
 // access-only compiler, the helper is intentionally a no-op compatibility
 // path; only the effect compiler promises to reserve L0 across this gap.
-void raw_lreg_metadata_lifetime(volatile unsigned *issue)
+void raw_lreg_metadata_lifetime()
 {
     asm volatile (".ttinsn %0" : : "n"(0x7100007bu));
     TT_LLK_SFPRAWLREG_EFFECT(1u, 1u);

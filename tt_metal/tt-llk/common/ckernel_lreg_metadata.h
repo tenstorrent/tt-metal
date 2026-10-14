@@ -36,6 +36,7 @@
 #define TT_LLK_RAW_LREG_FN __attribute__((always_inline)) constexpr inline
 
 namespace ckernel::raw_lreg_effect {
+constexpr unsigned all_lregs = 0xff;
 TT_LLK_RAW_LREG_FN unsigned bit(unsigned r) { return r < 8 ? 1u << r : 0u; }
 TT_LLK_RAW_LREG_FN unsigned op(unsigned x) { return x >> 24; }
 TT_LLK_RAW_LREG_FN unsigned mod(unsigned x) { return x & 15; }
@@ -61,11 +62,11 @@ TT_LLK_RAW_LREG_FN bool supported(unsigned x) {
 }
 TT_LLK_RAW_LREG_FN unsigned math_r(unsigned x, bool has_c = true) {
     unsigned r = bit(a(x)) | bit(b(x)) | (has_c ? bit(c(x)) : 0u);
-    if (mod(x) & 4) r = 0xff;
+    if (mod(x) & 4) r = all_lregs;
     if (mod(x) & 8) r |= bit(7);
     return r;
 }
-TT_LLK_RAW_LREG_FN unsigned math_w(unsigned x) { return (mod(x) & 8) ? 0xff : bit(d(x)); }
+TT_LLK_RAW_LREG_FN unsigned math_w(unsigned x) { return (mod(x) & 8) ? all_lregs : bit(d(x)); }
 TT_LLK_RAW_LREG_FN unsigned shft2_r(unsigned x) {
     switch (mod(x)) {
         case 0: return 0x0e; case 1: return 0x0f;
@@ -76,94 +77,96 @@ TT_LLK_RAW_LREG_FN unsigned shft2_r(unsigned x) {
         // an input through the destination write.
         case 5: return bit(b(x)) | bit(c(x)) | bit(d(x));
         case 6: return bit(b(x)) | bit(d(x));
-        default: return 0xff;
+        default: return all_lregs;
     }
 }
 TT_LLK_RAW_LREG_FN unsigned shft2_w(unsigned x) {
-    return mod(x) <= 2 ? 0x0f : (mod(x) <= 6 ? bit(d(x)) : 0xff);
+    return mod(x) <= 2 ? 0x0f : (mod(x) <= 6 ? bit(d(x)) : all_lregs);
 }
 TT_LLK_RAW_LREG_FN unsigned read(unsigned x) {
     const auto o = op(x), m = mod(x), dd = d(x), cc = c(x);
     switch (o) {
-        case 0x70: return (mm(x) == 14 || mm(x) == 15) ? bit(mr(x)) : 0;
-        case 0x71: return (mm(x) == 8 || mm(x) == 10) ? bit(mr(x)) : 0;
-        case 0x72: return bit(mr(x));
-        case 0x73: return 0x0f | ((mm(x) & 8) ? bit(7) : 0u);
+        case 0x70: /* SFPLOAD */ return (mm(x) == 14 || mm(x) == 15) ? bit(mr(x)) : 0;
+        case 0x71: /* SFPLOADI */ return (mm(x) == 8 || mm(x) == 10) ? bit(mr(x)) : 0;
+        case 0x72: /* SFPSTORE */ return bit(mr(x));
+        case 0x73: /* SFPLUT */ return 0x0f | ((mm(x) & 8) ? bit(7) : 0u);
         // Modifier bit 2 reads the source from the LREG named by LREG7[3:0],
         // which can be any LREG and is not known from the instruction word.
-        case 0x74: case 0x75: return (m & 4) ? 0xffu : bit(dd) | ((m & 8) ? bit(7) : 0u);
+        case 0x74: case 0x75: /* SFPMULI, SFPADDI */ return (m & 4) ? all_lregs : bit(dd) | ((m & 8) ? bit(7) : 0u);
+        // SFPDIVP2, SFPEXEXP, SFPEXMAN, SFPABS, SFPLZ, SFPCAST
         case 0x76: case 0x77: case 0x78: case 0x7d: case 0x81: case 0x90: return bit(cc);
-        case 0x79: return bit(cc) | ((m & 1) ? 0u : bit(dd));
+        case 0x79: /* SFPIADD */ return bit(cc) | ((m & 1) ? 0u : bit(dd));
         // lreg_c is the shift amount unless bit 0 selects imm12, and the data
         // input when bit 2 is set (BH/QSR). WH documents no bit 2; honoring it
         // there only adds a read.
-        case 0x7a: return bit(dd) | (!(m & 1) || (m & 4) ? bit(cc) : 0u);
-        case 0x7b: return (m & 8) || (m & 1) ? 0u : bit(cc);
-        case 0x7c: return (m & 8) ? 0u : bit(cc);
-        case 0x7e: case 0x7f:
+        case 0x7a: /* SFPSHFT */ return bit(dd) | (!(m & 1) || (m & 4) ? bit(cc) : 0u);
+        case 0x7b: /* SFPSETCC */ return (m & 8) || (m & 1) ? 0u : bit(cc);
+        case 0x7c: /* SFPMOV */ return (m & 8) ? 0u : bit(cc);
+        case 0x7e: case 0x7f: // SFPAND, SFPOR
 #if defined(TT_LLK_SFPU_ARCH_BH)
             return bit(cc) | bit((m & 1) ? b(x) : dd);
 #else
             return bit(cc) | bit(dd);
 #endif
-        case 0x8d: return bit(cc) | bit(dd);
-        case 0x80: return bit(cc);
-        case 0x82: case 0x83: case 0x89: return bit(cc) | ((m & 1) ? 0u : bit(dd));
-        case 0x84: case 0x85: case 0x86: return math_r(x);
-        case 0x8c: return 0xff;
-        case 0x8e: return bit(cc) | ((m & 8) ? 0u : bit(b(x)));
-        case 0x91: return dd < 4 || !(m & 1) ? bit(0) : 0u;
-        case 0x92: return bit(cc) | bit(dd) | bit(4 + (cc & 3)) | bit(4 + (dd & 3));
+        case 0x8d: /* SFPXOR */ return bit(cc) | bit(dd);
+        case 0x80: /* SFPNOT */ return bit(cc);
+        case 0x82: case 0x83: case 0x89: /* SFPSETEXP, SFPSETMAN, SFPSETSGN */ return bit(cc) | ((m & 1) ? 0u : bit(dd));
+        case 0x84: case 0x85: case 0x86: /* SFPMAD, SFPADD, SFPMUL */ return math_r(x);
+        case 0x8c: /* SFPTRANSP */ return all_lregs;
+        case 0x8e: /* SFP_STOCH_RND */ return bit(cc) | ((m & 8) ? 0u : bit(b(x)));
+        case 0x91: /* SFPCONFIG */ return dd < 4 || !(m & 1) ? bit(0) : 0u;
+        case 0x92: /* SFPSWAP */ return bit(cc) | bit(dd) | bit(4 + (cc & 3)) | bit(4 + (dd & 3));
         // The configured LOADMACRO sequence is not encoded in this word.
         // Model every LREG as an input and output rather than hiding effects.
         // The scheduled sub-ops finish after issue, but this marks the issue
         // point only: typed SFPI code must not sit between a LOADMACRO and its
         // drain. The compiler never moves typed SFPU instructions there, since
         // they are volatile and so ordered against raw words.
-        case 0x93: return 0xff;
-        case 0x94: return shft2_r(x);
-        case 0x95: return ((m & 10) == 10 ? 0x0fu : 0x7fu) | ((m & 8) ? 0x80u : 0u);
-        case 0x96: case 0x97: return bit(cc) | bit(dd);
-        case 0x98:
+        case 0x93: /* SFPLOADMACRO */ return all_lregs;
+        case 0x94: /* SFPSHFT2 */ return shft2_r(x);
+        case 0x95: /* SFPLUTFP32 */ return ((m & 10) == 10 ? 0x0fu : 0x7fu) | ((m & 8) ? 0x80u : 0u);
+        case 0x96: case 0x97: /* SFPLE, SFPGT */ return bit(cc) | bit(dd);
+        case 0x98: // SFPMUL24
 #if defined(TT_LLK_SFPU_ARCH_QSR)
-            return math_r(x, false);
+            return math_r(x, false /*has_c*/);
 #else
             return math_r(x);
 #endif
-        case 0x99:
+        case 0x99: // SFPARECIP (BH), SFPNONLINEAR (QSR)
 #if defined(TT_LLK_SFPU_ARCH_BH)
             return bit(cc) | (m == 1 ? bit(b(x)) : 0u);
 #else
             return bit(cc);
 #endif
         // CC stack, lane-enable and NOP instructions name no LREG.
-        case 0x87: case 0x88: case 0x8a: case 0x8b: case 0x8f: return 0;
+        case 0x87: case 0x88: case 0x8a: case 0x8b: case 0x8f: return 0; // SFPPUSHC, SFPPOPC, SFPENCC, SFPCOMPC, SFPNOP
         // An opcode without a model must not yield an empty mask.
-        default: return 0xff;
+        default: return all_lregs;
     }
 }
 TT_LLK_RAW_LREG_FN unsigned write(unsigned x) {
     const auto o = op(x), m = mod(x), dd = d(x), cc = c(x);
     switch (o) {
         // Conservatively include the paired high-half LREG when it is encodable.
-        case 0x70: return bit(mr(x)) | (mr(x) < 4 ? bit(mr(x) + 4) : 0u);
-        case 0x71: return bit(mr(x));
-        case 0x73: return (mm(x) & 8) ? 0xff : bit(mr(x));
-        case 0x74: case 0x75: return (m & 8) ? 0xff : bit(dd);
+        case 0x70: /* SFPLOAD */ return bit(mr(x)) | (mr(x) < 4 ? bit(mr(x) + 4) : 0u);
+        case 0x71: /* SFPLOADI */ return bit(mr(x));
+        case 0x73: /* SFPLUT */ return (mm(x) & 8) ? all_lregs : bit(mr(x));
+        case 0x74: case 0x75: /* SFPMULI, SFPADDI */ return (m & 8) ? all_lregs : bit(dd);
+        // Single-destination ALU operations, SFP_STOCH_RND, SFPCAST and SFPARECIP/SFPNONLINEAR.
         case 0x76: case 0x77: case 0x78: case 0x79: case 0x7a: case 0x7c:
         case 0x7d: case 0x7e: case 0x7f: case 0x80: case 0x81: case 0x82:
         case 0x83: case 0x89: case 0x8d: case 0x8e: case 0x90: case 0x99: return bit(dd);
-        case 0x84: case 0x85: case 0x86: case 0x98: return math_w(x);
-        case 0x8c: return 0xff;
-        case 0x92: return bit(cc) | bit(dd) | bit(4 + (cc & 3)) | bit(4 + (dd & 3));
-        case 0x93: return 0xff;
-        case 0x94: return shft2_w(x);
-        case 0x95: return (m & 8) ? 0xff : bit(dd);
-        case 0x96: case 0x97: return (m & 8) ? bit(dd) : 0u;
+        case 0x84: case 0x85: case 0x86: case 0x98: /* SFPMAD, SFPADD, SFPMUL, SFPMUL24 */ return math_w(x);
+        case 0x8c: /* SFPTRANSP */ return all_lregs;
+        case 0x92: /* SFPSWAP */ return bit(cc) | bit(dd) | bit(4 + (cc & 3)) | bit(4 + (dd & 3));
+        case 0x93: /* SFPLOADMACRO */ return all_lregs;
+        case 0x94: /* SFPSHFT2 */ return shft2_w(x);
+        case 0x95: /* SFPLUTFP32 */ return (m & 8) ? all_lregs : bit(dd);
+        case 0x96: case 0x97: /* SFPLE, SFPGT */ return (m & 8) ? bit(dd) : 0u;
         // Stores, CC updates and SFPCONFIG write no LREG in 0..7.
         case 0x72: case 0x7b: case 0x87: case 0x88: case 0x8a: case 0x8b:
         case 0x8f: case 0x91: return 0;
-        default: return 0xff;
+        default: return all_lregs;
     }
 }
 // Raw instructions execute under externally managed lane predicates. The
@@ -171,7 +174,6 @@ TT_LLK_RAW_LREG_FN unsigned write(unsigned x) {
 // Preserve the old destination as an input, including for nominally write-only
 // operations. This is deliberately conservative when all lanes are enabled.
 TT_LLK_RAW_LREG_FN unsigned inputs(unsigned x) { return read(x) | write(x); }
-constexpr unsigned all_lregs = 0xff;
 // An unsupported word reached only after inlining has no static_assert; keep
 // every LREG for it rather than trusting a partial decode.
 TT_LLK_RAW_LREG_FN unsigned checked_inputs(unsigned x) { return supported(x) ? inputs(x) : all_lregs; }

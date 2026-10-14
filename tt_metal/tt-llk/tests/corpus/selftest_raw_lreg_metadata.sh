@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 source_file="$here/raw_lreg_macro_metadata_compile.cpp"
+# Effect markers raw_lreg_macro_metadata_compile.cpp issues: six TT_ words in
+# tt_mmio_constant_lreg, one each in tt_mmio_runtime_lreg,
+# tt_mmio_runtime_address and tt_mmio_load_into, six TTI_ words in
+# tti_asm_constant_lreg. TEST_LUT_MODES adds lut_modifier_issue's eight.
+fixture_effects=15
+lut_mode_effects=8
 
 # Optional real target check. Host syntax checks below deliberately mock the
 # builtin and cannot establish that the compiler implements the interface.
@@ -24,7 +32,9 @@ if [[ ${1:-} == --target-cxx ]]; then
             "$target_cxx" -std=c++17 "$opt" -mcpu="$cpu" -DTEST_TARGET_EFFECT \
                 -DTEST_DEFAULT_FALLBACK "-DTEST_$arch" -S "$source_file" -o "$scratch/$arch.s"
             count=$(grep -c '# RAWLREG_EFFECT' "$scratch/$arch.s" || true)
-            [[ $count == 15 ]] || { echo "FAIL: $arch $opt emitted $count effects, expected 15" >&2; exit 1; }
+            [[ $count == "$fixture_effects" ]] || {
+                echo "FAIL: $arch $opt emitted $count effects, expected $fixture_effects" >&2; exit 1;
+            }
             # LREG3 load with a runtime address: L3 and its paired L7.
             grep -q '# RAWLREG_EFFECT 136, 136' "$scratch/$arch.s" || {
                 echo "FAIL: $arch $opt runtime address hid the constant LREG fields" >&2; exit 1;
@@ -47,12 +57,15 @@ if [[ ${1:-} == --target-cxx ]]; then
             [[ $stores == "$baseline_stores" ]] || {
                 echo "FAIL: metadata added scalar stores at $arch $opt" >&2; exit 1;
             }
-            echo "PASS: $cpu $opt compiled with 15 real effect markers (not a hardware test)"
+            echo "PASS: $cpu $opt compiled with $fixture_effects real effect markers (not a hardware test)"
             "$target_cxx" -std=c++17 "$opt" -mcpu="$cpu" -DTEST_TARGET_EFFECT \
                 -DTEST_DEFAULT_FALLBACK -DTEST_LUT_MODES "-DTEST_$arch" \
                 -S "$source_file" -o "$scratch/$arch.s"
             count=$(grep -c '# RAWLREG_EFFECT' "$scratch/$arch.s" || true)
-            [[ $count == 23 ]] || { echo "FAIL: LUT modifier fixture emitted $count effects, expected 23" >&2; exit 1; }
+            expected=$((fixture_effects + lut_mode_effects))
+            [[ $count == "$expected" ]] || {
+                echo "FAIL: LUT modifier fixture emitted $count effects, expected $expected" >&2; exit 1;
+            }
             echo "PASS: $cpu $opt LUT modifier combinations"
         done
         if "$target_cxx" -std=c++17 -O2 -mcpu="$cpu" -DTEST_TARGET_EFFECT \
