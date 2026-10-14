@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flat_routed_expert_program_factory.hpp"
+#include "flat_drisc.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -11,6 +12,7 @@
 
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace ttnn::operations::bringup::flat_routed_expert {
@@ -26,6 +28,8 @@ constexpr uint32_t DATA = 4, HARR = 5, GO = 6, DONE = 7, GATH = 8, XARR = 9, SFR
 // h buffer 3's gather semaphore on the down chain heads (4 h buffers; ids 0..3 are the weight readers' credits, unused
 // on down cores)
 constexpr uint32_t GATH3 = 3;
+// DRISC mode: the gate/up cores' grant counter (polled by their DRISC sender; id 1 is otherwise unused on them)
+constexpr uint32_t GRANT = 1;
 constexpr const char* KDIR = "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/kernels/";
 
 // A runtime-arg list whose buffer-address words are recorded for the cache-hit patch.
@@ -369,7 +373,47 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             SetRuntimeArgs(program, kc, p.readers[r], std::vector<uint32_t>{0});
         }
     }
-    if (!plain.empty()) {
+    // DRISC mode (flat_drisc.hpp): the DRAM cores' persistent senders read and forward the gate/up weights; the
+    // readers only post each call's job (se_drisc_go.cpp)
+    const uint32_t drisc_base = p.drisc ? flat_drisc_base() : 0;
+    // perf probe MIMO_FL_DRISC_XNOC=1 (DRISC mode): the x relays' multicast on NOC1 (x reads on NOC0) and the gate/up
+    // receivers on NOC0, off the DRISCs' NOC0 weight writes. Much slower (M 512 78 -> 122 us / expert: the relays sit
+    // for NOC0 multicast)
+    const char* xnoc_env = std::getenv("MIMO_FL_DRISC_XNOC");
+    const bool xswap = p.drisc && xnoc_env != nullptr && std::atoi(xnoc_env) != 0;
+    const NOC x_rd_noc = xswap ? NOC::NOC_0 : NOC::NOC_1, x_mc_noc = xswap ? NOC::NOC_1 : NOC::NOC_0;
+    auto drisc_xy = [&](uint32_t r) {
+        const auto v = device->virtual_core_from_logical_core(flat_drisc_logical(device, r, banks), tt::CoreType::DRAM);
+        return static_cast<uint32_t>((v.x << 16) | v.y);
+    };
+    if (p.drisc) {
+        TT_FATAL(!p.rdown && p.nsg == 1 && p.r_ <= 8, "MIMO_FL_DRISC: no reader down columns, one subgrid");
+        auto* mesh = dynamic_cast<distributed::MeshDevice*>(device);
+        TT_FATAL(mesh != nullptr, "MIMO_FL_DRISC: a mesh device");
+        flat_drisc_ensure(mesh, n_rd, banks);
+        // one launcher posts every slot's job (se_drisc_go.cpp RT: base, gate/up, landing, slots, R, per slot the
+        // DRISC xy / job / region offset, the slots' receivers, then the dyn args)
+        const auto k =
+            dm("se_drisc_go.cpp",
+               {p.launcher},
+               DataMovementProcessor::RISCV_0,
+               NOC::NOC_0,
+               {p.rg * p.slot * w_tile, p.slot * w_tile, p.rg, G, p.nk_gu, GRANT, DATA, E},
+               dyn_def);
+        Args a;
+        a.lit(drisc_base).a(AddrSrc::GateUp).a(AddrSrc::Arena).lit(n_rd).lit(p.r_);
+        for (uint32_t r = 0; r < n_rd; ++r) {
+            a.lit(drisc_xy(r)).lit(flat_drisc_job(r, banks)).lit((r / banks) * p.region_bytes);
+        }
+        for (uint32_t r = 0; r < n_rd; ++r) {
+            for (uint32_t j = 0; j < p.r_; ++j) {
+                a.lit(pk(p.gu[r * p.r_ + j]));
+            }
+        }
+        a.cat(dyn);
+        add_rt(k, p.launcher, a);
+    }
+    if (!plain.empty() && !p.drisc) {
         const auto k =
             dm("se_reader.cpp",
                plain,
@@ -386,7 +430,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             add_rt(k, p.readers[r], a);
         }
     }
-    {
+    if (!p.drisc) {
         const auto k =
             dm("se10_fwd.cpp",
                p.readers,
@@ -455,7 +499,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             dm("se11_xrd.cpp",
                xrel,
                DataMovementProcessor::RISCV_0,
-               NOC::NOC_1,
+               x_rd_noc,
                {0, t.x.logical_shape()[-1] * 2, E, MT, p.nsb, S, xrd_batch, idx_arg, p.H / t.x.logical_shape()[-1]},
                xrd_def);
         const auto ktz = cp("se11_tz.cpp", xrel, {0, 1, MT}, with(dyn_def, {{"SE_SBT", sbt}}));
@@ -464,7 +508,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             dm("se11_xmc.cpp",
                prim,
                DataMovementProcessor::RISCV_1,
-               NOC::NOC_0,
+               x_mc_noc,
                {1, MT, p.x_tile, p.x_slots, XARR, WORD, KBLK, E, p.nsb},
                with(
                    dyn_def,
@@ -482,7 +526,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 dm("se13_xhelp.cpp",
                    hl,
                    DataMovementProcessor::RISCV_1,
-                   NOC::NOC_0,
+                   x_mc_noc,
                    {1, MT, p.x_tile, p.land_slots, data_sem, 5, E, p.nsb},
                    with(dyn_def, {{"SE_SBT", sbt}})));
         }
@@ -504,15 +548,17 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             if (idx < NR) {
                 Args xm;
                 xm.a(AddrSrc::Arena, p.x_off)
-                    .lit(pk(CoreCoord(x0, y0)))
-                    .lit(pk(CoreCoord(x1, y1)))
+                    .lit(pk(xswap ? CoreCoord(x1, y1) : CoreCoord(x0, y0)))  // (NOC1 multicast: start is the far corner)
+                    .lit(pk(xswap ? CoreCoord(x0, y0) : CoreCoord(x1, y1)))
                     .lit((x1 - x0 + 1) * (y1 - y0 + 1))
                     .a(AddrSrc::Words)
                     .lit(x_once ? ngu : static_cast<uint32_t>(rect_cores[k].size()))
                     .lits({V * p.nsb, XARR, 1, 0, p.group_rect ? ((idx * MTG) | ((idx + 1) * MTG << 8)) : 0});
                 if (x_once) {  // the second rectangle this primary multicasts into (se11_xmc.cpp RT 11-13)
                     const auto [u0, u1, v0, v1] = p.rects[1];
-                    xm.lit((u1 - u0 + 1) * (v1 - v0 + 1)).lit(pk(CoreCoord(u0, v0))).lit(pk(CoreCoord(u1, v1)));
+                    xm.lit((u1 - u0 + 1) * (v1 - v0 + 1))
+                        .lit(pk(xswap ? CoreCoord(u1, v1) : CoreCoord(u0, v0)))
+                        .lit(pk(xswap ? CoreCoord(u0, v0) : CoreCoord(u1, v1)));
                 } else {
                     xm.lits({0, 0, 0});
                 }
@@ -546,15 +592,19 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // cores wedge the NoC (a relay stuck in noc_cmd_buf_ready or in its write barrier; ~1 in 1e4..2e5 launches,
         // any chip), a hardware hang the NoC probe test reproduces from the traffic alone
         // (tests/ttnn/unit_tests/operations/noc_hang_probe, op_skeleton); with these writes on NOC1 it never did.
+        Defines recv_def = with(dyn_def, {{"SE_GU_ONLY", "1"}, {"SE_X_RELAY", "1"}, {"SE_NO_PARTNER", "1"}});
+        if (p.drisc) {
+            recv_def["SE_DRISC"] = "1";
+        }
         const auto kr =
             dm("se5_recv.cpp",
                p.gu,
                DataMovementProcessor::RISCV_0,
-               NOC::NOC_1,
+               xswap ? NOC::NOC_0 : NOC::NOC_1,
                {0,         x_blk,   1,    p.slot, E * p.nk_gu, V,        p.ring_g, 16,    1,     3,      2,    MTG,
                 p.h_tile,  ngu_sg,  DATA, HARR,   GO,          DONE,     KBLK,     HARR,  SFREE, p.hbuf, XARR, HFREE,
                 p.x_slots, x_bytes, S,    NP,     HSFREE,      H_PIECES, p.nk_gu,  GATH1, GATH2, 1,      G,    E},
-               with(dyn_def, {{"SE_GU_ONLY", "1"}, {"SE_X_RELAY", "1"}, {"SE_NO_PARTNER", "1"}}));
+               recv_def);
         // perf probe (read at program build): MIMO_FL_GU_FULL_SYNC=1 - fp32 gate/up in a full-sync DST (8 tiles: the
         // whole MT x 2 NP sub-block in one K loop, no row passes; pack no longer overlaps math, once per sub-block)
         const bool gu_full_sync = p.gu_fp32 && p.gu_rp && (p.gu_full_sync || std::getenv("MIMO_FL_GU_FULL_SYNC"));
@@ -588,8 +638,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 const uint32_t ci = r * p.r_ + j;
                 const CoreCoord gc = p.gu[ci];
                 Args a;
-                a.lit(pk(p.readers[r]))
-                    .lit(j)
+                // the forwarder and its credit word: the reader's semaphore j, or the DRISC's L1 word j
+                a.lit(p.drisc ? drisc_xy(r) : pk(p.readers[r]))
+                    .lit(p.drisc ? GRANT : j)
                     .lit((r % p.n_rd_sg) * p.rg + j / G)
                     .lit(head_xy_sg[sg].size())
                     .lit(0)
@@ -738,7 +789,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         TT_FATAL(yrm_rows(pw) >= 1, "flat_routed_expert: row-major y: no room for one row tile");
         arena_cb(16, p.o_off, yrm_rows(pw) * pw * 2048, cores, tt::DataFormat::Float16_b, 2048);
     };
-    arena_cb(0, 0, p.rd_slots * p.rg * p.slot * w_tile, p.readers, wf, w_tile);
+    if (!p.drisc) {
+        arena_cb(0, 0, p.rd_slots * p.rg * p.slot * w_tile, p.readers, wf, w_tile);
+    }
     arena_cb(0, 0, RM_CHUNKS * 32 * p.seg, p.relays, tt::DataFormat::Float16_b, p.seg);
     arena_cb(1, p.sb_off, p.sb_slots * MT * p.sbt * p.x_tile, p.relays, x_fmt, p.x_tile);
     arena_cb(1, 0, p.ring_g * p.slot * w_tile, p.gu, wf, w_tile);

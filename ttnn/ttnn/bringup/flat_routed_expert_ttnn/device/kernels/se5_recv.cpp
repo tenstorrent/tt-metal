@@ -129,7 +129,16 @@ void kernel_main() {
     const uint32_t pxy = get_arg_val<uint32_t>(9), sxy = get_arg_val<uint32_t>(10);
     const bool is_coord = get_arg_val<uint32_t>(8) != 0;
     auto sem = [](uint32_t id) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id)); };
+#ifdef SE_DRISC
+    // DRISC mode (se_drisc.hpp): the forwarder is a DRAM core that polls this core's grants (RT 1: the semaphore
+    // counting them, zero at launch) - no NoC traffic from here (a write on the x multicast's NOC from its
+    // destinations is the wedge pattern above)
+    volatile tt_l1_ptr uint32_t* granted_word = sem(credit_sem_id);
+    auto grant = [&](uint32_t n) { *granted_word = *granted_word + n; };
+#else
     const uint64_t credit_noc = get_noc_addr(fxy >> 16, fxy & 0xFFFF, get_semaphore(credit_sem_id));
+    auto grant = [&](uint32_t n) { noc_semaphore_inc(credit_noc, n); };
+#endif
     const uint64_t done_noc = get_noc_addr(cxy >> 16, cxy & 0xFFFF, get_semaphore(done_sem_id));
     volatile tt_l1_ptr uint32_t* gath_sem = sem(gath_sem_id);
     const uint32_t peer0 = 21 + nh;
@@ -201,7 +210,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* harr_sem[2] = {sem(harr_sem_id), sem(harr1_sem_id)};
 
     if (!is_b) {
-        noc_semaphore_inc(credit_noc, w_slots);  // every landing slot starts free
+        grant(w_slots);  // every landing slot starts free
     }
     uint32_t granted = w_slots, pushed = 0;
     uint32_t x_pub = 0, x_cons = 0, x_rep = 0;
@@ -251,7 +260,7 @@ void kernel_main() {
 #endif
         while (!is_b && granted < total_w && cb_pages_reservable_at_back(in1_cb, (granted - pushed + 1) * slot) &&
                (no_partner || *bcopy >= granted + 1 - w_slots)) {
-            noc_semaphore_inc(credit_noc, 1);
+            grant(1);
             ++granted;
         }
         while (!is_b && *data_sem > pushed) {

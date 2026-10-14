@@ -12,6 +12,7 @@
 #include <tt-metalium/global_semaphore.hpp>
 
 #include "flat_routed_expert.hpp"
+#include "device/flat_drisc.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::bringup::detail {
@@ -222,6 +223,21 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("x_bf16") = false,
         nb::arg("h_bf16") = false,
         "The flat_routed_expert layout plan (weight bank layout, coordinator cores for the done words).");
+    mod.def(
+        "flat_drisc_stop",
+        [](tt::tt_metal::distributed::MeshDevice* device) {
+            ttnn::operations::bringup::flat_routed_expert::flat_drisc_stop(device);
+        },
+        nb::arg("device"),
+        "Stops the flat expert's persistent DRISC gate/up senders on this mesh device (MIMO_FL_DRISC); call before "
+        "closing it.");
+    mod.def(
+        "flat_drisc_dump",
+        [](tt::tt_metal::distributed::MeshDevice* device) {
+            ttnn::operations::bringup::flat_routed_expert::flat_drisc_dump(device);
+        },
+        nb::arg("device"),
+        "Logs the flat expert's DRISC senders' words (debug).");
 }
 
 }  // namespace ttnn::operations::bringup::detail

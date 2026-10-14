@@ -6,6 +6,13 @@ add_library(TTNN::Ops::Bringup::FlatRoutedExpertTtnn ALIAS ttnn_op_bringup_flat_
 tt_reuse_precompile_headers(ttnn_op_bringup_flat_routed_expert_ttnn TT::CommonPCH)
 # The source sat under ttnn/cpp and got it as an include dir from its API header set's BASE_DIRS.
 target_include_directories(ttnn_op_bringup_flat_routed_expert_ttnn PRIVATE ${FixmeOpAPIDir})
+# DRISC mode (device/flat_drisc.cpp) launches DRAM-core programs through tt_metal internals (slow dispatch, HAL)
+set_source_files_properties(
+    device/flat_drisc.cpp
+    PROPERTIES
+        INCLUDE_DIRECTORIES
+            "$<TARGET_PROPERTY:tt_metal,INCLUDE_DIRECTORIES>"
+)
 
 set_target_properties(
     ttnn_op_bringup_flat_routed_expert_ttnn
@@ -35,6 +42,7 @@ target_sources(
     PRIVATE
         device/flat_routed_expert_device_operation.cpp
         device/flat_combine_overlap_device_operation.cpp
+        device/flat_drisc.cpp
         device/flat_routed_expert_plan.cpp
         device/flat_routed_expert_program_factory.cpp
         flat_routed_expert.cpp
