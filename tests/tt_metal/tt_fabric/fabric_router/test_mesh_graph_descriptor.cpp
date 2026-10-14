@@ -2682,11 +2682,12 @@ TEST(MeshGraphDescriptorTests, PerMeshFabricConfigFromMgd) {
     EXPECT_ANY_THROW(resolve("", "", FabricConfig::FABRIC_2D_TORUS_Y));
 }
 
-// 1D fabric config rules: a 1D line mesh defaults to FABRIC_1D and a 1D ring axis to FABRIC_1D_RING;
-// a process-wide (code) override supplies the config when the MGD declares none, and the MGD's own
-// fabric_config is the source of truth that overrides a conflicting code override. (T3K cluster so the
-// 1D configs map to MESH and no is_ubb_galaxy torus expansion interferes.)
-TEST(MeshGraphDescriptorTests, FabricConfig1DRulesAndCodeOverride) {
+// Fabric config resolution rules: the auto-derive path (no explicit config) is ALWAYS 2D -- a line mesh
+// -> FABRIC_2D, a ring axis -> the matching torus variant, never 1D. An explicit config (process-wide in
+// code, or declared in the MGD) can request anything (including 1D on a single mesh) and overrides the
+// derived 2D; the MGD field is the source of truth over a conflicting code override. (T3K cluster so the
+// explicit 1D configs map to MESH and no is_ubb_galaxy torus expansion interferes.)
+TEST(MeshGraphDescriptorTests, FabricConfigDerivesTwoDAndExplicitOverride) {
     const auto resolved = [](const std::string& dim_types,
                              const std::string& declared_field,
                              std::optional<tt::tt_fabric::FabricConfig> code_override) {
@@ -2701,7 +2702,7 @@ TEST(MeshGraphDescriptorTests, FabricConfig1DRulesAndCodeOverride) {
             "graph_descriptors { name: \"G0\" type: \"FABRIC\" "
             "instances { mesh { mesh_descriptor: \"M0\" mesh_id: 0 } } } "
             "top_level_instance { graph { graph_descriptor: \"G0\" graph_id: 0 } }";
-        const auto path = std::filesystem::temp_directory_path() / "test_fabric_1d_rules.textproto";
+        const auto path = std::filesystem::temp_directory_path() / "test_fabric_config_rules.textproto";
         {
             std::ofstream file(path);
             file << text_proto;
@@ -2716,14 +2717,16 @@ TEST(MeshGraphDescriptorTests, FabricConfig1DRulesAndCodeOverride) {
     };
     using tt::tt_fabric::FabricConfig;
 
-    // 1D defaults derived from dim_types: line -> FABRIC_1D, ring axis -> FABRIC_1D_RING.
-    EXPECT_EQ(resolved("LINE, LINE", "", std::nullopt), FabricConfig::FABRIC_1D);
-    EXPECT_EQ(resolved("LINE, RING", "", std::nullopt), FabricConfig::FABRIC_1D_RING);
+    // Auto-derive is always 2D, never 1D -- even for a 1-row mesh. A plain line -> FABRIC_2D; a RING axis
+    // -> the matching torus variant (dim 1 -> TORUS_X here).
+    EXPECT_EQ(resolved("LINE, LINE", "", std::nullopt), FabricConfig::FABRIC_2D);
+    EXPECT_EQ(resolved("LINE, RING", "", std::nullopt), FabricConfig::FABRIC_2D_TORUS_X);
 
-    // Set through code: with no MGD field, the process-wide override is the source of the config.
-    EXPECT_EQ(resolved("LINE, LINE", "", FabricConfig::FABRIC_1D_RING), FabricConfig::FABRIC_1D_RING);
+    // Explicit code override can request anything (incl. 1D on a single mesh) and overrides the derived 2D.
+    EXPECT_EQ(resolved("LINE, LINE", "", FabricConfig::FABRIC_1D), FabricConfig::FABRIC_1D);
+    EXPECT_EQ(resolved("LINE, RING", "", FabricConfig::FABRIC_1D_RING), FabricConfig::FABRIC_1D_RING);
 
-    // The MGD's fabric_config is the source of truth: it overrides a conflicting code override.
+    // The MGD field is the source of truth: it can request anything and overrides a conflicting code override.
     EXPECT_EQ(
         resolved("LINE, RING", "fabric_config: FABRIC_1D", FabricConfig::FABRIC_1D_RING), FabricConfig::FABRIC_1D);
 }
@@ -2754,6 +2757,50 @@ TEST(MeshGraphDescriptorTests, OneDFabricRejectedForMultiMesh) {
         std::filesystem::remove(path);
         EXPECT_NE(std::string(e.what()).find("1D fabric is single-mesh only"), std::string::npos) << e.what();
     }
+}
+
+// The config-vs-topology check runs AFTER resolution for any explicit override, so an incompatible config
+// is rejected whether it comes from a process-wide code override or a declared MGD field. A 4x2 LINE,LINE
+// mesh provides MESH; a TORUS_Y (genuine ring on the extent-4 axis) needs more connectivity and is
+// rejected, while plain FABRIC_2D is accepted -- both ways.
+TEST(MeshGraphDescriptorTests, IncompatibleFabricConfigRejectedAfterResolution) {
+    const auto throws = [](const std::string& declared_field,
+                           std::optional<tt::tt_fabric::FabricConfig> code_override) {
+        const std::string text_proto =
+            "mesh_descriptors { name: \"L\" arch: BLACKHOLE "
+            "device_topology { dims: [ 4, 2 ] dim_types: [ LINE, LINE ] } host_topology { dims: [ 1, 1 ] } "
+            "channels { count: 2 policy: RELAXED } " +
+            declared_field +
+            " } "
+            "graph_descriptors { name: \"G0\" type: \"FABRIC\" "
+            "instances { mesh { mesh_descriptor: \"L\" mesh_id: 0 } } } "
+            "top_level_instance { graph { graph_descriptor: \"G0\" graph_id: 0 } }";
+        const auto path = std::filesystem::temp_directory_path() / "test_incompat_fabric_config.textproto";
+        {
+            std::ofstream file(path);
+            file << text_proto;
+        }
+        bool threw = false;
+        try {
+            if (code_override.has_value()) {
+                tt::tt_fabric::MeshGraph mg(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path.string(), *code_override);
+            } else {
+                tt::tt_fabric::MeshGraph mg(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path.string());
+            }
+        } catch (const std::exception&) {
+            threw = true;
+        }
+        std::filesystem::remove(path);
+        return threw;
+    };
+    using tt::tt_fabric::FabricConfig;
+
+    // Incompatible torus is rejected from a code override and from a declared MGD field.
+    EXPECT_TRUE(throws("", FabricConfig::FABRIC_2D_TORUS_Y));
+    EXPECT_TRUE(throws("fabric_config: FABRIC_2D_TORUS_Y", std::nullopt));
+    // Compatible plain FABRIC_2D is accepted from either source.
+    EXPECT_FALSE(throws("", FabricConfig::FABRIC_2D));
+    EXPECT_FALSE(throws("fabric_config: FABRIC_2D", std::nullopt));
 }
 
 // express_links (two ROW patterns) expand into 48 Z edges on the 32x4 [RING, RING] descriptor.

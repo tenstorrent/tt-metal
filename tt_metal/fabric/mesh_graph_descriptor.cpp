@@ -693,36 +693,15 @@ FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::Sw
 }
 
 // Derive a mesh's default FabricConfig from its declared device_topology dim_types, used when neither
-// the MGD nor a process-wide override supplies one. Rules:
-//   - Dimensionality is decided by how many axes have extent > 1 (an extent-1 axis is degenerate and
-//     doesn't count). <= 1 such axis => the mesh is effectively 1D; otherwise it is 2D.
-//   - 1D mesh: FABRIC_1D_RING when its single real axis is declared RING, else FABRIC_1D. (A single
-//     chip, with no axis of extent > 1, falls through to FABRIC_1D.)
-//   - 2D mesh: map the declared ring axes to the matching torus variant -- dim 0 (rows, N/S) => TORUS_Y,
-//     dim 1 (cols, E/W) => TORUS_X, both => TORUS_XY; plain FABRIC_2D when neither axis is RING.
+// the MGD nor a process-wide override supplies one. The auto-derived config is ALWAYS a 2D-family config
+// (plain FABRIC_2D or a torus variant) regardless of dim_types -- 1D is never auto-derived; it can only
+// be requested explicitly (in the MGD or in code). The torus variant follows the declared ring axes:
+// dim 0 (rows, N/S) => TORUS_Y, dim 1 (cols, E/W) => TORUS_X, both => TORUS_XY, neither => FABRIC_2D.
 FabricConfig MeshGraphDescriptor::default_fabric_config_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
-    const auto& dims = mesh_desc->device_topology().dims();
     const auto& dim_types = mesh_desc->device_topology().dim_types();
     const auto is_ring = [&](int axis) {
         return axis < dim_types.size() && dim_types[axis] == proto::TorusTopology::RING;
     };
-
-    // Count the axes that are genuinely multi-chip; remember the last one for the 1D case.
-    int non_unit_axes = 0;
-    int sole_axis = -1;
-    for (int i = 0; i < dims.size(); ++i) {
-        if (dims[i] > 1) {
-            ++non_unit_axes;
-            sole_axis = i;
-        }
-    }
-
-    // 1D (or single-chip): a RING on the sole real axis is a 1D ring, otherwise a 1D line.
-    if (non_unit_axes <= 1) {
-        return (sole_axis >= 0 && is_ring(sole_axis)) ? FabricConfig::FABRIC_1D_RING : FabricConfig::FABRIC_1D;
-    }
-
-    // 2D: pick the torus variant from which axes ring (dim 0 -> Y, dim 1 -> X), else plain 2D mesh.
     const bool y_ring = is_ring(0);
     const bool x_ring = is_ring(1);
     if (y_ring && x_ring) {
