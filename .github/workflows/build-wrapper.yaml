@@ -1,190 +1,75 @@
 name: "Build TT-Metalium across all configs"
-
 on:
-  workflow_call:
-    inputs:
-      # Pre-built Docker image tags (optional - if provided, skips docker build)
-      ubuntu-2204-ci-build-tag:
-        required: false
-        type: string
-        default: ""
-      ubuntu-2204-dev-tag:
-        required: false
-        type: string
-        default: ""
-      ubuntu-2204-manylinux-tag:
-        required: false
-        type: string
-        default: ""
-      ubuntu-2404-ci-build-tag:
-        required: false
-        type: string
-        default: ""
-      ubuntu-2404-dev-tag:
-        required: false
-        type: string
-        default: ""
-      ubuntu-2404-manylinux-tag:
-        required: false
-        type: string
-        default: ""
-      # Single-platform build options (alternative to matrix build with docker tags)
-      platform:
-        required: false
-        type: string
-        default: ""
-        description: "Platform to target (Ubuntu 22.04, Ubuntu 24.04). If set, runs single-platform build instead of matrix."
-      build-type:
-        required: false
-        type: string
-        default: "Release"
-        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
-      runs-on:
-        required: false
-        type: string
-        default: "tt-ubuntu-2204-large-stable"
-        description: "Runner label for build-artifact jobs"
-      enable-lto:
-        required: false
-        type: boolean
-        default: false
-        description: "Enable Link Time Optimization (LTO)"
-      ref:
-        required: false
-        type: string
-        default: ""
-        description: "Git ref to checkout (defaults to github.sha if not provided)"
-      fetch-depth:
-        required: false
-        type: number
-        default: 500
-        description: "Git fetch depth passed through to build-artifact"
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
-        description: "Harbor pull-through prefix for CI images (empty to use canonical refs)"
   workflow_dispatch:
-    inputs:
-      platform:
-        required: false
-        type: choice
-        default: "Ubuntu 22.04"
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to target"
-      build-type:
-        required: false
-        type: choice
-        default: Release
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - ASan
-          - TSan
-        description: "Build type configuration"
-      runs-on:
-        required: false
-        type: string
-        default: "tt-ubuntu-2204-large-stable"
-        description: "Runner label for build-artifact jobs"
-      enable-lto:
-        required: false
-        type: boolean
-        default: false
-        description: "Enable Link Time Optimization (LTO)"
-
 permissions:
   contents: read
-  packages: write
-
+  actions: read
+  packages: read
 jobs:
-  # =============================================================================
-  # NOTE: This workflow has two modes:
-  # 1. workflow_dispatch: Single platform build via build-dispatch job
-  # 2. workflow_call: Matrix build across multiple configs via build job
-  #
-  # Platform parsing is handled by build-artifact.yaml internally.
-  # =============================================================================
-
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
-
-  # build-dispatch is for direct workflow_dispatch calls only
-  build-dispatch:
-    needs: check-harbor
-    if: ${{ inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != '' }}
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      contents: read
-      packages: write
-    secrets: inherit
-    with:
-      harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
-      platform: ${{ inputs.platform }}
-      build-type: ${{ inputs.build-type || 'Release' }}
-      enable-lto: ${{ inputs.enable-lto || false }}
-      publish-artifact: true
-      publish-package: false
-      skip-tt-train: false
-      tracy: false
-      runs-on: ${{ inputs['runs-on'] }}
-      ref: 88db301912607fc681d56c5a21e776b52d84c500
-      fetch-depth: ${{ github.event_name == 'workflow_dispatch' && 500 || inputs.fetch-depth }}
-
-  # build job runs the matrix - either when called from merge-gate with pre-built tags,
-  # or when called via workflow_call without the platform dropdown
-  build:
-    needs: check-harbor
-    if: ${{ inputs.ubuntu-2204-ci-build-tag != '' || inputs.platform == '' }}
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      contents: read
-      packages: write
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        config:
-          - platform: "Ubuntu 22.04"
-            toolchain: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
-            build-type: "Debug"
-          - platform: "Ubuntu 22.04"
-            toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"
-            build-type: "Release"
-          - platform: "Ubuntu 22.04"
-            toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
-            build-type: "Release"
-          - platform: "Ubuntu 24.04"
-            toolchain: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
-            build-type: "Release"
-            enable-lto: true
-          - platform: "Ubuntu 24.04"
-            toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
-            build-type: "Release"
-    with:
-      harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
-      platform: ${{ matrix.config.platform }}
-      toolchain: ${{ matrix.config.toolchain }}
-      build-type: ${{ matrix.config.build-type }}
-      # Enable LTO only when explicitly set in the matrix config
-      enable-lto: ${{ matrix.config.enable-lto || false }}
-      publish-artifact: false
-      publish-package: false
-      skip-tt-train: false
-      tracy: false
-      runs-on: ${{ inputs['runs-on'] }}
-      ref: ${{ inputs.ref }}
-      fetch-depth: ${{ github.event_name == 'workflow_dispatch' && 500 || inputs.fetch-depth }}
-      # Pass pre-built docker image tags based on platform
-      ci-build-docker-image: ${{
-        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-ci-build-tag) ||
-        inputs.ubuntu-2204-ci-build-tag }}
-      dev-docker-image: ${{
-        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-dev-tag) ||
-        inputs.ubuntu-2204-dev-tag }}
-      manylinux-docker-image: ${{
-        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-manylinux-tag) ||
-        inputs.ubuntu-2204-manylinux-tag }}
+  flash-current-runtime:
+    runs-on: tt-ubuntu-2204-large-stable
+    timeout-minutes: 25
+    container:
+      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-dev-amd64@sha256:01621216c5a6d2cc661550ff007d1d1c51ea1e9ba5808286d0c79ab325a03a61
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: validation
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 88db301912607fc681d56c5a21e776b52d84c500
+          submodules: recursive
+          fetch-depth: 500
+          path: source
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: "11935456408"
+          run-id: "38651980925"
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: source
+      - name: Admit exact source and artifact, package in-family wheel without recompiling
+        working-directory: source
+        run: |
+          set -euo pipefail
+          mkdir -p ../evidence ../wheelhouse
+          test "$(git rev-parse HEAD)" = 88db301912607fc681d56c5a21e776b52d84c500
+          echo '9232a7c97f096091d4c37a5944c1b989247e622da428c738d5ade443ccacc1a4  ttm_any.tar.zst' | sha256sum -c -
+          tar --zstd -xf ttm_any.tar.zst
+          echo '33bb942d5b0fc623f2d099866fc5598c02aac71b11f7694225458a2629dae82e  ttnn/ttnn/_ttnn.so' | sha256sum -c -
+          /opt/venv/bin/python -c 'import sys,platform; assert sys.version_info[:3]==(3,12,12); assert platform.machine()=="x86_64"; print(sys.version)'
+          export TT_FROM_PRECOMPILED_DIR="$PWD" TT_METAL_HOME="$PWD"
+          export LD_LIBRARY_PATH="$PWD/build/lib" PYTHONPATH="$PWD:$PWD/ttnn"
+          timeout 600 uv build --wheel --out-dir ../wheelhouse
+          sha256sum ../wheelhouse/*.whl > ../evidence/wheel.sha256
+          uv pip install --python /opt/venv/bin/python -e .
+          uv pip freeze --python /opt/venv/bin/python > ../evidence/environment.txt
+          git diff --exit-code HEAD
+      - name: Actual current-source imports and original host controls, no devices
+        working-directory: source
+        run: |
+          set -euo pipefail
+          export TT_METAL_HOME="$PWD" LD_LIBRARY_PATH="$PWD/build/lib" PYTHONPATH="$PWD:$PWD/ttnn"
+          export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+          timeout 600 /opt/venv/bin/python ../validation/.ci/flash-current-runtime/runtime_host.py "$PWD" ../evidence/host
+          /opt/venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('../evidence/host/import-proof.json').read_text())
+          assert d['origins']['ttnn._ttnn']['sha256']=='33bb942d5b0fc623f2d099866fc5598c02aac71b11f7694225458a2629dae82e'
+          assert d['tt_fds']=={}
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: flash-current88db-runtime-evidence
+          path: evidence
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: flash-current88db-in-family-wheel
+          path: wheelhouse
+          if-no-files-found: error
