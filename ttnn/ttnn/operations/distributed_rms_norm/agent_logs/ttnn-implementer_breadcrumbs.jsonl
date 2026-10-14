@@ -1,1 +1,5 @@
 {"event":"test_run","status":"pass","test":"test_bf16_gamma[1x1x32x64-axis1]","notes":"second param errored at mesh re-open under --dev (fabric ethernet timeout), not op related","ts":"2026-10-14T10:27:03+00:00"}
+{"event":"test_run","status":"pass","test":"test_distributed_rms_norm.py (all 27)","mode":"non-dev","ts":"2026-10-14T10:39:12+00:00"}
+{"event":"device_print_observation","detail":"4096x1024: records/combine/rstd correct on (0,1); errors only in ragged last W chunk rows 2-3 -> cb_output_tiles capacity 2*11 not a multiple of the ragged batch 10, CB pointers wrap only on exact limit hit","ts":"2026-10-14T10:45:57+00:00"}
+{"event":"fix_applied","detail":"cw-dependent CBs (x_resident, output, gamma, xg) sized per chunk group (full / ragged last chunk)","ts":"2026-10-14T10:45:57+00:00"}
+{"event":"test_run","status":"pass","test":"acceptance 27/27; golden supported subset 579 passed","ts":"2026-10-14T10:45:57+00:00"}

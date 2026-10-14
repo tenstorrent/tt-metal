@@ -331,28 +331,43 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
     T_x, T_f = _tile_bytes(x_dtype), _tile_bytes(ttnn.float32)
     block_rows = plan["block_rows"]
     n_src_tiles = plan["n_src_tiles"]
-    out_batch = out_batch_tiles_knob(cw)
 
-    def cb(index, dtype, pages):
+    def cb(index, dtype, pages, cores):
         return ttnn.CBDescriptor(
             total_size=pages * _tile_bytes(dtype),
-            core_ranges=worker_set,
+            core_ranges=cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=_tile_bytes(dtype))
             ],
         )
 
     cbs = [
-        cb(CB_X_RESIDENT, x_dtype, X_BLOCKS_IN_FLIGHT * block_rows * cw),
-        cb(CB_SCALER, ttnn.bfloat16, 1),
-        cb(CB_SQ_ACC, ttnn.float32, block_rows),
-        cb(CB_PARTIAL, ttnn.float32, block_rows),
-        cb(CB_STATS_COMBINE, ttnn.float32, n_src_tiles * block_rows),
-        cb(CB_RSTD, ttnn.float32, block_rows),
-        cb(CB_OUTPUT_TILES, x_dtype, OUT_DEPTH * out_batch),
+        cb(CB_SCALER, ttnn.bfloat16, 1, worker_set),
+        cb(CB_SQ_ACC, ttnn.float32, block_rows, worker_set),
+        cb(CB_PARTIAL, ttnn.float32, block_rows, worker_set),
+        cb(CB_STATS_COMBINE, ttnn.float32, n_src_tiles * block_rows, worker_set),
+        cb(CB_RSTD, ttnn.float32, block_rows, worker_set),
     ]
-    if has_gamma:
-        cbs += [cb(CB_GAMMA_TILES, gamma.dtype, cw), cb(CB_XG, ttnn.float32, block_rows * cw)]
+    # CBs whose batch is a tile row of the W chunk are sized from the chunk the core actually owns: CB pointers
+    # wrap only on an exact hit of the ring end, so every batch must divide the capacity. The last chunk is
+    # ragged (tensor_w_tiles - (S_w - 1) * core_w_tiles), so its cores get their own CB descriptors.
+    cw_last = Wt - (S_w - 1) * cw
+    ragged = {(k % gx, 1 + k // gx) for k in range(n_used) if k % S_w == S_w - 1} if cw_last != cw else set()
+    chunk_groups = [(cw, [c for c in worker_cores if (c.x, c.y) not in ragged])]
+    if ragged:
+        chunk_groups.append((cw_last, [c for c in worker_cores if (c.x, c.y) in ragged]))
+    for cw_group, cores in chunk_groups:
+        cores_set = _crs(cores)
+        out_batch = out_batch_tiles_knob(cw_group)
+        cbs += [
+            cb(CB_X_RESIDENT, x_dtype, X_BLOCKS_IN_FLIGHT * block_rows * cw_group, cores_set),
+            cb(CB_OUTPUT_TILES, x_dtype, OUT_DEPTH * out_batch, cores_set),
+        ]
+        if has_gamma:
+            cbs += [
+                cb(CB_GAMMA_TILES, gamma.dtype, cw_group, cores_set),
+                cb(CB_XG, ttnn.float32, block_rows * cw_group, cores_set),
+            ]
 
     # ---- compile-time args ----
     x_acc = list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
