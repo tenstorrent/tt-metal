@@ -4,6 +4,7 @@
 
 """Runs the whole session flow against fake_benchmark.py instead of a device binary."""
 
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -224,14 +225,35 @@ def test_malformed_env_template_is_a_clear_error(expect_error, tmp_path, monkeyp
         session.execute(suite, ENV)
 
 
-def test_a_declared_metric_no_case_reports_is_rejected(setup, expect_error):
+def test_a_declared_metric_a_case_does_not_report_is_rejected(setup, expect_error):
     make, plan = setup
     suite = make([{"BM/a/k:1/manual_time": 1e-6}])
     plan.write_text(
         json.dumps({"metric": METRIC, "runs": [{"BM/a/k:1/manual_time": 1e-6}], "unreported_metric": "Other"})
     )
-    with expect_error(contract.ContractError, "reported by no case"):
+    with expect_error(contract.ContractError, "does not report declared metrics"):
         session.execute(suite, ENV)
+
+
+def test_output_with_fewer_repetitions_than_requested_is_rejected(setup, expect_error):
+    make, plan = setup
+    suite = make([{"BM/a/k:1/manual_time": 1e-6}])
+    plan.write_text(
+        json.dumps({"metric": METRIC, "runs": [{"BM/a/k:1/manual_time": 1e-6}], "ignore_repetitions": True})
+    )
+    with expect_error(contract.ContractError, "asked for 2 repetitions"):
+        session.execute(suite, ENV)
+
+
+def test_google_benchmark_suites_apply_env_and_env_unset(setup, monkeypatch):
+    make, plan = setup
+    suite = dataclasses.replace(make([{"BM/a/k:1/manual_time": 1e-6}]), env={"SET_ME": "on"}, env_unset=("DROP_ME",))
+    monkeypatch.setenv("DROP_ME", "1")
+    plan.write_text(
+        json.dumps({"metric": METRIC, "runs": [{"BM/a/k:1/manual_time": 1e-6}], "echo_env": ["SET_ME", "DROP_ME"]})
+    )
+    record = session.execute(suite, ENV)
+    assert record.context["env_SET_ME"] == "on" and record.context["env_DROP_ME"] == "unset"
 
 
 def test_update_from_run_writes_nothing_when_any_record_is_refused(monkeypatch, tmp_path):

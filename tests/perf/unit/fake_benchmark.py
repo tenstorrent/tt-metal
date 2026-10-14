@@ -29,7 +29,8 @@ call_path.write_text(json.dumps(calls))
 if values == "crash":
     sys.exit(3)
 
-repetitions = int(args.get("--benchmark_repetitions", 1))
+# "ignore_repetitions" mimics a binary that does not honor --benchmark_repetitions.
+repetitions = 1 if plan.get("ignore_repetitions") else int(args.get("--benchmark_repetitions", 1))
 case_filter = args.get("--benchmark_filter")
 metric = plan["metric"]
 rows = []
@@ -67,4 +68,7 @@ document = {
 # Lets a test declare a metric that no row reports.
 if "unreported_metric" in plan:
     document["context"][f"perf.metric.{plan['unreported_metric']}"] = metric["decl"]
+# Lets a test see the environment the benchmark ran with.
+for name in plan.get("echo_env", []):
+    document["context"][f"perf.context.env_{name}"] = os.environ.get(name, "unset")
 Path(args["--benchmark_out"]).write_text(json.dumps(document))
