@@ -64,11 +64,14 @@ against upstream's modules, run on CPU with the checkpoint's weights.
 - As upstream, with batch size above 1 every sample gathers the queries the first sample's cameras
   see, and the temporal self-attention reads `value[:bs]`; both are exact at batch size 1, which
   BEVFormer runs.
-- The sampling grids are float32, as in the decoder.
+- The temporal self-attention, the spatial cross-attention and the decoder's cross-attention all
+  run on main's `TTMSDeformableAttention` and its fused MSDA op
+  (`ttnn.experimental.fused_msda_from_offsets`), with float32 reference points: in bfloat16 a
+  point moves in steps of up to 0.8 px on the 200x200 grid. The self-attention calls the op's
+  core directly, as its Linears read both stacked maps.
 - The camera features are `(bs * num_cams, num_keys, 256)`: each sample's cameras in turn, the
   FPN's order, with the levels concatenated, as the perception transformer builds them.
-- Parameters come from `tt/model_preprocessing.py` (`create_bevformer_encoder_parameters`) and are
-  single use: building an encoder consumes the cross-attentions' sampling-offset weights.
+- Parameters come from `tt/model_preprocessing.py` (`create_bevformer_encoder_parameters`).
 
 ### Perception Transformer
 
@@ -118,13 +121,11 @@ six DETR layers of self-attention, single-level deformable cross-attention over 
 (`TTMSDeformableAttention`) and an FFN, with 900 object queries. After each layer the
 `reg_branches` output refines the (x, y, z) reference points.
 
-- The reference points and the sampling grid built from them are float32. In bfloat16 a
-  point moves in steps of up to 0.8 px on the 200x200 base BEV grid, and the error compounds
-  through the refinement.
-- The BEV size is folded into the sampling-offset Linear when the module is built, so the
-  decoder is built for one `(bev_h, bev_w)` and its forward runs on device only.
-- Parameters come from `tt/model_preprocessing.py` and are single use: building a decoder
-  consumes them, so each decoder instance needs its own `create_decoder_parameters` call.
+- The reference points stay float32 through the refinement and into the fused MSDA op, which
+  forms the sampling location from them in fp32. In bfloat16 a point moves in steps of up to
+  0.8 px on the 200x200 base BEV grid, and the error compounds through the refinement. The
+  forward runs on device only.
+- Parameters come from `tt/model_preprocessing.py` (`create_decoder_parameters`).
 - Inputs and outputs are sequence-first by default, as in the reference; `batch_first=True` takes
   and returns batch-first tensors and skips the permutes.
 - Besides the layer outputs and refined points, it returns each layer's box codes, the
@@ -139,7 +140,7 @@ and, per decoder layer, the classification branch.
 
 - The object queries, their positional embeddings and the initial reference points depend on
   the weights only, so `tt/model_preprocessing.py` computes them once. The parameters also
-  carry the head's BEV shape and `pc_range`, and are single use, like the decoder's.
+  carry the head's BEV shape and `pc_range`.
 - The box predictions are the decoder's box codes with cx, cy and cz replaced by its refined
   float32 points, scaled from [0, 1] to `pc_range` metres. The class logits are float32, as the
   coder's exact re-rank needs.
@@ -434,7 +435,7 @@ the port:
 - `pc_range`, [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]: the nuScenes range the BEV grid, the encoder's
   pillars and the head's boxes share.
 - The box code and the coder's box layout, ranges and top-k size.
-- The port's precision and memory choices: the float32 sampling grids and class logits, and the
+- The port's precision and memory choices: the float32 reference points and class logits, and the
   backbone and FPN's per-layer DRAM, sharding and fp32-accumulation settings.
 
 The dataset presets (camera rigs, image sizes, point-cloud ranges) that the deformable-attention,

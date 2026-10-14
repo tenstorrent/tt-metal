@@ -31,7 +31,7 @@ CASES = [
     ("base", BEV_SHAPES["base"], 1, False, False),
     ("base-traced", BEV_SHAPES["base"], 1, True, False),
     ("tiny-bs2", BEV_SHAPES["tiny"], 2, False, False),
-    # Non-square, so a swapped (H, W) anywhere in the grid scale or value layout shows.
+    # Non-square, so a swapped (H, W) anywhere in the offset scale or value layout shows.
     ("50x100", (50, 100), 1, False, False),
     # bs=2, so a batch/query mix-up in the batch-first inputs or outputs shows.
     ("tiny-bs2-batch-first", BEV_SHAPES["tiny"], 2, False, True),

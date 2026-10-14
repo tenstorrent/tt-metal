@@ -28,9 +28,8 @@ from models.experimental.bevformer.tt.tt_resnet import TtResNet
 class TtBEVFormer:
     """The detector for the image shape its parameters were built for.
 
-    The backbone's and FPN's convs are pinned to the image shape, and building the encoder consumes
-    its cross-attentions' sampling-offset weights (see ``TTBEVFormerEncoder``), so each instance
-    needs its own ``create_bevformer_parameters``.
+    The backbone's and FPN's convs are pinned to the image shape ``create_bevformer_parameters``
+    recorded them for.
     """
 
     def __init__(self, params, device):
