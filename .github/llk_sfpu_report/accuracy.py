@@ -13,6 +13,7 @@ report shows what changed.
 """
 
 import hashlib
+import math
 import shutil
 import sys
 from pathlib import Path
@@ -140,30 +141,56 @@ def _exact_stats(d):
     }
 
 
-def _specials(d):
-    """{input bits: (class, input, result)} for each distinct special input.
+#: The smallest normal magnitude of a float format: a nonzero input below it is subnormal.
+_MIN_NORMAL = {"Float16": 2.0**-14}
 
-    Not judged against the golden: the harness golden models the unpacker and the
-    Dest, so for NaN, signed zeros and subnormals it is not an IEEE reference (it
-    maps a NaN input to inf, and -0 to +0). What a reviewer needs is what the
-    hardware returns, and whether the PR changed it.
+
+def _min_normal(fmt):
+    return _MIN_NORMAL.get(fmt, 2.0**-126 if fmt.startswith(("Float", "Bfp", "Tf32")) else 0.0)
+
+
+def _golden_is_ieee(operands, min_normal):
+    """Whether the harness golden is an IEEE reference for these inputs. It models the
+    unpacker and the Dest, so it maps a NaN input to inf and -0 to +0, and flushes
+    subnormals: for those it says what the hardware does, not what is right."""
+    for v in operands:
+        if v != v or (v == 0 and math.copysign(1.0, v) < 0) or (v != 0 and abs(v) < min_normal):
+            return False
+    return True
+
+
+def _specials(d):
+    """{input bits: (class, input, result, reference)} for each distinct special input.
+
+    ``reference`` is the golden where it is an IEEE reference for the input, else None.
+    What a reviewer needs is what the hardware returns and whether the PR changed it;
+    the reference tells a change toward the right answer from a change away from it.
     """
     import torch
 
     src, result = d["src"].reshape(-1), d["result"].reshape(-1)
+    golden = torch.as_tensor(d["golden"]).reshape(-1) if d.get("golden") is not None else None
+    min_normal = _min_normal(d.get("in", ""))
     bits = lambda t, i: int(t[i].to(torch.float64).view(torch.int64))  # noqa: E731; NaN != NaN
+
+    def ref(i, operands):
+        if golden is None or i >= golden.numel() or not _golden_is_ieee(operands, min_normal):
+            return None
+        return float(golden[i])
+
     out = {}
     if d.get("binary"):
         src_b = d["src_b"].reshape(-1)
         for i in range(result.numel()):
             key = (bits(src, i), bits(src_b, i))
             if key not in out:
-                out[key] = ("pair", (float(src[i]), float(src_b[i])), float(result[i]))
+                pair = (float(src[i]), float(src_b[i]))
+                out[key] = ("pair", pair, float(result[i]), ref(i, pair))
         return out
     for i, cls in enumerate(d["classes"]):
         key = bits(src, i)
         if key not in out:
-            out[key] = (cls, float(src[i]), float(result[i]))
+            out[key] = (cls, float(src[i]), float(result[i]), ref(i, (float(src[i]),)))
     return out
 
 
@@ -176,13 +203,14 @@ def _bits(x):
 def specials_diff(base, head):
     """Special inputs whose result changed, and NaN propagation on each side."""
     changed = []
-    for key, (cls, x, new) in head.items():
+    for key, (cls, x, new, *ref) in head.items():
         if key in base:
             old = base[key][2]
             if _bits(old) != _bits(new) and not (old != old and new != new):
-                changed.append({"class": cls, "input": x, "old": old, "new": new})
+                changed.append({"class": cls, "input": x, "old": old, "new": new, "ref": ref[0] if ref else None})
     nan_ok = {
-        side: all(r != r for c, _, r in spec.values() if c == "nan") for side, spec in (("base", base), ("head", head))
+        side: all(v[2] != v[2] for v in spec.values() if v[0] == "nan")
+        for side, spec in (("base", base), ("head", head))
     }
     return {"changed": changed, "nan_propagates": nan_ok}
 

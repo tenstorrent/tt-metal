@@ -106,7 +106,10 @@ show only rows that changed, regressions first, and fold everything else into
   least 0.1% of the lanes net worse, or new non-finite results; for comparisons and
   integer ops, more wrong lanes; or a result missing on the head side;
 - **edge case**: a special input whose result changes kind (finite ↔ NaN/inf, sign,
-  zero), or a NaN input that stops returning NaN.
+  zero), unless it changes to the kind the reference gives; or a NaN input that stops
+  returning NaN. The reference is the functional test's golden, which models the
+  unpacker and the Dest: for NaN, -0 and subnormal inputs it is not an IEEE answer, so
+  there any change of kind counts.
 
 ## How it works
 
@@ -144,6 +147,11 @@ it, so each gets its own row: the binary float test's unpack broadcast
 (`SfpuElwadd (unpack bcast Row)`), the Dest-broadcast kernel
 (`SfpuElwadd (Dest bcast Row)`), fast mode (`Exp (fast_mode Yes)`) and the TopK sort
 switches.
+
+Logsigmoid's second operand, exp(-x), is an input to the test, but ttnn computes it on
+the device before the kernel runs (a negative and a fast exp). Main's cycles leave that
+work out, so a kernel that does it itself (#54080) measures slower here than it runs in
+ttnn; the report says so beside its rows and its regressions.
 
 **Accuracy.** `test_sfpu_report_accuracy.py` runs each op over every
 finite input of bf16 and fp16 (fp32: every 65,536th value) and over a tile of special

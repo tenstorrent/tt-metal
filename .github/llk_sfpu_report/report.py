@@ -14,7 +14,7 @@ import math
 import re
 from pathlib import Path
 
-from perf import ROWS_PER_TILE
+from perf import DEVICE_COMPUTED_OPERAND, ROWS_PER_TILE
 
 COMMENT_MARKER = "<!-- llk-sfpu-report -->"
 STALE_DAYS = 14
@@ -110,6 +110,14 @@ def perf_section(summaries):
             *[l for _, l in rest],
             "",
             "</details>",
+        ]
+    for op in sorted({row["op"].split(" (", 1)[0] for _, row in rows} & DEVICE_COMPUTED_OPERAND.keys()):
+        operand, work = DEVICE_COMPUTED_OPERAND[op]
+        lines += [
+            "",
+            f"`{op}`: the test feeds {operand} as an input. ttnn computes it on the device before "
+            f"this kernel runs ({work}), so the old cycles leave that work out, and a kernel that "
+            "does it itself measures slower here than it runs in ttnn. Compare such a change in ttnn.",
         ]
     lines += ["", _loadmacro_note(summaries), ""]
     return lines
@@ -415,9 +423,19 @@ def _kind(x):
     return "+" if x > 0 else "-"
 
 
+def _edge_change(c):
+    """How a special-input result changed: None (its value only), "fixed" (its kind, to
+    the reference's) or "worse" (its kind otherwise, or with no reference to go by)."""
+    new = _kind(c["new"])
+    if _kind(c["old"]) == new:
+        return None
+    ref = c.get("ref")
+    return "fixed" if ref is not None and _kind(ref) == new else "worse"
+
+
 def edge_section(summaries):
     """What the hardware returns for the special inputs, where the PR changed it."""
-    severe, minor, nan_lost, nan_gained, total = [], [], [], [], 0
+    severe, fixed, minor, nan_lost, nan_gained, total = [], [], [], [], [], 0
     for s in summaries:
         for rec in s["accuracy"]:
             sp = rec.get("specials")
@@ -427,12 +445,11 @@ def edge_section(summaries):
             op, i, o, approx, dest = rec["key"]
             where = f"{_ARCH[s['arch']]} | {op} | {_fmt_pair(f'{i}->{o}')} | {dest} | {approx}"
             for c in sp["changed"]:
-                bad = _kind(c["old"]) != _kind(c["new"])
-                row = (
-                    f"| {where} | `{_val(c['input'])}` | `{_val(c['old'])}` | "
-                    f"{'⚠️ ' if bad else ''}`{_val(c['new'])}` |"
-                )
-                (severe if bad else minor).append(row)
+                change = _edge_change(c)
+                new = f"`{_val(c['new'])}`"
+                new = {"worse": f"⚠️ {new}", "fixed": f"**{new}**"}.get(change, new)
+                row = f"| {where} | `{_val(c['input'])}` | `{_val(c['old'])}` | {new} |"
+                {"worse": severe, "fixed": fixed}.get(change, minor).append(row)
             nan = sp["nan_propagates"]
             if nan["base"] and not nan["head"]:
                 nan_lost.append(where)
@@ -447,13 +464,16 @@ def edge_section(summaries):
         "",
         "What the hardware returns for inputs the sweep does not feed: NaN, ±inf, ±0, subnormals, and "
         "the format's largest and smallest normal values, where the PR changed it. ⚠️ = the result "
-        "changed kind (finite ↔ NaN/inf, sign, zero).",
+        "changed kind (finite ↔ NaN/inf, sign, zero) away from the reference; **bold** = it changed "
+        "kind to the reference's. For NaN, -0 and subnormal inputs the reference models the unpacker, "
+        "not IEEE, so any change of kind there is ⚠️.",
         "",
     ]
-    if severe:
-        lines += header + severe[:40]
-        if len(severe) > 40:
-            lines.append(f"| … | {len(severe) - 40} more in the artifact | | | | | | |")
+    shown = severe + fixed
+    if shown:
+        lines += header + shown[:40]
+        if len(shown) > 40:
+            lines.append(f"| … | {len(shown) - 40} more in the artifact | | | | | | |")
     elif not minor:
         lines.append(f"No special-input result changed across the {total} variant(s).")
     else:
@@ -545,6 +565,9 @@ def findings(summaries):
                             f"{label} {_num(cell['base'])} → {_num(cell['head'])} cycles/tile "
                             f"({_speedup(cell['base'], cell['head']).strip('*')})"
                         )
+                        computed = DEVICE_COMPUTED_OPERAND.get(row["op"].split(" (", 1)[0])
+                        if computed:
+                            what += f"; the old cycles leave out {computed[0]}, see Performance"
                     add(
                         "perf",
                         s["arch"],
@@ -575,7 +598,7 @@ def findings(summaries):
                 add("accuracy", s["arch"], op, i, where, what, approx)
             sp = rec.get("specials")
             if sp:
-                severe = [c for c in sp["changed"] if _kind(c["old"]) != _kind(c["new"])]
+                severe = [c for c in sp["changed"] if _edge_change(c) == "worse"]
                 if severe:
                     c = severe[0]
                     what = f"`f{_val(c['input']) if isinstance(c['input'], (list, tuple)) else '(' + _val(c['input']) + ')'}`: `{_val(c['old'])}` → `{_val(c['new'])}`"

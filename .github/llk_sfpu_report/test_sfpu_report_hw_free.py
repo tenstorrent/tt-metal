@@ -755,6 +755,61 @@ def test_findings_list_every_regression_once():
     assert "--ops Square --formats Float16_b,Float16 --check" in text
 
 
+def test_a_special_result_that_changes_to_the_reference_is_not_a_regression():
+    import torch
+
+    # #54080: logsigmoid(+inf) went from -0 to +0, which is what torch returns.
+    pairs = [(INF, 0.0), (3.4e38, 0.0), (NAN, 1.0), (1.0, 0.36)]
+    golden = [0.0, 0.0, INF, -0.31]  # the harness maps a NaN input to inf
+
+    def run(result):
+        return accuracy._specials(
+            {
+                "binary": True,
+                "in": "Float32",
+                "src": torch.tensor([a for a, _ in pairs], dtype=torch.float64),
+                "src_b": torch.tensor([b for _, b in pairs], dtype=torch.float64),
+                "golden": torch.tensor(golden, dtype=torch.float64),
+                "result": torch.tensor(result, dtype=torch.float64),
+            }
+        )
+
+    summary = _summary()
+    summary["accuracy"][0]["specials"] = accuracy.specials_diff(
+        run([-0.0, -0.0, NAN, -0.31]), run([0.0, 0.0, 0.0, 0.31])
+    )
+    rows = {
+        line.split("|")[6].strip(): line for line in report.edge_section([summary]) if line.startswith("| Wormhole")
+    }
+    assert rows["`(inf, 0)`"].endswith("| **`0`** |")  # to the reference's kind
+    assert rows[f"`{report._val((3.4e38, 0.0))}`"].endswith("| **`0`** |")
+    assert rows["`(nan, 1)`"].endswith("| ⚠️ `0` |")  # a NaN input has no IEEE reference
+    assert rows["`(1, 0.36)`"].endswith("| ⚠️ `0.31` |")  # away from the reference
+    assert "`f(nan, 1)`: `nan` → `0` (+1 more special input(s))" in report.render([summary])
+
+    # -0 and subnormal inputs have no IEEE reference either.
+    unary = accuracy._specials(
+        {
+            "in": "Float16_b",
+            "src": torch.tensor([-0.0, 1e-40, 2.0], dtype=torch.float64),
+            "classes": ["zero", "subnormal", "normal"],
+            "golden": torch.tensor([0.0, 0.0, 4.0], dtype=torch.float64),
+            "result": torch.tensor([0.0, 0.0, 4.0], dtype=torch.float64),
+        }
+    )
+    assert [v[3] for v in unary.values()] == [None, None, 4.0]
+
+
+def test_logsigmoid_perf_says_what_mains_cycles_leave_out():
+    summary = _summary()
+    for rows in summary["perf"]["unary"].values():
+        rows[0]["op"] = "SfpuLogsigmoid"
+    text = report.render([summary])
+    assert "math 191 → 479 cycles/tile (0.40x); the old cycles leave out exp(-x), see Performance" in text
+    assert "`SfpuLogsigmoid`: the test feeds exp(-x) as an input." in text
+    assert "feeds" not in report.render([_summary()])
+
+
 def test_a_clean_report_says_so():
     summary = _summary()
     summary["perf"] = {}
