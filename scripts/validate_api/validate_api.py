@@ -31,6 +31,7 @@ SKIP_FILES = {
 BANNED_HEADERS = {
     "tt_stl/reflection.hpp": "reflection.hpp pulls in <reflect> and <nlohmann/json.hpp>; use forward declarations or move usage to .cpp files",
     "tt_stl/concepts.hpp": "concepts.hpp pulls in <reflect>; use sizeof(T)==0 for always_false_v, or move usage to .cpp files",
+    "tt-metalium/host_api.hpp": "host_api.hpp declares the free-function API (CreateKernel, CreateBuffer, ...) and pulls in program, buffer, device and kernel headers; include only the specific headers you actually need",
 }
 
 # Exhaustive set of UMD headers allowed in the public API.
@@ -42,6 +43,9 @@ ALLOWED_UMD_HEADERS = {
     "umd/device/types/cluster_descriptor_types.hpp",
     "umd/device/types/core_coordinates.hpp",
     "umd/device/types/xy_pair.hpp",
+    # PhysicalSystemDescriptor holds a tt::umd::SemVer by value. semver.hpp already reached the
+    # API through cluster_descriptor_types.hpp; it is listed so the header can include it directly.
+    "umd/device/utils/semver.hpp",
 }
 
 ALLOWED_PREFIXES = {

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import namedtuple
-from enum import Enum, auto
+from enum import Enum, IntFlag, auto
 
 import torch
 
@@ -81,6 +81,8 @@ class MathOperation(Enum):
     # tilized tensor rather than per datum.
     Cumsum = OpSpec("cumsum", MathOpType.SFPU_UNARY)
     Elu = OpSpec("elu", MathOpType.SFPU_UNARY)
+    # Whole-tile column-wise EMA; its golden works on the tilized tensor.
+    Ema = OpSpec("ema", MathOpType.SFPU_UNARY)
     Exp = OpSpec("exponential", MathOpType.SFPU_UNARY)
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
     # b^x via the SCALE_EN path of calculate_exponential; dispatched with a bf16
@@ -512,6 +514,15 @@ class ApproximationMode(Enum):
         return str(self.value).lower()
 
 
+class SfpuSrcsImpl(Enum):
+    LoadMacro = True
+    Sfpi = False
+
+    @property
+    def cpp_enum_value(self):
+        return str(self.value).lower()
+
+
 class DstRoundingMode(Enum):
     """Mirrors ckernel::DstRoundingMode — how a float32 SFPU result is narrowed
     on store into a bf16 DEST."""
@@ -824,6 +835,16 @@ class UnpackerEngine(Enum):
 class ReluConfig(Enum):
     NoRelu = 0
     ZeroRelu = 1
+
+
+class GatedReduceScale(IntFlag):
+    """Independent input/output scaling flags for gated-reduce tests."""
+
+    None_ = 0
+    Gate = 1
+    Up = 2
+    Out = 4
+    All = Gate | Up | Out
 
 
 class SdpaOp(Enum):

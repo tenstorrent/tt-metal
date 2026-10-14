@@ -6,7 +6,7 @@
 #include "api/debug/assert.h"
 #include "internal/ethernet/tunneling.h"
 
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include <tt-metalium/experimental/fabric/edm_fabric_counters.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
@@ -2581,6 +2581,12 @@ __attribute__((optimize("Os"))) void teardown(
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Update here when enabling dynamic noc mode");
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+
+#ifdef ARCH_BLACKHOLE
+    // Tagged write completion does not reset command-buffer transaction IDs.
+    // Restore this ERISC's dedicated NoC before the kernel-return checks.
+    noc_clear_packet_tags(noc_index);
+#endif
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
