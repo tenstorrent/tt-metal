@@ -250,3 +250,11 @@ def table(rows: list[dict]) -> str:
                 cells.append(f"{per}: {c['path']}" + ("" if c["same_as_deploy"] else " **(differs)**"))
             out.append(f"| {w} | " + " | ".join(cells) + " |")
     return "\n".join(out)
+
+
+def scaling_applies(spec: Spec) -> bool:
+    """A partial run on a box with fewer chips than the deployment box also runs scaled (plan/scale.py)."""
+    if not spec.has_deploy or spec.mode != "partial":
+        return False
+    run, dep = spec.boxes[spec.run_box]["mesh"], spec.boxes[spec.deploy_box]["mesh"]
+    return run[0] * run[1] < dep[0] * dep[1]

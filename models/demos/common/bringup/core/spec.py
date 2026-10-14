@@ -109,6 +109,9 @@ def _resolve(raw: dict) -> dict:
     return data
 
 
+SCALED_ENV = "BRINGUP_SCALED"
+
+
 class Spec:
     def __init__(self, data: dict, path: Path | None = None):
         if "model" not in data:
@@ -116,6 +119,40 @@ class Spec:
         self.raw = data
         self.data = _resolve(data)
         self.path = Path(path).resolve() if path else None
+        # The scaled run of a partial bring-up on a smaller box (BRINGUP_SCALED=1): the reduced checkpoint, its
+        # goldens and the deployment's context scaled to this box (plan/scale.py)
+        self.scaled = os.environ.get(SCALED_ENV) == "1" and self.has_deploy
+        if self.scaled:
+            self.data = self._scaled_view()
+
+    def _scaled_view(self) -> dict:
+        from models.demos.common.bringup.plan.boxes import context
+        from models.demos.common.bringup.plan.memory import load_plan
+
+        if self.mode != "partial":
+            raise SpecError("a scaled run is for partial mode (full mode runs the real model)")
+        ctx = context(self, load_plan(self), self.run_box)
+        if not ctx["exact"]:
+            raise SpecError(
+                f"the scaled context {ctx} is not whole chunks of whole tiles: set scaled.ladder in the spec"
+            )
+        data = dict(self.data)
+        data["target"] = {**(data.get("target") or {}), "seq": ctx["seq"], "chunk": ctx["chunk"]}
+        data["ladder"] = (self.raw.get("scaled") or {}).get("ladder") or [
+            {"name": "scaled", "seq": ctx["seq"], "chunk": ctx["chunk"]},
+            {
+                "name": "scaled_last",
+                "seq": ctx["seq"],
+                "chunk": ctx["chunk"],
+                "golden": "scaled",
+                "prefix_from_golden": True,
+            },
+        ]
+        data["perf"] = {k: v for k, v in (data.get("perf") or {}).items() if k != "rung"}
+        data["tests"] = {
+            k: v for k, v in (data.get("tests") or {}).items() if k not in ("component_rung", "component_chunk")
+        }
+        return data
 
     @classmethod
     def load(cls, path) -> "Spec":
@@ -182,12 +219,24 @@ class Spec:
     @property
     def hf_dir(self) -> Path:
         """The checkpoint dir. BRINGUP_HF overrides the spec (paths.hf, else the prior's, else $ART/<model>/hf) without
-        editing it, e.g. a checkout of an approved spec whose paths.hf names another user's /localdev."""
+        editing it, e.g. a checkout of an approved spec whose paths.hf names another user's /localdev. A scaled run
+        reads the reduced checkpoint instead."""
+        return self.scaled_hf_dir if self.scaled else self.real_hf_dir
+
+    @property
+    def real_hf_dir(self) -> Path:
         env = os.environ.get("BRINGUP_HF")
         return Path(_expand(env)) if env else self._shared("hf", "hf")
 
     @property
+    def scaled_hf_dir(self) -> Path:
+        """The reduced checkpoint of the run's box (plan/scale.py writes it)."""
+        return self._art_sub("hf_scaled", "hf_scaled") / self.run_box
+
+    @property
     def golden_root(self) -> Path:
+        if self.scaled:
+            return self._art_sub("golden_scaled", "golden_scaled") / self.run_box
         return self._shared("golden", "golden")
 
     @property
@@ -197,7 +246,7 @@ class Spec:
     def tt_cache(self, variant: str = "") -> Path:
         """Weight cache dir. The .tensorbin name only holds name/dtype/layout, so the path carries mesh and version."""
         base = self._art_sub("tt_cache", "tt_cache")
-        mesh = "x".join(str(x) for x in self.mesh)
+        mesh = "x".join(str(x) for x in self.mesh) + ("-scaled" if self.scaled else "")
         version = str(self.get("cache_version", "v1"))
         return base / mesh / (f"{version}-{variant}" if variant else version)
 

@@ -186,6 +186,27 @@ def knowledge_summary(spec) -> dict | None:
     }
 
 
+def boxes_summary(spec, res: Path) -> dict | None:
+    """F64: the deployment box this run stands in for, the run's box and mode, and the plan's per-box table
+    (results/plan_boxes.json, plan/boxes.py) when the plan gate wrote it."""
+    if not spec.has_deploy:
+        return None
+    from models.demos.common.bringup.plan.boxes import scaling_applies
+
+    mesh = lambda b: list(spec.boxes[b]["mesh"])  # noqa: E731
+    pb = res / "plan_boxes.json"
+    return {
+        "deploy": {
+            "box": spec.deploy_box,
+            "mesh": mesh(spec.deploy_box),
+            "seq": spec.deploy_seq,
+            "chunk": spec.deploy_chunk,
+        },
+        "run": {"box": spec.run_box, "mesh": mesh(spec.run_box), "mode": spec.mode, "scaled": scaling_applies(spec)},
+        "rows": json.loads(pb.read_text()).get("rows", []) if pb.exists() else [],
+    }
+
+
 def build(spec) -> dict:
     led = Ledger(spec.bringup_dir)
     tasks_spec, state = led.tasks(), led.state()
@@ -323,6 +344,7 @@ def build(spec) -> dict:
         "deferred": deferred_rows(spec, led, state),
         "final": final_tests(spec, led, state),
         "knowledge": knowledge_summary(spec),
+        "boxes": boxes_summary(spec, res),
         "thresholds": {k: spec.threshold(k, v) for k, v in DEFAULT_THRESHOLDS.items()},
         "source": str(spec.bringup_dir.relative_to(spec.repo)),
     }

@@ -56,6 +56,7 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
     metrics.record("rung_chunk", rung["chunk"])
     metrics.record("covered_layers", len(layers))
     metrics.record("subset", int(not full_stack))
+    metrics.record("scaled_run", int(getattr(s, "scaled", False)))  # F64: the reduced model of a scaled run
     state = model.new_state(rung["seq"])
     # F58: the KV format the ladder actually runs on, so a gate can require the served one (one format for the
     # ladder, the contract and serving). Optional hook: state.formats() -> {name: ttnn dtype}; bits per element.

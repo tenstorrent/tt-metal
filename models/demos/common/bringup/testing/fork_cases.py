@@ -53,8 +53,13 @@ def cases(fork: str) -> list[dict]:
     return list(runpy.run_path(str(p)).get("CASES", [])) if p.exists() else []
 
 
-def check(capture: Path, model: str) -> tuple[dict, dict[str, list[dict]]]:
-    calls = json.loads(capture.read_text())["calls"]
+def check(capture: Path | list[Path], model: str) -> tuple[dict, dict[str, list[dict]]]:
+    calls, seen = [], set()
+    for f in capture if isinstance(capture, list) else [capture]:  # e.g. a model's real and scaled runs (F64)
+        for c in json.loads(Path(f).read_text())["calls"]:
+            if (c["op"], c["sig"]) not in seen:
+                seen.add((c["op"], c["sig"]))
+                calls.append(c)
     owner = op_to_fork()
     by_fork: dict[str, list[dict]] = {}
     for c in calls:
@@ -94,7 +99,7 @@ def run_tests(forks: list[str]) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--capture", required=True)
+    ap.add_argument("--capture", required=True, nargs="+", help="one or more capture files (merged by call signature)")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--spec")
     g.add_argument("--model")
@@ -109,7 +114,7 @@ def main(argv=None) -> int:
         model = spec.model_dir.name
     else:
         model = a.model
-    res, missing = check(Path(a.capture), model)
+    res, missing = check([Path(c) for c in a.capture], model)
     stats = res["stats"]
     print(f"{model}: {stats['fork_calls']} distinct call(s) to {stats['forks_used']} fork(s): {res['forks']}")
     for fork, gap in missing.items():

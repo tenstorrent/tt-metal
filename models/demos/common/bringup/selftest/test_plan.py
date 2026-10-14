@@ -539,3 +539,110 @@ def test_run_check_keeps_the_runs_layers(fx):
     gb = lambda r, g: next(x["gb"] for x in r["rows"] if x["group"] == g)  # noqa: E731
     assert gb(mine, "model.layers.*.q.weight") * 2 == gb(every, "model.layers.*.q.weight")
     assert mine["errors"] == [] and gb(mine, "state: state layers 0-2") * 3 == gb(every, "state: state layers 0-2")
+
+
+# ---- F64 steps 4-5: the scaled run (reduced checkpoint, scaled spec view, scaled tasks)
+
+
+def _scaled_setup(fx, tmp_path, monkeypatch):
+    import json as _json
+
+    s = boxes_spec(fx)
+    hf = tmp_path / "hf"
+    hf.mkdir()
+    save_file(
+        {
+            "model.embed.weight": torch.randn(10, 16),
+            "model.layers.0.q.weight": torch.arange(8 * 4 * 16, dtype=torch.float32).reshape(32, 16),
+            "model.layers.0.gate.weight": torch.randn(8, 16),
+            **{f"model.layers.0.experts.{e}.w": torch.full((4, 16), float(e)) for e in range(8)},
+        },
+        str(hf / "model.safetensors"),
+    )
+    (hf / "config.json").write_text(_json.dumps({"text_config": {"num_attention_heads": 8, "n_routed_experts": 8}}))
+    (hf / "tokenizer.json").write_text("{}")
+    monkeypatch.setenv("BRINGUP_HF", str(hf))
+    s.bringup_dir.mkdir(parents=True, exist_ok=True)
+    write(s, "plan.yaml", deploy_plan())
+    sc = {
+        "counts": {"num_attention_heads": "heads", "n_routed_experts": "experts"},
+        "tensors": [
+            {"pattern": "model.layers.*.q.weight", "count": "num_attention_heads", "dim": 0},
+            {"pattern": "model.layers.*.experts.*", "count": "n_routed_experts", "index": r"experts\.(\d+)\."},
+            {"pattern": "model.layers.*.gate.weight", "count": "n_routed_experts", "dim": 0},
+        ],
+    }
+    write(s, "scaling.yaml", sc)
+    return s, hf, sc
+
+
+def test_scale_writes_the_reduced_checkpoint(fx, tmp_path, monkeypatch):
+    import json as _json
+
+    from safetensors.torch import load_file
+
+    from models.demos.common.bringup.plan import scale
+
+    s, hf, sc = _scaled_setup(fx, tmp_path, monkeypatch)
+    r = scale.scale(s)
+    assert r["errors"] == [] and r["counts"] == {"num_attention_heads": [8, 4], "n_routed_experts": [8, 1]}
+    out = load_file(str(s.scaled_hf_dir / "model.safetensors"))
+    src = load_file(str(hf / "model.safetensors"))
+    assert torch.equal(out["model.layers.0.q.weight"], src["model.layers.0.q.weight"][:16])  # 4 of 8 heads x 4 rows
+    assert out["model.layers.0.gate.weight"].shape == (1, 16) and "model.layers.0.experts.0.w" in out
+    assert not any(f"experts.{e}." in n for n in out for e in range(1, 8)) and r["tensors_dropped"] == 7
+    cfg = _json.loads((s.scaled_hf_dir / "config.json").read_text())["text_config"]
+    assert cfg == {"num_attention_heads": 4, "n_routed_experts": 1} and (s.scaled_hf_dir / "tokenizer.json").exists()
+    assert scale.scale(s).get("reused")  # unchanged plan and source: not rewritten
+    bad = {
+        **sc,
+        "tensors": [
+            {"pattern": "model.embed.weight", "count": "n_routed_experts", "dim": 0},  # 10 rows: not whole units of 8
+            {"pattern": "model.layers.*.q.weight", "count": "missing_key", "dim": 0},
+            {"pattern": "nothing.*", "count": "n_routed_experts", "dim": 0},
+        ],
+    }
+    errs = scale.scale(s, sc=bad)["errors"]
+    assert any("not whole units of 8" in e for e in errs) and any("not in counts" in e for e in errs)
+    assert any("matches no checkpoint tensor" in e for e in errs)
+
+
+def test_scaled_spec_view(fx, tmp_path, monkeypatch):
+    s, hf, _ = _scaled_setup(fx, tmp_path, monkeypatch)
+    monkeypatch.setenv("BRINGUP_SCALED", "1")
+    v = Spec.load(s.path)
+    assert v.scaled and (v.get("target.seq"), v.get("target.chunk")) == (1024, 256)
+    assert [r["name"] for r in v.data["ladder"]] == ["scaled", "scaled_last"] and v.rung("scaled_last")["golden"]
+    assert v.hf_dir == v.scaled_hf_dir and v.golden_root.name == "small" and "golden_scaled" in str(v.golden_root)
+    assert v.tt_cache().parent.name == "2x2-scaled" and v.real_hf_dir == hf
+    monkeypatch.delenv("BRINGUP_SCALED")
+    assert not Spec.load(s.path).scaled and Spec.load(s.path).hf_dir == hf
+
+
+def test_ledger_adds_the_scaled_tasks(fx, tmp_path, monkeypatch):
+    s, _, _ = _scaled_setup(fx, tmp_path, monkeypatch)
+    t = {x["id"]: x for x in generate(s, Reference())["tasks"]}
+    assert {"SG.1", "SL.scaled", "SL.scaled_last", "SX.1"} <= set(t)
+    assert t["SG.1"]["deps"] == ["PL.1"] and t["SG.1"]["role"] == "scale" and "plan.scale" in t["SG.1"]["gate"]["cmd"]
+    assert t["SL.scaled"]["deps"][1] == "SG.1" and t["SL.scaled_last"]["deps"] == ["SL.scaled"]
+    assert "BRINGUP_SCALED=1 BRINGUP_RUNG=scaled_last" in t["SL.scaled_last"]["gate"]["cmd"]
+    assert t["X.2"]["deps"] == ["SX.1"] and "--profile SX.1" in t["X.2"]["gate"]["cmd"]
+    o1 = t["O.1"]["gate"]["cmd"]
+    assert o1.count("fork_capture") == 2 and "fork_calls.json results/fork_calls_scaled.json --run-tests" in o1.replace(
+        "models/demos/fixture/bringup/", ""
+    )
+    plain = {x["id"] for x in generate(Spec.load(fx()), Reference())["tasks"]}
+    assert not plain & {"SG.1", "SL.scaled", "SX.1"}
+
+
+def test_fork_cases_merge_captures(tmp_path):
+    import json as _json
+
+    from models.demos.common.bringup.testing import fork_cases
+
+    a, b = tmp_path / "a.json", tmp_path / "b.json"
+    call = lambda sig: {"op": "ttnn.bringup.dispatch", "sig": sig, "count": 1}  # noqa: E731
+    a.write_text(_json.dumps({"calls": [call("x"), call("y")]}))
+    b.write_text(_json.dumps({"calls": [call("y"), call("z")]}))
+    res, missing = fork_cases.check([a, b], "nobody")
+    assert res["stats"]["fork_calls"] == 3 and res["stats"]["fork_calls_uncovered"] == 3

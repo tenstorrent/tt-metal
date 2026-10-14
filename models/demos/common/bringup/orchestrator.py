@@ -121,6 +121,7 @@ ROLE_OF_STEP = {
     "contract": "contract",
     "serving": "serving",
     "settings": "settings",
+    "scale": "scale",
 }
 IGNORED = (
     r"/dashboard/[^/]+\.html$",
@@ -422,7 +423,11 @@ class Orchestrator:
         b = rel(self.spec, self.spec.bringup_dir)
         if role == "test":
             return list(task.get("tests") or []) + self.common_paths()
-        extra = [f"{b}/plan.yaml", f"{b}/plan.md", f"{b}/components.yaml", f"{b}/tasks.yaml"] if role == "plan" else []
+        extra = (
+            [f"{b}/plan.yaml", f"{b}/plan.md", f"{b}/components.yaml", f"{b}/tasks.yaml", f"{b}/scaling.yaml"]
+            if role == "plan"
+            else []
+        )
         if role == "settings":  # the settings audit moves switches; it may touch the model's code and the forks
             md = rel(self.spec, self.spec.model_dir)
             return [f"{md}/tt", f"{md}/bringup/hooks.py", f"{b}/BREADCRUMBS.md", BRINGUP_OPS] + self.common_paths()
@@ -481,6 +486,7 @@ class Orchestrator:
             "breadcrumbs": f"{rel(s, b)}/BREADCRUMBS.md",
             "knowledge_report": rel(s, kusage.report_path(b, task["id"], role, attempt)),
             "ab_switch": ab_switch_text(task),
+            "scaled_hf": str(s.scaled_hf_dir) if s.has_deploy else "",
         }
         can_defer = defer and role == "implement" and OR.deferrable(task)  # never the debugger (it cannot defer)
         vals["defer"] = self.defer_text(task, comp, vals) if can_defer else ""
@@ -582,6 +588,17 @@ class Orchestrator:
                 "the box take the deployment's path, or why it stays different and what goes untested until the "
                 "deployment box (list those as deployment-only checks).\n"
             )
+            from models.demos.common.bringup.plan.boxes import scaling_applies
+
+            if scaling_applies(s):
+                text += (
+                    f"\nThis run's box has fewer chips than the deployment box, so the run also goes scaled: a reduced "
+                    "model with heads and experts cut so each chip holds what a deployment chip holds (task SG.1, "
+                    "`models/demos/common/bringup/plan/scale.py`). Write `scaling.yaml` next to the plan: which "
+                    "config counts are scaled (by the factor of which role), and for every tensor whose size follows "
+                    "one of them, the dimension to cut or the index to keep (per-expert tensors). The gate checks the "
+                    "rules against the checkpoint and prints the kept counts.\n"
+                )
         return text
 
     def serving_text(self, task: dict, role: str) -> str:
