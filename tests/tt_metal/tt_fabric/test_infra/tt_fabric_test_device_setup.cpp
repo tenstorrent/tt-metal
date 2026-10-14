@@ -1361,6 +1361,7 @@ void TestDevice::validate_results_after_readback(const ValidationReadOps& ops) c
         for (const auto& [core, sender] : this->senders_) {
             bool pass = sender.validate_results(data.at(core));
             TT_FATAL(pass, "Sender on device: {} core: {} failed", this->fabric_node_id_, core);
+            this->log_worker_diag(core, data.at(core));
         }
     }
 
@@ -1396,26 +1397,29 @@ void TestDevice::validate_sender_results() const {
     for (const auto& [core, sender] : this->senders_) {
         bool pass = sender.validate_results(data.at(core));
         TT_FATAL(pass, "Sender on device: {} core: {} failed", this->fabric_node_id_, core);
-        // Worker diagnostics written by the benchmark-mode sender kernel (CRAQ #52): result buffer
-        // words 4/5 = elapsed cycles, 2/3 = packets, MISC(16)+9/+10 = wait cycles, +11/+12 = signal
-        // cycles, +13 = packets that waited for a slot.
-        const auto& rb = data.at(core);
-        if (rb.size() > 16 + 13 && (rb[16 + 9] | rb[16 + 10] | rb[16 + 11] | rb[16 + 12]) != 0) {
-            const uint64_t elapsed = (static_cast<uint64_t>(rb[5]) << 32) | rb[4];
-            const uint64_t packets = (static_cast<uint64_t>(rb[3]) << 32) | rb[2];
-            const uint64_t wait = (static_cast<uint64_t>(rb[16 + 10]) << 32) | rb[16 + 9];
-            const uint64_t sig = (static_cast<uint64_t>(rb[16 + 12]) << 32) | rb[16 + 11];
-            log_info(
-                tt::LogTest,
-                "WorkerDiag {} core {}: packets={} elapsed_cycles={} wait_cycles={} signal_cycles={} waited={}",
-                this->fabric_node_id_,
-                core.str(),
-                packets,
-                elapsed,
-                wait,
-                sig,
-                rb[16 + 13]);
-        }
+        this->log_worker_diag(core, data.at(core));
+    }
+}
+
+// Worker diagnostics written by the benchmark-mode sender kernel (CRAQ #52): result buffer words
+// 4/5 = elapsed cycles, 2/3 = packets, MISC(16)+9/+10 = wait cycles, +11/+12 = signal cycles,
+// +13 = packets that waited for a slot.
+void TestDevice::log_worker_diag(const tt::tt_metal::CoreCoord& core, const std::vector<uint32_t>& rb) const {
+    if (rb.size() > 16 + 13 && (rb[16 + 9] | rb[16 + 10] | rb[16 + 11] | rb[16 + 12]) != 0) {
+        const uint64_t elapsed = (static_cast<uint64_t>(rb[5]) << 32) | rb[4];
+        const uint64_t packets = (static_cast<uint64_t>(rb[3]) << 32) | rb[2];
+        const uint64_t wait = (static_cast<uint64_t>(rb[16 + 10]) << 32) | rb[16 + 9];
+        const uint64_t sig = (static_cast<uint64_t>(rb[16 + 12]) << 32) | rb[16 + 11];
+        log_info(
+            tt::LogTest,
+            "WorkerDiag {} core {}: packets={} elapsed_cycles={} wait_cycles={} signal_cycles={} waited={}",
+            this->fabric_node_id_,
+            core.str(),
+            packets,
+            elapsed,
+            wait,
+            sig,
+            rb[16 + 13]);
     }
 }
 
