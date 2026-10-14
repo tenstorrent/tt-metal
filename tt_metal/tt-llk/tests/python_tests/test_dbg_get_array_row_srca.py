@@ -9,8 +9,9 @@ half and the restore writes the surviving half over both.
 
 Every in-tree caller passes ``dbg_array_id::DEST``, which never enters that path, so without
 this test the save/restore can regress undetected. The kernel writes a known tile into DEST,
-calls the helper, and reads DEST back -- the tile must come back bit-exact, for integer as well
-as float data and with either DEST width.
+calls the helper, and reads DEST back -- the tile must come back bit-exact with either DEST width.
+Row 0 carries planted patterns a converting save would change: integer values that read as float
+denormals, and float denormals and negative zero, which a flush or a half-width save alters.
 """
 
 import pytest
@@ -36,6 +37,23 @@ INT32_AT_RISK = [
     0x00008000,
     0x7FFFFFFF,
 ]
+# Float bit patterns with the same property: denormals (a converting save flushes them), negative zero
+# (a float compare cannot tell it from zero, so the check below is bitwise), the smallest normal and
+# the largest finite value as controls.
+FP32_AT_RISK_BITS = [
+    0x00000001,
+    0x007FFFFF,
+    0x80000001,
+    0x80000000,
+    0x00800000,
+    0x7F7FFFFF,
+]
+BF16_AT_RISK_BITS = [0x0001, 0x007F, 0x8001, 0x8000, 0x0080, 0x7F7F]
+
+
+def bit_view(tensor):
+    """The tensor's raw bits as a same-width integer tensor, so negative zero and NaN compare exactly."""
+    return tensor.view(torch.int16 if tensor.dtype == torch.bfloat16 else torch.int32)
 
 
 @parametrize(
@@ -60,6 +78,14 @@ def test_srca_row_dump_restores_dest_row_0(formats, dest_acc):
     )
     if formats.input_format == DataFormat.Int32:
         src_A[: len(INT32_AT_RISK)] = torch.tensor(INT32_AT_RISK, dtype=src_A.dtype)
+    elif formats.input_format == DataFormat.Float32:
+        src_A[: len(FP32_AT_RISK_BITS)] = torch.tensor(
+            FP32_AT_RISK_BITS, dtype=torch.int32
+        ).view(torch.float32)
+    elif formats.input_format == DataFormat.Float16_b:
+        src_A[: len(BF16_AT_RISK_BITS)] = torch.tensor(
+            BF16_AT_RISK_BITS, dtype=torch.int16
+        ).view(torch.bfloat16)
 
     configuration = TestConfig(
         "sources/dbg_get_array_row_srca_test.cpp",
@@ -89,7 +115,9 @@ def test_srca_row_dump_restores_dest_row_0(formats, dest_acc):
 
     # Only row 0 is at risk -- the helper borrows that row and nothing else -- so report on it
     # directly rather than letting a whole-tile mismatch hide which half came back wrong.
-    differing = (expected != res_tensor).nonzero().flatten().tolist()
+    differing = (
+        (bit_view(expected) != bit_view(res_tensor)).nonzero().flatten().tolist()
+    )
     assert not differing, (
         "dbg_get_array_row(SRCA) did not restore the dest row it borrowed. "
         f"{len(differing)} datum(s) differ, first at index {differing[0]}: "

@@ -65,7 +65,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // (which the save/restore goes through), the pairing _llk_math_hw_configure_ uses, so both modes are checked.
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
-    tensix_sync();
 
     dbg_copy_dest_tile<DbgDestTileOp::Write, MathThreadId>(l1_fmt, TILE_IDX, reinterpret_cast<void*>(params.buffer_A[0]));
 
