@@ -1182,11 +1182,6 @@ def test_eltwise_unary_sfpu_quasar(
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
-            # Unpack-to-Dest copies Int32 L1 as two's-complement. Only Int32 → Float16_b
-            # converts 2SC → SM in the kernel; other integer typecasts still pack SM.
-            twos_complement=_is_int32_to_fp16b(
-                formats.input_format, formats.output_format
-            ),
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
