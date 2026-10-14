@@ -325,7 +325,7 @@ struct FakeClock {
     using rep = duration::rep;
     using period = duration::period;
     using time_point = std::chrono::time_point<FakeClock, duration>;
-    static constexpr bool is_steady = true;
+    [[maybe_unused]] static constexpr bool is_steady = true;
 
     static inline duration current{0};
 
