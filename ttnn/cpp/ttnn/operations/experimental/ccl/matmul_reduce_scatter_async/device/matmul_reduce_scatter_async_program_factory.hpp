@@ -9,13 +9,13 @@
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
-#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
+#include "ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_mcast_2d.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct MatmulReduceScatterAsyncSharedVariables {
     ttnn::experimental::prim::ReduceScatterProgramArtifacts reduce_scatter_artifacts;
-    ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t matmul_shared_variables;
+    ttnn::prim::ccl_fusion::Mcast2DSharedVariables matmul_shared_variables;
 };
 
 struct MatmulReduceScatterAsyncProgramFactory {
