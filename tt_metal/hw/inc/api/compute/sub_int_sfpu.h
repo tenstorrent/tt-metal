@@ -119,7 +119,13 @@ ALWI void rsub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sub_int_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
+ALWI void sub_int_tile_init() {
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_BINARY_INIT(sub_int32)));
+#else
+    MATH((SFPU_BINARY_INIT(unused)));
+#endif
+}
 
 ALWI void rsub_int_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
 

@@ -69,9 +69,7 @@ inline void _add_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
         constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
-        // The store steps Dest through ADDR_MOD_6 instead of a dst_reg++ per row; an op that reads ADDR_MOD_6 after
-        // this one runs its own init first.
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+        // The store steps Dest through ADDR_MOD_6, which the binary SFPU init programs for this op.
 
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++)

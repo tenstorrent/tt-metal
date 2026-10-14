@@ -39,7 +39,8 @@ inline void eltwise_binary_sfpu_configure_addrmod()
         sfpu_op == SfpuType::lt_int || sfpu_op == SfpuType::gt_int || sfpu_op == SfpuType::le_int || sfpu_op == SfpuType::ge_int ||
         sfpu_op == SfpuType::eq_int || sfpu_op == SfpuType::ne_int || sfpu_op == SfpuType::lt || sfpu_op == SfpuType::gt || sfpu_op == SfpuType::le ||
         sfpu_op == SfpuType::ge || sfpu_op == SfpuType::eq || sfpu_op == SfpuType::ne || sfpu_op == SfpuType::div_int32 ||
-        sfpu_op == SfpuType::fmod_int32 || sfpu_op == SfpuType::remainder_int32 || sfpu_op == SfpuType::remainder_uint32)
+        sfpu_op == SfpuType::fmod_int32 || sfpu_op == SfpuType::remainder_int32 || sfpu_op == SfpuType::remainder_uint32 ||
+        sfpu_op == SfpuType::add_int32 || sfpu_op == SfpuType::sub_int32)
     {
         addr_mod_t {
             .srca = {.incr = 0},

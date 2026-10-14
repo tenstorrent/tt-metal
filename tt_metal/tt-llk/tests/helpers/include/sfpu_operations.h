@@ -1686,6 +1686,18 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
 template <bool APPROXIMATION_MODE, bool DST_ACCUM_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0>
 void call_binary_sfpu_operation_init()
 {
+#if defined(ARCH_BLACKHOLE)
+    // The Int32 add and sub store through ADDR_MOD_6, which add_int_tile_init and sub_int_tile_init program.
+    if constexpr (BINOP == BinaryOp::ADD && MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
+    {
+        SFPU_BINARY_INIT(add_int32);
+    }
+    else if constexpr (BINOP == BinaryOp::SUB && MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
+    {
+        SFPU_BINARY_INIT(sub_int32);
+    }
+    else
+#endif
     if constexpr (
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB ||
         BINOP == BinaryOp::XLOGY)

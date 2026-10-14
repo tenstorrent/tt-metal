@@ -82,6 +82,8 @@ ALWI void add_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 ALWI void add_int_tile_init() {
 #if defined(ARCH_QUASAR)
     MATH((llk_math_eltwise_binary_sfpu_add_int_init()));
+#elif defined(ARCH_BLACKHOLE)
+    MATH((SFPU_BINARY_INIT(add_int32)));
 #else
     MATH((SFPU_BINARY_INIT(unused)));
 #endif
