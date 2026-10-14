@@ -796,10 +796,8 @@ D2DStageGateDescriptor D2DStreamServiceReceiver::get_stage_gate_descriptor(
     const DeviceAddr base = impl_->stage_gate_addr(coord, 0, "get_stage_gate_descriptor");
     auto* mesh = impl_->mesh_device.get();
     const CoreCoord logical = impl_->service_cores.at(coord);
-    const auto node = mesh->get_fabric_node_id(coord);
     return D2DStageGateDescriptor{
-        .mesh_id = *node.mesh_id,
-        .chip_id = node.chip_id,
+        .fabric_node_id = mesh->get_fabric_node_id(coord),
         .service_core_logical = logical,
         .service_core_noc = mesh->get_device(coord)->worker_core_from_logical_core(logical),
         .gate_base_addr = base,
@@ -904,11 +902,6 @@ Program build_receiver_program(
         num_lanes,                     // [21] sender lanes = data-landed incs awaited per transfer
     };
     ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
-    // Stage-gate block, after the accessor args (at its next_compile_time_args_offset()).
-    ct_args.push_back(stage_gate.num_gates);
-    ct_args.push_back(stage_gate_addr);
-    ct_args.push_back(stage_gate.slot_id_offset_bytes);
-    ct_args.push_back(stage_gate.gate_flags_offset_bytes);
 
     auto kernel = CreateKernel(
         program,
@@ -918,6 +911,13 @@ Program build_receiver_program(
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = ct_args,
+            .named_compile_args =
+                {
+                    {"num_stage_gates", stage_gate.num_gates},
+                    {"stage_gate_addr", stage_gate_addr},
+                    {"stage_gate_slot_offset", stage_gate.slot_id_offset_bytes},
+                    {"stage_gate_flags_offset", stage_gate.gate_flags_offset_bytes},
+                },
         });
 
     // The receiver returns socket credits to the sender, so its fabric

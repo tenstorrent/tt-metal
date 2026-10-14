@@ -88,12 +88,11 @@ void py_module_types(nb::module_& mod) {
         .def_rw("gate_flags_offset_bytes", &D2DStageGateConfig::gate_flags_offset_bytes);
 
     nb::class_<D2DStageGateDescriptor>(mod, "D2DStageGateDescriptor", R"doc(
-        Where one coord's stage gates live: the chip (mesh_id, chip_id), the receiver
+        Where one coord's stage gates live: the chip (fabric_node_id), the receiver
         service core (logical and virtual NoC coords), and the gate array. Gate i is the
         uint32 at gate_base_addr + i * gate_stride_bytes; write 1 to open it.
     )doc")
-        .def_ro("mesh_id", &D2DStageGateDescriptor::mesh_id)
-        .def_ro("chip_id", &D2DStageGateDescriptor::chip_id)
+        .def_ro("fabric_node_id", &D2DStageGateDescriptor::fabric_node_id)
         .def_ro("service_core_logical", &D2DStageGateDescriptor::service_core_logical)
         .def_ro("service_core_noc", &D2DStageGateDescriptor::service_core_noc)
         .def_ro("gate_base_addr", &D2DStageGateDescriptor::gate_base_addr)

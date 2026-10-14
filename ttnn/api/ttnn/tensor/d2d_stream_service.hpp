@@ -13,6 +13,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -53,8 +54,7 @@ struct D2DStageGateConfig {
 // Everything an external writer needs to open the gates of one coord: the chip, the
 // receiver service core, and the gate array (gate i is at gate_base_addr + i * gate_stride_bytes).
 struct D2DStageGateDescriptor {
-    uint32_t mesh_id = 0;
-    uint32_t chip_id = 0;
+    tt::tt_fabric::FabricNodeId fabric_node_id{tt::tt_fabric::MeshId{0}, 0};
     tt::tt_metal::CoreCoord service_core_logical;
     tt::tt_metal::CoreCoord service_core_noc;  // virtual NoC coords
     tt::tt_metal::DeviceAddr gate_base_addr = 0;

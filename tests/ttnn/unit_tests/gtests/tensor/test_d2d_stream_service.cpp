@@ -447,9 +447,7 @@ void verify_stage_gate_descriptor(
         EXPECT_EQ(
             desc.service_core_noc,
             receiver_mesh->get_device(coord)->worker_core_from_logical_core(desc.service_core_logical));
-        const auto node = receiver_mesh->get_fabric_node_id(coord);
-        EXPECT_EQ(desc.mesh_id, *node.mesh_id);
-        EXPECT_EQ(desc.chip_id, node.chip_id);
+        EXPECT_EQ(desc.fabric_node_id, receiver_mesh->get_fabric_node_id(coord));
         for (uint32_t g = 0; g < kGateNumGates; ++g) {
             EXPECT_FALSE(receiver->is_stage_gate_open(coord, g)) << "gate " << g << " not CLOSED at " << coord;
         }
@@ -562,7 +560,7 @@ MeshWorkload make_remote_gate_opener_workload(
     const CoreCoord opener_core{0, 0};
     const MeshCoordinate opener_coord(0, 0);
     const auto src_node = opener_mesh->get_fabric_node_id(opener_coord);
-    const tt::tt_fabric::FabricNodeId dst_node(tt::tt_fabric::MeshId{desc.mesh_id}, desc.chip_id);
+    const auto& dst_node = desc.fabric_node_id;
     const auto links = tt::tt_fabric::get_forwarding_link_indices(src_node, dst_node);
     TT_FATAL(!links.empty(), "no fabric route from the opener chip to the gate's chip");
 
@@ -577,8 +575,8 @@ MeshWorkload make_remote_gate_opener_workload(
         static_cast<uint32_t>(desc.service_core_noc.x),
         static_cast<uint32_t>(desc.service_core_noc.y),
         static_cast<uint32_t>(desc.gate_base_addr + gate * desc.gate_stride_bytes),
-        desc.chip_id,
-        desc.mesh_id,
+        dst_node.chip_id,
+        *dst_node.mesh_id,
     };
     tt::tt_fabric::append_fabric_connection_rt_args(src_node, dst_node, links.front(), program, opener_core, rt);
     SetRuntimeArgs(program, kernel, opener_core, rt);
