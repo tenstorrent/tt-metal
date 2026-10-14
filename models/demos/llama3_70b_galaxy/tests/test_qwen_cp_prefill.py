@@ -24,6 +24,7 @@ from models.common.rmsnorm import RMSNorm
 from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_q_prep import column_slices, qwen_q_prep
 from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3_70b_galaxy.tt.llama_common import get_rot_transformation_mat
+from models.demos.llama3_70b_galaxy.tt.qwen_opt_limits import prefill_norm_eps
 
 N_LOCAL_HEADS = 8
 HEAD_DIM = 128
@@ -516,7 +517,7 @@ def test_cp_attention_layer(mesh_device, seq_len, reset_seeds):
     k_ref, v_ref = [], []
     for r in range(ROWS):
         kp = x32 @ wqkv[r][:, 1024:1152]
-        kn = kp * torch.rsqrt(kp.pow(2).mean(-1, keepdim=True) + attn.k_norm.eps) * g
+        kn = kp * torch.rsqrt(kp.pow(2).mean(-1, keepdim=True) + prefill_norm_eps(attn.k_norm, seq_len)) * g
         k_ref.append(kn * cos + (kn @ tfull) * sin)
         v_ref.append(x32 @ wqkv[r][:, 1152:1280])
     k_ref, v_ref = torch.stack(k_ref), torch.stack(v_ref)
@@ -529,7 +530,7 @@ def test_cp_attention_layer(mesh_device, seq_len, reset_seeds):
     heads = []
     for r in range(ROWS):
         qp = (x32[pos] @ wqkv[r][:, :1024]).reshape(-1, 8, 128)
-        qn = qp * torch.rsqrt(qp.pow(2).mean(-1, keepdim=True) + attn.q_norm.eps) * gq
+        qn = qp * torch.rsqrt(qp.pow(2).mean(-1, keepdim=True) + prefill_norm_eps(attn.q_norm, seq_len)) * gq
         q = qn * cos[pos][:, None] + (qn @ tfull) * sin[pos][:, None]  # [P, 8, 128]
         sc = torch.einsum("phd,kd->phk", q, k_ref[r]) * attn.scale
         sc = sc.masked_fill(torch.arange(seq_len)[None, None, :] > pos[:, None, None], float("-inf"))
@@ -596,7 +597,7 @@ def test_cp_mlp_norm_layer(mesh_device, seq_len, reset_seeds):
         y = ttnn.to_torch(ttnn.get_device_tensors(yd)[5]).float().reshape(lay.s32, -1)
         g = ttnn.to_torch(ttnn.get_device_tensors(dn.norm.weight)[0]).float().reshape(-1)
         x32 = xr.float().reshape(lay.s32, -1)
-        ref = x32 * torch.rsqrt(x32.pow(2).mean(-1, keepdim=True) + dn.norm.eps) * g
+        ref = x32 * torch.rsqrt(x32.pow(2).mean(-1, keepdim=True) + prefill_norm_eps(dn.norm, seq_len)) * g
         res[f"{name}_pcc"] = _pcc(y, ref)
         res[f"{name}_rel_l2"] = float((y - ref).norm() / ref.norm())
         ttnn.deallocate(yd)

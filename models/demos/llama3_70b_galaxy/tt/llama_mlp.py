@@ -5,6 +5,7 @@
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.llama3_70b_galaxy.tt.qwen_opt_limits import qwen_prefill_opt_ok
 import torch.nn.functional as F
 
 
@@ -441,12 +442,15 @@ class TtLlamaMLP(LightweightModule):
         # (S=40960: mul bf8 + typecast 1.64 ms -> mul bf16 1.04 ms; skips the bf8 rounding of w2_in).
         # Qwen long prefill (> 8192) on Wormhole instead gathers w2_in in bf8 on the 4-link ring and runs
         # minimal_matmul to the bf16 output (ff2_bf8_gather below), so the mul writes bf8 there.
+        # Both apply while the total context (cached prefix + S) is <= QWEN_OPT_MAX_SEQ_LEN only (qwen_opt_limits.py);
+        # longer contexts take main's FF2.
         ff2_bf8_gather = (
             self.args.is_qwen
             and not self.args.is_blackhole
             and self.use_prefetcher
             and batch_size == 1
             and seq_len > 8192
+            and qwen_prefill_opt_ok(self.model_config, seq_len)
         )
         w2_in_dtype = ttnn.bfloat8_b
         if (
@@ -454,6 +458,7 @@ class TtLlamaMLP(LightweightModule):
             and not self.args.is_blackhole
             and batch_size == 1
             and seq_len > 4096
+            and qwen_prefill_opt_ok(self.model_config, seq_len)
             and self.prefill_output_dtype == ttnn.bfloat16
             and not ff2_bf8_gather
         ):

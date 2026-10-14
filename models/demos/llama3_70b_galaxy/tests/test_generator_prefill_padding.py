@@ -21,8 +21,10 @@ from models.demos.llama3_70b_galaxy.tt.generator import (
     _should_skip_prefix_caching,
     get_padded_prefill_len,
     get_prefill_warmup_sequence_lengths,
+    prefill_pad_multiple_for,
 )
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import PREFILL_SUPPORT_SEQLENS
+from models.demos.llama3_70b_galaxy.tt.qwen_opt_limits import QWEN_OPT_MAX_SEQ_LEN
 
 # User decision (2026-10-08, keep 01b): Qwen prefill > 4096 pads to multiples of 8192 and the warmup
 # compiles every such bucket. A change of TtQwenModelArgs.prefill_pad_multiple must fail here.
@@ -160,6 +162,8 @@ def test_qwen_padding_exhaustive(qwen_pad_multiple):
         padded = get_padded_prefill_len(s, m)
         if s <= MAX_TRACED_PREFILL_LEN:
             assert padded == ref_padded_len(s), s  # traced buckets keep power-of-2 padding
+        elif -(-s // m) * m > QWEN_OPT_MAX_SEQ_LEN:
+            assert padded == ref_padded_len(s), s  # above the Qwen opt cap: main's power of 2
         else:
             assert padded == -(-s // m) * m, s
             # never above the power of 2 (the dropped min() branch), and every bucket meets the
@@ -215,38 +219,44 @@ def _sp1_pow2_bound(pad_multiple):
 
 def test_qwen_sp1_pow2_warmup_bound_is_tight(qwen_pad_multiple):
     # generator.py _prefill_warmup_sweep phase 2 (sp1) warms powers of 2 only (comment at generator.py:437-441).
-    # One token past max_safe, a block-aligned cached prefix leaves new tokens that pad to L (not a power of 2).
+    # Before the QWEN_OPT_MAX_SEQ_LEN cap, one token past max_safe a block-aligned cached prefix left new tokens
+    # that padded to L (not a power of 2). With the cap, that request (total > cap) pads exactly as main: total and
+    # new tokens to powers of 2 (generator.prefill_pad_multiple_for), so its sp1 bucket is a warmed power of 2.
     m = qwen_pad_multiple
     smallest, max_safe = _sp1_pow2_bound(m)
     seq_len = max_safe + 1
     num_cached = -(-(seq_len - smallest) // 128) * 128  # SDPA_CHUNK_ALIGN-aligned prefix
     assert smallest & (smallest - 1)
-    assert get_padded_prefill_len(seq_len, m) == 8 * smallest
-    assert not _should_skip_prefix_caching(seq_len, num_cached, m)
-    assert get_padded_prefill_len(seq_len - num_cached, m) == smallest
+    pm = prefill_pad_multiple_for(seq_len, m, num_cached)
+    assert seq_len > QWEN_OPT_MAX_SEQ_LEN and pm is None
+    assert get_padded_prefill_len(seq_len, m) == ref_padded_len(seq_len)
+    assert _should_skip_prefix_caching(seq_len, num_cached, m) == ref_skip_prefix_caching(seq_len, num_cached)
+    assert get_padded_prefill_len(seq_len - num_cached, pm) == ref_padded_len(seq_len - num_cached)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="known gap (found 2026-10-08): TtQwenModelArgs.max_context_len 190190 > 188416, the longest "
-    "max_seq_len whose prefix-cached prefills all use power-of-2 sp1 buckets; Qwen max_seq_len in "
-    "(188416, 190190] can hit an unwarmed sp1 bucket of 24576. Fix in generator.py phase 2 (warm the "
-    "non-power-of-2 sp1 buckets or assert max_seq_len), then drop this xfail.",
-)
 def test_qwen_sp1_pow2_warmup_guard(qwen_args, qwen_pad_multiple):
-    # Guard: every Qwen max_seq_len (up to max_context_len) stays within the sp1 power-of-2 reasoning.
-    _, max_safe = _sp1_pow2_bound(qwen_pad_multiple)
-    assert qwen_args.max_context_len <= max_safe, (qwen_args.max_context_len, max_safe)
+    # Guard: every Qwen max_seq_len (up to max_context_len) keeps power-of-2 sp1 buckets. This was a strict
+    # xfail (found 2026-10-08: max_context_len 190190 > 188416 = _sp1_pow2_bound's max_safe, an unwarmed sp1
+    # bucket of 24576 in (188416, 190190]). QWEN_OPT_MAX_SEQ_LEN closes the gap: the multiple-of-8192 padding
+    # applies only while cached + padded new <= 40960, where the heuristic never keeps a prefix (a padded total
+    # <= 40960 is < 8 * 24576), and beyond it every bucket is main's power of 2 (prefill_pad_multiple_for).
+    _check_prefix_cached_buckets_are_powers_of_two(qwen_args.max_context_len, qwen_pad_multiple)
 
 
-# 188416 = 8 * 24576 - 8192, the longest max_seq_len the sp1 power-of-2 reasoning covers (_sp1_pow2_bound).
+# 188416 = 8 * 24576 - 8192, the longest max_seq_len the sp1 power-of-2 reasoning covered before the cap.
 @pytest.mark.parametrize("max_seq_len", [40960, 131072, 188416])
 def test_qwen_prefix_cached_buckets_are_powers_of_two(max_seq_len, qwen_pad_multiple):
+    _check_prefix_cached_buckets_are_powers_of_two(max_seq_len, qwen_pad_multiple)
+
+
+def _check_prefix_cached_buckets_are_powers_of_two(max_seq_len, m):
     # The sp1 (prefix-cached) warmup keeps the power-of-2 list: the heuristic never keeps a cached
-    # prefix whose new tokens pad to a non-power-of-2 bucket while max_seq_len <= 8 * 24576 - 8192.
-    m = qwen_pad_multiple
+    # prefix whose new tokens pad to a non-power-of-2 bucket.
     pow2 = set(ref_warmup_lengths(max_seq_len))
     for seq_len in range(129, max_seq_len + 1, 53):
         for num_cached in range(128, seq_len, 128):
             if not _should_skip_prefix_caching(seq_len, num_cached, m):
-                assert get_padded_prefill_len(seq_len - num_cached, m) in pow2, (seq_len, num_cached)
+                # the generator pads the new tokens with prefill_pad_multiple_for (main's rule above the cap)
+                pm = prefill_pad_multiple_for(seq_len, m, num_cached)
+                padded_new = get_padded_prefill_len(seq_len - num_cached, pm)
+                assert padded_new in pow2, (seq_len, num_cached)

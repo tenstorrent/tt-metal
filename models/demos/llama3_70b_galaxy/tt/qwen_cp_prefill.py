@@ -20,8 +20,9 @@ Layout per device (r, c), S = padded prefill length:
     chunked SDPA calls instead (call j = slice slices(c)[j], per-device chunk_start_idx_tensor, chunked_sdpa_pair),
     bit-identical; QWEN_CP_CHUNKED_SDPA=0 keeps ring SDPA.
 
-Guard (cp_prefill_applies): Qwen, Wormhole, prefetcher, batch 1, start_pos 0 (no prefix cache), S > 8192,
-S % 1024 == 0, env QWEN_CP_PREFILL=1 (the default). QWEN_CP_PREFILL=0 selects the keep-14 seq-parallel path.
+Guard (cp_prefill_applies): Qwen, Wormhole, prefetcher, batch 1, start_pos 0 (no prefix cache),
+8192 < S <= QWEN_OPT_MAX_SEQ_LEN (tt/qwen_opt_limits.py), S % 1024 == 0, env QWEN_CP_PREFILL=1 (the default).
+QWEN_CP_PREFILL=0 selects the keep-14 seq-parallel path.
 """
 
 from __future__ import annotations
@@ -32,6 +33,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.llama3_70b_galaxy.tt.qwen_opt_limits import (
+    QWEN_OPT_MAX_SEQ_LEN,
+    prefill_norm_eps,
+    qwen_opt_seq_len_ok,
+)
 
 ROWS, COLS = 8, 4
 KV_BLOCK = 64  # reorder scratch block (rows); S / 8 is a multiple of it for every S % 1024 == 0
@@ -56,6 +62,7 @@ def cp_prefill_applies(args, use_prefetcher, prefetcher_setup, mode, batch_size,
         and batch_size == 1
         and start_pos == 0
         and seq_len > 8192
+        and qwen_opt_seq_len_ok(seq_len)  # S > QWEN_OPT_MAX_SEQ_LEN: main's per-layer path
         and seq_len % 1024 == 0
     )
 
@@ -507,10 +514,10 @@ def chunked_sdpa_pair(ctx: CPContext, q_nat, keys, values, page_table, scale, ck
     return out
 
 
-# Fused AG+matmul ops are measured and gated only for 32768 <= S <= 40960; longer sequences use the stock pair
-# (qwen_ag_matmul's wave plan raises above 65536 rows, e.g. S=73728 in the 128k warmup sweep).
+# Fused AG+matmul ops are measured and gated only for 32768 <= S <= 40960 (QWEN_OPT_MAX_SEQ_LEN); the CP path
+# itself stops there too (qwen_ag_matmul's wave plan raises above 65536 rows, e.g. S=73728 in the 128k warmup sweep).
 FUSED_AG_MIN_SEQ = 32768
-FUSED_AG_MAX_SEQ = 40960
+FUSED_AG_MAX_SEQ = QWEN_OPT_MAX_SEQ_LEN
 
 
 def fused_ag_enabled(seq_len) -> bool:
@@ -611,7 +618,7 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
         rot_mats[1],
         trans,
         attn.q_norm.weight,
-        eps=attn.q_norm.eps,
+        eps=prefill_norm_eps(attn.q_norm, S, getattr(attn, "model_config", None)),
         src=xqkv,
         src_col=0,
         src_local=True,
@@ -627,7 +634,7 @@ def attention_prefill(ctx: CPContext, tt_ccl, attn, x_local, rot_mats, w, user_i
         rot_local[1],
         trans,
         attn.k_norm.weight,
-        eps=attn.k_norm.eps,
+        eps=prefill_norm_eps(attn.k_norm, S, getattr(attn, "model_config", None)),
         all_rows=True,
         src=xqkv,
         src_col=H * D,
@@ -785,10 +792,14 @@ def local_norm(dist_norm, x, compute_kernel_config, out_dtype=ttnn.bfloat8_b):
     vs fp32 1.329e-2 -> 1.230e-2). Otherwise (or for a non-bf8 output) the stock ops: they overflow L1 at width 5120,
     so stats and apply run on two width halves of 2560 with the stats concatenated (job142: 0.737 ms, pcc 0.99996 vs
     fp32)."""
+    # x holds S/32 rows
+    eps = prefill_norm_eps(
+        dist_norm.norm, int(x.shape[-2]) * ROWS * COLS, getattr(getattr(dist_norm, "args", None), "model_config", None)
+    )
     if width_norm_enabled() and out_dtype == ttnn.bfloat8_b:
         from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_width_norm import qwen_width_norm
 
-        return qwen_width_norm(x, dist_norm.norm.weight, eps=dist_norm.norm.eps, fidelity=ttnn.MathFidelity.HiFi4)
+        return qwen_width_norm(x, dist_norm.norm.weight, eps=eps, fidelity=ttnn.MathFidelity.HiFi4)
     g = _norm_gammas(dist_norm)
     W = int(x.shape[-1])
     rows = int(x.shape[-2])
@@ -803,7 +814,7 @@ def local_norm(dist_norm, x, compute_kernel_config, out_dtype=ttnn.bfloat8_b):
         ttnn.rms_norm_post_all_gather(
             xs[i],
             st,
-            epsilon=dist_norm.norm.eps,
+            epsilon=eps,
             weight=g[i],
             compute_kernel_config=compute_kernel_config,
             dtype=out_dtype,

@@ -19,6 +19,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from transformers import AutoTokenizer
+from models.demos.llama3_70b_galaxy.tt.qwen_opt_limits import prefill_norm_eps
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -300,7 +301,7 @@ def test_qwen_model_prefill_inference(
         batch_size, seq_len, -1
     )  # [batch, seq, hidden_dim]
     tt_output_torch = tt_output_torch * torch.rsqrt(
-        tt_output_torch.pow(2).mean(-1, keepdim=True) + tt_model.norm.norm.eps
+        tt_output_torch.pow(2).mean(-1, keepdim=True) + prefill_norm_eps(tt_model.norm.norm, seq_len)
     )
     # TtTransformer has no `norm_weight` attribute (AttributeError on main@8bdf164e); use the final-norm
     # weight from the loaded state dict, which is what the on-device norm is built from.
