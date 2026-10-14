@@ -8,10 +8,10 @@ doubles as the warmup, then the layer captured as a trace and one signposted rep
 covers already-compiled programs with no host dispatch in between.
 
 What the encoder builds once per frame and shares between its layers, the camera geometry's
-rebatch plan, the spatial cross-attention's frame inputs and the self-attention's grid bias, is
-built before the capture, so the measured region is the cost the encoder repeats per layer. The
-layer's stages are signposted (``BEVLayer TSA/SCA/FFN Start/Complete``) when it is captured; the
-replay itself carries only the ``start`` and ``stop`` signposts.
+rebatch plan, the spatial cross-attention's frame inputs and the self-attention's reference
+points, is built before the capture, so the measured region is the cost the encoder repeats per
+layer. The layer's stages are signposted (``BEVLayer TSA/SCA/FFN Start/Complete``) when it is
+captured; the replay itself carries only the ``start`` and ``stop`` signposts.
 """
 
 import pytest

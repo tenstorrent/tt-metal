@@ -675,7 +675,7 @@ def build_reg_branches(seed=1):
 def random_reference_points(batch_size, generator=None):
     """Uniform in [0, 1], with a slice of points on and just inside the grid edges.
 
-    Edge points exercise out-of-bounds zero padding in grid_sample and the eps clamp of
+    Edge points exercise out-of-bounds zero padding in the sampling and the eps clamp of
     inverse_sigmoid, which trained queries near the BEV border reach.
     """
     points = torch.rand(batch_size, NUM_QUERY, 3, generator=generator)
