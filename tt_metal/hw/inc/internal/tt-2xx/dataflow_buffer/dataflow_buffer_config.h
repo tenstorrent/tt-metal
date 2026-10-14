@@ -148,7 +148,6 @@ struct dfb_global_header_t {
     uint32_t dm1_remapper_blob_offset;  // → DM1 remapper blob
     uint32_t dm0_isr_blob_offset;       // → DM0 ISR blob (core header + txn pools)
     uint32_t dfb_signal_region_off;     // → signal region: per-producer byte slots then dfb_expected_signal[NUM_DFBS]
-    // Highest device slot on this core + 1; a slot below it that no DFB here uses is in no participation mask.
     uint8_t num_dfbs;
     uint8_t dm0_isr_ready;  // cleared by host; set by DM0 when ISR is armed
     uint8_t has_dm0_isr;    // 1 if any DFB uses implicit sync (replaces per_dfb_layout_offset > dm0 check)

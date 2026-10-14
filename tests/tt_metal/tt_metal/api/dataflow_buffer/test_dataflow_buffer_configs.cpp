@@ -2332,8 +2332,7 @@ TEST_F(UnitMeshFixture, DFBConfigSerializationPreservesGappedDeviceSlots) {
     EXPECT_EQ(read_word(3, 3), wide_dfb->config.entry_size);
 }
 
-// Quasar counterpart: the coordinator's slots are {0, 3}, so its header spans four slots and the two
-// unused ones are in no participation mask.
+// Quasar counterpart: the coordinator's slots are {0, 3}; the two unused ones are in no participation mask.
 TEST_F(UnitMeshFixture, DfbSerializeGlobalHeaderGappedDeviceSlots) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Quasar-only DFB config layout";
@@ -2371,7 +2370,7 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeaderGappedDeviceSlots) {
     ASSERT_GT(nbytes, 0u);
 
     const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
-    EXPECT_EQ(ghdr->num_dfbs, 4u);
+    EXPECT_EQ(ghdr->num_dfbs, 2u);
     constexpr uint32_t slots_0_and_3 = 0b1001;
     EXPECT_EQ(ghdr->participation_mask[0], slots_0_and_3);  // producer_risc_mask 0x1
     EXPECT_EQ(ghdr->participation_mask[1], slots_0_and_3);  // consumer_risc_mask 0x2

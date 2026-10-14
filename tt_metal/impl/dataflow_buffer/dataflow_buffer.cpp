@@ -316,15 +316,15 @@ uint32_t compute_dfb_config_serialized_size(const std::vector<std::shared_ptr<Da
 void populate_dfb_global_header_participation(
     dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
     std::fill(std::begin(ghdr.participation_mask), std::end(ghdr.participation_mask), 0u);
+    ghdr.num_dfbs = static_cast<uint8_t>(dfbs_on_core.size());
     TT_FATAL(
         dfbs_on_core.size() <= ::dfb::NUM_DFBS,
         "DFB count {} exceeds maximum {}",
         dfbs_on_core.size(),
         ::dfb::NUM_DFBS);
-    // A DFB's slot is free on all of its cores, so one core's slots can have gaps. The header spans the
-    // highest slot; an unused slot is in no participation mask, so no hart initializes or waits on it.
+    // A DFB's slot is free on all of its cores, so one core's slots can have gaps; an unused slot is in
+    // no participation mask, so no hart initializes or waits on it.
     uint32_t id_mask = 0;
-    uint32_t slot_span = 0;
     for (const auto& dfb : dfbs_on_core) {
         TT_FATAL(
             dfb->device_slot < ::dfb::NUM_DFBS,
@@ -338,7 +338,6 @@ void populate_dfb_global_header_participation(
             dfb->id,
             dfb->device_slot);
         id_mask |= (1u << dfb->device_slot);
-        slot_span = std::max<uint32_t>(slot_span, dfb->device_slot + 1u);
         for (uint8_t hartid = 0; hartid < ::dfb::NUM_PARTICIPATING_HARTIDS; ++hartid) {
             if (dfb->risc_mask & (1u << hartid)) {
                 ghdr.participation_mask[hartid] |= (1u << dfb->device_slot);
@@ -373,7 +372,6 @@ void populate_dfb_global_header_participation(
             tc_slots,
             ::dfb::MAX_PACK_TC_SLOTS);
     }
-    ghdr.num_dfbs = static_cast<uint8_t>(slot_span);
 }
 
 void verify_dfb_hart_blobs(
@@ -428,12 +426,12 @@ void verify_dfb_hart_blobs(
                 e,
                 entry->num_tcs);
             TT_FATAL(
-                entry->logical_dfb_id < ghdr->num_dfbs,
-                "hart {} init entry {} logical_dfb_id={} >= num_dfbs={}",
+                entry->logical_dfb_id < ::dfb::NUM_DFBS,
+                "hart {} init entry {} logical_dfb_id={} out of range (maximum {})",
                 hartid,
                 e,
                 entry->logical_dfb_id,
-                ghdr->num_dfbs);
+                ::dfb::NUM_DFBS);
             TT_FATAL(
                 (ghdr->participation_mask[hartid] & (1u << entry->logical_dfb_id)) != 0,
                 "hart {} init entry {} logical_dfb_id={} not in participation_mask=0x{:x}",
@@ -456,7 +454,6 @@ void verify_dfb_hart_blobs(
 
 void verify_dfb_global_header_participation(
     const dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
-    const uint32_t valid_dfb_mask = ghdr.num_dfbs >= 32 ? ~0u : ((1u << ghdr.num_dfbs) - 1u);
     for (uint8_t hartid = 0; hartid < ::dfb::NUM_PARTICIPATING_HARTIDS; ++hartid) {
         uint32_t expected = 0;
         for (const auto& dfb : dfbs_on_core) {
@@ -470,12 +467,6 @@ void verify_dfb_global_header_participation(
             hartid,
             ghdr.participation_mask[hartid],
             expected);
-        TT_FATAL(
-            (ghdr.participation_mask[hartid] & ~valid_dfb_mask) == 0,
-            "participation_mask[{}]=0x{:x} has bits >= num_dfbs {}",
-            hartid,
-            ghdr.participation_mask[hartid],
-            ghdr.num_dfbs);
     }
 }
 
