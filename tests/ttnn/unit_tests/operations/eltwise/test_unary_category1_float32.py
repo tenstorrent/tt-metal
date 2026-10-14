@@ -1009,11 +1009,7 @@ def test_digamma_large_x(device):
 
 
 def test_digamma_small_x(device):
-    """Guard the steep near-pole region below 1. psi has a pole at 0 (psi(x) ~ -1/x).
-
-    ``test_digamma_multigammaln`` starts at 1, so the samples below 1 are the ones it misses.
-    1.9 and 1.99 are off the bfloat16 lattice that sweep uses.
-    """
+    """Guard the steep near-pole region below 1. psi has a pole at 0 (psi(x) ~ -1/x)."""
     xs = torch.tensor(
         [[0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 0.75, 1.9, 1.99]],
         dtype=torch.float32,
