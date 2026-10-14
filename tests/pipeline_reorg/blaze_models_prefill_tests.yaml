@@ -862,7 +862,7 @@
   skus:
     bh_sc1:
       # Sum of the section timeouts (6+8+12+15+25+2+3+37+34+27+30 = 199). No margin: models/demo/bh_sc1 in
-      # .github/time_budget.yaml is full (1969/1969), so anything above 199 fails verify-time-budgets.
+      # .github/time_budget.yaml is fully allocated, so anything above 199 fails verify-time-budgets.
       timeout: 199
       tier: 2
       release_ready: false

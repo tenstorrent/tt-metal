@@ -9,8 +9,9 @@ test uses (reference.deepseek_v4.model). What this adds over the block test is t
 device embedding and stream expand feeding layer 0, layers chaining their packed streams, the TP-sharded
 head collapse and the final norm. Each layer's output is scored, so a failure names the layer.
 
-Depth 3 is the shallowest that reaches every attention kind a model uses: layer 2 is CSA in both,
-after two HCA layers in Pro and two SWA layers in Flash.
+Depth 3 is the shallowest that reaches CSA: layer 2 is CSA in both, after two HCA layers in Pro and
+two SWA layers in Flash. Flash's first HCA layer is 3, so at this depth Flash HCA runs only in the
+block tests and the full-depth job.
 """
 
 import pytest

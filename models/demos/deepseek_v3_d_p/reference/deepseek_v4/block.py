@@ -27,7 +27,7 @@ def v4_block_modules(config, layer_idx: int) -> dict:
     """The six modules a V4 block is made of, freshly initialised.
 
     Both callers fill them in afterwards -- ``build_v4_block_reference`` randomises them,
-    ``tests/v4/golden.py`` copies checkpoint weights over them -- so the dict's shape is settled
+    ``tt/v4/weights.py`` copies checkpoint weights over them -- so the dict's shape is settled
     here rather than in each of them.
     """
     attn = DeepseekV4Attention(config, layer_idx=layer_idx).eval()

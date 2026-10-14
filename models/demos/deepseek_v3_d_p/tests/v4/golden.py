@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reader for the DeepSeek-V4 vLLM golden traces and for the native V4 checkpoint.
+"""Reader for the DeepSeek-V4 vLLM golden traces, and where to find the native V4 checkpoint.
 
 The traces use the same layout GLM's do: one directory per stream, split into
 ``rows_<s>_<e>.safetensors`` shards, each shard keying its tensor by the stream's own name. Reading
@@ -24,9 +24,7 @@ A trace can hold ``decoder_output`` for only some layers. Teacher forcing feeds 
 output of layer ``i-1``, so it works only where that layer was kept, and ``layer_input`` says so
 rather than reading a directory that is not there.
 
-The checkpoint uses DeepSeek's own key names -- ``layers.3.attn.wq_a.weight`` where HF would write
-``model.layers.3.self_attn.q_a_proj.weight`` -- and stores each expert as three matrices where the
-reference packs them into one. ``v4_layer_from_checkpoint`` holds that translation.
+Loading the checkpoint's weights is ``tt.v4.weights``' job.
 """
 
 from __future__ import annotations
