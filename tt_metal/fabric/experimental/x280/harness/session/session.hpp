@@ -105,6 +105,9 @@ struct Fixture {
      * the tile whose PLL was set and confirmed on that chip. `tile_id` is
      * chip 0's. */
     std::vector<x280::TileId> chip_tiles;
+    /** The tiles this open booted from reset-held, in tile_ids() order; empty
+     * when every chip already had a tile out of reset. */
+    std::vector<x280::TileId> booted;
 
     uint32_t pll_mhz = 0;
 
@@ -142,11 +145,13 @@ struct Fixture {
  * "firmware-lim-idle.bin"). Reset release is one-way for the chip-reset
  * lifetime and leaves PLL4 at the safe release frequency.
  *
- * Records against the running test: a skip when a tile needs an ASIC reset
- * first, a fatal failure for any other refusal. The caller checks
- * IsSkipped() and HasFatalFailure().
+ * Appends each tile of a batch that came up ready to `booted`. Records against
+ * the running test: a skip when a tile needs an ASIC reset first, a fatal
+ * failure for any other refusal. The caller checks IsSkipped() and
+ * HasFatalFailure().
  */
-inline void boot_held_chips(x280::X280Runtime& runtime, const std::vector<x280::TileId>& ids) {
+inline void boot_held_chips(
+    x280::X280Runtime& runtime, const std::vector<x280::TileId>& ids, std::vector<x280::TileId>& booted) {
     std::vector<int> chips;
     for (const auto& id : ids) {
         if (std::find(chips.begin(), chips.end(), id.chip_id) == chips.end()) {
@@ -170,17 +175,18 @@ inline void boot_held_chips(x280::X280Runtime& runtime, const std::vector<x280::
         }
         request.idle_image_path = artifacts::image_path("X280_IDLE_FW_IMAGE", "firmware-lim-idle.bin");
         request.allow_reset_release = true;
-        const auto booted = runtime.boot_tiles(request);
-        if (booted.ready()) {
+        const auto result = runtime.boot_tiles(request);
+        if (result.ready()) {
+            booted.insert(booted.end(), request.tiles.begin(), request.tiles.end());
             continue;
         }
-        for (const auto& report : booted.tiles) {
+        for (const auto& report : result.tiles) {
             if (x280::reset_required(report.result.outcome)) {
                 GTEST_SKIP() << "resident idle cannot boot on chip " << chip
                              << " until an ASIC reset (tt-smi -r <device>): " << report.result.diagnostic;
             }
         }
-        FAIL() << "resident idle boot failed on chip " << chip << ": " << booted.diagnostic;
+        FAIL() << "resident idle boot failed on chip " << chip << ": " << result.diagnostic;
     }
 }
 
@@ -230,7 +236,7 @@ inline void open_or_skip(Fixture& f, const OpenConfig& cfg) {
     if (ids.empty()) {
         GTEST_SKIP() << "no enabled X280 tiles";
     }
-    boot_held_chips(*f.runtime, ids);
+    boot_held_chips(*f.runtime, ids, f.booted);
     if (::testing::Test::IsSkipped() || ::testing::Test::HasFatalFailure()) {
         return;
     }
