@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_tiles_out = get_compile_time_arg_val(0);
@@ -44,6 +45,7 @@ void kernel_main() {
     const uint32_t block_height_tiles = get_arg_val<uint32_t>(4);
 
     if constexpr (out_resident) {
+        MaybeDeviceZoneScope("writer_cb_wait");
         const uint32_t n_pages = core_rows_tiles * block_width_tiles;
         cb_wait_front(cb_tiles_out, n_pages);
         cb_pop_front(cb_tiles_out, n_pages);
@@ -117,18 +119,33 @@ void kernel_main() {
                 (rb_start + block_height_tiles < core_rows_tiles) ? rb_start + block_height_tiles : core_rows_tiles;
             for (uint32_t r = rb_start; r < rb_end; ++r) {
                 const uint32_t first_tile = (row_start_tile + r) * tensor_cols_tiles + block_col_start;
-                cb_wait_front(cb_id, width_tiles);
+                {
+                    MaybeDeviceZoneScope("writer_cb_wait");
+                    cb_wait_front(cb_id, width_tiles);
+                }
                 uint32_t l1_read_addr = get_read_ptr(cb_id);
-                for (uint32_t c = 0; c < width_tiles; ++c) {
-                    noc_async_write(l1_read_addr, out_acc.get_noc_addr(first_tile + c), out_page_bytes);
-                    l1_read_addr += out_page_bytes;
+                {
+                    MaybeDeviceZoneScope("writer_issue");
+                    for (uint32_t c = 0; c < width_tiles; ++c) {
+#ifdef TILIZE_ABLATE_WRITE
+                        if (l1_read_addr == 0xFFFFFFFF)  // perf ablation: payload dropped, trip count kept
+#endif
+                            noc_async_write(l1_read_addr, out_acc.get_noc_addr(first_tile + c), out_page_bytes);
+                        l1_read_addr += out_page_bytes;
+                    }
                 }
                 // Flushed = data has left L1, so the slot may be recycled; acks are collected once
                 // at the end, keeping writes of consecutive tile-rows in flight together.
-                noc_async_writes_flushed();
+                {
+                    MaybeDeviceZoneScope("writer_flush");
+                    noc_async_writes_flushed();
+                }
                 cb_pop_front(cb_id, width_tiles);
             }
         }
     }
-    noc_async_write_barrier();
+    {
+        MaybeDeviceZoneScope("writer_final_barrier");
+        noc_async_write_barrier();
+    }
 }

@@ -14,11 +14,18 @@
 // prefix (left-expanded with 1s). Each segment reads only its in-range data bytes; the W tail,
 // H-tail sticks, sticks of pad images and whole pad tile-columns are filled by local L1->L1 NoC
 // copies from a one-segment fill row (the pad value in the input format), prepared once.
+//
+// Helper bypass (Perf 1, measured): the coalesced reorder issues its one-packet L1->L1 copies with
+// raw ncrisc_noc_write_with_state on two alternating write cmd bufs and bumps the write counters
+// once per tile-row, instead of noc_async_write_one_packet_with_state per copy. Reorder zone
+// 3.27 -> 2.01 us/core; op [1,1,16384,64] 11.46 -> 11.08 us, [1,1,16384,32] 8.18 -> 6.92 us
+// (BH p150b). Do not revert to the helper call without re-measuring; see changelog "Perf 1".
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_rm_sticks = get_compile_time_arg_val(0);
@@ -97,7 +104,7 @@ void kernel_main() {
     const uint32_t block_height_tiles = get_arg_val<uint32_t>(4);
     // coalesced path: < min(num_banks, chunk sticks); segment path: < tile_h (start stick)
     const uint32_t bank_stagger_offset = get_arg_val<uint32_t>(5);
-    const uint32_t fill_word = get_arg_val<uint32_t>(6);            // pad value, replicated to 32 bits
+    const uint32_t fill_word = get_arg_val<uint32_t>(6);  // pad value, replicated to 32 bits
 
     if constexpr (retile) {
         constexpr uint32_t half_bytes = tile_col_bytes / 2;                   // one face row: 16 elements
@@ -147,6 +154,7 @@ void kernel_main() {
                 return {image * in_tile_rows_per_image + first_h / in_tile_h, (valid + in_tile_h - 1) / in_tile_h, run};
             };
             auto issue_unit = [&](const Unit& u, uint32_t slot) {
+                MaybeDeviceZoneScope("reader_issue");
                 dataflow_kernel_lib::set_read_trid(noc, slot + 1);
                 uint32_t dst = staging_base + slot * slot_bytes;
                 for (uint32_t kk = 0; kk < u.nk; ++kk) {
@@ -177,7 +185,10 @@ void kernel_main() {
                     if (has_next) {
                         issue_unit(next, (u_idx + 1) % retile_slots);  // lands while this unit is de-faced
                     }
-                    dataflow_kernel_lib::async_read_barrier_with_trid(noc, slot + 1);
+                    {
+                        MaybeDeviceZoneScope("reader_read_barrier");
+                        dataflow_kernel_lib::async_read_barrier_with_trid(noc, slot + 1);
+                    }
                     src_base = staging_base + slot * slot_bytes;
                     src_row_stride = width_tiles * in_tile_page_bytes;
                 }
@@ -189,7 +200,11 @@ void kernel_main() {
                     const uint32_t valid = in_padded_h - first_h < tile_h ? in_padded_h - first_h : tile_h;
                     // Input row of output stick 0, relative to the unit's first input tile-row.
                     const uint32_t h0 = first_h % unit_h;
-                    cb_reserve_back(cb_id, width_tiles);
+                    {
+                        MaybeDeviceZoneScope("reader_cb_reserve");
+                        cb_reserve_back(cb_id, width_tiles);
+                    }
+                    MaybeDeviceZoneScope("reader_reorder");
                     const uint32_t l1_base = get_write_ptr(cb_id);
                     for (uint32_t i = 0; i < valid; ++i) {
                         const uint32_t h = h0 + i;
@@ -267,6 +282,7 @@ void kernel_main() {
                 : 1 + (core_rows_tiles - first_chunk_tile_rows + staging_tile_rows - 1) / staging_tile_rows;
 
         auto issue_chunk = [&](uint32_t chunk, uint32_t slot) {
+            MaybeDeviceZoneScope("reader_issue");
             const uint32_t n_sticks = chunk_rows(chunk) * tile_h;
             const uint32_t stick0 = first_core_stick + chunk_row0(chunk) * tile_h;
             const uint32_t base = staging_base + slot * slot_bytes;
@@ -276,10 +292,13 @@ void kernel_main() {
                 uint32_t g = k + bank_stagger_offset;
                 g = g >= groups ? g - groups : g;
                 const uint32_t count = (n_sticks - g + num_banks - 1) / num_banks;
-                noc_async_read(
-                    in_acc.get_noc_addr(stick0 + g),
-                    base + g * max_per_group * stick_page_bytes,
-                    count * stick_page_bytes);
+#ifdef TILIZE_ABLATE_READ
+                if (count == 0xFFFFFFFF)  // perf ablation: payload dropped, trip count kept
+#endif
+                    noc_async_read(
+                        in_acc.get_noc_addr(stick0 + g),
+                        base + g * max_per_group * stick_page_bytes,
+                        count * stick_page_bytes);
             }
         };
 
@@ -290,9 +309,29 @@ void kernel_main() {
         constexpr uint32_t writer_copy_sticks = one_packet_copies ? writer_copy_sticks_arg : 0;
         static_assert(writer_copy_sticks <= tile_h, "writer share exceeds the tile-row");
         constexpr uint32_t reader_copy_sticks = tile_h - writer_copy_sticks;
+        // Raw reorder copies (one-packet, dedicated NoC). Bypasses noc_async_write_one_packet_with_state:
+        // its per-copy cost is the cmd-buf turnaround (the next copy waits for the NIU to accept the
+        // previous one) plus two counter read-modify-writes. Here copies alternate between two write
+        // cmd bufs (write_cmd_buf, write_reg_cmd_buf; both preset to this core / seg_bytes) so one is
+        // accepted while the other is programmed, the counters are bumped once per tile-row, and the
+        // bank-group walk is strength-reduced (constant offsets, no per-copy div/mod).
+        // write_reg_cmd_buf's other users (remote semaphore set, inline writes) program their full
+        // state on every call, so presetting it here disturbs nothing.
+        constexpr bool raw_copies = one_packet_copies && noc_mode == DM_DEDICATED_NOC;
         if constexpr (one_packet_copies) {
             noc_async_write_one_packet_set_state(get_noc_addr(staging_base), seg_bytes);
+            if constexpr (raw_copies) {
+                ncrisc_noc_write_set_state<false /* posted */, true /* one_packet */>(
+                    noc_index, write_reg_cmd_buf, get_noc_addr(staging_base), seg_bytes, NOC_UNICAST_WRITE_VC);
+            }
         }
+        auto raw_copy = [](uint32_t cmd_buf, uint32_t src_l1, uint32_t dst_l1) __attribute__((always_inline)) {
+#ifdef TILIZE_ABLATE_REORDER
+            if (src_l1 == 0xFFFFFFFF)  // perf ablation: payload dropped, trip count kept
+#endif
+                ncrisc_noc_write_with_state<noc_mode, false /* posted */, false /* counters per tile-row */, true>(
+                    noc_index, cmd_buf, src_l1, dst_l1);
+        };
 
         // Chunk c lands in slot c % staging_slots with trid slot + 1 (trid 0 = untagged). At most
         // staging_slots - 1 chunks are in flight ahead of the one being reordered: chunk
@@ -310,14 +349,21 @@ void kernel_main() {
         }
         for (uint32_t c = 0; c < num_chunks; ++c) {
             const uint32_t slot = c % staging_slots;
-            dataflow_kernel_lib::async_read_barrier_with_trid(noc, slot + 1);  // only chunk c
+            {
+                MaybeDeviceZoneScope("reader_read_barrier");
+                dataflow_kernel_lib::async_read_barrier_with_trid(noc, slot + 1);  // only chunk c
+            }
             if (c + staging_slots - 1 < num_chunks) {
                 issue_tagged(c + staging_slots - 1);
             }
             const uint32_t base = staging_base + slot * slot_bytes;
             const uint32_t rows = chunk_rows(c);
             for (uint32_t t = 0; t < rows; ++t) {
-                cb_reserve_back(cb_rm_sticks, block_width_tiles);
+                {
+                    MaybeDeviceZoneScope("reader_cb_reserve");
+                    cb_reserve_back(cb_rm_sticks, block_width_tiles);
+                }
+                MaybeDeviceZoneScope("reader_reorder");
                 uint32_t dst_l1 = get_write_ptr(cb_rm_sticks);
                 if constexpr (writer_copy_sticks > 0) {
                     cb_reserve_back(cb_copy_job, 1);
@@ -328,15 +374,70 @@ void kernel_main() {
                     job[2] = t * tile_h + reader_copy_sticks;
                     cb_push_back(cb_copy_job, 1);
                 }
-                for (uint32_t i = 0; i < reader_copy_sticks; ++i) {
-                    const uint32_t s = t * tile_h + i;  // stick index inside the chunk
-                    const uint32_t src_l1 = base + ((s % num_banks) * max_per_group + s / num_banks) * stick_page_bytes;
-                    if constexpr (one_packet_copies) {
-                        noc_async_write_one_packet_with_state(src_l1, dst_l1);
+                if constexpr (raw_copies) {
+                    // Stick s of the chunk sits in bank group s % num_banks, row s / num_banks.
+                    constexpr uint32_t group_bytes = max_per_group * stick_page_bytes;
+                    if constexpr (tile_h % num_banks == 0 && reader_copy_sticks % num_banks == 0) {
+                        // Each run of num_banks consecutive sticks reads every group at one row:
+                        // constant src offsets g * group_bytes, dst offsets g * seg_bytes.
+                        uint32_t src_row = base + t * (tile_h / num_banks) * stick_page_bytes;
+                        for (uint32_t q = 0; q < reader_copy_sticks / num_banks; ++q) {
+#pragma GCC unroll 16
+                            for (uint32_t g = 0; g < num_banks; ++g) {
+                                raw_copy(
+                                    (g & 1) ? write_reg_cmd_buf : write_cmd_buf,
+                                    src_row + g * group_bytes,
+                                    dst_l1 + g * seg_bytes);
+                            }
+                            src_row += stick_page_bytes;
+                            dst_l1 += num_banks * seg_bytes;
+                        }
                     } else {
-                        noc_async_write(src_l1, get_noc_addr(dst_l1), seg_bytes);
+                        // Any tile_h / num_banks: incremental (group, row) cursor, copies in pairs.
+                        const uint32_t s0 = t * tile_h;
+                        uint32_t g = s0 % num_banks;
+                        uint32_t src_l1 = base + g * group_bytes + (s0 / num_banks) * stick_page_bytes;
+                        auto step = [&]() __attribute__((always_inline)) {
+                            dst_l1 += seg_bytes;
+                            if (++g == num_banks) {
+                                g = 0;
+                                src_l1 += stick_page_bytes - (num_banks - 1) * group_bytes;
+                            } else {
+                                src_l1 += group_bytes;
+                            }
+                        };
+                        uint32_t i = 0;
+                        for (; i + 1 < reader_copy_sticks; i += 2) {
+                            raw_copy(write_cmd_buf, src_l1, dst_l1);
+                            step();
+                            raw_copy(write_reg_cmd_buf, src_l1, dst_l1);
+                            step();
+                        }
+                        if (i < reader_copy_sticks) {
+                            raw_copy(write_cmd_buf, src_l1, dst_l1);
+                        }
                     }
-                    dst_l1 += seg_bytes;
+#ifndef TILIZE_ABLATE_REORDER
+                    noc_nonposted_writes_num_issued[noc_index] += reader_copy_sticks;
+                    noc_nonposted_writes_acked[noc_index] += reader_copy_sticks;
+#endif
+                } else {
+                    for (uint32_t i = 0; i < reader_copy_sticks; ++i) {
+                        const uint32_t s = t * tile_h + i;  // stick index inside the chunk
+                        const uint32_t src_l1 =
+                            base + ((s % num_banks) * max_per_group + s / num_banks) * stick_page_bytes;
+#ifdef TILIZE_ABLATE_REORDER
+                        if (src_l1 == 0xFFFFFFFF)  // perf ablation: payload dropped, trip count kept
+#endif
+                        {
+                            if constexpr (one_packet_copies) {
+                                noc_async_write_one_packet_with_state(src_l1, dst_l1);
+                            } else {
+                                noc_async_write(src_l1, get_noc_addr(dst_l1), seg_bytes);
+                            }
+                        }
+                        dst_l1 += seg_bytes;
+                    }
                 }
                 noc_async_write_barrier();
                 if constexpr (writer_copy_sticks > 0) {
@@ -426,7 +527,10 @@ void kernel_main() {
                 }
                 const uint32_t first_stick = in_image * image_height_sticks + first_h;
 
-                cb_reserve_back(cb_id, width_tiles);
+                {
+                    MaybeDeviceZoneScope("reader_cb_reserve");
+                    cb_reserve_back(cb_id, width_tiles);
+                }
                 const uint32_t l1_base = get_write_ptr(cb_id);
                 const bool bounce = seg_read_alignment != 0 && (seg_bytes % seg_read_alignment) != 0;
                 const uint32_t read_base = bounce ? bounce_base : l1_base;
@@ -435,12 +539,18 @@ void kernel_main() {
                 // Bank stagger: start each core's stick walk at a different stick (consecutive
                 // sticks live in consecutive banks), so column-split cores reading the same sticks
                 // do not all queue on one bank at once.
-                uint32_t i = bank_stagger_offset < valid_sticks ? bank_stagger_offset : 0;
-                for (uint32_t k = 0; k < valid_sticks; ++k) {
-                    read_stick_bytes(first_stick + i, seg_offset_bytes, read_base + i * read_stride, data_bytes);
-                    i = (i + 1 == valid_sticks) ? 0 : i + 1;
+                {
+                    MaybeDeviceZoneScope("reader_issue");
+                    uint32_t i = bank_stagger_offset < valid_sticks ? bank_stagger_offset : 0;
+                    for (uint32_t k = 0; k < valid_sticks; ++k) {
+                        read_stick_bytes(first_stick + i, seg_offset_bytes, read_base + i * read_stride, data_bytes);
+                        i = (i + 1 == valid_sticks) ? 0 : i + 1;
+                    }
                 }
-                noc_async_read_barrier();
+                {
+                    MaybeDeviceZoneScope("reader_read_barrier");
+                    noc_async_read_barrier();
+                }
                 if (bounce && data_bytes > 0) {
                     for (uint32_t k = 0; k < valid_sticks; ++k) {
                         noc_async_write(read_base + k * read_stride, get_noc_addr(l1_base + k * seg_bytes), data_bytes);
@@ -448,6 +558,7 @@ void kernel_main() {
                     noc_async_write_barrier();
                 }
                 if constexpr (has_padding) {
+                    MaybeDeviceZoneScope("reader_pad_fill");
                     // After the read barrier: a partial tail fill shares a NoC word with the data.
                     if (data_bytes < seg_bytes) {
                         for (uint32_t i = 0; i < valid_sticks; ++i) {

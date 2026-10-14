@@ -25,6 +25,7 @@
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_macros.h"
@@ -119,13 +120,21 @@ template <
     uint32_t round_tile_rows>
 ALWI void tilize_rows(uint32_t rows) {
     if constexpr (!bfp4_round) {
+        // Occupancy: the helper waits on cb_in / reserves cb_out per tile-row inside this zone.
+        MaybeDeviceZoneScope("compute_tilize");
         tilize_block<block_width_tiles, cb_in, cb_out>(rows);
     } else {
         using namespace compute_kernel_lib;
         for (uint32_t r = 0; r < rows; r += round_tile_rows) {
             const uint32_t n = (rows - r < round_tile_rows) ? rows - r : round_tile_rows;
-            unary<Bfp4Round, input(cb_in), output(cb_bfp4_rounded)>(IterationShape::tiles(n * block_width_tiles));
-            tilize_block<block_width_tiles, cb_bfp4_rounded, cb_out>(n);
+            {
+                MaybeDeviceZoneScope("compute_bfp4_round");
+                unary<Bfp4Round, input(cb_in), output(cb_bfp4_rounded)>(IterationShape::tiles(n * block_width_tiles));
+            }
+            {
+                MaybeDeviceZoneScope("compute_tilize");
+                tilize_block<block_width_tiles, cb_bfp4_rounded, cb_out>(n);
+            }
         }
     }
 }

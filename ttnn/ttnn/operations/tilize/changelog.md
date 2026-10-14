@@ -107,3 +107,72 @@
 - Golden test progress: not re-run (host-only change, and the default path is byte-identical). Unit tests: test_tilize_knobs (11/11), test_tilize, test_tilize_geometry_padding and test_tilize_perf pass.
 - Issues encountered: profiler coordinates (x = 1..6, 11..15) differ from `worker_core_from_logical_core` virtual coordinates (1..7, 10..13). Weights are keyed by logical core, mapped from the profiler map in sorted order.
 - Tests added: `test_tilize_knobs.py::test_tilize_weighted_row_split`.
+
+## Perf 1 — Perf tournament round 1 (focus `[1,1,16384,64]` bf16 DRAM→DRAM)
+- Date: 2026-10-14. Board: BH p150b, 110 cores, 8 DRAM banks. All ns are per-timer-cluster spans from `profile_log_device.csv` (`perf_experiments/_tools/zones.py`; the CSV `DEVICE KERNEL DURATION` is invalid on this board). Each figure is the median of 3 profiled samples (`_tools/ablate.sh`). Noise is ±3–5 %.
+- **Instrumentation (permanent).** Added `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` (`MaybeDeviceZoneScope` = `DeviceZoneScopedN`), because the header was missing on this branch. Zones:
+  - reader: `reader_issue`, `reader_read_barrier`, `reader_cb_reserve`, `reader_reorder`, `reader_pad_fill`
+  - writer: `writer_cb_wait`, `writer_issue`, `writer_flush`, `writer_final_barrier`
+  - compute: `compute_tilize`, `compute_bfp4_round`
+  - Waits are zoned separately from work. `compute_tilize` is occupancy, because the helper waits internally.
+  - Per-tile-row zones can exhaust the 250-marker budget on shapes with many tile-rows per core.
+- **Ablation knob.** Descriptor knob `ABLATE` (perf-only; output is wrong when set) compiles `TILIZE_ABLATE_{READ,REORDER,WRITE}`. Each drops one NoC payload and keeps all sync and trip counts.
+- **Measured breakdown on the focus shape** (median ns):
+
+  | Variant | ns |
+  |---|---|
+  | full | 11713 |
+  | −reorder | 11065 |
+  | −read | 9081 |
+  | −write | 9866 |
+  | −read −reorder | 8684 |
+  | −reorder −write | 7879 |
+  | −read −write | 4740 |
+  | all stubbed | 2756 |
+  | segment reader (no coalescing) | 32163 |
+
+  Zone means per core: reader_issue 577, reader_read_barrier 3513, reader_reorder 3270 (1378 of it remained with every copy stubbed), writer_cb_wait 6798, writer_flush 1038, writer_issue 395.
+- **Ranked bottleneck:**
+  1. Aggregate DRAM read+write: 4 MiB in ≈ 8.3 µs above the floor, about the 512 GB/s spec (roofline 8.2 µs + ≈ 1.5 µs launch/fill/drain).
+  2. The fixed floor of 2.76 µs. The reorder loop's overhead is half of it.
+  3. Reorder copies: 0.65 µs exposed in the full op, ≈ 2 µs when DRAM is not hiding them.
+- **Not floated:** an mcast/reuse broadcast (no operand is shared across cores). Per-stick direct reads were already measured at 32.2 µs (segment path), a 2.7× regression.
+- **Portfolio and verdicts** (experiment dirs under `perf_experiments/`):
+
+  | Idea | Verdict | Focus shape result | Other shapes |
+  |---|---|---|---|
+  | `reorder_cost`: cheaper NCRISC staging→CB permutation | **WIN** | reorder zone 3.27 → 2.01 µs | below |
+  | `dual_noc_writes`: reader RISC takes a share of output writes on NoC0 | REGRESSION | 1/4 share 11.75–11.86 vs 11.25–11.56; 1/2 share +13 %; all writes +80 % | 32768x64 +11–15 %; 2048x2048 +9–11 % |
+  | `dual_noc_reads`: writer RISC issues a share of DRAM reads on NoC1 | REGRESSION | +2 % (0.25 share) to +30 % (all) | 16384x32 −5 % only; others flat or worse |
+  | `rw_overlap_schedule`: per-tile-row trids, all reads in flight, writes start early | REGRESSION / NULL | per-row trids +30 % (512 B per-bank reads); whole-core ring and short first chunk flat | deeper in/out CBs −3 % (noise) |
+
+  - **`reorder_cost` (WIN).** Raw `ncrisc_noc_write_with_state` on two alternating write cmd bufs, counters bumped once per tile-row, and a strength-reduced bank-group walk, unrolled when `tile_h % num_banks == 0`. Per-copy cost was the cmd-buf turnaround, not address math: a 1-buffer unroll was slower (3.62 µs).
+  - **`dual_noc_writes`.** NoC0 DRAM writes are slow, and they slow the reader's reorder copies, which share its NoC0 port.
+  - **`dual_noc_reads`.** DRAM reads over NoC1 run at about half the NoC0 rate.
+  - **`rw_overlap_schedule`.** The cost tracks request size and count. Cross-core overlap of reads and writes already exists.
+- **Graduated:** `reorder_cost` only. It is now the unqualified reorder path of the coalesced reader for every one-packet copy on the dedicated-NoC mode the descriptor always uses. The general two-cmd-buf walk covers geometries where the unroll can't be expressed (`tile_h % num_banks != 0`, or a writer copy share that isn't a multiple of `num_banks`).
+  - **Carve-outs (cannot):** multi-packet stick copies (`seg_bytes > NOC_MAX_BURST_SIZE`) and dynamic NoC mode keep the old helper loop. The raw one-packet state and per-row counter bump are not valid there.
+  - The retile de-face loop issues similar copies but was not changed. Porting it is new code and was not measured; it is a candidate for round 2.
+  - Correctness (subagent): torch.equal on 18 cases, including tile_h 16/8/4/2, writer share 0.5/0.3, and fp32/uint16/int32/uint8, plus `--dev`.
+- **Whole-op before → after** (A/B in one session; old = the same kernel with `raw_copies` forced off):
+
+  | Shape | Before (ns) | After (ns) | Change |
+  |---|---|---|---|
+  | 16384x64 (focus) | 11459 | 11075 | −3.3 % (pooled median of 9 samples per arm) |
+  | 16384x32 | 8176 | 6919 | −15 % |
+  | 3520x64 | 3982 | 3704 | −7 % |
+  | 32768x64 | 21803 | 21638 | flat (DRAM-bound) |
+
+  The focus shape now runs at 11.08 µs, below the `measured_ns_blackhole` reference of 11.85 µs.
+- **Guard set, no regression.** 128x64 2133 → 2112, 32x2048 4295 → 4310, 2048x2048 39684 → 39699, 32x8192 6110 → 6007. These are the segment path and 2-D split; all flat. Sharded/resident and retile paths are untouched.
+- **Correctness.** Golden `eval/golden_tests/tilize/`: 2118 passed / 65 failed / 46 xfailed. The 65 failures are identical to HEAD:
+  - 56 `test_op` FP8_E4M3 sharded/retile cells: the harness `from_torch` cannot build the input (pre-existing, Refinement 5).
+  - 9 `test_translated` cells, re-run on HEAD's reader with the same 9 failures.
+
+  Unit dir `tests/ttnn/unit_tests/operations/tilize/`: 298/298.
+- **Outcome:** 4 ideas measured; 1 graduated, 3 regressions; focus shape −3.3 % (11.46 → 11.08 µs), up to −15 % on 16384x32; no regression.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `noc_async_write_one_packet_with_state` (dataflow_api, used for L1→L1 local copies) | capability | No way to issue a stream of same-size one-packet writes over more than one cmd buf: each call waits for its single cmd buf to be accepted before programming the next copy, and it read-modify-writes both write counters per call. There is no batch form ("issue N copies, bump counters by N once"). | 3270 (reorder zone/core); op 11459 | 2010 (reorder zone/core); op 11075 | `kernels/tilize_reader.cpp:328` (raw_copy), `:377–423` (walks) |

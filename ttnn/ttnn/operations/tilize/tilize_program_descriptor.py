@@ -70,6 +70,10 @@ MAX_LEADING_DIMS = 4
 PIN_OCCUPANCY_RATIO = 0.5
 # Row-only split: per-core row-count weights f(device, logical core) -> float (None = even split).
 ROW_SPLIT_WEIGHTS = None
+# Perf-only payload ablation (/perf-measure): names from {"read", "reorder", "write"} compile the
+# matching TILIZE_ABLATE_<NAME> define into the reader/writer, which drops that NoC payload but keeps
+# every CB handshake, barrier and trip count. Output is WRONG when set; never set outside perf runs.
+ABLATE = ()
 # Fill-row source offset: src = fill_base + (dst % FILL_PHASE_BYTES) keeps every local fill copy
 # NoC-alignment congruent (any alignment <= this) and in element phase.
 FILL_PHASE_BYTES = 64
@@ -687,6 +691,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
                 core_ranges=group_cores,
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
+                defines=[(f"TILIZE_ABLATE_{n.upper()}", "1") for n in ABLATE],
                 config=ttnn.ReaderConfigDescriptor(),
             )
         )
@@ -696,6 +701,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
                 core_ranges=group_cores,
                 compile_time_args=writer_ct,
                 runtime_args=writer_rt,
+                defines=[(f"TILIZE_ABLATE_{n.upper()}", "1") for n in ABLATE],
                 config=ttnn.WriterConfigDescriptor(),
             )
         )
