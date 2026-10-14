@@ -1,0 +1,16 @@
+o main @ids_op.txt
+o fin @ids_op.txt
+o new @ids_op.txt
+o new2 @ids_op.txt
+o new2 @ids_op.txt
+o new @ids_op.txt
+o fin @ids_op.txt
+o main @ids_op.txt
+o main @ids_op.txt
+o fin @ids_op.txt
+o new @ids_op.txt
+o new2 @ids_op.txt
+o new2 @ids_op.txt
+o new @ids_op.txt
+o fin @ids_op.txt
+o main @ids_op.txt
