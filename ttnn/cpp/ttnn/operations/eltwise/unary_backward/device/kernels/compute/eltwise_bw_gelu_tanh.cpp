@@ -50,23 +50,20 @@ void kernel_main() {
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D3, ckl::Dst::D1>{},
         // tile[1] = x + kKappa * x³
         ckl::AddBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1, BF16_ROUNDING_MODE>{},
-        // tile[1] = kBeta * (x + kKappa * x³) = inner
-        ckl::FillScalar<ckl::Dst::D3>{kBeta},
+        // tile[1] = 2 * kBeta * (x + kKappa * x³) = 2 * inner
+        ckl::FillScalar<ckl::Dst::D3>{2.0f * kBeta},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D3, ckl::Dst::D1>{},
-        // tile[1] = tanh(inner)
-        ckl::Tanh<ckl::Dst::D1>{},
-        ckl::CopyDest<ckl::Dst::D1, ckl::Dst::D4, COPY_DEST_DATA_FORMAT>{},  // tile[4] = tanh(inner)
-        // CDF term: tile[1] = 0.5 * (1 + tanh)
-        ckl::FillScalar<ckl::Dst::D3>{1.0f},
-        ckl::AddBinary<ckl::Dst::D1, ckl::Dst::D3, ckl::Dst::D1, BF16_ROUNDING_MODE>{},
-        ckl::FillScalar<ckl::Dst::D3>{0.5f},
-        ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D3, ckl::Dst::D1>{},  // tile[1] = 0.5*(1 + tanh) = CDF term
-        // sech²: tile[4] = 1 - tanh²
-        ckl::Square<ckl::Dst::D4>{},
+        // A 16-bit Dest rounds tanh(inner) to exactly -1 below x ~ -3, so 1 + tanh and 1 - tanh² both cancel
+        // to 0. With s = sigmoid(2 * inner), 0.5 * (1 + tanh) = s and sech² = 4 * s * (1 - s) keep their
+        // magnitude there, since 1 - s only cancels on the positive side where the PDF term is negligible.
+        // CDF term: tile[1] = s
+        ckl::Sigmoid<ckl::Dst::D1>{},
+        // tile[4] = s * (1 - s) = sech² / 4
+        ckl::CopyDest<ckl::Dst::D1, ckl::Dst::D4, COPY_DEST_DATA_FORMAT>{},
         ckl::FillScalar<ckl::Dst::D3>{1.0f},
         ckl::SubBinary<ckl::Dst::D3, ckl::Dst::D4, ckl::Dst::D3, BF16_ROUNDING_MODE>{},
-        ckl::CopyDest<ckl::Dst::D3, ckl::Dst::D4, COPY_DEST_DATA_FORMAT>{},
-        // PDF term: 0.5 * kBeta * x * (1 + 3*kKappa*x²) * sech²
+        ckl::MulBinary<ckl::Dst::D4, ckl::Dst::D3, ckl::Dst::D4>{},
+        // PDF term: 0.5 * kBeta * x * (1 + 3*kKappa*x²) * sech², with the factor 4 of sech² folded into kBeta
         // tile[2] still = x, need x²
         ckl::FillScalar<ckl::Dst::D3>{kKappa * 3.0f},
         ckl::Square<ckl::Dst::D2>{},
@@ -76,7 +73,7 @@ void kernel_main() {
         // tile[2] = sech² * (1 + 3*kKappa*x²)
         ckl::MulBinary<ckl::Dst::D2, ckl::Dst::D4, ckl::Dst::D2>{},
         // tile[2] = kBeta/2 * sech² * (1 + 3*kKappa*x²)
-        ckl::FillScalar<ckl::Dst::D3>{kBeta / 2.0f},
+        ckl::FillScalar<ckl::Dst::D3>{2.0f * kBeta},
         ckl::MulBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
         // tile[2] = x * kBeta/2 * sech² * (1 + 3*kKappa*x²) = PDF term
         ckl::CopyDest<ckl::Dst::D5, ckl::Dst::D3, COPY_DEST_DATA_FORMAT>{},  // tile[3] = x (saved in tile[5])
