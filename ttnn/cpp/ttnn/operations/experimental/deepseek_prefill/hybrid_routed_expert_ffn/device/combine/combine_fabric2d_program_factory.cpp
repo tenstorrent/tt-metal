@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "combine_fabric2d_program_factory.hpp"
+#include "combine_fabric2d_collector.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_placement.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_assignments.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
@@ -583,55 +584,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         }
     }
 
-    {
-        const auto& collector = placement.at(coord).collector.value();
-
-        // Only the untilizers: they are the cores that read routed-expert output from DRAM, so only they can
-        // run ahead of it. The readers consume what the untilizers staged in L1 and are ordered behind them.
-        std::vector<CoreCoord> waiting;
-        for (const auto& group : groups) {
-            for (const auto& untilizer : group) {
-                waiting.push_back(untilizer.worker_virtual);
-            }
-        }
-        // An empty list would leave every DRAM reader ungated, which reads stale rows rather than failing.
-        TT_FATAL(!waiting.empty(), "combine_fabric2d: overlapped with the routed expert but no core gates on it");
-        const uint32_t passes = args.hybrid_token_threshold > 0 ? 2 : 1;
-        auto* dev = args.device;
-        const auto re_first = dev->worker_core_from_logical_core(
-            CoreCoord{args.routed_expert_cores.start_coord.x, args.routed_expert_cores.start_coord.y});
-        const auto re_last = dev->worker_core_from_logical_core(
-            CoreCoord{args.routed_expert_cores.end_coord.x, args.routed_expert_cores.end_coord.y});
-
-        tt::tt_metal::KernelDescriptor kernel;
-        kernel.kernel_source =
-            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/"
-            "collector_combine_fabric2d.cpp";
-        kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-        kernel.defines.emplace_back("CMBF2D_PROGRESS_SEM", std::to_string(sems.progress()));
-        kernel.core_ranges = CoreRangeSet(CoreRange(collector.logical));
-        kernel.compile_time_args = {
-            args.routed_expert_writers,
-            passes * args.experts_per_chip,
-            l1.collector_counts,
-            sems.ready(),
-            args.routed_expert_go_addr,
-            static_cast<uint32_t>(re_first.x),
-            static_cast<uint32_t>(re_first.y),
-            static_cast<uint32_t>(re_last.x),
-            static_cast<uint32_t>(re_last.y),
-            static_cast<uint32_t>(args.routed_expert_cores.size()),
-            static_cast<uint32_t>(waiting.size())};
-        for (const auto& core : waiting) {
-            kernel.compile_time_args.push_back(static_cast<uint32_t>(core.x));
-            kernel.compile_time_args.push_back(static_cast<uint32_t>(core.y));
-        }
-        kernel.config = tt::tt_metal::DataMovementConfigDescriptor{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::NOC_0,
-        };
-        desc.kernels.push_back(std::move(kernel));
-    }
+    add_collector(desc, args, placement.at(coord), l1.collector_counts, sems.ready(), sems.progress());
     return desc;
 }
 }  // namespace

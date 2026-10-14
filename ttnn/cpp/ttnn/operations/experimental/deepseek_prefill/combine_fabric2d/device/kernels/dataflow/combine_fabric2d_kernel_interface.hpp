@@ -161,6 +161,13 @@ struct UntilizerPlan {
     std::vector<HandshakePeer> consumers;
 };
 
+// Overlapped only: the per-chip values the collector needs that are not read off the arguments.
+struct CollectorPlan {
+    uint32_t counts_addr = 0;
+    uint32_t ready_sem = 0;
+    std::vector<tt::tt_metal::CoreCoord> waiting;  // virtual; the cores `ready` is published to
+};
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
 
 namespace cmbf2d {
