@@ -30,6 +30,11 @@ logprobs, and other unsupported sampling options through its host sampler.
 Host and device sampling use different random streams, so seeded output is not
 guaranteed to stay identical when a request changes sampling mode.
 
+Explicit seeds are reduced modulo `2**31 - 131072 - 1` before adding the
+absolute token position. This accepts signed 64-bit request seeds and leaves
+room for device increments throughout the supported context. The resulting
+device seed cannot reach the reserved value that skips reseeding.
+
 ## Run
 
 Build tt-metal and activate its Python environment. Install the current vLLM TT
@@ -38,10 +43,10 @@ checkpoint at revision `0e9e39f249a16976918f6564b8830bc894c89659`, or set
 `LLAMA_MODEL_PATH` to that local snapshot. The model opens its checkpoint
 offline. Compiled kernels are cached beneath `TT_METAL_CACHE`.
 
-The plugin changes are in [vllm-tt-plugin #116](https://github.com/tenstorrent/vllm-tt-plugin/pull/116).
-Until that dependency merges, both scheduled and manual workflow runs and the
-registry command default to `yieldthought/llama31-qb2-serving`. The workflow's
-plugin-ref input or `VLLM_TT_PLUGIN_REF` can select another branch or tag.
+The Llama QB2 adapter is merged in [vllm-tt-plugin #116](https://github.com/tenstorrent/vllm-tt-plugin/pull/116).
+Scheduled and manual workflow runs and the registry command default to plugin
+`main`. The workflow's `vllm-tt-plugin-ref` input or `VLLM_TT_PLUGIN_REF` can
+select another branch or tag.
 
 ```bash
 export TT_LLAMA_TEXT_VER=llama31_8b_qb2 MESH_DEVICE=P300x2

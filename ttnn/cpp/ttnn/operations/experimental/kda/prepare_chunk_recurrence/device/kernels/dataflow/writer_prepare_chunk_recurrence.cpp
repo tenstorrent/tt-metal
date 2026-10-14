@@ -16,8 +16,7 @@ TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count, uint32
     DataflowBuffer control(dfb::chronology_writer);
     control.wait_front(1);
     const uint32_t valid_chunks =
-        kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_read_ptr())).valid_rows /
-        tt::constants::TILE_HEIGHT;
+        kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_read_ptr())).chunk_count();
     control.pop_front(1);
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;

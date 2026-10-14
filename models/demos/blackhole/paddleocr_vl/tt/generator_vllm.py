@@ -54,10 +54,14 @@ class TT_PaddleOCRVLProcessingInfo(PaddleOCRVLProcessingInfo):
     dummy_inputs=PaddleOCRVLDummyInputsBuilder,
 )
 class PaddleOCRVLForConditionalGeneration(VLGenerator, SupportsMultiModal):
+    # The shared generator requires the plugin's explicit reload commands (#51646).
+    decode_input_update_contract = 1
+
     model_capabilities = {
         # Prefix caching would need the vision splice to be cache-aware; not claimed.
         "supports_prefix_caching": False,
-        "supports_async_decode": True,
+        # Host sampling keeps the sampled token on the host, which async decode does not allow.
+        "supports_async_decode": False,
         # Corrupts output at batch 1 (qwen3_vl #48037); argmax alone clears the decode gate.
         "supports_sample_on_device": False,
     }
@@ -251,6 +255,12 @@ class PaddleOCRVLForConditionalGeneration(VLGenerator, SupportsMultiModal):
 
     def decode_forward(self, *args, **kwargs):
         rope_deltas_list = kwargs.pop("rope_deltas_all_users", None)
+        slot_remap = kwargs.pop("slot_remap", None)
         if rope_deltas_list is not None:
+            # Already in the new slot layout, so remapping again would move it twice.
             super().update_rope_deltas(rope_deltas_list)
+        elif slot_remap is not None:
+            super().remap_rope_deltas(slot_remap)
+        if slot_remap is not None:
+            kwargs["slot_remap"] = slot_remap
         return super().decode_forward(*args, **kwargs)

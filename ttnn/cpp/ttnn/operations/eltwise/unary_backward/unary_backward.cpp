@@ -22,7 +22,6 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
-#include "gelu_bw/device/gelu_bw_device_operation.hpp"
 #include "device/unary_backward_device_operation.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
@@ -310,7 +309,8 @@ std::vector<std::optional<Tensor>> exp_bw(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
 
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad =
+        input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     Tensor exp_result = ttnn::exp(input, false, output_mem_config);
     Tensor result = ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
@@ -347,7 +347,8 @@ std::vector<std::optional<Tensor>> sqrt_bw(
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
 
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad =
+        input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     ttnn::sqrt(input, false, output_mem_config, input_grad);
     ttnn::multiply(
         grad,
@@ -518,7 +519,7 @@ std::vector<std::optional<ttnn::Tensor>> rsqrt_bw(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     if (!input_grad.has_value()) {
-        input_grad = ttnn::empty_like(grad);
+        input_grad = ttnn::empty_like(grad, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
     float t_nan = std::nanf("");
 
@@ -553,7 +554,8 @@ std::vector<std::optional<Tensor>> neg_bw(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt};
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad =
+        input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     result[0] = ttnn::neg(grad, output_mem_config, input_grad);
     return result;
 }
@@ -919,7 +921,8 @@ std::vector<std::optional<Tensor>> silu_bw(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt};
 
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad =
+        input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     Tensor sigmoid_res = ttnn::sigmoid(
         input,
         (int)ttnn::operations::unary::VecMode::RC,
@@ -1603,7 +1606,11 @@ std::vector<std::optional<ttnn::Tensor>> gelu_bw(
     auto output_memory_config =
         input_grad.has_value() ? input_grad->memory_config() : output_mem_config.value_or(input.memory_config());
 
-    return {ttnn::prim::gelu_bw(grad, input, variant, input.dtype(), output_memory_config, input_grad)};
+    const auto op_type = variant == operations::unary::GeluVariant::TANH
+                             ? ttnn::operations::unary_backward::UnaryBackwardOpType::GELU_TANH_BW
+                             : ttnn::operations::unary_backward::UnaryBackwardOpType::GELU_BW;
+    return {ttnn::operations::unary_backward::launch_unary_backward(
+        op_type, grad, input, input.dtype(), output_memory_config, input_grad)};
 }
 
 std::vector<Tensor> repeat_bw(

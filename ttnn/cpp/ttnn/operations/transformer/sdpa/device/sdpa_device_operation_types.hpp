@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/windowed_mode.hpp"
 #include <optional>
 
 namespace ttnn::prim {
@@ -22,9 +23,9 @@ struct SDPAParams {
     bool use_mla = false;
     std::optional<uint32_t> head_dim_v;
     std::optional<uint32_t> sliding_window_size;
-    // Windowed (block-diagonal) attention: when true, the mask is synthesized on-device from the
-    // cu_window_seqlens tensor instead of being read from attn_mask. Implies non-causal.
-    bool is_windowed = false;
+    // Windowed (block-diagonal) attention: in any mode but None, the mask is synthesized on-device from
+    // the cu_window_seqlens tensor instead of being read from attn_mask. Causal when is_causal is set.
+    WindowedMode windowed_mode = WindowedMode::None;
     // Global row index of Q row 0, when Q is a sequence-parallel shard of a longer sequence. Q and the
     // output are addressed locally; cu_window_seqlens and K/V stay global, so the mask generator offsets
     // Q by this to find the right windows. 0 means Q spans the whole sequence (the unsharded case).

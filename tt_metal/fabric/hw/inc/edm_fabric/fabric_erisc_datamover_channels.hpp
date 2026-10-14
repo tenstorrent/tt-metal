@@ -16,7 +16,7 @@
 #endif
 #include "api/alignment.h"
 #include "internal/risc_attribs.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "fabric_static_channels_ct_args.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"

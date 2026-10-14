@@ -54,8 +54,9 @@ The shared-generator changes are reviewed separately:
 - [Compact prefill request/page ownership, #58504](https://github.com/tenstorrent/tt-metal/pull/58504).
 - [Decode output rows across changing buckets, #58542](https://github.com/tenstorrent/tt-metal/pull/58542).
 
-Indexed sparse bias is merged. The other prerequisites above are not included
-in this model-only import and must land through their normal review/check gates.
+The three native prerequisites and decode output-row change are merged on main.
+Compact prefill #58504 remains independently reviewed and must land before
+integrated model validation. This model-only import does not duplicate that change.
 
 Serving uses the current official [vLLM TT plugin installation procedure](https://github.com/tenstorrent/vllm-tt-plugin#installation)
 with merged [input/slot integration #152](https://github.com/tenstorrent/vllm-tt-plugin/pull/152)

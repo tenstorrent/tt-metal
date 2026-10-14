@@ -754,8 +754,9 @@ _OP_DOMAIN_REGISTRY: Dict[
     #
     # Bounded by accuracy rather than representable range: a**b evaluates as
     # exp(b * ln a), and the relative error is roughly flat in the operands, so the bounds
-    # pair with the rtol in BINARY_CUSTOM_TOLERANCES. A <= 16 is left out because it drives
-    # |a**b| to Float16's ceiling, which would make this an overflow test.
+    # pair with the rtol SfpuElwpow declares in sfpu_accuracy_budget.yaml. A <= 16 is
+    # left out because it drives |a**b| to Float16's ceiling, which would make this an
+    # overflow test.
     MathOperation.SfpuElwpow: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=8.0),
         spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=4.0),
@@ -765,8 +766,8 @@ _OP_DOMAIN_REGISTRY: Dict[
     #
     # x's ceiling is an absolute-accuracy bound: the error is dominated by
     # x * abs_err(ln y) and so grows with x while a fixed atol does not, which is what pairs
-    # it with the atol in BINARY_CUSTOM_TOLERANCES. Most of that error is output
-    # quantization rather than the kernel. y keeps its full log-uniform span.
+    # it with the atol SfpuXlogy declares in sfpu_accuracy_budget.yaml. Most of that error
+    # is output quantization rather than the kernel. y keeps its full log-uniform span.
     MathOperation.SfpuXlogy: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=8.0),
         spec_B=StimuliSpec(
@@ -2062,6 +2063,14 @@ def specials_safe(
     return True
 
 
+def unpacks_to_dest(input_format: DataFormat, dest_acc: Union[bool, Enum]) -> bool:
+    """Does the unpack write *input_format* straight into Dest, rather than through
+    SrcA and the datacopy? A 32-bit input at dest_acc=Yes. One rule for the ULP sweep
+    driver's TestConfig, the sweep's input masks and :func:`negative_zero_delivered`,
+    so the three cannot drift apart."""
+    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
+
+
 def negative_zero_delivered(
     input_format: DataFormat, dest_acc: Optional[Union[bool, Enum]]
 ) -> bool:
@@ -2079,7 +2088,7 @@ def negative_zero_delivered(
     """
     if dest_acc is None:
         return True
-    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
+    return unpacks_to_dest(input_format, dest_acc)
 
 
 def nan_survives_to_l1(
