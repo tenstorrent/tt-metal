@@ -20,7 +20,9 @@ which call the ttnn experimental async CCL ops.  They exist to catch ops
 that silently drop or fail to update ``TensorTopology`` placements on
 their output tensors.
 
-The fixture opens a 2x2 line-line mesh (4 devices).
+The fixture opens a 2x2 line-line mesh (4 devices). Every test runs with
+``ttnn.CONFIG.strict_ccl_topology`` on (what CI runs), so a label the CCL
+topology helper refuses is an error, not a warning plus the input's label.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ import pytest
 import ttnn
 import ttml
 
-pytestmark = pytest.mark.requires_device
+pytestmark = [pytest.mark.requires_device, pytest.mark.usefixtures("strict_ccl_topology")]
 
 # Default mesh for the main tests: 2x2 with both axes addressable as the
 # collective axis. Both axes are size 2 so any axis can be used as the
@@ -294,7 +296,8 @@ class TestAllGatherTopology:
 
 @pytest.fixture
 def strict_ccl_topology():
-    """Promote the CCL topology helper's refusals from warnings to errors for the test (what CI runs)."""
+    """Promote the CCL topology helper's refusals from warnings to errors (what CI runs). Applied to every test in
+    this module through ``pytestmark``, so a refusal surfaces as the helper's reason rather than as a label mismatch."""
     previous = ttnn.CONFIG.strict_ccl_topology
     ttnn.CONFIG.strict_ccl_topology = True
     try:
@@ -357,13 +360,13 @@ class TestCollapsedInputs:
     """The default mappers produce one placement for the whole mesh; before the CCL topology helper every
     collective edited placements by mesh-axis index, so cluster_axis=1 did nothing to the label and cluster_axis=0
     overwrote the single placement. These tests pin the per-axis labels the helper derives and check them against
-    the bytes by composing the shards the way the label says. All run with strict mode on, so a label the helper
-    refuses is an error (asserted explicitly in the negative controls)."""
+    the bytes by composing the shards the way the label says. Like the rest of the module they run with strict mode
+    on, so a label the helper refuses is an error (asserted explicitly in the negative controls)."""
 
     ROWS, COLS = MESH_SHAPE_2X2
 
     @pytest.fixture(autouse=True)
-    def _setup(self, ccl_mesh, strict_ccl_topology):
+    def _setup(self, ccl_mesh):
         self.mesh = ccl_mesh
 
     def _pieces(self, data, dim):
