@@ -11,7 +11,8 @@
 // CT args: [cb_in, cb_mid, cb_out, Wt_in, Wt_out, in_tile_rows, out_tile_rows, max_bct]
 // RT args: [num_chunks]
 #include <cstdint>
-#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tilize.h"
@@ -47,9 +48,10 @@ void kernel_main() {
     CircularBuffer mid_buffer(cb_mid);
     CircularBuffer out_buffer(cb_out);
 
+    compute_kernel_hw_startup(cb_in, cb_mid);
+
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         // Phase 1: untilize input tiles → RM sticks in cb_mid
-        unary_op_init_common(cb_in, cb_mid);
         pack_untilize_init<block_ct_dim, full_ct_dim>(cb_in, cb_mid);
 
         for (uint32_t tr = 0; tr < in_tile_rows; ++tr) {
@@ -64,7 +66,8 @@ void kernel_main() {
         pack_untilize_uninit(cb_mid);
 
         // Phase 2: tilize RM sticks → output tiles in cb_out
-        unary_op_init_common(cb_mid, cb_out);
+        reconfig_data_format_srca(cb_in, cb_mid);
+        pack_reconfig_data_format(cb_mid, cb_out);
         tilize_init(cb_mid, Wt_out, cb_out);
 
         for (uint32_t tr = 0; tr < out_tile_rows; ++tr) {
@@ -74,5 +77,10 @@ void kernel_main() {
             out_buffer.push_back(Wt_out);
             mid_buffer.pop_front(Wt_out);
         }
+        tilize_uninit(cb_mid, cb_out);
+
+        // Restore the phase-1 formats for the next chunk's untilize.
+        reconfig_data_format_srca(cb_mid, cb_in);
+        pack_reconfig_data_format(cb_out, cb_mid);
     }
 }
