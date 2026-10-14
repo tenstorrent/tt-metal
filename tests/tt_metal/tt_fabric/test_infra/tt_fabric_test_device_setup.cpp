@@ -61,6 +61,24 @@ std::vector<RoutingDirection> mcast_outgoing_directions(
 }  // namespace
 
 // ====================================
+// Fabric 2.0 hook: when the fabric2 builder plugin is loaded (LD_PRELOAD) and TT_FABRIC2 is set, worker
+// connections are provisioned by the plugin (DRISC injection ring + x280 WorkerCell) instead of the EDM.
+#include <dlfcn.h>
+namespace {
+using Fabric2HookFn = bool (*)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, tt::tt_metal::Program*,
+                               const tt::tt_metal::CoreCoord*, std::vector<uint32_t>*);
+bool fabric2_connection_hook(
+    const tt::tt_fabric::FabricNodeId& src, const tt::tt_fabric::FabricNodeId& dst, uint32_t link_idx,
+    tt::tt_metal::Program& program, const tt::tt_metal::CoreCoord& core, std::vector<uint32_t>& rt_args) {
+    if (std::getenv("TT_FABRIC2") == nullptr) {
+        return false;
+    }
+    static Fabric2HookFn fn = reinterpret_cast<Fabric2HookFn>(dlsym(RTLD_DEFAULT, "fabric2_append_worker_connection_rt_args"));
+    TT_FATAL(fn != nullptr, "TT_FABRIC2 is set but the fabric2 plugin is not loaded (LD_PRELOAD libfabric2_plugin.so)");
+    return fn(*src.mesh_id, src.chip_id, *dst.mesh_id, dst.chip_id, link_idx, &program, &core, &rt_args);
+}
+}  // namespace
+
 // FabricConnectionManager Implementation
 // ====================================
 
@@ -357,8 +375,11 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
                     core,
                     rt_args);
             } else {
-                append_fabric_connection_rt_args(
-                    fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
+                if (!fabric2_connection_hook(
+                        fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args)) {
+                    append_fabric_connection_rt_args(
+                        fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
+                }
             }
         }
     }
@@ -423,6 +444,10 @@ void TestWorker::create_kernel(
     uint32_t local_args_capacity_bytes,
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear,
     tt::tt_metal::NOC noc_id) const {
+    std::map<std::string, std::string> kernel_defines;
+    if (std::getenv("TT_FABRIC2") != nullptr) {
+        kernel_defines["FABRIC2_WORKER"] = "";  // Fabric 2.0 worker adapter (fabric2_worker_adapter.hpp)
+    }
     auto kernel_handle = tt::tt_metal::CreateKernel(
         this->test_device_ptr_->get_program_handle(),
         this->kernel_src_,
@@ -431,6 +456,7 @@ void TestWorker::create_kernel(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = noc_id,
             .compile_args = ct_args,
+            .defines = kernel_defines,
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
     // Set fabric connection runtime args (for WorkerToFabricEdmSender::build_from_args)
