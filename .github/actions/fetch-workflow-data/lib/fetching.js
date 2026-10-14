@@ -295,6 +295,22 @@ function filterManualRuns(runs, source) {
   return filteredRuns;
 }
 
+function isBaseRepoRun(run) {
+  return run.head_repository?.full_name === run.repository?.full_name;
+}
+
+function filterForkRuns(runs, source) {
+  if (!Array.isArray(runs) || runs.length === 0) {
+    return runs;
+  }
+  const filteredRuns = runs.filter(isBaseRepoRun);
+  const removed = runs.length - filteredRuns.length;
+  if (removed > 0) {
+    core.info(`[${source}] Filtered out ${removed} runs from forks`);
+  }
+  return filteredRuns;
+}
+
 /**
  * Fetches new workflow runs from GitHub API
  * @param {object} octokit - Octokit client
@@ -328,7 +344,7 @@ async function fetchNewWorkflowRuns(octokit, context, days, cachedRunIds, workfl
     core.info(`[FETCH] Total new runs fetched: ${newRuns.length} (from ${workflowIds.length} workflows)`);
   }
 
-  return filterManualRuns(newRuns, 'FETCH');
+  return filterForkRuns(filterManualRuns(newRuns, 'FETCH'), 'FETCH');
 }
 
 /**
@@ -367,6 +383,7 @@ function mergeAndDeduplicateRuns(previousRuns, newRuns, days) {
   core.info(`[MERGE] After filtering (date>=${cutoff.toISOString()}): ${mergedRuns.length} runs (removed ${beforeDateFilter - mergedRuns.length})`);
 
   mergedRuns = filterManualRuns(mergedRuns, 'MERGE');
+  mergedRuns = filterForkRuns(mergedRuns, 'MERGE');
   core.info(`[MERGE] Final count after all filtering: ${mergedRuns.length} runs`);
   core.info(`[MERGE] Note: branch and status=completed were already filtered at API level`);
 
@@ -488,4 +505,5 @@ module.exports = {
   fetchNewWorkflowRuns,
   mergeAndDeduplicateRuns,
   recheckForNewerAttempts,
+  isBaseRepoRun,
 };
