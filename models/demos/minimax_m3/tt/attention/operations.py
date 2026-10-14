@@ -97,6 +97,18 @@ def apply_rope(tensor, rope_mats, transformation_mat, is_decode_mode: bool, kv_a
     if rotary_dim >= head_dim:
         return _rotate(tensor)
 
+    if kv_actual_global is not None:
+        # The indexed rope rotates [0, rotary_dim) and copies [rotary_dim, head_dim) unchanged.
+        return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+            tensor,
+            rope_mats[0],
+            rope_mats[1],
+            transformation_mat,
+            kv_actual_global=kv_actual_global,
+            cluster_axis=cluster_axis,
+            rotary_dim=rotary_dim,
+        )
+
     # Partial rotary: split [..., :rotary_dim] (rotate) and [..., rotary_dim:] (pass through).
     shape = tensor.shape
     t_rot = ttnn.slice(tensor, [0, 0, 0, 0], [shape[0], shape[1], shape[2], rotary_dim])
