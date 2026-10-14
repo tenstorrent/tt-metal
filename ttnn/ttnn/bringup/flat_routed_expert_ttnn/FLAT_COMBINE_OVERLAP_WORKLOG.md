@@ -1209,6 +1209,23 @@ costs what `XRD_SKIP=0` saves (M 64 / 128 / 192 / 256: 3.3 / 6.2 / 7.4 / 8.0 µs
 86.6 / 105.3 / 147.1. x read once wins ~2.3 µs at M <= 128 (half the x bytes next to DRAM-bound weights), then one
 primary's tilize + double multicast is the limit.
 
+**K3 on real uneven routing (2026-10-14, default config, galaxy-unified `07204e33c04`).** Per-chip count vectors (12
+local experts) cut from the captured Kimi K2.7 routing in test_hybrid_routed_expert_combine.py (balanced / hot-expert
+dispatch groups: 8 chips each; real (8, 4) cells L45c3 (median skew) / L11c9 (most skewed, one expert 3458): 32
+chips each), run through test_flat_balanced_sweep.py with GLM_SWEEP_COUNTS at K3 shapes (situ). Per chip, us per call;
+"vs balanced" = the balanced sweep at the same total rows (interpolated):
+
+| routing | chips | median | worst chip | worst: rows / max count / DRAM | vs balanced, median / max |
+|---|---|---|---|---|---|
+| balanced group | 8 | 576 | 604 | 1452 / 249 / 79% | 0.97 / 1.02 |
+| hot-expert group | 8 | 577 | 728 | 3333 / 2878 / 73% | 1.00 / 1.03 |
+| real L45c3 | 32 | 594 | 694 | 2412 / 1156 / 72% | 1.00 / 1.07 |
+| real L11c9 | 32 | 582 | 945 | 4500 / 3458 / 59% | 1.00 / 1.05 |
+
+Skew costs nothing beyond the rows themselves: every chip is within -7..+7% of balanced routing with the same total, and
+the worst chip is simply the one with the most rows (L11c9 c17: 4500 rows, ~830 us of compute at the balanced
+compute-only rate; light chips sit at 80-86% DRAM, the 436 us weight floor).
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
