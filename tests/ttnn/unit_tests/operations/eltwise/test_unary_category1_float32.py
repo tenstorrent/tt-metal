@@ -706,6 +706,98 @@ def test_exp_allclose(device):
     assert_allclose(expected_result=golden, actual_result=result, atol=1.0e-38, rtol=0)
 
 
+def test_exp_full_mantissa(device):
+    """exp on float32 inputs off the bfloat16 lattice, up to the overflow edge.
+
+    | Inputs                                     | Check   |
+    |--------------------------------------------|---------|
+    | 4096 evenly spaced values in [-87.3, 88.7] | ULP ≤ 1 |
+    | edge points up to the last finite input    | ULP ≤ 1 |
+    | (log(FLT_MAX) ≈ 88.7228)                   |         |
+
+    test_exp_ops only sees bfloat16 values (lower 16 mantissa bits zero), and
+    its bfloat16 sweep stops at 88.5, so it covers neither full-mantissa
+    rounding nor (88.5, 88.7228].
+    """
+    low, high = -87.3, 88.7
+    last_finite = torch.nextafter(torch.log(torch.tensor(torch.finfo(torch.float32).max)), torch.tensor(0.0)).item()
+    edge_points = torch.tensor(
+        [
+            low,
+            -20.0,
+            -1.0,
+            1.0,
+            20.0,
+            high,
+            torch.nextafter(torch.tensor(high), torch.tensor(low)).item(),
+            88.72,
+            last_finite,
+        ],
+        dtype=torch.float32,
+    )
+    input_tensor = torch.cat([torch.linspace(low, high, 4096, dtype=torch.float32), edge_points]).unique()
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp)
+    golden = golden_function(input_tensor, device=device)
+
+    result = ttnn.to_torch(ttnn.exp(tt_in))
+
+    assert torch.isfinite(golden).all(), "edge points must stay below exp overflow"
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+def test_exp_special_values(device):
+    """exp on the inputs the bfloat16 sweeps replace with 0, plus both saturation ends.
+
+    | Input                                  | Expected            |
+    |----------------------------------------|---------------------|
+    | -inf, -120, -104                       | 0                   |
+    | ±0 and bfloat16 subnormals             | 1                   |
+    | 1                                      | e (ULP ≤ 1)         |
+    | 88.7                                   | finite (ULP ≤ 1)    |
+    | 89, 100, +inf                          | +inf                |
+    | NaN, negative NaN                      | NaN                 |
+    """
+    negative_nan = torch.tensor([-0x400000], dtype=torch.int32).view(torch.float32)
+    subnormals = torch.tensor([1e-40, -1e-40, 1.1e-38, -1.1e-38], dtype=torch.float32)
+    input_tensor = torch.cat(
+        [
+            torch.tensor(
+                [
+                    -float("inf"),
+                    -120.0,
+                    -104.0,
+                    -0.0,
+                    0.0,
+                    1.0,
+                    88.7,
+                    89.0,
+                    100.0,
+                    float("inf"),
+                    float("nan"),
+                ],
+                dtype=torch.float32,
+            ),
+            negative_nan,
+            subnormals,
+        ]
+    )
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp)
+    golden = golden_function(input_tensor, device=device)
+
+    result = ttnn.to_torch(ttnn.exp(tt_in))
+
+    assert torch.equal(torch.isnan(result), torch.isnan(golden))
+    assert torch.equal(torch.isposinf(result), torch.isposinf(golden))
+    assert torch.equal(torch.isneginf(result), torch.isneginf(golden))
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
+
+
 def test_exp2_allclose(device):
     """exp2 underflow region (-127, -126) allclose check.
 
