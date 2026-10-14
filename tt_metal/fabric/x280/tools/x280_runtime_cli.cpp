@@ -134,7 +134,7 @@ void usage(const char* argv0) {
         "                  load and verify the image, write and verify the reset\n"
         "                  vectors, clear the mailboxes. Nothing becomes one-way.\n"
         "  --idle-image    path to the resident-idle image. Falls back to $%s.\n"
-        "                  Build one with: make -C x280 lim-idle\n"
+        "                  Build one with: ninja x280_images\n"
         "  --prepare-pinned-input\n"
         "                  admit exact WAYENABLE=1 and baseline mask bits 11,\n"
         "                  populate the fixed 4288-byte Zero Device region via\n"
@@ -158,10 +158,10 @@ void usage(const char* argv0) {
         "                  this condition; a failed prepare aborts the epoch.\n"
         "  --prepare-pinned-input-image\n"
         "                  preparation-only active image. Falls back to $%s.\n"
-        "                  Build it with: make -C x280 pinned-input-prepare\n"
+        "                  Build it with: ninja x280_images\n"
         "  --teardown-pinned-input-image\n"
         "                  teardown-only active image. Falls back to $%s.\n"
-        "                  Build it with: make -C x280 pinned-input-teardown\n"
+        "                  Build it with: ninja x280_images\n"
         "\n"
         "exit: 0 success, 4 an ASIC reset is required, 1 failed\n",
         argv0,
@@ -600,8 +600,7 @@ int main(int argc, char** argv) {
             if (options.image_path.empty()) {
                 std::fprintf(
                     stderr,
-                    "no resident-idle image: pass --idle-image PATH or set %s.\nBuild one with: make -C x280 "
-                    "lim-idle\n",
+                    "no resident-idle image: pass --idle-image PATH or set %s.\nBuild one with: ninja x280_images\n",
                     kImageEnvVar);
                 return kExitFailed;
             }
@@ -651,7 +650,7 @@ int main(int argc, char** argv) {
         if (!initial.resident_idle_live && options.image_path.empty()) {
             std::fprintf(
                 stderr,
-                "no resident-idle image: pass --idle-image PATH or set %s.\nBuild one with: make -C x280 lim-idle\n",
+                "no resident-idle image: pass --idle-image PATH or set %s.\nBuild one with: ninja x280_images\n",
                 kImageEnvVar);
             return kExitFailed;
         }
