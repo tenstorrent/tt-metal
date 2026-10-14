@@ -39,11 +39,24 @@ def torch_masked_bincount(
     return counts[:n_routed_experts] * mask
 
 
+def _grid_cores(tokens: int, max_cores: int = 64, max_rows_per_core: int = 128) -> int:
+    """The core count masked_bincount's program factory picks: the fewest cores (<= max_cores) that
+    divide the token rows evenly at <= max_rows_per_core rows each; larger inputs keep max_cores."""
+    return next((n for n in range(1, max_cores + 1) if tokens % n == 0 and tokens // n <= max_rows_per_core), max_cores)
+
+
+# The op sizes its grid to the token count (see _grid_cores). The rows cover a power-of-two tree
+# (4096 -> 32 cores) and the non-power-of-two trees the prefill shapes actually take: 640 tokens/chip
+# -> 5 cores (Mistral-Small-4, Kimi-K2.7), 2560 -> 20 cores.
 @pytest.mark.parametrize(
     "sp_dim, topk, n_routed_experts",
     [
         (4096, 8, 256),
+        (640, 4, 128),
+        (640, 8, 384),
+        (2560, 8, 256),
     ],
+    ids=["isl4096-32cores", "isl640-mistral-5cores", "isl640-kimi-5cores", "isl2560-20cores"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -65,6 +78,14 @@ def torch_masked_bincount(
             fabric2d_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
+        ),
+        # Blackhole accepts 32-device meshes only, so the rows above skip on a galaxy (rc=0, which reads
+        # as coverage). This row is the one that executes there.
+        pytest.param(
+            (8, 4),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-mesh-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -112,9 +133,8 @@ def test_masked_bincount(
             torch_histograms[(group, chip)] = hist
 
     # masked_bincount consumes the gate's output directly: UINT16, TILE, L1-interleaved. The op
-    # untiles in-kernel and splits the token rows across a fixed 8x8 (64-core) grid internally.
-    num_cores = 64
-    assert sp_dim % num_cores == 0, f"sp_dim={sp_dim} must be divisible by {num_cores}"
+    # untiles in-kernel and splits the token rows across a grid it sizes from the token count.
+    assert sp_dim % 32 == 0, f"sp_dim={sp_dim} must be tile-aligned"
 
     # Shard dim 0 across the dispatch axis, replicate across TP axis
     mesh_mapper = ttnn.ShardTensor2dMesh(
@@ -206,14 +226,13 @@ def test_masked_bincount_tree_reduction_race(mesh_device):
     the root's gather_sem before the slow leaf finishes, exposing data races
     where a parent reads a child's incomplete histogram.
     """
-    # sp_dim stays at 4096 rather than moving to the 640-token prefill ISL: this test exists to
-    # expose a gather_sem race, and the window it opens scales with per-core work (rows_per_core=64
-    # here, 10 at 640). Shrinking it would narrow the race window this test is built to catch.
+    # sp_dim stays at 4096 rather than the 640-token prefill ISL: both give 128 rows per core, but 4096
+    # takes a 32-core grid whose deeper tree has more parent/child pairs to race.
     sp_dim = 4096
     topk = 8
     n_routed_experts = 256
-    num_cores = 64
-    rows_per_core = sp_dim // num_cores  # 64
+    num_cores = _grid_cores(sp_dim)  # 32
+    rows_per_core = sp_dim // num_cores  # 128
     num_iterations = 50
 
     # Custom dispatch table: only experts 0-7 are "present" (chip_id=0),
@@ -242,7 +261,7 @@ def test_masked_bincount_tree_reduction_race(mesh_device):
 
     for iteration in range(num_iterations):
         # Craft skewed indices:
-        # - Core 1 (rows 64-127): present experts 0..7 → many atomic increments (slow)
+        # - Core 1 (a non-root leaf): present experts 0..7 → many atomic increments (slow)
         # - All other cores: absent experts 128..255 → zero increments (fast)
         indices = torch.randint(128, n_routed_experts, (sp_dim, topk), dtype=torch.int32)
         core1_start = 1 * rows_per_core
