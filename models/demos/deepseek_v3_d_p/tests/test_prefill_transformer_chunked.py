@@ -210,22 +210,21 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
     # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
-    # then re-cut seven times. Last re-cut: CI run 37511163391 / job 112436803829, where the traced MoE
-    # runs the routed expert overlapped with combine_fabric2d, ~27-42 ms less per chunk than main's
-    # centre (CI run 37730295536 / job 113160290655). The sample predates main's centre, so re-cut if
-    # the band misses.
+    # then re-cut eight times. Last re-cut: CI run 38480868957 / job 115586663557, where the traced MoE
+    # runs the routed expert overlapped with combine_fabric2d, ~27-54 ms less per chunk than main's
+    # centre (CI run 37730295536 / job 113160290655).
     (61, 11, 10): [
-        0.333,
-        0.346,
-        0.378,
-        0.408,
-        0.442,
-        0.470,
-        0.496,
-        0.527,
-        0.567,
-        0.605,
-        0.643,
+        0.321,
+        0.335,
+        0.367,
+        0.397,
+        0.432,
+        0.461,
+        0.490,
+        0.526,
+        0.569,
+        0.607,
+        0.641,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
@@ -247,10 +246,10 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Recentered to CI run 37511163391 / job 112436803819: the traced MoE runs the routed expert
-    # overlapped with combine_fabric2d, ~30-37 ms less on every chunk than main's centre (CI run
-    # 37809088320 / job 113425373669). The sample predates main's centre, so re-cut if the band misses.
-    (78, 11, 10): [0.452, 0.453, 0.464, 0.459, 0.472, 0.473, 0.472, 0.476, 0.488, 0.494, 0.503],
+    # Recentered to CI run 38480868957 / job 115586663804: the traced MoE runs the routed expert
+    # overlapped with combine_fabric2d, ~54-61 ms less on every chunk than main's centre (CI run
+    # 37809088320 / job 113425373669).
+    (78, 11, 10): [0.430, 0.428, 0.436, 0.434, 0.445, 0.449, 0.448, 0.452, 0.463, 0.469, 0.478],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
@@ -265,29 +264,30 @@ MISTRAL4_UNTRACED_MAX_OUT_OF_BAND = 1
 # is armed; other parametrizations have no key and stay record-only. Values are per-chunk medians
 # from a CI run, not a galaxy box.
 MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Cut on bh_sc1_high_power, run 37547408320 (LoFi SDPA + 8256 B packets). Must be cut there: on
-    # plain bh_sc1 the same rows split into two clusters 1.5x apart depending which box the pool gave them.
+    # Cut on bh_sc1_high_power, run 38480868957 / job 115586663717 (LoFi SDPA + 8256 B packets, the MoE
+    # running the routed expert overlapped with combine_fabric2d). Must be cut there: on plain bh_sc1
+    # the same rows split into two clusters 1.5x apart depending which box the pool gave them.
     (36, 20, 10): [
-        0.104,
-        0.109,
+        0.086,
+        0.091,
+        0.096,
+        0.102,
+        0.107,
         0.113,
         0.120,
-        0.124,
-        0.131,
-        0.140,
+        0.123,
+        0.127,
+        0.134,
+        0.141,
         0.142,
-        0.145,
-        0.152,
-        0.161,
-        0.160,
-        0.165,
-        0.170,
-        0.175,
+        0.148,
+        0.153,
+        0.158,
+        0.164,
+        0.169,
+        0.176,
         0.181,
-        0.186,
-        0.195,
-        0.199,
-        0.202,
+        0.185,
     ],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
