@@ -25,7 +25,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
-from models.demos.deepseek_v3_d_p.tt.moe.fabric2d_contract import check_fabric2d_setup, combine_fabric2d_payload_size
+from models.demos.deepseek_v3_d_p.tt.moe.fabric2d_contract import check_fabric2d_setup, fabric2d_min_payload_size
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombine2dModule, TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatch2dModule, TtDispatchModule
@@ -343,11 +343,10 @@ class TtMoe(LightweightModule):
                 every other forward.
 
         "fabric2d", for either op, needs a Ring axis-0 topology on a fabric that wraps axis 0, an even
-        axis-0 size of at least 4 and metadata_len == 3. A fabric2d combine needs a fabric max payload of
-        half a routed_emb_dim bf16 token plus 64 B (combine_fabric2d_payload_size), which
-        moe_fabric_payload_size opens the mesh with, and a dispatch buffer that holds every routed token,
-        until combine_fabric2d clamps overflow tokens. A fabric2d dispatch needs a whole token plus 64 B
-        (fabric2d_packet_bytes), which a model mesh does not have, num_experts_per_tok <=
+        axis-0 size of at least 4, metadata_len == 3, and a fabric max payload of half a routed_emb_dim bf16
+        token plus 64 B (fabric2d_min_payload_size), which moe_fabric_payload_size opens the mesh with. A
+        fabric2d combine also needs a dispatch buffer that holds every routed token, until combine_fabric2d
+        clamps overflow tokens. A fabric2d dispatch also needs num_experts_per_tok <=
         DISPATCH_FABRIC2D_MAX_TOPK, and no trace.
         """
         super().__init__()
@@ -615,7 +614,7 @@ class TtMoe(LightweightModule):
         # the payload must fit half of one. A mesh opened with the model's own payload (EMB_SIZE), or on a fabric that
         # does not wrap, runs the routed expert then combine instead; moe_fabric_payload_size opens one with room for
         # the overlap.
-        overlap_payload = combine_fabric2d_payload_size(self.routed_emb_dim)
+        overlap_payload = fabric2d_min_payload_size(self.routed_emb_dim)
         fabric_payload = ttnn.get_tt_fabric_max_payload_size_bytes() if is_blackhole() else 0
         ring_axis_wraps = ttnn.get_fabric_config() in (
             ttnn.FabricConfig.FABRIC_2D_TORUS_Y,

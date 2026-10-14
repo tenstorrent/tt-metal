@@ -29,10 +29,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 
 FC = ttnn.FabricConfig
 EMB_DIM = 7168
-# dispatch_fabric2d: 7168 bf16 values (14336 B, already a multiple of 64) plus 64 B of forwarding metadata.
-EXACT_PAYLOAD = 14400
-# combine_fabric2d: half of that token plus the 64 B, the payload a model mesh opens with.
-COMBINE_EXACT_PAYLOAD = 7232
+# Half of a 7168-value bf16 token (14336 B, already a multiple of 64) plus 64 B of forwarding metadata: both
+# ops send a token that does not fit one packet as two halves. The payload a model mesh opens with.
+EXACT_PAYLOAD = 7232
 
 
 @pytest.fixture
@@ -88,10 +87,10 @@ def test_fabric_that_does_not_wrap_the_axis_raises(expect_error, fabric, cluster
 
 
 # 500 bf16 values are 1000 B, which dispatch_fabric2d pads to a 1024 B page (a multiple of the 64 B DRAM
-# alignment). A num_experts_per_tok asks for dispatch's whole-token packet, None for combine's half token.
+# alignment). A num_experts_per_tok checks as dispatch, None as combine; the payload rule is the same.
 @pytest.mark.parametrize(
     "emb_dim, num_experts_per_tok, exact_payload",
-    [(EMB_DIM, 8, EXACT_PAYLOAD), (500, 8, 1024 + 64), (EMB_DIM, None, COMBINE_EXACT_PAYLOAD)],
+    [(EMB_DIM, 8, EXACT_PAYLOAD), (500, 8, 512 + 64), (EMB_DIM, None, EXACT_PAYLOAD)],
     ids=["dispatch", "dispatch-padded", "combine"],
 )
 def test_payload_exact_passes_one_byte_short_raises(expect_error, fabric, emb_dim, num_experts_per_tok, exact_payload):
@@ -210,17 +209,15 @@ def test_tt_moe_rejects_unknown_impl(expect_error, fabric, monkeypatch, name):
         _tt_moe(monkeypatch, **{name: "fabric_2d"})
 
 
-@pytest.mark.parametrize(
-    "name, exact_payload", [("dispatch_impl", EXACT_PAYLOAD), ("combine_impl", COMBINE_EXACT_PAYLOAD)]
-)
-def test_tt_moe_fabric2d_checks_before_device_work(expect_error, fabric, monkeypatch, name, exact_payload):
+@pytest.mark.parametrize("name", ["dispatch_impl", "combine_impl"])
+def test_tt_moe_fabric2d_checks_before_device_work(expect_error, fabric, monkeypatch, name):
     with expect_error(ValueError, "axis-0 topology is"):
         _tt_moe(monkeypatch, topology=(ttnn.Topology.Linear, ttnn.Topology.Ring), **{name: "fabric2d"})
     with expect_error(ValueError, "3 metadata fields"):
         _tt_moe(monkeypatch, metadata_len=4, **{name: "fabric2d"})
     with expect_error(ValueError, "even ring"):
         _tt_moe(monkeypatch, mesh_device=_mesh(2, 4), **{name: "fabric2d"})
-    fabric(max_payload=exact_payload - 1)
+    fabric(max_payload=EXACT_PAYLOAD - 1)
     with expect_error(ValueError, "fabric max payload"):
         _tt_moe(monkeypatch, **{name: "fabric2d"})
 
