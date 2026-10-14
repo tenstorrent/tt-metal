@@ -436,9 +436,6 @@ class RunTimeOptions {
     // If not set, automatic selection is used (O3 when VC1 inactive, Os when VC1 active)
     std::optional<tt_metal::KernelBuildOptLevel> fabric_kernel_opt_level = std::nullopt;
 
-    // Disable XIP dump
-    bool disable_xip_dump = false;
-
     // Dump JIT build commands to stdout for debugging
     bool dump_build_commands = false;
 
@@ -1034,8 +1031,6 @@ public:
     void set_fabric_kernel_opt_level(std::optional<tt_metal::KernelBuildOptLevel> opt_level) {
         fabric_kernel_opt_level = opt_level;
     }
-
-    bool get_disable_xip_dump() const { return disable_xip_dump; }
 
     bool get_dump_build_commands() const { return dump_build_commands; }
 
