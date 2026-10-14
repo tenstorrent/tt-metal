@@ -28,9 +28,10 @@ from cc_optimize import perf_mcp as pm
 @pytest.fixture
 def resets(monkeypatch):
     seen = []
-    monkeypatch.setattr(
-        PR, "reset_after_ended_child", lambda error_text="", env=None: seen.append((error_text, env)) or True
-    )
+    for name in ("reset_after_ended_child", "reset_after_killed_child"):
+        monkeypatch.setattr(
+            PR, name, lambda error_text="", env=None, _n=name: seen.append((error_text, env, _n)) or True
+        )
     # Not the thing under test, and both read the real host.
     monkeypatch.setattr(PR, "wait_for_memory_headroom_before_device_work", lambda label: None)
     monkeypatch.setattr(PR, "memory_cap_preexec_fn", lambda: None)
@@ -48,9 +49,10 @@ def test_a_run_killed_for_no_progress_is_reset_with_its_own_env_and_output(reset
     env = dict(os.environ, PERF_TEST_MARK="child-env")
     cmd = _child("import time; print('loading weights', flush=True); time.sleep(120)")
     with pytest.raises(subprocess.TimeoutExpired):  # allow-pytest.raises: repo-root conftest bypassed
-        pm._adaptive_run(cmd, str(tmp_path), env, "full-pipeline", stall_s=1, backstop=2)
+        pm._adaptive_run(cmd, str(tmp_path), env, "full-pipeline", stall_s=1, backstop=600)
     assert len(resets) == 1, "the kill must be followed by exactly one reset"
-    text, child_env = resets[0]
+    text, child_env, how = resets[0]
+    assert how == "reset_after_killed_child", "a stall kill is counted toward the repeat-hang reset"
     assert child_env is env, "the rule decides from the killed child's own env (its chip count)"
     assert "loading weights" in text, "the killed run's output is the evidence the reset is given"
 
@@ -66,6 +68,7 @@ def test_a_failing_reset_still_raises_the_timeout(monkeypatch, tmp_path):
         raise RuntimeError("tt-smi missing")
 
     monkeypatch.setattr(PR, "reset_after_ended_child", boom)
+    monkeypatch.setattr(PR, "reset_after_killed_child", boom)
     monkeypatch.setattr(PR, "wait_for_memory_headroom_before_device_work", lambda label: None)
     monkeypatch.setattr(PR, "memory_cap_preexec_fn", lambda: None)
     with pytest.raises(subprocess.TimeoutExpired):  # allow-pytest.raises: repo-root conftest bypassed

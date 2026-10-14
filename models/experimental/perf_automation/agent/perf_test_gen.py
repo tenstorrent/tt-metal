@@ -579,7 +579,11 @@ def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
             out = log.read_text(errors="ignore") if log.exists() else ""
             # _execute killed the run's process group: on a multi-chip fabric that kill is the
             # evidence the reset needs, whatever the telemetry says (device_recovery's own rule).
-            ok = _pr.reset_after_ended_child(error_text=out, env=env)
+            # A stall is counted, so a repeat resets a single chip too (probes.reset_after_killed_child).
+            _reset = (
+                _pr.reset_after_killed_child if _pr.kill_kind(exc) == _pr.KILL_STALL else _pr.reset_after_ended_child
+            )
+            ok = _reset(error_text=out, env=env)
             return 124, out + "\n[perf_test_gen] WEDGE: %s; killed process group + tt-smi -r (reset_ok=%s)\n" % (
                 exc,
                 ok,

@@ -381,6 +381,9 @@ class Counter:
 
 CONSEC_CRASH = Counter("consec_crash")
 RESET_FAILS = Counter("reset_fails")
+# Device runs killed for making no progress since the last run that worked (see note_kill).
+CONSEC_KILLS = Counter("consec_kills")
+KILL_STREAK_LIMIT = int(os.environ.get("TT_RECOVERY_KILL_STREAK", "2") or "2")
 
 
 def board_map_file():
@@ -834,6 +837,7 @@ def recover(
             continue
         if device_is_healthy():
             RESET_FAILS["n"] = 0
+            CONSEC_KILLS["n"] = 0
             if log:
                 log("device recovered at %s via target=%s" % (where, tgt))
             return True
@@ -911,9 +915,10 @@ def note_crash(where: str, reset, error_text: str = "", config_target: str = "",
         if ok:
             CONSEC_CRASH["n"] = 0
         return ok
+    hung_again = killed_for_no_progress(error_text) and note_kill()
     CONSEC_CRASH["n"] = CONSEC_CRASH["n"] + 1
-    if CONSEC_CRASH["n"] >= 2:
-        ok = recover(where, reset, error_text, config_target, log, expand)
+    if CONSEC_CRASH["n"] >= 2 or hung_again:
+        ok = recover(where, reset, error_text, config_target, log, expand, fault_is_certain=hung_again)
         if ok:
             CONSEC_CRASH["n"] = 0
         return ok
@@ -927,5 +932,34 @@ def note_ok() -> None:
     board that alternates working and wedging would clear it on every good measurement -- restoring
     exactly the unbounded retrying the limit exists to stop. The reset count is scoped to the run
     instead (see _run_stamp), which is the honest lifetime for "have resets stopped working here".
+    The kill streak clears with it: a run that worked is the evidence the last kill left no hang.
     """
     CONSEC_CRASH["n"] = 0
+    CONSEC_KILLS["n"] = 0
+
+
+def killed_for_no_progress(text) -> bool:
+    """Does this failure text say a watchdog killed the run for making NO progress (not for running
+    past its ceiling while still moving)? probes.kill_kind owns the wording."""
+    try:
+        from .probes import KILL_STALL, kill_kind
+
+        return kill_kind(text) == KILL_STALL
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def note_kill() -> bool:
+    """Record a device run killed for making no progress; True when this is the KILL_STREAK_LIMIT-th
+    in a row with no working run between -- the reset is then due whatever the veto says.
+
+    THE VETO CANNOT SEE THIS HANG. On a single chip recover() skips the reset while every ARC is warm
+    and the one-op work probe passes. Run 1791998839 (2026-10-14, minicpm5_2b, --devices 0): board 0
+    hung in fetch_queue_reserve_back on every large upload while both checks passed, so each kill's
+    reset was skipped and five stalled runs in a row -- on the edit and on the clean HEAD alike -- went
+    to the same hung chip for ~80 minutes. One kill is still ambiguous (a slow op, a contended device)
+    and keeps the veto, the 2026-08-17 protection; a second with nothing working between is not.
+    note_ok and a verified reset clear the streak.
+    """
+    CONSEC_KILLS["n"] = CONSEC_KILLS["n"] + 1
+    return CONSEC_KILLS["n"] >= KILL_STREAK_LIMIT

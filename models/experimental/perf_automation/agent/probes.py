@@ -1615,6 +1615,17 @@ def reset_after_ended_child(error_text: str = "", env=None) -> bool:
     return _device_reset(error_text=error_text, **_kill)
 
 
+def reset_after_killed_child(error_text: str = "", env=None) -> bool:
+    """reset_after_ended_child for a run a watchdog killed for making NO progress: the kill is counted
+    (device_recovery.note_kill), and a repeat with no working run between resets whatever the veto
+    says -- the hang a warm ARC and a passing one-op probe both miss."""
+    from . import device_recovery as _dr
+
+    if _dr.note_kill():
+        return _device_reset(error_text=error_text, fault_is_certain=True)
+    return reset_after_ended_child(error_text=error_text, env=env)
+
+
 # A RETRIED STEP KEEPS THE STAGES IT ALREADY MEASURED. The owner of a retried device step names a file
 # here; trace_replay appends each stage it finishes and, on the next attempt of the SAME step, replays
 # that stage's lines instead of measuring it again. Without it every attempt after a heat stop starts

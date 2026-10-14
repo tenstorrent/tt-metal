@@ -426,7 +426,7 @@ def _note_device_crash(where: str, error_text: str = "") -> None:
 
 
 def _note_device_ok() -> None:
-    _CONSEC_CRASH["n"] = 0
+    _dr().note_ok()
 
 
 def _l1_sig(text) -> bool:
@@ -2786,14 +2786,17 @@ def _adaptive_run(cmd, cwd, env, label="device run", stall_s=None, backstop=None
             # minicpm5_2b, --devices 0) then spent 4 back-to-back 662 s attempts stuck in
             # fetch_queue_reserve_back on the board the previous kill left behind. The reset goes
             # through the one rule every other killing path uses (probes.reset_after_ended_child),
-            # so a single-chip run still meets the veto and its work probe exactly as before.
+            # so a single-chip run still meets the veto and its work probe -- until a stall repeats
+            # with nothing working between (probes.reset_after_killed_child), which the veto cannot see.
+            stalled = now - last_progress >= limit
             try:
-                from agent.probes import reset_after_ended_child
+                from agent import probes as _pr
 
-                reset_after_ended_child(error_text="".join(buf)[-4000:], env=env)
+                _reset = _pr.reset_after_killed_child if stalled else _pr.reset_after_ended_child
+                _reset(error_text="".join(buf)[-4000:], env=env)
             except Exception:  # noqa: BLE001 -- the next run's own device open says if it is still needed
                 pass
-            raise _sp.TimeoutExpired(cmd, limit if now - last_progress >= limit else backstop)
+            raise _sp.TimeoutExpired(cmd, limit if stalled else backstop)
     rc = proc.returncode
     pt.join(timeout=30)
     return _AdaptiveResult(rc, "".join(buf))
