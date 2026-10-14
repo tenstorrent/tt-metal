@@ -40,7 +40,7 @@ struct RandTile : RandTileTag, UnaryOp<RandTile<DstSlot>, DstSlot> {
 
     ALWI void init() const { rand_tile_init(seed_, stream_id_); }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
-        rand_tile(to_u32(DstSlot) + slot_offset, from_, scale_);
+        rand_tile<true>(to_u32(DstSlot) + slot_offset, from_, scale_);
     }
 };
 
