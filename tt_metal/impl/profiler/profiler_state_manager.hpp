@@ -12,6 +12,7 @@
 #include <unordered_set>
 #include <atomic>
 #include <mutex>
+#include <utility>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
@@ -113,7 +114,7 @@ public:
 
     // Calls f(ProfilerStateManager&) on every attached state manager, holding the registry lock.
     template <typename F>
-    void for_each_attached(F&& f) {
+    void for_each_attached(const F& f) {
         std::lock_guard<std::mutex> lock(mutex_);
         for (ProfilerStateManager* profiler_state_manager : attached_) {
             f(*profiler_state_manager);
@@ -124,7 +125,7 @@ public:
     template <typename F>
     auto with_sole_attached(F&& f) {
         std::lock_guard<std::mutex> lock(mutex_);
-        return f(attached_.empty() ? nullptr : attached_.front());
+        return std::forward<F>(f)(attached_.empty() ? nullptr : attached_.front());
     }
 
     // Guard the profiler output files, which all device profilers share by default.
