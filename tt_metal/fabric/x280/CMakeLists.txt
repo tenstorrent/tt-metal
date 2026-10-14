@@ -324,3 +324,25 @@ foreach(_case Unharvested Harvested Disagreement)
             $<TARGET_FILE:x280_runtime_coordinate_tests> "--gtest_filter=${_filter}"
     )
 endforeach()
+
+# The operator client: opens the runtime, reports the borrowed path and composes runtime calls,
+# including boot and the pinned-input preparation and teardown images.
+add_executable(x280_runtime_cli tools/x280_runtime_cli.cpp)
+target_include_directories(
+    x280_runtime_cli
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/device
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+)
+target_link_libraries(
+    x280_runtime_cli
+    PRIVATE
+        x280_device
+        TT::Metalium
+)
+set_target_properties(
+    x280_runtime_cli
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${X280_TEST_OUTPUT_DIR}
+)
