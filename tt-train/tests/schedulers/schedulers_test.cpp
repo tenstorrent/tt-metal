@@ -59,6 +59,7 @@ public:
     explicit GroupedMockOptimizer(const std::vector<float> &lrs) :
         OptimizerBase(ttml::serialization::NamedParameters{}) {
         std::vector<ParamGroup> groups;
+        groups.reserve(lrs.size());
         for (const float lr : lrs) {
             groups.push_back({.params = {}, .options = {{"lr", lr}}});
         }
