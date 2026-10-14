@@ -210,7 +210,7 @@ def _l1_hog(device, bytes_per_core):
     [p for p in _PATHS if p[0] == "tile_rows"],
     ids=["tile_rows"],
 )
-def test_reshape_codegen_program_key_ignores_free_l1(device, path, in_shape, out_shape, dtype, layout, mem):
+def test_reshape_codegen_program_key_stable_while_full_plan_fits(device, path, in_shape, out_shape, dtype, layout, mem):
     # The hog leaves room for the full plan, so the program and its key stay the same.
     source = _make(in_shape, dtype)
     expected = source.reshape(out_shape)

@@ -40,7 +40,8 @@ bool supported_by_codegen(
 bool supported_by_codegen(const Tensor& input, const ttnn::Shape& logical_output_shape);
 
 // Perf routing only: native's tiled reshape measures faster than the tile-rows program, so routing sends the call
-// to native. The read-cut threshold was fitted on Blackhole. Never true for uint16, which native rejects.
+// to native. True unless the full plan cuts reads 8x, saves 16+ reads per output tile, or copies whole face halves
+// over more than one native round; thresholds fitted on Blackhole. Never true for uint16, which native rejects.
 bool is_demoted(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
