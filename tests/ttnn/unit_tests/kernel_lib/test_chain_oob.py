@@ -98,18 +98,17 @@ def test_zero_tiles_is_a_noop(device):
 
 
 def test_identity_chain_bf16_special_value_contract(device):
-    """BF16 copy/pack canonicalizes NaN to +inf and -0 to +0, while preserving signed infinities."""
+    """A BF16 copy ends in an identity pack: -0 and signed infinities come through bit for bit, and a
+    NaN stays a NaN. Its payload is not part of the contract; this copy path returns 0xFFFF."""
     values = torch.tensor([-0.0, 0.0, float("inf"), float("-inf"), float("nan"), -1.5, 2.0], dtype=torch.bfloat16)
     host_input = values.repeat((32 * 32 + len(values) - 1) // len(values))[: 32 * 32].reshape(1, 1, 32, 32)
     _, out = _run_identity_copy(
         device, slot=0, num_tiles=1, fp32_dest_acc_en=False, dst_full_sync_en=False, host_input=host_input
     )
-    expected = torch.where(
-        torch.isnan(host_input),
-        torch.full_like(host_input, float("inf")),
-        torch.where(host_input == 0, torch.zeros_like(host_input), host_input),
-    ).to(torch.float32)
-    assert torch.equal(out, expected)
+    out_bf16 = out.to(torch.bfloat16)
+    is_nan = torch.isnan(host_input)
+    assert torch.equal(torch.isnan(out_bf16), is_nan)
+    assert torch.equal(out_bf16[~is_nan].view(torch.int16), host_input[~is_nan].view(torch.int16))
 
 
 # =============================================================================

@@ -7,7 +7,7 @@ import ttnn
 import pytest
 
 from tests.ttnn.utils_for_testing import assert_equal
-from math import isnan
+from models.common.utility_functions import is_wormhole_b0
 
 
 def torch_equal_nan(a, b):
@@ -431,9 +431,6 @@ def test_where_scalar_bf16_inputs_fp32_output(device, scalar, scalar_is_true):
 @pytest.mark.parametrize("h, w", [[64, 128]])
 @pytest.mark.parametrize("scalar", [15.5, float("nan"), float("inf"), -float("inf")])
 def test_where_tts(device, dtype, h, w, scalar):
-    if dtype == torch.bfloat16 and isnan(scalar):
-        pytest.xfail("NaN is packed as inf for ttnn.bfloat16")
-
     torch.manual_seed(0)
 
     ttnn_dtype = ttnn.bfloat16
@@ -459,9 +456,6 @@ def test_where_tts(device, dtype, h, w, scalar):
 @pytest.mark.parametrize("h, w", [[64, 128]])
 @pytest.mark.parametrize("scalar", [15.5, float("nan"), float("inf"), -float("inf")])
 def test_where_tst(device, dtype, h, w, scalar):
-    if dtype == torch.bfloat16 and isnan(scalar):
-        pytest.xfail("NaN is packed as inf for ttnn.bfloat16")
-
     torch.manual_seed(0)
 
     ttnn_dtype = ttnn.bfloat16
@@ -496,9 +490,6 @@ def test_where_tst(device, dtype, h, w, scalar):
     ],
 )
 def test_where_tss(device, dtype, h, w, scalar1, scalar2):
-    if dtype == torch.bfloat16 and (isnan(scalar1) or isnan(scalar2)):
-        pytest.xfail("NaN is packed as inf for ttnn.bfloat16")
-
     torch.manual_seed(0)
 
     ttnn_dtype = ttnn.bfloat16
@@ -549,10 +540,6 @@ def test_where_TSS_float_types(torch_dtype, ttnn_dtype, scalars, input_shapes, d
     scalar_true, scalar_false = scalars
 
     torch_result = torch.where(condition.bool(), scalar_true, scalar_false)
-    if torch_dtype != torch.float32:
-        torch_result = torch.where(
-            torch.isnan(torch_result), torch.tensor(float("inf"), dtype=torch_dtype), torch_result
-        )
 
     ttnn_condition = ttnn.from_torch(condition, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_result = ttnn.where(ttnn_condition, scalar_true, scalar_false)
@@ -639,18 +626,15 @@ def test_div_edgcase(device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     # fast_and_approximate_mode=False (accurate mode)
-    # output_tensor tensor([-1., inf, -inf, inf,  3.,  0.], dtype=torch.bfloat16)
+    # output_tensor tensor([-1., inf, -inf, nan,  3.,  0.], dtype=torch.bfloat16)
     # golden_tensor tensor([-1., inf, -inf, nan,  3.,  0.], dtype=torch.bfloat16)
 
-    # Replace NaN values in golden tensor with inf to match expected behavior of ttnn.bfloat16
-    golden_tensor = torch.where(
-        torch.isnan(golden_tensor), torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
-    )
-
-    assert torch.allclose(output_tensor, golden_tensor, equal_nan=False)
+    assert torch.allclose(output_tensor, golden_tensor, equal_nan=True)
 
 
 def test_addcdiv_edgcase(device):
+    if is_wormhole_b0():
+        pytest.xfail("On Wormhole the SFPU store narrows the NaN that SFPMAD makes for 0/0 into inf")
     # Hardcoded input tensors
     a = torch.tensor([1, 2, -4, 0, -6, 0], dtype=torch.bfloat16)
     b = torch.tensor([-1, 0, 0, 0, -2, 7], dtype=torch.bfloat16)
@@ -664,15 +648,9 @@ def test_addcdiv_edgcase(device):
     golden_tensor = torch.addcdiv(c, a, b, value=value)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    # output_tensor tensor([ 0.5000,    -inf,     inf,     inf, -1.5000,  0.0000],dtype=torch.bfloat16)
+    # output_tensor tensor([ 0.5000,    -inf,     inf,     nan, -1.5000,  0.0000],dtype=torch.bfloat16)
     # golden_tensor tensor([ 0.5000,    -inf,     inf,     nan, -1.5000,  0.0000],dtype=torch.bfloat16)
 
-    # Where golden is NaN (e.g. 0/0), normalize ttnn output to NaN for comparison
-    output_tensor = torch.where(
-        torch.isnan(golden_tensor),
-        torch.tensor(float("nan"), dtype=output_tensor.dtype, device=output_tensor.device),
-        output_tensor,
-    )
     assert torch.allclose(output_tensor, golden_tensor, equal_nan=True)
 
 

@@ -18,9 +18,11 @@ from helpers.param_config import input_output_formats, parametrize
 from helpers.sfpu_accuracy_budget import assert_against_contract
 from helpers.sfpu_domains import (
     SPECIALS_READY_OPS,
+    accept_wormhole_narrowed_nan,
     edge_spec,
     specials_after_nan_sign_gate,
     specials_safe,
+    wormhole_store_may_narrow_nan,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -139,6 +141,15 @@ def _run_sfpu_binop_scalar(
     torch_format = format_dict[formats.output_format]
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
+    # On Wormhole a 16-bit SFPU store may narrow a NaN to an infinity on some kernel paths even
+    # where the pack keeps it, so there a golden NaN accepts either (see sfpu_domains).
+    res_tensor = accept_wormhole_narrowed_nan(
+        golden_tensor,
+        res_tensor,
+        wormhole_store_may_narrow_nan(
+            formats.input_format, formats.output_format, dest_acc, TestConfig.CHIP_ARCH
+        ),
+    )
 
     # The whole contract, step budget included, as the binary and ternary drivers gate:
     # every Scalar* row was measured over this driver's own variants. The mode the
