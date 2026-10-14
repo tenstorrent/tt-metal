@@ -88,7 +88,7 @@ def test_leg_bits_gen(device, case):
     )
     kw = dict(program_config=pc, compute_kernel_config=ckc, memory_config=D, dtype=do, transpose_a=ta, transpose_b=tb)
     if extra == "bias":
-        bias = ttnn.from_torch(torch.randn(1, 1, 32, n), dtype=BF, layout=ttnn.TILE_LAYOUT, device=device, memory_config=D)
+        bias = ttnn.from_torch(torch.randn(1, 1, 1, n), dtype=BF, layout=ttnn.TILE_LAYOUT, device=device, memory_config=D)
         out = ttnn.linear(a, b, bias=bias, **kw)
     else:
         out = ttnn.matmul(a, b, **kw)

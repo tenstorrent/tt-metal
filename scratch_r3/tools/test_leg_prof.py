@@ -34,15 +34,6 @@ def out_subblock_w(per_core_n):  # models/tt_transformers/tt/common.py:672 at ou
     return w
 
 
-def find_grid(n_tiles):  # model_config.py:3747 on Blackhole (10 x 12)
-    cand = sorted([k for k in range(1, 121) if n_tiles % k == 0], key=lambda x: abs(x - 32))
-    for cores in cand:
-        for rows in range(1, 11):
-            if cores % rows == 0 and cores // rows <= 12:
-                return rows, cores // rows
-    raise AssertionError
-
-
 def agmm_setup(device, dim, wdt, fid, approx, seed=0):
     torch.manual_seed(seed)
     k, n = dim, dim // NUM_DEVICES
@@ -55,13 +46,16 @@ def agmm_setup(device, dim, wdt, fid, approx, seed=0):
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-    rows, cols = find_grid(n // 32)
-    out_mc = ttnn.create_sharded_memory_config(
-        (32, n // (rows * cols)),
-        ttnn.CoreGrid(x=cols, y=rows),
-        ttnn.ShardStrategy.WIDTH,
-        ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
+    # without a persistent buffer the CCL op skips the matmul validate and takes the matmul's own output spec: width
+    # sharded on the 8 compute cores (matmul_device_operation.cpp, the 1D branch of compute_output_specs)
+    out_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+            [32, n // 8],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
     )
     a = ttnn.from_torch(torch.randn(1, 1, 32, k), dtype=BF, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_mc)
     b = ttnn.from_torch(
