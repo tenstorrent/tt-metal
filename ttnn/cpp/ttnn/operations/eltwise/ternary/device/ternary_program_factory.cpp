@@ -1346,12 +1346,13 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     writer_desc.common_runtime_args = writer_common_runtime_args;
 
     // ---- Compute Kernel ----
-    // fp32 DEST is needed whenever any input or the output is fp32: fp32 tiles unpacked into a
-    // 16-bit DEST are corrupted (issue 60223).
-    bool fp32_dest_acc_en =
-        output_data_format == tt::DataFormat::UInt32 || output_data_format == tt::DataFormat::Int32 ||
-        output_data_format == tt::DataFormat::Float32 || predicate_data_format == tt::DataFormat::Float32 ||
-        value_true_data_format == tt::DataFormat::Float32 || value_false_data_format == tt::DataFormat::Float32;
+    // Any 32-bit operand needs a 32-bit Dest: a Float32 input CB is unpacked with UnpackToDestFp32 below,
+    // and that lands corrupted in a Dest configured for 16-bit datums.
+    auto is_32bit_format = [](tt::DataFormat format) {
+        return format == tt::DataFormat::UInt32 || format == tt::DataFormat::Int32 || format == tt::DataFormat::Float32;
+    };
+    bool fp32_dest_acc_en = is_32bit_format(output_data_format) || is_32bit_format(predicate_data_format) ||
+                            is_32bit_format(value_true_data_format) || is_32bit_format(value_false_data_format);
 
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
 
@@ -1424,11 +1425,14 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
             kernel_defines["BCAST_C"] = (broadcast_type == TernaryBroadcastType::SCALAR_B_BCAST) ? "1" : "0";
         }
     }
-    // The SFPU variant must match the DEST layout: Float16_b variants access only the low 16 bits of each
-    // DEST word, so with fp32 DEST floating-point inputs are processed with the Float32 variant.
-    const DataType sfpu_dtype = (fp32_dest_acc_en && is_floating_point(predicate_tensor.dtype()))
-                                    ? DataType::FLOAT32
-                                    : predicate_tensor.dtype();
+    // The SFPU variant must match the Dest layout: Float16_b variants access only the low 16 bits of each Dest word,
+    // so once another operand has put Dest in 32-bit mode a 16-bit predicate selects the Float32 variant. That holds
+    // for every floating-point predicate, and for where with any 16-bit predicate.
+    auto sfpu_dtype = predicate_tensor.dtype();
+    if (fp32_dest_acc_en && !is_32bit_format(predicate_data_format) &&
+        (is_floating_point(predicate_tensor.dtype()) || operation_attributes.ternary_op_type == TernaryOpType::WHERE)) {
+        sfpu_dtype = DataType::FLOAT32;
+    }
     auto op_defines = CMAKE_UNIQUE_NAMESPACE::get_ternary_compute_defines(operation_attributes, sfpu_dtype);
     for (const auto& [key, value] : op_defines) {
         kernel_defines[key] = value;
