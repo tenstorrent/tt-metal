@@ -43,8 +43,10 @@ VARIANTS = {
     "FAST_bfp8": (ttnn.SDPAPrecision.FAST, ttnn.bfloat8_b),
 }
 
-LINE_1D = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
-# 1x1 runs without fabric (a 1x1 submesh with FABRIC_1D fails the router handshake on a 2-chip host).
+# 1x2 runs on 2-chip hosts only, like the other tt_dit fabric tests (a 1x2 submesh with FABRIC_1D times out in the
+# fabric router handshake on a 4-chip QB2). 1x1 runs without fabric (a 1x1 submesh with FABRIC_1D fails the router
+# handshake on a 2-chip host).
+LINE_1D = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}
 MESHES = pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "device_params"),
     [
