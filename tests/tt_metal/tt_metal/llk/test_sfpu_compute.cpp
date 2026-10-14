@@ -3454,7 +3454,8 @@ INSTANTIATE_TEST_SUITE_P(
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_QuasarSfpuRelu) {
     // 1 and 4-tile, SyncFull and SyncHalf
     for (const char* sfpu_op : {"relu", "relu_min", "relu_max"}) {
         for (const uint32_t num_tiles : {1u, 4u}) {
@@ -3468,7 +3469,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
     }
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuUnpackToDest16b) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_QuasarSfpuUnpackToDest16b) {
     // 16-bit operand explicitly unpacked to Dest
     for (const char* sfpu_op : {"relu", "relu_min", "relu_max"}) {
         for (const bool dst_full_sync_en : {true, false}) {
@@ -3504,12 +3506,17 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTypecastFixture, TensixSfpuTypecast) {
     //  * any UInt8 endpoint;
     //  * any Int16 endpoint (the data_format.cpp Int16 enablement is reverted until the full narrow-int
     //    datapath lands, so an Int16 endpoint trips the format-consistency / pack_src derivation);
-    //  * a non-Float32 input widening into a 32-bit Int output (Float16_b/MX -> Int32).
+    //  * a non-Float32 input widening into a 32-bit Int output (Float16_b/MX -> Int32);
+    //  * Int32 narrowed to Float16_b (hangs, tenstorrent/tt-metal#59923).
     // Float32 <-> Int32 and Float16_b/MX <-> Float32 still run.
     // Int16/UInt8 support through the metal2 compute-API path is tracked in tenstorrent/tt-metal#48601.
     const bool uint8_endpoint = (in_fmt == tt::DataFormat::UInt8 || out_fmt == tt::DataFormat::UInt8);
     const bool int16_endpoint = (in_fmt == tt::DataFormat::Int16 || out_fmt == tt::DataFormat::Int16);
     const bool widen_to_int32 = (out_fmt == tt::DataFormat::Int32 && in_fmt != tt::DataFormat::Float32);
+    const bool int32_to_bf16 = (in_fmt == tt::DataFormat::Int32 && out_fmt == tt::DataFormat::Float16_b);
+    if (int32_to_bf16) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     if (uint8_endpoint || int16_endpoint || widen_to_int32) {
         GTEST_SKIP() << "typecast format not yet supported through the metal2 compute-API path "
                         "(tenstorrent/tt-metal#48601)";
