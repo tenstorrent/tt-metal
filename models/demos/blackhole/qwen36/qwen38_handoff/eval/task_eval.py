@@ -231,7 +231,8 @@ def out_paths(args):
     return [f"{stem}.r{k}.jsonl" for k in range(args.repeats)]
 
 
-async def run_file(client, model, qs, extract, args, path, seed_offset):
+async def run_file(client, model, qs, extract, args, path, seed_offset, sem=None):
+    tag = f"[{os.path.basename(path)}] " if sem is not None else ""  # shared-pool mode: disambiguate interleaved logs
     done = set()
     if os.path.exists(path):
         with open(path) as f:
@@ -249,7 +250,8 @@ async def run_file(client, model, qs, extract, args, path, seed_offset):
     )
     t0 = time.time()
     if todo:
-        sem = asyncio.Semaphore(args.concurrency)
+        if sem is None:
+            sem = asyncio.Semaphore(args.concurrency)
         n = nc = 0
         total = len(todo)
         lock = asyncio.Lock()
@@ -265,7 +267,7 @@ async def run_file(client, model, qs, extract, args, path, seed_offset):
                 n += 1
                 nc += bool(r["correct"])
                 if n % args.log_every == 0 or n == total:
-                    print(f"[{n}/{total}] running_acc={nc / n:.3f} elapsed={time.time() - t0:.0f}s", flush=True)
+                    print(f"{tag}[{n}/{total}] running_acc={nc / n:.3f} elapsed={time.time() - t0:.0f}s", flush=True)
 
         await asyncio.gather(*(worker(q) for q in todo))
         fout.close()
@@ -287,8 +289,17 @@ async def amain(args):
     client = AsyncOpenAI(base_url=args.base_url, api_key="EMPTY", timeout=args.timeout, max_retries=0)
     model = args.model or (await client.models.list()).data[0].id
     print(f"task={args.task} model: {model} questions={len(qs)} repeats={args.repeats}", flush=True)
-    for k, path in enumerate(out_paths(args)):
-        await run_file(client, model, qs, extract, args, path, args.seed_offset + k)
+    if args.parallel_repeats:
+        sem = asyncio.Semaphore(args.concurrency)  # one pool shared by all repeats
+        await asyncio.gather(
+            *(
+                run_file(client, model, qs, extract, args, path, args.seed_offset + k, sem)
+                for k, path in enumerate(out_paths(args))
+            )
+        )
+    else:
+        for k, path in enumerate(out_paths(args)):
+            await run_file(client, model, qs, extract, args, path, args.seed_offset + k)
     await client.close()
 
 
@@ -309,6 +320,11 @@ def main():
     )
     p.add_argument("--concurrency", type=int, default=16)
     p.add_argument("--repeats", type=int, default=1)
+    p.add_argument(
+        "--parallel-repeats",
+        action="store_true",
+        help="run all repeat files concurrently sharing one --concurrency pool (avoids per-repeat tail idle)",
+    )
     p.add_argument("--no-think", action="store_true")
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--top-p", type=float, default=0.95)
