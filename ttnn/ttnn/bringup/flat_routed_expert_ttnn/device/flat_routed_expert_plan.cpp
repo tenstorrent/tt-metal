@@ -424,6 +424,11 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     p.mtg = p.mt / p.g;
     const uint32_t m_pad = (p.m + p.mt * 32 - 1) / (p.mt * 32) * p.mt * 32;
     p.nh = p.g > 1 ? 2 : 1;
+    // (perf probe: x helpers per rectangle, 1-4; 2 on GLM-Flash: M 512 / 2048 83.5 / 326.3 vs 70.6 / 273.4, the
+    // helpers take down cells)
+    if (const char* nh = std::getenv("MIMO_FL_NH")) {
+        p.nh = std::clamp<uint32_t>(std::atoi(nh), 1, 4);
+    }
     p.land_slots = p.nh > 1 || p.x_tile != BF8_TILE ? 2 : 3;
     // the down weight ring: two whole experts with pinning (the pinned schedule's regions); bf16 h: 1.5 experts, the
     // unpinned down schedule, so two 512 KB h buffers leave the row-major y out CB its room (else ~1 row tile: the
