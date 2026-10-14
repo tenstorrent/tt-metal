@@ -86,12 +86,16 @@ def tp_reduce_scatter(partial, mesh, tt_ccl, args, dim=3, memory_config=ttnn.DRA
 def _tp_reduce_scatter(partial, mesh, tt_ccl, args, dim, memory_config):
     """tp_reduce_scatter without the bf8 option; consumes `partial`."""
     if not is_2d_mesh(mesh):
+        # tt_all_reduce takes cluster_axis=0 on 1xN to reach its reduce-scatter branch, but link discovery on that
+        # size-1 axis falls back to 1 link (#58659); the TP ring is axis 1, so pass its link count explicitly.
         return tt_all_reduce(
             partial,
             mesh,
             tt_ccl,
             cluster_axis=0,
             dim=dim,
+            num_reduce_scatter_links=tt_ccl.get_num_links(1),
+            num_all_gather_links=tt_ccl.get_num_links(1),
             topology=args.ccl_topology(),
             memory_config=memory_config,
             **prefill_rs_kwargs(args),
