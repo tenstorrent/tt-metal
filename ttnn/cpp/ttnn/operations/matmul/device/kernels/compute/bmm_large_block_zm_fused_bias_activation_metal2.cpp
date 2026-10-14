@@ -213,6 +213,12 @@ void kernel_main() {
 #else
     constexpr bool in0_transpose_tile = false;
 #endif
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
+    // LoFi with more than one K tile per block packs per tile: the block run read slower there (Llama FF1 LoFi +1 %).
+    constexpr bool mm_block_pack = MATH_FIDELITY != MathFidelity::LoFi || in0_block_w == 1;
+#else
+    constexpr bool mm_block_pack = false;
+#endif
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
@@ -490,7 +496,16 @@ void kernel_main() {
 #endif
 #endif
                                 uint32_t start_dst_index = 0;
+#ifdef ARCH_BLACKHOLE
+                                if constexpr (mm_block_pack) {
+                                    pack_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
+                                } else {
+                                    PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
+                                        start_dst_index, mm_out_dfb_id, out_subblock_num_tiles)));
+                                }
+#else
                                 pack_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
+#endif
 
                                 tile_regs_release();
                                 mm_out_dfb.push_back(out_subblock_num_tiles);
@@ -513,7 +528,16 @@ void kernel_main() {
 #endif
 
                                 uint32_t start_dst_index = 0;
+#ifdef ARCH_BLACKHOLE
+                                if constexpr (mm_block_pack) {
+                                    pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
+                                } else {
+                                    PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
+                                        start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles)));
+                                }
+#else
                                 pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
+#endif
 
                                 tile_regs_release();
                                 mm_partials_dfb.push_back(out_subblock_num_tiles);

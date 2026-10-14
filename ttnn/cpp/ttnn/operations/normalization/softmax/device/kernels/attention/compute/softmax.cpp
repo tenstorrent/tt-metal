@@ -14,6 +14,17 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+
+// Block-float outputs keep the per-tile pack: the closed block gave segformer's bf8 softmax no gain.
+constexpr bool softmax_pack_block(std::uint32_t dfb) {
+#ifdef TRISC_PACK
+    return !ckernel::IS_BFP_FORMAT(pack_dst_format[dfb]);
+#else
+    return true;
+#endif
+}
+#define CKL_ELTWISE_CHAIN_PACK_BLOCK_IF (softmax_pack_block(ElemT::dfb))
+
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
