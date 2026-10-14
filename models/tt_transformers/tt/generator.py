@@ -137,6 +137,8 @@ def prepare_prefill_page_tables_per_layer(
     A scheduler table can retain stale block IDs beyond the request's valid
     length. Those columns and padding rows must never reach cache-fill kernels.
     Columns cover the padded kernel input, with -1 beyond each real prompt.
+    For a resumed prompt, prefill_seq_len includes its cached-token offset so
+    per-layer tables retain absolute page positions; the model handles chunks.
     Layers sharing a table and block size retain one shared prepared table.
     """
     if page_tables is None:
@@ -1006,6 +1008,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         num_cached_tokens=0,
         **kwargs,
     ):
+        if kwargs.get("page_tables_per_layer") is not None:
+            raise ValueError(
+                "Explicit per-layer page tables require untraced prefill; trace refresh is not implemented"
+            )
         global_user_id = kwargs.get("global_user_id", None)
         use_start_pos = "sp1" if num_cached_tokens > 0 else "sp0"
         trace_key = f"{prefill_seq_len}_{model_id}_{batch_size}_{use_start_pos}"
@@ -1461,7 +1467,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     padded_batch if use_batched_prefill else 1,
                     prompt_lens,
                     [int(layer_cache[0].shape[2]) for layer_cache in kv_cache[model_id]],
-                    prefill_seq_len,
+                    prefill_seq_len + (0 if use_batched_prefill else num_cached_tokens),
                 )
             if getattr(self.model[model_id], "users_row_sharded", False):
                 local_kwargs["global_user_id"] = batch_user_ids if use_batched_prefill else user_id
