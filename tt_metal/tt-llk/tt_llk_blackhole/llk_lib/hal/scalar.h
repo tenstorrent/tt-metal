@@ -285,47 +285,51 @@ inline constexpr std::uint32_t half_index(const bool high)
     return Index * 2u + high;
 }
 
+template <bool High, std::uint32_t Index, std::uint32_t Value>
+inline constexpr std::uint32_t set_half_operation(const hal::Gpr<Index> destination, const Immediate<Value> value)
+{
+    if constexpr (Index != hal::detail::DynamicGprIndex && Value != DynamicImmediateValue)
+    {
+        static_assert(Value < (1u << 16), "GPR half value must fit in 16 bits");
+        return TT_OP_SETDMAREG(0, Value, 0, half_index<Index>(High));
+    }
+    else
+    {
+        if constexpr (Value != DynamicImmediateValue)
+        {
+            static_assert(Value < (1u << 16), "GPR half value must fit in 16 bits");
+        }
+        validate_gpr(destination);
+        const std::uint32_t half_value = OperandTraits<Immediate<Value>>::value(value);
+        LLK_ASSERT(half_value < (1u << 16), "GPR half value must fit in 16 bits");
+        return TT_OP_SETDMAREG(0, half_value, 0, OperandTraits<hal::Gpr<Index>>::value(destination) * 2u + High);
+    }
+}
+
+template <BinaryOperation Operation, std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+class BinaryDescriptor
+{
+public:
+    constexpr BinaryDescriptor(const hal::Gpr<Destination> destination, const hal::Gpr<Lhs> lhs, const Rhs rhs) : destination(destination), lhs(lhs), rhs(rhs)
+    {
+    }
+
+    constexpr std::uint32_t operation() const
+    {
+        return binary_operation<Operation>(destination, lhs, rhs);
+    }
+
+    hal::Gpr<Destination> destination;
+    hal::Gpr<Lhs> lhs;
+    Rhs rhs;
+};
+
 } // namespace detail
-
-/** @brief Encode a compile-time 16-bit write to the low half of one GPR. */
-template <std::uint32_t Value, std::uint32_t Index>
-inline constexpr std::uint32_t set_low_operation(const hal::Gpr<Index>)
-{
-    static_assert(Value < (1u << 16), "GPR half value must fit in 16 bits");
-    return TT_OP_SETDMAREG(0, Value, 0, detail::half_index<Index>(false));
-}
-
-/** @brief Encode a runtime 16-bit write to the low half of one GPR. */
-template <std::uint32_t Index>
-inline __attribute__((always_inline)) std::uint32_t set_low_operation(const hal::Gpr<Index> destination, const std::uint32_t value)
-{
-    detail::validate_gpr(destination);
-    LLK_ASSERT(value < (1u << 16), "GPR half value must fit in 16 bits");
-    return TT_OP_SETDMAREG(0, value, 0, detail::OperandTraits<hal::Gpr<Index>>::value(destination) * 2u);
-}
-
-/** @brief Encode a compile-time 16-bit write to the high half of one GPR. */
-template <std::uint32_t Value, std::uint32_t Index>
-inline constexpr std::uint32_t set_high_operation(const hal::Gpr<Index>)
-{
-    static_assert(Value < (1u << 16), "GPR half value must fit in 16 bits");
-    return TT_OP_SETDMAREG(0, Value, 0, detail::half_index<Index>(true));
-}
-
-/** @brief Encode a runtime 16-bit write to the high half of one GPR. */
-template <std::uint32_t Index>
-inline __attribute__((always_inline)) std::uint32_t set_high_operation(const hal::Gpr<Index> destination, const std::uint32_t value)
-{
-    detail::validate_gpr(destination);
-    LLK_ASSERT(value < (1u << 16), "GPR half value must fit in 16 bits");
-    return TT_OP_SETDMAREG(0, value, 0, detail::OperandTraits<hal::Gpr<Index>>::value(destination) * 2u + 1u);
-}
 
 /** @brief Set a GPR to a compile-time 32-bit value. */
 template <std::uint32_t Value, std::uint32_t Index>
-inline __attribute__((always_inline)) void set(const hal::Gpr<Index> destination)
+inline __attribute__((always_inline)) void set(const hal::Gpr<Index>)
 {
-    (void)set_low_operation<Value & 0xffffu>(destination);
     TTI_SETDMAREG(0, Value & 0xffffu, 0, detail::half_index<Index>(false));
     TTI_SETDMAREG(0, Value >> 16, 0, detail::half_index<Index>(true));
 }
@@ -342,9 +346,9 @@ inline __attribute__((always_inline)) void set(const hal::Gpr<Index> destination
 
 /** @brief Set the low half of a GPR to a compile-time 16-bit value. */
 template <std::uint32_t Value, std::uint32_t Index>
-inline __attribute__((always_inline)) void set_low(const hal::Gpr<Index> destination)
+inline __attribute__((always_inline)) void set_low(const hal::Gpr<Index>)
 {
-    (void)set_low_operation<Value>(destination);
+    static_assert(Value < (1u << 16), "GPR half value must fit in 16 bits");
     TTI_SETDMAREG(0, Value, 0, detail::half_index<Index>(false));
 }
 
@@ -352,14 +356,14 @@ inline __attribute__((always_inline)) void set_low(const hal::Gpr<Index> destina
 template <std::uint32_t Index>
 inline __attribute__((always_inline)) void set_low(const hal::Gpr<Index> destination, const std::uint32_t value)
 {
-    ckernel::instrn_buffer[0] = set_low_operation(destination, value);
+    ckernel::instrn_buffer[0] = detail::set_half_operation<false>(destination, immediate(value));
 }
 
 /** @brief Set the high half of a GPR to a compile-time 16-bit value. */
 template <std::uint32_t Value, std::uint32_t Index>
-inline __attribute__((always_inline)) void set_high(const hal::Gpr<Index> destination)
+inline __attribute__((always_inline)) void set_high(const hal::Gpr<Index>)
 {
-    (void)set_high_operation<Value>(destination);
+    static_assert(Value < (1u << 16), "GPR half value must fit in 16 bits");
     TTI_SETDMAREG(0, Value, 0, detail::half_index<Index>(true));
 }
 
@@ -367,14 +371,7 @@ inline __attribute__((always_inline)) void set_high(const hal::Gpr<Index> destin
 template <std::uint32_t Index>
 inline __attribute__((always_inline)) void set_high(const hal::Gpr<Index> destination, const std::uint32_t value)
 {
-    ckernel::instrn_buffer[0] = set_high_operation(destination, value);
-}
-
-/** @brief Encode an unsigned 32-bit wrapping addition without issuing it. */
-template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
-inline constexpr std::uint32_t add_operation(const hal::Gpr<Destination> destination, const hal::Gpr<Lhs> lhs, const Rhs rhs)
-{
-    return detail::binary_operation<detail::BinaryOperation::Add>(destination, lhs, rhs);
+    ckernel::instrn_buffer[0] = detail::set_half_operation<true>(destination, immediate(value));
 }
 
 /** @brief Add two operands with unsigned 32-bit wraparound. */
@@ -384,25 +381,11 @@ inline __attribute__((always_inline)) void add(const hal::Gpr<Destination> desti
     detail::emit_binary<detail::BinaryOperation::Add>(destination, lhs, rhs);
 }
 
-/** @brief Encode an unsigned 32-bit wrapping subtraction without issuing it. */
-template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
-inline constexpr std::uint32_t subtract_operation(const hal::Gpr<Destination> destination, const hal::Gpr<Lhs> lhs, const Rhs rhs)
-{
-    return detail::binary_operation<detail::BinaryOperation::Subtract>(destination, lhs, rhs);
-}
-
 /** @brief Subtract the rhs from the lhs with unsigned 32-bit wraparound. */
 template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
 inline __attribute__((always_inline)) void subtract(const hal::Gpr<Destination> destination, const hal::Gpr<Lhs> lhs, const Rhs rhs)
 {
     detail::emit_binary<detail::BinaryOperation::Subtract>(destination, lhs, rhs);
-}
-
-/** @brief Encode a multiplication of the operands' low 16 bits without issuing it. */
-template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
-inline constexpr std::uint32_t multiply_low_u16_operation(const hal::Gpr<Destination> destination, const hal::Gpr<Lhs> lhs, const Rhs rhs)
-{
-    return detail::binary_operation<detail::BinaryOperation::MultiplyLowU16>(destination, lhs, rhs);
 }
 
 /** @brief Multiply the low 16 bits of each operand and write the full 32-bit result. */
@@ -412,25 +395,11 @@ inline __attribute__((always_inline)) void multiply_low_u16(const hal::Gpr<Desti
     detail::emit_binary<detail::BinaryOperation::MultiplyLowU16>(destination, lhs, rhs);
 }
 
-/** @brief Encode a bitwise AND without issuing it. */
-template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
-inline constexpr std::uint32_t bit_and_operation(const hal::Gpr<Destination> destination, const hal::Gpr<Lhs> lhs, const Rhs rhs)
-{
-    return detail::binary_operation<detail::BinaryOperation::BitAnd>(destination, lhs, rhs);
-}
-
 /** @brief Compute a bitwise AND. */
 template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
 inline __attribute__((always_inline)) void bit_and(const hal::Gpr<Destination> destination, const hal::Gpr<Lhs> lhs, const Rhs rhs)
 {
     detail::emit_binary<detail::BinaryOperation::BitAnd>(destination, lhs, rhs);
-}
-
-/** @brief Encode a bitwise OR without issuing it. */
-template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
-inline constexpr std::uint32_t bit_or_operation(const hal::Gpr<Destination> destination, const hal::Gpr<Lhs> lhs, const Rhs rhs)
-{
-    return detail::binary_operation<detail::BinaryOperation::BitOr>(destination, lhs, rhs);
 }
 
 /** @brief Compute a bitwise OR. */
@@ -440,25 +409,11 @@ inline __attribute__((always_inline)) void bit_or(const hal::Gpr<Destination> de
     detail::emit_binary<detail::BinaryOperation::BitOr>(destination, lhs, rhs);
 }
 
-/** @brief Encode a bitwise XOR without issuing it. */
-template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
-inline constexpr std::uint32_t bit_xor_operation(const hal::Gpr<Destination> destination, const hal::Gpr<Lhs> lhs, const Rhs rhs)
-{
-    return detail::binary_operation<detail::BinaryOperation::BitXor>(destination, lhs, rhs);
-}
-
 /** @brief Compute a bitwise XOR. */
 template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
 inline __attribute__((always_inline)) void bit_xor(const hal::Gpr<Destination> destination, const hal::Gpr<Lhs> lhs, const Rhs rhs)
 {
     detail::emit_binary<detail::BinaryOperation::BitXor>(destination, lhs, rhs);
-}
-
-/** @brief Encode a logical left shift without issuing it. */
-template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
-inline constexpr std::uint32_t shift_left_operation(const hal::Gpr<Destination> destination, const hal::Gpr<Lhs> lhs, const Rhs rhs)
-{
-    return detail::binary_operation<detail::BinaryOperation::ShiftLeft>(destination, lhs, rhs);
 }
 
 /** @brief Shift the lhs left logically by the rhs low five bits. */
@@ -468,25 +423,11 @@ inline __attribute__((always_inline)) void shift_left(const hal::Gpr<Destination
     detail::emit_binary<detail::BinaryOperation::ShiftLeft>(destination, lhs, rhs);
 }
 
-/** @brief Encode a logical right shift without issuing it. */
-template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
-inline constexpr std::uint32_t shift_right_operation(const hal::Gpr<Destination> destination, const hal::Gpr<Lhs> lhs, const Rhs rhs)
-{
-    return detail::binary_operation<detail::BinaryOperation::ShiftRight>(destination, lhs, rhs);
-}
-
 /** @brief Shift the lhs right logically by the rhs low five bits. */
 template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
 inline __attribute__((always_inline)) void shift_right(const hal::Gpr<Destination> destination, const hal::Gpr<Lhs> lhs, const Rhs rhs)
 {
     detail::emit_binary<detail::BinaryOperation::ShiftRight>(destination, lhs, rhs);
-}
-
-/** @brief Encode an unsigned comparison without issuing it. */
-template <Compare Predicate, std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
-inline constexpr std::uint32_t compare_operation(const hal::Gpr<Destination> destination, const hal::Gpr<Lhs> lhs, const Rhs rhs)
-{
-    return detail::binary_operation<detail::compare_operation<Predicate>>(destination, lhs, rhs);
 }
 
 /** @brief Compare two unsigned 32-bit operands and write zero or one. */
@@ -495,5 +436,165 @@ inline __attribute__((always_inline)) void compare(const hal::Gpr<Destination> d
 {
     detail::emit_binary<detail::compare_operation<Predicate>>(destination, lhs, rhs);
 }
+
+// Descriptors encode one scalar-unit instruction. operation() is usable in constant
+// expressions; invalid constants fail compilation and runtime operands use LLK_ASSERT.
+
+/** @brief Encode a SETDMAREG write to the low half of one GPR without issuing it. */
+template <std::uint32_t Index, std::uint32_t Value>
+class SetLow
+{
+public:
+    constexpr SetLow(const hal::Gpr<Index> destination, const Immediate<Value> value) : destination(destination), value(value)
+    {
+    }
+
+    constexpr std::uint32_t operation() const
+    {
+        return detail::set_half_operation<false>(destination, value);
+    }
+
+    hal::Gpr<Index> destination;
+    Immediate<Value> value;
+};
+
+/** @brief Encode a SETDMAREG write to the high half of one GPR without issuing it. */
+template <std::uint32_t Index, std::uint32_t Value>
+class SetHigh
+{
+public:
+    constexpr SetHigh(const hal::Gpr<Index> destination, const Immediate<Value> value) : destination(destination), value(value)
+    {
+    }
+
+    constexpr std::uint32_t operation() const
+    {
+        return detail::set_half_operation<true>(destination, value);
+    }
+
+    hal::Gpr<Index> destination;
+    Immediate<Value> value;
+};
+
+/** @brief Encode ADDDMAREG without issuing it. */
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+class Add : public detail::BinaryDescriptor<detail::BinaryOperation::Add, Destination, Lhs, Rhs>
+{
+public:
+    using detail::BinaryDescriptor<detail::BinaryOperation::Add, Destination, Lhs, Rhs>::BinaryDescriptor;
+};
+
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+Add(hal::Gpr<Destination>, hal::Gpr<Lhs>, Rhs) -> Add<Destination, Lhs, Rhs>;
+
+/** @brief Encode SUBDMAREG without issuing it. */
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+class Subtract : public detail::BinaryDescriptor<detail::BinaryOperation::Subtract, Destination, Lhs, Rhs>
+{
+public:
+    using detail::BinaryDescriptor<detail::BinaryOperation::Subtract, Destination, Lhs, Rhs>::BinaryDescriptor;
+};
+
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+Subtract(hal::Gpr<Destination>, hal::Gpr<Lhs>, Rhs) -> Subtract<Destination, Lhs, Rhs>;
+
+/** @brief Encode MULDMAREG without issuing it. */
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+class MultiplyLowU16 : public detail::BinaryDescriptor<detail::BinaryOperation::MultiplyLowU16, Destination, Lhs, Rhs>
+{
+public:
+    using detail::BinaryDescriptor<detail::BinaryOperation::MultiplyLowU16, Destination, Lhs, Rhs>::BinaryDescriptor;
+};
+
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+MultiplyLowU16(hal::Gpr<Destination>, hal::Gpr<Lhs>, Rhs) -> MultiplyLowU16<Destination, Lhs, Rhs>;
+
+/** @brief Encode a bitwise-AND BITWOPDMAREG without issuing it. */
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+class BitAnd : public detail::BinaryDescriptor<detail::BinaryOperation::BitAnd, Destination, Lhs, Rhs>
+{
+public:
+    using detail::BinaryDescriptor<detail::BinaryOperation::BitAnd, Destination, Lhs, Rhs>::BinaryDescriptor;
+};
+
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+BitAnd(hal::Gpr<Destination>, hal::Gpr<Lhs>, Rhs) -> BitAnd<Destination, Lhs, Rhs>;
+
+/** @brief Encode a bitwise-OR BITWOPDMAREG without issuing it. */
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+class BitOr : public detail::BinaryDescriptor<detail::BinaryOperation::BitOr, Destination, Lhs, Rhs>
+{
+public:
+    using detail::BinaryDescriptor<detail::BinaryOperation::BitOr, Destination, Lhs, Rhs>::BinaryDescriptor;
+};
+
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+BitOr(hal::Gpr<Destination>, hal::Gpr<Lhs>, Rhs) -> BitOr<Destination, Lhs, Rhs>;
+
+/** @brief Encode a bitwise-XOR BITWOPDMAREG without issuing it. */
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+class BitXor : public detail::BinaryDescriptor<detail::BinaryOperation::BitXor, Destination, Lhs, Rhs>
+{
+public:
+    using detail::BinaryDescriptor<detail::BinaryOperation::BitXor, Destination, Lhs, Rhs>::BinaryDescriptor;
+};
+
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+BitXor(hal::Gpr<Destination>, hal::Gpr<Lhs>, Rhs) -> BitXor<Destination, Lhs, Rhs>;
+
+/** @brief Encode a left SHIFTDMAREG without issuing it. */
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+class ShiftLeft : public detail::BinaryDescriptor<detail::BinaryOperation::ShiftLeft, Destination, Lhs, Rhs>
+{
+public:
+    using detail::BinaryDescriptor<detail::BinaryOperation::ShiftLeft, Destination, Lhs, Rhs>::BinaryDescriptor;
+};
+
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+ShiftLeft(hal::Gpr<Destination>, hal::Gpr<Lhs>, Rhs) -> ShiftLeft<Destination, Lhs, Rhs>;
+
+/** @brief Encode a right SHIFTDMAREG without issuing it. */
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+class ShiftRight : public detail::BinaryDescriptor<detail::BinaryOperation::ShiftRight, Destination, Lhs, Rhs>
+{
+public:
+    using detail::BinaryDescriptor<detail::BinaryOperation::ShiftRight, Destination, Lhs, Rhs>::BinaryDescriptor;
+};
+
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+ShiftRight(hal::Gpr<Destination>, hal::Gpr<Lhs>, Rhs) -> ShiftRight<Destination, Lhs, Rhs>;
+
+/** @brief Encode an unsigned greater-than CMPDMAREG without issuing it. */
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+class CompareGreaterThan : public detail::BinaryDescriptor<detail::BinaryOperation::CompareGreaterThan, Destination, Lhs, Rhs>
+{
+public:
+    using detail::BinaryDescriptor<detail::BinaryOperation::CompareGreaterThan, Destination, Lhs, Rhs>::BinaryDescriptor;
+};
+
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+CompareGreaterThan(hal::Gpr<Destination>, hal::Gpr<Lhs>, Rhs) -> CompareGreaterThan<Destination, Lhs, Rhs>;
+
+/** @brief Encode an unsigned less-than CMPDMAREG without issuing it. */
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+class CompareLessThan : public detail::BinaryDescriptor<detail::BinaryOperation::CompareLessThan, Destination, Lhs, Rhs>
+{
+public:
+    using detail::BinaryDescriptor<detail::BinaryOperation::CompareLessThan, Destination, Lhs, Rhs>::BinaryDescriptor;
+};
+
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+CompareLessThan(hal::Gpr<Destination>, hal::Gpr<Lhs>, Rhs) -> CompareLessThan<Destination, Lhs, Rhs>;
+
+/** @brief Encode an unsigned equality CMPDMAREG without issuing it. */
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+class CompareEqual : public detail::BinaryDescriptor<detail::BinaryOperation::CompareEqual, Destination, Lhs, Rhs>
+{
+public:
+    using detail::BinaryDescriptor<detail::BinaryOperation::CompareEqual, Destination, Lhs, Rhs>::BinaryDescriptor;
+};
+
+template <std::uint32_t Destination, std::uint32_t Lhs, typename Rhs>
+CompareEqual(hal::Gpr<Destination>, hal::Gpr<Lhs>, Rhs) -> CompareEqual<Destination, Lhs, Rhs>;
 
 } // namespace hal::scalar
