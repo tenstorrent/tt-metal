@@ -31,18 +31,22 @@
 #define TT_LLK_SFPRAWLREG_EFFECT(r, w) ((void)0)
 #endif
 
-namespace ckernel::raw_lreg_effect {
-constexpr unsigned bit(unsigned r) { return r < 8 ? 1u << r : 0u; }
-constexpr unsigned op(unsigned x) { return x >> 24; }
-constexpr unsigned mod(unsigned x) { return x & 15; }
-constexpr unsigned d(unsigned x) { return (x >> 4) & 15; }
-constexpr unsigned c(unsigned x) { return (x >> 8) & 15; }
-constexpr unsigned b(unsigned x) { return (x >> 12) & 15; }
-constexpr unsigned a(unsigned x) { return (x >> 16) & 15; }
-constexpr unsigned mr(unsigned x) { return (x >> 20) & 15; }
-constexpr unsigned mm(unsigned x) { return (x >> 16) & 15; }
+// Forced inline so a word that becomes constant only after inlining folds to a
+// constant mask instead of a call to the decoder.
+#define TT_LLK_RAW_LREG_FN __attribute__((always_inline)) constexpr inline
 
-constexpr bool supported(unsigned x) {
+namespace ckernel::raw_lreg_effect {
+TT_LLK_RAW_LREG_FN unsigned bit(unsigned r) { return r < 8 ? 1u << r : 0u; }
+TT_LLK_RAW_LREG_FN unsigned op(unsigned x) { return x >> 24; }
+TT_LLK_RAW_LREG_FN unsigned mod(unsigned x) { return x & 15; }
+TT_LLK_RAW_LREG_FN unsigned d(unsigned x) { return (x >> 4) & 15; }
+TT_LLK_RAW_LREG_FN unsigned c(unsigned x) { return (x >> 8) & 15; }
+TT_LLK_RAW_LREG_FN unsigned b(unsigned x) { return (x >> 12) & 15; }
+TT_LLK_RAW_LREG_FN unsigned a(unsigned x) { return (x >> 16) & 15; }
+TT_LLK_RAW_LREG_FN unsigned mr(unsigned x) { return (x >> 20) & 15; }
+TT_LLK_RAW_LREG_FN unsigned mm(unsigned x) { return (x >> 16) & 15; }
+
+TT_LLK_RAW_LREG_FN bool supported(unsigned x) {
     if (op(x) == 0x94) return mod(x) <= 6;
     // Sign retention (4) and indirect destination (8) are independent flags.
     // The ISA admits 0,2,3,4,6,7,A,E; all other modifier values are reserved.
@@ -55,14 +59,14 @@ constexpr bool supported(unsigned x) {
     return op(x) >= 0x70 && op(x) <= 0x99;
 #endif
 }
-constexpr unsigned math_r(unsigned x, bool has_c = true) {
+TT_LLK_RAW_LREG_FN unsigned math_r(unsigned x, bool has_c = true) {
     unsigned r = bit(a(x)) | bit(b(x)) | (has_c ? bit(c(x)) : 0u);
     if (mod(x) & 4) r = 0xff;
     if (mod(x) & 8) r |= bit(7);
     return r;
 }
-constexpr unsigned math_w(unsigned x) { return (mod(x) & 8) ? 0xff : bit(d(x)); }
-constexpr unsigned shft2_r(unsigned x) {
+TT_LLK_RAW_LREG_FN unsigned math_w(unsigned x) { return (mod(x) & 8) ? 0xff : bit(d(x)); }
+TT_LLK_RAW_LREG_FN unsigned shft2_r(unsigned x) {
     switch (mod(x)) {
         case 0: return 0x0e; case 1: return 0x0f;
         case 2: return 0x0e | bit(c(x));
@@ -71,10 +75,10 @@ constexpr unsigned shft2_r(unsigned x) {
         case 6: return bit(d(x)); default: return 0xff;
     }
 }
-constexpr unsigned shft2_w(unsigned x) {
+TT_LLK_RAW_LREG_FN unsigned shft2_w(unsigned x) {
     return mod(x) <= 2 ? 0x0f : (mod(x) <= 6 ? bit(d(x)) : 0xff);
 }
-constexpr unsigned read(unsigned x) {
+TT_LLK_RAW_LREG_FN unsigned read(unsigned x) {
     const auto o = op(x), m = mod(x), dd = d(x), cc = c(x);
     switch (o) {
         case 0x70: return (mm(x) == 14 || mm(x) == 15) ? bit(mr(x)) : 0;
@@ -130,7 +134,7 @@ constexpr unsigned read(unsigned x) {
         default: return 0xff;
     }
 }
-constexpr unsigned write(unsigned x) {
+TT_LLK_RAW_LREG_FN unsigned write(unsigned x) {
     const auto o = op(x), m = mod(x), dd = d(x), cc = c(x);
     switch (o) {
         // Conservatively include the paired high-half LREG when it is encodable.
@@ -158,23 +162,44 @@ constexpr unsigned write(unsigned x) {
 // instruction word alone cannot prove that every destination lane is written.
 // Preserve the old destination as an input, including for nominally write-only
 // operations. This is deliberately conservative when all lanes are enabled.
-constexpr unsigned inputs(unsigned x) { return read(x) | write(x); }
+TT_LLK_RAW_LREG_FN unsigned inputs(unsigned x) { return read(x) | write(x); }
+constexpr unsigned all_lregs = 0xff;
+// An unsupported word reached only after inlining has no static_assert; keep
+// every LREG for it rather than trusting a partial decode.
+TT_LLK_RAW_LREG_FN unsigned checked_inputs(unsigned x) { return supported(x) ? inputs(x) : all_lregs; }
+TT_LLK_RAW_LREG_FN unsigned checked_write(unsigned x) { return supported(x) ? write(x) : all_lregs; }
 // A template argument requires constant evaluation without introducing local
 // constexpr objects (whose initialization can emit stack stores at -O0).
 template <unsigned Mask> struct constant_mask { enum : unsigned { value = Mask }; };
 } // namespace ckernel::raw_lreg_effect
 
-#define TT_LLK_SFPU_EFFECT(word)                                                                \
-    do {                                                                                        \
-        static_assert(!__builtin_constant_p(word) || ckernel::raw_lreg_effect::supported(word), \
-                      "unsupported raw SFPU effect; use an explicit typed annotation");         \
-        TT_LLK_SFPRAWLREG_EFFECT(                                                               \
-            (ckernel::raw_lreg_effect::constant_mask<__builtin_constant_p(word)                  \
-                ? ckernel::raw_lreg_effect::inputs(word) : 0xffu>::value),                       \
-            (ckernel::raw_lreg_effect::constant_mask<__builtin_constant_p(word)                  \
-                ? ckernel::raw_lreg_effect::write(word) : 0xffu>::value));                       \
+#if defined(__OPTIMIZE__)
+// __builtin_constant_p here is resolved after inlining, so LREG operands of an
+// inline helper are still decoded exactly. A word that never becomes constant
+// selects all_lregs, so no decoder code survives to the generated program.
+#define TT_LLK_SFPU_MASK(decode, lreg_word)                                                     \
+    (__builtin_constant_p(lreg_word) ? ckernel::raw_lreg_effect::decode(lreg_word)              \
+                                     : ckernel::raw_lreg_effect::all_lregs)
+#else
+// Nothing is inlined without optimization, so only front-end constants can be
+// decoded; the template argument keeps that decode out of the generated code.
+#define TT_LLK_SFPU_MASK(decode, lreg_word)                                                     \
+    (ckernel::raw_lreg_effect::constant_mask<__builtin_constant_p(lreg_word)                     \
+        ? ckernel::raw_lreg_effect::decode(lreg_word) : ckernel::raw_lreg_effect::all_lregs>::value)
+#endif
+// LREG_WORD is the issued instruction with operands that can never name an
+// LREG or select how one is accessed (Dest address, address mode, immediate
+// data) set to zero. A runtime address or immediate then leaves the mask exact.
+#define TT_LLK_SFPU_EFFECT(lreg_word)                                                                     \
+    do {                                                                                                  \
+        static_assert(!__builtin_constant_p(lreg_word) || ckernel::raw_lreg_effect::supported(lreg_word), \
+                      "unsupported raw SFPU effect; use an explicit typed annotation");                   \
+        TT_LLK_SFPRAWLREG_EFFECT(TT_LLK_SFPU_MASK(checked_inputs, lreg_word),                             \
+                                 TT_LLK_SFPU_MASK(checked_write, lreg_word));                             \
     } while (0)
 // Statement expressions keep TT_/TTI_ SFPU macros usable wherever the bare
 // TT_INSN/TTI_INSN expressions were, e.g. as comma or conditional operands.
-#define TT_LLK_SFPU_ISSUE_TT(word)  ({ TT_INSN(word); TT_LLK_SFPU_EFFECT(word); })
-#define TT_LLK_SFPU_ISSUE_TTI(word) ({ TTI_INSN(word); TT_LLK_SFPU_EFFECT(word); })
+#define TT_LLK_SFPU_ISSUE_TT_LREGS(word, lreg_word)  ({ TT_INSN(word); TT_LLK_SFPU_EFFECT(lreg_word); })
+#define TT_LLK_SFPU_ISSUE_TTI_LREGS(word, lreg_word) ({ TTI_INSN(word); TT_LLK_SFPU_EFFECT(lreg_word); })
+#define TT_LLK_SFPU_ISSUE_TT(word)                   TT_LLK_SFPU_ISSUE_TT_LREGS(word, word)
+#define TT_LLK_SFPU_ISSUE_TTI(word)                  TT_LLK_SFPU_ISSUE_TTI_LREGS(word, word)

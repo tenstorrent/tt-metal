@@ -574,8 +574,8 @@
 #define TT_OP_SFPADDI(imm16_math, lreg_dest, instr_mod1) TT_OP(0x75, (((imm16_math) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPADDI_VALID(imm16_math, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm16_math, 16) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPADDI(imm16_math, lreg_dest, instr_mod1)  TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPADDI(imm16_math, lreg_dest, instr_mod1))
-#define TTI_SFPADDI(imm16_math, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPADDI(imm16_math, lreg_dest, instr_mod1))
+#define TT_SFPADDI(imm16_math, lreg_dest, instr_mod1)  TT_LLK_SFPU_ISSUE_TT_LREGS(TT_OP_SFPADDI(imm16_math, lreg_dest, instr_mod1), TT_OP_SFPADDI(0, lreg_dest, instr_mod1))
+#define TTI_SFPADDI(imm16_math, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI_LREGS(TT_OP_SFPADDI(imm16_math, lreg_dest, instr_mod1), TT_OP_SFPADDI(0, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPAND(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_OP(0x7e, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPAND_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
@@ -606,8 +606,8 @@
 #define TT_OP_SFPCONFIG(imm16_math, config_dest, instr_mod1) TT_OP(0x91, (((imm16_math) << 8) + ((config_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPCONFIG_VALID(imm16_math, config_dest, instr_mod1) \
     (ckernel::is_valid(imm16_math, 16) && ckernel::is_valid(config_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPCONFIG(imm16_math, config_dest, instr_mod1)  TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPCONFIG(imm16_math, config_dest, instr_mod1))
-#define TTI_SFPCONFIG(imm16_math, config_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPCONFIG(imm16_math, config_dest, instr_mod1))
+#define TT_SFPCONFIG(imm16_math, config_dest, instr_mod1)  TT_LLK_SFPU_ISSUE_TT_LREGS(TT_OP_SFPCONFIG(imm16_math, config_dest, instr_mod1), TT_OP_SFPCONFIG(0, config_dest, instr_mod1))
+#define TTI_SFPCONFIG(imm16_math, config_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI_LREGS(TT_OP_SFPCONFIG(imm16_math, config_dest, instr_mod1), TT_OP_SFPCONFIG(0, config_dest, instr_mod1))
 
 #define TT_OP_SFPDIVP2(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x76, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
@@ -660,26 +660,26 @@
     TT_OP(0x70, (((lreg_ind) << 20) + ((instr_mod0) << 16) + ((sfpu_addr_mode) << 13) + ((dest_reg_addr) << 0)))
 #define TT_SFPLOAD_VALID(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) \
     (ckernel::is_valid(lreg_ind, 4) && ckernel::is_valid(instr_mod0, 4) && ckernel::is_valid(sfpu_addr_mode, 3) && ckernel::is_valid(dest_reg_addr, 13))
-#define TT_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr)  TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr))
-#define TTI_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr))
+#define TT_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr)  TT_LLK_SFPU_ISSUE_TT_LREGS(TT_OP_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr), TT_OP_SFPLOAD(lreg_ind, instr_mod0, 0, 0))
+#define TTI_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) TT_LLK_SFPU_ISSUE_TTI_LREGS(TT_OP_SFPLOAD(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr), TT_OP_SFPLOAD(lreg_ind, instr_mod0, 0, 0))
 
 #define TT_OP_SFPLOADI(lreg_ind, instr_mod0, imm16)    TT_OP(0x71, (((lreg_ind) << 20) + ((instr_mod0) << 16) + ((imm16) << 0)))
 #define TT_SFPLOADI_VALID(lreg_ind, instr_mod0, imm16) (ckernel::is_valid(lreg_ind, 4) && ckernel::is_valid(instr_mod0, 4) && ckernel::is_valid(imm16, 16))
-#define TT_SFPLOADI(lreg_ind, instr_mod0, imm16)       TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPLOADI(lreg_ind, instr_mod0, imm16))
-#define TTI_SFPLOADI(lreg_ind, instr_mod0, imm16)      TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPLOADI(lreg_ind, instr_mod0, imm16))
+#define TT_SFPLOADI(lreg_ind, instr_mod0, imm16)       TT_LLK_SFPU_ISSUE_TT_LREGS(TT_OP_SFPLOADI(lreg_ind, instr_mod0, imm16), TT_OP_SFPLOADI(lreg_ind, instr_mod0, 0))
+#define TTI_SFPLOADI(lreg_ind, instr_mod0, imm16)      TT_LLK_SFPU_ISSUE_TTI_LREGS(TT_OP_SFPLOADI(lreg_ind, instr_mod0, imm16), TT_OP_SFPLOADI(lreg_ind, instr_mod0, 0))
 
 #define TT_OP_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) \
     TT_OP(0x93, (((lreg_ind) << 20) + ((instr_mod0) << 16) + ((sfpu_addr_mode) << 13) + ((dest_reg_addr) << 0)))
 #define TT_SFPLOADMACRO_VALID(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) \
     (ckernel::is_valid(lreg_ind, 4) && ckernel::is_valid(instr_mod0, 4) && ckernel::is_valid(sfpu_addr_mode, 3) && ckernel::is_valid(dest_reg_addr, 13))
-#define TT_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr)  TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr))
-#define TTI_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr))
+#define TT_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr)  TT_LLK_SFPU_ISSUE_TT_LREGS(TT_OP_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr), TT_OP_SFPLOADMACRO(lreg_ind, instr_mod0, 0, 0))
+#define TTI_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) TT_LLK_SFPU_ISSUE_TTI_LREGS(TT_OP_SFPLOADMACRO(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr), TT_OP_SFPLOADMACRO(lreg_ind, instr_mod0, 0, 0))
 
 #define TT_OP_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr) TT_OP(0x73, (((lreg_ind) << 20) + ((instr_mod0) << 16) + ((dest_reg_addr) << 0)))
 #define TT_SFPLUT_VALID(lreg_ind, instr_mod0, dest_reg_addr) \
     (ckernel::is_valid(lreg_ind, 4) && ckernel::is_valid(instr_mod0, 4) && ckernel::is_valid(dest_reg_addr, 16))
-#define TT_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr)  TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr))
-#define TTI_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr))
+#define TT_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr)  TT_LLK_SFPU_ISSUE_TT_LREGS(TT_OP_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr), TT_OP_SFPLUT(lreg_ind, instr_mod0, 0))
+#define TTI_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr) TT_LLK_SFPU_ISSUE_TTI_LREGS(TT_OP_SFPLUT(lreg_ind, instr_mod0, dest_reg_addr), TT_OP_SFPLUT(lreg_ind, instr_mod0, 0))
 
 #define TT_OP_SFPLUTFP32(lreg_dest, instr_mod1)    TT_OP(0x95, (((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPLUTFP32_VALID(lreg_dest, instr_mod1) (ckernel::is_valid(lreg_dest, 20) && ckernel::is_valid(instr_mod1, 4))
@@ -727,8 +727,8 @@
 #define TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1) TT_OP(0x74, (((imm16_math) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPMULI_VALID(imm16_math, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm16_math, 16) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_SFPMULI(imm16_math, lreg_dest, instr_mod1)  TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1))
-#define TTI_SFPMULI(imm16_math, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1))
+#define TT_SFPMULI(imm16_math, lreg_dest, instr_mod1)  TT_LLK_SFPU_ISSUE_TT_LREGS(TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1), TT_OP_SFPMULI(0, lreg_dest, instr_mod1))
+#define TTI_SFPMULI(imm16_math, lreg_dest, instr_mod1) TT_LLK_SFPU_ISSUE_TTI_LREGS(TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1), TT_OP_SFPMULI(0, lreg_dest, instr_mod1))
 
 #define TT_OP_SFPNOP TT_OP(0x8f, 0)
 #define TTI_SFPNOP   TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPNOP)
@@ -805,8 +805,8 @@
     TT_OP(0x72, (((lreg_ind) << 20) + ((instr_mod0) << 16) + ((sfpu_addr_mode) << 13) + ((dest_reg_addr) << 0)))
 #define TT_SFPSTORE_VALID(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) \
     (ckernel::is_valid(lreg_ind, 4) && ckernel::is_valid(instr_mod0, 4) && ckernel::is_valid(sfpu_addr_mode, 3) && ckernel::is_valid(dest_reg_addr, 13))
-#define TT_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr)  TT_LLK_SFPU_ISSUE_TT(TT_OP_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr))
-#define TTI_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) TT_LLK_SFPU_ISSUE_TTI(TT_OP_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr))
+#define TT_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr)  TT_LLK_SFPU_ISSUE_TT_LREGS(TT_OP_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr), TT_OP_SFPSTORE(lreg_ind, instr_mod0, 0, 0))
+#define TTI_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr) TT_LLK_SFPU_ISSUE_TTI_LREGS(TT_OP_SFPSTORE(lreg_ind, instr_mod0, sfpu_addr_mode, dest_reg_addr), TT_OP_SFPSTORE(lreg_ind, instr_mod0, 0, 0))
 
 #define TT_OP_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1) \
     TT_OP(0x92, (((imm12_math) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))

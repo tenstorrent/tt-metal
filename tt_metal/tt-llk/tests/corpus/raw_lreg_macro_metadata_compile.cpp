@@ -173,6 +173,37 @@ constexpr bool lut_modifier_masks()
 }
 static_assert(lut_modifier_masks());
 
+// Wrappers decode effects from a word with address and immediate operands
+// zeroed; those operands must never change the decoded masks.
+constexpr bool same_effect(unsigned issued, unsigned lreg_word)
+{
+    return ckernel::raw_lreg_effect::inputs(issued) == ckernel::raw_lreg_effect::inputs(lreg_word) &&
+           ckernel::raw_lreg_effect::write(issued) == ckernel::raw_lreg_effect::write(lreg_word);
+}
+constexpr bool lreg_word_operands_ignored()
+{
+    for (unsigned mode = 0; mode != 16; ++mode) {
+        for (unsigned lreg = 0; lreg != 8; ++lreg) {
+#if defined(TEST_QSR)
+            if (!same_effect(TT_OP_SFPLOAD(lreg, mode, 3, 1, 0x2a5), TT_OP_SFPLOAD(lreg, mode, 0, 0, 0))) return false;
+            if (!same_effect(TT_OP_SFPSTORE(lreg, mode, 3, 1, 0x2a5), TT_OP_SFPSTORE(lreg, mode, 0, 0, 0))) return false;
+#else
+            if (!same_effect(TT_OP_SFPLOAD(lreg, mode, 3, 0x1abc), TT_OP_SFPLOAD(lreg, mode, 0, 0))) return false;
+            if (!same_effect(TT_OP_SFPSTORE(lreg, mode, 3, 0x1abc), TT_OP_SFPSTORE(lreg, mode, 0, 0))) return false;
+            if (!same_effect(TT_OP_SFPLUT(lreg, mode, 0xbeef), TT_OP_SFPLUT(lreg, mode, 0))) return false;
+#endif
+            if (!same_effect(TT_OP_SFPLOADI(lreg, mode, 0xbeef), TT_OP_SFPLOADI(lreg, mode, 0))) return false;
+            if (!same_effect(TT_OP_SFPADDI(0xbeef, lreg, mode), TT_OP_SFPADDI(0, lreg, mode))) return false;
+            if (!same_effect(TT_OP_SFPMULI(0xbeef, lreg, mode), TT_OP_SFPMULI(0, lreg, mode))) return false;
+        }
+        for (unsigned dest = 0; dest != 16; ++dest) {
+            if (!same_effect(TT_OP_SFPCONFIG(0xbeef, dest, mode), TT_OP_SFPCONFIG(0, dest, mode))) return false;
+        }
+    }
+    return true;
+}
+static_assert(lreg_word_operands_ignored());
+
 #ifdef TEST_LUT_MODES
 void lut_modifier_issue()
 {
@@ -229,6 +260,29 @@ void tt_mmio_runtime_lreg(unsigned lreg)
     TT_SFPLOAD(lreg, 0, 0, 0);
 #endif
 }
+
+// The address is a runtime value, but the LREG operands are constants, so the
+// effect stays exact at every optimization level.
+void tt_mmio_runtime_address(unsigned address)
+{
+#if defined(TEST_QSR)
+    TT_SFPLOAD(3, 0, 0, 0, address);
+#else
+    TT_SFPLOAD(3, 0, 0, address);
+#endif
+}
+
+// LREG operands become constant only after inlining: exact when optimizing,
+// all LREGs otherwise. Forced inline keeps the -O0 helper-call scan meaningful.
+__attribute__((always_inline)) inline void tt_mmio_load_into(unsigned lreg)
+{
+#if defined(TEST_QSR)
+    TT_SFPLOAD(lreg, 0, 0, 0, 0);
+#else
+    TT_SFPLOAD(lreg, 0, 0, 0);
+#endif
+}
+void tt_mmio_inlined_lreg() { tt_mmio_load_into(2); }
 
 void tti_asm_constant_lreg()
 {

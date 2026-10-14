@@ -24,7 +24,18 @@ if [[ ${1:-} == --target-cxx ]]; then
             "$target_cxx" -std=c++17 "$opt" -mcpu="$cpu" -DTEST_TARGET_EFFECT \
                 -DTEST_DEFAULT_FALLBACK "-DTEST_$arch" -S "$source_file" -o "$scratch/$arch.s"
             count=$(grep -c '# RAWLREG_EFFECT' "$scratch/$arch.s" || true)
-            [[ $count == 13 ]] || { echo "FAIL: $arch $opt emitted $count effects, expected 13" >&2; exit 1; }
+            [[ $count == 15 ]] || { echo "FAIL: $arch $opt emitted $count effects, expected 15" >&2; exit 1; }
+            # LREG3 load with a runtime address: L3 and its paired L7.
+            grep -q '# RAWLREG_EFFECT 136, 136' "$scratch/$arch.s" || {
+                echo "FAIL: $arch $opt runtime address hid the constant LREG fields" >&2; exit 1;
+            }
+            # LREG2 load issued from an inline helper: L2 and its paired L6
+            # once inlined, otherwise the all-LREG fallback.
+            inlined=0
+            grep -q '# RAWLREG_EFFECT 68, 68' "$scratch/$arch.s" && inlined=1
+            [[ $inlined == $([[ $opt == -O2 ]] && echo 1 || echo 0) ]] || {
+                echo "FAIL: $arch $opt inlined LREG operand decoded unexpectedly" >&2; exit 1;
+            }
             if grep -Eq '[[:space:]]call[[:space:]]' "$scratch/$arch.s"; then
                 echo "FAIL: metadata fixture emitted a runtime helper call at $opt" >&2; exit 1
             fi
@@ -36,12 +47,12 @@ if [[ ${1:-} == --target-cxx ]]; then
             [[ $stores == "$baseline_stores" ]] || {
                 echo "FAIL: metadata added scalar stores at $arch $opt" >&2; exit 1;
             }
-            echo "PASS: $cpu $opt compiled with 13 real effect markers (not a hardware test)"
+            echo "PASS: $cpu $opt compiled with 15 real effect markers (not a hardware test)"
             "$target_cxx" -std=c++17 "$opt" -mcpu="$cpu" -DTEST_TARGET_EFFECT \
                 -DTEST_DEFAULT_FALLBACK -DTEST_LUT_MODES "-DTEST_$arch" \
                 -S "$source_file" -o "$scratch/$arch.s"
             count=$(grep -c '# RAWLREG_EFFECT' "$scratch/$arch.s" || true)
-            [[ $count == 21 ]] || { echo "FAIL: LUT modifier fixture emitted $count effects, expected 21" >&2; exit 1; }
+            [[ $count == 23 ]] || { echo "FAIL: LUT modifier fixture emitted $count effects, expected 23" >&2; exit 1; }
             echo "PASS: $cpu $opt LUT modifier combinations"
         done
         if "$target_cxx" -std=c++17 -O2 -mcpu="$cpu" -DTEST_TARGET_EFFECT \
