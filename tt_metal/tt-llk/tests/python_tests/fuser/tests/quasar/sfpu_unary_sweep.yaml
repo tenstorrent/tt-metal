@@ -7,7 +7,8 @@ operands:
     dims: [32, 32]
     # Float32 only: with dest_acc the datacopy unpacks straight into a 32-bit Dest, and the unpacker
     # cannot widen a 16-bit input on the way (see is_valid_quasar_unpack_to_dest). A Float16_b input
-    # left bf16 cells in Dest for an SFPU and packer that read it as fp32; the dest16 configs cover it.
+    # left bf16 cells in Dest for an SFPU and packer that read it as fp32. 16-bit inputs are covered by
+    # the sfpu_unary_float / approx_modes configs: _dest16 into 16-bit Dest, _dest32 widened via SrcA.
     format: [Float32]
     stimuli:
       include:
