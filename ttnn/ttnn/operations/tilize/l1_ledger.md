@@ -11,6 +11,23 @@ Schema: `.claude/references/l1-footprint-discipline.md`. Block axes (from `op_de
 | `cb_stick_staging` (slot 2, implementer-added, perf) | 1 page of `2 · num_banks · ceil(staging_tile_rows·tile_h / num_banks) · stick_bytes`; `staging_tile_rows = clamp(STAGING_SLOT_BUDGET_BYTES (16 KiB) // (tile_h·stick_bytes), 1, max core rows)` | one slot being copied out while the other slot's DRAM reads land | `{rows: streams → staging_tile_rows per slot, cols: spans the whole stick (only when num_col_blocks = 1), stick_in_tile: spans}` | input dtype (raw bytes) | reader | reader (local L1→L1 NoC copies into `cb_rm_sticks`) | whole kernel; allocated only when the bank-coalesced reader is active (interleaved source, one column block, aligned images, cores ≥ 2·num_banks) | Reader-private scratch, no CB handshake. Cannot be `cb_rm_sticks` itself: the wide per-bank reads land bank-grouped, and tilize needs row order, so a permuting copy between two buffers is required. ≈ 2×16 KiB (one slot may round up to a whole tile-row when a tile-row exceeds 16 KiB, i.e. up to 2 · tile_h · stick_bytes ≤ 2 · per-tile-row input bytes of the block). |
 | `cb_pad_fill` (slot 3, Refinement 1) | 1 page of `fill_row_bytes + 64`, `fill_row_bytes = block_width_tiles · 32 · in_elem_bytes + 64` | the whole fill row (read-only after setup) | `{rows: n/a (one stick), cols: spans → block_width_tiles (+64 B phase slack), stick_in_tile: n/a}` | input dtype (the pad value replicated) | reader (once, at kernel start: 64 B RISC seed + doubling local NoC copies) | reader (source of local L1→L1 fill copies into `cb_rm_sticks`) | whole kernel; allocated only when the output is padded | Reader-private, no CB handshake. Cannot be `cb_rm_sticks`: it must outlive every tile-row. Not a zero-tile helper case — the fill is an arbitrary value, and filling via NoC copies (not a RISC store loop per segment) keeps the DM engine moving the bytes. Mutually exclusive with `cb_stick_staging` (coalescing requires no padding). ≤ 255·128 + 128 B. |
 
+### Sharded regimes (Refinement 2)
+
+| Regime | `cb_rm_sticks` | `cb_tiles_out` | Extra L1 |
+|--------|----------------|----------------|----------|
+| `sharded_same_spec_in_place` | **backed on the input shard** (`_resident_cb`: `cb_descriptor_from_sharded_tensor`, re-paged to tile-sized pages; capacity = `shard_rows_tiles · shard_cols_tiles` pages = the shard) | **backed on the output shard** (same) | **0** — no CB is allocated at all |
+| `sharded_input_pinned` | backed on the input shard | `out_depth · block_width_tiles` ring (as interleaved) | output ring only |
+| `sharded_output_pinned` | ring (as interleaved) + `cb_stick_staging` / `cb_pad_fill` when their gates hold | backed on the output shard | input ring only |
+| `sharded_full_grid` | as interleaved | as interleaved | as interleaved |
+
+Resident CBs exist only when the shard is exactly one block: one shard per core, full shard width
+(no ragged width shard), tile-aligned rows, `shard_cols_tiles ≤ max_block_width_tiles` (so `low_l1`
+still bounds the non-resident ring), and for the input no stride padding (`aligned page ==
+shard_w · elem`) and no padding request. `block_width_tiles = shard_cols_tiles`, `block_height_tiles
+= core_rows_tiles` (the whole shard; a ragged last shard is a shorter runtime extent). Otherwise that
+side goes through a TensorAccessor and its ring is sized as above. Shares-with: a resident CB IS the
+tensor buffer — nothing to share.
+
 ## Symbol table
 
 | Symbol | Bound | Predicate establishing it |
@@ -53,6 +70,11 @@ Per-group CBs (Refinement 1): under `interleaved_2d_split` cores with different 
 `block_width_tiles`, so every bound above holds per core.
 
 ## Data-movement budget (chosen split: `interleaved_row_split`, `interleaved_2d_split` when R < grid)
+
+Sharded regimes (Refinement 2): a resident side crosses the NoC **0** times (same-spec: neither
+side does — zero NoC/DRAM traffic); a non-resident side crosses once, as below (sharded sources are
+read through sharded TensorAccessors, a width/block-sharded RM stick segment in one read per
+shard-width page piece).
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|

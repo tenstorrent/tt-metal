@@ -47,7 +47,7 @@
 
 **Outcome**: landed. 26/26 targeted bf16 interleaved golden cells + 5 program-cache cases pass; translated padding/to_layout slice 421 pass. Cores reached (BH, 110): `[1,1,32,2048]` 64 cores (one tile each), `[1,1,2048,2048]` 110 cores (22×5). Device ns (row-only → 2-D): `[1,1,32,2048]` 5.6 → 4.1 µs, `[1,1,32,8192]` 12.2 → 6.1 µs (86 cores), `[1,1,2048,2048]` 43.2 → 39.6 µs (~420 GB/s, near DRAM roofline). short_wide stays latency-bound (32 × 64 B segment reads per core); next lever would be fewer, wider segment reads per core (e.g. cores_c capped so segments ≥ 128 B) — not tried, outside this refinement's scope.
 
-### [ ] Refinement 2 — Sharded placements (all schemes, both shard APIs, crossovers)
+### [x] Refinement 2 — Sharded placements (all schemes, both shard APIs, crossovers)
 
 **Goal**: add `shard_api` ∈ {legacy_2d, nd}, `out_scheme` ∈ {HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED, ND_SHARDED}, `orientation` ∈ {ROW_MAJOR, COL_MAJOR} to SUPPORTED, covering same-spec, interleaved↔sharded crossovers, cross-spec (height in / width out), DRAM-sharded output, partial final shards and physical shard padding — the four sharded regimes in op_design.md (`sharded_same_spec_in_place`, `sharded_input_pinned`, `sharded_output_pinned`, `sharded_full_grid`).
 
@@ -59,6 +59,8 @@
 - The sharded LOOSE_CASES (`[1,1,2048,512]` HEIGHT on 64 cores, `[1,1,512,512]` BLOCK COL_MAJOR) become guard-set members for later perf refinements; report their device-ns.
 
 **Done when**: every golden cell with `shard_api ≠ none` passes at bf16 (DRAM-sharded output included), the program-cache cases `height_sharded_same_spec` and `interleaved_to_height_sharded` pass, and a dataflow check confirms same-spec cores issue no NoC reads of their own shard.
+
+**Outcome**: all 12 bf16 `shard_api ≠ none` golden cells, the 4 sharded loose cases and both sharded program-cache cases pass; same-spec cores run the resident path (reader = one reserve/push, writer = one wait/pop, both CBs backed on the shards — pinned by `test_tilize_sharded.py`). Sharded loose cases on BH p150b (per-timer-cluster span): height-in→DRAM 8.7 µs (ref 8.3), DRAM→height-out 7.4–7.7 µs (ref 7.0), height same-spec 1.16 µs (ref 0.93), block COL same-spec 1.13 µs (ref 0.89). Same-spec is pure fixed overhead (no data movement); crossovers are bound by the non-resident side's NoC half.
 
 ### [ ] Refinement 3 — Speed up the perf-flagged profile `[1,1,16384,64]`
 

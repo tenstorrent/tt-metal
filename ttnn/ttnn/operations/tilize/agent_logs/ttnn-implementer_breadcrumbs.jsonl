@@ -13,3 +13,4 @@
 {"event":"perf","lever":"interleaved_2d_split","before_ns":{"32x2048(1 core)":5645,"32x8192(1 core)":12221,"2048x2048(64 cores)":43187},"after_ns":{"32x2048(64)":4226,"32x8192(86)":6445,"2048x2048(110)":40661},"perf_focus_unchanged":{"16384x64":11190},"method":"per-timer-cluster span from profile_log_device.csv","ts":"2026-10-14T14:16:10+00:00"}
 {"event":"perf","lever":"segment-path bank stagger (start stick k%tile_h)","off_ns":{"32x2048":4520,"2048x2048":40350,"32x8192":6350},"on_ns":{"32x2048":4150,"2048x2048":39600,"32x8192":6100},"kept":true,"knob":"SEGMENT_BANK_STAGGER","ts":"2026-10-14T14:18:22+00:00"}
 {"event":"test_run","status":"pass","test":"unit dir 58 + golden slice 31 + translated slice 29","ts":"2026-10-14T14:19:27+00:00"}
+{"event":"test_run","status":"pass","what":"Refinement 2 sharded golden slice 18/18, test_tilize_sharded 16/16, unit regression 45/45, program cache 8/8","ts":"2026-10-14T14:34:45+00:00"}
