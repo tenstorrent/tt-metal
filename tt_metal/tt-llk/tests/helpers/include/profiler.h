@@ -145,6 +145,11 @@ __attribute__((always_inline)) inline void write_data(std::uint64_t data)
 __attribute__((noipa, section(".text.llk_zone.reserve"))) inline void zone_reserve()
 {
     reserved_words_count += ZONE_START_WORDS + ZONE_END_WORDS;
+#if defined(LLK_ZONE_RESERVE_NOPS) // experiment hook (nikola, 334f72387d0): the helper grows by N instructions
+#define LLK_ZR_STR_(x) #x
+#define LLK_ZR_STR(x)  LLK_ZR_STR_(x)
+    asm volatile(".rept " LLK_ZR_STR(LLK_ZONE_RESERVE_NOPS) "\n\tnop\n\t.endr");
+#endif
 }
 
 __attribute__((noipa, section(".text.llk_zone.record"))) inline void zone_record(std::uint16_t id16, std::uint64_t start_timestamp, std::uint64_t end_timestamp)
