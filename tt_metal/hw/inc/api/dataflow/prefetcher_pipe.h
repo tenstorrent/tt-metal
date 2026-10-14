@@ -908,8 +908,8 @@ private:
         return get_my_thread_id() * L1_ALIGNMENT;
     }
 
-    // Quasar: discard cached copies (L1 D$ of this hart + shared L2) of the local credit
-    // lines. Only safe when nothing is dirty, i.e. after the previous pipe's dtor flushed.
+    // Quasar: write back and invalidate the cached copies (L1 D$ of this hart + shared L2) of the local credit lines,
+    // so the next reads come from TL1. Not a discard, which would lose a dirty line's credit writes or neighbours.
     FORCE_INLINE void invalidate_local_credit_lines(uint32_t lane_offset_bytes) const {
 #ifdef ARCH_QUASAR
         uint32_t base = 0;
@@ -917,9 +917,9 @@ private:
         local_credit_range(lane_offset_bytes, base, size);
         constexpr uint32_t line = 64;
         for (uint32_t addr = base & ~(line - 1); addr < base + size; addr += line) {
-            invalidate_l1_dcache(addr);
+            flush_l1_dcache(addr);
         }
-        invalidate_l2_cache_range(base, size);
+        flush_l2_cache_range(base, size);
 #else
         (void)lane_offset_bytes;
 #endif
