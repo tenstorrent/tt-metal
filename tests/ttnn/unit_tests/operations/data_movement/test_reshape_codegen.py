@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Reshape codegen port: routing, bit-exactness of every program, sub_core_grids and program-cache re-keying.
+# Reshape codegen port: routing, bit-exactness of the program, edge shapes, sub_core_grids and program-cache keys.
 
 import pytest
 import torch
@@ -109,8 +109,38 @@ def test_reshape_codegen_sub_core_grids(device, path, in_shape, out_shape, dtype
     assert device.num_program_cache_entries() == entries
 
 
-# (id, in shape, out shape, dtype, layout, expected route). TILE demotion is decided by the tile plan
-# (tile_native_faster); shapes the tile-rows program does not take run native.
+# Forced tile rows on shapes whose tile padding, rank or outer dims differ from the common head split.
+_EDGE = [
+    ("h50", [3, 50, 64], [3, 100, 32]),
+    ("h33", [7, 33, 64], [7, 66, 32]),
+    ("h1", [5, 1, 128], [5, 4, 32]),
+    ("rank2", [50, 64], [100, 32]),
+    ("rank5", [2, 3, 1, 50, 64], [2, 3, 50, 2, 32]),
+    ("odd_outer", [7, 32, 96], [3, 7, 32, 32]),
+    ("outer_to_h", [3, 50, 64], [50, 3, 64]),
+]
+_EDGE_CASES = [(*e, ttnn.bfloat16) for e in _EDGE] + [
+    (*e, dtype) for e in _EDGE if e[0] in ("h50", "rank5", "outer_to_h") for dtype in (ttnn.float32, ttnn.int32)
+]
+
+
+@pytest.mark.parametrize(
+    "case,in_shape,out_shape,dtype", _EDGE_CASES, ids=[f"{c[0]}-{c[3].name.lower()}" for c in _EDGE_CASES]
+)
+def test_reshape_codegen_edge_shapes(device, case, in_shape, out_shape, dtype):
+    source = _make(in_shape, dtype)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
+    codegen = _force_codegen(x, out_shape, memory_config=_DRAM)
+    native = _force_native(x, out_shape, memory_config=_DRAM)
+    assert list(codegen.shape) == out_shape
+    assert list(codegen.padded_shape) == list(native.padded_shape)
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(codegen), dtype)
+    # Whole padded buffers, so the tile padding must match native's fill too.
+    _assert_bits(native.cpu().to_torch_with_padded_shape(), codegen.cpu().to_torch_with_padded_shape(), dtype)
+
+
+# (id, in shape, out shape, dtype, layout, expected route). Shapes outside the tile-rows scope, and shapes
+# is_demoted sends back, run native.
 _ROUTES = [
     # Head split: batching cuts source reads 32x.
     ("tile_rows", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
@@ -176,26 +206,21 @@ def _l1_hog(device, bytes_per_core):
     [p for p in _PATHS if p[0] == "tile_rows"],
     ids=["tile_rows"],
 )
-def test_reshape_codegen_cache_hit_changed_free_l1(device, path, in_shape, out_shape, dtype, layout, mem):
-    # The plan sizes its buffers from the L1 free at launch, so the same call under less free L1 must not reuse a
-    # program planned for more.
+def test_reshape_codegen_program_key_ignores_free_l1(device, path, in_shape, out_shape, dtype, layout, mem):
+    # Buffers are sized against a static L1 budget, so less free L1 must hit the same program and still be right.
     source = _make(in_shape, dtype)
     expected = source.reshape(out_shape)
     x = _to_device(device, source, dtype, layout, mem)
     out = _force_codegen(x, out_shape, memory_config=mem)
     _assert_bits(expected, ttnn.to_torch(out), dtype)
     ttnn.deallocate(out)
-    for bytes_per_core in (256 * 1024, 512 * 1024):
-        hog = _l1_hog(device, bytes_per_core)
-        out = _force_codegen(x, out_shape, memory_config=mem)
-        _assert_bits(expected, ttnn.to_torch(out), dtype)
-        ttnn.deallocate(out)
-        ttnn.deallocate(hog)
-    # With the hogs freed the first plan comes back and hits its program.
-    grown = device.num_program_cache_entries()
+    entries = device.num_program_cache_entries()
+    hog = _l1_hog(device, 256 * 1024)
     out = _force_codegen(x, out_shape, memory_config=mem)
     _assert_bits(expected, ttnn.to_torch(out), dtype)
-    assert device.num_program_cache_entries() == grown
+    assert device.num_program_cache_entries() == entries
+    ttnn.deallocate(out)
+    ttnn.deallocate(hog)
 
 
 _OUT_OF_SCOPE = [
