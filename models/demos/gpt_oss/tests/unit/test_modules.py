@@ -650,7 +650,7 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     return decoder_layer
 
 
-@parametrize_mesh_with_fabric([(1, 1), (1, 8), (4, 8)])
+@parametrize_mesh_with_fabric([(1, 1), (1, 4), (1, 8), (4, 8)])
 @parametrize_batch_seq(
     [
         (1, 1),  # decode
