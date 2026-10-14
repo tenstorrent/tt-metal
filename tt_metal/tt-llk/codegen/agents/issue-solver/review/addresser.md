@@ -169,11 +169,12 @@ that reviewer, so:
 - Write to the reviewer, in second person, in plain prose. One paragraph.
 - **600 characters maximum.** Longer is rejected and fails the round.
 - No headings, no bullet lists, no restating their comment back at them.
-- **Never cite a commit sha.** The dashboard appends the real one; a sha you write
-  is routinely the wrong one (an earlier round's).
+- **Never cite a commit sha.** A sha you write is routinely the wrong one (an
+  earlier round's), and reviewers see the push.
 - **Never mention** this agent, the session, the host, the checkout, whether a
-  card is attached, or what you could not run. The dashboard appends the actual
-  hardware verdict. A reply that explains your tooling to a reviewer is a bug.
+  card is attached, this round's test results (what ran, how many passed), or
+  what you could not run. A reply that explains your tooling or the round to a
+  reviewer is a bug.
 - For `no_change` / `disagree`, lead with the technical reason, not with the
   verdict.
 
