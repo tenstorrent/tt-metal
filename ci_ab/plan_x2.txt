@@ -1,0 +1,14 @@
+# X2 (topk_xl K 2048 rotating survivor, #60291 head 666dcee1a6f): X2B as built; X2R = even chunks in tiles 0/2, odd in 4/6,
+# each merge leaving the survivor in the merged chunk's tiles. ABBA twice; counters once each; functional bits.
+r X2B ids/xls.txt -
+r X2R ids/xls.txt -
+r X2R ids/xls.txt -
+r X2B ids/xls.txt -
+r X2B ids/xls.txt -
+r X2R ids/xls.txt -
+r X2R ids/xls.txt -
+r X2B ids/xls.txt -
+c X2B_wc ids/xls.txt - wc
+c X2R_wc ids/xls.txt - wc
+b X2B ids/xlt.txt - bits
+b X2R ids/xlt.txt - bits

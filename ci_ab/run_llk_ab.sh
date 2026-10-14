@@ -17,7 +17,7 @@ export PYTHONPATH="$S/plug${PYTHONPATH:+:$PYTHONPATH}"
 OBJ=$(find $L/tests/sfpi/ -name riscv-tt-elf-objcopy -type f 2>/dev/null | head -1); echo "== objcopy $OBJ"
 place() {
   local d=${1%_wc}
-  while read -r rel; do [[ -n $rel ]] && cp "$S/variants/$d/$rel" "$R/$rel"; done < $FL
+  while read -r rel; do [[ -n $rel ]] && cp "$S/${VARIANTS:-variants}/$d/$rel" "$R/$rel"; done < $FL
   echo "== place $1: $(while read -r rel; do [[ -n $rel ]] && md5sum < "$R/$rel" | cut -c1-8; done < $FL | tr '\n' ' ')"
 }
 texthash() { (cd $1 && find . -name "*.elf" -path "*/elf/*" | sort | while read -r e; do echo "$($OBJ -O binary -j .text "$e" /dev/stdout 2>/dev/null | md5sum | cut -c1-12) ${e#./}"; done); }
