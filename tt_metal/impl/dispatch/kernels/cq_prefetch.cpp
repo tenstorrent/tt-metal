@@ -148,7 +148,8 @@ constexpr uintptr_t prefetch_q_view_end = prefetch_q_view_base + prefetch_q_size
 #if defined(PREFETCH_Q_CACHED)
 static_assert(sizeof(prefetch_q_entry_type) == 4, "Cached fetch queue entries carry a phase bit in a 4-byte entry");
 static_assert(
-    prefetch_q_base % L2_CACHE_LINE_SIZE == 0 && prefetch_q_size % L2_CACHE_LINE_SIZE == 0,
+    prefetch_q_base % L2_CACHE_LINE_SIZE == 0 && cmddat_q_base % L2_CACHE_LINE_SIZE == 0 &&
+        cmddat_q_base >= prefetch_q_end,
     "Fetch queue lines are invalidated without writeback, so they must not hold anything else");
 // Phase the current lap's entries carry. Slots still holding the previous lap's phase are not ready yet.
 static uint32_t prefetch_q_expected_phase = 1U;
@@ -619,7 +620,8 @@ FORCE_INLINE uint32_t read_from_pcie(
     // of it hits. Skipping the fences is fine since the invalidate has a whole line of entries to land first.
     if ((reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) & (L2_CACHE_LINE_SIZE - 1)) == 0) {
         uintptr_t next_line = reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) + L2_CACHE_LINE_SIZE;
-        if (next_line == prefetch_q_view_end) {
+        // The queue may end partway through its last line, so anything past its end wraps to the first line.
+        if (next_line >= prefetch_q_view_end) {
             next_line = prefetch_q_view_base;
         }
         invalidate_l2_cache_line_async(next_line);
