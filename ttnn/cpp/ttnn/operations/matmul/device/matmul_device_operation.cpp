@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 
+#include <cstdlib>
 #include <string_view>
 
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -2478,7 +2479,9 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
                 if (!operation_attributes.prefetcher_pipes.empty()) {
                     return MatmulMultiCoreReuseMcast1DProgramFactory{};
                 }
-                if (c.gather_in0 || operation_attributes.global_cb.has_value()) {
+                // scratch only (CI A/B): TT_MM_LEGACY_1D routes plain 1D configs to the legacy builder, the
+                // compute kernel all_gather_matmul_async builds per device
+                if (c.gather_in0 || operation_attributes.global_cb.has_value() || std::getenv("TT_MM_LEGACY_1D")) {
                     return MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory{};
                 }
                 return MatmulMultiCoreReuseMcast1DProgramFactory{};
