@@ -120,22 +120,22 @@ extern "C" __attribute__((noinline, used)) void compare_modes()
 // CHECK-NEXT: ttcmpdmareg 1,2,31,8,32
 // CHECK-NEXT: ret
 
-// The *_operation encoders return the same word the issuing calls emit.
+// Descriptor operation() returns the same word the issuing calls emit.
 extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
 {
-    constexpr std::uint32_t low      = scalar::set_low_operation<0x5678>(hal::gpr<63>());
-    constexpr std::uint32_t high     = scalar::set_high_operation<0x1234>(hal::gpr<63>());
-    constexpr std::uint32_t add      = scalar::add_operation(hal::gpr<1>(), hal::gpr<2>(), hal::gpr<3>());
-    constexpr std::uint32_t subtract = scalar::subtract_operation(hal::gpr<4>(), hal::gpr<5>(), scalar::immediate<63>());
-    constexpr std::uint32_t multiply = scalar::multiply_low_u16_operation(hal::gpr<7>(), hal::gpr<8>(), hal::gpr<9>());
-    constexpr std::uint32_t bit_and  = scalar::bit_and_operation(hal::gpr<10>(), hal::gpr<11>(), scalar::immediate<1>());
-    constexpr std::uint32_t bit_or   = scalar::bit_or_operation(hal::gpr<13>(), hal::gpr<14>(), hal::gpr<15>());
-    constexpr std::uint32_t bit_xor  = scalar::bit_xor_operation(hal::gpr<16>(), hal::gpr<17>(), scalar::immediate<3>());
-    constexpr std::uint32_t left     = scalar::shift_left_operation(hal::gpr<19>(), hal::gpr<20>(), hal::gpr<21>());
-    constexpr std::uint32_t right    = scalar::shift_right_operation(hal::gpr<22>(), hal::gpr<23>(), scalar::immediate<5>());
-    constexpr std::uint32_t greater  = scalar::compare_operation<scalar::Compare::GreaterThan>(hal::gpr<25>(), hal::gpr<26>(), hal::gpr<27>());
-    constexpr std::uint32_t less     = scalar::compare_operation<scalar::Compare::LessThan>(hal::gpr<28>(), hal::gpr<29>(), scalar::immediate<7>());
-    constexpr std::uint32_t equal    = scalar::compare_operation<scalar::Compare::Equal>(hal::gpr<31>(), hal::gpr<32>(), hal::gpr<33>());
+    constexpr std::uint32_t low      = scalar::SetLow {hal::gpr<63>(), scalar::immediate<0x5678>()}.operation();
+    constexpr std::uint32_t high     = scalar::SetHigh {hal::gpr<63>(), scalar::immediate<0x1234>()}.operation();
+    constexpr std::uint32_t add      = scalar::Add {hal::gpr<1>(), hal::gpr<2>(), hal::gpr<3>()}.operation();
+    constexpr std::uint32_t subtract = scalar::Subtract {hal::gpr<4>(), hal::gpr<5>(), scalar::immediate<63>()}.operation();
+    constexpr std::uint32_t multiply = scalar::MultiplyLowU16 {hal::gpr<7>(), hal::gpr<8>(), hal::gpr<9>()}.operation();
+    constexpr std::uint32_t bit_and  = scalar::BitAnd {hal::gpr<10>(), hal::gpr<11>(), scalar::immediate<1>()}.operation();
+    constexpr std::uint32_t bit_or   = scalar::BitOr {hal::gpr<13>(), hal::gpr<14>(), hal::gpr<15>()}.operation();
+    constexpr std::uint32_t bit_xor  = scalar::BitXor {hal::gpr<16>(), hal::gpr<17>(), scalar::immediate<3>()}.operation();
+    constexpr std::uint32_t left     = scalar::ShiftLeft {hal::gpr<19>(), hal::gpr<20>(), hal::gpr<21>()}.operation();
+    constexpr std::uint32_t right    = scalar::ShiftRight {hal::gpr<22>(), hal::gpr<23>(), scalar::immediate<5>()}.operation();
+    constexpr std::uint32_t greater  = scalar::CompareGreaterThan {hal::gpr<25>(), hal::gpr<26>(), hal::gpr<27>()}.operation();
+    constexpr std::uint32_t less     = scalar::CompareLessThan {hal::gpr<28>(), hal::gpr<29>(), scalar::immediate<7>()}.operation();
+    constexpr std::uint32_t equal    = scalar::CompareEqual {hal::gpr<31>(), hal::gpr<32>(), hal::gpr<33>()}.operation();
     TTI_INSN(low);
     TTI_INSN(high);
     TTI_INSN(add);

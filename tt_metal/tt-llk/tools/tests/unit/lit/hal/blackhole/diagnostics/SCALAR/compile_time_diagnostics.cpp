@@ -129,5 +129,5 @@ void half_too_wide()
 
 namespace scalar = hal::scalar;
 
-constexpr auto too_wide = scalar::set_low_operation<0x10000>(hal::gpr<1>());
+constexpr auto too_wide = scalar::SetLow {hal::gpr<1>(), scalar::immediate<0x10000>()}.operation();
 // HALF_OPERATION_TOO_WIDE: error: static assertion failed: GPR half value must fit in 16 bits
