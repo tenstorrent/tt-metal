@@ -124,10 +124,7 @@ sfpi_inline void calculate_div_int32_body(
 
     sfpi::vInt result = q;
 
-    // Recompute the sign from Dest. Both inputs are still there; the output is
-    // stored below. Holding a_orig ^ b_orig live through the correction path
-    // exceeds the LReg file once the profiler build wraps this body, and a
-    // profiler-only reload would measure a kernel production never runs.
+    // Reload instead of holding a ^ b, the assert-free tt-llk build runs out of LRegs otherwise.
     sfpi::vInt a_reload = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     sfpi::vInt sign = a_reload ^ sfpi::vInt(sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi]);
 
