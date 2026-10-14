@@ -117,7 +117,8 @@ def test_the_last_bare_call_is_taken_as_the_profiled_branch():
     assert "per-stage pass in _eager_forward()" in why
     lines = out.splitlines()
     br = next(i for i, l in enumerate(lines) if 'signpost("start")' in l)
-    assert "_eager_forward()" in lines[br + 1], "the bracket wrapped the wrong call"
+    # The call is the first thing in the bracket, inside the profile-window guard's try.
+    assert lines[br + 1].strip() == "try:" and "_eager_forward()" in lines[br + 2], "the bracket wrapped the wrong call"
 
 
 def test_a_test_with_nothing_to_wrap_is_refused_with_a_reason():
@@ -192,7 +193,10 @@ def test_the_marks_follow_that_decision():
     assert "per-stage pass in _eager_forward()" in why, why
     lines = out.splitlines()
     br = next(i for i, l in enumerate(lines) if 'signpost("start")' in l)
-    assert "_eager_forward()" in lines[br + 1], "the bracket wrapped a call the profiler never makes"
+    # The call is the first thing in the bracket, inside the profile-window guard's try.
+    assert (
+        lines[br + 1].strip() == "try:" and "_eager_forward()" in lines[br + 2]
+    ), "the bracket wrapped a call the profiler never makes"
 
 
 def test_the_environment_comes_from_the_run_not_from_a_copy_here():

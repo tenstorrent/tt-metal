@@ -389,6 +389,13 @@ class TracyHangError(TracyRunError):
     crash. Retriable: reset the device and re-profile."""
 
 
+class DiskFullError(TracyRunError):
+    """Watchdog killed a run because the disk its profile writes to fell below the free-space floor
+    (disk_floor_breached). NOT retriable as a hang: the space is still gone, so a retry would only
+    fill it again. Raised so the run fails with the reason instead of every process on the box
+    failing with ENOSPC."""
+
+
 _ERR_RE = re.compile(
     r"^[A-Za-z_][\w.]*(Error|Exception|Interrupt|Fault):"  # `ExceptionType: message` (not a `raise X(` line)
     r"|Segmentation fault|Aborted|core dumped|TT_FATAL|terminate called|Fatal Python error",
@@ -1893,10 +1900,10 @@ def _execute(
             preexec_fn=preexec_fn,  # e.g. memory_cap_preexec_fn(); runs in the child after the new session
         )
 
-        def _kill_and_raise(reason: str):
+        def _kill_and_raise(reason: str, error=TracyHangError):
             _kill_tree(proc.pid)
             proc.wait()
-            raise TracyHangError(f"{label} {reason}; log: {log_path}") from None
+            raise error(f"{label} {reason}; log: {log_path}") from None
 
         pgid = proc.pid
         start = time.monotonic()
@@ -1909,6 +1916,8 @@ def _execute(
         poll = 5.0
         _therm = _thermal_watch_new()
         _mempress = memory_pressure_watch_new()
+        _disk_paths = (log_path.parent, cwd)
+        _disk_floor = disk_floor(_disk_paths)
         while True:
             try:
                 rc = proc.wait(timeout=poll)
@@ -1928,6 +1937,9 @@ def _execute(
                 pass
             _thermal_watch_sample(_therm, _therm_label)
             memory_pressure_watch_sample(_mempress, _therm_label)
+            _disk_low = disk_floor_breached(_disk_paths, _disk_floor)
+            if _disk_low:
+                _kill_and_raise(f"stopped before it filled the disk: {_disk_low}", DiskFullError)
             now = time.monotonic()
             try:
                 size = log_path.stat().st_size
@@ -2917,6 +2929,45 @@ def memory_cap_preexec_fn(margin_gb: float = None):
 
 _MEM_PRESSURE_WATCH_REPORT_S = 60.0
 _MEM_PRESSURE_WARN_PCT = float(os.environ.get("PERF_MCP_MEM_PRESSURE_WARN_PCT", "35") or "35")
+
+
+# THE DISK A PROFILE WRITES TO. A device log grows with every op of every core of every chip; a
+# decode that ignored its token window wrote a 97 GB profile_log_device.csv and filled the root disk
+# (Mistral-Small-4-119B-2603, 2026-10-14) -- the run died on ENOSPC, and so did every other process
+# writing to that disk. Below this many free GB the profiled run is stopped instead.
+_MIN_FREE_DISK_GB = float(os.environ.get("PERF_MCP_MIN_FREE_DISK_GB", "10") or "10")
+
+
+def _free_disk_gb(paths) -> dict:
+    """{path: free GB on its filesystem} for each path that can be measured."""
+    out = {}
+    for p in paths:
+        try:
+            out[p] = shutil.disk_usage(p).free / 1e9
+        except OSError:
+            continue
+    return out
+
+
+def disk_floor(paths) -> float:
+    """The free-space floor for a run about to write to `paths`: _MIN_FREE_DISK_GB, or half of what is
+    free at launch when that is less -- a disk that starts low is guarded against THIS run eating
+    what is left, rather than refused outright."""
+    free = _free_disk_gb(paths)
+    return min([_MIN_FREE_DISK_GB] + [f / 2 for f in free.values()])
+
+
+def disk_floor_breached(paths, floor_gb: float) -> str:
+    """'' while every measurable path's filesystem has at least floor_gb free; otherwise why not. A path
+    that cannot be measured is skipped: this guards a run, it never fails one by itself."""
+    for p, free_gb in _free_disk_gb(paths).items():
+        if free_gb < floor_gb:
+            return "%.1f GB free on the disk holding %s, under the %.1f GB floor (PERF_MCP_MIN_FREE_DISK_GB)" % (
+                free_gb,
+                p,
+                floor_gb,
+            )
+    return ""
 
 
 def memory_pressure_watch_new() -> dict:
