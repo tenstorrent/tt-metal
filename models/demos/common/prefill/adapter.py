@@ -86,6 +86,8 @@ class PrefillRunParams:
     # rather than re-read from the env downstream so one resolution decides which drafter gets built.
     dflash_checkpoint_path: str = ""
     mtp_levels: int = 0
+    # Chunks per H2D message (PREFILL_BATCH_MAX_LANES). Above 1 needs supports_batched_steps; see step_message.py.
+    max_lanes: int = 1
 
     @property
     def sp_factor(self) -> int:
@@ -141,6 +143,12 @@ class PrefillModelAdapter(ABC):
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
     supports_mtp: bool = False
+    # The runtime implements prefill_step for multi-lane step messages:
+    #   runtime.prefill_step(inp, kv_caches, *, lanes, request_id, d2h_service, metadata_msg)
+    # lanes are step_message.Lane (slot, start, end) in message order; request_id numbers lane 0's chunk and lane i
+    # acks as chunk request_id + i. Layer acks: num_layers per lane, in lane order, none before its KV is written,
+    # all before the next step (step_message.py has the full contract).
+    supports_batched_steps: bool = False
 
     def cache_kind(self, config_id: int) -> str:
         """What migration-table config ``config_id`` holds. Generic consumers understand ``"kvpe"`` and
