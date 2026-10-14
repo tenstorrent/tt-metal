@@ -10,7 +10,9 @@ rebuilds the same scenario dict from the live call and runs the very same
 taggers on it, so the runtime gate and the test-side decoration cannot drift.
 
 Built regimes (op_design.md): `interleaved_row_split`, `interleaved_2d_split` (the host picks the
-per-core rectangle), and in-kernel pad fill (reader) for `pad_mode` auto / explicit.
+per-core rectangle), in-kernel pad fill (reader) for `pad_mode` auto / explicit, and the sharded
+regimes `sharded_same_spec_in_place`, `sharded_input_pinned`, `sharded_output_pinned`,
+`sharded_full_grid` (resident shards consumed / produced in place via shard-backed CBs).
 """
 
 from __future__ import annotations
@@ -196,11 +198,17 @@ SUPPORTED = {
     "dtype": [ttnn.bfloat16],
     "output_dtype": [ttnn.bfloat16],
     "low_l1": [False, True],
-    "shard_api": ["none"],
-    "out_scheme": [_INTERLEAVED],
+    "shard_api": ["none", "legacy_2d", "nd"],
+    "out_scheme": [
+        _INTERLEAVED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.TensorMemoryLayout.ND_SHARDED,
+    ],
     "buffer": ["dram_to_dram", "dram_to_l1", "l1_to_l1", "l1_to_dram"],
     "rank": [0, 1, 2, 3, 4, 5, 6],
-    "orientation": ["none"],
+    "orientation": ["none", ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
     "pad_mode": ["none", "auto", "explicit"],
     "pad_value": ["none", "zero", "positive", "negative"],
     "tile_height": [32, 16, 8, 4, 2, 1],
@@ -403,13 +411,9 @@ def tilize(
     padded_shape = _resolve_padded_shape(logical_shape, output_padded_shape, pad_value, tile_h)
 
     # The output buffer is laid out at the padded shape; a metadata-only view then restores the
-    # input's logical shape (no second dispatch). Interleaved placement only.
-    output_spec = ttnn.TensorSpec(
-        ttnn.Shape(padded_shape if padded_shape is not None else logical_shape),
-        output_dtype,
-        ttnn.TILE_LAYOUT,
-        buffer_type=output_memory_config.buffer_type,
-        tile=out_tile,
+    # input's logical shape (no second dispatch).
+    output_spec = _output_spec(
+        padded_shape if padded_shape is not None else logical_shape, output_dtype, output_memory_config, out_tile
     )
     output_tensor = ttnn.allocate_tensor_on_device(output_spec, device)
 
@@ -421,6 +425,25 @@ def tilize(
     if padded_shape is not None and padded_shape != logical_shape:
         output_tensor = ttnn.experimental.view(output_tensor, ttnn.Shape(logical_shape), ttnn.Shape(padded_shape))
     return output_tensor
+
+
+def _output_spec(shape, dtype, mem_config, tile):
+    """TILE-layout spec at `shape` placed per `mem_config` (interleaved, legacy 2-D shard or ND shard)."""
+    shape = ttnn.Shape(shape)
+    if mem_config.memory_layout in _SHARDED_LAYOUTS and mem_config.shard_spec is not None:
+        return ttnn.TensorSpec(
+            shape,
+            dtype,
+            ttnn.TILE_LAYOUT,
+            mem_config.memory_layout,
+            mem_config.shard_spec,
+            buffer_type=mem_config.buffer_type,
+            tile=tile,
+        )
+    nd_spec = getattr(mem_config, "nd_shard_spec", None)
+    if mem_config.memory_layout != _INTERLEAVED and nd_spec is not None:
+        return ttnn.TensorSpec(shape, dtype, ttnn.TILE_LAYOUT, nd_spec, buffer_type=mem_config.buffer_type, tile=tile)
+    return ttnn.TensorSpec(shape, dtype, ttnn.TILE_LAYOUT, buffer_type=mem_config.buffer_type, tile=tile)
 
 
 def _round_up(x, unit):

@@ -19,13 +19,23 @@ void kernel_main() {
     constexpr uint32_t last_block_width_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t num_col_blocks = get_compile_time_arg_val(6);
     constexpr bool has_tail = get_compile_time_arg_val(7) != 0;
-    constexpr auto out_args = TensorAccessorArgs<8>();
+    // Resident output (sharded regimes): cb_tiles_out is backed on this core's own output shard, so
+    // the compute packs straight into place; the writer only retires the pages.
+    constexpr bool out_resident = get_compile_time_arg_val(8) != 0;
+    constexpr auto out_args = TensorAccessorArgs<9>();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start_tile = get_arg_val<uint32_t>(1);
     const uint32_t core_rows_tiles = get_arg_val<uint32_t>(2);
     const uint32_t col_start_tile = get_arg_val<uint32_t>(3);
     const uint32_t block_height_tiles = get_arg_val<uint32_t>(4);
+
+    if constexpr (out_resident) {
+        const uint32_t n_pages = core_rows_tiles * block_width_tiles;
+        cb_wait_front(cb_tiles_out, n_pages);
+        cb_pop_front(cb_tiles_out, n_pages);
+        return;
+    }
 
     const auto out_acc = TensorAccessor(out_args, dst_addr, out_page_bytes);
 

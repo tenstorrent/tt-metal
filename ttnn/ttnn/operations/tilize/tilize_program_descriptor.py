@@ -52,6 +52,9 @@ BLOCK_HEIGHT_TILES = None
 ENABLE_2D_SPLIT = True
 # Leading (batch) dims the reader can pad independently; rank <= 2 + this.
 MAX_LEADING_DIMS = 4
+# Sharded regimes (op_design.md): pin the work split to a side's resident shards when that side's
+# grid holds at least this fraction of min(R, grid) cores; else fall back to the full-grid split.
+PIN_OCCUPANCY_RATIO = 0.5
 # Fill-row source offset: src = fill_base + (dst % FILL_PHASE_BYTES) keeps every local fill copy
 # NoC-alignment congruent (any alignment <= this) and in element phase.
 FILL_PHASE_BYTES = 64
@@ -136,6 +139,115 @@ def _rect_assignment(device, tensor_rows_tiles, tensor_cols_tiles, col_unit_tile
     return all_cores, assignment, cores_c
 
 
+def _flat_2d(shape):
+    rows = 1
+    for d in shape[:-1]:
+        rows *= int(d)
+    return [rows, int(shape[-1])]
+
+
+def _shard_rects(tensor, shape, tile_h, *, max_cols_tiles):
+    """Per-core OUTPUT-tile rectangles of `tensor`'s resident L1 shards, or None.
+
+    Returns (rects, shard_rows_tiles, shard_cols_tiles) with rects = [(core, row_start, rows,
+    col_start, cols)] when every shard is ONE tile-aligned rectangle of the 2-D flattened tensor
+    (rows = all dims but the last), sits alone on its core and spans its full shard width (so the
+    shard is exactly `rows` tile-rows of `shard_cols_tiles` tiles, consumable/producible in place).
+    A ragged last shard along the rows is fine (shorter runtime extent). Anything else (DRAM shards,
+    several shards per core, a ragged last shard along the width, a non-rectangular ND box, a shard
+    wider than one block) returns None and the op reads/writes that side through a TensorAccessor.
+    """
+    mem = tensor.memory_config()
+    if mem.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED or mem.buffer_type != ttnn.BufferType.L1:
+        return None
+    nd = mem.nd_shard_spec
+    if nd is None or len(shape) < 2 or int(shape[-2]) % tile_h != 0:
+        return None
+    s = [int(d) for d in nd.shard_shape]
+    t = [int(d) for d in shape]
+    if len(s) == 2:  # legacy 2-D spec: the tensor is viewed flattened to 2-D
+        t = _flat_2d(t)
+    elif len(s) < len(t):
+        s = [1] * (len(t) - len(s)) + s
+    elif len(s) > len(t):
+        t = [1] * (len(s) - len(t)) + t
+    n = len(t)
+    if s[-1] % TILE_WIDTH != 0 or s[-1] // TILE_WIDTH > max_cols_tiles or t[-1] % s[-1] != 0:
+        return None
+    g = [math.ceil(td / sd) for td, sd in zip(t, s)]
+    num_shards = math.prod(g)
+    cores_in_grid = nd.grid.num_cores()
+    if num_shards > cores_in_grid:
+        return None
+    strategy = nd.shard_distribution_strategy
+    row_major = nd.orientation == ttnn.ShardOrientation.ROW_MAJOR
+    if strategy == ttnn.ShardDistributionStrategy.GRID_2D:
+        ranges = nd.grid.ranges()
+        if n != 2 or len(ranges) != 1:
+            return None
+        origin = ranges[0].start
+        core_of = lambda idx: (
+            ttnn.CoreCoord(origin.x + idx[1], origin.y + idx[0])
+            if row_major
+            else ttnn.CoreCoord(origin.x + idx[0], origin.y + idx[1])
+        )
+    elif strategy == ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D:
+        cores = ttnn.corerange_to_cores(nd.grid, None, row_major)
+        core_of = lambda idx: cores[_linear(idx, g)]
+    else:
+        return None
+
+    rects = []
+    for i in range(num_shards):
+        idx = _delinear(i, g)
+        start = [a * b for a, b in zip(idx, s)]
+        ext = [min(sd, td - st) for sd, td, st in zip(s, t, start)]
+        # Rows (dims 0..n-2) must form one contiguous run of the flattened row index.
+        k = max((d for d in range(n - 1) if ext[d] < t[d]), default=0)
+        if any(ext[j] != 1 for j in range(k)):
+            return None
+        row0 = _linear(start[: n - 1], t[: n - 1])
+        nrows = math.prod(ext[k : n - 1])
+        if row0 % tile_h != 0 or nrows % tile_h != 0:
+            return None
+        rects.append((core_of(idx), row0 // tile_h, nrows // tile_h, start[-1] // TILE_WIDTH, ext[-1] // TILE_WIDTH))
+    shard_rows = math.prod(s[:-1])
+    if shard_rows % tile_h != 0:
+        return None
+    return rects, shard_rows // tile_h, s[-1] // TILE_WIDTH
+
+
+def _linear(idx, dims):
+    v = 0
+    for i, d in zip(idx, dims):
+        v = v * d + i
+    return v
+
+
+def _delinear(v, dims):
+    idx = []
+    for d in reversed(dims):
+        idx.append(v % d)
+        v //= d
+    return list(reversed(idx))
+
+
+def _same_rects(a, b):
+    key = lambda r: (r[0].x, r[0].y, r[1], r[2], r[3], r[4])
+    return sorted(map(key, a)) == sorted(map(key, b))
+
+
+def _resident_cb(index, tensor, page_bytes, num_pages, cores, tile):
+    """CB backed on `tensor`'s resident shard (zero-copy), re-paged to tile-sized pages."""
+    desc = ttnn.cb_descriptor_from_sharded_tensor(index, tensor, total_size=num_pages * page_bytes, core_ranges=cores)
+    desc.format_descriptors = [
+        ttnn.CBFormatDescriptor(
+            buffer_index=index, data_format=tensor.dtype, page_size=page_bytes, tile=ttnn.TileDescriptor(tile)
+        )
+    ]
+    return desc
+
+
 def _cb(index, num_pages, page_bytes, dtype, cores, tile=None):
     fmt_kwargs = dict(buffer_index=index, data_format=dtype, page_size=page_bytes)
     if tile is not None:
@@ -179,6 +291,10 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
     out_page_bytes = output_tensor.buffer_page_size()  # one output tile
     stick_page_bytes = input_tensor.buffer_aligned_page_size()
     in_row_bytes = in_view[-1] * in_elem_bytes  # logical data bytes of one input stick
+    # A width/block-sharded RM input pages each stick into shard-width pieces: page id of
+    # (stick, piece) = stick * in_pages_per_stick + piece (interleaved / height: one page per stick).
+    in_page_data_bytes = input_tensor.buffer_page_size()
+    in_pages_per_stick = max(1, math.ceil(in_row_bytes / in_page_data_bytes))
 
     # --- Per-core rectangles --------------------------------------------------
     read_alignment = (
@@ -189,7 +305,6 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
     # Every stick-segment offset (col_start * 32 * elem) must stay read-aligned.
     seg_unit_bytes = TILE_WIDTH * in_elem_bytes
     align_unit_tiles = read_alignment // math.gcd(read_alignment, seg_unit_bytes)
-    all_cores, assignment, cores_c = _rect_assignment(device, tensor_rows_tiles, tensor_cols_tiles, align_unit_tiles)
 
     def blocking_for(core_cols_tiles):
         return compute_blocking(
@@ -200,6 +315,38 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             low_l1=low_l1,
             read_alignment=read_alignment,
         )
+
+    # --- Regime selector (op_design.md "Selection function") ---------------------------------
+    # A side whose L1 shards are natively consumable/producible pins the work split to its shards
+    # (one block = the whole shard); the other side goes through a TensorAccessor (interleaved, or
+    # sharded non-local). Input shards are resident only without padding (the input is the output's
+    # exact prefix) and when a shard row is exactly the block's stick segment (no stride padding).
+    max_block_tiles = blocking_for(FAST_TILIZE_MAX_WIDTH_TILES * align_unit_tiles)[0]
+    in_shards = None
+    if not has_padding:
+        in_shards = _shard_rects(input_tensor, in_shape, tile_h, max_cols_tiles=max_block_tiles)
+        if in_shards is not None and stick_page_bytes != in_shards[2] * seg_unit_bytes:
+            in_shards = None
+    out_shards = _shard_rects(output_tensor, out_shape, tile_h, max_cols_tiles=max_block_tiles)
+    grid = device.compute_with_storage_grid_size()
+    pin_min_cores = min(tensor_rows_tiles, grid.x * grid.y) * PIN_OCCUPANCY_RATIO
+    in_resident = out_resident = False
+    if in_shards and out_shards and _same_rects(in_shards[0], out_shards[0]):
+        regime, in_resident, out_resident = "sharded_same_spec_in_place", True, True
+    elif in_shards and len(in_shards[0]) >= pin_min_cores:
+        regime, in_resident = "sharded_input_pinned", True
+    elif out_shards and len(out_shards[0]) >= pin_min_cores:
+        regime, out_resident = "sharded_output_pinned", True
+    else:
+        regime = "full_grid"  # interleaved_row_split / interleaved_2d_split / sharded_full_grid
+    if regime == "full_grid":
+        all_cores, assignment, cores_c = _rect_assignment(
+            device, tensor_rows_tiles, tensor_cols_tiles, align_unit_tiles
+        )
+    else:
+        assignment = (in_shards if in_resident else out_shards)[0]
+        all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(e[0], e[0]) for e in assignment])
+        cores_c = len({e[3] for e in assignment})
 
     # Column groups: cores whose rectangles have the same column extent share one column walk
     # (CT block widths), so they share one kernel/CB set. At most two (cores_c > 1, ragged last).
@@ -244,26 +391,35 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
         has_tail = last_block_width_tiles != block_width_tiles
 
         # --- Circular buffers (per group: ring quanta = this group's block widths) ----------
-        cbs.append(
-            _cb(
-                CB_RM_STICKS,
-                IN_DEPTH_TILE_ROWS * block_width_tiles,
-                in_page_bytes,
-                input_tensor.dtype,
-                group_cores,
-                out_tile,
+        # Resident sides: the CB IS the shard (zero-copy, whole shard = one block).
+        if in_resident:
+            shard_pages = in_shards[1] * in_shards[2]
+            cbs.append(_resident_cb(CB_RM_STICKS, input_tensor, in_page_bytes, shard_pages, group_cores, out_tile))
+        else:
+            cbs.append(
+                _cb(
+                    CB_RM_STICKS,
+                    IN_DEPTH_TILE_ROWS * block_width_tiles,
+                    in_page_bytes,
+                    input_tensor.dtype,
+                    group_cores,
+                    out_tile,
+                )
             )
-        )
-        cbs.append(
-            _cb(
-                CB_TILES_OUT,
-                OUT_DEPTH_TILE_ROWS * block_width_tiles,
-                out_page_bytes,
-                output_tensor.dtype,
-                group_cores,
-                out_tile,
+        if out_resident:
+            shard_pages = out_shards[1] * out_shards[2]
+            cbs.append(_resident_cb(CB_TILES_OUT, output_tensor, out_page_bytes, shard_pages, group_cores, out_tile))
+        else:
+            cbs.append(
+                _cb(
+                    CB_TILES_OUT,
+                    OUT_DEPTH_TILE_ROWS * block_width_tiles,
+                    out_page_bytes,
+                    output_tensor.dtype,
+                    group_cores,
+                    out_tile,
+                )
             )
-        )
         if coalesce:
             cbs.append(_cb(CB_STICK_STAGING, 1, staging_bytes, input_tensor.dtype, group_cores))
         fill_row_bytes = block_width_tiles * seg_unit_bytes + FILL_PHASE_BYTES
@@ -317,9 +473,19 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             int(leading_pad),
             *out_lead,
             *in_lead,
+            int(in_resident),
+            in_pages_per_stick,
+            in_page_data_bytes,
         ]
         reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-        writer_ct = [CB_TILES_OUT, CB_TILES_OUT_TAIL, tensor_cols_tiles, out_page_bytes, *col_geometry]
+        writer_ct = [
+            CB_TILES_OUT,
+            CB_TILES_OUT_TAIL,
+            tensor_cols_tiles,
+            out_page_bytes,
+            *col_geometry,
+            int(out_resident),
+        ]
         writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
         compute_ct = [CB_RM_STICKS, CB_RM_STICKS_TAIL, CB_TILES_OUT, CB_TILES_OUT_TAIL, *col_geometry]
 

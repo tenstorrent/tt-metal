@@ -52,7 +52,14 @@ void kernel_main() {
                        out_l2 = get_compile_time_arg_val(23), out_l3 = get_compile_time_arg_val(24);
     constexpr uint32_t in_l0 = get_compile_time_arg_val(25), in_l1 = get_compile_time_arg_val(26),
                        in_l2 = get_compile_time_arg_val(27), in_l3 = get_compile_time_arg_val(28);
-    constexpr auto in_args = TensorAccessorArgs<29>();
+    // Resident input (sharded regimes): cb_rm_sticks is backed on this core's own input shard, which
+    // already holds the block in the layout the tilize consumes — no NoC traffic at all.
+    constexpr bool in_resident = get_compile_time_arg_val(29) != 0;
+    // Input pages per stick (> 1 for a width/block-sharded RM input: shard-width pieces) and the
+    // logical bytes of one page; page id of (stick, piece) = stick * in_pages_per_stick + piece.
+    constexpr uint32_t in_pages_per_stick = get_compile_time_arg_val(30);
+    constexpr uint32_t in_page_data_bytes = get_compile_time_arg_val(31);
+    constexpr auto in_args = TensorAccessorArgs<32>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start_tile = get_arg_val<uint32_t>(1);
@@ -63,7 +70,31 @@ void kernel_main() {
     const uint32_t bank_stagger_offset = get_arg_val<uint32_t>(5);
     const uint32_t fill_word = get_arg_val<uint32_t>(6);            // pad value, replicated to 32 bits
 
+    if constexpr (in_resident) {
+        // One block = the whole resident shard (single column block): publish it in one push.
+        const uint32_t n_pages = core_rows_tiles * block_width_tiles;
+        cb_reserve_back(cb_rm_sticks, n_pages);
+        cb_push_back(cb_rm_sticks, n_pages);
+        return;
+    }
+
     const auto in_acc = TensorAccessor(in_args, src_addr, stick_page_bytes);
+    // Read bytes [offset, offset + n_bytes) of `stick` to `dst_l1`, split at page boundaries.
+    auto read_stick_bytes = [&](uint32_t stick, uint32_t offset, uint32_t dst_l1, uint32_t n_bytes) {
+        if constexpr (in_pages_per_stick == 1) {
+            noc_async_read(in_acc.get_noc_addr(stick, offset), dst_l1, n_bytes);
+        } else {
+            while (n_bytes > 0) {
+                const uint32_t piece = offset / in_page_data_bytes;
+                const uint32_t in_page = offset - piece * in_page_data_bytes;
+                const uint32_t n = (in_page_data_bytes - in_page < n_bytes) ? in_page_data_bytes - in_page : n_bytes;
+                noc_async_read(in_acc.get_noc_addr(stick * in_pages_per_stick + piece, in_page), dst_l1, n);
+                offset += n;
+                dst_l1 += n;
+                n_bytes -= n;
+            }
+        }
+    };
 
     if constexpr (coalesce_bank_reads) {
         // Whole-stick single column block; tile-rows of this core are consecutive sticks.
@@ -208,8 +239,7 @@ void kernel_main() {
                 // do not all queue on one bank at once.
                 uint32_t i = bank_stagger_offset < valid_sticks ? bank_stagger_offset : 0;
                 for (uint32_t k = 0; k < valid_sticks; ++k) {
-                    noc_async_read(
-                        in_acc.get_noc_addr(first_stick + i, seg_offset_bytes), l1_base + i * seg_bytes, data_bytes);
+                    read_stick_bytes(first_stick + i, seg_offset_bytes, l1_base + i * seg_bytes, data_bytes);
                     i = (i + 1 == valid_sticks) ? 0 : i + 1;
                 }
                 noc_async_read_barrier();
