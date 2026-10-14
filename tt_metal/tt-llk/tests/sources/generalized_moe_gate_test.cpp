@@ -344,8 +344,7 @@ static inline void run_gate()
             GMG_SFPU_CALL(_generic_moe_gate_topk_, (false, 8, 256, false, true, false), 0u, 0u, 0u);
         }
         GMG_SFPU_CALL(generalized_moe_gate_finalize_sorted, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TOPK, GMG_SOFTMAX), GMG_EPS, GMG_SCALE);
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */, 2, true>();
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false /* is_32bit */>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_direct_<is_fp32_dest_acc_en, false /* is_32bit */>();
         return;
     }
 #else
@@ -585,9 +584,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (GMG_MODE == MODE_GATE || GMG_MODE == MODE_BINARY)
         {
-            _llk_math_generalized_moe_gate_eltwise_binary_init_<ELTWISE_BINARY_OP, BINARY_MODE, MATH_FIDELITY>(params.num_faces, ACC_TO_DEST);
-            _llk_math_generalized_moe_gate_eltwise_binary_<ELTWISE_BINARY_OP, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY>(
-                params.num_faces, 0 /* dst_index */);
+#ifdef ARCH_BLACKHOLE
+            if constexpr (GMG_SFPU_SORT)
+            {
+                // The op's sfpu_sort route issues the bias add's words directly.
+                _llk_math_generalized_moe_gate_eltwise_binary_direct_init_<BINARY_MODE>();
+                _llk_math_generalized_moe_gate_eltwise_binary_direct_<BINARY_MODE>(0 /* dst_index */);
+            }
+            else
+#endif
+            {
+                _llk_math_generalized_moe_gate_eltwise_binary_init_<ELTWISE_BINARY_OP, BINARY_MODE, MATH_FIDELITY>(params.num_faces, ACC_TO_DEST);
+                _llk_math_generalized_moe_gate_eltwise_binary_<ELTWISE_BINARY_OP, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY>(
+                    params.num_faces, 0 /* dst_index */);
+            }
         }
 
         if constexpr (GMG_MODE != MODE_BINARY)

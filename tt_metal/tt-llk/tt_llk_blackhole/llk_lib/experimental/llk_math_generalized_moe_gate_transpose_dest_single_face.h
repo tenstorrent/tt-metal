@@ -371,4 +371,22 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_()
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
 }
 
+// step2's two-tile MOP and replay window (scores, indices) as direct words, with the keep-zero-flag init.
+template <bool is_fp32_dest_acc_en, bool is_32bit = false>
+inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_direct_()
+{
+    static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit and fp32 dest accum enable are not supported for single face transpose");
+    math::_configure_preserve_zero_flag_state_();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD);
+    for (std::uint32_t tile = 0; tile < 2; ++tile)
+    {
+        TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 0);
+        TTI_MOVD2B(0, 20, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, 4);
+        TTI_TRNSPSRCB;
+        TTI_MOVB2D(0, 16, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 0);
+    }
+    TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+}
+
 } // namespace ckernel

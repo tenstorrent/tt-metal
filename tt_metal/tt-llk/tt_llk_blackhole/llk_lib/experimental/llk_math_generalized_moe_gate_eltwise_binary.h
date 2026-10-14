@@ -143,3 +143,42 @@ inline void _llk_math_generalized_moe_gate_eltwise_binary_init_(const std::uint3
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
+
+// Direct forms issue the MOP's words in place: no MOP program, so no wait for the previous MOP to drain.
+template <GeneralizedMoeGateEltwiseBinaryMode mode>
+inline void _llk_math_generalized_moe_gate_eltwise_binary_direct_init_()
+{
+    generalized_moe_gate_eltwise_binary_configure_addrmod<EltwiseBinaryType::ELWADD>();
+    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+// The ELWADD a four-face tile takes through generalized_moe_gate_eltwise_binary_configure_mop, word for word.
+template <GeneralizedMoeGateEltwiseBinaryMode mode>
+inline void _llk_math_generalized_moe_gate_eltwise_binary_direct_(std::uint32_t dst_index)
+{
+    constexpr std::uint32_t dst_math_offset = 128;
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    for (std::uint32_t face = 0; face < 4; face++)
+    {
+        if constexpr (mode == GeneralizedMoeGateEltwiseBinaryMode::RELOAD)
+        {
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD);
+            TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 0, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, 0);
+            TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 4, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, 4);
+            TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 8, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, 8);
+            TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 12, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, 12);
+            TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_0, dst_math_offset);
+            TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_0, dst_math_offset);
+        }
+        else
+        {
+            TTI_MOVA2D(0, 0, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 0);
+            TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_0, dst_math_offset);
+            TTI_MOVA2D(0, 0, ADDR_MOD_1, p_mova2d::MOV_8_ROWS, 0);
+            TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_0, dst_math_offset);
+        }
+        TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB);
+    }
+    math::clear_dst_reg_addr();
+}

@@ -25,12 +25,17 @@
 namespace ckernel {
 
 // A one-face input can select within-face transpose only. Multi-face callers keep Both.
+// direct (Blackhole's sfpu_sort route): the bias add issues its words in place, so no MOP is programmed for it.
 template <
     bool enable_sigmoid = false,
     bool is_32bit = false,
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
-    bool transpose_of_faces = true>
+    bool transpose_of_faces = true,
+    bool direct = false>
 ALWI void generalized_moe_gate_init(uint32_t icb0, uint32_t icb1) {
+#if !defined(ARCH_BLACKHOLE)
+    static_assert(!direct, "the direct bias add is Blackhole's");
+#endif
     if constexpr (enable_sigmoid) {
         // Init sigmoid (SFPU)
         sigmoid_tile_init<false>();
@@ -40,10 +45,18 @@ ALWI void generalized_moe_gate_init(uint32_t icb0, uint32_t icb1) {
         // Init copy add (FPU)
         UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(
             icb0, icb1, transpose_of_faces ? Transpose::Both : Transpose::IntraFace)));
-        MATH((llk_math_generalized_moe_gate_eltwise_binary_init_with_operands<
-              EltwiseBinaryType::ELWADD,
-              GeneralizedMoeGateEltwiseBinaryMode::COPY,
-              MATH_FIDELITY>(icb0, icb1, false)));
+#if defined(ARCH_BLACKHOLE)
+        if constexpr (direct) {
+            MATH((
+                llk_math_generalized_moe_gate_eltwise_binary_direct_init<GeneralizedMoeGateEltwiseBinaryMode::COPY>()));
+        } else
+#endif
+        {
+            MATH((llk_math_generalized_moe_gate_eltwise_binary_init_with_operands<
+                  EltwiseBinaryType::ELWADD,
+                  GeneralizedMoeGateEltwiseBinaryMode::COPY,
+                  MATH_FIDELITY>(icb0, icb1, false)));
+        }
         // Init transpose dest addrmods (does not conflict with copy add)
         MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_common_init<is_32bit>()));
         // Init topk (SFPU)
@@ -206,23 +219,44 @@ ALWI void generalized_moe_gate(
         // Init add binary reuse (FPU)
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
             false, false, icb1)));
-        MATH((llk_math_generalized_moe_gate_eltwise_binary_init_with_operands<
-              EltwiseBinaryType::ELWADD,
-              GeneralizedMoeGateEltwiseBinaryMode::RELOAD,
-              MATH_FIDELITY>(icb1, icb1, false)));
-        // Add binary reuse (FPU)
-        UNPACK((llk_unpack_A<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(icb1, 0)));
-        MATH((llk_math_generalized_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, is_fp32_dest_acc_en, MATH_FIDELITY>(
-            icb1, icb1, 0)));
+#if defined(ARCH_BLACKHOLE)
+        if constexpr (sfpu_sort) {
+            MATH((llk_math_generalized_moe_gate_eltwise_binary_direct_init<
+                  GeneralizedMoeGateEltwiseBinaryMode::RELOAD>()));
+            UNPACK((llk_unpack_A<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(icb1, 0)));
+            MATH((llk_math_generalized_moe_gate_eltwise_binary_direct<GeneralizedMoeGateEltwiseBinaryMode::RELOAD>(0)));
+        } else
+#endif
+        {
+            MATH((llk_math_generalized_moe_gate_eltwise_binary_init_with_operands<
+                  EltwiseBinaryType::ELWADD,
+                  GeneralizedMoeGateEltwiseBinaryMode::RELOAD,
+                  MATH_FIDELITY>(icb1, icb1, false)));
+            // Add binary reuse (FPU)
+            UNPACK((llk_unpack_A<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(icb1, 0)));
+            MATH((llk_math_generalized_moe_gate_eltwise_binary<
+                  EltwiseBinaryType::ELWADD,
+                  is_fp32_dest_acc_en,
+                  MATH_FIDELITY>(icb1, icb1, 0)));
+        }
         // Init transpose dest addrmods (does not conflict with add binary reuse)
         MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_common_init<is_32bit>()));
         // Init topk (SFPU)
         MATH((SFPU_UNARY_INIT_FN(unused, sfpu::generalized_moe_gate_topk_init, (APPROX, is_fp32_dest_acc_en))));
     } else {
-        // Copy add (FPU)
+        // Copy add (FPU); the sfpu_sort route's init programmed no MOP for it (generalized_moe_gate_init<..., direct>)
         UNPACK((llk_unpack_AB(icb0, icb1, 0, 0)));
-        MATH((llk_math_generalized_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, is_fp32_dest_acc_en, MATH_FIDELITY>(
-            icb0, icb1, 0)));
+#if defined(ARCH_BLACKHOLE)
+        if constexpr (sfpu_sort) {
+            MATH((llk_math_generalized_moe_gate_eltwise_binary_direct<GeneralizedMoeGateEltwiseBinaryMode::COPY>(0)));
+        } else
+#endif
+        {
+            MATH((llk_math_generalized_moe_gate_eltwise_binary<
+                  EltwiseBinaryType::ELWADD,
+                  is_fp32_dest_acc_en,
+                  MATH_FIDELITY>(icb0, icb1, 0)));
+        }
     }
     // Set srcb dummy valid for transpose wh (FPU)
     UNPACK((llk_unpack_set_srcb_dummy_valid()));
@@ -243,8 +277,7 @@ ALWI void generalized_moe_gate(
             VectorMode::RC_custom,
             eps,
             scale)));
-        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init<is_32bit, 2, true>()));
-        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2<is_fp32_dest_acc_en, is_32bit>()));
+        MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2_direct<is_fp32_dest_acc_en, is_32bit>()));
         return;
     }
 #else

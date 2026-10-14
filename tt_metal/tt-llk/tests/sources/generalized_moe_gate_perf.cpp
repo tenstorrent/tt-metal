@@ -120,8 +120,7 @@ static inline void run_gate()
             return;
         }
         GMG_SFPU_CALL(generalized_moe_gate_finalize_sorted, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TOPK, GMG_SOFTMAX), GMG_EPS, GMG_SCALE);
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false, 2, true>();
-        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false>();
+        _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_direct_<is_fp32_dest_acc_en, false>();
         return;
     }
 
@@ -184,8 +183,17 @@ static inline void token_math(RUNTIME_PARAMETERS params)
     }
     _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false /* skip_int8 */>(formats.math);
 
-    _llk_math_generalized_moe_gate_eltwise_binary_init_<ELTWISE_BINARY_OP, BINARY_MODE, MATH_FIDELITY>(num_faces, ACC_TO_DEST);
-    _llk_math_generalized_moe_gate_eltwise_binary_<ELTWISE_BINARY_OP, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY>(num_faces, SCORES_TILE);
+    if constexpr (GMG_SFPU_SORT)
+    {
+        // The op's sfpu_sort route issues the bias add's words directly.
+        _llk_math_generalized_moe_gate_eltwise_binary_direct_init_<BINARY_MODE>();
+        _llk_math_generalized_moe_gate_eltwise_binary_direct_<BINARY_MODE>(SCORES_TILE);
+    }
+    else
+    {
+        _llk_math_generalized_moe_gate_eltwise_binary_init_<ELTWISE_BINARY_OP, BINARY_MODE, MATH_FIDELITY>(num_faces, ACC_TO_DEST);
+        _llk_math_generalized_moe_gate_eltwise_binary_<ELTWISE_BINARY_OP, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY>(num_faces, SCORES_TILE);
+    }
 
     _llk_math_generalized_moe_gate_transpose_dest_single_face_common_init_<false /* is_32bit */>();
     SFPU_UNARY_INIT_FN(unused, sfpu::generalized_moe_gate_topk_init, (APPROX_MODE, is_fp32_dest_acc_en));
