@@ -82,7 +82,7 @@ constexpr MathFidelitySchedule math_fidelity_schedule(const DataFormat src_a_for
 template <bool EN_32BIT_DEST>
 constexpr DataFormat dest_src_format(const DataFormat dest_format)
 {
-    return EN_32BIT_DEST ? DataFormat::Tf32 : dest_format;
+    return EN_32BIT_DEST && dest_format == DataFormat::Float16_b ? DataFormat::Tf32 : dest_format;
 }
 
 // Phases the formats cannot use are dropped from the request.
