@@ -11,9 +11,11 @@ A thin composition of the repo's generic modules:
   dispatched along ``cluster_axis`` (mesh rows) and the output is reduce-scattered over the other axis,
   so each device ends with ``[1, 1, tokens_per_device, hidden / mesh_cols]`` -- the same hidden-sharded
   residual layout GPT-OSS uses.
-* The checkpoint's swiglu clamp is not applied (``moe_compute`` SILU has none); see moe_weights.py.
+* The checkpoint's swiglu clamp (up in [-10, 10], gate <= 10) is applied by ``moe_compute``'s SILU_CLAMPED activation
+  (``swiglu_limit`` in the config; DSV41_DEC_SWIGLU_CLAMP=0 disables it).
 """
 
+import os
 from pathlib import Path
 
 import ttnn
@@ -80,6 +82,20 @@ class _TailDecode(TTMoEDecode):
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "deepseek_v41_flash.yaml"
 
 
+def clamp_text(text, site):
+    """The config text with the swiglu clamp of ``site`` (decode / prefill / spec / mtp: every place that builds a ``moe_compute`` front-end from the YAML) switched off when
+    DSV41_DEC_SWIGLU_CLAMP=0 or when the site is not in DSV41_SWIGLU_CLAMP_SITES (comma list, default decode,prefill,mtp).
+
+    ``spec`` (the speculative VERIFY block) is NOT in the default: with the clamp on there the vLLM server generates garbage (decode + MTP + prefill clamped and verify unclamped is
+    coherent: GSM8K / greedy probes; any set with ``spec`` is garbage, cause not found; the same kernel is exact at every token count 1..64 per device in
+    tests/test_moe_clamp_device.py, and the demo with every site clamped is coherent). Verify then differs from the plain decode only where a gate / up projection exceeds the limit.
+    """
+    sites = os.environ.get("DSV41_SWIGLU_CLAMP_SITES", "decode,prefill,mtp").split(",")
+    if os.environ.get("DSV41_DEC_SWIGLU_CLAMP", "1") == "0" or site not in sites:
+        text = text.replace("swiglu_limit: 10.0", "swiglu_limit: 0.0", 1)
+    return text
+
+
 ROUTE_LOG = [] if __import__("os").environ.get("DSV41_ROUTE_CAPTURE") == "1" else None
 
 ROUTE_ON = [False]  # set by the caller around EAGER decode steps only (never during trace capture)
@@ -142,6 +158,7 @@ class DSV41MoEBlock:
         # the derived memory configs (dispatch input shards, ...) are computed from batch_per_device when the config is parsed,
         # so the batch size has to be in the YAML text itself (updating the field afterwards leaves them sized for 4 users)
         text = text.replace("batch_per_device: 4 ", f"batch_per_device: {batch_per_device} ", 1)
+        text = clamp_text(text, "decode")
         if not shared_in_moe:
             text = text.replace("num_shared_experts: 1", "num_shared_experts: 0").replace(
                 "  shared_expert_ids_to_devices: fully_replicated\n", ""

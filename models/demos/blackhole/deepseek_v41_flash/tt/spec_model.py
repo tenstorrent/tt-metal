@@ -28,7 +28,7 @@ from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, eff
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM, PAD_HEADS
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import pos_buckets  # noqa: F401 (re-exported)
-from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import CONFIG_PATH
+from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import CONFIG_PATH, clamp_text
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_weights import _Shards
 from models.demos.blackhole.deepseek_v41_flash.tt.mtp import (
     BLOCK,
@@ -86,7 +86,7 @@ def _moe_view(moe, Tn, buffers):
     from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
 
     md = moe.mesh_device
-    text = CONFIG_PATH.read_text()
+    text = clamp_text(CONFIG_PATH.read_text(), "spec")
     text = text.replace("batch_per_device: 4 ", f"batch_per_device: {Tn} ", 1)
     text = text.replace("num_shared_experts: 1", "num_shared_experts: 0").replace(
         "  shared_expert_ids_to_devices: fully_replicated\n", ""

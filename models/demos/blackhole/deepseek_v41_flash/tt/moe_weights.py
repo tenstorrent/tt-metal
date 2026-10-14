@@ -11,8 +11,8 @@ Checkpoint (per layer, ``layers.{L}.ffn.*``):
 
 TTMoEDecode computes ``silu(x @ w0) * (x @ w1) @ w2`` with ``w0, w1: [L, E, hidden, inter]`` and
 ``w2: [L, E, inter, hidden]``, so w0 = gate (checkpoint w1), w1 = up (checkpoint w3), all transposed to
-``[in, out]``. The checkpoint's swiglu clamp (|up|<=10, gate<=10) is not expressible in the SILU path of
-``moe_compute``; ``clamp_effect`` in ``tests`` measures what dropping it costs.
+``[in, out]``. The checkpoint's swiglu clamp (|up|<=10, gate<=10) is applied in ``moe_compute`` through its SILU_CLAMPED activation
+(``swiglu_limit`` in configs/deepseek_v41_flash.yaml).
 """
 
 import json

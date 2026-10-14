@@ -19,6 +19,7 @@ import ttnn
 from models.common.modules.moe.tt_moe_decode import TTMoEDecode, _TTMoEDecodeBuffers
 from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
 from models.demos.blackhole.deepseek_v41_flash.tt import moe_overlap, pf_tune
+from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import clamp_text
 
 _PROF_EVERY = int(
     os.environ.get("DSV41_PROF_EVERY", "0")
@@ -139,7 +140,7 @@ class DSV41PrefillMoE:
             moe_g_for(moe_block.decode.config.batch_per_device) if g is None else g
         )  # G consecutive 32-token chunks per moe_compute call
         T = T * G
-        text = CONFIG_PATH.read_text()
+        text = clamp_text(CONFIG_PATH.read_text(), "prefill")
         text = text.replace("batch_per_device: 4 ", f"batch_per_device: {T} ", 1)
         text = text.replace("num_shared_experts: 1", "num_shared_experts: 0").replace(
             "  shared_expert_ids_to_devices: fully_replicated\n", ""

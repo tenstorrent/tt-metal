@@ -18,7 +18,8 @@ score_correction_bias: true
 
 compute:
   intermediate_size: 2304
-  activation_type: SILU   # model.py also clamps: up in [-10, 10], gate <= 10 (swiglu_limit); shared expert clamps too
+  activation_type: SILU
+  swiglu_limit: 10.0   # model.py clamps up to [-10, 10] and gate to <= 10 before silu(gate) * up (DSV41_DEC_SWIGLU_CLAMP=0 turns it off)
 
 reduce:
   shared_expert_scale: 1.0
