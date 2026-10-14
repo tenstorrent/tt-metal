@@ -68,6 +68,11 @@ inline void se_drisc_post(const SeDyn& dyn, uint32_t a0, uint32_t scratch, uint3
         d[SD_N_LOAD] = n_load;
         d[SD_GRANTS] = get_semaphore(arg(11));
         d[SD_MPFE] = arg(5);
+#ifdef SE_DRISC_PAIRED_ALWAYS  // (two tiles per bank every call)
+        d[SD_PAIRED] = 1;
+#else
+        d[SD_PAIRED] = alt_call ? 1 : 0;  // (switch mode: the alternate tiles send next to the free ones)
+#endif
         for (uint32_t l = 0; l < n_load; ++l) {
             d[SD_LOADS + l] = dyn.load_eid[l] | (uint32_t(dyn.region[l]) << 8);
         }
