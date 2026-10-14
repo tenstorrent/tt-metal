@@ -23,6 +23,7 @@ from loguru import logger
 
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import skip_routed_on_simulator
 
 
 def windowed_mask(seq_len, cu_window_seqlens, is_causal=False):
@@ -48,6 +49,8 @@ def to_cu_tensor(cu_window_seqlens, device, **kwargs):
 
 
 def sdpa_configs(device, q_chunk, k_chunk, fp32_dest_acc_en=True):
+    # FP32 dest without `precision` routes to the ACCURATE recipe.
+    skip_routed_on_simulator(fp32_dest_acc_en)
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         exp_approx_mode=False,
@@ -115,6 +118,7 @@ def reference_sdpa(q, k, v, mask, scale):
 def test_windowed_sdpa_smoke(
     device, dtype, pcc_threshold, num_heads, seq_len, chunk, cu_window_seqlens, fp32_dest_acc_en, is_causal
 ):
+    skip_routed_on_simulator(fp32_dest_acc_en)
     torch.manual_seed(42)
     b, dh = 1, 128
     scale = dh**-0.5
@@ -212,6 +216,7 @@ def test_windowed_sdpa_q_token_offset(
     k = torch.randn(b, num_heads, seq_len, dh, dtype=torch.bfloat16)
     v = torch.randn(b, num_heads, seq_len, dh, dtype=torch.bfloat16)
 
+    skip_routed_on_simulator()  # FP32 dest: routed to the ACCURATE recipe
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         exp_approx_mode=False,
