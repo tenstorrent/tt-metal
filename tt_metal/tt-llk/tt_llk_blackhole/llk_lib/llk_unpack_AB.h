@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#define LLK_EXP_BH_S2_(x) #x
+#define LLK_EXP_BH_S_(x)  LLK_EXP_BH_S2_(x)
 
 #include <cstdint>
 
@@ -160,6 +162,9 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
 {
+#if defined(LLK_EXP_NOP_UNPACK_INIT) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
+    asm volatile(".rept " LLK_EXP_BH_S_(LLK_EXP_NOP_UNPACK_INIT) "\n\tnop\n\t.endr"); // experiment hook (integ4)
+#endif
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_init_", tensor_shape);
     const bool within_face_16x16_transpose = transpose == ckernel::Transpose::IntraFace || transpose == ckernel::Transpose::Both;
@@ -184,6 +189,9 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+#if defined(LLK_EXP_NOP_UNPACK_INIT) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
+    asm volatile(".rept " LLK_EXP_BH_S_(LLK_EXP_NOP_UNPACK_INIT) "\n\tnop\n\t.endr"); // experiment hook (integ4)
+#endif
     _llk_unpack_AB_init_<BType>(tensor_shape, ckernel::Transpose::None);
 }
 
@@ -202,6 +210,9 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckern
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t transpose)
 {
+#if defined(LLK_EXP_NOP_UNPACK_INIT) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
+    asm volatile(".rept " LLK_EXP_BH_S_(LLK_EXP_NOP_UNPACK_INIT) "\n\tnop\n\t.endr"); // experiment hook (integ4)
+#endif
     _llk_unpack_AB_init_<BType>(tensor_shape, transpose > 0 ? ckernel::Transpose::Both : ckernel::Transpose::None);
 }
 
