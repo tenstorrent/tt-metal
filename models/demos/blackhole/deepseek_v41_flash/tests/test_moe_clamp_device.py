@@ -55,6 +55,10 @@ def test_moe_clamp(mesh_device, layer_id):
     blk.ffn.register_forward_hook(lambda m, i, o: cap.update(x=i[0].detach()))
     blk(h, 0, pm, None)
     x = cap["x"].reshape(batch, 1, 1, -1).to(torch.bfloat16)
+    if (
+        os.environ.get("DSV41_CLAMP_SAME") == "1"
+    ):  # every token identical: they all route to the same experts, so an expert sees up to `batch` tokens (several 32-token chunks)
+        x = x[:1].repeat(batch, 1, 1, 1).contiguous()
     w = load_moe_layer(
         layer_id, experts=range(384)
     )  # host copies of every routed expert (a warm cache would skip them); the block is built from them
