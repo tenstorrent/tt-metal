@@ -35,10 +35,10 @@ std::string describe(const TensorTopology& topology) {
     return ss.str();
 }
 
-// A 1-D label with a single placement for the whole mesh. On a 1-D mesh this is also the N-D form, so callers that
-// need the distinction also check the mesh rank.
-bool is_collapsed(const TensorTopology& in) {
-    return in.distribution_shape().dims() == 1 && in.placements().size() == 1;
+// The collapsed spelling: a 1-D label with a single placement for the whole of a multi-axis mesh. On a 1-D mesh the
+// same form is the N-D label (one placement per axis), so it is not collapsed there.
+bool is_collapsed(const TensorTopology& in, const MeshShape& mesh_shape) {
+    return in.distribution_shape().dims() == 1 && in.placements().size() == 1 && mesh_shape.dims() > 1;
 }
 
 // The one axis of size > 1 of a mesh that is a line (1xN, Nx1, ...); nullopt when the mesh has none or several.
@@ -214,7 +214,7 @@ std::optional<TensorTopology> scatter_output_topology(
     }
     // Only normalised dims are ever written into a placement the helper creates.
     const TopologyPlacement shard = Shard{static_cast<int>(*normalized_dim)};
-    const bool collapsed = is_collapsed(in) && mesh_shape.dims() > 1;
+    const bool collapsed = is_collapsed(in, mesh_shape);
     std::string reason;
 
     if (!cluster_axis.has_value()) {
@@ -350,7 +350,7 @@ std::optional<TopologyPlacements> uncollapse_placements(
         }
         return placements;
     }
-    if (!is_collapsed(in)) {
+    if (!is_collapsed(in, mesh_shape)) {
         set_reason(fmt::format(
             "tensor topology {} is neither a collapsed 1-D label nor one placement per axis of mesh {}",
             describe(in),
@@ -403,7 +403,7 @@ std::optional<TensorTopology> all_gather_output_topology(
         return fail(reason, Family::Gather);
     }
 
-    const bool collapsed = is_collapsed(in) && mesh_shape.dims() > 1;
+    const bool collapsed = is_collapsed(in, mesh_shape);
     if (collapsed && single_non_trivial_axis(mesh_shape) == axis) {
         // The collapsed axis is the gathered axis (cluster_axis 1 on a 1xN line): keep the collapsed spelling.
         return TensorTopology(in.distribution_shape(), TopologyPlacements{replicate}, in.mesh_coords());
