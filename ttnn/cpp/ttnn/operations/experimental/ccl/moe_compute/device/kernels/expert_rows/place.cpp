@@ -17,9 +17,15 @@
 // core's metadata semaphore once (the combine reader waits for exactly 1).
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_s = get_named_compile_time_arg_val("cb_scratch");
+    CircularBuffer cb_s(get_named_compile_time_arg_val("cb_scratch"));
     constexpr uint32_t T = get_named_compile_time_arg_val("tokens");
     constexpr uint32_t K = get_named_compile_time_arg_val("top_k");
     constexpr uint32_t E = get_named_compile_time_arg_val("local_experts");
@@ -76,22 +82,28 @@ void kernel_main() {
     const uint32_t sync_y = get_arg_val<uint32_t>(a++);
     const uint32_t vx_at = a, vy_at = a + GW;
 
-    cb_reserve_back(cb_s, 1);
-    const uint32_t s = get_write_ptr(cb_s);
+    const Noc noc;
+    cb_s.reserve_back(1);
+    const uint32_t s = cb_s.get_write_ptr();
     tt_l1_ptr uint32_t* cnt = reinterpret_cast<tt_l1_ptr uint32_t*>(s + CNO);
     tt_l1_ptr uint32_t* ofs = reinterpret_cast<tt_l1_ptr uint32_t*>(s + OFO);
     const tt_l1_ptr uint16_t* lst = reinterpret_cast<const tt_l1_ptr uint16_t*>(s + RTB + P_RTR);
 
     const auto tab = TensorAccessor(tab_args, tab_addr, P_RTBS);
     const uint64_t tb = tab.get_noc_addr(0);
-    noc_async_read(tb, s + RTB, P_RTR);
-    noc_async_read_barrier();
+    noc.async_read(PrecomposedUnicastEndpoint{}, CoreLocalMem<uint32_t>(s + RTB), P_RTR, {.noc_addr = tb}, {});
+    noc.async_read_barrier();
     const uint32_t nrow = *reinterpret_cast<const tt_l1_ptr uint32_t*>(s + RTB);
     const uint32_t rb = (nrow * 2 + 63) & ~63u;
     if (nrow) {
         const uint32_t parts[5] = {P_RTR, P_TES, P_TET, P_TEC, P_TEK};
         for (uint32_t i = 0; i < 5; ++i) {
-            noc_async_read(tb + parts[i], s + RTB + parts[i], rb);
+            noc.async_read(
+                PrecomposedUnicastEndpoint{},
+                CoreLocalMem<uint32_t>(s + RTB + parts[i]),
+                rb,
+                {.noc_addr = tb + parts[i]},
+                {});
         }
     }
     {
@@ -102,7 +114,7 @@ void kernel_main() {
             ofs[l] = to[l];
         }
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 
     // ---- slot 0: counts, one row per grid core, cores pi, pi + NP, ... of the row-major grid ----
     volatile tt_l1_ptr uint32_t* crow = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + CRB);
@@ -112,13 +124,18 @@ void kernel_main() {
     for (uint32_t li = pi; li < GW * GH; li += NP) {
         const uint32_t vx = get_arg_val<uint32_t>(vx_at + li % GW);
         const uint32_t vy = get_arg_val<uint32_t>(vy_at + li / GW);
-        noc_async_write(s + CRB, get_noc_addr(vx, vy, cnt_addr), EAL * 4);
+        noc.async_write(
+            CoreLocalMem<uint32_t>(s + CRB),
+            UnicastEndpoint{},
+            EAL * 4,
+            {},
+            {.noc_x = vx, .noc_y = vy, .addr = cnt_addr});
     }
     // ---- slot 2: page e for the experts e with e % NP == pi ----
     const auto et = TensorAccessor(et_args, et_addr, ETW);
     volatile tt_l1_ptr uint32_t* eb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + ETB);
     for (uint32_t e = pi; e < E; e += NP) {
-        noc_async_write_barrier();  // eb is reused per page
+        noc.async_write_barrier();  // eb is reused per page
         const uint32_t n = cnt[e];
         for (uint32_t i = 0; i <= n; ++i) {
             eb[4 * i] = i < n ? uint32_t(lst[ofs[e] + i]) : 0xFFFFFFFFu;
@@ -126,7 +143,7 @@ void kernel_main() {
             eb[4 * i + 2] = 0;
             eb[4 * i + 3] = 0;
         }
-        noc_async_write(s + ETB, et.get_noc_addr(e), (n + 1) * 16);
+        noc.async_write(CoreLocalMem<uint32_t>(s + ETB), et, (n + 1) * 16, {}, {.page_id = e});
     }
     // ---- slot 1: row r is written by core r % NP; activated tokens first (ascending), then empty rows ----
     const auto ac = TensorAccessor(ac_args, ac_addr, T * AROW);
@@ -147,7 +164,7 @@ void kernel_main() {
         }
         if (r % NP == pi) {
             if (buf == 0) {
-                noc_async_write_barrier();  // all NAB buffers are about to be refilled
+                noc.async_write_barrier();  // all NAB buffers are about to be refilled
             }
             volatile tt_l1_ptr uint32_t* row = row_buf();
             row[0] = t;
@@ -162,13 +179,14 @@ void kernel_main() {
                 row[1 + tes[q]] = tek[q];
                 row[1 + E + tes[q]] = uint32_t(tec[q]);
             }
-            noc_async_write(s + ARB + buf * AROW, ac.get_noc_addr(0, r * AROW), AROW);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(s + ARB + buf * AROW), ac, AROW, {}, {.page_id = 0, .offset_bytes = r * AROW});
             buf = (buf + 1) % NAB;
         }
         ++r;
         q0 = q1;
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
     buf = 0;
     {
         volatile tt_l1_ptr uint32_t* row = row_buf();
@@ -183,7 +201,7 @@ void kernel_main() {
     }
     for (uint32_t rr = r; rr < T; ++rr) {
         if (rr % NP == pi) {
-            noc_async_write(s + ARB, ac.get_noc_addr(0, rr * AROW), AROW);
+            noc.async_write(CoreLocalMem<uint32_t>(s + ARB), ac, AROW, {}, {.page_id = 0, .offset_bytes = rr * AROW});
         }
     }
 
@@ -197,21 +215,25 @@ void kernel_main() {
             const uint32_t c = q + (h < rem ? 1 : 0);
             const uint32_t off = h * q + (h < rem ? h : rem);
             for (uint32_t dt = 0; dt < c; ++dt) {
-                noc_async_read(rw.get_noc_addr(ofs[e] + off + dt, w * SEG), dense + (e % 2) * BLOCK + dt * SEG, SEG);
+                noc.async_read(
+                    rw,
+                    CoreLocalMem<uint32_t>(dense + (e % 2) * BLOCK + dt * SEG),
+                    SEG,
+                    {.page_id = ofs[e] + off + dt, .offset_bytes = w * SEG},
+                    {});
             }
         }
     }
-    noc_async_read_barrier();
-    noc_async_write_barrier();
+    noc.async_read_barrier();
+    noc.async_write_barrier();
     if constexpr (!PLACE_DENSE) {
-        const uint32_t done = get_semaphore(DONE_SEM);
-        noc_semaphore_inc(get_noc_addr(lead_x, lead_y, done), 1);
+        Semaphore<> done(DONE_SEM);
+        done.up(noc, lead_x, lead_y, 1);
         if (pi == 0) {
-            volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done);
-            noc_semaphore_wait(d, NP);
-            noc_semaphore_set(d, 0);
-            noc_semaphore_inc(get_noc_addr(sync_x, sync_y, get_semaphore(META_SEM)), 1);
+            done.wait(NP);
+            done.set(0);
+            Semaphore<>(META_SEM).up(noc, sync_x, sync_y, 1);
         }
-        noc_async_atomic_barrier();
+        noc.async_atomic_barrier();
     }
 }
