@@ -33,6 +33,8 @@ fields:
     tracker_writer: _apply_src_zero_flag_
     invalidate: _invalidate_src_zero_flag_state_
 
-# Writes that are put back somewhere this check cannot see. Each needs a reason.
+# Writes that are put back somewhere this check cannot see. Each needs a reason. An entry exempts
+# its function and field under either policy, so a tracked write whose invalidate lives in another
+# file goes here too. restored_by must name a function defined in that arch's headers.
 # Keys: path (repo-relative), function, field, restored_by, reason.
 sites: []

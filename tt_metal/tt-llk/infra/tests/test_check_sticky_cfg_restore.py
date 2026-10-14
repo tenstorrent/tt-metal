@@ -153,10 +153,9 @@ def test_unresolved_value_is_a_note_not_a_failure(tmp_path):
     assert "cannot be judged" in r.stdout
 
 
-def test_table_site_covers(tmp_path):
-    f = hdr(tmp_path, f"inline void _llk_math_thing_() {{ {rmw(FP32, 0)} }}\n")
+def site_table(tmp_path, path, function, field, restored_by="_llk_math_thing_done_"):
     rel = os.path.relpath(
-        str(f), os.path.normpath(os.path.join(INFRA, "..", "..", ".."))
+        str(path), os.path.normpath(os.path.join(INFRA, "..", "..", ".."))
     )
     t = tmp_path / "t.yaml"
     t.write_text(
@@ -168,16 +167,53 @@ def test_table_site_covers(tmp_path):
                 f"""\
                 sites:
                   - path: {rel}
-                    function: _llk_math_thing_
-                    field: {FP32}
-                    restored_by: _llk_math_thing_done_
-                    reason: the op's done hook writes the configured value back
+                    function: {function}
+                    field: {field}
+                    restored_by: {restored_by}
+                    reason: the op's done hook puts the field back
                 """
             ),
         )
     )
+    return t
+
+
+def test_table_site_covers(tmp_path):
+    f = hdr(
+        tmp_path,
+        f"""
+        inline void _llk_math_thing_() {{ {rmw(FP32, 0)} }}
+        template <bool is_fp32_dest_acc_en>
+        inline void _llk_math_thing_done_() {{ {rmw(FP32, "is_fp32_dest_acc_en")} }}
+        """,
+    )
+    t = site_table(tmp_path, f, "_llk_math_thing_", FP32)
     assert run(f).returncode == 1
     assert run(f, table=t).returncode == 0
+
+
+def test_table_site_covers_tracked_field(tmp_path):
+    """A site also records a tracked write whose invalidate lives where the check cannot see."""
+    f = hdr(
+        tmp_path,
+        f"""
+        inline void _llk_math_thing_() {{ {rmw(ZF, 1)} }}
+        inline void _llk_math_thing_done_() {{ math::_invalidate_src_zero_flag_state_(); }}
+        """,
+    )
+    t = site_table(tmp_path, f, "_llk_math_thing_", ZF)
+    assert run(f).returncode == 1
+    assert run(f, table=t).returncode == 0
+
+
+def test_table_site_restorer_must_exist(tmp_path):
+    f = hdr(tmp_path, f"inline void _llk_math_thing_() {{ {rmw(FP32, 0)} }}\n")
+    t = site_table(
+        tmp_path, f, "_llk_math_thing_", FP32, restored_by="_no_such_function_"
+    )
+    r = run(f, table=t)
+    assert r.returncode == 1
+    assert ".yaml:" in r.stdout and "_no_such_function_" in r.stdout
 
 
 def test_field_not_in_table_is_ignored(tmp_path):
@@ -272,6 +308,39 @@ def test_baseline_suppresses_by_function(tmp_path):
     assert run(f, baseline=b).returncode == 0
     b.write_text(f"{rel}:_llk_math_other_:{FP32}\n")
     assert run(f, baseline=b).returncode == 1
+
+
+def test_baseline_key_is_shared_by_overloads(tmp_path):
+    """The key is path:function:field, so same-named functions in a file share one entry."""
+    f = hdr(
+        tmp_path,
+        f"""
+        inline void _llk_math_thing_(int a) {{ {rmw(FP32, 0)} }}
+        inline void _llk_math_thing_(int a, int b) {{ {rmw(FP32, 0)} }}
+        """,
+    )
+    assert run(f).stdout.count("[restore]") == 2
+    rel = os.path.relpath(
+        str(f), os.path.normpath(os.path.join(INFRA, "..", "..", ".."))
+    )
+    b = tmp_path / "b.txt"
+    b.write_text(f"{rel}:_llk_math_thing_:{FP32}\n")
+    assert run(f, baseline=b).returncode == 0
+
+
+def test_missing_pyyaml_is_a_table_error(tmp_path):
+    f = hdr(tmp_path, "inline void _llk_math_thing_() {}\n")
+    saved = sys.modules.get("yaml")
+    sys.modules["yaml"] = None  # makes `import yaml` raise ImportError
+    try:
+        r = run(f)
+    finally:
+        if saved is None:
+            del sys.modules["yaml"]
+        else:
+            sys.modules["yaml"] = saved
+    assert r.returncode == 1
+    assert "PyYAML is required" in r.stdout
 
 
 def test_only_touched_headers_are_checked(tmp_path):

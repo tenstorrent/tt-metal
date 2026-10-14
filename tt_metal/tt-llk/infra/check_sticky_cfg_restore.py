@@ -12,7 +12,10 @@ The fields and their policy live in sticky_cfg_fields.yaml:
              a function of the same file that calls it.
 
 A write whose value is not a literal cannot be judged and is reported as a note, never a failure.
-Pre-existing findings go in a baseline keyed by path, function and field.
+Pre-existing findings go in a baseline keyed by path, function and field; overloads and same-named
+functions in one file share a key. A `sites:` entry exempts its function and field under either
+policy, so it is also the place to record a tracked write whose invalidate lives in another file.
+The function it names as `restored_by` must be defined in that arch's headers.
 
 Known limit: the restore check is lexical, so a branch that clears a field and a sibling branch that
 sets it back read as restored.
@@ -79,7 +82,10 @@ def arch_of(path):
 
 
 def load_table(path=TABLE, repo=REPO):
-    import yaml
+    try:
+        import yaml
+    except ImportError:
+        raise TableError("PyYAML is required: pip install pyyaml")
 
     try:
         doc = yaml.safe_load(open(path)) or {}
@@ -202,6 +208,40 @@ def uninit_index(fields, extra=()):
     return idx
 
 
+def function_names(extra=()):
+    """(arch, function name) for every function defined in the arch trees and in extra."""
+    names = set()
+    paths = {p for a in DEFINES for p in tree_files(a)} | {
+        os.path.abspath(e) for e in extra
+    }
+    for path in sorted(paths):
+        arch = arch_of(path)
+        if arch:
+            for name, _sig, _bl, _body in bodies(path):
+                if name:
+                    names.add((arch, name))
+    return names
+
+
+def check_sites(sites, extra=()):
+    """Raise TableError for a site whose path is outside an arch tree or whose
+    restored_by names no function in that arch's headers."""
+    if not sites:
+        return
+    names = function_names(extra)
+    for s in sites:
+        arch = arch_of(os.path.join(REPO, s["path"]))
+        if arch is None:
+            raise TableError(
+                f"site {s['path']} is not under a wormhole_b0 or blackhole tree"
+            )
+        if (arch, s["restored_by"]) not in names:
+            raise TableError(
+                f"site {s['path']}:{s['function']}: restored_by {s['restored_by']} is not "
+                f"defined in any {arch} header"
+            )
+
+
 def _uninit_name(name):
     return re.sub(r"_init(?=_|$)", "_uninit", name, count=1) if name else None
 
@@ -322,6 +362,11 @@ def main():
         sorted({p for a in DEFINES for p in tree_files(a)}) if whole_tree else headers
     )
     uninits = uninit_index(fields, targets)
+    try:
+        check_sites(sites, targets)
+    except TableError as e:
+        print(f"{args.table}: {e}")
+        return 1
 
     accepted = set()
     if args.baseline and os.path.exists(args.baseline):
