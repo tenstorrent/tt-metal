@@ -103,6 +103,12 @@ struct RecipeAccumulatorState {
 constexpr uint32_t INVALID_CB = 32;
 #ifdef SDPA_RECIPE_FP32
 static bool sdpa_skip_prev_sum_pop = false;
+// The FP32 recipes keep their row maxima in FP32 tiles (CBs 10, 11): BF16 maxima of FP32 scores can sit
+// beyond the score exp's range (about 21.5 below and 0.7 above 0) once |scale * s| exceeds about 1e4, which
+// zeroes a whole row of P. The max reduce reads scores through srcA (19 bits), so the maxima are exact on
+// that grid, and every FPU read of them (S - m, m_old - m_new) is exact as well.
+// Word offset of row r's maximum (column 0) in an FP32 tile: 16 x 16 word faces, rows 16-31 in face 2.
+constexpr uint32_t sdpa_max_word(uint32_t r) { return (r / 16) * 512 + (r % 16) * 16; }
 #endif
 // Blackhole benefits from blocked packing at width four.
 constexpr uint32_t MIN_BLOCKED_PACK_TILES = 4;
@@ -526,7 +532,7 @@ SDPA_RECIPE_COLD void reduce_c_row_group(
 
 #ifdef SDPA_RECIPE_FP32
 #ifdef SDPA_RECIPE_ACCURATE
-// Apply the same BF16-derived maximum once to the entire FP32 score row using
+// Apply the row maximum once to the entire FP32 score row using
 // the L1 FP32 adder, then reload four score tiles without a resident maximum.
 static void sdpa_subtract_max_l1(uint32_t inout_cb, uint32_t max_cb, uint32_t row, uint32_t cols) {
     tile_regs_acquire();
@@ -635,11 +641,8 @@ SDPA_RECIPE_COLD void sub_exp_block_bcast_cols(
 
     {
 #ifdef SDPA_RECIPE_FP32
-        if (skip_pack_configure) {
-            sdpa_stream_reconfig_srca(inout_cb);
-        } else {
-            sdpa_stream_reconfig(inout_cb, max_cb);
-        }
+        // Both sources: after the QK matmul srcB still holds Q's BF16 format, and the maxima are FP32.
+        sdpa_stream_reconfig(inout_cb, max_cb);
 #endif
         sub_bcast_cols_init_short_custom(inout_cb, max_cb, tiles_per_column);
     }
@@ -817,14 +820,14 @@ bool sub_exp_first_col_blocks(
                 get_tile_l1_byte_address(get_operand_id(in0_cb), global_row_base + t));
             auto* new_max = reinterpret_cast<volatile uint32_t*>(
                 get_tile_l1_byte_address(get_operand_id(in1_cb), global_row_base + t));
-            // Same 32 BF16 first-column comparisons, four independent loads
-            // per loop control iteration. Upper halves remain irrelevant.
+            // The 32 FP32 first-column comparisons (sdpa_max_word), four independent loads per loop
+            // control iteration.
             for (uint32_t r = 0; r < 32; r += 4) {
-                const uint32_t offset = (r / 16) * 256 + (r % 16) * 8;
+                const uint32_t offset = sdpa_max_word(r);
                 const uint32_t difference =
-                    (old_max[offset] ^ new_max[offset]) | (old_max[offset + 8] ^ new_max[offset + 8]) |
-                    (old_max[offset + 16] ^ new_max[offset + 16]) | (old_max[offset + 24] ^ new_max[offset + 24]);
-                if ((difference & 0xffffu) != 0) {
+                    (old_max[offset] ^ new_max[offset]) | (old_max[offset + 16] ^ new_max[offset + 16]) |
+                    (old_max[offset + 32] ^ new_max[offset + 32]) | (old_max[offset + 48] ^ new_max[offset + 48]);
+                if (difference != 0) {
                     identical = 0;
                     break;
                 }
@@ -1189,13 +1192,13 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                 auto* new_max =
                     reinterpret_cast<volatile uint32_t*>(get_tile_l1_byte_address(get_operand_id(cur.max), row));
                 for (uint32_t r = 0; r < 32; r += 4) {
-                    const uint32_t offset = (r / 16) * 256 + (r % 16) * 8;
-                    const uint32_t a0 = old_max[offset], a1 = old_max[offset + 8];
-                    const uint32_t a2 = old_max[offset + 16], a3 = old_max[offset + 24];
-                    const uint32_t diff = (a0 ^ new_max[offset]) | (a1 ^ new_max[offset + 8]) |
-                                          (a2 ^ new_max[offset + 16]) | (a3 ^ new_max[offset + 24]);
-                    if ((diff & 0xffffu) || (a0 & 0x7f80u) == 0x7f80u || (a1 & 0x7f80u) == 0x7f80u ||
-                        (a2 & 0x7f80u) == 0x7f80u || (a3 & 0x7f80u) == 0x7f80u) {
+                    constexpr uint32_t inf = 0x7f800000u;
+                    const uint32_t offset = sdpa_max_word(r);
+                    const uint32_t a0 = old_max[offset], a1 = old_max[offset + 16];
+                    const uint32_t a2 = old_max[offset + 32], a3 = old_max[offset + 48];
+                    const uint32_t diff = (a0 ^ new_max[offset]) | (a1 ^ new_max[offset + 16]) |
+                                          (a2 ^ new_max[offset + 32]) | (a3 ^ new_max[offset + 48]);
+                    if (diff || (a0 & inf) == inf || (a1 & inf) == inf || (a2 & inf) == inf || (a3 & inf) == inf) {
                         sdpa_early_identity = 0;
                         break;
                     }
@@ -1332,7 +1335,8 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                         /*skip_pack_configure=*/true);
                     sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_qkt_im>();
 #ifdef SDPA_RECIPE_FP32
-                    sdpa_stream_reconfig_srca(cb_kt_in);
+                    // sub_exp left the FP32 maxima's format on srcB: restore Q's.
+                    sdpa_stream_reconfig(cb_kt_in, cb_q_in);
 #else
                     sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
 #endif

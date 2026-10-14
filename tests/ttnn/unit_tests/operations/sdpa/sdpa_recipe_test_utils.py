@@ -149,6 +149,29 @@ def check_joint(device, variant):
     assert l2_pct(actual, expected) < L2_PCT_BOUND[variant]
 
 
+# Largest scaled logit of the rows (natural-log units of the scaled scores) for check_large_logits. Past about 1.1e4,
+# FP32 scores against BF16 row maxima leave the score exp's range and zero whole rows of P.
+LOGIT_SCALES = {"moderate": 3e3, "large": 2e4}
+
+
+def aligned_inputs(b, nh, sq, sk, d, logit, seed):
+    """Every query is a scaled copy of a random key: its row's largest scaled logit is between logit / 2 and logit,
+    and the row's other logits stay below about a third of it, so the reference picks that key's value row."""
+    generator = torch.Generator().manual_seed(seed)
+    k, v = randn(b, nh, sk, d, seed=seed + 1), randn(b, nh, sk, d, seed=seed + 2)
+    keys = k[:, :, torch.randint(0, sk, (sq,), generator=generator), :].double()
+    target = logit * (0.5 + 0.5 * torch.rand(b, nh, sq, 1, generator=generator, dtype=torch.float64))
+    q = keys * (target * math.sqrt(d) / (keys * keys).sum(-1, keepdim=True))
+    return q.bfloat16(), k, v
+
+
+def check_large_logits(device, variant, scale):
+    b, nh, _, sq, sk, d, q_chunk, k_chunk = SHAPES["subtile_tails"]
+    q, k, v = aligned_inputs(b, nh, sq, sk, d, LOGIT_SCALES[scale], seed=40)
+    actual = ttnn.to_torch(sdpa(device, variant, q, k, v, q_chunk, k_chunk))
+    assert l2_pct(actual, reference(q, k, v)) < L2_PCT_BOUND[variant]
+
+
 # b, nh, sq, sk, d, joint rows (0 = plain SDPA).
 OP_SELECTED_SHAPES = {
     "self_attention": (1, 10, 4096, 4096, 128, 0),

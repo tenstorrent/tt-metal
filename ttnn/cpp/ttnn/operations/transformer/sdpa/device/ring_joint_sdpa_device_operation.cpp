@@ -1186,7 +1186,11 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     if (args.precision.has_value()) {
         using State = sdpa::streaming::StateTransfer;
         const uint32_t q_chunk = args.get_q_chunk_size();
-        const uint32_t pages = State::page_count(q_chunk / 32, input.logical_shape()[3] / 32) + 1;
+        // BALANCED and ACCURATE checkpoint FP32 maxima.
+        const bool fp32_maxima = *args.precision == ttnn::transformer::SDPAPrecision::BALANCED ||
+                                 *args.precision == ttnn::transformer::SDPAPrecision::ACCURATE;
+        const uint32_t pages =
+            State::page_count(q_chunk / 32, input.logical_shape()[3] / 32, fp32_maxima ? 4096 : 2048) + 1;
         const uint32_t q_blocks = input.logical_shape()[0] * input.logical_shape()[1] *
                                   ((input.padded_shape()[2] + q_chunk - 1) / q_chunk +
                                    (joint_padded_seq + q_chunk - 1) / q_chunk);

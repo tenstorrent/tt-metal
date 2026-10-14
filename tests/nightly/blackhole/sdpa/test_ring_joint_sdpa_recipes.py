@@ -14,7 +14,9 @@ import ttnn
 
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     L2_PCT_BOUND,
+    LOGIT_SCALES,
     VARIANTS,
+    aligned_inputs,
     blackhole_only,
     l2_pct,
     randn,
@@ -189,13 +191,18 @@ def run_ring(
     )
 
 
-def ring_case(mesh, variant, case):
+def ring_case(mesh, variant, case, logit=None):
+    """logit: aligned_inputs with that largest scaled logit instead of normally distributed inputs."""
     b, nh, nkv, q_local, k_local, d, q_chunk, k_chunk, joint, logical_n, grid = RING_CASES[case]
-    q, k, v = (
-        randn(b, nh, RING * q_local, d, seed=1),
-        randn(b, nkv, RING * k_local, d, seed=2),
-        randn(b, nkv, RING * k_local, d, seed=3),
-    )
+    if logit is None:
+        q, k, v = (
+            randn(b, nh, RING * q_local, d, seed=1),
+            randn(b, nkv, RING * k_local, d, seed=2),
+            randn(b, nkv, RING * k_local, d, seed=3),
+        )
+    else:
+        assert nh == nkv and joint is None and logical_n is None
+        q, k, v = aligned_inputs(b, nh, RING * q_local, RING * k_local, d, logit, seed=41)
     logical_n = logical_n or RING * k_local
     if logical_n < RING * k_local:
         # Finite garbage past logical_n: the recipe must skip or mask it.
@@ -232,6 +239,27 @@ def ring_case(mesh, variant, case):
 def test_ring_joint_sdpa_recipe(ring_mesh, variant, case):
     mesh, semaphores, ccl_column = ring_mesh
     inputs, joints, backing, logical_n, kwargs, expected, has_joint = ring_case(mesh, variant, case)
+    out = run_ring(
+        mesh,
+        semaphores,
+        ccl_column,
+        inputs,
+        joints,
+        backing,
+        logical_n=logical_n,
+        precision=VARIANTS[variant][0],
+        **kwargs,
+    )
+    assert_per_chip(out, expected, variant, RING, has_joint)
+
+
+# Scaled logits up to 2e4 with several Q chunks per core: FP32 row maxima, checkpointed between ring iterations.
+@pytest.mark.parametrize("variant", ["balanced", "accurate"])
+def test_ring_joint_sdpa_recipe_large_logits(ring_mesh, variant):
+    mesh, semaphores, ccl_column = ring_mesh
+    inputs, joints, backing, logical_n, kwargs, expected, has_joint = ring_case(
+        mesh, variant, "multi_q_checkpoint", logit=LOGIT_SCALES["large"]
+    )
     out = run_ring(
         mesh,
         semaphores,
