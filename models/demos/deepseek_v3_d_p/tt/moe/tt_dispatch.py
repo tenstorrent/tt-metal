@@ -354,7 +354,7 @@ class TtDispatch2dModule(LightweightModule):
                 TtCombine2dModule, size it so no token is dropped: combine_fabric2d does not handle
                 a buffer with dropped tokens.
             seq_len_per_chip: Number of tokens on each source device.
-            emb_dim: Embedding dimension of each token. Used to check that a token fits in one
+            emb_dim: Embedding dimension of each token. Used to check that half a token fits in one
                 fabric packet. A TILE x also needs it to be a multiple of 32.
             cluster_axis: Mesh axis the ring runs along (0 = SP/dispatch axis).
             num_links: Number of fabric links per direction, 1 to 4.

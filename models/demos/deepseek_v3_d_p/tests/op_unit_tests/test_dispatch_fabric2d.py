@@ -29,7 +29,9 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_y_device_params
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
+from models.demos.deepseek_v3_d_p.tt.moe.fabric2d_contract import fabric2d_min_payload_size
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config, get_gate_outputs
 
 # One 5120-token chunk spread over the 8-chip dispatch group.
@@ -50,6 +52,16 @@ assert len(_MESH_CONFIGS) == len(_MESH_IDS), "dispatch_fabric2d mesh configs mis
 
 # The production 8x4 mesh on its own, for the tests about how the op is called, not the ring geometry.
 _PRODUCTION_MESH = [param for param in _MESH_CONFIGS if param.id == "fabric2d-torus-xy-8x4-2link"]
+
+# The 8x1 proxy at the payload a model mesh opens with: half a production token plus the metadata, so a
+# 7168-wide token crosses every hop as two packets. The rows above open at a whole token.
+_HALF_TOKEN_PAYLOAD_8X1 = pytest.param(
+    (8, 1),
+    torus_y_device_params(fabric_payload_size=fabric2d_min_payload_size(7168)),
+    2,
+    marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+    id="fabric2d-torus-y-8x1-2link-half-token-payload",
+)
 
 
 def _reference_dispatch(indices, table, offs, x, capacity, G, H, seq, topk, emb):
@@ -569,7 +581,7 @@ def test_dispatch_fabric2d_subdevice(mesh_device, device_params, num_links, capf
 
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
-    _PRODUCTION_MESH,
+    _PRODUCTION_MESH + [_HALF_TOKEN_PAYLOAD_8X1],
     indirect=["mesh_device", "device_params"],
 )
 # 90 and 224 tiles wide. 90 is not a multiple of 8, so it is the width that exercises

@@ -30,6 +30,7 @@ struct SenderCtArgs {
         kDownstreamNocX,
         kDownstreamNocY,
         kFwdSemAddr,
+        kFirstPacketBytes,
         kCount,
     };
 
@@ -48,6 +49,9 @@ struct SenderCtArgs {
     uint32_t downstream_noc_x;  // the downstream stream core
     uint32_t downstream_noc_y;
     uint32_t fwd_sem_addr;
+    // Bytes of a token its first fabric packet carries: all of it, or the first half when a whole token and
+    // its fwd_meta do not fit one packet. The rest of the token and the fwd_meta then follow as a second.
+    uint32_t first_packet_bytes;
 
 #ifndef KERNEL_BUILD
     // `downstream` is the core serving this stream on the next chip; the sender signals its arrived-page
@@ -57,7 +61,8 @@ struct SenderCtArgs {
         const op::StreamPlacement& self,
         const op::StreamPlacement& downstream,
         const op::L1Layout& l1,
-        const op::KernelPlan& plan) :
+        const op::KernelPlan& plan,
+        uint32_t first_packet) :
         queue_depth(QUEUE_DEPTH),
         token_size_bytes(token_bytes),
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
@@ -72,7 +77,8 @@ struct SenderCtArgs {
         freed_addr(plan.queue_freed_addr),
         downstream_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
         downstream_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
-        fwd_sem_addr(plan.fwd_arrived_addr) {}
+        fwd_sem_addr(plan.fwd_arrived_addr),
+        first_packet_bytes(first_packet) {}
 
     std::vector<uint32_t> to_ct_word_arr() const {
         constexpr uint32_t kUnset = 0xDEADBEEFu;
@@ -92,6 +98,7 @@ struct SenderCtArgs {
         w[kDownstreamNocX] = downstream_noc_x;
         w[kDownstreamNocY] = downstream_noc_y;
         w[kFwdSemAddr] = fwd_sem_addr;
+        w[kFirstPacketBytes] = first_packet_bytes;
         for (uint32_t i = 0; i < kCount; i++) {
             TT_FATAL(w[i] != kUnset, "dispatch_fabric2d: sender compile-time arg {} was never assigned", i);
         }
@@ -113,10 +120,12 @@ struct SenderCtArgs {
         freed_addr(get_compile_time_arg_val(kFreedAddr)),
         downstream_noc_x(get_compile_time_arg_val(kDownstreamNocX)),
         downstream_noc_y(get_compile_time_arg_val(kDownstreamNocY)),
-        fwd_sem_addr(get_compile_time_arg_val(kFwdSemAddr)) {}
+        fwd_sem_addr(get_compile_time_arg_val(kFwdSemAddr)),
+        first_packet_bytes(get_compile_time_arg_val(kFirstPacketBytes)) {}
 #endif
 
     constexpr uint32_t entry_stride() const { return token_size_bytes + forwarding_metadata_size; }
+    constexpr uint32_t packets_per_token() const { return first_packet_bytes < token_size_bytes ? 2 : 1; }
 };
 
 }  // namespace dspf2d

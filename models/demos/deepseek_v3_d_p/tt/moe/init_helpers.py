@@ -22,7 +22,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.fabric2d_contract import (
     FABRIC2D_FORWARDING_METADATA_BYTES,
-    combine_fabric2d_payload_size,
+    fabric2d_min_payload_size,
 )
 
 # Fabric packet payload limits (conservative round values below hardware maximums).
@@ -44,7 +44,7 @@ def moe_fabric_payload_size(model_cfg) -> int:
     mesh opened any other way simply runs without it. Deferred to avoid probing hardware at import time.
     """
     if is_blackhole():
-        return max(model_cfg.FABRIC_PAYLOAD_SIZE, combine_fabric2d_payload_size(model_cfg.EMB_SIZE))
+        return max(model_cfg.FABRIC_PAYLOAD_SIZE, fabric2d_min_payload_size(model_cfg.EMB_SIZE))
     return model_cfg.FABRIC_PAYLOAD_SIZE
 
 
