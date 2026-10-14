@@ -502,6 +502,11 @@ class Gemma4Generator:
                 start_pos=aligned_start,
                 histories=histories,
             )
+            audit_dump = self._audit_control().get("dump_logits")
+            if audit_dump:
+                filename = Path(str(audit_dump)).name
+                vector = self._host_logits(out).reshape(-1, self.model.config.vocab_size)[0]
+                torch.save(vector, Path("/prefix-controlled") / f"logits-{filename}-{length}.pt")
             if history_keys is not None:
                 state.prefill_history[history_keys[row]] = {"end": length, "layers": histories}
                 if self._audit_control().get("retain_bf16", False):
