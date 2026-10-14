@@ -1558,7 +1558,7 @@ void append_to_descriptor(
     //         = (2*K_gate*N_gate + K_down*N_down) / (K_gate/w_wide - K_gate/w_narrow)
     //
     // Measured on a BH p150b at ISL 5120, tiles per extra block: kimi_k3 4608,
-    // kimi_k26 / dsv4_flash / glm_51 3072, gptoss_120b 2700, minimax_m3 1536,
+    // kimi_k26 / dsv4_flash / glm_53 3072, gptoss_120b 2700, minimax_m3 1536,
     // dsv4_pro 658. Only kimi_k3 clears the bar, and it is the only shape the
     // doubling measurably helps: +3-4% at ISL >= 512, -3% at ISL <= 256, against
     // 1.5-1.85x LOSSES on the shapes below it. The bar sits between 3072 and 4608;
@@ -2273,7 +2273,7 @@ void append_to_descriptor(
         .defines = {compute_defines.begin(), compute_defines.end()},
         .config =
             tt::tt_metal::ComputeConfigDescriptor{
-                .math_fidelity = MathFidelity::LoFi,
+                .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
                 .fp32_dest_acc_en = kFp32DestAccEn,
                 .math_approx_mode = false,
             },

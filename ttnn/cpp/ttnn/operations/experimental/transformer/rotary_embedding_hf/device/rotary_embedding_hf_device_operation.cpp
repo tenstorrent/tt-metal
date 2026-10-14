@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/device_operation.hpp"
 
 using namespace tt::constants;

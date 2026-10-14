@@ -21,6 +21,11 @@ struct SparseMatmulParams {
     // of scanning all batchB sparsity slots, and the output batch axis is COMPACT (length num_active).
     // Set from indices.has_value() at build time so the program hash distinguishes the two modes.
     bool use_indices = false;
+    // When true, a per-group `bias` operand (in optional_input_tensors[1], indexed mode only) is added to
+    // each group's output inside the matmul: bias is a TILE tensor of padded shape [..., E, 32, N] whose
+    // tile row e holds group e's [1, N] bias (row-broadcast add, as the dense fused bias). Hashed so the
+    // FUSE_BIAS program differs from the plain one.
+    bool use_bias = false;
     std::optional<const operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
     tt::tt_metal::MemoryConfig output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     std::optional<tt::tt_metal::DataType> output_dtype = std::nullopt;

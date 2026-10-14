@@ -7,6 +7,7 @@ import inspect
 import json
 import math
 import os
+import re
 from enum import Enum, auto
 from functools import lru_cache
 from pathlib import Path
@@ -47,11 +48,14 @@ from models.tt_transformers.tt.load_checkpoints import (
     convert_meta_to_hf_no_qkv_permute,
     convert_vision_hf_to_meta,
     convert_vision_hf_to_meta_no_qkv_permute,
+    load_hf_state_dict_for_layers,
     reverse_permute,
     standardize_hf_keys,
     standardize_hf_keys_multimodal,
 )
 from models.tt_transformers.tt.prefetcher import Prefetcher
+
+_HF_LAYER_KEY_RE = re.compile(r"^model\.layers\.(\d+)\.")
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -736,9 +740,7 @@ class ModelArgs:
             raise ValueError(f"Batch size {self.max_batch_size} not supported")
 
         # Load model params
-        if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
-            self.trust_remote_code_hf = True
-
+        # Do not force remote code for Phi-3. Its remote model leaves most weights randomly initialized on HF 5.x.
         self._set_hf_params(self.CKPT_DIR)
 
         # Set the max number of tokens for each prefill chunk based on the model and device
@@ -3295,14 +3297,18 @@ class ModelArgs:
     def weight_cache_path(self, dtype):
         # Keep the weight cache separate for generative and instruct weights
         if self.instruct:
-            return (
-                self.model_cache_path
-                / {ttnn.bfloat16: "tensor_cache_instruct_bf16", ttnn.bfloat8_b: "tensor_cache_instruct_bfp8"}[dtype]
-            )
+            cache_name = {
+                ttnn.bfloat16: "tensor_cache_instruct_bf16",
+                ttnn.bfloat8_b: "tensor_cache_instruct_bfp8",
+            }[dtype]
         else:
-            return (
-                self.model_cache_path / {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
-            )
+            cache_name = {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
+
+        if self.base_model_name == "Phi-3-mini-128k-instruct":
+            # Caches built before the native-loader fix may contain randomly initialized weights.
+            cache_name += "_hf_native"
+
+        return self.model_cache_path / cache_name
 
     # Name of the marker file dropped into a weight-cache directory once every weight for that
     # (model, dtype, mesh shape) has been materialized to disk. Generalizes the GPT-OSS
@@ -3484,7 +3490,38 @@ class ModelArgs:
 
         raise ValueError(f"Unknown model for config {type(self.hf_config)}")
 
-    # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
+    def _load_hf_state_dict_for_configured_layers(self):
+        """Read only the decoder layers this ModelArgs was trimmed to (plus embeddings, norm and lm_head)
+        straight from the safetensors shards, instead of materialising the whole checkpoint through
+        from_pretrained. Returns None when the full HF model is needed or the checkpoint cannot be
+        read that way, and the caller falls back to from_pretrained.
+        """
+        full_n_layers = getattr(self, "full_model_n_layers", self.n_layers)
+        if self.n_layers >= full_n_layers:
+            return None
+        # The HF model object itself is needed for reference modules, custom (remote-code) layouts and
+        # the multimodal key remapping; those keep the from_pretrained path.
+        if self.cache_hf_flag or self.trust_remote_code_hf or self.is_multimodal or self.force_text_only:
+            return None
+        try:
+            state_dict = load_hf_state_dict_for_layers(
+                self.CKPT_DIR, self.n_layers, local_files_only=os.getenv("CI") == "true"
+            )
+        except (OSError, KeyError, ValueError, ImportError) as exc:
+            logger.warning(f"Per-layer safetensors load of {self.CKPT_DIR} failed ({exc}); loading the full model")
+            return None
+        if not any(_HF_LAYER_KEY_RE.match(k) for k in state_dict):
+            logger.warning(
+                f"Per-layer safetensors load of {self.CKPT_DIR} found no decoder layers; loading the full model"
+            )
+            return None
+        # from_pretrained materialises the tied lm_head; raw shards only carry the embedding.
+        if "lm_head.weight" not in state_dict and getattr(self.hf_config, "tie_word_embeddings", False):
+            if "model.embed_tokens.weight" in state_dict:
+                state_dict["lm_head.weight"] = state_dict["model.embed_tokens.weight"]
+        logger.info(f"Loaded {len(state_dict)} weights for {self.n_layers} of {full_n_layers} layers from safetensors")
+        return state_dict
+
     def load_state_dict(self):
         # by default, the model is not a mixture-of-expert. This will be set to True if we find any `.experts.` in the keys
         if self.dummy_weights:
@@ -3530,19 +3567,21 @@ class ModelArgs:
             state_dict = model.state_dict()
         else:
             # Always HuggingFace since we only support HF_MODEL now
-            model_cls = self.get_hf_model_cls()
-            model = model_cls.from_pretrained(
-                self.CKPT_DIR,
-                torch_dtype="auto",
-                trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=os.getenv("CI") == "true",
-                # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                # unnecessary cast.
-            )
-            if self.cache_hf_flag:
-                self.cached_hf_model = model
-            state_dict = model.state_dict()
+            state_dict = self._load_hf_state_dict_for_configured_layers()
+            if state_dict is None:
+                model_cls = self.get_hf_model_cls()
+                model = model_cls.from_pretrained(
+                    self.CKPT_DIR,
+                    torch_dtype="auto",
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=os.getenv("CI") == "true",
+                    # Note that the default setting is torch.dtype.float32, but model weights are
+                    # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                    # unnecessary cast.
+                )
+                if self.cache_hf_flag:
+                    self.cached_hf_model = model
+                state_dict = model.state_dict()
             self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
 
         if self.is_multimodal:
@@ -4531,7 +4570,12 @@ class ModelArgs:
     def reference_decoder(self, load_checkpoint=False):
         model = self.reference_transformer(wrap=False, load_checkpoint=load_checkpoint)
         layer = model.model.layers[0]
-        use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in ("phi-4",)
+        # Remote Phi-3 computes RoPE internally, while native Transformers 5.x requires the caller to supply it.
+        use_position_embeddings = (
+            layer.__class__.__name__ != "Phi3DecoderLayer"
+            or "position_embeddings" in inspect.signature(layer.forward).parameters
+            or self.base_model_name in ("phi-4",)
+        )
         if hasattr(model.model, "rotary_emb_local"):
             rotary_emb_local = model.model.rotary_emb_local
         else:

@@ -295,20 +295,18 @@ def _install_quasar_interleaved_matmul(monkeypatch, mesh_device):
             logger.warning(f"[llama-e2e][quasar] matmul de-shard failed ({e}); passing tensor through")
             return t
 
-    # CAP the matmul grid to a small 2D shape (2x2, clamped to the device). CRITICAL and non-obvious:
-    #  - It must be a 2D grid (both dims > 1), NOT a single row: a 1-row grid makes the picker choose 1D mcast
-    #    for the large-M prefill, whose per-core output = full M -> L1 OOM. A 2D grid lets the picker choose 2D
-    #    mcast for prefill/lm_head, which streams out_block and fits L1.
-    #  - It must be SMALL: 1D mcast FAILS at large grids on Quasar -- the device's full 8x4 tripped
-    #    llk_io_unpack.h:45 on the DECODE matmul (test_quasar_qkv_matmul_dfb[8x4] fails the same way; 8x4 was
-    #    never validated even with alias=0). The validated regime is <= ~3x2; 2x2 is validated for BOTH 1D
-    #    (test_quasar_qkv_matmul_dfb) and 2D (test_quasar_matmul_2d_mcast). Do NOT rely on
-    #    TT_METAL_CORE_GRID_OVERRIDE to keep the grid small -- pin it here so a run without the override
-    #    (device = full 8x4) doesn't fall back to the failing large grid.
-    # Cap the matmul grid to a small 2D shape (2x2, clamped to device). Must be 2D (a 1-row grid makes the
-    # picker pick 1D for prefill -> full-M-per-core L1 OOM) and SMALL (1D fails at 8x4 -- llk_io_unpack.h:45).
+    # Matmul grid for the 2-node emulator.
+    #  - gx capped to 2: 1D mcast FAILS at large grids on Quasar -- the full 8x4 tripped llk_io_unpack.h:45 on
+    #    the decode matmul; <= ~3x2 is the validated regime (test_quasar_qkv_matmul_dfb / _matmul_2d_mcast).
+    #  - gy PINNED to 1: the 2-node emulator is a SINGLE ROW (2x1). compute_with_storage_grid_size can report
+    #    y>1, but those rows are NOT usable in slow dispatch -- a 2-row config addresses row 1 and throws
+    #    "No core at (0,1)". A 1-row grid is fine because we build an EXPLICIT 2D config (not the picker): with
+    #    gy=1 the 2D path sets per_core_M = full M on the one row and out_block_h STREAMS it to L1, so it still
+    #    fits (no full-M-per-core OOM), and N splits across gx. The mainline 2D factory's single-row mcast
+    #    clamp lets grid.y==1 run (matmul_multicore_reuse_mcast_2d_program_factory.cpp; guard test
+    #    debug_ops/test_quasar_matmul_2d_single_row.py).
     dev = mesh_device.compute_with_storage_grid_size()
-    gx, gy = min(int(dev.x), 2), min(int(dev.y), 2)
+    gx, gy = min(int(dev.x), 2), 1
     mm_core_grid = ttnn.CoreGrid(y=gy, x=gx)
 
     def _blk(v, sub, cap):
@@ -1066,6 +1064,119 @@ def _install_quasar_device_sdpa_split(monkeypatch, mesh_device):
                 logger.warning(f"[llama-e2e][quasar] could not patch {name} for device SDPA split ({e})")
 
 
+def _install_quasar_concat_heads_grid_agnostic(monkeypatch, mesh_device):
+    """Replace decode nlp_concat_heads_decode with a GRID-AGNOSTIC device head-merge when the device has fewer
+    than num_heads compute cores (the 2-compute-node emulator under slow dispatch).
+
+    The stock op places one head-column per core, so it needs num_heads (=32) cores
+    (num_cores_to_corerangeset(num_heads, grid) -> work_split.cpp:99 FATAL "32 > 2" on the emulator). But the
+    concat is just a per-user flatten of the (num_heads, head_dim) block: input[0,b,h,d] -> output[0,0,b,h*hd+d].
+    In ROW_MAJOR that is a contiguous reshape, so do it grid-agnostically on device: deshard -> untilize ->
+    reshape (merge heads into the hidden dim) -> pad the user/batch axis to a tile -> tilize. None of those shard
+    by head, so it fits ANY grid. Validated standalone (test_quasar_nlp_concat_heads_decode.py::
+    test_nlp_concat_heads_decode_grid_agnostic). On a >= num_heads-core device (WH/BH), the stock op is used
+    unchanged. Single-device only; falls back to orig on any error. NOT a host fallback -- the whole merge runs
+    on device. The durable fix is the op enhancement (pack heads/core); this unblocks the emulator now."""
+    tr_exp = getattr(ttnn, "experimental", None)
+    orig = getattr(tr_exp, "nlp_concat_heads_decode", None) if tr_exp is not None else None
+    if orig is None:
+        logger.warning("[llama-e2e][quasar] no ttnn.experimental.nlp_concat_heads_decode; concat patch skipped")
+        return
+
+    q = getattr(ttnn.experimental, "quasar", None)
+    _s2i = getattr(q, "sharded_to_interleaved", None) or ttnn.sharded_to_interleaved
+    _untilize = getattr(q, "untilize", None) or ttnn.untilize
+    _tilize = getattr(q, "tilize", None) or ttnn.tilize
+
+    def _grid_agnostic_merge(input_tensor, num_heads):
+        # input: [1, batch, num_heads, head_dim] TILE (HEIGHT_SHARDED or DRAM). Merge heads -> [1,1,batch,H*hd].
+        shp = input_tensor.shape
+        batch, head_dim = int(shp[1]), int(shp[3])
+        x = input_tensor
+        if x.is_sharded():
+            x = _s2i(x, ttnn.DRAM_MEMORY_CONFIG)
+        x = _untilize(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # row-major [1,batch,num_heads,head_dim]
+        x = ttnn.reshape(x, (1, 1, batch, num_heads * head_dim))  # contiguous head-merge
+        pad_to = ((batch + 31) // 32) * 32
+        if pad_to != batch:
+            x = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_to - batch), (0, 0)], value=0.0)
+        return _tilize(x, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+
+    def _wrap(orig_fn):
+        def _f(input_tensor, *args, num_heads=None, **kwargs):
+            try:
+                dev = input_tensor.device()
+                if dev is None or dev.get_num_devices() != 1 or num_heads is None:
+                    return orig_fn(input_tensor, *args, num_heads=num_heads, **kwargs)
+                g = dev.compute_with_storage_grid_size()
+                if int(g.x) * int(g.y) >= int(num_heads):
+                    return orig_fn(input_tensor, *args, num_heads=num_heads, **kwargs)  # stock op fits
+                logger.warning(
+                    f"[llama-e2e][quasar] grid-agnostic concat-heads (grid {g.x}x{g.y} < num_heads={num_heads})"
+                )
+                return _grid_agnostic_merge(input_tensor, int(num_heads))
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] grid-agnostic concat-heads failed ({e}); falling back to op")
+                return orig_fn(input_tensor, *args, num_heads=num_heads, **kwargs)
+
+        return _f
+
+    try:
+        monkeypatch.setattr(ttnn.experimental, "nlp_concat_heads_decode", _wrap(orig))
+    except Exception as e:
+        logger.warning(f"[llama-e2e][quasar] could not patch nlp_concat_heads_decode ({e})")
+
+
+def _install_quasar_concat_l1_overflow_to_dram(monkeypatch, mesh_device):
+    """Route an L1 ttnn.concat output to DRAM when it won't fit L1 on this (small) device.
+
+    The lm_head concatenates 47 logit splits into the full-vocab [1,1,32,128256] output with an L1 output memcfg
+    (lm_head_1d.py:154, output_memcfg defaults to L1_MEMORY_CONFIG). On the 2-compute-node emulator that's ~8 MB
+    interleaved across 2 banks = ~4 MB/bank > the 3.88 MB bank size -> Out of Memory (bank_manager.cpp). The
+    full-vocab logits can't live in L1 on 2 cores. Coerce an OVERSIZED L1 concat output to DRAM interleaved;
+    small concats keep their L1 config. Downstream (sampling / argmax) accepts a DRAM tensor. Complements
+    _install_quasar_force_interleaved, which only handles oversized SHARDED configs (this is L1 INTERLEAVED)."""
+    orig = ttnn.concat
+    dev = mesh_device.compute_with_storage_grid_size()
+    ncores = max(int(dev.x) * int(dev.y), 1)
+    per_bank_budget = 3_800_000  # under the ~3.88 MB L1 bank size, leaving headroom for other allocations
+
+    def _l1_output_fits(tensors):
+        # concat output volume == sum of input volumes; L1-interleaved spreads it across `ncores` banks.
+        total_bytes = 0
+        for t in tensors:
+            try:
+                vol = 1
+                for d in t.shape:
+                    vol *= int(d)
+                total_bytes += vol * 2  # bf16 (the Quasar activation dtype)
+            except Exception:
+                return True  # can't estimate -> don't coerce
+        return (total_bytes / ncores) <= per_bank_budget
+
+    def _f(tensors, *args, **kwargs):
+        try:
+            mc = kwargs.get("memory_config")
+            if (
+                mc is not None
+                and getattr(mc, "buffer_type", None) == ttnn.BufferType.L1
+                and isinstance(tensors, (list, tuple))
+                and not _l1_output_fits(tensors)
+            ):
+                logger.warning(
+                    f"[llama-e2e][quasar] concat L1 output exceeds {ncores}-bank L1 budget -> DRAM interleaved"
+                )
+                kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+        except Exception as e:
+            logger.warning(f"[llama-e2e][quasar] concat L1->DRAM check failed ({e}); passing through")
+        return orig(tensors, *args, **kwargs)
+
+    try:
+        monkeypatch.setattr(ttnn, "concat", _f)
+    except Exception as e:
+        logger.warning(f"[llama-e2e][quasar] could not patch ttnn.concat ({e})")
+
+
 def _install_quasar_force_interleaved(monkeypatch, mesh_device):
     """Force OVERSIZED sharded memory configs to DRAM-interleaved on Quasar; keep device-fitting shards.
 
@@ -1260,6 +1371,13 @@ def test_llama_e2e(mesh_device, optimizations, monkeypatch):  # noqa: F811 — m
     if "LLAMA_PCC_LOG" not in os.environ:
         monkeypatch.setenv("LLAMA_PCC_LOG", "1")
     if quasar:
+        # Disable the program cache on Quasar. The cache-hit partial-fast-path (UpdateProgramRunArgs)
+        # mis-applies some ops' per-dispatch state on reuse -- e.g. paged_fill_cache's DRAM write overrun --
+        # whose proper fix is a codeowner-side program-factory change. With the cache off, every dispatch
+        # takes the full SetProgramRunArgs path, which is correct. Slower, but the bring-up e2e is minimal
+        # (1 layer, 1 decode step). Nothing re-enables it, so this one call covers the whole run.
+        mesh_device.disable_and_clear_program_cache()
+
         # minimal_matmul pins an 8x8 grid unavailable on the Quasar emulator -> force ttnn.linear.
         monkeypatch.setenv("DISABLE_MINIMAL_MATMUL", "1")
         # Default to a 1-layer stack for bring-up unless the caller asked for more.
@@ -1274,10 +1392,13 @@ def test_llama_e2e(mesh_device, optimizations, monkeypatch):  # noqa: F811 — m
         # Route weight-upload tilize through the Gen2-native quasar op (the mainline one hangs on the sim).
         # Must be installed before create_model, which materializes the weights via ttnn.from_torch.
         _install_quasar_tilize_from_torch(monkeypatch)
-        # Route interleaved_to_sharded through the Gen2-native quasar op (the mainline one faults on the
-        # sim -- RoPE cos/sin decode sharding, UNALIGNED_LOAD / neighbour-core corruption). See the
-        # dedicated repro test_llama_e2e_with_i2s_failure.py.
-        _install_quasar_i2s(monkeypatch)
+        # i2s reroute REVERTED: mainline ttnn.interleaved_to_sharded is now fixed in-branch -- it passes
+        # tile_bytes as a compile-time arg instead of the stale get_tile_size() descriptor read (885d5069683,
+        # #58195/#58133), and the idle-neighbour UNALIGNED_LOAD root (stale launch-msg DFB fields on cores left
+        # idle by a subset-grid program) is fixed by the dm.cc enables-gate. So the Gen2-native quasar i2s
+        # reroute is no longer needed. Confirm on the sim with test_quasar_i2s_rope_fault.py::test_i2s_mainline
+        # (incl. the addr-shift/churn variants); re-install _install_quasar_i2s(monkeypatch) here if it faults.
+        # _install_quasar_i2s(monkeypatch)
         # Force fp32_dest_acc_en=False everywhere: the Quasar sim can't do the bf16->Tf32 unpack that
         # fp32 accumulation needs (qsr_unpack_src_value in_format=5 out_format=4). Must precede create_model
         # (compute configs are built during model construction).
@@ -1305,12 +1426,14 @@ def test_llama_e2e(mesh_device, optimizations, monkeypatch):  # noqa: F811 — m
             _install_quasar_host_matmul(monkeypatch)
             _install_quasar_host_create_qkv_heads(monkeypatch)
 
-        # RoPE on HOST by default (both modes). The device rotary_embedding_llama_sharded compute kernel is only
-        # PARTIALLY Quasar-ported: it pack_init's for the matmul-rotate output (dfb::rotated_interm) but NOT for
-        # the eltwise-chain PackTile targets (sin_interm / cos_interm / out), so pack_tile trips the pack re-init
-        # guard (llk_pack_tile_api.h:94, recipe section 7). host RoPE is exact + validated. Flip to device with
-        # LLAMA_QSR_DEVICE_ROPE=1 once the kernel port (pack_init on each pack-output switch) lands.
-        device_rope = device_attn and os.environ.get("LLAMA_QSR_DEVICE_ROPE", "0") == "1"
+        # RoPE ON DEVICE by default (LLAMA_QSR_DEVICE_ROPE=1 default; set =0 to fall back to host). The model is
+        # use_qk_fused=False (model.py:838), so decode uses the NON-fused ttnn.experimental.rotary_embedding_llama
+        # (separate Q/K), whose sharded compute kernel is Quasar-ported by #58196 (9d3abcb5c85: dummy_pack for
+        # resident pushes + pack_init on each pack-output switch) and binds 8 DFBs (fits the HW remapper's
+        # 8-intra-tensix-DFB limit). The fused_qk op is NOT used here and does NOT fit on Quasar (10 DFBs).
+        # Verified by tests/debug_ops/test_quasar_rope_device.py (non-fused sharded decode, PCC vs torch).
+        # host RoPE (LLAMA_QSR_DEVICE_ROPE=0) remains exact + validated as a fallback.
+        device_rope = device_attn and os.environ.get("LLAMA_QSR_DEVICE_ROPE", "1") == "1"
         if not device_rope:
             _install_quasar_host_rope(monkeypatch)
 
@@ -1337,6 +1460,15 @@ def test_llama_e2e(mesh_device, optimizations, monkeypatch):  # noqa: F811 — m
             _install_quasar_device_sdpa_split(monkeypatch, mesh_device)
         else:
             _install_quasar_host_sdpa(monkeypatch)
+        # Decode concat-heads (STAGE 9): nlp_concat_heads_decode needs num_heads(=32) cores (one head-column per
+        # core), so it FATALs on the 2-node emulator (work_split.cpp:99 "32 > 2"). On a < num_heads-core grid,
+        # replace it with a grid-agnostic device head-merge (deshard->untilize->reshape->pad->tilize); >=
+        # num_heads-core grids (WH/BH) keep the stock op. On device, not a host fallback. The durable fix is the
+        # op enhancement (pack heads/core) -- see debug_ops/test_quasar_nlp_concat_heads_decode.py.
+        _install_quasar_concat_heads_grid_agnostic(monkeypatch, mesh_device)
+        # lm_head concat: the full-vocab [1,1,32,128256] logits (47 splits) use an L1 output memcfg (~8MB), which
+        # overflows L1 on the 2-node emulator (4MB/bank > 3.88MB). Route oversized L1 concat outputs to DRAM.
+        _install_quasar_concat_l1_overflow_to_dram(monkeypatch, mesh_device)
         # Route eltwise add/mul/multiply/subtract to the Quasar-native ops: mainline binary_ng is Gen1-only
         # (DataMovementKernel FATAL on Quasar). Keeps residual adds + MLP gate mul on device.
         _install_quasar_eltwise(monkeypatch)

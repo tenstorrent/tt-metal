@@ -122,7 +122,23 @@ inline uint32_t noc_v3_inline_write_state_val = 0;
 // callers that pass a state address with a nonzero offset (the existing
 // dataflow wrappers do) behave identically to V2 instead of leaking stale
 // base bits into base | local.
+// noc_v3_state_base_of and noc_v3_cq_local_of return a bare 32-bit CQ offset
+// whole: every real operand has bits >= 32 set because every window they can
+// match has a compare >= 2^32, except LoopbackScratch (compare 0x100000), whose
+// aperture a bare offset must never fall into. Pin that for the active map.
+static_assert(
+    noc_att::map_window(ACTIVE_ATT_MAP, noc_att::WindowClass::Worker).compare >= (uint64_t{1} << 32) &&
+        noc_att::map_window(ACTIVE_ATT_MAP, noc_att::WindowClass::Dram).compare >= (uint64_t{1} << 32) &&
+        noc_att::map_window(ACTIVE_ATT_MAP, noc_att::WindowClass::FullTile).compare >= (uint64_t{1} << 32),
+    "ATT CQ walk assumes only LoopbackScratch has compare < 2^32; a bare CQ offset would otherwise "
+    "match a real window and lose its high bits");
+
 inline __attribute__((always_inline)) uint64_t noc_v3_state_base_of(uint64_t noc_addr) {
+    // A bare 32-bit offset (completion-queue pointer, packed-write tail) is not a
+    // windowed operand: return it whole.
+    if (noc_addr < (uint64_t{1} << 32)) {
+        return noc_addr;
+    }
     const noc_att::WindowClass window_class = noc_att::matching_window_class(ACTIVE_ATT_MAP, noc_addr);
     if (window_class != noc_att::WindowClass::Invalid) {
         const noc_att::Window& window = noc_att::map_window(ACTIVE_ATT_MAP, window_class);
@@ -968,6 +984,11 @@ inline constexpr uint64_t NOC_V3_CQ_MCAST_LOCAL_MASK = noc_att::DESCRIPTOR_LOCAL
 
 // Extract the offset half of an address.
 inline __attribute__((always_inline)) uint64_t noc_v3_cq_local_of(uint64_t noc_addr) {
+    // A bare 32-bit CQ offset is already a local offset: return it whole so the
+    // LoopbackScratch aperture cannot match it.
+    if (noc_addr < (uint64_t{1} << 32)) {
+        return noc_addr;
+    }
     const noc_att::WindowClass window_class = noc_att::matching_window_class(ACTIVE_ATT_MAP, noc_addr);
     if (window_class == noc_att::WindowClass::Invalid) {
         return noc_addr;
@@ -977,10 +998,11 @@ inline __attribute__((always_inline)) uint64_t noc_v3_cq_local_of(uint64_t noc_a
 
 // Turn a host-packed coordinate word ((y << NOC_ADDR_NODE_ID_BITS) | x) into
 // the coordinate half of an address: the tile's window and selector with a
-// zero offset.
+// zero offset. The word is in the host's frame, so the map's frame offset is
+// applied before the lookup.
 inline __attribute__((always_inline)) uint64_t noc_v3_cq_packed_base(uint32_t packed_xy) {
     constexpr uint32_t node_mask = (1u << NOC_ADDR_NODE_ID_BITS) - 1;
-    const noc_att::ResolvedTile tile = noc_att::resolve_current(
+    const noc_att::ResolvedTile tile = noc_att::resolve_host_coordinate(
         ACTIVE_ATT_MAP, packed_xy & node_mask, (packed_xy >> NOC_ADDR_NODE_ID_BITS) & node_mask);
     if (!tile.valid) {
         __builtin_trap();

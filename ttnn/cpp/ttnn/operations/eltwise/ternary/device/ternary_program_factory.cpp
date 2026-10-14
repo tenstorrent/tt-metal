@@ -8,6 +8,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
 
@@ -565,7 +566,8 @@ TernaryCorePartition compute_core_partition(
     // zero_start_grid is a flag to indicate that we are using a single rectangular grid that starts at (0, 0)
     // as well as having the sharded tensors (if any) start at (0, 0)
     const auto& all_device_cores = operation_attributes.worker_grid;
-    if (grid.size() == 1) {
+    // A multi-range worker grid would leave cores past its first range without args.
+    if (grid.size() == 1 && all_device_cores.size() == 1) {
         const auto& cr = *all_device_cores.ranges().begin();
         if (cr.start_coord.x == 0 && cr.start_coord.y == 0) {
             if (p.has_sharding) {
@@ -1340,9 +1342,13 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     writer_desc.common_runtime_args = writer_common_runtime_args;
 
     // ---- Compute Kernel ----
-    bool fp32_dest_acc_en = output_data_format == tt::DataFormat::UInt32 ||
-                            output_data_format == tt::DataFormat::Int32 ||
-                            output_data_format == tt::DataFormat::Float32;
+    // Any 32-bit operand needs a 32-bit Dest: a Float32 input CB is unpacked with UnpackToDestFp32 below,
+    // and that lands corrupted in a Dest configured for 16-bit datums.
+    auto is_32bit_format = [](tt::DataFormat format) {
+        return format == tt::DataFormat::UInt32 || format == tt::DataFormat::Int32 || format == tt::DataFormat::Float32;
+    };
+    bool fp32_dest_acc_en = is_32bit_format(output_data_format) || is_32bit_format(predicate_data_format) ||
+                            is_32bit_format(value_true_data_format) || is_32bit_format(value_false_data_format);
 
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
 
@@ -1415,9 +1421,15 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
             kernel_defines["BCAST_C"] = (broadcast_type == TernaryBroadcastType::SCALAR_B_BCAST) ? "1" : "0";
         }
     }
-    // Get operation-specific compute kernel defines
-    auto op_defines =
-        CMAKE_UNIQUE_NAMESPACE::get_ternary_compute_defines(operation_attributes, predicate_tensor.dtype());
+    // Get operation-specific compute kernel defines.
+    // where_tile reads Dest in the layout its format names, so a 16-bit float predicate must select the
+    // Float32 variant once another operand has put Dest in 32-bit mode.
+    auto compute_dtype = predicate_tensor.dtype();
+    if (operation_attributes.ternary_op_type == TernaryOpType::WHERE && fp32_dest_acc_en &&
+        !is_32bit_format(predicate_data_format)) {
+        compute_dtype = DataType::FLOAT32;
+    }
+    auto op_defines = CMAKE_UNIQUE_NAMESPACE::get_ternary_compute_defines(operation_attributes, compute_dtype);
     for (const auto& [key, value] : op_defines) {
         kernel_defines[key] = value;
     }

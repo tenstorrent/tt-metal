@@ -46,22 +46,17 @@ def test_run_average_pool2d(
 @pytest.mark.parametrize(
     "act_shape",
     (
-        pytest.param(
-            [1, 7, 7, 2048],
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=RuntimeError,
-                reason="padded RM: NC folds to one slice but 49 logical rows sit in 224 padded ones, "
-                "which reduce refuses - see test_global_avg_pool2d_legacy_pad_to_tile_rejected",
-            ),
-        ),
+        [1, 7, 7, 2048],
         [1, 1, 32, 64],
         [1, 1, 16, 128],
+        [1, 2, 31, 56],
+        [2, 1, 16, 128],
+        [4, 2, 17, 64],
     ),
-    ids=["resnet50_unpadded", "rm_dense_alligned", "rm_dense_unaligned"],
+    ids=["resnet50_unpadded", "rm_dense_alligned", "rm_dense_unaligned", "h2_w31_c56", "b2_h1_w16", "b4_h2_w17"],
 )
 def test_global_avg_pool2d_legacy_pad_to_tile(act_shape, device):
-    """Legacy pad_to_tile ROW_MAJOR inputs. Dense RM mean/sum allows suffix H padding when NC=1."""
+    """Legacy pad_to_tile ROW_MAJOR inputs, including shapes whose W pad is interleaved across H."""
     torch.manual_seed(0)
     act = torch.randn(act_shape, dtype=torch.bfloat16).float()
     ttact = ttnn.Tensor(act, ttnn.bfloat16)
@@ -70,23 +65,12 @@ def test_global_avg_pool2d_legacy_pad_to_tile(act_shape, device):
         ttact = ttact.pad_to_tile(0.0)
     ttact = ttact.to(device)
 
-    out = ttnn.to_torch(ttnn.global_avg_pool2d(ttact))
+    out = ttnn.to_torch(ttnn.global_avg_pool2d(ttact)).float()
     out = torch.permute(out, (0, 3, 1, 2))
     golden = torch.nn.AdaptiveAvgPool2d((1, 1))(torch.permute(act, (0, 3, 1, 2)))
     assert_with_pcc(golden, out)
-
-
-@pytest.mark.parametrize("act_shape", ([[1, 7, 7, 2048]]), ids=["resnet50_unpadded"])
-def test_global_avg_pool2d_legacy_pad_to_tile_rejected(act_shape, device, expect_error):
-    """pad_to_tile pads H per NC slice, so the pool's canonical (N, 1, H*W, C) view carries 224
-    padded rows over 49 logical ones. The dense RM reader steps by the logical row count and so does
-    the tilize a fallback would run, so reduce refuses instead of silently converting the layout."""
-    torch.manual_seed(0)
-    act = torch.randn(act_shape, dtype=torch.bfloat16).float()
-    ttact = ttnn.Tensor(act, ttnn.bfloat16).pad_to_tile(0.0).to(device)
-
-    with expect_error(RuntimeError, "ROW_MAJOR input padded on H is only supported"):
-        ttnn.global_avg_pool2d(ttact)
+    # PCC misses a uniform scale error, which is what summing pad rows produces.
+    torch.testing.assert_close(out, golden, atol=2e-2, rtol=0)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["BFLOAT16"])

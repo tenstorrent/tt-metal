@@ -11,7 +11,20 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
+
+#ifdef ARCH_QUASAR
+// Quasar emulator self-loopback workaround: a NoC transfer whose source and destination are both this
+// core's L1 (a write-back whose storage core is this core) is done with the shared RISC copy helper, which also issues
+// the fence that orders the uncached-alias stores ahead of the semaphore / credit that publishes them. The helper takes
+// uncached-alias addresses (what the DFB getters hand out on Quasar DM); a LocalTensorAccessor base is the
+// plain (cached) L1 address, so normalise both operands first.
+#include "ttnn/operations/kernel_helper_functions/local_l1_copy.hpp"
+FORCE_INLINE uint32_t l1_uncached(uint32_t addr) {
+    return addr >= MEM_L1_UNCACHED_BASE ? addr : MEM_L1_UNCACHED_BASE + (addr - MEM_L1_BASE);
+}
+#endif
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -68,7 +81,8 @@ void kernel_main() {
     const Noc noc;
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);
-    const DataflowBuffer dfb_out_reshard(dfb::out_reshard);
+    // The output tensor's own L1 shard: only its base address is needed (no FIFO traffic).
+    const LocalTensorAccessor<uint32_t> out_shard(tensor::out_shard);
 #ifdef FUSE_BIAS
     DataflowBuffer dfb_in3(dfb::bias);
 #endif
@@ -213,7 +227,7 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_shard_to_write_back; ++i) {
         uint32_t l1_read_addr_out = dfb_out.get_read_ptr() + l1_read_addr_out_offset;
-        uint32_t l1_write_addr_out_reshard = dfb_out_reshard.get_write_ptr();
+        uint32_t l1_write_addr_out_reshard = out_shard.get_bank_base_address();
 
         if (i == 0) {
             l1_write_addr_out_reshard += reshard_tensor_start_offset;
@@ -226,14 +240,28 @@ void kernel_main() {
 
         const UnicastEndpoint dst_ep;
         uint32_t reshard_dest_local_addr = l1_write_addr_out_reshard;
+#ifdef ARCH_QUASAR
+        // The storage core for this shard is this core: copy with the RISC (see local_l1_copy).
+        const bool reshard_is_local = noc.is_local_bank(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y);
+#endif
 
         for (uint32_t h = 0; h < per_core_M; ++h) {
-            noc.async_write(
-                CoreLocalMem<uint32_t>(l1_read_addr_out),
-                dst_ep,
-                per_core_N_reshard_bytes,
-                {},
-                {.noc_x = in0_mcast_sender_noc_x, .noc_y = in0_mcast_sender_noc_y, .addr = reshard_dest_local_addr});
+#ifdef ARCH_QUASAR
+            if (reshard_is_local) {
+                local_l1_copy(
+                    l1_uncached(reshard_dest_local_addr), l1_uncached(l1_read_addr_out), per_core_N_reshard_bytes);
+            } else
+#endif
+            {
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(l1_read_addr_out),
+                    dst_ep,
+                    per_core_N_reshard_bytes,
+                    {},
+                    {.noc_x = in0_mcast_sender_noc_x,
+                     .noc_y = in0_mcast_sender_noc_y,
+                     .addr = reshard_dest_local_addr});
+            }
             l1_read_addr_out += out_tensor_stride_w_bytes;
             reshard_dest_local_addr += out_reshard_tensor_stride_w_bytes;
         }
@@ -246,12 +274,9 @@ void kernel_main() {
 
     dfb_out.pop_front(out_block_num_tiles);
 
-    // Restore NCRISC_RD_CMD_BUF NOC_CTRL to the firmware default (VC=1, set in
-    // noc_init). set_async_read_state<NocOptions::CUSTOM_VC> writes a per-bank VC into NOC_CTRL
-    // and this hardware register persists across kernel launches. Kernels that
-    // follow (e.g. 1d-multicast matmul readers running in DM_DEDICATED_NOC mode)
-    // rely on NOC_CTRL being at its initialized value and do not re-set it, so
-    // they inherit the stale custom VC and suffer reduced DRAM bandwidth.
-    noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = 1});
+    // Restore only NCRISC read_cmd_buf NOC_CTRL VC to firmware default (VC=1, set in noc_init); a full set_async_read_state
+    // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state fast paths read.
+    const uint32_t noc_rd_cmd_field =
+        NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
 }

@@ -295,7 +295,9 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::tensor_args_t::to_hash() const {
                                    : std::nullopt,
         input_tensor_b.has_value() ? std::optional{input_tensor_b->tensor_spec().tile()} : std::nullopt,
         sharded_tensor_shape_in_pages(input_tensor_a),
-        input_tensor_b.has_value() ? sharded_tensor_shape_in_pages(*input_tensor_b) : std::nullopt);
+        input_tensor_b.has_value() ? sharded_tensor_shape_in_pages(*input_tensor_b) : std::nullopt,
+        // Output dtype can change the program (fp32 DEST). Falls back to a's dtype so in-place calls still share.
+        output_tensor.has_value() ? output_tensor->dtype() : input_tensor_a.dtype());
 }
 
 void BinaryNgDeviceOperation::validate_on_program_cache_miss(
@@ -466,9 +468,6 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     const auto& tensor_b = tensor_args.input_tensor_b;
     const auto input_shape_b = tensor_b.has_value() ? tensor_b->logical_shape() : ttnn::Shape{};
 
-    const int rank_a = input_shape_a.rank();
-    const int rank_b = input_shape_b.rank();
-    const int larger_rank = std::max(rank_a, rank_b);
     auto output_dtype = attributes.get_dtype();
 
     // Integer division results in FP32 outputs.
@@ -490,7 +489,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
                 }
             }
             const auto& larger_shape = shape_a.rank() > shape_b.rank() ? shape_a : shape_b;
-            for (int i = smaller_rank; i < larger_rank; ++i) {
+            for (int i = smaller_rank; i < larger_shape.rank(); ++i) {
                 auto dim = -1 - i;
                 if (larger_shape[dim] != 1) {
                     return false;

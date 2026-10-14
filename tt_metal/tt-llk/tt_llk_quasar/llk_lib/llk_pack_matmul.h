@@ -83,6 +83,11 @@ inline void _llk_pack_matmul_init_(
     const std::uint32_t num_subblocks_c_dim,
     const TensorShape tensor_shape = DEFAULT_TENSOR_SHAPE)
 {
+    // Clear all sub-counters (TILE, FACE, ROW) to wipe residual state a prior op
+    // (e.g. strided pack_untilize) may have left behind.
+    TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_pacr::PACK0, 0);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_pacr::PACK0, 0);
+
     _llk_pack_matmul_mop_config_(buf_desc_id, subblock_r_dim, subblock_c_dim, num_subblocks_c_dim, tensor_shape);
 }
 

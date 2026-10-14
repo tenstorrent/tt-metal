@@ -149,7 +149,7 @@ def mtp_layer_state_dict(use_pretrained, mtp_cfg, config_only) -> dict | None:
 
 @pytest.fixture
 def mtp_config_and_glm_config(mtp_cfg):
-    """``(MTPConfig, glm_hf_config)`` pair with matching hidden size, for tests that need both."""
+    """``(MTPConfig, glm_5_3_hf_config)`` pair with matching hidden size, for tests that need both."""
     config = glm_5_3_hf_config()
     assert config.hidden_size == mtp_cfg.hidden_size == GLM53Config.EMB_SIZE
     return mtp_cfg, config

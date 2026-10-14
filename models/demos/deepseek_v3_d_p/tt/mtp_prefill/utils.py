@@ -136,7 +136,7 @@ def mtp_indexer_types(config, mtp_layer_idx: int | None = None) -> list:
     short. Returns a new list, unchanged when the map already reaches the layer, and moves no trunk slot.
     """
     types = list(getattr(config, "indexer_types", None) or [])
-    assert types, "config has no indexer_types (GLM-5.1 and dense variants: every layer is full, nothing to extend)"
+    assert types, "config has no indexer_types (dense variants: every layer is full, nothing to extend)"
     if mtp_layer_idx is None:
         mtp_layer_idx = int(getattr(config, "num_hidden_layers", None) or len(types))
     while len(types) <= mtp_layer_idx:

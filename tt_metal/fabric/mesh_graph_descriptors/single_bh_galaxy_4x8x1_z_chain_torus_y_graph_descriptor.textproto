@@ -1,0 +1,51 @@
+# Single BH galaxy carved into 4 Z-connected [8,1] meshes (Z-chain 0->1->2->3), SP axis a ring.
+#
+# Torus-Y variant of single_bh_galaxy_4x8x1_z_chain: identical carving, but the 8-long SP axis wraps,
+# so ring-attention collectives run Ring as they do in the single-process 8x1 measurements. Pair with
+# PREFILL_FABRIC_MODE=2d_torus_y: a torus mode must match the dim_types here, or a Ring collective on
+# an unwrapped axis hangs.
+#
+# Each mesh is one column of the logical 8x4 galaxy (SP=8 x TP=1). A column spans two trays, so its
+# device set cannot be read off tray discovery; the per-rank TT_VISIBLE_DEVICES in
+# pipeline_prefill_request_intragalaxy_4rank_8x1.yaml come from create_submeshes(MeshShape(8,1)) on a
+# live mesh.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 1 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+
+  # Adjacent columns of the galaxy are joined by one X-link per row (8 per boundary); 4 RELAXED
+  # mirrors the proven [2,4] z-chain rather than demanding every link.
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+    assign_z_direction: true
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    channels { count: 4 policy: RELAXED }
+    assign_z_direction: true
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    channels { count: 4 policy: RELAXED }
+    assign_z_direction: true
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

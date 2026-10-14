@@ -26,9 +26,9 @@ enum class SemScope : uint8_t {
     EXTERNAL = 2,
     // Blackhole compute scope: the Tensix hardware (Sync Unit) semaphore, so concurrent UNPACK
     // and PACK writers cannot lose an update. Produced by ResolveSemaphoreScope() for a Blackhole
-    // semaphore bound only by compute kernels (semaphore_scope.hpp). Keep this enum numerically in
-    // step with the device-side SemScope in api/dataflow/semaphore_binding_token.h -- the two are
-    // unlinked mirrors.
+    // semaphore bound only by compute kernels (metal2_host_api/program_spec/construction/resource/
+    // semaphore.cpp). Keep this enum numerically in step with the device-side SemScope in
+    // api/dataflow/semaphore_binding_token.h -- the two are unlinked mirrors.
     COMPUTE_ATOMIC = 3,
 };
 
@@ -62,23 +62,6 @@ inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<Se
            << "u, ::SemScope::" << sem_scope_enumerator(entry.scope) << "};\n";
     }
     os << "}  // namespace sem\n";
-}
-
-// Emits the list of cached semaphores this kernel binds: each one's id and how many harts on
-// this core use it.
-inline void emit_cached_semaphore_list(std::ostream& os, const std::vector<SemBindingEntry>& entries) {
-    os << "namespace sem_internal {\n";
-    os << "constexpr ::sem_internal::CachedSemaphore kCachedSemaphores[] = {";
-    const char* sep = "";
-    for (const auto& entry : entries) {
-        if (entry.scope != SemScope::DM_LOCAL_CACHED) {
-            continue;
-        }
-        os << sep << "{" << entry.id << "u, " << entry.total_binder_harts << "u}";
-        sep = ", ";
-    }
-    os << "};\n";
-    os << "}  // namespace sem_internal\n";
 }
 
 // Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.

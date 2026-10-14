@@ -276,6 +276,7 @@ class TtPrefillBlock(LightweightModule):
         overlap_shared_expert_with_dispatch: bool = True,
         first_layer_idx: Optional[int] = None,
         llama4_scale_cache: Optional[dict] = None,
+        use_fused_rmsnorm: Optional[bool] = None,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -310,6 +311,11 @@ class TtPrefillBlock(LightweightModule):
             f"({'MoE' if self.is_moe else 'dense'}, kv_only={kv_only})"
         )
 
+        # A caller can enable fusion for any model or override its default.
+        # Eager execution and trace capture use the same operator; the op validates shapes.
+        if use_fused_rmsnorm is None:
+            use_fused_rmsnorm = getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole() and is_chunked
+
         # --- Attention norm ---
         use_glm53_l1_attn_norm = (
             is_blackhole()
@@ -329,6 +335,7 @@ class TtPrefillBlock(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
+            use_fused=use_fused_rmsnorm,
             output_memcfg=ttnn.L1_MEMORY_CONFIG if use_glm53_l1_attn_norm else None,
         )
 
@@ -374,6 +381,7 @@ class TtPrefillBlock(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
+            use_fused=use_fused_rmsnorm,
         )
 
         # --- FFN (MoE or dense) ---
@@ -402,7 +410,7 @@ class TtPrefillBlock(LightweightModule):
             )
         else:
             # emb_dim/hidden_dim default to DSv3/Kimi's 7168/18432 in TtFfn; pass the variant's real dims
-            # so GLM-5.1 (hidden 6144, dense intermediate 12288) doesn't inherit the 7168 default. emb_dim
+            # so GLM-5.3 (hidden 6144, dense intermediate 12288) doesn't inherit the 7168 default. emb_dim
             # is always safe (== default for 7168-dim models); hidden_dim only overrides when the config
             # exposes intermediate_size (GLM does; DSv3/Kimi fall back to the TtFfn default).
             _dense_ffn_kwargs = {}

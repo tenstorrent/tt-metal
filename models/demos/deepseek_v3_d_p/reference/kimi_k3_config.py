@@ -66,7 +66,7 @@ class KimiK3Config:
     # 3584x3072 routed-expert shape, between 128 and 192: the composite's cost is flat inside an M
     # chunk while the fused op's rises with the count. The composite takes 192 by 8.5% and never
     # gives the band back. Measured under SituGlu, the activation these experts actually run.
-    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
+    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.2 dispatch both routed-expert ops today.
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 128
@@ -148,6 +148,12 @@ class KimiK3Config:
         wants: ``[3, 7, 11, ..., 87, 91, 92]``.
         """
         return sorted(layer - 1 for layer in cls.FULL_ATTN_LAYERS_1BASED)
+
+    @classmethod
+    def kda_layer_ids(cls) -> list[int]:
+        """0-indexed model-layer indices of the KDA (linear-attention) layers: every layer that is not MLA."""
+        mla = set(cls.mla_layer_ids())
+        return [layer for layer in range(cls.NUM_LAYERS) if layer not in mla]
 
     @classmethod
     def mla_kv_slot(cls, layer_idx: int) -> int:

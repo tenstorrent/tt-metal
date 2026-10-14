@@ -85,7 +85,7 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
     const auto& output_tensor{tensor_return_value.mesh_tensor()};
     const auto& input_shape{input_tensor.padded_shape()};
 
-    const tt::tt_metal::distributed::MeshDevice& device = input_tensor.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = input_tensor.device();
 
     const auto dst_cb_data_format{datatype_to_dataformat_converter(output_tensor.dtype())};
 
