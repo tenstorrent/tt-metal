@@ -1,0 +1,3 @@
+P bits.txt
+N bits.txt
+N2 fn.txt
