@@ -78,7 +78,12 @@ def test_errors_and_context_are_collected(tmp_path):
     "context, rows, message",
     [
         ({}, [_row("BM/a", 1.0)], "declares no perf.metric"),
-        (DECL, [_row("BM/a", 1.0, metric="Other")], "reports none of the declared metrics"),
+        (DECL, [_row("BM/a", 1.0, metric="Other")], "does not report declared metrics"),
+        (
+            {**DECL, "perf.metric.Other": "unit=s;better=lower;aggregate=min"},
+            [_row("BM/a", 1.0)],
+            "does not report declared metrics \\['Other'\\]",
+        ),
         (DECL, [_row("BM/a", float("nan"))], "invalid IterationTime"),
         (DECL, [_row("BM/a", 0)], "invalid IterationTime"),
         ({"perf.metric.x": "unit=s;better=up;aggregate=min"}, [], "better='up'"),
@@ -87,6 +92,30 @@ def test_errors_and_context_are_collected(tmp_path):
 def test_contract_violations_are_rejected(expect_error, tmp_path, context, rows, message):
     with expect_error(contract.ContractError, message):
         contract.read([_write(tmp_path, rows, context)])
+
+
+def test_aggregate_only_output_from_separate_processes_is_rejected(expect_error, tmp_path):
+    context = {"perf.metric.t": "unit=s;better=lower;aggregate=min"}
+    paths = [
+        _write(
+            tmp_path,
+            [
+                {
+                    "name": "a_min",
+                    "run_name": "a",
+                    "run_type": "aggregate",
+                    "aggregate_name": "min",
+                    "repetitions": 1,
+                    "t": v,
+                }
+            ],
+            context,
+            name=f"{i}.json",
+        )
+        for i, v in enumerate([1.0, 3.0])
+    ]
+    with expect_error(contract.ContractError, "cannot be merged"):
+        contract.read(paths)
 
 
 def test_group_is_the_prefix_before_swept_arguments():
