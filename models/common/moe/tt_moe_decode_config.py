@@ -217,6 +217,8 @@ class ComputeConfig(_TTOpKwargs):
     )
     has_bias: bool
     activation_type: ActivationFunction
+    # > 0 with activation_type SILU: silu(min(gate, L)) * clamp(up, -L, L), L = swiglu_limit (0 = plain SILU)
+    swiglu_limit: float = 0.0
     intermediate_size: int
     # Splatted into moe_compute as `num_shared_experts_per_device`. This is the *physical*
     # per-device shared-expert count, derived by the parent from `shared_expert_ids_to_devices`
