@@ -15,9 +15,6 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#if defined(CORE_SYNC_PROBE_DRISC)
-#include "experimental/drisc_mode.h"
-#endif
 /* Named by path rather than by -I: the ERISC and DRISC launches of this source
  * get no include root beyond its own directory. */
 #include "../../../kernels/shared/core_sync_barrier.hpp"
@@ -105,7 +102,6 @@ void kernel_main() {
 
 #if defined(CORE_SYNC_PROBE_DRISC)
     static_assert(core_family == CORE_SYNC_CORE_FAMILY_DRAM, "the DRISC entry point requires the DRAM core family");
-    experimental::drisc_set_stream_mode();
 #else
     static_assert(core_family != CORE_SYNC_CORE_FAMILY_DRAM, "the DRAM core family requires the DRISC entry point");
 #endif
@@ -215,8 +211,4 @@ void kernel_main() {
     res[CORE_SYNC_PROBE_RESULT_EXIT_LO] = static_cast<uint32_t>(arrival & 0xFFFFFFFFu);
     res[CORE_SYNC_PROBE_RESULT_EXIT_HI] = static_cast<uint32_t>(arrival >> 32);
     res[CORE_SYNC_PROBE_RESULT_RUN_NONCE] = run_nonce;
-
-#if defined(CORE_SYNC_PROBE_DRISC)
-    experimental::drisc_set_noc2axi_mode();
-#endif
 }
