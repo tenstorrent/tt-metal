@@ -401,11 +401,10 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
-          # e2e demo combo (b1, short prompt). Seeded report-only from run 37650523176, issue #58596.
+          # e2e demo combo (b1, short prompt).
           - batch_size: 1
             seq_len: null
             status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 15.337
               decode_t/s: 15.337
@@ -434,11 +433,10 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
-          # e2e demo combo (b1, short prompt). Seeded report-only from run 37650523176, issue #58596.
+          # e2e demo combo (b1, short prompt).
           - batch_size: 1
             seq_len: null
             status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 33.9331
               decode_t/s: 33.9331
@@ -464,11 +462,9 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
-          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: null
             seq_len: null
             status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 14.4169
               decode_t/s: 14.4169
@@ -479,11 +475,9 @@ targets:
             accuracy: {}
       p300x2:
         entries:
-          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: 1
             seq_len: null
             status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 18.6301
               decode_t/s: 18.6301
@@ -501,11 +495,9 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
-          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: 1
             seq_len: null
             status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 16.6298
               decode_t/s: 16.6298
@@ -516,11 +508,9 @@ targets:
             accuracy: {}
       p300x2:
         entries:
-          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: null
             seq_len: null
             status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 26.813
               decode_t/s: 26.813
@@ -684,11 +674,10 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
-          # e2e demo combo (b1, short prompt). Seeded report-only from run 37650523176, issue #58596.
+          # e2e demo combo (b1, short prompt).
           - batch_size: 1
             seq_len: null
             status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 29.5194
               decode_t/s: 29.5194
@@ -722,11 +711,10 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
-          # e2e demo combo (b1, short prompt). Seeded report-only from run 37650523176, issue #58596.
+          # e2e demo combo (b1, short prompt).
           - batch_size: 1
             seq_len: null
             status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 54.4664
               decode_t/s: 54.4664
@@ -749,11 +737,10 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
-          # e2e demo combo (b1, short prompt). Seeded report-only from run 37650523176, issue #58596.
+          # e2e demo combo (b1, short prompt).
           - batch_size: 1
             seq_len: null
             status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 32.384
               decode_t/s: 32.384
@@ -891,11 +878,9 @@ targets:
               top1: 90
               top5: 98
           # data-parallel P300 LFC e2e leg (b64) emits ml_model_name "llama-3.1-8b" -> resolve here.
-          # Seeded report-only from run 37650523176, issue #58596.
           - batch_size: 64
             seq_len: null
             status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 38.4782
               decode_t/s: 2462.6055
@@ -920,11 +905,9 @@ targets:
               prefill_time_to_first_token: 40
             accuracy: {}
           # data-parallel e2e legs (b4/b8) emit ml_model_name "llama-3.1-8b" -> resolve here.
-          # Seeded report-only from run 37650523176, issue #58596.
           - batch_size: 4
             seq_len: null
             status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 21.1
               decode_t/s: 84.4002
@@ -935,7 +918,6 @@ targets:
           - batch_size: 8
             seq_len: null
             status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 25.8738
               decode_t/s: 206.9905
@@ -1322,11 +1304,10 @@ targets:
             accuracy:
               top1: 96
               top5: 100
-          # e2e demo perf combo (b1, vision prompt). Seeded report-only from run 37650523176, issue #58596.
+          # e2e demo perf combo (b1, vision prompt).
           - batch_size: 1
             seq_len: null
             status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 9.1667
               decode_t/s: 9.1667
@@ -2025,7 +2006,6 @@ targets:
           - batch_size: null
             seq_len: null
             status: active
-            enforce_perf: false
             perf: {}
             accuracy: {}
       bh_p150:
@@ -2033,7 +2013,6 @@ targets:
           - batch_size: null
             seq_len: null
             status: active
-            enforce_perf: false
             perf: {}
             accuracy: {}
             owner_id: U0491KT8MNY # Mohamed Bahnas
@@ -2119,14 +2098,12 @@ targets:
     # e2e demo emits ml_model_name "ttnn-vit-base-trace-2cq-batch-size-8"; alias so it resolves (issue #58596).
     aliases: ["ViT", "vit", "google/vit-base-patch16-224", "ttnn-vit-base-trace-2cq-batch-size-8"]
     skus:
-      # samples/sec is reported as fps (report_vision_fps). Seeded report-only below.
+      # samples/sec is reported as fps (report_vision_fps).
       wh_n150:
         entries:
-          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: 8
             seq_len: null
             status: active
-            enforce_perf: false
             perf:
               fps: 1479.7557
             accuracy: {}
@@ -2134,11 +2111,9 @@ targets:
             team: models
       wh_n300:
         entries:
-          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: 8
             seq_len: null
             status: active
-            enforce_perf: false
             perf:
               fps: 1359.9084
             accuracy: {}
@@ -2352,11 +2327,9 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
-          # Seeded (report-only) from run 37650523176, issue #58596.
           - batch_size: 32
             seq_len: 2048
             status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 20.4788
               decode_t/s: 655.321
@@ -2369,7 +2342,6 @@ targets:
           - batch_size: 1
             seq_len: 128
             status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 23.3354
               decode_t/s: 23.3354
@@ -2384,9 +2356,7 @@ targets:
     skus:
       bh_p150:
         entries:
-          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 16.9904
               decode_t/s: 16.9904
@@ -2399,9 +2369,7 @@ targets:
             team: models
       bh_quietbox_2:
         entries:
-          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            enforce_perf: false
             perf:
               decode_t/s/u: 39.8862
               decode_t/s: 39.8862
@@ -2417,9 +2385,7 @@ targets:
     skus:
       bh_p150:
         entries:
-          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            enforce_perf: false
             perf:
               fps: 3492.1357
             accuracy: {}
@@ -2511,9 +2477,7 @@ targets:
     skus:
       bh_quietbox_2:
         entries:
-          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            enforce_perf: false
             perf:
               fps: 0.0932
             accuracy: {}
@@ -2524,9 +2488,7 @@ targets:
     skus:
       bh_quietbox_2:
         entries:
-          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            enforce_perf: false
             perf:
               fps: 0.0933
             accuracy: {}
@@ -2537,9 +2499,7 @@ targets:
     skus:
       bh_quietbox_2:
         entries:
-          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            enforce_perf: false
             perf:
               fps: 0.0114
             accuracy: {}
@@ -2557,9 +2517,7 @@ targets:
     skus:
       bh_quietbox_2:
         entries:
-          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            enforce_perf: false
             perf:
               fps: 0.1983
             accuracy: {}
@@ -2666,9 +2624,7 @@ targets:
     skus:
       bh_quietbox_2:
         entries:
-          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            enforce_perf: false
             perf:
               fps: 0.0192
             accuracy: {}
@@ -2679,9 +2635,7 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
-          # Seeded (report-only) from run 37650523176, issue #58596.
           - status: active
-            enforce_perf: false
             perf:
               fps: 0.0735
             accuracy: {}
