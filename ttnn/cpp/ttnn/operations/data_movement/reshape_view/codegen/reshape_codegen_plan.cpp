@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_plan.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <limits>
 #include <numeric>
 
@@ -26,6 +27,10 @@ constexpr uint32_t kMaxSlabBatch = 8;
 
 // Program creation starts every CB at a DRAM-aligned address, so a CB takes its size rounded up to that alignment.
 uint64_t cb_footprint(uint64_t bytes) { return tt::round_up(bytes, tt::tt_metal::hal::get_dram_alignment()); }
+
+// Largest power of two no greater than `n` (n > 0). Reduced CB depths step along powers of two so that small moves of
+// the L1 frontier keep the same program and its cache key.
+uint64_t power_of_two_floor(uint64_t n) { return std::bit_floor(n); }
 
 uint64_t volume_before_last(const ttnn::Shape& shape) {
     uint64_t volume = 1;
@@ -189,29 +194,27 @@ std::optional<RmPlan> fit_rm(RmPlan plan, uint64_t l1_budget) {
     plan.push_sticks = 0;
     if (full_depth * plan.cb_page > ring_budget) {
         // Two pushes in flight keep reader and writer overlapped; fewer is not worth running.
+        const uint64_t push_bytes = 2 * pages_per_split_stick * plan.cb_page;
         if (plan.can_coalesce) {
             // Every core must push the same, evenly dividing stick count so the ring never wraps mid-push. The push
-            // is the largest divisor of that count within both the read cap (one stick is always allowed) and L1.
+            // is the largest power of two dividing that count within both the read cap (one stick is always allowed)
+            // and L1.
             const uint32_t common = std::gcd(plan.split.units_group1, plan.split.units_group2);
             const uint32_t split_stick_bytes = plan.split_by_old ? plan.old_stick : plan.new_stick;
-            const uint64_t push_bytes = 2 * pages_per_split_stick * plan.cb_page;
             const uint64_t fit_limit = ring_budget / push_bytes;
             const uint64_t read_limit = std::max<uint64_t>(1, kMaxReadSize / split_stick_bytes);
-            uint64_t push = std::min({static_cast<uint64_t>(common), fit_limit, read_limit});
-            while (push > 0 && common % push != 0) {
-                --push;
-            }
-            if (push == 0) {
+            const uint64_t limit = std::min({uint64_t{1} << std::countr_zero(common), fit_limit, read_limit});
+            if (limit == 0) {
                 return std::nullopt;
             }
-            plan.push_sticks = static_cast<uint32_t>(push);
-            depth = 2 * push * pages_per_split_stick;
+            plan.push_sticks = static_cast<uint32_t>(power_of_two_floor(limit));
+            depth = 2 * static_cast<uint64_t>(plan.push_sticks) * pages_per_split_stick;
         } else {
-            const uint64_t pushes = ring_budget / (pages_per_split_stick * plan.cb_page);
-            if (pushes < 2) {
+            const uint64_t push_pairs = ring_budget / push_bytes;
+            if (push_pairs == 0) {
                 return std::nullopt;
             }
-            depth = pushes * pages_per_split_stick;
+            depth = 2 * power_of_two_floor(push_pairs) * pages_per_split_stick;
         }
     }
     plan.cb_depth = static_cast<uint32_t>(depth);
