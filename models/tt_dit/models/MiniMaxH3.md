@@ -422,6 +422,55 @@ the 50-block stack is keyed on the padded packed length, so warming a different 
 `run_warm_generation` asserts the warm and measured lengths agree; for t2va the hazard is
 masked only by luck, since 1 and 39 tokens both round up to 37888.
 
+## Galaxy timings at a TDP cap (2026-10-14)
+
+- **Hardware:** one Blackhole Galaxy (4x8), firmware 19.12.0.
+- **Power cap:** `TT_METAL_TDP_LIMIT_WATTS` (needs firmware >= 19.11.0). Every run logged 32 lines of
+  `firmware TDP limit on chip N is now <W> W`. The cap stays set after the process exits, until a chip reset.
+- **Request:** t2va, 16:9 1344x768, 50 steps (49 forwards), seed 0, the calibrated fox prompt.
+- **Measurement:** one warm generation per row, with zero program-cache misses. "Steady step" is the
+  pipeline's own `denoise breakdown` line (48 steps, first excluded).
+
+**Preset (bucketed, denoise untraced), 160 W.** `test_t2va_performance[blackhole-4x8-16x9_{5,10,15}s]`:
+
+| clip | frames | seq -> bucket | denoise | per step | steady step | VAE decode | text enc | audio dec | **total** |
+|---|---|---|---|---|---|---|---|---|---|
+| 5 s | 124 | 37749 -> 38912 | 45.37 s | 0.926 s | 0.922 s | 0.97 s | 0.28 s | 0.06 s | **46.71 s** |
+| 10 s | 243 | 73425 -> 76800 | 117.75 s | 2.403 s | 2.399 s | 1.62 s | 0.26 s | 0.06 s | **119.73 s** |
+| 15 s | 362 | 109101 -> 111616 | 235.63 s | 4.809 s | 4.805 s | 2.30 s | 0.26 s | 0.08 s | **238.32 s** |
+
+**15 s at 190 W, preset vs traced and unbucketed.** The second row is
+`test_t2va_performance_traced_unbucketed[blackhole-4x8_TRACED-16x9_15s]`, with `trace_denoise=True,
+bucket_denoise=False, use_persistent_ccl_buffers=True, trace_audio=False`:
+
+| 15 s, 190 W | seq -> padded | denoise | per step | steady step | VAE decode | audio dec | **total** |
+|---|---|---|---|---|---|---|---|
+| preset (bucketed, untraced) | 109101 -> 111616 | 219.31 s | 4.476 s | 4.472 s | 2.26 s | 0.08 s | **221.96 s** |
+| traced, unbucketed | 109101 -> 109312 | 203.92 s | **4.162 s** | 4.159 s | 2.05 s | 0.28 s | **206.51 s** |
+
+- **Gain:** traced and unbucketed is 7.0 % faster per step and in total.
+- **Cause not separated:** the padded length is also 2.1 % shorter, and attention is quadratic, so up to about 4 % of
+  the gain may come from padding, not tracing.
+- **Audio decode is 0.2 s slower** because `trace_audio` requires bucketing.
+- **What 160 W costs:** at 15 s it is 7.4 % per step against 190 W (4.809 vs 4.476 s), while VAE decode barely moves.
+
+**The same model through tt-media-server.** FL2VA base, 160 W, the client on the same host, median of 3:
+5 / 10 / 15 s clips take 53.6 / 123.9 / 244.5 s end to end. Steady steps are 1.055 / 2.466 / 4.905 s and VAE
+decode 0.75 / 1.42 / 2.06 s. The keyframe adds 1008 rows, which at 5 s moves the request up to the 41984 rung. The
+client script and the launch steps are in tt-inference-server, `tt-media-server/docs/minimax-h3-fl2va-benchmark.md`.
+
+To reproduce (the cache is the same `TT_DIT_CACHE_DIR` the server builds):
+
+```bash
+export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers TT_DIT_CACHE_DIR=/path/to/tt_dit_cache
+export TT_METAL_TDP_LIMIT_WATTS=160   # 190 for the second table
+pytest -svv "models/tt_dit/tests/models/minimax_h3/test_performance_minimax_h3.py::test_t2va_performance[blackhole-4x8-16x9_15s]"
+TT_METAL_TDP_LIMIT_WATTS=190 pytest -svv \
+  "models/tt_dit/tests/models/minimax_h3/test_performance_minimax_h3.py::test_t2va_performance_traced_unbucketed[blackhole-4x8_TRACED-16x9_15s]"
+```
+
+The test writes clips to `$HOME/h3_t2va_artifacts` and overwrites files of the same name.
+
 ## Precision
 
 The conditioner's decoder linears run at **HiFi4** instead of the tt_dit-wide HiFi2 default.

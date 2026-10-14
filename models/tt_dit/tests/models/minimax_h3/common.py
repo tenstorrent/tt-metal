@@ -140,6 +140,8 @@ _WH_ONLY = pytest.mark.skipif(is_blackhole(), reason="Wormhole-only mesh configu
 
 MESH_4X8_RING = pytest.param((4, 8), _ring_8k, id="4x8", marks=_BH_ONLY)
 MESH_4X32_RING_TRACED = pytest.param((4, 32), _ring_8k_trace, id="4x32_TRACED", marks=_BH_ONLY)
+# One Galaxy with a trace region, for the opt-in traced 4x8 perf case (the 4x8 preset does not trace).
+MESH_4X8_RING_TRACED = pytest.param((4, 8), _ring_8k_trace, id="4x8_TRACED", marks=_BH_ONLY)
 # Links and residency come from the pipeline's `_PRESETS_WH`, so the row carries only device params.
 MESH_4X8_RING_WH = pytest.param((4, 8), _ring_4k, id="4x8_WH", marks=_WH_ONLY)
 
