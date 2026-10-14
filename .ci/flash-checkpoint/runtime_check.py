@@ -19,6 +19,13 @@ assert (
     == (Path.cwd() / "source/models/demos/blackhole/qwen38_flash_next/tools/download_checkpoint.py").resolve()
 )
 assert not any(n == "ttnn" or n.startswith("ttnn.") for n in sys.modules)
+# This fixture is a server inside this same test process, not an external proxy target.
+os.environ["no_proxy"] = "127.0.0.1,localhost"
+os.environ["NO_PROXY"] = "127.0.0.1,localhost"
+Path("evidence").mkdir(exist_ok=True)
+Path("evidence/imports.json").write_text(
+    json.dumps({"python": sys.version, "origins": runtime_origins, "ttnn_imported": False}, indent=2)
+)
 payload = b"original downloader loopback compatibility check\n"
 
 
