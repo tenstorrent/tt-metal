@@ -21,6 +21,12 @@ Per-request latency, seconds, wall time as seen by the client (each request fetc
 | TT T3K Docker 2026-03-28 | 105 | 10.27 | – | – | – |
 | **New, 3 servers (slices 1-3)** | 105 | **3.62** | 2.65 | 7.27 | 10.93 |
 | **New, 4 servers (slices 0-3)** | 105 | 3.76 | 3.11 | 6.88 | 11.19 |
+| **New, 1 server, strictly sequential (clean pass), https video** | 105 | **3.88** | 3.03 | 7.02 | 10.51 |
+| **New, 1 server, strictly sequential, local `file://` video** | 105 | **2.31** | 1.76 | 4.54 | 6.10 |
+
+The clean pass (one server, one request at a time, after a power cycle of the Galaxy) is the number to compare with
+the references. The video download is ~1.6 s of the 3.88 s mean; without it the mean is 0.65x the HF baseline per test
+(faster on 100/100 tests). Accuracy in both clean passes: 97/100, 0 request errors (misses: idx 22, 26, 84).
 
 Per test, new/HF-baseline ratio: median 1.03x (faster on 47 of 100 tests). Versus the 2026-03 T3K Docker run the mean
 is 2.8x lower (10.27 s -> 3.62 s); that older figure also included the video download, as do the new ones.
@@ -50,9 +56,10 @@ Raw per-request results of run 2: `results_galaxy_slices_main_2026-10-14.jsonl`.
 
 ## Caveats
 
-* The new latencies were measured with 3-4 servers receiving requests concurrently (one in flight per server);
-  a clean one-request-at-a-time pass was not possible because the Galaxy needed a power cycle afterwards.
+* The first three rows were measured with 3-4 servers receiving requests concurrently (one in flight per server);
+  the two "sequential" rows are the clean single-server passes.
 * The new numbers are from Galaxy slices (8 Wormhole chips each), the old Docker numbers from a T3K; both are 8-chip
   Wormhole meshes, but not the same host.
 * Slice 0 of this Galaxy hangs on long prefills (see BRINGUP_LOG, Session 11): requests up to ~5k tokens were fine,
-  a 34k-token video stalled it.
+  a 34k-token video stalled it. It still hangs after a full host power cycle (5 clean prefills, then a stall on the same
+  chip, mesh node N5 / Device 4), so it is not a transient state.
