@@ -47,6 +47,7 @@ def _gold(tag, a, b, out):
     r = (e / m.clamp_min(1e-30)).flatten()
     med = float(r.median())
     bad = (r > 10 * med).nonzero().flatten().tolist()
+    torch.save(torch.tensor(bad, dtype=torch.int64), os.path.join(os.environ["GOLD_OUT"], f"badtiles_{tag}.pt"))
     with open(os.path.join(os.environ["GOLD_OUT"], "gold.txt"), "a") as f:
         f.write(f"{tag}: tiles {r.numel()}, median rel err {med:.3e}, max {float(r.max()):.3e}, tiles above 10x median {len(bad)} {bad[:8]}\n")
 
