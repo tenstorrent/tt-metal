@@ -2953,21 +2953,21 @@ constexpr std::size_t kMaxGrowthCycles = 4;
 // Soft seams = MappingConstraints::allow_unmatched_target_edges on the master session: the SAT backend maximizes
 // the number of realized inter-mesh links and a seating that leaves some connection without physical links is
 // accepted (logical-only / host interconnect). Under a STRICT inter-mesh policy rungs 3-4 are never tried.
-// Each rung carries its own per-solve CaDiCaL conflict budget; a solve that exceeds it counts as failed for
-// that rung, and on a soft rung the budget also bounds every realized-link maximization probe.
+// The per-solve CaDiCaL conflict budget is chosen by seam hardness (MasterSolve::restart): a solve that
+// exceeds it counts as failed for that rung, and on a soft rung it also bounds every realized-link
+// maximization probe.
 struct SolveRung {
     bool drop_host_cap;
     bool soft_seams;
-    int conflict_cap;
     const char* name;
 };
 constexpr int kHardSeamConflictCap = 300'000;
 constexpr int kSoftSeamConflictCap = 300'000;
 constexpr std::array<SolveRung, 4> kSolveLadder{{
-    {/*drop_host_cap=*/false, /*soft_seams=*/false, kHardSeamConflictCap, "hard seams, host cap"},
-    {/*drop_host_cap=*/true, /*soft_seams=*/false, kHardSeamConflictCap, "hard seams, host cap dropped"},
-    {/*drop_host_cap=*/false, /*soft_seams=*/true, kSoftSeamConflictCap, "soft seams, host cap"},
-    {/*drop_host_cap=*/true, /*soft_seams=*/true, kSoftSeamConflictCap, "soft seams, host cap dropped"},
+    {/*drop_host_cap=*/false, /*soft_seams=*/false, "hard seams, host cap"},
+    {/*drop_host_cap=*/true, /*soft_seams=*/false, "hard seams, host cap dropped"},
+    {/*drop_host_cap=*/false, /*soft_seams=*/true, "soft seams, host cap"},
+    {/*drop_host_cap=*/true, /*soft_seams=*/true, "soft seams, host cap dropped"},
 }};
 
 // True when this grouping's committed footprint (mesh_node_to_asic_position) satisfies every one of a mesh's
@@ -3289,8 +3289,8 @@ bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, boo
 MappingResult<MeshId, const Candidate*> SatPlacementEnumerationSession::MasterSolve::next(bool drop_cap) {
     MappingResult<MeshId, const Candidate*> failure;
     failure.success = false;
-    // Soft seams (constraints_.allow_unmatched_target_edges, set per rung by the session) need RELAXED
-    // validation so their models are not rejected by STRICT channel checks on edges left unrealized.
+    // Soft seams (constraints_.allow_unmatched_target_edges, set per rung by the session) are only tried
+    // under a RELAXED inter-mesh policy; the OR keeps the validation mode consistent with the encoding.
     const bool relaxed_mode = owner_->relaxed_inter_mesh_policy_ || owner_->constraints_.allow_unmatched_target_edges();
     // Unchanged mode and host cap (the session resets this object when the seam softness changes): another
     // model from the session already encoded.
