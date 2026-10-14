@@ -6859,6 +6859,8 @@ class TestReportModesDuringTraceCapture:
         ttnn.synchronize_device(device)
 
 
+# mesh_device depends on silicon_arch_name, which conftest only parametrizes for tests that name it at collection.
+@pytest.mark.usefixtures("silicon_arch_name")
 def test_multihost_graph_report(request):
     """
     Smoke test for graph reports in a multi-process (multi-host) run: every rank captures its own graph and rank 0
