@@ -6,6 +6,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::data_movement::reshape_codegen {
@@ -47,6 +48,11 @@ const char* scope_violation(
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     if (input.storage_type() != ttnn::StorageType::DEVICE || input.buffer() == nullptr) {
         return "input is not an allocated device tensor";
+    }
+    // The kernels access NoC-filled L1 through cached RISC pointers and copy within L1 with NoC reads from the core's
+    // own L1; Quasar keeps neither coherent, so native runs there.
+    if (input.device()->arch() == tt::ARCH::QUASAR) {
+        return "the codegen kernels do not support Quasar";
     }
     // The program moves bytes, so any 2 or 4 B type the kernels copy in halfwords or words works alike.
     switch (input.dtype()) {
