@@ -21,7 +21,8 @@ struct ReshapeCodegenParams {
     ttnn::Shape logical_output_shape;
     tt::tt_metal::MemoryConfig output_mem_config;
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
-    // Not in the key: it follows from the shapes, which are.
+    // Not an attribute: it follows from the shapes, which are. The plan live L1 shrinks it to is keyed by
+    // ReshapeCodegenDeviceOperation::compute_program_hash.
     ttnn::operations::data_movement::reshape_codegen::LaunchPlan plan;
 
     static constexpr auto attribute_names =

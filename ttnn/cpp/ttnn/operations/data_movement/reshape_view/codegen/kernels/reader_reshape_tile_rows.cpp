@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Tile-row permutation TILE reshape reader: stages each batch's plan page and its distinct source tiles once.
-// Every batch reserves all in_slots (only n_in are filled) so batches never straddle the wrap of the 2 * in_slots CB.
+// Every batch reserves all in_slots (only n_in are filled) so batches never straddle the wrap of the CB, which holds
+// one or two batches.
 #include <cstdint>
 
 #include "api/core_local_mem.h"

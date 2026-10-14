@@ -7,6 +7,8 @@
 #include <optional>
 #include <variant>
 
+#include <tt_stl/reflection.hpp>
+
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_program_factory.hpp"
 #include "ttnn/types.hpp"
 
@@ -33,6 +35,10 @@ struct ReshapeCodegenDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    // Keys the plan live L1 selects, so a cached program never runs with buffers that no longer fit.
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 

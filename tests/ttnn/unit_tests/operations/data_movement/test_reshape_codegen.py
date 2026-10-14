@@ -209,7 +209,7 @@ def _l1_hog(device, bytes_per_core):
     ids=["tile_rows"],
 )
 def test_reshape_codegen_program_key_ignores_free_l1(device, path, in_shape, out_shape, dtype, layout, mem):
-    # Buffers are sized against a static L1 budget, so less free L1 must hit the same program and still be right.
+    # The hog leaves room for the full plan, so the program and its key stay the same.
     source = _make(in_shape, dtype)
     expected = source.reshape(out_shape)
     x = _to_device(device, source, dtype, layout, mem)
@@ -222,6 +222,40 @@ def test_reshape_codegen_program_key_ignores_free_l1(device, path, in_shape, out
     _assert_bits(expected, ttnn.to_torch(out), dtype)
     assert device.num_program_cache_entries() == entries
     ttnn.deallocate(out)
+    ttnn.deallocate(hog)
+
+
+def _l1_hog_leaving(device, free_bytes_per_bank):
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    tiles_per_bank = (view.largest_contiguous_bytes_free_per_bank - free_bytes_per_bank) // (32 * 32 * 2)
+    if tiles_per_bank <= 0:
+        pytest.skip("L1 already has less free space than the test needs")
+    return ttnn.allocate_tensor_on_device(
+        ttnn.Shape((1, 1, 32, tiles_per_bank * view.num_banks * 32)),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        _L1,
+    )
+
+
+def test_reshape_codegen_shrinks_plan_under_l1_pressure(device):
+    # Every output tile of this fp32 head split needs 32 source tiles, so no source cap shrinks the staged CB: the
+    # full plan's buffers take 301 KiB per core double-buffered and 173 KiB single-buffered, and 240 KiB free fits only
+    # the latter.
+    in_shape, out_shape, dtype = [1, 256, 4096], [1, 256, 32, 128], ttnn.float32
+    source = _make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
+    _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+    entries = device.num_program_cache_entries()
+    hog = _l1_hog_leaving(device, 240 * 1024)
+    # The smaller plan is a new program, so it cannot reuse the full plan's cache entry.
+    _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+    assert device.num_program_cache_entries() == entries + 1
+    # Auto routes to the codegen program it just compiled; native would compile a new one.
+    _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+    assert device.num_program_cache_entries() == entries + 1
     ttnn.deallocate(hog)
 
 

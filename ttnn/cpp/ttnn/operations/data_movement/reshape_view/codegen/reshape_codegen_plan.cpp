@@ -6,6 +6,8 @@
 
 #include <tt-metalium/hal.hpp>
 
+#include "ttnn/operations/data_movement/common/common.hpp"
+
 namespace ttnn::operations::data_movement::reshape_codegen {
 
 tt::tt_metal::TensorSpec output_spec(
@@ -44,6 +46,18 @@ uint64_t static_l1_budget(const Tensor& input, const tt::tt_metal::TensorSpec& o
         subtract_footprint(output_spec);
     }
     return budget;
+}
+
+std::optional<TileRowsChoice> live_tile_rows_choice(
+    const Tensor& input, const ttnn::Shape& logical_output_shape, const TileRowsChoice& planned) {
+    const uint32_t tile_bytes =
+        input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
+    const uint64_t free_l1 = get_max_l1_space(input);
+    const auto fits = [&](const TileRowsChoice& choice) { return tile_rows_l1_bytes(choice, tile_bytes) <= free_l1; };
+    if (fits(planned)) {
+        return planned;
+    }
+    return plan_tile_rows_fitting(input.logical_shape(), logical_output_shape, fits);
 }
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen
