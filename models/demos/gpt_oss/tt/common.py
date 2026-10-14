@@ -9,6 +9,7 @@ GPT-OSS specific implementation of create_tt_model that's compatible with tt_tra
 from loguru import logger
 
 import ttnn
+from models.demos.gpt_oss.utils.lazy_state_dict import GptOssLazyStateDict
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -93,6 +94,13 @@ def create_tt_model(
     # cache that must not satisfy the completeness check).
     if loaded_real_weights and num_layers is None:
         gpt_oss_model_args.mark_weight_cache_complete(dtype)
+
+    # A lazy state dict re-reads and re-dequantizes every tensor on access. With data parallel the
+    # caller passes the returned state_dict to the next submesh, which has the same mesh shape and
+    # therefore the same tensor cache this build just wrote, so hand back {} and let it load from
+    # the cache instead of repeating the host prep.
+    if isinstance(state_dict, GptOssLazyStateDict):
+        state_dict = {}
 
     # Extract tt_kv_cache like tt_transformers does
     tt_kv_cache = []
