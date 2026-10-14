@@ -213,6 +213,60 @@ struct SlidingQWorkPlan {
     }
 };
 
+// A striped Q block can span many ownership cycles. Its visible keys are bounded by
+// its first and last absolute Q rows. In each source's packed cache this is one
+// contiguous local range; exact per-tile masks remove gaps between Q stripes. Gathered
+// rows retain the full-cache rank-major layout, so a source range needs no repacking.
+template <uint32_t MaxSourceRanges>
+constexpr SlidingQWorkPlan<MaxSourceRanges> build_striped_sliding_q_work_plan(
+    uint32_t q_start,
+    uint32_t q_rows,
+    uint32_t device_index,
+    uint32_t ring_size,
+    uint32_t stripe_rows,
+    uint32_t window_tokens,
+    uint32_t tile_height,
+    uint32_t cache_rows,
+    uint32_t k_chunk_rows,
+    uint32_t logical_rows,
+    const ChunkedQMapping& mapping,
+    bool local_first) {
+    SlidingQWorkPlan<MaxSourceRanges> plan;
+    if (ring_size > MaxSourceRanges || stripe_rows == 0 || k_chunk_rows == 0 || cache_rows % k_chunk_rows != 0) {
+        return plan;
+    }
+    if (q_start >= mapping.q_valid_tile_count) {
+        // Padded Q still consumes one local block to preserve the output cadence.
+        plan.source_ranges[0] = SlidingKVSourceRange{device_index, 0, 1, 0, 0};
+        plan.source_range_count = plan.total_k_chunk_count = 1;
+        plan.is_valid = true;
+        return plan;
+    }
+    const uint32_t q_end =
+        q_start + q_rows < mapping.q_valid_tile_count ? q_start + q_rows : mapping.q_valid_tile_count;
+    const uint32_t first = striped_q_global_tile(mapping.q_pre_wrap_start_tile, q_start, stripe_rows, ring_size);
+    const uint32_t last = striped_q_global_tile(mapping.q_pre_wrap_start_tile, q_end - 1, stripe_rows, ring_size) + 1;
+    const uint32_t left_rows = (window_tokens - 1 + tile_height - 1) / tile_height;
+    const uint32_t begin = first > left_rows ? first - left_rows : 0;
+    const uint32_t end = last < logical_rows ? last : logical_rows;
+    for (uint32_t i = 0; i < ring_size; ++i) {
+        const uint32_t source = local_first ? (device_index + i) % ring_size : i;
+        const uint32_t local_begin = striped_local_prefix(begin, stripe_rows, ring_size, source);
+        const uint32_t local_end = striped_local_prefix(end, stripe_rows, ring_size, source);
+        const uint32_t clipped_end = local_end < cache_rows ? local_end : cache_rows;
+        if (local_begin >= clipped_end) {
+            continue;
+        }
+        const uint32_t first_k = local_begin / k_chunk_rows;
+        const uint32_t last_k = (clipped_end + k_chunk_rows - 1) / k_chunk_rows;
+        plan.source_ranges[plan.source_range_count++] =
+            SlidingKVSourceRange{source, first_k, last_k, source * (cache_rows / k_chunk_rows) + first_k, 0};
+        plan.total_k_chunk_count += last_k - first_k;
+    }
+    plan.is_valid = plan.total_k_chunk_count != 0;
+    return plan;
+}
+
 // Chunked prefill stores each global Q-sized group as one local slab per ring
 // device. A window can need only the local slab and the cyclic predecessor's
 // tail; device 0 consumes the final device's tail from the preceding group.
@@ -234,6 +288,24 @@ constexpr SlidingQWorkPlan<MaxSourceRanges> build_sliding_q_work_plan(
     uint32_t circular_kv_slab_count = 0,
     const ChunkedQMapping* rotated_q = nullptr,
     bool local_first = true) {
+#ifdef RING_JOINT_STRIPE_TILES
+    if (!rotated_q) {
+        return {};
+    }
+    return build_striped_sliding_q_work_plan<MaxSourceRanges>(
+        q_local_start_tile,
+        q_chunk_tile_rows,
+        q_device_index,
+        ring_size,
+        RING_JOINT_STRIPE_TILES,
+        sliding_window_tokens,
+        tile_height,
+        k_local_tile_rows,
+        k_chunk_tile_rows,
+        logical_k_tile_rows,
+        *rotated_q,
+        local_first);
+#endif
     SlidingQWorkPlan<MaxSourceRanges> plan;
     if (q_chunk_tile_rows == 0 || q_local_tile_rows == 0 || ring_size == 0 || sliding_window_tokens == 0 ||
         tile_height == 0 || k_chunk_tile_rows == 0 || q_local_tile_rows % k_chunk_tile_rows != 0 ||

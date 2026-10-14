@@ -603,7 +603,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     uint32_t kv_cache_layer_idx,
     bool split_forwarding_enabled,
     bool partial_readiness_enabled,
-    RingAttentionRankMapping rank_mapping) {
+    RingAttentionRankMapping rank_mapping,
+    uint32_t gather_tail_tile_rows,
+    uint32_t gather_tail_alignment,
+    uint32_t gather_stripe_tile_rows) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
@@ -1066,6 +1069,19 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         kBackwardDirection,
         unicast_forward_args[0],
         unicast_forward_args[1]);
+
+    if (gather_tail_tile_rows != 0) {
+        TT_FATAL(dim == 2 && gather_tail_alignment > 0, "Bounded gather tails require sequence-axis gather");
+        for (auto* kernel :
+             {&sender_reader_forward_kernel,
+              &sender_writer_forward_kernel,
+              &sender_reader_backward_kernel,
+              &sender_writer_backward_kernel}) {
+            kernel->defines.emplace_back("RING_GATHER_TAIL_ROWS", std::to_string(gather_tail_tile_rows));
+            kernel->defines.emplace_back("RING_GATHER_TAIL_ALIGNMENT", std::to_string(gather_tail_alignment));
+            kernel->defines.emplace_back("RING_GATHER_STRIPE_ROWS", std::to_string(gather_stripe_tile_rows));
+        }
+    }
 
     /* All gather fusion */
     // Inline equivalent of AllGatherFusedOpSignaler::init_all_gather for the descriptor

@@ -776,3 +776,68 @@ TEST(SlidingWindowWorkPlan, NonSourceKeyedHaloFallsBackToUnicast) {
 }
 
 }  // namespace
+
+namespace {
+TEST(StripedSlidingWindow, CoversEveryVisibleTileAndBoundedGather) {
+    constexpr uint32_t ring = 8;
+    constexpr uint32_t cache_rows = 4096;
+    for (uint32_t local : {1u, 3u, 4u, 12u, 24u}) {
+        for (uint32_t stripe : {1u, 2u, 4u}) {
+            if (local % stripe != 0) {
+                continue;
+            }
+            for (uint32_t window : {33u, 257u, 1024u, 2048u}) {
+                for (uint32_t k_rows : {1u, 2u, 4u, 8u}) {
+                    for (uint32_t prefix : {0u, 1u, 17u, 128u, 8192u}) {
+                        for (uint32_t length : {1u, local * ring}) {
+                            const uint32_t end = prefix + length;
+                            const uint32_t gather_end = ((end + stripe * ring - 1) / (stripe * ring)) * stripe;
+                            const uint32_t tail =
+                                local + stripe +
+                                ((window - 1 + stripe * ring * 32 - 1) / (stripe * ring * 32)) * stripe;
+                            const uint32_t gather_start = (gather_end > tail ? gather_end - tail : 0) / k_rows * k_rows;
+                            for (uint32_t rank = 0; rank < ring; ++rank) {
+                                const auto mapping = build_chunked_q_mapping(prefix, end, local, ring, rank, stripe);
+                                for (uint32_t q = 0; q < local; ++q) {
+                                    const auto plan = build_striped_sliding_q_work_plan<8>(
+                                        q, 1, rank, ring, stripe, window, 32, cache_rows, k_rows, end, mapping, true);
+                                    ASSERT_TRUE(plan.is_valid);
+                                    if (q >= mapping.q_valid_tile_count) {
+                                        ASSERT_EQ(plan.total_k_chunk_count, 1u);
+                                        EXPECT_EQ(plan.k_chunk_at(0).source_ring_id, rank);
+                                        continue;
+                                    }
+                                    const uint32_t q_tile =
+                                        striped_q_global_tile(mapping.q_pre_wrap_start_tile, q, stripe, ring);
+                                    const uint32_t q_token = q_tile * 32;
+                                    const uint32_t first_token = q_token >= window - 1 ? q_token - window + 1 : 0;
+                                    for (uint32_t key = first_token / 32; key <= q_tile; ++key) {
+                                        const uint32_t source = key / stripe % ring;
+                                        const uint32_t local_key = (key / (stripe * ring)) * stripe + key % stripe;
+                                        bool found = false;
+                                        for (uint32_t work = 0; work < plan.total_k_chunk_count; ++work) {
+                                            const auto ref = plan.k_chunk_at(work);
+                                            if (ref.source_ring_id == source &&
+                                                ref.source_k_chunk == local_key / k_rows) {
+                                                found = true;
+                                                if (source != rank) {
+                                                    EXPECT_GE(ref.source_k_chunk * k_rows, gather_start);
+                                                    EXPECT_LT(local_key, gather_end);
+                                                    EXPECT_EQ(
+                                                        ref.compact_k_chunk,
+                                                        source * (cache_rows / k_rows) + ref.source_k_chunk);
+                                                }
+                                            }
+                                        }
+                                        ASSERT_TRUE(found) << "Missing key " << key << " for query " << q_tile;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+}  // namespace

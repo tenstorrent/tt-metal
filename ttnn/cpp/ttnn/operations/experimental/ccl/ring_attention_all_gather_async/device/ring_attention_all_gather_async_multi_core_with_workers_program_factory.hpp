@@ -260,7 +260,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Opt-in two-stage fused readiness: every received shard signals once at its row midpoint and
     // once when complete. Only consumers that interpret the doubled semaphore protocol may enable it.
     bool partial_readiness_enabled = false,
-    RingAttentionRankMapping rank_mapping = {});
+    RingAttentionRankMapping rank_mapping = {},
+    // Keep only this many final valid tile rows, rounded outward to the alignment.
+    // Writes retain their original rank-major cache addresses. Zero keeps the full prefix.
+    uint32_t gather_tail_tile_rows = 0,
+    uint32_t gather_tail_alignment = 1,
+    uint32_t gather_stripe_tile_rows = 0);
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,

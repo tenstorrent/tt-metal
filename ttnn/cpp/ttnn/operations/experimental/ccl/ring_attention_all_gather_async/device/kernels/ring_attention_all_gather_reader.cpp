@@ -160,6 +160,7 @@ void kernel_main() {
     std::array<uint32_t, num_inputs> input_tile_id_start;
     std::array<uint32_t, num_inputs> input_tile_id_end;
     std::array<uint32_t, num_inputs> input_valid_pages;
+    std::array<uint32_t, num_inputs> input_page_offset{};
     std::array<uint32_t, num_inputs> worker_link;
     std::array<uint32_t, num_inputs> input_cache_batch_extent;
     // Phase-1 input page base: nonzero only for single-slot gather (skip to the sliced input slot).
@@ -237,6 +238,23 @@ void kernel_main() {
             input_tile_id_end);
     }
 
+#ifdef RING_GATHER_TAIL_ROWS
+    // Narrow after device metadata has supplied the live extent. Reader and writer
+    // use the same range, preserving packet counts and all ring readiness signals.
+    for (uint32_t input_idx = 0; input_idx < num_inputs; ++input_idx) {
+        const uint32_t valid_rows = input_valid_pages[input_idx] / input_tensor_Wt[input_idx];
+        const uint32_t excess = valid_rows > RING_GATHER_TAIL_ROWS ? valid_rows - RING_GATHER_TAIL_ROWS : 0;
+        const uint32_t start_rows = (excess / RING_GATHER_TAIL_ALIGNMENT) * RING_GATHER_TAIL_ALIGNMENT;
+        const uint32_t offset = start_rows * input_tensor_Wt[input_idx];
+        input_page_offset[input_idx] = offset;
+        input_valid_pages[input_idx] -= offset;
+        const auto range = ring_attention_all_gather::compute_link_page_range(
+            input_valid_pages[input_idx], num_links, worker_link[input_idx]);
+        input_tile_id_start[input_idx] = offset + range.start;
+        input_tile_id_end[input_idx] = offset + range.end;
+    }
+#endif
+
     OpSignaler op_signaler;
     if constexpr (fuse_op) {
         op_signaler = OpSignaler(arg_idx);
@@ -257,9 +275,11 @@ void kernel_main() {
         const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
         if constexpr (output_bank_owned_schedule) {
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
-                const uint32_t input_page_base = input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
-                const uint32_t output_page_base =
-                    bh_idx * output_pages_per_batch_head + my_tensor_rank * input_pages_per_batch_head;
+                const uint32_t input_page_base =
+                    input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head + input_page_offset[input_idx];
+                const uint32_t output_page_base = bh_idx * output_pages_per_batch_head +
+                                                  my_tensor_rank * input_pages_per_batch_head +
+                                                  input_page_offset[input_idx];
                 if constexpr (partial_readiness_enabled) {
                     const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
                         input_valid_pages[input_idx], input_tensor_Wt[input_idx]);
@@ -421,8 +441,9 @@ void kernel_main() {
                         worker_link[input_idx] + (is_split_forwarded_slice ? direction * num_links : 0);
                     const uint32_t bank_stride = num_links * split_factor;
                     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
-                        const uint32_t output_page_base =
-                            bh_idx * output_pages_per_batch_head + sender_tensor_rank * input_pages_per_batch_head;
+                        const uint32_t output_page_base = bh_idx * output_pages_per_batch_head +
+                                                          sender_tensor_rank * input_pages_per_batch_head +
+                                                          input_page_offset[input_idx];
                         if constexpr (partial_readiness_enabled) {
                             const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
                                 input_valid_pages[input_idx], input_tensor_Wt[input_idx]);

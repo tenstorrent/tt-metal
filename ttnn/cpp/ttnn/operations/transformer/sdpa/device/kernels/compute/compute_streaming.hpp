@@ -1141,6 +1141,9 @@ static void apply_lightweight_mask_streaming(
                 const int32_t q_pos = static_cast<int32_t>(q_pos_u32);
                 [[maybe_unused]] const RowMaskStamper stamper{mask_cb, out_cb, neginf_idx, row_offset, mask_cols};
 
+                // Explicit stripes map adjacent cache columns to disjoint global positions.
+                // Their leading edge is stamped per column below, alongside the causal edge.
+#ifndef RING_JOINT_STRIPE_TILES
                 if constexpr (has_sliding_window) {
                     if (apply_sliding_window) {
                         stamp_sliding_leading_edge<leading_base_tiles, leading_remainder>(
@@ -1148,6 +1151,7 @@ static void apply_lightweight_mask_streaming(
                     }
                 }
 
+#endif
                 if (packed_columns) {
                     uint32_t begin = 0;
                     for (uint32_t run = 0; run < packed_mask.run_count; ++run) {
@@ -1189,6 +1193,13 @@ static void apply_lightweight_mask_streaming(
                             continue;
                         }
                         const int32_t k_pos = static_cast<int32_t>(k_pos_u32);
+#ifdef RING_JOINT_STRIPE_TILES
+                        if constexpr (has_sliding_window) {
+                            const RowMaskStamper column_stamper{mask_cb, out_cb, neginf_idx, row_offset + col, 1};
+                            stamp_sliding_leading_edge<leading_base_tiles, leading_remainder>(
+                                column_stamper, q_pos, k_pos_u32, sliding_leading_prev_idx, sliding_leading_idx);
+                        }
+#endif
                         l1_acc_causal_col_mask(
                             mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, primary_diag_idx);
                     }
