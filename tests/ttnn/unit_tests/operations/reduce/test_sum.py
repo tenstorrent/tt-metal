@@ -125,6 +125,7 @@ def test_sum_4d(device, n, c, h, w, dim):
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "shapes",
     [
