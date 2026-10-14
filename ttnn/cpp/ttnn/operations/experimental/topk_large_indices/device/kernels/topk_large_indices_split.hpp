@@ -43,8 +43,13 @@ constexpr std::uint32_t chunk_tiles = classic ? 2 : (K == 2048 ? 2 : 1);
 template <std::uint32_t K, bool classic>
 constexpr bool supported_split = (K == 512 || (K >= 1024 && !classic));
 
+// DEST bank 1 starts at tile 4 in 32-bit mode: one-tile chunks with an even id sit there, so MATH's face moves on
+// one chunk do not hold PACK's SFPU loads on the other.
 template <std::uint32_t K, bool classic>
 constexpr std::uint32_t chunk_tile(const std::uint32_t chunk) {
+    if constexpr (chunk_tiles<K, classic> == 1) {
+        return chunk == 0 ? 0 : (chunk & 1) ? 1 : 4;
+    }
     return chunk_tiles<K, classic> * (chunk == 0 ? 0 : 2 - (chunk & 1));
 }
 
@@ -203,9 +208,9 @@ inline __attribute__((always_inline)) void sfpu_stage_body(
                 }
             } else if (chunk > 0) {
                 if (chunk & 1) {
-                    _topk_xl_split_merge_<K, chunk_rows, true>(0);
+                    _topk_xl_split_merge_<K, (chunk_tile<K, classic>(1) << 6), true>(0);
                 } else {
-                    _topk_xl_split_merge_<K, 2 * chunk_rows, true>(0);
+                    _topk_xl_split_merge_<K, (chunk_tile<K, classic>(2) << 6), true>(0);
                 }
             }
             break;
