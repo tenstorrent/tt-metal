@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "device/ternary_device_operation.hpp"
@@ -95,6 +96,20 @@ inline bool is_integer_dtype(DataType dtype) {
            dtype == DataType::UINT8;
 }
 
+void validate_where_scalar_for_integer_tensor(float scalar, DataType tensor_dtype) {
+    if (tensor_dtype != DataType::INT32 && tensor_dtype != DataType::UINT32) {
+        return;
+    }
+    TT_FATAL(
+        ttnn::operations::binary::utils::scalar_fits_integer_dtype(scalar, tensor_dtype),
+        "ttnn.where with a {} tensor cannot represent the scalar {}: only a finite integer within the range of {} "
+        "survives being packed as one, and this value would be changed silently. Typecast the tensor to a "
+        "floating-point dtype first.",
+        tensor_dtype,
+        scalar,
+        tensor_dtype);
+}
+
 // TTT: tensor, tensor, tensor
 Tensor invoke_impl(
     const Tensor& predicate,
@@ -136,6 +151,7 @@ Tensor invoke_impl(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    validate_where_scalar_for_integer_tensor(scalar_false, t_true.dtype());
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true);
     if (typecast_needed) {
@@ -159,6 +175,7 @@ Tensor invoke_impl(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    validate_where_scalar_for_integer_tensor(scalar_true, t_false.dtype());
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_false);
     if (typecast_needed) {
