@@ -256,18 +256,16 @@ def _tokenize_chat(tokenizer, text: str, thinking_mode: str = "chat", reasoning_
 
 
 def _traced_max_seq(config, needed: int, num_layers: int) -> int:
-    """Round ``needed`` up so every compressed group tiles into index blocks, and cap it.
+    """Round ``needed`` up so every compressed group tiles into index blocks.
 
-    ``DEEPSEEK_V4_MAX_SEQ`` raises the floor. The cap is ``candidate_topk_blocks * candidate_block_size``.
+    ``DEEPSEEK_V4_MAX_SEQ`` raises the floor.
     """
     max_seq = _pad_to_tile(needed)
     max_seq = max(int(os.environ.get("DEEPSEEK_V4_MAX_SEQ", max_seq)), max_seq)
     ratios = {int(r) for r in config.compress_ratios[:num_layers] if int(r)}
     if not ratios:
         return max_seq
-    max_seq = round_context(max_seq, ratios, CSA_INDEX_BLOCK_SIZE)
-    limit = config.candidate_topk_blocks * config.candidate_block_size
-    return min(max_seq, limit)
+    return round_context(max_seq, ratios, CSA_INDEX_BLOCK_SIZE)
 
 
 def _build_and_prefill(
@@ -411,7 +409,16 @@ class _InterruptFlag:
 @torch.no_grad()
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "num_command_queues": 2}],
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+            "num_command_queues": 2,
+            # The CCL semaphores and width_sharded_all_reduce's scratch live as long as their cached programs.
+            # Without L1_SMALL they land in L1 wherever the first layer's temporaries leave the allocator, and
+            # cap the circular buffers of every later program on the stage (fused_experts clashes at 40 layers).
+            "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "4096")),
+        }
+    ],
     indirect=["device_params"],
     ids=["fabric_1d"],
 )

@@ -22,6 +22,21 @@ void require_rank4_device(const Tensor& tensor, const char* name) {
     TT_FATAL(tensor.logical_shape().rank() == 4, "fused_lightning_select_kv: {} must be rank-4", name);
 }
 
+void require_int32_rm_interleaved(const Tensor& tensor, const ttnn::Shape& shape, const char* name) {
+    TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "fused_lightning_select_kv: {} must be on device", name);
+    TT_FATAL(
+        tensor.dtype() == DataType::INT32 && tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+            tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "fused_lightning_select_kv: {} must be INT32 row-major interleaved",
+        name);
+    TT_FATAL(
+        tensor.logical_shape() == shape,
+        "fused_lightning_select_kv: {} must be {}, got {}",
+        name,
+        shape,
+        tensor.logical_shape());
+}
+
 }  // namespace
 
 FusedLightningSelectKvDeviceOperation::program_factory_t FusedLightningSelectKvDeviceOperation::select_program_factory(
@@ -130,7 +145,7 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(batch == 1, "fused_lightning_select_kv: only B == 1 is supported, got page_table batch {}", batch);
     TT_FATAL(query[2] == 1, "fused_lightning_select_kv: only Sq == 1 is supported, got query Sq {}", query[2]);
     TT_FATAL(
-        key_cache[0] == kv_cache[0],
+        tensor_args.row_table.has_value() || key_cache[0] == kv_cache[0],
         "fused_lightning_select_kv: key_cache and kv_cache must have the same number of blocks, got {} and {}",
         key_cache[0],
         kv_cache[0]);
@@ -299,6 +314,74 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
             !tensor_args.page_table_tensor.is_sharded(),
             "fused_lightning_select_kv: new_kv_row needs an interleaved page_table_tensor");
     }
+
+    const bool is_candidate_source = args.candidate_topk_blocks > 0;
+    TT_FATAL(
+        is_candidate_source == (args.candidate_block_size > 0),
+        "fused_lightning_select_kv: candidate_topk_blocks ({}) and candidate_block_size ({}) must be given together",
+        args.candidate_topk_blocks,
+        args.candidate_block_size);
+    if (tensor_args.num_keys_tensor.has_value()) {
+        TT_FATAL(
+            !is_candidate_source,
+            "fused_lightning_select_kv: num_keys_tensor is for candidate-pool consumers, not the candidate source");
+        const auto& num_keys = tensor_args.num_keys_tensor.value();
+        TT_FATAL(
+            num_keys.storage_type() == StorageType::DEVICE &&
+                num_keys.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "fused_lightning_select_kv: num_keys_tensor must be an interleaved device tensor");
+        TT_FATAL(
+            num_keys.dtype() == DataType::INT32 && num_keys.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
+                num_keys.logical_shape().volume() == 1,
+            "fused_lightning_select_kv: num_keys_tensor must hold one INT32 row-major count, got {} {}",
+            num_keys.dtype(),
+            num_keys.logical_shape());
+    }
+    if (is_candidate_source) {
+        const uint32_t page_block_size = key_cache[-2];
+        TT_FATAL(
+            tt::constants::TILE_WIDTH % args.candidate_block_size == 0,
+            "fused_lightning_select_kv: candidate_block_size {} must divide the {}-key score tile",
+            args.candidate_block_size,
+            tt::constants::TILE_WIDTH);
+        TT_FATAL(
+            page_block_size % args.candidate_block_size == 0,
+            "fused_lightning_select_kv: candidate_block_size {} must divide the page block size {}",
+            args.candidate_block_size,
+            page_block_size);
+        if (tensor_args.candidate_blocks_output.has_value()) {
+            require_int32_rm_interleaved(
+                tensor_args.candidate_blocks_output.value(),
+                ttnn::Shape({1, args.candidate_topk_blocks}),
+                "candidate_blocks_output");
+        }
+        if (tensor_args.pool_count_output.has_value()) {
+            require_int32_rm_interleaved(tensor_args.pool_count_output.value(), ttnn::Shape({1}), "pool_count_output");
+        }
+    } else {
+        TT_FATAL(
+            !tensor_args.candidate_blocks_output.has_value() && !tensor_args.pool_count_output.has_value(),
+            "fused_lightning_select_kv: candidate_blocks_output and pool_count_output need candidate source mode");
+    }
+
+    TT_FATAL(args.num_parts >= 1, "fused_lightning_select_kv: num_parts must be at least 1");
+    TT_FATAL(
+        (args.num_parts > 1) == tensor_args.part_index_tensor.has_value(),
+        "fused_lightning_select_kv: part_index_tensor is given exactly when num_parts > 1, got num_parts {}",
+        args.num_parts);
+    if (args.num_parts > 1) {
+        TT_FATAL(
+            !is_candidate_source,
+            "fused_lightning_select_kv: candidate source mode does not support num_parts > 1 yet");
+        TT_FATAL(
+            !tensor_args.output_tensor.has_value(),
+            "fused_lightning_select_kv: with num_parts > 1 the op outputs candidates, not an output_tensor");
+        require_int32_rm_interleaved(tensor_args.part_index_tensor.value(), ttnn::Shape({1}), "part_index_tensor");
+    }
+    if (tensor_args.row_table.has_value()) {
+        require_int32_rm_interleaved(
+            tensor_args.row_table.value(), ttnn::Shape({1, pt_shape[1] * key_cache[-2]}), "row_table");
+    }
 }
 
 FusedLightningSelectKvDeviceOperation::spec_return_value_t FusedLightningSelectKvDeviceOperation::compute_output_specs(
@@ -308,8 +391,13 @@ FusedLightningSelectKvDeviceOperation::spec_return_value_t FusedLightningSelectK
     const auto& pt_shape = tensor_args.page_table_tensor.logical_shape();
     const uint32_t batch = pt_shape[0];
     const uint32_t max_keys = pt_shape[1] * tensor_args.key_cache.logical_shape()[-2];
-    return {
-        tensor_args.output_tensor.has_value()
+    spec_return_value_t specs = {
+        args.num_parts > 1
+            ? tt::tt_metal::TensorSpec(
+                  ttnn::Shape({1, 1, 1, 2 * args.k + 16}),
+                  tt::tt_metal::TensorLayout(
+                      DataType::INT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{}))
+        : tensor_args.output_tensor.has_value()
             ? tensor_args.output_tensor->tensor_spec()
             : tt::tt_metal::TensorSpec(
                   ttnn::Shape({batch, kv_shape[1], args.k, kv_shape[3]}),
@@ -321,6 +409,21 @@ FusedLightningSelectKvDeviceOperation::spec_return_value_t FusedLightningSelectK
             tt::tt_metal::TensorLayout(
                 DataType::FLOAT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{})),
     };
+    if (args.candidate_topk_blocks > 0) {
+        const auto int32_spec = [](const ttnn::Shape& shape) {
+            return tt::tt_metal::TensorSpec(
+                shape,
+                tt::tt_metal::TensorLayout(
+                    DataType::INT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{}));
+        };
+        specs.push_back(
+            tensor_args.candidate_blocks_output.has_value() ? tensor_args.candidate_blocks_output->tensor_spec()
+                                                            : int32_spec(ttnn::Shape({1, args.candidate_topk_blocks})));
+        specs.push_back(
+            tensor_args.pool_count_output.has_value() ? tensor_args.pool_count_output->tensor_spec()
+                                                      : int32_spec(ttnn::Shape({1})));
+    }
+    return specs;
 }
 
 FusedLightningSelectKvDeviceOperation::tensor_return_value_t
@@ -332,6 +435,16 @@ FusedLightningSelectKvDeviceOperation::create_output_tensors(
         tensor_args.output_tensor.has_value() ? tensor_args.output_tensor.value()
                                               : ttnn::create_device_tensor(specs[0], tensor_args.kv_cache.device()));
     outputs.push_back(ttnn::create_device_tensor(specs[1], tensor_args.kv_cache.device()));
+    if (args.candidate_topk_blocks > 0) {
+        outputs.push_back(
+            tensor_args.candidate_blocks_output.has_value()
+                ? tensor_args.candidate_blocks_output.value()
+                : ttnn::create_device_tensor(specs[2], tensor_args.kv_cache.device()));
+        outputs.push_back(
+            tensor_args.pool_count_output.has_value()
+                ? tensor_args.pool_count_output.value()
+                : ttnn::create_device_tensor(specs[3], tensor_args.kv_cache.device()));
+    }
     return outputs;
 }
 
@@ -353,7 +466,15 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
     const std::optional<ttnn::Tensor>& output_tensor,
     uint32_t output_row_offset,
     const std::optional<ttnn::Tensor>& new_kv_row,
-    const std::optional<ttnn::Tensor>& new_kv_row_index) {
+    const std::optional<ttnn::Tensor>& new_kv_row_index,
+    const std::optional<ttnn::Tensor>& num_keys_tensor,
+    uint32_t candidate_topk_blocks,
+    uint32_t candidate_block_size,
+    const std::optional<ttnn::Tensor>& candidate_blocks_output,
+    const std::optional<ttnn::Tensor>& pool_count_output,
+    uint32_t num_parts,
+    const std::optional<ttnn::Tensor>& part_index_tensor,
+    const std::optional<ttnn::Tensor>& row_table) {
     using OperationType =
         ttnn::operations::experimental::deepseek::fused_lightning_select_kv::FusedLightningSelectKvDeviceOperation;
 
@@ -370,6 +491,9 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
     auto attrs = OperationType::operation_attributes_t{
         .k = k,
         .output_row_offset = output_row_offset,
+        .candidate_topk_blocks = candidate_topk_blocks,
+        .candidate_block_size = candidate_block_size,
+        .num_parts = num_parts,
         // SDPA reads the gathered rows next, so they stay in L1 by default.
         .output_mem_config = memory_config.value_or(
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1}),
@@ -386,6 +510,11 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
         .output_tensor = output_tensor,
         .new_kv_row = new_kv_row,
         .new_kv_row_index = new_kv_row_index,
+        .num_keys_tensor = num_keys_tensor,
+        .candidate_blocks_output = candidate_blocks_output,
+        .pool_count_output = pool_count_output,
+        .part_index_tensor = part_index_tensor,
+        .row_table = row_table,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
