@@ -650,4 +650,55 @@ foreach(_member compute forward)
     )
 endforeach()
 
+# ---------------------------------------------------------------------------
+# core_sync: an X280 hart joins or directs core_sync_barrier over Tensix, ERISC and DRISC workers;
+# the release probe releases one or more X280 multicast groups. Both images keep their
+# zero-initialised statics in .data, since the per-hart entry zeroes no .bss.
+# ---------------------------------------------------------------------------
+foreach(_member director release-probe)
+    string(REPLACE "-" "_" _source "${_member}")
+    x280_add_image(
+        NAME firmware-core-sync-${_member}
+        SOURCES src/core_sync_${_source}.cpp
+        COMPILE_OPTIONS -fno-zero-initialized-in-bss
+        INCLUDES
+            kernels/shared
+            kernels/core_sync
+    )
+endforeach()
+set(_x280_core_sync_dirs
+    ${_x280_shared_dir}
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/core_sync
+)
+foreach(_header core_sync_director_args.h core_sync_release_probe_args.h)
+    _x280_check_header(${_header} c ${_x280_core_sync_dirs})
+    _x280_check_header(${_header} c++ ${_x280_core_sync_dirs})
+endforeach()
+target_sources(x280_bench_host_tests PRIVATE tests/host/test_core_sync_director_args.cpp)
+target_include_directories(x280_bench_host_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/kernels/core_sync)
+target_sources(x280_bench_device_tests PRIVATE tests/device/test_core_sync_hw.cpp)
+# Its memory-binding and probe-argument suites need no device.
+add_test(
+    NAME x280_core_sync_offline
+    COMMAND
+        x280_bench_device_tests "--gtest_filter=CoreSyncMemoryBindings.*:CoreSyncProbeArgs.*"
+)
+set_tests_properties(
+    x280_core_sync_offline
+    PROPERTIES
+        PASS_REGULAR_EXPRESSION
+            "\\[  PASSED  \\] 4 tests"
+)
+# The director's DRISC worker launches only under slow dispatch.
+_x280_device_test(x280_core_sync_director
+    tests/device/test_core_sync_x280_director_hw.cpp
+    KERNELS shared core_sync
+    SLOW_DISPATCH
+)
+# Built on request (ninja x280_core_sync_characterization), not by default.
+_x280_device_test(x280_core_sync_characterization EXCLUDE_FROM_ALL
+    tests/device/test_core_sync_characterization_hw.cpp
+    KERNELS shared core_sync
+)
+
 add_custom_target(x280_abi_headers ALL DEPENDS ${_x280_header_stamps})
