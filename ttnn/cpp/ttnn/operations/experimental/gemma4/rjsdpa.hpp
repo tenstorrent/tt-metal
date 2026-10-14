@@ -35,6 +35,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa(
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
     std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
-    std::optional<uint32_t> stripe_size = std::nullopt);
+    std::optional<uint32_t> stripe_size = std::nullopt,
+    const std::optional<ttnn::Tensor>& input_tensor_v = std::nullopt,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_v = std::nullopt,
+    std::optional<uint32_t> sliding_window_size = std::nullopt);
 
 }  // namespace ttnn::experimental::gemma4

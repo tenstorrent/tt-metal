@@ -39,7 +39,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa_wrapper(
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
-    std::optional<uint32_t> stripe_size) {
+    std::optional<uint32_t> stripe_size,
+    const std::optional<ttnn::Tensor>& input_tensor_v,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_v,
+    std::optional<uint32_t> sliding_window_size) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
     return ttnn::experimental::gemma4::rjsdpa(
@@ -67,7 +70,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa_wrapper(
         kv_actual_isl_tensor,
         kv_cache_num_layers,
         kv_cache_layer_idx,
-        stripe_size);
+        stripe_size,
+        input_tensor_v,
+        persistent_output_buffer_v,
+        sliding_window_size);
 }
 }  // namespace
 
@@ -76,6 +82,7 @@ void bind_rjsdpa(nb::module_& mod) {
     const auto* doc = R"doc(
         Packed-KV causal ring attention, with the same arguments and (output, statistics)
         return contract as ttnn.transformer.ring_mla, plus optional stripe_size.
+        Separate K/V tensors and causal sliding-window attention are also supported.
 
         With stripe_size=None, behavior is identical to ring_mla (including its supported
         latent-V, packed-KV, balanced, indexed-cache and device-metadata modes).
@@ -100,6 +107,22 @@ void bind_rjsdpa(nb::module_& mod) {
         extension, not a ragged multi-request interface. The cache must already use the
         specified stripe layout. FP32 destination accumulation and split-KV are unsupported
         with explicit stripes. Omitting stripe_size retains all legacy modes.
+
+        For sliding attention, input_tensor_kv is K; provide input_tensor_v and its
+        persistent_output_buffer_v. head_dim_v must match V's width. Set
+        sliding_window_size=W to attend exactly max(0, q-W+1) <= k <= q.
+        With explicit stripes the op uses one fused dispatch and gathers only a bounded
+        tail covering the window and current queries. Persistent buffers retain the full
+        rank-major gathered-cache shape (CP * local cache rows); they are not compact halo
+        buffers. Communication and compute do not grow with the prefix length.
+
+        At CP=8, stripe_size=32 supports 256-token chunks and every multiple of 256.
+        q_chunk_size must divide the local Q length; k_chunk_size must divide the local
+        cache length. Both are positive multiples of 32, independently of stripe_size.
+        Sliding requires separate BF16 Q / BFP8 K,V with equal Q/K/V head dimensions and
+        matching K/V head counts. Host or device prefix, indexed users/layers, partial
+        queries, and trace replay are supported. Circular caches are not supported with
+        explicit stripes. Without stripe_size, sliding retains the legacy halo contract.
         )doc";
     ttnn::bind_function<"rjsdpa", "ttnn.experimental.gemma4.">(
         gemma4,
@@ -130,7 +153,10 @@ void bind_rjsdpa(nb::module_& mod) {
         nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
         nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
-        nb::arg("stripe_size").noconvert() = nb::none());
+        nb::arg("stripe_size").noconvert() = nb::none(),
+        nb::arg("input_tensor_v").noconvert() = nb::none(),
+        nb::arg("persistent_output_buffer_v").noconvert() = nb::none(),
+        nb::arg("sliding_window_size").noconvert() = nb::none());
 }
 
 }  // namespace ttnn::experimental::gemma4

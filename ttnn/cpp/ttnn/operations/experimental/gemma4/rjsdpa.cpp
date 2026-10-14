@@ -33,7 +33,16 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa(
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
-    std::optional<uint32_t> stripe_size) {
+    std::optional<uint32_t> stripe_size,
+    const std::optional<ttnn::Tensor>& input_tensor_v,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_v,
+    std::optional<uint32_t> sliding_window_size) {
+    TT_FATAL(
+        input_tensor_v.has_value() == persistent_output_buffer_v.has_value(),
+        "rjsdpa separate V requires both input_tensor_v and persistent_output_buffer_v");
+    TT_FATAL(
+        !input_tensor_v.has_value() || input_tensor_v->logical_shape()[3] == head_dim_v,
+        "rjsdpa head_dim_v must match the separate V tensor width");
     if (stripe_size.has_value()) {
         TT_FATAL(
             *stripe_size > 0 && *stripe_size % tt::constants::TILE_HEIGHT == 0,
@@ -53,12 +62,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa(
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_kv,
-        std::nullopt,
+        input_tensor_v,
         std::nullopt,
         std::nullopt,
         std::nullopt,
         persistent_output_buffer_kv,
-        std::nullopt,  // persistent_output_buffer_v
+        persistent_output_buffer_v,
         std::nullopt,  // persistent_output_buffer_joint_k
         std::nullopt,  // persistent_output_buffer_joint_v
         "rear",
@@ -81,13 +90,13 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa(
         core_allocation_strategy,
         kv_cache_batch_idx,
         kv_actual_isl,
-        head_dim_v,
+        input_tensor_v.has_value() ? std::nullopt : std::optional<uint32_t>(head_dim_v),
         std::nullopt,  // attention_sink
         slot_id,
         kv_actual_isl_tensor,
         kv_cache_num_layers.value_or(1),
         kv_cache_layer_idx.value_or(0),
-        std::nullopt,  // sliding_window_size
+        sliding_window_size,
         false,         // circular_kv_cache
         std::nullopt,  // logical_n_tensor
         std::nullopt,  // logical_l_tensor

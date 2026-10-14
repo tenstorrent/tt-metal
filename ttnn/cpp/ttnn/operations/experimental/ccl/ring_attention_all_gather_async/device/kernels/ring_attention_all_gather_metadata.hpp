@@ -122,8 +122,14 @@ inline uint32_t compute_gather_valid_Ht(
     kv_actual_isl = trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_global_tiles, cache_global_tiles);
     const uint32_t logical_nt_local =
         trace_metadata::logical_tile_rows_clamped_to_cache(kv_actual_isl, chunk_global_tiles, cache_global_tiles);
+#if defined(RING_GATHER_STRIPE_ROWS) && RING_GATHER_STRIPE_ROWS > 0
+    constexpr uint32_t stripe = RING_GATHER_STRIPE_ROWS;
+    const uint32_t group = stripe * ring_size;
+    return ((logical_nt_local + group - 1) / group) * stripe;
+#else
     const uint32_t valid_slabs = (logical_nt_local + chunk_global_tiles - 1) / chunk_global_tiles;
     return valid_slabs * chunk_local_tiles;
+#endif
 }
 
 inline ttnn::operations::transformer::sdpa::ring_joint::SlidingHaloSources compute_halo_sources(
