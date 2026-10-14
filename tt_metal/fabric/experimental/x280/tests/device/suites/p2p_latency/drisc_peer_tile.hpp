@@ -17,6 +17,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/program/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
 
 #include <cstdint>
@@ -102,15 +103,11 @@ inline void run_axis(
                 });
             ttm::SetRuntimeArgs(program, kernel, logical_core, runtime_args);
             program.impl().compile(device, /*force_slow_dispatch=*/true);
-            ttm::detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/true);
-            ttm::detail::LaunchProgram(
-                device,
-                program,
-                /*wait_until_cores_done=*/false,
-                /*force_slow_dispatch=*/true);
+            ttm::slow_dispatch::WriteRuntimeArgsToDevice(*device, program, /*force_slow_dispatch=*/true);
+            ttm::slow_dispatch::LaunchProgramAsync(*device, program, /*force_slow_dispatch=*/true);
             const auto outcome = x280::harness::execution::run_x280(fixture.handle(), launch);
             try {
-                ttm::detail::WaitProgramDone(device, program);
+                ttm::slow_dispatch::WaitProgramDone(*device, program);
             } catch (const std::exception& error) {
                 throw std::runtime_error(
                     std::string("DRISC wait failed; reset the device before another workload: ") + error.what());
