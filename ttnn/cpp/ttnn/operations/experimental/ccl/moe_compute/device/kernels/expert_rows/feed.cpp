@@ -12,9 +12,15 @@
 // width shard.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_s = get_named_compile_time_arg_val("cb_scratch");
+    CircularBuffer cb_s(get_named_compile_time_arg_val("cb_scratch"));
     constexpr uint32_t E = get_named_compile_time_arg_val("local_experts");
     constexpr uint32_t NTP = get_named_compile_time_arg_val("height_shards");
     constexpr uint32_t DP = get_named_compile_time_arg_val("width_shards");
@@ -42,11 +48,12 @@ void kernel_main() {
     const uint32_t nc = get_arg_val<uint32_t>(a++);
     const uint32_t cxy = a;  // combine cores (x, y), shard order h * DP + w
 
-    cb_reserve_back(cb_s, 1);
-    const uint32_t s = get_write_ptr(cb_s);
+    const Noc noc;
+    cb_s.reserve_back(1);
+    const uint32_t s = cb_s.get_write_ptr();
     const auto tab = TensorAccessor(tab_args, tab_addr, P_RTBS);
-    noc_async_read(tab.get_noc_addr(0), s, P_RTR);
-    noc_async_read_barrier();
+    noc.async_read(tab, CoreLocalMem<uint32_t>(s), P_RTR, {.page_id = 0}, {});
+    noc.async_read_barrier();
     const tt_l1_ptr uint16_t* cnt = reinterpret_cast<const tt_l1_ptr uint16_t*>(s + P_RTC);
     const tt_l1_ptr uint16_t* ofs = reinterpret_cast<const tt_l1_ptr uint16_t*>(s + P_RTO);
 
@@ -64,30 +71,35 @@ void kernel_main() {
     }
 
     const auto rw = TensorAccessor(rows_args, rows_addr, ROW_BYTES);
-    const uint32_t sem_addr = get_semaphore(SEM);
-    volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+    Semaphore<> sem(SEM);
     uint32_t released = 0;
     for (uint32_t e = 0; e < E; ++e) {
         const uint32_t n = cnt[e], first = ofs[e];
         const uint32_t half = (e & 1) * BLOCK;
         auto issue_reads = [&](uint32_t j) {
+            const Noc noc;  // see rows_writer.cpp: a captured Noc's id is a run-time value out of line
             const uint32_t i0 = j * BATCH;
             const uint32_t nb = n - i0 < BATCH ? n - i0 : BATCH;
             const uint32_t buf = s + STAGE + (j & 1) * BATCH * SLICE;
             for (uint32_t i = 0; i < nb; ++i) {
-                noc_async_read(rw.get_noc_addr(first + i0 + i, c0 * TWB), buf + i * SLICE, nc * TWB);
+                noc.async_read(
+                    rw,
+                    CoreLocalMem<uint32_t>(buf + i * SLICE),
+                    nc * TWB,
+                    {.page_id = first + i0 + i, .offset_bytes = c0 * TWB},
+                    {});
             }
         };
         const uint32_t batches = (n + BATCH - 1) / BATCH;
         if (batches) {
             issue_reads(0);
         }
-        noc_semaphore_wait_min(sem, released);  // the combine released this half
+        sem.wait_min(released);  // the combine released this half
         const uint32_t q = n / NTP, rem = n % NTP;
         uint32_t h = 0, row = 0, cap = q + (rem ? 1 : 0);
         for (uint32_t j = 0; j < batches; ++j) {
-            noc_async_read_barrier();
-            noc_async_writes_flushed();  // batch j - 1 left the other staging buffer
+            noc.async_read_barrier();
+            noc.async_writes_flushed();  // batch j - 1 left the other staging buffer
             if (j + 1 < batches) {
                 issue_reads(j + 1);
             }
@@ -99,6 +111,7 @@ void kernel_main() {
                     const uint32_t idx = h * DP + pw[p];
                     const uint32_t x = get_arg_val<uint32_t>(cxy + 2 * idx);
                     const uint32_t y = get_arg_val<uint32_t>(cxy + 2 * idx + 1);
+                    // dataflow_api write: Noc::async_write in this loop made the program 5-6 % slower
                     noc_async_write(
                         buf + i * SLICE + ps[p], get_noc_addr(x, y, dense + half + row * SEG + po[p]), pb[p]);
                 }
@@ -109,19 +122,16 @@ void kernel_main() {
                 }
             }
         }
-        noc_async_write_barrier();  // the rows are in the combine cores' L1 before their semaphore moves
+        noc.async_write_barrier();  // the rows are in the combine cores' L1 before their semaphore moves
         for (uint32_t p = 0; p < np; ++p) {
             for (uint32_t y = 0; y < NTP; ++y) {
                 const uint32_t idx = y * DP + pw[p];
-                noc_semaphore_inc(
-                    get_noc_addr(
-                        get_arg_val<uint32_t>(cxy + 2 * idx), get_arg_val<uint32_t>(cxy + 2 * idx + 1), sem_addr),
-                    1);
+                sem.up(noc, get_arg_val<uint32_t>(cxy + 2 * idx), get_arg_val<uint32_t>(cxy + 2 * idx + 1), 1);
             }
         }
         released += NTP * np;  // every combine core signalled releases this feeder once per expert
     }
-    noc_semaphore_wait_min(sem, released);  // the combine's last release, then reset for the next call
-    noc_semaphore_set(sem, 0);
-    noc_async_atomic_barrier();
+    sem.wait_min(released);  // the combine's last release, then reset for the next call
+    sem.set(0);
+    noc.async_atomic_barrier();
 }

@@ -20,14 +20,20 @@
 // slot's previous chunk), and the a2 slot the same way; a slot's first use waits for nothing.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_a = get_named_compile_time_arg_val("cb_a");
-    constexpr uint32_t cb_a2 = get_named_compile_time_arg_val("cb_a2");
-    constexpr uint32_t cb_rt = get_named_compile_time_arg_val("cb_rt");
-    constexpr uint32_t cb_x = get_named_compile_time_arg_val("cb_x");
-    constexpr uint32_t cb_z = get_named_compile_time_arg_val("cb_z");
-    constexpr uint32_t cb_rows = get_named_compile_time_arg_val("cb_rows");
+    CircularBuffer cb_a(get_named_compile_time_arg_val("cb_a"));
+    CircularBuffer cb_a2(get_named_compile_time_arg_val("cb_a2"));
+    CircularBuffer cb_rt(get_named_compile_time_arg_val("cb_rt"));
+    CircularBuffer cb_x(get_named_compile_time_arg_val("cb_x"));
+    CircularBuffer cb_z(get_named_compile_time_arg_val("cb_z"));
+    CircularBuffer cb_rows(get_named_compile_time_arg_val("cb_rows"));
     constexpr uint32_t NC = get_named_compile_time_arg_val("group_cores");
     constexpr uint32_t Nt = get_named_compile_time_arg_val("intermediate_tiles");
     constexpr uint32_t KT = get_named_compile_time_arg_val("hidden_tiles");
@@ -86,17 +92,20 @@ void kernel_main() {
 
     // cb_z: [x staging: JR M rows x PMAX x 64 B][piece tiles: PMAX x M][row staging: JR rows x RSTR]
     constexpr uint32_t PSTR = PMAX * 64;
-    const uint32_t stg = get_write_ptr(cb_z);
+    const uint32_t stg = cb_z.get_write_ptr();
     const uint32_t tbuf = stg + JR * M * PSTR;
     const uint32_t rstg = tbuf + PMAX * M * TA;
     const auto xs = TensorAccessor(x_args, x_addr, ROW_BYTES);
     const auto out = TensorAccessor(out_args, out_addr, ROW_BYTES);
-    const uint32_t x_base = get_write_ptr(cb_x);
-    const uint32_t a2_base = get_write_ptr(cb_a2);
+    const uint32_t x_base = cb_x.get_write_ptr();
+    const uint32_t a2_base = cb_a2.get_write_ptr();
+    // Lambdas that issue NoC commands build their own Noc: in a lambda the compiler keeps out of line, a captured Noc's
+    // id is a run-time value, which adds instructions to every NoC command.
+    const Noc noc;
 
-    cb_wait_front(cb_rt, 1);
+    cb_rt.wait_front(1);
     invalidate_l1_cache();  // the table arrives by NoC read from the root core (rows_reader.cpp)
-    const uint32_t rt = get_read_ptr(cb_rt);
+    const uint32_t rt = cb_rt.get_read_ptr();
     volatile tt_l1_ptr uint16_t* rows = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(rt + RWO);
     volatile tt_l1_ptr uint16_t* jobs = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(rt + JBO);
     // this group's jobs (local index e): g, g + G, ... with one row tile per job, else group by group as the root
@@ -112,35 +121,43 @@ void kernel_main() {
     auto J = [&](uint32_t e) -> uint32_t { return M > 1 ? j0 + e : g + G * e; };
 
     auto write_rows = [&](uint32_t e) {
+        const Noc noc;
         const uint32_t j = J(e);
         const uint32_t first = jobs[3 * j + 1], n = jobs[3 * j + 2];
         const uint32_t m = (n + JR - 1) / JR;
         for (uint32_t q = 0; q < nq; ++q) {
             for (uint32_t r = 0; r < m; ++r) {
-                cb_wait_front(cb_rows, 4);
-                const uint32_t src = get_read_ptr(cb_rows);
+                cb_rows.wait_front(4);
+                const uint32_t src = cb_rows.get_read_ptr();
                 const uint32_t nt = nout - 4 * q < 4 ? nout - 4 * q : 4;
                 const uint32_t nr = n - JR * r < JR ? n - JR * r : JR;  // rows of row tile r
                 // row p of tile c: 32 B in face ((p / 16) * 2) (columns 0..15) and the next face (16..31), row p % 16
-                noc_async_read_one_packet_set_state(get_noc_addr(src), 32);
+                noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                    PrecomposedUnicastEndpoint{}, 32, {.noc_addr = get_noc_addr(src)});
                 for (uint32_t c = 0; c < nt; ++c) {
                     for (uint32_t p = 0; p < nr; ++p) {
                         const uint32_t s0 = src + c * TA + ((p >> 4) * 2) * 512 + (p & 15) * 32;
                         const uint32_t d0 = rstg + p * RSTR + c * 64;
-                        noc_async_read_one_packet_with_state(s0, d0);
-                        noc_async_read_one_packet_with_state(s0 + 512, d0 + 32);
+                        noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                            UnicastEndpoint{}, CoreLocalMem<uint32_t>(d0), 32, {.addr = s0}, {});
+                        noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                            UnicastEndpoint{}, CoreLocalMem<uint32_t>(d0 + 32), 32, {.addr = s0 + 512}, {});
                     }
                 }
-                noc_async_read_barrier();
-                cb_pop_front(cb_rows, 4);
+                noc.async_read_barrier();
+                cb_rows.pop_front(4);
                 // posted writes: non-posted row writes, many in flight under the weight stream, were never acked and
                 // hung the device
                 const uint32_t col = (n0 + 4 * q) * 64;
                 for (uint32_t p = 0; p < nr; ++p) {
-                    noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(
-                        rstg + p * RSTR, out.get_noc_addr(first + JR * r + p, col), nt * 64);
+                    noc.async_write<NocOptions::POSTED>(
+                        CoreLocalMem<uint32_t>(rstg + p * RSTR),
+                        out,
+                        nt * 64,
+                        {},
+                        {.page_id = first + JR * r + p, .offset_bytes = col});
                 }
-                noc_async_posted_writes_flushed();
+                noc.async_writes_flushed<NocOptions::POSTED>();
             }
         }
     };
@@ -152,15 +169,11 @@ void kernel_main() {
         const uint32_t kc = chunk_tiles_of(e);
         return (KT + kc - 1) / kc;
     };
-    auto wait_sem = [&](uint32_t sem, uint32_t count) {
-        volatile tt_l1_ptr uint32_t* v = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem));
-        while (*v < count) {
-            invalidate_l1_cache();
-        }
-    };
+    auto wait_sem = [&](uint32_t sem, uint32_t count) { Semaphore<>(sem).wait_min(count); };
     auto inc_grp = [&](uint32_t sem) {
-        const uint32_t l1 = get_semaphore(sem);
-        for_grp([&](uint32_t cx, uint32_t cy) { noc_semaphore_inc(get_noc_addr(cx, cy, l1), 1); });
+        const Noc noc;
+        Semaphore<> s(sem);
+        for_grp([&](uint32_t cx, uint32_t cy) { s.up(noc, cx, cy, 1); });
     };
     // this core's piece of chunk c of job e: hidden tiles [c kc + lo, c kc + lo + n)
     auto piece_of = [&](uint32_t e, uint32_t c, uint32_t& lo, uint32_t& n) {
@@ -171,6 +184,7 @@ void kernel_main() {
     };
     // the piece of chunk c for every row of job e, as tiles [piece tile][row tile] in tbuf
     auto build_piece = [&](uint32_t e, uint32_t c) {
+        const Noc noc;
         const uint32_t j = J(e);
         const uint32_t first = jobs[3 * j + 1], n = jobs[3 * j + 2];
         const uint32_t m = (n + JR - 1) / JR;
@@ -182,28 +196,37 @@ void kernel_main() {
         // staging row stride = this piece (a one-row-tile job's piece is up to M times a held job's)
         const uint32_t k0 = c * chunk_tiles_of(e) + lo, pstr = pn * 64;
         for (uint32_t p = 0; p < n; ++p) {
-            noc_async_read(xs.get_noc_addr(rows[first + p], k0 * 64), stg + p * pstr, pn * 64);
+            noc.async_read(
+                xs,
+                CoreLocalMem<uint32_t>(stg + p * pstr),
+                pn * 64,
+                {.page_id = rows[first + p], .offset_bytes = k0 * 64},
+                {});
         }
-        noc_async_read_barrier();
-        noc_async_read_one_packet_set_state(get_noc_addr(stg), 32);
+        noc.async_read_barrier();
+        noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            PrecomposedUnicastEndpoint{}, 32, {.noc_addr = get_noc_addr(stg)});
         for (uint32_t kk = 0; kk < pn; ++kk) {
             for (uint32_t p = 0; p < n; ++p) {
                 const uint32_t s0 = stg + p * pstr + kk * 64;
                 const uint32_t d0 = tbuf + (kk * m + p / JR) * TA + (((p % JR) >> 4) * 2) * 512 + (p & 15) * 32;
-                noc_async_read_one_packet_with_state(s0, d0);
-                noc_async_read_one_packet_with_state(s0 + 32, d0 + 512);
+                noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                    UnicastEndpoint{}, CoreLocalMem<uint32_t>(d0), 32, {.addr = s0}, {});
+                noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                    UnicastEndpoint{}, CoreLocalMem<uint32_t>(d0 + 512), 32, {.addr = s0 + 32}, {});
             }
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
     };
     // seq: the chunk's number in this core's x stream (slot seq % XS, its use seq / XS)
     auto send_piece = [&](uint32_t e, uint32_t c, uint32_t seq) {
+        const Noc noc;
         const uint32_t n = jobs[3 * J(e) + 2];
         const uint32_t m = (n + JR - 1) / JR;
         const uint32_t slot = seq % XS, use = seq / XS;
         if constexpr (CREDITS) {
-            cb_reserve_back(cb_x, KC * M);  // this core's compute popped the slot's previous chunk
-            if (use > 0) {  // a slot starts free on every group core: only reuses wait for the hand-back
+            cb_x.reserve_back(KC * M);  // this core's compute popped the slot's previous chunk
+            if (use > 0) {              // a slot starts free on every group core: only reuses wait for the hand-back
                 inc_grp(SEM_XF + slot);
                 wait_sem(SEM_XF + slot, NC * use);
             }
@@ -215,15 +238,31 @@ void kernel_main() {
             if (m == 1 && n <= 16) {  // rows 0..15 only: the top two faces of each tile
                 for_grp([&](uint32_t cx, uint32_t cy) {
                     for (uint32_t kk = 0; kk < pn; ++kk) {
-                        noc_async_write(tbuf + kk * TA, get_noc_addr(cx, cy, dst + kk * TA), n * 32);
-                        noc_async_write(tbuf + kk * TA + 512, get_noc_addr(cx, cy, dst + kk * TA + 512), n * 32);
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(tbuf + kk * TA),
+                            UnicastEndpoint{},
+                            n * 32,
+                            {},
+                            {.noc_x = cx, .noc_y = cy, .addr = dst + kk * TA});
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(tbuf + kk * TA + 512),
+                            UnicastEndpoint{},
+                            n * 32,
+                            {},
+                            {.noc_x = cx, .noc_y = cy, .addr = dst + kk * TA + 512});
                     }
                 });
             } else {
-                for_grp(
-                    [&](uint32_t cx, uint32_t cy) { noc_async_write(tbuf, get_noc_addr(cx, cy, dst), pn * m * TA); });
+                for_grp([&](uint32_t cx, uint32_t cy) {
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(tbuf),
+                        UnicastEndpoint{},
+                        pn * m * TA,
+                        {},
+                        {.noc_x = cx, .noc_y = cy, .addr = dst});
+                });
             }
-            noc_async_write_barrier();
+            noc.async_write_barrier();
         }
         inc_grp(SEM_X + slot);
     };
@@ -231,18 +270,19 @@ void kernel_main() {
         const uint32_t slot = seq % XS, use = seq / XS;
         wait_sem(SEM_X + slot, NC * (use + 1));
         if constexpr (!CREDITS) {
-            cb_reserve_back(cb_x, KC * M);
+            cb_x.reserve_back(KC * M);
         }
-        cb_push_back(cb_x, KC * M);
+        cb_x.push_back(KC * M);
     };
     auto exchange = [&](uint32_t e) {
+        const Noc noc;
         const uint32_t n = jobs[3 * J(e) + 2];
         const uint32_t m = (n + JR - 1) / JR;
         const uint32_t slot = e % NBUF, use = e / NBUF;
-        cb_wait_front(cb_a, M * a_tiles);
-        const uint32_t src = get_read_ptr(cb_a);
+        cb_a.wait_front(M * a_tiles);
+        const uint32_t src = cb_a.get_read_ptr();
         if constexpr (CREDITS) {
-            cb_reserve_back(cb_a2, M * Nt);  // this core's compute popped the slot's previous job
+            cb_a2.reserve_back(M * Nt);  // this core's compute popped the slot's previous job
             if (use > 0) {
                 inc_grp(SEM_A2F + slot);
                 wait_sem(SEM_A2F + slot, NC * use);
@@ -250,20 +290,22 @@ void kernel_main() {
         }
         for_grp([&](uint32_t cx, uint32_t cy) {
             for (uint32_t r = 0; r < m; ++r) {
-                noc_async_write(
-                    src + r * a_tiles * TA,
-                    get_noc_addr(cx, cy, a2_base + (slot * M * Nt + r * Nt + c0) * TA),
-                    na * TA);
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(src + r * a_tiles * TA),
+                    UnicastEndpoint{},
+                    na * TA,
+                    {},
+                    {.noc_x = cx, .noc_y = cy, .addr = a2_base + (slot * M * Nt + r * Nt + c0) * TA});
             }
         });
-        noc_async_write_barrier();
+        noc.async_write_barrier();
         inc_grp(SEM_A2 + slot);
-        cb_pop_front(cb_a, M * a_tiles);
+        cb_a.pop_front(M * a_tiles);
         wait_sem(SEM_A2 + slot, NC * (use + 1));
         if constexpr (!CREDITS) {
-            cb_reserve_back(cb_a2, M * Nt);
+            cb_a2.reserve_back(M * Nt);
         }
-        cb_push_back(cb_a2, M * Nt);
+        cb_a2.push_back(M * Nt);
     };
 
     if constexpr (!CREDITS) {
@@ -288,7 +330,7 @@ void kernel_main() {
             }
         }
         write_rows(D - 1);
-        noc_async_full_barrier();
+        noc.async_full_barrier();
         return;
     }
 
@@ -323,5 +365,5 @@ void kernel_main() {
     }
     exchange(D - 1);
     write_rows(D - 1);
-    noc_async_full_barrier();
+    noc.async_full_barrier();
 }
