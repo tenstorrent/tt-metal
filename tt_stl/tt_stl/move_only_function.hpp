@@ -25,9 +25,7 @@ namespace ttsl {
 
 namespace detail {
 
-// A 3-pointer inline buffer plus one table pointer makes sizeof 32, the same as std::function on
-// libstdc++.
-inline constexpr std::size_t kMoveOnlyFunctionInlinePointers = 3;
+inline constexpr std::size_t kMoveOnlyFunctionInlinePointers = 3;  // sizeof 32, as std::function on libstdc++
 inline constexpr std::size_t kMoveOnlyFunctionInlineSize = kMoveOnlyFunctionInlinePointers * sizeof(void*);
 inline constexpr std::size_t kMoveOnlyFunctionInlineAlign = alignof(void*);
 
