@@ -670,7 +670,8 @@ ninja -C build x280_images x280_abi_headers x280_runtime_host_tests x280_runtime
   x280_p2p_latency_erisc_peer_tile x280_p2p_latency_drisc_peer_tile \
   x280_pipeline_stage_route_compute x280_pipeline_stage_route_forward \
   x280_core_sync_director x280_core_sync_characterization \
-  x280_packet_injection_tensix_to_x280 x280_packet_injection_erisc_to_x280_header
+  x280_packet_injection_tensix_to_x280 x280_packet_injection_erisc_to_x280_header \
+  x280_eth_credit
 ctest --test-dir build -R x280      # image placement, pinned-input guards, header refusals, host, offline and mock-cluster tests; no device
 ```
 
@@ -690,6 +691,7 @@ ctest --test-dir build -R x280      # image placement, pinned-input guards, head
 | `firmware-core-sync-director.bin` | `src/core_sync_director.cpp` | the X280 participant or director of `core_sync_barrier`, run by `x280_core_sync_director` and `x280_core_sync_characterization` (built only when named) |
 | `firmware-core-sync-release-probe.bin` | `src/core_sync_release_probe.cpp` | test-only release of one or more X280 multicast groups, run by `x280_core_sync_director` |
 | `firmware-packet-injection-{latency-include,latency-exclude,throughput,backpressure-include,backpressure-exclude}.bin` | `src/packet_injection_x280.cpp` | the X280 consumer of packet_injection, one image per mode and creation flag; `x280_packet_injection_tensix_to_x280` runs each point's variant and `x280_packet_injection_erisc_to_x280_header` the throughput image. The latency variants link the pinned-input operations |
+| `firmware-eth-credit-x280-fwd.bin` | `src/eth_credit_x280_fwd.cpp` | the X280 forwarders of eth_credit on both chips, run by `x280_eth_credit` |
 
 Every image compiles with `-mcpu=sifive-x280 -march=rv64gc -mabi=lp64d
 -mcmodel=medany -O2 -Werror`, freestanding, and links with
@@ -778,6 +780,62 @@ the ID 14 contract and the removed single-writer prototype are in
 [`CHARACTERIZATION_PACKET_HEADER_INGRESS.md`](CHARACTERIZATION_PACKET_HEADER_INGRESS.md).
 Each record names the tt-metal revision the executable was built from
 (`tt_metal_sha`, `source_dirty`).
+
+### Credit flow control across a direct Ethernet link
+
+`x280_eth_credit` measures read/write-pointer credit flow control over one live
+Ethernet link between UMD chips 0 and 1: X280 forwarders on each chip, E0 on
+ERISC0 (NoC 0) and E1 on ERISC1 (NoC 1) of the linked active Ethernet core. Its
+cases run in bring-up order, from the barrier and handshake with no traffic to
+both directions, and each step carries a run that must fail. E0 and E1 are
+JIT-built per shape from `kernels/eth_credit/{e0,e1}_kernel.cpp`. An Ethernet
+kernel's only extra include root is its source directory, so they reach every
+x280 header by relative path; the `x280_eth_credit_jit` CTest compiles them the
+same way with no device. ERISC stall budgets
+scale by each chip's programmed AICLK, and every run brackets both ERISC wall
+clocks with the AICLK sampler of `MEASUREMENT.md`; ERISC ticks convert to time
+only when that evidence is clean. Each run also writes an `eth_credit_link`
+record per chip with the base firmware's link retrain count before launch and
+after `Finish`, so a failure can be checked against a retrain, and the chip's
+ERISC clock evidence; and an `eth_credit_kernel` record per launched kernel
+with its result block: status, packets per `p`, every stall and cost site's
+count and ticks, and failure detail. The console prints raw packet counts and
+ticks and, for a failed run, the attribution line and every chip's kernel
+results; rates come from the tabulator. The design is in
+[`ETH_CREDIT.md`](ETH_CREDIT.md).
+
+```bash
+env -u TT_VISIBLE_DEVICES TT_METAL_RUNTIME_ROOT="$PWD" ./build/test/tt_metal/x280/x280_eth_credit
+```
+
+The suite uses L2CPU 0 of both chips; the harness boots resident idle on each
+chip whose L2CPUs are all held in reset (§ Benchmark harness). It links
+`x280_slow_dispatch`, and it sets `TT_METAL_OPERATION_TIMEOUT_SECONDS=120`
+itself, which bounds each device's wait inside a slow-dispatch `Finish`,
+counted from when `Finish` starts waiting, not from launch; every E0/E1 wait's
+own stall budget bounds the kernels themselves. Finding the link asks Metal for
+each active Ethernet core's peer, and Metal refuses a peer outside the visible
+cluster, so on a host where chip 0 or 1 also links to another card, run with
+every card visible, as above.
+A Metal call that throws is recorded as
+`metal_failure` in the run's `eth_credit_link` records, and the result blocks
+are still harvested. `X280_ETH_CREDIT_KERNEL_ROOT` points the E0/E1
+sources at another x280 tree, which is how a mutation check compiles an edited
+copy.
+
+A run that ends undrained (a Metal call threw, an X280 wait expired that the
+case expected to finish, an E0/E1 left no result, or the link went down or
+retrained) may leave TT-link resends in flight: a TX queue keeps resending
+unacknowledged packets after `CMD_ONGOING` clears, and no Blackhole register
+counts them, so the idle-queue check before each run cannot rule them out. The
+suite then refuses every later run in the process. A fresh process cannot see
+that an earlier one ended undrained, so after one, or after a process killed
+mid-run, reset both chips before the next run; the next run boots their
+L2CPUs again:
+
+```bash
+env -u TT_VISIBLE_DEVICES tt-smi -r 0,1   # nothing may hold the cards
+```
 
 ### Paired Tensix/X280 cases
 
