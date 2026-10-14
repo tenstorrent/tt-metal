@@ -527,6 +527,11 @@ std::optional<TensorTopology> over_storage_ring_order(
     const Tensor& ring_tensor,
     std::optional<uint32_t> cluster_axis,
     std::string_view op) {
+    // Returned as is: no label (the pure helper already refused); a cluster_axis (the ring rank is then the coordinate
+    // value along that axis, not a position in the storage list, so the label's coordinates are already right); a
+    // tensor not stored on every device (on a multi-host mesh this host's storage lists only its own devices while the
+    // label is global, so respelling over it would shrink the label; a single-host sub-mesh label already lists its
+    // own devices, so there is nothing to respell).
     if (!label.has_value() || cluster_axis.has_value() || !ring_tensor.device_storage().is_uniform_storage()) {
         return label;
     }
