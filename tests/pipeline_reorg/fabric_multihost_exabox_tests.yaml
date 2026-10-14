@@ -48,6 +48,7 @@
       --filter 'name.*_short'
 
     echo "=== DC validation (quad) neighbor exchange ==="
+    cd "${TT_METAL_HOME}"
     TTRUN_DIR=/etc/ttop
     WORKER_HOME=/home/user/tt-metal
     mkdir -p "${PIPELINE_DIR}"
