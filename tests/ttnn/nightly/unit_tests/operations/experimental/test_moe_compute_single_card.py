@@ -45,6 +45,9 @@ from ttnn.experimental.moe_compute_utils import (
     get_weight_mem_configs,
     auto_output_width_shard_dim,
     effective_matmul_ring_size,
+)
+
+from tests.ttnn.moe_packed_token_list_utils import (
     decode_packed_token_lists,
     token_list_header_words,
     token_list_page_words,

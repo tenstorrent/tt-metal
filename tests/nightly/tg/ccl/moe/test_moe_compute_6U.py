@@ -23,11 +23,14 @@ from ttnn.operations.ccl import MoEActivationFunction
 
 from ttnn.experimental.moe_compute_utils import (
     auto_output_width_shard_dim,
+    _shard_tiles,
+    _w2_shard_tiles,
+)
+
+from tests.ttnn.moe_packed_token_list_utils import (
     decode_packed_token_lists,
     token_list_header_words,
     token_list_segment_starts,
-    _shard_tiles,
-    _w2_shard_tiles,
 )
 
 from tests.nightly.tg.ccl.moe.test_selective_combine_6U import device_mesh_iterator
