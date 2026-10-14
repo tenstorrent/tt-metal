@@ -384,13 +384,13 @@ class TestCollapsedInputs:
         assert tuple(int(d) for d in result.tensor_topology().distribution_shape()) == MESH_SHAPE_2X2
         assert np.array_equal(_compose_by_label(result), data)
 
-    def test_all_gather_same_dim_outer_axis_is_refused(self):
+    def test_all_gather_same_dim_outer_axis_is_refused(self, expect_error):
         """Rule (d), negative control: {4}, [Shard(3)] puts piece 2r+c on device (r, c); gathering dim 3 along axis 0
         gives device (r, c) pieces c and 2+c side by side, which is no slice of any tensor. Strict mode makes that
         an error; before this change the label silently became {4}, [Replicate], claiming all four devices equal."""
         tensor, _ = _collapsed_tensor((1, 1, 64, 128), lambda d: ttnn.shard_tensor_to_mesh_mapper(d, 3), seed=31)
 
-        with pytest.raises(RuntimeError, match="would interleave"):  # allow-pytest.raises: no expect_error here
+        with expect_error(RuntimeError, "would interleave"):
             ttml.core.distributed.all_gather(tensor, 3, cluster_axis=0)
 
     def test_all_gather_other_dim_outer_axis(self):
