@@ -70,7 +70,12 @@ add_library(
     ${TOPOLOGY_GENERATED_PROTO_SRCS}
 )
 add_library(TT::ScaleoutTopology ALIAS scaleout_topology)
-set_target_properties(scaleout_topology PROPERTIES EXPORT_NAME ScaleoutTopology) # installed name == in-tree alias
+set_target_properties(
+    scaleout_topology
+    PROPERTIES
+        EXPORT_NAME
+            ScaleoutTopology
+) # installed name == in-tree alias
 set_source_files_properties(
     ${TOPOLOGY_GENERATED_PROTO_SRCS}
     PROPERTIES
