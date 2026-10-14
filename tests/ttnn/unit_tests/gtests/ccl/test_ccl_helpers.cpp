@@ -970,8 +970,9 @@ TEST(CclTopologyUtils, AllGatherReplicatesTheClusterAxisOfAnNDLabelAndKeepsTheRe
         topo::all_gather_output_topology(in, 0, mesh, kRank, /*gathered_dim=*/2),
         nd_label(mesh, {TopoReplicate{}, TopoShard{3}}));
 
-    // Rule (e): another axis sharding the gathered dim keeps its Shard -- its pieces are still distinct after the
-    // gather. The old prim all_gather rule replicated every axis whose Shard dim equalled the gather dim.
+    // Only the gathered axis is replicated: another axis sharding the gathered dim keeps its Shard, since its pieces
+    // are still distinct after the gather. The old prim all_gather rule replicated every axis whose Shard dim equalled
+    // the gather dim.
     EXPECT_EQ(
         topo::all_gather_output_topology(nd_label(mesh, {TopoShard{3}, TopoReplicate{}}), 1, mesh, kRank, 3),
         nd_label(mesh, {TopoShard{3}, TopoReplicate{}}));
@@ -1024,7 +1025,8 @@ TEST(CclTopologyUtils, AllGatherOfACollapsedShardAlongTheInnermostAxis) {
     }
 
     // Three non-trivial axes: gathering along the innermost leaves Shard{3} on two axes next to a Replicate axis,
-    // which no label expresses (rule (c)): warn-only gives nullopt, strict throws.
+    // which no label expresses (finalise collapses a repeated dim only when every non-trivial axis shards it):
+    // warn-only gives nullopt, strict throws.
     const MeshShape cube(2, 2, 2);
     {
         StrictCclTopologyScope warn_only(false);
@@ -1041,7 +1043,8 @@ TEST(CclTopologyUtils, AllGatherOfACollapsedShardAlongAnOuterAxisIsRefusedUnless
     const MeshShape mesh(2, 4);
     const auto in = collapsed_label(mesh, TopoShard{3});
 
-    // Rule (d): gathering dim 3 along axis 0 interleaves the pieces axis 1 keeps apart.
+    // The interleave refusal (require_contiguous_gather): gathering dim 3 along axis 0 interleaves the pieces axis 1
+    // keeps apart.
     {
         StrictCclTopologyScope strict(false);
         EXPECT_FALSE(topo::all_gather_output_topology(in, 0, mesh, kRank, 3).has_value());
@@ -1114,7 +1117,7 @@ TEST(CclTopologyUtils, ReduceScatterShardsTheClusterAxisWithTheNormalisedDim) {
     const MeshShape mesh(2, 4);
     StrictCclTopologyScope strict(true);
 
-    // Rule (f): only normalised dims are written.
+    // Only normalised dims are written into a placement.
     EXPECT_EQ(
         topo::reduce_scatter_output_topology(nd_label(mesh, {TopoReplicate{}, TopoReplicate{}}), 1, mesh, kRank, -1),
         nd_label(mesh, {TopoReplicate{}, TopoShard{3}}));
