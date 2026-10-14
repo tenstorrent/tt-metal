@@ -9,6 +9,7 @@ from itertools import chain, product
 
 import pytest
 import torch
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -1576,6 +1577,30 @@ def eltwise_unary_sfpu(
     # For callers that want a stricter gate than the op's tolerance (an exact-bits check on
     # a probe table, say); the sweeps above ignore it.
     return res_tensor, golden_tensor
+
+
+QUICK_GELU_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.QuickGelu],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(**QUICK_GELU_SWEEP)
+def test_eltwise_unary_sfpu_quick_gelu(formats, dest_acc, mathop):
+    # quick_gelu, both signs past the hold; Blackhole has the only kernel.
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-16.0, high=16.0),
+    )
 
 
 # Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false

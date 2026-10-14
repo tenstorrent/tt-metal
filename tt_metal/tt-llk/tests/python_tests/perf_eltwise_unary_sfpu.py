@@ -3,7 +3,7 @@
 
 
 import pytest
-from conftest import skip_for_blackhole
+from conftest import skip_for_blackhole, skip_for_quasar, skip_for_wormhole
 from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
@@ -388,6 +388,24 @@ def test_perf_eltwise_unary_sfpu_comp_uint32(
         formats.input_format.is_32_bit(),
         input_dimensions,
     ).run(perf_report)
+
+
+@pytest.mark.perf
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.QuickGelu],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=_EXTRA_SLICE_DIMS,
+)
+def test_perf_eltwise_unary_sfpu_quick_gelu(
+    perf_report, formats, mathop, dest_acc, input_dimensions
+):
+    # quick_gelu; Blackhole has the only kernel.
+    _extra_slice_config(formats, mathop, dest_acc, False, input_dimensions).run(
+        perf_report
+    )
 
 
 @pytest.mark.perf
