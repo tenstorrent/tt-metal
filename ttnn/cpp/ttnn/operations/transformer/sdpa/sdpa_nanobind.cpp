@@ -988,8 +988,8 @@ void bind_sdpa(nb::module_& mod) {
                 tech_reports/FlashAttention/SDPAPrecisionRecipes.md). Each Q chunk's online-softmax state stays
                 in L1 across ring steps and is normalized once, on the last. logical_n may be a scalar or a
                 device tensor. When omitted, the streaming kernel runs; FP32 DEST, or a blocking it cannot build,
-                runs STANDARD (ACCURATE with FP32 DEST) on Blackhole. compute_kernel_config and exp_approx_mode are
-                accepted and ignored; scale is honored.
+                runs STANDARD (ACCURATE with FP32 DEST) on Blackhole at op-chosen chunks on the program_config
+                grid. compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):

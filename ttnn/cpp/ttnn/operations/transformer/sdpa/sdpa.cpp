@@ -100,8 +100,8 @@ bool route_fp32_prefill(
     return !precision && routes_fp32_dest(q, compute_kernel_config);
 }
 
-// Ring and exp ring: the caller's chunk sizes unless the recipe does not support that geometry, in which case
-// both are left to the op's blocking chooser.
+// Ring: the caller's chunk sizes unless the recipe does not support that geometry, in which case both are left to the
+// op's blocking chooser.
 void drop_unsupported_routed_chunks(
     ttnn::operations::transformer::SDPAProgramConfig& program_config, uint32_t head_dim) {
     const bool tile_aligned = program_config.q_chunk_size % 32 == 0 && program_config.k_chunk_size % 32 == 0 &&
@@ -1033,7 +1033,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
         const auto policy = numeric::resolve_recipe_policy(
             input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, program_config);
         if (routed) {
-            drop_unsupported_routed_chunks(program_config, input_tensor_q.logical_shape()[3]);
+            // Routed calls choose their chunks on the caller's grid: the caller's were picked for the streaming kernel
+            // (a Q32 call on a 5x4 grid needs 8 serial passes; the device op allows 3).
+            program_config.q_chunk_size = 0;
+            program_config.k_chunk_size = 0;
         }
         program_config = numeric::resolve_exp_ring_recipe_blocking(
             policy, input_tensor_q, input_tensor_k, joint_tensor_q, static_cast<uint32_t>(ring_size), program_config);
