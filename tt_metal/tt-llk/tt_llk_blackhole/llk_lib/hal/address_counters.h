@@ -1041,7 +1041,7 @@ public:
      */
     inline __attribute__((always_inline)) void advance_and_reset() const
     {
-        ckernel::instrn_buffer[0] = get_operation<GetOpType::ADVANCE_AND_RESET>();
+        TT_INSN(get_operation<GetOpType::ADVANCE_AND_RESET>());
     }
 };
 
