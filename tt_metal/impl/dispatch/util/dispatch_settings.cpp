@@ -29,10 +29,17 @@ static_assert(
 static_assert(
     DispatchSettings::DISPATCH_MESSAGE_ENTRIES + 1 < 16,
     "FDS reserves group zero and requires every dispatch message index to fit in a four-bit group id");
+// An FDS done group is its completion counter + 1, with group zero reserved.
+static_assert(
+    DispatchSettings::DISPATCH_COMPLETION_COUNTERS + 1 <= 16,
+    "FDS reserves group zero and requires every completion counter to fit in a four-bit done group id");
+static_assert(
+    DispatchSettings::num_completion_slots(DispatchSettings::DISPATCH_MESSAGE_ENTRIES) >= 1,
+    "Every sub-device needs at least one completion slot");
 
 // The completion counter index lives in go_msg_t::offset, a full byte, written independently of the signal byte. The
-// host writes offset = counter index + cq_id * DISPATCH_COMPLETION_COUNTERS (DispatchMemMap::
-// get_completion_counter_index + get_completion_counter_offset), so its maximum,
+// host writes offset = counter index + cq_id * DISPATCH_COMPLETION_COUNTERS (DispatchSettings::
+// completion_counter_index + DispatchMemMap::get_completion_counter_offset), so its maximum,
 // MAX_NUM_HW_CQS * DISPATCH_COMPLETION_COUNTERS - 1, must fit in that byte.
 static_assert(
     DispatchSettings::MAX_NUM_HW_CQS * DispatchSettings::DISPATCH_COMPLETION_COUNTERS <= 256,

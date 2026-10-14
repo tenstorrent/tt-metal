@@ -193,7 +193,7 @@ volatile uint32_t last_wait_count = 0;
 #ifdef FDS_SIGNALLING
 // Last go token pushed to the auto dispatch queue, not the value currently on the wire.
 volatile uint32_t last_go_token = 0;
-volatile uint32_t last_fds_tracked_sub_device_mask = 0;
+volatile uint32_t last_fds_tracked_counter_mask = 0;
 #endif
 volatile uint32_t last_wait_stream = 0;
 constexpr uint32_t stream_addr0 = STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
@@ -212,8 +212,13 @@ static uint32_t num_worker_sems = 1;
 static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
 
 #ifdef FDS_SIGNALLING
-static std::array<uint32_t, max_num_worker_sems> collected_worker_completion_count = {0};
-static uint32_t tracked_sub_device_mask = 0;
+// FDS dones are tracked per completion counter: a launch reporting into counter c signals done group c + 1.
+static std::array<uint32_t, max_num_completion_counters> expected_worker_completion_count = {0};
+static std::array<uint32_t, max_num_completion_counters> collected_worker_completion_count = {0};
+static uint32_t tracked_counter_mask = 0;
+
+FORCE_INLINE
+constexpr uint32_t done_group_for_counter(uint32_t counter) { return counter + 1; }
 
 FORCE_INLINE
 void push_auto_dispatch_entry(uint32_t value) {
@@ -232,48 +237,48 @@ void send_fds_go(uint32_t sub_device_index) {
     last_go_token = go_token;
 }
 
-// Adds each tracked sub-device's newly arrived FDS dones to its worker completion semaphore, and stops
-// tracking the sub-device once every expected worker has reported. The hardware count is the number of
+// Adds each tracked counter's newly arrived FDS dones to its worker completion semaphore, and stops
+// tracking the counter once every expected worker has reported. The hardware count is the number of
 // workers that have reported so far, so each call adds only its increase since the last call.
 FORCE_INLINE
 void collect_worker_completions() {
-    uint32_t remaining_tracked_sub_devices = tracked_sub_device_mask;
-    while (remaining_tracked_sub_devices != 0) {
-        const uint32_t sub_device_index = __builtin_ctz(remaining_tracked_sub_devices);
-        const uint32_t sub_device_mask = 1U << sub_device_index;
-        const uint32_t completed_worker_count = overlay::fds_signalling::dispatch_read_group_count(
-            overlay::fds_signalling::go_group_for_sub_device(sub_device_index));
-        const uint32_t expected_worker_count = workers_per_sub_device[sub_device_index];
+    uint32_t remaining_tracked_counters = tracked_counter_mask;
+    while (remaining_tracked_counters != 0) {
+        const uint32_t counter = __builtin_ctz(remaining_tracked_counters);
+        const uint32_t counter_mask = 1U << counter;
+        const uint32_t completed_worker_count =
+            overlay::fds_signalling::dispatch_read_group_count(done_group_for_counter(counter));
+        const uint32_t expected_worker_count = expected_worker_completion_count[counter];
         ASSERT(completed_worker_count <= expected_worker_count);
 
-        const uint32_t collected_worker_count = collected_worker_completion_count[sub_device_index];
+        const uint32_t collected_worker_count = collected_worker_completion_count[counter];
         if (completed_worker_count > collected_worker_count) {
-            *worker_completion_sem_addr(
-                first_stream_used + sub_device_index, first_stream_used, completion_counter_offset) +=
+            *worker_completion_sem_addr(first_stream_used + counter, first_stream_used, completion_counter_offset) +=
                 completed_worker_count - collected_worker_count;
-            collected_worker_completion_count[sub_device_index] = completed_worker_count;
+            collected_worker_completion_count[counter] = completed_worker_count;
         }
         if (completed_worker_count == expected_worker_count) {
-            tracked_sub_device_mask &= ~sub_device_mask;
-            last_fds_tracked_sub_device_mask = tracked_sub_device_mask;
+            tracked_counter_mask &= ~counter_mask;
+            last_fds_tracked_counter_mask = tracked_counter_mask;
         }
 
-        remaining_tracked_sub_devices &= ~sub_device_mask;
+        remaining_tracked_counters &= ~counter_mask;
     }
 }
 
-// Starts tracking FDS dones for a sub-device just before its go is queued. Clears the dones its workers
-// still hold on the wire from the previous go.
+// Starts tracking FDS dones into a completion counter just before a go for sub_device_index's workers, which report
+// into that counter, is queued. Clears the dones its workers still hold on the wire from the previous go.
 FORCE_INLINE
-void begin_worker_completion_tracking(uint32_t sub_device_index) {
+void begin_worker_completion_tracking(uint32_t sub_device_index, uint32_t counter) {
     WAYPOINT("FCLW");
     ASSERT(sub_device_index < max_num_worker_sems);
-    const uint32_t sub_device_mask = 1U << sub_device_index;
-    ASSERT((tracked_sub_device_mask & sub_device_mask) == 0);
+    ASSERT(counter < max_num_completion_counters);
+    const uint32_t counter_mask = 1U << counter;
+    ASSERT((tracked_counter_mask & counter_mask) == 0);
     ASSERT(workers_per_sub_device[sub_device_index] != 0);
     ASSERT(workers_per_sub_device[sub_device_index] <= overlay::fds_signalling::num_worker_lanes);
 
-    const uint32_t group_id = overlay::fds_signalling::go_group_for_sub_device(sub_device_index);
+    const uint32_t group_id = done_group_for_counter(counter);
     uint32_t workers_with_stale_completion = overlay::fds_signalling::dispatch_read_group_status(group_id);
     while (workers_with_stale_completion != 0) {
         const uint32_t worker_lane = __builtin_ctz(workers_with_stale_completion);
@@ -284,16 +289,17 @@ void begin_worker_completion_tracking(uint32_t sub_device_index) {
     // can arrive before its go is queued, so clearing every lane drops nothing.
     overlay::fds_signalling::dispatch_clear_group_status(group_id);
 
-    collected_worker_completion_count[sub_device_index] = 0;
-    tracked_sub_device_mask |= sub_device_mask;
-    last_fds_tracked_sub_device_mask = tracked_sub_device_mask;
+    expected_worker_completion_count[counter] = workers_per_sub_device[sub_device_index];
+    collected_worker_completion_count[counter] = 0;
+    tracked_counter_mask |= counter_mask;
+    last_fds_tracked_counter_mask = tracked_counter_mask;
     WAYPOINT("FCLD");
 }
 
-// Tracking stops when a sub-device's dones reach its worker count, so no sub-device may be tracked when the
+// Tracking stops when a counter's dones reach its worker count, so no counter may be tracked when the
 // worker counts are updated.
 FORCE_INLINE
-void assert_no_sub_device_tracked() { ASSERT(tracked_sub_device_mask == 0); }
+void assert_no_sub_device_tracked() { ASSERT(tracked_counter_mask == 0); }
 
 FORCE_INLINE
 void init_fds_signalling() {
@@ -303,7 +309,9 @@ void init_fds_signalling() {
     overlay::fds_signalling::dispatch_disable_auto_dispatch();
     overlay::fds_signalling::dispatch_config_filter_length(overlay::fds_signalling::filter_length_cycles);
     overlay::fds_signalling::dispatch_config_interrupt_enable(overlay::fds_signalling::interrupts_disabled);
-    for (uint32_t group_id = overlay::fds_signalling::idle_group_id + 1; group_id <= max_num_worker_sems; ++group_id) {
+    for (uint32_t group_id = done_group_for_counter(0);
+         group_id <= done_group_for_counter(max_num_completion_counters - 1);
+         ++group_id) {
         overlay::fds_signalling::dispatch_config_group(
             group_id, overlay::fds_signalling::all_worker_lanes_mask, overlay::fds_signalling::dispatch_done_threshold);
         // Where group status is sticky, start without the dones a previous run left in it.
@@ -339,7 +347,7 @@ void drain_fds_go_wire() {
 
 #else
 FORCE_INLINE void collect_worker_completions() {}
-FORCE_INLINE void begin_worker_completion_tracking(uint32_t) {}
+FORCE_INLINE void begin_worker_completion_tracking(uint32_t, uint32_t) {}
 FORCE_INLINE void assert_no_sub_device_tracked() {}
 FORCE_INLINE void init_fds_signalling() {}
 FORCE_INLINE void drain_fds_go_wire() {}
@@ -601,7 +609,8 @@ FORCE_INLINE void wait_for_workers_and_send_go_signal(
     uint32_t go_signal_value,
     uint32_t multicast_go_offset,
     uint32_t wait_count,
-    uint32_t wait_stream) {
+    uint32_t wait_stream,
+    uint32_t completion_counter) {
     wait_for_workers(wait_count, wait_stream);
     // A program GO carries signal == RUN_MSG_GO; control codes take the NOC path.
     go_msg_t go_signal;
@@ -611,7 +620,7 @@ FORCE_INLINE void wait_for_workers_and_send_go_signal(
 
     if (use_fds_go) {
         DPRINT("DISPATCH_S: go FDS\n");
-        begin_worker_completion_tracking(/*sub_device_index=*/multicast_go_offset);
+        begin_worker_completion_tracking(/*sub_device_index=*/multicast_go_offset, completion_counter);
         send_fds_go(/*sub_device_index=*/multicast_go_offset);
     } else if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         DPRINT("DISPATCH_S: go NOC\n");
@@ -620,7 +629,7 @@ FORCE_INLINE void wait_for_workers_and_send_go_signal(
             aligned_go_signal_storage, aligned_go_signal_storage_uncached, go_signal_value, multicast_go_offset);
         // The unicast-target go path, unreachable today because active ethernet is not supported with FDS.
         ASSERT(go_signal.signal != RUN_MSG_GO);
-        ASSERT((tracked_sub_device_mask & (1U << multicast_go_offset)) == 0);
+        ASSERT((tracked_counter_mask & (1U << completion_counter)) == 0);
         issue_go_signal_mcast_noc_write();
     } else {
         DPRINT("DISPATCH_S: go NOC\n");
@@ -633,7 +642,8 @@ FORCE_INLINE void wait_for_workers_and_send_go_signal(
     uint32_t go_signal_value,
     uint32_t multicast_go_offset,
     uint32_t wait_count,
-    uint32_t wait_stream) {
+    uint32_t wait_stream,
+    uint32_t /*completion_counter*/) {
     DPRINT("DISPATCH_S: go NOC\n");
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
 #if DEVICE_PRINT_DISPATCH_ENABLED
@@ -707,6 +717,7 @@ void process_go_signal_mcast_cmd() {
     uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
     uint32_t wait_count = load_aligned<uint32_t>(&cmd->mcast.wait_count);
     uint32_t wait_stream = load_aligned<uint32_t>(&cmd->mcast.wait_stream);
+    const uint32_t completion_counter = cmd->mcast.completion_counter;
 
     // Fold the per-sub-device multicast GO counter into go_signal's go_count before the send. The NOC mcast write
     // itself (storage offset, DEVICE_PRINT ordering, write accounting) lives in wait_for_workers_and_send_go_signal.
@@ -724,7 +735,8 @@ void process_go_signal_mcast_cmd() {
         go_signal.all,
         multicast_go_offset,
         wait_count,
-        wait_stream);
+        wait_stream,
+        completion_counter);
 
     if (telemetry_enabled) {
         static uint32_t local_launch_seq_counter = 0;
@@ -735,6 +747,7 @@ void process_go_signal_mcast_cmd() {
         dispatch_telemetry_control->launched_work_sequence_counter[sync_index] = ++local_launch_seq_counter;
         dispatch_telemetry->last_work_launch_timestamp[sync_index] = get_timestamp();
         dispatch_telemetry_control->launched_work_start_stream_sem[sync_index] = wait_count;
+        dispatch_telemetry_control->launched_work_stream[sync_index] = first_stream_used + completion_counter;
         dispatch_telemetry_control->launched_work_sequence_counter[sync_index] = ++local_launch_seq_counter;
     }
 
@@ -790,10 +803,10 @@ void set_num_worker_sems() {
 }
 
 // Processes CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR: reseeds this sub-device's per-sync GO-counter baseline and writes the
-// done-return address (go_msg_t word 1: {master_x, master_y, offset}) to the sub-device's workers via tensix mcast,
-// leaving the per-go word 0 untouched. Sent on CQ-ownership change, before the new owner's first go (the workers are
-// idle then, so no in-flight done reads a half-written address). Targets workers the same way the go does: grid-wide
-// mcast to slot [multicast_go_offset].
+// done-return address (go_msg_t word 1: {master_x, master_y, offset, max_completion_slot}) to the sub-device's workers
+// via tensix mcast, leaving the per-go word 0 untouched. Sent on CQ-ownership change, before the new owner's first go
+// (the workers are idle then, so no in-flight done reads a half-written address). Targets workers the same way the go
+// does: grid-wide mcast to slot [multicast_go_offset].
 FORCE_INLINE
 void process_set_go_signal_noc_addr_cmd() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
@@ -804,17 +817,19 @@ void process_set_go_signal_noc_addr_cmd() {
     const uint8_t master_x = cmd->set_go_signal_noc_addr.master_x;
     const uint8_t master_y = cmd->set_go_signal_noc_addr.master_y;
     const uint8_t cfg_offset = cmd->set_go_signal_noc_addr.offset;
+    const uint8_t max_completion_slot = cmd->set_go_signal_noc_addr.max_completion_slot;
 
     // Reseed the GO-counter baseline so the new owner's first go advances from the worker's current go_processed
     // (the host-authoritative count), not this CQ's stale local counter.
     ASSERT(sync_index < max_num_worker_sems);
     go_count_per_sync[sync_index] = baseline;
 
-    // go_msg_t word 1 payload: {master_x, master_y, offset, 0}.
+    // go_msg_t word 1 payload: {master_x, master_y, offset, max_completion_slot}.
     go_msg_t go_msg = {};
     go_msg.master_x = master_x;
     go_msg.master_y = master_y;
     go_msg.offset = cfg_offset;
+    go_msg.max_completion_slot = max_completion_slot;
     const uint32_t addr_value = go_msg.addr_all;
     constexpr uint32_t go_msg_words = sizeof(go_msg_t) / sizeof(uint32_t);
     constexpr uint32_t addr_word = offsetof(go_msg_t, master_x) / sizeof(uint32_t);  // word 1 of the slot

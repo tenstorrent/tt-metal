@@ -421,7 +421,6 @@ CommandListData CommandListBuilderImpl::serialize_range(
     dispatch_state.reset(mesh_device.num_sub_devices());
     std::vector<uint32_t> bytes;
     auto& launch_state = dispatch_state.launch_state;
-    const auto& mem_map = mesh_device.impl().metal_context().dispatch_mem_map();
     CompletionCounterArray<uint32_t> expected_workers{};
 
     // Each staged node with no program on this range becomes a dummy GO signal at the start of the stream, so
@@ -429,7 +428,7 @@ CommandListData CommandListBuilderImpl::serialize_range(
     // the last program may still be running when the stream ends.
     for (uint32_t sub_device_idx = 0; sub_device_idx < mesh_device.num_sub_devices(); ++sub_device_idx) {
         const SubDeviceId sub_device{static_cast<uint8_t>(sub_device_idx)};
-        const uint32_t counter_index = mem_map.get_completion_counter_index(sub_device_idx);
+        const uint32_t counter_index = mesh_device.impl().completion_counter_index(sub_device);
         for (size_t i = 0; i < staged_nodes.size(); ++i) {
             const auto& staged_node = staged_nodes[i];
             if (programs[i] != nullptr || *staged_node.sub_device_id != sub_device_idx ||
@@ -478,14 +477,13 @@ CommandListData CommandListBuilderImpl::serialize_range(
         }
 
         auto& worker_launch_state = launch_state[*sub_device];
-        const uint32_t counter_index = mem_map.get_completion_counter_index(*sub_device);
+        const uint32_t counter_index = mesh_device.impl().completion_counter_index(sub_device);
         node.dispatch_metadata.sync_count += starting_workers[counter_index];
         program_dispatch::update_traced_program_dispatch_commands(
             node,
             command_sequence,
             worker_launch_state.get_mcast_wptr(),
             expected_workers[counter_index],
-            sub_device,
             ProgramBinaryStatus::Committed,
             dispatch_state.cq_id);
 

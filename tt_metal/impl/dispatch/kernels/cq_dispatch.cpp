@@ -1307,6 +1307,7 @@ void process_set_go_signal_noc_addr_cmd() {
     const uint8_t master_x = cmd->set_go_signal_noc_addr.master_x;
     const uint8_t master_y = cmd->set_go_signal_noc_addr.master_y;
     const uint8_t cfg_offset = cmd->set_go_signal_noc_addr.offset;
+    const uint8_t max_completion_slot = cmd->set_go_signal_noc_addr.max_completion_slot;
 
     ASSERT(sync_index < max_num_worker_sems);
     go_count_per_sync[sync_index] = baseline;
@@ -1315,6 +1316,7 @@ void process_set_go_signal_noc_addr_cmd() {
     go_msg.master_x = master_x;
     go_msg.master_y = master_y;
     go_msg.offset = cfg_offset;
+    go_msg.max_completion_slot = max_completion_slot;
     const uint32_t addr_value = go_msg.addr_all;
     constexpr uint32_t go_msg_words = sizeof(go_msg_t) / sizeof(uint32_t);
     constexpr uint32_t addr_word = offsetof(go_msg_t, master_x) / sizeof(uint32_t);  // word 1 of the slot

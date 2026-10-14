@@ -551,6 +551,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
     uint32_t go_signal,
     uint32_t wait_stream,
     uint8_t sub_device_index,
+    uint8_t completion_counter,
     uint8_t multicast_go_offset,
     DispatcherSelect dispatcher_type) {
     uint32_t lengthB = sizeof(CQDispatchCmd);
@@ -566,6 +567,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         mcast_cmd->mcast.multicast_go_offset = multicast_go_offset;
         mcast_cmd->mcast.wait_stream = wait_stream;
         mcast_cmd->mcast.sub_device_index = sub_device_index;
+        mcast_cmd->mcast.completion_counter = completion_counter;
     };
     CQDispatchCmd* mcast_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
 
@@ -586,6 +588,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_go_signal_noc_addr(
     uint8_t master_x,
     uint8_t master_y,
     uint8_t offset,
+    uint8_t max_completion_slot,
     uint8_t multicast_go_offset,
     DispatcherSelect dispatcher_type) {
     uint32_t lengthB = sizeof(CQDispatchCmd);
@@ -602,6 +605,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_go_signal_noc_addr(
         cmd->set_go_signal_noc_addr.master_x = master_x;
         cmd->set_go_signal_noc_addr.master_y = master_y;
         cmd->set_go_signal_noc_addr.offset = offset;
+        cmd->set_go_signal_noc_addr.max_completion_slot = max_completion_slot;
     };
     CQDispatchCmd* cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
     if constexpr (hugepage_write) {

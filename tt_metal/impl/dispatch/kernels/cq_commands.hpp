@@ -403,7 +403,7 @@ struct CQDispatchGoSignalMcastCmd {
     uint8_t multicast_go_offset;  // Index of the multicast go to write to. CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET - no
                                   // multicast gos.
     uint8_t sub_device_index;     // Sub-device the go targets: selects its go counter and dispatch_s sync semaphore
-    uint8_t pad1;
+    uint8_t completion_counter;   // Completion counter (within the CQ's block) the go's workers report done into
     uint32_t go_signal;
     uint32_t wait_count;
     uint32_t wait_stream;  // Completion counter (stream index) to wait on before sending the go
@@ -435,7 +435,8 @@ struct CQDispatchSetSubDeviceWorkerCountsCmd {
     uint32_t num_sub_devices;
 } __attribute__((packed));
 
-// Writes the done-return address (go_msg_t word 1: master_x/master_y/offset) to a sub-device's workers and reseeds the
+// Writes the done-return address (go_msg_t word 1: master_x/master_y/offset/max_completion_slot) to a sub-device's
+// workers and reseeds the
 // dispatcher's per-sync go_count baseline. Sent on CQ-ownership change, before the new owner's first go. Targets
 // workers the same way the go signal does: grid-wide Tensix mcast to slot [multicast_go_offset].
 struct CQDispatchSetGoSignalNocAddrCmd {
@@ -444,7 +445,8 @@ struct CQDispatchSetGoSignalNocAddrCmd {
     uint8_t go_count;             // host-authoritative go_count baseline for this sub-device
     uint8_t master_x;             // owning dispatcher coords written into go_msg_t word 1
     uint8_t master_y;
-    uint8_t offset;  // completion counter index (base slot) written into go_msg_t word 1
+    uint8_t offset;               // completion counter index (base slot) written into go_msg_t word 1
+    uint8_t max_completion_slot;  // sub-device's highest completion slot written into go_msg_t word 1
 } __attribute__((packed));
 
 struct CQDispatchCmd {

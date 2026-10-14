@@ -70,8 +70,8 @@ void populate_go_signal_sequence(DeviceCommand<HugepageWrite>& commands, const G
             true);
     }
 
-    const uint32_t completion_stream = metal_ctx.dispatch_mem_map().get_completion_stream(
-        metal_ctx.dispatch_mem_map().get_completion_counter_index(*config.sub_device_id));
+    const uint32_t completion_counter = mesh_impl.completion_counter_index(config.sub_device_id);
+    const uint32_t completion_stream = metal_ctx.dispatch_mem_map().get_completion_stream(completion_counter);
     if (config.config_ring_sync_count.has_value()) {
         commands.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM, 0, completion_stream, *config.config_ring_sync_count, config.cq_id);
@@ -100,6 +100,7 @@ void populate_go_signal_sequence(DeviceCommand<HugepageWrite>& commands, const G
         go_message,
         completion_stream,
         static_cast<uint8_t>(sub_device_index),
+        static_cast<uint8_t>(completion_counter),
         (config.send_mcast && config.mesh_device->impl().has_noc_mcast_txns(config.sub_device_id))
             ? *config.sub_device_id
             : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
@@ -167,7 +168,7 @@ void write_go_signal_sequence(
 }
 
 void write_rt_profiler_flush(
-    uint8_t cq_id, SubDeviceId sub_device_id, SystemMemoryManager& sysmem_manager, uint32_t wait_count) {
+    uint8_t cq_id, uint32_t completion_counter_index, SystemMemoryManager& sysmem_manager, uint32_t wait_count) {
     MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
     DeviceCommandCalculator calculator(metal_ctx);
     calculator.add_dispatch_rt_profiler_flush();
@@ -176,8 +177,7 @@ void write_rt_profiler_flush(
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
 
     HugepageDeviceCommand flush_cmd_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
-    const uint32_t wait_stream = metal_ctx.dispatch_mem_map().get_completion_stream(
-        metal_ctx.dispatch_mem_map().get_completion_counter_index(*sub_device_id));
+    const uint32_t wait_stream = metal_ctx.dispatch_mem_map().get_completion_stream(completion_counter_index);
     flush_cmd_sequence.add_dispatch_rt_profiler_flush(wait_count, wait_stream);
 
     TT_ASSERT(flush_cmd_sequence.size_bytes() == flush_cmd_sequence.write_offset_bytes());

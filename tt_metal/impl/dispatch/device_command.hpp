@@ -124,6 +124,7 @@ public:
         uint32_t go_signal,
         uint32_t wait_stream,
         uint8_t sub_device_index,
+        uint8_t completion_counter,
         uint8_t multicast_go_offset,
         DispatcherSelect dispatcher_type);
 
@@ -135,6 +136,7 @@ public:
         uint8_t master_x,
         uint8_t master_y,
         uint8_t offset,
+        uint8_t max_completion_slot,
         uint8_t multicast_go_offset,
         DispatcherSelect dispatcher_type);
 

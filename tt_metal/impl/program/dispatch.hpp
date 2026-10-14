@@ -19,6 +19,7 @@
 
 #include "core_coord.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "dispatch/expected_worker_completions.hpp"
 #include "kernel_types.hpp"
 #include "program_impl.hpp"
 #include "sub_device_types.hpp"
@@ -175,7 +176,7 @@ uint32_t finalize_kernel_bins(
 
 void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_command_sequence);
 
-void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id);
+void insert_stall_cmds(ProgramCommandSequence& program_command_sequence);
 
 void initialize_worker_config_buf_mgr(
     const Hal& hal, WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start);
@@ -199,7 +200,6 @@ void update_program_dispatch_commands(
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
     uint8_t cq_id);
@@ -209,7 +209,6 @@ void update_traced_program_dispatch_commands(
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    SubDeviceId sub_device_id,
     ProgramBinaryStatus program_binary_status,
     uint8_t cq_id);
 
@@ -245,20 +244,21 @@ void write_program_command_sequence(
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
-// Resets the config buffer managers and the completion counters of sub-devices [0, num_entries_to_reset).
+// Resets config buffer managers [0, num_entries_to_reset), and clears the expected worker completions and lays them out
+// for num_sub_devices sub-devices.
 void reset_config_buf_mgrs_and_expected_workers(
     const Hal& hal,
-    const DispatchMemMap& mem_map,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
-    CompletionCounterArray<uint32_t>& expected_num_workers_completed,
+    ExpectedWorkerCompletions& expected_num_workers_completed,
     uint32_t num_entries_to_reset,
+    uint32_t num_sub_devices,
     uint32_t worker_l1_unreserved_start);
 
 void reset_worker_dispatch_state_on_device(
     distributed::MeshDevice* mesh_device,
     SystemMemoryManager& manager,
     uint8_t cq_id,
-    const CompletionCounterArray<uint32_t>& expected_num_workers_completed,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
     bool reset_launch_msg_state,
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
 
@@ -267,14 +267,16 @@ void reset_worker_dispatch_state_on_device(
 void clear_worker_go_messages_on_device(
     Device* device,
     uint8_t cq_id,
-    const CompletionCounterArray<uint32_t>& expected_num_workers_completed,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
     uint32_t num_sub_devices,
     ttsl::Span<const uint32_t> done_addr_words);
 
+// Sets the sub-device worker counts on dispatch, and dispatch_s's worker semaphore count to the completion counters
+// num_sub_devices sub-devices use.
 void set_num_worker_sems_on_dispatch(
     SystemMemoryManager& manager,
     uint8_t cq_id,
-    uint32_t num_worker_sems,
+    uint32_t num_sub_devices,
     ttsl::Span<const uint32_t> workers_per_sub_device);
 
 // Writes a sub-device's done-return address (go_msg_t word 1) to its workers and reseeds the dispatcher go_count
@@ -287,10 +289,11 @@ void set_go_signal_noc_addr_on_dispatch(
     uint8_t master_x,
     uint8_t master_y,
     uint8_t offset,
+    uint8_t max_completion_slot,
     uint8_t multicast_go_offset);
-// Wait for number of workers to complete and then reset the counter on the device
+// Wait for number of workers to complete and then reset the completion counter on the device
 void reset_expected_num_workers_completed_on_device(
-    Device* device, SubDeviceId sub_device_id, uint32_t num_expected_workers, uint8_t cq_id);
+    Device* device, uint32_t completion_counter_index, uint32_t num_expected_workers, uint8_t cq_id);
 
 //
 // Get the expected number of workers completed values for the given Program to run on the sub device.

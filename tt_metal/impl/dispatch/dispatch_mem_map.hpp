@@ -100,10 +100,6 @@ public:
 
     uint32_t get_dispatch_stream_index(uint32_t index) const;
 
-    // Completion counter, within a CQ's counter block, that a sub-device's programs report done into. This is the
-    // offset passed in go_msg_t word 1, relative to the CQ's get_completion_counter_offset.
-    uint32_t get_completion_counter_index(uint32_t sub_device_index) const;
-
     // Stream register holding a completion counter (arches with stream registers).
     uint32_t get_completion_stream(uint32_t counter_index) const;
 

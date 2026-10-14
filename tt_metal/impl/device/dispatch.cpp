@@ -88,7 +88,7 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
 
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
         const uint32_t counter_index =
-            metal_ctx.dispatch_mem_map().get_completion_counter_index(*dispatch_params.sub_device_ids[i]);
+            dispatch_params.expected_num_workers_completed.counter_index(dispatch_params.sub_device_ids[i]);
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
@@ -120,7 +120,7 @@ void write_to_core_impl(
     DeviceAddr address,
     uint32_t size_bytes,
     uint32_t cq_id,
-    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
     const CoreType dispatch_core_type = metal_ctx.get_dispatch_core_manager().get_dispatch_core_type();
@@ -154,7 +154,7 @@ void write_to_core(
     DeviceAddr address,
     uint32_t size_bytes,
     uint32_t cq_id,
-    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
     validate_core_read_write_bounds(device, virtual_core, address, size_bytes);
     write_to_core_impl(
@@ -168,7 +168,7 @@ void write_to_core_unchecked(
     DeviceAddr address,
     uint32_t size_bytes,
     uint32_t cq_id,
-    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
     // Same as write_to_core, minus validate_core_read_write_bounds: the DRAM-banked bounds
     // check would reject programmable DRAM-core (DRISC) L1.
@@ -196,7 +196,7 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
     const uint32_t last_index = num_worker_counters - 1;
     for (uint32_t i = 0; i < last_index; ++i) {
         const uint32_t counter_index =
-            metal_ctx.dispatch_mem_map().get_completion_counter_index(*dispatch_params.sub_device_ids[i]);
+            dispatch_params.expected_num_workers_completed.counter_index(dispatch_params.sub_device_ids[i]);
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
@@ -205,7 +205,7 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
             dispatch_params.cq_id);
     }
     const uint32_t counter_index =
-        metal_ctx.dispatch_mem_map().get_completion_counter_index(*dispatch_params.sub_device_ids[last_index]);
+        dispatch_params.expected_num_workers_completed.counter_index(dispatch_params.sub_device_ids[last_index]);
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
         0,

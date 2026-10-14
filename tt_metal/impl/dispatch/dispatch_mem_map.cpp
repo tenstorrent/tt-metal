@@ -302,13 +302,6 @@ uint32_t DispatchMemMap::get_dispatch_message_addr_start() const {
 
 uint32_t DispatchMemMap::get_dispatch_stream_index(uint32_t index) const { return dispatch_stream_base_ + index; }
 
-uint32_t DispatchMemMap::get_completion_counter_index(uint32_t sub_device_index) const {
-    TT_ASSERT(sub_device_index < DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
-    const uint32_t counter_index = sub_device_index;
-    TT_ASSERT(counter_index < DispatchSettings::DISPATCH_COMPLETION_COUNTERS);
-    return counter_index;
-}
-
 uint32_t DispatchMemMap::get_completion_stream(uint32_t counter_index) const {
     TT_ASSERT(counter_index < DispatchSettings::DISPATCH_COMPLETION_COUNTERS);
     return get_dispatch_stream_index(counter_index);

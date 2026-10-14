@@ -11,6 +11,7 @@
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "dispatch/cq_shared_state.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "dispatch/expected_worker_completions.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "mesh_trace.hpp"
@@ -109,8 +110,7 @@ private:
     static constexpr size_t max_sub_device_setup_cache_entries = 8;
     std::vector<SubDeviceSetupCommands> sub_device_setup_commands_;
 
-    // Indexed by completion counter (DispatchMemMap::get_completion_counter_index).
-    CompletionCounterArray<uint32_t> expected_num_workers_completed_{};
+    ExpectedWorkerCompletions expected_num_workers_completed_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
     // CrossNode programs rewrite a program-owned config Buffer at launch. For each
     // program id, remember the worker-completion count that launch will report when
@@ -119,7 +119,7 @@ private:
     DispatchArray<std::unordered_map<uint64_t, uint32_t>> cross_node_program_completion_counts_;
 
     DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset_;
-    CompletionCounterArray<uint32_t> expected_num_workers_completed_reset_{};
+    ExpectedWorkerCompletions expected_num_workers_completed_reset_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
 
     struct MeshTraceNode {

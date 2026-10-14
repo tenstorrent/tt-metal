@@ -28,14 +28,14 @@ namespace tt::tt_metal::trace_dispatch {
 void reset_host_dispatch_state_for_trace(
     uint32_t num_sub_devices,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
-    CompletionCounterArray<uint32_t>& expected_num_workers_completed,
+    ExpectedWorkerCompletions& expected_num_workers_completed,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state_reset,
-    CompletionCounterArray<uint32_t>& expected_num_workers_completed_reset,
+    ExpectedWorkerCompletions& expected_num_workers_completed_reset,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr_reset) {
     // Record the original value of expected_num_workers_completed, and reset it to 0.
     expected_num_workers_completed_reset = expected_num_workers_completed;
-    expected_num_workers_completed.fill(0);
+    expected_num_workers_completed.counts.fill(0);
 
     // Record original value of launch msg buffer
     std::copy(
@@ -58,10 +58,10 @@ void reset_host_dispatch_state_for_trace(
 void load_host_dispatch_state(
     uint32_t num_sub_devices,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
-    CompletionCounterArray<uint32_t>& expected_num_workers_completed,
+    ExpectedWorkerCompletions& expected_num_workers_completed,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state_reset,
-    CompletionCounterArray<uint32_t>& expected_num_workers_completed_reset,
+    ExpectedWorkerCompletions& expected_num_workers_completed_reset,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr_reset) {
     expected_num_workers_completed = expected_num_workers_completed_reset;
     std::copy(
@@ -77,7 +77,7 @@ void issue_trace_commands(
     SystemMemoryManager& sysmem_manager,
     const TraceDispatchMetadata& dispatch_md,
     uint8_t cq_id,
-    const CompletionCounterArray<uint32_t>& expected_num_workers_completed) {
+    const ExpectedWorkerCompletions& expected_num_workers_completed) {
     MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
     void* cmd_region = sysmem_manager.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB, cq_id);
 
@@ -96,7 +96,7 @@ void issue_trace_commands(
     const auto& mem_map = metal_ctx.dispatch_mem_map();
     for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
         auto index = *id;
-        const uint32_t counter_index = mem_map.get_completion_counter_index(index);
+        const uint32_t counter_index = expected_num_workers_completed.counter_index(id);
 
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
         command_sequence.add_dispatch_go_signal_mcast(
@@ -107,6 +107,7 @@ void issue_trace_commands(
             metal_ctx.hal().make_go_msg_u32(0, dev_msgs::RUN_MSG_REPLAY_TRACE),
             mem_map.get_completion_stream(counter_index),
             static_cast<uint8_t>(index),
+            static_cast<uint8_t>(counter_index),
             desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
                 ? index
                 : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
@@ -117,7 +118,7 @@ void issue_trace_commands(
     // this step, before sending kernel config data to workers or notifying dispatch_s that its safe to send the
     // go_signal. Clear the dispatch <--> worker semaphore, since trace starts at 0.
     for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
-        const uint32_t counter_index = mem_map.get_completion_counter_index(*id);
+        const uint32_t counter_index = expected_num_workers_completed.counter_index(id);
         uint32_t expected_num_workers = expected_num_workers_completed[counter_index];
         if (desc.num_traced_programs_needing_go_signal_multicast) {
             expected_num_workers += mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
@@ -185,11 +186,10 @@ void update_worker_state_post_trace_execution(
     const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& trace_worker_descriptors,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
-    CompletionCounterArray<uint32_t>& expected_num_workers_completed,
-    const DispatchMemMap& mem_map) {
+    ExpectedWorkerCompletions& expected_num_workers_completed) {
     for (const auto& [id, desc] : trace_worker_descriptors) {
         auto index = *id;
-        const uint32_t counter_index = mem_map.get_completion_counter_index(index);
+        const uint32_t counter_index = expected_num_workers_completed.counter_index(id);
         // Update the expected worker cores counter due to trace programs completion
         expected_num_workers_completed[counter_index] = desc.num_completion_worker_cores;
         // After trace runs, the rdptr on each worker will be incremented by the number of programs in the trace

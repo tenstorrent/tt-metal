@@ -5,6 +5,7 @@
 #pragma once
 
 #include <umd/device/types/core_coordinates.hpp>
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string>
@@ -91,6 +92,23 @@ public:
     // Worker completion counters per CQ; programs report done into one, selected by sub-device and completion slot.
     static constexpr uint32_t DISPATCH_COMPLETION_COUNTERS = ::DISPATCH_MAX_COMPLETION_COUNTERS;
 
+    // Most completion slots a sub-device can own: one per launch message ring entry, since no more programs than that
+    // can be in flight on a core.
+    static constexpr uint32_t MAX_COMPLETION_SLOTS_PER_SUB_DEVICE = 8;
+
+    // Completion slots (K) each sub-device owns when num_sub_devices share a CQ's completion counters. Sub-device i
+    // owns counters [i * K, (i + 1) * K); counter i * K is its base slot.
+    static constexpr uint32_t num_completion_slots(uint32_t num_sub_devices) {
+        return std::min(MAX_COMPLETION_SLOTS_PER_SUB_DEVICE, DISPATCH_COMPLETION_COUNTERS / num_sub_devices);
+    }
+
+    // Base completion counter of a sub-device, within a CQ's counter block, when each sub-device owns
+    // num_completion_slots counters. Programs and control acks report done relative to it; it is go_msg_t::offset
+    // (relative to the CQ's DispatchMemMap::get_completion_counter_offset).
+    static constexpr uint32_t completion_counter_index(uint32_t sub_device_index, uint32_t num_completion_slots) {
+        return sub_device_index * num_completion_slots;
+    }
+
     // correctness asserted in .cpp
     static constexpr uint32_t DISPATCH_MESSAGES_MAX_OFFSET = 255;
 
@@ -176,7 +194,7 @@ private:
 template <typename T>
 using DispatchArray = std::array<T, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>;
 
-// Per-CQ arrays indexed by completion counter (DispatchMemMap::get_completion_counter_index), not by sub-device.
+// Per-CQ arrays indexed by completion counter (DispatchSettings::completion_counter_index), not by sub-device.
 template <typename T>
 using CompletionCounterArray = std::array<T, DispatchSettings::DISPATCH_COMPLETION_COUNTERS>;
 

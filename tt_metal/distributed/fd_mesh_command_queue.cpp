@@ -216,10 +216,10 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     active_distributed_context_(std::move(distributed_context)) {
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
-        MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map(),
         config_buffer_mgr_,
         expected_num_workers_completed_,
         DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
+        mesh_device_->num_sub_devices(),
         mesh_device_->allocator_impl()->get_config().l1_unreserved_base);
     this->populate_virtual_program_dispatch_core();
 
@@ -367,9 +367,7 @@ void FDMeshCommandQueue::wait_for_outstanding_reads(std::unique_lock<std::mutex>
 }
 
 uint32_t FDMeshCommandQueue::completion_counter_index(SubDeviceId sub_device_id) const {
-    return MetalContext::instance(mesh_device_->impl().get_context_id())
-        .dispatch_mem_map()
-        .get_completion_counter_index(*sub_device_id);
+    return expected_num_workers_completed_.counter_index(sub_device_id);
 }
 
 void FDMeshCommandQueue::clear_expected_num_workers_completed() {
@@ -476,7 +474,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         for (auto* device : mesh_device_->get_devices()) {
             program_dispatch::reset_expected_num_workers_completed_on_device(
                 static_cast<Device*>(device),  // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
-                sub_device_id,
+                counter_index,
                 expected_num_workers_completed,
                 id());
         }
@@ -545,8 +543,10 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     {
         const auto& dispatch_mem_map = MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map();
         const uint8_t offset = static_cast<uint8_t>(
-            dispatch_mem_map.get_completion_counter_index(*sub_device_id) +
+            completion_counter_index(sub_device_id) +
             dispatch_mem_map.get_completion_counter_offset(static_cast<uint8_t>(this->id_)));
+        const uint8_t max_completion_slot =
+            static_cast<uint8_t>(expected_num_workers_completed_.num_completion_slots - 1);
         // The address belongs to the sub-device's workers, not this workload: it must reach them even when this
         // workload sends them no go (e.g. an empty program), since the next go on this CQ will not resend it.
         const uint8_t multicast_go_offset = mesh_device_->impl().has_noc_mcast_txns(sub_device_id)
@@ -565,6 +565,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 static_cast<uint8_t>(dispatch_core.x),
                 static_cast<uint8_t>(dispatch_core.y),
                 offset,
+                max_completion_slot,
                 multicast_go_offset);
             mirror.noc_addr_cq_id = static_cast<uint8_t>(this->id_);
         }
@@ -591,7 +592,6 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             program_cmd_seq,
             mcast_launch_msg_wptr,
             expected_num_workers_completed,
-            sub_device_id,
             dispatch_metadata,
             program_binary_status,
             static_cast<uint8_t>(this->id()));
@@ -786,9 +786,10 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
 
     if (tt::IsProgramRealtimeProfilerActive(extract_context_id(mesh_device_))) {
         for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
-            const uint32_t wait_count = expected_num_workers_completed_[completion_counter_index(sub_device_id)];
+            const uint32_t counter_index = completion_counter_index(sub_device_id);
+            const uint32_t wait_count = expected_num_workers_completed_[counter_index];
             for (auto* device : mesh_device_->get_devices()) {
-                write_rt_profiler_flush(id_, sub_device_id, device->sysmem_manager(), wait_count);
+                write_rt_profiler_flush(id_, counter_index, device->sysmem_manager(), wait_count);
             }
         }
     }
@@ -1232,16 +1233,18 @@ void FDMeshCommandQueue::prepare_go_slots_for_reset(IDevice* device, uint32_t ac
     const auto& dispatch_mem_map = MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map();
     auto done_offset = [&](uint32_t sd) {
         return static_cast<uint8_t>(
-            dispatch_mem_map.get_completion_counter_index(sd) +
+            completion_counter_index(SubDeviceId(static_cast<uint8_t>(sd))) +
             dispatch_mem_map.get_completion_counter_offset(static_cast<uint8_t>(id_)));
     };
-    // go_msg_t word 1 ({master_x, master_y, offset, 0}) per active slot, matching what SET_GO_SIGNAL_NOC_ADDR writes.
+    const uint32_t max_completion_slot = expected_num_workers_completed_.num_completion_slots - 1;
+    // go_msg_t word 1 ({master_x, master_y, offset, max_completion_slot}) per active slot, matching what
+    // SET_GO_SIGNAL_NOC_ADDR writes.
     std::vector<uint32_t> done_addr_words;
     done_addr_words.reserve(active_sub_devices);
     for (uint32_t sd = 0; sd < active_sub_devices; ++sd) {
         done_addr_words.push_back(
             static_cast<uint32_t>(dispatch_core.x) | (static_cast<uint32_t>(dispatch_core.y) << 8) |
-            (static_cast<uint32_t>(done_offset(sd)) << 16));
+            (static_cast<uint32_t>(done_offset(sd)) << 16) | (max_completion_slot << 24));
     }
     // The RESET_READ_PTR go re-baselines the dispatcher's go count to 0 and ticks it to 1, so a worker whose
     // go_processed is already 1 (exactly one go since the last reset) would never see it. A sub-device reconfig can
@@ -1344,12 +1347,13 @@ void FDMeshCommandQueue::reset_worker_state(
             reset_launch_msg_state ? std::optional<uint32_t>(DispatchSettings::DISPATCH_MESSAGE_ENTRIES)
                                    : std::nullopt);
     }
+    // The counters are laid out for the manager being loaded (num_sub_devices), which becomes active after this.
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
-        MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map(),
         config_buffer_mgr_,
         expected_num_workers_completed_,
         mesh_device_->num_sub_devices(),
+        num_sub_devices,
         mesh_device_->allocator_impl()->get_config().l1_unreserved_base);
     if (reset_launch_msg_state) {
         std::for_each(
@@ -1471,7 +1475,7 @@ void FDMeshCommandQueue::submit_replay_buffer(
             // enqueue_mesh_workload).
             const bool mcast = mesh_device_->impl().has_noc_mcast_txns(sub_device_id);
             const uint8_t offset = static_cast<uint8_t>(
-                dispatch_mem_map.get_completion_counter_index(*sub_device_id) +
+                completion_counter_index(sub_device_id) +
                 dispatch_mem_map.get_completion_counter_offset(static_cast<uint8_t>(this->id_)));
             for (auto* device : mesh_device_->get_devices()) {
                 auto& mirror = device->sysmem_manager().worker_go_mirror(*sub_device_id);
@@ -1486,6 +1490,7 @@ void FDMeshCommandQueue::submit_replay_buffer(
                     static_cast<uint8_t>(dispatch_core_.x),
                     static_cast<uint8_t>(dispatch_core_.y),
                     offset,
+                    static_cast<uint8_t>(expected_num_workers_completed_.num_completion_slots - 1),
                     mcast ? static_cast<uint8_t>(*sub_device_id) : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET);
                 mirror.noc_addr_cq_id = static_cast<uint8_t>(this->id_);
             }
@@ -1515,8 +1520,7 @@ void FDMeshCommandQueue::submit_replay_buffer(
         worker_descriptors,
         cq_shared_state_->worker_launch_message_buffer_state,
         config_buffer_mgr_,
-        expected_num_workers_completed_,
-        MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map());
+        expected_num_workers_completed_);
 
     // Mirror the dispatcher's per-sub-device go_count for the gos this replay issued. Only multicast gos advance it:
     // the trace's multicast program gos plus the REPLAY_TRACE reset go, which is multicast only when the trace has
@@ -1743,7 +1747,6 @@ void FDMeshCommandQueue::record_end() {
                 cached_program_command_sequence,
                 worker_launch_msg_state.get_mcast_wptr(),
                 trace_worker_descriptors[sub_device_id].num_completion_worker_cores,
-                sub_device_id,
                 ProgramBinaryStatus::Committed,
                 static_cast<uint8_t>(this->id()));
 
@@ -1867,9 +1870,9 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
         }
         program_dispatch::reset_config_buf_mgrs_and_expected_workers(
             MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
-            MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map(),
             config_buffer_mgr_,
             expected_num_workers_completed_,
+            mesh_device_->num_sub_devices(),
             mesh_device_->num_sub_devices(),
             mesh_device_->allocator_impl()->get_config().l1_unreserved_base);
         if (reset_launch_msg_state) {
