@@ -600,7 +600,7 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
 
         // Records: raw values only; the tabulator pools the per-worker populations.
         const Run run{
-            .provenance = {PI_ENGINE_SHA, PI_METAL_SHA, PI_SOURCE_DIRTY != 0},
+            .provenance = build_provenance(),
             .run_value = run_value,
             .cfg = cfg,
             .layout = L,

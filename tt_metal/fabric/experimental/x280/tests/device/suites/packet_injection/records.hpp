@@ -45,9 +45,8 @@ struct LimSlotDump {
     bool ok() const { return error.empty() && !produced.empty(); }
 };
 
-// The checkout a packet_injection host was configured from.
+// The tt-metal revision a packet_injection host was built from.
 struct Provenance {
-    const char* engine_sha;
     const char* tt_metal_sha;
     bool source_dirty;
 };
@@ -81,10 +80,9 @@ inline std::vector<x280::harness::output::Field> run_identity(
     const auto& cfg = run.cfg;
     const auto& r = run.result;
     return {
-        {"engine_sha", run.provenance.engine_sha},
         {"tt_metal_sha", run.provenance.tt_metal_sha},
         {"source_dirty", run.provenance.source_dirty},
-        {"source_revision_basis", "cmake_configure_time"},
+        {"source_revision_basis", "build_time"},
         {"run_value", run.run_value},
         {"mode", cfg.mode},
         {"include_creation", cfg.include_creation},

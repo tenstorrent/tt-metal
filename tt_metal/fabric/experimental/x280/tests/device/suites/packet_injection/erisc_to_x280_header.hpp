@@ -461,7 +461,7 @@ inline uint64_t run_once(
         // A calibration pilot records nothing.
         if (warmup != nullptr) {
             const Run run{
-                .provenance = {PI_ENGINE_SHA, PI_METAL_SHA, PI_SOURCE_DIRTY != 0},
+                .provenance = build_provenance(),
                 .run_value = run_value,
                 .cfg = cfg,
                 .layout = L,
