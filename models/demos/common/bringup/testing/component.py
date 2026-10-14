@@ -111,7 +111,7 @@ def _run_golden(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
     ref_hooks = s.hooks()
     g, c = component_golden(s)
     layer = s.representative_layer(s.block_type_of(layer)) if layer is None else layer
-    ref = ref_hooks.reference(s, layers=[layer], dtype=torch.float32)
+    ref = ref_hooks.reference(s, layers=[*s.state_sources(layer), layer], dtype=torch.float32)  # F65: its sources
     st = _step(ref, layer, step)
     gl = g.layer(c, layer)
     inputs = [gl[i].float() if gl[i].is_floating_point() else gl[i] for i in st.inputs]
@@ -125,8 +125,8 @@ def _run_golden(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
     if getattr(fn, "cpu_bridge", False):
         print(f"FAIL {step}: device_component returned a CPU bridge; a deferred step is not on the device")
         return False
-    rctx = reference_ctx(ref, layer, g, c)
-    out = fn(rctx, device_ctx(layer, g, c), *inputs)
+    rctx = reference_ctx(ref, layer, g, c, s)
+    out = fn(rctx, device_ctx(layer, g, c, s), *inputs)
     mode = compare_mode or default_mode(want)
     name = metric or f"pcc_{step}_L{layer:02d}"
     _, ok = compare(name, out, want, mode, threshold(s, "component") if thr is None else thr)
@@ -137,8 +137,8 @@ def _run_golden(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
         s,
         step,
         name,
-        lambda: fn(rctx, device_ctx(layer, g, c), *_clone(inputs)),
-        lambda: fn(rctx, device_ctx(layer, g, c), *_clone(b_inputs)),
+        lambda: fn(rctx, device_ctx(layer, g, c, s), *_clone(inputs)),
+        lambda: fn(rctx, device_ctx(layer, g, c, s), *_clone(b_inputs)),
         out,
     )
     return ok and det
@@ -166,7 +166,7 @@ def _run_auto(s, step, layer, mesh, compare_mode, thr, metric) -> bool:
 
     g, c = component_golden(s)
     layer = s.representative_layer(s.block_type_of(layer)) if layer is None else layer
-    ref = s.hooks().reference(s, layers=[layer], dtype=torch.float32)
+    ref = s.hooks().reference(s, layers=[*s.state_sources(layer), layer], dtype=torch.float32)
     st = _step(ref, layer, step)
     want = g.layer(c, layer)[st.output]
     want = want.float() if want.is_floating_point() else want
@@ -415,9 +415,9 @@ def run_swap_test(
     g, c = component_golden(s)
     layer = s.representative_layer(block_type)
     hooks = s.hooks()
-    ref = hooks.reference(s, layers=[layer], dtype=torch.float32)
+    ref = hooks.reference(s, layers=[*s.state_sources(layer), layer], dtype=torch.float32)
     steps = ref.block_graph(layer)
-    rctx, dctx = reference_ctx(ref, layer, g, c), device_ctx(layer, g, c)
+    rctx, dctx = reference_ctx(ref, layer, g, c, s), device_ctx(layer, g, c, s)
     if hasattr(hooks, "swap_context"):
         hooks.swap_context(s, ref, layer, g, c, rctx, dctx)
     overrides, same_input, bridged, snapshot = {}, {}, {}, {}

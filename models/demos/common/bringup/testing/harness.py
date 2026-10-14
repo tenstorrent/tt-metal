@@ -16,7 +16,9 @@ Device hooks a model provides (the implement role writes them):
     device_params(spec) -> dict                     mesh fixture params (fabric config, l1_small_size, ...)
     device_component(mesh, spec, layer, step) -> fn(ctx, *host inputs) -> host tensor
         ctx.extra: state_prefix ({name: tensor} from the golden, positions [0, prefix_len) valid; a fixed-size tensor
-        (spec state.fixed) is the state as of prefix_len), prefix_len, max_seq
+        (spec state.fixed) is the state as of prefix_len), prefix_len, max_seq; for a layer that reads other layers'
+        state (hooks state_sources, F65) also source_state ({source layer: {name: tensor}} as of source_len, the end
+        of this chunk: the sources have already run it) and source_len
     device_model(mesh, spec, layers, lm_head=True) -> object with
         load_seconds, new_state(max_seq), embed(tokens), from_host(h [S, H]), layer(i, h, start, state),
         final_norm(h), to_host(h) -> [S, H], logits(hidden, rows) -> [len(rows), V], free(h), sync()
@@ -79,19 +81,30 @@ def component_golden(s) -> tuple[Golden, int]:
     return g, int(s.get("tests.component_chunk", g.dumped_chunks[-1]))
 
 
-def reference_ctx(ref, layer: int, g: Golden, c: int):
-    start = c * g.chunk
+def sources(layer: int, s=None) -> list[int]:
+    """F65: the layers whose state ``layer`` reads (spec.state_sources)."""
+    return (s or spec()).state_sources(layer)
+
+
+def reference_ctx(ref, layer: int, g: Golden, c: int, s=None):
+    """The reference's context for chunk c: the layer's own state before the chunk, and its source layers' state
+    after it (they run the chunk before this layer does)."""
+    start, end = c * g.chunk, (c + 1) * g.chunk
     state = ref.new_state(g.seq)
     if start:
         ref.load_state(state, layer, g.state(layer, at=start), start)
+    for j in sources(layer, s):
+        ref.load_state(state, j, g.state(j, at=end), end)
     return ref.chunk_context(layer, start, g.chunk, state)
 
 
-def device_ctx(layer: int, g: Golden, c: int) -> Ctx:
-    start = c * g.chunk
-    return Ctx(
-        layer, start, g.chunk, None, {"state_prefix": g.state(layer, at=start), "prefix_len": start, "max_seq": g.seq}
-    )
+def device_ctx(layer: int, g: Golden, c: int, s=None) -> Ctx:
+    start, end = c * g.chunk, (c + 1) * g.chunk
+    extra = {"state_prefix": g.state(layer, at=start), "prefix_len": start, "max_seq": g.seq}
+    src = sources(layer, s)
+    if src:
+        extra.update(source_state={j: g.state(j, at=end) for j in src}, source_len=end)
+    return Ctx(layer, start, g.chunk, None, extra)
 
 
 def as_float(t: torch.Tensor) -> torch.Tensor:

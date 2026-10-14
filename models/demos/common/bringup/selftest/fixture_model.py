@@ -10,6 +10,10 @@ generate_golden can be exercised without a checkpoint. Used as the ``hooks`` mod
 Spec ``fixture.recurrent_layers: [i, ...]`` turns those layers' attention into a linear recurrence with a fixed-size
 state (``recurrent`` [H, H], decayed and updated per token), for mixed per-layer state (spec state.by_block_type,
 state.fixed).
+
+Spec ``fixture.shared: {consumer: source}`` makes a layer read another layer's state instead of keeping its own
+(F65, hooks ``state_sources``): from a KV source, causal attention of its own queries over the source's keys and values
+(which the source wrote for this chunk); from a recurrent source, its queries times the source's state after the chunk.
 """
 
 from __future__ import annotations
@@ -43,6 +47,10 @@ def recurrent_layers(spec) -> set[int]:
     return set(spec.get("fixture.recurrent_layers") or []) if spec is not None else set()
 
 
+def shared_layers(spec) -> dict[int, int]:
+    return {int(k): int(v) for k, v in (spec.get("fixture.shared") or {}).items()} if spec is not None else {}
+
+
 def recurrence(x, w, s):
     """Linear attention with decay: per token, s = DECAY * s + k^T v, out = q s. Updates s in place."""
     q, k, v = x @ w["wq"].T, x @ w["wk"].T, x @ w["wv"].T
@@ -54,8 +62,8 @@ def recurrence(x, w, s):
 
 
 class State:
-    def __init__(self, layers, max_seq, recurrent=()):
-        kv = [i for i in layers if i not in recurrent]
+    def __init__(self, layers, max_seq, recurrent=(), shared=()):
+        kv = [i for i in layers if i not in recurrent and i not in shared]
         self.k = {i: torch.zeros(max_seq, H) for i in kv}
         self.v = {i: torch.zeros(max_seq, H) for i in kv}
         self.r = {i: torch.zeros(H, H) for i in layers if i in recurrent}
@@ -67,16 +75,21 @@ class Reference:
         self.layer_ids = list(range(LAYERS)) if layers is None else list(layers)
         self.broken_graph = broken_graph
         self.recurrent = recurrent_layers(spec)
+        self.shared = shared_layers(spec)
 
     def new_state(self, max_seq):
-        return State(self.layer_ids, max_seq, self.recurrent)
+        return State(self.layer_ids, max_seq, self.recurrent, self.shared)
 
     def state_tensors(self, state, layer, length):
+        if layer in self.shared:
+            return {}
         if layer in self.recurrent:
             return {"recurrent": state.r[layer].clone()}
         return {"key": state.k[layer][:length].clone(), "value": state.v[layer][:length].clone()}
 
     def load_state(self, state, layer, tensors, length):
+        if layer in self.shared:
+            return
         if layer in self.recurrent:
             state.r[layer].copy_(tensors["recurrent"])
             return
@@ -100,6 +113,14 @@ class Reference:
         w = self.w["layers"][layer]
 
         def attention(ctx, x):
+            if layer in self.shared:
+                src, end = self.shared[layer], ctx.start + x.shape[0]
+                q = x @ w["wq"].T
+                if src in self.recurrent:
+                    return q @ ctx.state.r[src] / H
+                k, v = ctx.state.k[src][:end], ctx.state.v[src][:end]
+                mask = torch.arange(end)[None] > torch.arange(ctx.start, end)[:, None]
+                return torch.softmax((q @ k.T / H**0.5).masked_fill(mask, float("-inf")), -1) @ v
             if layer in self.recurrent:
                 if ctx.start == 0:
                     ctx.state.r[layer].zero_()
@@ -158,12 +179,14 @@ class Reference:
 
 
 class _HFLayer(torch.nn.Module):
-    """Independent one-shot implementation (causal attention over the whole sequence, no state)."""
+    """Independent one-shot implementation (causal attention over the whole sequence, no state). A shared layer reads
+    the keys and values its source layer left in ``kv``."""
 
-    def __init__(self, w, recurrent=False):
+    def __init__(self, w, recurrent=False, idx=0, source=None, kv=None):
         super().__init__()
         self.w = w
         self.recurrent = recurrent
+        self.idx, self.source, self.kv = idx, source, kv
 
     def forward(self, h):
         w = self.w
@@ -171,9 +194,14 @@ class _HFLayer(torch.nn.Module):
         if self.recurrent:
             h = h + recurrence(x, w, torch.zeros(H, H))
             return (h + F.silu(norm(h) @ w["w1"].T) @ w["w2"].T,)
-        s = (x @ w["wq"].T) @ (x @ w["wk"].T).T / H**0.5
+        if self.source is None:
+            k, v = x @ w["wk"].T, x @ w["wv"].T
+            self.kv[self.idx] = (k, v)
+        else:
+            k, v = self.kv[self.source]
+        s = (x @ w["wq"].T) @ k.T / H**0.5
         s = s.masked_fill(torch.triu(torch.ones(s.shape, dtype=torch.bool), 1), float("-inf"))
-        h = h + torch.softmax(s, -1) @ (x @ w["wv"].T)
+        h = h + torch.softmax(s, -1) @ v
         return (h + F.silu(norm(h) @ w["w1"].T) @ w["w2"].T,)
 
 
@@ -183,12 +211,15 @@ class _HFOut:
 
 
 class HFTwin(torch.nn.Module):
-    def __init__(self, num_layers=None, recurrent=()):
+    def __init__(self, num_layers=None, recurrent=(), shared=None):
         super().__init__()
         self.w = weights()
         n = num_layers or LAYERS
         self.model = torch.nn.Module()
-        self.model.layers = torch.nn.ModuleList(_HFLayer(self.w["layers"][i], i in recurrent) for i in range(n))
+        kv, shared = {}, shared or {}
+        self.model.layers = torch.nn.ModuleList(
+            _HFLayer(self.w["layers"][i], i in recurrent, i, shared.get(i), kv) for i in range(n)
+        )
 
     def forward(self, tokens, use_cache=False):
         h = self.w["embed"][tokens[0]]
@@ -212,7 +243,13 @@ def reference(spec, layers=None, dtype=torch.float32):
 
 
 def hf_model(spec, num_layers):
-    return HFTwin(num_layers, recurrent_layers(spec))
+    return HFTwin(num_layers, recurrent_layers(spec), shared_layers(spec))
+
+
+def state_sources(spec, layer):
+    """F65: the layers whose state this layer reads (as of the end of the current chunk)."""
+    src = shared_layers(spec).get(layer)
+    return [] if src is None else [src]
 
 
 def tokenizer(spec):
@@ -231,13 +268,15 @@ def _noisy(t: torch.Tensor, seed: int) -> torch.Tensor:
 
 
 def device_component(mesh, spec, layer, name):
-    ref = Reference(spec, [layer])
+    ref = Reference(spec, [layer, *state_sources(spec, layer)])
     cpu = ref.component(layer, name)
 
     def fn(ctx, *x):
         state = ref.new_state(ctx.extra["max_seq"])
         if ctx.extra["prefix_len"]:
             ref.load_state(state, layer, ctx.extra["state_prefix"], ctx.extra["prefix_len"])
+        for j, t in ctx.extra.get("source_state", {}).items():  # F65: the source layers' state after this chunk
+            ref.load_state(state, j, t, ctx.extra["source_len"])
         return _noisy(cpu(Ctx(layer, ctx.start, ctx.length, state), *x), layer)
 
     return fn
