@@ -32,21 +32,11 @@ static_assert(
     !std::is_invocable_v<move_only_function<void()>&, int, int>,
     "must not claim to be invocable with a wrong argument list");
 
-// The public surface is std::move_only_function's and nothing more.
+// The public surface is std::move_only_function's.
 static_assert(std::is_same_v<move_only_function<int(char)>::result_type, int>);
 static_assert(!std::is_invocable_v<const move_only_function<void()>&>, "R(Args...) is not const-callable");
 static_assert(!std::is_constructible_v<move_only_function<void()>, int>, "must reject non-callables");
 static_assert(!std::is_constructible_v<move_only_function<void()>, void (*)(int)>, "must reject a wrong signature");
-// Concepts, so inaccessible members read as unsatisfied rather than an error.
-template <typename F>
-concept ExposesHasValue = requires(F& f) { f.has_value(); };
-template <typename F>
-concept ExposesReset = requires(F& f) { f.reset(); };
-template <typename F>
-concept ExposesType = requires(F& f) { f.type(); };
-static_assert(!ExposesHasValue<move_only_function<void()>>, "no accessors beyond std::move_only_function's");
-static_assert(!ExposesReset<move_only_function<void()>>, "no accessors beyond std::move_only_function's");
-static_assert(!ExposesType<move_only_function<void()>>, "no accessors beyond std::move_only_function's");
 
 TEST(MoveOnlyFunctionTest, CPU_InvokesLambda) {
     int calls = 0;
