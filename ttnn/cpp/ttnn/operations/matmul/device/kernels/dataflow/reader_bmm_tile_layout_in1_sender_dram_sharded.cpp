@@ -274,9 +274,15 @@ void kernel_main() {
 
     dfb_out.pop_front(out_block_num_tiles);
 
+#ifdef ARCH_QUASAR
+    // Quasar has no NOC_CTRL command-buffer register; restore the firmware-default VC (1) through the NOC API.
+    noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = 1});
+#else
     // Restore only NCRISC read_cmd_buf NOC_CTRL VC to firmware default (VC=1, set in noc_init); a full set_async_read_state
     // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state fast paths read.
     const uint32_t noc_rd_cmd_field =
         NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+#endif
 }
