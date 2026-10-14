@@ -149,7 +149,8 @@ inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces = 4) {
  * Initialize the unpacker for the combined tilize-A / unpack-B operation.
  *
  * Operand A and B face geometry (face_r_dim, num_faces) and narrow-tile flag are derived from
- * circular-buffer unpack metadata (see set_unpack_face_geometry). In debug builds, validates that
+ * circular-buffer unpack metadata (see set_unpack_face_geometry / set_tile_dims; the 2-face narrow
+ * tile needs the latter). In debug builds, validates that
  * both unpackers are configured consistently before programming the init sequence.
  *
  * @tparam neginf_srcA      Initialize srcA padding with negative infinity (for reduce-max).
