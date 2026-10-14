@@ -61,22 +61,37 @@ void kernel_main() {
         dfb_in.push_back(ublock_size_pages);
     }
 #else
-    // Pages are read round-robin, one block of num_pages_per_block[t] pages from each input t.
+    // Pages are read round-robin, one block of num_pages_per_block[t] pages from each input t. Each step
+    // reads the rest of the current input's block, which is no pages for an input that is empty along
+    // dim, so the cursor still moves on to the next input.
     concat_reader::RoundRobinCursor cursor(start_tensor, start_tensor_id);
-    for (uint32_t i = 0; i < num_pages; ++i) {
+    uint32_t pages_left = num_pages;
+    while (pages_left > 0) {
         const uint32_t num_pages_per_block = get_vararg(cursor.tensor);
         const uint32_t page_id =
             get_vararg(page_id_per_tensor_offset + cursor.tensor) + cursor.pages_already_read(num_pages_per_block);
 
-        dfb_in.reserve_back(ublock_size_pages);
-        const uint32_t l1_write_addr = dfb_in.get_write_ptr();
+        uint32_t pages_to_read = num_pages_per_block - cursor.id_in_block;
+        if (pages_to_read > pages_left) {
+            pages_to_read = pages_left;
+        }
         concat_reader::with_input(cursor.tensor, tensor_indices, [&](auto I) {
-            read_input_page<decltype(I)::value>(noc, l1_write_addr, page_id);
+            constexpr uint32_t input = decltype(I)::value;
+            const auto accessor = TensorAccessor(std::get<input>(tensor::inputs));
+            for (uint32_t p = 0; p < pages_to_read; ++p) {
+                dfb_in.reserve_back(ublock_size_pages);
+                noc.async_read(
+                    accessor,
+                    CoreLocalMem<uint8_t>(dfb_in.get_write_ptr()),
+                    get_compile_time_vararg<input>(),
+                    {.page_id = page_id + p},
+                    {});
+                noc.async_read_barrier();
+                dfb_in.push_back(ublock_size_pages);
+            }
         });
-        noc.async_read_barrier();
-        dfb_in.push_back(ublock_size_pages);
-
-        cursor.advance(1, num_pages_per_block, num_tensors);
+        pages_left -= pages_to_read;
+        cursor.advance(pages_to_read, num_pages_per_block, num_tensors);
     }
 #endif
 }

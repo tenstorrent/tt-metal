@@ -617,6 +617,8 @@ TWO_CORE_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.Cor
         (33, [(1, 131, 1, 64), (1, 131, 2, 64), (1, 131, 3, 64)], 2, ttnn.ROW_MAJOR_LAYOUT, None),
         (33, [(1, 7, 32, 32), (1, 7, 64, 32), (1, 7, 96, 32)], 2, ttnn.TILE_LAYOUT, TWO_CORE_GRID),
         (33, [(1, 7, 1, 64), (1, 7, 2, 64), (1, 7, 3, 64)], 2, ttnn.ROW_MAJOR_LAYOUT, TWO_CORE_GRID),
+        # Every other input is empty along dim, so the reader has to step past 0-page blocks.
+        (33, [(1, 1, 8, 64), (1, 1, 0, 64)], 2, ttnn.ROW_MAJOR_LAYOUT, None),
     ],
 )
 def test_concat_many_inputs(device, num_inputs, shapes, dim, layout, sub_core_grids):
