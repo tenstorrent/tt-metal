@@ -324,7 +324,7 @@ pass-outer and ring-inner.
   caches (`kv_cache_batch_idx`, or `slot_id` with the metadata tensors outside chunked prefill) and a V head dim
   below Q's (MLA with a separate V); exp ring: noncausal. KV-pad rotation (`kv_actual_isl`, metadata on chunked
   prefill), circular caches, sinks and sliding windows are rejected (`sliding_window_size` with an explicit error:
-  the legacy FP32 ring kernel ignores it). A BFP8/BFP4 Q is widened to BF16 first and the outputs narrowed back, as on the dense path;
+  the legacy FP32 ring kernel ignores it). A BFP8/BFP4 Q is widened to BF16 first; the outputs are BF16, as the legacy ring kernel's are;
   K/V may be BF16, BFP8 or BFP4 under every recipe. `scale`, `compute_kernel_config` and `exp_approx_mode` follow
   [Legacy arguments](#legacy-arguments-with-a-recipe).
 - `ring_distributed_scaled_dot_product_attention` takes `precision` too (see
