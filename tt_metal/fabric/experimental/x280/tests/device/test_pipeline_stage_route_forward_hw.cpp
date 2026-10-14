@@ -24,6 +24,7 @@ protected:
             .open =
                 {
                     .image_env_var = "X280_PIPELINE_STAGE_ROUTE_FORWARD_FW_IMAGE",
+                    .image_file = "firmware-pipeline-stage-route-forward.bin",
                     .kernel_dir = x280::harness::artifacts::kernel_dir_of(__FILE__),
                     .prepared_suite_requested = true,
                 },

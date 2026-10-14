@@ -92,7 +92,7 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
     hreg::write_args(*f.tile, R.args, store.args);
 
     hexec::X280Launch launch{
-        .image_path = hart_::image_path("X280_PIPELINE_STAGE_ROUTE_FORWARD_FW_IMAGE"),
+        .image_path = hart_::image_path("X280_PIPELINE_STAGE_ROUTE_FORWARD_FW_IMAGE", "firmware-pipeline-stage-route-forward.bin"),
         .run_value = run_value,
         .args_addr = R.args.addr,
         .args_bytes = R.args.bytes,

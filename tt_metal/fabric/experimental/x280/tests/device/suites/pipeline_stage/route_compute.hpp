@@ -115,7 +115,7 @@ inline void run_axis(
     hreg::write_args(*fixture.tile, regions.args, store.args);
 
     const hexec::X280Launch launch{
-        .image_path = hart_::image_path("X280_PIPELINE_STAGE_ROUTE_COMPUTE_FW_IMAGE"),
+        .image_path = hart_::image_path("X280_PIPELINE_STAGE_ROUTE_COMPUTE_FW_IMAGE", "firmware-pipeline-stage-route-compute.bin"),
         .run_value = run_value,
         .args_addr = regions.args.addr,
         .args_bytes = regions.args.bytes,
