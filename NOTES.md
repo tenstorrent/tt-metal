@@ -1,6 +1,6 @@
 # t503 notes (continue t498: LTX-2.5 Aug-17 Gemma-4 encoder A/B)
 
-## State 2026-10-14 12:35 PDT (run 1897)
+## State 2026-10-14 12:15 PDT (run 1897)
 - Code: t498's 94825eb729e/df0b2742038 cherry-picked on origin/ltx-rt f6547442b30 (this branch). CPU tests 3 pass.
 - Boxes 12:10 PDT: blx01 HELD degraded (until ~10-17), g15blx02 skipped (2 drops, jobs 773/775), blx03 healthy
   (back from a reboot 12:10 PDT after chips 8-15 left PCIe at 12:02 PDT, live LTX job 243 killed; not ours).
@@ -12,6 +12,10 @@
   resumable: an arm with ARM_OK is skipped, weight caches persist in /var/tmp/fasth3/t503/cache; r2 exits 9 at once
   if r1 failed fast).
 - tdiff503 (run 1897 tdiff503.log): per-tensor diff of old vs new file.
+
+## 2026-10-14 12:27 PDT (run 1898)
+- g15blx02 rebooted 12:22 PDT mid-staging (DiT copy lost). Relaunched stage503 (resumable) and drv503 under run 1898;
+  probe503.sh now watches run 1898's drv503.rc.
 
 ## Next on wake
 1. ssh g14blx03 cat /var/tmp/fasth3/runner/done/t503-ab-r{1,2}.done; logs in /var/tmp/fasth3/t503/out_{old,new}/run.log.

@@ -1,7 +1,7 @@
 #!/bin/bash
 # t503: after staging, copy the job script to blx03 and queue A/B attempts r1, r2 on blx03's serial runner.
 set -eo pipefail
-D=/home/smarton/fasth3/tt-metal/tt-project/t503; RC=/home/smarton/fasth3/tt-metal/tt-project/state/runs/1897/stage503.rc
+D=/home/smarton/fasth3/tt-metal/tt-project/t503; RC=/home/smarton/fasth3/tt-metal/tt-project/state/runs/1898/stage503.rc
 for i in $(seq 1 200); do [ -e $RC ] && break; sleep 30; done
 [ "$(cat $RC 2>/dev/null)" = 0 ] || { echo "staging failed rc=$(cat $RC 2>/dev/null)"; exit 4; }
 ssh g14blx03 "mkdir -p /var/tmp/fasth3/t503/plug"
