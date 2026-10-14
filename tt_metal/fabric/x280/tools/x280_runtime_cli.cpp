@@ -30,6 +30,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <utility>
@@ -91,6 +92,21 @@ std::string describe_access_path(const std::shared_ptr<tt::tt_metal::distributed
     }
     return "chip " + std::to_string(chip_id) +
            " through the runtime-shared Metal transport bound to the caller's MeshDevice";
+}
+
+// Refuses a resident-idle image that cannot be read before boot touches the chip; boot moves the
+// chip-global PLL before it opens the image.
+bool idle_image_readable(const std::string& path) {
+    if (std::ifstream(path).good()) {
+        return true;
+    }
+    std::fprintf(
+        stderr,
+        "cannot read resident-idle image '%s': pass --idle-image PATH or set %s.\nBuild one with: ninja "
+        "x280_images\n",
+        path.c_str(),
+        kImageEnvVar);
+    return false;
 }
 
 void usage(const char* argv0) {
@@ -599,6 +615,10 @@ int main(int argc, char** argv) {
                     "Pass --boot to allow reset release, which is one-way for this chip-reset lifetime.\n");
                 return kExitOk;
             }
+            if (!idle_image_readable(options.image_path)) {
+                return kExitFailed;
+            }
+
             x280::MultiTileBootRequest request;
             request.tiles = selection;
             request.idle_image_path = options.image_path;
@@ -637,6 +657,11 @@ int main(int argc, char** argv) {
                 "\ninspection only after runtime initialization: nothing was booted. "
                 "Pass --boot to allow reset release, which is one-way for this chip-reset lifetime.\n");
             return initial.observation_valid ? kExitOk : kExitFailed;
+        }
+
+        // Resident idle is already present on the fast path, so boot neither loads nor needs an image.
+        if (!initial.resident_idle_live && !idle_image_readable(options.image_path)) {
+            return kExitFailed;
         }
 
         x280::BootRequest request;
