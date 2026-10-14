@@ -28,22 +28,16 @@
 //                   therefore the bar to beat. Stateful means only the addresses change per
 //                   call, so it is the cheapest NOC read available, not a straw man.
 //
-// COMMAND BUFFER DISCIPLINE. The iDMA path borrows cmdbuf 0, which is also OVERLAY_WR_CMD_BUF
-// -- the buffer the device profiler uses to push its timestamps at kernel end. It is restored
-// with init_wr_cmd_buf() after the final ack; resetting it with an ack still outstanding can
-// disturb the transfer. The NOC path uses the read cmd buf and never touches cmdbuf 0.
+// The iDMA engine is experimental::idma_copy_rows (experimental/idma_copy_rows.h), the helper ops
+// use. The NOC path uses the read cmd buf and never touches cmdbuf 0.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "experimental/kernel_args.h"
-#include "internal/tt-2xx/quasar/noc_nonblocking_api.h"    // init_wr_cmd_buf, noc_local_xy
-#include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"  // addrgen src/dest loops
-#include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"  // overlay:: cmdbuf API
-#include "narrow_row_engine_mode.hpp"                      // EngineMode, shared with the host
-
-using namespace overlay;
+#include "experimental/idma_copy_rows.h"
+#include "narrow_row_engine_mode.hpp"  // EngineMode, shared with the host
 
 using narrow_row::CHANNELS_ALL;
 using narrow_row::EngineMode;
@@ -66,80 +60,16 @@ inline std::uint32_t l1_phys(std::uint32_t addr) {
 #endif
 }
 
-// Owns cmdbuf 0 and addrgen 0 for the whole gather: configures both, issues every row, drains
-// once, and hands the command buffer back. `num_channels` is the raw runtime arg -- it is
-// resolved here because CMDBUF_NUM_IDMA_VCS is visible only on this side.
-//
-// The transfer length is `dst_stride`: the output is dense, so the bytes kept from each row and
-// the destination stride are the same number. It is the SOURCE stride that is larger, and that
-// difference is the compaction.
-inline void compact_idma_per_row(
-    std::uint32_t src_base,
-    std::uint32_t dst_base,
-    std::uint32_t num_rows,
-    std::uint32_t src_stride,
-    std::uint32_t dst_stride,
-    std::uint32_t num_channels) {
-    // CHANNELS_ALL and anything above the VC count both mean "every VC", so a stale caller
-    // cannot ask for channels that do not exist.
-    if (num_channels == CHANNELS_ALL || num_channels > CMDBUF_NUM_IDMA_VCS) {
-        num_channels = CMDBUF_NUM_IDMA_VCS;
-    }
-
-    // ---- command buffer: what ONE transfer is -------------------------------------------
-    reset_cmdbuf_0();
-    idma_setup_as_copy_cmdbuf_0(/*wrapping_en=*/false);
-    // Everything AutoIncConfig does not name defaults to false; the addrgen supplies both
-    // addresses, so only the request VC advances -- round-robining the per-row packets across
-    // the VC window below.
-    setup_ongoing_cmdbuf_0({.req_vc = true});
-    // `resp` must be passed explicitly. Defaulted it is {0, 0, 0}, which forces RESP_VC 0 --
-    // and that sits INSIDE the request window this same call programs, because
-    // CMDBUF_FIRST_IDMA_VC is 0. Sharing a VC between requests and their responses is the
-    // classic NoC deadlock configuration.
-    setup_wrapping_vcs_cmdbuf_0(
-        /*req=*/{.start = CMDBUF_FIRST_IDMA_VC, .end = CMDBUF_FIRST_IDMA_VC + num_channels - 1},
-        /*resp=*/{.start = CMDBUF_WR_RESP_VC, .end = CMDBUF_WR_RESP_VC});
-    // Fan-out round-robins PACKETS, and one packet per row is the right granularity: 32 rows
-    // already outnumber the 8 channels, and splitting further only multiplies per-packet cost
-    // (measured: ~5 cyc per extra packet, up to 12x slower at 16 B packets). This must be
-    // programmed explicitly whatever the value -- CMDBUF_RESET zeroes it to its rdl default of
-    // 0, which means "never split", and every channel knob then goes silently inert.
-    setup_max_bytes_in_packet_cmdbuf_0(dst_stride);
-    setup_trids_cmdbuf_0(CMDBUF_DEF_TRID);
-    set_len_cmdbuf_0(dst_stride);
-
-    // ---- address generator: WHERE each transfer goes ------------------------------------
-    // FULL reset, not reset_counters_: that variant keeps "base addresses, sizes and strides
-    // intact", which includes the outer-loop, face-size and banking registers this kernel
-    // never programs. The addrgen and im2col tests in this same binary DO program them on
-    // addrgen_0 of this same logical core, so a counters-only reset inherits their state and
-    // generates wrong addresses -- invisibly, because it only shows up when the whole suite
-    // runs rather than under a --gtest_filter. Every other addrgen user in the tree resets
-    // fully.
-    reset_addrgen_0();
-    setup_src_base_start_addrgen_0(src_base);
-    setup_src_inner_loop_addrgen_0(src_stride, (std::uint64_t)num_rows * src_stride);
-    setup_dest_base_start_addrgen_0(dst_base);
-    setup_dest_inner_loop_addrgen_0(dst_stride, (std::uint64_t)num_rows * dst_stride);
-
-    // ---- issue every row, then drain ONCE ------------------------------------------------
-    // Draining inside the loop would serialise the transfers and turn a throughput path into a
-    // latency one; issuing first also means the RISC has registered all `num_rows` outstanding
-    // before it polls, so the ack counter cannot read zero early.
-    for (std::uint64_t r = 0; r < num_rows; r++) {
-        push_both_addrgen_0();  // hand the next src/dst pair to the cmdbuf
-        issue_cmdbuf_0();
-    }
-    while (!idma_acked_cmdbuf_0()) {
-    }
-
-    // Every ack is in: safe to hand cmdbuf 0 back to the NoC write path.
-    init_wr_cmd_buf(noc_local_xy());
+// CHANNELS_ALL and anything above the VC count both mean "every VC", so a stale caller cannot ask
+// for channels that do not exist. Resolved here because CMDBUF_NUM_IDMA_VCS is visible only on
+// this side.
+inline std::uint32_t resolve_num_vcs(std::uint32_t num_channels) {
+    return (num_channels == CHANNELS_ALL || num_channels > overlay::CMDBUF_NUM_IDMA_VCS) ? overlay::CMDBUF_NUM_IDMA_VCS
+                                                                                         : num_channels;
 }
 
-// Owns the read state for the whole gather, mirroring compact_idma_per_row: configure, loop,
-// barrier. As there, the transfer length is `dst_stride` -- the dense output row.
+// Owns the read state for the whole gather: configure, loop, barrier. The transfer length is
+// `dst_stride` -- the dense output row.
 inline void compact_noc_per_row(
     std::uint32_t src_base,
     std::uint32_t dst_base,
@@ -203,7 +133,8 @@ void kernel_main() {
     // Each engine owns its hardware end to end -- command buffer or read state, the per-row
     // loop, and the drain -- so this is only the choice between them.
     if (use_idma) {
-        compact_idma_per_row(src_base, dst_addr, num_rows, pad_row_bytes, out_row_bytes, num_channels);
+        experimental::idma_copy_rows(
+            src_base, pad_row_bytes, dst_addr, out_row_bytes, num_rows, resolve_num_vcs(num_channels));
     } else {
         compact_noc_per_row(src_base, dst_addr, num_rows, pad_row_bytes, out_row_bytes, dest_coords);
     }
