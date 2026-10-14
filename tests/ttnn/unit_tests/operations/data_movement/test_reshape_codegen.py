@@ -1,0 +1,213 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Reshape codegen port: routing, bit-exactness of every program, sub_core_grids and program-cache re-keying.
+
+import pytest
+import torch
+
+import ttnn
+
+_dm = ttnn._ttnn.operations.data_movement
+_force_native = _dm.reshape_force_native
+_force_codegen = _dm.reshape_force_codegen
+
+_DRAM = ttnn.DRAM_MEMORY_CONFIG
+_L1 = ttnn.L1_MEMORY_CONFIG
+_SUB_CORE_GRIDS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6))])
+
+# NaN payloads, +-Inf, -0 and subnormals: values a compute-engine round trip would change.
+_SPECIAL16 = [0x7FC0, 0x7FC1, 0xFFC0, 0x7F81, 0x7F80, 0xFF80, 0x8000, 0x0001, 0x007F, 0x8001, 0x0080]
+_SPECIAL32 = [
+    0x7FC00000,
+    0x7FC00001,
+    0xFFC00000,
+    0x7F800001,
+    0x7F800000,
+    0xFF800000,
+    0x80000000,
+    0x00000001,
+    0x007FFFFF,
+    0x80000001,
+    0x00800000,
+]
+
+# Float dtypes: (torch dtype handed to from_torch, integer view of its bits).
+_FLOAT = {ttnn.bfloat16: (torch.bfloat16, torch.int16), ttnn.float32: (torch.float32, torch.int32)}
+# Integer dtypes: full value range, carried in int64 so uint32 keeps its top bit.
+_INT_RANGE = {ttnn.int32: (-(1 << 31), (1 << 31) - 1), ttnn.uint32: (0, (1 << 32) - 1), ttnn.uint16: (0, (1 << 16) - 1)}
+
+
+def _make(shape, dtype):
+    torch.manual_seed(0)
+    if dtype in _INT_RANGE:
+        low, high = _INT_RANGE[dtype]
+        return torch.randint(low, high, shape, dtype=torch.int64).to(
+            torch.int32 if dtype == ttnn.int32 else torch.int64
+        )
+    host, bits = _FLOAT[dtype]
+    data = torch.randn(shape, dtype=torch.float32).to(host)
+    width = 16 if bits == torch.int16 else 32
+    special = [v - (1 << width) if v >= 1 << (width - 1) else v for v in (_SPECIAL16 if width == 16 else _SPECIAL32)]
+    flat = data.view(bits).flatten()
+    idx = torch.arange(0, flat.numel(), max(1, flat.numel() // (8 * len(special))))[: 8 * len(special)]
+    flat[idx] = torch.tensor(special, dtype=bits).repeat(8)[: len(idx)]
+    return flat.view(host).reshape(shape)
+
+
+def _assert_bits(expected, actual, dtype):
+    actual = actual.reshape(expected.shape)
+    if dtype in _FLOAT:
+        _, bits = _FLOAT[dtype]
+        expected, actual = expected.contiguous().view(bits), actual.to(expected.dtype).contiguous().view(bits)
+    else:
+        expected, actual = expected.to(torch.int64), actual.to(torch.int64)
+    bad = (expected != actual).sum().item()
+    assert bad == 0, f"{bad} of {expected.numel()} datums differ"
+
+
+def _to_device(device, source, dtype, layout, mem):
+    return ttnn.from_torch(source, dtype=dtype, layout=layout, device=device, memory_config=mem)
+
+
+# One case per program. Which program runs is the plan's choice for these shapes on the full grid.
+_PATHS = [
+    # Tile-row permutation: both widths multiples of 32.
+    ("tile_rows", [1, 64, 1024], [1, 64, 8, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ("tile_rows_fp32", [1, 64, 1024], [1, 64, 8, 128], ttnn.float32, ttnn.TILE_LAYOUT),
+    ("tile_rows_int32", [1, 64, 1024], [1, 64, 8, 128], ttnn.int32, ttnn.TILE_LAYOUT),
+    ("tile_rows_uint32", [1, 64, 1024], [1, 64, 8, 128], ttnn.uint32, ttnn.TILE_LAYOUT),
+    ("tile_rows_uint16", [1, 64, 1024], [1, 64, 8, 128], ttnn.uint16, ttnn.TILE_LAYOUT),
+]
+
+
+@pytest.mark.parametrize("mem", [_DRAM, _L1], ids=["dram", "l1"])
+@pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _PATHS, ids=[p[0] for p in _PATHS])
+def test_reshape_codegen_bit_exact(device, path, in_shape, out_shape, dtype, layout, mem):
+    source = _make(in_shape, dtype)
+    x = _to_device(device, source, dtype, layout, mem)
+    out = _force_codegen(x, out_shape, memory_config=mem)
+    assert list(out.shape) == out_shape
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
+
+
+@pytest.mark.parametrize(
+    "path,in_shape,out_shape,dtype,layout",
+    [p for p in _PATHS if p[0] == "tile_rows"],
+    ids=["tile_rows"],
+)
+def test_reshape_codegen_sub_core_grids(device, path, in_shape, out_shape, dtype, layout):
+    source = _make(in_shape, dtype)
+    x = _to_device(device, source, dtype, layout, _DRAM)
+    out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=_SUB_CORE_GRIDS)
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
+    # Auto keeps the caller's grid on the codegen program it just compiled.
+    entries = device.num_program_cache_entries()
+    out = ttnn.reshape(x, out_shape, memory_config=_DRAM, sub_core_grids=_SUB_CORE_GRIDS)
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
+    assert device.num_program_cache_entries() == entries
+
+
+# (id, in shape, out shape, dtype, layout, expected route). TILE demotion is decided by the tile plan
+# (tile_native_faster); shapes the tile-rows program does not take run native.
+_ROUTES = [
+    # Head split: batching cuts source reads 32x.
+    ("tile_rows", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
+    # Width change: tile rows saves only 2x the reads on far fewer cores.
+    ("tile_width_native", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.bfloat16, ttnn.TILE_LAYOUT, "native"),
+    ("tile_width_uint16", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.uint16, ttnn.TILE_LAYOUT, "codegen"),
+    # A width that is not a multiple of 32 is not a tile-row permutation.
+    ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "native"),
+    ("row_major", [512, 256], [1024, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "native"),
+]
+
+
+@pytest.mark.parametrize("case,in_shape,out_shape,dtype,layout,route", _ROUTES, ids=[r[0] for r in _ROUTES])
+def test_reshape_codegen_routing(device, case, in_shape, out_shape, dtype, layout, route):
+    source = _make(in_shape, dtype)
+    x = _to_device(device, source, dtype, layout, _DRAM)
+    expected_leg = _force_codegen if route == "codegen" else _force_native
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(expected_leg(x, out_shape, memory_config=_DRAM)), dtype)
+    # The expected leg compiled its program; auto taking the other leg would compile a new one.
+    entries = device.num_program_cache_entries()
+    out = ttnn.reshape(x, out_shape, memory_config=_DRAM)
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
+    assert device.num_program_cache_entries() == entries, f"auto did not take {route}"
+
+
+@pytest.mark.parametrize(
+    "path,in_shape,out_shape,dtype,layout",
+    [p for p in _PATHS if p[0] == "tile_rows"],
+    ids=["tile_rows"],
+)
+def test_reshape_codegen_cache_hit_new_addresses(device, path, in_shape, out_shape, dtype, layout):
+    source = _make(in_shape, dtype)
+    x = _to_device(device, source, dtype, layout, _DRAM)
+    first = _force_codegen(x, out_shape, memory_config=_DRAM)
+    entries = device.num_program_cache_entries()
+    # The first input and output stay allocated, so the second call runs on new addresses; a cache hit must
+    # rebind them.
+    other = torch.flip(source, dims=[0]) if source.shape[0] > 1 else torch.flip(source, dims=[-1])
+    y = _to_device(device, other, dtype, layout, _DRAM)
+    assert y.buffer_address() != x.buffer_address()
+    second = _force_codegen(y, out_shape, memory_config=_DRAM)
+    assert second.buffer_address() != first.buffer_address()
+    assert device.num_program_cache_entries() == entries
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(first), dtype)
+    _assert_bits(other.reshape(out_shape), ttnn.to_torch(second), dtype)
+
+
+def _l1_hog(device, bytes_per_core):
+    grid = device.compute_with_storage_grid_size()
+    rows = grid.x * grid.y * bytes_per_core // 2048
+    return ttnn.from_torch(
+        torch.zeros([rows, 1024], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_L1,
+    )
+
+
+@pytest.mark.parametrize("mem", [_DRAM, _L1], ids=["dram", "l1"])
+@pytest.mark.parametrize(
+    "path,in_shape,out_shape,dtype,layout",
+    [p for p in _PATHS if p[0] == "tile_rows"],
+    ids=["tile_rows"],
+)
+def test_reshape_codegen_cache_hit_changed_free_l1(device, path, in_shape, out_shape, dtype, layout, mem):
+    # The plan sizes its buffers from the L1 free at launch, so the same call under less free L1 must not reuse a
+    # program planned for more.
+    source = _make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, layout, mem)
+    out = _force_codegen(x, out_shape, memory_config=mem)
+    _assert_bits(expected, ttnn.to_torch(out), dtype)
+    ttnn.deallocate(out)
+    for bytes_per_core in (256 * 1024, 512 * 1024):
+        hog = _l1_hog(device, bytes_per_core)
+        out = _force_codegen(x, out_shape, memory_config=mem)
+        _assert_bits(expected, ttnn.to_torch(out), dtype)
+        ttnn.deallocate(out)
+        ttnn.deallocate(hog)
+    # With the hogs freed the first plan comes back and hits its program.
+    grown = device.num_program_cache_entries()
+    out = _force_codegen(x, out_shape, memory_config=mem)
+    _assert_bits(expected, ttnn.to_torch(out), dtype)
+    assert device.num_program_cache_entries() == grown
+
+
+_OUT_OF_SCOPE = [
+    ("bfloat8_b", [1, 1, 64, 128], [1, 1, 128, 64], ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ("row_major", [512, 256], [1024, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+]
+
+
+@pytest.mark.parametrize("case,in_shape,out_shape,dtype,layout", _OUT_OF_SCOPE, ids=[c[0] for c in _OUT_OF_SCOPE])
+def test_forced_codegen_refuses_out_of_scope_case(device, expect_error, case, in_shape, out_shape, dtype, layout):
+    # The forced leg is compared against native, so outside its scope it must fail rather than fall back.
+    x = ttnn.from_torch(torch.rand(in_shape), dtype=dtype, layout=layout, device=device)
+    with expect_error(RuntimeError, "outside the codegen scope"):
+        _force_codegen(x, out_shape)

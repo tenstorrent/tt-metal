@@ -13,6 +13,7 @@
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape_force.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 
@@ -109,6 +110,40 @@ void bind_reshape_view_operation(nb::module_& mod) {
             nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("skip_padding_fill") = false));
+
+    // Plain mod.def: ttnn::bind_function also registers the function into the ttnn.* namespace.
+    mod.def(
+        "reshape_force_native",
+        &reshape_force_native,
+        nb::arg("input_tensor"),
+        nb::arg("shape"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("pad_value") = nb::none(),
+        nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("skip_padding_fill") = false,
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Reshape that always runs the existing implementation. Same arguments as ``ttnn.reshape``.
+        )doc");
+
+    mod.def(
+        "reshape_force_codegen",
+        &reshape_force_codegen,
+        nb::arg("input_tensor"),
+        nb::arg("shape"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("pad_value") = nb::none(),
+        nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("skip_padding_fill") = false,
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Reshape that always runs the generated implementation. Raises for inputs it does not support
+            instead of falling back. Same arguments as ``ttnn.reshape``.
+        )doc");
 }
 
 }  // namespace detail
