@@ -81,3 +81,9 @@ for layers 0/49, steps 1/4; device-lint; submit via blx01 broker (t288/blx01-sub
 - Relaunched chain479 unchanged at 20:00 PDT 10-13 (detached, run 1822): d1 -> blx01 job 307.
   Files: $TTP_RUN_DIR=state/runs/1822/{chain479.log,chain479.rc,replay479.txt}.
   Next: read replay479.txt. If d1 fails 3x again past audio warm, add a T286 audio-length skip (keep only the 10 s length).
+
+# t479 run 1831 (after g15blx02 reboot 21:22 PDT 10-13)
+- Chain479 (run 1822) died with the reboot while blx01 job 307 was still queued (no dumps yet). Added ADOPT=<id> to
+  chain479.sh and relaunched it at 21:25 PDT with ADOPT=307 (waits on 307, no duplicate submit; tries 2-3 submit
+  fresh). Files: state/runs/1831/{chain479.log,chain479.rc,chain479.done,replay479.txt}.
+  Next: same as run 1822 (read replay479.txt).
