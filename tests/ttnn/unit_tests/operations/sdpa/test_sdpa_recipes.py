@@ -140,18 +140,18 @@ def test_sdpa_recipe_program_cache_and_trace(device, variant):
         ttnn.release_trace(device, trace)
 
 
-# A cache hit with new inputs rebinds every buffer: the dense layout (mask, sink) and the key-range layout (page table,
-# Q offset tensor, sink). Joint and windowed are in the nightly file.
-@pytest.mark.parametrize("case", ["dense_mask_sink", "chunked_paged_sink"])
+# A cache hit with new inputs rebinds every buffer: the dense layout (mask, sink). The key-range layout (page table,
+# Q offset tensor, sink), joint and windowed are in the nightly file.
+@pytest.mark.parametrize("case", ["dense_mask_sink"])
 def test_sdpa_recipe_cache_hit_rebinds(device, case):
     check_cache_hit_rebinds(device, case)
 
 
-# What legacy callers pass, on the recipes the legacy routes move to: STANDARD and ACCURATE with BFP8 Q/K/V (the
+# What legacy callers pass, on the recipe the FP32-dest legacy routes move to: ACCURATE with BFP8 Q/K/V (the
 # output comes back as BFP8), a custom scale with an attn_mask, L1 inputs and output, an FP32-dest HiFi4
 # compute_kernel_config with exp_approx_mode=False (ignored), and six batch/heads (GQA) on a 2x2 grid, so each
-# core runs Q chunks of several heads. The sweeps are in the nightly file.
-@pytest.mark.parametrize("variant", ["standard", "accurate"])
+# core runs Q chunks of several heads. STANDARD and the sweeps are in the nightly file.
+@pytest.mark.parametrize("variant", ["accurate"])
 def test_sdpa_recipe_legacy_arguments(device, variant):
     check_legacy_arguments(
         device,
@@ -168,27 +168,15 @@ def test_sdpa_recipe_legacy_arguments(device, variant):
 
 
 # Precision routing (no `precision`): FP32 dest runs ACCURATE at op-chosen blocking (dense causal with BFP8 Q/K/V and
-# a custom scale; an attn_mask call passing Q2048; chunked prefill from a start tensor), non-ring joint runs STANDARD
-# (ACCURATE with FP32 dest), also at op-chosen blocking.
-@pytest.mark.parametrize(
-    "case",
-    [
-        "dense_causal_bfp8",
-        "dense_mask_q2048",
-        "chunked_tensor_start",
-        "joint_bf16_dest",
-        "joint_fp32_dest",
-        "dense_d512",
-        "dense_mixed_kv",
-        "joint_empty",
-    ],
-)
+# a custom scale; chunked prefill from a start tensor), non-ring joint runs STANDARD, also at op-chosen blocking. The
+# other routing cases are in the nightly file (SDPA_ROUTING_NIGHTLY_CASES).
+@pytest.mark.parametrize("case", ["dense_causal_bfp8", "chunked_tensor_start", "joint_bf16_dest"])
 def test_sdpa_precision_routing(device, case):
     check_routing(device, case)
 
 
-# K and V in different formats on the fused reference-max path (K BFP8, V BF16); routing case dense_mixed_kv covers the
-# FP32-state path (K BF16, V BFP8).
+# K and V in different formats on the fused reference-max path (K BFP8, V BF16); routing case dense_mixed_kv (nightly)
+# covers the FP32-state path (K BF16, V BFP8).
 @pytest.mark.parametrize(
     "variant, k_dtype, v_dtype",
     [("standard", ttnn.bfloat8_b, ttnn.bfloat16)],
