@@ -12,13 +12,13 @@
 // from `buffer_A[0]` / `buffer_B[0]`; the run-0 tilize only exists to leave the
 // unpacker in a (possibly tiny `face_r_dim`) state. The run-1 transition is:
 //   `_llk_unpack_tilize_uninit_` (restores the tilize-mutated SrcA baseline) +
-//   `_llk_unpack_reconfig_data_format_src{a,b}_impl_<.. FACE_ROW_MAJOR>`
-//   (re-establishes the canonical regular strides / Tile_x_dim / Z-dim).
+//   `_llk_unpack_hw_configure_` (re-establishes the regular 32x32 operand baseline
+//   for both operands: descriptors, Tile_x_dim, strides).
 //
 // If that transition fails to fully reset the unpacker (e.g. leaves a tiny
-// `Tile_x_dim_cntx0`, a tilize-specific Z-dim, or a stale Y-stride), the regular
-// matmul reads its operands with the wrong layout and the result diverges from
-// `tilize(MatmulGolden(A, B))`.
+// `Tile_x_dim_cntx0`, a tilize-specific descriptor Z-dim, or `tileize_mode` with its
+// row pitch), the regular matmul reads its operands with the wrong layout and the
+// result diverges from `tilize(MatmulGolden(A, B))`.
 //
 // NOTE: run-0 tilize reads `buffer_A[0]` (which holds the tilized matmul operand)
 // as raw row-major input; the 4-face polluter (two tiles wide) also reads on into
@@ -99,9 +99,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // 32x32 operand baseline for BOTH operands before the matmul.
         //
         // `_llk_unpack_AB_matmul_init_` only reprograms x-end and the ZW counter (see its
-        // uninit doc) -- it does NOT reset the SrcA Y/Z strides, Tile_x_dim, or the operand
-        // tile descriptors, so without an explicit restore the polluter tilize state leaks
-        // into the matmul.
+        // uninit doc) -- it does NOT reset tileize_mode with its row pitch, Tile_x_dim, or the
+        // operand tile descriptors, so without an explicit restore the polluter tilize state
+        // leaks into the matmul.
         //
         // A *geometry change* (tiny polluter -> regular matmul) cannot be undone by
         // uninit + a stride-only reconfig alone: `_llk_unpack_reconfig_data_format_srca_impl_`

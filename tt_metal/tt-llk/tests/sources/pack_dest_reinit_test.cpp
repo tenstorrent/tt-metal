@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Functional re-init test: the math/pack dest handshake is re-initialised between consecutive blocks of
-// a datacopy with nothing else in between. The pack thread calls _llk_pack_dest_init_ straight after its
-// previous block's section-done, and the math thread calls _llk_math_pack_sync_init_ straight after its
-// previous block's section-done. The copy must equal its input across every block boundary.
+// Functional smoke test of the per-block re-init: the math/pack dest handshake is re-initialised between
+// consecutive blocks of a datacopy with nothing else in between. The pack thread calls _llk_pack_dest_init_
+// straight after its previous block's section-done, and the math thread calls _llk_math_pack_sync_init_
+// straight after its previous block's section-done. Both reset to DEST half 0, and the math-side init
+// waits for MATH_PACK to drain, so no pack is in flight when the re-init runs. The copy must equal its
+// input across every block boundary.
 
 #include <cstdint>
 
@@ -19,7 +21,6 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_lib_unpack_wrappers.h"
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 #include "params.h"
@@ -53,7 +54,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "llk_lib_math_wrappers.h"
-#include "llk_lib_unpack_wrappers.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -77,7 +77,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t tile_num = 0; tile_num < NUM_TILES_IN_BLOCK; ++tile_num)
         {
             _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                DST_INDEX + tile_num, formats.math, formats.math, num_faces);
+                DST_INDEX + tile_num /* dst_index */, formats.math, formats.math, num_faces);
         }
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
@@ -111,7 +111,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t tile_num = 0; tile_num < NUM_TILES_IN_BLOCK; ++tile_num)
         {
             _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-                DST_INDEX + tile_num, L1_ADDRESS(buffer_Res[block_num * NUM_TILES_IN_BLOCK + tile_num]));
+                DST_INDEX + tile_num /* tile_index */, L1_ADDRESS(buffer_Res[block_num * NUM_TILES_IN_BLOCK + tile_num]));
         }
         _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }

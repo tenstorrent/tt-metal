@@ -16,9 +16,11 @@ cannot mix tile geometries, so this uses a **state-leak** design instead:
            operands read directly from buffer_A[0] / buffer_B[0].
 
 `_llk_unpack_AB_matmul_init_` only reprograms x-end and the ZW *counter*; it does NOT
-reset the SrcA Y-stride / Z-stride / Tile_x_dim that `unpack_tilize` mutates (those are
-restored by `_llk_unpack_tilize_uninit_`). So a tiny tilize that is not properly uninit'd
-leaks its strides into the matmul, corrupting the result.
+reset what `unpack_tilize` mutates: `tileize_mode` and its row pitch in unpack config
+word 0, `Tile_x_dim_cntx0`, and on Blackhole the SrcA tile-descriptor X/Z-dim (those are
+restored by `_llk_unpack_tilize_uninit_`). Tilize leaves no non-canonical stride on either
+arch. So a tilize that is not properly uninit'd leaks that state into the matmul,
+corrupting the result.
 
 The `do_restore` toggle makes this a controlled experiment:
     do_restore=True  -> transition restores the baseline; matmul must match golden.
@@ -93,7 +95,7 @@ class POLLUTER_CT_DIM(TemplateParameter):
 
 @parametrize(
     # Same format for both runs so skipping the restore (do_restore=False) does not
-    # introduce a data-format mismatch — isolating the unpacker-stride leak.
+    # introduce a data-format mismatch — isolating the tilize-state leak.
     formats=input_output_formats(
         [
             DataFormat.Float16_b,

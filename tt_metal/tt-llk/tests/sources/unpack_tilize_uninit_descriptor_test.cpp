@@ -10,6 +10,7 @@
 //
 // WH: init never writes the word, so uninit must leave it bit-identical.
 // BH: init writes Z-dim, so uninit re-establishes it; Y-dim untouched.
+// Both: uninit must also restore the canonical Tile_x_dim_cntx0, asserted below.
 
 #include <cstdint>
 

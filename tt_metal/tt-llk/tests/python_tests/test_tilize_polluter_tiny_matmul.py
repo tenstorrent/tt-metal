@@ -17,6 +17,11 @@ regular-tilize state; `_llk_unpack_tilize_uninit_` then restores the baseline (g
 Because the tiny-matmul run re-runs `_llk_unpack_hw_configure_` for its operands, this
 primarily validates that the regular-tilize -> uninit -> tiny-matmul SEQUENCE produces a
 correct result; `do_restore=False` is the negative control.
+
+The Blackhole mixed-width (input and output format differ) `dest_acc=Yes` cases are the
+silicon reproducer for the packer drain in `configure_pack`: run 1 calls
+`_llk_pack_hw_configure_` straight after run 0's pack, and without the drain they hang the
+Tensix. Keep them in the sweep.
 """
 
 from dataclasses import dataclass

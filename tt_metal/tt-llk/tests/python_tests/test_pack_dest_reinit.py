@@ -3,11 +3,12 @@
 
 """Datacopy whose math/pack dest handshake is re-initialised between every block.
 
-Functional re-init test: the pack thread calls ``_llk_pack_dest_init_`` (and the math thread
-``_llk_math_pack_sync_init_``) between consecutive blocks with no reconfig in between, so the re-init
-lands directly behind the previous block's section-done. The copy must equal its input across every
-block boundary; a re-init that disturbed the previous block's last pack or the handshake would show up
-as a wrong tile or a hang.
+Functional smoke test of the per-block re-init: the pack thread calls ``_llk_pack_dest_init_`` (and the
+math thread ``_llk_math_pack_sync_init_``) between consecutive blocks with no reconfig in between, so the
+re-init lands directly behind the previous block's section-done. Both re-inits reset to DEST half 0, and
+the math-side init waits for the MATH_PACK semaphore to drain, so no pack is in flight when the re-init
+runs. The copy must equal its input across every block boundary; a re-init that broke the handshake or
+the dest-offset registers shows up as a hang or a wrong tile.
 """
 
 import torch
