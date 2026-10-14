@@ -33,18 +33,18 @@ Owner:
 """
 
 from run_checks import run as get_run_checks
-from semaphores_provider import SemaphoreData, SemaphoresProvider, run as get_semaphores_provider
+from semaphore_provider import SemaphoreData, SemaphoreProvider, run as get_semaphore_provider
 from triage import ScriptConfig, run_script
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 
 script_config = ScriptConfig(
-    depends=["run_checks", "semaphores_provider"],
+    depends=["run_checks", "semaphore_provider"],
 )
 
 
 def shown_semaphores(
-    location: OnChipCoordinate, provider: SemaphoresProvider, include_unchanged: bool
+    location: OnChipCoordinate, provider: SemaphoreProvider, include_unchanged: bool
 ) -> list[SemaphoreData]:
     return [
         s for s in provider.get_semaphores(location) if include_unchanged or s.kind == "program" or s.value != s.initial
@@ -54,7 +54,7 @@ def shown_semaphores(
 def run(args, context: Context):
     include_unchanged: bool = args["--include-global-unchanged"]
     run_checks = get_run_checks(args, context)
-    provider = get_semaphores_provider(args, context)
+    provider = get_semaphore_provider(args, context)
     return run_checks.run_per_block_check(
         lambda location: shown_semaphores(location, provider, include_unchanged),
         block_filter=["tensix", "active_eth", "idle_eth"],

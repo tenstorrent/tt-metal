@@ -5,7 +5,7 @@
 
 """
 Usage:
-    semaphores_provider
+    semaphore_provider
 
 Description:
     Data provider for semaphore values on Tensix and Ethernet cores. get_semaphores(location) reads a
@@ -100,7 +100,7 @@ def read_global_semaphores(location: OnChipCoordinate, globals_) -> list[Semapho
     ]
 
 
-class SemaphoresProvider:
+class SemaphoreProvider:
     def __init__(self, dispatcher_data: DispatcherData, by_kernel: dict[int, list], globals_: list):
         self.dispatcher_data = dispatcher_data
         self.by_kernel = by_kernel
@@ -117,12 +117,12 @@ class SemaphoresProvider:
 
 
 @triage_singleton
-def run(args, context: Context) -> SemaphoresProvider:
+def run(args, context: Context) -> SemaphoreProvider:
     run_checks = get_run_checks(args, context)
     inspector_data = get_inspector_data(args, context)
     by_kernel = program_semaphores_by_kernel(inspector_data)
     globals_ = global_semaphores(inspector_data, get_metal_device_id_mapping(args, context), run_checks)
-    return SemaphoresProvider(get_dispatcher_data(args, context), by_kernel, globals_)
+    return SemaphoreProvider(get_dispatcher_data(args, context), by_kernel, globals_)
 
 
 if __name__ == "__main__":
