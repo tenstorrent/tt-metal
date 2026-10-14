@@ -74,16 +74,11 @@ SEQ_LEN = PREFILL_CHUNK_TOKENS_PER_CHIP
 # difference can reorder the selection, small enough to keep every value well inside bf16 range.
 MARGIN = 1.0
 
-# Effective comparison resolution of the top-k datapath, as a RELATIVE gap between two keys.
-# The network does not compare at fp32: measured on Blackhole over 5077 tokens (both input dtypes,
-# 4 seeds, Kimi geometry), selection is exactly torch's from a relative gap of 8e-4 upward and
-# starts deviating below it -- consistent with roughly a 10-bit effective mantissa in the sort
-# datapath. Keys closer than this are ties to the hardware however far apart fp32 says they are,
-# so every tie-freedom predicate below is a tolerance rather than an exact comparison. 2e-3 keeps
-# ~93% of tokens assertable with headroom over the measured 8e-4 floor.
-#
-# This is a property of the datapath, not of this PR: main deviates at the same ~1% rate on the
-# same near-boundary tokens. An exact predicate here reports a defect on every branch.
+# Comparison resolution of the top-k datapath, as a RELATIVE gap between two keys. The sort
+# compares 17 mantissa bits of the fp32 keys (the stable engine's rank tag takes the low 6), about
+# 8e-6 relative, and the device's activation differs slightly from torch's, so every tie-freedom
+# predicate below is a tolerance rather than an exact comparison. 2e-3 is the bound from when the
+# sort compared TF32 keys (10 mantissa bits); it is kept as a conservative margin.
 SORT_RESOLUTION = 2e-3
 
 
