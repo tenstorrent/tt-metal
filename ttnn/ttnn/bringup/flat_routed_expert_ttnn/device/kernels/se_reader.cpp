@@ -54,7 +54,7 @@ void kernel_main() {
     SeDyn d;
     se_dyn_load<num_experts>(d, 4, get_write_ptr(tt::CBIndex::c_7), 1);
 #ifdef SE_DRISC_LAUNCH  // this reader also posts the call's DRISC jobs (DRISC slot 0's own reader: idle on DRISC calls)
-    se_drisc_post(d, SE_DRISC_LAUNCH, get_write_ptr(tt::CBIndex::c_7));
+    se_drisc_post(d, SE_DRISC_LAUNCH, get_write_ptr(tt::CBIndex::c_7), 2 * SE_DYN_HALF);
 #endif
 #ifdef SE_DRISC_DUAL  // a DRISC call (small counts): this slot's weights come from its DRAM core (se_drisc.hpp)
     if (d.max_cnt <= SE_DRISC_MAXCNT) {

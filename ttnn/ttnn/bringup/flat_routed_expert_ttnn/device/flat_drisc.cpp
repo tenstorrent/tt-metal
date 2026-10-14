@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <set>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -105,11 +106,26 @@ uint32_t mpfe_port(IDevice* device, const CoreCoord& logical) {
 // MIMO_FL_DRISC_TILES: 1 (default) - the bank's tile that is no endpoint (its slot on NOC1, as the Tensix forwarders; a
 // second slot per tile would go on NOC0, but one tile sends ~21-28 GB/s: with MIMO_FL_DRISC_SLOTS 8 the other slots keep
 // Tensix readers); 2 - both Metal tiles of a bank, a slot each (tile 1, its bank's NOC1 endpoint, sends on NOC0)
-uint32_t flat_drisc_tiles() { return env_or("MIMO_FL_DRISC_TILES", 1); }
+// MIMO_FL_DRISC_PURE=1: every slot's gate/up from the DRAM cores (no Tensix weight reads; the reader cells keep only
+// reader down columns where the plan has them), tiles in switch mode (3)
+bool flat_drisc_pure() { return env_or("MIMO_FL_DRISC_PURE", 0) != 0; }
+
+uint32_t flat_drisc_tiles() { return env_or("MIMO_FL_DRISC_TILES", flat_drisc_pure() ? 3 : 1); }
 
 CoreCoord flat_drisc_logical(IDevice* device, uint32_t r, uint32_t banks) {
-    return flat_drisc_tiles() == 1 ? CoreCoord(r % banks, free_tile(device, r % banks))
+    return flat_drisc_tiles() != 2 ? CoreCoord(r % banks, free_tile(device, r % banks))
                                    : CoreCoord(r % banks, 1 + r / banks);
+}
+
+// switch mode (MIMO_FL_DRISC_TILES=3): a bank's second slot is sent by its other Metal tile (the bank's NOC1 endpoint,
+// on NOC0, DMA stream 1) on calls with small counts, else as the free tile's second job (two tiles at parity up to
+// M ~160, one tile from M ~256: GLM-Flash). {logical tile, job}; job ~0u: none.
+std::pair<CoreCoord, uint32_t> flat_drisc_alt(IDevice* device, uint32_t r, uint32_t banks) {
+    if (flat_drisc_tiles() != 3 || r < banks) {
+        return {CoreCoord(0, 0), ~0u};
+    }
+    const uint32_t b = r % banks, f = free_tile(device, b);
+    return {CoreCoord(b, f == 1 ? 2 : 1), 0};
 }
 
 uint32_t flat_drisc_mpfe(bool reader_down) {
@@ -126,7 +142,7 @@ uint32_t flat_drisc_mpfe(bool reader_down) {
     return on ? (1u << 31) | (w & 7) | ((o & 7) << 4) | ((x & 7) << 8) : 0;
 }
 
-uint32_t flat_drisc_job(uint32_t r, uint32_t banks) { return flat_drisc_tiles() == 1 ? r / banks : 0; }
+uint32_t flat_drisc_job(uint32_t r, uint32_t banks) { return flat_drisc_tiles() != 2 ? r / banks : 0; }
 
 namespace {
 CoreCoord noc0_of(IDevice* device, const CoreCoord& logical, tt::CoreType type) {
@@ -144,11 +160,14 @@ CoreCoord flat_drisc_physical(IDevice* device, uint32_t r, uint32_t banks) {
     return noc0_of(device, flat_drisc_logical(device, r, banks), tt::CoreType::DRAM);
 }
 
-uint32_t flat_drisc_noc(IDevice* device, uint32_t r, uint32_t banks) {
+uint32_t flat_drisc_noc(IDevice* device, uint32_t r, uint32_t banks, bool reader_down) {
     // one tile per bank: its first slot on NOC1, the second on NOC0; two tiles: the non-endpoint tile's slot on NOC1
     // (M 256 / 512 55.0 / 81.5 -> 50.6 / 77.2 us / expert); MIMO_FL_DRISC_NOC1=0: all on NOC0
-    if (flat_drisc_tiles() == 1) {  // job 0 on NOC1 (a hybrid's only DRISC job: all weights on NOC1, as the forwarders)
-        return env_or("MIMO_FL_DRISC_NOC1", 1) ? (r / banks == 0 ? 1 : 0) : 0;
+    if (flat_drisc_tiles() != 2) {  // job 0 on NOC1 (a hybrid's only DRISC job: all weights on NOC1, as the forwarders)
+        // job 1, the free tile's second slot (MIMO_FL_DRISC_JOB1_NOC): NOC0, but NOC1 in pure mode with reader down
+        // columns (K2.7 E12 one tile, M 512 / 2048: 128.9 / 449.7 on NOC0, 124.5 / 442.9 on NOC1; Tensix 123.5 / 443.1)
+        const uint32_t j1 = env_or("MIMO_FL_DRISC_JOB1_NOC", flat_drisc_pure() && reader_down ? 1 : 0);
+        return env_or("MIMO_FL_DRISC_NOC1", 1) ? (r / banks == 0 ? 1 : j1) : 0;
     }
     if (!env_or("MIMO_FL_DRISC_NOC1", 1)) {  // (default: tile 2's half of the weights off the x multicast's NOC0)
         return 0;
@@ -164,7 +183,7 @@ CoreCoord flat_worker_noc0(IDevice* device, const CoreCoord& logical) {
     return noc0_of(device, logical, tt::CoreType::WORKER);
 }
 
-void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t banks) {
+void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t banks, bool reader_down) {
     std::lock_guard<std::mutex> lk(mu);
     if (running.contains(mesh)) {
         TT_FATAL(running.at(mesh).n_slots == n_slots, "flat DRISC senders: running for another slot count");
@@ -187,7 +206,15 @@ void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t
         if (v.size() <= k) {
             v.resize(k + 1, 0);
         }
-        v[k] = flat_drisc_noc(dev0, r, banks);
+        v[k] = flat_drisc_noc(dev0, r, banks, reader_down);
+    }
+    std::set<std::pair<uint32_t, uint32_t>> alt_tiles;  // (switch mode: one job on NOC0, DMA stream 1)
+    for (uint32_t r = 0; r < n_slots; ++r) {
+        const auto [ac, aj] = flat_drisc_alt(dev0, r, banks);
+        if (aj != ~0u) {
+            tile_nocs[{ac.x, ac.y}] = {0};
+            alt_tiles.insert({ac.x, ac.y});
+        }
     }
     for (const auto& [xy, nocs] : tile_nocs) {
         run.cores.emplace_back(xy.first, xy.second);
@@ -220,7 +247,8 @@ void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t
             // a bank's two tiles DMA on different streams: both on stream 0 with ~7 reads in flight each, next to heavy
             // NOC1 DRAM reads through the bank's NOC1 endpoint (MIMO_FL_DN_NOC0=1), wedged those NoC reads (3 of 3
             // runs; split streams 2 of 2 clean, as is a 2-read cap). MIMO_FL_DRISC_STREAM_SPLIT=0 restores the hang.
-            if (env_or("MIMO_FL_DRISC_STREAM_SPLIT", 1) && flat_drisc_tiles() == 2 && c.y == 2) {
+            if ((env_or("MIMO_FL_DRISC_STREAM_SPLIT", 1) && flat_drisc_tiles() == 2 && c.y == 2) ||
+                alt_tiles.contains({c.x, c.y})) {
                 d["SE_DRISC_STREAM0"] = "1";
             }
             const auto k = CreateKernel(
