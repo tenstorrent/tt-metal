@@ -2420,8 +2420,7 @@ def main() -> int:
     if args.prefill_slab is not None and not is_slab_rows(args.prefill_slab):
         raise SystemExit(f"--prefill-slab takes a multiple of 128 in 256..4096, got {args.prefill_slab}")
     if args.prefill_slab is not None:
-        # The slab call-size switch is checked here before any
-        # device is opened: a refused ring count is a start-up error, not a poisoned model 79 s into the warm pass
+        # Validate the one-call slab option before runtime admission opens a device.
         try:
             moe_slab_one_call_enabled()
         except ValueError as error:
