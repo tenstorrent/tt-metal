@@ -9,6 +9,8 @@ partially filled second tile column (HV = 40) and HV = 48 (hv%32 spans both face
 and phased paths the cost model picks (BH = B * HV up to 96), with fp32 and bf16 g / beta inputs.
 """
 
+import os
+
 import pytest
 import torch
 
@@ -18,6 +20,9 @@ from models.common.utility_functions import is_blackhole
 pytestmark = pytest.mark.skipif(
     not is_blackhole(), reason="the fused and phased chunk_gated_delta_rule paths are Blackhole-only"
 )
+
+# The simulator runs much slower than silicon, so it covers the fp32 gates only.
+_hw_only = pytest.mark.skipif(bool(os.environ.get("TT_METAL_SIMULATOR")), reason="hardware test only")
 
 CHUNK = 32
 DIM = 128  # K == V: the flat q/k path assumes it unless num_key_heads is given
@@ -48,7 +53,9 @@ def _const_tiles(device):
     return tuple(_up(t) for t in (eye, tril, ones, masks))
 
 
-@pytest.mark.parametrize("gate_dtype", [ttnn.float32, ttnn.bfloat16], ids=["g_fp32", "g_bf16"])
+@pytest.mark.parametrize(
+    "gate_dtype", [ttnn.float32, pytest.param(ttnn.bfloat16, marks=_hw_only)], ids=["g_fp32", "g_bf16"]
+)
 @pytest.mark.parametrize(
     "batch, num_k_heads, num_v_heads, seq",
     [
