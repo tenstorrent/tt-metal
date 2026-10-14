@@ -583,7 +583,15 @@ def test_fused_msda_v1_v2_equivalence(device, reference_mode, R, Q, packed, alig
     offsets = _bf16(torch.randn(B, Q, H, L, P, 2) * 2.0)
     attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
 
-    loc = _bf16(_locations_from_offsets(ref_pts, offsets, spatial_shapes, reference_mode))
+    loc = _bf16(
+        _locations_from_offsets(
+            ref_pts,
+            offsets,
+            spatial_shapes,
+            reference_mode,
+            align_corners=align_corners,
+        )
+    )
 
     value_t = _to_device(value, device)
     attn_t = _to_device(_pack_weights(attn) if packed else attn, device)
