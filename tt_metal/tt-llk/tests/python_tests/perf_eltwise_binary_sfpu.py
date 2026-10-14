@@ -30,12 +30,6 @@ _ATAN2_PERF_AXES = {
     "approx_mode": [ApproximationMode.Yes, ApproximationMode.No],
 }
 
-# A functional sweep dict shared below becomes perf cases, times the run types.
-# Narrow it here when a point should stay functional-only.
-_INT_UNIFORM_PERF_SWEEP = {
-    **_func.INT_UNIFORM_SWEEP,
-}
-
 
 _BOTH_DEST_ACC = [DestAccumulation.No, DestAccumulation.Yes]
 
@@ -444,7 +438,7 @@ def test_perf_eltwise_binary_sfpu_bitwise(
 
 @pytest.mark.perf
 @parametrize(
-    **_INT_UNIFORM_PERF_SWEEP,
+    **_func.INT_UNIFORM_SWEEP,
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_int_uniform(
