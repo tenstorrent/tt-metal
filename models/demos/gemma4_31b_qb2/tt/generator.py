@@ -464,6 +464,35 @@ class Gemma4Generator:
                                     if valid < min(1024, start):
                                         raise ValueError("BF16 audit oracle retained tail is too short")
                                     restored.append(tuple(t[:, :, :valid, :] for t in tail))
+                            if audit_control.get("validate_oracle", False):
+                                cached = self._restore_prefill_history(state, page_table, slot, start)
+                                checks = []
+                                for layer_index, (original, stored) in enumerate(zip(restored, cached)):
+                                    if original is None:
+                                        continue
+                                    for kv_index, (value, actual) in enumerate(zip(original, stored)):
+                                        value = value[:, :, max(0, value.shape[2] - 1024) :, :]
+                                        quantized = ttnn.typecast(ttnn.typecast(value, ttnn.bfloat8_b), ttnn.bfloat16)
+                                        composer = ttnn.ConcatMeshToTensor(self.mesh, dim=1)
+                                        expected_host = ttnn.to_torch(quantized, mesh_composer=composer).float()
+                                        actual_host = ttnn.to_torch(actual, mesh_composer=composer).float()
+                                        raw_host = ttnn.to_torch(value, mesh_composer=composer).float()
+                                        difference = expected_host - actual_host
+                                        checks.append(
+                                            {
+                                                "layer": layer_index,
+                                                "kv": kv_index,
+                                                "elements": difference.numel(),
+                                                "different": int(torch.count_nonzero(difference)),
+                                                "max_abs": float(difference.abs().max()),
+                                                "raw_bf16_vs_cache_rmse": float(
+                                                    (raw_host - actual_host).square().mean().sqrt()
+                                                ),
+                                            }
+                                        )
+                                logger.info(
+                                    "GEMMA_ORACLE_VALUE_CHECK " + json.dumps({"start": start, "checks": checks})
+                                )
                             logger.info(
                                 "GEMMA_BF16_ORACLE "
                                 + json.dumps(
