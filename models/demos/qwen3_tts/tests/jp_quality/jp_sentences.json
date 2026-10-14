@@ -1,0 +1,113 @@
+{
+  "_doc": [
+    "text   : TTS input.",
+    "accept : correct transcriptions. CER = min over accept (defaults to [text]). Add orthographic variants only",
+    "         (kanji/kana, digits, punctuation) -- never a mis-reading, or the harness stops detecting it.",
+    "listen : what CER cannot judge; the report lists these for a human to check by ear.",
+    "max_new_tokens : per-sentence override (12.5 frames/s). Frames reaching the cap are flagged as truncated."
+  ],
+  "reference": {
+    "wav": "jp_reference.wav",
+    "text_file": "jp_reference.txt",
+    "source": "fsicoli/common_voice_17_0 ja dev common_voice_ja_28360668.mp3 (CC0-1.0)"
+  },
+  "seeds": [0, 1, 2],
+  "sentences": [
+    {
+      "id": "s01_head_hai",
+      "focus": "Head loss (shortest utterance)",
+      "text": "はい、わかりました。",
+      "accept": ["はい、わかりました。", "はい、分かりました。"],
+      "listen": "Is the initial 「は」 audible? (head loss gives 「いわかりました」)"
+    },
+    {
+      "id": "s02_head_kaasan",
+      "focus": "Head loss (still a valid word, meaning changes)",
+      "text": "お母さんに電話します。",
+      "accept": ["お母さんに電話します。"],
+      "listen": "Does 「お」 drop, leaving 「母さんに」?"
+    },
+    {
+      "id": "s03_long_vowel",
+      "focus": "Long vowels, palatalised syllables",
+      "text": "東京の空港で、おばあさんと写真を撮りました。",
+      "accept": ["東京の空港で、おばあさんと写真を撮りました。", "東京の空港で、お婆さんと写真を撮りました。"],
+      "listen": "Is 「おばあさん」 (grandmother) shortened to 「おばさん」 (aunt)? Whisper may correct it from context"
+    },
+    {
+      "id": "s04_sokuon",
+      "focus": "Geminate consonants, palatalised syllables",
+      "text": "ちょっと待って、切符を買ってきます。",
+      "accept": ["ちょっと待って、切符を買ってきます。", "ちょっと待って、切符を買って来ます。"],
+      "listen": "Is the geminate pause (っ) preserved?"
+    },
+    {
+      "id": "s05_youon",
+      "focus": "Consecutive palatalised syllables",
+      "text": "旅行の予約は、今週中にキャンセルできます。",
+      "accept": ["旅行の予約は、今週中にキャンセルできます。", "旅行の予約は、今週中にキャンセル出来ます。"]
+    },
+    {
+      "id": "s06_accent",
+      "focus": "Pitch accent (homophones)",
+      "text": "雨が降ってきたので、駅の売店で飴を買いました。",
+      "accept": ["雨が降ってきたので、駅の売店で飴を買いました。", "雨が降って来たので、駅の売店で飴を買いました。", "雨が降ってきたので、駅の売店であめを買いました。"],
+      "listen": "Are 「雨」 (rain, head-high) and 「飴」 (candy, flat) accented differently? CER cannot tell"
+    },
+    {
+      "id": "s07_question",
+      "focus": "Prosody (question-final rise)",
+      "text": "明日の会議は、本当に中止になったんですか？",
+      "accept": ["明日の会議は、本当に中止になったんですか？"],
+      "listen": "Does the pitch rise at the end so it sounds like a question? CER cannot tell"
+    },
+    {
+      "id": "s08_num_kanji",
+      "focus": "Numbers and times (kanji numerals in input)",
+      "text": "会議は十月三日の午後二時半から、三階の会議室で始まります。",
+      "accept": ["会議は十月三日の午後二時半から、三階の会議室で始まります。", "会議は10月3日の午後2時半から、3階の会議室で始まります。"],
+      "listen": "Readings 「三日」 = みっか, 「三階」 = さんがい"
+    },
+    {
+      "id": "s09_num_arabic",
+      "focus": "Numbers and units (Arabic digits in input = text normalisation)",
+      "text": "価格は1,280円で、重さは2.5キログラムです。",
+      "accept": ["価格は1,280円で、重さは2.5キログラムです。", "価格は1280円で、重さは2.5キログラムです。", "価格は1,280円で、重さは2.5kgです。", "価格は千二百八十円で、重さは二・五キログラムです。", "価格は千二百八十円で、重さは二点五キログラムです。"],
+      "listen": "Read as 「せんにひゃくはちじゅうえん」 and 「にてんご」? Whisper may turn a digit-by-digit misreading back into the number"
+    },
+    {
+      "id": "s10_date_arabic",
+      "focus": "Date (Arabic digits in input)",
+      "text": "次回の打ち合わせは、2026年11月4日の10時からです。",
+      "accept": ["次回の打ち合わせは、2026年11月4日の10時からです。", "次回の打ち合わせは、二〇二六年十一月四日の十時からです。", "次回の打ち合わせは、二千二十六年十一月四日の十時からです。"],
+      "listen": "Readings 「四日」 = よっか, 「十時」 = じゅうじ"
+    },
+    {
+      "id": "s11_loanword",
+      "focus": "Loanwords in katakana (with long vowels and geminates)",
+      "text": "スマートフォンのアプリをアップデートしたら、バッテリーの減りが早くなりました。",
+      "accept": ["スマートフォンのアプリをアップデートしたら、バッテリーの減りが早くなりました。"]
+    },
+    {
+      "id": "s12_codeswitch",
+      "focus": "Latin letters mixed in",
+      "text": "来週のミーティングで、新しいAIモデルのデモを見せます。",
+      "accept": ["来週のミーティングで、新しいAIモデルのデモを見せます。"],
+      "listen": "Is 「AI」 read as エーアイ?"
+    },
+    {
+      "id": "s13_long",
+      "focus": "Long sentence (~10 s)",
+      "text": "明日の関東地方は、朝のうちは雲が広がりますが、昼過ぎから次第に晴れるでしょう。夜は北寄りの風がやや強まる見込みです。",
+      "accept": ["明日の関東地方は、朝のうちは雲が広がりますが、昼過ぎから次第に晴れるでしょう。夜は北寄りの風がやや強まる見込みです。"]
+    },
+    {
+      "id": "s14_long_paragraph",
+      "focus": "Long-form consistency (~15 s: voice/rate drift, ending cut off)",
+      "text": "駅から歩いて五分のところに、小さなパン屋があります。毎朝七時に開店し、焼きたてのクロワッサンを求めて、近所の人たちが列を作ります。店主は、材料にこだわることが一番大切だと話していました。",
+      "accept": ["駅から歩いて五分のところに、小さなパン屋があります。毎朝七時に開店し、焼きたてのクロワッサンを求めて、近所の人たちが列を作ります。店主は、材料にこだわることが一番大切だと話していました。", "駅から歩いて5分のところに、小さなパン屋があります。毎朝7時に開店し、焼きたてのクロワッサンを求めて、近所の人たちが列を作ります。店主は、材料にこだわることが一番大切だと話していました。"],
+      "max_new_tokens": 360,
+      "listen": "Do voice and speaking rate stay stable, and is the whole text read to the end?"
+    }
+  ]
+}
