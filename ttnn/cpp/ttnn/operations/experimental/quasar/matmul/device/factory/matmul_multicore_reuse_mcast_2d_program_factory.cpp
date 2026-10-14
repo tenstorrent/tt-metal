@@ -26,9 +26,21 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+
+namespace {
+// Quasar has one NOC and no torus, so a multicast rectangle is always given low corner to high, whatever NOC
+// the WH/BH start/end swaps assumed (preferred_noc_for_dram_write returns NOC_1 on Quasar too; see #48552).
+void quasar_ascending_mcast_rect(tt::tt_metal::CoreCoord& start, tt::tt_metal::CoreCoord& end) {
+    const tt::tt_metal::CoreCoord lo{std::min(start.x, end.x), std::min(start.y, end.y)};
+    const tt::tt_metal::CoreCoord hi{std::max(start.x, end.x), std::max(start.y, end.y)};
+    start = lo;
+    end = hi;
+}
+}  // namespace
 
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
@@ -1196,6 +1208,10 @@ namespace reuse_mcast_optimized_helpers {
             std::swap(in0_mcast_sender, in1_mcast_sender);
             std::swap(in0_mcast_start, in1_mcast_end);
             std::swap(in0_mcast_end, in1_mcast_start);
+        }
+        if (device.arch() == tt::ARCH::QUASAR) {
+            quasar_ascending_mcast_rect(in0_mcast_start, in0_mcast_end);
+            quasar_ascending_mcast_rect(in1_mcast_start, in1_mcast_end);
         }
 
         // in0 sender
@@ -2669,6 +2685,10 @@ create_program_mcast_in0_in1(
             std::swap(in0_mcast_sender, in1_mcast_sender);
             std::swap(in0_mcast_start, in1_mcast_end);
             std::swap(in0_mcast_end, in1_mcast_start);
+        }
+        if (device.arch() == tt::ARCH::QUASAR) {
+            quasar_ascending_mcast_rect(in0_mcast_start, in0_mcast_end);
+            quasar_ascending_mcast_rect(in1_mcast_start, in1_mcast_end);
         }
 
         // in0 sender
@@ -4453,6 +4473,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             std::swap(in0_mcast_sender, in1_mcast_sender);
             std::swap(in0_mcast_start, in1_mcast_end);
             std::swap(in0_mcast_end, in1_mcast_start);
+        }
+        if (device.arch() == tt::ARCH::QUASAR) {
+            quasar_ascending_mcast_rect(in0_mcast_start, in0_mcast_end);
+            quasar_ascending_mcast_rect(in1_mcast_start, in1_mcast_end);
         }
 
         // in0 sender / receiver
