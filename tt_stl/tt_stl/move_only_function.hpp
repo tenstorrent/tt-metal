@@ -48,9 +48,6 @@ concept MoveOnlyFunctionTarget =
     !std::is_same_v<std::remove_cvref_t<F>, Self> && !is_in_place_type<std::remove_cvref_t<F>>::value &&
     std::is_invocable_r_v<R, std::decay_t<F>, Args...> && std::is_invocable_r_v<R, std::decay_t<F>&, Args...>;
 
-// std::move_only_function yields an empty wrapper for a null pointer or an empty std::function.
-// Only those two -- not a general emptiness probe; a new source type needs a case in
-// is_nullable_callable_v and here rather than falling through as engaged.
 template <typename T>
     requires is_nullable_callable_v<std::decay_t<T>>
 bool is_empty_callable(const T& f) noexcept {
