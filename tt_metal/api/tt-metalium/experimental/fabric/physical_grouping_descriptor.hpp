@@ -502,38 +502,28 @@ private:
     std::vector<std::pair<MeshId, std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>> extra_required_;
     std::vector<std::map<MeshId, std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>> yielded_footprints_;
 
-    // One rung of the solve ladder in next(): which relaxations are on and the SAT conflict budget to use.
-    struct SolveRung {
-        bool drop_host_cap;  // host-count cap not enforced
-        bool soft_seams;     // inter-mesh edges may be zero-link (allow_unmatched_target_edges)
-        int conflict_cap;    // per-solve CaDiCaL conflict budget (primary solve and soft-seam maximization probes)
-        const char* name;
-    };
-
-    // Live SAT session. next() is another model from it while the rung (validation mode, host cap, seam
-    // softness, conflict budget) is unchanged; it is rebuilt when the pools grow or the rung changes.
+    // Live SAT session. next() is another model from it when the mode and host cap still match.
+    // The placement session resets it when the pools grow; next() rebuilds only then, or when the cap changes.
     struct MasterSolve {
         explicit MasterSolve(SatPlacementEnumerationSession* owner) : owner_(owner) {}
 
         void reset() { session.reset(); }
 
-        bool matches(bool relaxed_mode, const SolveRung& rung) const {
-            return session != nullptr && relaxed == relaxed_mode && drop_host_cap == rung.drop_host_cap &&
-                   soft_seams == rung.soft_seams && conflict_cap == rung.conflict_cap;
+        // True when this session was encoded for this validation mode and host-cap setting.
+        bool matches(bool relaxed_mode, bool drop_cap) const {
+            return session != nullptr && relaxed == relaxed_mode && drop_host_cap == drop_cap;
         }
 
-        // Rebuild the session for this validation mode and rung. False when the seat constraints cannot be built.
-        bool restart(bool relaxed_mode, const SolveRung& rung);
+        // Rebuild the session for this mode and host cap. False when the seat constraints cannot be built.
+        bool restart(bool relaxed_mode, bool drop_cap);
 
-        // Another model from the live session for this rung (restarts only when the rung or pools changed).
-        MappingResult<MeshId, const Candidate*> next(const SolveRung& rung);
+        // Another model from the live session. Restarts only when there is no session or the mode or host cap differs.
+        MappingResult<MeshId, const Candidate*> next(bool drop_cap);
 
         void block_assigned(const AssignedMeshes& assigned);
 
         bool relaxed = false;
         bool drop_host_cap = false;
-        bool soft_seams = false;
-        int conflict_cap = 0;
 
     private:
         SatPlacementEnumerationSession* owner_ = nullptr;
