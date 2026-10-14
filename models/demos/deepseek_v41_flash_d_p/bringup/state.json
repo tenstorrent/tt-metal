@@ -1,4 +1,26 @@
 {
+ "G.s16384": {
+  "attempts": 0,
+  "duration_s": 1583.5,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-10-14T21:23:01"
+   }
+  ],
+  "last_run": "2026-10-14T21:23:01",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/G.s16384.log",
+  "metrics": {
+   "cpu_seconds": 1566.4,
+   "golden_chunks": 2,
+   "golden_hash_ok": 1,
+   "golden_layers": 8
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-14T20:56:37",
+  "status": "PASS"
+ },
  "G.s4096": {
   "attempts": 0,
   "duration_s": 1116.6,
