@@ -881,3 +881,28 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   mark the reported use `cited`, and cited ids missing from the report are kept as `cited_only` (counted as uses,
   `unreported`). The orchestrator prints `KNOWLEDGE CONTRADICTED <id>: <evidence>` when the step ends and records
   the ids on the agent run; the supervisor relays it to the owner at once.
+
+## F64 (2026-10-14): plan for the deployment box, fit to every box (steps 1-3: spec, plan check, prompts)
+
+- Owner: the target of every model is a Galaxy 8x4; QuietBox / LoudBox stand in for it during the bring-up. Modes:
+  partial (the first layers bring up the layout; on a smaller box scaled so each chip sees the Galaxy's per-chip
+  shapes, plus a real-size run for accuracy) and full (every layer, real dimensions, every end-to-end check, on any box
+  where it fits). Marko's GLM changes (split caches, head-split weights) were plan decisions made for 56k on 4 chips;
+  a 1M target on 32 chips forces them in the memory check.
+- Spec (core/spec.py): optional `deploy: {box, seq, chunk}`, `boxes: {name: {mesh, chip_dram_gb, ..., overrides}}`,
+  `run: {box, mode}`. The run's box becomes `box` and its overrides (spec keys) are merged, so every `box.*` reader is
+  unchanged; `raw` is the file (run forks copy it). Without these keys nothing changes (`raw is data`).
+- Plan (plan/boxes.py, memory.py): `roles` (role -> mesh axes, `sequence` required), placement `split` over a role,
+  state entries with total `heads` and `split_heads` / `split_seq`, per-box `dtypes` / activations under `boxes`, and
+  `conditions` (per-chip counts that pick a path: max / min / multiple_of, `else` = the other path). Per box:
+  scale per role, the scaled context (exact or not), full model weights and longest context, the run's layers scaled
+  (per chip as on the deployment box) and at real size, and each condition's path vs the deployment box's. Errors:
+  the deployment box does not fit at its context, a condition without `else` fails on the deployment or run box,
+  a `skip` drops decoder layers (the check applies the subset). check_plan writes results/plan_boxes.json, prints the
+  table, records deploy_fits / box_path_differences, and requires a `## Boxes` section in plan.md. The run's own
+  memory check keeps the run's layers.
+- Briefs: a "Boxes" section (run box and mode, the deployment box, every box); the plan role also gets how to plan for
+  the deployment box. Engineer rule 15: code runs on every listed box (no chip-count constants; sizes for every box;
+  per-chip path choices as the plan's conditions say).
+- Not yet (steps 4-6): the reduced model for scaled partial runs (reference hook, expert slice, goldens per scale), the
+  two ladder sets and full-mode gates, labels, results per box, dashboard, the `new` intake questions.

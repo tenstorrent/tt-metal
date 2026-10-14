@@ -360,6 +360,10 @@ def _new_from_prior(a):
     from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
 
     prior = Spec.load(CODE_ROOT / "models" / "demos" / a.prior / "bringup" / "spec.yaml")
+    if prior.has_deploy:
+        sys.exit(
+            f"{a.prior} already lists the boxes it runs on: add this box to its spec's boxes and set run.box, not a copy"
+        )
     mesh = [int(x) for x in a.mesh.split(",")] if a.mesh else prior.mesh
     model = a.model or f"{a.prior}_{mesh[0]}x{mesh[1]}"
     if model == a.prior:

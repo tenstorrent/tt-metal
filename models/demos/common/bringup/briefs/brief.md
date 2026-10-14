@@ -8,7 +8,7 @@ $title
 $role_text
 
 $rules
-$prior
+$prior$boxes
 $deferred
 $serving
 ## Read first
