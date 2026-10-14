@@ -54,19 +54,24 @@ def test_binary_nd_sharded_operands(device, inputs_nd_sharded, preallocated_outp
     assert torch.equal(ttnn.to_torch(out), expected)
 
 
-@pytest.mark.parametrize("explicit_memory_config", [False, True], ids=["inferred_output", "explicit_memory_config"])
-def test_binary_nd_sharded_on_second_sub_device(device, explicit_memory_config):
-    """The worker grid must come from the sub-device that holds the ND shard grid, not the first sub-device."""
+@pytest.mark.parametrize(
+    "inputs_nd_sharded, explicit_memory_config",
+    [(True, False), (True, True), (False, True)],
+    ids=["nd_inputs-inferred_output", "nd_inputs-explicit_memory_config", "interleaved_inputs-explicit_memory_config"],
+)
+def test_binary_nd_sharded_on_second_sub_device(device, inputs_nd_sharded, explicit_memory_config):
+    """The output keeps the ND grid on the second sub-device, and the op runs there instead of on the first."""
     sub_device_0 = ttnn.SubDevice([ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 3))})])
     sub_device_1 = ttnn.SubDevice([ttnn.CoreRangeSet({ttnn.CoreRange((4, 0), (5, 1))})])
     manager = device.create_sub_device_manager([sub_device_0, sub_device_1], 3200)
     device.load_sub_device_manager(manager)
     try:
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange((4, 0), (5, 1))})
         config = ttnn.MemoryConfig(
             ttnn.BufferType.L1,
             ttnn.NdShardSpec(
                 shard_shape=ttnn.Shape([1, 1, 64, 64]),
-                grid=ttnn.CoreRangeSet({ttnn.CoreRange((4, 0), (5, 1))}),
+                grid=grid,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
             ),
@@ -79,9 +84,12 @@ def test_binary_nd_sharded_on_second_sub_device(device, explicit_memory_config):
                 to_device(device, torch_a, ttnn.L1_MEMORY_CONFIG), to_device(device, torch_b, ttnn.L1_MEMORY_CONFIG)
             )
         )
-        a = to_device(device, torch_a, config)
-        b = to_device(device, torch_b, config)
+        input_config = config if inputs_nd_sharded else ttnn.L1_MEMORY_CONFIG
+        a = to_device(device, torch_a, input_config)
+        b = to_device(device, torch_b, input_config)
         out = ttnn.add(a, b, memory_config=config) if explicit_memory_config else ttnn.add(a, b)
+        assert out.memory_config().shard_spec is None
+        assert out.memory_config().nd_shard_spec.grid == grid
         assert torch.equal(ttnn.to_torch(out), expected)
     finally:
         device.clear_loaded_sub_device_manager()

@@ -404,29 +404,6 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
                 "RHS operand must be either sharded or interleaved");
         }
     }
-
-    // Circular buffers and the subtile fill helpers are sized for a 32x32 tile.
-    auto validate_tile_shape = [](const Tensor& tensor, const char* name) {
-        if (tensor.layout() != Layout::TILE) {
-            return;
-        }
-        const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
-        TT_FATAL(
-            tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
-            "Eltwise binary supports only {}x{} tiles, but {} has a {}x{} tile",
-            tt::constants::TILE_HEIGHT,
-            tt::constants::TILE_WIDTH,
-            name,
-            tile_shape[0],
-            tile_shape[1]);
-    };
-    validate_tile_shape(input_tensor_a, "input tensor A");
-    if (input_tensor_b.has_value()) {
-        validate_tile_shape(*input_tensor_b, "input tensor B");
-    }
-    if (output_tensor.has_value()) {
-        validate_tile_shape(*output_tensor, "the output tensor");
-    }
 }
 
 void BinaryNgDeviceOperation::validate_on_program_cache_hit(
@@ -481,6 +458,30 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
             std::isfinite(attributes.atol) && attributes.atol >= 0.0f,
             "isclose: atol must be a finite, non-negative value, got {}",
             attributes.atol);
+    }
+
+    // Circular buffers and the subtile fill helpers are sized for a 32x32 tile. Checked here because the
+    // program hash does not include the preallocated output's tile.
+    auto validate_tile_shape = [](const Tensor& tensor, const char* name) {
+        if (tensor.layout() != Layout::TILE) {
+            return;
+        }
+        const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+        TT_FATAL(
+            tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
+            "Eltwise binary supports only {}x{} tiles, but {} has a {}x{} tile",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            name,
+            tile_shape[0],
+            tile_shape[1]);
+    };
+    validate_tile_shape(input_tensor_a, "input tensor A");
+    if (input_tensor_b.has_value()) {
+        validate_tile_shape(*input_tensor_b, "input tensor B");
+    }
+    if (output_tensor.has_value()) {
+        validate_tile_shape(*output_tensor, "the output tensor");
     }
 }
 
@@ -696,8 +697,10 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         }
     } else if (memory_config.has_value()) {
         mem_config_actual = *memory_config;
-        // If the provided memory config is sharded but doesn't have a shard spec, inherit from input
-        if (mem_config_actual.is_sharded() && !mem_config_actual.shard_spec().has_value()) {
+        // If the provided memory config is sharded but doesn't have a shard spec, inherit from input.
+        // An ND_SHARDED config has no 2D shard spec either, but already carries its own geometry.
+        if (mem_config_actual.is_sharded() && !mem_config_actual.shard_spec().has_value() &&
+            !mem_config_actual.nd_shard_spec().has_value()) {
             if (input_tensor_a.is_sharded()) {
                 mem_config_actual =
                     operations::binary_ng::compute_mem_config_actual(input_tensor_a, input_tensor_b.logical_shape());

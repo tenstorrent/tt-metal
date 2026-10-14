@@ -223,3 +223,16 @@ def test_binary_rejects_non_default_tile(device, expect_error, operand, tile_sha
     output = to_device(small_tile) if operand == "output" else None
     with expect_error(RuntimeError, "supports only 32x32 tiles"):
         ttnn.add(tensor_a, tensor_b, output_tensor=output)
+
+
+def test_binary_rejects_non_default_output_tile_on_cache_hit(device, expect_error):
+    """The program hash ignores the preallocated output's tile, so the check must also run on a cache hit."""
+    torch_input = torch.rand(TENSOR_SHAPE, dtype=torch.bfloat16)
+
+    def to_device(tile=None):
+        return ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
+
+    tensor_a, tensor_b = to_device(), to_device()
+    ttnn.add(tensor_a, tensor_b, output_tensor=to_device())
+    with expect_error(RuntimeError, "supports only 32x32 tiles"):
+        ttnn.add(tensor_a, tensor_b, output_tensor=to_device(ttnn.Tile((16, 32))))
