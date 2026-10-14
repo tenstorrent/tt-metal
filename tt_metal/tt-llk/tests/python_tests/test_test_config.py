@@ -407,3 +407,44 @@ def test_tile_loop_build_puts_the_harness_after_the_kernel():
             "\tret\n\t.size\t_Z10run", ".balign 512\n\tret\n\t.size\t_Z10run"
         )
     )
+
+
+# run_kernel as GCC lays it out: INIT's cold block (.L4) between the window's code and the loop's out of line block (.L5)
+_KERNEL_TAIL_ASM = """\t.section\t.text.run_kernel,"ax",@progbits
+\t.align\t2
+\t.type\t_Z10run_kernelRK13RuntimeParams, @function
+_Z10run_kernelRK13RuntimeParams:
+\tbeqz\ta4,.L4
+.L6:
+ #APP
+\tllk_park 1, 0, 0, 1024, 0
+ #NO_APP
+.L2:
+\tbnez\ta0,.L5
+\taddi\ta0,a0,-1
+.L3:
+\tbnez\ta1,.L2
+ #APP
+\tllk_park 0, 0, 0, 1024, 0
+ #NO_APP
+\taddi\tsp,sp,16
+\tjr\tra
+.L4:
+\tli\ta2,1
+\tj\t.L6
+.L5:
+\tli\ta3,2
+\tj\t.L3
+\t.size\t_Z10run_kernelRK13RuntimeParams, .-_Z10run_kernelRK13RuntimeParams
+"""
+
+
+def test_tile_loop_window_blocks_follow_the_window_and_the_rest_comes_after():
+    from helpers.test_config import _window_chains_first
+
+    lines = _window_chains_first(_KERNEL_TAIL_ASM).split("\n")
+    at = {line.strip(): i for i, line in enumerate(lines)}
+    # the code after the closing park becomes a chain of its own, after the loop's out of line block
+    assert lines[at["llk_park 0, 0, 0, 1024, 0"] + 2] == "\tj\t.Lllk_after_park0"
+    assert lines[at["llk_park 0, 0, 0, 1024, 0"] + 3] == ".L5:"
+    assert at[".L5:"] < at[".Lllk_after_park0:"] < at["jr\tra"] < at[".L4:"]
