@@ -14,6 +14,12 @@ bool is_native_transpose_sharding(
     const tt::tt_metal::TensorSpec& input_spec,
     const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config = std::nullopt);
 
+// MemoryConfig's public constructors always reset experimental per-core-allocation /
+// range-lockstep-allocation state to defaults, so any hand-reconstruction of a MemoryConfig (to
+// swap buffer_type/shard geometry while otherwise preserving it) must re-apply them explicitly.
+// Shared by transpose.cpp and the device op so a new allocation mode only has to be added once.
+void copy_experimental_allocation_flags(const tt::tt_metal::MemoryConfig& source, tt::tt_metal::MemoryConfig& dest);
+
 // Scale shard_spec from `from_shape` to `to_shape`; nullopt when scaling isn't exact.
 std::optional<tt::tt_metal::ShardSpec> adjust_shard_spec_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);

@@ -15,17 +15,17 @@ export HF_HUB_OFFLINE=1               # use the local HF cache only
 | ------ | ------------- | ------ |
 | 1x P150 | `P150` | Qwen3.5-9B |
 | 4x P150 | `P150x4` | Qwen3.5-27B, Qwen3.6-27B, Qwen3.8-27B, Qwen3.6-35B-A3B |
-| 8x P150 | `P150x8` | Qwen3.6-27B |
+| 8x P150 | `P150x8` | Qwen3.6-27B, Qwen3.8-27B |
 
 ## Run the e2e demo
 
 ```bash
 # Single P150 (9B): single-user only
 MESH_DEVICE=P150 HF_MODEL=Qwen/Qwen3.5-9B \
-  pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128"
+  pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128 and not traced_128k"
 
 # P150x4 / P150x8: single user, any context length
-pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128"   # also traced_4k ... traced_64k, traced_128k, traced_256k
+pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128 and not traced_128k"   # also traced_4k ... traced_64k, traced_128k, traced_256k
 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced"       # all single-user lengths
 
 # P150x4 / P150x8: batched
@@ -36,6 +36,8 @@ pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "batched_128_b32
 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "determinism_128"
 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "accuracy_512"
 ```
+
+On Galaxy (`P150x8`), prefix pytest with `TT_VISIBLE_DEVICES=1,2,3,4,5,6,7,8`.
 
 Prompts of 8k and longer download a public-domain text on first run (cached in `demo/sample_prompts/.context_cache`).
 
@@ -58,6 +60,7 @@ Plain decode is also used on any device when `QWEN36_SPEC=0`, the checkpoint has
 | `QWEN36_SPEC` | `1` | `0` forces plain decode (baseline) |
 | `QWEN36_SPEC_DRAFT_LEN` | auto (see above) | Override K (3, 7 or 11; batch * (K+1) must be <= 32) |
 | `QWEN36_SPEC_BATCH_DISTINCT` | `0` | `1`: each batched user gets a different prompt (skips the identical-output check) |
+| `QWEN36_SPEC_TIMING` | `0` | `1` prints per-phase timing lines |
 | `QWEN35_TEMP` | `0` (greedy) | Temperature; > 0 samples (speculation stays on) |
 | `QWEN35_TOP_K` / `QWEN35_TOP_P` | `0` / `1.0` | Top-k / top-p when sampling |
 | `QWEN35_SEED` | random | Sampling seed for speculative decode |

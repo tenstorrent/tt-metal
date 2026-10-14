@@ -178,8 +178,6 @@ class Qwen36DecoderLayer:
         gdn_collect=False,
         gdn_recurrent=False,
         decode_cfg=False,
-        exact_kv_pos=None,
-        exact_kv_pt=None,
         alias_kv_write=False,
         spec_verify_mode=False,
         spec_page_table=None,
@@ -192,14 +190,11 @@ class Qwen36DecoderLayer:
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
         # paths. Fail fast instead.
         assert mode in ("decode", "prefill"), f"mode must be 'decode' or 'prefill', got {mode!r}"
-        # n_users / state_blk_idx / conv_sel: the MULTI-USER speculative verify. Its bucket rows are
-        # n_users users x T = rows // n_users candidates each, USER-MAJOR (row u*T + j). GDN reshapes
-        # them to [n_users, T, C] and reads its per-user initial state / conv window through the two
-        # shared device selectors (state_blk_idx, conv_sel — the deferred commit); full attention
-        # folds them into per-user SDPA groups (spec_n_users) AND groups the aliased KV write by
-        # candidate index (T calls of n_users rows instead of n_users*T single-row calls).
-        # n_users=1 is the single-user path, unchanged.
-        # spec_user_page_table: optional [n_users, nb] per-user block table for that grouped write.
+        # n_users / state_blk_idx / conv_sel: multi-user speculative verify. Bucket rows are n_users
+        # users x T = rows // n_users candidates, user-major (row u*T + j). GDN reshapes them to
+        # [n_users, T, C] and reads each user's initial state / conv window through the shared device
+        # selectors state_blk_idx / conv_sel; full attention groups the SDPA and the aliased KV write
+        # per user (spec_n_users, spec_user_page_table).
         # decode_cfg: run a SHORT prefill-mode forward (spec verify, <=TILE_SIZE rows) with the DECODE
         # matmul/norm configuration. Every matmul in the stack already selects decode-vs-prefill purely
         # on `x.shape[-2] <= TILE_SIZE`, so at a 32-row bucket they all pick the DRAM-sharded decode
@@ -247,17 +242,13 @@ class Qwen36DecoderLayer:
                             chunk_page_table=chunk_page_table,
                             chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0,
                             chunk_start_idx_tensor=chunk_start_idx_tensor,
-                            exact_kv_pos=exact_kv_pos,
-                            exact_kv_pt=exact_kv_pt,
                         )
                     else:
                         attn_output = self.attention.forward_prefill(attn_input, cos, sin)
                 else:
                     # alias_kv_write: the B rows are not independent users (spec verify's candidates
-                    # as pseudo-users), so the KV write must not be one batched call — see
-                    # TPAttention._write_kv_aliased. At n_users > 1 it groups by candidate index
-                    # (T calls of n_users rows); spec_user_page_table is the optional pre-staged
-                    # [n_users, nb] per-user table that saves the group's page-table slice.
+                    # as pseudo-users), so the KV write cannot be one batched call — see
+                    # TPAttention._write_kv_aliased.
                     # spec_verify_mode/spec_page_table: additionally fold those rows into ONE SDPA
                     # batch row so the KV cache is read once per layer (same place).
                     attn_output = self.attention.forward_decode(

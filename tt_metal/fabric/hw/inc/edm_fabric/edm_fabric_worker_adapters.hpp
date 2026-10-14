@@ -66,7 +66,8 @@ namespace fabric_detail{
 template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS, uint8_t VC_ID>
 struct WorkerToFabricEdmSenderBase {
     static_assert(VC_ID == 0 || VC_ID == 2, "Only VC_ID 0 and 2 are supported");
-    // VC0 uses stream 22 (sender_channel_0 free slots); VC2 uses stream 30.
+    // VC0 reads the pinned sender-channel-0 free-slots stream from connection_interface (its value
+    // is the single authority); VC2 reads the aliased VC2 stream.
     static constexpr uint32_t STREAM_ID =
         VC_ID == 2 ? tt::tt_fabric::connection_interface::vc2_sender_free_slots_stream_id
                    : tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id;

@@ -62,7 +62,7 @@ jobs:
   gate:
     name: "Gate ${{ matrix.arch }} (speed of light)"
     needs: llk-perf-tests
-    if: ${{ always() && github.event_name == 'schedule' }}
+    if: ${{ !cancelled() && github.event_name == 'schedule' }}
     strategy:
       fail-fast: false
       matrix:

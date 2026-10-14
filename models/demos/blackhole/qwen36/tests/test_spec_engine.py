@@ -248,7 +248,7 @@ def test_spec_engine_serves_many_requests_with_one_capture(mesh_device):
         ("short", short1),
         ("2148", pool[200 : 200 + 2148]),
         ("4096", pool[:4096]),
-        ("stop", pool[300 : 300 + 77]),
+        ("stop", None),  # window chosen below
         ("short2", pool[50 : 50 + 100]),
         ("repeat", short1),
     ]
@@ -258,15 +258,27 @@ def test_spec_engine_serves_many_requests_with_one_capture(mesh_device):
 
     # --- plain references first, each on its own page table ----------------------------------- #
     refs = {}
+    # Stop token: first-occurrence index >= 2 where the plain path is confident, so it must stop there.
+    # Pick the first prompt window that has such an index.
+    cand = []
+    for off in range(300, 300 + 8 * 100, 100):
+        window = pool[off : off + 77]
+        assert len(window) == 77, f"pool too small for stop window at {off}"
+        sref, sgaps = _plain_greedy(model, kv_shape, window, tables[3], MAX_NEW)
+        cand = [i for i in range(2, MAX_NEW) if sref[i] not in sref[:i] and min(sgaps[: i + 1]) >= NEAR_TIE_GAP]
+        if cand:
+            reqs[3] = ("stop", window)
+            refs["stop"] = (sref, sgaps)
+            break
+    assert cand, "no stop prompt window with a confident stop token"
     for i, (name, prompt) in enumerate(reqs):
+        if name == "stop":
+            continue
         if name == "repeat":
             refs[name] = refs["short"]
             continue
         refs[name] = _plain_greedy(model, kv_shape, prompt, tables[i], MAX_NEW)
-    # Stop token: first-occurrence index >= 2 where the plain path is confident, so it must stop there.
-    sref, sgaps = refs["stop"]
-    cand = [i for i in range(2, MAX_NEW) if sref[i] not in sref[:i] and min(sgaps[: i + 1]) >= NEAR_TIE_GAP]
-    stop_idx = cand[0] if cand else 2
+    stop_idx = cand[0]
     stop_tok = sref[stop_idx]
     stop_idx = sref.index(stop_tok)
     logger.info(f"[reuse] stop token {stop_tok} expected at index {stop_idx}")

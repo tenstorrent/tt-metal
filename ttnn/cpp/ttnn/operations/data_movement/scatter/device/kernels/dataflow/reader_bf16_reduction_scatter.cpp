@@ -47,7 +47,7 @@ FORCE_INLINE void scatter_along_chunk(
     const DataflowBuffer& output_dfb,
     const Scratchpad<volatile float>& fp32_temp,
     const uint32_t& input_stick_size,
-    const index_type& input_offset,
+    const uint32_t& input_offset,
     const uint32_t& input_chunk_size,
     const uint32_t& index_chunk_size,
     const ScatterReductionType& scatter_reduction_type = ScatterReductionType::INVALID) {
@@ -75,7 +75,7 @@ FORCE_INLINE void scatter_along_chunk(
             continue;
         }
         volatile uint16_t& source_value = source_l1_read_ptr[index_in_index_chunk];
-        const index_type& output_index = index_value - input_offset;
+        const uint32_t& output_index = index_value - input_offset;
         fp32_temp[output_index] = perform_reduction(fp32_temp[output_index], source_value, scatter_reduction_type);
     }
 }

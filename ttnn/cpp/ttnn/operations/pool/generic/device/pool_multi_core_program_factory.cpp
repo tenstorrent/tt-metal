@@ -20,6 +20,7 @@
 #include "ttnn/tensor/storage.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/math.hpp>
 #include <algorithm>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 

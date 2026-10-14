@@ -224,3 +224,57 @@ def test_one_change_on_many_points_is_one_finding():
     text = build_text("regressed", rows, _CTX)
     assert "4 point(s) regressed, in 1 finding(s)" in text
     assert "×4 points" in text
+
+
+def test_the_merge_gate_names_itself_and_carries_the_note():
+    ctx = {**_CTX, "gate_name": "LLK perf merge gate", "note": "Stale baseline."}
+    for status, rows in (("clean", []), ("skipped", []), ("regressed", [_ROW])):
+        text = build_text(status, rows, ctx)
+        assert "LLK perf merge gate" in text.splitlines()[0]
+        assert ":hourglass: Stale baseline." in text
+
+
+def test_no_note_adds_no_line():
+    text = build_text("clean", [], _CTX)
+    assert "*LLK perf gate passed*" in text and ":hourglass:" not in text
+
+
+def test_a_run_without_a_pr_names_what_started_it():
+    ctx = {**_CTX, "pr_number": "", "trigger": "manual run on some/branch"}
+    assert (
+        "(manual run on some/branch)" in build_text("skipped", [], ctx).splitlines()[0]
+    )
+    assert "(nightly)" in build_text("skipped", [], {**_CTX, "pr_number": ""})
+
+
+def _post(tmp_path, monkeypatch, exit_code, have_baseline="true", *extra):
+    flag = tmp_path / "have_baseline.txt"
+    flag.write_text(have_baseline)
+    output = tmp_path / "out.txt"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    args = [
+        "--have-baseline",
+        str(flag),
+        "--report",
+        str(flag),
+        "--exit-code",
+        exit_code,
+    ]
+    main(
+        args + ["--channel", "C0TEST", "--out", str(tmp_path / "payload.json"), *extra]
+    )
+    return output.read_text()
+
+
+def test_post_pass_false_keeps_a_pass_out_of_slack(tmp_path, monkeypatch):
+    out = _post(tmp_path, monkeypatch, "0", "true", "--post-pass", "false")
+    assert "status=clean" in out and "should_post=false" in out
+
+
+def test_post_pass_false_still_posts_a_regression_and_a_skip(tmp_path, monkeypatch):
+    assert "should_post=true" in _post(
+        tmp_path, monkeypatch, "1", "true", "--post-pass", "false"
+    )
+    assert "should_post=true" in _post(
+        tmp_path, monkeypatch, "0", "false", "--post-pass", "false"
+    )

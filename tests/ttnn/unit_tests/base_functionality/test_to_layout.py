@@ -459,6 +459,14 @@ def test_int_untilize(device, batch_size, sentence_size):
     assert_equal(torch_input_tensor, output_torch)
 
 
+def test_to_layout_host_same_layout_with_memory_config():
+    torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+    host_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    output = ttnn.to_layout(host_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert_equal(torch_input, ttnn.to_torch(output))
+
+
 @pytest.mark.parametrize("shape", [(32, 32), (64, 128), (9, 256)])
 def test_int8_to_layout_roundtrip_on_host(shape):
     torch.manual_seed(0)

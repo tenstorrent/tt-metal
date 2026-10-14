@@ -157,6 +157,14 @@ unit_tests_legacy:
     config: 2x3_DISPATCH
     back2back: true
 
+  - filter: "*TraceBmm"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarTraceDFBSizeOverride"
+    config: 2x3_DISPATCH
+    back2back: true
+
   - filter: "*EventSynchronize"
     config: 2x3_DISPATCH
     back2back: true

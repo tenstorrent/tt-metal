@@ -306,6 +306,16 @@ from ttnn.types import (
     FaceGeometry,
     compute_program_descriptor_hash,
     TensorAccessorArgs,
+    attach_absent_mcast,
+    TransferMode,
+    Mcast,
+    McastCoreOrder,
+    McastSenderPlacement,
+    McastFixedSenderConfig,
+    McastExplicitFixedSenderConfig,
+    McastRotatingSenderConfig,
+    McastConfig,
+    McastDataReady,
 )
 
 from ttnn.device import (
@@ -441,7 +451,9 @@ if "ttnn.experimental" in sys.modules:
                 sub_submodule = importlib.import_module(full_internal_name)
                 sys.modules[full_external_name] = sub_submodule
 
-from ttnn.operations.unary import SigmoidMode, GeluVariant
+# ttnn.operations registers its submodules under bare names, so importing ttnn.operations.unary here
+# would execute unary.py a second time and let its goldens override later registrations.
+from ttnn._ttnn.operations.unary import SigmoidMode, GeluVariant
 
 divide = ttnn.div
 sub = ttnn.subtract
@@ -500,7 +512,6 @@ from ttnn.operations.normalization import (
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
     create_group_norm_weight_bias_rm,
-    create_group_norm_reciprocals,
     create_layer_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
     determine_expected_group_norm_dram_grid_size,
@@ -526,6 +537,7 @@ from ttnn.operations.reduction import (
 from ttnn.operations.ccl import (
     Topology,
     get_usable_topology,
+    get_num_links,
     DispatchAlgorithm,
     WorkerMode,
     MMSignalAggregatorMode,
@@ -599,6 +611,7 @@ from ttnn.operations.transformer import (
     ChunkGdnMonoProgramConfig,
     ChunkGdnPhasedProgramConfig,
     ChunkGdnFusedProgramConfig,
+    ChunkGdnWyInverse,
 )
 
 transformer.SparseKVFormat = SparseKVFormat

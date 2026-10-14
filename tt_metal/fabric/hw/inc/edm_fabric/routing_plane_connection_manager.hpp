@@ -14,9 +14,13 @@ namespace tt::tt_fabric {
 
 // Determine maximum number of routing-plane connections if not provided by the build.
 #ifndef TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS
-#if defined(FABRIC_2D)
-#define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 4
-#else  // 1D
+// The manager holds at most one logical connection per output direction. When any local Blackhole
+// mesh uses express routing, all local workers compile for the five-direction superset; a worker on
+// a non-express mesh simply leaves the Z slot unused. Parallel lanes to one neighbor are routing-plane
+// realizations, not additional logical connections.
+#if defined(FABRIC_EXPRESS_ENABLED) && defined(ARCH_BLACKHOLE)
+#define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 5
+#else
 #define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 4
 // TODO: 3D, dragonfly and custom etc.
 #endif
@@ -35,9 +39,7 @@ public:
         BUILD_AND_OPEN_CONNECTION_START_ONLY,
     };
 
-    // These field for FABRIC_2D are used by fabric_set_unicast_route
 #if defined(FABRIC_2D)
-    uint32_t ew_dim;
     uint16_t my_mesh_id;
     uint16_t my_chip_id;
 #endif
@@ -73,7 +75,6 @@ public:
                 conn.sender.open_start<false, false, WORKER_HANDSHAKE_NOC>();
             }
         }
-
         mgr.num_active_ = num_connections_to_build;
 
         if constexpr (connect && wait_for_connection_open_finish) {
@@ -83,7 +84,6 @@ public:
         }
 
 #if defined(FABRIC_2D)
-        mgr.ew_dim = get_arg_val<uint32_t>(arg_idx++);
         mgr.my_chip_id = get_arg_val<uint32_t>(arg_idx++);
         mgr.my_mesh_id = get_arg_val<uint32_t>(arg_idx++);
         for (uint32_t i = 0; i < num_connections_to_build; i++) {
@@ -114,15 +114,6 @@ public:
     inline void for_each(Fn&& fn) {
         for (uint32_t i = 0; i < num_active_; ++i) {
             fn(slots_[i].sender, i, slots_[i].tag);
-        }
-    }
-
-    template <typename Fn>
-    inline void for_each_with_tag(uint32_t tag, Fn&& fn) {
-        for (uint32_t i = 0; i < num_active_; ++i) {
-            if (slots_[i].tag == tag) {
-                fn(slots_[i].sender, i, slots_[i].tag);
-            }
         }
     }
 

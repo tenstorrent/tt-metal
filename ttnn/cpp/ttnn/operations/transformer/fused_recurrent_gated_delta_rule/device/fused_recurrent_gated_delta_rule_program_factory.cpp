@@ -41,8 +41,6 @@ constexpr uint32_t sd = tt::CBIndex::c_10;        // [K,V]  decayed state (S*dec
 constexpr uint32_t vread = tt::CBIndex::c_11;     // [1,V]  k . S'
 constexpr uint32_t u = tt::CBIndex::c_12;         // [1,V]  beta*(v - vread)
 constexpr uint32_t kcol = tt::CBIndex::c_13;      // [K,1]  transpose(k)
-constexpr uint32_t supd = tt::CBIndex::c_14;      // [K,V]  k^T (x) u
-constexpr uint32_t delta = tt::CBIndex::c_15;     // [1,V]  v - vread
 constexpr uint32_t blkidx = tt::CBIndex::c_16;    // [BH]   uint32 scratch, ring mode only
 }  // namespace cb
 
@@ -55,13 +53,10 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
     const uint32_t per_token = attrs.output_per_token_state ? 1u : 0u;
-    // Ring mode: each core picks its initial-state block out of `initial_state` by index, and the
-    // per-token states are written back into that same buffer (outputs[1] aliases it).
     const bool ring = in.initial_state_block_idx.has_value();
     const uint32_t use_blk_idx = ring ? 1u : 0u;
     Buffer* blk_buf = ring ? in.initial_state_block_idx->buffer() : nullptr;
-    // One ROW_MAJOR page holds the whole [BH] index vector; read it whole (the aligned page size,
-    // not the logical one, so the DRAM read stays page-aligned).
+    // The [BH] index vector is one ROW_MAJOR page; the aligned page size keeps the DRAM read aligned.
     const uint32_t blk_page_bytes = ring ? blk_buf->aligned_page_size() : 0u;
 
     const uint32_t kv = Kt * Vt;
@@ -104,8 +99,6 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     add_cb(cb::vread, Vt);
     add_cb(cb::u, Vt);
     add_cb(cb::kcol, Kt);
-    add_cb(cb::supd, kv);
-    add_cb(cb::delta, Vt);
     if (ring) {
         const tt::DataFormat idx_fmt = datatype_to_dataformat_converter(in.initial_state_block_idx->dtype());
         desc.cbs.push_back(CBDescriptor{
@@ -176,7 +169,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     for (uint32_t h = 0; h < BH; h++) {
         const auto& core = head_cores[h];
         reader.emplace_runtime_args(
-            core, {h, T, q_buf, k_buf, v_buf, decay_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes});
+            core, {h, T, q_buf, k_buf, v_buf, decay_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes, BH});
         // BH is needed by the writer to place per-token state token-major (page t*BH + h).
         writer.emplace_runtime_args(core, {h, T, o_buf, st_buf, BH});
         compute.emplace_runtime_args(core, {T});

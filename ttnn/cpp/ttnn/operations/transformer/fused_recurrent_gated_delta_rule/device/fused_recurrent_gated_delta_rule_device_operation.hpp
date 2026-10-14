@@ -17,10 +17,6 @@
 namespace ttnn::prim {
 
 // Device operation returning {output o, state}. `output_per_token_state` widens state to per-token.
-//
-// Ring mode (initial_state_block_idx present): state output IS `initial_state` (in place) and each
-// core picks its initial-state block from that ring by index. See the contract on
-// FusedRecurrentGatedDeltaRuleInputs.
 struct FusedRecurrentGatedDeltaRuleDeviceOperation {
     using operation_attributes_t = FusedRecurrentGatedDeltaRuleParams;
     using tensor_args_t = FusedRecurrentGatedDeltaRuleInputs;

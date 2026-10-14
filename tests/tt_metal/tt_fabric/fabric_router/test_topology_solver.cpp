@@ -3601,6 +3601,180 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_HardCapRespect
     }
 }
 
+// Globals in NO host group (the master placement's cross-host *_hostedge seats) raise no occupancy literal, so a
+// capped solve used to satisfy "at most k groups" vacuously by choosing them: a k=1 solve on a 4-galaxy quad returned
+// two cross-host seats over three hosts. Under an armed HARD cap such globals must be unusable, for both engines, on
+// the single solve and on every enumerated mapping.
+static AdjacencyGraph<TestGlobalNode> make_disconnected_global_graph_with_unlabelled(
+    size_t n_labelled, const std::vector<TestGlobalNode>& unlabelled) {
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap adj;
+    for (size_t i = 0; i < n_labelled; ++i) {
+        adj[static_cast<TestGlobalNode>(100 + i)] = {};
+    }
+    for (TestGlobalNode g : unlabelled) {
+        adj[g] = {};
+    }
+    return AdjacencyGraph<TestGlobalNode>(adj);
+}
+
+static size_t count_unlabelled_used(
+    const MappingResult<TestTargetNode, TestGlobalNode>& result,
+    const std::vector<std::set<TestGlobalNode>>& global_groups) {
+    size_t n = 0;
+    for (const auto& [t, g] : result.target_to_global) {
+        bool labelled = false;
+        for (const auto& grp : global_groups) {
+            if (grp.contains(g)) {
+                labelled = true;
+                break;
+            }
+        }
+        if (!labelled) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_UnlabelledGlobalsExcludedUnderCap) {
+    constexpr size_t kNumTargets = 2, kNumGroups = 4, kGroupSize = 2, kCap = 1, kMaxSolutions = 50;
+    const std::vector<TestGlobalNode> unlabelled{900, 901};
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph_with_unlabelled(kNumGroups * kGroupSize, unlabelled);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* name = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+        auto single = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        ASSERT_TRUE(single.success) << name << ": " << single.error_message;
+        EXPECT_EQ(count_unlabelled_used(single, host_groups), 0u)
+            << name << ": a global in no host group must not be chosen while the HARD cap is armed";
+        EXPECT_EQ(count_host_groups_used(single, host_groups), kCap) << name;
+
+        auto results = solve_topology_mapping_n(
+            target_graph,
+            global_graph,
+            constraints,
+            kMaxSolutions,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine);
+        ASSERT_FALSE(results.empty()) << name;
+        for (size_t i = 0; i < results.size(); ++i) {
+            ASSERT_TRUE(results[i].success) << name << " mapping " << i;
+            EXPECT_EQ(count_unlabelled_used(results[i], host_groups), 0u) << name << " mapping " << i;
+            EXPECT_EQ(count_host_groups_used(results[i], host_groups), kCap) << name << " mapping " << i;
+        }
+    }
+}
+
+// The cardinality clause is not binding when at most k labelled groups are reachable (here: ONE group, k=1), but
+// the unlabelled exclusion must still be emitted: an unlabelled global would otherwise slip past the cap exactly
+// when the cap looks trivially satisfied. Both engines must refuse it.
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_CapNotBindingStillExcludesUnlabelled) {
+    constexpr size_t kNumTargets = 2, kNumGroups = 1, kGroupSize = 2, kCap = 1, kMaxSolutions = 50;
+    const std::vector<TestGlobalNode> unlabelled{900, 901};
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph_with_unlabelled(kNumGroups * kGroupSize, unlabelled);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* name = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+        auto single = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        ASSERT_TRUE(single.success) << name << ": " << single.error_message;
+        EXPECT_EQ(count_unlabelled_used(single, host_groups), 0u)
+            << name << ": the cap is not binding with one reachable group, but unlabelled globals stay excluded";
+        EXPECT_EQ(count_host_groups_used(single, host_groups), kCap) << name;
+
+        auto results = solve_topology_mapping_n(
+            target_graph,
+            global_graph,
+            constraints,
+            kMaxSolutions,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            engine);
+        ASSERT_FALSE(results.empty()) << name;
+        for (size_t i = 0; i < results.size(); ++i) {
+            ASSERT_TRUE(results[i].success) << name << " mapping " << i;
+            EXPECT_EQ(count_unlabelled_used(results[i], host_groups), 0u) << name << " mapping " << i;
+        }
+    }
+}
+
+// When a target's only candidates are unlabelled, the capped solve must FAIL rather than place it: that failure is
+// the signal MultiMeshSolutionEnumerator / the SAT placement session use to drop the cap and re-admit such globals.
+TEST_F(TopologySolverTest, SolveTopologyMapping_MaxSameRankGroups_OnlyUnlabelledCandidatesInfeasibleUnderCap) {
+    constexpr size_t kNumTargets = 2, kNumGroups = 4, kGroupSize = 2, kCap = 1;
+    const std::vector<TestGlobalNode> unlabelled{900, 901};
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph_with_unlabelled(kNumGroups * kGroupSize, unlabelled);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    ASSERT_TRUE(constraints.add_required_constraint(TestTargetNode(1), std::set<TestGlobalNode>{900, 901}));
+    constraints.set_max_same_rank_groups_used(kCap);
+
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        const char* name = engine == TopologyMappingSolverEngine::Sat ? "SAT" : "DFS";
+        auto result = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        EXPECT_FALSE(result.success)
+            << name << ": target 1 can only take an unlabelled global, which the armed HARD cap must refuse";
+    }
+
+    // Without the cap the same instance places (the drop-cap path the enumerator falls back to).
+    constraints.set_max_same_rank_groups_used(0);
+    auto uncapped = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(uncapped.success) << uncapped.error_message;
+    EXPECT_TRUE(uncapped.target_to_global.at(1) == 900 || uncapped.target_to_global.at(1) == 901)
+        << "without the cap target 1 takes one of its (unlabelled) required globals";
+    EXPECT_GE(count_unlabelled_used(uncapped, host_groups), 1u);
+}
+
+// SOFT minimize (no HARD cap) shares the at-most-k encoding, so while its packing assumption holds it must also
+// prefer labelled globals over unlabelled ones instead of scoring a cross-host seat as "zero hosts".
+TEST_F(TopologySolverTest, SolveTopologyMapping_MinimizeSameRankGroups_SoftPrefersLabelledGlobals) {
+    constexpr size_t kNumTargets = 2, kNumGroups = 4, kGroupSize = 2;
+    const std::vector<TestGlobalNode> unlabelled{900, 901};
+    auto target_graph = make_disconnected_target_graph(kNumTargets);
+    auto global_graph = make_disconnected_global_graph_with_unlabelled(kNumGroups * kGroupSize, unlabelled);
+    auto host_groups = make_host_groups(kNumGroups, kGroupSize);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, host_groups));
+    constraints.set_minimize_same_rank_groups_used(true);
+
+    auto result = solve_topology_mapping(
+        target_graph,
+        global_graph,
+        constraints,
+        ConnectionValidationMode::RELAXED,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Sat);
+    ASSERT_TRUE(result.success) << result.error_message;
+    EXPECT_EQ(count_unlabelled_used(result, host_groups), 0u)
+        << "SOFT minimize must pack onto labelled host groups when that is feasible";
+    EXPECT_EQ(count_host_groups_used(result, host_groups), 1u);
+}
+
 // Multi-solution enumeration must honour the HARD host-group cap on every returned mapping, for both engines.
 // Regression: the DFS enumeration loop (search_n) once lost the candidate-level cap pruning that dfs_recursive
 // applies, so solve_topology_mapping_n could hand back placements spanning more than the cap.

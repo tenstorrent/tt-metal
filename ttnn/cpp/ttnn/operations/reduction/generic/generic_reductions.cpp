@@ -393,7 +393,7 @@ static Tensor std_var_impl(
     uint64_t divisor = correction ? (reduced_volume - 1) : reduced_volume;
     TT_FATAL(divisor > 0, "Reduction is performed on too few elements, yielding divisor of {}", divisor);
 
-    // Welford single-pass algorithm
+    // Numerically stable statistics reductions use an SFPU two-pass algorithm for all supported input dtypes.
     bool single_h = (dim.size() == 1 && dim[0] == rank - 2);
     bool single_w = (dim.size() == 1 && dim[0] == rank - 1);
 
@@ -769,6 +769,11 @@ Tensor min(
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode) {
+    TT_FATAL(
+        !(fast_and_approximate_mode && input_tensor_arg.dtype() == DataType::FLOAT32),
+        "ttnn.min does not support fast_and_approximate_mode=True on Float32 input: the FPU has no min, so SFPU path "
+        "is both more accurate and faster.");
+
     /* Scaling is applied after reduction, so flip the op for negative scalars:
      * min(s * x) = s * max(x) when s < 0.*/
     if (scalar < 0.0f) {

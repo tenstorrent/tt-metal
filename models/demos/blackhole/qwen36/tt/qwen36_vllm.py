@@ -52,6 +52,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     # bucket's inputs before replay, so their I/O buffers may safely overlap.
     _tt_allow_decode_trace_buffer_reuse = True
     decode_input_update_contract = 1
+    _ENABLE_MTP = False  # MTP contract subclass overrides
 
     # supports_async_decode=False: async decode assumes on-device token/position continuity, which
     # corrupts Qwen's GDN scan. supports_sample_on_device=True: on-device sampling is decode-only.
@@ -136,7 +137,12 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("CI") == "true"
             name_or_path = snapshot_download(name_or_path, local_files_only=offline)
         args, model, _ = create_tt_model(
-            mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, hf_model=name_or_path
+            mesh_device,
+            max_batch_size=max_batch_size,
+            max_seq_len=max_seq_len,
+            hf_model=name_or_path,
+            # vLLM does not drive spec decode yet (vllm-tt-plugin#110): skip the MTP head, its weights and its KV cache.
+            enable_mtp=cls._ENABLE_MTP,
         )
         # Attach the TT vision tower so prefill can splice image/video embeddings (multimodal path).
         # No-op cost for text-only requests; get_image_features / get_video_features are only invoked
@@ -431,6 +437,7 @@ def _mesh_tp(default=4):
 class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     """Plugin spec-decode contract adapter (B=1) over the MTP engine in tt/spec_engine.py."""
 
+    _ENABLE_MTP = True
     _SPEC_K = int(os.environ.get("QWEN36_SPEC_K", "3"))  # vLLM warmup does not carry K
     _SUPPORTED_K = (3, 7, 11)
 

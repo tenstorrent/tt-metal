@@ -55,11 +55,11 @@ void kernel_main() {
 
     for (uint32_t t = 0; t < T; t++) {
         write_from(cbout, o_acc, (h * T + t) * cv, cv);  // o stays head-major
-        if (per_token) {
+        if constexpr (per_token) {
             write_from(cbst, st_acc, (t * BH + h) * kv, kv);  // state is token-major
         }
     }
-    if (!per_token) {
+    if constexpr (!per_token) {
         write_from(cbst, st_acc, h * kv, kv);  // final state only
     }
 }

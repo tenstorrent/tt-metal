@@ -27,10 +27,6 @@ bool is_effectively_1d(const ttnn::Tensor& tensor) {
     }
     return non_unit_dims < 2;
 }
-
-uint32_t draw_stochastic_rounding_seed() {
-    return static_cast<uint32_t>(autograd::ctx().get_generator()());
-}
 }  // namespace
 
 std::string AdamW::get_name() const {
@@ -111,7 +107,9 @@ void AdamW::step() {
             m_config.epsilon,
             weight_decay,
             static_cast<ttml::metal::StochasticRounding>(m_config.stochastic_rounding),
-            m_config.stochastic_rounding ? std::optional<uint32_t>{draw_stochastic_rounding_seed()} : std::nullopt);
+            m_config.stochastic_rounding
+                ? std::optional<uint32_t>{static_cast<uint32_t>(autograd::ctx().get_generator()())}
+                : std::nullopt);
     }
 }
 

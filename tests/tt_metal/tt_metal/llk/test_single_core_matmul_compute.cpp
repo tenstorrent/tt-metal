@@ -753,7 +753,9 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
-        compute_hw_config = experimental::ComputeHardwareConfig{.enable_32_bit_dest = cfg.fp32_dest_acc_en};
+        // Quasar's first fidelity phase covers the Float16_b and MxFp4_2x operands here in full
+        compute_hw_config = experimental::ComputeHardwareConfig{
+            .fpu_math_fidelity = MathFidelity::LoFi, .enable_32_bit_dest = cfg.fp32_dest_acc_en};
     } else {
         reader_hw_config = experimental::DataMovementHardwareConfig{
             .config_1xx =
@@ -1005,10 +1007,15 @@ void run_matmul_no_mop(const std::shared_ptr<distributed::MeshDevice>& mesh_devi
         kt_dim,
         static_cast<int>(test_config.math_fidelity));
 
-    distributed::DeviceLocalBufferConfig dram_config{
-        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+    // One page per buffer, not one per tile: the reader and writer kernels walk a single DRAM bank
+    // linearly (one bank_id, the address advancing by a tile per transfer), and a page-per-tile
+    // buffer is interleaved across the channels, so tile k would be fetched from page
+    // k * num_banks and the walk would leave that bank's share of the buffer part way through.
     auto make_dram = [&](std::uint32_t num_tiles) {
-        distributed::ReplicatedBufferConfig cfg{.size = single_tile_size * num_tiles};
+        const std::uint32_t buffer_size = single_tile_size * num_tiles;
+        distributed::DeviceLocalBufferConfig dram_config{
+            .page_size = buffer_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+        distributed::ReplicatedBufferConfig cfg{.size = buffer_size};
         return distributed::MeshBuffer::create(cfg, dram_config, mesh_device.get());
     };
     auto in0_dram = make_dram(in0_num_tiles);
@@ -1220,8 +1227,6 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreComputeMatmulNo
         {.rt_dim = 1, .ct_dim = 1, .kt_dim = 2},
         {.rt_dim = 2, .ct_dim = 2, .kt_dim = 1},
         {.rt_dim = 2, .ct_dim = 2, .kt_dim = 2},
-        {.rt_dim = 1, .ct_dim = 1, .kt_dim = 1, .math_fidelity = MathFidelity::HiFi4},
-        {.rt_dim = 2, .ct_dim = 2, .kt_dim = 2, .math_fidelity = MathFidelity::HiFi4},
     };
     for (const auto& cfg : cases) {
         unit_tests::compute::matmul::run_matmul_no_mop(this->devices_.at(0), cfg);

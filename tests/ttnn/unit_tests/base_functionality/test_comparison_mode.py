@@ -618,7 +618,8 @@ def test_ema_golden_matches_recurrence():
 
 
 def test_var_hw_and_std_hw_goldens_use_biased_correction():
-    input_tensor = torch.tensor([[[[1.0, 2.0], [3.0, 4.0]]]])
+    # A tile-aligned plane: the device divides by the tile-padded H * W, which equals the logical area only here.
+    input_tensor = torch.tensor([[1.0, 2.0], [3.0, 4.0]]).repeat(16, 16).reshape(1, 1, 32, 32)
 
     var_output = ttnn.get_golden_function(ttnn.var_hw)(input_tensor)
     std_output = ttnn.get_golden_function(ttnn.std_hw)(input_tensor)
@@ -643,8 +644,9 @@ def test_quantize_goldens_support_scalar_and_per_channel_args():
     assert quantized.dtype == torch.int32
     assert torch.equal(quantized, torch.tensor([[4, 6], [8, 10]], dtype=torch.int32))
 
+    # Without dtype, dequantize outputs BFLOAT16.
     dequantized = ttnn.get_golden_function(ttnn.dequantize)(quantized.float(), 0.5, 2.0)
-    torch.testing.assert_close(dequantized, (quantized.float() - 2.0) * 0.5)
+    torch.testing.assert_close(dequantized, ((quantized.float() - 2.0) * 0.5).to(torch.bfloat16))
 
     scale = torch.tensor([0.5, 2.0])
     zero_point = torch.tensor([1.0, 0.0])
@@ -715,6 +717,111 @@ def test_mesh_partition_golden_round_trips_replicated_input():
 
     assert torch.equal(output, full)
     assert golden_function([full], 0) is None
+
+
+def test_mesh_partition_golden_whole_mesh_concatenates_every_device():
+    """cluster_axis=None: device k keeps chunk k of dim in row-major device order and the op labels the output
+    {N}, [Shard(dim)], so the golden must compose every device along dim, on an N-D and on a collapsed mesh shape
+    alike. The first version kept the input's shard dims for None and composed to device 0's chunk, which only
+    matched the stale pre-fix output label."""
+    full = torch.arange(16, dtype=torch.float32).reshape(2, 8)
+    golden_function = ttnn.get_golden_function(ttnn.mesh_partition)
+
+    output = golden_function(
+        [full.clone() for _ in range(4)],
+        1,
+        cluster_axis=None,
+        _ttnn_golden_mesh_shape=(2, 2),
+        _ttnn_golden_mesh_shard_dims=(None, None),
+    )
+    assert torch.equal(output, full)
+
+    output = golden_function(
+        [full.clone() for _ in range(4)],
+        -1,
+        cluster_axis=None,
+        _ttnn_golden_mesh_shape=(4,),
+        _ttnn_golden_mesh_shard_dims=(None,),
+    )
+    assert torch.equal(output, full)
+
+
+def test_mesh_partition_golden_partitions_each_devices_own_shard():
+    """An input already sharded along dim (rule 2's "output bytes" stance): device k keeps chunk k of ITS OWN shard,
+    not of device 0's, and the composition over the collapsed {N}, [Shard(dim)] label concatenates those chunks in
+    row-major device order."""
+    golden_function = ttnn.get_golden_function(ttnn.mesh_partition)
+    shards = [torch.arange(8, dtype=torch.float32).reshape(2, 4) + 100 * k for k in range(4)]
+
+    output = golden_function(
+        shards,
+        1,
+        cluster_axis=None,
+        _ttnn_golden_mesh_shape=(2, 2),
+        _ttnn_golden_mesh_shard_dims=(1, 1),
+    )
+
+    expected = torch.cat([torch.chunk(shard, 4, dim=1)[k] for k, shard in enumerate(shards)], dim=1)
+    assert torch.equal(output, expected)
+
+
+def test_mesh_partition_golden_outer_axis_same_dim_composes_row_major():
+    """Rule 1(ii): the outer axis already shards dim and the partition runs along the inner axis, so the op emits the
+    collapsed row-major label; device (r, c) keeps chunk c of the dim-shard its row holds, and composing those chunks
+    row-major recovers the full tensor."""
+    golden_function = ttnn.get_golden_function(ttnn.mesh_partition)
+    full = torch.arange(16, dtype=torch.float32).reshape(2, 8)
+    row_shards = torch.chunk(full, 2, dim=1)
+    inputs = [row_shards[0], row_shards[0].clone(), row_shards[1], row_shards[1].clone()]  # row-major (r, c)
+
+    output = golden_function(
+        inputs,
+        1,
+        cluster_axis=1,
+        _ttnn_golden_mesh_shape=(2, 2),
+        _ttnn_golden_mesh_shard_dims=(1, None),
+    )
+
+    assert torch.equal(output, full)
+
+
+def test_mesh_partition_golden_declines_where_the_op_keeps_the_input_label():
+    """Where the hook has no honest label and leaves the input's on the result, comparison mode would compose the
+    device output by that label; the golden declines (None) instead of composing something else."""
+    golden_function = ttnn.get_golden_function(ttnn.mesh_partition)
+    shard = torch.arange(8, dtype=torch.float32).reshape(2, 4)
+    inputs = [shard.clone() for _ in range(4)]
+
+    # Rule 2 fallback: a whole-mesh partition of a tensor sharded on another dim along a non-trivial axis.
+    assert (
+        golden_function(
+            inputs, 1, cluster_axis=None, _ttnn_golden_mesh_shape=(2, 2), _ttnn_golden_mesh_shard_dims=(0, None)
+        )
+        is None
+    )
+    # Rule 1(iii) fallback: the partitioned dim is already sharded along an inner axis.
+    assert (
+        golden_function(
+            inputs, 1, cluster_axis=0, _ttnn_golden_mesh_shape=(2, 2), _ttnn_golden_mesh_shard_dims=(None, 1)
+        )
+        is None
+    )
+    # A collapsed label partitioned along a cluster axis it has no placement for (rules 3-5): not representable here.
+    assert (
+        golden_function(inputs, 1, cluster_axis=1, _ttnn_golden_mesh_shape=(4,), _ttnn_golden_mesh_shard_dims=(None,))
+        is None
+    )
+    # Rule 1(i): the same dim on a size-1 axis is the whole extent and does not block the golden.
+    assert (
+        golden_function(
+            [shard.clone(), shard.clone()],
+            1,
+            cluster_axis=1,
+            _ttnn_golden_mesh_shape=(1, 2),
+            _ttnn_golden_mesh_shard_dims=(1, None),
+        )
+        is not None
+    )
 
 
 def test_allocate_tensor_goldens_return_skip_marked_uninitialized_storage():

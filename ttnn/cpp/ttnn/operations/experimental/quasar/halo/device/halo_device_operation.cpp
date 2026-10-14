@@ -8,6 +8,7 @@
 #include "ttnn/operations/experimental/quasar/halo/device/halo_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include <array>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::prim::qsr {
 

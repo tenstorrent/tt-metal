@@ -16,6 +16,7 @@ def create_tt_model(
     n_layers=None,
     layer_indices=None,
     hf_model=None,
+    enable_mtp=None,
 ):
     """Build the Qwen3.5-9B model. Returns (args, model, state_dict).
 
@@ -30,6 +31,7 @@ def create_tt_model(
         mesh_device=mesh_device,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
+        enable_mtp=enable_mtp,
     )
     if layer_indices is not None:
         layer_indices = list(layer_indices)

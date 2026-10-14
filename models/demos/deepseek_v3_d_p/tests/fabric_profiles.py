@@ -39,6 +39,28 @@ def fabric_1d_device_params(*, fabric_payload_size=None, **overrides) -> dict:
     return params
 
 
+def fabric_1d_plain_device_params(**overrides) -> dict:
+    """Bare 1D fabric profile: ``fabric_config`` and nothing else.
+
+    ``fabric_1d_device_params`` above additionally pins a router config and RELAXED_INIT, which the
+    dispatch/combine tests want. The op-level CSA tests deliberately do not -- they open a 1D fabric on
+    its defaults, which is what they were characterized against, and adding a router config to them is
+    a behavioral change that needs its own hardware run. This exists so those tests still get a FRESH
+    dict per ``pytest.param`` (a shared literal is mutable fixture state) and so the profile has one
+    home instead of one copy per test file.
+    """
+    params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
+    params.update(overrides)
+    return params
+
+
+def fabric_disabled_device_params(**overrides) -> dict:
+    """No fabric, for the single-device (1x1) cases that run no collective at all."""
+    params = {"fabric_config": ttnn.FabricConfig.DISABLED}
+    params.update(overrides)
+    return params
+
+
 def torus_y_device_params(*, fabric_payload_size=None, **overrides) -> dict:
     """Fabric2D Ring/Linear profile for an Nx1 mesh."""
     params = {

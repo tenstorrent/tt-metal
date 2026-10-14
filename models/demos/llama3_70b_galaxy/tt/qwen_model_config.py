@@ -186,6 +186,11 @@ class TtQwenModelArgs(TtModelArgs):
         self.mesh_device = mesh_device
         self.is_blackhole = ttnn.get_arch_name().lower() == "blackhole"
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
+        # Tensor caches are architecture specific: a DRAM-sharded weight stores its shard grid (12 DRAM banks
+        # on Wormhole, 8 on Blackhole) in the cached file and ttnn.load_tensor re-applies that stored grid, so a
+        # file written on one architecture silently loads with the wrong sharding on the other (#58871). Keep
+        # Blackhole Galaxy in its own cache directory (same name tt_transformers uses) instead of sharing TG.
+        self.cache_device_name = "BHGLX" if self.is_blackhole and self.num_devices == 32 else self.device_name
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
@@ -258,9 +263,9 @@ class TtQwenModelArgs(TtModelArgs):
             self.TOKENIZER_PATH = HF_MODEL
             self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
             if not self.CACHE_PATH:
-                self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
-            else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
-                self.CACHE_PATH = os.path.join(self.CACHE_PATH, self.device_name)
+                self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.cache_device_name)
+            else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG/BHGLX) to the cache path
+                self.CACHE_PATH = os.path.join(self.CACHE_PATH, self.cache_device_name)
             self.model_name = HF_MODEL  # May be overridden by config
             self.from_hf_url = True
         else:

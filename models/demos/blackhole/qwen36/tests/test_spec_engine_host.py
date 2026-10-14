@@ -3,7 +3,7 @@
 """CPU unit tests for the host-side bookkeeping of the MTP spec-decode engine.
 
 Covers the pure helpers in tt/spec_engine.py and the page-table helpers on ``Qwen36Model``
-(``_fit_spec_page_table``, ``_verify_page_table_forms``, ``_check_verify_write_blocks``). No device.
+(``_fit_spec_page_table``). No device.
 
 Convention: after a verify at start_pos s with m accepted drafts, committed_tokens[u, :m+1] =
 accepted drafts then the bonus token, at positions s+1 .. s+m+1.
@@ -41,7 +41,6 @@ from models.demos.blackhole.qwen36.tt.spec_engine import (
 )
 
 SHAPES = [(1, 12), (2, 8), (4, 4), (8, 4), (3, 5)]
-BLOCK = 64
 
 
 # --------------------------------------------------------------------------- #
@@ -225,84 +224,6 @@ def test_fit_page_table_int32_contiguous(src, nb):
 def test_fit_page_table_clip_of_noncontiguous_is_contiguous():
     out = Qwen36Model._fit_spec_page_table(torch.arange(12, dtype=torch.int32).reshape(2, 6), 3)
     assert out.is_contiguous()
-
-
-def _bare_model(groups=0, grouped=False, block=BLOCK):
-    """Qwen36Model with only the attributes the page-table helpers read."""
-    model = object.__new__(Qwen36Model)
-    model._vfy_spec_groups = groups
-    model._vfy_kv_grouped = grouped
-    # get_block_size reads kv_cache[0][0].shape[2]
-    model._paged_kv_caches = [[types.SimpleNamespace(shape=(8, 1, block, 32))]]
-    return model
-
-
-def test_page_table_forms_row_and_user():
-    pt = torch.arange(6, dtype=torch.int32).reshape(2, 3)
-    kvpt, users, _ = _bare_model(groups=0)._verify_page_table_forms(pt, 4)
-    assert torch.equal(kvpt, pt.repeat_interleave(4, dim=0)) and kvpt.shape == (8, 3)
-    assert torch.equal(users, pt)
-    assert kvpt.is_contiguous()
-
-
-@pytest.mark.parametrize("B,groups", [(2, 2), (2, 6), (4, 8), (1, 3)])
-def test_page_table_forms_group_aliasing(B, groups):
-    """groups >= B and groups % B == 0: each user's row repeated groups // B times."""
-    pt = torch.arange(B * 3, dtype=torch.int32).reshape(B, 3) + 1
-    _, _, kvpt1 = _bare_model(groups=groups)._verify_page_table_forms(pt, 4)
-    assert torch.equal(kvpt1, pt.repeat_interleave(groups // B, dim=0))
-    assert kvpt1.shape == (groups, 3) and kvpt1.is_contiguous()
-
-
-@pytest.mark.parametrize("B,groups", [(2, 0), (2, 3), (4, 2)])
-def test_page_table_forms_group_fallback(B, groups):
-    """Fused path off or groups not a multiple of B: row 0 repeated ``groups`` times (unread)."""
-    pt = torch.arange(B * 3, dtype=torch.int32).reshape(B, 3) + 1
-    _, _, kvpt1 = _bare_model(groups=groups)._verify_page_table_forms(pt, 4)
-    assert torch.equal(kvpt1, pt[:1].repeat(groups, 1))
-
-
-def test_write_blocks_disjoint_passes():
-    pt = torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=torch.int32)
-    _bare_model(grouped=True)._check_verify_write_blocks(pt, [0, BLOCK - 2], 4)
-
-
-def test_write_blocks_shared_block_raises(expect_error):
-    pt = torch.tensor([[1, 2, 3], [1, 5, 6]], dtype=torch.int32)
-    with expect_error(AssertionError, "block 1"):
-        _bare_model(grouped=True)._check_verify_write_blocks(pt, [0, 0], 4)
-
-
-def test_write_blocks_shared_zero_padding_not_written_passes():
-    """vLLM zero-pads tables; both users own one real block and only write inside it."""
-    pt = torch.tensor([[1, 0, 0], [2, 0, 0]], dtype=torch.int32)
-    _bare_model(grouped=True)._check_verify_write_blocks(pt, [3, 10], 4)
-
-
-def test_write_blocks_shared_zero_padding_written_raises(expect_error):
-    """If a user's write crosses into its zero padding while another user also writes block 0."""
-    pt = torch.tensor([[1, 0, 0], [0, 0, 0]], dtype=torch.int32)
-    with expect_error(AssertionError, ".*"):
-        _bare_model(grouped=True)._check_verify_write_blocks(pt, [BLOCK - 2, 0], 4)
-
-
-def test_write_blocks_same_user_repeat_is_fine():
-    pt = torch.tensor([[1, 2, 3]], dtype=torch.int32)
-    _bare_model(grouped=True)._check_verify_write_blocks(pt, [5], 8)
-
-
-@pytest.mark.parametrize("grouped", [True, False])
-def test_write_blocks_position_past_table_raises(grouped, expect_error):
-    pt = torch.tensor([[1, 2], [3, 4]], dtype=torch.int32)
-    model = _bare_model(grouped=grouped)
-    model._check_verify_write_blocks(pt, [0, 2 * BLOCK - 4], 4)  # last write at 2*BLOCK-1: fits
-    with expect_error(AssertionError, "past the page table"):
-        model._check_verify_write_blocks(pt, [0, 2 * BLOCK - 3], 4)
-
-
-def test_write_blocks_overlap_allowed_when_not_grouped():
-    pt = torch.tensor([[1, 2, 3], [1, 2, 3]], dtype=torch.int32)
-    _bare_model(grouped=False)._check_verify_write_blocks(pt, [0, 0], 4)
 
 
 # --------------------------------------------------------------------------- #

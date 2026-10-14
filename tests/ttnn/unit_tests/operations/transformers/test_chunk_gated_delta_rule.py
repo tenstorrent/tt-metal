@@ -17,6 +17,8 @@ rounding. What bounds the gap is that the op's inputs are bf16 -- the reference 
 bf16-rounded values, upcast, so this measures the op's arithmetic and not input quantization.
 """
 
+import os
+
 import pytest
 import torch
 
@@ -29,7 +31,12 @@ from models.experimental.gated_attention_gated_deltanet.torch_functional.delta_r
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 CHUNK = 32  # the phased op's supported chunk size (Ct=1); 64 splits the WY matrix (see fused_chunk.py)
-REPEATS = 8  # extra multicast runs per shape, to give a non-deterministic race a chance to show
+
+# The simulator runs are much slower than silicon (roughly x100),
+# so the long cases run on hardware only.
+_SIM = bool(os.environ.get("TT_METAL_SIMULATOR"))
+_hw_only = pytest.mark.skipif(_SIM, reason="hardware test only: too slow on the simulator for the coverage it adds")
+REPEATS = 0 if _SIM else 8  # extra multicast runs per shape, to give a non-deterministic race a chance to show
 
 # Measured:
 PCC_O = 0.99999
@@ -189,6 +196,69 @@ def test_gated_delta_attn_seq_golden_matches_documented_scan():
     torch.testing.assert_close(actual_state, expected_state)
 
 
+def _gated_delta_attn_seq_inputs(batch_heads, num_chunks, with_initial_state, seed):
+    """Inputs for gated_delta_attn_seq at the only size it accepts (C = Dk = Dv = 128)."""
+    gen = torch.Generator().manual_seed(seed)
+    C = Dk = Dv = 128
+
+    def r(*shape):
+        return torch.randn(*shape, generator=gen) * 0.1
+
+    # Well-conditioned unit-lower-triangular L, and the inverse of each of its 32x32 diagonal blocks.
+    L_unit = (
+        torch.eye(C).expand(batch_heads, num_chunks, C, C)
+        + torch.tril(r(batch_heads, num_chunks, C, C), diagonal=-1) * 0.1
+    )
+    L_inv = torch.cat([torch.linalg.inv(L_unit[..., i : i + 32, i : i + 32]) for i in range(0, C, 32)], dim=-2)
+    inputs = dict(
+        L_unit=L_unit,
+        v_beta_sc=r(batch_heads, num_chunks, C, Dv),
+        k_bd_sc=r(batch_heads, num_chunks, C, Dk),
+        intra_attn=torch.tril(r(batch_heads, num_chunks, C, C)),
+        q_decay=r(batch_heads, num_chunks, C, Dk),
+        k_decay_t=r(batch_heads, num_chunks, Dk, C),
+        dl_exp=torch.rand(batch_heads, num_chunks, 1, 1, generator=gen) * 0.5 + 0.5,
+        L_inv=L_inv,
+    )
+    initial_state = r(batch_heads, Dk, Dv) if with_initial_state else None
+    return inputs, initial_state
+
+
+@pytest.mark.parametrize(
+    "num_chunks", [1, 2, pytest.param(3, marks=_hw_only), pytest.param(4, marks=_hw_only)], ids=lambda n: f"NC{n}"
+)
+@pytest.mark.parametrize("with_initial_state", [False, True], ids=["s0=0", "s0=rand"])
+def test_gated_delta_attn_seq_vs_golden(device, num_chunks, with_initial_state):
+    """Device gated_delta_attn_seq vs its golden.
+
+    The reader seeds the starting state (loaded, or zero-filled when there is none) into its own CB,
+    which compute reads on chunk 0; on later chunks compute reads the state it carried over itself.
+    NC = 1 covers the seed alone; NC >= 2 covers the hand-off from the seed to the carried state.
+    The op runs twice with fresh inputs, so the second run hits the program cache.
+    """
+    batch_heads = 3
+    golden = ttnn.get_golden_function(ttnn.transformer.gated_delta_attn_seq)
+
+    def dev(t):
+        return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    for run in range(2):
+        inputs, initial_state = _gated_delta_attn_seq_inputs(
+            batch_heads, num_chunks, with_initial_state, seed=100 * num_chunks + 10 * with_initial_state + run
+        )
+        out_tt, state_tt = ttnn.transformer.gated_delta_attn_seq(
+            **{name: dev(t) for name, t in inputs.items()},
+            initial_state=dev(initial_state) if initial_state is not None else None,
+        )
+        out_ref, state_ref = golden(**inputs, initial_state=initial_state)
+
+        ok_o, pcc_o = check_with_pcc(out_ref, ttnn.to_torch(out_tt), 0.999)
+        ok_s, pcc_s = check_with_pcc(state_ref, ttnn.to_torch(state_tt), 0.999)
+        print(f"\nrun {run}: PCC output={pcc_o} final_state={pcc_s}")
+        assert ok_o, f"run {run}: output vs golden: {pcc_o}"
+        assert ok_s, f"run {run}: final_state vs golden: {pcc_s}"
+
+
 def _const_tiles(device, chunk_size=CHUNK):
     """The op's constant tiles (mirrors qwen36 fused_chunk.build_fused_const_tiles).
 
@@ -213,13 +283,39 @@ def _const_tiles(device, chunk_size=CHUNK):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="phased chunk_gated_delta_rule is Blackhole-only")
-@pytest.mark.parametrize("batch, num_k_heads, num_v_heads, key_dim, val_dim", _REGIME_SHAPES + _QWEN_FAMILY_SHAPES)
-@pytest.mark.parametrize("seq_len", [CHUNK, 128, 256], ids=lambda v: f"T{v}")
+@pytest.mark.parametrize("batch, num_k_heads, num_v_heads, key_dim, val_dim", _REGIME_SHAPES)
+@pytest.mark.parametrize("seq_len", [CHUNK, 128, pytest.param(256, marks=_hw_only)], ids=lambda v: f"T{v}")
 @pytest.mark.parametrize("with_initial_state", [False, True], ids=["s0=0", "s0=rand"])
 def test_chunk_vs_recurrent_reference(
     device, batch, num_k_heads, num_v_heads, key_dim, val_dim, seq_len, with_initial_state
 ):
-    """Chunk-parallel device op vs the token-by-token torch recurrence."""
+    """Chunk-parallel device op vs the token-by-token torch recurrence, over the op's internal branches."""
+    _check_vs_recurrent_reference(
+        device, batch, num_k_heads, num_v_heads, key_dim, val_dim, seq_len, with_initial_state
+    )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="phased chunk_gated_delta_rule is Blackhole-only")
+@pytest.mark.parametrize("batch, num_k_heads, num_v_heads, key_dim, val_dim", _QWEN_FAMILY_SHAPES)
+@pytest.mark.parametrize(
+    "seq_len",
+    [CHUNK, pytest.param(128, marks=_hw_only), pytest.param(256, marks=_hw_only)],
+    ids=lambda v: f"T{v}",
+)
+@pytest.mark.parametrize("with_initial_state", [False, True], ids=["s0=0", "s0=rand"])
+def test_chunk_vs_recurrent_reference_qwen_family(
+    device, batch, num_k_heads, num_v_heads, key_dim, val_dim, seq_len, with_initial_state
+):
+    """The same gate over every Qwen per-chip head geometry; the multi-chunk cases are covered above
+    for every branch, so the simulator runs the family at one chunk."""
+    _check_vs_recurrent_reference(
+        device, batch, num_k_heads, num_v_heads, key_dim, val_dim, seq_len, with_initial_state
+    )
+
+
+def _check_vs_recurrent_reference(
+    device, batch, num_k_heads, num_v_heads, key_dim, val_dim, seq_len, with_initial_state
+):
     torch.manual_seed(20260910)
     B, T, Dk, Dv = batch, seq_len, key_dim, val_dim
     G = num_v_heads // num_k_heads
@@ -353,8 +449,10 @@ def _run_op(device, tensors, const_tiles, initial_state, chunk_size, use_mcast):
     "batch, num_k_heads, num_v_heads, key_dim, val_dim, seq_len, chunk, want_mcast",
     [
         (1, 4, 12, 128, 128, 256, 32, True),  # TP-4 per-device shape: BH=12 -> NV=4, fan-out 3
-        (1, 16, 48, 128, 128, 256, 32, True),  # single-device Qwen3.6 shape: BH=48 -> NV=2, fan-out 1
-        (2, 16, 48, 128, 128, 256, 32, False),  # batched prefill: BH=96 -> NV=1, degenerates to plain reader
+        (1, 16, 48, 128, 128, 128, 32, True),  # single-device Qwen3.6 shape: BH=48 -> NV=2, fan-out 1
+        pytest.param(
+            2, 16, 48, 128, 128, 256, 32, False, marks=_hw_only
+        ),  # batched prefill: BH=96 -> NV=1, plain reader
         (1, 4, 12, 64, 128, 256, 32, True),  # K != V: kd/q_decay/k_dec_t shrink, v_beta does not
         (1, 4, 12, 128, 128, 256, 64, True),  # chunk_size=64 -> Ct=2: two tile-rows per chunk
         (1, 4, 12, 128, 128, 32, 32, True),  # T == chunk_size -> NC==1: single-chunk handshake

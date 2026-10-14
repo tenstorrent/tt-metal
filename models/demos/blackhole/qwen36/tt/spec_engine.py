@@ -24,6 +24,7 @@ from loguru import logger
 from ttnn.tools import trace_allocation_tracker
 
 import ttnn
+from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
 
 # Prompt length above which the reseed goes back to the per-slot loop (B == 1 only).
 EAGER_RESEED_PROMPT_LEN = 131072
@@ -401,8 +402,6 @@ class MTPSpecEngine:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        # QWEN36_SPEC_CHECK_ANCHOR=1: assert the anchor matmul is bit-equal to the rows it names.
-        self._check_anchor = bool(int(os.environ.get("QWEN36_SPEC_CHECK_ANCHOR", "0")))
         self._timing = bool(int(os.environ.get("QWEN36_SPEC_TIMING", "0")))
         self.last_verify_timing = None  # (device_s, readback_s) of the last verify when timing is on
         self.mtp_extra_steps = 0  # drafter forwards spent on KV maintenance (reseed)
@@ -594,7 +593,7 @@ class MTPSpecEngine:
         model, B, T = self.model, self.B, self.T
         assert not self.captured and getattr(model, "_vfy_trace_id", None) is None, "prepare_decode after capture"
         t0 = time.perf_counter()
-        model.prepare_verify_trace(self._prep_pt, T, warm_positions=[0] * B, decode_cfg=True)
+        model.prepare_verify_trace(self._prep_pt, T, warm_positions=[0] * B)
 
         # Drafter programs.
         zrow = ttnn.zeros(
@@ -1015,7 +1014,7 @@ class MTPSpecEngine:
         h = anchor_hidden
         for k in range(self.K):
             logits, h_next = self.model.ttnn_mtp_decode_forward(h, tok_tt, [pu + k for pu in p], self._mtp_pt)
-            idx = self._argmax_last(logits)  # [1,1,B] uint32 ROW_MAJOR
+            idx = draft_argmax(self.mtp, logits)  # [1,1,B,1] uint32 ROW_MAJOR
             ttnn.deallocate(logits)
             tok_tt = ttnn.reshape(idx, (B, 1))
             owned_tok.append(tok_tt)
@@ -1081,7 +1080,7 @@ class MTPSpecEngine:
         h, tok, outs = self._hp_buf, self._dr_tok0, []
         for k in range(self.K):
             logits, hn = mtp.forward_decode(h, tok, self._dr_pos[k], self._dr_cos[k], self._dr_sin[k], self._mtp_pt)
-            idx = self._argmax_last(logits)
+            idx = draft_argmax(mtp, logits)
             ttnn.deallocate(logits)
             tok = ttnn.reshape(idx, (B, 1))
             outs.append(idx)
@@ -1121,17 +1120,10 @@ class MTPSpecEngine:
     def _draft_warmup(self, pending, Hp, p):
         """One need_logits=True draft step before capture (compiles head norm, LM head, argmax, mesh_partition)."""
         logits, h = self.model.ttnn_mtp_decode_forward(Hp, [int(t) for t in pending], list(p), self._mtp_pt)
-        idx = self._argmax_last(logits)
+        idx = draft_argmax(self.mtp, logits)
         for t in (logits, idx, h):
             ttnn.deallocate(t)
         ttnn.synchronize_device(self.mesh)
-
-    def _argmax_last(self, logits):
-        """argmax over vocab for B rows -> [1,1,B] uint32. Untilize first: argmax on TILE input is single-core and slow."""
-        u = ttnn.untilize(logits, use_multicore=True)
-        out = ttnn.argmax(u, dim=-1, keepdim=False)
-        ttnn.deallocate(u)
-        return out
 
     def _id_to_host(self, id_tt):
         """[*, B] uint32 device ids -> B ints, read from the device-0 replica."""
@@ -1278,21 +1270,7 @@ class MTPSpecEngine:
         self._stage(anchor_selector(m, self.B, self.T), self._anchor_sel, ttnn.bfloat16, ttnn.TILE_LAYOUT)
         Hp = ttnn.matmul(self._anchor_sel, feed_rows, compute_kernel_config=self._anchor_cc)
         ttnn.copy(Hp, self._hp_buf)
-        if self._check_anchor:
-            self._check_anchor_rows(Hp, feed_rows, m)
         ttnn.deallocate(Hp)
-
-    def _check_anchor_rows(self, Hp, feed_rows, m):
-        """QWEN36_SPEC_CHECK_ANCHOR=1: assert the one-hot matmul is bit-identical to the rows it names (debug only)."""
-        T = self.T
-        got = ttnn.to_torch(ttnn.get_device_tensors(Hp)[0]).reshape(-1, Hp.shape[-1])
-        ref = ttnn.to_torch(ttnn.get_device_tensors(feed_rows)[0]).reshape(-1, feed_rows.shape[-1])
-        for u in range(self.B):
-            r = u * T + int(m[u])
-            assert torch.equal(got[u], ref[r]), (
-                f"anchor matmul mismatch for user {u} (m={int(m[u])}, feed row {r}): "
-                f"max |delta| {float((got[u].float() - ref[r].float()).abs().max()):.3e}"
-            )
 
 
 def get_spec_engine(model, batch_size, draft_len):

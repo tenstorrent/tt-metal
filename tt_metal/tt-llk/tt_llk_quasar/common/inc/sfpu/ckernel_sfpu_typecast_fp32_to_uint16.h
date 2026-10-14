@@ -23,15 +23,14 @@ inline void _calculate_typecast_fp32_to_uint16_rows()
     TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::FP32, ADDR_MOD_7, 0, 0); // load from dest into lreg[0], uses ADDR_MOD_7 (set to all zeroes)
 
     // Clamp negatives to 0 before the cast; the unsigned conversion does not saturate them.
-    // SFPENCC instr_mod1 bits[1:0] select the CC-enable source: 2 takes it from imm12_math[0],
-    // so (1, 2) turns predication on and (0, 2) turns it back off. Mode 1 would only invert the
-    // previous enable, which leaves the block's behaviour dependent on incoming CC state.
+    // Predication is left enabled (CC_en = 1) from SFPU init, with every lane's CC_res set, so
+    // SFPSETCC narrows the active lanes to the negative ones and SFPENCC(0, 0) re-widens them to
+    // all lanes afterwards, leaving CC_en alone for whatever SFPU code follows.
     // SFPSETCC imm12_math bit 11 selects how src_c is read: it must be set for an FP32 LREG,
     // otherwise the float bits are compared as two's-complement int32.
-    TTI_SFPENCC(1, 2);                                                 // CC_en <= 1, CC_res <= 1
     TTI_SFPSETCC(ckernel::p_sfpu::cc::FP32_SM32_EN, p_sfpu::LREG0, 0); // CC_res <= (LREG0 < 0), src read as FP32
     TTI_SFPLOADI(p_sfpu::LREG0, 0, 0);                                 // loads zeros where lreg[0] is negative
-    TTI_SFPENCC(0, 2);                                                 // CC_en <= 0, subsequent lanes all active
+    TTI_SFPENCC(0, 0);                                                 // CC_res <= 1: all lanes active again
 
     // Single-instruction fp32 -> uint16 convert, round-nearest-even. Unlike the two-step
     // SFPCAST-then-narrow sequence, this mode saturates on overflow, so inputs above 65535 land on

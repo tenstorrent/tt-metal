@@ -50,9 +50,8 @@ DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
 
 # The dflash manifest differs from the plain one by the knobs a drafter run needs, so the two legs cannot
 # share a file. What it pins, and why, since JSON cannot say it:
-#   PREFILL_USE_TRACE=1    -- the verifier forward IS trace-captured with dflash on. The drafter's FC tap
-#      fires inside that forward and is allocation-free after warmup; its KV finalize runs after the
-#      captured forward returns and stays eager.
+#   PREFILL_USE_TRACE=1    -- the verifier forward, the drafter's FC taps and its KV finalize (last rank)
+#      or partial export (other ranks) are one capture, replayed per chunk.
 #   PREFILL_LAYER_ACK_D2H=1 -- each rank stands up its own LayerAckService from D2H device records.
 #      Without it the non-first ranks take the host-ring branch and connect() to
 #      /tt_prefill_layer_completion_ring_N with a HARD-CODED 30 s timeout, which a rank that finished
@@ -87,7 +86,7 @@ fi
 # context even within double quotes, and the script fails to parse rather than to run.
 HOSTS="${PREFILL_HOSTS:?PREFILL_HOSTS must list the rank hosts, rank 0 first (e.g. hostA,hostB)}"
 
-# sc1 is single-galaxy. It takes the same STAGED code path as sc4 -- PREFILL_MOCK_MIGRATION all-gathers
+# sc1 is single-galaxy. It takes the same STAGED code path as sc4 -- the runner all-gathers
 # the stage layouts at any rank count -- so what it does not cover is the remote HOST, not the branch: one
 # rank builds the table over its own DRAM and the producer reads it back over local PCIe. The rank count
 # itself comes from the mesh-graph descriptor below, so this only validates the key.
@@ -212,8 +211,7 @@ python3 "${TTRUN_PY}" \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     ${RUNNER_NUM_USERS_EXPORT}\
     export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
-    export PREFILL_ENABLE_MIGRATION=1; \
-    export PREFILL_MOCK_MIGRATION=1; \
+    export PREFILL_ENABLE_MIGRATION=0; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_MIGRATION_DEVICE_MAP_PATH=/tmp/dflash_kv_device_map.json; \
     export PREFILL_SYNC_PER_CHUNK=1; \

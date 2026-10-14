@@ -59,7 +59,7 @@ _REGRESSION_CASE = _PerformanceCase(
     num_chunks=4,
     key_dim=32,
     value_dim=64,
-    expected_duration_ns=16_269,
+    expected_duration_ns=13_299,
 )
 _PRODUCTION_CASE = _PerformanceCase(
     "pr7-leaf-bh96-n20-k128-v128",
@@ -67,7 +67,7 @@ _PRODUCTION_CASE = _PerformanceCase(
     num_chunks=20,
     key_dim=128,
     value_dim=128,
-    expected_duration_ns=363_886,
+    expected_duration_ns=368_665,
 )
 _PRODUCTION_BF16 = frozenset({"kd", "q_decay", "final_decay"})
 

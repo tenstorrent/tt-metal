@@ -48,6 +48,7 @@ class SystemMemoryManager;
 
 namespace experimental {
 class DispatchContext;
+class HostRegion;
 }  // namespace experimental
 
 namespace program_cache::detail {
@@ -133,6 +134,7 @@ private:
     // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
     // on the device may not be thread safe.
     std::mutex api_mutex_;
+    bool command_list_builder_active_ = false;
     bool is_internal_state_initialized = false;
     // Which MetalContext instance this MeshDevice uses
     // To be removed in favor of directly passing around the MetalContext reference.
@@ -149,12 +151,35 @@ private:
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
-    // Only ever read on the dispatch path, which holds the api lock.
+    // The view's local devices, which the view fixes when it is constructed. Held here because the
+    // accessors that cross-check a property against every device would otherwise rebuild this list
+    // on every call. Rewritten when a reshape swaps the view, under the api lock.
+    std::vector<IDevice*> local_devices_;
+    // Filled on first use per range and cleared by reshape, both under the api lock, which the
+    // dispatch path also holds while it reads an entry by reference.
     mutable std::unordered_map<MeshCoordinateRange, std::vector<IDevice*>> local_devices_by_range_;
-    // Established once the devices are open (see establish_device_property_caches) so that the
-    // accessors below stay pure reads: ttnn calls them from many threads without the api lock.
-    std::optional<CoreCoord> compute_with_storage_grid_size_;
-    std::optional<uint32_t> l1_size_per_core_;
+    // The mesh-wide properties that are fixed once the devices are open. Each is otherwise answered
+    // by a cross-device agreement check that walks the whole mesh, and the dispatch path asks for
+    // several of them once per program on every enqueue. Established as a unit (see
+    // establish_device_property_caches) so that the accessors below never write, which is what lets
+    // ttnn call them from many threads without holding the api lock. Initialization and reshape are
+    // the only writers; reshape takes the api lock, so it cannot rewrite these under the dispatch
+    // path, but it is still the caller's job not to reshape a mesh other threads are reading. Each
+    // accessor keeps the agreement check as its unestablished path, which covers the window before
+    // initialization runs and a remote-only mesh, where there is no local device to agree with and
+    // the check raises as it always did.
+    struct MeshProperties {
+        uint8_t num_hw_cqs = 0;
+        CoreCoord compute_with_storage_grid_size;
+        CoreCoord grid_size;
+        CoreCoord logical_grid_size;
+        CoreCoord dram_grid_size;
+        uint32_t l1_size_per_core = 0;
+        uint32_t dram_size_per_channel = 0;
+        std::set<CoreCoord> ethernet_cores;
+        std::set<CoreCoord> storage_only_cores;
+    };
+    std::optional<MeshProperties> mesh_properties_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
@@ -166,8 +191,6 @@ private:
     uint32_t max_num_eth_cores_ = 0;
     std::shared_ptr<ThreadPool> dispatch_thread_pool_;
     std::shared_ptr<ThreadPool> reader_thread_pool_;
-    // Num Virtual Eth Cores == Max Number of Eth Cores across all opened devices (Issue #19729)
-    std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
 
     // Owns the real-time profiler subsystem (per-device sockets, receiver thread, Tracy
@@ -191,6 +214,15 @@ private:
     // to experimental::StartTensorPrefetcher; torn down in close_impl() before the
     // rest of the mesh shutdown so any in-flight kernel completes against live resources.
     std::unique_ptr<TensorPrefetcherManager> tensor_prefetcher_;
+
+    // The one pinned host region backing this mesh's D2H2H2D's D2H sockets. Lazily constructed on the
+    // first host_region() call; released in close_impl() so the pin is dropped while the
+    // cluster is still live, which a process-lifetime singleton could not guarantee.
+    // SHARED, not unique: every RingAlias holds a handle and calls clear_aliases() from its
+    // destructor, which may run after this mesh is closed or gone. close_impl() releases the
+    // pin but keeps this reference, so there is only ever one region per mesh; the object
+    // lives until its last holder does.
+    std::shared_ptr<experimental::HostRegion> host_region_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
     // Recursively quiesce all submeshes.
@@ -264,6 +296,11 @@ public:
     void push_corruptible_allocation_scope();
     void pop_corruptible_allocation_scope();
 
+    // Command List builder lifecycle. The reservation is device-wide; the active
+    // SubDeviceManagerId is captured separately by the builder for validation.
+    SubDeviceManagerId acquire_command_list_builder();
+    void release_command_list_builder();
+
     // IDevice interface implementation
     tt::ARCH arch() const override;
     int id() const override;
@@ -298,7 +335,6 @@ public:
     std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
-    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) const;
     CoreCoord compute_with_storage_grid_size() const override;
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
@@ -358,6 +394,11 @@ public:
     // the manager bound to this mesh device; subsequent calls return the same instance.
     // experimental::StartTensorPrefetcher / StopTensorPrefetcher delegate here.
     TensorPrefetcherManager& tensor_prefetcher(MeshDevice* mesh_device);
+    // Created on first use. One per mesh: the region is provisioned against this device's
+    // PCIe endpoint, so two meshes cannot share one. A handle, so a holder that may outlive
+    // this mesh (RingAlias) keeps the object valid; see host_region_. After close() it
+    // returns the released region, or TT_FATALs if none was ever created.
+    std::shared_ptr<experimental::HostRegion> host_region();
 
     // Returns the logical DRAM core for `bank_id` on `device` whose physical NoC coord isn't
     // already claimed by the SOC descriptor as a worker_endpoint or eth_endpoint — i.e. one
@@ -389,8 +430,6 @@ public:
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
     HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
     bool has_noc_mcast_txns(SubDeviceId sub_device_id) const;
-    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const;
-    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const;
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
     SubDeviceManagerId create_sub_device_manager(

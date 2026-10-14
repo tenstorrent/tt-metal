@@ -32,7 +32,7 @@ class SpeculativeDecoder:
     ``SpecSamplingParams`` switches acceptance to exact speculative rejection sampling over the verify
     logits. One shared ``SpecSampler`` serves the LIVE users in order 0..B-1, so a seeded run is
     reproducible for a fixed batch composition. Default demo decode path (QWEN36_SPEC=0 opts out).
-    Env knobs: QWEN36_SPEC_DRAFT_LEN (K), QWEN36_SPEC_TIMING, QWEN36_SPEC_CHECK_ANCHOR (engine).
+    Env knobs: QWEN36_SPEC_DRAFT_LEN (K), QWEN36_SPEC_TIMING.
     """
 
     # Field order of the QWEN36_SPEC_TIMING lines; engine.propose is timed as one phase ("draft"), so anchor/reseed are 0.
@@ -57,19 +57,21 @@ class SpeculativeDecoder:
         # T = K+1 must be in ``TPAttention._SPEC_SDPA_L1_FIT`` ({4, 8, 12}) to take the fused SDPA plan;
         # any other T uses the per-row SDPA path.
         self.K = int(draft_len if draft_len is not None else os.environ.get("QWEN36_SPEC_DRAFT_LEN", 3))
-        # torch int32 [B, num_blocks], one row per user; a [nb] vector is the B == 1 case.
-        pt = page_tables if isinstance(page_tables, torch.Tensor) else torch.as_tensor(page_tables)
-        if pt.dim() == 1:
-            pt = pt.reshape(1, -1)
-        assert pt.dim() == 2, f"page_tables must be [B, num_blocks], got {tuple(pt.shape)}"
-        self.page_tables = pt.to(torch.int32).contiguous()
+        self.T = self.K + 1
+        # Block table, one row per user: torch int32 [B, num_blocks]; a bare [nb] vector is B == 1.
+        pt = torch.as_tensor(page_tables).to(torch.int32).contiguous()
+        self.page_tables = pt.reshape(1, -1) if pt.dim() == 1 else pt
+        assert self.page_tables.dim() == 2, f"page_tables must be [B, num_blocks], got {tuple(self.page_tables.shape)}"
         self.B = int(self.page_tables.shape[0])
         assert self.B == self.args.max_batch_size, (
             f"page_tables has {self.B} rows but the model was built for max_batch_size="
             f"{self.args.max_batch_size}; the verify trace's row count is baked in at capture"
         )
-        assert self.B * (self.K + 1) <= MAX_SPEC_ROWS, (
-            f"B={self.B} users x T={self.K + 1} rows = {self.B * (self.K + 1)} > {MAX_SPEC_ROWS}: the verify "
+        # Verify/reseed row count. One decode tile carries every row: nlp_create_qkv_heads_decode, the
+        # 1-tile-row decode matmul configs and the fused GDN kernel's core budget all assume 32 rows.
+        self.R = self.B * self.T
+        assert self.R <= ttnn.TILE_SIZE, (
+            f"B={self.B} users x T={self.T} rows = {self.R} > {ttnn.TILE_SIZE}: the verify "
             f"is one decode tile. Lower K (see the auto-K-by-batch policy) or lower the batch."
         )
         self._timing = bool(int(os.environ.get("QWEN36_SPEC_TIMING", "0")))
@@ -87,6 +89,9 @@ class SpeculativeDecoder:
         self.iters = 0  # loop iterations (the seed verify is not counted)
         # Live (not FROZEN) user-iterations; denominator of every rate.
         self.user_iters = 0
+        # --- instrumentation (mean acceptance alone hides where the drafts die) ---
+        # Aggregated over the live users: one accept decision each per iteration, so the histogram
+        # sums to user_iters.
         self.accept_hist = [0] * (self.K + 1)  # how often exactly j drafts were accepted
         self.depth_hits = [0] * self.K  # depth_hits[j] = user-iterations that accepted draft j
         self.zero_accept = 0  # user-iterations with no accepted draft (still worth 1 token)
@@ -116,21 +121,10 @@ class SpeculativeDecoder:
         ``verify_ids`` is that user's [T] argmax ids: verify_ids[j] is the base's token after row j, i.e.
         the one drafts[j] must equal. The correction verify_ids[m] becomes the next `last`.
         """
-        K = len(drafts)
-        m = K
-        for j in range(K):
-            if drafts[j] != verify_ids[j]:
-                m = j
-                break
-        self.accept_hist[m] += 1
-        for j in range(m):
-            self.depth_hits[j] += 1
-        if m == 0:
-            self.zero_accept += 1
-        return m
+        return next((j for j, (d, v) in enumerate(zip(drafts, verify_ids)) if d != v), len(drafts))
 
     def _accept_sample(self, drafts, vlogits, penalize_base=None):
-        """Exact speculative rejection sampling over ONE user's verify logits; returns (m, token).
+        """Exact speculative rejection sampling over one user's verify logits; returns (m, token).
 
         ``vlogits`` is that user's [T, vocab] verify logits. Drafts are argmax (a delta proposal), so
         the accept test is ``u_j < p_j(d_j)``. ``next_token`` is the recovered token (m < K) or the bonus
@@ -138,11 +132,6 @@ class SpeculativeDecoder:
         (``generated_so_far ∪ {last}``, None without presence penalty); the sampler adds ``drafts[:j]``
         per row. See spec_sampling.py."""
         m, next_tok, p_draft = self.sampler.accept(vlogits, drafts, penalize_base)
-        self.accept_hist[m] += 1
-        for j in range(m):
-            self.depth_hits[j] += 1
-        if m == 0:
-            self.zero_accept += 1
         self._p_draft_sum += sum(p_draft)
         self._p_draft_n += len(p_draft)
         return m, next_tok
@@ -187,7 +176,7 @@ class SpeculativeDecoder:
         if not self._timing or not self._tn:
             return
         mean = {k: self._tsum.get(k, 0.0) / self._tn for k in self._TPHASES}
-        cpi = self.accept_rate() + 1.0  # per LIVE user
+        cpi = self.accept_rate() + 1.0  # per live user
         tot = cpi * self.B  # tokens the batch commits per iteration with every user still live
         # Frozen users commit nothing at the same iteration cost, so the delivered rate uses the mean live users.
         live_mean = self.user_iters / max(1, self.iters)
@@ -248,19 +237,18 @@ class SpeculativeDecoder:
         # max_new_tokens <= 1 (the seed verify still writes T slots).
         block_size = int(self.engine.block_size)
         nb = self.page_tables.shape[-1]
-        _cap = nb * block_size
+        cap = nb * block_size
         for u in range(B):
-            _hi = Tp[u] + K + max(1, max_new_tokens - 1)
-            assert _hi < _cap, (
-                f"user {u}: high-water slot {_hi} (prompt={Tp[u]}, max_new={max_new_tokens}, K={K}, "
-                f"users={B}) does not fit the paged KV: {nb} blocks x {block_size} = {_cap} slots"
+            hi = Tp[u] + self.K + max(1, max_new_tokens - 1)
+            assert hi < cap, (
+                f"user {u}: high-water slot {hi} (prompt={Tp[u]}, max_new={max_new_tokens}, K={self.K}, "
+                f"users={B}) does not fit the paged KV: {nb} blocks x {block_size} = {cap} slots"
             )
 
         # last[u]: last committed token (KV not yet written) at pos[u]; counts[u]: tokens the previous verify committed.
         out = [[] for _ in range(B)]
         done = [False] * B
-        self._out_sets = [set() for _ in range(B)]
-        out_sets = self._out_sets
+        out_sets = [set() for _ in range(B)]
         first = []
         for u in range(B):
             logits = engine.prefill(u, prompt_lists[u], self.page_tables[u : u + 1])
@@ -328,6 +316,10 @@ class SpeculativeDecoder:
                             else None
                         )
                         m, corr = self._accept_sample(drafts[u][:nd], vlogits[u][: nd + 1], penalize_base)
+                    self.accept_hist[m] += 1
+                    for j in range(m):
+                        self.depth_hits[j] += 1
+                    self.zero_accept += m == 0
                     self.total_accepted += m  # full m even if a stop truncates below
                 new = drafts[u][:m] + [corr]
                 # Drafts may be accepted past a stop token: emit only through the first one.
@@ -395,26 +387,21 @@ class SpeculativeDecoder:
         return res[0] if flat_in else res
 
     def accept_rate(self):
-        """Mean accepted DRAFT tokens per USER per iteration (0..K); tokens/iter/user is this + 1."""
+        """Mean accepted draft tokens per user per iteration (0..K); tokens/iter/user is this + 1."""
         return self.total_accepted / max(1, self.user_iters)
 
     def stats(self):
         """Acceptance breakdown. Mean acceptance alone cannot distinguish 'the drafter is weak at
         depth 3' from 'the first draft keeps aborting the iteration', which need different fixes.
 
-        Every rate is per USER-ITERATION (there is one accept decision per user per loop iteration),
-        so the numbers are comparable across batch sizes; ``tokens_per_iter_total`` is what the batch
-        commits per iteration and is the number throughput scales with.
-
-        FINISHED USERS DO NOT COUNT. A user that has stopped is FROZEN: its T rows still replay
-        (the row count is baked into the trace) but its accept result is discarded, so it feeds
-        neither ``user_iters`` nor the histograms nor ``total_drafted`` / ``total_accepted``. Every
-        rate below is therefore over USEFUL work only, whatever order the users finish in.
-        ``iters`` stays the raw loop-iteration count, and ``mean_live_users`` (= user_iters / iters)
-        says how full the batch was on average. So ``tokens_per_iter_total`` (= B x
-        committed_per_iter) is the rate with the batch FULL — the number throughput scales with —
-        while ``tokens_per_iter_delivered`` (= mean_live_users x committed_per_iter) is what the run
-        actually emitted per iteration. The two are equal when no user finishes early."""
+        Every rate is per user-iteration (one accept decision per live user per loop iteration), so
+        the numbers are comparable across batch sizes. Frozen users (see generate()) feed neither
+        ``user_iters`` nor the histograms nor ``total_drafted`` / ``total_accepted``, so every rate
+        covers useful work only. ``iters`` is the raw loop-iteration count and ``mean_live_users``
+        (= user_iters / iters) is how full the batch was on average. ``tokens_per_iter_total``
+        (= B x committed_per_iter) is the rate with the batch full, while
+        ``tokens_per_iter_delivered`` (= mean_live_users x committed_per_iter) is what the run
+        emitted per iteration; the two are equal when no user finishes early."""
         n = max(1, self.user_iters)
         return {
             "iters": self.iters,
