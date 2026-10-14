@@ -1120,6 +1120,18 @@ struct SenderKernelTrafficConfig {
             if (num_packets_processed < conn->num_buffers_per_channel) {
                 conn->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
             } else {
+                // CRAQ #52 diag: stamp this packet's ordinal into the router's location-info pad word
+                // (offset 60) with a plain async NOC write from L1 (no inline-write path, no wait), issued
+                // on the same NOC just before the stream-register signal.
+                {
+                    alignas(16) static uint32_t diag_stamp[4];
+                    diag_stamp[3] = conn->buffer_slot_write_counter.counter + 1;
+                    noc_async_write(
+                        reinterpret_cast<uint32_t>(&diag_stamp[3]),
+                        get_noc_addr(conn->edm_noc_x, conn->edm_noc_y, conn->edm_worker_location_info_addr + 60, get_fabric_worker_noc()),
+                        4,
+                        get_fabric_worker_noc());
+                }
                 fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn);
             }
             const uint64_t diag_t2 = get_timestamp();
