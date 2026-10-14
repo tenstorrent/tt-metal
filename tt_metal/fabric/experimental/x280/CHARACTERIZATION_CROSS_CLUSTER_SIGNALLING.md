@@ -104,14 +104,14 @@ Three consequences follow from the destination being LIM rather than L1:
 
 ID 3 needs two complexes in live resident idle, and reset release is one-way
 (D-022), so every tile it uses must leave reset inside one chip-reset
-lifetime. `x280_runtime_cli --boot --tile 0,1,2` is one such batch and there
-is one batch per lifetime. Three tiles rather than two, because releasing only
-0 and 1 forecloses the placement sweep until the next ASIC reset, and tile 3
-stays held so the device cases that require a reset-held tile still run
+lifetime. The harness's session fixture boots every enabled L2CPU of a chip
+whose L2CPUs are all held in reset in one batch (README § Benchmark harness),
+and there is one batch per lifetime, so the placement sweep finds every pair
+live. The device cases that require a reset-held tile
 (`ColdBootRefusedWithoutOptIn`,
 `OversizedIdleImageIsRejectedWithoutWritingLim` and
 `OversizedActiveImageIsRejectedWithoutWritingLim` in
-`tests/device/test_x280_device_hw.cpp`). Extra live tiles
+`tests/device/test_x280_device_hw.cpp`) then skip until the next ASIC reset. Extra live tiles
 do not perturb the measurement — the resident idle touches no DRAM, AXI, or
 MMIO outside its own L2CPU tile (`src/lim_idle.c:20-22`) — and cost only
 power. Images, environment knobs and the full sequence are in
