@@ -12,7 +12,8 @@
 //      its chips;
 //   3) open an X280Runtime with LimEccPrimingPolicy::RequirePrepared;
 //   4) pick the first enabled tile;
-//   5) require the tile to be in live resident idle;
+//   5) boot resident idle on every chip whose L2CPUs are all held in reset,
+//      then require the tile to be in live resident idle;
 //   6) pin the chip-global X280 PLL to `X280_PLL_MHZ` (default 1750 MHz) on
 //      every chip with a tile, and confirm the ARC telemetry echoes it.
 //
@@ -132,6 +133,57 @@ struct Fixture {
     }
 };
 
+/**
+ * Boots resident idle on every chip of `ids` whose enabled L2CPUs are all held
+ * in reset: one X280Runtime::boot_tiles batch per chip, with every enabled tile
+ * of that chip, because boot_tiles admits a batch only while all of them are
+ * held and only one per chip-reset lifetime. A chip with any tile out of reset
+ * is left as it is. The image is artifacts::image_path("X280_IDLE_FW_IMAGE",
+ * "firmware-lim-idle.bin"). Reset release is one-way for the chip-reset
+ * lifetime and leaves PLL4 at the safe release frequency.
+ *
+ * Records against the running test: a skip when a tile needs an ASIC reset
+ * first, a fatal failure for any other refusal. The caller checks
+ * IsSkipped() and HasFatalFailure().
+ */
+inline void boot_held_chips(x280::X280Runtime& runtime, const std::vector<x280::TileId>& ids) {
+    std::vector<int> chips;
+    for (const auto& id : ids) {
+        if (std::find(chips.begin(), chips.end(), id.chip_id) == chips.end()) {
+            chips.push_back(id.chip_id);
+        }
+    }
+    for (const int chip : chips) {
+        x280::MultiTileBootRequest request;
+        bool all_held = true;
+        for (const auto& id : ids) {
+            if (id.chip_id != chip) {
+                continue;
+            }
+            const auto state = runtime.tile(id).inspect();
+            ASSERT_TRUE(state.observation_valid) << state.invalid_reason;
+            all_held = all_held && !state.reset_released;
+            request.tiles.push_back(id);
+        }
+        if (!all_held) {
+            continue;
+        }
+        request.idle_image_path = artifacts::image_path("X280_IDLE_FW_IMAGE", "firmware-lim-idle.bin");
+        request.allow_reset_release = true;
+        const auto booted = runtime.boot_tiles(request);
+        if (booted.ready()) {
+            continue;
+        }
+        for (const auto& report : booted.tiles) {
+            if (x280::reset_required(report.result.outcome)) {
+                GTEST_SKIP() << "resident idle cannot boot on chip " << chip
+                             << " until an ASIC reset (tt-smi -r <device>): " << report.result.diagnostic;
+            }
+        }
+        FAIL() << "resident idle boot failed on chip " << chip << ": " << booted.diagnostic;
+    }
+}
+
 // The whole SetUp pattern in one call. Emits GTEST_SKIP() / ASSERT_* into
 // the calling test case exactly the way the pre-harness code did. Returns
 // void because GTEST_SKIP() expands to `return void_expr;` and cannot sit
@@ -161,13 +213,26 @@ inline void open_or_skip(Fixture& f, const OpenConfig& cfg) {
     }
     auto opened = x280::X280Runtime::open(f.mesh, runtime_config);
     if (!opened.runtime) {
-        GTEST_SKIP() << "prepared X280 runtime unavailable: " << opened.diagnostic;
+        std::string why = opened.diagnostic;
+        if (opened.requires_reset()) {
+            why += "; reset the device (tt-smi -r <device>)";
+        }
+        if (opened.requires_preparation() || opened.requires_reset()) {
+            why +=
+                "; an unprimed device is primed once by X280_ALLOW_LIM_ECC_PRIME=1 x280_prime_test, then "
+                "tt-smi -r <device>";
+        }
+        GTEST_SKIP() << "prepared X280 runtime unavailable: " << why;
     }
     f.runtime = std::make_unique<x280::X280Runtime>(std::move(*opened.runtime));
 
     const auto ids = f.runtime->tile_ids();
     if (ids.empty()) {
         GTEST_SKIP() << "no enabled X280 tiles";
+    }
+    boot_held_chips(*f.runtime, ids);
+    if (::testing::Test::IsSkipped() || ::testing::Test::HasFatalFailure()) {
+        return;
     }
     f.tile_id = ids.front();
     f.tile = &f.runtime->tile(f.tile_id);
@@ -177,7 +242,9 @@ inline void open_or_skip(Fixture& f, const OpenConfig& cfg) {
     const auto state = f.tile->inspect();
     ASSERT_TRUE(state.observation_valid) << state.invalid_reason;
     if (!state.resident_idle_live) {
-        GTEST_SKIP() << "requires a tile already in live resident idle; a case never releases reset";
+        GTEST_SKIP() << "requires a tile in live resident idle; chip " << f.tile_id.chip_id
+                     << " is partly out of reset, so none of its L2CPUs can boot until an ASIC reset "
+                        "(tt-smi -r <device>)";
     }
 
     // Every tile out of reset must be in resident idle; reset-held tiles are
