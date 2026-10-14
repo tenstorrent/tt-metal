@@ -32,9 +32,11 @@ constexpr bool bmm_reload_every_block = false;
 #else
 constexpr bool bmm_reload_every_block = get_arg(args::num_blocks_inner_dim) > 1;
 #endif
-// not when the partials are reloaded every block: the matmul init after each reload drains the unpack thread
-constexpr bool bmm_unpack_auto_ttsync =
-    get_arg(args::out_subblock_w) <= 2 && get_arg(args::out_subblock_h) <= 2 && !bmm_reload_every_block;
+// not when the partials are reloaded every block: the matmul init after each reload drains the unpack thread; not for
+// one tile row of in0 either (decode), which reads slower with it
+constexpr bool bmm_unpack_auto_ttsync = get_arg(args::out_subblock_w) <= 2 && get_arg(args::out_subblock_h) <= 2 &&
+                                        !bmm_reload_every_block &&
+                                        get_arg(args::in0_block_num_tiles) > get_arg(args::in0_block_w);
 #endif
 
 // This is the Metal 2.0 fork of bmm_large_block_zm_fused_bias_activation.cpp, which still sits
@@ -248,8 +250,16 @@ void kernel_main() {
 #else
     constexpr bool row_mop_fidelity = true;
 #endif
+#ifdef MATMUL_DRAM_SHARDED
+    // at LoFi the two row MOP rewrites per inner block around a narrowed last sub block cost more than an inner block
+    // under three tiles saves
+    constexpr bool row_mop_tail =
+        row_mop_fidelity || in0_block_w >= 3 || get_arg(args::last_subblock_w_valid) == out_subblock_w;
+#else
+    constexpr bool row_mop_tail = true;
+#endif
     constexpr bool row_mop =
-        (row_mop_fidelity || out_subblock_w >= 6 || (out_subblock_num_tiles >= 8 && in0_block_w > 1)) &&
+        row_mop_tail && (row_mop_fidelity || out_subblock_w >= 6 || (out_subblock_num_tiles >= 8 && in0_block_w > 1)) &&
         (DST_ACCUM_MODE || (unpack_src_format[out_dfb_id] != (uint8_t)DataFormat::Float32 &&
                             unpack_src_format[mm_partials_dfb_id] != (uint8_t)DataFormat::Float32));
     constexpr bool unpack_auto_ttsync = bmm_unpack_auto_ttsync;
