@@ -326,7 +326,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "experimental/llk_pack_fast_tilize.h"
 #include "llk_pack_common.h"
 
-// As the `ttnn.tilize` kernels: 16-bit rows of three or more tiles step L1 by the packer's output W counter.
+// As the `ttnn.tilize` kernels: a 16-bit input steps L1 by the packer's output W counter, except a row of two tiles
+// with a 16-bit output, which keeps the paced init.
 constexpr bool w_step = FAST_TILIZE_W_STEP && !is_fp32_dest_acc_en && clear_on_acquire;
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -401,8 +402,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                 formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
-            _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, true, w_step>(
-                0 /* use_32bit_dest */, formats.pack_dst, unit_dims[0], 4 /* num_faces */, formats.pack_src, input_32b);
+            if (FAST_TILIZE_TWO_TILE_ROW && !w_step && !input_32b && datum_size_in_bytes(formats.pack_dst) == 2)
+            {
+                // As llk_pack_fast_tilize_init_two_tile_row.
+                _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0 /* use_32bit_dest */, formats.pack_dst, 2, 4 /* num_faces */, formats.pack_src);
+            }
+            else
+            {
+                _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, true, w_step>(
+                    0 /* use_32bit_dest */, formats.pack_dst, unit_dims[0], 4 /* num_faces */, formats.pack_src, input_32b);
+            }
         }
         {
             START_PERF_MEASURE("TILE_LOOP")

@@ -271,7 +271,7 @@ ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, u
     }
     if constexpr (!is_fp32_dest_acc_en) {
         if (full_dim == 2) {
-            PACK((llk_pack_fast_tilize_init_two_tile_row<is_fp32_dest_acc_en>(icb, ocb)));
+            PACK((llk_pack_fast_tilize_init_two_tile_row<is_fp32_dest_acc_en, w_step>(icb, ocb)));
         } else {
             PACK((llk_pack_fast_tilize_init<is_fp32_dest_acc_en, w_step>(icb, ocb, first_chunk)));
         }
@@ -287,8 +287,8 @@ ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, u
 
 }  // namespace fast_tilize_detail
 
-// w_step (Blackhole, rows of three or more tiles): a 16-bit input steps L1 by the packer's output W counter; pass the same
-// value to fast_tilize_block and fast_tilize_uninit.
+// w_step (Blackhole, a 16-bit input): bare chunks step L1 by the packer's output W counter; pass the same value to
+// fast_tilize_block and fast_tilize_uninit.
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool w_step = false>
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     fast_tilize_detail::fast_tilize_init_impl<true, is_fp32_dest_acc_en, w_step>(icb, full_dim, ocb, call_line);

@@ -30,12 +30,12 @@ inline void llk_pack_fast_tilize_init(
 
 // A row of two tiles: with a 16-bit input and output its one chunk is paced either way, so it takes the init with the
 // WRCFG replay.
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool w_step = false>
 inline void llk_pack_fast_tilize_init_two_tile_row(const std::uint32_t input_operand, const std::uint32_t pack_output) {
     const std::uint8_t output_id = get_output_id(pack_output);
     const bool input_32b = pack_dst_format[get_output_id(input_operand)] == (uint)DataFormat::Float32;
-    if (is_fp32_dest_acc_en || input_32b || datum_size_in_bytes(pack_dst_format[output_id]) != 2) {
-        llk_pack_fast_tilize_init<is_fp32_dest_acc_en>(input_operand, pack_output, 2);
+    if (w_step || is_fp32_dest_acc_en || input_32b || datum_size_in_bytes(pack_dst_format[output_id]) != 2) {
+        llk_pack_fast_tilize_init<is_fp32_dest_acc_en, w_step>(input_operand, pack_output, 2);
         return;
     }
     SAN_HOOK(unsupported());

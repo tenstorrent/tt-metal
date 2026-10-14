@@ -89,20 +89,25 @@ class THROTTLE_LEVEL(TemplateParameter):
 
 @dataclass(init=False)
 class FAST_TILIZE_W_STEP(TemplateParameter):
-    """Blackhole fast tilize: rows of three or more tiles step L1 by the packer's output W counter, as the `ttnn.tilize`
-    kernels do (tilize_helpers.inl). No dataclass field, so the perf reports keep their columns.
+    """Blackhole fast tilize: a 16-bit input steps L1 by the packer's output W counter, as the `ttnn.tilize` kernels do
+    (tilize_helpers.inl), except a row of two tiles with a 16-bit output, which keeps the paced init. No dataclass
+    field, so the perf reports keep their columns.
     """
 
-    MIN_TILES = 3
-
-    def __init__(self, ct_dim: int):
-        self.w_step = ct_dim >= self.MIN_TILES
+    def __init__(self, ct_dim: int, formats):
+        self.two_tile_row = ct_dim == 2
+        self.w_step = formats.input_format.size == 2 and (
+            ct_dim >= 3 or (self.two_tile_row and formats.output_format.size != 2)
+        )
 
     def __repr__(self) -> str:
-        return f"FAST_TILIZE_W_STEP({self.w_step})"
+        return f"FAST_TILIZE_W_STEP({self.w_step}, {self.two_tile_row})"
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool FAST_TILIZE_W_STEP = {str(self.w_step).lower()};"
+        return (
+            f"constexpr bool FAST_TILIZE_W_STEP = {str(self.w_step).lower()};\n"
+            f"constexpr bool FAST_TILIZE_TWO_TILE_ROW = {str(self.two_tile_row).lower()};"
+        )
 
 
 @dataclass

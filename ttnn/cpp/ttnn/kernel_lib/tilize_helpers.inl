@@ -44,17 +44,24 @@ constexpr bool is_fp32_output_format() {
     return dfb_l1_format<output_dfb>() == static_cast<uint32_t>(DataFormat::Float32);
 }
 
+template <uint32_t output_dfb>
+constexpr bool is_16b_output_format() {
+    constexpr auto format = dfb_l1_format<output_dfb>();
+    return format == static_cast<uint32_t>(DataFormat::Float16_b) || format == static_cast<uint32_t>(DataFormat::Float16);
+}
+
 template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
 constexpr bool can_use_fast_tilize() {
     return block_width_tiles < 256 && dfb_has_32x32_tiles<output_dfb>() && !get_dst_full_sync_enabled() &&
            has_supported_fast_tilize_format<input_dfb>() && !is_fp32_output_format<output_dfb>();
 }
 
-// BH fast tilize steps L1 by the packer's output W counter for paired 16-bit rows of three or more tiles; a row of two
-// takes the paced init.
-template <uint32_t block_width_tiles, uint32_t input_dfb, tilize_config::ChunkPairing chunk_pairing>
+// BH fast tilize steps L1 by the packer's output W counter for paired 16-bit-input rows; a row of two tiles with a
+// 16-bit output keeps the paced init: back-to-back L1 writes there only slow the unpacker.
+template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb, tilize_config::ChunkPairing chunk_pairing>
 constexpr bool fast_tilize_w_step() {
-    return chunk_pairing == tilize_config::ChunkPairing::Paired && block_width_tiles >= 3 &&
+    return chunk_pairing == tilize_config::ChunkPairing::Paired &&
+           (block_width_tiles >= 3 || (block_width_tiles == 2 && !is_16b_output_format<output_dfb>())) &&
            !is_fp32_input_format<input_dfb>() && !DST_ACCUM_MODE;
 }
 
@@ -91,7 +98,7 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         (fp32_mode == tilize_config::Fp32Mode::Lossless) && is_fp32_input_format<input_dfb>();
     constexpr bool use_fast =
         can_use_fast_tilize<block_width_tiles, input_dfb, output_dfb>() && !lossless_fp32_override;
-    constexpr bool w_step = use_fast && fast_tilize_w_step<block_width_tiles, input_dfb, chunk_pairing>();
+    constexpr bool w_step = use_fast && fast_tilize_w_step<block_width_tiles, input_dfb, output_dfb, chunk_pairing>();
 
     // Determine if we're doing data type reconfiguration
     constexpr bool use_unpack_reconfig =

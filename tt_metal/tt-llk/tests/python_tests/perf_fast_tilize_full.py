@@ -81,7 +81,7 @@ def _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim):
             PerfRunType.PACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ],
-        templates=[FAST_TILIZE_W_STEP(ct_dim)],
+        templates=[FAST_TILIZE_W_STEP(ct_dim, formats)],
         runtimes=[
             generate_input_dim(dimensions, dimensions),
             TILE_COUNT(tile_count),

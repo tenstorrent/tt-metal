@@ -14,7 +14,7 @@
 //
 // L1 step (16-bit input and DEST): end_ops advance L1_Dest_addr one output tile (SCRATCH_SEC2) by a bare CFGSHIFTMASK;
 // two-tile chunks of a 16-bit output use the replay with that CFGSHIFTMASK, since bare chunks do not step OUTPUT_ADDR.
-// w_step (rows of three or more tiles): bare chunks step L1 by the output channel's W counter instead, no cfg write per tile.
+// w_step: every chunk is bare and steps L1 by the output channel's W counter, no cfg write per tile.
 
 #pragma once
 
@@ -195,7 +195,10 @@ TT_ALWAYS_INLINE void _llk_pack_fast_tilize_configure_(
 
     // Per-tile L1 advance (used by addr-update replay's ADDDMAREG).
     const std::uint32_t tile_l1_size = GET_L1_HEADERLESS_TILE_SIZE(pack_dst_format);
-    TT_SETDMAREG(0, LOWER_HALFWORD(tile_l1_size), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
+    if constexpr (!w_step)
+    {
+        TT_SETDMAREG(0, LOWER_HALFWORD(tile_l1_size), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
+    }
 
     TTI_SETDMAREG(0, 0x000, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
     TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
@@ -252,7 +255,7 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
 template <bool output_16b, bool w_step = false>
 inline void _llk_pack_fast_tilize_l1_step_mop_config_(const std::uint32_t unit_dim)
 {
-    _llk_pack_fast_tilize_mop_config_<w_step>(unit_dim, output_16b && (unit_dim == 2));
+    _llk_pack_fast_tilize_mop_config_<w_step>(unit_dim, !w_step && output_16b && (unit_dim == 2));
 }
 
 template <DstSync Dst, bool output_16b, bool program_mop, bool w_step = false>
@@ -261,14 +264,25 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_l1_step_init_(
 {
     _llk_pack_fast_tilize_configure_<Dst, false, w_step>(pack_dst_format, 4, pack_src_format);
     _llk_pack_fast_tilize_configure_addrmod_();
-    _llk_pack_fast_tilize_load_l1_step_replay_();
+    if constexpr (w_step)
+    {
+        // Every chunk is bare: no address-update replay and no step register.
+        _llk_pack_fast_tilize_load_tile_replay_();
+    }
+    else
+    {
+        _llk_pack_fast_tilize_load_l1_step_replay_();
+    }
     if constexpr (program_mop)
     {
         _llk_pack_fast_tilize_l1_step_mop_config_<output_16b, w_step>(unit_dim);
     }
-    // Last, so a MOP program's sync does not wait on it; the register's high half is zero, as the WRCFG address-update
-    // replay's ADDDMAREG also requires.
-    TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR_OFFSET, 0, SCRATCH_SEC2_val_ADDR32);
+    if constexpr (!w_step)
+    {
+        // Last, so a MOP program's sync does not wait on it; the register's high half is zero, as the WRCFG
+        // address-update replay's ADDDMAREG also requires.
+        TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR_OFFSET, 0, SCRATCH_SEC2_val_ADDR32);
+    }
 }
 
 // For callers that know the input's L1 format: a 16-bit input through a 16-bit DEST takes the L1 step, a 32-bit input or
