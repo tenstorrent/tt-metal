@@ -19,6 +19,7 @@
 #include "ckernel_sfpu_piecewise_rational.h"
 #include "ckernel_sfpu_tanh.h"  // _sfpu_tanh_fp32_accurate_ for gelu_tanh
 #include "sfpi.h"
+#include "ckernel_sfpu_gelu_tanh_bf16.h"
 
 namespace ckernel::sfpu {
 
@@ -347,6 +348,12 @@ inline void calculate_gelu() {
 
 template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_tanh() {
+    if constexpr (!is_fp32_dest_acc_en) {
+        if (bf16_dest_gelu_tanh()) {
+            calculate_gelu_tanh_bf16<ITERATIONS>();
+            return;
+        }
+    }
     constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
     constexpr float GELU_TANH_K = 0.044715f;
 
