@@ -67,3 +67,15 @@
 - evidence: /home/ubuntu/ssinghal/olmo3-logs/a4d7a853746-dirty_rep_trace_gate-b32.log
 - paths: models/demos/olmo_galaxy, ttnn/cpp/ttnn/operations/transformer/sdpa_decode
 - data: {"replay_hit_rate_64l": 0.037, "device_slot": 22, "chip_id": 14}
+
+## E261014-0455-120
+- date: 2026-10-14T04:55:51
+- commit: a37fc8e1287
+- branch: ssinghal/olmo3-galaxy-main
+- host: UF-EV-A9-GWH02
+- track: serving
+- status: inferred
+- claim: Serving through tt-inference-server (run.py --local-server, vLLM 0.30.0 + vllm-tt-plugin b16250b, spec olmo3_32b_galaxy) on the Galaxy, vllm bench serve random 128/128, 32 concurrent, greedy: TPOT 42.4 ms (23.6 tok/s/user), TTFT 1508 ms, 593 tok/s output, 96/96 ok. Demo batch-32 at a69ec79: 38.3 ms (26.1 tok/s/user). Model-card sampling (T=0.6, top_p=0.95) with server default top_k=32: 42.8 ms (device sampling); with top_k unset and no default: 127 ms (host sampling). 2K/4K prompts x32 concurrent: 0/64 failures (TPOT 51 ms; P99 ITL 55 ms at 4K). Needle retrieval OK at 28.5K and 57K prompt tokens; 5/5 factual checks across 32 concurrent users. Measured on the tree that became a37fc8e (uncommitted at the time); single unpaired runs.
+- evidence: /home/ubuntu/ssinghal/olmo3-logs/bench_ttis1.log
+- paths: models/demos/olmo_galaxy
+- data: {"tpot_ms": 42.4, "demo_tpot_ms": 38.3, "ttft_ms": 1508, "concurrency": 32}
