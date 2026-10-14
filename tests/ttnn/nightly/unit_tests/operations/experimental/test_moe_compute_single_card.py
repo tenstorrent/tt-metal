@@ -45,15 +45,15 @@ from ttnn.experimental.moe_compute_utils import (
     get_weight_mem_configs,
     auto_output_width_shard_dim,
     effective_matmul_ring_size,
-    decode_packed_token_lists,
-    token_list_header_words,
-    token_list_page_words,
-    token_list_segment_starts,
 )
 
 # Reuse 6U test helpers verbatim. The intent is that this single-card test
 # never duplicates compute logic — same goldens, same validators.
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
+    decode_packed_token_lists,
+    token_list_header_words,
+    token_list_page_words,
+    token_list_segment_starts,
     create_torch_w0,
     create_torch_w1,
     create_torch_w2,
