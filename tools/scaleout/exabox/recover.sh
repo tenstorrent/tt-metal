@@ -720,8 +720,9 @@ fi
 # only an interrupt stops recovery here.
 SYS_TRIAGE_DIR="$OUTPUT_DIR/sys_triage"
 
-# Args: <bundle root> <sys-triage path or ""> <budget s> <where, for messages> <uid:gid to hand
-# the bundle back to, or ""> <true if this rank tags its own lines with [host]>
+# Args: <bundle root> <sys-triage path or ""> <budget s> <where, for messages> <uid:gid to write
+# the bundle as, when running as root in a container, or ""> <true if this rank tags its own lines
+# with [host]>
 read -r -d '' SYS_TRIAGE_RANK_CMD <<'SYS_TRIAGE_CMD' || true
 h=$(hostname)
 root="$1"
@@ -753,6 +754,19 @@ elif ! bin=$(command -v sys-triage); then
     exit 0
 fi
 
+# Root in a container is squashed to nobody on an NFS output tree, where it could neither write
+# as the caller nor chown to them afterwards. So nothing reaches the output as root: sys-triage
+# writes to a local staging directory, and the bundle and log are written out as the caller.
+if [[ -n "$owner" ]]; then
+    if ! command -v setpriv >/dev/null 2>&1; then
+        say "SKIP: setpriv not found in $where; it is needed to write the bundle as ${owner}"
+        exit 0
+    fi
+    as_owner() { setpriv --reuid="${owner%%:*}" --regid="${owner##*:}" --clear-groups "$@"; }
+else
+    as_owner() { "$@"; }
+fi
+
 BMC_IP=$(sudo -n ipmitool lan print 2>/dev/null | awk -F': *' '/^IP Address[[:space:]]*:/ { print $2; exit }')
 if [[ -z "$BMC_IP" || "$BMC_IP" == "0.0.0.0" ]]; then
     say "SKIP: could not read this host's BMC address (sudo -n ipmitool lan print)"
@@ -763,27 +777,36 @@ export BMC_IP
 out="$root/$h"
 log="$root/$h.log"
 # A bundle left by an earlier run into the same output would be read as this run's state.
-rm -rf "$out"
-if ! mkdir -p "$out" 2>/dev/null; then
+as_owner rm -rf "$out"
+if ! as_owner mkdir -p "$out" 2>/dev/null; then
     say "SKIP: cannot create $out on this host"
+    exit 0
+fi
+work="$out"
+if [[ -n "$owner" ]] && ! work=$(mktemp -d); then
+    say "SKIP: cannot create a staging directory in $where"
     exit 0
 fi
 
 stdout_f=$(mktemp)
 stderr_f=$(mktemp)
 start=$SECONDS
-timeout --signal=TERM --kill-after=30s "$budget" "$bin" "$out" </dev/null >"$stdout_f" 2>"$stderr_f"
+timeout --signal=TERM --kill-after=30s "$budget" "$bin" "$work" </dev/null >"$stdout_f" 2>"$stderr_f"
 rc=$?
 dur=$((SECONDS - start))
+if [[ "$work" != "$out" ]]; then
+    chown -R "$owner" "$work"
+    as_owner cp -r "$work/." "$out/" || say "could not copy the bundle from $work into $out"
+    rm -rf "$work"
+fi
 {
-    printf '$ %s %s\nrc=%s  duration=%ss  bmc=%s@%s\n' "$bin" "$out" "$rc" "$dur" "$BMC_USER" "$BMC_IP"
+    printf '$ %s %s\nrc=%s  duration=%ss  bmc=%s@%s\n' "$bin" "$work" "$rc" "$dur" "$BMC_USER" "$BMC_IP"
+    [[ "$work" != "$out" ]] && printf 'bundle copied to %s as %s\n' "$out" "$owner"
     printf '\n--- stdout ---\n'
     scrub <"$stdout_f"
     printf '\n--- stderr ---\n'
     scrub <"$stderr_f"
-} >"$log" 2>/dev/null || say "could not write $log"
-# Written as root in a container; hand the bundle back to whoever ran recovery.
-[[ -n "$owner" ]] && chown -R "$owner" "$out" "$log" 2>/dev/null
+} | as_owner tee "$log" >/dev/null 2>&1 || say "could not write $log"
 
 # sys-triage carries on past a section it cannot collect and says so on stderr, so its
 # warnings are the only record of what the bundle lacks.
@@ -811,7 +834,7 @@ run_sys_triage() {
     if [[ -n "$SYS_TRIAGE_IMAGE" ]]; then
         # mpi-docker runs the image as the caller's uid over the host's /etc/passwd, where the
         # image's passwordless sudo does not apply, and sys-triage needs root for ipmitool and
-        # the CPLD dump: root it is, with the bundle chowned back after. mpi-docker joins and
+        # the CPLD dump: root it is, writing the bundle out as the caller. mpi-docker joins and
         # re-parses the command once on each rank, hence the %q on every argument. /var/log,
         # not /var/log/journal: a missing bind source is created on the host, and journald
         # would start persisting into it.
@@ -863,10 +886,6 @@ else
     if ! mkdir -p "$SYS_TRIAGE_DIR"; then
         echo "Warning: cannot create $SYS_TRIAGE_DIR; skipping sys-triage, recovery continues"
     else
-        # Container root is squashed to nobody on an NFS output tree, so it needs write access as anyone.
-        if [[ -n "$SYS_TRIAGE_IMAGE" ]] && ! chmod 0777 "$SYS_TRIAGE_DIR"; then
-            echo "Warning: could not chmod 0777 $SYS_TRIAGE_DIR; the containers may not be able to write there"
-        fi
         run_sys_triage || SYS_TRIAGE_EXIT=$?
         if [[ $SYS_TRIAGE_EXIT -eq 130 || $SYS_TRIAGE_EXIT -eq 143 ]]; then
             echo "sys-triage collection was interrupted; stopping recovery."
