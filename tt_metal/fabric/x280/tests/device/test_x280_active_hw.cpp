@@ -11,6 +11,7 @@
 #include "x280_tile_impl.hpp"
 
 #include "x280.h"
+#include "x280_test_images.hpp"
 
 #include <gtest/gtest.h>
 #include <mesh_device.hpp>
@@ -51,14 +52,19 @@ std::vector<std::string> split_image_list(const std::string& list) {
 }
 
 // Image list for the contract suite, falling back to the single-image variable
-// the sentinel tests use so existing invocations keep working. A path that is
+// the sentinel tests use so existing invocations keep working, and with neither
+// set to the build's contract set: the sentinel and atomic-bench. A path that is
 // not present is dropped rather than failed: the list names every conforming
 // image, and a checkout need not have built them all. Dropping is not silent —
 // EveryRequestedImageResolves names each one and fails when nothing resolves.
 std::vector<std::string> images_from_env() {
     const char* many = std::getenv("X280_ACTIVE_FW_IMAGES");
     const char* one = std::getenv("X280_ACTIVE_FW_IMAGE");
-    const std::string list = many != nullptr ? many : (one != nullptr ? one : "");
+    const std::string list =
+        many != nullptr  ? many
+        : one != nullptr ? one
+                         : x280::test::test_image("X280_ACTIVE_FW_IMAGE", "firmware.bin") + ":" +
+                               x280::test::test_image("X280_ATOMIC_BENCH_FW_IMAGE", "firmware-atomic-bench.bin");
 
     std::vector<std::string> images;
     for (auto& path : split_image_list(list)) {
@@ -190,24 +196,7 @@ protected:
 // sweep, skew, a rejected image. These test the runtime, not image conformance.
 class X280ActiveHw : public X280ActiveHwBase {
 protected:
-    // Every case here runs the sentinel, so X280_ACTIVE_FW_IMAGE gates the
-    // whole fixture and the skip belongs here rather than in each body.
-    // GTEST_SKIP returns only from the function it appears in, so a skip
-    // already raised by the base has to be re-tested before adding another.
-    void SetUp() override {
-        X280ActiveHwBase::SetUp();
-        if (::testing::Test::IsSkipped()) {
-            return;
-        }
-        if (success_image().empty()) {
-            GTEST_SKIP() << "set X280_ACTIVE_FW_IMAGE to x280/build/firmware.bin";
-        }
-    }
-
-    std::string success_image() const {
-        const char* path = std::getenv("X280_ACTIVE_FW_IMAGE");
-        return path == nullptr ? std::string{} : std::string(path);
-    }
+    std::string success_image() const { return x280::test::test_image("X280_ACTIVE_FW_IMAGE", "firmware.bin"); }
 
     SessionId enqueue(uint64_t value) { return enqueue_image(success_image(), value); }
 

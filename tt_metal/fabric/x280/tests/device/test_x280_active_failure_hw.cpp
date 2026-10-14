@@ -10,6 +10,7 @@
 #include "x280_runtime_impl.hpp"
 
 #include "x280.h"
+#include "x280_test_images.hpp"
 
 #include <gtest/gtest.h>
 #include <mesh_device.hpp>
@@ -34,10 +35,7 @@ TEST(X280ActiveFailure, TrapMakesTheTileUnhealthyAndRefusesReacquisition) {
     if (!enabled()) {
         GTEST_SKIP() << "set X280_ALLOW_ACTIVE_SESSION_FAILURE=1 to run the intentional CEASE test";
     }
-    const char* image = std::getenv("X280_ACTIVE_FAULT_FW_IMAGE");
-    if (image == nullptr || *image == '\0') {
-        GTEST_SKIP() << "set X280_ACTIVE_FAULT_FW_IMAGE to firmware-active-session-fault.bin";
-    }
+    const std::string image = x280::test::test_image("X280_ACTIVE_FAULT_FW_IMAGE", "firmware-active-session-fault.bin");
 
     auto mesh = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0);
     auto opened = X280Runtime::open(mesh, RuntimeOpenConfig{.priming_policy = LimEccPrimingPolicy::RequirePrepared});

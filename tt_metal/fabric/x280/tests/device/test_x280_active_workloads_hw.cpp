@@ -13,6 +13,7 @@
 #include "x280_tile_impl.hpp"
 
 #include "x280.h"
+#include "x280_test_images.hpp"
 
 #include <gtest/gtest.h>
 #include <mesh_device.hpp>
@@ -179,11 +180,6 @@ protected:
         mesh_.reset();
     }
 
-    std::string image(const char* environment) const {
-        const char* path = std::getenv(environment);
-        return path == nullptr ? std::string{} : std::string(path);
-    }
-
     SessionId enqueue(const std::string& image_path, uint64_t run_value) {
         ActiveRunRequest request;
         request.image_path = image_path;
@@ -232,10 +228,7 @@ protected:
 }  // namespace
 
 TEST_F(X280ActiveWorkloadHw, ActiveImageLoadsExecutesAndReturnsToIdle) {
-    const std::string firmware = image("X280_ATOMIC_BENCH_FW_IMAGE");
-    if (firmware.empty()) {
-        GTEST_SKIP() << "set X280_ATOMIC_BENCH_FW_IMAGE to firmware-atomic-bench.bin";
-    }
+    const std::string firmware = x280::test::test_image("X280_ATOMIC_BENCH_FW_IMAGE", "firmware-atomic-bench.bin");
 
     LimSnapshot lim(*access_, kAtomicBase, 0x2100);
     zero_region(*access_, kAtomicBase, 0x2100);

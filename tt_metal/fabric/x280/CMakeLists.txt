@@ -231,6 +231,9 @@ function(_x280_device_test name)
             RUNTIME_OUTPUT_DIRECTORY
                 ${X280_TEST_OUTPUT_DIR}
     )
+    # The tests default to the images this build produces.
+    target_compile_definitions(${name} PRIVATE X280_IMAGE_DIR="${X280_IMAGE_DIR}")
+    add_dependencies(${name} x280_images)
 endfunction()
 
 _x280_device_test(x280_runtime_device_tests
