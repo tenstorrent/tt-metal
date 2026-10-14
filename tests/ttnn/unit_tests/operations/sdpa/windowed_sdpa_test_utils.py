@@ -7,6 +7,7 @@
 import torch
 
 import ttnn
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import skip_routed_on_simulator
 
 
 def windowed_mask(seq_len, cu_window_seqlens, is_causal=False):
@@ -32,6 +33,8 @@ def to_cu_tensor(cu_window_seqlens, device, **kwargs):
 
 
 def sdpa_configs(device, q_chunk, k_chunk, fp32_dest_acc_en=True):
+    # FP32 dest without `precision` routes to the ACCURATE recipe.
+    skip_routed_on_simulator(fp32_dest_acc_en)
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         exp_approx_mode=False,

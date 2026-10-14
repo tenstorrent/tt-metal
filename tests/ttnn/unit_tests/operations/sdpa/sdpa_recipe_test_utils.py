@@ -14,10 +14,21 @@ import pytest
 import torch
 import ttnn
 
+ON_SIMULATOR = os.environ.get("TT_METAL_SIMULATOR") is not None
+# The simulator does not model the recipes' 32-bit unpack-to-DEST broadcasts (SETDVALID) or their FP32 unpacks.
+SIMULATOR_REASON = "SDPA precision recipes run on Blackhole and Wormhole B0 hardware, not the simulator"
 recipe_hardware = pytest.mark.skipif(
-    ttnn.get_arch_name() not in ("blackhole", "wormhole_b0") or os.environ.get("TT_METAL_SIMULATOR") is not None,
-    reason="SDPA precision recipes run on Blackhole and Wormhole B0 hardware (the simulator disables SFPLOADMACRO)",
+    ttnn.get_arch_name() not in ("blackhole", "wormhole_b0") or ON_SIMULATOR,
+    reason=SIMULATOR_REASON,
 )
+
+
+def skip_routed_on_simulator(routed=True):
+    """Skip a call without `precision` that routes to a recipe (FP32-dest prefill, non-ring joint) on the simulator."""
+    if routed and ON_SIMULATOR:
+        pytest.skip(f"Routed to the SDPA precision recipes: {SIMULATOR_REASON}")
+
+
 # Ring recipes on the Blackhole fabric (exp ring stays Blackhole-only).
 blackhole_only = pytest.mark.skipif(
     ttnn.get_arch_name() != "blackhole" or os.environ.get("TT_METAL_SIMULATOR") is not None,

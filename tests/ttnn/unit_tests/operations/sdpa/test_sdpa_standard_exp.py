@@ -7,6 +7,7 @@ import pytest
 import torch
 import ttnn
 
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import skip_routed_on_simulator
 from tests.ttnn.unit_tests.operations.sdpa.standard_exp_test_utils import (
     TRUE_PCC_MIN,
     make_fixture,
@@ -32,6 +33,7 @@ from tests.ttnn.unit_tests.operations.sdpa.standard_exp_test_utils import (
 def test_standard_sdpa_exp_modes(device, k_chunks, scale, fp32_dest_acc_en, record_property):
     device.enable_program_cache()
     routed = fp32_dest_acc_en and ttnn.get_arch_name() in ("blackhole", "wormhole_b0")
+    skip_routed_on_simulator(routed)
     host_inputs = make_fixture(k_chunks)
     golden = reference(*host_inputs, scale)
     # Fail before device execution when a changed fixture makes correlation undefined.
