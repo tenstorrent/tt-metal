@@ -123,6 +123,16 @@ __attribute__((always_inline)) inline void row_math(const std::uint32_t runtime_
     const std::uint32_t tile_cnt = ROW_TILES > 0 ? ROW_TILES : runtime_tile_cnt;
     _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
         tensor_shape, 0 /* acc_to_dest */);
+    if (MATH_FIDELITY == MathFidelity::LoFi && _llk_math_mul_reduce_scalar_interleaves_(tensor_shape, tile_cnt))
+    {
+        _llk_math_mul_reduce_scalar_interleaved_init_<is_fp32_dest_acc_en>();
+        for (std::uint32_t i = 0; i < tile_cnt; ++i)
+        {
+            _llk_math_mul_reduce_scalar_interleaved_tile_(i, tensor_shape, REDUCE_SCALER);
+        }
+        _llk_math_mul_reduce_scalar_interleaved_tail_(tile_cnt, tensor_shape);
+        return;
+    }
     for (std::uint32_t i = 0; i < tile_cnt; ++i)
     {
         if (_llk_math_mul_reduce_scalar_shares_slot_(tensor_shape))

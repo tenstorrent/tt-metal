@@ -122,6 +122,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
+    if (MATH_FIDELITY == MathFidelity::LoFi && _llk_math_mul_reduce_scalar_interleaves_(tensor_shape, tile_cnt))
+    {
+        _llk_math_mul_reduce_scalar_interleaved_init_<is_fp32_dest_acc_en>();
+        for (std::uint32_t i = 0; i < tile_cnt; ++i)
+        {
+            _llk_math_mul_reduce_scalar_interleaved_tile_(i, tensor_shape, REDUCE_SCALER);
+        }
+        _llk_math_mul_reduce_scalar_interleaved_tail_(tile_cnt, tensor_shape);
+        _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+        return;
+    }
+
     // Step 1 - multiply phase: C[i] = A[i] * B[i] into DEST[i].
     for (std::uint32_t i = 0; i < tile_cnt; ++i)
     {

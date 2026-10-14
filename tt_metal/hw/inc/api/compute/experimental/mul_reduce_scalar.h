@@ -63,13 +63,23 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
     static_assert(!accumulate_in_one_tile, "accumulate_in_one_tile is Blackhole-only");
 #endif
 
+#if defined(ARCH_BLACKHOLE)
+    // A LoFi row of two or more tiles pools each product while the next tile is multiplied (same results).
+    MATH(
+        const bool interleave = mul_f == MathFidelity::LoFi && reduce_f == MathFidelity::LoFi &&
+                                !accumulate_in_one_tile && llk_math_mul_reduce_scalar_interleaves(icb0, num_tiles));
+    MATH(if (interleave) { llk_math_mul_reduce_scalar_interleaved_init<is_fp32_dest_acc_en>(); });
+#endif
+
     // Step 1: Unpack input tiles from both circular buffers and perform multiplication. ELWMUL accumulates
     // into DEST, so with accumulate_in_one_tile every product lands in dest[0].
     for (uint32_t i = 0; i < num_tiles; i++) {
         UNPACK((llk_unpack_AB(icb0, icb1, i, i)));
 #if defined(ARCH_BLACKHOLE)
-        MATH((llk_math_eltwise_mul_reduce_scalar<is_fp32_dest_acc_en, mul_f, !accumulate_in_one_tile>(
-            accumulate_in_one_tile ? 0 : i, icb0)));
+        MATH(
+            (interleave ? llk_math_mul_reduce_scalar_interleaved_tile(i, icb0, scaler)
+                        : llk_math_eltwise_mul_reduce_scalar<is_fp32_dest_acc_en, mul_f, !accumulate_in_one_tile>(
+                              accumulate_in_one_tile ? 0 : i, icb0)));
 #else
         MATH((llk_math_eltwise_mul_reduce_scalar<is_fp32_dest_acc_en, mul_f>(accumulate_in_one_tile ? 0 : i, icb0)));
 #endif
@@ -78,6 +88,12 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
 
     // Step 2: Switch UNPACK state for reduce phase (reset counters, set DVALID)
     UNPACK((llk_unpack_mul_reduce_scalar_switch_to_reduce()));
+#if defined(ARCH_BLACKHOLE)
+    MATH(if (interleave) {
+        llk_math_mul_reduce_scalar_interleaved_tail(num_tiles, icb0);
+        return;
+    });
+#endif
 
     // Step 3: Initialize reduce operation
     MATH((llk_math_mul_reduce_scalar_reduce_init<is_fp32_dest_acc_en, reduce_f>()));
