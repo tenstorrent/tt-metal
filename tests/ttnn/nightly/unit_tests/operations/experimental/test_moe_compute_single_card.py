@@ -1530,7 +1530,11 @@ def _run_moe_compute_local_output_prefill_test(
         for start in range(0, tokens, _PREFILL_REFERENCE_TOKENS):
             stop = min(start + _PREFILL_REFERENCE_TOKENS, tokens)
             call_inputs = upload_call_inputs(hidden[start:stop], indices[start:stop], scores[start:stop])
-            outputs = run(*call_inputs, cluster_axis=None)
+            # Preserve the fused-ring reference for this local ring writer. Automatic selection may use
+            # expert rows, whose default LoFi/BF16 arithmetic is not this bitwise reference.
+            with pytest.MonkeyPatch.context() as kernel:
+                kernel.setenv("TT_METAL_MOE_COMPUTE_KERNEL", "ring")
+                outputs = run(*call_inputs, cluster_axis=None)
             reference_bits.append(_bf16_bits(outputs[5]))
             for tensor in (outputs[0], outputs[1], outputs[2], outputs[4], *call_inputs):
                 ttnn.deallocate(tensor)
