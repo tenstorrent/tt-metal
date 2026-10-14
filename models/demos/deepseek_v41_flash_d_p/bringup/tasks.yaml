@@ -130,3 +130,6762 @@ tasks:
       ledger_tasks: '>= 1'
   paths:
   - models/demos/deepseek_v41_flash_d_p/bringup/tasks.yaml
+- id: PL.1
+  title: 'Plan: fits per-chip DRAM (from the checkpoint), every step mapped, ledger valid, approved'
+  step: plan
+  deps:
+  - PL.0
+  - B.1
+  - SC.1
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.check_plan
+    metrics:
+      plan_fits: == 1
+      unplaced_tensors: == 0
+      plan_errors: == 0
+      component_errors: == 0
+      ledger_errors: == 0
+      plan_approved: == 1
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/plan.yaml
+  - models/demos/deepseek_v41_flash_d_p/bringup/plan.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/components.yaml
+  - models/demos/deepseek_v41_flash_d_p/bringup/approvals.yaml
+  - models/demos/deepseek_v41_flash_d_p/bringup/results/plan_memory.json
+  - models/demos/deepseek_v41_flash_d_p/bringup/results/plan_boxes.json
+  - models/demos/deepseek_v41_flash_d_p/bringup/scaling.yaml
+  approval: plan
+- id: SG.1
+  title: 'Scaled run: the reduced checkpoint (heads and experts cut by the plan''s scale factors) and its golden'
+  step: scale
+  deps:
+  - PL.1
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.scale && BRINGUP_SCALED=1 python -m models.demos.common.bringup.reference.generate_golden
+      --rung scaled
+    metrics:
+      scale_errors: == 0
+      scale_tensors_total: '>= 1'
+      golden_layers: == 8
+      golden_hash_ok: == 1
+  role: scale
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/reference
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/__init__.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/scaling.yaml
+- id: C.swa.attn_hc
+  title: swa attn_hc (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_hc.py
+    metrics:
+      pcc_attn_hc_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_hc.py
+  freeze_extra: &id002
+  - /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json
+  paths: &id003
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  brief:
+    block_type: swa
+    step: attn_hc
+    kind: op
+    layer: 0
+    stateful: false
+- id: S.swa.01
+  title: 'swa block with steps 1-1 on device (last: attn_hc)'
+  step: implement
+  deps:
+  - C.swa.attn_hc
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_01_attn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_01_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    swapped:
+    - attn_hc
+    layer: 0
+- id: C.swa.attn_collapse
+  title: swa attn_collapse (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_collapse.py
+    metrics:
+      pcc_attn_collapse_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    step: attn_collapse
+    kind: op
+    layer: 0
+    stateful: false
+- id: S.swa.02
+  title: 'swa block with steps 1-2 on device (last: attn_collapse)'
+  step: implement
+  deps:
+  - C.swa.attn_collapse
+  - S.swa.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_02_attn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_02_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    swapped:
+    - attn_hc
+    - attn_collapse
+    layer: 0
+- id: C.swa.attn_norm
+  title: swa attn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_norm.py
+    metrics:
+      pcc_attn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    step: attn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+- id: S.swa.03
+  title: 'swa block with steps 1-3 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.swa.attn_norm
+  - S.swa.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_03_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_03_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    layer: 0
+- id: C.swa.q_a
+  title: swa q_a (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_q_a.py
+    metrics:
+      pcc_q_a_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    step: q_a
+    kind: op
+    layer: 0
+    stateful: false
+- id: S.swa.04
+  title: 'swa block with steps 1-4 on device (last: q_a)'
+  step: implement
+  deps:
+  - C.swa.q_a
+  - S.swa.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_04_q_a.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_04_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    layer: 0
+- id: C.swa.kv
+  title: swa kv (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_kv.py
+    metrics:
+      pcc_kv_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    step: kv
+    kind: op
+    layer: 0
+    stateful: false
+- id: S.swa.05
+  title: 'swa block with steps 1-5 on device (last: kv)'
+  step: implement
+  deps:
+  - C.swa.kv
+  - S.swa.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_05_kv.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_05_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    layer: 0
+- id: C.swa.attention
+  title: swa attention (attention) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attention.py &&
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
+    metrics:
+      pcc_attention_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    step: attention
+    kind: attention
+    layer: 0
+    stateful: true
+- id: S.swa.06
+  title: 'swa block with steps 1-6 on device (last: attention)'
+  step: implement
+  deps:
+  - C.swa.attention
+  - S.swa.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_06_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_06_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    layer: 0
+- id: C.swa.attn_residual
+  title: swa attn_residual (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_residual.py
+    metrics:
+      pcc_attn_residual_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    step: attn_residual
+    kind: residual
+    layer: 0
+    stateful: false
+- id: S.swa.07
+  title: 'swa block with steps 1-7 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.swa.attn_residual
+  - S.swa.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_07_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_07_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    layer: 0
+- id: C.swa.ffn_hc
+  title: swa ffn_hc (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_hc.py
+    metrics:
+      pcc_ffn_hc_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    step: ffn_hc
+    kind: op
+    layer: 0
+    stateful: false
+- id: S.swa.08
+  title: 'swa block with steps 1-8 on device (last: ffn_hc)'
+  step: implement
+  deps:
+  - C.swa.ffn_hc
+  - S.swa.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_08_ffn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_08_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    layer: 0
+- id: C.swa.ffn_collapse
+  title: swa ffn_collapse (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_collapse.py
+    metrics:
+      pcc_ffn_collapse_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    step: ffn_collapse
+    kind: op
+    layer: 0
+    stateful: false
+- id: S.swa.09
+  title: 'swa block with steps 1-9 on device (last: ffn_collapse)'
+  step: implement
+  deps:
+  - C.swa.ffn_collapse
+  - S.swa.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_09_ffn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_09_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    layer: 0
+- id: C.swa.ffn_norm
+  title: swa ffn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    step: ffn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+- id: S.swa.10
+  title: 'swa block with steps 1-10 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.swa.ffn_norm
+  - S.swa.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_10_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_10_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    layer: 0
+- id: C.swa.router
+  title: swa router (router) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_router.py
+    metrics:
+      pcc_router_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    step: router
+    kind: router
+    layer: 0
+    stateful: false
+- id: S.swa.11
+  title: 'swa block with steps 1-11 on device (last: router)'
+  step: implement
+  deps:
+  - C.swa.router
+  - S.swa.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_11_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_11_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    layer: 0
+- id: C.swa.experts
+  title: swa experts (moe) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_experts.py
+    metrics:
+      pcc_experts_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    step: experts
+    kind: moe
+    layer: 0
+    stateful: false
+- id: S.swa.12
+  title: 'swa block with steps 1-12 on device (last: experts)'
+  step: implement
+  deps:
+  - C.swa.experts
+  - S.swa.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_12_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_12_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    layer: 0
+- id: C.swa.shared_expert
+  title: swa shared_expert (mlp) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_shared_expert.py
+    metrics:
+      pcc_shared_expert_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    step: shared_expert
+    kind: mlp
+    layer: 0
+    stateful: false
+- id: S.swa.13
+  title: 'swa block with steps 1-13 on device (last: shared_expert)'
+  step: implement
+  deps:
+  - C.swa.shared_expert
+  - S.swa.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_13_shared_expert.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_13_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    layer: 0
+- id: C.swa.moe_add
+  title: swa moe_add (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_moe_add.py
+    metrics:
+      pcc_moe_add_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    step: moe_add
+    kind: residual
+    layer: 0
+    stateful: false
+- id: S.swa.14
+  title: 'swa block with steps 1-14 on device (last: moe_add)'
+  step: implement
+  deps:
+  - C.swa.moe_add
+  - S.swa.13
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_14_moe_add.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_14_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    layer: 0
+- id: C.swa.ffn_residual
+  title: swa ffn_residual (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    step: ffn_residual
+    kind: residual
+    layer: 0
+    stateful: false
+- id: S.swa.15
+  title: 'swa block with steps 1-15 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.swa.ffn_residual
+  - S.swa.14
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_15_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_15_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    - ffn_residual
+    layer: 0
+- id: C.swa_engram.engram_rows
+  title: swa_engram engram_rows (embedding) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_rows.py
+    metrics:
+      pcc_engram_rows_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_rows.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: engram_rows
+    kind: embedding
+    layer: 1
+    stateful: true
+- id: S.swa_engram.01
+  title: 'swa_engram block with steps 1-1 on device (last: engram_rows)'
+  step: implement
+  deps:
+  - C.swa_engram.engram_rows
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_01_engram_rows.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_01_engram_rows.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    layer: 1
+- id: C.swa_engram.engram_kv
+  title: swa_engram engram_kv (op) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_kv.py
+    metrics:
+      pcc_engram_kv_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: engram_kv
+    kind: op
+    layer: 1
+    stateful: false
+- id: S.swa_engram.02
+  title: 'swa_engram block with steps 1-2 on device (last: engram_kv)'
+  step: implement
+  deps:
+  - C.swa_engram.engram_kv
+  - S.swa_engram.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_02_engram_kv.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_02_engram_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    layer: 1
+- id: C.swa_engram.engram_add
+  title: swa_engram engram_add (residual) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_add.py
+    metrics:
+      pcc_engram_add_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: engram_add
+    kind: residual
+    layer: 1
+    stateful: false
+- id: S.swa_engram.03
+  title: 'swa_engram block with steps 1-3 on device (last: engram_add)'
+  step: implement
+  deps:
+  - C.swa_engram.engram_add
+  - S.swa_engram.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_03_engram_add.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_03_engram_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    layer: 1
+- id: C.swa_engram.attn_hc
+  title: swa_engram attn_hc (op) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_hc.py
+    metrics:
+      pcc_attn_hc_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: attn_hc
+    kind: op
+    layer: 1
+    stateful: false
+- id: S.swa_engram.04
+  title: 'swa_engram block with steps 1-4 on device (last: attn_hc)'
+  step: implement
+  deps:
+  - C.swa_engram.attn_hc
+  - S.swa_engram.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_04_attn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_04_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    layer: 1
+- id: C.swa_engram.attn_collapse
+  title: swa_engram attn_collapse (op) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_collapse.py
+    metrics:
+      pcc_attn_collapse_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: attn_collapse
+    kind: op
+    layer: 1
+    stateful: false
+- id: S.swa_engram.05
+  title: 'swa_engram block with steps 1-5 on device (last: attn_collapse)'
+  step: implement
+  deps:
+  - C.swa_engram.attn_collapse
+  - S.swa_engram.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_05_attn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_05_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    layer: 1
+- id: C.swa_engram.attn_norm
+  title: swa_engram attn_norm (norm) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_norm.py
+    metrics:
+      pcc_attn_norm_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: attn_norm
+    kind: norm
+    layer: 1
+    stateful: false
+- id: S.swa_engram.06
+  title: 'swa_engram block with steps 1-6 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.swa_engram.attn_norm
+  - S.swa_engram.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_06_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_06_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    layer: 1
+- id: C.swa_engram.q_a
+  title: swa_engram q_a (op) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_q_a.py
+    metrics:
+      pcc_q_a_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: q_a
+    kind: op
+    layer: 1
+    stateful: false
+- id: S.swa_engram.07
+  title: 'swa_engram block with steps 1-7 on device (last: q_a)'
+  step: implement
+  deps:
+  - C.swa_engram.q_a
+  - S.swa_engram.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_07_q_a.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_07_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    layer: 1
+- id: C.swa_engram.kv
+  title: swa_engram kv (op) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_kv.py
+    metrics:
+      pcc_kv_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: kv
+    kind: op
+    layer: 1
+    stateful: false
+- id: S.swa_engram.08
+  title: 'swa_engram block with steps 1-8 on device (last: kv)'
+  step: implement
+  deps:
+  - C.swa_engram.kv
+  - S.swa_engram.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_08_kv.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_08_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    layer: 1
+- id: C.swa_engram.attention
+  title: swa_engram attention (attention) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attention.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
+    metrics:
+      pcc_attention_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: attention
+    kind: attention
+    layer: 1
+    stateful: true
+- id: S.swa_engram.09
+  title: 'swa_engram block with steps 1-9 on device (last: attention)'
+  step: implement
+  deps:
+  - C.swa_engram.attention
+  - S.swa_engram.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_09_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_09_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    layer: 1
+- id: C.swa_engram.attn_residual
+  title: swa_engram attn_residual (residual) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_residual.py
+    metrics:
+      pcc_attn_residual_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: attn_residual
+    kind: residual
+    layer: 1
+    stateful: false
+- id: S.swa_engram.10
+  title: 'swa_engram block with steps 1-10 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.swa_engram.attn_residual
+  - S.swa_engram.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_10_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_10_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    layer: 1
+- id: C.swa_engram.ffn_hc
+  title: swa_engram ffn_hc (op) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_hc.py
+    metrics:
+      pcc_ffn_hc_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: ffn_hc
+    kind: op
+    layer: 1
+    stateful: false
+- id: S.swa_engram.11
+  title: 'swa_engram block with steps 1-11 on device (last: ffn_hc)'
+  step: implement
+  deps:
+  - C.swa_engram.ffn_hc
+  - S.swa_engram.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_11_ffn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_11_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    layer: 1
+- id: C.swa_engram.ffn_collapse
+  title: swa_engram ffn_collapse (op) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_collapse.py
+    metrics:
+      pcc_ffn_collapse_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: ffn_collapse
+    kind: op
+    layer: 1
+    stateful: false
+- id: S.swa_engram.12
+  title: 'swa_engram block with steps 1-12 on device (last: ffn_collapse)'
+  step: implement
+  deps:
+  - C.swa_engram.ffn_collapse
+  - S.swa_engram.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_12_ffn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_12_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    layer: 1
+- id: C.swa_engram.ffn_norm
+  title: swa_engram ffn_norm (norm) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: ffn_norm
+    kind: norm
+    layer: 1
+    stateful: false
+- id: S.swa_engram.13
+  title: 'swa_engram block with steps 1-13 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.swa_engram.ffn_norm
+  - S.swa_engram.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_13_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_13_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    layer: 1
+- id: C.swa_engram.router
+  title: swa_engram router (router) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_router.py
+    metrics:
+      pcc_router_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: router
+    kind: router
+    layer: 1
+    stateful: false
+- id: S.swa_engram.14
+  title: 'swa_engram block with steps 1-14 on device (last: router)'
+  step: implement
+  deps:
+  - C.swa_engram.router
+  - S.swa_engram.13
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_14_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_14_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    layer: 1
+- id: C.swa_engram.experts
+  title: swa_engram experts (moe) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_experts.py
+    metrics:
+      pcc_experts_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: experts
+    kind: moe
+    layer: 1
+    stateful: false
+- id: S.swa_engram.15
+  title: 'swa_engram block with steps 1-15 on device (last: experts)'
+  step: implement
+  deps:
+  - C.swa_engram.experts
+  - S.swa_engram.14
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_15_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_15_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    layer: 1
+- id: C.swa_engram.shared_expert
+  title: swa_engram shared_expert (mlp) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_shared_expert.py
+    metrics:
+      pcc_shared_expert_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: shared_expert
+    kind: mlp
+    layer: 1
+    stateful: false
+- id: S.swa_engram.16
+  title: 'swa_engram block with steps 1-16 on device (last: shared_expert)'
+  step: implement
+  deps:
+  - C.swa_engram.shared_expert
+  - S.swa_engram.15
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_16_shared_expert.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_16_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    layer: 1
+- id: C.swa_engram.moe_add
+  title: swa_engram moe_add (residual) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_moe_add.py
+    metrics:
+      pcc_moe_add_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: moe_add
+    kind: residual
+    layer: 1
+    stateful: false
+- id: S.swa_engram.17
+  title: 'swa_engram block with steps 1-17 on device (last: moe_add)'
+  step: implement
+  deps:
+  - C.swa_engram.moe_add
+  - S.swa_engram.16
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_17_moe_add.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_17_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    layer: 1
+- id: C.swa_engram.ffn_residual
+  title: swa_engram ffn_residual (residual) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    step: ffn_residual
+    kind: residual
+    layer: 1
+    stateful: false
+- id: S.swa_engram.18
+  title: 'swa_engram block with steps 1-18 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.swa_engram.ffn_residual
+  - S.swa_engram.17
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_18_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_18_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: swa_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    - ffn_residual
+    layer: 1
+- id: C.enc_source.attn_hc
+  title: enc_source attn_hc (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_hc.py
+    metrics:
+      pcc_attn_hc_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: attn_hc
+    kind: op
+    layer: 2
+    stateful: false
+- id: S.enc_source.01
+  title: 'enc_source block with steps 1-1 on device (last: attn_hc)'
+  step: implement
+  deps:
+  - C.enc_source.attn_hc
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_01_attn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_01_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    layer: 2
+- id: C.enc_source.attn_collapse
+  title: enc_source attn_collapse (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_collapse.py
+    metrics:
+      pcc_attn_collapse_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: attn_collapse
+    kind: op
+    layer: 2
+    stateful: false
+- id: S.enc_source.02
+  title: 'enc_source block with steps 1-2 on device (last: attn_collapse)'
+  step: implement
+  deps:
+  - C.enc_source.attn_collapse
+  - S.enc_source.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_02_attn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_02_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    - attn_collapse
+    layer: 2
+- id: C.enc_source.attn_norm
+  title: enc_source attn_norm (norm) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_norm.py
+    metrics:
+      pcc_attn_norm_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: attn_norm
+    kind: norm
+    layer: 2
+    stateful: false
+- id: S.enc_source.03
+  title: 'enc_source block with steps 1-3 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.enc_source.attn_norm
+  - S.enc_source.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_03_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_03_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    layer: 2
+- id: C.enc_source.q_a
+  title: enc_source q_a (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_q_a.py
+    metrics:
+      pcc_q_a_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: q_a
+    kind: op
+    layer: 2
+    stateful: false
+- id: S.enc_source.04
+  title: 'enc_source block with steps 1-4 on device (last: q_a)'
+  step: implement
+  deps:
+  - C.enc_source.q_a
+  - S.enc_source.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_04_q_a.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_04_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    layer: 2
+- id: C.enc_source.kv
+  title: enc_source kv (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_kv.py
+    metrics:
+      pcc_kv_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: kv
+    kind: op
+    layer: 2
+    stateful: false
+- id: S.enc_source.05
+  title: 'enc_source block with steps 1-5 on device (last: kv)'
+  step: implement
+  deps:
+  - C.enc_source.kv
+  - S.enc_source.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_05_kv.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_05_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    layer: 2
+- id: C.enc_source.compressor
+  title: enc_source compressor (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_compressor.py
+    metrics:
+      pcc_compressor_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_compressor.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: compressor
+    kind: op
+    layer: 2
+    stateful: true
+- id: S.enc_source.06
+  title: 'enc_source block with steps 1-6 on device (last: compressor)'
+  step: implement
+  deps:
+  - C.enc_source.compressor
+  - S.enc_source.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_06_compressor.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_06_compressor.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    layer: 2
+- id: C.enc_source.indexer
+  title: enc_source indexer (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_indexer.py
+    metrics:
+      pcc_indexer_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_indexer.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: indexer
+    kind: op
+    layer: 2
+    stateful: true
+- id: S.enc_source.07
+  title: 'enc_source block with steps 1-7 on device (last: indexer)'
+  step: implement
+  deps:
+  - C.enc_source.indexer
+  - S.enc_source.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_07_indexer.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_07_indexer.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    layer: 2
+- id: C.enc_source.attention
+  title: enc_source attention (attention) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attention.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
+    metrics:
+      pcc_attention_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: attention
+    kind: attention
+    layer: 2
+    stateful: true
+- id: S.enc_source.08
+  title: 'enc_source block with steps 1-8 on device (last: attention)'
+  step: implement
+  deps:
+  - C.enc_source.attention
+  - S.enc_source.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_08_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_08_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    layer: 2
+- id: C.enc_source.attn_residual
+  title: enc_source attn_residual (residual) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_residual.py
+    metrics:
+      pcc_attn_residual_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: attn_residual
+    kind: residual
+    layer: 2
+    stateful: false
+- id: S.enc_source.09
+  title: 'enc_source block with steps 1-9 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.enc_source.attn_residual
+  - S.enc_source.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_09_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_09_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    layer: 2
+- id: C.enc_source.ffn_hc
+  title: enc_source ffn_hc (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_hc.py
+    metrics:
+      pcc_ffn_hc_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: ffn_hc
+    kind: op
+    layer: 2
+    stateful: false
+- id: S.enc_source.10
+  title: 'enc_source block with steps 1-10 on device (last: ffn_hc)'
+  step: implement
+  deps:
+  - C.enc_source.ffn_hc
+  - S.enc_source.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_10_ffn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_10_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    layer: 2
+- id: C.enc_source.ffn_collapse
+  title: enc_source ffn_collapse (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_collapse.py
+    metrics:
+      pcc_ffn_collapse_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: ffn_collapse
+    kind: op
+    layer: 2
+    stateful: false
+- id: S.enc_source.11
+  title: 'enc_source block with steps 1-11 on device (last: ffn_collapse)'
+  step: implement
+  deps:
+  - C.enc_source.ffn_collapse
+  - S.enc_source.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_11_ffn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_11_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    layer: 2
+- id: C.enc_source.ffn_norm
+  title: enc_source ffn_norm (norm) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: ffn_norm
+    kind: norm
+    layer: 2
+    stateful: false
+- id: S.enc_source.12
+  title: 'enc_source block with steps 1-12 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.enc_source.ffn_norm
+  - S.enc_source.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_12_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_12_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    layer: 2
+- id: C.enc_source.router
+  title: enc_source router (router) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_router.py
+    metrics:
+      pcc_router_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: router
+    kind: router
+    layer: 2
+    stateful: false
+- id: S.enc_source.13
+  title: 'enc_source block with steps 1-13 on device (last: router)'
+  step: implement
+  deps:
+  - C.enc_source.router
+  - S.enc_source.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_13_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_13_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    layer: 2
+- id: C.enc_source.experts
+  title: enc_source experts (moe) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_experts.py
+    metrics:
+      pcc_experts_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: experts
+    kind: moe
+    layer: 2
+    stateful: false
+- id: S.enc_source.14
+  title: 'enc_source block with steps 1-14 on device (last: experts)'
+  step: implement
+  deps:
+  - C.enc_source.experts
+  - S.enc_source.13
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_14_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_14_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    layer: 2
+- id: C.enc_source.shared_expert
+  title: enc_source shared_expert (mlp) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_shared_expert.py
+    metrics:
+      pcc_shared_expert_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: shared_expert
+    kind: mlp
+    layer: 2
+    stateful: false
+- id: S.enc_source.15
+  title: 'enc_source block with steps 1-15 on device (last: shared_expert)'
+  step: implement
+  deps:
+  - C.enc_source.shared_expert
+  - S.enc_source.14
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_15_shared_expert.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_15_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    layer: 2
+- id: C.enc_source.moe_add
+  title: enc_source moe_add (residual) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_moe_add.py
+    metrics:
+      pcc_moe_add_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: moe_add
+    kind: residual
+    layer: 2
+    stateful: false
+- id: S.enc_source.16
+  title: 'enc_source block with steps 1-16 on device (last: moe_add)'
+  step: implement
+  deps:
+  - C.enc_source.moe_add
+  - S.enc_source.15
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_16_moe_add.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_16_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    layer: 2
+- id: C.enc_source.ffn_residual
+  title: enc_source ffn_residual (residual) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    step: ffn_residual
+    kind: residual
+    layer: 2
+    stateful: false
+- id: S.enc_source.17
+  title: 'enc_source block with steps 1-17 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.enc_source.ffn_residual
+  - S.enc_source.16
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_17_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_17_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    - ffn_residual
+    layer: 2
+- id: C.enc_source_engram.engram_rows
+  title: enc_source_engram engram_rows (embedding) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_rows.py
+    metrics:
+      pcc_engram_rows_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_rows.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: engram_rows
+    kind: embedding
+    layer: 14
+    stateful: true
+- id: S.enc_source_engram.01
+  title: 'enc_source_engram block with steps 1-1 on device (last: engram_rows)'
+  step: implement
+  deps:
+  - C.enc_source_engram.engram_rows
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_01_engram_rows.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_01_engram_rows.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    layer: 14
+- id: C.enc_source_engram.engram_kv
+  title: enc_source_engram engram_kv (op) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_kv.py
+    metrics:
+      pcc_engram_kv_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: engram_kv
+    kind: op
+    layer: 14
+    stateful: false
+- id: S.enc_source_engram.02
+  title: 'enc_source_engram block with steps 1-2 on device (last: engram_kv)'
+  step: implement
+  deps:
+  - C.enc_source_engram.engram_kv
+  - S.enc_source_engram.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_02_engram_kv.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_02_engram_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    layer: 14
+- id: C.enc_source_engram.engram_add
+  title: enc_source_engram engram_add (residual) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_add.py
+    metrics:
+      pcc_engram_add_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: engram_add
+    kind: residual
+    layer: 14
+    stateful: false
+- id: S.enc_source_engram.03
+  title: 'enc_source_engram block with steps 1-3 on device (last: engram_add)'
+  step: implement
+  deps:
+  - C.enc_source_engram.engram_add
+  - S.enc_source_engram.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_03_engram_add.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_03_engram_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    layer: 14
+- id: C.enc_source_engram.attn_hc
+  title: enc_source_engram attn_hc (op) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_hc.py
+    metrics:
+      pcc_attn_hc_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: attn_hc
+    kind: op
+    layer: 14
+    stateful: false
+- id: S.enc_source_engram.04
+  title: 'enc_source_engram block with steps 1-4 on device (last: attn_hc)'
+  step: implement
+  deps:
+  - C.enc_source_engram.attn_hc
+  - S.enc_source_engram.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_04_attn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_04_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    layer: 14
+- id: C.enc_source_engram.attn_collapse
+  title: enc_source_engram attn_collapse (op) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_collapse.py
+    metrics:
+      pcc_attn_collapse_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: attn_collapse
+    kind: op
+    layer: 14
+    stateful: false
+- id: S.enc_source_engram.05
+  title: 'enc_source_engram block with steps 1-5 on device (last: attn_collapse)'
+  step: implement
+  deps:
+  - C.enc_source_engram.attn_collapse
+  - S.enc_source_engram.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_05_attn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_05_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    layer: 14
+- id: C.enc_source_engram.attn_norm
+  title: enc_source_engram attn_norm (norm) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_norm.py
+    metrics:
+      pcc_attn_norm_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: attn_norm
+    kind: norm
+    layer: 14
+    stateful: false
+- id: S.enc_source_engram.06
+  title: 'enc_source_engram block with steps 1-6 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.enc_source_engram.attn_norm
+  - S.enc_source_engram.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_06_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_06_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    layer: 14
+- id: C.enc_source_engram.q_a
+  title: enc_source_engram q_a (op) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_q_a.py
+    metrics:
+      pcc_q_a_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: q_a
+    kind: op
+    layer: 14
+    stateful: false
+- id: S.enc_source_engram.07
+  title: 'enc_source_engram block with steps 1-7 on device (last: q_a)'
+  step: implement
+  deps:
+  - C.enc_source_engram.q_a
+  - S.enc_source_engram.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_07_q_a.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_07_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    layer: 14
+- id: C.enc_source_engram.kv
+  title: enc_source_engram kv (op) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_kv.py
+    metrics:
+      pcc_kv_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: kv
+    kind: op
+    layer: 14
+    stateful: false
+- id: S.enc_source_engram.08
+  title: 'enc_source_engram block with steps 1-8 on device (last: kv)'
+  step: implement
+  deps:
+  - C.enc_source_engram.kv
+  - S.enc_source_engram.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_08_kv.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_08_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    layer: 14
+- id: C.enc_source_engram.compressor
+  title: enc_source_engram compressor (op) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_compressor.py
+    metrics:
+      pcc_compressor_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_compressor.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: compressor
+    kind: op
+    layer: 14
+    stateful: true
+- id: S.enc_source_engram.09
+  title: 'enc_source_engram block with steps 1-9 on device (last: compressor)'
+  step: implement
+  deps:
+  - C.enc_source_engram.compressor
+  - S.enc_source_engram.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_09_compressor.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_09_compressor.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    layer: 14
+- id: C.enc_source_engram.indexer
+  title: enc_source_engram indexer (op) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_indexer.py
+    metrics:
+      pcc_indexer_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_indexer.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: indexer
+    kind: op
+    layer: 14
+    stateful: true
+- id: S.enc_source_engram.10
+  title: 'enc_source_engram block with steps 1-10 on device (last: indexer)'
+  step: implement
+  deps:
+  - C.enc_source_engram.indexer
+  - S.enc_source_engram.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_10_indexer.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_10_indexer.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    layer: 14
+- id: C.enc_source_engram.attention
+  title: enc_source_engram attention (attention) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attention.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
+    metrics:
+      pcc_attention_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: attention
+    kind: attention
+    layer: 14
+    stateful: true
+- id: S.enc_source_engram.11
+  title: 'enc_source_engram block with steps 1-11 on device (last: attention)'
+  step: implement
+  deps:
+  - C.enc_source_engram.attention
+  - S.enc_source_engram.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_11_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_11_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    layer: 14
+- id: C.enc_source_engram.attn_residual
+  title: enc_source_engram attn_residual (residual) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_residual.py
+    metrics:
+      pcc_attn_residual_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: attn_residual
+    kind: residual
+    layer: 14
+    stateful: false
+- id: S.enc_source_engram.12
+  title: 'enc_source_engram block with steps 1-12 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.enc_source_engram.attn_residual
+  - S.enc_source_engram.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_12_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_12_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    layer: 14
+- id: C.enc_source_engram.ffn_hc
+  title: enc_source_engram ffn_hc (op) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_hc.py
+    metrics:
+      pcc_ffn_hc_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: ffn_hc
+    kind: op
+    layer: 14
+    stateful: false
+- id: S.enc_source_engram.13
+  title: 'enc_source_engram block with steps 1-13 on device (last: ffn_hc)'
+  step: implement
+  deps:
+  - C.enc_source_engram.ffn_hc
+  - S.enc_source_engram.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_13_ffn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_13_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    layer: 14
+- id: C.enc_source_engram.ffn_collapse
+  title: enc_source_engram ffn_collapse (op) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_collapse.py
+    metrics:
+      pcc_ffn_collapse_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: ffn_collapse
+    kind: op
+    layer: 14
+    stateful: false
+- id: S.enc_source_engram.14
+  title: 'enc_source_engram block with steps 1-14 on device (last: ffn_collapse)'
+  step: implement
+  deps:
+  - C.enc_source_engram.ffn_collapse
+  - S.enc_source_engram.13
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_14_ffn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_14_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    layer: 14
+- id: C.enc_source_engram.ffn_norm
+  title: enc_source_engram ffn_norm (norm) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: ffn_norm
+    kind: norm
+    layer: 14
+    stateful: false
+- id: S.enc_source_engram.15
+  title: 'enc_source_engram block with steps 1-15 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.enc_source_engram.ffn_norm
+  - S.enc_source_engram.14
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_15_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_15_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    layer: 14
+- id: C.enc_source_engram.router
+  title: enc_source_engram router (router) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_router.py
+    metrics:
+      pcc_router_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: router
+    kind: router
+    layer: 14
+    stateful: false
+- id: S.enc_source_engram.16
+  title: 'enc_source_engram block with steps 1-16 on device (last: router)'
+  step: implement
+  deps:
+  - C.enc_source_engram.router
+  - S.enc_source_engram.15
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_16_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_16_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    layer: 14
+- id: C.enc_source_engram.experts
+  title: enc_source_engram experts (moe) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_experts.py
+    metrics:
+      pcc_experts_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: experts
+    kind: moe
+    layer: 14
+    stateful: false
+- id: S.enc_source_engram.17
+  title: 'enc_source_engram block with steps 1-17 on device (last: experts)'
+  step: implement
+  deps:
+  - C.enc_source_engram.experts
+  - S.enc_source_engram.16
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_17_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_17_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    layer: 14
+- id: C.enc_source_engram.shared_expert
+  title: enc_source_engram shared_expert (mlp) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_shared_expert.py
+    metrics:
+      pcc_shared_expert_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: shared_expert
+    kind: mlp
+    layer: 14
+    stateful: false
+- id: S.enc_source_engram.18
+  title: 'enc_source_engram block with steps 1-18 on device (last: shared_expert)'
+  step: implement
+  deps:
+  - C.enc_source_engram.shared_expert
+  - S.enc_source_engram.17
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_18_shared_expert.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_18_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    layer: 14
+- id: C.enc_source_engram.moe_add
+  title: enc_source_engram moe_add (residual) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_moe_add.py
+    metrics:
+      pcc_moe_add_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: moe_add
+    kind: residual
+    layer: 14
+    stateful: false
+- id: S.enc_source_engram.19
+  title: 'enc_source_engram block with steps 1-19 on device (last: moe_add)'
+  step: implement
+  deps:
+  - C.enc_source_engram.moe_add
+  - S.enc_source_engram.18
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_19_moe_add.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_19_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    layer: 14
+- id: C.enc_source_engram.ffn_residual
+  title: enc_source_engram ffn_residual (residual) on device, layer 14
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L14: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    step: ffn_residual
+    kind: residual
+    layer: 14
+    stateful: false
+- id: S.enc_source_engram.20
+  title: 'enc_source_engram block with steps 1-20 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.enc_source_engram.ffn_residual
+  - S.enc_source_engram.19
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_20_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_source_engram_20_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_source_engram
+    swapped:
+    - engram_rows
+    - engram_kv
+    - engram_add
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    - ffn_residual
+    layer: 14
+- id: C.enc_reuse.attn_hc
+  title: enc_reuse attn_hc (op) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_hc.py
+    metrics:
+      pcc_attn_hc_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    step: attn_hc
+    kind: op
+    layer: 3
+    stateful: false
+- id: S.enc_reuse.01
+  title: 'enc_reuse block with steps 1-1 on device (last: attn_hc)'
+  step: implement
+  deps:
+  - C.enc_reuse.attn_hc
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_01_attn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_01_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    swapped:
+    - attn_hc
+    layer: 3
+- id: C.enc_reuse.attn_collapse
+  title: enc_reuse attn_collapse (op) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_collapse.py
+    metrics:
+      pcc_attn_collapse_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    step: attn_collapse
+    kind: op
+    layer: 3
+    stateful: false
+- id: S.enc_reuse.02
+  title: 'enc_reuse block with steps 1-2 on device (last: attn_collapse)'
+  step: implement
+  deps:
+  - C.enc_reuse.attn_collapse
+  - S.enc_reuse.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_02_attn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_02_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    layer: 3
+- id: C.enc_reuse.attn_norm
+  title: enc_reuse attn_norm (norm) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_norm.py
+    metrics:
+      pcc_attn_norm_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    step: attn_norm
+    kind: norm
+    layer: 3
+    stateful: false
+- id: S.enc_reuse.03
+  title: 'enc_reuse block with steps 1-3 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.enc_reuse.attn_norm
+  - S.enc_reuse.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_03_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_03_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    layer: 3
+- id: C.enc_reuse.q_a
+  title: enc_reuse q_a (op) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_q_a.py
+    metrics:
+      pcc_q_a_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    step: q_a
+    kind: op
+    layer: 3
+    stateful: false
+- id: S.enc_reuse.04
+  title: 'enc_reuse block with steps 1-4 on device (last: q_a)'
+  step: implement
+  deps:
+  - C.enc_reuse.q_a
+  - S.enc_reuse.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_04_q_a.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_04_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    layer: 3
+- id: C.enc_reuse.kv
+  title: enc_reuse kv (op) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_kv.py
+    metrics:
+      pcc_kv_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    step: kv
+    kind: op
+    layer: 3
+    stateful: false
+- id: S.enc_reuse.05
+  title: 'enc_reuse block with steps 1-5 on device (last: kv)'
+  step: implement
+  deps:
+  - C.enc_reuse.kv
+  - S.enc_reuse.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_05_kv.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_05_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    layer: 3
+- id: C.enc_reuse.attention
+  title: enc_reuse attention (attention) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attention.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
+    metrics:
+      pcc_attention_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    step: attention
+    kind: attention
+    layer: 3
+    stateful: true
+- id: S.enc_reuse.06
+  title: 'enc_reuse block with steps 1-6 on device (last: attention)'
+  step: implement
+  deps:
+  - C.enc_reuse.attention
+  - S.enc_reuse.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_06_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_06_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    layer: 3
+- id: C.enc_reuse.attn_residual
+  title: enc_reuse attn_residual (residual) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_residual.py
+    metrics:
+      pcc_attn_residual_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    step: attn_residual
+    kind: residual
+    layer: 3
+    stateful: false
+- id: S.enc_reuse.07
+  title: 'enc_reuse block with steps 1-7 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.enc_reuse.attn_residual
+  - S.enc_reuse.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_07_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_07_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    layer: 3
+- id: C.enc_reuse.ffn_hc
+  title: enc_reuse ffn_hc (op) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_hc.py
+    metrics:
+      pcc_ffn_hc_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    step: ffn_hc
+    kind: op
+    layer: 3
+    stateful: false
+- id: S.enc_reuse.08
+  title: 'enc_reuse block with steps 1-8 on device (last: ffn_hc)'
+  step: implement
+  deps:
+  - C.enc_reuse.ffn_hc
+  - S.enc_reuse.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_08_ffn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_08_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    layer: 3
+- id: C.enc_reuse.ffn_collapse
+  title: enc_reuse ffn_collapse (op) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_collapse.py
+    metrics:
+      pcc_ffn_collapse_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    step: ffn_collapse
+    kind: op
+    layer: 3
+    stateful: false
+- id: S.enc_reuse.09
+  title: 'enc_reuse block with steps 1-9 on device (last: ffn_collapse)'
+  step: implement
+  deps:
+  - C.enc_reuse.ffn_collapse
+  - S.enc_reuse.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_09_ffn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_09_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    layer: 3
+- id: C.enc_reuse.ffn_norm
+  title: enc_reuse ffn_norm (norm) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    step: ffn_norm
+    kind: norm
+    layer: 3
+    stateful: false
+- id: S.enc_reuse.10
+  title: 'enc_reuse block with steps 1-10 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.enc_reuse.ffn_norm
+  - S.enc_reuse.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_10_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_10_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    layer: 3
+- id: C.enc_reuse.router
+  title: enc_reuse router (router) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_router.py
+    metrics:
+      pcc_router_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    step: router
+    kind: router
+    layer: 3
+    stateful: false
+- id: S.enc_reuse.11
+  title: 'enc_reuse block with steps 1-11 on device (last: router)'
+  step: implement
+  deps:
+  - C.enc_reuse.router
+  - S.enc_reuse.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_11_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_11_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    layer: 3
+- id: C.enc_reuse.experts
+  title: enc_reuse experts (moe) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_experts.py
+    metrics:
+      pcc_experts_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    step: experts
+    kind: moe
+    layer: 3
+    stateful: false
+- id: S.enc_reuse.12
+  title: 'enc_reuse block with steps 1-12 on device (last: experts)'
+  step: implement
+  deps:
+  - C.enc_reuse.experts
+  - S.enc_reuse.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_12_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_12_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    layer: 3
+- id: C.enc_reuse.shared_expert
+  title: enc_reuse shared_expert (mlp) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_shared_expert.py
+    metrics:
+      pcc_shared_expert_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    step: shared_expert
+    kind: mlp
+    layer: 3
+    stateful: false
+- id: S.enc_reuse.13
+  title: 'enc_reuse block with steps 1-13 on device (last: shared_expert)'
+  step: implement
+  deps:
+  - C.enc_reuse.shared_expert
+  - S.enc_reuse.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_13_shared_expert.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_13_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    layer: 3
+- id: C.enc_reuse.moe_add
+  title: enc_reuse moe_add (residual) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_moe_add.py
+    metrics:
+      pcc_moe_add_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    step: moe_add
+    kind: residual
+    layer: 3
+    stateful: false
+- id: S.enc_reuse.14
+  title: 'enc_reuse block with steps 1-14 on device (last: moe_add)'
+  step: implement
+  deps:
+  - C.enc_reuse.moe_add
+  - S.enc_reuse.13
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_14_moe_add.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_14_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    layer: 3
+- id: C.enc_reuse.ffn_residual
+  title: enc_reuse ffn_residual (residual) on device, layer 3
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L03: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_reuse_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    step: ffn_residual
+    kind: residual
+    layer: 3
+    stateful: false
+- id: S.enc_reuse.15
+  title: 'enc_reuse block with steps 1-15 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.enc_reuse.ffn_residual
+  - S.enc_reuse.14
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_15_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_enc_reuse_15_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: enc_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    - ffn_residual
+    layer: 3
+- id: C.dec_candidate.attn_hc
+  title: dec_candidate attn_hc (op) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_hc.py
+    metrics:
+      pcc_attn_hc_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: attn_hc
+    kind: op
+    layer: 20
+    stateful: false
+- id: S.dec_candidate.01
+  title: 'dec_candidate block with steps 1-1 on device (last: attn_hc)'
+  step: implement
+  deps:
+  - C.dec_candidate.attn_hc
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_01_attn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_01_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    layer: 20
+- id: C.dec_candidate.attn_collapse
+  title: dec_candidate attn_collapse (op) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_collapse.py
+    metrics:
+      pcc_attn_collapse_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: attn_collapse
+    kind: op
+    layer: 20
+    stateful: false
+- id: S.dec_candidate.02
+  title: 'dec_candidate block with steps 1-2 on device (last: attn_collapse)'
+  step: implement
+  deps:
+  - C.dec_candidate.attn_collapse
+  - S.dec_candidate.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_02_attn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_02_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    - attn_collapse
+    layer: 20
+- id: C.dec_candidate.attn_norm
+  title: dec_candidate attn_norm (norm) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_norm.py
+    metrics:
+      pcc_attn_norm_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: attn_norm
+    kind: norm
+    layer: 20
+    stateful: false
+- id: S.dec_candidate.03
+  title: 'dec_candidate block with steps 1-3 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.dec_candidate.attn_norm
+  - S.dec_candidate.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_03_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_03_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    layer: 20
+- id: C.dec_candidate.q_a
+  title: dec_candidate q_a (op) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_q_a.py
+    metrics:
+      pcc_q_a_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: q_a
+    kind: op
+    layer: 20
+    stateful: false
+- id: S.dec_candidate.04
+  title: 'dec_candidate block with steps 1-4 on device (last: q_a)'
+  step: implement
+  deps:
+  - C.dec_candidate.q_a
+  - S.dec_candidate.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_04_q_a.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_04_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    layer: 20
+- id: C.dec_candidate.kv
+  title: dec_candidate kv (op) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_kv.py
+    metrics:
+      pcc_kv_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: kv
+    kind: op
+    layer: 20
+    stateful: false
+- id: S.dec_candidate.05
+  title: 'dec_candidate block with steps 1-5 on device (last: kv)'
+  step: implement
+  deps:
+  - C.dec_candidate.kv
+  - S.dec_candidate.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_05_kv.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_05_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    layer: 20
+- id: C.dec_candidate.compressor
+  title: dec_candidate compressor (op) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_compressor.py
+    metrics:
+      pcc_compressor_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_compressor.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: compressor
+    kind: op
+    layer: 20
+    stateful: true
+- id: S.dec_candidate.06
+  title: 'dec_candidate block with steps 1-6 on device (last: compressor)'
+  step: implement
+  deps:
+  - C.dec_candidate.compressor
+  - S.dec_candidate.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_06_compressor.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_06_compressor.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    layer: 20
+- id: C.dec_candidate.indexer
+  title: dec_candidate indexer (op) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_indexer.py
+    metrics:
+      pcc_indexer_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_indexer.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: indexer
+    kind: op
+    layer: 20
+    stateful: true
+- id: S.dec_candidate.07
+  title: 'dec_candidate block with steps 1-7 on device (last: indexer)'
+  step: implement
+  deps:
+  - C.dec_candidate.indexer
+  - S.dec_candidate.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_07_indexer.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_07_indexer.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    layer: 20
+- id: C.dec_candidate.attention
+  title: dec_candidate attention (attention) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attention.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
+    metrics:
+      pcc_attention_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: attention
+    kind: attention
+    layer: 20
+    stateful: true
+- id: S.dec_candidate.08
+  title: 'dec_candidate block with steps 1-8 on device (last: attention)'
+  step: implement
+  deps:
+  - C.dec_candidate.attention
+  - S.dec_candidate.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_08_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_08_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    layer: 20
+- id: C.dec_candidate.attn_residual
+  title: dec_candidate attn_residual (residual) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_residual.py
+    metrics:
+      pcc_attn_residual_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: attn_residual
+    kind: residual
+    layer: 20
+    stateful: false
+- id: S.dec_candidate.09
+  title: 'dec_candidate block with steps 1-9 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.dec_candidate.attn_residual
+  - S.dec_candidate.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_09_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_09_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    layer: 20
+- id: C.dec_candidate.ffn_hc
+  title: dec_candidate ffn_hc (op) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_hc.py
+    metrics:
+      pcc_ffn_hc_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: ffn_hc
+    kind: op
+    layer: 20
+    stateful: false
+- id: S.dec_candidate.10
+  title: 'dec_candidate block with steps 1-10 on device (last: ffn_hc)'
+  step: implement
+  deps:
+  - C.dec_candidate.ffn_hc
+  - S.dec_candidate.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_10_ffn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_10_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    layer: 20
+- id: C.dec_candidate.ffn_collapse
+  title: dec_candidate ffn_collapse (op) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_collapse.py
+    metrics:
+      pcc_ffn_collapse_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: ffn_collapse
+    kind: op
+    layer: 20
+    stateful: false
+- id: S.dec_candidate.11
+  title: 'dec_candidate block with steps 1-11 on device (last: ffn_collapse)'
+  step: implement
+  deps:
+  - C.dec_candidate.ffn_collapse
+  - S.dec_candidate.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_11_ffn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_11_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    layer: 20
+- id: C.dec_candidate.ffn_norm
+  title: dec_candidate ffn_norm (norm) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: ffn_norm
+    kind: norm
+    layer: 20
+    stateful: false
+- id: S.dec_candidate.12
+  title: 'dec_candidate block with steps 1-12 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.dec_candidate.ffn_norm
+  - S.dec_candidate.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_12_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_12_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    layer: 20
+- id: C.dec_candidate.router
+  title: dec_candidate router (router) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_router.py
+    metrics:
+      pcc_router_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: router
+    kind: router
+    layer: 20
+    stateful: false
+- id: S.dec_candidate.13
+  title: 'dec_candidate block with steps 1-13 on device (last: router)'
+  step: implement
+  deps:
+  - C.dec_candidate.router
+  - S.dec_candidate.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_13_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_13_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    layer: 20
+- id: C.dec_candidate.experts
+  title: dec_candidate experts (moe) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_experts.py
+    metrics:
+      pcc_experts_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: experts
+    kind: moe
+    layer: 20
+    stateful: false
+- id: S.dec_candidate.14
+  title: 'dec_candidate block with steps 1-14 on device (last: experts)'
+  step: implement
+  deps:
+  - C.dec_candidate.experts
+  - S.dec_candidate.13
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_14_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_14_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    layer: 20
+- id: C.dec_candidate.shared_expert
+  title: dec_candidate shared_expert (mlp) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_shared_expert.py
+    metrics:
+      pcc_shared_expert_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: shared_expert
+    kind: mlp
+    layer: 20
+    stateful: false
+- id: S.dec_candidate.15
+  title: 'dec_candidate block with steps 1-15 on device (last: shared_expert)'
+  step: implement
+  deps:
+  - C.dec_candidate.shared_expert
+  - S.dec_candidate.14
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_15_shared_expert.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_15_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    layer: 20
+- id: C.dec_candidate.moe_add
+  title: dec_candidate moe_add (residual) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_moe_add.py
+    metrics:
+      pcc_moe_add_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: moe_add
+    kind: residual
+    layer: 20
+    stateful: false
+- id: S.dec_candidate.16
+  title: 'dec_candidate block with steps 1-16 on device (last: moe_add)'
+  step: implement
+  deps:
+  - C.dec_candidate.moe_add
+  - S.dec_candidate.15
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_16_moe_add.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_16_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    layer: 20
+- id: C.dec_candidate.ffn_residual
+  title: dec_candidate ffn_residual (residual) on device, layer 20
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L20: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_candidate_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    step: ffn_residual
+    kind: residual
+    layer: 20
+    stateful: false
+- id: S.dec_candidate.17
+  title: 'dec_candidate block with steps 1-17 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.dec_candidate.ffn_residual
+  - S.dec_candidate.16
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_17_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_candidate_17_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_candidate
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - compressor
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    - ffn_residual
+    layer: 20
+- id: C.dec_reindex.attn_hc
+  title: dec_reindex attn_hc (op) on device, layer 24
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_hc.py
+    metrics:
+      pcc_attn_hc_L24: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    step: attn_hc
+    kind: op
+    layer: 24
+    stateful: false
+- id: S.dec_reindex.01
+  title: 'dec_reindex block with steps 1-1 on device (last: attn_hc)'
+  step: implement
+  deps:
+  - C.dec_reindex.attn_hc
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_01_attn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_01_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    swapped:
+    - attn_hc
+    layer: 24
+- id: C.dec_reindex.attn_collapse
+  title: dec_reindex attn_collapse (op) on device, layer 24
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_collapse.py
+    metrics:
+      pcc_attn_collapse_L24: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    step: attn_collapse
+    kind: op
+    layer: 24
+    stateful: false
+- id: S.dec_reindex.02
+  title: 'dec_reindex block with steps 1-2 on device (last: attn_collapse)'
+  step: implement
+  deps:
+  - C.dec_reindex.attn_collapse
+  - S.dec_reindex.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_02_attn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_02_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    swapped:
+    - attn_hc
+    - attn_collapse
+    layer: 24
+- id: C.dec_reindex.attn_norm
+  title: dec_reindex attn_norm (norm) on device, layer 24
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_norm.py
+    metrics:
+      pcc_attn_norm_L24: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    step: attn_norm
+    kind: norm
+    layer: 24
+    stateful: false
+- id: S.dec_reindex.03
+  title: 'dec_reindex block with steps 1-3 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.dec_reindex.attn_norm
+  - S.dec_reindex.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_03_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_03_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    layer: 24
+- id: C.dec_reindex.q_a
+  title: dec_reindex q_a (op) on device, layer 24
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_q_a.py
+    metrics:
+      pcc_q_a_L24: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    step: q_a
+    kind: op
+    layer: 24
+    stateful: false
+- id: S.dec_reindex.04
+  title: 'dec_reindex block with steps 1-4 on device (last: q_a)'
+  step: implement
+  deps:
+  - C.dec_reindex.q_a
+  - S.dec_reindex.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_04_q_a.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_04_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    layer: 24
+- id: C.dec_reindex.kv
+  title: dec_reindex kv (op) on device, layer 24
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_kv.py
+    metrics:
+      pcc_kv_L24: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    step: kv
+    kind: op
+    layer: 24
+    stateful: false
+- id: S.dec_reindex.05
+  title: 'dec_reindex block with steps 1-5 on device (last: kv)'
+  step: implement
+  deps:
+  - C.dec_reindex.kv
+  - S.dec_reindex.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_05_kv.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_05_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    layer: 24
+- id: C.dec_reindex.indexer
+  title: dec_reindex indexer (op) on device, layer 24
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_indexer.py
+    metrics:
+      pcc_indexer_L24: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_indexer.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    step: indexer
+    kind: op
+    layer: 24
+    stateful: true
+- id: S.dec_reindex.06
+  title: 'dec_reindex block with steps 1-6 on device (last: indexer)'
+  step: implement
+  deps:
+  - C.dec_reindex.indexer
+  - S.dec_reindex.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_06_indexer.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_06_indexer.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - indexer
+    layer: 24
+- id: C.dec_reindex.attention
+  title: dec_reindex attention (attention) on device, layer 24
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attention.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
+    metrics:
+      pcc_attention_L24: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    step: attention
+    kind: attention
+    layer: 24
+    stateful: true
+- id: S.dec_reindex.07
+  title: 'dec_reindex block with steps 1-7 on device (last: attention)'
+  step: implement
+  deps:
+  - C.dec_reindex.attention
+  - S.dec_reindex.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_07_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_07_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - indexer
+    - attention
+    layer: 24
+- id: C.dec_reindex.attn_residual
+  title: dec_reindex attn_residual (residual) on device, layer 24
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_residual.py
+    metrics:
+      pcc_attn_residual_L24: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    step: attn_residual
+    kind: residual
+    layer: 24
+    stateful: false
+- id: S.dec_reindex.08
+  title: 'dec_reindex block with steps 1-8 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.dec_reindex.attn_residual
+  - S.dec_reindex.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_08_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_08_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - indexer
+    - attention
+    - attn_residual
+    layer: 24
+- id: C.dec_reindex.ffn_hc
+  title: dec_reindex ffn_hc (op) on device, layer 24
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_hc.py
+    metrics:
+      pcc_ffn_hc_L24: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    step: ffn_hc
+    kind: op
+    layer: 24
+    stateful: false
+- id: S.dec_reindex.09
+  title: 'dec_reindex block with steps 1-9 on device (last: ffn_hc)'
+  step: implement
+  deps:
+  - C.dec_reindex.ffn_hc
+  - S.dec_reindex.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_09_ffn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_09_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    layer: 24
+- id: C.dec_reindex.ffn_collapse
+  title: dec_reindex ffn_collapse (op) on device, layer 24
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_collapse.py
+    metrics:
+      pcc_ffn_collapse_L24: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    step: ffn_collapse
+    kind: op
+    layer: 24
+    stateful: false
+- id: S.dec_reindex.10
+  title: 'dec_reindex block with steps 1-10 on device (last: ffn_collapse)'
+  step: implement
+  deps:
+  - C.dec_reindex.ffn_collapse
+  - S.dec_reindex.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_10_ffn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_10_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    layer: 24
+- id: C.dec_reindex.ffn_norm
+  title: dec_reindex ffn_norm (norm) on device, layer 24
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L24: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    step: ffn_norm
+    kind: norm
+    layer: 24
+    stateful: false
+- id: S.dec_reindex.11
+  title: 'dec_reindex block with steps 1-11 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.dec_reindex.ffn_norm
+  - S.dec_reindex.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_11_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_11_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    layer: 24
+- id: C.dec_reindex.router
+  title: dec_reindex router (router) on device, layer 24
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_router.py
+    metrics:
+      pcc_router_L24: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    step: router
+    kind: router
+    layer: 24
+    stateful: false
+- id: S.dec_reindex.12
+  title: 'dec_reindex block with steps 1-12 on device (last: router)'
+  step: implement
+  deps:
+  - C.dec_reindex.router
+  - S.dec_reindex.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_12_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_12_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    layer: 24
+- id: C.dec_reindex.experts
+  title: dec_reindex experts (moe) on device, layer 24
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_experts.py
+    metrics:
+      pcc_experts_L24: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    step: experts
+    kind: moe
+    layer: 24
+    stateful: false
+- id: S.dec_reindex.13
+  title: 'dec_reindex block with steps 1-13 on device (last: experts)'
+  step: implement
+  deps:
+  - C.dec_reindex.experts
+  - S.dec_reindex.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_13_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_13_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    layer: 24
+- id: C.dec_reindex.shared_expert
+  title: dec_reindex shared_expert (mlp) on device, layer 24
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_shared_expert.py
+    metrics:
+      pcc_shared_expert_L24: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    step: shared_expert
+    kind: mlp
+    layer: 24
+    stateful: false
+- id: S.dec_reindex.14
+  title: 'dec_reindex block with steps 1-14 on device (last: shared_expert)'
+  step: implement
+  deps:
+  - C.dec_reindex.shared_expert
+  - S.dec_reindex.13
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_14_shared_expert.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_14_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    layer: 24
+- id: C.dec_reindex.moe_add
+  title: dec_reindex moe_add (residual) on device, layer 24
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_moe_add.py
+    metrics:
+      pcc_moe_add_L24: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    step: moe_add
+    kind: residual
+    layer: 24
+    stateful: false
+- id: S.dec_reindex.15
+  title: 'dec_reindex block with steps 1-15 on device (last: moe_add)'
+  step: implement
+  deps:
+  - C.dec_reindex.moe_add
+  - S.dec_reindex.14
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_15_moe_add.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_15_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    layer: 24
+- id: C.dec_reindex.ffn_residual
+  title: dec_reindex ffn_residual (residual) on device, layer 24
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L24: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reindex_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    step: ffn_residual
+    kind: residual
+    layer: 24
+    stateful: false
+- id: S.dec_reindex.16
+  title: 'dec_reindex block with steps 1-16 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.dec_reindex.ffn_residual
+  - S.dec_reindex.15
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_16_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reindex_16_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reindex
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    - ffn_residual
+    layer: 24
+- id: C.dec_reuse.attn_hc
+  title: dec_reuse attn_hc (op) on device, layer 21
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_hc.py
+    metrics:
+      pcc_attn_hc_L21: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    step: attn_hc
+    kind: op
+    layer: 21
+    stateful: false
+- id: S.dec_reuse.01
+  title: 'dec_reuse block with steps 1-1 on device (last: attn_hc)'
+  step: implement
+  deps:
+  - C.dec_reuse.attn_hc
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_01_attn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_01_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    swapped:
+    - attn_hc
+    layer: 21
+- id: C.dec_reuse.attn_collapse
+  title: dec_reuse attn_collapse (op) on device, layer 21
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_collapse.py
+    metrics:
+      pcc_attn_collapse_L21: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    step: attn_collapse
+    kind: op
+    layer: 21
+    stateful: false
+- id: S.dec_reuse.02
+  title: 'dec_reuse block with steps 1-2 on device (last: attn_collapse)'
+  step: implement
+  deps:
+  - C.dec_reuse.attn_collapse
+  - S.dec_reuse.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_02_attn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_02_attn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    layer: 21
+- id: C.dec_reuse.attn_norm
+  title: dec_reuse attn_norm (norm) on device, layer 21
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_norm.py
+    metrics:
+      pcc_attn_norm_L21: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    step: attn_norm
+    kind: norm
+    layer: 21
+    stateful: false
+- id: S.dec_reuse.03
+  title: 'dec_reuse block with steps 1-3 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.dec_reuse.attn_norm
+  - S.dec_reuse.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_03_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_03_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    layer: 21
+- id: C.dec_reuse.q_a
+  title: dec_reuse q_a (op) on device, layer 21
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_q_a.py
+    metrics:
+      pcc_q_a_L21: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    step: q_a
+    kind: op
+    layer: 21
+    stateful: false
+- id: S.dec_reuse.04
+  title: 'dec_reuse block with steps 1-4 on device (last: q_a)'
+  step: implement
+  deps:
+  - C.dec_reuse.q_a
+  - S.dec_reuse.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_04_q_a.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_04_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    layer: 21
+- id: C.dec_reuse.kv
+  title: dec_reuse kv (op) on device, layer 21
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_kv.py
+    metrics:
+      pcc_kv_L21: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    step: kv
+    kind: op
+    layer: 21
+    stateful: false
+- id: S.dec_reuse.05
+  title: 'dec_reuse block with steps 1-5 on device (last: kv)'
+  step: implement
+  deps:
+  - C.dec_reuse.kv
+  - S.dec_reuse.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_05_kv.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_05_kv.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    layer: 21
+- id: C.dec_reuse.attention
+  title: dec_reuse attention (attention) on device, layer 21
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attention.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
+    metrics:
+      pcc_attention_L21: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    step: attention
+    kind: attention
+    layer: 21
+    stateful: true
+- id: S.dec_reuse.06
+  title: 'dec_reuse block with steps 1-6 on device (last: attention)'
+  step: implement
+  deps:
+  - C.dec_reuse.attention
+  - S.dec_reuse.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_06_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_06_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    layer: 21
+- id: C.dec_reuse.attn_residual
+  title: dec_reuse attn_residual (residual) on device, layer 21
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_residual.py
+    metrics:
+      pcc_attn_residual_L21: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    step: attn_residual
+    kind: residual
+    layer: 21
+    stateful: false
+- id: S.dec_reuse.07
+  title: 'dec_reuse block with steps 1-7 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.dec_reuse.attn_residual
+  - S.dec_reuse.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_07_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_07_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    layer: 21
+- id: C.dec_reuse.ffn_hc
+  title: dec_reuse ffn_hc (op) on device, layer 21
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_hc.py
+    metrics:
+      pcc_ffn_hc_L21: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    step: ffn_hc
+    kind: op
+    layer: 21
+    stateful: false
+- id: S.dec_reuse.08
+  title: 'dec_reuse block with steps 1-8 on device (last: ffn_hc)'
+  step: implement
+  deps:
+  - C.dec_reuse.ffn_hc
+  - S.dec_reuse.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_08_ffn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_08_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    layer: 21
+- id: C.dec_reuse.ffn_collapse
+  title: dec_reuse ffn_collapse (op) on device, layer 21
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_collapse.py
+    metrics:
+      pcc_ffn_collapse_L21: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    step: ffn_collapse
+    kind: op
+    layer: 21
+    stateful: false
+- id: S.dec_reuse.09
+  title: 'dec_reuse block with steps 1-9 on device (last: ffn_collapse)'
+  step: implement
+  deps:
+  - C.dec_reuse.ffn_collapse
+  - S.dec_reuse.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_09_ffn_collapse.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_09_ffn_collapse.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    layer: 21
+- id: C.dec_reuse.ffn_norm
+  title: dec_reuse ffn_norm (norm) on device, layer 21
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L21: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    step: ffn_norm
+    kind: norm
+    layer: 21
+    stateful: false
+- id: S.dec_reuse.10
+  title: 'dec_reuse block with steps 1-10 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.dec_reuse.ffn_norm
+  - S.dec_reuse.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_10_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_10_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    layer: 21
+- id: C.dec_reuse.router
+  title: dec_reuse router (router) on device, layer 21
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_router.py
+    metrics:
+      pcc_router_L21: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    step: router
+    kind: router
+    layer: 21
+    stateful: false
+- id: S.dec_reuse.11
+  title: 'dec_reuse block with steps 1-11 on device (last: router)'
+  step: implement
+  deps:
+  - C.dec_reuse.router
+  - S.dec_reuse.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_11_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_11_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    layer: 21
+- id: C.dec_reuse.experts
+  title: dec_reuse experts (moe) on device, layer 21
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_experts.py
+    metrics:
+      pcc_experts_L21: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    step: experts
+    kind: moe
+    layer: 21
+    stateful: false
+- id: S.dec_reuse.12
+  title: 'dec_reuse block with steps 1-12 on device (last: experts)'
+  step: implement
+  deps:
+  - C.dec_reuse.experts
+  - S.dec_reuse.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_12_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_12_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    layer: 21
+- id: C.dec_reuse.shared_expert
+  title: dec_reuse shared_expert (mlp) on device, layer 21
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_shared_expert.py
+    metrics:
+      pcc_shared_expert_L21: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    step: shared_expert
+    kind: mlp
+    layer: 21
+    stateful: false
+- id: S.dec_reuse.13
+  title: 'dec_reuse block with steps 1-13 on device (last: shared_expert)'
+  step: implement
+  deps:
+  - C.dec_reuse.shared_expert
+  - S.dec_reuse.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_13_shared_expert.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_13_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    layer: 21
+- id: C.dec_reuse.moe_add
+  title: dec_reuse moe_add (residual) on device, layer 21
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_moe_add.py
+    metrics:
+      pcc_moe_add_L21: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    step: moe_add
+    kind: residual
+    layer: 21
+    stateful: false
+- id: S.dec_reuse.14
+  title: 'dec_reuse block with steps 1-14 on device (last: moe_add)'
+  step: implement
+  deps:
+  - C.dec_reuse.moe_add
+  - S.dec_reuse.13
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_14_moe_add.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_14_moe_add.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    layer: 21
+- id: C.dec_reuse.ffn_residual
+  title: dec_reuse ffn_residual (residual) on device, layer 21
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L21: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_dec_reuse_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    step: ffn_residual
+    kind: residual
+    layer: 21
+    stateful: false
+- id: S.dec_reuse.15
+  title: 'dec_reuse block with steps 1-15 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.dec_reuse.ffn_residual
+  - S.dec_reuse.14
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_15_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_dec_reuse_15_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dec_reuse
+    swapped:
+    - attn_hc
+    - attn_collapse
+    - attn_norm
+    - q_a
+    - kv
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_collapse
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_add
+    - ffn_residual
+    layer: 21
+- id: M.1
+  title: Assemble the all-device model (hidden state on the device from embedding to final norm)
+  step: assemble
+  deps:
+  - S.swa.15
+  - S.swa_engram.18
+  - S.enc_source.17
+  - S.enc_source_engram.20
+  - S.enc_reuse.15
+  - S.dec_candidate.17
+  - S.dec_reindex.16
+  - S.dec_reuse.15
+  gate:
+    cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: L.s4096
+  title: 'Ladder s4096: all chunks of 4096 in 2048'
+  step: integrate
+  deps:
+  - M.1
+  - G.s4096
+  gate:
+    cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: L.s16384
+  title: 'Ladder s16384: all chunks of 16384 in 8192'
+  step: integrate
+  deps:
+  - L.s4096
+  - G.s16384
+  gate:
+    cmd: BRINGUP_RUNG=s16384 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: L.last
+  title: 'Ladder last: last chunk after a golden prefix of 56320 in 5120'
+  step: integrate
+  deps:
+  - L.s16384
+  - G.s56320
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+  device: true
+  paths: *id003
+- id: L.s56320
+  title: 'Ladder s56320: all chunks of 56320 in 5120'
+  step: integrate
+  deps:
+  - L.last
+  - G.s56320
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: SL.scaled
+  title: 'Scaled ladder scaled: the reduced model at the deployment''s per-chip shapes'
+  step: integrate
+  deps:
+  - L.s56320
+  - SG.1
+  gate:
+    cmd: BRINGUP_SCALED=1 BRINGUP_RUNG=scaled scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+  device: true
+  paths: *id003
+- id: SL.scaled_last
+  title: 'Scaled ladder scaled_last: the reduced model at the deployment''s per-chip shapes'
+  step: integrate
+  deps:
+  - SL.scaled
+  gate:
+    cmd: BRINGUP_SCALED=1 BRINGUP_RUNG=scaled_last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+  device: true
+  paths: *id003
+- id: K.1
+  title: Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)
+  step: contract
+  deps:
+  - L.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+    metrics:
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= 0.97'
+      smoke_runner_ok: == 1
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+- id: X.1
+  title: Warm per-section, per-chip profile of one long chunk
+  step: perf
+  deps:
+  - L.s56320
+  gate:
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      device_ms_total: '> 0'
+      profiled_programs: '>= 1'
+  device: true
+- id: SX.1
+  title: 'Scaled profile: warm per-section, per-chip profile of one long chunk of the reduced model'
+  step: perf
+  deps:
+  - X.1
+  - SL.scaled_last
+  gate:
+    cmd: BRINGUP_SCALED=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+      TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      device_ms_total: '> 0'
+      profiled_programs: '>= 1'
+  device: true
+- id: X.2
+  title: Opportunity list ranked by measured device time (scaled run)
+  step: perf
+  deps:
+  - SX.1
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.opportunities --profile SX.1
+    metrics:
+      opportunities_listed: '>= 1'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/opportunities.md
+- id: X.3
+  title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
+  step: perf
+  deps:
+  - X.2
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
+      BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+      TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_positions.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      prefill_ms_full: '> 0'
+      pos_chunk: '>= 1'
+      op_rows: '>= 1'
+      timeline_ok: == 1
+  device: true
+- id: O.1
+  title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes (real and scaled runs)'
+  step: optests
+  deps:
+  - X.3
+  gate:
+    cmd: BRINGUP_CAPTURE_FORKS=models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls.json BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture
+      && BRINGUP_SCALED=1 BRINGUP_CAPTURE_FORKS=models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls_scaled.json
+      BRINGUP_RUNG=scaled_last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      -p models.demos.common.bringup.testing.fork_capture && python -m models.demos.common.bringup.testing.fork_cases --capture
+      models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls.json models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls_scaled.json
+      --run-tests
+    metrics:
+      forks_used: '>= 0'
+      fork_calls_uncovered: == 0
+      fork_tests_failed: == 0
+  role: optests
+  paths:
+  - ttnn/ttnn/bringup
+  device: true
+- id: Z.1
+  title: 'Settings audit: every switch of the model and its forks in tt/settings.py, behaviour unchanged'
+  step: settings
+  deps:
+  - O.1
+  gate:
+    cmd: python -m models.demos.common.bringup.testing.settings_lint && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/common/bringup/tests/test_ladder.py && python -m models.demos.common.bringup.testing.serving
+      --run all
+    metrics:
+      settings_violations: == 0
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+  device: true
+  role: settings
