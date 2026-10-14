@@ -1,0 +1,61 @@
+chunk_size,q_rows_per_rank,q_chunk,k_chunk,case,production,prefixes,status,min_pcc,max_rmse,median_us,reason
+256,32,32,128,accuracy,False,0 256 4096,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=32 K=128"
+256,32,32,128,perf_final,False,261888,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=32 K=128"
+256,32,64,64,accuracy,False,0 256 4096,not_run,,,,NotImplementedError: accuracy helper runs K chunk 128 only
+256,32,64,64,perf_final,False,261888,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=64 K=64"
+256,32,64,128,accuracy,False,0 256 4096,op_error,,,,q_chunk_size must divide the per-device Q slab for chunked sliding attention
+256,32,64,128,perf_final,False,261888,op_error,,,,q_chunk_size must divide the per-device Q slab for chunked sliding attention
+256,32,128,64,accuracy,False,0 256 4096,not_run,,,,NotImplementedError: accuracy helper runs K chunk 128 only
+256,32,128,64,perf_final,False,261888,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=128 K=64"
+256,32,128,128,accuracy,True,0 256 4096,op_error,,,,q_chunk_size must divide the per-device Q slab for chunked sliding attention
+256,32,128,128,perf_final,True,261888,op_error,,,,q_chunk_size must divide the per-device Q slab for chunked sliding attention
+256,32,128,256,accuracy,False,0 256 4096,not_run,,,,NotImplementedError: accuracy helper runs K chunk 128 only
+256,32,128,256,perf_final,False,261888,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=128 K=256"
+512,64,32,128,accuracy,False,0 512 4096,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=32 K=128"
+512,64,32,128,perf_final,False,261632,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=32 K=128"
+512,64,64,64,accuracy,False,0 512 4096,not_run,,,,NotImplementedError: accuracy helper runs K chunk 128 only
+512,64,64,64,perf_final,False,261632,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=64 K=64"
+512,64,64,128,accuracy,False,0 512 4096,op_error,,,,k_chunk_size must divide the per-device Q slab for chunked sliding attention
+512,64,64,128,perf_final,False,261632,op_error,,,,k_chunk_size must divide the per-device Q slab for chunked sliding attention
+512,64,128,64,accuracy,False,0 512 4096,not_run,,,,NotImplementedError: accuracy helper runs K chunk 128 only
+512,64,128,64,perf_final,False,261632,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=128 K=64"
+512,64,128,128,accuracy,True,0 512 4096,op_error,,,,q_chunk_size must divide the per-device Q slab for chunked sliding attention
+512,64,128,128,perf_final,True,261632,op_error,,,,q_chunk_size must divide the per-device Q slab for chunked sliding attention
+512,64,128,256,accuracy,False,0 512 4096,not_run,,,,NotImplementedError: accuracy helper runs K chunk 128 only
+512,64,128,256,perf_final,False,261632,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=128 K=256"
+1024,128,32,128,accuracy,False,0 1024 4096,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=32 K=128"
+1024,128,32,128,perf_final,False,261120,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=32 K=128"
+1024,128,64,64,accuracy,False,0 1024 4096,not_run,,,,NotImplementedError: accuracy helper runs K chunk 128 only
+1024,128,64,64,perf_final,False,261120,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=64 K=64"
+1024,128,64,128,accuracy,False,0 1024 4096,ok,0.9964246511654562,0.082138,,
+1024,128,64,128,perf_final,False,261120,ok,,,311.7,
+1024,128,128,64,accuracy,False,0 1024 4096,not_run,,,,NotImplementedError: accuracy helper runs K chunk 128 only
+1024,128,128,64,perf_final,False,261120,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=128 K=64"
+1024,128,128,128,accuracy,True,0 1024 4096,ok,0.9964246511654562,0.082138,,
+1024,128,128,128,perf_final,True,261120,ok,,,350.4,
+1024,128,128,256,accuracy,False,0 1024 4096,not_run,,,,NotImplementedError: accuracy helper runs K chunk 128 only
+1024,128,128,256,perf_final,False,261120,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=128 K=256"
+2048,256,32,128,accuracy,False,0 2048 4096,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=32 K=128"
+2048,256,32,128,perf_final,False,260096,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=32 K=128"
+2048,256,64,64,accuracy,False,0 2048 4096,not_run,,,,NotImplementedError: accuracy helper runs K chunk 128 only
+2048,256,64,64,perf_final,False,260096,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=64 K=64"
+2048,256,64,128,accuracy,False,0 2048 4096,ok,0.9965742468618516,0.080668,,
+2048,256,64,128,perf_final,False,260096,ok,,,312.7,
+2048,256,128,64,accuracy,False,0 2048 4096,not_run,,,,NotImplementedError: accuracy helper runs K chunk 128 only
+2048,256,128,64,perf_final,False,260096,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=128 K=64"
+2048,256,128,128,accuracy,True,0 2048 4096,ok,0.9965742468618516,0.080668,,
+2048,256,128,128,perf_final,True,260096,ok,,,336.7,
+2048,256,128,256,accuracy,False,0 2048 4096,not_run,,,,NotImplementedError: accuracy helper runs K chunk 128 only
+2048,256,128,256,perf_final,False,260096,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=128 K=256"
+4096,512,32,128,accuracy,False,0 4096 8192,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=32 K=128"
+4096,512,32,128,perf_final,False,258048,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=32 K=128"
+4096,512,64,64,accuracy,False,0 4096 8192,not_run,,,,NotImplementedError: accuracy helper runs K chunk 128 only
+4096,512,64,64,perf_final,False,258048,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=64 K=64"
+4096,512,64,128,accuracy,False,0 4096 8192,ok,0.9965878960177178,0.080767,,
+4096,512,64,128,perf_final,False,258048,ok,,,408.0,
+4096,512,128,64,accuracy,False,0 4096 8192,not_run,,,,NotImplementedError: accuracy helper runs K chunk 128 only
+4096,512,128,64,perf_final,False,258048,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=128 K=64"
+4096,512,128,128,accuracy,True,0 4096 8192,ok,0.9965878960177178,0.080767,,
+4096,512,128,128,perf_final,True,258048,ok,,,374.7,
+4096,512,128,256,accuracy,False,0 4096 8192,not_run,,,,NotImplementedError: accuracy helper runs K chunk 128 only
+4096,512,128,256,perf_final,False,258048,op_error,,,,"Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q=128 K=256"

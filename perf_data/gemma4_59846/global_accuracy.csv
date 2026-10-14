@@ -1,0 +1,19 @@
+test_id,chunk_idx,pcc,rmse,accuracy,test_result
+chunk256-q32-k512-ksplit4-unseg-first,0,0.9998336237598312,0.020737,PASS,"FAIL: AssertionError: gemma4_global-q32-k512: output equals the run without K split on every chunk, so it never applied"
+chunk256-q32-k512-ksplit4-unseg-last,255,0.9991648377924718,0.034958,PASS,PASS
+chunk256-q32-k256-ksplit3-seg-first,0,0.9998336237598312,0.020737,PASS,"FAIL: AssertionError: gemma4_global-q32-k256: output equals the run without K split on every chunk, so it never applied"
+chunk256-q32-k256-ksplit3-seg-last,255,0.999059878588772,0.036317,PASS,PASS
+chunk512-q64-k256-ksplit4-unseg-first,0,0.9998610915528124,0.019575,PASS,"FAIL: AssertionError: gemma4_global-q64-k256: output equals the run without K split on every chunk, so it never applied"
+chunk512-q64-k256-ksplit4-unseg-last,127,0.9991502970459172,0.036059,PASS,PASS
+chunk512-q32-k256-ksplit3-seg-first,0,0.9998610915528124,0.019575,PASS,"FAIL: AssertionError: gemma4_global-q32-k256: output equals the run without K split on every chunk, so it never applied"
+chunk512-q32-k256-ksplit3-seg-last,127,0.9990808842032807,0.036159,PASS,PASS
+chunk1024-q64-k384-ksplit4-unseg-first,0,0.9998689759097386,0.018828,PASS,"FAIL: AssertionError: gemma4_global-q64-k384: output equals the run without K split on every chunk, so it never applied"
+chunk1024-q64-k384-ksplit4-unseg-last,63,0.9991794871894807,0.035455,PASS,PASS
+chunk1024-q32-k256-ksplit3-seg-first,0,0.9998689759097386,0.018828,PASS,"FAIL: AssertionError: gemma4_global-q32-k256: output equals the run without K split on every chunk, so it never applied"
+chunk1024-q32-k256-ksplit3-seg-last,63,0.9990845872413696,0.036129,PASS,PASS
+chunk2048-q64-k384-ksplit3-unseg-first,0,0.9998600515301195,0.019048,PASS,"FAIL: AssertionError: gemma4_global-q64-k384: output equals the run without K split on every chunk, so it never applied"
+chunk2048-q64-k384-ksplit3-unseg-last,31,0.9991552766514146,0.035846,PASS,PASS
+chunk2048-q64-k256-ksplit3-seg-first,0,0.9998600515301195,0.019048,PASS,"FAIL: AssertionError: gemma4_global-q64-k256: output equals the run without K split on every chunk, so it never applied"
+chunk2048-q64-k256-ksplit3-seg-last,31,0.9990964532592131,0.036366,PASS,PASS
+chunk4096-q128-k256-ksplit3-seg-first,0,0.9998182804791457,0.019449,PASS,"FAIL: AssertionError: gemma4_global-q128-k256: output equals the run without K split on every chunk, so it never applied"
+chunk4096-q128-k256-ksplit3-seg-last,15,0.9990866656684441,0.036233,PASS,PASS
