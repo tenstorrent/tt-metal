@@ -48,8 +48,8 @@ EXPECTED_METRICS = {
         "vae_decoding_time": 0.2,
         "total_time": 75,
     },
-    # BH LoudBox: total 19.0s (CI run 38231039779).
-    (True, (2, 4)): {"total_time": 21},
+    # BH LoudBox: total 20.5s with the model-card prompt (CI run 38592590547).
+    (True, (2, 4)): {"total_time": 23},
     # WH Galaxy: total 14.7–15.0s (CI runs 38337794894, 38364045034).
     (False, (4, 8)): {"total_time": 17},
     # BH Galaxy: total 7.7s (CI run 38231028525).
