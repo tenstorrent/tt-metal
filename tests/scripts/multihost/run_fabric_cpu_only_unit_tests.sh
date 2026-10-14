@@ -1015,7 +1015,7 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 # Llama-8b + audio 4-mesh RELAXED line (no loopback): 1x2 -> 1x2 -> 4x2 -> 4x2 (80 chips / 34 ranks, maps on 3 galaxies of the SC4 quad).
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/llama8b_audio_4mesh_line_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}"
 
-# Two co-placed copies of the Llama-8b + audio 4-mesh RELAXED line (2-MGD mapping form): one merged solve, split per subcontext. 160 chips / 68 ranks on 6 disjoint galaxies of the SC20 mock.
+# Two co-placed copies of the Llama-8b + audio 4-mesh RELAXED line (2-MGD mapping form): one merged solve, split per subcontext. 160 chips / 68 ranks on 5 galaxies of the SC20 mock (the four 8-chip meshes -- two per copy -- co-pack onto one shared galaxy; the host-count cap forces this compaction from 6 down to 5).
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mock-cluster-rank-binding "${SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" --mesh-graph-descriptor-mapping tests/tt_metal/distributed/config/llama8b_audio_4mesh_line_2copy_mesh_graph_descriptor_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestControlPlaneInitNoMGD
 
 # Heterogeneous disaggregated placement (2-MGD form): 64x M0(4x2) closed ring (subcontext 0) + 1
