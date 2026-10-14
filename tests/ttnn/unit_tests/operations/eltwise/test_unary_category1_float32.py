@@ -708,7 +708,7 @@ def test_exp_allclose(device):
 
 
 def test_exp_full_mantissa(device):
-    """exp on float32 inputs off the bfloat16 lattice, up to the overflow edge.
+    """exp tested for float32 inputs off the bfloat16 lattice, up to the overflow edge.
 
     | Inputs                                     | Check   |
     |--------------------------------------------|---------|
@@ -716,9 +716,6 @@ def test_exp_full_mantissa(device):
     | edge points up to the last finite input    | ULP ≤ 1 |
     | (log(FLT_MAX) ≈ 88.7228)                   |         |
 
-    test_exp_ops only sees bfloat16 values (lower 16 mantissa bits zero), and
-    its bfloat16 sweep stops at 88.5, so it covers neither full-mantissa
-    rounding nor (88.5, 88.7228].
     """
     low, high = -87.3, 88.7
     last_finite = torch.nextafter(torch.log(torch.tensor(torch.finfo(torch.float32).max)), torch.tensor(0.0)).item()
@@ -750,7 +747,7 @@ def test_exp_full_mantissa(device):
 
 
 def test_exp_special_values(device):
-    """exp on the inputs the bfloat16 sweeps replace with 0, plus both saturation ends.
+    """exp tested for float32 special value inputs.
 
     | Input                                  | Expected            |
     |----------------------------------------|---------------------|
@@ -799,9 +796,7 @@ def test_exp_special_values(device):
 def test_exp2_allclose(device):
     """exp2 underflow region (-127, -126) allclose check.
 
-    The ULP sweep in test_exp_ops covers (-126.0, 127.0); this extends into the
-    underflow tail where exp2(x) approaches the smallest normals. 1022 of 1024
-    values are bit-exact. The other 2 (x = -126.5, -127) are flushed to zero.
+    The 2 values in the underflow tail (x = -126.5, -127) are flushed to zero.
     Largest |err| is 8.31e-39 at x=-126.5, so atol sits just above that and
     rtol stays 0.
     """
@@ -828,8 +823,6 @@ def test_exp2_full_mantissa(device):
     | edge points up to the last finite input      | ULP ≤ 1 |
     | (largest float32 below 128)                  |         |
 
-    test_exp_ops only sees bfloat16 values (lower 16 mantissa bits zero), so it
-    never checks full-mantissa rounding or (127, 128).
     """
     low, high = -126.0, 127.0
     last_finite = torch.nextafter(torch.tensor(128.0), torch.tensor(0.0)).item()
