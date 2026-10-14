@@ -119,6 +119,9 @@ target_link_libraries(
         Metalium::Metal::Impl
         metal_common_libs
         common
+        # every TT::Metalium::Types object, not just the archive members tt_metal's own code references
+        $<TARGET_OBJECTS:tt_metalium_types>
+        TT::Metalium::Types
         jit_build
         llrt
         detail
@@ -175,6 +178,46 @@ include_directories(
     api/tt-metalium
     ${CMAKE_CURRENT_BINARY_DIR}/api
 )
+
+# ---------------------------------------------------------------------------
+# TT::Metalium::Types — runtime-free value types shared by libtt_metal and TT::FabricTopologyUtils: MeshShape /
+# MeshCoordinate and ShapeBase (common/), FabricNodeId & friends and PhysicalNodeId (fabric/). Each owning directory
+# adds its sources with target_sources; the headers are in tt_metal's api file set. tt_metal links the objects
+# directly so libtt_metal.so exports every symbol exactly once, and the topology library links the target so an
+# external consumer gets libtt-metalium-types.a through the exported interface.
+# ---------------------------------------------------------------------------
+add_library(tt_metalium_types STATIC)
+add_library(TT::Metalium::Types ALIAS tt_metalium_types)
+set_target_properties(
+    tt_metalium_types
+    PROPERTIES
+        EXPORT_NAME
+            Metalium::Types
+        OUTPUT_NAME
+            tt-metalium-types
+)
+target_include_directories(
+    tt_metalium_types
+    PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>"
+        "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR} # distributed/mesh_coord_utils.hpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium # bare "shape_base.hpp" / <mesh_coord.hpp> in common/ (same FIXME as tt_metal)
+)
+target_link_libraries(
+    tt_metalium_types
+    PUBLIC
+        TT::STL
+        fmt::fmt-header-only
+    PRIVATE
+        enchantum::enchantum
+        $<BUILD_INTERFACE:Boost::asio> # boost/move header included by common/mesh_coord.cpp
+)
+target_compile_features(tt_metalium_types PUBLIC cxx_std_20)
+TT_ENABLE_UNITY_BUILD(tt_metalium_types)
+tt_reuse_precompile_headers(tt_metalium_types TT::CommonPCH)
+install(TARGETS tt_metalium_types EXPORT Metalium ARCHIVE COMPONENT metalium-dev)
 
 add_subdirectory(logging)
 add_subdirectory(hw)

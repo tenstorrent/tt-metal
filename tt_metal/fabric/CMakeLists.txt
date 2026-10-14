@@ -70,6 +70,7 @@ add_library(
     ${FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_SRCS}
 )
 add_library(TT::FabricTopologyUtils ALIAS tt_fabric_topology_utils)
+target_sources(tt_metalium_types PRIVATE ${FABRIC_TYPES_SOURCES})
 set_target_properties(
     tt_fabric_topology_utils
     PROPERTIES
@@ -102,7 +103,6 @@ target_include_directories(
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
     PRIVATE
         ${PROJECT_SOURCE_DIR}/tt_metal
-        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium # bare "shape_base.hpp" / <mesh_coord.hpp> in the common/ sources (same FIXME as tt_metal)
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scaleout # board/board.hpp
     SYSTEM
@@ -119,6 +119,7 @@ target_include_directories(
 target_link_libraries(
     tt_fabric_topology_utils
     PUBLIC
+        TT::Metalium::Types
         TT::STL
         TT::Metalium::HostDevCommon
         enchantum::enchantum
@@ -130,7 +131,6 @@ target_link_libraries(
         $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>$<INSTALL_INTERFACE:$<1:yaml-cpp>::$<1:yaml-cpp>>
         $<BUILD_INTERFACE:protobuf::libprotobuf>$<INSTALL_INTERFACE:$<1:protobuf>::$<1:libprotobuf>>
         $<BUILD_INTERFACE:cadical::cadical>
-        $<BUILD_INTERFACE:Boost::asio> # boost/move header used by common/mesh_coord.cpp
 )
 target_compile_features(tt_fabric_topology_utils PUBLIC cxx_std_20)
 # Repo build accelerators (match fabric / scaleout_tools): unity build + shared PCH. Generated proto sources are

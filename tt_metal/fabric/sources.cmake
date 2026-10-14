@@ -23,7 +23,6 @@ set(FABRIC_TOPOLOGY_UTILS_SOURCES
     mesh_graph_descriptor.cpp
     physical_system_descriptor.cpp
     physical_system_descriptor_diff.cpp
-    physical_node_id.cpp
     serialization/physical_system_descriptor_serialization.cpp
     topology_mapper_utils.cpp
     topology_solver.cpp
@@ -33,12 +32,13 @@ set(FABRIC_TOPOLOGY_UTILS_SOURCES
     physical_grouping_descriptor_graph_building.cpp
     physical_grouping_descriptor_matching.cpp
     physical_descriptor_builder.cpp
-    # Runtime-free TUs the library needs for a standalone link: the strong-type formatters/operators and the
-    # MeshShape/MeshCoordinate implementations (owned by common, compiled here instead so libtt-fabric-topology-utils.a
-    # is self-contained; libtt_metal.so still gets exactly one copy via fabric -> tt_fabric_topology_utils).
+)
+
+# Runtime-free value types shared with the runtime (FabricNodeId & friends, PhysicalNodeId): compiled into
+# TT::Metalium::Types (declared in tt_metal/CMakeLists.txt), which both libtt_metal and the topology library link.
+set(FABRIC_TYPES_SOURCES
     fabric_types.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../common/mesh_coord.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../common/shape_base.cpp
+    physical_node_id.cpp
 )
 
 set(FABRIC_SOURCES
