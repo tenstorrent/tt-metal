@@ -495,9 +495,14 @@ def run_request_loop(
     t0 = time.perf_counter()
     c = 0
     first = None
+    ack_fence = getattr(runtime, "layer_ack_fence", None)
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
+            if ack_fence is not None:
+                # The socket read blocks while holding the GIL; publish the queued layer acks first so the
+                # producer, which waits on them before sending more, is not deadlocked against the fence thread.
+                ack_fence.drain()
             inp, mtp_tokens, meta, metadata_msg = _socket_next(h2d_service, NUM_MTP_TOKENS)
             meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
         else:
