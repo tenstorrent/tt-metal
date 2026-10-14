@@ -339,15 +339,22 @@ tt::tt_metal::ProgramDescriptor ReshapeCodegenProgramFactory::create_descriptor(
         out_aligned_page);
     const auto grid = rcg::reshape_core_grid(input, operation_attributes.sub_core_grids);
 
-    if (plan.rm.has_value()) {
-        return build_rm(*plan.rm, input, tensor_return_value, rcg::split_units(grid, plan.rm->split.units));
-    }
+    const auto chosen = rcg::live_rm_choice(
+        input,
+        operation_attributes.logical_output_shape,
+        operation_attributes.output_mem_config.buffer_type(),
+        grid.num_cores(),
+        plan);
     TT_FATAL(
-        plan.rm_arbitrary.has_value(),
-        "Reshape circular buffers do not fit the L1 free at launch ({} bytes)",
-        plan.l1_budget);
-    return build_rm_arbitrary(
-        *plan.rm_arbitrary, input, tensor_return_value, rcg::split_units(grid, plan.rm_arbitrary->split.units));
+        chosen.has_value(),
+        "ReshapeCodegen: no row-major program fits the {} B of L1 free per core below the lowest L1 allocation; free "
+        "L1 tensors or use the native reshape",
+        ttnn::operations::data_movement::get_max_l1_space(input));
+    if (const auto* stick = std::get_if<rcg::RmPlan>(&*chosen)) {
+        return build_rm(*stick, input, tensor_return_value, rcg::split_units(grid, stick->split.units));
+    }
+    const auto& slab = std::get<rcg::RmArbitraryPlan>(*chosen);
+    return build_rm_arbitrary(slab, input, tensor_return_value, rcg::split_units(grid, slab.split.units));
 }
 
 tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileRowsProgramFactory::create_workload_descriptor(

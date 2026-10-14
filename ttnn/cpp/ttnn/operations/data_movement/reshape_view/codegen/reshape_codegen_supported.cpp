@@ -11,8 +11,6 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
-#include "ttnn/operations/data_movement/common/common.hpp"
-
 namespace ttnn::operations::data_movement::reshape_codegen {
 
 namespace {
@@ -261,8 +259,8 @@ bool rm_native_faster(
         piece, new_stick, std::max(old_stick, new_stick) / piece, num_old_sticks, num_cores, output_mem_config, merge);
 }
 
-// The budget-independent half of the row-major programs, fitted to the static budget for the gate and to the live
-// budget for the launch. The slab geometry is only built when the stick program does not fit.
+// The budget-independent half of the row-major programs, fitted to the static budget for the gate. The launch
+// carries it unfitted for live_rm_choice. The slab geometry is only built when the stick program does not fit.
 class RmGeometry {
 public:
     RmGeometry(
@@ -295,21 +293,11 @@ public:
         return slab_.has_value() ? fit_rm_arbitrary(*slab_, l1_budget) : std::nullopt;
     }
 
-    // The launch allocates the output before the program runs, so its reservation is held back from the live read.
-    std::optional<LaunchPlan> live_plan() {
-        const uint64_t reservation = get_pending_l1_output_reservation(
-            input_, output_spec_.padded_shape(), output_mem_config_, input_.dtype(), input_.layout());
-        const uint64_t live = live_l1_budget(input_);
-        LaunchPlan plan{
-            .l1_budget = live > reservation ? live - reservation : 0, .out_aligned_page = out_aligned_page_};
-        plan.rm = fit_stick(plan.l1_budget);
-        if (!plan.rm.has_value()) {
-            plan.rm_arbitrary = fit_slab(plan.l1_budget);
-            if (!plan.rm_arbitrary.has_value()) {
-                return std::nullopt;
-            }
-        }
-        return plan;
+    // Whether the smallest stick or slab plan fits the static window.
+    bool fits_static() { return fit_stick(static_budget_).has_value() || fit_slab(static_budget_).has_value(); }
+
+    LaunchPlan launch_plan() const {
+        return LaunchPlan{.out_aligned_page = out_aligned_page_, .rm = stick_, .rm_arbitrary = slab_};
     }
 
 private:
@@ -362,9 +350,7 @@ const char* unsupported_reason(
     }
     if (input.layout() == Layout::ROW_MAJOR) {
         RmGeometry geometry(input, logical_output_shape, output_mem_config, sub_core_grids);
-        const bool fits = geometry.fit_stick(geometry.static_budget()).has_value() ||
-                          geometry.fit_slab(geometry.static_budget()).has_value();
-        return fits ? nullptr : kRmStaticFitViolation;
+        return geometry.fits_static() ? nullptr : kRmStaticFitViolation;
     }
     const auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
     if (!choice) {
@@ -408,7 +394,8 @@ bool codegen_plan_fits_live_l1(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     if (input.layout() == Layout::ROW_MAJOR) {
-        return RmGeometry(input, logical_output_shape, output_mem_config, sub_core_grids).live_plan().has_value();
+        // The program factory fits row-major CBs to the L1 free at program creation.
+        return true;
     }
     const auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
     if (!choice) {
@@ -427,12 +414,8 @@ LaunchPlan launch_plan(
     TT_FATAL(violation == nullptr, "reshape_force_codegen: outside the codegen scope: {}", violation);
     if (input.layout() == Layout::ROW_MAJOR) {
         RmGeometry geometry(input, logical_output_shape, output_mem_config, sub_core_grids);
-        const bool fits = geometry.fit_stick(geometry.static_budget()).has_value() ||
-                          geometry.fit_slab(geometry.static_budget()).has_value();
-        TT_FATAL(fits, "reshape_force_codegen: outside the codegen scope: {}", kRmStaticFitViolation);
-        auto plan = geometry.live_plan();
-        TT_FATAL(plan.has_value(), "reshape_force_codegen: no row-major program fits the L1 free at launch");
-        return std::move(*plan);
+        TT_FATAL(geometry.fits_static(), "reshape_force_codegen: outside the codegen scope: {}", kRmStaticFitViolation);
+        return geometry.launch_plan();
     }
     auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
     TT_FATAL(choice.has_value(), "reshape_force_codegen: outside the codegen scope: {}", kPlanCapsViolation);

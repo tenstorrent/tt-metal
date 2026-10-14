@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <variant>
 
 #include <tt-metalium/core_coord.hpp>
 
@@ -80,18 +81,20 @@ struct RmArbitraryPlan {
 
 WorkSplit split_units(const tt::tt_metal::CoreRangeSet& grid, uint32_t units);
 
-// What the entry planned for one call. A program-cache miss builds from it instead of planning again unless it no
-// longer fits live L1 (live_tile_rows_choice).
+// What the entry planned for one call. A program-cache miss builds from it instead of planning again; live L1 then
+// picks the plan's size (live_tile_rows_choice, live_rm_choice).
 struct LaunchPlan {
     // TILE.
     TileRowsChoice tile_rows;
-    // ROW_MAJOR: the stick program, else the slab program, fitted to `l1_budget`, the L1 free at launch less the
-    // output's reservation.
-    uint64_t l1_budget = 0;
+    // ROW_MAJOR: the geometries routing built, not yet fitted to any budget. The slab geometry is only built when the
+    // stick program does not fit the static window, or has no geometry.
     uint32_t out_aligned_page = 0;
     std::optional<RmPlan> rm;
     std::optional<RmArbitraryPlan> rm_arbitrary;
 };
+
+// A row-major program fitted to a budget: the stick program, or the slab program.
+using RmChoice = std::variant<RmPlan, RmArbitraryPlan>;
 
 // Cores the op may use: `sub_core_grids` if given, else the device's compute grid.
 tt::tt_metal::CoreRangeSet reshape_core_grid(
@@ -124,14 +127,10 @@ std::optional<TileRowsChoice> live_tile_rows_choice(
     const TileRowsChoice& planned,
     uint64_t reserved_l1_bytes = 0);
 
-// L1 window free right now, for fitting a row-major launch; never for the gate. Read once per call, before the
-// launch allocates the output, and planned against less that output's reservation.
-uint64_t live_l1_budget(const Tensor& input);
-
 // Each row-major program is planned in two steps. The geometry step depends only on the shapes, dtype, memory
 // configs and grid, and returns nullopt when the case is outside what the kernels handle; the fit step sizes the CB
-// depth or batch to `l1_budget` and returns nullopt when the CBs exceed it at their minimum depth. One geometry is
-// fitted to both the static and the live budget.
+// depth or batch to `l1_budget` and returns nullopt when the CBs exceed it at their minimum depth. The gate fits one
+// geometry to static_l1_budget, live_rm_choice fits it to live L1.
 std::optional<RmPlan> rm_geometry(
     const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t out_aligned_page, uint32_t grid_cores);
 
@@ -145,5 +144,15 @@ std::optional<RmArbitraryPlan> rm_arbitrary_geometry(
     uint32_t grid_cores);
 
 std::optional<RmArbitraryPlan> fit_rm_arbitrary(RmArbitraryPlan plan, uint64_t l1_budget);
+
+// The row-major program the factory builds: the stick program at the deepest CB that fits the L1 free below the
+// lowest live allocation, else the slab program at the largest batch that does; nullopt when neither fits. Same
+// contract as live_tile_rows_choice: only the program hash and the factory call it, after the output is allocated.
+std::optional<RmChoice> live_rm_choice(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    tt::tt_metal::BufferType output_buffer,
+    uint32_t grid_cores,
+    const LaunchPlan& planned);
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen
