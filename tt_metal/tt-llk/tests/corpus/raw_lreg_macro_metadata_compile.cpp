@@ -43,6 +43,12 @@ static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPMAD(1, 2, 3, 4, 8)) == 0x8
 static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPMAD(1, 2, 3, 4, 8)) == 0xffu);
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPADDI(0, 3, 8)) == 0x88u);
 static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPADDI(0, 3, 8)) == 0xffu);
+static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPADDI(0, 3, 4)) == 0xffu);
+static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPADDI(0, 3, 4)) == 0x08u);
+static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPMULI(0, 3, 4)) == 0xffu);
+static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPMULI(0, 3, 4)) == 0x08u);
+static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPMULI(0, 3, 12)) == 0xffu);
+static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPMULI(0, 3, 12)) == 0xffu);
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPLOADI(3, 8, 0)) == 0x08u);
 static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPLOADI(3, 8, 0)) == 0x08u);
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSWAP(0, 1, 2, 0)) == 0x66u);

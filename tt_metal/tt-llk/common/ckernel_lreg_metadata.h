@@ -75,7 +75,9 @@ constexpr unsigned read(unsigned x) {
         case 0x71: return (mm(x) == 8 || mm(x) == 10) ? bit(mr(x)) : 0;
         case 0x72: return bit(mr(x));
         case 0x73: return 0x0f | ((mm(x) & 8) ? bit(7) : 0u);
-        case 0x74: case 0x75: return bit(dd) | ((m & 8) ? bit(7) : 0u);
+        // Modifier bit 2 reads the source from the LREG named by LREG7[3:0],
+        // which can be any LREG and is not known from the instruction word.
+        case 0x74: case 0x75: return (m & 4) ? 0xffu : bit(dd) | ((m & 8) ? bit(7) : 0u);
         case 0x76: case 0x77: case 0x78: case 0x7d: case 0x81: case 0x90: return bit(cc);
         case 0x79: return bit(cc) | ((m & 1) ? 0u : bit(dd));
         case 0x7a:
