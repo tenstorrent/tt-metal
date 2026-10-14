@@ -126,7 +126,7 @@ void kernel_main() {
     if constexpr (SE_DRISC_BURST != 0) {  // (0: leave the DMA transfer attributes alone)
         experimental::dma_set_burst_size(SE_DRISC_BURST);
     }
-    const uint32_t room = (region - SE_DRISC_SLOTS) / nj;
+    uint32_t seen_real[2] = {0, 0}, seen_skip[2] = {0, 0};
     uint32_t seen = 0, dma_total[2] = {0, 0};  // (debug: this kernel's DMA reads per stream)
     const uint32_t hw0[2] = {READ_TX_STREAM_REG(0, TX_REG_STREAM_TOTAL_READS_REG_OFFSET),
                              READ_TX_STREAM_REG(1, TX_REG_STREAM_TOTAL_READS_REG_OFFSET)};
@@ -137,17 +137,35 @@ void kernel_main() {
         if (*word(SE_DRISC_STOP)) {
             break;
         }
+        // each job gets one post per call: a descriptor (job counter) or a skip (skip counter)
         bool posted = true;
         for (uint32_t k = 0; k < nj; ++k) {
-            posted = posted && *word(se_drisc_jobs(k)) != seen;
+            posted = posted && (*word(se_drisc_jobs(k)) != seen_real[k] || *word(se_drisc_skips(k)) != seen_skip[k]);
         }
         if (!posted) {
             continue;
         }
         ++seen;
-        uint32_t left = 0;
+        bool real[2] = {false, false};
+        uint32_t n_real = 0;
+        for (uint32_t k = 0; k < nj; ++k) {
+            real[k] = *word(se_drisc_jobs(k)) != seen_real[k];
+            if (real[k]) {
+                ++seen_real[k];
+                ++n_real;
+            } else {
+                ++seen_skip[k];
+            }
+        }
+        const uint32_t room = n_real ? (region - SE_DRISC_SLOTS) / n_real : 0;  // (L1 slots split over the real jobs)
+        uint32_t left = 0, ri = 0;
         for (uint32_t k = 0; k < nj; ++k) {
             Job& J = jobs[k];
+            if (!real[k]) {
+                J.units = 0;
+                J.rd = J.wr = J.fl = 0;
+                continue;
+            }
             volatile uint32_t* d = word(se_drisc_desc(k));
             J.gddr = d[SD_GDDR];
             J.chunk = d[SD_CHUNK];
@@ -173,7 +191,7 @@ void kernel_main() {
                 J.coord[j] = (uint32_t)(J.rx[j] >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
                 J.cr[j] = 0;
             }
-            J.slot0 = base + SE_DRISC_SLOTS + k * room;
+            J.slot0 = base + SE_DRISC_SLOTS + (ri++) * room;
             // a unit is UB consecutive blocks of one chunk (one DMA, one transaction id, one flush check). One job
             // per tile: single blocks (the deepest pipeline: GLM-Flash M 64 33.9 vs 35.2 us / expert with pairs); two
             // jobs per tile (half the L1 each): pairs (the per-block loop, ~800 cycles, caps a tile at ~15 GB/s: all
@@ -181,7 +199,7 @@ void kernel_main() {
 #ifdef SE_DRISC_UB
             J.ub = SE_DRISC_UB;
 #else
-            J.ub = nj > 1 && J.rg % 2 == 0 ? 2 : 1;
+            J.ub = n_real > 1 && J.rg % 2 == 0 ? 2 : 1;
 #endif
             J.ns = room / (J.ub * J.blk);
             J.ns = J.ns > 7 ? 7 : J.ns;  // (transaction ids 1-7 / 8-14 per job)
@@ -194,8 +212,13 @@ void kernel_main() {
             st[1] = J.units;
             st[5] = n_load;
         }
-        if (const uint32_t w = word(se_drisc_desc(0))[SD_MPFE]; w != mp_applied) {
-            mpfe(w);
+        for (uint32_t k = 0; k < nj; ++k) {  // (the MPFE weights of this call: the first real job's descriptor)
+            if (real[k]) {
+                if (const uint32_t w = word(se_drisc_desc(k))[SD_MPFE]; w != mp_applied) {
+                    mpfe(w);
+                }
+                break;
+            }
         }
         for (uint32_t k = 0; k < nj; ++k) {  // (the fast path's constant registers, per NoC)
             if (jobs[k].units && jobs[k].blk <= NOC_MAX_BURST_SIZE) {

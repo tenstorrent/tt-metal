@@ -22,6 +22,8 @@ constexpr uint32_t SE_DRISC_READY_MAGIC = 0xD815C0DE;
 // per job k (a tile serves 1 or 2 reader slots): jobs posted (Tensix atomic increments), its receivers' grants as last
 // read (NoC read landing, + 16 j), progress (debug: call, units, read, written, flushed, loads), the job descriptor
 constexpr uint32_t se_drisc_jobs(uint32_t k) { return k ? 64 : 0; }
+// skipped jobs (a call whose slot another DRISC serves: an atomic increment, no descriptor)
+constexpr uint32_t se_drisc_skips(uint32_t k) { return se_drisc_jobs(k) + 4; }
 constexpr uint32_t se_drisc_credit(uint32_t k) { return 128 + 128 * k; }
 constexpr uint32_t se_drisc_state(uint32_t k) { return 384 + 32 * k; }
 constexpr uint32_t se_drisc_desc(uint32_t k) { return 512 + 640 * k; }

@@ -16,6 +16,6 @@ void kernel_main() {
     const uint32_t scratch = get_write_ptr(tt::CBIndex::c_7);
     SeDyn dyn;
     se_dyn_load<num_e>(dyn, se_drisc_post_nargs(0), scratch, 1);
-    se_drisc_post(dyn, 0, scratch);
+    se_drisc_post(dyn, 0, scratch, 2 * SE_DYN_HALF);
     noc_async_full_barrier();
 }

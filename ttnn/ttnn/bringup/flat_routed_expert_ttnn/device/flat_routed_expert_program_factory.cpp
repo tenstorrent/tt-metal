@@ -306,7 +306,14 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     if (p.dual) {
         const char* mc = std::getenv("MIMO_FL_DRISC_MAXCNT");
         drisc_dual_def["SE_DRISC_DUAL"] = "1";
-        drisc_dual_def["SE_DRISC_MAXCNT"] = mc ? std::string(mc) : std::string(p.rdown ? "128" : "256");
+        drisc_dual_def["SE_DRISC_MAXCNT"] =
+            mc ? std::string(mc) : std::string(flat_drisc_pure() ? "0xFFFFFFFF" : (p.rdown ? "128" : "256"));
+        if (flat_drisc_tiles() == 3) {  // switch mode: the alternate tiles serve calls with counts up to this
+            const char* am = std::getenv("MIMO_FL_DRISC_ALT_MAXCNT");
+            // (two tiles up to: GLM-Flash 224, K2.7 E12 (reader down columns) 384: M 256 85.2 two tiles vs 89.1 / 98.1
+            // one tile, job 1 on NOC0 / NOC1)
+            drisc_dual_def["SE_DRISC_ALT_MAXCNT"] = am ? std::string(am) : std::string(p.rdown ? "384" : "224");
+        }
         drisc_dual_def["SE_GRANT_SEM"] = std::to_string(GRANT);
     }
     // readers (read NOC0, forward NOC1): the chain-tail readers also compute down columns (se9_rdown)
@@ -436,7 +443,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         auto* mesh = dynamic_cast<distributed::MeshDevice*>(device);
         TT_FATAL(mesh != nullptr, "MIMO_FL_DRISC: a mesh device");
-        flat_drisc_ensure(mesh, p.drisc_n, banks);
+        flat_drisc_ensure(mesh, p.drisc_n, banks, p.rdown);
         // the job posting args (se_drisc_post.hpp): by a launcher kernel, or (dual) by slot 0's own reader
         drisc_post.lit(drisc_base)
             .a(AddrSrc::GateUp)
@@ -446,7 +453,17 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             .lit(flat_drisc_mpfe(p.rdown))
             .lits({p.rg * p.slot * w_tile, p.slot * w_tile, p.rg, G, p.nk_gu, GRANT, DATA});
         for (uint32_t r = 0; r < p.drisc_n; ++r) {
-            drisc_post.lit(drisc_xy(r)).lit(flat_drisc_job(r, banks)).lit((r / banks) * p.region_bytes);
+            const auto [ac, aj] = flat_drisc_alt(device, r, banks);
+            uint32_t axy = 0;
+            if (aj != ~0u) {
+                const auto v = device->virtual_core_from_logical_core(ac, tt::CoreType::DRAM);
+                axy = static_cast<uint32_t>((v.x << 16) | v.y);
+            }
+            drisc_post.lit(drisc_xy(r))
+                .lit(flat_drisc_job(r, banks))
+                .lit((r / banks) * p.region_bytes)
+                .lit(axy)
+                .lit(aj == ~0u ? 0 : aj);
         }
         for (uint32_t r = 0; r < p.drisc_n; ++r) {
             for (uint32_t j = 0; j < p.r_; ++j) {
