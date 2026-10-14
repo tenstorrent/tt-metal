@@ -27,8 +27,7 @@ def argmax_last(logits):
     ttnn.argmax needs ROW_MAJOR input: a TILE tensor takes a single-core internal-untilize path that
     is catastrophically slow on a 151k-wide vocab, so untilize multicore first. The GATHERED form:
     ``logits`` is the full replicated [1,1,B,vocab]. Reached through draft_argmax, which is what
-    both the eager draft step (SpeculativeDecoder) and the traced chain
-    (Qwen36Model._draft_body) call, so the two pick their ids through byte-identical ops.
+    every drafter step (spec_engine._drafter_body) calls, so all pick their ids through byte-identical ops.
     """
     u = ttnn.untilize(logits, use_multicore=True)
     out = ttnn.argmax(u, dim=-1, keepdim=True)  # [1,1,B,1] uint32 RM
@@ -39,9 +38,8 @@ def argmax_last(logits):
 def draft_argmax(mtp, logits):
     """Drafter logits -> token id, for whichever LM-head form the flag selected.
 
-    THE shared drafter pick: the eager chain (SpeculativeDecoder._draft/_draft_warmup) and the
-    traced one (Qwen36Model._draft_body) both come through here, so the two
-    dispatch on one value and switch together — the same reason argmax_last was hoisted to module
+    THE shared drafter pick: the engine's drafter (spec_engine._drafter_body) comes through here, so
+    all callers dispatch on one value and switch together — the same reason argmax_last was hoisted to module
     level in the first place. Both forms take the drafter's own logits and return [1,1,B,1] uint32
     ROW_MAJOR (one id per row), and neither frees ``logits``: the caller owns it.
 
