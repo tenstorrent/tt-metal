@@ -940,23 +940,45 @@ class TtHCA(_TtHCABase):
         # passes fewer compressed rows than the capacity (a tile multiple, so no pad is needed), the mask is
         # sliced to the same width -- one program per distinct width, compiled once, and the SDPA / masks cost
         # what the position needs instead of what the max context would.
-        mask = self._mask
-        if live:
-            width = self._mask_col + int(compressed_kv.shape[2])
-            mask = ttnn.slice(self._mask, [0, 0, 0, 0], [self._mask.shape[0], 1, self._mask.shape[2], width])
-        rows = mask.shape[2]
+        width = self._mask_col + int(compressed_kv.shape[2]) if live else int(self._mask.shape[3])
         carry_cols = self._carry_cols[kv_actual == 0]
-        ttnn.experimental.slice_write(
-            carry_cols, mask, start=[0, 0, 0, 0], end=[batch, 1, rows, carry_cols.shape[3]], step=[1, 1, 1, 1]
-        )
-        if mask_block is not None:
+        if mask_block is not None and os.environ.get("PREFILL_MASK_CONCAT", "1") == "1":
+            # DS41F-0064: compose [carry | static chunk columns | mask_block | static tail] in one concat. A TILE-interleaved
+            # slice_write converts its WHOLE output to ROW_MAJOR and back (slice_write.cpp), i.e. two full-mask layout round
+            # trips per chunk; at ~400k columns (V4.1 ratio 2, 782k positions) those programs no longer fit in L1. Every
+            # non-static column is rewritten each call (the block spans the whole compressed region), so the persistent
+            # mask stays static and the values are the in-place version's.
+            c, mc, bw = int(carry_cols.shape[3]), int(self._mask_col), int(mask_block.shape[3])
+            rows = int(self._mask.shape[2])
+            dram = ttnn.DRAM_MEMORY_CONFIG
+            static = []
+            parts = [carry_cols]
+            if mc > c:
+                static.append(ttnn.slice(self._mask, [0, 0, 0, c], [batch, 1, rows, mc], memory_config=dram))
+                parts.append(static[-1])
+            parts.append(mask_block)
+            if mc + bw < width:
+                static.append(ttnn.slice(self._mask, [0, 0, 0, mc + bw], [batch, 1, rows, width], memory_config=dram))
+                parts.append(static[-1])
+            mask = ttnn.concat(parts, dim=3, memory_config=dram)
+            for t in static:
+                ttnn.deallocate(t)
+        else:
+            mask = self._mask
+            if live:
+                mask = ttnn.slice(self._mask, [0, 0, 0, 0], [self._mask.shape[0], 1, self._mask.shape[2], width])
+            rows = mask.shape[2]
             ttnn.experimental.slice_write(
-                mask_block,
-                mask,
-                start=[0, 0, 0, self._mask_col],
-                end=[batch, 1, rows, self._mask_col + mask_block.shape[3]],
-                step=[1, 1, 1, 1],
+                carry_cols, mask, start=[0, 0, 0, 0], end=[batch, 1, rows, carry_cols.shape[3]], step=[1, 1, 1, 1]
             )
+            if mask_block is not None:
+                ttnn.experimental.slice_write(
+                    mask_block,
+                    mask,
+                    start=[0, 0, 0, self._mask_col],
+                    end=[batch, 1, rows, self._mask_col + mask_block.shape[3]],
+                    step=[1, 1, 1, 1],
+                )
 
         attn = ttnn.transformer.scaled_dot_product_attention(
             q,
