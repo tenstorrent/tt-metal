@@ -225,6 +225,20 @@ def test_binary_rejects_non_default_tile(device, expect_error, operand, tile_sha
         ttnn.add(tensor_a, tensor_b, output_tensor=output)
 
 
+@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16), (16, 16)], ids=lambda s: f"tile_{s[0]}x{s[1]}")
+def test_binary_scalar_rejects_non_default_tile(device, expect_error, tile_shape):
+    """The tensor-scalar path reaches the same 32x32 circular buffers through input A."""
+    tensor_a = ttnn.from_torch(
+        torch.rand(TENSOR_SHAPE, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+    with expect_error(RuntimeError, "supports only 32x32 tiles"):
+        ttnn.add(tensor_a, 2.0)
+
+
 def test_binary_rejects_non_default_output_tile_on_cache_hit(device, expect_error):
     """The program hash ignores the preallocated output's tile, so the check must also run on a cache hit."""
     torch_input = torch.rand(TENSOR_SHAPE, dtype=torch.bfloat16)
