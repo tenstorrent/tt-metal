@@ -36,7 +36,12 @@ from ...utils.ltx import (
     default_ltx25_path,
     default_ltx25_video_vae,
 )
-from .pipeline_ltx_distilled import LTXDistilledPipeline
+from .pipeline_ltx_distilled import (
+    ANCESTRAL_NOISE_SEED_OFFSET,
+    ANCESTRAL_S2_NOISE_SEED_OFFSET,
+    LTXDistilledPipeline,
+    _env_on,
+)
 
 
 def _default_gemma3_path() -> str:
@@ -55,6 +60,21 @@ def _vae_header_config(path: str) -> dict:
         header_size = int.from_bytes(f.read(8), "little")
         header = json.loads(f.read(header_size))
     return json.loads(header.get("__metadata__", {}).get("config", "{}")).get("vae", {})
+
+
+def _ancestral_noise_seed(trace_key: str | None, seed: int, use_ancestral_sampler: bool) -> int | None:
+    """Ancestral Euler noise seed for this denoise pass, or ``None`` for plain Euler.
+
+    Stage 1 is ancestral. Upstream runs stage 2 ancestral as well (its own seed offset);
+    here that is opt-in via LTX25_S2_ANCESTRAL=1, read per call, so the default stays plain Euler.
+    """
+    if not use_ancestral_sampler:
+        return None
+    if trace_key == "s1":
+        return seed + ANCESTRAL_NOISE_SEED_OFFSET
+    if trace_key == "s2" and _env_on("LTX25_S2_ANCESTRAL"):
+        return seed + ANCESTRAL_S2_NOISE_SEED_OFFSET
+    return None
 
 
 class LTX25DistilledPipeline(LTXDistilledPipeline):
@@ -85,22 +105,20 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
         self._ltx25_diffvae_path = diffvae_path
         self._diffusion_decoder = diffusion_decoder
         self._diffvae_options = diffvae_options
-        # Stage-1 ancestral Euler for 2.5+ (upstream ``should_use_ancestral_sampler``); stage 2 stays
-        # deterministic. Override False only for A/B against the plain Euler path.
+        # Ancestral Euler for 2.5+ (upstream ``should_use_ancestral_sampler``); see
+        # ``_ancestral_noise_seed`` for which stages use it. False forces plain Euler for A/B.
         self.use_ancestral_sampler = use_ancestral_sampler
         super().__init__(mesh_device, parallel_config, ccl_manager, **kwargs)
 
     def _denoise_no_guidance(self, v_embeds, a_embeds, *, trace_key: str | None = None, seed: int = 10, **kwargs):
-        from .pipeline_ltx_distilled import ANCESTRAL_NOISE_SEED_OFFSET
-
-        ancestral = self.use_ancestral_sampler and trace_key == "s1"
+        noise_seed = _ancestral_noise_seed(trace_key, seed, self.use_ancestral_sampler)
         return super()._denoise_no_guidance(
             v_embeds,
             a_embeds,
             trace_key=trace_key,
             seed=seed,
-            ancestral=ancestral,
-            ancestral_noise_seed=(seed + ANCESTRAL_NOISE_SEED_OFFSET) if ancestral else None,
+            ancestral=noise_seed is not None,
+            ancestral_noise_seed=noise_seed,
             **kwargs,
         )
 
