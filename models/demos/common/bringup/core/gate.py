@@ -196,6 +196,8 @@ def gate_outputs(ledger: Ledger, task: dict) -> list[Path]:
     out = [ledger.results_dir / f"{tid}.json", *sorted(ledger.results_dir.glob(f"{tid}_*.json"))]
     if task.get("step") == "optests":
         out.append(ledger.results_dir / "fork_calls.json")
+        if "fork_calls_scaled.json" in (task.get("gate") or {}).get("cmd", ""):  # F64: the scaled run's calls
+            out.append(ledger.results_dir / "fork_calls_scaled.json")
     return out
 
 

@@ -882,7 +882,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   `unreported`). The orchestrator prints `KNOWLEDGE CONTRADICTED <id>: <evidence>` when the step ends and records
   the ids on the agent run; the supervisor relays it to the owner at once.
 
-## F64 (2026-10-14): plan for the deployment box, fit to every box (steps 1-3: spec, plan check, prompts)
+## F64 (2026-10-14): plan for the deployment box, fit to every box; scaled runs on smaller boxes
 
 - Owner: the target of every model is a Galaxy 8x4; QuietBox / LoudBox stand in for it during the bring-up. Modes:
   partial (the first layers bring up the layout; on a smaller box scaled so each chip sees the Galaxy's per-chip
@@ -904,5 +904,20 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - Briefs: a "Boxes" section (run box and mode, the deployment box, every box); the plan role also gets how to plan for
   the deployment box. Engineer rule 15: code runs on every listed box (no chip-count constants; sizes for every box;
   per-chip path choices as the plan's conditions say).
-- Not yet (steps 4-6): the reduced model for scaled partial runs (reference hook, expert slice, goldens per scale), the
-  two ladder sets and full-mode gates, labels, results per box, dashboard, the `new` intake questions.
+- Steps 4-6 (same day): the scaled run. plan/scale.py writes the reduced checkpoint (`<art>/hf_scaled/<run box>/`)
+  from `scaling.yaml` next to the plan (config counts -> roles; per tensor: cut a dimension to the kept heads, or keep
+  per-expert tensors by index; config.json counts scaled), so the CPU reference and the device model see a smaller
+  model with no model-code change, provided they read their dimensions from the checkpoint's config. scaling.yaml is
+  not an approved plan file: the scale step (role `scale`, task SG.1) may fix it. BRINGUP_SCALED=1 gives the spec's
+  scaled view: the reduced checkpoint, `golden_scaled/<box>`, a `-scaled` weight cache, the deployment's context
+  scaled by the sequence factor, and a two-rung ladder (`scaled` all chunks, `scaled_last` last chunk after a golden
+  prefix; `scaled.ladder` overrides). Tasks, when a partial run's box has fewer chips than the deployment box: SG.1
+  (reduced checkpoint + golden, after PL.1), SL.<rung> (after the real ladder), SX.1 (scaled profile; X.2 ranks
+  opportunities from it), and O.1 captures the fork calls of both runs (fork_cases takes several capture files).
+  The plan gate checks scaling.yaml against the checkpoint and prints the kept counts. Full mode needs every layer, so
+  the end-to-end gates (final hidden, top-k, the device smoke) come from the existing rules. Ladder and profile
+  record `scaled_run`. Dashboard: deployment and mode in the header, a Boxes section (per-box table, per-chip paths,
+  differing ones marked), teletext page 111. The intake asks for the deployment box, the boxes and the mode.
+- Not done: results per box. One ledger per model, so running the same model on a second box re-runs its tasks in
+  the same results folder; separating them means a ledger per box, worth doing when a model first moves boxes.
+  Perf picks (P tasks) still A/B on the real-size profile; only the opportunity list uses the scaled one.
