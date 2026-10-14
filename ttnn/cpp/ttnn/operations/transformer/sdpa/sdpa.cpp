@@ -828,8 +828,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         TT_FATAL(input_tensor_k.dtype() == input_tensor_v.dtype(), "Named ring recipes require matching KV types");
         finalize_ring_recipe_config(
             numeric::RecipeOp::Ring, policy, program_config, compute_kernel_config, input_tensor_q.logical_shape()[3]);
-        // The ring recipe reads Q as BF16: a BFP8/BFP4 Q (legacy takes them) is widened first and the outputs
-        // narrowed back, as on the dense path.
+        // The ring recipe reads Q as BF16: a BFP8/BFP4 Q (legacy takes them) is widened first; the outputs stay BF16,
+        // as legacy's do.
         query = numeric::recipe_bf16_query(input_tensor_q);
         if (joint_tensor_q && joint_tensor_q->logical_shape().volume() > 0) {
             joint_query = numeric::recipe_bf16_query(*joint_tensor_q);
@@ -901,16 +901,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         logical_n_tensor,
         logical_l_tensor,
         precision);
-    auto& output = output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX];
-    auto& joint_output = output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX];
-    if (output.dtype() != input_tensor_q.dtype()) {
-        output = ttnn::typecast(output, input_tensor_q.dtype());
-    }
-    if (joint_tensor_q && joint_output.dtype() != joint_tensor_q->dtype() &&
-        joint_output.logical_shape().volume() > 0) {
-        joint_output = ttnn::typecast(joint_output, joint_tensor_q->dtype());
-    }
-    return {output, joint_output, output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
+    // Ring joint outputs are BF16 for every Q dtype (legacy and recipe alike), so no narrowing back to Q's dtype.
+    return {
+        output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
+        output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
+        output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(

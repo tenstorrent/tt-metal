@@ -372,7 +372,8 @@ def test_ring_joint_sdpa_recipe_legacy_arguments(ring_mesh, variant):
 
 def test_ring_joint_sdpa_precision_routing(ring_mesh):
     """Without precision, FP32 dest runs ACCURATE when the ring recipe has the call's features: bitwise the explicit
-    ACCURATE call (sharded joint), and BFP8 Q/K/V (Q widened to BF16, outputs narrowed back), noncausal and causal."""
+    ACCURATE call (sharded joint), and BFP8 Q/K/V (Q widened to BF16, BF16 outputs as legacy's), noncausal and causal.
+    """
     mesh, semaphores, ccl_column = ring_mesh
     fp32 = fp32_dest_config(mesh)
     inputs, joints, backing, logical_n, kwargs, expected, _ = ring_case(mesh, "accurate", "joint_sharded")
@@ -414,14 +415,12 @@ def test_ring_joint_sdpa_precision_routing(ring_mesh):
             is_causal=causal,
             compute_kernel_config=fp32,
         )
-        assert out[0].dtype == ttnn.bfloat8_b
+        assert out[0].dtype == ttnn.bfloat16
         for chip in range(RING):
             rows = RING * k_local
             mask = key_mask(k_local, rows, causal=True, q_offset=chip * k_local) if causal else None
             want = reference(q.chunk(RING, dim=2)[chip], k, v, mask)
-            rounding = 1.5 * l2_pct(stored(want.bfloat16(), ttnn.bfloat8_b), want)
-            bound = L2_PCT_BOUND["accurate"] + rounding
-            assert l2_pct(per_chip(out[0])[chip], want) < bound, f"causal {causal} chip {chip}"
+            assert l2_pct(per_chip(out[0])[chip], want) < L2_PCT_BOUND["accurate"], f"causal {causal} chip {chip}"
 
 
 # Causal ring attention: batch, heads, kv_heads, local rows (Q = K), head_dim, q_chunk, k_chunk, SDPA grid. A balanced
