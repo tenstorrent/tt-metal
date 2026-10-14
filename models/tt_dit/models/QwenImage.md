@@ -13,14 +13,24 @@ The model consists of a Qwen2.5-VL text encoder together with its tokenizer, a s
 ## Performance
 
 Performance is measured for image size of 1024x1024px with 50 inference steps and classifier-free
-guidance.
+guidance, using the prompt from the Qwen-Image-2512 model card: 142 tokens, which the pipeline pads
+to its 256-token sequence length bucket.
 
 | System              | Encoding | Denoising (50 steps) | VAE   | Total |
 | ------------------- | -------- | -------------------- | ----- | ----- |
-| T3K (2x4)           | 0.38s    | 63.2s                | 0.12s | 63.8s |
-| BH QuietBox 2 (2x2) | 0.10s    | 26.8s                | 0.11s | 27.1s |
-| BH LoudBox (2x4)    | 0.09s    | 18.7s                | 0.08s | 19.0s |
-| BH Galaxy (4x8)     | 0.06s    | 7.5s                 | 0.05s | 7.6s  |
+| T3K (2x4)           | 0.41s    | 66.4s                | 0.12s | 67.0s |
+| BH QuietBox 2 (2x2) | 0.11s    | 27.5s                | 0.12s | 27.8s |
+| BH LoudBox (2x4)    | 0.10s    | 20.2s                | 0.08s | 20.5s |
+| BH Galaxy (4x8)     | 0.07s    | 8.2s                 | 0.04s | 8.3s  |
+
+Total time per image at 50 steps for larger [resolutions](#resolutions) and for
+[inpainting](#inpainting):
+
+| Case              | BH QuietBox 2 (2x2) | BH LoudBox (2x4) | BH Galaxy (4x8) |
+| ----------------- | ------------------- | ---------------- | --------------- |
+| 1344x1344         | 49.9s               | 33.3s            | 11.3s           |
+| 1664x928          | 43.9s               | 29.4s            | 10.5s           |
+| inpaint 1024x1024 | 28.5s               | 20.7s            | 8.6s            |
 
 The parallelism of each system is listed under [Scalability](#scalability).
 
@@ -34,17 +44,7 @@ there with the text encoder on the device. Pass `width` and `height` to the pipe
 one.
 
 The transformer pads the image's sequence to one of a few lengths, so sizes of similar area share a
-trace. Total time per image at 50 steps for the sizes other than 1024x1024:
-
-| Size      | BH QuietBox 2 (2x2) | BH LoudBox (2x4) | BH Galaxy (4x8) |
-| --------- | ------------------- | ---------------- | --------------- |
-| 1344x1344 | 48.4s               | 31.8s            | 10.6s           |
-| 1664x928  | 42.7s               | 27.5s            | 9.8s            |
-| 928x1664  | 42.8s               | 27.7s            | 9.8s            |
-| 1472x1120 | 45.5s               | 29.7s            | 10.3s           |
-| 1120x1472 | 45.6s               | 29.8s            | 10.1s           |
-| 1600x1056 | 46.2s               | 30.1s            | 10.4s           |
-| 1056x1600 | 46.5s               | 30.2s            | 10.2s           |
+trace.
 
 ## Inpainting
 
