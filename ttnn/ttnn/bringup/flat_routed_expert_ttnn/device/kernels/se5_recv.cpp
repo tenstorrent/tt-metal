@@ -135,6 +135,19 @@ void kernel_main() {
     // destinations is the wedge pattern above)
     volatile tt_l1_ptr uint32_t* granted_word = sem(credit_sem_id);
     auto grant = [&](uint32_t n) { *granted_word = *granted_word + n; };
+#elif defined(SE_DRISC_DUAL)
+    // the slot has both a Tensix reader (RT 0 / 1) and a DRAM core; per call (the same rule in every kernel) small
+    // counts go to the DRAM core, which polls the local grant counter (semaphore SE_GRANT_SEM)
+    const uint64_t credit_noc = get_noc_addr(fxy >> 16, fxy & 0xFFFF, get_semaphore(credit_sem_id));
+    volatile tt_l1_ptr uint32_t* granted_word = sem(SE_GRANT_SEM);
+    bool drisc_call = false;  // (set once the schedule is loaded, before any grant)
+    auto grant = [&](uint32_t n) {
+        if (drisc_call) {
+            *granted_word = *granted_word + n;
+        } else {
+            noc_semaphore_inc(credit_noc, n);
+        }
+    };
 #else
     const uint64_t credit_noc = get_noc_addr(fxy >> 16, fxy & 0xFFFF, get_semaphore(credit_sem_id));
     auto grant = [&](uint32_t n) { noc_semaphore_inc(credit_noc, n); };
@@ -149,6 +162,9 @@ void kernel_main() {
     SeDyn dyn;
     se_dyn_load<num_e_dyn>(dyn, peer0, get_write_ptr(tt::CBIndex::c_7), mt * 32);
     se_dyn_publish(dyn, tt::CBIndex::c_6);
+#ifdef SE_DRISC_DUAL
+    drisc_call = dyn.max_cnt <= SE_DRISC_MAXCNT;
+#endif
     const uint32_t total_w = dyn.n_load * (total_w_ct / num_e_dyn);  // gate/up loads
     const uint32_t num_v = dyn.num_v;
 #else

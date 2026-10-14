@@ -46,7 +46,11 @@ void kernel_main() {
     constexpr uint32_t num_e = get_compile_time_arg_val(11);
     SeDyn dyn;
     se_dyn_load<num_e>(dyn, 1 + R, get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF, 1);  // NCRISC: upper half of CB 7
+#ifdef SE_DRISC_DUAL  // a DRISC call (small counts): the slot's DRAM core forwards instead
+    const uint32_t total = dyn.max_cnt <= SE_DRISC_MAXCNT ? 0 : dyn.n_load * per_e;
+#else
     const uint32_t total = dyn.n_load * per_e;  // gate/up loads, each into its ring region (se_dyn.hpp)
+#endif
     static_assert(get_compile_time_arg_val(5) == SE_GU_NREG * per_e);
 #else
     constexpr uint32_t total = get_compile_time_arg_val(8);

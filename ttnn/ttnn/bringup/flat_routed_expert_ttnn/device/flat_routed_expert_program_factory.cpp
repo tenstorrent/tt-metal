@@ -290,6 +290,17 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         return d;
     };
 
+    // dual DRISC slots (plan.dual): the per-call switch, the largest per-expert count served by the DRAM cores
+    // (MIMO_FL_DRISC_MAXCNT; default 256 tokens, 128 with reader down columns). us / expert Tensix -> dual, GLM-Flash
+    // M 32 / 64 / 128 / 256 33.0 / 35.4 / 40.2 / 49.7 -> 31.5 / 33.9 / 39.3 / 49.6 (384: DRISC 58.8 vs 57.4: Tensix
+    // there); K2.7 E12 M 32 / 64 / 128 58.0 / 62.1 / 68.7 -> 56.5 / 60.6 / 67.6 (256: DRISC 85.0 vs 83.7)
+    Defines drisc_dual_def = dyn_def;
+    if (p.dual) {
+        const char* mc = std::getenv("MIMO_FL_DRISC_MAXCNT");
+        drisc_dual_def["SE_DRISC_DUAL"] = "1";
+        drisc_dual_def["SE_DRISC_MAXCNT"] = mc ? std::string(mc) : std::string(p.rdown ? "128" : "256");
+        drisc_dual_def["SE_GRANT_SEM"] = std::to_string(GRANT);
+    }
     // readers (read NOC0, forward NOC1): the chain-tail readers also compute down columns (se9_rdown)
     std::vector<CoreCoord> rdn_cores, plain;
     for (const auto& [r, tail] : p.rdn) {
@@ -340,43 +351,60 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         return d;
     };
     if (p.rdown) {
-        Defines rdn_def = yrm_def(with(dyn_def, {{"SE9_TRID", "1"}, {"SE_E2E", "1"}}), p.pcd_r);
-        rdn_def.insert(cmb_def.begin(), cmb_def.end());
-        const auto k =
-            dm("se9_rdown.cpp",
-               rdn_cores,
-               DataMovementProcessor::RISCV_0,
-               NOC::NOC_0,
-               {0,        w_tile, p.rg * p.slot, E * p.nk_gu, 1,    p.slot_dr, E * p.nblk_r, 2,  p.h_tiles, p.h_tile,
-                H_PIECES, 16,     p.out_tiles_r, V,           HARR, HSFREE,    p.hbuf,       MT, p.pcd_r,   Ht,
-                S,        E,      p.rd_slots,    p.ring_dr},
-               rdn_def);
-        const auto kc =
-            cp("se6_dcompute.cpp",
-               rdn_cores,
-               {MTG, G, It, p.kd_r, p.pcd_r, E, S, p.slot_dr, p.ring_dr},
-               dn_def(yrm_def(with(dyn_def, {{"SE_EARLY_POP", "1"}}))),
-               cfg.down_fp32,
-               cfg.down_fp32);
-        for (uint32_t i = 0; i < p.rdn.size(); ++i) {
-            const auto [r, t_] = p.rdn[i];
-            Args a;
-            a.a(AddrSrc::GateUp)
-                .lit(r % banks)
-                .lit((r / banks) * p.region_bytes)
-                .a(AddrSrc::ReaderDown)
-                .lit(i % banks)
-                .lit((i / banks) * p.wr_region)
-                .lit(pk(p.down[t_]))
-                .lit(coord_sg[p.sg_rd(r)])
-                .a(AddrSrc::Done)
-                .lit(p.nd_sg + i % p.n_rdn)
-                .a(AddrSrc::Y)
-                .lit(p.rem_cols + (i % p.n_rdn) * p.pcd_r)
-                .cat(dyn)
-                .lits(sgx(p.sg_rd(r)));
-            add_rt(k, p.readers[r], add_writer_rt(k, p.readers[r], a));
-            SetRuntimeArgs(program, kc, p.readers[r], std::vector<uint32_t>{0});
+        // (dual: the DRISC slots' reader tails skip their gate/up reads on DRISC calls: their own kernel)
+        for (const bool dual_set : {false, true}) {
+            const auto in_set = [&](uint32_t r) { return (p.dual && p.drisc_slot(r)) == dual_set; };
+            std::vector<CoreCoord> cores;
+            for (const auto& [r, tail] : p.rdn) {
+                if (in_set(r)) {
+                    cores.push_back(p.readers[r]);
+                }
+            }
+            if (cores.empty()) {
+                continue;
+            }
+            Defines rdn_def =
+                yrm_def(with(dual_set ? drisc_dual_def : dyn_def, {{"SE9_TRID", "1"}, {"SE_E2E", "1"}}), p.pcd_r);
+            rdn_def.insert(cmb_def.begin(), cmb_def.end());
+            const auto k =
+                dm("se9_rdown.cpp",
+                   cores,
+                   DataMovementProcessor::RISCV_0,
+                   NOC::NOC_0,
+                   {0,        w_tile, p.rg * p.slot, E * p.nk_gu, 1,    p.slot_dr, E * p.nblk_r, 2,  p.h_tiles, p.h_tile,
+                    H_PIECES, 16,     p.out_tiles_r, V,           HARR, HSFREE,    p.hbuf,       MT, p.pcd_r,   Ht,
+                    S,        E,      p.rd_slots,    p.ring_dr},
+                   rdn_def);
+            const auto kc =
+                cp("se6_dcompute.cpp",
+                   cores,
+                   {MTG, G, It, p.kd_r, p.pcd_r, E, S, p.slot_dr, p.ring_dr},
+                   dn_def(yrm_def(with(dyn_def, {{"SE_EARLY_POP", "1"}}))),
+                   cfg.down_fp32,
+                   cfg.down_fp32);
+            for (uint32_t i = 0; i < p.rdn.size(); ++i) {
+                const auto [r, t_] = p.rdn[i];
+                if (!in_set(r)) {
+                    continue;
+                }
+                Args a;
+                a.a(AddrSrc::GateUp)
+                    .lit(r % banks)
+                    .lit((r / banks) * p.region_bytes)
+                    .a(AddrSrc::ReaderDown)
+                    .lit(i % banks)
+                    .lit((i / banks) * p.wr_region)
+                    .lit(pk(p.down[t_]))
+                    .lit(coord_sg[p.sg_rd(r)])
+                    .a(AddrSrc::Done)
+                    .lit(p.nd_sg + i % p.n_rdn)
+                    .a(AddrSrc::Y)
+                    .lit(p.rem_cols + (i % p.n_rdn) * p.pcd_r)
+                    .cat(dyn)
+                    .lits(sgx(p.sg_rd(r)));
+                add_rt(k, p.readers[r], add_writer_rt(k, p.readers[r], a));
+                SetRuntimeArgs(program, kc, p.readers[r], std::vector<uint32_t>{0});
+            }
         }
     }
     // DRISC mode (flat_drisc.hpp): the DRAM cores' persistent senders read and forward the gate/up weights; the
@@ -392,72 +420,111 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         const auto v = device->virtual_core_from_logical_core(flat_drisc_logical(device, r, banks), tt::CoreType::DRAM);
         return static_cast<uint32_t>((v.x << 16) | v.y);
     };
+    Args drisc_post;
     if (p.drisc) {
         TT_FATAL(p.nsg == 1 && p.r_ <= 8, "MIMO_FL_DRISC: one subgrid");
         for (const auto& [r, tail] : p.rdn) {
-            TT_FATAL(p.tensix_reader(r), "MIMO_FL_DRISC: a reader down column on a DRISC slot");
+            TT_FATAL(!p.drisc_slot(r) || p.dual, "MIMO_FL_DRISC: a reader down column on a DRISC-only slot");
         }
         auto* mesh = dynamic_cast<distributed::MeshDevice*>(device);
         TT_FATAL(mesh != nullptr, "MIMO_FL_DRISC: a mesh device");
         flat_drisc_ensure(mesh, p.drisc_n, banks);
-        // one launcher posts every slot's job (se_drisc_go.cpp RT: base, gate/up, landing, slots, R, MPFE, per slot the
-        // DRISC xy / job / region offset, the slots' receivers, then the dyn args)
-        const auto k =
-            dm("se_drisc_go.cpp",
-               {p.launcher},
-               DataMovementProcessor::RISCV_0,
-               NOC::NOC_0,
-               {p.rg * p.slot * w_tile, p.slot * w_tile, p.rg, G, p.nk_gu, GRANT, DATA, E},
-               dyn_def);
-        Args a;
-        a.lit(drisc_base).a(AddrSrc::GateUp).a(AddrSrc::Arena).lit(p.drisc_n).lit(p.r_).lit(flat_drisc_mpfe(p.rdown));
+        // the job posting args (se_drisc_post.hpp): by a launcher kernel, or (dual) by slot 0's own reader
+        drisc_post.lit(drisc_base)
+            .a(AddrSrc::GateUp)
+            .a(AddrSrc::Arena)
+            .lit(p.drisc_n)
+            .lit(p.r_)
+            .lit(flat_drisc_mpfe(p.rdown))
+            .lits({p.rg * p.slot * w_tile, p.slot * w_tile, p.rg, G, p.nk_gu, GRANT, DATA});
         for (uint32_t r = 0; r < p.drisc_n; ++r) {
-            a.lit(drisc_xy(r)).lit(flat_drisc_job(r, banks)).lit((r / banks) * p.region_bytes);
+            drisc_post.lit(drisc_xy(r)).lit(flat_drisc_job(r, banks)).lit((r / banks) * p.region_bytes);
         }
         for (uint32_t r = 0; r < p.drisc_n; ++r) {
             for (uint32_t j = 0; j < p.r_; ++j) {
-                a.lit(pk(p.gu[r * p.r_ + j]));
+                drisc_post.lit(pk(p.gu[r * p.r_ + j]));
             }
         }
-        a.cat(dyn);
-        add_rt(k, p.launcher, a);
-    }
-    if (!plain.empty()) {
-        const auto k =
-            dm("se_reader.cpp",
-               plain,
-               DataMovementProcessor::RISCV_0,
-               NOC::NOC_0,
-               {0, w_tile, p.rg * p.slot, 1, p.nk_gu, 0, 1, E, p.rg * p.slot, 0},
-               dyn_def);
-        for (uint32_t r = 0; r < n_rd; ++r) {
-            if (std::find(plain.begin(), plain.end(), p.readers[r]) == plain.end()) {
-                continue;
-            }
+        TT_FATAL(
+            !p.dual || std::find(plain.begin(), plain.end(), p.launcher) != plain.end(),
+            "MIMO_FL_DRISC dual: the launcher must be a plain reader");
+        if (!p.dual) {
+            const auto k =
+                dm("se_drisc_go.cpp", {p.launcher}, DataMovementProcessor::RISCV_0, NOC::NOC_0, {E}, drisc_dual_def);
             Args a;
-            a.a(AddrSrc::GateUp).lit(r % banks).lit((r / banks) * p.region_bytes).lit(0).cat(dyn).lits(sgx(p.sg_rd(r)));
-            add_rt(k, p.readers[r], a);
+            a.cat(drisc_post).cat(dyn);
+            add_rt(k, p.launcher, a);
         }
     }
-    if (!trd.empty()) {
-        const auto k =
-            dm("se10_fwd.cpp",
-               trd,
-               DataMovementProcessor::RISCV_1,
-               NOC::NOC_1,
-               {0, p.r_, w_tile, p.rg * p.slot, p.slot, p.ring_g, 0, DATA, p.nk_gu, p.rd_slots, FWD, E, G},
-               dyn_def);
+    // Tensix readers + forwarders; dual DRISC slots' ones (SE_DRISC_DUAL) stand down on DRISC calls
+    for (const bool dual_set : {false, true}) {
+        const auto in_set = [&](uint32_t r) { return p.tensix_reader(r) && (p.dual && p.drisc_slot(r)) == dual_set; };
+        std::vector<CoreCoord> rd_cores, fwd_cores;
         for (uint32_t r = 0; r < n_rd; ++r) {
-            if (!p.tensix_reader(r)) {
+            if (in_set(r)) {
+                fwd_cores.push_back(p.readers[r]);
+                if (std::find(plain.begin(), plain.end(), p.readers[r]) != plain.end()) {
+                    rd_cores.push_back(p.readers[r]);
+                }
+            }
+        }
+        const Defines def = dual_set ? drisc_dual_def : dyn_def;
+        // dual: slot 0's reader also posts the DRISC jobs (its own kernel: SE_DRISC_LAUNCH = the post args' index)
+        const uint32_t post0 = 4 + static_cast<uint32_t>(dyn.v.size()) + static_cast<uint32_t>(sgx(0).size());
+        for (const bool launch : {false, true}) {
+            std::vector<CoreCoord> cores;
+            for (const auto& c : rd_cores) {
+                if ((dual_set && c == p.launcher) == launch) {
+                    cores.push_back(c);
+                }
+            }
+            if (cores.empty()) {
                 continue;
             }
-            Args a;
-            a.a(AddrSrc::Arena);  // land_addr: the gate/up cores' in1 ring (arena offset 0)
-            for (uint32_t j = 0; j < p.r_; ++j) {
-                a.lit(pk(p.gu[r * p.r_ + j]));
+            const auto k =
+                dm("se_reader.cpp",
+                   cores,
+                   DataMovementProcessor::RISCV_0,
+                   NOC::NOC_0,
+                   {0, w_tile, p.rg * p.slot, 1, p.nk_gu, 0, 1, E, p.rg * p.slot, 0},
+                   launch ? with(def, {{"SE_DRISC_LAUNCH", std::to_string(post0)}}) : def);
+            for (uint32_t r = 0; r < n_rd; ++r) {
+                if (!in_set(r) || std::find(cores.begin(), cores.end(), p.readers[r]) == cores.end()) {
+                    continue;
+                }
+                Args a;
+                a.a(AddrSrc::GateUp)
+                    .lit(r % banks)
+                    .lit((r / banks) * p.region_bytes)
+                    .lit(0)
+                    .cat(dyn)
+                    .lits(sgx(p.sg_rd(r)));
+                if (launch) {
+                    a.cat(drisc_post);
+                }
+                add_rt(k, p.readers[r], a);
             }
-            a.cat(dyn).lits(sgx(p.sg_rd(r)));
-            add_rt(k, p.readers[r], a);
+        }
+        if (!fwd_cores.empty()) {
+            const auto k =
+                dm("se10_fwd.cpp",
+                   fwd_cores,
+                   DataMovementProcessor::RISCV_1,
+                   NOC::NOC_1,
+                   {0, p.r_, w_tile, p.rg * p.slot, p.slot, p.ring_g, 0, DATA, p.nk_gu, p.rd_slots, FWD, E, G},
+                   def);
+            for (uint32_t r = 0; r < n_rd; ++r) {
+                if (!in_set(r)) {
+                    continue;
+                }
+                Args a;
+                a.a(AddrSrc::Arena);  // land_addr: the gate/up cores' in1 ring (arena offset 0)
+                for (uint32_t j = 0; j < p.r_; ++j) {
+                    a.lit(pk(p.gu[r * p.r_ + j]));
+                }
+                a.cat(dyn).lits(sgx(p.sg_rd(r)));
+                add_rt(k, p.readers[r], a);
+            }
         }
     }
 
@@ -608,7 +675,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         const Defines recv_def = with(dyn_def, {{"SE_GU_ONLY", "1"}, {"SE_X_RELAY", "1"}, {"SE_NO_PARTNER", "1"}});
         std::vector<CoreCoord> gu_t, gu_d;
         for (uint32_t ci = 0; ci < ngu; ++ci) {
-            (p.tensix_reader(ci / p.r_) ? gu_t : gu_d).push_back(p.gu[ci]);
+            (p.drisc_slot(ci / p.r_) ? gu_d : gu_t).push_back(p.gu[ci]);
         }
         const std::vector<uint32_t> recv_ct = {
             0,         x_blk,   1,    p.slot, E * p.nk_gu, V,        p.ring_g, 16,    1,     3,      2,    MTG,
@@ -617,14 +684,17 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         const NOC recv_noc = xswap ? NOC::NOC_0 : NOC::NOC_1;
         const KernelHandle kr_t =
             gu_t.empty() ? 0 : dm("se5_recv.cpp", gu_t, DataMovementProcessor::RISCV_0, recv_noc, recv_ct, recv_def);
+        Defines recv_d_def = recv_def;
+        if (p.dual) {  // both paths (the reader's credits / the local grant counter), chosen per call
+            for (const auto& [k, v] : drisc_dual_def) {
+                recv_d_def[k] = v;
+            }
+        } else {
+            recv_d_def["SE_DRISC"] = "1";
+        }
         const KernelHandle kr_d =
             gu_d.empty() ? 0
-                         : dm("se5_recv.cpp",
-                              gu_d,
-                              DataMovementProcessor::RISCV_0,
-                              recv_noc,
-                              recv_ct,
-                              with(recv_def, {{"SE_DRISC", "1"}}));
+                         : dm("se5_recv.cpp", gu_d, DataMovementProcessor::RISCV_0, recv_noc, recv_ct, recv_d_def);
         // perf probe (read at program build): MIMO_FL_GU_FULL_SYNC=1 - fp32 gate/up in a full-sync DST (8 tiles: the
         // whole MT x 2 NP sub-block in one K loop, no row passes; pack no longer overlaps math, once per sub-block)
         const bool gu_full_sync = p.gu_fp32 && p.gu_rp && (p.gu_full_sync || std::getenv("MIMO_FL_GU_FULL_SYNC"));
@@ -659,9 +729,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 const CoreCoord gc = p.gu[ci];
                 Args a;
                 // the forwarder and its credit word: the reader's semaphore j, or the DRISC's L1 word j
-                const bool dr = !p.tensix_reader(r);
-                a.lit(dr ? drisc_xy(r) : pk(p.readers[r]))
-                    .lit(dr ? GRANT : j)
+                const bool dr = p.drisc_slot(r);  // (dual: RT 0 / 1 are the reader's, the grant counter is SE_GRANT_SEM)
+                a.lit(dr && !p.dual ? drisc_xy(r) : pk(p.readers[r]))
+                    .lit(dr && !p.dual ? GRANT : j)
                     .lit((r % p.n_rd_sg) * p.rg + j / G)
                     .lit(head_xy_sg[sg].size())
                     .lit(0)
