@@ -1342,9 +1342,13 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     writer_desc.common_runtime_args = writer_common_runtime_args;
 
     // ---- Compute Kernel ----
-    bool fp32_dest_acc_en = output_data_format == tt::DataFormat::UInt32 ||
-                            output_data_format == tt::DataFormat::Int32 ||
-                            output_data_format == tt::DataFormat::Float32;
+    // Any 32-bit operand needs a 32-bit Dest: a Float32 input CB is unpacked with UnpackToDestFp32 below,
+    // and that lands corrupted in a Dest configured for 16-bit datums.
+    auto is_32bit_format = [](tt::DataFormat format) {
+        return format == tt::DataFormat::UInt32 || format == tt::DataFormat::Int32 || format == tt::DataFormat::Float32;
+    };
+    bool fp32_dest_acc_en = is_32bit_format(output_data_format) || is_32bit_format(predicate_data_format) ||
+                            is_32bit_format(value_true_data_format) || is_32bit_format(value_false_data_format);
 
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
 
@@ -1417,9 +1421,15 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
             kernel_defines["BCAST_C"] = (broadcast_type == TernaryBroadcastType::SCALAR_B_BCAST) ? "1" : "0";
         }
     }
-    // Get operation-specific compute kernel defines
-    auto op_defines =
-        CMAKE_UNIQUE_NAMESPACE::get_ternary_compute_defines(operation_attributes, predicate_tensor.dtype());
+    // Get operation-specific compute kernel defines.
+    // where_tile reads Dest in the layout its format names, so a 16-bit float predicate must select the
+    // Float32 variant once another operand has put Dest in 32-bit mode.
+    auto compute_dtype = predicate_tensor.dtype();
+    if (operation_attributes.ternary_op_type == TernaryOpType::WHERE && fp32_dest_acc_en &&
+        !is_32bit_format(predicate_data_format)) {
+        compute_dtype = DataType::FLOAT32;
+    }
+    auto op_defines = CMAKE_UNIQUE_NAMESPACE::get_ternary_compute_defines(operation_attributes, compute_dtype);
     for (const auto& [key, value] : op_defines) {
         kernel_defines[key] = value;
     }

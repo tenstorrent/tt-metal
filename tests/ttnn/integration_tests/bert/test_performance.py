@@ -20,11 +20,11 @@ from models.experimental.functional_common.attention_mask_functions import get_e
 
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
 )
-from models.perf.perf_utils import prep_perf_report
+from tt_py_test_utils_common.perf.perf_utils import prep_perf_report
 
 
 def preprocess_inputs(
