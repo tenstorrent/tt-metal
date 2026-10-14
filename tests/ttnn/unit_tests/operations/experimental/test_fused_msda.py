@@ -613,9 +613,7 @@ def test_fused_msda_v1_v2_equivalence(device, reference_mode, R, Q, packed, alig
     # SFPU from the unrounded reference point and offset, so the two differ by
     # the rounding of the intermediate location only.
     _assert_close(v1, v2, pcc=0.999)
-    _assert_close(
-        _msda_reference(value, loc, attn, spatial_shapes, align_corners=align_corners), v2, pcc=0.99
-    )
+    _assert_close(_msda_reference(value, loc, attn, spatial_shapes, align_corners=align_corners), v2, pcc=0.99)
 
 
 def test_fused_msda_v2_bevformer_pillar_shape(device):
