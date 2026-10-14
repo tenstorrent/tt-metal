@@ -59,8 +59,8 @@ def prefetch_and_linear(
             the matmul. Supply exactly one of ``global_cb`` / ``prefetcher_pipes``.
         prefetcher_pipes: The DRAM-sender PrefetcherPipes (every pipe of one
             ``create_prefetcher_pipes_for_tensor_prefetcher`` call) shared by the prefetch and
-            the matmul, as an alternative to ``global_cb``. Receiver-contiguous weight only;
-            mcast-in0 or gather-in0.
+            the matmul, as an alternative to ``global_cb``. A K-row-major weight needs one pipe
+            per bank (``support_multi_receiver_shards=True``); mcast-in0 or gather-in0.
         program_config: 1D matmul program config driving the matmul.
         **linear_kwargs: Forwarded to ``ttnn.linear`` (e.g. ``memory_config``,
             ``compute_kernel_config``, ``dtype``, ``bias``). A ``queue_id``/``cq_id``
