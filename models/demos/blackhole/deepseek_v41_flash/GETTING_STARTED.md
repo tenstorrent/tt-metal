@@ -325,6 +325,47 @@ list, a seeded request twice, and the field checks in the table).
 | `presence_penalty`, `frequency_penalty`, `repetition_penalty` | accepted; per the server's own message these requests decode without speculation (slower) |
 | `n` | `n` 2 returned two choices in a test |
 
+## Run the GSM8K evaluation
+
+The accuracy numbers in this guide come from tt-inference-server's `evals` workflow, run from the same image
+against the running server. `assets/run_gsm8k_eval.sh` does that: it starts a second container of the image
+(the client) that runs `run.py --workflow evals` against `http://127.0.0.1:8000`.
+
+| | |
+|---|---|
+| Task | `dsv41_gsm8k_cot`: lm-eval's `gsm8k_cot` (the 8 chain-of-thought exemplars of Wei et al.), copied to `reference_config/evals/lm_eval_tasks/dsv41_gsm8k_cot.yaml` in tt-inference-server with the namespaced dataset id `openai/gsm8k`. The task and its `EvalTask` entry in `reference_config/evals/eval_config.py` are both in the image. |
+| Questions | all 1319 of the GSM8K test split, 8-shot, through the chat API with the model's chat template |
+| Sampling | temperature 1.0, top-p 0.95, `do_sample`, up to 2048 generated tokens, stop at `Q:` (the start of the next exemplar), streaming; `max_length` 40000 |
+| Concurrency | `DSV41_EVAL_CONCURRENCY`, 16 here (the 16-user server); the task's own default is 32, for the 32-user build |
+| Score | `exact_match,flexible-extract` in percent. The model card lists 93.0 for the base model (a different protocol); the workflow's check passes within 5 % of it. `strict-match` is also reported, but it is lower because the answers end "The answer is $64." and its regex wants a digit right after "is". |
+
+Start the server as in "Launch the server" (steps 1-5), then:
+
+```bash
+cd models/demos/blackhole/deepseek_v41_flash        # in the tt-metal checkout
+IMAGE=$IMAGE CKPT=$CKPT SPEC=$PWD/assets/runtime_spec_b16_k5_131072.json STATE=$STATE ./assets/run_gsm8k_eval.sh
+```
+
+- `CKPT`, `SPEC`, `STATE` and `IMAGE` are the variables of step 3. The script also takes `URL` (default
+  `http://127.0.0.1:8000`), `CONCURRENCY` (default 16), `HF_CACHE` and `DOCKER`.
+- **Checkpoint mount.** `eval_config.py` names the tokenizer by the checkpoint's site path
+  (`/mnt/tt-data/ssinghal/deepseek-v41-flash`), so the script mounts your checkpoint at that path inside the
+  client container.
+- **Network.** The client downloads the dataset (`openai/gsm8k`) from the Hugging Face hub and, on its first run,
+  installs the workflow's Python environment (`uv`, PyPI). Both go into `$STATE/eval/` and are reused later.
+- **Entry script.** `assets/eval_client_entry.sh` is mounted as the client's entry point: `run.py` calls `git rev-parse HEAD` on
+  its own tree, and the tree in the image is an empty `git init` owned by another user, so the script trusts it
+  and commits it before starting `run.py`.
+- **Output.** The report is `$STATE/eval/workflow_logs/reports_output/evals/report_*.md` (the score table at the
+  bottom), and the raw lm-eval samples are next to it.
+- **Time.** About 20 minutes for the 1319 questions at concurrency 16 (20.4 min measured in a container run), plus the
+  first-run setup (about 15 minutes measured: managed Python, the workflow environment and the dataset; later runs skip it).
+- **Quick check.** Extra arguments go to `run.py`: `./assets/run_gsm8k_eval.sh --limit-samples-mode smoke-test` runs 8 questions.
+
+Results with this protocol: **96.29 %** on this image (16 users, speculative decoding, 40,000-token context; the same
+number from a host server and from the container run), 95.75 ± 0.56 % on the previous image. Sampling at temperature 1.0 makes a
+run differ from the next by about half a percent, so compare scores within that margin.
+
 ## Notes
 
 - **Concurrency.** 16 requests decode at once; the rest wait. A new request's prefill pauses the running
@@ -341,8 +382,6 @@ list, a seeded request twice, and the field checks in the table).
   `PermissionError: ... '/mnt/tt-data'` unless it is disabled.
 - **Running the workflows (`evals`, `benchmarks`) from the image.** The image ships the client side of
   tt-inference-server (`/home/container_app_user/tt-inference-server`, run with
-  `/home/container_app_user/tt-metal/python_env/bin/python run.py ...`). Three things are needed that are
-  not yet in the image: the directory must be a git repository with a commit (`run.py` calls
-  `git rev-parse HEAD`), uv's managed Python must be installed on a mounted path
-  (`UV_PYTHON_INSTALL_DIR`), and the workflow output directories must be mounted writable. Wrapper
-  scripts for this are not part of the repos yet.
+  `/home/container_app_user/tt-metal/python_env/bin/python run.py ...`). `assets/run_gsm8k_eval.sh` wraps the
+  `evals` workflow for GSM8K (section "Run the GSM8K evaluation"); there is no such wrapper for `benchmarks` in the
+  repos yet.
