@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import resource
 import statistics
 import sys
 import time
@@ -44,6 +45,18 @@ ROWS, COLS = 4, 8
 NUM_LAYERS = 36
 TARGET_LAYERS = (1, 9, 17, 25, 33)
 HANDOFF_FORMAT_VERSION = 1
+
+
+def _raise_nproc_limit():
+    """Raise RLIMIT_NPROC to the hard limit so tt-metal's parallel kernel JIT (a burst of g++/make
+    procs) doesn't starve with EAGAIN mid-build."""
+    soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+    if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
+        try:
+            resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
+            print(f"[dflash-prefill] raised RLIMIT_NPROC soft {soft} -> {hard}", flush=True)
+        except (ValueError, OSError) as e:
+            print(f"[dflash-prefill] WARNING: could not raise RLIMIT_NPROC (soft={soft}): {e}", file=sys.stderr)
 
 
 def _pcc(reference: torch.Tensor, actual: torch.Tensor) -> float:
@@ -201,6 +214,7 @@ def main() -> int:
     if ttnn.get_num_devices() < ROWS * COLS:
         print("[dflash-prefill] SKIP: requires a 4x8 Blackhole Galaxy", flush=True)
         return 0
+    _raise_nproc_limit()
     trace_dir = _require_path("PREFILL_TRACE_DIR")
     seed_raw = os.environ.get("BLAZE_DFLASH_SEED_REF")
     seed_path = _require_path("BLAZE_DFLASH_SEED_REF") if seed_raw else None
