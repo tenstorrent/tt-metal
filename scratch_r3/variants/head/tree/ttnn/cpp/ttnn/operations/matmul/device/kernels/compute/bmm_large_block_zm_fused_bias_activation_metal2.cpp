@@ -33,19 +33,21 @@ constexpr bool bmm_reload_every_block = false;
 constexpr bool bmm_reload_every_block = get_arg(args::num_blocks_inner_dim) > 1;
 #endif
 // not when the partials are reloaded every block: the matmul init after each reload drains the unpack thread
-// scratch: FORK_VARIANT 0 and 4 neither opt-in (4 is the A/A copy), 1 both, 2 the row MOP only, 3 Auto TTSync only
-#if defined(FORK_VARIANT) && (FORK_VARIANT == 0 || FORK_VARIANT == 2 || FORK_VARIANT == 4)
-#define FORK_TTSYNC_ON false
+// scratch: FORK_VARIANT 0 and 4 neither opt-in (4 the A/A copy), 1 the head's rules, 5 Auto TTSync off for one-row
+// blocks and the row MOP off for a narrowed last sub block, 6 the same with the row MOP rule at LoFi only
+#if defined(FORK_VARIANT) && (FORK_VARIANT == 0 || FORK_VARIANT == 4)
+#define FORK_ON false
 #else
-#define FORK_TTSYNC_ON true
+#define FORK_ON true
 #endif
-#if defined(FORK_VARIANT) && (FORK_VARIANT == 0 || FORK_VARIANT == 3 || FORK_VARIANT == 4)
-#define FORK_ROWMOP_ON false
+#if defined(FORK_VARIANT) && (FORK_VARIANT == 5 || FORK_VARIANT == 6)
+#define FORK_NARROW true
 #else
-#define FORK_ROWMOP_ON true
+#define FORK_NARROW false
 #endif
-constexpr bool bmm_unpack_auto_ttsync = FORK_TTSYNC_ON &&
-    get_arg(args::out_subblock_w) <= 2 && get_arg(args::out_subblock_h) <= 2 && !bmm_reload_every_block;
+constexpr bool bmm_unpack_auto_ttsync = FORK_ON &&
+    get_arg(args::out_subblock_w) <= 2 && get_arg(args::out_subblock_h) <= 2 && !bmm_reload_every_block &&
+    (!FORK_NARROW || get_arg(args::in0_block_num_tiles) > get_arg(args::in0_block_w));
 #endif
 
 // This is the Metal 2.0 fork of bmm_large_block_zm_fused_bias_activation.cpp, which still sits
@@ -259,7 +261,19 @@ void kernel_main() {
 #else
     constexpr bool row_mop_fidelity = true;
 #endif
-    constexpr bool row_mop = FORK_ROWMOP_ON &&
+#ifdef MATMUL_DRAM_SHARDED
+    constexpr bool fork_tail_narrowed = get_arg(args::last_subblock_w_valid) < out_subblock_w;
+#else
+    constexpr bool fork_tail_narrowed = false;
+#endif
+#if defined(FORK_VARIANT) && FORK_VARIANT == 5
+    constexpr bool fork_tail_off = fork_tail_narrowed;
+#elif defined(FORK_VARIANT) && FORK_VARIANT == 6
+    constexpr bool fork_tail_off = fork_tail_narrowed && !row_mop_fidelity;
+#else
+    constexpr bool fork_tail_off = false;
+#endif
+    constexpr bool row_mop = FORK_ON && !fork_tail_off &&
         (row_mop_fidelity || out_subblock_w >= 6 || (out_subblock_num_tiles >= 8 && in0_block_w > 1)) &&
         (DST_ACCUM_MODE || (unpack_src_format[out_dfb_id] != (uint8_t)DataFormat::Float32 &&
                             unpack_src_format[mm_partials_dfb_id] != (uint8_t)DataFormat::Float32));

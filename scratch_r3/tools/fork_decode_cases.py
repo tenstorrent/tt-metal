@@ -35,7 +35,6 @@ TT_MODELS = [
     ("l31_8b_p150_acc", "meta-llama/Llama-3.1-8B-Instruct", 1, "accuracy"),
     ("l32_1b_p150_perf", "meta-llama/Llama-3.2-1B-Instruct", 1, "performance"),
     ("l32_3b_p150_perf", "meta-llama/Llama-3.2-3B-Instruct", 1, "performance"),
-    ("q25_7b_p150_perf", "Qwen/Qwen2.5-7B-Instruct", 1, "performance"),
     ("mis_7b_p150_perf", "mistralai/Mistral-7B-Instruct-v0.3", 1, "performance"),
     ("l31_70b_p150x4_perf", "meta-llama/Llama-3.1-70B-Instruct", 4, "performance"),
     ("l31_70b_p150x4_acc", "meta-llama/Llama-3.1-70B-Instruct", 4, "accuracy"),
