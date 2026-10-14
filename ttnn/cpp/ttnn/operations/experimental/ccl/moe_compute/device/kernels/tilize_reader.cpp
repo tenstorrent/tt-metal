@@ -368,6 +368,7 @@ void kernel_main() {
     // built and the expert -> token lists are packed (moe_ring::token_list) from per-RISC pair lists (NCRISC c_9,
     // BRISC c_10; the non-drain cores' lists staged on the drain in c_12) by the drain, which publishes the page
     // before releasing the matmul cores: dm1 reads it for its output rows.
+    // TODO(#60614): move the packed mapping into selective_reduce_combine and drop the activations tensor.
     constexpr bool local_output = get_named_compile_time_arg_val("local_output") == 1;
     [[maybe_unused]] constexpr uint32_t pairs_capacity_bytes = get_named_compile_time_arg_val("pairs_capacity_bytes");
     [[maybe_unused]] constexpr uint32_t token_list_header_words =
