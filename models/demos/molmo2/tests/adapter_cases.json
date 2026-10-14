@@ -1,0 +1,7 @@
+[
+  {"name": "text-long", "content": [{"type": "text", "text": "Explain the difference between supervised and unsupervised learning in two sentences."}]},
+  {"name": "image", "content": [{"type": "image", "image": "logo"}, {"type": "text", "text": "Describe this image in one sentence."}]},
+  {"name": "video", "content": [{"type": "video", "video": "d02d399003cca14e2a5c822d389821e553e6b7942c5640d48c075703e533d1dc.mp4"}, {"type": "text", "text": "Describe what is happening in this video."}]},
+  {"name": "two-images", "content": [{"type": "image", "image": "logo"}, {"type": "image", "image": "cat"}, {"type": "text", "text": "Compare these two images."}]},
+  {"name": "text-short", "content": [{"type": "text", "text": "What is 2 + 2?"}]}
+]

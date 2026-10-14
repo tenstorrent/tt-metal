@@ -341,6 +341,15 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
                 return flat[0]
         return val
 
+    def warmup_model_prefill(self, kv_cache=None, enable_trace=False, can_sample_on_device=False, **kwargs):
+        """vllm-tt-plugin contract hook (called once with and once without ``enable_trace``).
+
+        Prefill JIT + vision kernels are already compiled in ``initialize_vllm_model``. Prefill traces are
+        deliberately never captured: an eager prefill with an explicit image-bidirectional mask cannot
+        coexist with the decode trace (execute_trace hangs), so there is nothing to do here.
+        """
+        logger.info(f"Molmo2 prefill warmup: nothing to capture (enable_trace={enable_trace}); compiled at init")
+
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, enable_trace=False, **kwargs):
         """Run prefill for each user in the batch; route per-user to a DP replica.
 
