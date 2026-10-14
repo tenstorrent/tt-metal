@@ -1,7 +1,4 @@
 {
-  "description": "LoFi global ring_mla winners at full 262144-token context; keys are global chunk sizes before CP sharding. Selected configuration is used at every prefix.",
-  "selection": "Smallest measured median among successful configurations with PCC >= 0.9.",
-  "source": "tests/nightly/blackhole/sdpa/gemma4_global_sweep_results/2026-10-11/best_and_production.csv: final_256K, best",
   "workload": {
     "arch": "blackhole",
     "cp_degree": 8,
