@@ -142,8 +142,29 @@ void kernel_main() {
             cache_local_tile_rows,
             halo_slot_count,
             hop);
+#if defined(SLIDING_SHARED_HALO_STRIDE) && SLIDING_SHARED_HALO_STRIDE > 0
+        const uint32_t shared_end = trace_metadata::logical_tile_rows_clamped_to_cache(
+            trace_metadata::bounded_sliding_kv_actual_isl(
+                kv_actual_isl, q_local_tile_rows, ring_size, cache_local_tile_rows, halo_slot_count),
+            q_local_tile_rows * ring_size,
+            cache_local_tile_rows * ring_size);
+        const auto shared_slice = ring_joint::sliding_shared_halo_slice(
+            shared_end,
+            q_local_tile_rows,
+            ring_size,
+            halo_tile_rows,
+            SLIDING_SHARED_HALO_K_TILES,
+            source_device,
+            cache_local_tile_rows,
+            SLIDING_SHARED_HALO_STRIDE,
+            hop,
+            SLIDING_SHARED_HALO_MIN_ROWS);
+#endif
         for (uint32_t input = 0; input < num_inputs; ++input) {
             const uint32_t input_Wt = get_arg_val<uint32_t>(arg_idx++);
+#if defined(SLIDING_SHARED_HALO_STRIDE) && SLIDING_SHARED_HALO_STRIDE > 0
+            halo_pages[input] = shared_slice.tile_count * input_Wt;
+#endif
             first_origin[input] = sources.first_start_tile * input_Wt;
             second_origin[input] = sources.second_start_tile * input_Wt;
             const auto range = ring_attention_all_gather::compute_link_page_range(

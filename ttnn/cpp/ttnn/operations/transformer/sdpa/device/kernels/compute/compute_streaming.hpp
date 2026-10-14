@@ -54,7 +54,8 @@ constexpr bool sdpa_compute_lofi = true;
 constexpr bool sdpa_compute_lofi = false;
 #endif
 
-ALWI void sdpa_mm_init(uint32_t in0_cb, uint32_t in1_cb, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
+ALWI void sdpa_mm_init(
+    uint32_t in0_cb, uint32_t in1_cb, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
     if constexpr (sdpa_matmul_fidelity_set) {
         mm_no_mop_init_short_fidelity<sdpa_matmul_fidelity>(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
     } else {
@@ -104,7 +105,7 @@ constexpr uint32_t sliding_q_plan_max_source_ranges = SLIDING_MAX_SOURCE_RANGES;
 #else
 constexpr uint32_t sliding_q_plan_max_source_ranges =
     ttnn::operations::transformer::sdpa::ring_joint::sliding_q_work_plan_source_ranges(
-        ttnn::operations::transformer::sdpa::ring_joint::sliding_max_halo_hops, 1);
+        ttnn::operations::transformer::sdpa::ring_joint::sliding_max_ring_size, 1);
 #endif
 
 // Set by ring joint SDPA: put the local slab first only when the halo spans several hops (see the program factory).
@@ -2796,16 +2797,20 @@ void sdpa_ring_v2(
         ttnn::operations::transformer::sdpa::ring_joint::SlidingQWorkPlan<sliding_q_plan_max_source_ranges>
             sliding_q_plan;
         constexpr bool circular_kv_cache = circular_kv_slab_count > 1;
+        uint32_t physical_q_start_tile = q_chunk * Sq_chunk_t;
         if constexpr (has_sliding_window) {
             const ttnn::operations::transformer::sdpa::ring_joint::ChunkedQMapping q_mapping{
                 chunked.kv_pad_rotation.q_pre_wrap_start_tile,
                 chunked.kv_pad_rotation.q_pre_wrap_tile_count,
                 chunked.kv_pad_rotation.q_post_wrap_start_tile,
                 chunked.kv_pad_rotation.q_valid_tile_count};
-            sliding_q_plan = ttnn::operations::transformer::sdpa::ring_joint::build_sliding_q_work_plan<
+            const auto q_block = ring_joint::sliding_q_block(q_mapping, q_chunk, Sq_chunk_t, q_local_padded_Nt);
+            physical_q_start_tile = q_block.start_tile;
+            ttnn::operations::transformer::sdpa::ring_joint::build_sliding_q_work_plan_in_place<
                 sliding_q_plan_max_source_ranges>(
-                q_chunk * Sq_chunk_t,
-                Sq_chunk_t,
+                sliding_q_plan,
+                q_block.start_tile,
+                q_block.valid_tile_count,
                 chunked.ring_index,
                 q_local_padded_Nt,
                 ring_size,
@@ -2816,7 +2821,13 @@ void sdpa_ring_v2(
                 logical_nt,
                 circular_kv_slab_count,
                 kv_pad_rotation_enabled ? &q_mapping : nullptr,
-                sliding_local_first && sliding_split_count == 1);
+                sliding_local_first && sliding_split_count == 1,
+#ifdef SLIDING_SHARED_HALO_STRIDE
+                SLIDING_SHARED_HALO_STRIDE
+#else
+                0
+#endif
+            );
             ASSERT(sliding_q_plan.is_valid);
             acc_state.sliding_plan_k_chunks = sliding_q_plan.total_k_chunk_count;
             ASSERT(sliding_q_plan.total_k_chunk_count > 0);
@@ -2870,7 +2881,7 @@ void sdpa_ring_v2(
         static_assert(ring_joint::kPackedKVInvalidRowTile == KV_PAD_ROTATION_INVALID_TILE);
         ring_joint::PackedKVRowBounds packed_row_bounds{};
         if (packed_sources) {
-            const uint32_t mask_q_start = kv_pad_rotation_enabled ? q_chunk * Sq_chunk_t : q_start_tile;
+            const uint32_t mask_q_start = kv_pad_rotation_enabled ? physical_q_start_tile : q_start_tile;
             packed_row_bounds =
                 ring_joint::packed_kv_row_bounds(Sq_chunk_t, logical_nt, packed_head_global_end, [&](uint32_t row) {
                     return q_global_tile_for_mask_row<kv_pad_rotation_enabled>(
@@ -3175,7 +3186,7 @@ void sdpa_ring_v2(
                 step_save_out_cb,
                 step_save_max_cb,
                 step_apply_causal,
-                kv_pad_rotation_enabled ? q_chunk * Sq_chunk_t : q_start_tile,
+                kv_pad_rotation_enabled ? physical_q_start_tile : q_start_tile,
                 step_k_start_tile,
                 lw_mask.neginf_tile_idx,
                 has_sliding_window ? 1 : lw_mask.causal_diag_tile_idx,

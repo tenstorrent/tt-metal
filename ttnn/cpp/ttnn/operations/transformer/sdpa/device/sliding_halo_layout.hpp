@@ -24,6 +24,11 @@ struct ChunkedSlidingHaloLayout {
     uint32_t q_start_tile = 0;
     // halo_tile_rows-sized slots in the compact buffer; block-cyclic Q that wraps a slab needs two.
     uint32_t halo_slot_count = 1;
+    // Optional larger source-major buffer. Zero retains the compact predecessor layout.
+    uint32_t shared_cache_stride = 0;
+    uint32_t cache_local_tile_rows = 0;
+    uint32_t k_chunk_tile_rows = 0;
+    uint32_t minimum_payload_tile_rows = 1;
 
     bool uses_neighbor_halo() const;
     // What `source_device` sends to the receiver `hop` positions ahead (1 = the immediate neighbour).
@@ -34,6 +39,8 @@ struct ChunkedSlidingHaloLayout {
     // Rows shipped by hop `hop` (1-based), and the first compact-buffer row that `source_device`'s
     // payload lands in on the receiver `hop` positions ahead, in halo slot `slot`.
     uint32_t hop_rows(uint32_t hop) const;
+    // Actual payload can be shorter than hop_rows() for a source-major direction.
+    uint32_t send_rows(uint32_t source_device, uint32_t hop) const;
     uint32_t dest_row(uint32_t source_device, uint32_t hop, uint32_t slot = 0) const;
     // Every hop carries a whole slab into a source-keyed block, so a multicast can serve several
     // receivers (see chunked_sliding_halo_source_keyed).
@@ -69,6 +76,7 @@ ChunkedSlidingHaloLayout build_chunked_sliding_halo_layout(
     uint32_t logical_k_tile_rows,
     uint32_t halo_buffer_tile_rows,
     uint32_t circular_kv_slab_count = 0,
-    std::optional<uint32_t> q_start_tile = std::nullopt);
+    std::optional<uint32_t> q_start_tile = std::nullopt,
+    uint32_t cache_local_tile_rows = 0);
 
 }  // namespace ttnn::operations::transformer::sdpa::ring_joint

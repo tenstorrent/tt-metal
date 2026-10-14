@@ -16,6 +16,7 @@
 #include "chunked_prefill_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
 #include "ring_joint_kv_pad_derivation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/chunked_q_mapping.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "metadata_scalar_read.hpp"
 #include "fused_op_receiver.hpp"
@@ -429,6 +430,7 @@ struct QChunkInfo {
     Slice out_slice;
     uint32_t stats_seq_start_tile;
     uint32_t stats_seq_end_tile;
+    uint32_t valid_end_tile = UINT32_MAX;
 };
 
 // Compute DRAM address info (output slice + stats range) for one Q chunk.
@@ -442,7 +444,8 @@ inline QChunkInfo get_q_chunk_info(
     const uint32_t Sq_chunk_t,
     const uint32_t DHt,
     const uint32_t Lt,
-    const uint32_t q_local_padded_Nt) {
+    const uint32_t q_local_padded_Nt,
+    const ring_joint::ChunkedQMapping* sliding_mapping = nullptr) {
     QChunkInfo info;
     if constexpr (has_joint_q) {
         info.is_joint_q = q_chunk >= num_local_q_chunks;
@@ -458,9 +461,15 @@ inline QChunkInfo get_q_chunk_info(
     } else {
         info.is_joint_q = false;
     }
-    const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
+    const auto block = sliding_mapping
+                           ? ring_joint::sliding_q_block(*sliding_mapping, q_chunk, Sq_chunk_t, q_local_padded_Nt)
+                           : ring_joint::SlidingQBlock{q_chunk * Sq_chunk_t, Sq_chunk_t};
+    const uint32_t out_row_start_tile = block.start_tile;
+    if (sliding_mapping) {
+        info.valid_end_tile = block.start_tile + block.valid_tile_count;
+    }
     info.out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
-    info.stats_seq_start_tile = q_chunk * Sq_chunk_t;
+    info.stats_seq_start_tile = out_row_start_tile;
     info.stats_seq_end_tile = info.stats_seq_start_tile + Sq_chunk_t;
     info.stats_seq_start_tile = std::min(info.stats_seq_start_tile, q_local_padded_Nt);
     info.stats_seq_end_tile = std::min(info.stats_seq_end_tile, q_local_padded_Nt);
@@ -472,9 +481,9 @@ inline QChunkInfo get_q_chunk_info(
 template <bool has_joint_q>
 inline uint32_t get_end_seq_tile(const QChunkInfo& qi, uint32_t ring_id, uint32_t Lt, uint32_t q_local_padded_Nt) {
     if constexpr (has_joint_q) {
-        return qi.is_joint_q ? Lt : q_local_padded_Nt * (ring_id + 1);
+        return std::min(qi.valid_end_tile, qi.is_joint_q ? Lt : q_local_padded_Nt * (ring_id + 1));
     } else {
-        return q_local_padded_Nt * (ring_id + 1);
+        return std::min(qi.valid_end_tile, q_local_padded_Nt * (ring_id + 1));
     }
 }
 
@@ -576,6 +585,11 @@ void kernel_main() {
     uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
     uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
     uint32_t single_valid_kv_chunk_mask = get_arg_val<uint32_t>(argidx++);
+    ring_joint::ChunkedQMapping qmap;
+    qmap.q_pre_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
+    qmap.q_pre_wrap_tile_count = get_arg_val<uint32_t>(argidx++);
+    qmap.q_post_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
+    qmap.q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         false, /* wait_for_op_signal */
         argidx);
@@ -710,6 +724,17 @@ void kernel_main() {
         }
         logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
             kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+        if constexpr (has_sliding_window) {
+            const uint32_t tensor_rank =
+                ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                    fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
+            qmap = ring_joint::build_chunked_q_mapping(
+                kv_actual_isl / 32,
+                logical_nt,
+                q_local_padded_Nt,
+                ring_size / kv_stripe_split,
+                tensor_rank / kv_stripe_split);
+        }
         // Joint trio stays defaulted: KV-pad rotation is validated incompatible with a sharded joint.
         const auto masks = ring_joint::build_ring_work_masks_device<full_mesh_rank_mapping>({
             .transport_rank = fused_op_receiver.seq.ring_index,
@@ -740,6 +765,8 @@ void kernel_main() {
     const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr);
     const auto stats_writer = TensorAccessor(stats_args, stats_addr);
 
+    // Segment alignment cannot create partial blocks when Q divides the slab: splitting
+    // at a non-aligned segment boundary would require an extra work unit and is rejected.
     constexpr bool output_has_no_padding = !has_joint_q && (q_local_padded_Nt % Sq_chunk_t == 0);
     using StaticOutputTileShape = StaticTensorTileShape<B, NH, q_local_padded_Nt, vDHt>;
     using OutputTileShape = std::conditional_t<output_has_no_padding, StaticOutputTileShape, TensorTileShape>;
@@ -884,7 +911,7 @@ void kernel_main() {
                 const uint32_t nq = decoded_q.nq;
                 const uint32_t q_chunk = decoded_q.q_chunk;
                 const auto qi = get_q_chunk_info<has_joint_q>(
-                    q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
+                    q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt, &qmap);
                 const uint32_t end_seq_tile =
                     get_end_seq_tile<has_joint_q>(qi, ring_id / kv_stripe_split, Lt, q_local_padded_Nt);
 
@@ -1326,7 +1353,8 @@ void kernel_main() {
             Sq_chunk_t,
             vDHt,
             Lt,
-            q_local_padded_Nt);
+            q_local_padded_Nt,
+            has_sliding_window ? &qmap : nullptr);
         const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_size - 1, Lt, q_local_padded_Nt);
         write_block_row_grouped_trid<output_has_no_padding>(
             noc, out_generator, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);

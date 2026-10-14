@@ -292,6 +292,9 @@ void ring_attention_neighbor_halo_exchange_helper(
     reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel.core_ranges = workers;
     reader_kernel.config = WriterConfigDescriptor{};
+    reader_kernel.defines.emplace_back("SLIDING_SHARED_HALO_STRIDE", std::to_string(halo.shared_cache_stride));
+    reader_kernel.defines.emplace_back("SLIDING_SHARED_HALO_K_TILES", std::to_string(halo.k_chunk_tile_rows));
+    reader_kernel.defines.emplace_back("SLIDING_SHARED_HALO_MIN_ROWS", std::to_string(halo.minimum_payload_tile_rows));
     reader_kernel.compile_time_args = {
         ring_index,
         ring_size,
@@ -324,6 +327,9 @@ void ring_attention_neighbor_halo_exchange_helper(
     writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel.core_ranges = workers;
     writer_kernel.config = ReaderConfigDescriptor{};
+    writer_kernel.defines.emplace_back("SLIDING_SHARED_HALO_STRIDE", std::to_string(halo.shared_cache_stride));
+    writer_kernel.defines.emplace_back("SLIDING_SHARED_HALO_K_TILES", std::to_string(halo.k_chunk_tile_rows));
+    writer_kernel.defines.emplace_back("SLIDING_SHARED_HALO_MIN_ROWS", std::to_string(halo.minimum_payload_tile_rows));
     writer_kernel.compile_time_args = {
         packet_header_cb,
         data_cb,
@@ -429,10 +435,17 @@ void ring_attention_neighbor_halo_exchange_helper(
                 "Second neighbor halo exceeds the input cache");
             const uint32_t range_page_count = halo.send_to_next_count_Ht * input_Wt;
             const uint32_t valid_pages = std::min(gather_valid_Ht.value_or(input_Ht), input_Ht) * input_Wt;
+            // Grouped histories and source-major multicast payloads have a fixed width even
+            // before enough history exists.
+            // Its unused trailing rows stay within the physical cache (checked above), and
+            // build_sliding_q_work_plan clips every consumed row to the logical causal window.
+            const bool padded_grouped_history =
+                halo.shared_cache_stride != 0 ||
+                (halo.q_local_tile_rows != 0 && halo.halo_tile_rows > ring_size * halo.q_local_tile_rows);
             TT_FATAL(
-                (halo.send_to_next_start_Ht + tail_rows) * input_Wt <= valid_pages &&
-                    (halo.send_to_next_count_Ht == tail_rows ||
-                     (halo.send_second_start_Ht + tail_rows) * input_Wt <= valid_pages),
+                padded_grouped_history || ((halo.send_to_next_start_Ht + tail_rows) * input_Wt <= valid_pages &&
+                                           (halo.send_to_next_count_Ht == tail_rows ||
+                                            (halo.send_second_start_Ht + tail_rows) * input_Wt <= valid_pages)),
                 "Neighbor halo [{}, {}) exceeds the valid per-head page prefix {}",
                 range_start_page,
                 range_start_page + range_page_count,
@@ -506,6 +519,9 @@ void ring_attention_neighbor_halo_exchange_helper(
                 halo_slot_count = std::min(
                     halo_slot_count,
                     static_cast<uint32_t>(output.padded_shape()[2] / tt::constants::TILE_HEIGHT / halo.halo_tile_rows));
+            }
+            if (halo.shared_cache_stride) {
+                halo_slot_count = halo.q_local_tile_rows > 1 ? 2 : 1;
             }
             const auto append_halo_meta =
                 [&](KernelDescriptor::RTArgList& args, bool with_cache_batch, bool with_ring_size) {

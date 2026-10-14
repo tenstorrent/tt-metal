@@ -16,6 +16,34 @@ struct ChunkedQMapping {
     uint32_t q_valid_tile_count = 0;
 };
 
+struct SlidingQBlock {
+    uint32_t start_tile;
+    uint32_t valid_tile_count;
+};
+
+// Keep a Q block within one packed segment when this needs no additional core work units.
+// A rotated slab can otherwise make one block attend two distant windows. Restrict remapping
+// to full slabs; partial logical Q inputs retain their existing scheduling and padding.
+constexpr SlidingQBlock sliding_q_block(
+    const ChunkedQMapping& mapping, uint32_t index, uint32_t block_tiles, uint32_t local_tiles) {
+    uint32_t start = index * block_tiles;
+    uint32_t end = local_tiles;
+    const uint32_t pre = mapping.q_pre_wrap_tile_count;
+    if (mapping.q_valid_tile_count == local_tiles && pre > 0 && pre < local_tiles) {
+        const uint32_t pre_blocks = (pre + block_tiles - 1) / block_tiles;
+        const uint32_t post_blocks = (local_tiles - pre + block_tiles - 1) / block_tiles;
+        if (pre_blocks + post_blocks == (local_tiles + block_tiles - 1) / block_tiles) {
+            if (index < pre_blocks) {
+                end = pre;
+            } else {
+                start = pre + (index - pre_blocks) * block_tiles;
+            }
+        }
+    }
+    const uint32_t remaining = end > start ? end - start : 0;
+    return {start, remaining < block_tiles ? remaining : block_tiles};
+}
+
 // Whether any device's packed Q contains segments from two groups.
 constexpr bool chunked_q_wraps(uint32_t start_tile, uint32_t end_tile, uint32_t q_local_tile_rows, uint32_t ring_size) {
     const uint32_t second_slab_start = (start_tile / q_local_tile_rows + ring_size) * q_local_tile_rows;

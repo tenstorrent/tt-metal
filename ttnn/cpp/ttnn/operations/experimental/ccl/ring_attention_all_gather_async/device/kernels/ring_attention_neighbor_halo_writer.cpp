@@ -115,10 +115,35 @@ void kernel_main() {
             cache_local_tile_rows,
             halo_slot_count,
             hop);
-        const uint32_t tail_tile_rows = ttnn::operations::transformer::sdpa::ring_joint::chunked_sliding_halo_hop_rows(
-            halo_tile_rows, q_local_tile_rows, hop);
+#if defined(SLIDING_SHARED_HALO_STRIDE) && SLIDING_SHARED_HALO_STRIDE > 0
+        const uint32_t shared_end = trace_metadata::logical_tile_rows_clamped_to_cache(
+            trace_metadata::bounded_sliding_kv_actual_isl(
+                kv_actual_isl, q_local_tile_rows, ring_size_rt, cache_local_tile_rows, halo_slot_count),
+            q_local_tile_rows * ring_size_rt,
+            cache_local_tile_rows * ring_size_rt);
+        const auto shared_slice = ring_joint::sliding_shared_halo_slice(
+            shared_end,
+            q_local_tile_rows,
+            ring_size_rt,
+            halo_tile_rows,
+            SLIDING_SHARED_HALO_K_TILES,
+            source_device,
+            cache_local_tile_rows,
+            SLIDING_SHARED_HALO_STRIDE,
+            hop,
+            SLIDING_SHARED_HALO_MIN_ROWS);
+        const uint32_t tail_tile_rows = shared_slice.tile_count;
+#else
+        const uint32_t tail_tile_rows = ttnn::operations::transformer::sdpa::ring_joint::chunked_sliding_halo_peer_rows(
+            halo_tile_rows, q_local_tile_rows, ring_size_rt, hop);
+#endif
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             const uint32_t input_Wt = get_arg_val<uint32_t>(arg_idx++);
+#if defined(SLIDING_SHARED_HALO_STRIDE) && SLIDING_SHARED_HALO_STRIDE > 0
+            output_origin_page[input_idx] = shared_slice.dest_tile * input_Wt;
+            output_second_origin_page[input_idx] = output_origin_page[input_idx];
+            tail_pages[input_idx] = tail_tile_rows * input_Wt;
+#endif
             const uint32_t pages = sources.count * tail_tile_rows * input_Wt;
             ASSERT(pages <= output_batch_head_stride_pages[input_idx]);
             const auto range = ring_attention_all_gather::compute_link_page_range(pages, num_links, worker_link);

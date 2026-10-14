@@ -668,7 +668,11 @@ void apply_ring_joint_scalar_runtime_args(
             tensor_args.gathered_k.logical_shape()[2] / tt::constants::TILE_HEIGHT,
             derived_kv_slab_count(args, tensor_args),
             args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
-                                           : std::nullopt);
+                                           : std::nullopt,
+            tensor_args.input_k.padded_shape()[2] / tt::constants::TILE_HEIGHT);
+        const uint32_t width_tiles = input_k.padded_shape()[3] / tt::constants::TILE_WIDTH;
+        runtime_halo_layout->minimum_payload_tile_rows =
+            (args.all_gather_operation_attributes.num_links + width_tiles - 1) / width_tiles;
         TT_FATAL(runtime_halo_layout->uses_neighbor_halo(), "Sliding attention requires a neighbor halo");
     }
     const std::vector<ring_joint::ChunkedSlidingHaloExchange> halo_exchanges =
@@ -796,7 +800,8 @@ void apply_ring_joint_scalar_runtime_args(
         for (uint32_t exchange = 0; exchange < halo_exchanges.size(); ++exchange) {
             const auto& plan = halo_exchanges[exchange];
             const auto sources = runtime_chunked_sliding_layout.send_sources(ring_write_plan.transport_rank, plan.hop);
-            const uint32_t tail_rows = runtime_chunked_sliding_layout.hop_rows(plan.hop);
+            const uint32_t tail_rows =
+                runtime_chunked_sliding_layout.send_rows(ring_write_plan.transport_rank, plan.hop);
             const auto origin_rows =
                 multicast_origin_rows(runtime_chunked_sliding_layout, ring_write_plan.transport_rank, plan);
             auto& reader_grid_args = GetRuntimeArgs(program, kNeighborHaloReaderKernelIndex + 2 * exchange);
@@ -840,6 +845,13 @@ void apply_ring_joint_scalar_runtime_args(
                         reader_args[reader_base + ag_rt::kNeighborReaderHaloPagesFieldOffset] = halo_pages;
                         writer_args[writer_base + ag_rt::kNeighborWriterInputTileStartFieldOffset] = start;
                         writer_args[writer_base + ag_rt::kNeighborWriterInputTileEndFieldOffset] = end;
+                        writer_args[writer_base + ag_rt::kNeighborWriterOutputOriginPageFieldOffset] =
+                            runtime_chunked_sliding_layout.dest_row(ring_write_plan.transport_rank, plan.hop) *
+                            input_Wt;
+                        writer_args[writer_base + ag_rt::kNeighborWriterOutputSecondOriginPageFieldOffset] =
+                            runtime_chunked_sliding_layout.dest_row(ring_write_plan.transport_rank, plan.hop, 1) *
+                            input_Wt;
+                        writer_args[writer_base + ag_rt::kNeighborWriterTailPagesFieldOffset] = halo_pages;
                     }
                     for (uint32_t i = 0; i < origin_rows.size(); ++i) {
                         write_runtime_arg(
@@ -888,7 +900,13 @@ void apply_ring_joint_scalar_runtime_args(
         runtime_plan.kv_pad_q_mapping.q_post_wrap_start_tile,
         runtime_plan.kv_pad_q_mapping.q_valid_tile_count};
     const std::array writer_values = {
-        runtime_plan.logical_nt, ring_work_masks.active_ring_iter_mask, ring_work_masks.single_valid_kv_chunk_mask};
+        runtime_plan.logical_nt,
+        ring_work_masks.active_ring_iter_mask,
+        ring_work_masks.single_valid_kv_chunk_mask,
+        runtime_plan.kv_pad_q_mapping.q_pre_wrap_start_tile,
+        runtime_plan.kv_pad_q_mapping.q_pre_wrap_tile_count,
+        runtime_plan.kv_pad_q_mapping.q_post_wrap_start_tile,
+        runtime_plan.kv_pad_q_mapping.q_valid_tile_count};
     const std::array compute_values = {
         runtime_plan.logical_nt,
         runtime_plan.kv_pad_q_mapping.q_pre_wrap_start_tile,
@@ -1160,7 +1178,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             gathered_padded_Nt,
             circular_kv_slab_count,
             args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
-                                           : std::nullopt);
+                                           : std::nullopt,
+            kv_local_padded_Nt);
+        chunked_sliding_halo_layout.minimum_payload_tile_rows =
+            (args.all_gather_operation_attributes.num_links + DHt - 1) / DHt;
         TT_FATAL(
             kernel_chunked && chunked_sliding_halo_layout.uses_neighbor_halo(),
             "Sliding K/V requires neighbor-halo geometry; gathered rows={}, global rows={}",
@@ -1914,7 +1935,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
-        TT_FATAL(use_streaming_compute, "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
+        TT_FATAL(
+            use_streaming_compute, "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
         defines["SDPA_MATMUL_FIDELITY"] =
             std::to_string(static_cast<uint32_t>(*args.program_config->matmul_math_fidelity));
     }
@@ -1922,6 +1944,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     if (math_fidelity == MathFidelity::LoFi) {
         defines["SDPA_COMPUTE_LOFI"] = "1";
     }
+    defines["SLIDING_SHARED_HALO_STRIDE"] = std::to_string(chunked_sliding_halo_layout.shared_cache_stride);
     defines["SLIDING_HALO_SLOT_COUNT"] =
         std::to_string(has_sliding_window ? chunked_sliding_halo_layout.halo_slot_count : 0);
     const uint32_t sliding_halo_hops =
@@ -1929,9 +1952,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             ? ring_joint::chunked_sliding_halo_hop_count(chunked_sliding_halo_layout.halo_tile_rows, q_local_padded_Nt)
             : 0;
     defines["SLIDING_MAX_SOURCE_RANGES"] = std::to_string(
-        has_sliding_window
-            ? ring_joint::sliding_q_work_plan_source_ranges(sliding_halo_hops, chunked_sliding_halo_layout.halo_slot_count)
-            : 1);
+        has_sliding_window ? ring_joint::sliding_q_work_plan_source_ranges(
+                                 sliding_halo_hops, chunked_sliding_halo_layout.halo_slot_count)
+                           : 1);
     // Local slab first (so it computes while the halo is in flight) only for a multi-hop halo, where the exchange
     // is long enough to hide; a one-hop halo keeps the oldest-first accumulation order.
     defines["SLIDING_LOCAL_FIRST"] = sliding_halo_hops > 1 ? "1" : "0";
@@ -3258,6 +3281,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             runtime_arg_layout.writer_single_valid_kv_chunk_mask,
             single_valid_kv_chunk_mask,
             "writer.single_valid_kv_chunk_mask");
+        writer_args.push_back(kv_pad_q_mapping.q_pre_wrap_start_tile);
+        writer_args.push_back(kv_pad_q_mapping.q_pre_wrap_tile_count);
+        writer_args.push_back(kv_pad_q_mapping.q_post_wrap_start_tile);
+        writer_args.push_back(kv_pad_q_mapping.q_valid_tile_count);
         std::vector<uint32_t> writer_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
@@ -3535,7 +3562,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // Q wraps. A multicast lists every hop's origin so its kernels can
             // group equal ones into runs. Metadata kernels re-derive them on-device each replay.
             const auto hop_sources = chunked_sliding_halo_layout.send_sources(transport_rank, plan.hop);
-            const uint32_t hop_tail_rows = chunked_sliding_halo_layout.hop_rows(plan.hop);
+            const uint32_t hop_tail_rows = chunked_sliding_halo_layout.send_rows(transport_rank, plan.hop);
             const RingAttentionNeighborHaloConfig neighbor_halo{
                 .send_to_next_start_Ht = hop_sources.first_start_tile,
                 .send_to_next_count_Ht = hop_sources.count * hop_tail_rows,
@@ -3547,6 +3574,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 .dest_row_base = chunked_sliding_halo_layout.dest_row(transport_rank, plan.hop),
                 .second_dest_row_base = chunked_sliding_halo_layout.dest_row(transport_rank, plan.hop, 1),
                 .hop_origin_rows = multicast_origin_rows(chunked_sliding_halo_layout, transport_rank, plan),
+                .shared_cache_stride = chunked_sliding_halo_layout.shared_cache_stride,
+                .minimum_payload_tile_rows = chunked_sliding_halo_layout.minimum_payload_tile_rows,
+                .k_chunk_tile_rows = Sk_chunk_t,
                 .link_base = lane_index % lane_span,
                 .arrivals_expected = halo_remote_hops,
                 .rendezvous_noc = halo_rendezvous,

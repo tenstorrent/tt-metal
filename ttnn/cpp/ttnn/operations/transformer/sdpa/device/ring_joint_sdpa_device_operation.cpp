@@ -384,7 +384,12 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             ring_joint::chunked_q_wraps(args.kv_actual_isl.value(), args.logical_n, local, args.ring_size);
         const uint32_t halo = sliding_halo_token_count(args.sliding_window_size.value(), args.get_k_chunk_size());
         TT_FATAL(
-            tensor_args.gathered_k.logical_shape()[2] >= halo * (needs_two ? 2 : 1),
+            tensor_args.gathered_k.logical_shape()[2] >= halo * (needs_two ? 2 : 1) ||
+                (!args.circular_kv_cache &&
+                 tensor_args.gathered_k.logical_shape()[2] >=
+                     32 * args.ring_size *
+                         ring_joint::sliding_shared_halo_stride(
+                             local / 32, args.ring_size, halo / 32, args.get_k_chunk_size() / 32)),
             "Sliding attention requires one predecessor-halo slot, or two when scalar Q wraps");
     }
 }
@@ -662,10 +667,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     if (args.has_sliding_window()) {
         const uint32_t window_size = args.sliding_window_size.value();
-        const bool supported_q_chunk = q_chunk_size == 64 || q_chunk_size == 128;
-        const bool supported_k_chunk = k_chunk_size == 128;
         // These are the only ring sizes the chunked sliding halo is tested on. Extend the test matrix
-        // (and sliding_max_halo_hops) before widening this allowlist.
+        // (and sliding_max_ring_size) before widening this allowlist.
         TT_FATAL(
             args.ring_size == 4 || args.ring_size == 8,
             "Chunked sliding attention supports the SP4 production ring or SP8 test ring, got SP{}",
@@ -706,11 +709,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "Chunked sliding attention requires a compact halo buffer, got gathered rows {} for {} global rows",
             gathered_buffer_n,
             N_local_kv * args.ring_size);
-        TT_FATAL(
-            supported_q_chunk && supported_k_chunk,
-            "Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q={} K={}",
-            q_chunk_size,
-            k_chunk_size);
+        // Q/K chunks are positive tile multiples (validated above). Sliding geometry
+        // requires K to divide the per-device slab. The final Q block can be padded:
+        // the reader zero-fills it and the writer clips it to the real output shape.
         TT_FATAL(args.is_causal, "Ring sliding-window attention is currently causal-only");
         TT_FATAL(is_chunked, "Ring sliding-window attention requires chunked prefill");
         TT_FATAL(!args.is_balanced, "Chunked ring sliding-window attention requires is_balanced=false");
@@ -719,18 +720,16 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         const uint32_t halo_tokens = sliding_halo_token_count(window_size, k_chunk_size);
         TT_FATAL(halo_tokens > 0, "Chunked sliding attention requires sliding_window_size > 1, got {}", window_size);
         TT_FATAL(
-            N_local_q % q_chunk_size == 0,
-            "q_chunk_size must divide the per-device Q slab for chunked sliding attention");
-        TT_FATAL(
             N_local_q % k_chunk_size == 0,
             "k_chunk_size must divide the per-device Q slab for chunked sliding attention");
-        // A halo wider than the per-device Q slab is delivered by several hops around the CP ring,
-        // one slab tail each (sliding_window_work_plan.hpp), and cannot span more than the ring.
+        // A halo may span several ring groups: aggregate each peer's contiguous historical slabs
+        // into one transfer. Circular caches still require the existing single-group geometry.
         const uint32_t halo_hops = ring_joint::chunked_sliding_halo_hop_count(
             halo_tokens / tt::constants::TILE_HEIGHT, N_local_q / tt::constants::TILE_HEIGHT);
         TT_FATAL(
-            halo_hops <= args.ring_size,
-            "Chunked sliding halo {} (window {}) needs {} hops over the per-device Q slab {}, more than the SP{} ring",
+            !args.circular_kv_cache || halo_hops <= args.ring_size,
+            "Circular sliding halo {} (window {}) needs {} historical slabs over Q slab {}; "
+            "multi-group circular halos beyond the SP{} ring are not supported",
             halo_tokens,
             window_size,
             halo_hops,

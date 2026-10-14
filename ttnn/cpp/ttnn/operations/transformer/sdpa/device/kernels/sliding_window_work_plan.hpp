@@ -17,6 +17,98 @@ struct SlidingHaloSources {
     uint32_t count = 1;
 };
 
+// Shared source-major halo: multicast one cache slice per source to all peers. The
+// slice covers the union of the current Q group's windows, including K-block rounding.
+constexpr uint32_t sliding_shared_halo_stride(uint32_t local, uint32_t ring, uint32_t halo, uint32_t k) {
+    const uint32_t group = local * ring;
+    return group ? ((group + halo + (k > 1 ? k : 0) + group - 1) / group) * local : 0;
+}
+
+constexpr uint32_t sliding_shared_halo_origin(
+    uint32_t logical_end,
+    uint32_t local,
+    uint32_t ring,
+    uint32_t halo,
+    uint32_t k,
+    uint32_t source,
+    uint32_t capacity,
+    uint32_t stride) {
+    const uint32_t group = local * ring;
+    const uint32_t first_q = logical_end > group ? logical_end - group : 0;
+    const uint32_t first = (first_q > halo ? first_q - halo : 0) / k * k;
+    const uint32_t within_group = first % group;
+    const uint32_t before_source = source * local;
+    const uint32_t partial = within_group > before_source ? within_group - before_source : 0;
+    const uint32_t origin = first / group * local + (partial < local ? partial : local);
+    return origin < capacity - stride ? origin : capacity - stride;
+}
+
+// A source-major buffer keeps a fixed address space, but a fabric direction only
+// needs the union of windows on that side of the source. Trim the payload without
+// changing any compute-reader addresses or the number of arrival signals.
+struct SlidingSharedHaloSlice {
+    uint32_t first_tile;
+    uint32_t tile_count;
+    uint32_t dest_tile;
+};
+
+constexpr SlidingSharedHaloSlice sliding_shared_halo_slice(
+    uint32_t logical_end,
+    uint32_t local,
+    uint32_t ring,
+    uint32_t halo,
+    uint32_t k,
+    uint32_t source,
+    uint32_t capacity,
+    uint32_t stride,
+    uint32_t hop,
+    uint32_t minimum_rows = 1) {
+    const uint32_t group = local * ring;
+    const uint32_t q_start = logical_end > group ? logical_end - group : 0;
+    const uint32_t origin = sliding_shared_halo_origin(logical_end, local, ring, halo, k, source, capacity, stride);
+    const bool backward = source + hop >= ring;
+    const uint32_t receiver_begin = backward ? 0 : source + 1;
+    const uint32_t receiver_end = backward ? source : ring;
+    // Number of rows belonging to this source before an absolute sequence row.
+    const auto source_prefix = [=](uint32_t absolute) {
+        const uint32_t within = absolute % group;
+        const uint32_t after = within > source * local ? within - source * local : 0;
+        return absolute / group * local + (after < local ? after : local);
+    };
+    uint32_t first = capacity, last = 0;
+    for (uint32_t receiver = receiver_begin; receiver < receiver_end; ++receiver) {
+        const auto mapping = build_chunked_q_mapping(q_start, logical_end, local, ring, receiver);
+        for (uint32_t part = 0; part < 2; ++part) {
+            const uint32_t begin = part ? mapping.q_post_wrap_start_tile : mapping.q_pre_wrap_start_tile;
+            const uint32_t count =
+                part ? mapping.q_valid_tile_count - mapping.q_pre_wrap_tile_count : mapping.q_pre_wrap_tile_count;
+            if (count == 0) {
+                continue;
+            }
+            const uint32_t low = source_prefix(begin > halo ? begin - halo : 0);
+            const uint32_t high = source_prefix(begin + count);
+            if (low < high) {
+                const uint32_t rounded_low = low / k * k;
+                const uint32_t rounded_high = (high + k - 1) / k * k;
+                first = rounded_low < first ? rounded_low : first;
+                last = rounded_high > last ? rounded_high : last;
+            }
+        }
+    }
+    // Even an unused direction sends one K block, preserving the fused arrival
+    // signal and non-empty per-link ranges. These rows are inside the existing slice.
+    if (first >= last) {
+        first = origin;
+        last = origin + k;
+    }
+    // Each link must carry at least one page to send its fused arrival signal.
+    // Narrow heads can need several rows; retain the original payload in that case.
+    if (last - first < minimum_rows) {
+        return {origin, stride, source * stride};
+    }
+    return {first, last - first, source * stride + first - origin};
+}
+
 struct SlidingKVSourceRange {
     uint32_t source_ring_id = 0;
     uint32_t first_k_chunk = 0;
@@ -77,9 +169,43 @@ constexpr uint32_t chunked_sliding_halo_hop_rows(uint32_t halo_tile_rows, uint32
     return remaining < q_local_tile_rows ? remaining : q_local_tile_rows;
 }
 
+// A halo spanning multiple ring groups needs several historical slabs from the same peer.
+// They are contiguous in that peer's unbounded local cache, so send them as one payload.
+// `distance` is the physical predecessor distance (1..ring_size), not the historical slab index.
+constexpr uint32_t chunked_sliding_halo_peer_rows(
+    uint32_t halo_tile_rows, uint32_t q_local_tile_rows, uint32_t ring_size, uint32_t distance) {
+    if (q_local_tile_rows == 0 || ring_size == 0 || distance == 0 || distance > ring_size) {
+        return 0;
+    }
+    const uint32_t group_rows = ring_size * q_local_tile_rows;
+    const uint32_t complete_groups = halo_tile_rows / group_rows;
+    const uint32_t remainder = halo_tile_rows % group_rows;
+    const uint32_t consumed = (distance - 1) * q_local_tile_rows;
+    const uint32_t extra = remainder > consumed ? remainder - consumed : 0;
+    return complete_groups * q_local_tile_rows + (extra < q_local_tile_rows ? extra : q_local_tile_rows);
+}
+
+constexpr uint32_t chunked_sliding_halo_source_start(
+    uint32_t query_slab,
+    uint32_t local,
+    uint32_t ring_size,
+    uint32_t halo,
+    uint32_t circular_slabs,
+    uint32_t distance) {
+    if (query_slab < distance) {
+        return 0;
+    }
+    const uint32_t source_end =
+        (circular_kv_local_slab((query_slab - distance) / ring_size, circular_slabs) + 1) * local;
+    const uint32_t rows = chunked_sliding_halo_peer_rows(halo, local, ring_size, distance);
+    // Before enough history exists, unused trailing rows may be sent but are never read by the clipped plan.
+    return source_end > rows ? source_end - rows : 0;
+}
+
 // Hops that actually cross the fabric. A halo deep enough to reach `ring_size` slabs back wraps
 // onto this device's OWN earlier slab, which the work plan reads locally, so no exchange is built
-// for it. Everything downstream (kernel indices, signal counts) counts remote hops.
+// for it. Beyond one group, all historical slabs from a peer share one exchange.
+// Everything downstream (kernel indices, signal counts) counts physical peers.
 constexpr uint32_t chunked_sliding_halo_remote_hop_count(
     uint32_t halo_tile_rows, uint32_t q_local_tile_rows, uint32_t ring_size) {
     const uint32_t hops = chunked_sliding_halo_hop_count(halo_tile_rows, q_local_tile_rows);
@@ -103,6 +229,11 @@ constexpr uint32_t chunked_sliding_halo_hop_dest_row(
 constexpr bool chunked_sliding_halo_source_keyed(
     uint32_t halo_tile_rows, uint32_t q_local_tile_rows, uint32_t ring_size) {
     const uint32_t hops = chunked_sliding_halo_hop_count(halo_tile_rows, q_local_tile_rows);
+    if (hops > ring_size) {
+        // Whole historical groups give every source the same payload size and destination
+        // on every receiver, preserving multicast for the smallest aligned chunks.
+        return ring_size > 0 && halo_tile_rows % (ring_size * q_local_tile_rows) == 0;
+    }
     return hops > 1 && hops <= ring_size && ring_size % hops == 0 && halo_tile_rows % q_local_tile_rows == 0;
 }
 
@@ -111,7 +242,18 @@ constexpr bool chunked_sliding_halo_source_keyed(
 constexpr uint32_t chunked_sliding_halo_block_dest_row(
     uint32_t halo_tile_rows, uint32_t q_local_tile_rows, uint32_t ring_size, uint32_t source_ring_id, uint32_t hop) {
     if (chunked_sliding_halo_source_keyed(halo_tile_rows, q_local_tile_rows, ring_size)) {
+        if (halo_tile_rows > ring_size * q_local_tile_rows) {
+            return source_ring_id * (halo_tile_rows / ring_size);
+        }
         return (source_ring_id % chunked_sliding_halo_hop_count(halo_tile_rows, q_local_tile_rows)) * q_local_tile_rows;
+    }
+    if (halo_tile_rows > ring_size * q_local_tile_rows) {
+        // Group each peer's history into a contiguous block. Local history needs no exchange;
+        // its share remains unused at the end of the existing halo-sized slot.
+        const uint32_t complete_groups = halo_tile_rows / (ring_size * q_local_tile_rows);
+        const uint32_t remainder = halo_tile_rows % (ring_size * q_local_tile_rows);
+        const uint32_t preceding_rows = (hop - 1) * q_local_tile_rows;
+        return complete_groups * preceding_rows + (remainder < preceding_rows ? remainder : preceding_rows);
     }
     return chunked_sliding_halo_hop_dest_row(halo_tile_rows, q_local_tile_rows, hop);
 }
@@ -143,13 +285,10 @@ constexpr SlidingHaloSources sliding_halo_sources(
     uint32_t circular_slabs = 0,
     uint32_t hop = 1) {
     SlidingHaloSources sources;
-    const uint32_t tail = chunked_sliding_halo_hop_rows(halo, local, hop);
     const auto origin = [=](uint32_t query_start) {
         const uint32_t query_slab = query_start / local;
         // No such slab before the first group: the receiver's clipped plan never reads the payload.
-        return query_slab < hop
-                   ? 0
-                   : circular_kv_local_slab((query_slab - hop) / ring_size, circular_slabs) * local + local - tail;
+        return chunked_sliding_halo_source_start(query_slab, local, ring_size, halo, circular_slabs, hop);
     };
     if (mapping.q_valid_tile_count == 0) {
         return sources;
@@ -163,8 +302,10 @@ constexpr SlidingHaloSources sliding_halo_sources(
     return sources;
 }
 
-// Chunked sliding attention accepts rings of at most 8 (validated in ring_joint_sdpa_device_operation.cpp).
-constexpr uint32_t sliding_max_halo_hops = 8;
+// Physical rings remain at most 8; a small Q slab can need up to 32 historical slabs.
+// Multiple historical slabs from the same peer share one fabric exchange.
+constexpr uint32_t sliding_max_ring_size = 8;
+constexpr uint32_t sliding_max_halo_hops = 32;
 
 // A Q compute block reads at most hops + 1 slabs per Q segment, and two segments when Q can wrap. The plan
 // lives on the RISC stack, so kernels size it per program.
@@ -219,8 +360,11 @@ struct SlidingQWorkPlan {
 // circular_kv_slab_count (0/1 = unbounded): the local K/V cache is a circular buffer of that many
 // Q-sized slabs, so chunk group g lives in local slab (g % n_slabs) instead of slab g. Only the
 // local-row derivation wraps; every range_global_* / first_global_k_chunk value stays absolute.
+// Populate kernel-owned storage directly: a returned temporary can overflow the TRISC
+// stack for a 32-slab history, even though the final plan fits.
 template <uint32_t MaxSourceRanges = sliding_q_work_plan_max_source_ranges>
-constexpr SlidingQWorkPlan<MaxSourceRanges> build_sliding_q_work_plan(
+constexpr void build_sliding_q_work_plan_in_place(
+    SlidingQWorkPlan<MaxSourceRanges>& plan,
     uint32_t q_local_start_tile,
     uint32_t q_chunk_tile_rows,
     uint32_t q_device_index,
@@ -233,22 +377,26 @@ constexpr SlidingQWorkPlan<MaxSourceRanges> build_sliding_q_work_plan(
     uint32_t logical_k_tile_rows,
     uint32_t circular_kv_slab_count = 0,
     const ChunkedQMapping* rotated_q = nullptr,
-    bool local_first = true) {
-    SlidingQWorkPlan<MaxSourceRanges> plan;
+    bool local_first = true,
+    uint32_t shared_halo_stride = 0) {
+    plan.source_range_count = plan.total_k_chunk_count = 0;
+    plan.is_valid = false;
     if (q_chunk_tile_rows == 0 || q_local_tile_rows == 0 || ring_size == 0 || sliding_window_tokens == 0 ||
         tile_height == 0 || k_chunk_tile_rows == 0 || q_local_tile_rows % k_chunk_tile_rows != 0 ||
-        q_local_start_tile + q_chunk_tile_rows > q_local_tile_rows) {
-        return plan;
+        q_local_start_tile >= q_local_tile_rows ||
+        (shared_halo_stride && (k_local_tile_rows < shared_halo_stride || shared_halo_stride % k_chunk_tile_rows))) {
+        return;
     }
     const uint32_t group_rows = ring_size * q_local_tile_rows;
     if (!rotated_q && logical_k_tile_rows < group_rows) {
-        return plan;
+        return;
     }
     const uint32_t halo = chunked_sliding_halo_tile_rows(sliding_window_tokens, tile_height, k_chunk_tile_rows);
     const uint32_t hops = chunked_sliding_halo_hop_count(halo, q_local_tile_rows);
-    // Beyond the whole ring a source is this device's own earlier slab, already a local read.
-    if (hops > ring_size) {
-        return plan;
+    // Multi-group transfers are contiguous only for unbounded caches. Existing circular-cache
+    // geometry stays on the single-group path until wrapped multi-group transfers are supported.
+    if (hops > sliding_max_halo_hops || (hops > ring_size && circular_kv_slab_count > 1)) {
+        return;
     }
     const ChunkedQMapping mapping = rotated_q
                                         ? *rotated_q
@@ -295,22 +443,47 @@ constexpr SlidingQWorkPlan<MaxSourceRanges> build_sliding_q_work_plan(
             const uint32_t first_k = local_begin / k_chunk_tile_rows;
             const uint32_t last_k = (clipped_end + k_chunk_tile_rows - 1) / k_chunk_tile_rows;
             uint32_t compact_k = 0;
-            if (source != q_device_index) {
+            if (source != q_device_index && shared_halo_stride != 0) {
+                const uint32_t origin = sliding_shared_halo_origin(
+                    logical_k_tile_rows,
+                    q_local_tile_rows,
+                    ring_size,
+                    halo,
+                    k_chunk_tile_rows,
+                    source,
+                    k_local_tile_rows,
+                    shared_halo_stride);
+                if (circular_kv_slab_count > 1 || first_k * k_chunk_tile_rows < origin ||
+                    last_k * k_chunk_tile_rows > origin + shared_halo_stride) {
+                    plan.source_range_count = plan.total_k_chunk_count = 0;
+                    return;
+                }
+                compact_k = (source * shared_halo_stride + first_k * k_chunk_tile_rows - origin) / k_chunk_tile_rows;
+            } else if (source != q_device_index) {
                 // Hop d's block (hop- or source-keyed) in the segment's slot holds the tail of the slab d
                 // before the segment's first slab.
                 const uint32_t hop = segment_first_slab - slab;
-                const uint32_t tail = chunked_sliding_halo_hop_rows(halo, q_local_tile_rows, hop);
-                const uint32_t halo_origin = local_base + q_local_tile_rows - tail;
+                const uint32_t distance = hops > ring_size ? hop % ring_size : hop;
+                const uint32_t tail = hops > ring_size
+                                          ? chunked_sliding_halo_peer_rows(halo, q_local_tile_rows, ring_size, distance)
+                                          : chunked_sliding_halo_hop_rows(halo, q_local_tile_rows, hop);
+                const uint32_t halo_origin =
+                    hops > ring_size
+                        ? chunked_sliding_halo_source_start(
+                              segment_first_slab, q_local_tile_rows, ring_size, halo, circular_kv_slab_count, distance)
+                        : local_base + q_local_tile_rows - tail;
                 if (slab >= segment_first_slab || tail == 0 || first_k * k_chunk_tile_rows < halo_origin) {
-                    return SlidingQWorkPlan<MaxSourceRanges>{};
+                    plan.source_range_count = plan.total_k_chunk_count = 0;
+                    return;
                 }
                 compact_k = (halo_slot * halo +
-                             chunked_sliding_halo_block_dest_row(halo, q_local_tile_rows, ring_size, source, hop) +
+                             chunked_sliding_halo_block_dest_row(halo, q_local_tile_rows, ring_size, source, distance) +
                              first_k * k_chunk_tile_rows - halo_origin) /
                             k_chunk_tile_rows;
             }
             if (plan.source_range_count == MaxSourceRanges) {
-                return SlidingQWorkPlan<MaxSourceRanges>{};
+                plan.source_range_count = plan.total_k_chunk_count = 0;
+                return;
             }
             plan.source_ranges[plan.source_range_count++] = SlidingKVSourceRange{
                 source,
@@ -340,6 +513,41 @@ constexpr SlidingQWorkPlan<MaxSourceRanges> build_sliding_q_work_plan(
         plan.source_range_count = plan.total_k_chunk_count = 1;
     }
     plan.is_valid = plan.total_k_chunk_count != 0;
+}
+
+template <uint32_t MaxSourceRanges = sliding_q_work_plan_max_source_ranges>
+constexpr SlidingQWorkPlan<MaxSourceRanges> build_sliding_q_work_plan(
+    uint32_t q_local_start_tile,
+    uint32_t q_chunk_tile_rows,
+    uint32_t q_device_index,
+    uint32_t q_local_tile_rows,
+    uint32_t ring_size,
+    uint32_t sliding_window_tokens,
+    uint32_t tile_height,
+    uint32_t k_local_tile_rows,
+    uint32_t k_chunk_tile_rows,
+    uint32_t logical_k_tile_rows,
+    uint32_t circular_kv_slab_count = 0,
+    const ChunkedQMapping* rotated_q = nullptr,
+    bool local_first = true,
+    uint32_t shared_halo_stride = 0) {
+    SlidingQWorkPlan<MaxSourceRanges> plan;
+    build_sliding_q_work_plan_in_place(
+        plan,
+        q_local_start_tile,
+        q_chunk_tile_rows,
+        q_device_index,
+        q_local_tile_rows,
+        ring_size,
+        sliding_window_tokens,
+        tile_height,
+        k_local_tile_rows,
+        k_chunk_tile_rows,
+        logical_k_tile_rows,
+        circular_kv_slab_count,
+        rotated_q,
+        local_first,
+        shared_halo_stride);
     return plan;
 }
 

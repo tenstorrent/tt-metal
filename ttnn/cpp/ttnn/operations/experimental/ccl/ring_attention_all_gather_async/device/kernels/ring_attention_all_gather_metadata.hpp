@@ -141,12 +141,29 @@ inline ttnn::operations::transformer::sdpa::ring_joint::SlidingHaloSources compu
         kv_actual_isl, q_local_tile_rows, ring_size, cache_local_tile_rows, halo_slot_count);
     const uint32_t end = trace_metadata::logical_tile_rows_clamped_to_cache(
         kv_actual_isl, group_rows, cache_local_tile_rows * ring_size);
+#if defined(SLIDING_SHARED_HALO_STRIDE) && SLIDING_SHARED_HALO_STRIDE > 0
+    return {
+        sliding::sliding_shared_halo_slice(
+            end,
+            q_local_tile_rows,
+            ring_size,
+            halo_tile_rows,
+            SLIDING_SHARED_HALO_K_TILES,
+            source_device,
+            cache_local_tile_rows,
+            SLIDING_SHARED_HALO_STRIDE,
+            hop,
+            SLIDING_SHARED_HALO_MIN_ROWS)
+            .first_tile,
+        0,
+        1};
+#endif
     const auto mapping = sliding::build_chunked_q_mapping(
         kv_actual_isl / 32, end, q_local_tile_rows, ring_size, (source_device + hop) % ring_size);
     return sliding::sliding_halo_sources(mapping, q_local_tile_rows, ring_size, halo_tile_rows, 0, hop);
 }
 
-constexpr uint32_t kMaxMulticastHaloHops = ttnn::operations::transformer::sdpa::ring_joint::sliding_max_halo_hops;
+constexpr uint32_t kMaxMulticastHaloHops = ttnn::operations::transformer::sdpa::ring_joint::sliding_max_ring_size;
 
 // Source tile row each hop of a multicast halo exchange ships, derived from kv_actual_isl. The caller
 // supplies the first hop's row, which it has already derived.

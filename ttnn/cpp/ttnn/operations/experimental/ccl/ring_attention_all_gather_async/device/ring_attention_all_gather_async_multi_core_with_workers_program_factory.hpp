@@ -80,6 +80,9 @@ struct RingAttentionNeighborHaloConfig {
     // Non-empty for a line multicast over hops [hop, hop + hop_origin_rows.size()): the source tile row
     // each hop ships.
     std::vector<uint32_t> hop_origin_rows;
+    uint32_t shared_cache_stride = 0;
+    uint32_t minimum_payload_tile_rows = 1;
+    uint32_t k_chunk_tile_rows = 1;
     // Fabric link index this exchange starts from. A one-hop halo spreads over every link; with
     // more hops, each hop uses one link and hops beyond the link count time-share (see below).
     uint32_t link_base = 0;
@@ -155,6 +158,8 @@ constexpr uint32_t kNeighborWriterInputTileEndFieldOffset = 3;
 // First destination page this hop writes in the compact buffer (see sliding_window_work_plan.hpp), followed
 // by the second tail's first page and the pages per tail.
 constexpr uint32_t kNeighborWriterOutputOriginPageFieldOffset = 4;
+constexpr uint32_t kNeighborWriterOutputSecondOriginPageFieldOffset = 5;
+constexpr uint32_t kNeighborWriterTailPagesFieldOffset = 6;
 // Multicast exchanges append [hop count, one source tile row per hop] after the tensor descriptors, then
 // (reader only) one tile width per input.
 constexpr uint32_t kNeighborMulticastBlockOriginsOffset = 1;

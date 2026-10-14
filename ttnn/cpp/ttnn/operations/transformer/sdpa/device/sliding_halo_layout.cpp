@@ -11,25 +11,80 @@ namespace ttnn::operations::transformer::sdpa::ring_joint {
 bool ChunkedSlidingHaloLayout::uses_neighbor_halo() const { return ring_size > 1 && halo_tile_rows > 0; }
 
 SlidingHaloSources ChunkedSlidingHaloLayout::send_sources(uint32_t source_device, uint32_t hop) const {
+    if (shared_cache_stride) {
+        const auto slice = sliding_shared_halo_slice(
+            logical_k_tile_rows,
+            q_local_tile_rows,
+            ring_size,
+            halo_tile_rows,
+            k_chunk_tile_rows,
+            source_device,
+            cache_local_tile_rows,
+            shared_cache_stride,
+            hop,
+            minimum_payload_tile_rows);
+        return {slice.first_tile, 0, 1};
+    }
     const auto q = build_chunked_q_mapping(
         q_start_tile, logical_k_tile_rows, q_local_tile_rows, ring_size, (source_device + hop) % ring_size);
     return sliding_halo_sources(q, q_local_tile_rows, ring_size, halo_tile_rows, circular_kv_slab_count, hop);
 }
 
 uint32_t ChunkedSlidingHaloLayout::remote_hop_count() const {
+    if (shared_cache_stride) {
+        return ring_size - 1;
+    }
     return chunked_sliding_halo_remote_hop_count(halo_tile_rows, q_local_tile_rows, ring_size);
 }
 
 uint32_t ChunkedSlidingHaloLayout::hop_rows(uint32_t hop) const {
-    return chunked_sliding_halo_hop_rows(halo_tile_rows, q_local_tile_rows, hop);
+    if (shared_cache_stride) {
+        return shared_cache_stride;
+    }
+    return chunked_sliding_halo_peer_rows(halo_tile_rows, q_local_tile_rows, ring_size, hop);
+}
+
+uint32_t ChunkedSlidingHaloLayout::send_rows(uint32_t source_device, uint32_t hop) const {
+    if (shared_cache_stride) {
+        return sliding_shared_halo_slice(
+                   logical_k_tile_rows,
+                   q_local_tile_rows,
+                   ring_size,
+                   halo_tile_rows,
+                   k_chunk_tile_rows,
+                   source_device,
+                   cache_local_tile_rows,
+                   shared_cache_stride,
+                   hop,
+                   minimum_payload_tile_rows)
+            .tile_count;
+    }
+    return hop_rows(hop);
 }
 
 uint32_t ChunkedSlidingHaloLayout::dest_row(uint32_t source_device, uint32_t hop, uint32_t slot) const {
+    if (shared_cache_stride) {
+        return sliding_shared_halo_slice(
+                   logical_k_tile_rows,
+                   q_local_tile_rows,
+                   ring_size,
+                   halo_tile_rows,
+                   k_chunk_tile_rows,
+                   source_device,
+                   cache_local_tile_rows,
+                   shared_cache_stride,
+                   hop,
+                   minimum_payload_tile_rows)
+            .dest_tile;
+    }
     return slot * halo_tile_rows +
            chunked_sliding_halo_block_dest_row(halo_tile_rows, q_local_tile_rows, ring_size, source_device, hop);
 }
 
 bool ChunkedSlidingHaloLayout::source_keyed() const {
+    if (shared_cache_stride) {
+        return true;
+    }
     return chunked_sliding_halo_source_keyed(halo_tile_rows, q_local_tile_rows, ring_size);
 }
 
@@ -38,7 +93,7 @@ std::vector<ChunkedSlidingHaloExchange> plan_chunked_sliding_halo_exchanges(
     const uint32_t ring_size = layout.ring_size;
     const uint32_t remote_hops = layout.remote_hop_count();
     std::vector<ChunkedSlidingHaloExchange> exchanges;
-    if (!allow_multicast || !layout.source_keyed() || layout.halo_slot_count > 1) {
+    if (!allow_multicast || !layout.source_keyed() || (layout.halo_slot_count > 1 && !layout.shared_cache_stride)) {
         for (uint32_t hop = 1; hop <= remote_hops; ++hop) {
             const bool send_backward = linear_topology && source_device + hop >= ring_size;
             exchanges.push_back(ChunkedSlidingHaloExchange{
@@ -79,7 +134,8 @@ ChunkedSlidingHaloLayout build_chunked_sliding_halo_layout(
     uint32_t logical_k_tile_rows,
     uint32_t halo_buffer_tile_rows,
     uint32_t circular_kv_slab_count,
-    std::optional<uint32_t> q_start_tile) {
+    std::optional<uint32_t> q_start_tile,
+    uint32_t cache_local_tile_rows) {
     ChunkedSlidingHaloLayout layout;
     layout.q_local_tile_rows = q_local_tile_rows;
     layout.logical_k_tile_rows = logical_k_tile_rows;
@@ -97,6 +153,15 @@ ChunkedSlidingHaloLayout build_chunked_sliding_halo_layout(
     layout.halo_tile_rows = chunked_sliding_halo_tile_rows(sliding_window_tokens, tile_height, k_chunk_tile_rows);
     if (layout.halo_tile_rows > 0) {
         layout.halo_slot_count = halo_buffer_tile_rows / layout.halo_tile_rows;
+    }
+    const uint32_t stride =
+        sliding_shared_halo_stride(q_local_tile_rows, ring_size, layout.halo_tile_rows, k_chunk_tile_rows);
+    if (circular_kv_slab_count <= 1 && ring_size > 1 && stride > 0 && cache_local_tile_rows >= stride &&
+        cache_local_tile_rows % q_local_tile_rows == 0 && halo_buffer_tile_rows >= ring_size * stride) {
+        layout.shared_cache_stride = stride;
+        layout.cache_local_tile_rows = cache_local_tile_rows;
+        layout.k_chunk_tile_rows = k_chunk_tile_rows;
+        layout.halo_slot_count = q_local_tile_rows > 1 ? 2 : 1;
     }
     return layout;
 }

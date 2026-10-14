@@ -997,7 +997,8 @@ void kernel_main() {
             const uint32_t nq = decoded_q.nq;
             const uint32_t q_chunk = decoded_q.q_chunk;
             const uint32_t nk = nq / q_heads_per_k;
-            const auto q_row_start_tile = q_chunk * Sq_chunk_t;
+            const auto q_block = ring_joint::sliding_q_block(qmap, q_chunk, Sq_chunk_t, q_local_padded_Nt);
+            const auto q_row_start_tile = has_sliding_window ? q_block.start_tile : q_chunk * Sq_chunk_t;
             const bool is_joint_q = has_joint_q ? (q_chunk >= num_local_q_chunks) : false;
             const uint32_t q_iter_local = [&]() {
                 if constexpr (enable_kv_chains && gqa_grouped_kv) {
@@ -1047,7 +1048,8 @@ void kernel_main() {
 
             // Default to local Q tensor; override below for joint Q when applicable.
             Slice q_slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
-            uint32_t q_end_seq_tile = q_local_padded_Nt;
+            uint32_t q_end_seq_tile =
+                has_sliding_window ? q_block.start_tile + q_block.valid_tile_count : q_local_padded_Nt;
             if constexpr (has_joint_q) {
                 if (is_joint_q) {
                     const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
@@ -1068,9 +1070,10 @@ void kernel_main() {
 
             ring_joint::SlidingQWorkPlan<SLIDING_MAX_SOURCE_RANGES> sliding_q_plan;
             if constexpr (has_sliding_window) {
-                sliding_q_plan = ring_joint::build_sliding_q_work_plan<SLIDING_MAX_SOURCE_RANGES>(
-                    q_chunk * Sq_chunk_t,
-                    Sq_chunk_t,
+                ring_joint::build_sliding_q_work_plan_in_place<SLIDING_MAX_SOURCE_RANGES>(
+                    sliding_q_plan,
+                    q_block.start_tile,
+                    q_block.valid_tile_count,
                     ring_index,
                     q_local_padded_Nt,
                     ring_size,
@@ -1081,7 +1084,8 @@ void kernel_main() {
                     logical_nt,
                     circular_kv_slab_count,
                     kv_pad_rotation_enabled ? &qmap : nullptr,
-                    /*local_first=*/SLIDING_LOCAL_FIRST && ksplit_count == 1);
+                    /*local_first=*/SLIDING_LOCAL_FIRST && ksplit_count == 1,
+                    SLIDING_SHARED_HALO_STRIDE);
                 ASSERT(sliding_q_plan.is_valid);
                 ASSERT(sliding_q_plan.total_k_chunk_count > 0);
             }
