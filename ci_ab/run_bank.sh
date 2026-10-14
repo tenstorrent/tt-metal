@@ -22,8 +22,9 @@ for step in "real 1" "probe 1" "real2 1" "real2 2" "probe 2" "real 2"; do
   cp ci_ab/$src/dram_streaming_matmul.hpp ci_ab/$src/dram_streaming_matmul_compressed.hpp $U/
   out=/work/generated/bank/${arm}_$r; rm -rf "$out" /tmp/ttcache_${arm}_$r; mkdir -p "$out"
   t0=$(date +%s)
-  TT_METAL_CACHE=/tmp/ttcache_${arm}_$r python3 -m tracy -p -r --no-web-server -o "$out" ci_ab/ab_run.py ci_ab/ids.txt > "$out.log" 2>&1
+  TT_METAL_CACHE=/tmp/ttcache_${arm}_$r IDS_FILE=/work/ci_ab/ids.txt PYTHONPATH=/work:/work/tools python3 -m tracy -p -r --no-web-server -o "$out" -m ci_ab.ab_run > "$out.log" 2>&1
   echo "== $arm r$r rc=$? $(( $(date +%s) - t0 )) s: $(grep -E '[0-9]+ (passed|failed)' "$out.log" | tail -1)"
+  grep -q -E "passed|failed" "$out.log" || { echo NO_PYTEST_OUTPUT; head -c 3000 "$out.log"; }
   grep -E "Tile counts|per_core_N=|Kt=" "$out.log" | sort -u | head -12
   n=$(find /tmp/ttcache_${arm}_$r -name '*.elf' 2>/dev/null | wc -l); echo "elfs $n"
   h=$(find /tmp/ttcache_${arm}_$r -name '*.elf' -exec md5sum {} + 2>/dev/null | awk '{print $1}' | sort | md5sum | cut -c1-12)
