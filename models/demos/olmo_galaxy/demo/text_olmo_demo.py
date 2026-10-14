@@ -120,7 +120,7 @@ def run_olmo_demo(
     is_cur_pos_sharded=True,
     stop_at_eos=False,
 ):
-    enable_trace = True
+    enable_trace = os.environ.get("OLMO_DECODE_TRACE", "1") == "1"
     prefill_enable_trace = True
     print_outputs = not is_ci_env
 

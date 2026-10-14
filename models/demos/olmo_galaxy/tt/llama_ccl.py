@@ -222,26 +222,6 @@ class TT_CCL:
             for idx in range(self.num_cbs):
                 self._reset_semaphore_handle(self.gather_semaphore_handles[axis][idx])
 
-    def ensure_decode_buffers_allocated(self):
-        """Re-allocate persistent decode all_gather_buffers if any have lost device storage.
-
-        On merged-main, persistent buffers like SAMPLING_VALUES can become unallocated
-        across mode transitions or memory pressure. ttnn's stricter all_gather_async
-        then trips "Tensor is not allocated" in update_output_tensor_topologies.
-
-        Call this in EAGER context (e.g. right before begin_trace_capture or before
-        an eager sampling call). It must NOT be called inside trace capture, since
-        re-allocation involves ttnn.from_torch host→device writes which trace forbids.
-        """
-        if self.mode != "decode":
-            return
-        if not self.all_gather_buffers:
-            return
-        # Check a representative buffer; if stale, re-create the whole dict atomically.
-        sv = self.all_gather_buffers.get("SAMPLING_VALUES")
-        if sv is not None and not sv.is_allocated():
-            self.all_gather_buffers = self.get_all_gather_buffers()
-
     def reset_gather_and_buffer_idx(self):
         self.gather_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
@@ -1498,6 +1478,11 @@ class TT_CCL:
 
         else:
             topology = self.model_config["CCL_TOPOLOGY"]
+            # models/common/sampling owns and deallocates its gathered top-k tensors, so they must not
+            # alias persistent buffers: a persistent buffer freed during decode trace capture lets the
+            # allocator hand its memory to other tensors while every replay still writes to it.
+            if buffer_key in ("SAMPLING_VALUES", "SAMPLING_INDICES"):
+                buffer_key = None
             persistent_buffer = self.all_gather_buffers.get(buffer_key, None) if buffer_key is not None else None
         # OLMo prefill: sync all_gather (no subdevice). Same fabric-saturation rationale
         # as ring_all_gather and ring_reduce_scatter above.

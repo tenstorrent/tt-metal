@@ -774,13 +774,6 @@ class Generator(WarmupForwardMixin):
             tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
         )
 
-        # Persistent decode buffers (SAMPLING_VALUES etc.) can have lost their device
-        # storage across the prior prefill warmup. Re-allocate eagerly *before* trace
-        # capture starts — re-allocation involves host→device writes that are forbidden
-        # inside trace capture. Centralised, so vLLM/inference-server hit it too if they
-        # capture decode traces.
-        self.model.tt_ccl.ensure_decode_buffers_allocated()
-
         # Save the buffer addresses for preallocated tensors
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         tt_out_tok = self.model.ttnn_decode_forward(
