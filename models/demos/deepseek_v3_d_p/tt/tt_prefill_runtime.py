@@ -109,6 +109,10 @@ class TtPrefillRuntimeConfig:
     overlap_shared_expert_with_dispatch: bool = True
     # KV dedup, must match the cache allocation. None: sparse dedups, dense does not.
     tp_shard_kv: Optional[bool] = None
+    # MoE dispatch and combine ops, each "direct" or "fabric2d" (PREFILL_MOE_DISPATCH /
+    # PREFILL_MOE_COMBINE). See TtMoe.
+    dispatch_impl: str = "direct"
+    combine_impl: str = "direct"
 
     @property
     def sp_factor(self) -> int:
@@ -289,6 +293,8 @@ class TtPrefillRuntime:
             is_last_rank=self.config.is_last_rank,
             sparse_kv_cache_format=self.config.sparse_kv_cache_format,
             overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
+            dispatch_impl=self.config.dispatch_impl,
+            combine_impl=self.config.combine_impl,
             mtp_predictor=self.mtp_predictor,
             tp_shard_kv=self.config.tp_shard_kv,
         )
@@ -368,6 +374,8 @@ class TtPrefillRuntime:
             routing_use_l1_small_for_semaphores=self.config.routing_use_l1_small_for_semaphores,
             sparse_kv_cache_format=self.config.sparse_kv_cache_format,
             overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
+            dispatch_impl=self.config.dispatch_impl,
+            combine_impl=self.config.combine_impl,
             weight_cache_path=mtp_cache_path,
             cache_name_prefix=MTP_CACHE_PREFIX,
             first_layer_idx=self.config.first_layer_idx,

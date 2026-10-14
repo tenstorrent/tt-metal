@@ -342,6 +342,8 @@ class KimiK3Adapter(MLAPrefillAdapter):
             use_trace=params.use_trace,
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
             tp_shard_kv=True if self._dense_tp_shard_kv(params) else None,
+            dispatch_impl=params.dispatch_impl,
+            combine_impl=params.combine_impl,
         )
         return TtKimiK3Runtime(
             mesh_device=mesh_device,
