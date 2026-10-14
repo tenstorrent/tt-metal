@@ -308,7 +308,7 @@ The input-tile zeroing is load-bearing: the scalar comes from a compute kernel
 that cannot know which corners fell outside the feature map, so an un-zeroed
 row would be multiplied by a live weight. A stale row is itself a plausible
 sampled value, so the correlation survives it — which is why
-`test_fused_msda_masks_out_of_bounds_corners` asserts a per-element error ratio
+`test_fused_msda_v1_masks_out_of_bounds_corners` asserts a per-element error ratio
 alongside PCC.
 
 ---
