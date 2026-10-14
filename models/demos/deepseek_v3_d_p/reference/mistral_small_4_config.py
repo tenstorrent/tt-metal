@@ -40,6 +40,10 @@ class MistralSmall4Config:
     FABRIC_PAYLOAD_SIZE = EMB_SIZE * 2 + 64
     USE_FUSED_PREFILL_RMSNORM = True
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension (also the shared expert's)
+    # Routed-expert hybrid split: experts with <= this many active tokens go to moe_fused_swiglu, the
+    # rest to unified_routed_expert_moe. Swept 64/96/128/192 at a 1536-token prompt: all within
+    # run-to-run drift, 128 lowest (320 was slower). Re-measure if the routed-expert matmul shape,
+    # expert count, activation or either kernel changes.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 128
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension; unused - NUM_DENSE_LAYERS is 0
 
