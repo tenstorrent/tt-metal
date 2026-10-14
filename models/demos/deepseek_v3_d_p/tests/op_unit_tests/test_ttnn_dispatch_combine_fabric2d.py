@@ -9,8 +9,8 @@ The fabric2d version of test_ttnn_dispatch_combine.py: TtDispatch2dModule then T
 no expert in between. The dispatch buffer, its metadata and the combine output are each compared
 byte for byte against the torch reference.
 
-combine_fabric2d cannot take a buffer that dispatch dropped tokens from, so the buffer is sized to
-hold every routed token.
+The torch reference does not model tokens dispatch drops, so the buffer is sized to hold every routed
+token.
 
 A right-padded case checks padded routing end to end: padded tokens carry the expert id
 num_routed_experts, as the gate marks them, which the dispatch table's last column maps to no chip, so
@@ -244,7 +244,7 @@ def prepare_round_trip_inputs(
     buffer_end = int((expert_region_offsets + expert_token_counts).max())
     assert buffer_end <= max_dispatch_buffer_token_size, (
         f"The routing needs {buffer_end} dispatch buffer pages, but the buffer has only "
-        f"{max_dispatch_buffer_token_size}. Dispatch would drop tokens, which combine_fabric2d cannot handle."
+        f"{max_dispatch_buffer_token_size}. Dispatch would drop tokens, which this test's reference does not model."
     )
 
     return RoundTripInputs(
@@ -436,7 +436,7 @@ def check_round_trip(
 
 # Same shape as the DeepSeek V3 case of test_ttnn_dispatch_combine: production emb_dim, a quarter of
 # the routed experts, top-2, capacity factor 2. top-k equal to the capacity factor means the buffer
-# holds every routed token even if all of them land on one chip, which combine_fabric2d needs.
+# holds every routed token even if all of them land on one chip, as the reference needs.
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     [

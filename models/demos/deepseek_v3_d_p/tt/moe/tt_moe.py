@@ -348,9 +348,7 @@ class TtMoe(LightweightModule):
         "fabric2d", for either op, needs a Ring axis-0 topology on a fabric that wraps axis 0, an even
         axis-0 size of at least 4, metadata_len == 3, and a fabric max payload of half a routed_emb_dim bf16
         token plus 64 B (fabric2d_min_payload_size), which moe_fabric_payload_size opens the mesh with. A
-        fabric2d combine also needs a dispatch buffer that holds every routed token, until combine_fabric2d
-        clamps overflow tokens. A fabric2d dispatch also needs num_experts_per_tok <=
-        DISPATCH_FABRIC2D_MAX_TOPK.
+        fabric2d dispatch also needs num_experts_per_tok <= DISPATCH_FABRIC2D_MAX_TOPK.
         """
         super().__init__()
         self.mesh_device = mesh_device

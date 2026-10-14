@@ -350,9 +350,7 @@ class TtDispatch2dModule(LightweightModule):
             num_experts_per_tok: Number of experts each token is routed to (top-k). At most
                 DISPATCH_FABRIC2D_MAX_TOPK.
             max_dispatch_buffer_token_size: Total token capacity of the flat dispatch buffer per
-                chip. Tokens past it are dropped, as in TtDispatchModule. When the output feeds
-                TtCombine2dModule, size it so no token is dropped: combine_fabric2d does not handle
-                a buffer with dropped tokens.
+                chip. Tokens past it are dropped, as in TtDispatchModule; combine_fabric2d skips them.
             seq_len_per_chip: Number of tokens on each source device.
             emb_dim: Embedding dimension of each token. Used to check that half a token fits in one
                 fabric packet. A TILE x also needs it to be a multiple of 32.

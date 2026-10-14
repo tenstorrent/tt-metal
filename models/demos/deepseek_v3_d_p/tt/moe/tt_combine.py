@@ -231,8 +231,6 @@ class TtCombine2dModule(LightweightModule):
             dispatched_buffer: Expert-processed token embeddings produced by TtRoutedExpert.
                 A chip's page range for one expert holds that expert's tokens grouped by the chip
                 they ORIGINATED on. BFLOAT16 (ROW_MAJOR or TILE) or BFLOAT8_B (TILE).
-                It must hold every routed token: combine_fabric2d reads each expert's full token count
-                and does not check it against the buffer size.
             dispatched_metadata: Per-token routing metadata produced by TtDispatch2dModule.forward() or
                 TtDispatchModule.forward().
                 3 int32 per token: (linearized_mesh_coord, token_idx, topk_idx). INT32 ROW_MAJOR.

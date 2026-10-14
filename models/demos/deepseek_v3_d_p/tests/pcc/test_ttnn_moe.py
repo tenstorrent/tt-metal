@@ -694,8 +694,8 @@ def run_model(
     )
 
     if combine_impl == "fabric2d":
-        # combine_fabric2d reads every routed token, including any dispatch dropped, so check that none
-        # were: on every chip, the last expert region must end inside the dispatch buffer.
+        # The torch reference keeps every routed token, so check dispatch dropped none: on every chip, the
+        # last expert region must end inside the dispatch buffer.
         _, device_counts, device_region_offsets, _ = get_gate_outputs(
             tt_indices.view(dispatch_group_size, seq_len_per_chip, -1),
             dispatch_group_size,
@@ -708,7 +708,7 @@ def run_model(
         buffer_end = int((device_region_offsets + device_counts).max())
         assert buffer_end <= max_dispatch_buffer_token_size, (
             f"the device routing needs {buffer_end} dispatch buffer pages but the buffer has "
-            f"{max_dispatch_buffer_token_size}; dispatch dropped tokens, which combine_fabric2d cannot handle"
+            f"{max_dispatch_buffer_token_size}; dispatch dropped tokens, which the reference does not model"
         )
 
     if gate_fallback_mode in _HASH_GATE_MODES:
@@ -1451,8 +1451,8 @@ def test_kimi_moe(
 
 
 # The kimi-5k-pcc row with both ops on fabric2d. Capacity factor 5 could drop tokens on skewed routing,
-# which combine_fabric2d cannot handle until it clamps overflow; this test's routing is balanced enough
-# that nothing is dropped, and run_model asserts so.
+# which the reference does not model; this test's routing is balanced enough that nothing is dropped, and
+# run_model asserts so.
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     _fabric2d_torus_xy_8x4(KimiK27Config),
@@ -1594,10 +1594,10 @@ def test_kimi_k3_moe(
     )
 
 
-# The kimi_k3-5k-pcc row with combine on fabric2d. Dispatch stays direct. The routed side runs at the 3584 latent width, so this also checks the packet size
-# is taken from it. Capacity factor 5 could drop tokens on skewed routing, which combine_fabric2d cannot
-# handle until it clamps overflow; this test's routing is balanced enough that nothing is dropped, and
-# run_model asserts so.
+# The kimi_k3-5k-pcc row with combine on fabric2d. Dispatch stays direct. The routed side runs at the 3584 latent
+# width, so this also checks the packet size is taken from it. Capacity factor 5 could drop tokens on skewed
+# routing, which the reference does not model; this test's routing is balanced enough that nothing is dropped,
+# and run_model asserts so.
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     _fabric2d_torus_xy_8x4(KimiK3Config),
