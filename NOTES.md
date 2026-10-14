@@ -70,3 +70,14 @@ for layers 0/49, steps 1/4; device-lint; submit via blx01 broker (t288/blx01-sub
 - chain479 detached on g15blx02 at 12:23 PDT (pid in ttp detach), files in /home/smarton/fasth3/tt-metal/tt-project/state/runs/1810:
   chain479.log, chain479.done (exit code: 0 all dumps, 10 build failed, 15 collect failed, 11 submit), replay479.txt.
   Next: read replay479.txt, write results here, then bisect/fix (step 4) or stop per the spec's stop condition.
+
+# t479 run 1822 (after g15blx02 reboot 16:10 PDT)
+- Run 1810 chain: build rc 0; d1 jobs 221/229/231 on blx01 all exit 1, no dumps. Cause (job 231 run.log, line 1893):
+  `RuntimeError: [t286] warm deadline 400 s passed in Warming prompt encoder keyframe layouts`. Weight caches load warm
+  (10 s); audio decode warm took 6m27s (lengths 7-12 cold, ~60 s each, +2180 programs). Cold JIT, not a code bug:
+  compiled kernels persist in /var/tmp/fasth3/cache/tt-metal-cache-h3hf, so each try gets further.
+  Earlier blx01 holds while waiting: 3/32 then 8/32 chips off the bus (broker degraded-hold, 19:33-20:28 UTC 10-13,
+  not our job; trays owns recovery).
+- Relaunched chain479 unchanged at 20:00 PDT 10-13 (detached, run 1822): d1 -> blx01 job 307.
+  Files: $TTP_RUN_DIR=state/runs/1822/{chain479.log,chain479.rc,replay479.txt}.
+  Next: read replay479.txt. If d1 fails 3x again past audio warm, add a T286 audio-length skip (keep only the 10 s length).
