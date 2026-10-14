@@ -4,9 +4,14 @@ name: "Verify changed tests"
 # the merge queue until that specific entry has run green
 #
 # All logic lives in the tenstorrent/tt-metal/.github/actions/verify-changed-tests
-# action, pinned to @main so a PR branch always runs the current gate rather than
-# whatever copy (or lack of one) sits at its own head. This file only wires it up,
-# plus the two policy lists below.
+# action, normally pinned to @main so a PR branch always runs the current gate
+# rather than whatever copy (or lack of one) sits at its own head. This file only
+# wires it up, plus the two policy lists below.
+#
+# TEMPORARY, validation-only: the `scope` job below points at the local checkout
+# instead of @main, so this PR's own CI run exercises its entry_workdir/entry_env
+# fix for #60501 against real LLK legs, rather than the pre-fix gate at main.
+# Re-pin to @main (drop this commit) before merge -- this must not land on main.
 #
 # merge_group runs `scope` only. The hardware legs already ran on the PR head;
 # re-firing them in the queue would spend the same scarce hardware twice. The
@@ -147,9 +152,9 @@ jobs:
 
       - name: Scope the changed tests and narrow the matrix
         id: gate
-        # Pinned to @main: a PR branch runs the current gate, not whatever
-        # copy (or lack of one) happens to sit at its own head.
-        uses: tenstorrent/tt-metal/.github/actions/verify-changed-tests@main
+        # TEMPORARILY unpinned (local path, not @main) -- see the file-level
+        # comment above. Re-pin to @main before merge.
+        uses: ./.github/actions/verify-changed-tests
         with:
           event: ${{ github.event_name }}
           base: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
