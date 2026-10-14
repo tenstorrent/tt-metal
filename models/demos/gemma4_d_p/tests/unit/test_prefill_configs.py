@@ -22,7 +22,6 @@ GRID = SimpleNamespace(x=11, y=10)
 @pytest.mark.parametrize(
     "slab, sliding, expected",
     [
-        # LoFi winners selected at full context; input is the per-rank slab C/8.
         (32, False, (32, 224, 4, True)),
         (256, False, (64, 288, 3, True)),
         (448, False, (128, 288, 3, True)),
@@ -36,10 +35,7 @@ GRID = SimpleNamespace(x=11, y=10)
         (64, False, (64, 256, 4, True)),
         (160, False, (96, 224, 4, True)),
         (1536, False, (96, 256, 1, False)),
-        # Untuned sizes retain the geometry heuristic.
-        # Segmented accumulation needs one Q chunk per core: 8 heads x ceil(slab / q) <= 110 cores.
         (1664, False, (128, 256, 1, True)),
-        # Too long for any q tried (chunk 16384: 16 chunks of q 128 per head): q 96 without segments.
         (2048, False, (96, 256, 1, False)),
         (4096, False, (96, 256, 1, False)),
     ],
@@ -101,16 +97,18 @@ def test_ring_sdpa_tuning_is_optional_and_geometry_specific():
         (8, 4, 12, 10, ttnn.bfloat16, False),
     ],
 )
-def test_ring_sdpa_global_caller_guards_tuned_workload(monkeypatch, cp, tp, cols, rows, kv_dtype, expected):
+def test_ring_sdpa_global_caller_guards_tuned_workload(
+    monkeypatch, expect_error, cp, tp, cols, rows, kv_dtype, expected
+):
     class SelectionReached(Exception):
         pass
 
     def select(*args, **kwargs):
         assert kwargs["use_tuned_configs"] is expected
-        raise SelectionReached
+        raise SelectionReached("SDPA configuration selected")
 
     monkeypatch.setattr(ring_prefill, "ring_sdpa_chunk_sizes", select)
-    with pytest.raises(SelectionReached):
+    with expect_error(SelectionReached, "SDPA configuration selected"):
         ring_prefill.global_ring_prefill_attention(
             SimpleNamespace(shape=(1, 8, 768, 512), dtype=ttnn.bfloat16),
             SimpleNamespace(dtype=kv_dtype),

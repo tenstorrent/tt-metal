@@ -196,7 +196,6 @@ def global_ring_prefill_attention(
             sliding=False,
             num_heads=tt_q.shape[1],
             num_cores=(sdpa_grid.x - 1) * sdpa_grid.y,
-            # The table was measured for this LoFi packed-KV workload on Blackhole Galaxy.
             use_tuned_configs=(
                 mesh_device.arch() == ttnn.Arch.BLACKHOLE
                 and mesh_config.cp_degree == 8
@@ -292,28 +291,32 @@ def _load_global_ring_sdpa_configs():
 
 def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, num_cores=110, *, use_tuned_configs=True):
     """(q_chunk_size, k_chunk_size, max_k_splits, segmented_accumulation) for the ring SDPA, from the per-rank Q slab
-    (chunk / CP), the local heads and the SDPA cores. Global defaults use the CP8/TP4 LoFi winner at full context
-    for every prefix. Set use_tuned_configs=False for other workloads or fidelities. Missing entries use the heuristic.
+    (chunk / CP), the local heads and the SDPA cores.
     """
+
     if sliding:
         # Split K three ways when the cores hold three bands of every (head, Q chunk) unit.
         q_chunk = 128
         k_splits = 3 if num_heads * -(-q_slab_tokens // q_chunk) * 3 <= num_cores else 1
         return q_chunk, 128, k_splits, False
+
     if use_tuned_configs and num_heads == 8 and num_cores == 110:
         tuned = _load_global_ring_sdpa_configs().get(q_slab_tokens * 8)
         if tuned is not None:
             return tuned
+
     # Short slabs: 4 Q chunks per head are too few to fill the grid, so K is split over 3 bands.
     if q_slab_tokens <= 512:
         q_chunk = q_slab_tokens // 4
         q_chunk = q_chunk if q_chunk > 0 and q_chunk % TILE_HEIGHT == 0 else TILE_HEIGHT
         segmented = -(-q_slab_tokens // q_chunk) * num_heads <= num_cores
         return q_chunk, 256, 3, segmented
+
     # Segmented accumulation needs one Q chunk per core.
     for q_chunk in _GLOBAL_Q_CHUNKS:
         if -(-q_slab_tokens // q_chunk) * num_heads <= num_cores:
             return q_chunk, 256, 1, True
+
     return _GLOBAL_Q_CHUNKS[0], 256, 1, False
 
 
