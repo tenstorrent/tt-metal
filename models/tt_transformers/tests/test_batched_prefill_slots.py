@@ -323,3 +323,16 @@ def test_layer_page_width_is_stable_inside_a_padded_trace_bucket():
     assert (prepared[0][0, 3:] == -1).all()
     assert (prepared[1][0, 4:] == -1).all()
     assert prepared[2].tolist() == table.tolist()
+
+
+def test_explicit_layer_tables_cannot_silently_enter_trace_replay():
+    generator = object.__new__(Generator)
+    with pytest.raises(ValueError, match="require untraced prefill"):  # allow-pytest.raises: host-only contract refusal
+        generator._easy_trace_prefill(torch.zeros(1, 128), page_tables_per_layer=[torch.tensor([[42]])])
+
+
+def test_resumed_layer_tables_retain_absolute_cached_page_positions():
+    table = torch.tensor([[10, 11, 12, 13, 99]], dtype=torch.int32)
+    # 128 cached tokens plus a padded128-token suffix cover four absolute pages.
+    result = prepare_prefill_page_tables_per_layer([table], [0], [0], 1, [200], [64], 128 + 128)[0]
+    assert result.tolist() == [[10, 11, 12, 13]]
