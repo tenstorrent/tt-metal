@@ -176,7 +176,8 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
     hreg::write_args(tile_a, la.args, block_a);
     hreg::write_args(tile_b, lb.args, block_b);
 
-    const std::string image = hart_::image_path("X280_P2P_LATENCY_X280_PEER_TILE_FW_IMAGE");
+    const std::string image =
+        hart_::image_path("X280_P2P_LATENCY_X280_PEER_TILE_FW_IMAGE", "firmware-p2p-latency-x280-peer-tile.bin");
     const hexec::X280Launch launch_a{
         .image_path = image,
         .run_value = run_value,

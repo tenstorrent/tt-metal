@@ -141,7 +141,8 @@ inline void run_axis(
     hreg::write_args(*f.tile, L.args, block);
 
     hexec::X280Launch launch{
-        .image_path = hart_::image_path("X280_P2P_LATENCY_X280_SAME_TILE_FW_IMAGE"),
+        .image_path =
+            hart_::image_path("X280_P2P_LATENCY_X280_SAME_TILE_FW_IMAGE", "firmware-p2p-latency-x280-same-tile.bin"),
         .run_value = run_value,
         .args_addr = L.args.addr,
         .args_bytes = L.args.bytes,

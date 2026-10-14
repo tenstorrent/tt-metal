@@ -190,7 +190,8 @@ inline void launch_peer(
     const auto source = hart_::shared_kernel_dir(spec.open.kernel_dir, "p2p_latency") / "metal_peer_entry.cpp";
     ASSERT_TRUE(std::filesystem::exists(source)) << target.peer_name << " kernel source not found at " << source;
     const hexec::X280Launch launch{
-        .image_path = hart_::image_path("X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE"),
+        .image_path =
+            hart_::image_path("X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE", "firmware-p2p-latency-metal-peer-tile.bin"),
         .run_value = run_value,
         .args_addr = x280_regions.args.addr,
         .args_bytes = x280_regions.args.bytes,

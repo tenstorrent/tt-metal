@@ -34,6 +34,7 @@ protected:
             .open =
                 {
                     .image_env_var = "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE",
+                    .image_file = "firmware-p2p-latency-metal-peer-tile.bin",
                     .kernel_dir = x280::harness::artifacts::kernel_dir_of(__FILE__),
                 },
             .suite_label = "p2p_latency_drisc_peer_tile",
@@ -119,7 +120,7 @@ TEST_P(X280P2PLatencyDriscPeerTile, SharedX280ImageRejectsInvalidCommonArguments
         const auto outcome = hexec::run_x280(
             f.handle(),
             {
-                .image_path = x280::harness::artifacts::image_path(spec().open.image_env_var),
+                .image_path = x280::harness::artifacts::image_path(spec().open.image_env_var, spec().open.image_file),
                 .run_value = 0xDED000u + invalid,
                 .args_addr = regions.args.addr,
                 .args_bytes = regions.args.bytes,

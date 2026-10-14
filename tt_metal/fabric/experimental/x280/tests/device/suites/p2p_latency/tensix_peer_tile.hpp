@@ -195,7 +195,8 @@ inline void launch(
     workload.add_program(ttmd::MeshCoordinateRange(f.mesh->shape()), std::move(program));
 
     const hexec::X280Launch x280_launch{
-        .image_path = hart_::image_path("X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE"),
+        .image_path =
+            hart_::image_path("X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE", "firmware-p2p-latency-metal-peer-tile.bin"),
         .run_value = run_value,
         .args_addr = XR.args.addr,
         .args_bytes = XR.args.bytes,

@@ -31,6 +31,7 @@ protected:
             .open =
                 {
                     .image_env_var = "X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE",
+                    .image_file = "firmware-p2p-latency-metal-peer-tile.bin",
                     .kernel_dir = x280::harness::artifacts::kernel_dir_of(__FILE__),
                 },
             .suite_label = "p2p_latency_tensix_peer_tile",
