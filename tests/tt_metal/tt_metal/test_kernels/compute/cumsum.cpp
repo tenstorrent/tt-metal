@@ -3,62 +3,64 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/pack.h"
 #include "api/compute/transpose.h"
 #include "api/compute/transpose_dest.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/cumsum.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
+// Columnwise: tiles arrive in NWH order, and the cumsum chain runs down each tile column (Ht).
+// ROWWISE: tiles arrive in NHW order and are transposed into and out of Dest, so the host passes Wt as Ht
+// (and vice versa) and the chain runs across each tile row.
 void kernel_main() {
     constexpr int onetile = 1;
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t NC = get_compile_time_arg_val(2);
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t NC = get_arg(args::NC);
 
+    DataflowBuffer dfb_in(dfb::in);
+    DataflowBuffer dfb_out(dfb::out);
+
+    compute_kernel_hw_startup(dfb::in, dfb::out);
 #ifndef ROWWISE
-    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    copy_init(tt::CBIndex::c_0);
+    copy_init(dfb::in);
 #else
-    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    transpose_init(tt::CBIndex::c_0);
+    transpose_init(dfb::in);
 #endif
     cumsum_tile_init();
-
-    CircularBuffer cb0(tt::CBIndex::c_0);
-    CircularBuffer cb16(tt::CBIndex::c_16);
 
     for (uint32_t nc = 0; nc < NC; ++nc) {
         for (uint32_t wt = 0; wt < Wt; ++wt) {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
-                cb16.reserve_back(onetile);
+                dfb_out.reserve_back(onetile);
                 tile_regs_acquire();
-                cb0.wait_front(onetile);
+                dfb_in.wait_front(onetile);
 
 #ifndef ROWWISE
-                copy_tile(tt::CBIndex::c_0, 0, 0);
+                copy_tile(dfb::in, 0, 0);
 #else
-                transpose_init(tt::CBIndex::c_0);
-                transpose_tile(tt::CBIndex::c_0, 0, 0);
+                transpose_init(dfb::in);
+                transpose_tile(dfb::in, 0, 0);
 #endif
                 cumsum_tile(0, ht == 0);
 #ifdef ROWWISE
-                transpose_dest_init(tt::CBIndex::c_0);
+                transpose_dest_init(dfb::in);
                 transpose_dest(0);
 #endif
 
                 tile_regs_commit();
                 tile_regs_wait();
 
-                pack_tile(0, tt::CBIndex::c_16);
+                pack_tile(0, dfb::out);
 
-                cb0.pop_front(onetile);
+                dfb_in.pop_front(onetile);
                 tile_regs_release();
-                cb16.push_back(onetile);
+                dfb_out.push_back(onetile);
             }
         }
     }

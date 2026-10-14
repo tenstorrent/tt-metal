@@ -83,7 +83,9 @@ def main():
     hidden_size = num_heads * head_size
 
     torch_hidden_states = torch.randn((batch_size, sequence_size, hidden_size), dtype=torch.bfloat16)
-    torch_attention_mask = torch.randn((batch_size, 1, 1, sequence_size), dtype=torch.bfloat16)
+    # Additive padding mask: 0 to attend, a large negative value to ignore. Never -inf.
+    torch_attention_mask = torch.zeros((batch_size, 1, 1, sequence_size), dtype=torch.bfloat16)
+    torch_attention_mask[..., -32:] = -1e3
     torch_query_weight = torch.randn((hidden_size, hidden_size), dtype=torch.bfloat16)
     torch_query_bias = torch.randn((hidden_size,), dtype=torch.bfloat16)
     torch_key_weight = torch.randn((hidden_size, hidden_size), dtype=torch.bfloat16)

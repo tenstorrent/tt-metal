@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include <optional>
 
 namespace ttnn::operations::unary {
@@ -27,14 +28,24 @@ const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal:
 
 bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
-CoreRangeSet get_worker_grid(
+tt::tt_metal::CoreRangeSet get_worker_grid(
     const Tensor& input_tensor,
     const std::optional<Tensor>& output_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
+
+/** Throw if a sharded tensor's buffer is distributed differently from `spec_distribution`. A view keeps its
+ * parent's buffer under a freshly computed spec and the same shard spec can resolve to different banks at
+ * the view's shape. */
+void require_buffer_distribution_matches_spec(
+    const Tensor& tensor,
+    const std::optional<tt::tt_metal::BufferDistributionSpec>& spec_distribution,
+    const char* slot);
+
+void require_buffer_distribution_matches_spec(const Tensor& tensor, const char* slot);
 
 // Synthesize a populated-shard output ShardSpec for specless sharded eltwise-unary outputs.
 // `output_element_size_bytes` reflects the output dtype (typecast can differ from input dtype).

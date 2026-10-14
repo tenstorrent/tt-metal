@@ -111,6 +111,7 @@ def emitted(tmp_path_factory):
     subprocess.run(
         [
             str(_COMPILER),
+            "-mcpu=tt-qsr32-tensix",
             "-std=c++17",
             "-S",
             "-O2",

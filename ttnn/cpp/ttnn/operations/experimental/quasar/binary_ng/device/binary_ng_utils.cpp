@@ -821,6 +821,12 @@ bool is_native_L1_sharding(
 
     // Both tensors have identical shape and memory config (no broadcast on any dimension)
     if ((a.logical_shape() == b->logical_shape()) && (a.memory_config() == b->memory_config())) {
+        // A sharded input must carry the output's exact memory config: the factories borrow the shards in
+        // place, so another layout, shard spec or orientation maps core i's inputs to tiles its output shard
+        // does not hold. b needs no check of its own: the condition above makes its memory config a's.
+        if (a.memory_config().is_sharded() && c.is_sharded() && a.memory_config() != c) {
+            return false;
+        }
         if (is_uneven(a) || is_uneven(*b)) {
             // Uneven shards are safe when all tensors (a, b, c) are L1 sharded with identical
             // shard specs -- each core sees the same tile counts for all tensors, matching legacy
@@ -835,24 +841,6 @@ bool is_native_L1_sharding(
         if (a.memory_config().buffer_type() == BufferType::DRAM ||
             b->memory_config().buffer_type() == BufferType::DRAM || c.buffer_type() == BufferType::DRAM) {
             return false;
-        }
-
-        // Check if output grid differs from input grids - if so, cannot use native sharding
-        // This will force resharding through interleaved path
-        if (c.is_sharded() && c.shard_spec().has_value()) {
-            const auto& c_grid = c.shard_spec()->grid;
-            if (a.memory_config().is_sharded() && a.memory_config().shard_spec().has_value()) {
-                const auto& a_grid = a.memory_config().shard_spec()->grid;
-                if (a_grid != c_grid) {
-                    return false;
-                }
-            }
-            if (b->memory_config().is_sharded() && b->memory_config().shard_spec().has_value()) {
-                const auto& b_grid = b->memory_config().shard_spec()->grid;
-                if (b_grid != c_grid) {
-                    return false;
-                }
-            }
         }
 
         if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {

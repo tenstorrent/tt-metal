@@ -10,11 +10,10 @@
 //       via the binding token (the CRTA word the Scratchpad ctor reads).
 //
 // The kernel writes a known pattern into the scratchpad, then reports the scratchpad's base address
-// (Scratchpad::get_base_address()) to a host-known fixed L1 location passed as a named RTA. The host
-// reads that reported address, then reads the scratchpad's L1 at that address and checks the
-// pattern. If the framework had shipped a 0 / stale base address, either get_base_address() would be
-// wrong (so the host reads the wrong L1) or the pattern wouldn't land where the host looks — both
-// fail the test.
+// and data format to a host-known fixed L1 location passed as a named RTA. The host reads the report,
+// checks the format, then reads the scratchpad's L1 at that address and checks the pattern. If the
+// framework had shipped a 0 / stale base address, either get_base_address() would be wrong (so the
+// host reads the wrong L1) or the pattern wouldn't land where the host looks — both fail the test.
 //
 // `Scratchpad` and the `scratch::pad` token are provided by the auto-generated kernel_bindings
 // header (genfiles emits `#include "api/scratchpad.h"` plus the `scratch::` namespace
@@ -44,4 +43,5 @@ void kernel_main() {
     // and test_single_dm_l1_write rely on for Gen1.
     volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
     report[0] = s.get_base_address();
+    report[1] = static_cast<uint32_t>(s.get_dataformat());
 }

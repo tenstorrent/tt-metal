@@ -31,8 +31,8 @@ def perf_input_dimensions(formats):
     16-bit, 4 at 32-bit, the same ceiling the functional sweep uses per format. The square is the
     one extra row-axis case: both factors of row_base = rt * block_ct_dim * REDUCE_TILE_STRIDE
     exceed one there. The single tile is the like-for-like point against Blackhole, whose
-    perf_sfpu_reduce runs only a 32x32 Float32 ReduceRow Max. The column axis reduces tile by tile,
-    so its rows across these shapes are knowingly duplicates.
+    perf_sfpu_reduce runs only single 32x32 ReduceRow tiles ({Float32, Int32} x {Max, Sum}). The
+    column axis reduces tile by tile, so its rows across these shapes are knowingly duplicates.
     """
     dest_acc = (
         DestAccumulation.Yes
