@@ -17,7 +17,6 @@ import torch
 import ttnn
 
 from ..tt.generator import build_generator
-from ..tt.multichip_decoder import MultichipDecoder
 
 MODEL_DIR = Path(__file__).resolve().parents[1]
 
@@ -33,19 +32,13 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--isl", nargs="+", type=int, default=[32767, 65535, 131071, 262015, 524159])
     p.add_argument("--osl", type=int, default=128)
-    p.add_argument("--kernels", choices=["new", "old"], default="new")
     p.add_argument("--output", type=Path, required=True)
     a = p.parse_args()
-    if a.kernels == "old":
-        MultichipDecoder.accurate_decode_kernel = "chunked"
-        MultichipDecoder.accurate_prefill_grid = (8, 8)
-        MultichipDecoder.accurate_prefill_q_chunk = 128
-        MultichipDecoder.accurate_prefill_max_k_chunk = 128
     torch.set_num_threads(16)
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=200_000_000)
     gen = None
-    results = {"kernels": a.kernels, "osl": a.osl, "runs": []}
+    results = {"osl": a.osl, "runs": []}
     try:
         start = time.perf_counter()
         gen = build_generator(MODEL_DIR, mesh)

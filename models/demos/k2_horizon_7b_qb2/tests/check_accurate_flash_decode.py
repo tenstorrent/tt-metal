@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Accuracy and latency of decode attention paths against an FP32 oracle (one chip).
+"""Accuracy and latency of paged decode attention against an FP64 oracle (one chip).
+
+Paths: the stock op with default settings ("stock*") and with SDPAProgramConfig.fp32_accumulation
+("fp32*", FP32 scores and online-softmax state, accurate exponentials), which the model uses beyond the
+stock decode bound ("fp32_k256": k_chunk 256, up to 64 cores per head, HiFi4).
 
 Fixtures use the per-chip TP4 geometry (8 Q heads, 2 KV heads, head_dim 128, BFP8 paged
 cache, page 32). The oracle reads back the stored BFP8 cache, as the stage-11 comparator.
@@ -50,19 +54,11 @@ def main():
         help="batch:position cases for the 'batched' fixture",
     )
     p.add_argument("--long-positions", nargs="+", type=int, default=[65663, 131199, 262143, 524287])
-    p.add_argument("--paths", nargs="+", default=["stock16", "accurate", "flash16", "flash32", "flash55"])
+    p.add_argument("--paths", nargs="+", default=["stock16", "stock64_k256", "fp32_k256", "fp32_16"])
     p.add_argument("--iters", type=int, default=10)
     p.add_argument("--device", type=int, default=0)
     p.add_argument("--output")
     a = p.parse_args()
-
-    import types
-
-    from models.demos.k2_horizon_7b_qb2.tt.accurate_attention import accurate_attention, accurate_flash_decode
-    from models.demos.k2_horizon_7b_qb2.tt.multichip_decoder import MultichipDecoder
-
-    # The model's previous long-context decode path (B1 scalar / batched packed-GQA accurate attention).
-    production = types.SimpleNamespace(accurate_attention_batch_size=32, _attention=accurate_attention)
 
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), physical_device_ids=[a.device])
     up = lambda x, dt, lay: ttnn.from_torch(
@@ -87,13 +83,14 @@ def main():
         pos = up(positions, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         expected = reference(q, keys, values, table, positions)
 
-        def stock(cores, fidelity="HiFi2"):
+        def sdpa(cores, k_chunk=128, fidelity="HiFi2", fp32_accumulation=False):
             cfg = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(11, 10),
                 q_chunk_size=0,
-                k_chunk_size=128,
+                k_chunk_size=k_chunk,
                 exp_approx_mode=False,
                 max_cores_per_head_batch=cores,
+                fp32_accumulation=fp32_accumulation,
             )
             return lambda: ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 qt,
@@ -103,47 +100,16 @@ def main():
                 cur_pos_tensor=pos,
                 compute_kernel_config=hifi[fidelity],
                 program_config=cfg,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        def flash(cores, k_chunk=128):
-            return lambda: accurate_flash_decode(qt, kt, vt, pt, pos, max_cores_per_head=cores, k_chunk_size=k_chunk)
-
-        def accurate():
-            # Current production fallback (B1 scalar path), row by row.
-            parts = []
-            tab = pt
-            pad = (-tab.shape[1]) % 8
-            if pad:
-                tab = ttnn.concat([tab, ttnn.repeat(tab[:, -1:], (1, pad))], dim=1)
-            for row in range(batch):
-                p_ = ttnn.to_layout(ttnn.reshape(pos[row : row + 1], (1, 1, 1, 1)), ttnn.TILE_LAYOUT)
-                p_ = ttnn.maximum(p_, 0)
-                offset = ttnn.reshape(ttnn.to_layout(ttnn.bitwise_and(p_, -32), ttnn.ROW_MAJOR_LAYOUT), (1,))
-                index = ttnn.repeat(ttnn.typecast(ttnn.bitwise_and(p_, 31), ttnn.uint32), (1, 8, 1, 128))
-                query = ttnn.repeat(ttnn.permute(qt[:, row : row + 1, :, :], (0, 2, 1, 3)), (1, 1, 32, 1))
-                att = accurate_attention(
-                    query, kt, vt, tab[row : row + 1], chunk_start_idx_tensor=offset, q_chunk_size=32, k_chunk_size=128
-                )
-                parts.append(ttnn.permute(ttnn.gather(att, 2, index), (0, 2, 1, 3)))
-            return ttnn.concat(parts, dim=1) if len(parts) > 1 else parts[0]
-
-        def chunked_prod():
-            return MultichipDecoder._accurate_decode_attention(production, qt, (kt, vt), pt, pos)
-
         fns = {
-            "chunked_prod": chunked_prod,
-            "flash_k256": lambda: accurate_flash_decode(qt, kt, vt, pt, pos, max_cores_per_head=64, k_chunk_size=256),
-            "stock16": stock(16),
-            "stock16_hifi4": stock(16, "HiFi4"),
-            "stock55": stock(55),
-            "accurate": accurate,
-            "flash1": flash(1),
-            "flash16": flash(16),
-            "flash32": flash(32),
-            "flash55": flash(55),
-            "flash55_k256": flash(55, 256),
-            "flash55_k512": flash(55, 512),
-            "flash55_k64": flash(55, 64),
+            "stock16": sdpa(16),
+            "stock16_hifi4": sdpa(16, fidelity="HiFi4"),
+            "stock64_k256": sdpa(64, 256, "HiFi4"),
+            "fp32_k256": sdpa(64, 256, "HiFi4", fp32_accumulation=True),
+            "fp32_16": sdpa(16, 128, "HiFi4", fp32_accumulation=True),
+            "fp32_55": sdpa(55, 128, "HiFi4", fp32_accumulation=True),
         }
         for path in a.paths:
             fn = fns[path]

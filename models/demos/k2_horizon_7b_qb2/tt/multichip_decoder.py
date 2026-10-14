@@ -21,16 +21,16 @@ from .optimized_decoder import MatmulGeometry, OptimizedDecoder, PrecisionPolicy
 class MultichipDecoder(OptimizedDecoder):
     prefill_q_chunk = 128
     prefill_k_chunk = 256
-    accurate_attention_batch_size = 32
-    accurate_attention_transport = "packed_gqa_rows_v1"
-    # Beyond the stock decode bound: split-K flash decode with FP32 recurrence
-    # (accurate_flash_decode). "chunked" restores the chunked-prefill fallback.
-    accurate_decode_kernel = "flash"
+    # Beyond the stock decode bound: split-K paged flash decode with SDPAProgramConfig.fp32_accumulation
+    # (FP32 scores and online-softmax state, accurate exponentials). The default BF16 recurrence drifts
+    # with context length (2-2.7% relative L2 vs FP64 at 64K-512K, against 0.18-0.33% with the option).
     flash_decode_k_chunk = 256
     flash_decode_max_cores_per_head = 64  # tree reduction limit; B1 uses all 55 per KV head
-    # Accurate long prefill: causal SDPA assigns Q chunks in pairs, so a 4096-token chunk at Q128
-    # (256 chunks) needs 4 per core on 64 or 110 cores. Q64 fills all 110 workers (at most 6 per core);
-    # large K blocks amortize the FP32 recurrence. HiFi4 retained (HiFi2 triples the error).
+    long_decode_fp32_accumulation = True  # False only for A/B diagnostics (tests/check_batched_long_decode.py)
+    # Accurate long prefill: chunked SDPA with fp32_accumulation. Causal SDPA assigns Q chunks in pairs, so
+    # a 4096-token chunk at Q128 (256 chunks) needs 4 per core on 64 or 110 cores. Q64 fills all 110 workers
+    # (at most 6 per core); large K blocks amortize the FP32 recurrence. HiFi4 retained (HiFi2 triples the
+    # error).
     accurate_prefill_grid = (11, 10)
     accurate_prefill_q_chunk = 64
     accurate_prefill_max_k_chunk = 1024
@@ -65,9 +65,6 @@ class MultichipDecoder(OptimizedDecoder):
     ):
         import torch
 
-        from .accurate_attention import _load, accurate_attention, accurate_flash_decode
-
-        _load()  # Host extension/kernel-path loading is an explicit setup boundary.
         c = hf_config
         if (
             c.hidden_size,
@@ -133,8 +130,6 @@ class MultichipDecoder(OptimizedDecoder):
         self.local_q_heads, self.local_kv_heads = 8, 2
         self.weight_allocations = []
         self.kv_dtype = getattr(ttnn, self.policy.kv)
-        self._attention = accurate_attention
-        self._flash_decode = accurate_flash_decode
         self.eps = c.rms_norm_eps
         self.context = c.max_position_embeddings
         self.compute = ttnn.init_device_compute_kernel_config(
@@ -150,6 +145,17 @@ class MultichipDecoder(OptimizedDecoder):
             math_approx_mode=math_approx_mode,
             fp32_dest_acc_en=True,
             packer_l1_acc=packer_l1_acc,
+        )
+        # Long-context attention (fp32_accumulation): HiFi4 and exact arithmetic for both phases.
+        self.long_decode_compute, self.long_prefill_compute = (
+            ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=l1_acc,
+            )
+            for l1_acc in (False, True)
         )
         prefix = f"model.layers.{layer_idx}."
 
@@ -551,21 +557,18 @@ class MultichipDecoder(OptimizedDecoder):
                     compute_with_storage_grid_size=(11, 10), q_chunk_size=0, k_chunk_size=128, exp_approx_mode=False
                 ),
             )
-        elif self.accurate_decode_kernel == "flash":
-            attention = self._flash_decode_attention(q, kv_cache, page_table, current_pos)
         else:
-            attention = self._accurate_decode_attention(q, kv_cache, page_table, current_pos)
+            attention = self._flash_decode_attention(q, kv_cache, page_table, current_pos)
         # [1,B,H,D] is already in concatenated logical order. Tile reshape
         # avoids the dedicated concat op's compulsory L1 sharding roundtrip.
         attention = ttnn.reshape(attention, (1, 1, batch, 1024))
         return self._finish(x, attention)
 
     def _flash_decode_attention(self, q, kv_cache, page_table, current_pos):
-        """Stock split-K decode contract with FP32 scores/recurrence and accurate exp.
+        """Stock split-K paged decode with fp32_accumulation (FP32 scores and recurrence, accurate exp).
 
         All 110 workers split each KV head's history and merge through the stock tree
-        (B1: 55 per KV head). The chunked-prefill fallback ran one query head per core,
-        8 of 64 cores at B1, serially over the whole context.
+        (B1: 55 per KV head).
         """
         # The reader fetches whole K chunks before causal masking; pad with a valid
         # request-owned page, as the stock branch does for K128.
@@ -573,75 +576,23 @@ class MultichipDecoder(OptimizedDecoder):
         table = (
             ttnn.concat([page_table, ttnn.repeat(page_table[:, -1:], (1, padding))], dim=1) if padding else page_table
         )
-        return self._flash_decode(
+        return ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
             kv_cache[0],
             kv_cache[1],
-            table,
-            current_pos,
-            max_cores_per_head=self.flash_decode_max_cores_per_head,
-            k_chunk_size=self.flash_decode_k_chunk,
+            page_table_tensor=table,
+            cur_pos_tensor=current_pos,
+            compute_kernel_config=self.long_decode_compute,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(11, 10),
+                q_chunk_size=0,
+                k_chunk_size=self.flash_decode_k_chunk,
+                exp_approx_mode=False,
+                max_cores_per_head_batch=self.flash_decode_max_cores_per_head,
+                fp32_accumulation=self.long_decode_fp32_accumulation,
+            ),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-    def _accurate_decode_attention(self, q, kv_cache, page_table, current_pos):
-        """Pack the four query heads sharing each KV head into independent rows."""
-        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
-        batch = q.shape[1]
-        per_group = []
-        start = 0
-        while start < batch:
-            count = 1 << (min(self.accurate_attention_batch_size, batch - start).bit_length() - 1)
-            if count == 1:
-                # Retain the original scalar path and its eight separate Q heads.
-                pos = ttnn.to_layout(ttnn.reshape(current_pos[start : start + 1], (1, 1, 1, 1)), ttnn.TILE_LAYOUT)
-                pos = ttnn.maximum(pos, 0)
-                offset = ttnn.reshape(ttnn.to_layout(ttnn.bitwise_and(pos, -32), ttnn.ROW_MAJOR_LAYOUT), (1,))
-                index = ttnn.repeat(ttnn.typecast(ttnn.bitwise_and(pos, 31), ttnn.uint32), (1, 8, 1, 128))
-                query = ttnn.repeat(ttnn.permute(q[:, start : start + 1, :, :], (0, 2, 1, 3)), (1, 1, 32, 1))
-                offset_args = {"chunk_start_idx_tensor": offset}
-            else:
-                if q.dtype != ttnn.bfloat16:
-                    raise ValueError("Packed accurate attention requires the selected BF16 queries without a cast")
-                # The unchanged reader/compute use floor(position / 32) for the K
-                # extent. The private writer also needs position % 32, so retain
-                # each full clamped position in its distinct scalar buffer owner.
-                pos = ttnn.to_layout(
-                    ttnn.reshape(current_pos[start : start + count], (1, 1, 1, count)), ttnn.TILE_LAYOUT
-                )
-                pos = ttnn.maximum(pos, 0)
-                positions = ttnn.reshape(ttnn.to_layout(pos, ttnn.ROW_MAJOR_LAYOUT), (count,))
-                offsets = [positions[row : row + 1] for row in range(count)]
-                offset_args = {"chunk_start_idx_tensors": offsets, "packed_gqa": True}
-                # Local heads 0..3 share KV head 0 and heads 4..7 share KV head 1.
-                # Explicit row-major reshapes and padding preserve every BF16 bit.
-                query = ttnn.to_layout(q[:, start : start + count, :, :], ttnn.ROW_MAJOR_LAYOUT)
-                query = ttnn.reshape(query, (count, 2, 4, 128))
-                query = ttnn.pad(query, [(0, 0), (0, 0), (0, 28), (0, 0)], 0)
-                query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
-            table = page_table[start : start + count, :]
-            padding = (-table.shape[1]) % 8
-            if padding:
-                table = ttnn.concat([table, ttnn.repeat(table[:, -1:], (1, padding))], dim=1)
-            attended = self._attention(
-                query,
-                kv_cache[0],
-                kv_cache[1],
-                table,
-                q_chunk_size=32,
-                k_chunk_size=128,
-                **offset_args,
-            )
-            if count == 1:
-                output = ttnn.permute(ttnn.gather(attended, 2, index), (0, 2, 1, 3))
-            else:
-                # Discard zero-query rows and restore KV-major, query-head-major
-                # order before the existing output projection sees its eight heads.
-                output = ttnn.to_layout(attended[:, :, :4, :], ttnn.ROW_MAJOR_LAYOUT)
-                output = ttnn.reshape(output, (1, count, 8, 128))
-                output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
-            per_group.append(output)
-            start += count
-        return ttnn.concat(per_group, dim=1) if len(per_group) > 1 else per_group[0]
 
     def _prefill_chunk(self, x, *, rope, kv_cache, page_table, start_pos):
         logical = x.shape[2]
@@ -697,15 +648,20 @@ class MultichipDecoder(OptimizedDecoder):
             k_chunk = self.accurate_prefill_max_k_chunk
             while start_pos % k_chunk:
                 k_chunk //= 2
-            attention = self._attention(
+            attention = ttnn.transformer.chunked_scaled_dot_product_attention(
                 q,
                 kv_cache[0],
                 kv_cache[1],
                 page_table,
                 chunk_start_idx=start_pos,
-                q_chunk_size=q_chunk,
-                k_chunk_size=max(k_chunk, 32),
-                grid=self.accurate_prefill_grid,
+                compute_kernel_config=self.long_prefill_compute,
+                program_config=ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=self.accurate_prefill_grid,
+                    q_chunk_size=q_chunk,
+                    k_chunk_size=max(k_chunk, 32),
+                    exp_approx_mode=False,
+                    fp32_accumulation=True,
+                ),
             )
         attention = ttnn.experimental.nlp_concat_heads(attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Prefill assembles chunks and decode-assisted prefix tokens in one public
