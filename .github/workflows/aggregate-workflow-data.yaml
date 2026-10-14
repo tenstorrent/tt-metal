@@ -325,7 +325,9 @@ jobs:
         shell: bash
         run: |
           slack_ts="${{ steps.slack-report.outputs.slack_ts }}"
-          if [ -n "$slack_ts" ]; then
+          if [ "${{ steps.slack-report.outcome }}" = "skipped" ]; then
+            echo "status=skipped" >> "$GITHUB_OUTPUT"
+          elif [ -n "$slack_ts" ]; then
             echo "status=success" >> "$GITHUB_OUTPUT"
           else
             echo "status=failed" >> "$GITHUB_OUTPUT"
@@ -333,7 +335,7 @@ jobs:
 
   trigger-regression-analysis:
     needs: [analyze-data, handle-failures]
-    if: ${{ always() && needs.analyze-data.result == 'success' && needs.analyze-data.outputs.has_regressions == 'true' && needs.handle-failures.outputs.slack_notification_status == 'success' }}
+    if: ${{ always() && github.event.inputs.skip-slack != 'true' && needs.analyze-data.result == 'success' && needs.analyze-data.outputs.has_regressions == 'true' && needs.handle-failures.outputs.slack_notification_status == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
