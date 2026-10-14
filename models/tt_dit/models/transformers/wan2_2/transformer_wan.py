@@ -471,7 +471,14 @@ class WanTransformer3DModel(Module):
 
         return tt_rope_cos_1HND, tt_rope_sin_1HND, tt_trans_mat
 
+    def set_cross_kv_cache_enabled(self, enabled: bool) -> None:
+        for block in self.blocks:
+            block.attn2.set_cross_kv_cache_enabled(enabled)
+
     def prepare_text_conditioning(self, encoder_hidden_states):
+        # New text conditioning: drop the cross-attention K/V cached for earlier prompts
+        for block in self.blocks:
+            block.attn2.clear_cross_kv_cache()
         tt_prompt_1BLP = self.condition_embedder.forward_text(encoder_hidden_states)
 
         logger.info(f"TT prompt shape: {tt_prompt_1BLP.shape}")

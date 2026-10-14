@@ -75,6 +75,10 @@ class WanAttention(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
         self.is_self = is_self
+        # Cross-attention K/V depend only on the prompt, which stays the same tensor over the denoising steps.
+        # While enabled, they are kept per prompt tensor (see set_cross_kv_cache_enabled).
+        self._cross_kv_cache_enabled = False
+        self._cross_kv_cache = {}
 
         self.n_local_heads = self.num_heads // self.parallel_config.tensor_parallel.factor
 
@@ -268,6 +272,18 @@ class WanAttention(Module):
         )
         return out
 
+    def set_cross_kv_cache_enabled(self, enabled: bool) -> None:
+        """Keep the cross-attention K/V of each prompt tensor across calls (and drop what is cached).
+
+        Must stay off under trace: a trace captured on a cache hit has no K/V ops, so its replays would keep the
+        K/V of the prompt it was captured with.
+        """
+        self._cross_kv_cache_enabled = enabled
+        self._cross_kv_cache.clear()
+
+    def clear_cross_kv_cache(self) -> None:
+        self._cross_kv_cache.clear()
+
     def _cross_attention_kv(self, prompt_1BLP: ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]):
         """Head-split cross-attention K and V of the prompt: [1, H, L, E] each.
 
@@ -275,14 +291,22 @@ class WanAttention(Module):
         like the query: [1, 2H, L, E], head 2h + b holds prompt b of head h.
         """
         prompts = prompt_1BLP if isinstance(prompt_1BLP, tuple) else (prompt_1BLP,)
+        key = tuple(id(p) for p in prompts)
+        if self._cross_kv_cache_enabled and key in self._cross_kv_cache:
+            # the entry holds the prompt tensors too, so their ids cannot be reused while it exists
+            return self._cross_kv_cache[key][1]
         ks, vs = [], []
         for prompt in prompts:
             k_1BLF, v_1BLF = self.to_kv(prompt, compute_kernel_config=self.mm_compute_kernel_config)
             ks.append(self.norm_k(k_1BLF, num_heads_per_device=self.n_local_heads))
             vs.append(self._create_heads(v_1BLF))
         if len(prompts) == 1:
-            return ks[0], vs[0]
-        return _fold_heads(ttnn.concat(ks, dim=2)), _fold_heads(ttnn.concat(vs, dim=2))
+            kv = (ks[0], vs[0])
+        else:
+            kv = (_fold_heads(ttnn.concat(ks, dim=2)), _fold_heads(ttnn.concat(vs, dim=2)))
+        if self._cross_kv_cache_enabled:
+            self._cross_kv_cache[key] = (prompts, kv)
+        return kv
 
     def _to_out_fused_addcmul(
         self,
