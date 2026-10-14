@@ -44,6 +44,7 @@ static_assert(sizeof(KvCacheLocation) == 16, "KvCacheLocation must be 16 bytes f
 // What kind of cached tensor a config's chunks belong to. Each value maps 1:1 onto a TemporalPolicy
 // alternative (how the tensor's sequence coordinate is interpreted). Only the types the chunk map
 // can currently address are listed; new values are added as their TemporalPolicy gains support.
+// Values must match KvChunkTensorType in kv_chunk_address_table.proto.
 enum class KvChunkTensorType : uint8_t {
     Kv = 0,        // temporal::Dense — full KV / MLA latent over [0, prefix_len)
     Snapshot = 1,  // temporal::None  — fixed-size state keyed by the prefix_len it was snapshotted at
