@@ -1,0 +1,4 @@
+perf_mul_reduce_scalar.py::test_perf_mul_reduce_scalar[variant:(<MathFidelity.LoFi: 0>, 3, True, 16)]
+perf_mul_reduce_scalar.py::test_perf_mul_reduce_scalar[variant:(<MathFidelity.LoFi: 0>, 7, True, 32)]
+perf_mul_reduce_scalar.py::test_perf_mul_reduce_scalar[variant:(<MathFidelity.LoFi: 0>, 7, 1307, 32)]
+perf_mul_reduce_scalar.py::test_perf_mul_reduce_scalar[variant:(<MathFidelity.LoFi: 0>, 3, 1303, 16)]
