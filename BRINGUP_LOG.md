@@ -40,6 +40,23 @@ slices 1, 2, 3; **slice 0 (tray 3 chip 4) hangs under the full model workload �
 - Action: treat slice 0 as unavailable for Molmo2 until tray 3 chip 4 is checked by hardware; run 3 instances (slices 1-3).
   Repro: `python models/demos/molmo2/tests/stress_prefill_hang.py 12` on slice 0 (`TT_VISIBLE_DEVICES=0..7`, t3k mesh descriptor).
 
+## Session 12 — 2026-10-14 (after Galaxy power cycle)
+
+**Status**: all checks below pass on slices 1-3 and through the tt-inference-server flow; slice 0 (tray 3 chip 4) still hangs in the
+per-slice configuration (survives a power cycle).
+**Block Hash**: fc756c8fe30
+
+- Demo fix verified on device: 6/6 cases at ~20 tok/s; 384-frame video (S=34455) + 2048-token budget gives a coherent 562-token answer
+  (HF also coherent); traced decode default + server warm-up before trace capture (first-occurrence video shape after capture hung).
+- Clean latency pass (1 server, sequential): 3.88 s https / 2.31 s local-file per request, 97/100; HF baseline 3.61 s, March T3K 10.27 s.
+  Decode 19-20 tok/s (March T3K ~35). See verification/latency_comparison.md.
+- 30-video comparison vs HF 4.57.1: 6 identical, ~18 phrasing-only, ~6 detail differences; spot checks (bear video: TT right on 3 cubs).
+  Teacher-forced 95.8% mean (diagnostic only).
+- tt-inference-server: Molmo2 specs + launchers; run.py end to end: per-slice 97/100; single-instance DP=4: 97/100 after fixing slot
+  routing, slot_remap and per-row multimodal kwargs in generator_vllm.
+- Slice 0 hang (per-slice t3k config): same chip (mesh node N5 / Device 4) after the power cycle, 5 clean 25k prefills then a Matmul stall.
+  Not reproduced in the DP=4 whole-Galaxy instance in 5 long (34k) prefills (not enough to conclude).
+
 ## Session 1 — 2026-04-29
 
 **Status**: Architecture phase complete (image + video)

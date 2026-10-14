@@ -122,6 +122,23 @@ Molmo2). Setup used for the numbers above:
 
 The older docker / `run.py --docker-server` flow described below targets the retired fork-based image.
 
+### tt-inference-server (`run.py`, current main + a Molmo2 spec)
+
+tt-inference-server main has no Molmo2; the spec lives on a branch (`workflows/model_specs/dev/vlm.yaml`: `id_molmo2_Molmo2-8B_t3k`,
+`_galaxy_t3k` per 1x8 slice, and `_galaxy` = one instance on the whole Galaxy with in-process DP=4). With `MODEL_SPECS_ENV=dev`:
+
+```bash
+# one instance, whole Galaxy, DP=4 (the adapter splits the 8x4 mesh into four 1x8 replicas; max_concurrency 4)
+TT_METAL_HOME=... TT_METAL_PYTHON_VENV_DIR=<venv with vLLM+plugin> HF_TOKEN=any ./scripts/launch_galaxy_dp4.sh
+# or one instance per 1x8 slice (ports 8000+slice)
+./scripts/launch_4x_galaxy_t3k.sh
+```
+The spec's `TT_MESH_GRAPH_DESC_PATH` is relative (`../../tt-metal/...`), i.e. tt-metal must be reachable as `tt-inference-server/tt-metal`.
+Results (2026-10-14): per-slice flow 97/100 on the 105-test suite; **single DP=4 instance: 97/100, 0 errors, 219 s wall with 4 requests in
+flight** (four independent servers: 102 s; one engine process serializes prefill), 34,455-token video prefills on ranks 0/2/3 fine.
+The DP path needed three adapter fixes (prefill routed by the runner's slot, `slot_remap` applied as an indirection, per-row multimodal
+kwargs); regression tests in `tests/test_generator_vllm_routing.py`.
+
 ## Server (tt-inference-server, legacy docker flow)
 
 Exposes an OpenAI-compatible HTTP API on port 8000.
