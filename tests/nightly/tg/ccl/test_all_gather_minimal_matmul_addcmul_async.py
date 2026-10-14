@@ -124,5 +124,14 @@ def test_all_gather_minimal_matmul_addcmul_cache_hit(mesh_device, topology):
     # Hit: new allocations, new semaphores, and a different excluded scalar must still match.
     second = run_test_linear(mesh_device, addcmul_scalar=0.5, **common)
     assert mesh_device.num_program_cache_entries() == entries
+    # dst_full_sync_en is a compile-time DST_SYNC_MODE, so it must miss rather than reuse the half-sync kernel.
+    full_sync = run_test_linear(mesh_device, addcmul_scalar=0.5, dst_full_sync_en=True, **common)
+    full_sync_entries = mesh_device.num_program_cache_entries()
+    assert full_sync_entries == entries + 1
+    # A later call with the same full-sync config reuses that entry.
+    full_sync_hit = run_test_linear(mesh_device, addcmul_scalar=0.5, dst_full_sync_en=True, **common)
+    assert mesh_device.num_program_cache_entries() == full_sync_entries
     _assert_addcmul_quality(mesh_device, first)
     _assert_addcmul_quality(mesh_device, second)
+    _assert_addcmul_quality(mesh_device, full_sync)
+    _assert_addcmul_quality(mesh_device, full_sync_hit)

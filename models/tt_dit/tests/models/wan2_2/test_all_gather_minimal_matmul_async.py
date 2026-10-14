@@ -57,6 +57,7 @@ def run_test_linear_impl(
     activation=None,
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
+    dst_full_sync_en=False,
     num_iters=1,
     enable_trace=False,
     use_persistent_buffers=True,
@@ -190,6 +191,7 @@ def run_test_linear_impl(
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_acc,
         packer_l1_acc=True,
+        dst_full_sync_en=dst_full_sync_en,
     )
 
     matmul_config = ttnn.MinimalMatmulConfig(
@@ -395,6 +397,7 @@ def run_test_linear(
     activation=None,
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
+    dst_full_sync_en=False,
     dtype=ttnn.bfloat16,
     weight_dtype=None,
     bias_dtype=None,
@@ -503,6 +506,7 @@ def run_test_linear(
         activation=activation,
         math_fidelity=math_fidelity,
         fp32_acc=fp32_acc,
+        dst_full_sync_en=dst_full_sync_en,
         core_grid=core_grid,
         input_dtype=dtype,
         num_devices=device.get_num_devices(),
