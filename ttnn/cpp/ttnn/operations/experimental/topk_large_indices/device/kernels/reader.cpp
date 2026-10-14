@@ -16,8 +16,14 @@ void kernel_main() {
     const uint32_t src_addr = get_common_arg_val<uint32_t>(topk_common_args::input_address);
     const uint32_t start_row = get_arg_val<uint32_t>(topk_core_args::reader_start_row);
     const uint32_t num_rows = get_arg_val<uint32_t>(topk_core_args::reader_num_rows);
-    const uint32_t seg_first_chunk = get_arg_val<uint32_t>(topk_core_args::reader_seg_first_chunk);
-    const uint32_t seg_end_chunk = get_arg_val<uint32_t>(topk_core_args::reader_seg_end_chunk);
+    constexpr bool tree = get_named_compile_time_arg_val("tree") != 0;
+    const uint32_t seg_first_chunk = tree ? get_arg_val<uint32_t>(topk_core_args::reader_seg_first_chunk) : 0;
+    const uint32_t seg_end_chunk = tree ? get_arg_val<uint32_t>(topk_core_args::reader_seg_end_chunk) : 0;
+    const uint32_t split_row = tree ? get_arg_val<uint32_t>(topk_core_args::reader_split_row) : 0;
+    const bool has_split = tree && get_arg_val<uint32_t>(topk_core_args::reader_has_split) != 0;
+    // Without a split row the segment args already describe the whole rows.
+    const uint32_t whole_first_chunk = has_split ? 0 : seg_first_chunk;
+    const uint32_t whole_end_chunk = has_split ? UINT32_MAX : seg_end_chunk;
     uint32_t search_len = get_common_arg_val<uint32_t>(topk_common_args::search_length);
     const uint32_t input_page_bytes = get_common_arg_val<uint32_t>(topk_common_args::input_row_bytes);
 
@@ -46,7 +52,8 @@ void kernel_main() {
     Noc noc;
 
     TopkMetadataBounds bounds;
-    TopkSegmentBounds segment;
+    TopkSegmentBounds whole;
+    TopkSegmentBounds split;
     if constexpr (metadata_mode) {
         CircularBuffer meta_cb_obj(meta_cb);
         meta_cb_obj.reserve_back(1);
@@ -76,21 +83,67 @@ void kernel_main() {
             }
         }
         bounds = calculate_topk_bounds(search_len, llk_k);
-        segment = calculate_topk_segment_bounds(bounds, llk_k, seg_first_chunk, seg_end_chunk);
-        // The compute sees only this core's segment of the metadata-bounded row.
         CoreLocalMem<TopkMetadataBounds> mailbox(scratch);
-        mailbox->num_chunks = segment.num_chunks;
-        mailbox->tail_elements = segment.tail_elements;
+        if constexpr (!tree) {
+            mailbox->num_chunks = bounds.num_chunks;
+            mailbox->tail_elements = bounds.tail_elements;
+        } else {
+            // The compute sees the metadata-bounded rows and this core's segment of the split row.
+            whole = calculate_topk_segment_bounds(bounds, llk_k, whole_first_chunk, whole_end_chunk);
+            split = calculate_topk_segment_bounds(bounds, llk_k, seg_first_chunk, seg_end_chunk);
+            mailbox->num_chunks = whole.num_chunks;
+            mailbox->tail_elements = whole.tail_elements;
+            CoreLocalMem<TopkMetadataBounds> split_mailbox(scratch + sizeof(TopkMetadataBounds));
+            split_mailbox->num_chunks = split.num_chunks;
+            split_mailbox->tail_elements = split.tail_elements;
+        }
         clobber_all_memory();
         meta_cb_obj.push_back(1);
     } else {
         bounds = calculate_topk_bounds(search_len, llk_k);
-        segment = calculate_topk_segment_bounds(bounds, llk_k, seg_first_chunk, seg_end_chunk);
+        if constexpr (tree) {
+            whole = calculate_topk_segment_bounds(bounds, llk_k, whole_first_chunk, whole_end_chunk);
+            split = calculate_topk_segment_bounds(bounds, llk_k, seg_first_chunk, seg_end_chunk);
+        }
     }
-    const uint32_t tail_chunk_bytes = segment.tail_elements * element_bytes;
 
+    // Whole-row programs keep the loop without segment bookkeeping, which costs one-chunk rows about half a percent.
+    if constexpr (!tree) {
+        const uint32_t tail_chunk_bytes = bounds.tail_elements * element_bytes;
+        for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
+            const uint32_t row = start_row + local_row;
+            for (uint32_t chunk = 0; chunk < bounds.num_chunks; ++chunk) {
+                const uint32_t active_chunk_bytes = (chunk + 1 == bounds.num_chunks) ? tail_chunk_bytes : chunk_bytes;
+                input_cb.reserve_back(tiles_per_chunk);
+                for (uint32_t tile = 0; tile < tiles_per_chunk; ++tile) {
+                    const uint32_t tile_offset = tile * tile_bytes;
+                    const uint32_t read_bytes =
+                        tile_offset < active_chunk_bytes
+                            ? (active_chunk_bytes - tile_offset < tile_bytes ? active_chunk_bytes - tile_offset
+                                                                             : tile_bytes)
+                            : 0;
+                    if (read_bytes != 0) {
+                        noc.async_read(
+                            input,
+                            input_cb,
+                            read_bytes,
+                            {.page_id = row, .offset_bytes = chunk * chunk_bytes + tile_offset},
+                            {.offset_bytes = tile_offset});
+                    }
+                }
+                noc.async_read_barrier();
+                input_cb.push_back(tiles_per_chunk);
+            }
+        }
+        return;
+    }
+
+    const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
     for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
-        const uint32_t row = start_row + local_row;
+        const bool is_split = has_split && local_row == num_whole_rows;
+        const uint32_t row = is_split ? split_row : start_row + local_row;
+        const TopkSegmentBounds& segment = is_split ? split : whole;
+        const uint32_t tail_chunk_bytes = segment.tail_elements * element_bytes;
         if (segment.empty) {
             // Nothing valid in this segment: hand the compute one chunk of -inf so its survivors lose every merge.
             input_cb.reserve_back(tiles_per_chunk);

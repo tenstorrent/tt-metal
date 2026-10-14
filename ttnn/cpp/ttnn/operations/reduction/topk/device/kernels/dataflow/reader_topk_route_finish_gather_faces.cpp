@@ -30,7 +30,7 @@ void kernel_main() {
     constexpr uint32_t cb_values = get_compile_time_arg_val(4);
     constexpr uint32_t cb_indices = get_compile_time_arg_val(5);
     constexpr bool index_is_u32 = get_compile_time_arg_val(6) == 1;
-    constexpr uint32_t units_per_tile = get_compile_time_arg_val(7);
+    static_assert(get_compile_time_arg_val(7) == 4, "the face kernels run four units per tile");
     constexpr auto src_args = TensorAccessorArgs<8>();
     constexpr auto idx_args = TensorAccessorArgs<decltype(src_args)::next_compile_time_args_offset()>();
 
@@ -52,7 +52,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* const stick_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stick_base);
 
     for (uint32_t u = start_unit; u < start_unit + num_units; ++u) {
-        const auto [row_tile, kt, half, col0, ncols] = decode_unit(u, k_tiles, units_per_tile);
+        const auto [row_tile, kt, half, col0, ncols] = decode_unit(u, k_tiles);
 
         const uint32_t batch = row_tile / row_tiles_per_batch;
         const uint32_t row_in_batch0 = (row_tile % row_tiles_per_batch) * 32 + half * half_rows;

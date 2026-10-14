@@ -136,7 +136,7 @@ std::optional<TopKCoreConfig> find_topk_core_config_impl(
     // there, and the start-split clamp above only binds at the eligibility floor
     // (a zero split needs lp2(max_cores) > width-in-tiles; Wormhole grids top out
     // at lp2(max_cores) = 32, so W=1024's 32 tiles never truncate to zero there).
-    // kTreeRoundCostFactor: on p100a (32 x 16384, k 32) a round costs about 2 us, 0.4 of a 5.25 us local tile.
+    // kTreeRoundCostFactor: a merge round costs about 0.4 of a local tile.
     constexpr uint32_t kLocalCostFactor = 7;
     constexpr uint32_t kTreeRoundCostFactor = 3;
     constexpr uint32_t kFinalCostFactor = 2;

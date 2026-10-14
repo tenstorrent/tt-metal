@@ -461,10 +461,15 @@ FORCE_INLINE void reduce_split_segmented_row(
 
 void kernel_main() {
     const uint32_t num_rows = get_arg_val<uint32_t>(topk_core_args::compute_num_rows);
-    const uint32_t seg_first_chunk = get_arg_val<uint32_t>(topk_core_args::compute_seg_first_chunk);
-    const uint32_t seg_end_chunk = get_arg_val<uint32_t>(topk_core_args::compute_seg_end_chunk);
-    const uint32_t num_recv_rounds = get_arg_val<uint32_t>(topk_core_args::compute_num_recv_rounds);
-    const bool sends_survivor = get_arg_val<uint32_t>(topk_core_args::compute_sends_survivor) != 0;
+    constexpr bool tree = get_named_compile_time_arg_val("tree") != 0;
+    const uint32_t seg_first_chunk = tree ? get_arg_val<uint32_t>(topk_core_args::compute_seg_first_chunk) : 0;
+    const uint32_t seg_end_chunk = tree ? get_arg_val<uint32_t>(topk_core_args::compute_seg_end_chunk) : 0;
+    const uint32_t num_recv_rounds = tree ? get_arg_val<uint32_t>(topk_core_args::compute_num_recv_rounds) : 0;
+    const bool sends_survivor = tree && get_arg_val<uint32_t>(topk_core_args::compute_sends_survivor) != 0;
+    const bool has_split = tree && get_arg_val<uint32_t>(topk_core_args::compute_has_split) != 0;
+    // Without a split row the segment args already describe the whole rows.
+    const uint32_t whole_first_chunk = has_split ? 0 : seg_first_chunk;
+    const uint32_t whole_end_chunk = has_split ? UINT32_MAX : seg_end_chunk;
     const uint32_t search_len = get_common_arg_val<uint32_t>(topk_common_args::compute_search_length);
 
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
@@ -494,18 +499,38 @@ void kernel_main() {
 
     uint32_t num_chunks;
     uint32_t tail_elements;
+    uint32_t split_num_chunks;
+    uint32_t split_tail_elements;
     if constexpr (valid_length_from_metadata) {
-        // The reader already clipped the segment against the metadata length.
+        // The reader already clipped the rows and the segment against the metadata length.
         CircularBuffer meta_cb_obj(meta_cb);
         meta_cb_obj.wait_front(1);
         num_chunks = ckernel::read_tile_value(meta_cb, 0, topk_metadata_num_chunks_word);
         tail_elements = ckernel::read_tile_value(meta_cb, 0, topk_metadata_tail_elements_word);
+        if constexpr (tree) {
+            split_num_chunks =
+                ckernel::read_tile_value(meta_cb, 0, topk_metadata_split_word_offset + topk_metadata_num_chunks_word);
+            split_tail_elements = ckernel::read_tile_value(
+                meta_cb, 0, topk_metadata_split_word_offset + topk_metadata_tail_elements_word);
+        } else {
+            split_num_chunks = num_chunks;
+            split_tail_elements = tail_elements;
+        }
         meta_cb_obj.pop_front(1);
+    } else if constexpr (!tree) {
+        const auto bounds = calculate_topk_bounds(search_len, K);
+        num_chunks = bounds.num_chunks;
+        tail_elements = bounds.tail_elements;
+        split_num_chunks = num_chunks;
+        split_tail_elements = tail_elements;
     } else {
-        const auto segment =
-            calculate_topk_segment_bounds(calculate_topk_bounds(search_len, K), K, seg_first_chunk, seg_end_chunk);
-        num_chunks = segment.num_chunks;
-        tail_elements = segment.tail_elements;
+        const auto row = calculate_topk_bounds(search_len, K);
+        const auto whole = calculate_topk_segment_bounds(row, K, whole_first_chunk, whole_end_chunk);
+        const auto split = calculate_topk_segment_bounds(row, K, seg_first_chunk, seg_end_chunk);
+        num_chunks = whole.num_chunks;
+        tail_elements = whole.tail_elements;
+        split_num_chunks = split.num_chunks;
+        split_tail_elements = split.tail_elements;
     }
 
     CircularBuffer input(input_cb);
@@ -513,16 +538,12 @@ void kernel_main() {
     CircularBuffer landing(landing_cb);
     CircularBuffer send(send_cb);
 
-    // A survivor that leaves this core is merge operand one of its parent and must end ascending.
-    const bool body_final_ascending = sends_survivor && num_recv_rounds == 0;
-
 #ifdef ARCH_BLACKHOLE
-    // Whole rows of two to 32 chunks, and K = 2048 rows longer than 32 with the accumulator buffer; a core of a
-    // column segment tree keeps the single-thread body.
+    // Whole rows of two to 32 chunks, and K = 2048 rows longer than 32 with the accumulator buffer; a core with a
+    // split row keeps the single-thread body.
     if constexpr (multi_chunk_rows && !columns) {
         constexpr bool split_segments = K == 2048 && body_mode == ComputeBodyMode::FusedSegmented && acc_cb != 0;
-        if (num_chunks >= 2 && num_recv_rounds == 0 && !sends_survivor &&
-            (num_chunks <= max_fused_chunks || split_segments)) {
+        if (num_chunks >= 2 && !has_split && (num_chunks <= max_fused_chunks || split_segments)) {
             MATH((topk_large_indices_split::start()));
             PACK((topk_large_indices_split::wait_start()));
             for (uint32_t row = 0; row < num_rows; ++row) {
@@ -553,25 +574,35 @@ void kernel_main() {
     }
 #endif
 
+    const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
     for (uint32_t row = 0; row < num_rows; ++row) {
+        const bool split_row = has_split && row == num_whole_rows;
+        const uint32_t first_chunk = split_row ? seg_first_chunk : whole_first_chunk;
+        const uint32_t row_chunks = split_row ? split_num_chunks : num_chunks;
+        const uint32_t row_tail = split_row ? split_tail_elements : tail_elements;
+        const uint32_t row_recv_rounds = split_row ? num_recv_rounds : 0;
+        const bool row_sends = split_row && sends_survivor;
+        // A survivor that leaves this core is merge operand one of its parent and must end ascending.
+        const bool body_final_ascending = row_sends && row_recv_rounds == 0;
+
         tile_regs_acquire();
 
         if constexpr (body_mode == ComputeBodyMode::FusedEndToEnd) {
             // The rebuild assembles its instructions from the direction, so each direction gets its own body.
             if (body_final_ascending) {
-                reduce_fused_row<K, true>(input, seg_first_chunk, num_chunks, tail_elements);
+                reduce_fused_row<K, true>(input, first_chunk, row_chunks, row_tail);
             } else {
-                reduce_fused_row<K, false>(input, seg_first_chunk, num_chunks, tail_elements);
+                reduce_fused_row<K, false>(input, first_chunk, row_chunks, row_tail);
             }
         } else {
-            reduce_segmented_row<K, columns>(input, seg_first_chunk, num_chunks, tail_elements, body_final_ascending);
+            reduce_segmented_row<K, columns>(input, first_chunk, row_chunks, row_tail, body_final_ascending);
         }
 
-        for (uint32_t round = 0; round < num_recv_rounds; ++round) {
-            merge_landed_survivor<K>(landing, input_cb, final_survivor, sends_survivor && round + 1 == num_recv_rounds);
+        for (uint32_t round = 0; round < row_recv_rounds; ++round) {
+            merge_landed_survivor<K>(landing, input_cb, final_survivor, row_sends && round + 1 == row_recv_rounds);
         }
 
-        if (sends_survivor) {
+        if (row_sends) {
             tile_regs_commit();
             tile_regs_wait();
 
@@ -598,7 +629,7 @@ void kernel_main() {
 
         tile_regs_release();
 
-        if (sends_survivor) {
+        if (row_sends) {
             // Re-arm the untilize pack the row output path expects.
             pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);
         }

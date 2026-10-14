@@ -47,4 +47,7 @@ inline constexpr uint32_t topk_metadata_num_chunks_word = offsetof(TopkMetadataB
 inline constexpr uint32_t topk_metadata_tail_elements_word =
     offsetof(TopkMetadataBounds, tail_elements) / sizeof(uint32_t);
 
+// The mailbox holds the whole-row bounds, then the split row's segment bounds.
+inline constexpr uint32_t topk_metadata_split_word_offset = sizeof(TopkMetadataBounds) / sizeof(uint32_t);
+
 static_assert(sizeof(TopkMetadataBounds) == 2 * sizeof(uint32_t));

@@ -15,14 +15,14 @@
 namespace topk_route_finish {
 
 constexpr uint32_t tile_width = 32;
-constexpr uint32_t half_rows = 16;                    // rows per work unit (one face-pair)
+constexpr uint32_t half_rows = 16;                    // rows per staged half
 constexpr uint32_t rows_per_risc = 8;                 // reader rows [0,8), writer rows [8,16)
 constexpr uint32_t stick_seg_bytes = tile_width * 4;  // 128 B: 32 u32 indices
 constexpr uint32_t bounce_slot_bytes = 64;            // Blackhole DRAM-read alignment
 constexpr uint32_t gather_wave = 32;                  // reads in flight per trid wave
 constexpr uint32_t wave_trid0 = 1;                    // waves use trids {1, 2}; 0 stays untagged
 
-// With four units per tile a unit is one face, so col0 is 16 for the odd units.
+// Four units per tile, one face each: col0 is 16 for the odd units.
 struct UnitPos {
     uint32_t row_tile;
     uint32_t kt;
@@ -31,16 +31,11 @@ struct UnitPos {
     uint32_t ncols;
 };
 
-inline UnitPos decode_unit(uint32_t u, uint32_t k_tiles, uint32_t units_per_tile) {
+inline UnitPos decode_unit(uint32_t u, uint32_t k_tiles) {
+    constexpr uint32_t units_per_tile = 4;
     const uint32_t rem = u % (k_tiles * units_per_tile);
     const uint32_t sub = rem % units_per_tile;
-    const bool face_units = units_per_tile == 4;
-    return {
-        u / (k_tiles * units_per_tile),
-        rem / units_per_tile,
-        face_units ? sub >> 1 : sub,
-        face_units ? (sub & 1) * 16 : 0,
-        face_units ? 16 : tile_width};
+    return {u / (k_tiles * units_per_tile), rem / units_per_tile, sub >> 1, (sub & 1) * 16, 16};
 }
 
 // Zero rows [lr0, lr1) of faces [face0, face1) of one staged half; elem_bytes 4 (u32 indices) doubles every stride.
