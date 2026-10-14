@@ -135,8 +135,10 @@ def test_reshape_codegen_edge_shapes(device, case, in_shape, out_shape, dtype):
     assert list(codegen.shape) == out_shape
     assert list(codegen.padded_shape) == list(native.padded_shape)
     _assert_bits(source.reshape(out_shape), ttnn.to_torch(codegen), dtype)
-    # Whole padded buffers, so the tile padding must match native's fill too.
-    _assert_bits(native.cpu().to_torch_with_padded_shape(), codegen.cpu().to_torch_with_padded_shape(), dtype)
+    # Native leaves tile padding unspecified unless pad_value is passed; codegen writes zeros there.
+    padded = torch.zeros(list(codegen.padded_shape), dtype=source.dtype)
+    padded[tuple(slice(0, d) for d in out_shape)] = source.reshape(out_shape)
+    _assert_bits(padded, codegen.cpu().to_torch_with_padded_shape(), dtype)
 
 
 # (id, in shape, out shape, dtype, layout, expected route). Shapes outside the tile-rows scope, and shapes
