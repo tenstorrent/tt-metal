@@ -64,48 +64,142 @@ struct LLKOperandExtractor {
 template <const auto& Token>
 using LLKOperandFrom = typename binding_details::LLKOperandExtractor<Token>::OperandT;
 
-// Watcher/lightweight asserts fire when the host left the format unset. LLKOperandFrom still static_asserts.
+/**
+ * Extract DataFormat metadata associated with a `ScratchpadBindingToken`.
+ * This metadata is configured on the host.
+ *
+ * See: `ScratchpadSpec::data_format_metadata` in the Metal host API for configuration.
+ *
+ * pre-condition: `ScratchpadSpec::data_format_metadata` associated with this scratchpad has been set to a
+ * non-empty value on the host.
+ */
 constexpr DataFormat get_dataformat(const ScratchpadBindingToken& token) {
     ASSERT(token.llk_metadata_.format != binding_details::LLKMetadata::kNoFormat);
     return static_cast<DataFormat>(token.llk_metadata_.format);
 }
+
+/**
+ * Extract DataFormat metadata associated with a `DFBBindingToken`.
+ * This metadata is configured on the host.
+ *
+ * See: `DataflowBufferSpec::data_format_metadata` in the Metal host API for configuration.
+ *
+ * pre-condition: `DataflowBufferSpec::data_format_metadata` associated with this DFB has been set to a
+ * non-empty value on the host.
+ */
 constexpr DataFormat get_dataformat(const DFBBindingToken& token) {
     ASSERT(token.llk_metadata_.format != binding_details::LLKMetadata::kNoFormat);
     return static_cast<DataFormat>(token.llk_metadata_.format);
 }
+
+/**
+ * Extract DataFormat metadata associated with a `TensorBindingToken`.
+ * This metadata describes the data format of the `MeshTensor` that this token represents.
+ */
 template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
 constexpr DataFormat get_dataformat(const tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>& token) {
-    ASSERT(token.llk_metadata_.format != binding_details::LLKMetadata::kNoFormat);
     return static_cast<DataFormat>(token.llk_metadata_.format);
 }
 
+/**
+ * Extract the face height (in elements) associated with a `ScratchpadBindingToken`.
+ * This metadata is configured on the host; if tile metadata is omitted, the default tile is assumed.
+ *
+ * See: `ScratchpadSpec::tile_format_metadata` in the Metal host API for configuration.
+ */
 constexpr uint8_t get_face_r_dim(const ScratchpadBindingToken& token) { return token.llk_metadata_.face_r_dim; }
+
+/**
+ * Extract the face height (in elements) associated with a `DFBBindingToken`.
+ * This metadata is configured on the host; if tile metadata is omitted, the default tile is assumed.
+ *
+ * See: `DataflowBufferSpec::tile_format_metadata` in the Metal host API for configuration.
+ */
 constexpr uint8_t get_face_r_dim(const DFBBindingToken& token) { return token.llk_metadata_.face_r_dim; }
+
+/**
+ * Extract the face height (in elements) associated with a `TensorBindingToken`.
+ * This metadata describes the tile layout of the `MeshTensor` that this token represents.
+ */
 template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
 constexpr uint8_t get_face_r_dim(const tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>& token) {
     return token.llk_metadata_.face_r_dim;
 }
 
+/**
+ * Extract the face width (in elements) associated with a `ScratchpadBindingToken`.
+ * This metadata is configured on the host; if tile metadata is omitted, the default tile is assumed.
+ *
+ * See: `ScratchpadSpec::tile_format_metadata` in the Metal host API for configuration.
+ */
 constexpr uint8_t get_face_c_dim(const ScratchpadBindingToken& token) { return token.llk_metadata_.face_c_dim; }
+
+/**
+ * Extract the face width (in elements) associated with a `DFBBindingToken`.
+ * This metadata is configured on the host; if tile metadata is omitted, the default tile is assumed.
+ *
+ * See: `DataflowBufferSpec::tile_format_metadata` in the Metal host API for configuration.
+ */
 constexpr uint8_t get_face_c_dim(const DFBBindingToken& token) { return token.llk_metadata_.face_c_dim; }
+
+/**
+ * Extract the face width (in elements) associated with a `TensorBindingToken`.
+ * This metadata describes the tile layout of the `MeshTensor` that this token represents.
+ */
 template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
 constexpr uint8_t get_face_c_dim(const tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>& token) {
     return token.llk_metadata_.face_c_dim;
 }
 
+/**
+ * Extract the number of faces along the tile's row dimension associated with a `ScratchpadBindingToken`.
+ * This metadata is configured on the host; if tile metadata is omitted, the default tile is assumed.
+ *
+ * See: `ScratchpadSpec::tile_format_metadata` in the Metal host API for configuration.
+ */
 constexpr uint8_t get_num_faces_r_dim(const ScratchpadBindingToken& token) {
     return token.llk_metadata_.num_faces_r_dim;
 }
+
+/**
+ * Extract the number of faces along the tile's row dimension associated with a `DFBBindingToken`.
+ * This metadata is configured on the host; if tile metadata is omitted, the default tile is assumed.
+ *
+ * See: `DataflowBufferSpec::tile_format_metadata` in the Metal host API for configuration.
+ */
 constexpr uint8_t get_num_faces_r_dim(const DFBBindingToken& token) { return token.llk_metadata_.num_faces_r_dim; }
+
+/**
+ * Extract the number of faces along the tile's row dimension associated with a `TensorBindingToken`.
+ * This metadata describes the tile layout of the `MeshTensor` that this token represents.
+ */
 template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
 constexpr uint8_t get_num_faces_r_dim(const tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>& token) {
     return token.llk_metadata_.num_faces_r_dim;
 }
 
+/**
+ * Extract the number of faces along the tile's column dimension associated with a `ScratchpadBindingToken`.
+ * This metadata is configured on the host; if tile metadata is omitted, the default tile is assumed.
+ *
+ * See: `ScratchpadSpec::tile_format_metadata` in the Metal host API for configuration.
+ */
 constexpr uint8_t get_num_faces_c_dim(const ScratchpadBindingToken& token) {
     return token.llk_metadata_.num_faces_c_dim;
 }
+
+/**
+ * Extract the number of faces along the tile's column dimension associated with a `DFBBindingToken`.
+ * This metadata is configured on the host; if tile metadata is omitted, the default tile is assumed.
+ *
+ * See: `DataflowBufferSpec::tile_format_metadata` in the Metal host API for configuration.
+ */
 constexpr uint8_t get_num_faces_c_dim(const DFBBindingToken& token) { return token.llk_metadata_.num_faces_c_dim; }
+
+/**
+ * Extract the number of faces along the tile's column dimension associated with a `TensorBindingToken`.
+ * This metadata describes the tile layout of the `MeshTensor` that this token represents.
+ */
 template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
 constexpr uint8_t get_num_faces_c_dim(const tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>& token) {
     return token.llk_metadata_.num_faces_c_dim;
