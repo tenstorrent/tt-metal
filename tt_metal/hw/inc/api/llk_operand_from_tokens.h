@@ -103,7 +103,7 @@ constexpr DataFormat get_dataformat(const tensor_accessor::TensorBindingToken<CT
 
 /**
  * Extract the face height (in elements) associated with a `ScratchpadBindingToken`.
- * This metadata is configured on the host; if tile metadata is omitted, the default tile is assumed.
+ * returns 16 if tile metadata is omitted on host, representing a default face (16x16 elements).
  *
  * See: `ScratchpadSpec::tile_format_metadata` in the Metal host API for configuration.
  */
@@ -111,7 +111,7 @@ constexpr uint8_t get_face_r_dim(const ScratchpadBindingToken& token) { return t
 
 /**
  * Extract the face height (in elements) associated with a `DFBBindingToken`.
- * This metadata is configured on the host; if tile metadata is omitted, the default tile is assumed.
+ * returns 16 if tile metadata is omitted on host, representing a default face (16x16 elements).
  *
  * See: `DataflowBufferSpec::tile_format_metadata` in the Metal host API for configuration.
  */
@@ -128,7 +128,7 @@ constexpr uint8_t get_face_r_dim(const tensor_accessor::TensorBindingToken<CTA_O
 
 /**
  * Extract the face width (in elements) associated with a `ScratchpadBindingToken`.
- * This metadata is configured on the host; if tile metadata is omitted, the default tile is assumed.
+ * returns 16 if tile metadata is omitted on host, representing a default face (16x16 elements).
  *
  * See: `ScratchpadSpec::tile_format_metadata` in the Metal host API for configuration.
  */
@@ -136,7 +136,7 @@ constexpr uint8_t get_face_c_dim(const ScratchpadBindingToken& token) { return t
 
 /**
  * Extract the face width (in elements) associated with a `DFBBindingToken`.
- * This metadata is configured on the host; if tile metadata is omitted, the default tile is assumed.
+ * returns 16 if tile metadata is omitted on host, representing a default face (16x16 elements).
  *
  * See: `DataflowBufferSpec::tile_format_metadata` in the Metal host API for configuration.
  */
@@ -153,7 +153,7 @@ constexpr uint8_t get_face_c_dim(const tensor_accessor::TensorBindingToken<CTA_O
 
 /**
  * Extract the number of faces along the tile's row dimension associated with a `ScratchpadBindingToken`.
- * This metadata is configured on the host; if tile metadata is omitted, the default tile is assumed.
+ * returns 2 if tile metadata is omitted on host, representing a default tile (2x2 faces).
  *
  * See: `ScratchpadSpec::tile_format_metadata` in the Metal host API for configuration.
  */
@@ -163,7 +163,7 @@ constexpr uint8_t get_num_faces_r_dim(const ScratchpadBindingToken& token) {
 
 /**
  * Extract the number of faces along the tile's row dimension associated with a `DFBBindingToken`.
- * This metadata is configured on the host; if tile metadata is omitted, the default tile is assumed.
+ * returns 2 if tile metadata is omitted on host, representing a default tile (2x2 faces).
  *
  * See: `DataflowBufferSpec::tile_format_metadata` in the Metal host API for configuration.
  */
@@ -180,7 +180,7 @@ constexpr uint8_t get_num_faces_r_dim(const tensor_accessor::TensorBindingToken<
 
 /**
  * Extract the number of faces along the tile's column dimension associated with a `ScratchpadBindingToken`.
- * This metadata is configured on the host; if tile metadata is omitted, the default tile is assumed.
+ * returns 2 if tile metadata is omitted on host, representing a default tile (2x2 faces).
  *
  * See: `ScratchpadSpec::tile_format_metadata` in the Metal host API for configuration.
  */
@@ -190,7 +190,7 @@ constexpr uint8_t get_num_faces_c_dim(const ScratchpadBindingToken& token) {
 
 /**
  * Extract the number of faces along the tile's column dimension associated with a `DFBBindingToken`.
- * This metadata is configured on the host; if tile metadata is omitted, the default tile is assumed.
+ * returns 2 if tile metadata is omitted on host, representing a default tile (2x2 faces).
  *
  * See: `DataflowBufferSpec::tile_format_metadata` in the Metal host API for configuration.
  */
