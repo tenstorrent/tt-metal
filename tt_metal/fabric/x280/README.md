@@ -545,8 +545,8 @@ compiler tt-metal fetches (`runtime/sfpi`, or `/opt/tenstorrent/sfpi` with
 ```bash
 ./build_metal.sh --build-metal-tests --configure-only
 cmake -B build -DTT_METAL_BUILD_X280=ON
-ninja -C build x280_images          # build/x280/<image>.{elf,bin}
-ctest --test-dir build -R x280      # image placement and header checks; no device
+ninja -C build x280_images x280_abi_headers x280_runtime_host_tests x280_runtime_coordinate_tests
+ctest --test-dir build -R x280      # image placement, pinned-input guards, host and mock-cluster tests; no device
 ```
 
 | Image (`build/x280/`) | Source | Use |
@@ -554,13 +554,15 @@ ctest --test-dir build -R x280      # image placement and header checks; no devi
 | `firmware-lim-idle.bin` | `src/lim_idle.c` | resident idle, the runtime prerequisite |
 | `firmware.bin` | `src/main.c` | active session success image (the sentinel) |
 | `firmware-pinned-input-prepare.bin`, `firmware-pinned-input-teardown.bin` | `src/x280_pinned_input.c` | pinned-input preparation and teardown (§ 1) |
+| `firmware-atomic-bench.bin` | `src/atomic_bench.c` | cross-hart atomics micro-benchmark (§ 7); in the active-image contract set |
+| `firmware-active-session-fault.bin` | `src/active_session_fault.c` | traps and CEASEs hart 2, for `x280_active_failure_test` only |
 
 Every image compiles with `-mcpu=sifive-x280 -march=rv64gc -mabi=lp64d
 -mcmodel=medany -O2 -Werror`, freestanding, and links with
 `X280_REQUIRE_NO_BSS` defined, so the linker scripts refuse a `.bss`.
 `x280_image_layout` checks resident idle's `.text` at `0x08000000` and the
-sentinel's at `0x08001000`; `x280_abi_headers` compiles each ABI header alone
-as C, C++ and, for the two `entry.S` includes, assembly.
+sentinel's at `0x08001000`. The `x280_abi_headers` build target compiles each
+ABI header alone as C, C++ and, for the two `entry.S` includes, assembly.
 
 ### Active-image contract suite
 
