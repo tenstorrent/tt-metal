@@ -571,6 +571,7 @@ def _make_plan(
             auxiliary_cb_id=CB_SCALER,
             accumulator_cb_id=CB_ACCUMULATOR,
             output_cb_id=CB_OUTPUT,
+            accumulator_cb_tiles=case.output_tiles,
         ),
         hardware=_PLANNER.ReduceHardwareConfig(
             arch=device.arch(),
@@ -589,11 +590,8 @@ def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int], arch) -> None:
     assert plan.auxiliary.tiles or case.allow_empty_auxiliary
     if case.family == "empty-auxiliary":
         assert not plan.auxiliary.tiles
-        assert all(
-            requirement.role != _PLANNER.ReduceCbRole.AUXILIARY
-            for call in plan.calls
-            for requirement in call.plan.cb_requirements
-        )
+        assert plan.auxiliary.cb is None
+        assert all(call.plan.auxiliary_cb is None for call in plan.calls)
     elif case.family == "shared-zero":
         assert len(plan.calls[0].plan.auxiliary_tiles) == 1
         assert plan.calls[0].auxiliary_tile_offset == plan.calls[1].auxiliary_tile_offset
@@ -677,6 +675,7 @@ def _repeated_input_cb_plan(input_tensor, output):
             auxiliary_cb_id=CB_SCALER,
             accumulator_cb_id=CB_ACCUMULATOR,
             output_cb_id=CB_OUTPUT,
+            accumulator_cb_tiles=1,
         ),
         hardware=hardware,
     )
@@ -1172,7 +1171,9 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
                 )
                 for _ in range(calls)
             ],
-            cb_ids=_PLANNER.ReduceSequenceCbIds(CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT),
+            cb_ids=_PLANNER.ReduceSequenceCbIds(
+                CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT, accumulator_cb_tiles=output_capacity
+            ),
             hardware=hardware,
             algorithm=_ALGORITHM[algorithm],
         )
@@ -1503,7 +1504,7 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail, 
         sums.append(values.float().sum(-1 if dim == "REDUCE_ROW" else -2))
     sequence = _PLANNER.make_reduce_sequence_plan(
         reductions=reductions,
-        cb_ids=_PLANNER.ReduceSequenceCbIds(CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT),
+        cb_ids=_PLANNER.ReduceSequenceCbIds(CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT, accumulator_cb_tiles=output_tiles),
         hardware=_PLANNER.ReduceHardwareConfig(
             arch=device.arch(),
             fp32_dest_acc_en=True,

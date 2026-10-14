@@ -138,8 +138,8 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
     std::vector<uint32_t> writer_reduce_args;
     reduce_host::ReduceAuxiliaryArgs({1, max_plan.auxiliary_tiles}).append_to(writer_reduce_args);
     reduce_host::ReduceAuxiliaryArgs({1, sum_plan.auxiliary_tiles}).append_to(writer_reduce_args);
-    const auto* max_auxiliary = max_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
-    const auto* sum_auxiliary = sum_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const auto& max_auxiliary = max_plan.auxiliary_cb;
+    const auto& sum_auxiliary = sum_plan.auxiliary_cb;
 
     Group<DataflowBufferSpec> dfbs = {
         DataflowBufferSpec{

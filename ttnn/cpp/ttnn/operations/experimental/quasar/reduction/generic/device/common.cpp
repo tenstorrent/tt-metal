@@ -71,7 +71,13 @@ ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
             rh::ReduceCallConfig{
                 block, math, dim, scalar, fp32_mode, compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile});
     }
-    auto sequence = rh::make_reduce_sequence_plan(calls, {1, 3, 2}, hardware);
+    // The row-major factories size the accumulator with the staging chunk of the kept axis.
+    const uint32_t accumulator_tiles =
+        row_major ? (dim == ReduceOpDim::W ? row_major->ht_tiles_per_chunk : row_major->wt_tiles_per_chunk) : 0;
+    auto sequence = rh::make_reduce_sequence_plan(
+        calls,
+        {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2, .accumulator_cb_tiles = accumulator_tiles},
+        hardware);
     for (auto& call : sequence.calls) {
         // The kernel starts with its output format configured. Row-major mixed
         // output formats must also restore the packer after tilize.

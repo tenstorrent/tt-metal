@@ -35,10 +35,13 @@ inline SoftmaxReducePlans make_softmax_reduce_plans(
     tt::tt_metal::DataType max_input_dtype,
     tt::tt_metal::DataType intermediate_dtype,
     const ttnn::kernel_lib::host::ReduceHardwareConfig& hardware,
-    compute_kernel_lib::ReduceInputPolicy input_policy) {
+    compute_kernel_lib::ReduceInputPolicy input_policy,
+    uint32_t accumulator_cb_tiles) {
     using namespace tt::tt_metal;
     namespace rh = ttnn::kernel_lib::host;
     const uint32_t passes = (width_tiles + pass_tiles - 1) / pass_tiles;
+    const rh::ReduceSequenceCbIds cb_ids{
+        .auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2, .accumulator_cb_tiles = accumulator_cb_tiles};
     const uint32_t descriptors = std::min(passes, 3U);
     std::vector<rh::ReduceCbConfig> max_calls;
     std::vector<rh::ReduceCbConfig> sum_calls;
@@ -58,12 +61,12 @@ inline SoftmaxReducePlans make_softmax_reduce_plans(
                 sum_block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, input_policy});
     }
     SoftmaxReducePlans plans{
-        rh::make_reduce_sequence_plan(max_calls, {1, 3, 2}, hardware),
+        rh::make_reduce_sequence_plan(max_calls, cb_ids, hardware),
         // BF16 DEST loses small contributions when an unreduced sum is carried
         // over hundreds of tiles. Reduce each pass before cross-call accumulation.
         rh::make_reduce_sequence_plan(
             sum_calls,
-            {1, 3, 2},
+            cb_ids,
             hardware,
             passes > 1 && !hardware.fp32_dest_acc_en ? std::optional{compute_kernel_lib::ReduceAlgorithm::ReduceTile}
                                                      : std::nullopt)};

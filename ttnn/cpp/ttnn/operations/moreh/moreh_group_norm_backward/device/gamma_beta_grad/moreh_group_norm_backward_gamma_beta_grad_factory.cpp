@@ -148,9 +148,9 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
         ReduceOpDim::HW,
         DataType::FLOAT32,
         output_grad.dtype(),
-        {device->arch(), true, false});
-    const auto& auxiliary =
-        *reduction.sequence.calls.front().plan.find_cb(ttnn::kernel_lib::host::ReduceCbRole::Auxiliary);
+        {device->arch(), true, false},
+        std::min(im2_t, im3_t));
+    const auto& auxiliary = *reduction.sequence.auxiliary.cb;
     const uint32_t in4_t = reduction.sequence.auxiliary.tiles.size();
 
     Group<DataflowBufferSpec> dfbs;

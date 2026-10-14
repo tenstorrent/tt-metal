@@ -86,13 +86,13 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWLargeFactory::create_program
     }
     auto reduce_sequence = reduce_host::make_reduce_sequence_plan(
         reductions,
-        {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2},
+        {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2, .accumulator_cb_tiles = 1},
         {.arch = device.arch(),
          .fp32_dest_acc_en = fp32_dest_acc_en,
          .dst_full_sync_en = compute_kernel_config.dst_full_sync_en,
          .math_fidelity = compute_kernel_config.math_fidelity});
     reduce_sequence.calls.back().accumulation_index = num_blocks - 1;
-    const auto* auxiliary = reduce_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const auto& auxiliary = reduce_sequence.auxiliary.cb;
     const uint32_t auxiliary_tiles = reduce_sequence.auxiliary.tiles.size();
     const auto compute_reduce_args = reduce_sequence.get_compile_time_args();
     const auto writer_reduce_args = reduce_sequence.get_auxiliary_compile_time_args();

@@ -20,6 +20,7 @@ def create_program_descriptor(
 ) -> ttnn.ProgramDescriptor:
     planner = ttnn.reduce_planner
     cb_in, cb_aux, cb_out = 0, 2, 16
+    input_cb_tiles, output_cb_tiles = 2, 2
     core = ttnn.CoreCoord(0, 0)
     core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
     sequence = planner.make_reduce_sequence_plan(
@@ -32,7 +33,7 @@ def create_program_descriptor(
                         input_tensor.shape[-1],
                         input_tensor.dtype,
                         output_tensor.dtype,
-                        input_cb_tiles=2,
+                        input_cb_tiles=input_cb_tiles,
                         batches=math.prod(list(input_tensor.shape)[:-2]),
                         padded_h=input_tensor.padded_shape[-2],
                         padded_w=input_tensor.padded_shape[-1],
@@ -55,24 +56,22 @@ def create_program_descriptor(
         ),
     )
     plan = sequence.calls[0].plan
-    aux_dtype = ttnn.float32 if input_tensor.dtype == ttnn.float32 else ttnn.bfloat16
-    role_buffers = {
-        planner.ReduceCbRole.INPUT: (cb_in, input_tensor.dtype),
-        planner.ReduceCbRole.AUXILIARY: (cb_aux, aux_dtype),
-        planner.ReduceCbRole.OUTPUT: (cb_out, output_tensor.dtype),
-    }
-    cbs = []
-    for requirement in plan.cb_requirements:
-        cb_id, dtype = role_buffers[requirement.role]
-        cbs.append(
-            ttnn.CBDescriptor(
-                total_size=requirement.total_size_bytes,
-                core_ranges=core_grid,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(buffer_index=cb_id, data_format=dtype, page_size=requirement.page_size)
-                ],
-            )
+
+    def cb(cb_id, dtype, page_size, pages):
+        return ttnn.CBDescriptor(
+            total_size=page_size * pages,
+            core_ranges=core_grid,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=cb_id, data_format=dtype, page_size=page_size)],
         )
+
+    input_tile_size = input_tensor.spec.tile.get_tile_size(input_tensor.dtype)
+    output_tile_size = output_tensor.spec.tile.get_tile_size(output_tensor.dtype)
+    auxiliary = sequence.auxiliary.cb
+    cbs = [
+        cb(cb_in, input_tensor.dtype, input_tile_size, input_cb_tiles),
+        cb(cb_aux, auxiliary.data_format, auxiliary.page_size, auxiliary.page_count),
+        cb(cb_out, output_tensor.dtype, output_tile_size, output_cb_tiles),
+    ]
 
     reader_ct_args = [plan.Ht, plan.Wt, plan.batches, plan.chunk.output_tiles, int(reduce_row)]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())

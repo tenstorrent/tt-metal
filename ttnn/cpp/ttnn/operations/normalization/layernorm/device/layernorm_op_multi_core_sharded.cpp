@@ -401,7 +401,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                 .plan = plan};
             rh::ReduceCallArgs(call).append_to(config.reduce_compute_args);
             local_auxiliary.tiles = plan.auxiliary_tiles;
-            if (const auto* auxiliary = plan.find_cb(rh::ReduceCbRole::Auxiliary)) {
+            if (const auto& auxiliary = plan.auxiliary_cb) {
                 config.reduce_auxiliary_format = auxiliary->data_format;
             }
         }

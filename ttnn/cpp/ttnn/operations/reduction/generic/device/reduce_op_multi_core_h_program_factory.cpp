@@ -255,7 +255,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         (rm_path || tile_h_split) ? slice_Ht : Ht,
         use_width_sharding ? num_cols_per_core_group_1 / NC : num_cols_per_core_group_1,
         use_width_sharding ? NC : 1);
-    const auto* auxiliary_cb = reduce_unit.calls.front().plan.find_cb(rh::ReduceCbRole::Auxiliary);
+    const auto& auxiliary_cb = reduce_unit.auxiliary.cb;
     scaler_cb_data_format = auxiliary_cb->data_format;
     scaler_single_tile_size = auxiliary_cb->page_size;
 

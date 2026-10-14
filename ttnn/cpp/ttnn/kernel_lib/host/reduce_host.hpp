@@ -68,13 +68,6 @@ struct ReduceTailConfig {
     ReduceValidShape shape;
 };
 
-enum class ReduceCbRole : std::uint8_t {
-    Input,
-    Output,
-    Auxiliary,
-    Accumulator,
-};
-
 struct ReduceHardwareConfig {
     tt::ARCH arch = tt::ARCH::Invalid;
     bool fp32_dest_acc_en = false;
@@ -90,8 +83,9 @@ struct ReduceChunkPlan {
     std::uint32_t buffers = 1;
 };
 
-struct ReduceCbRequirement {
-    ReduceCbRole role;
+// The auxiliary CB the caller allocates. It is the only reduction CB whose size and format the
+// planner decides: the caller sizes input (input_cb_tiles), output and accumulator CBs itself.
+struct ReduceAuxiliaryCb {
     tt::DataFormat data_format;
     std::uint32_t page_size;
     std::uint32_t page_count;
@@ -116,6 +110,8 @@ float round_reduce_auxiliary_value(float value, tt::DataFormat data_format);
 struct ReduceAuxiliaryPlan {
     std::uint32_t cb_id = no_cb_id;
     std::vector<ReduceAuxiliaryTileSpec> tiles;
+    // Absent when no call reads auxiliary tiles.
+    std::optional<ReduceAuxiliaryCb> cb;
 };
 
 struct ReducePlan {
@@ -158,9 +154,11 @@ struct ReducePlan {
     std::vector<ReduceAuxiliaryTileSpec> auxiliary_tiles;
     std::uint32_t partial_reduce_axis_elements = 0;
 
-    std::vector<ReduceCbRequirement> cb_requirements;
+    // Absent when the plan reads no auxiliary tiles.
+    std::optional<ReduceAuxiliaryCb> auxiliary_cb;
+    std::uint32_t input_cb_tiles = 0;
+    tt::DataFormat input_format = tt::DataFormat::Invalid;
 
-    const ReduceCbRequirement* find_cb(ReduceCbRole role) const;
     // Use the same compiled plan on full and tail cores. Initialize the runtime
     // marker on all cores: [0, 0, 0] selects full work, [height, width, batches] selects tail.
     // Both have three words, so arguments that follow sit at the same offset on every core.
@@ -236,6 +234,10 @@ struct ReduceSequenceCbIds {
     std::uint32_t auxiliary_cb_id;
     std::uint32_t accumulator_cb_id;
     std::uint32_t output_cb_id;
+    // Capacity of the accumulator CB in tiles; read only when the sequence accumulates. Every call
+    // packs all of its partials before the next call reloads any, so it must hold one call's
+    // complete per-core output.
+    std::uint32_t accumulator_cb_tiles = 0;
 };
 
 // CB binding for serializing an existing single-call ReducePlan.
@@ -313,7 +315,7 @@ private:
 };
 
 // Plan one local tiled reduction using the requested input policy. The planner
-// reports buffer requirements; the factory owns allocation and L1 fit checks.
+// reports the auxiliary CB it needs; the factory owns allocation and L1 fit checks.
 // Tilization and row-major staging belong to the caller.
 // INT32 and accurate FLOAT32 use SFPU SUM/MAX/MIN, and BFLOAT16 MIN uses SFPU MIN,
 // along W or H on non-Quasar devices. Accurate FLOAT32 AVG must be lowered to SUM plus its normalization

@@ -139,7 +139,9 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWLar
                 compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop});
     }
     auto sum_sequence = reduce_host::make_reduce_sequence_plan(
-        reductions, {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2}, reduce_hardware);
+        reductions,
+        {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2, .accumulator_cb_tiles = 1},
+        reduce_hardware);
     sum_sequence.calls.back().accumulation_index = num_blocks - 1;
     std::vector<uint32_t> compute_reduce_args;
     reduce_host::ReduceCallArgs(max_plan, {0, 1, 2}).append_to(compute_reduce_args);
@@ -148,8 +150,8 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWLar
     std::vector<uint32_t> writer_reduce_args;
     reduce_host::ReduceAuxiliaryArgs({1, max_plan.auxiliary_tiles}).append_to(writer_reduce_args);
     reduce_host::ReduceAuxiliaryArgs(sum_sequence.auxiliary).append_to(writer_reduce_args);
-    const auto* max_auxiliary = max_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
-    const auto* sum_auxiliary = sum_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const auto& max_auxiliary = max_plan.auxiliary_cb;
+    const auto& sum_auxiliary = sum_sequence.auxiliary.cb;
     const uint32_t sum_auxiliary_tiles = sum_sequence.auxiliary.tiles.size();
 
     Group<DataflowBufferSpec> dfbs = {

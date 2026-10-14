@@ -331,6 +331,8 @@ def _make_sequence_plan(
             auxiliary_cb_id=CB_AUXILIARY,
             accumulator_cb_id=CB_ACCUMULATOR,
             output_cb_id=CB_OUT,
+            # _planned_cbs allocates the accumulator with one call's output tiles.
+            accumulator_cb_tiles={"row": Ht * NC, "col": Wt * NC, "scalar": NC}[dim],
         ),
         hardware=_hardware(input_tensor, fp32_dest, fidelity),
     )

@@ -29,3 +29,11 @@ mcast_topology  box=bh-50-special-malimpic-for-reservation-133300  arch=Arch.BLA
   per_core_dram  split=8x8  cores= 64/110 ( 58%)  per-core DRAM reads              7565355991806 ns ±0.0%  -> 1.00x
   mcast_1d_pair  split=8x8  cores= 64/110 ( 58%)  2x Mcast (RowMajor + ColumnMajor) 7565355987580 ns ±0.0%  -> 1.00x
 ```
+
+## Arch.BLACKHOLE — bh-50-special-malimpic-for-reservation-134223
+
+```
+mcast_topology  box=bh-50-special-malimpic-for-reservation-134223  arch=Arch.BLACKHOLE  grid=11x10 (110 cores)  M=8t N=32t K=4t  delivery only (no compute)   N=5 (median of 5-launch windows)
+  per_core_dram  split=8x8  cores= 64/110 ( 58%)  per-core DRAM reads              5458815856779 ns ±0.0%  -> 1.00x
+  mcast_1d_pair  split=8x8  cores= 64/110 ( 58%)  2x Mcast (RowMajor + ColumnMajor) 5458815852683 ns ±0.0%  -> 1.00x
+```

@@ -83,11 +83,6 @@ void bind_reduce_planner(nb::module_& mod) {
         .value("NONE", compute_kernel_lib::ReducePartialMode::None)
         .value("SCALER", compute_kernel_lib::ReducePartialMode::Scaler)
         .value("MASK", compute_kernel_lib::ReducePartialMode::Mask);
-    nb::enum_<host::ReduceCbRole>(planner, "ReduceCbRole")
-        .value("INPUT", host::ReduceCbRole::Input)
-        .value("OUTPUT", host::ReduceCbRole::Output)
-        .value("AUXILIARY", host::ReduceCbRole::Auxiliary)
-        .value("ACCUMULATOR", host::ReduceCbRole::Accumulator);
     nb::enum_<ttnn::kernel_lib::ReduceAuxiliaryTileType>(planner, "ReduceAuxiliaryTileType")
         .value("FIRST_ROW", ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRow)
         .value("FIRST_COLUMN", ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstColumn)
@@ -121,15 +116,16 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_ro("output_tiles", &host::ReduceChunkPlan::output_tiles)
         .def_ro("buffers", &host::ReduceChunkPlan::buffers);
 
-    nb::class_<host::ReduceCbRequirement>(planner, "ReduceCbRequirement")
-        .def_ro("role", &host::ReduceCbRequirement::role)
+    nb::class_<host::ReduceAuxiliaryCb>(planner, "ReduceAuxiliaryCb")
         .def_prop_ro(
             "data_format",
-            [](const host::ReduceCbRequirement& self) { return static_cast<std::uint8_t>(self.data_format); },
-            "Raw tt::DataFormat value; DataFormat is not otherwise exposed to Python.")
-        .def_ro("page_size", &host::ReduceCbRequirement::page_size)
-        .def_ro("page_count", &host::ReduceCbRequirement::page_count)
-        .def_ro("total_size_bytes", &host::ReduceCbRequirement::total_size_bytes);
+            [](const host::ReduceAuxiliaryCb& self) {
+                return tt::tt_metal::dataformat_to_datatype_converter(self.data_format);
+            },
+            "The CB's data type, usable directly as a CBFormatDescriptor data_format.")
+        .def_ro("page_size", &host::ReduceAuxiliaryCb::page_size)
+        .def_ro("page_count", &host::ReduceAuxiliaryCb::page_count)
+        .def_ro("total_size_bytes", &host::ReduceAuxiliaryCb::total_size_bytes);
 
     nb::class_<host::ReduceAuxiliaryTileSpec>(planner, "ReduceAuxiliaryTileSpec")
         .def(
@@ -145,6 +141,7 @@ void bind_reduce_planner(nb::module_& mod) {
         .def(nb::init<uint32_t, std::vector<host::ReduceAuxiliaryTileSpec>>(), nb::arg("cb_id"), nb::arg("tiles"))
         .def_ro("cb_id", &host::ReduceAuxiliaryPlan::cb_id)
         .def_ro("tiles", &host::ReduceAuxiliaryPlan::tiles)
+        .def_ro("cb", &host::ReduceAuxiliaryPlan::cb)
         .def_prop_ro(
             "compile_time_args",
             [](const host::ReduceAuxiliaryPlan& self) {
@@ -210,7 +207,7 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_ro("partial_mode", &host::ReducePlan::partial_mode)
         .def_ro("auxiliary_tiles", &host::ReducePlan::auxiliary_tiles)
         .def_ro("partial_reduce_axis_elements", &host::ReducePlan::partial_reduce_axis_elements)
-        .def_ro("cb_requirements", &host::ReducePlan::cb_requirements)
+        .def_ro("auxiliary_cb", &host::ReducePlan::auxiliary_cb)
         .def(
             "compile_time_args",
             [](const host::ReducePlan& self,
@@ -328,18 +325,22 @@ void bind_reduce_planner(nb::module_& mod) {
             [](host::ReduceSequenceCbIds* self,
                std::uint32_t auxiliary_cb_id,
                std::uint32_t accumulator_cb_id,
-               std::uint32_t output_cb_id) {
+               std::uint32_t output_cb_id,
+               std::uint32_t accumulator_cb_tiles) {
                 new (self) host::ReduceSequenceCbIds{
                     .auxiliary_cb_id = auxiliary_cb_id,
                     .accumulator_cb_id = accumulator_cb_id,
-                    .output_cb_id = output_cb_id};
+                    .output_cb_id = output_cb_id,
+                    .accumulator_cb_tiles = accumulator_cb_tiles};
             },
             nb::arg("auxiliary_cb_id"),
             nb::arg("accumulator_cb_id"),
-            nb::arg("output_cb_id"))
+            nb::arg("output_cb_id"),
+            nb::arg("accumulator_cb_tiles") = 0)
         .def_rw("auxiliary_cb_id", &host::ReduceSequenceCbIds::auxiliary_cb_id)
         .def_rw("accumulator_cb_id", &host::ReduceSequenceCbIds::accumulator_cb_id)
-        .def_rw("output_cb_id", &host::ReduceSequenceCbIds::output_cb_id);
+        .def_rw("output_cb_id", &host::ReduceSequenceCbIds::output_cb_id)
+        .def_rw("accumulator_cb_tiles", &host::ReduceSequenceCbIds::accumulator_cb_tiles);
 
     nb::class_<host::ReduceCallPlan>(planner, "ReduceCallPlan")
         .def_ro("input_cb_id", &host::ReduceCallPlan::input_cb_id)

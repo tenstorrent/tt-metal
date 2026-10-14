@@ -138,7 +138,8 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         input_tensor.dtype(),
         fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
         {arch, fp32_dest_acc_en, dst_full_sync_en, math_fidelity},
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+        0);
     const auto reduce_compute_args = reduce_plans.compute_args();
     const auto reduce_auxiliary_args = reduce_plans.auxiliary_args();
 

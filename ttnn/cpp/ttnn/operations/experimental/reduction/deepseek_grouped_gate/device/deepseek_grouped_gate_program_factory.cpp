@@ -158,7 +158,7 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
         {device->arch(), false, false},
         compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop);
 
-    const auto* auxiliary = reduce_plan.find_cb(rh::ReduceCbRole::Auxiliary);
+    const auto& auxiliary = reduce_plan.auxiliary_cb;
     add_cb(cb_reduce_ones_scalar, auxiliary->page_size, auxiliary->page_count, auxiliary->data_format);
 
     auto cb_epsilon_scalar = tt::CBIndex::c_18;

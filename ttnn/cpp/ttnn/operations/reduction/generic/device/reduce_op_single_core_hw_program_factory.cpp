@@ -110,7 +110,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         NC,
         num_input_tiles,
         true);
-    const auto* auxiliary_cb = reduce_unit.calls.front().plan.find_cb(rh::ReduceCbRole::Auxiliary);
+    const auto& auxiliary_cb = reduce_unit.auxiliary.cb;
     scaler_cb_data_format = auxiliary_cb->data_format;
     scaler_single_tile_size = auxiliary_cb->page_size;
 

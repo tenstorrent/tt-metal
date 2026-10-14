@@ -129,7 +129,9 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
                     compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop});
         }
         auto sequence = reduce_host::make_reduce_sequence_plan(
-            calls, {.auxiliary_cb_id = 1, .accumulator_cb_id = 30, .output_cb_id = 16}, {.arch = device->arch()});
+            calls,
+            {.auxiliary_cb_id = 1, .accumulator_cb_id = 30, .output_cb_id = 16, .accumulator_cb_tiles = 1},
+            {.arch = device->arch()});
         sequence.calls.back().accumulation_index = num_blocks - 1;
         auxiliary_tiles = std::max(auxiliary_tiles, static_cast<uint32_t>(sequence.auxiliary.tiles.size()));
         reductions.push_back(std::move(sequence));

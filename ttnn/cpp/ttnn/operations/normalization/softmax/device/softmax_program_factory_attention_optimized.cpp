@@ -225,7 +225,8 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
         {arch, fp32_dest_acc_en, dst_full_sync_en, math_fidelity},
         (use_large_kernel ? compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile
-                          : compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop));
+                          : compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop),
+        use_large_kernel ? im1_t : 0);
     if (!use_large_kernel) {
         // The small kernel already packs intermediates in the MAX output format.
         for (auto& call : reduce_plans.max.calls) {

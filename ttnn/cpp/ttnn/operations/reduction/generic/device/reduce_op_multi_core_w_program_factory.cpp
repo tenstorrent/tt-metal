@@ -243,7 +243,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     };
     const auto reduce_unit = make_unit(
         rm_path ? tt::div_up(num_rows_per_core_group_1, plan.rm_rows_per_tile) : num_rows_per_core_group_1, Wt, 1);
-    const auto* auxiliary_cb = reduce_unit.calls.front().plan.find_cb(rh::ReduceCbRole::Auxiliary);
+    const auto& auxiliary_cb = reduce_unit.auxiliary.cb;
     scaler_cb_data_format = auxiliary_cb->data_format;
     scaler_single_tile_size = auxiliary_cb->page_size;
 

@@ -116,7 +116,7 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
         hardware,
         compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop);
 
-    const auto& auxiliary = *max_plan.find_cb(rh::ReduceCbRole::Auxiliary);
+    const auto& auxiliary = *max_plan.auxiliary_cb;
     const uint32_t scale_tiles = auxiliary.page_count;
     const auto scalar_df = auxiliary.data_format;
     const auto scalar_tile_size = auxiliary.page_size;

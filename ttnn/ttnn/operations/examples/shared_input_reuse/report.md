@@ -1,6 +1,6 @@
 # shared_input_reuse — device report
 
-- box: `bh-50-special-malimpic-for-reservation-133300`
+- box: `bh-50-special-malimpic-for-reservation-134223`
 - arch: Arch.BLACKHOLE
 - cores: 22 (2 × 11 grid); injector = top-left (0,0)
 - shared input: an SDPA K head [S_kv=9728, head_dim=128] = 1216 tiles (2.38 MB bf16),
@@ -12,5 +12,5 @@
 
 | variant | ns/op | ±% | vs per_core_dram |
 |---------|-------|----|------------------|
-| per_core_dram | 7565356118402.6 | 0.0 | 1.00x |
-| mcast | 7565356060858.5 | 0.0 | 1.00x |
+| per_core_dram | 5458815983471.4 | 0.0 | 1.00x |
+| mcast | 5458815925935.9 | 0.0 | 1.00x |

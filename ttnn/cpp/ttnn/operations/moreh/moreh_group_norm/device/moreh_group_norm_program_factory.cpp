@@ -188,13 +188,13 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
     }
     auto moment_sequence = reduce_host::make_reduce_sequence_plan(
         moment_calls,
-        {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2},
+        {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2, .accumulator_cb_tiles = im3_t},
         {.arch = device->arch(),
          .fp32_dest_acc_en = fp32_dest_acc_en,
          .dst_full_sync_en = dst_full_sync_en,
          .math_fidelity = math_fidelity});
     moment_sequence.calls.back().accumulation_index = num_blocks - 1;
-    const auto* auxiliary = moment_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const auto& auxiliary = moment_sequence.auxiliary.cb;
     const uint32_t in1_t = moment_sequence.auxiliary.tiles.size();
     const auto append_moment_args = [&](auto& args) {
         args.insert(args.end(), {reduce_block_tiles, im7_t, in1_t});

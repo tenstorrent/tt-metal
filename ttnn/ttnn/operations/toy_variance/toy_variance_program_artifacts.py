@@ -123,9 +123,12 @@ def create_program_artifacts(
                 ),
             )
         )
+    accumulator_tiles = max(2 * Ht, 2)
     sequence = planner.make_reduce_sequence_plan(
         reductions=configs,
-        cb_ids=planner.ReduceSequenceCbIds(auxiliary_cb_id=1, accumulator_cb_id=3, output_cb_id=2),
+        cb_ids=planner.ReduceSequenceCbIds(
+            auxiliary_cb_id=1, accumulator_cb_id=3, output_cb_id=2, accumulator_cb_tiles=accumulator_tiles
+        ),
         hardware=planner.ReduceHardwareConfig(
             arch=input_tensor.device().arch(),
             fp32_dest_acc_en=False,
@@ -166,7 +169,7 @@ def create_program_artifacts(
         ttnn.DataflowBufferSpec(
             unique_id=DFB_ACCUMULATOR,
             entry_size=output_page_size,
-            num_entries=max(2 * Ht, 2),
+            num_entries=accumulator_tiles,
             data_format=output_tensor.dtype,
         ),
         # mean: persistent across all of pass 2 (WaitUpfrontNoPop). After pass 1 holds Ht tiles;

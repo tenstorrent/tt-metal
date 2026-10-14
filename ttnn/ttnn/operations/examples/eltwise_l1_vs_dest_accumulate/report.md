@@ -1,6 +1,6 @@
 # eltwise_l1_vs_dest_accumulate — device report
 
-- box: `bh-50-special-malimpic-for-reservation-133300`
+- box: `bh-50-special-malimpic-for-reservation-134223`
 - arch: Arch.BLACKHOLE
 - shape: 64 blocks x 1 tiles (fp32); kernel_iters=100; rounds=10x5
 - accumulation steps per launch: 6400
@@ -11,6 +11,6 @@
 
 | method | ns/op | ±% | vs rmw |
 |--------|-------|----|--------|
-| rmw | 977481.2 | 0.0 | 1.00x |
-| pack_l1_acc | 185657.4 | 0.0 | 5.26x |
-| dest_acc | 92166.5 | 0.0 | 10.61x |
+| rmw | 977641.9 | 0.0 | 1.00x |
+| pack_l1_acc | 185658.3 | 0.0 | 5.27x |
+| dest_acc | 92162.0 | 0.0 | 10.61x |

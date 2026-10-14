@@ -22,7 +22,8 @@ inline MorehReduceBlocks make_moreh_reduce_blocks(
     tt::tt_metal::ReduceOpDim dim,
     tt::tt_metal::DataType input_dtype,
     tt::tt_metal::DataType output_dtype,
-    const ttnn::kernel_lib::host::ReduceHardwareConfig& hardware) {
+    const ttnn::kernel_lib::host::ReduceHardwareConfig& hardware,
+    uint32_t accumulator_cb_tiles) {
     using namespace tt::tt_metal;
     namespace rh = ttnn::kernel_lib::host;
     constexpr uint32_t block_tiles = MorehReduceBlocks::tiles_per_block;
@@ -47,7 +48,10 @@ inline MorehReduceBlocks make_moreh_reduce_blocks(
                 ReduceFp32Mode::Fast,
                 compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop});
     }
-    auto sequence = rh::make_reduce_sequence_plan(calls, {1, 3, 2}, hardware);
+    auto sequence = rh::make_reduce_sequence_plan(
+        calls,
+        {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2, .accumulator_cb_tiles = accumulator_cb_tiles},
+        hardware);
     if (num_blocks > 1) {
         sequence.calls.back().accumulation_index = num_blocks - 1;
     }

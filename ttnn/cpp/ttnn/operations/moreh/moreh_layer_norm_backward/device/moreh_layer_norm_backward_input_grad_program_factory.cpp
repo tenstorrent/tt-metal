@@ -166,9 +166,9 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
         (is_lastdim_layer_norm ? ReduceOpDim::W : ReduceOpDim::HW),
         (fp32_dest_acc_en ? DataType::FLOAT32 : output_grad.dtype()),
         (fp32_dest_acc_en ? DataType::FLOAT32 : output_grad.dtype()),
-        {arch, fp32_dest_acc_en, dst_full_sync_en, math_fidelity});
-    const auto& auxiliary =
-        *reduction.sequence.calls.front().plan.find_cb(ttnn::kernel_lib::host::ReduceCbRole::Auxiliary);
+        {arch, fp32_dest_acc_en, dst_full_sync_en, math_fidelity},
+        std::min({im4_t, im5_t, im7_t}));
+    const auto& auxiliary = *reduction.sequence.auxiliary.cb;
     const uint32_t in4_t = reduction.sequence.auxiliary.tiles.size();
 
     const uint32_t dfb_usage =

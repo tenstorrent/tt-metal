@@ -146,9 +146,13 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     const auto data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     const auto single_tile_size = tt::tile_size(data_format);
     auto reduction = make_moreh_reduce_blocks(
-        num_inner_tiles, ReduceOpDim::HW, output_grad.dtype(), output_grad.dtype(), {device->arch(), false, false});
-    const auto& auxiliary =
-        *reduction.sequence.calls.front().plan.find_cb(ttnn::kernel_lib::host::ReduceCbRole::Auxiliary);
+        num_inner_tiles,
+        ReduceOpDim::HW,
+        output_grad.dtype(),
+        output_grad.dtype(),
+        {device->arch(), false, false},
+        std::min({im4_t, im5_t, im7_t}));
+    const auto& auxiliary = *reduction.sequence.auxiliary.cb;
     const uint32_t in4_t = reduction.sequence.auxiliary.tiles.size();
 
     const auto dfb_usage = (in0_t + in1_t + in2_t + in3_t + in5_t + in6_t + in7_t + out0_t + im0_t + im1_t + im2_t +

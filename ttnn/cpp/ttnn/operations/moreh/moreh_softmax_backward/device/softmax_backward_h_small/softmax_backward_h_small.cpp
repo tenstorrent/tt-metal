@@ -78,7 +78,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create_program
         op == MorehSoftmaxBackwardOp::LOGSOFTMAX ? compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop
                                                  : compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop);
 
-    const auto* auxiliary = reduce_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const auto& auxiliary = reduce_plan.auxiliary_cb;
     const auto compute_reduce_args = reduce_host::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
     const auto writer_reduce_args =
         reduce_host::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();

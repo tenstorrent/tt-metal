@@ -218,8 +218,8 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     max_plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
     sum_plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
 
-    const auto& max_aux = *max_plan.find_cb(rh::ReduceCbRole::Auxiliary);
-    const auto& sum_aux = *sum_plan.find_cb(rh::ReduceCbRole::Auxiliary);
+    const auto& max_aux = *max_plan.auxiliary_cb;
+    const auto& sum_aux = *sum_plan.auxiliary_cb;
     std::vector<uint32_t> reduce_args = rh::ReduceCallArgs(max_plan, {0, 1, 2}).get_compile_time_args();
     rh::ReduceCallArgs(sum_plan, {0, 1, 2}).append_to(reduce_args);
     auto auxiliary_args = rh::ReduceAuxiliaryArgs({1, max_plan.auxiliary_tiles}).get_compile_time_args();

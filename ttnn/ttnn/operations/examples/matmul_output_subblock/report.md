@@ -1,6 +1,6 @@
 # matmul_output_subblock — device report
 
-- box: `bh-50-special-malimpic-for-reservation-133300`
+- box: `bh-50-special-malimpic-for-reservation-134223`
 - arch: Arch.BLACKHOLE
 - shape: M=16 N=16 K=1 tiles (single K-block); kernel_iters=100; rounds=10x5
 - output tiles: 256; DEST capacity = 8 tiles (fp16, no fp32 accumulator)
@@ -12,9 +12,9 @@
 
 | variant | sb (h×w) | reuses | ns/op | ±% | vs 1x1 |
 |---------|----------|--------|-------|----|--------|
-| sb_1x1 | 1×1 | none | 1041218.6 | 0.0 | 1.00x |
-| sb_1x8 | 1×8 | A (across B) | 711794.1 | 0.0 | 1.46x |
-| sb_8x1 | 8×1 | B (across A) | 712000.0 | 0.0 | 1.46x |
-| sb_2x4 | 2×4 | A (across B) | 714620.7 | 0.0 | 1.46x |
-| sb_4x2 | 4×2 | B (across A) | 714554.3 | 0.0 | 1.46x |
-| sb_2x2 | 2×2 | A (across B) | 742827.0 | 0.0 | 1.40x |
+| sb_1x1 | 1×1 | none | 1041217.9 | 0.0 | 1.00x |
+| sb_1x8 | 1×8 | A (across B) | 711794.6 | 0.0 | 1.46x |
+| sb_8x1 | 8×1 | B (across A) | 712007.6 | 0.0 | 1.46x |
+| sb_2x4 | 2×4 | A (across B) | 714737.0 | 0.0 | 1.46x |
+| sb_4x2 | 4×2 | B (across A) | 714701.2 | 0.0 | 1.46x |
+| sb_2x2 | 2×2 | A (across B) | 742822.8 | 0.0 | 1.40x |
