@@ -38,6 +38,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
 
@@ -661,7 +662,7 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
         /* Slow dispatch otherwise JIT-builds each chip's program inside its
          * own launch, so a build only chip B needs (its E1, in one direction)
          * delays chip B's E0 behind chip A's past the handshake budget. */
-        ttm::detail::CompileProgram(dev[i], program);
+        program.impl().compile(dev[i]);
         workload.add_program(ttmd::MeshCoordinateRange(ttmd::MeshCoordinate(0, i)), std::move(program));
         for (uint32_t p = 0; p < c.shape.P; ++p) {
             cr.fwd[p].launched = true;
