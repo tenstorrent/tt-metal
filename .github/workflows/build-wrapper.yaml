@@ -70,7 +70,13 @@ jobs:
           git fetch --depth=1 origin f4c19b2bb7118114b41b831cdeba3a52634f6e19
           git show f4c19b2bb7118114b41b831cdeba3a52634f6e19:models/demos/gpt_oss_120b_qb2/tests/test_serving_host.py > models/demos/gpt_oss_120b_qb2/tests/test_serving_host.py
           echo "5e6aed63bc42ff8fe0c7f7f7f175e594fc88002a08b07c94e47dc84e495dc275  models/demos/gpt_oss_120b_qb2/tests/test_serving_host.py" | sha256sum -c -
-          git diff --exit-code -- . ':!models/demos/gpt_oss_120b_qb2/tests/test_serving_host.py'
+          # Exact Python review fix; native C++ sources/artifact remain unchanged.
+          git fetch --depth=1 origin 460238dfd5145bd3c415e648fcf27c8fd5c0391a
+          git show 460238dfd5145bd3c415e648fcf27c8fd5c0391a:models/tt_transformers/tt/generator.py > models/tt_transformers/tt/generator.py
+          echo "0f85476ec8a5889fe87c53d4fbdddf0f2e000cf35598e984dd274ea9693440d2  models/tt_transformers/tt/generator.py" | sha256sum -c -
+          git show 460238dfd5145bd3c415e648fcf27c8fd5c0391a:models/tt_transformers/tests/test_batched_prefill_slots.py > models/tt_transformers/tests/test_batched_prefill_slots.py
+          echo "768a1f660fff65896e61f36beffae5d99842069e05ab35f0e50be7c0759e6b78  models/tt_transformers/tests/test_batched_prefill_slots.py" | sha256sum -c -
+          git diff --exit-code -- . ':!models/demos/gpt_oss_120b_qb2/tests/test_serving_host.py' ':!models/tt_transformers/tt/generator.py' ':!models/tt_transformers/tests/test_batched_prefill_slots.py'
           cat > /tmp/gpt-import-host.py <<'PY'
           """CPU-only admission of the exact built GPT source, followed by original host tests."""
           import hashlib
