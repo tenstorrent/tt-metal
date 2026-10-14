@@ -41,6 +41,8 @@ constexpr int kExitFailed = 1;
 constexpr int kExitResetRequired = 4;
 
 constexpr const char* kImageEnvVar = "X280_IDLE_FW_IMAGE";
+// The resident-idle image this build's x280_images target produces.
+constexpr const char* kDefaultIdleImage = X280_IMAGE_DIR "/firmware-lim-idle.bin";
 constexpr const char* kPinnedInputPrepareImageEnvVar = "X280_PINNED_INPUT_PREPARE_FW_IMAGE";
 constexpr const char* kPinnedInputTeardownImageEnvVar = "X280_PINNED_INPUT_TEARDOWN_FW_IMAGE";
 
@@ -133,8 +135,9 @@ void usage(const char* argv0) {
         "  --dry-run       do everything a cold boot does except release reset:\n"
         "                  load and verify the image, write and verify the reset\n"
         "                  vectors, clear the mailboxes. Nothing becomes one-way.\n"
-        "  --idle-image    path to the resident-idle image. Falls back to $%s.\n"
-        "                  Build one with: ninja x280_images\n"
+        "  --idle-image    path to the resident-idle image. Falls back to $%s,\n"
+        "                  then to %s,\n"
+        "                  which ninja x280_images builds.\n"
         "  --prepare-pinned-input\n"
         "                  admit exact WAYENABLE=1 and baseline mask bits 11,\n"
         "                  populate the fixed 4288-byte Zero Device region via\n"
@@ -167,6 +170,7 @@ void usage(const char* argv0) {
         argv0,
         kDefaultPllMhz,
         kImageEnvVar,
+        kDefaultIdleImage,
         kPinnedInputPrepareImageEnvVar,
         kPinnedInputTeardownImageEnvVar);
 }
@@ -301,6 +305,8 @@ bool parse(int argc, char** argv, Options& options) {
         // default is the driver's job.
         if (const char* from_env = std::getenv(kImageEnvVar); from_env != nullptr && *from_env != '\0') {
             options.image_path = from_env;
+        } else {
+            options.image_path = kDefaultIdleImage;
         }
     }
     if (options.lim_ways_specified && options.pinned_input != PinnedInputOperation::None) {
@@ -597,14 +603,6 @@ int main(int argc, char** argv) {
                     "Pass --boot to allow reset release, which is one-way for this chip-reset lifetime.\n");
                 return kExitOk;
             }
-            if (options.image_path.empty()) {
-                std::fprintf(
-                    stderr,
-                    "no resident-idle image: pass --idle-image PATH or set %s.\nBuild one with: ninja x280_images\n",
-                    kImageEnvVar);
-                return kExitFailed;
-            }
-
             x280::MultiTileBootRequest request;
             request.tiles = selection;
             request.idle_image_path = options.image_path;
@@ -643,16 +641,6 @@ int main(int argc, char** argv) {
                 "\ninspection only after runtime initialization: nothing was booted. "
                 "Pass --boot to allow reset release, which is one-way for this chip-reset lifetime.\n");
             return initial.observation_valid ? kExitOk : kExitFailed;
-        }
-
-        // Resident idle is already present on the fast path, so boot neither
-        // loads nor needs an image there.
-        if (!initial.resident_idle_live && options.image_path.empty()) {
-            std::fprintf(
-                stderr,
-                "no resident-idle image: pass --idle-image PATH or set %s.\nBuild one with: ninja x280_images\n",
-                kImageEnvVar);
-            return kExitFailed;
         }
 
         x280::BootRequest request;

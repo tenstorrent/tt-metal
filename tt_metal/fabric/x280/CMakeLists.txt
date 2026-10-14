@@ -340,6 +340,9 @@ target_link_libraries(
         x280_device
         TT::Metalium
 )
+# The resident-idle image defaults to the one this build produces.
+target_compile_definitions(x280_runtime_cli PRIVATE X280_IMAGE_DIR="${X280_IMAGE_DIR}")
+add_dependencies(x280_runtime_cli x280_images)
 set_target_properties(
     x280_runtime_cli
     PROPERTIES
