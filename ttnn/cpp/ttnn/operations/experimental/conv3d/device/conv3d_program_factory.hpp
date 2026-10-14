@@ -47,21 +47,31 @@ struct Conv3dCbGeometry {
 };
 
 // The decisions that depend on how much L1 the circular buffers may take: out_subblock_h after the Wormhole
-// shrink, whether the input shard CB exists, and how many rows of coalesced-read scratch it carries. The
-// program cache keys on these, not on the budget they were decided from, so a move of the L1 frontier
-// re-plans only when it changes a decision.
+// shrink, whether the input shard CB exists, and how many rows of coalesced-read scratch it carries.
 struct Conv3dL1Plan {
     uint32_t out_subblock_h = 1;
     bool prefetch_shard = false;
     uint32_t coalesced_scratch_rows = 0;
-    uint32_t l1_prefetch_max_bytes = 0;  // what the shard was decided against; informational, not keyed on
+    uint32_t static_cb_bytes = 0;        // every CB but the prefetch shard, at out_subblock_h
+    uint32_t l1_prefetch_max_bytes = 0;  // what the shard was decided against; informational
+};
+
+// The L1 the circular buffers may take on this device. span: everything above the allocator's L1 base, the
+// bound the enqueue-time region check applies when no L1 buffer is live. planning: the span less
+// L1_TENSOR_HEADROOM, kept free for the L1 buffers live when the program runs; the plan shrinks and prefetches
+// against it. Both follow from the device configuration only, so the plan is as static as the program cache
+// key and as a traced program.
+inline constexpr uint32_t L1_TENSOR_HEADROOM = 128 * 1024;
+struct Conv3dL1Budget {
+    uint32_t span = 0;
+    uint32_t planning = 0;
 };
 
 Conv3dCbGeometry derive_cb_geometry(const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args);
-Conv3dL1Plan plan_l1(const Conv3dCbGeometry& geometry, uint32_t l1_usable_for_cbs);
-// The plan against the live budget: the L1 span from the allocator's base up to the lowest live L1 buffer
-// (available_program_l1_capacity). The op's own output is allocated before either caller runs, so the
-// program hash and the program factory see the same budget.
+Conv3dL1Plan plan_l1(const Conv3dCbGeometry& geometry, const Conv3dL1Budget& budget);
+Conv3dL1Budget conv3d_l1_cb_budget(const tt::tt_metal::IDevice* device);
+// derive_cb_geometry and plan_l1 against conv3d_l1_cb_budget: what validate_on_program_cache_miss checks and
+// what create_descriptor builds.
 Conv3dL1Plan select_l1_plan(const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args);
 
 struct Conv3dProgramFactory {

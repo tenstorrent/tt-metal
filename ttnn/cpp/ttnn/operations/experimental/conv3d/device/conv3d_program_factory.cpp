@@ -13,7 +13,6 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <algorithm>
 #include <array>
@@ -135,7 +134,7 @@ Conv3dCbGeometry derive_cb_geometry(const Conv3dParams& operation_attributes, co
     return g;
 }
 
-Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, uint32_t l1_usable_for_cbs) {
+Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, const Conv3dL1Budget& budget) {
     // The static circular buffers at a given out_subblock_h: every CB but the prefetch shard.
     auto static_cb_bytes_for = [&](uint32_t sub_h) -> uint32_t {
         uint32_t bytes = g.vol2col_rm_pages * g.padded_patch_size_bytes +     // vol2col_rm
@@ -163,53 +162,45 @@ Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, uint32_t l1_usable_for_cbs) {
     Conv3dL1Plan plan;
     // Wormhole's sub_h scaling multiplies vol2col_tiled and, with the fp32 operand split, the x_hi/x_lo CBs by
     // out_subblock_h; blockings swept on Blackhole's larger L1 can overrun Wormhole's. Shrink sub_h toward 1
-    // until the static CBs fit with slack to spare, so that a small move of the L1 frontier does not re-plan;
-    // the prefetch shard below is budgeted from whatever is left.
-    constexpr uint32_t L1_STATIC_CB_SLACK = 64 * 1024;
+    // until the static CBs fit the planning budget; the prefetch shard below is budgeted from whatever is left.
     plan.out_subblock_h = g.out_subblock_h;
-    while (plan.out_subblock_h > 1 &&
-           static_cb_bytes_for(plan.out_subblock_h) + L1_STATIC_CB_SLACK > l1_usable_for_cbs) {
+    while (plan.out_subblock_h > 1 && static_cb_bytes_for(plan.out_subblock_h) > budget.planning) {
         const uint32_t shrunk = largest_divisor_up_to(g.matmul_M_t, plan.out_subblock_h - 1);
         log_debug(
             tt::LogOp,
-            "conv3d: static CBs at out_subblock_h={} ({} B) do not fit {} B of L1; trying {}",
+            "conv3d: static CBs at out_subblock_h={} ({} B) do not fit the {} B budget; trying {}",
             plan.out_subblock_h,
             static_cb_bytes_for(plan.out_subblock_h),
-            l1_usable_for_cbs,
+            budget.planning,
             shrunk);
         plan.out_subblock_h = shrunk;
     }
 
-    // The loop stops at out_subblock_h=1 whether or not the CBs fit. Fail here, where the message can say what
-    // was asked for, rather than at enqueue where only the region clash is reported; and say when the fit is
-    // inside the slack, since a small move of the L1 frontier then fails the next call.
-    const uint32_t static_cb_bytes = static_cb_bytes_for(plan.out_subblock_h);
+    // The loop stops at out_subblock_h=1 whether or not the CBs fit. A blocking whose static CBs cannot be
+    // placed below the top of L1 at all fails here, where the message can say what was asked for, rather than at
+    // enqueue where only the region clash is reported. One that fits the span but not the planning budget runs
+    // with less than the headroom left for L1 buffers; the validator warns about it.
+    plan.static_cb_bytes = static_cb_bytes_for(plan.out_subblock_h);
     TT_FATAL(
-        static_cb_bytes <= l1_usable_for_cbs,
+        plan.static_cb_bytes <= budget.span,
         "conv3d: the static circular buffers need {} B at out_subblock_h={} (M_t={}, K_t={}, N_t={}, C_in blocks={}) "
-        "but only {} B of L1 are free for them; shrink the blocking or free L1 before the call",
-        static_cb_bytes,
+        "but only {} B of L1 lie above the allocator base; shrink the blocking (C_in_block, C_out_block, "
+        "T/H/W_out_block)",
+        plan.static_cb_bytes,
         plan.out_subblock_h,
         g.matmul_M_t,
         g.matmul_K_t,
         g.matmul_N_t,
         g.C_in_num_blocks,
-        l1_usable_for_cbs);
-    if (static_cb_bytes + L1_STATIC_CB_SLACK > l1_usable_for_cbs) {
-        log_warning(
-            tt::LogOp,
-            "conv3d: the static circular buffers ({} B at out_subblock_h={}) fit the {} B of free L1 with less than "
-            "{} B to spare; any L1 tensor allocated before the next call can fail it",
-            static_cb_bytes,
-            plan.out_subblock_h,
-            l1_usable_for_cbs,
-            L1_STATIC_CB_SLACK);
-    }
+        budget.span);
 
     // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation: gathers the spatial receptive field from DRAM
-    // once per spatial block, then vol2col reads from L1. Budget: the L1 span minus the static CBs, capped.
+    // once per spatial block, then vol2col reads from L1. Budget: what the static CBs leave of the planning
+    // budget, capped; none when the static CBs already exceed it.
     constexpr uint32_t L1_PREFETCH_HARD_CAP = 500 * 1024;
-    plan.l1_prefetch_max_bytes = std::min(l1_usable_for_cbs - static_cb_bytes, L1_PREFETCH_HARD_CAP);
+    plan.l1_prefetch_max_bytes = plan.static_cb_bytes < budget.planning
+                                     ? std::min(budget.planning - plan.static_cb_bytes, L1_PREFETCH_HARD_CAP)
+                                     : 0;
     if (g.shard_positions == 0) {
         return plan;
     }
@@ -236,11 +227,28 @@ Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, uint32_t l1_usable_for_cbs) {
     return plan;
 }
 
+Conv3dL1Budget conv3d_l1_cb_budget(const tt::tt_metal::IDevice* device) {
+    // Circular buffers are placed upward from the allocator's L1 base and L1 buffers are allocated downward
+    // from the top of L1. The plan keeps a fixed headroom below the top for the L1 buffers that are live when
+    // the program runs (sharded operands of neighbouring ops, CCL and semaphore buffers). The budget is a
+    // function of the device configuration only: the program cache keys on the attributes and the tensor
+    // specs, and a traced program replays under whatever L1 state exists then, so a plan drawn from the live
+    // allocator frontier at create time would describe neither.
+    Conv3dL1Budget budget;
+    budget.span = static_cast<uint32_t>(
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
+    TT_FATAL(
+        budget.span > L1_TENSOR_HEADROOM,
+        "conv3d: {} B of L1 above the allocator base cannot hold the {} B headroom for L1 buffers",
+        budget.span,
+        L1_TENSOR_HEADROOM);
+    budget.planning = budget.span - L1_TENSOR_HEADROOM;
+    return budget;
+}
+
 Conv3dL1Plan select_l1_plan(const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args) {
-    const auto* device = tensor_args.input_tensor.device();
     return plan_l1(
-        derive_cb_geometry(operation_attributes, tensor_args),
-        static_cast<uint32_t>(ttnn::operations::core::available_program_l1_capacity(device)));
+        derive_cb_geometry(operation_attributes, tensor_args), conv3d_l1_cb_budget(tensor_args.input_tensor.device()));
 }
 
 tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
@@ -265,10 +273,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     ProgramDescriptor desc;
 
-    // The CB sizes and the L1 plan: the same derivation compute_program_hash keys on, so a cached program's
-    // circular buffers still fit under the live L1 frontier whenever the plan it was built for still holds.
+    // The CB sizes and the L1 plan. Both follow from the attributes, the tensor specs and the device
+    // configuration, like the program cache key, so a cached program is the one this call would build.
     const Conv3dCbGeometry geometry = derive_cb_geometry(operation_attributes, tensor_args);
-    const Conv3dL1Plan plan = select_l1_plan(operation_attributes, tensor_args);
+    const Conv3dL1Plan plan = plan_l1(geometry, conv3d_l1_cb_budget(input_tensor.device()));
 
     auto grid_size = config.compute_with_storage_grid_size;
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
