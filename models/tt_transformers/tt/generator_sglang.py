@@ -9,6 +9,7 @@ from loguru import logger
 from tqdm import tqdm
 
 import ttnn
+from models.common.tensor_creation import allocate_replicated_zeros
 from models.common.utility_functions import is_wormhole_b0
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
@@ -20,7 +21,6 @@ def allocate_sglang_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[T
     submesh_devices = [model.mesh_device for model in dp_model]
     kv_cache = []
     for mesh_idx, submesh in enumerate(submesh_devices):
-        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
         kv_tt = []
         for layer_num in tqdm(range(num_layers), desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})"):
             # Get the dtype for the kv cache based on the configured optimizations in the model
@@ -33,19 +33,14 @@ def allocate_sglang_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[T
             # Set default to bfloat8_b when no optimizations are configured
             kv_cache_dtype = ttnn.bfloat8_b if kv_cache_dtype is None else kv_cache_dtype
             kv_tt_i = [
-                ttnn.as_tensor(
-                    cache_kv,
+                allocate_replicated_zeros(
+                    kv_cache_shape,
                     device=submesh,
-                    # TODO: this could be ShardTensorToMesh, removing the need for sglang to know about TP for num_kv_heads.
-                    # Could affect other calculations which use TTCacheEngine.num_kv_heads, though.
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=kv_cache_dtype,
-                    # Separate cache files for K and V to avoid collision.
-                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}",
                 )
-                for kv in ["k", "v"]
+                for _ in range(2)
             ]
 
             kv_tt.append(kv_tt_i)

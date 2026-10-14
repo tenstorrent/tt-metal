@@ -6,13 +6,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import torch
 
 import ttnn
 from models.common.llm_runtime.config import PagedKVCacheConfig
+from models.common.tensor_creation import allocate_replicated_zeros
 
 
 @dataclass(frozen=True)
@@ -174,33 +174,16 @@ class PagedKVCacheManager:
 
         cache: list[list[Any]] = []
         allocated: list[Any] = []
-        host_staging: dict[tuple[tuple[int, int, int, int], torch.dtype], torch.Tensor] = {}
-        model_args = getattr(self._model, "model_args", None)
-        cache_path_value = getattr(model_args, "model_cache_path", None)
-        cache_path = Path(cache_path_value) if cache_path_value else None
-        dtypes_by_shape: dict[tuple[int, int, int, int], set[ttnn.DataType]] = {}
-        for shape, spec in zip(self.cache_shapes, self._layer_specs):
-            dtypes_by_shape.setdefault(shape, set()).add(spec.dtype)
         try:
             for shape, spec in zip(self.cache_shapes, self._layer_specs):
-                host_key = (shape, torch_dtype_for_ttnn(spec.dtype))
-                host_tensor = host_staging.get(host_key)
-                if host_tensor is None:
-                    host_tensor = torch.zeros(shape, dtype=host_key[1])
-                    host_staging[host_key] = host_tensor
                 pair = []
-                for kv in ("k", "v"):
-                    cache_file_name = None
-                    if cache_path is not None and len(dtypes_by_shape[shape]) == 1:
-                        cache_file_name = cache_path / f"empty_{kv}cache_paged_attention{shape}"
-                    tensor = ttnn.as_tensor(
-                        host_tensor,
+                for _ in range(2):
+                    tensor = allocate_replicated_zeros(
+                        shape,
                         device=self._mesh_device,
-                        mesh_mapper=ttnn.ReplicateTensorToMesh(self._mesh_device),
                         layout=ttnn.TILE_LAYOUT,
                         memory_config=self._config.memory_config,
                         dtype=spec.dtype,
-                        cache_file_name=cache_file_name,
                     )
                     allocated.append(tensor)
                     pair.append(tensor)

@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.common.tensor_creation import allocate_replicated_zeros
 
 
 class TtLlamaAttention(LightweightModule):
@@ -545,58 +547,35 @@ class TtLlamaAttention(LightweightModule):
         return q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD
 
     def init_kv_cache(self, configuration, weight_cache_path):
-        """
-        Generates empty KV cache and pushed to device memory
-        """
+        """Allocate zero-filled K/V caches on the model mesh.
 
+        Keep the arguments for caller compatibility. Zero caches do not need
+        weight cache files.
+        """
         if self.paged_attention_config:
-            cache_k = torch.zeros(
-                (
-                    self.paged_attention_config.max_num_blocks,
-                    self.n_local_kv_heads,
-                    self.paged_attention_config.block_size,
-                    self.head_dim,
-                )
-            )
-            cache_v = torch.zeros(
-                (
-                    self.paged_attention_config.max_num_blocks,
-                    self.n_local_kv_heads,
-                    self.paged_attention_config.block_size,
-                    self.head_dim,
-                )
+            cache_shape = (
+                self.paged_attention_config.max_num_blocks,
+                self.n_local_kv_heads,
+                self.paged_attention_config.block_size,
+                self.head_dim,
             )
         else:
-            cache_k = torch.zeros(
-                (
-                    self.batch_size_per_device_group,
-                    self.n_local_kv_heads,
-                    self.max_seq_len,
-                    self.head_dim,
-                )
-            )
-            cache_v = torch.zeros(
-                (
-                    self.batch_size_per_device_group,
-                    self.n_local_kv_heads,
-                    self.max_seq_len,
-                    self.head_dim,
-                )
+            cache_shape = (
+                self.batch_size_per_device_group,
+                self.n_local_kv_heads,
+                self.max_seq_len,
+                self.head_dim,
             )
 
         self.layer_past = [
-            ttnn.as_tensor(
-                k_or_v,
+            allocate_replicated_zeros(
+                cache_shape,
                 dtype=self.dtype,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                if weight_cache_path and not configuration.dummy_weights
-                else None,
             )
-            for k_or_v in [cache_k, cache_v]
+            for _ in range(2)
         ]
 
     def forward_decode(

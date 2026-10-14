@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
 from tqdm import tqdm
+
+import ttnn
+from models.common.tensor_creation import allocate_replicated_zeros
 from models.demos.llama3_70b_galaxy.tt.generator import Generator
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
@@ -17,23 +19,17 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: TtTransform
     kv_cache = []
 
     for mesh_idx, submesh in enumerate(submesh_devices):
-        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
         kv_tt = []
         for _ in tqdm(range(num_layers), desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})"):
             kv_tt_i = [
-                ttnn.as_tensor(
-                    cache_kv,
+                allocate_replicated_zeros(
+                    kv_cache_shape,
                     device=submesh,
-                    # TODO: this could be ShardTensorToMesh, removing the need for vLLM to know about TP for num_kv_heads.
-                    # Could affect other calculations which use TTCacheEngine.num_kv_heads, though.
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=ttnn.bfloat8_b,
-                    # Separate cache files for K and V to avoid collision.
-                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}",
                 )
-                for kv in ["k", "v"]
+                for _ in range(2)
             ]
 
             kv_tt.append(kv_tt_i)
