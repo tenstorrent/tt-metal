@@ -116,12 +116,10 @@ TEST_F(ProgramSpecTestGen1, CPU_GlobalSemaphoreFabric1DApiJITSmoke) {
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_GlobalSemaphoreFabric2DApiJITSmoke) {
-    // fabric/hw/inc/mesh/api.h includes a ttnn kernel header, which a tt-metalium-only install does not ship.
-    const std::filesystem::path ttnn_header =
-        std::filesystem::path(MetalContext::instance().rtoptions().get_root_dir()) /
-        "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp";
-    if (!std::filesystem::exists(ttnn_header)) {
-        GTEST_SKIP() << "2D fabric kernel headers need ttnn sources (" << ttnn_header << " not found)";
+    // The 2D fabric kernel headers need a source checkout; a tt-metalium-only install does not ship them.
+    const std::filesystem::path root(MetalContext::instance().rtoptions().get_root_dir());
+    if (!std::filesystem::exists(root / "CMakeLists.txt")) {
+        GTEST_SKIP() << "2D fabric JIT smoke needs a source checkout (" << root << " is an installed package)";
     }
     // ROUTING_MODE_2D | ROUTING_MODE_MESH | ROUTING_MODE_LOW_LATENCY
     CompileGlobalSemaphoreKernel(*mesh_device_, kFabricSmokeSource, {{"FABRIC_2D", "1"}, {"ROUTING_MODE", "162"}});
