@@ -149,7 +149,7 @@ StreamSemaphores allocate_stream_semaphores(ttnn::MeshDevice* mesh, const CoreRa
         return ttnn::global_semaphore::create_global_semaphore(mesh, allowed_cores, 0, tt::tt_metal::BufferType::L1);
     };
     StreamSemaphores sems{make(), make(), make(), make()};
-    tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
+    tt::tt_metal::distributed::Synchronize(*mesh, std::nullopt, {});
     return sems;
 }
 
