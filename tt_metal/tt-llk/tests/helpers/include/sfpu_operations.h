@@ -1672,6 +1672,11 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
  * DST_ACCUM_MODE (is_fp32_dest_acc_en) must match the value passed to the paired
  * call_binary_sfpu_operation(): ops such as atan2 load an fp32- vs bf16-specific
  * reciprocal polynomial at init time that the calculate step then relies on.
+ *
+ * SIGN_MAGNITUDE_FORMAT and zero_point are quant-family only (QUANT, REQUANT,
+ * DEQUANT). SIGN_MAGNITUDE_FORMAT must match the paired calculate call. zero_point
+ * is the fp32 bit pattern of the zero point: +zp for QUANT and REQUANT, -zp for
+ * DEQUANT.
  */
 template <bool APPROXIMATION_MODE, bool DST_ACCUM_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0, bool SIGN_MAGNITUDE_FORMAT = false>
 void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point = 0)
@@ -1824,7 +1829,9 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     }
     else if constexpr (BINOP == BinaryOp::QUANT)
     {
-        // quant_tile_init. SIGN_MAGNITUDE_FORMAT selects the SMAG32 replay body.
+        // quant_tile_init. On Blackhole, SIGN_MAGNITUDE_FORMAT selects the SMAG32 replay
+        // body. On Wormhole the init takes the flag as unused; it only changes the
+        // SFPLOAD/SFPSTORE mode inside calculate_quant_int32.
         SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT), zero_point);
     }
     else if constexpr (BINOP == BinaryOp::REQUANT)
@@ -2401,57 +2408,31 @@ void call_binary_sfpu_operation(
     }
     else if constexpr (BINOP == BinaryOp::COPY_DEST)
     {
-        // copy_dest_value(in, out, unused). Block-float dest holds bf16.
-        if constexpr (MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Float16))
-        {
-            SFPU_BINARY_CALL(
-                DST_SYNC_MODE,
-                DST_ACCUM_MODE,
-                copy_dest_value,
-                (DataFormat::Float16, APPROXIMATION_MODE, PER_FACE_ITERATIONS),
-                dst_index_in0,
-                dst_index_out,
-                0,
-                vector_mode);
-        }
-        else if constexpr (
-            MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Float16_b) || MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ||
-            MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Bfp4_b))
-        {
-            SFPU_BINARY_CALL(
-                DST_SYNC_MODE,
-                DST_ACCUM_MODE,
-                copy_dest_value,
-                (DataFormat::Float16_b, APPROXIMATION_MODE, PER_FACE_ITERATIONS),
-                dst_index_in0,
-                dst_index_out,
-                0,
-                vector_mode);
-        }
-        else if constexpr (MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
-        {
-            SFPU_BINARY_CALL(
-                DST_SYNC_MODE,
-                DST_ACCUM_MODE,
-                copy_dest_value,
-                (DataFormat::Int32, APPROXIMATION_MODE, PER_FACE_ITERATIONS),
-                dst_index_in0,
-                dst_index_out,
-                0,
-                vector_mode);
-        }
-        else
-        {
-            SFPU_BINARY_CALL(
-                DST_SYNC_MODE,
-                DST_ACCUM_MODE,
-                copy_dest_value,
-                (DataFormat::Float32, APPROXIMATION_MODE, PER_FACE_ITERATIONS),
-                dst_index_in0,
-                dst_index_out,
-                0,
-                vector_mode);
-        }
+        // copy_dest_value(in, out, unused). The shared driver passes (tile, tile + 1, tile),
+        // so the source is in1: copying in0 would write a tile onto itself. A 32-bit Dest
+        // stores the full word, and GetSfpLoadStoreInstrMod defaults is_fp32_dest_acc_en to
+        // false, so a narrow math format is passed as Float32. Int32 is already full width.
+        // Block-float Dest without accumulation holds bf16.
+        constexpr bool copy_full_word = DST_ACCUM_MODE && MATH_FORMAT != static_cast<std::uint32_t>(DataFormat::Int32);
+        constexpr bool copy_fp16      = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Float16);
+        constexpr bool copy_bf16      = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Float16_b) ||
+                                   MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Bfp8_b) ||
+                                   MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Bfp4_b);
+        constexpr bool copy_int32        = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32);
+        constexpr DataFormat copy_format = copy_full_word ? DataFormat::Float32
+                                           : copy_fp16    ? DataFormat::Float16
+                                           : copy_bf16    ? DataFormat::Float16_b
+                                           : copy_int32   ? DataFormat::Int32
+                                                          : DataFormat::Float32;
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            copy_dest_value,
+            (copy_format, APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            dst_index_in1,
+            dst_index_out,
+            0 /*unused*/,
+            vector_mode);
     }
     else
     {

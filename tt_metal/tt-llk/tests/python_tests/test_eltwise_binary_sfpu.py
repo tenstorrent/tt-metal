@@ -445,10 +445,10 @@ def _logsigmoid_stimuli_spec():
 # =============================================================================
 # Shared driver
 #
-# Every test below (except add_top_row and the separate broadcast kernel) runs
-# through sfpu_binary(): it builds the two-tile stimuli, computes the golden
-# per tile-pair, and drives sources/sfpu_binary_test.cpp. Perf counterparts
-# call the same helper with is_perf=True.
+# Every test below (except add_top_row, the quant family, and the separate
+# broadcast kernel) runs through sfpu_binary(): it builds the two-tile stimuli,
+# computes the golden per tile-pair, and drives sources/sfpu_binary_test.cpp.
+# Perf counterparts call the same helper with is_perf=True.
 # =============================================================================
 
 
@@ -568,15 +568,19 @@ def sfpu_binary(
         if formats.input_format == DataFormat.Bfp8_b
         else formats.input_format
     )
-    elements_per_pair = 2 * 32 * 32
+    elements_per_pair = 2 * _ELEMENTS_PER_TILE
     golden_chunks = []
     generated_nan_chunks = []
+    # WH/BH copy_dest_value copies src1 onto the even dest tile. The shared
+    # _copy_dest golden still returns its first argument, which Quasar uses for
+    # a src0 copy, so only this call swaps the pair.
+    src1_idx, src2_idx = (1, 0) if mathop == MathOperation.SfpuCopyDest else (0, 1)
     for offset in range(0, golden_src.numel(), elements_per_pair):
         chunk = generate_golden(
             mathop,
             golden_src[offset : offset + elements_per_pair],
-            0,
-            1,
+            src1_idx,
+            src2_idx,
             0,
             32,
             [64, 32],
@@ -806,10 +810,11 @@ def test_eltwise_binary_sfpu_float(
     _skip_fp32_no_dest_acc(formats, dest_acc)
     _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
-    # copy_dest_value reads src0 only. A broadcast row would compare against the
-    # broadcast golden, which this kernel does not compute.
+    # copy_dest_value copies src1 onto src0 and does not broadcast. A broadcast
+    # row would compare against the broadcast golden, which this kernel does not
+    # compute.
     if mathop == MathOperation.SfpuCopyDest and bcast_dim != LlkBroadcastType.None_:
-        pytest.skip("COPY_DEST ignores src1; the None_ row covers the kernel")
+        pytest.skip("COPY_DEST does not broadcast; the None_ row covers the kernel")
 
     # Bfp8_b quantization can map small positive operands to zero, making xlogy's
     # logarithm -inf. LOGADDEXP and LOGADDEXP2 are skipped here too: their +/-200
@@ -1068,13 +1073,13 @@ def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop, **run_kwargs)
 
 _QUANT_INT8_MIN = -127
 _QUANT_INT8_MAX = 127
-_QUANT_OPS = {
-    "quant": MathOperation.SfpuQuant,
-    "requant": MathOperation.SfpuRequant,
-    "dequant": MathOperation.SfpuDequant,
-}
+_QUANT_OPS = [
+    MathOperation.SfpuQuant,
+    MathOperation.SfpuRequant,
+    MathOperation.SfpuDequant,
+]
 QUANT_SWEEP = dict(
-    mathop=list(_QUANT_OPS.values()),
+    mathop=_QUANT_OPS,
     sign_magnitude=[False, True],
 )
 
@@ -1100,20 +1105,32 @@ def _run_quant(
     approx_mode=ApproximationMode.No,
 ):
     """Stage the Quasar quant stimuli on the shared WH/BH binary kernel."""
-    n = 32 * 32
+    n = _ELEMENTS_PER_TILE
+    tile_cnt_A = 2
     is_dequant = mathop == MathOperation.SfpuDequant
     a_is_int = mathop != MathOperation.SfpuQuant
     output_format = DataFormat.Float32 if is_dequant else DataFormat.Int32
-    scale = torch.rand(n, dtype=torch.float32) * 0.04 + 0.01
+    # Wide enough that |a| near 2000 saturates the int8 clamp on both signs.
+    scale = torch.rand(n, dtype=torch.float32) * 0.2 + 0.01
     zero_point = 3.0
 
     if a_is_int:
-        a_vals = torch.randint(-2000, 2000, (n,), dtype=torch.int32)
-        a_float = a_vals.to(torch.float32)
-        a_staged = _int32_to_smag32(a_vals) if sign_magnitude else a_vals
+        a_float = torch.randint(-2000, 2000, (n,), dtype=torch.int32).to(torch.float32)
     else:
         a_float = (torch.rand(n, dtype=torch.float32) - 0.5) * 4000.0
-        a_vals = a_float
+
+    # Dyadic edges, so they do not depend on the random draw. 0.25 and 0.5 are
+    # exact in fp32. Lane 2 is an exact half (5.5). Lane 3 is in (-0.5, 0), which
+    # SFPSTOCHRND flushes to +0 on both Wormhole and Blackhole.
+    a_float[0], scale[0] = 4000.0, 0.25
+    a_float[1], scale[1] = -4000.0, 0.25
+    a_float[2], scale[2] = 5.0, 0.5
+    a_float[3], scale[3] = -13.0, 0.25
+
+    if a_is_int:
+        a_vals = a_float.to(torch.int32)
+        a_staged = _int32_to_smag32(a_vals) if sign_magnitude else a_vals
+    else:
         a_staged = _fp32_bits_as_int32(a_float)
 
     src_A = torch.cat((a_staged, _fp32_bits_as_int32(scale)))
@@ -1128,20 +1145,22 @@ def _run_quant(
         prod = a_float * scale + zero_point
         rounded = torch.round(prod)
         clamped = torch.clamp(rounded, _QUANT_INT8_MIN, _QUANT_INT8_MAX).to(torch.int32)
-        # STOCH_RND emits a sign-magnitude int8. A negative value whose magnitude
-        # rounds to 0 is sign-magnitude -0 on Wormhole, and the INT32_2S_COMP
-        # store maps that to -1. Blackhole's FP32_TO_INT8 flush of that case is
-        # +0, and its sign-magnitude store is a no-op, so both encodings stay +0.
+        # SFPSTOCHRND clears the sign when the magnitude rounds to 0, on both
+        # Wormhole and Blackhole, so a negative product that rounds to 0 stays +0.
         neg_zero = (clamped == 0) & (prod < 0)
         if sign_magnitude:
             golden_active = _int32_to_smag32(clamped)
         else:
             golden_active = clamped.clone()
-        if TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE:
-            if sign_magnitude:
-                golden_active[neg_zero] = torch.tensor(-(2**31), dtype=torch.int32)
-            else:
-                golden_active[neg_zero] = -1
+        assert (clamped == _QUANT_INT8_MIN).any() and (
+            clamped == _QUANT_INT8_MAX
+        ).any(), f"{mathop.name} stimuli never reach the int8 clamp"
+        assert (
+            neg_zero.any()
+        ), f"{mathop.name} stimuli never round a negative value to 0"
+        assert (
+            golden_active[neg_zero] == 0
+        ).all(), f"{mathop.name} negative-zero lanes must stay +0"
         out_dtype = torch.int32
 
     zp_for_kernel = -zero_point if is_dequant else zero_point
@@ -1163,7 +1182,7 @@ def _run_quant(
             SIGN_MAGNITUDE_FORMAT(sign_magnitude),
         ],
         "runtimes": [
-            TILE_COUNT(2),
+            TILE_COUNT(tile_cnt_A),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             LOOP_FACTOR(loop_factor),
@@ -1176,9 +1195,9 @@ def _run_quant(
             src_A[:n],
             DataFormat.Int32,
             output_format,
-            tile_count_A=2,
+            tile_count_A=tile_cnt_A,
             tile_count_B=1,
-            tile_count_res=1,
+            tile_count_res=tile_cnt_A,
             twos_complement=True,
         ),
         "dest_acc": dest_acc,
@@ -2120,6 +2139,7 @@ def _run_sfpu_binary_bcast(
             SFPU_BCAST_DIM(bcast_dim),
             # Unread by this kernel. Present so the report columns match sfpu_binary.
             SFPU_DST_ROUNDING_MODE(),
+            SIGN_MAGNITUDE_FORMAT(False),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A + tile_cnt_B),
@@ -2127,6 +2147,7 @@ def _run_sfpu_binary_bcast(
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             LOOP_FACTOR(loop_factor),
             NUM_FACES(),
+            ZERO_POINT(0),
         ],
         "variant_stimuli": StimuliConfig(
             tilize(src_A, stimuli_format=formats.input_format),
