@@ -21,6 +21,8 @@ Run (Blackhole galaxy)::
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 import torch
 from loguru import logger
@@ -35,6 +37,7 @@ from models.demos.gpt_oss_d_p.tt.attention.kv_cache import (
 from models.demos.gpt_oss_d_p.tt.runners.kv_chunk_table import (
     build_and_serialize_kv_chunk_table,
     build_kv_chunk_address_table,
+    dflash_config_name,
 )
 from tests.ttnn.utils_for_testing import assert_equal
 
@@ -315,3 +318,124 @@ def test_gpt_oss_kv_chunk_table_readback(mesh_device, num_users, num_layers, seq
         f"GPT-OSS KV table readback OK: {comparisons} chunks "
         f"(configs={table.num_configs()}, users={num_users}, layers={num_layers}, seq={seq_len})"
     )
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    ids=["line"],
+    indirect=True,
+)
+@pytest.mark.skipif(not is_blackhole(), reason="GPT-OSS KV NdShardSpec table tests target Blackhole")
+@pytest.mark.timeout(0)
+def test_gpt_oss_merged_target_and_dflash_table_two_slot_readback(mesh_device, device_params, tmp_path, expect_error):
+    """Kimi-parity gate: merged global layer axis, both slots, exact bytes and protobuf IDs."""
+    rows, cols = tuple(mesh_device.shape)
+    users, target_layers, draft_layers, seq_len = 2, 2, 8, 128
+    target = allocate_kv_cache(
+        mesh_device,
+        num_layers=target_layers,
+        max_seq_len=seq_len,
+        sp_axis=SP_AXIS,
+        num_users=users,
+        head_dim=HEAD_DIM,
+    )
+    draft = allocate_kv_cache(
+        mesh_device,
+        num_layers=draft_layers,
+        max_seq_len=seq_len,
+        sp_axis=SP_AXIS,
+        num_users=users,
+        head_dim=HEAD_DIM,
+    )
+    _write_random_cache(mesh_device, target, num_users=users, num_layers=target_layers, seq_len=seq_len, seed=101)
+    _write_random_cache(mesh_device, draft, num_users=users, num_layers=draft_layers, seq_len=seq_len, seed=202)
+    with expect_error(AssertionError, "distinct allocations"):
+        build_kv_chunk_address_table(
+            mesh_device=mesh_device,
+            kv_cache=target,
+            seq_len=seq_len,
+            num_layers=target_layers,
+            mesh_shape=(rows, cols),
+            sp_axis=SP_AXIS,
+            num_users=users,
+            chunk_size=seq_len,
+            num_kv_heads=cols,
+            head_dim=HEAD_DIM,
+            dflash_kv_cache=dataclasses.replace(draft, v=draft.k),
+            dflash_num_layers=draft_layers,
+        )
+    table = build_kv_chunk_address_table(
+        mesh_device=mesh_device,
+        kv_cache=target,
+        seq_len=seq_len,
+        num_layers=target_layers,
+        mesh_shape=(rows, cols),
+        sp_axis=SP_AXIS,
+        num_users=users,
+        chunk_size=seq_len,
+        num_kv_heads=cols,
+        head_dim=HEAD_DIM,
+        dflash_kv_cache=draft,
+        dflash_num_layers=draft_layers,
+    )
+    assert table.num_configs() == 4 * cols
+    assert [table.config_name(i) for i in range(2 * cols)] == [f"{i:02d}" for i in range(2 * cols)]
+    assert [table.config_name(i) for i in range(2 * cols, 4 * cols)] == [
+        dflash_config_name(kind, head) for kind in ("k", "v") for head in range(cols)
+    ]
+    assert all(table.config(i).num_layers == target_layers + draft_layers for i in range(table.num_configs()))
+    chunks_per_layer = seq_len // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    # The C++ table allocates the merged global layer axis densely for every
+    # config; model-specific sparse row maps select target vs DFlash rows.
+    assert table.total_entries() == 4 * cols * (target_layers + draft_layers) * chunks_per_layer * users
+
+    comparisons = 0
+    chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, HEAD_DIM]
+    for config_id in range(table.num_configs()):
+        is_dflash = config_id >= 2 * cols
+        local_config = config_id - 2 * cols if is_dflash else config_id
+        is_k = local_config < cols
+        head = local_config if is_k else local_config - cols
+        cache_pair = draft if is_dflash else target
+        cache = cache_pair.k if is_k else cache_pair.v
+        physical_layers = draft_layers if is_dflash else target_layers
+        layer_offset = target_layers if is_dflash else 0
+        for slot in range(users):
+            for physical_layer in range(physical_layers):
+                global_layer = layer_offset + physical_layer
+                for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                    raw = table.read_device_chunk(
+                        layer=global_layer,
+                        position=position,
+                        slot=slot,
+                        config_id=config_id,
+                    )
+                    actual = ttnn.to_torch(
+                        ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw, chunk_shape)
+                    ).to(torch.bfloat16)
+                    expected = _expected_chunk_from_device(
+                        cache,
+                        mesh_device,
+                        slot=slot,
+                        layer=physical_layer,
+                        head=head,
+                        position=position,
+                        num_layers=physical_layers,
+                        chunk_size=seq_len,
+                    )
+                    assert_equal(expected, actual)
+                    comparisons += 1
+
+    pb_path = tmp_path / "merged.pb"
+    ttnn.experimental.disaggregation.export_to_protobuf_file(table, str(pb_path))
+    restored = ttnn.experimental.disaggregation.import_from_protobuf_file(str(pb_path))
+    assert [restored.config_name(i) for i in range(restored.num_configs())] == [
+        table.config_name(i) for i in range(table.num_configs())
+    ]
+    assert restored.total_entries() == table.total_entries()
+    expected_populated = (
+        2 * cols * target_layers * chunks_per_layer * users + 2 * cols * draft_layers * chunks_per_layer * users
+    )
+    assert comparisons == expected_populated
