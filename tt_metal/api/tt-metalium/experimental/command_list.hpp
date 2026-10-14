@@ -17,6 +17,7 @@
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt_stl/strong_type.hpp>
 
 // Experimental and subject to change: this header carries no API-stability guarantee.
