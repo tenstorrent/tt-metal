@@ -143,6 +143,10 @@ def run_model(
     skip_upstream_reference=False,
     dispatch_impl="direct",
     combine_impl="direct",
+    overlap_routed_expert_with_combine=None,
+    overlap_routed_expert_with_combine_eager=False,
+    hybrid_token_threshold_model_config=None,
+    overlap_shared_expert_with_dispatch=True,
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -173,6 +177,11 @@ def run_model(
     resulting route instead of running its own gate.
 
     ``dispatch_impl`` / ``combine_impl`` pick TtMoe's dispatch and combine ops ("direct" or "fabric2d").
+    ``overlap_routed_expert_with_combine`` / ``overlap_routed_expert_with_combine_eager`` pass through to
+    TtMoe; this forward is untraced, so it overlaps only with the eager one set.
+    ``hybrid_token_threshold_model_config`` takes the routed experts' hybrid threshold from that model's
+    dimension-constants class instead of the variant's, for a row that runs one model's dims under
+    another's gate. ``overlap_shared_expert_with_dispatch`` passes through to TtMoe.
 
     ``measure`` wraps the forward for a perf caller: it is called as ``measure(forward)``,
     must invoke the thunk and return its result, and owns the device sync. The perf gates use
@@ -542,8 +551,10 @@ def run_model(
         # takes it too, so every variant this file can run is graded on the dispatch it ships -- the
         # fused-only sentinel for K2.7, 1792 for GLM 5.2, absent (single-op) everywhere else,
         # K3 included: its crossover is measured but parked until the split is enabled for it.
-        routed_expert_hybrid_token_threshold=getattr(
-            variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None
+        routed_expert_hybrid_token_threshold=(
+            getattr(variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None)
+            if hybrid_token_threshold_model_config is None
+            else getattr(hybrid_token_threshold_model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None)
         ),
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
@@ -568,6 +579,9 @@ def run_model(
         rms_norm_eps=rms_norm_eps,
         dispatch_impl=dispatch_impl,
         combine_impl=combine_impl,
+        overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
+        overlap_routed_expert_with_combine_eager=overlap_routed_expert_with_combine_eager,
+        overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
@@ -586,6 +600,10 @@ def run_model(
     tt_x = upload_tt_x()
 
     def forward():
+        nonlocal tt_x
+        # TtMoe frees its input, so a measure() that forwards more than once needs it uploaded again.
+        if not tt_x.is_allocated():
+            tt_x = upload_tt_x()
         return tt_moe(
             tt_x,
             return_intermediates=run_pcc_check,
@@ -1057,6 +1075,73 @@ def test_ds_moe_fabric2d(
         padded_percent=padded_percent,
         dispatch_impl=dispatch_impl,
         combine_impl=combine_impl,
+    )
+
+
+# The fabric2d ops at the payload a model mesh opens with, half a token plus 64 B, so every token crosses the
+# fabric as two packets. The other fabric2d cases open the mesh at a whole token, where neither op splits one.
+def _combine_fabric2d_model_payload_cases():
+    cases = []
+    for model_cfg, model_id in ((DeepSeekV3Config, "deepseek_v3"), (GLM53Config, "glm_5_3")):
+        payload = moe_fabric_payload(model_cfg)
+        cases += [
+            pytest.param(
+                model_cfg,
+                (8, 1),
+                torus_y_device_params(fabric_payload_size=payload),
+                2,
+                marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+                id=f"{model_id}-torus-y-8x1",
+            ),
+            pytest.param(
+                model_cfg,
+                (8, 4),
+                torus_xy_device_params(fabric_payload_size=payload),
+                2,
+                marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+                id=f"{model_id}-torus-xy-8x4",
+            ),
+        ]
+    return cases
+
+
+# combine-only: direct dispatch, then the routed expert, then combine_fabric2d. both-overlapped: dispatch_fabric2d,
+# then the routed expert and combine_fabric2d as one program, run untraced so this PCC check reaches it.
+@pytest.mark.parametrize(
+    "dispatch_impl, overlap",
+    [("direct", False), ("fabric2d", True)],
+    ids=["combine-only", "both-overlapped"],
+)
+@pytest.mark.parametrize(
+    "model_cfg, mesh_device, device_params, num_links",
+    _combine_fabric2d_model_payload_cases(),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["ds-ref"])
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(900)
+def test_moe_fabric2d_model_payload(
+    variant, config_only, model_cfg, mesh_device, device_params, num_links, request, dispatch_impl, overlap
+):
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=PREFILL_CHUNK_TOKENS_PER_CHIP,
+        emb_dim=model_cfg.EMB_SIZE,
+        hidden_dim=model_cfg.MOE_INTERMEDIATE_SIZE,
+        num_routed_experts=model_cfg.NUM_ROUTED_EXPERTS,
+        num_experts_per_tok=model_cfg.NUM_EXPERTS_PER_TOKEN,
+        dispatch_buffer_capacity_factor=8,
+        run_pcc_check=True,
+        num_links=num_links,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        request=request,
+        dispatch_impl=dispatch_impl,
+        combine_impl="fabric2d",
+        overlap_routed_expert_with_combine=overlap,
+        overlap_routed_expert_with_combine_eager=overlap,
     )
 
 
