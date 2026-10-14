@@ -91,6 +91,7 @@ struct OpConfig {
         EQ,
         NE,
         ISCLOSE,
+        GEGLU_TANH,
     };
 
     template <class EnumT>

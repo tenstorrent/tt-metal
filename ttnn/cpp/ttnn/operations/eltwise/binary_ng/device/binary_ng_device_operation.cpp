@@ -105,6 +105,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case WHERE_TST:
         case WHERE_TTS:
         case ISCLOSE: return true;
+        case GEGLU_TANH: return a == BFLOAT16 && b == BFLOAT16;
         default: return false;
     }
     return false;

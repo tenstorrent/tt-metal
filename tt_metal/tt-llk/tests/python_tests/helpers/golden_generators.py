@@ -4145,7 +4145,28 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuIntSumAdd: self._int_sum_add,
                 MathOperation.SfpuClampedSiluGlu: self._clamped_silu_glu,
                 MathOperation.SfpuSituGlu: self._situ_glu,
+                MathOperation.SfpuGegluTanh: self._geglu_tanh,
             }
+        )
+
+    def _geglu_tanh(self, t1, t2):
+        # The exact product of activations/products/geglu_tanh.json's leaves in float64,
+        # each at its input as the SFPU reads it (a subnormal as 0).
+        a, b = (
+            torch.tensor(
+                0.0 if abs(float(t)) < 2.0**-126 else float(t), dtype=torch.float64
+            )
+            for t in (t1, t2)
+        )
+        return float(
+            (
+                a
+                / (
+                    1
+                    + torch.exp(-(1.5957691216057308 * a + 0.07135481627260025 * a**3))
+                )
+            )
+            * (b)
         )
 
     def __call__(
