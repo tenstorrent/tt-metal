@@ -21,6 +21,8 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/cb_api.h"
 #include "api/compute/transpose.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/circular_buffer.h"
@@ -267,14 +269,19 @@ inline void lmask_fused(uint32_t ones, uint32_t decay, uint32_t decay_row, uint3
     CircularBuffer(o).push_back(Ct * Ct);
 }
 
-// dl*I: the identity tile scaled by column 0 of tile `col_tile` of `col` (dl in every row).
+// dl: element [0,0] of tile `col_tile` of `col` (dl = exp(g_sum), the same value in every row of column 0).
 inline void dl_tile(uint32_t eye, uint32_t col, uint32_t col_tile, uint32_t o) {
+    // dl = exp(g_sum) as one fp32 tile filled with the value, taken bit-exact from the decay column
+    // (its element [0,0]) and written on the SFPU. The scan reads it back as a scalar and multiplies
+    // the state on the SFPU; an FPU broadcast (eye * col) here would truncate dl to 19 bits and bias
+    // the decay every chunk. `eye` is unused (kept for the call sites' CB map).
+    (void)eye;
+    const uint32_t dl_bits = read_tile_value(col, col_tile, 0);
     CircularBuffer(o).reserve_back(1);
     pack_reconfig_data_format(o);
-    reconfig_data_format(eye, col);  // bcast(a,col): a->srcA, col->srcB
-    mul_bcast_cols_init(eye, col);
+    fill_tile_init();
     tile_regs_acquire();
-    mul_tiles_bcast_cols(eye, col, 0, col_tile, 0);
+    fill_tile_bitcast(0, dl_bits);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, o, 0);
@@ -939,9 +946,9 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
 
     {
         GDN_ZONE("pp_dl");
-        // ---- dl*I: dl = exp(g_sum) (decayfac's extra tile Ct, the same value in every row of column 0)
-        // broadcast down the identity -> one tile with dl on the diagonal. The scan decays the state as
-        // the matmul (dl*I) @ S_tile so the update S <- dl*S + k_dec_t@v_new accumulates in one DST pass.
+        // ---- dl = exp(g_sum) (decayfac's extra tile Ct, the same value in every row of column 0), as a
+        // full fp32 tile written bit-exact. The scan multiplies the state by it on the SFPU (S <- dl*S +
+        // k_dec_t@v_new), so dl never passes through the FPU's 19-bit source registers.
         dl_tile(cb.eye, cb.decayfac, Ct, cb.dl);
         POP(cb.decayfac, Ct + 1);
         POP(cb.decay_exp, Ct);
@@ -952,9 +959,10 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
 
 // PHASE B (scan): one chunk of the sequential recurrence. cur_S = the state input CB for this
 // chunk (reader-fed cb_S at chunk 0, then the compute-only ping-pong), dst = where the updated
-// state goes (the other ping-pong CB, or the final-state CB on the last chunk).
+// state goes (the other ping-pong CB, or the final-state CB on the last chunk). cur_Sx / nxt_Sx are the
+// exact (unpack-to-DEST) copies of cur_S / the updated state; nxt_Sx = 0xFFFFFFFF on the last chunk.
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
+inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst, uint32_t cur_Sx, uint32_t nxt_Sx) {
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
     constexpr uint32_t cv = Ct * Vt;
@@ -1051,38 +1059,56 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
         POP(cb.qdecay, ck);
         POP(cb.intra, cc);
     }
-    // S_new = (dl*I) @ S + k_dec_t @ v_new -> dst (the next chunk's cur_S, or the final state).
-    // The decay is block-diagonal, so every state tile (i,j) uses the single dl*I tile as in0.
+    // S_new = dl * S + k_dec_t @ v_new -> dst (the next chunk's cur_S, or the final state), and its exact
+    // copy -> nxt_Sx. k_dec_t @ v_new accumulates in DST[0] on the FPU (operands are per-chunk, so
+    // their input rounding does not compound); S enters DST[1] from its exact copy (unpack-to-DEST),
+    // is scaled by dl and added on the SFPU, all in fp32. Through the FPU, S and dl would be truncated
+    // to 19 bits on every chunk and the carried state would shrink with sequence length.
     {
         GDN_ZONE("st_snew");
         WAIT(cb.kdec_t, kc);
         WAIT(cb.dl, 1);
+        WAIT(cur_Sx, kv);
+        const uint32_t dl_bits = read_tile_value(cb.dl, 0, 0);
+        const bool keep_exact = nxt_Sx != 0xFFFFFFFFu;
         CircularBuffer(dst).reserve_back(kv);
-        matmul_init(cb.dl, cur_S, 0);
-        for (uint32_t t0 = 0; t0 < kv; t0 += kDstTiles) {
-            const uint32_t nb = (kv - t0 < kDstTiles) ? (kv - t0) : kDstTiles;
+        if (keep_exact) {
+            CircularBuffer(nxt_Sx).reserve_back(kv);
+        }
+        for (uint32_t t = 0; t < kv; t++) {
+            const uint32_t mi = t / Vt;
+            const uint32_t ni = t - mi * Vt;
             tile_regs_acquire();
-            for (uint32_t j = 0; j < nb; j++) {
-                matmul_tiles(cb.dl, cur_S, 0, t0 + j, j);
+            reconfig_data_format(cb.vnew, cb.kdec_t);
+            matmul_init(cb.kdec_t, cb.vnew, 0);
+            for (uint32_t kc_ = 0; kc_ < Ct; kc_++) {
+                matmul_tiles(cb.kdec_t, cb.vnew, mi * Ct + kc_, kc_ * Vt + ni, 0);
             }
-            for (uint32_t j = 0; j < nb; j++) {
-                const uint32_t t = t0 + j;
-                const uint32_t mi = t / Vt;
-                const uint32_t ni = t - mi * Vt;
-                for (uint32_t kc_ = 0; kc_ < Ct; kc_++) {
-                    matmul_tiles(cb.kdec_t, cb.vnew, mi * Ct + kc_, kc_ * Vt + ni, j);
-                }
-            }
+            reconfig_data_format_srca(cur_Sx);
+            copy_init(cur_Sx);
+            copy_tile(cur_Sx, t, 1);
+            binop_with_scalar_tile_init();
+            mul_unary_tile(1, dl_bits);
+            add_binary_tile_init();
+            add_binary_tile(0, 1, 0);
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t j = 0; j < nb; j++) {
-                pack_tile(j, dst, t0 + j);
+            pack_tile(0, dst, t);
+            if (keep_exact) {
+                pack_tile(0, nxt_Sx, t);
             }
             tile_regs_release();
         }
         CircularBuffer(dst).push_back(kv);
+        if (keep_exact) {
+            CircularBuffer(nxt_Sx).push_back(kv);
+        }
+        // Restore the plain fp32 matmul unpack formats: the next chunk's blocks run with the
+        // per-call reconfigs skipped (H) and must not inherit the unpack-to-DEST srcA setting.
+        reconfig_data_format(cb.vnew, cb.kdec_t);
         POP(cb.kdec_t, kc);
         POP(cb.dl, 1);
+        POP(cur_Sx, kv);
     }
     // v_new and the input state fed both blocks; release them once everything is packed.
     POP(cb.vnew, cv);

@@ -445,6 +445,10 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     add_cb(pcb::S, kv);
     add_cb(pcb::s2, kv);
     add_cb(pcb::s3, kv);
+    // Exact (unpack-to-DEST) copies of the state for the fp32 state update (gdn_scan_compute_config).
+    for (uint32_t cb : kGdnScanExactStateCbs) {
+        add_cb(cb, kv);
+    }
     // Outputs.
     add_cb(pcb::out, cv, 2, df_io);
     add_cb(pcb::final_s, kv);
@@ -548,7 +552,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = cores;
     compute.compile_time_args = ct_args;
-    compute.config = gdn_compute_config(attrs.compute_kernel_config);
+    compute.config = gdn_scan_compute_config(attrs.compute_kernel_config);
     compute.runtime_args.reserve(n_used);
 
     auto* vb_buf = in.v_beta.buffer();

@@ -4,10 +4,12 @@
 #pragma once
 
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt_stl/assert.hpp>
+#include <hostdevcommon/kernel_structs.h>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule_config.hpp"
@@ -34,6 +36,29 @@ inline tt::tt_metal::ComputeConfigDescriptor gdn_compute_config(const DeviceComp
         .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
         .dst_full_sync_en = cfg.dst_full_sync_en,
         .math_approx_mode = cfg.math_approx_mode};
+}
+
+// The scan's carried-state CBs that are unpacked straight into the fp32 DEST (UnpackToDestFp32): the
+// exact copies of S (reader-fed initial copy + compute ping-pong). Indices are free on every scan core
+// (phased scan program, fused receivers). See gdn_scan_compute_config.
+inline constexpr uint32_t kGdnScanExactStateCbs[3] = {
+    tt::CBIndex::c_9, tt::CBIndex::c_10, tt::CBIndex::c_12};
+
+// The scan compute configuration: gdn_compute_config plus UnpackToDestFp32 on the exact-state CBs.
+// The state update S <- dl*S + k_dec_t@v_new must not read S through the FPU: srcA/srcB hold 19-bit
+// values and the unpacker TRUNCATES fp32 into them, so an FPU-formed update rounds the carried state
+// toward zero every chunk and the bias compounds over the sequence (measured on Blackhole at chunk 32:
+// ~10% final-state norm shrinkage and state PCC 0.992 at 8K tokens on real Qwen3.x GDN inputs). The scan
+// instead unpacks S into DEST, scales it by dl on the SFPU and adds the k_dec_t@v_new matmul in fp32.
+// Only CBs consumed exclusively by copy_tile may carry this mode (it changes the CB's unpack destination
+// format, which an FPU matmul operand cannot use), hence separate exact copies of the state.
+inline tt::tt_metal::ComputeConfigDescriptor gdn_scan_compute_config(const DeviceComputeKernelConfig& cfg) {
+    auto desc = gdn_compute_config(cfg);
+    desc.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    for (uint32_t cb : kGdnScanExactStateCbs) {
+        desc.unpack_to_dest_mode[cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    return desc;
 }
 
 // WY-inverse method of the prep compute (the `tinv` attribute of the prep and fused prims): the op's

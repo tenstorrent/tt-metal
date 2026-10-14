@@ -52,6 +52,7 @@
 // already aligned) so the fused program declares one hand-off CB set on the producer/receiver
 // union. Must match chunk_gdn_scan.cpp (compute) and both program factories.
 constexpr uint32_t cb_dl = 22, cb_S = 8, cb_Tinv = 13;
+constexpr uint32_t cb_Sx0 = 9;  // exact (unpack-to-DEST) copy of the initial state, see chunk_gdn_scan.cpp
 constexpr uint32_t cb_eye = 5;  // one 32x32 fp32 identity tile for the compute's `I @ v_beta` accumulation
 constexpr uint32_t cb_vbeta = 14, cb_nkd = 18, cb_qdecay = 19, cb_intra = 20, cb_kdec_t = 24;
 
@@ -192,6 +193,7 @@ void kernel_main() {
     // initial state S [K, V] (once) — a required input (the public op builds zeros for a fresh sequence). V-sliced
     // (degenerates to the full state on fused receivers: vb = 0, Vt = Vt_full).
     read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
+    read_vslice(s0_acc, cb_Sx0, h * Kt * Vt_full, Kt);  // the same bytes, for the fp32 state update
 
     // One fp32 identity tile for the compute's `I @ v_beta` DST accumulation (scan_step). Written once,
     // never popped: the NoC zero-fills the tile (a loopback read of the firmware's zero region, no RISC

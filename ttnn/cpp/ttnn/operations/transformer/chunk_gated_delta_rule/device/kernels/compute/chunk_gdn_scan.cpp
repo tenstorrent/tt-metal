@@ -8,7 +8,9 @@
 // Per chunk (Ct=C/32, Kt=K/32, Vt=V/32):
 //   v_new = T_inv @ (v_beta + nkd @ S)      (nkd = -(k_beta*decay_exp), handed off negated)
 //   o     = q_decay @ S + intra @ v_new         (one DST accumulate)
-//   S     = (dl*I) @ S + k_dec_t @ v_new        (one DST accumulate; dl = exp(g_sum) on the diagonal)
+//   S     = dl * S + k_dec_t @ v_new           (k_dec_t @ v_new in DST; dl * S on the SFPU in fp32)
+// The carried state is never read through the FPU for the update: its exact fp32 copy (cur_Sx) is
+// unpacked straight into DEST, scaled by the fp32 dl scalar and added on the SFPU (see scan_step).
 // No matrix inverse here — that (the expensive part) lives entirely in the prep phase.
 //
 
@@ -33,6 +35,9 @@ constexpr uint32_t cb_s2 = 21, cb_vnew = 11, cb_ointer = 23, cb_kdec_t = 24;
 constexpr uint32_t cb_final = 27;
 constexpr uint32_t cb_eye = 5;  // one 32x32 identity tile, written by the reader (scan_step's I @ v_beta operand)
 constexpr uint32_t cb_s3 = 31;
+// Exact (UnpackToDestFp32) copies of the state: reader-fed initial copy + compute ping-pong
+// (kGdnScanExactStateCbs in chunk_gdn_compute_config.hpp).
+constexpr uint32_t cb_sx0 = 9, cb_sx2 = 10, cb_sx3 = 12;
 
 constexpr GdnScanCbs CBS{
     .dl = cb_dl,
@@ -67,6 +72,8 @@ void kernel_main() {
         const uint32_t nxt_S = (c & 1u) ? cb_s3 : cb_s2;
         const bool last = (c == NC - 1);
         const uint32_t dst = last ? cb_final : nxt_S;
+        const uint32_t cur_Sx = (c == 0) ? cb_sx0 : ((c & 1u) ? cb_sx2 : cb_sx3);
+        const uint32_t nxt_Sx = last ? 0xFFFFFFFFu : ((c & 1u) ? cb_sx3 : cb_sx2);
 
 #if defined(PROFILE_KERNEL)
         {
@@ -84,7 +91,7 @@ void kernel_main() {
 #endif
         {
             DeviceZoneScopedN("scan_step");
-            scan_step<Ct, Kt, Vt>(CBS, cur_S, dst);
+            scan_step<Ct, Kt, Vt>(CBS, cur_S, dst, cur_Sx, nxt_Sx);
         }
     }
 }

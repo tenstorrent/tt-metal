@@ -225,6 +225,11 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     add_cb(rcv_set, fcb::final_s, kvl);
     add_cb(rcv_set, fcb::eye, 1);  // the reader-written identity tile (scan_step's I @ v_beta)
     add_cb(rcv_set, fcb::s3, kvl);
+    // Exact (unpack-to-DEST) copies of the state for the fp32 state update (gdn_scan_compute_config).
+    // Receiver-only; the producer's same indices (decay/decay_exp/lmask) live on the disjoint prod_set.
+    for (uint32_t cb : kGdnScanExactStateCbs) {
+        add_cb(rcv_set, cb, kvl);
+    }
 
     // Handshake semaphores, declared on the UNION so each id resolves to the same L1 address on
     // producer and receiver. Ids reach both kernels as trailing compile-time args.
@@ -356,7 +361,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = rcv_set,
         .compile_time_args = ct_scan,
-        .config = gdn_compute_config(attrs.compute_kernel_config),
+        .config = gdn_scan_compute_config(attrs.compute_kernel_config),
     };
     scan_compute.runtime_args.reserve(R);
 
