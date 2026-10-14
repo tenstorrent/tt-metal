@@ -113,7 +113,7 @@
  *   - firmware .text/.data/.bss           < 0x120000
  *   - migration control + boot handshake  0x130000..0x131FFF
  *   - bank table / slots / staging / fifo  0x132000..0x153FFF
- * We claim [0x160000, 0x163000). It is below the stack (0x1D8000) and
+ * We claim [0x160000, 0x163000). It is above the stacks (below 0x120000) and
  * does NOT overlap the idle-FW boot-handshake mailboxes (0x130200..),
  * so priming these lines can never wipe the idle heartbeat.
  *

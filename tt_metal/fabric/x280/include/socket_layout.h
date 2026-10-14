@@ -54,6 +54,7 @@
  *
  *   0x000000 firmware .text/.data/.bss       (~tens of KiB)
  *   ...
+ *   0x0FFF80 stack bottom (4 x 32 KiB)       (boot/entry.S, x280.ld)
  *   0x100000 X280_SENTINEL_ADDR              (x280_address_map.h)
  *   0x120000 spike mailbox region            (PCIe NoC-write spike)
  *
@@ -80,7 +81,6 @@
  *                                              allocator hands out per-
  *                                              H2D-HOST_PUSH ring slices)
  *   ...      (free for future expansion)
- *   0x1D8000 stack bottom (top - 32 KiB)     (boot/entry.S, x280.ld)
  *   0x1E0000 LIM end (X280_LIM_END)
  *
  * Total reservation: ~144 KiB. The placement order puts small fixed-
@@ -597,7 +597,7 @@ static_assert(
 
 /* ------------------------------------------------------------------
  * Compile-time guards: each region must fit before the next, and the
- * top of the FIFO pool must stay below the firmware stack. Update
+ * top of the FIFO pool must stay below 0x1D8000. Update
  * whenever a new region is added above.
  * ------------------------------------------------------------------ */
 static_assert(
@@ -669,7 +669,7 @@ static_assert(
     X280_STAGING_OFFSET + X280_STAGING_SIZE <= X280_H2D_FIFO_POOL_OFFSET,
     "X280_STAGING_SIZE overflows into the H2D-FIFO bump pool.");
 static_assert(
-    X280_SOCKET_HIGHEST_END <= 0x001D8000UL, "X280 socket layout overflows LIM (must stay below stack at 0x081D8000).");
+    X280_SOCKET_HIGHEST_END <= 0x001D8000UL, "X280 socket layout overflows LIM (must stay below 0x081D8000).");
 static_assert(
     X280_LIM_BASE + X280_SOCKET_HIGHEST_END <= X280_LIM_END, "X280 socket layout overflows the canonical LIM bounds.");
 
