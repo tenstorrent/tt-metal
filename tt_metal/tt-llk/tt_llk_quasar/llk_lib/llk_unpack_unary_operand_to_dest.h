@@ -77,8 +77,8 @@ inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t bu
  *       and semaphore::UNPACK_PACK, each with max N (1 for SyncFull, 2 for SyncHalf) and value 0. Per section, T1 waits on
  *       UNPACK_MATH (@ref _llk_sync_wait_), does its work, posts MATH_PACK (@ref _llk_sync_post_) and gets UNPACK_MATH
  *       (@ref _llk_sync_get_). T1 never flips the section base (unpack owns it, see @ref _llk_unpack_dest_init_).
- * @note Pack thread (T2) contract: per section, behind the packer drain, get UNPACK_PACK (frees the bank for this thread)
- *       and then MATH_PACK; SyncHalf: flip the pack section base (@ref _llk_sync_advance_dest_section_).
+ * @note Pack thread (T2) contract: per section, behind the packer drain, get UNPACK_PACK (frees the bank for the unpack
+ *       thread, T0) and then MATH_PACK; SyncHalf: flip the pack section base (@ref _llk_sync_advance_dest_section_).
  * @note @ref _llk_unpack_dest_init_ must have run once on this thread before the first call. Per section on this
  *       thread: @ref _llk_sync_wait_ STALL_ON_MAX on UNPACK_PACK (a DEST bank is free), any number of
  *       @ref _llk_unpack_unary_operand_to_dest_tile_ / @ref _llk_unpack_unary_operand_to_dest_block_, then, behind an
