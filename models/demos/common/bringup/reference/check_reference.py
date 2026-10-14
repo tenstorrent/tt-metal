@@ -122,6 +122,7 @@ def main(argv=None):
         for j in spec.state_sources(li):  # F65: the layers it reads, as they are after the last chunk
             ref.load_state(state, j, ref.state_tensors(ch_state, j, a.seq), a.seq)
         ctx = ref.chunk_context(li, start, a.chunk, state)
+        ctx.extra.setdefault("tokens", tokens[start : start + a.chunk])  # F65: as the harness gives every step
         replayed = {}
         run_block(
             steps,

@@ -30,7 +30,7 @@ from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.reference.generate_golden import run_starts
 from models.demos.common.bringup.reference.golden import Golden
 from models.demos.common.bringup.testing import cpu_bridge
-from models.demos.common.bringup.testing.harness import threshold
+from models.demos.common.bringup.testing.harness import begin_chunk, threshold
 from models.demos.common.bringup.testing.host_transfers import HostTransfers
 
 
@@ -77,6 +77,7 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
         s0 = c * chunk
         t0 = time.time()
         h = None
+        begin_chunk(model, tokens[s0 : s0 + chunk], s0)  # F65
         for i in layers:
             if i in starts:
                 if h is not None:

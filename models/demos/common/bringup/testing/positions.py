@@ -22,6 +22,7 @@ import torch
 
 from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.testing import cpu_bridge
+from models.demos.common.bringup.testing.harness import begin_chunk
 
 
 def _target_seq(s) -> int:
@@ -65,6 +66,7 @@ def run_positions(s, mesh) -> list[tuple[int, float]]:
         tokens = torch.randint(0, vocab, (chunk,))
 
         def once():
+            begin_chunk(model, tokens, start)  # F65
             h = model.embed(tokens)
             for i in layers:
                 h2 = model.layer(i, h, start, state)
