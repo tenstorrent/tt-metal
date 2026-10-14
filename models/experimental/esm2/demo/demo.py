@@ -76,20 +76,19 @@ def main() -> int:
     ap.add_argument("--max-len", type=int, default=1026)
     args = ap.parse_args()
 
-    import json
     import os
     import sys
+    from pathlib import Path
 
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from models.experimental.esm2.tt.esm2.ttnn_backend import TtnnEsm2
+    # demo.py lives at <repo>/models/experimental/esm2/demo/ -> parents[4] is the repo root.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+    from models.experimental.esm2.runtime import build_runtime
 
     if args.fasta == "demo/example.fasta" and not os.path.exists(args.fasta):
         with open(args.fasta, "w") as f:
             f.write(EXAMPLE_FASTA)
 
-    with open(os.path.join(args.checkpoint, "config.json")) as f:
-        cfg_dict = json.load(f)
-    backend = TtnnEsm2.build(args.checkpoint, cfg_dict, args.device, precision=args.precision)
+    backend = build_runtime(args.checkpoint, device=args.device, precision=args.precision)
 
     vocab = load_vocab(os.path.join(args.checkpoint, "vocab.txt"))
     with open(args.fasta) as f:
@@ -98,7 +97,7 @@ def main() -> int:
 
     L = max(len(ids) for _, ids in cases)
     B = len(cases)
-    pad = cfg_dict["pad_token_id"]
+    pad = backend.config.pad_token_id
     ids = np.full((B, L), pad, dtype=np.int64)
     am = np.zeros((B, L), dtype=np.int64)
     for i, (_, case_ids) in enumerate(cases):

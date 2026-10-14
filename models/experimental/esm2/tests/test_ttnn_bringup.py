@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import torch
 
 from models.experimental.esm2.tt.esm2.config import Esm2TTConfig
@@ -118,3 +119,99 @@ class TestFullModel:
         diff = (h_single - h_batch_row0).abs().max().item()
         print(f"\n[batch] row-0 max diff = {diff:.8f}")
         assert diff < 1e-4, f"batch row-0 max diff {diff} > 1e-4"
+
+
+class TestCachesAndTrace:
+    """Codex-review regressions: shape-keyed device caches, bounded retention,
+    and trace first-call correctness (a newly captured trace must execute
+    before its outputs are read)."""
+
+    def _backend(self, device):
+        cfg = _make_cfg()
+        w = _make_weights(cfg)
+        b = TtnnEsm2(cfg, w, device=device, precision="fp32")
+        b.build()
+        return b, cfg
+
+    def _ids(self, batch, length, seed):
+        g = torch.Generator().manual_seed(seed)
+        ids = torch.randint(3, 30, (batch, length), generator=g)
+        ids[:, 0], ids[:, -1] = 0, 2
+        return ids
+
+    def test_mask_cache_keys_include_shape(self, device):
+        """[1,64] and [2,32] all-ones masks flatten to identical bytes but
+        must resolve to distinct, correctly-shaped device tensors."""
+        b, cfg = self._backend(device)
+        H = cfg.num_attention_heads
+        m64 = b.mask_tensor(torch.ones(1, 64, dtype=torch.long))
+        m32 = b.mask_tensor(torch.ones(2, 32, dtype=torch.long))
+        assert m64 is not m32
+        assert [int(d) for d in m64.shape] == [1, H, 64, 64]
+        assert [int(d) for d in m32.shape] == [2, H, 32, 32]
+
+    def test_rotary_cache_keys_include_shape(self, device):
+        """Equal-element-count ids shapes must not collide in the rotary cache."""
+        b, cfg = self._backend(device)
+        H, D = cfg.num_attention_heads, cfg.head_dim
+        t1 = b.rotary_tensors(torch.zeros(1, 64, dtype=torch.long))
+        t2 = b.rotary_tensors(torch.zeros(2, 32, dtype=torch.long))
+        assert t1 is not t2
+        assert [int(d) for d in t1[0][0].shape] == [1, H, 64, D]  # q_cos
+        assert [int(d) for d in t2[0][0].shape] == [2, H, 32, D]
+
+    def test_rotary_cache_reuses_same_position_pattern(self, device):
+        """Tables depend only on positions: different ids with the same pad
+        structure (here: no pads) reuse one device copy."""
+        b, cfg = self._backend(device)
+        ids_a = self._ids(1, 32, seed=101)
+        ids_b = self._ids(1, 32, seed=202)
+        assert not torch.equal(ids_a, ids_b)
+        assert b.rotary_tensors(ids_a) is b.rotary_tensors(ids_b)
+
+    def test_per_input_caches_are_bounded(self, device):
+        """Rotary/mask caches must not grow without bound across shapes."""
+        b, cfg = self._backend(device)
+        b._MASK_CACHE_MAX = 2
+        b._ROTARY_CACHE_MAX = 2
+        for length in (32, 64, 96):
+            b.mask_tensor(torch.ones(1, length, dtype=torch.long))
+            b.rotary_tensors(self._ids(1, length, seed=length))
+        assert len(b._mask_cache) <= 2
+        assert len(b._rotary_cache) <= 2
+
+    def test_trace_first_call_matches_eager_and_replay(self, device):
+        """The FIRST traced call (capture) must already return executed
+        outputs, bit-identical to eager; replay must reproduce them."""
+        b, cfg = self._backend(device)
+        ids = self._ids(1, 32, seed=11)
+        mask = torch.ones(1, 32, dtype=torch.long)
+        eager = b.forward(ids, mask)
+        b.set_trace(True)
+        first = b.forward(ids, mask)  # capture + first execute
+        assert b.trace_status == "captured", b.trace_status
+        assert b.last_trace_mode == "trace_capture"
+        replay = b.forward(ids, mask)
+        assert b.trace_status == "replayed", b.trace_status
+        assert b.last_trace_mode == "trace_replay"
+        for out in (first, replay):
+            assert np.array_equal(out["hidden"], eager["hidden"])
+            assert np.array_equal(out["logits"], eager["logits"])
+
+    def test_trace_survives_cache_eviction(self, device):
+        """Evicting the captured shape's rotary/mask cache entries must not
+        invalidate the trace: entries hold their own tensor references."""
+        b, cfg = self._backend(device)
+        ids = self._ids(1, 32, seed=13)
+        mask = torch.ones(1, 32, dtype=torch.long)
+        b.set_trace(True)
+        first = b.forward(ids, mask)  # capture + execute
+        b._MASK_CACHE_MAX = 1
+        b._ROTARY_CACHE_MAX = 1
+        for length in (64, 96):  # new shapes evict the captured shape's entries
+            b.forward(self._ids(1, length, seed=length), torch.ones(1, length, dtype=torch.long))
+        assert len(b._mask_cache) <= 1 and len(b._rotary_cache) <= 1
+        replay = b.forward(ids, mask)  # trace hit with its own pinned tensors
+        assert b.trace_status == "replayed", b.trace_status
+        assert np.array_equal(replay["hidden"], first["hidden"])
+        assert np.array_equal(replay["logits"], first["logits"])

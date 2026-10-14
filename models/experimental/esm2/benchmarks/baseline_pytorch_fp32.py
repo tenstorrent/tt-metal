@@ -24,12 +24,13 @@ import platform
 import resource
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
 
-sys.path.insert(0, ".")
-from models.experimental.esm2.tt.esm2.ttnn_backend import TtnnEsm2  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))  # repo root
+from models.experimental.esm2.runtime import build_runtime  # noqa: E402
 
 # Fixed suite shapes (name, batch, padded_len, seed) — envelope from CONTRACT.md.
 # Seeds are explicit literals so the artifact is reproducible across runs.
@@ -102,7 +103,7 @@ def main() -> int:
 
     torch.set_num_threads(max(1, os.cpu_count() // 2))  # polite on shared host
     t0 = time.perf_counter()
-    backend = TtnnEsm2.build(args.weights, os.path.join(args.weights, "config.json"), "cpu")
+    backend = build_runtime(args.weights, device="cpu", precision="fp32")
     load_s = time.perf_counter() - t0
     cfg = backend.config
 

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 import torch
 
@@ -83,6 +84,39 @@ class TestReferenceTwin:
             logits_masked, _ = model(ids_masked, mask)
         delta = (logits_masked - logits_plain).abs().max().item()
         assert delta > 0.01, f"Masking a residue must change that position's logits (delta={delta:.6f})"
+
+
+class TestRuntimeFacade:
+    """The demo/baseline entry point: one embed() surface over the backends."""
+
+    def test_cpu_facade_matches_reference_twin(self, small_cfg, model):
+        from models.experimental.esm2.runtime import Esm2Runtime
+
+        rt = Esm2Runtime(model, "cpu")
+        assert rt.config is small_cfg
+        ids, mask = _make_ids(small_cfg)
+        out = rt.embed(ids.numpy(), mask.numpy())
+        assert set(out) == {"logits", "hidden"}
+        with torch.no_grad():
+            logits, hidden = model(ids, mask)
+        np.testing.assert_array_equal(out["logits"], logits.numpy())
+        np.testing.assert_array_equal(out["hidden"], hidden.numpy())
+
+    def test_build_runtime_rejects_bad_arguments(self, tmp_path, expect_error):
+        from models.experimental.esm2.runtime import build_runtime
+
+        with expect_error(ValueError, "device must be"):
+            build_runtime(str(tmp_path), device="cuda")
+        with expect_error(ValueError, "FP32 only"):
+            build_runtime(str(tmp_path), device="cpu", precision="bf16")
+
+    def test_cpu_facade_rejects_mismatched_shapes(self, small_cfg, model, expect_error):
+        from models.experimental.esm2.runtime import Esm2Runtime
+
+        rt = Esm2Runtime(model, "cpu")
+        ids, _ = _make_ids(small_cfg)
+        with expect_error(ValueError, "input_ids"):
+            rt.embed(ids.numpy(), np.ones((1, 7), dtype=np.int64))
 
 
 class TestConfig:

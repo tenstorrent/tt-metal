@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import inspect
 import time
+from collections import OrderedDict
 
 import numpy as np
 import torch
@@ -70,6 +71,12 @@ class TtnnEsm2:
     # trace fast path bounds (see module docstring; opt-in only)
     _TRACE_MAX_LT = 1024  # decline trace at Lt >= 1024 until memory sized
     _TRACE_CACHE_MAX = 4  # each entry pins trace buffers; evict oldest
+    # per-input device tensor caches: bounded LRU (see rotary_tensors /
+    # mask_tensor). Eviction only drops the cache's reference -- captured
+    # trace entries keep their own tensor references, so a live trace stays
+    # valid after its inputs' cache entries are evicted.
+    _ROTARY_CACHE_MAX = 8  # ~10.3 MiB/table-set at Lt=1056 bf16
+    _MASK_CACHE_MAX = 4  # [B,H,L,L] masks are the largest per-input tensors
     _TRACE_CQ_ID = 0  # single queue (verified.
 
     def __init__(self, config: Esm2TTConfig, weights: dict, device=None, precision: str = "bf16", device_id: int = 0):
@@ -105,8 +112,8 @@ class TtnnEsm2:
         self._inv_freq = 1.0 / (
             config.rotary_base ** (torch.arange(0, config.head_dim, 2, dtype=torch.float32) / config.head_dim)
         )  # fp32 [head_dim/2]
-        self._rotary_cache: dict = {}  # ids bytes -> (q tables, k tables)
-        self._mask_cache: dict = {}  # am bytes -> additive mask device
+        self._rotary_cache: OrderedDict = OrderedDict()  # (shape, pos bytes) -> (q tables, k tables)
+        self._mask_cache: OrderedDict = OrderedDict()  # (shape, am bytes) -> additive mask device
         # opt-in trace fast path state (eager is the safe default)
         self.enable_trace = False
         self._trace_cache: dict = {}  # key -> entry (see module docstring)
@@ -237,6 +244,8 @@ class TtnnEsm2:
     def close(self):
         for key in list(self._trace_cache):
             self._release_trace_entry(key)
+        self._rotary_cache.clear()
+        self._mask_cache.clear()
         if self._owns_device and self.device is not None:
             self.ttnn.close_device(self.device)
         self.device = None
@@ -329,6 +338,14 @@ class TtnnEsm2:
     def rotary_tensors(self, ids: torch.Tensor):
         """Cached device bf16 tables: q [B,H,L,D] and k^T [B,H,D,L].
 
+        Cache key is (shape, position-id bytes): the table values depend only
+        on the position pattern, so (a) equal-element-count shapes such as
+        [1,64] vs [2,32] can never collide, and (b) different proteins with
+        the same pad structure reuse one device copy instead of pinning four
+        new tensors each. Bounded LRU (_ROTARY_CACHE_MAX); eviction only
+        drops this cache's reference, so captured traces that hold their own
+        table references stay valid.
+
         Tables are PRE-DUPLICATED to full head width with the rotation sign
         folded in (cos_d = cat(cos, cos); sin_d = cat(-sin, sin)), so the
         per-layer rotation needs only 2 slices + concat + 2 muls + add
@@ -342,12 +359,13 @@ class TtnnEsm2:
         one-time per-input rotary upload (long: ~5.4 -> ~10.8 MB, cold-only;
         warm per-call traffic is unchanged).
         """
-        key = ids.detach().numpy().tobytes()
-        cached = self._rotary_cache.get(key)
-        if cached is not None:
-            return cached
         cfg = self.config
         pos = position_ids_from_input_ids(ids, cfg.pad_token_id)
+        key = (tuple(int(n) for n in pos.shape), pos.detach().numpy().tobytes())
+        cached = self._rotary_cache.get(key)
+        if cached is not None:
+            self._rotary_cache.move_to_end(key)
+            return cached
         cos_h, sin_h = self._cos_sin_half(pos)  # [B,L,half] fp32 host
         cos_d = torch.cat([cos_h, cos_h], dim=-1)  # [B,L,D] fp32
         sin_d = torch.cat([-sin_h, sin_h], dim=-1)  # sign-folded [B,L,D]
@@ -359,19 +377,31 @@ class TtnnEsm2:
         k_cos = self._dev(cos_t.unsqueeze(1).expand(-1, H, -1, -1))
         k_sin = self._dev(sin_t.unsqueeze(1).expand(-1, H, -1, -1))
         cached = ((q_cos, q_sin), (k_cos, k_sin))
+        while len(self._rotary_cache) >= self._ROTARY_CACHE_MAX:
+            self._rotary_cache.popitem(last=False)
         self._rotary_cache[key] = cached
         return cached
 
     def mask_tensor(self, am: torch.Tensor):
-        """Cached device bf16 additive mask [B,H,L,L]: 0 keep / -1e9 pad."""
-        key = am.detach().numpy().tobytes()
+        """Cached device bf16 additive mask [B,H,L,L]: 0 keep / -1e9 pad.
+
+        The key includes the shape: all-ones masks for [1,64] and [2,32] have
+        identical flattened bytes but must resolve to different tensors
+        (broadcasting [1,H,64,64] onto [2,H,32,32] scores fails). Bounded LRU
+        (_MASK_CACHE_MAX); eviction never frees buffers a live captured trace
+        still references.
+        """
+        key = (tuple(int(n) for n in am.shape), am.detach().numpy().tobytes())
         cached = self._mask_cache.get(key)
         if cached is not None:
+            self._mask_cache.move_to_end(key)
             return cached
         add = (1.0 - am.float()) * _MASK_NEG  # [B,L]
         B, L = am.shape
         m = add[:, None, None, :].expand(B, 1, L, L).expand(B, self.config.num_attention_heads, L, L).contiguous()
         t = self._dev(m)
+        while len(self._mask_cache) >= self._MASK_CACHE_MAX:
+            self._mask_cache.popitem(last=False)
         self._mask_cache[key] = t
         return t
 
@@ -588,6 +618,14 @@ class TtnnEsm2:
                 x0 = self._dev(emb, dtype=self.stream_dtype)
                 q_tables, k_tables = self.rotary_tensors(ids)
                 mask = self.mask_tensor(am)
+                # Warm-up pass (eager, outside capture): this runtime refuses
+                # to load new program binaries during capture ("Cannot load
+                # new binaries during trace capture... Warm up before
+                # capturing a trace"), so every op config in the graph must
+                # already be in the program cache before begin_trace_capture.
+                # One eager pass over the exact captured tensors guarantees
+                # that for any shape, not just previously-run ones.
+                self._graph_forward(x0, q_tables, k_tables, mask)
                 t0 = time.perf_counter()
                 tid = self._trace_call(ttnn.begin_trace_capture, self.device)
                 if tid is None:
@@ -598,6 +636,14 @@ class TtnnEsm2:
                 self._trace_disabled = True
                 self.trace_status = f"capture_failed: {e!r}"
                 if tid is not None:
+                    # Best-effort cleanup: END the capture first so the
+                    # device leaves capture mode, otherwise every subsequent
+                    # device op (including the eager fallback below) fatals
+                    # with "Writes are not supported during trace capture".
+                    try:
+                        self._trace_call(ttnn.end_trace_capture, self.device, tid)
+                    except Exception:
+                        pass
                     try:
                         self._trace_call(ttnn.release_trace, self.device, tid)
                     except Exception:
@@ -620,6 +666,17 @@ class TtnnEsm2:
                 "replays": 0,
                 "released": False,
             }
+            # Capture records commands; ending capture does NOT execute them.
+            # Execute once now so THIS call returns real outputs -- reading
+            # logits/hidden before any execute would see unwritten or stale
+            # buffer contents.
+            try:
+                self._trace_call(ttnn.execute_trace, self.device, tid)
+            except Exception as e:
+                self._trace_disabled = True
+                self.trace_status = f"first_execute_failed: {e!r}"
+                self._release_trace_entry(key)
+                return None, None, "eager"
             self.trace_status = "captured"
             return logits, hidden, "trace_capture"
         # ---- cache hit: fresh inputs must reproduce the captured embedding
