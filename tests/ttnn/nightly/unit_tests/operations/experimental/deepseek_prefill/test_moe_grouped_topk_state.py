@@ -34,9 +34,9 @@ TOTAL_EXPERTS, K = KIMI[1], KIMI[4]
 SCORE_FUNC = "sigmoid"
 INPUT_DTYPE = ttnn.bfloat16
 
-# Relative gap below which two keys may be equal on device. The sort compares scores with 10
-# mantissa bits (the FPU keeps that many when it moves fp32 tiles), so keys closer than about 1e-3
-# can be exact ties on device even when torch separates them.
+# Relative gap below which two keys may be equal on device. The sort compares 17 mantissa bits of
+# the fp32 keys (~8e-6 relative), and the device's activation differs from torch's slightly, so keys
+# closer than this are not asserted against the torch order. Conservative.
 SORT_RESOLUTION = 2e-3
 # The device's activations against torch: allowed relative error, and the logit range checked. The
 # device's sqrt-softplus returns 0 for logits below about -5 (torch gives up to 0.08 there), so its

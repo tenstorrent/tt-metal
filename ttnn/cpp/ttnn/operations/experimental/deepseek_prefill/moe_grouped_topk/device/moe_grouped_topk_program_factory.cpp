@@ -264,10 +264,6 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
         {"log_width_tiles", ceil_log2(static_cast<uint32_t>(width_tiles))},
     };
 
-    // Default-unpacked fp32 tiles reach DEST through SrcA as TF32, i.e. with zero low 13 mantissa bits;
-    // the kernel's rank-tag stable engine keeps its tag inside those bits and is lossless only then.
-    // sort_keys_tf32 certifies it from the modes actually passed for the two CBs the rank-tag sorts
-    // read. It is the single-group path's flag; the grouped path's keys are full fp32 by design (below).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     // Raw fp32 inputs unpack straight to DEST, so the activation and the SFPU bias add see exact values.
@@ -277,24 +273,16 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     if (bias_data_format == tt::DataFormat::Float32) {
         unpack_to_dest_mode[static_cast<uint32_t>(cb_in_bias)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    // Grouped path: full-fp32 keys. Every CB that carries routing scores into a grouped sort or into the
-    // group sum unpacks straight to DEST (transpose_tile then takes the 32-bit transpose_dest path), and the
-    // group sum runs on the SFPU. The single-group sigmoid path keeps TF32 keys: its sort contract (ties at
-    // the 10 compared mantissa bits ordered by index, the rank-tag engine) is defined on them. The
-    // single-group sqrt(softplus) key stays full fp32 too (its rank-tag top-k then compares 23 - GATE_TAG_BITS
-    // = 17 mantissa bits; exact ties still go lowest index first).
+    // Full-fp32 sort keys on every path: each CB that carries routing scores into a sort or into the group
+    // sum unpacks straight to DEST (SrcA would truncate it to TF32, 10 mantissa bits), transpose_tile then
+    // takes the 32-bit transpose_dest path, and the group sum runs on the SFPU. The rank-tag top-k compares
+    // 23 - GATE_TAG_BITS = 17 mantissa bits; exact ties still go lowest index first.
+    unpack_to_dest_mode[static_cast<uint32_t>(cb_biased_scores)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     if (operation_attributes.n_groups > 1) {
-        for (auto cb : {cb_biased_scores, cb_top_experts_per_group, cb_group_summed_scores, cb_winning_group_scores}) {
+        for (auto cb : {cb_top_experts_per_group, cb_group_summed_scores, cb_winning_group_scores}) {
             unpack_to_dest_mode[static_cast<uint32_t>(cb)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
-    } else if (operation_attributes.score_func == ScoreFunc::SqrtSoftplus) {
-        unpack_to_dest_mode[static_cast<uint32_t>(cb_biased_scores)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    const auto default_unpack = [&](tt::CBIndex cb) {
-        return unpack_to_dest_mode[static_cast<uint32_t>(cb)] == tt::tt_metal::UnpackToDestMode::Default;
-    };
-    const bool sort_keys_tf32 = default_unpack(cb_biased_scores) && default_unpack(cb_group_summed_scores);
-    compute_named_compile_time_args.emplace_back("sort_keys_tf32", static_cast<uint32_t>(sort_keys_tf32));
 
     KernelDescriptor::NamedCompileTimeArgs writer_named_compile_time_args = {
         {"row_major_weights", static_cast<uint32_t>(row_major_weights)},
