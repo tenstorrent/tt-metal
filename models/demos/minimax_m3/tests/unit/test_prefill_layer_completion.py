@@ -62,3 +62,36 @@ def test_no_completion_consumer_keeps_asynchronous_path(monkeypatch):
     hidden = object()
     model = SimpleNamespace(layers=[lambda value, **kwargs: value], mesh_device=object(), is_last_rank=False)
     assert Model._forward_layers_and_head(model, hidden, None, None) is hidden
+
+
+def test_event_fence_acks_each_layer_after_its_event(monkeypatch):
+    from models.demos.minimax_m3.tt.tt_prefill_runtime import EventLayerAckFence
+
+    mesh = object()
+    recorded = []
+    waited = []
+    acked = []
+
+    def record_event(device, cq_id):
+        assert device is mesh and cq_id == 0
+        recorded.append(len(recorded))
+        return recorded[-1]
+
+    def event_synchronize(event):
+        waited.append(event)
+
+    def ack(index):
+        assert waited == list(range(index + 1))
+        acked.append(index)
+
+    monkeypatch.setattr("ttnn.record_event", record_event)
+    monkeypatch.setattr("ttnn.event_synchronize", event_synchronize)
+    monkeypatch.setattr("ttnn.synchronize_device", lambda device: pytest.fail("the event fence replaces the sync"))
+    fence = EventLayerAckFence()
+    try:
+        model = SimpleNamespace(layers=[lambda value, **kwargs: value] * 3, mesh_device=mesh, is_last_rank=False)
+        Model._forward_layers_and_head(model, object(), None, None, on_layer_complete=fence.bind(ack))
+        fence.drain()
+    finally:
+        fence.close()
+    assert acked == [0, 1, 2]
