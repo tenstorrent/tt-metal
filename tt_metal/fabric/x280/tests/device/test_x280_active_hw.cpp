@@ -51,25 +51,34 @@ std::vector<std::string> split_image_list(const std::string& list) {
     return paths;
 }
 
-// Image list for the contract suite, falling back to the single-image variable
-// the sentinel tests use so existing invocations keep working, and with neither
-// set to the build's contract set: the sentinel and atomic-bench. A path that is
-// not present is dropped rather than failed: the list names every conforming
-// image, and a checkout need not have built them all. Dropping is not silent —
-// EveryRequestedImageResolves names each one and fails when nothing resolves.
-std::vector<std::string> images_from_env() {
-    const char* many = std::getenv("X280_ACTIVE_FW_IMAGES");
-    const char* one = std::getenv("X280_ACTIVE_FW_IMAGE");
-    std::string list = std::string(X280_IMAGE_DIR) + "/firmware.bin:" +
-                       x280::test::test_image("X280_ATOMIC_BENCH_FW_IMAGE", "firmware-atomic-bench.bin");
-    if (many != nullptr) {
-        list = many;
-    } else if (one != nullptr) {
-        list = one;
-    }
+// The images the contract suite was asked to run. X280_ACTIVE_FW_IMAGES names them; when it is
+// unset, the single-image variable the sentinel tests use keeps existing invocations working; when
+// both are unset or empty, the build's contract set (the sentinel and atomic-bench) is requested.
+// An X280_ACTIVE_FW_IMAGES that is set but names no path opts the suite out.
+struct RequestedImages {
+    std::vector<std::string> paths;
+    bool build_defaults = false;
+};
 
+RequestedImages requested_images() {
+    if (const char* many = std::getenv("X280_ACTIVE_FW_IMAGES"); many != nullptr) {
+        return {split_image_list(many), false};
+    }
+    if (const char* one = std::getenv("X280_ACTIVE_FW_IMAGE"); one != nullptr && *one != '\0') {
+        return {split_image_list(one), false};
+    }
+    return {
+        {std::string(X280_IMAGE_DIR) + "/firmware.bin",
+         x280::test::test_image("X280_ATOMIC_BENCH_FW_IMAGE", "firmware-atomic-bench.bin")},
+        true};
+}
+
+// The requested images that exist. A requested path that does not is dropped rather than failed,
+// since a list may name images a checkout has not built; EveryRequestedImageResolves reports each
+// drop and fails when nothing resolves, or when a build default is missing.
+std::vector<std::string> images_from_env() {
     std::vector<std::string> images;
-    for (auto& path : split_image_list(list)) {
+    for (auto& path : requested_images().paths) {
         if (std::ifstream(path).good()) {
             images.push_back(std::move(path));
         }
@@ -240,11 +249,11 @@ TEST_P(X280ActiveContract, ConformsToTheActiveImageContract) {
 
 INSTANTIATE_TEST_SUITE_P(Images, X280ActiveContract, ::testing::ValuesIn(images_from_env()));
 
-// An empty list is legitimate: X280_ACTIVE_FW_IMAGES may be unset, or name
-// images this checkout has not built. Without this, gtest fails the binary
-// for having a parameterised suite with no cases, where every other test here
-// skips. It follows that gtest cannot tell a deliberately empty suite from a
-// broken invocation — EveryRequestedImageResolves is what catches the latter.
+// An empty suite is legitimate when X280_ACTIVE_FW_IMAGES names no path, or only
+// images this checkout has not built. Without this, gtest fails the binary for
+// having a parameterised suite with no cases, where every other test here skips.
+// It follows that gtest cannot tell a deliberately empty suite from a broken
+// invocation — EveryRequestedImageResolves is what catches the latter.
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(X280ActiveContract);
 
 // A path list that resolves to nothing instantiates no cases and passes in
@@ -254,12 +263,7 @@ GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(X280ActiveContract);
 // prepared runtime, and a broken path list is detectable with no hardware at
 // all, so inheriting it would skip exactly where this has to fail.
 TEST(X280ActiveContractImages, EveryRequestedImageResolves) {
-    const char* list = std::getenv("X280_ACTIVE_FW_IMAGES");
-    if (list == nullptr) {
-        GTEST_SKIP() << "X280_ACTIVE_FW_IMAGES unset: skipping image-resolution guard (X280ActiveContract may still "
-                        "run via the X280_ACTIVE_FW_IMAGE fallback or the build's images)";
-    }
-    const auto requested = split_image_list(list);
+    const auto [requested, build_defaults] = requested_images();
     if (requested.empty()) {
         GTEST_SKIP() << "X280_ACTIVE_FW_IMAGES names no paths: the contract suite is opted out";
     }
@@ -275,13 +279,18 @@ TEST(X280ActiveContractImages, EveryRequestedImageResolves) {
         std::cout << "[  DROPPED ] not readable, no contract case: " << path << "\n";
     }
 
+    std::string names;
+    for (const auto& path : dropped) {
+        names += "\n  " + path;
+    }
+    if (build_defaults && !dropped.empty()) {
+        FAIL() << "the build's contract images are missing, so X280ActiveContract would silently skip them; "
+                  "build x280_images or set X280_ACTIVE_FW_IMAGES:"
+               << names;
+    }
     if (dropped.size() == requested.size()) {
-        std::string names;
-        for (const auto& path : dropped) {
-            names += "\n  " + path;
-        }
         FAIL() << "none of the " << requested.size()
-               << " paths in X280_ACTIVE_FW_IMAGES resolve, so X280ActiveContract "
+               << " requested paths resolve, so X280ActiveContract "
                   "instantiates no case and the suite proves nothing:"
                << names;
     }

@@ -575,17 +575,17 @@ A path that does not resolve costs its case but is never dropped silently.
 `X280ActiveContractImages.EveryRequestedImageResolves` compares what was
 requested against what resolved:
 
-| `X280_ACTIVE_FW_IMAGES` | Outcome |
+| Request | Outcome |
 |---|---|
 | every path resolves | one case per path |
 | some resolve | those cases run; each unresolved path prints as `[  DROPPED ]`; exit 0 |
 | none resolve | **fail**, naming every path — the suite would otherwise instantiate nothing and pass |
-| unset, or naming no path | skip: nothing was requested |
+| the build's images, one missing | **fail**, naming it |
+| `X280_ACTIVE_FW_IMAGES` names no path | skip: the suite is opted out |
 
-The guard keys on `X280_ACTIVE_FW_IMAGES` alone and needs no hardware, so a
-broken path list fails on a laptop. `X280_ACTIVE_FW_IMAGE` is a fallback for
-instantiating `X280ActiveContract` when `X280_ACTIVE_FW_IMAGES` is unset, but
-it does not count as a request for this guard test.
+The request is `X280_ACTIVE_FW_IMAGES`, else a non-empty `X280_ACTIVE_FW_IMAGE`,
+else the build's sentinel and atomic-bench. The guard needs no hardware, so a
+broken path list fails on a laptop.
 
 Every runtime device test takes its image from `build/x280/` unless its
 variable names another (`X280_ACTIVE_FW_IMAGE` for `X280ActiveHw`, which runs
