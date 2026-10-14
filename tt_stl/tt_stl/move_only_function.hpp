@@ -171,7 +171,9 @@ public:
 
     ~move_only_function() { destroy_target(); }
 
-    explicit operator bool() const noexcept { return table() != &kEmptyTable; }
+    // Only the empty table has no destroy entry. Comparing table addresses instead would fail for an empty
+    // instance made in another shared library built with hidden visibility, which has its own kEmptyTable.
+    explicit operator bool() const noexcept { return table()->destroy != nullptr; }
 
     // Calling an empty instance throws through the empty table, with no branch here.
     R operator()(Args... args) { return table()->call(buffer_, std::forward<Args>(args)...); }
