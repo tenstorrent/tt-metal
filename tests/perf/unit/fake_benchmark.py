@@ -8,7 +8,8 @@
 
 $FAKE_BENCH_PLAN names a JSON file: {"metric": {...decl...}, "runs": [{case: value, ...}, ...]}. Each invocation
 consumes the next entry of "runs", so a test can give the retry different values from the first run. An entry of
-"crash" makes that invocation exit with an error.
+"crash" makes that invocation exit with an error, a case value of None errors every repetition, and a case value of
+[value, "error_last"] errors only the last repetition.
 """
 
 import json
@@ -40,7 +41,14 @@ for case, value in values.items():
             {"name": case, "run_name": case, "run_type": "iteration", "error_occurred": True, "error_message": "boom"}
         )
         continue
+    # A [value, "error_last"] pair succeeds on every repetition but the last, which reports an error.
+    error_last = isinstance(value, list)
+    if error_last:
+        value = value[0]
     for rep in range(repetitions):
+        if error_last and rep == repetitions - 1:
+            rows.append({"name": case, "run_name": case, "run_type": "iteration", "error_occurred": True})
+            continue
         rows.append(
             {
                 "name": case,
