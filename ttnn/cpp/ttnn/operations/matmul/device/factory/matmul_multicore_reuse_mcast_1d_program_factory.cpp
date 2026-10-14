@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include <algorithm>
@@ -811,6 +812,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         unpack_to_dest_mode[cb_to_mark] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
+    // scratch only (CI A/B): TT_MM_LEG_VARIANT selects the variant compiled from one legacy source, in process
+    if (const char* leg_variant = std::getenv("TT_MM_LEG_VARIANT")) {
+        mm_kernel_defines["LEG_VARIANT"] = leg_variant;
+    }
     // Create compute kernel
     // bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode

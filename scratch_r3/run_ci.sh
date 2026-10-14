@@ -61,7 +61,8 @@ while read -r tag v tests conf kexp; do
     grep -a -E "^(FAILED|ERROR) |TT_FATAL" $OUTD/log_${tag}_${i}_$v.txt | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-300 | sort -u | head -12
     continue
   fi
-  timeout -s INT -k 60 ${CI_LIMIT:-900} python -m tracy -r -p --no-web-server -o $OUT -m pytest "${C[@]}" -p mm_prof_plugin -p no:cacheprovider -o timeout_method=thread -q -rfE "${K[@]}" "${T[@]}" > $OUTD/log_${tag}_${i}_$v.txt 2>&1
+  P=(-p mm_prof_plugin); [[ $tag == alt* ]] && P=()  # the alternation test places its own signposts
+  timeout -s INT -k 60 ${CI_LIMIT:-900} python -m tracy -r -p --no-web-server -o $OUT -m pytest "${C[@]}" "${P[@]}" -p no:cacheprovider -o timeout_method=thread -q -rfE "${K[@]}" "${T[@]}" > $OUTD/log_${tag}_${i}_$v.txt 2>&1
   rc=$?; echo "== $tag $v ($i) rc=$rc $(date -u +%T): $(grep -E 'passed|failed' $OUTD/log_${tag}_${i}_$v.txt | tail -1)"
   if [[ $rc -ne 0 ]] || ! grep -q passed $OUTD/log_${tag}_${i}_$v.txt; then grep -a -m8 -E "error:|undefined reference" $OUTD/log_${tag}_${i}_$v.txt; tail -40 $OUTD/log_${tag}_${i}_$v.txt; fi
   grep -a -E "^(FAILED|ERROR) |TT_FATAL" $OUTD/log_${tag}_${i}_$v.txt | sed 's/\x1b\[[0-9;]*m//g' | cut -c1-300 | sort -u | head -12
@@ -100,7 +101,13 @@ for vd in sorted(glob.glob(os.path.join(d, "bits_*"))):
                     print(f"   head {n[:-8]} full against half: {'bit-identical' if torch.equal(x, y) else 'DIFFERENT (%d of %d)' % (int((x != y).sum()), x.numel())}")
 PY
 fi
-for tag in $(awk '!/^#/ && NF {print $1}' "$1" | sort -u); do
+for tag in $(awk '!/^#/ && NF && $1 ~ /^alt/ {print $1}' "$1" | sort -u); do
+  echo "== alternation $tag"; python $S/tools/alt_reduce.py $OUTD $tag 2>&1
+  for v in $(awk -v t=$tag '!/^#/ && NF && $1 == t {print $2}' "$1" | sort -u); do
+    READELF=$(dirname "$OBJ")/riscv-tt-elf-readelf python $S/tools/alt_guard.py $HOME/r3cache_$v 2>&1 | head -40
+  done
+done
+for tag in $(awk '!/^#/ && NF && $1 !~ /^(alt|bits)/ {print $1}' "$1" | sort -u); do
   echo "== reduce $tag (base head)"; PROF_BASE=head python $S/tools/prof_reduce.py $OUTD $tag 2>&1
   for b in ${CI_BASES:-}; do echo "== reduce $tag (base $b)"; PROF_BASE=$b python $S/tools/prof_reduce.py $OUTD $tag 2>&1; done
   for pr in ${CI_PAIRS:+${CI_PAIRS//;/ }}; do echo "== pairs $tag ($pr)"; PROF_PAIRS=$pr python $S/tools/prof_reduce.py $OUTD $tag 2>&1; done
