@@ -206,3 +206,20 @@ def test_binary_mixed_dtype_rejected(device, expect_error, op, dtype_a, dtype_b)
     tensor_a, tensor_b = _make_mixed_binary_tensors(device, dtype_a, dtype_b)
     with expect_error(RuntimeError, MIXED_DTYPE_ERROR):
         op(tensor_a, tensor_b)
+
+
+@pytest.mark.parametrize("operand", ["a", "b", "output"])
+@pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16), (16, 16)], ids=lambda s: f"tile_{s[0]}x{s[1]}")
+def test_binary_rejects_non_default_tile(device, expect_error, operand, tile_shape):
+    """The circular buffers are sized for a 32x32 tile, so a smaller tile would be read past its pages."""
+    torch_input = torch.rand(TENSOR_SHAPE, dtype=torch.bfloat16)
+
+    def to_device(tile=None):
+        return ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
+
+    small_tile = ttnn.Tile(tile_shape)
+    tensor_a = to_device(small_tile if operand == "a" else None)
+    tensor_b = to_device(small_tile if operand == "b" else None)
+    output = to_device(small_tile) if operand == "output" else None
+    with expect_error(RuntimeError, "supports only 32x32 tiles"):
+        ttnn.add(tensor_a, tensor_b, output_tensor=output)

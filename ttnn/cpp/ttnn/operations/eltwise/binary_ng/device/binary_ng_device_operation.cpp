@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_device_operation.hpp"
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
@@ -138,21 +139,31 @@ CoreRangeSet get_worker_grid(
         return sub_core_grids.value();
     }
 
-    auto get_tensor_grid = [](const Tensor& tensor) -> CoreRangeSet {
-        const auto& grid = tensor.shard_spec()->grid;
+    // An ND_SHARDED tensor is_sharded() with an empty shard_spec(); its grid is in nd_shard_spec().
+    auto get_tensor_grid = [](const Tensor& tensor) -> std::optional<CoreRangeSet> {
+        std::optional<CoreRangeSet> grid;
+        if (tensor.shard_spec().has_value()) {
+            grid = tensor.shard_spec()->grid;
+        } else if (tensor.nd_shard_spec().has_value()) {
+            grid = tensor.nd_shard_spec()->grid;
+        } else {
+            return std::nullopt;
+        }
         auto* device = tensor.device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-            if (sub_device_workers.intersects(grid)) {
+            if (sub_device_workers.intersects(*grid)) {
                 return sub_device_workers;
             }
         }
-        __builtin_unreachable();
+        return std::nullopt;
     };
 
     if (output_tensor.has_value() && output_tensor->is_sharded()) {
-        log_debug(tt::LogOp, "Using output tensor grid for worker grid {}", output_tensor->shard_spec()->grid.str());
-        return get_tensor_grid(*output_tensor);
+        if (auto workers = get_tensor_grid(*output_tensor)) {
+            log_debug(tt::LogOp, "Using output tensor grid for worker grid {}", workers->str());
+            return *workers;
+        }
     }
 
     if (memory_config.has_value()) {
@@ -189,19 +200,14 @@ CoreRangeSet get_worker_grid(
             input_tensor_a.tensor_spec(),
             input_tensor_b ? std::optional<tt::tt_metal::TensorSpec>{input_tensor_b->tensor_spec()} : std::nullopt,
             memory_config_actual)) {
-        if (input_tensor_a.is_sharded()) {
-            log_debug(
-                tt::LogOp,
-                "Native L1 sharding using input tensor A grid for worker grid {}",
-                input_tensor_a.shard_spec()->grid.str());
-            return get_tensor_grid(input_tensor_a);
-        }
-        if (input_tensor_b && input_tensor_b->is_sharded()) {
-            log_debug(
-                tt::LogOp,
-                "Native L1 sharding using input tensor B grid for worker grid {}",
-                input_tensor_b->shard_spec()->grid.str());
-            return get_tensor_grid(*input_tensor_b);
+        for (const Tensor* input : {&input_tensor_a, input_tensor_b}) {
+            if (input && input->is_sharded()) {
+                if (auto workers = get_tensor_grid(*input)) {
+                    log_debug(
+                        tt::LogOp, "Native L1 sharding using input tensor grid for worker grid {}", workers->str());
+                    return *workers;
+                }
+            }
         }
     }
     // use all worker cores of the device
@@ -402,6 +408,29 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
                 "RHS operand must be either sharded or interleaved");
         }
     }
+
+    // Circular buffers and the subtile fill helpers are sized for a 32x32 tile.
+    auto validate_tile_shape = [](const Tensor& tensor, const char* name) {
+        if (tensor.layout() != Layout::TILE) {
+            return;
+        }
+        const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+        TT_FATAL(
+            tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
+            "Eltwise binary supports only {}x{} tiles, but {} has a {}x{} tile",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            name,
+            tile_shape[0],
+            tile_shape[1]);
+    };
+    validate_tile_shape(input_tensor_a, "input tensor A");
+    if (input_tensor_b.has_value()) {
+        validate_tile_shape(*input_tensor_b, "input tensor B");
+    }
+    if (output_tensor.has_value()) {
+        validate_tile_shape(*output_tensor, "the output tensor");
+    }
 }
 
 void BinaryNgDeviceOperation::validate_on_program_cache_hit(
@@ -504,6 +533,12 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
             shape,
             output_shape);
         return output_tensor->tensor_spec();
+    }
+
+    if (attributes.memory_config.is_sharded() && !attributes.memory_config.shard_spec().has_value() &&
+        attributes.memory_config.nd_shard_spec().has_value()) {
+        return tt::tt_metal::TensorSpec(
+            output_shape, TensorLayout(output_dtype, PageConfig(attributes.output_layout), attributes.memory_config));
     }
 
     if (attributes.memory_config.is_sharded()) {
@@ -652,7 +687,9 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
                         tt::LogOp,
                         "BinaryNgDeviceOperation: Using memory config from input tensor B since it is sharded");
                 }
-            } else if (input_tensor_b.shard_spec()->num_cores() > input_tensor_a.shard_spec()->num_cores()) {
+            } else if (
+                input_tensor_a.shard_spec().has_value() && input_tensor_b.shard_spec().has_value() &&
+                input_tensor_b.shard_spec()->num_cores() > input_tensor_a.shard_spec()->num_cores()) {
                 mem_config_actual =
                     operations::binary_ng::compute_mem_config_actual(input_tensor_b, input_tensor_a.logical_shape());
                 log_debug(
