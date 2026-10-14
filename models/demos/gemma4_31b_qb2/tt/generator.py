@@ -452,10 +452,24 @@ class Gemma4Generator:
                         if audit_control.get("restore") == "bf16_oracle":
                             digest = hashlib.sha256(tokens[row, :start].numpy().tobytes()).hexdigest()
                             snapshot = getattr(self, "_audit_bf16_snapshot", None)
-                            if snapshot is None or snapshot[0] != start or snapshot[1] != digest:
-                                raise ValueError("BF16 audit oracle requires an exact matching seeded prefix")
-                            restored = list(snapshot[2])
-                            logger.info("GEMMA_BF16_ORACLE " + json.dumps({"start": start, "sha256": digest}))
+                            rewind = snapshot[0] - start if snapshot is not None else -1
+                            if snapshot is None or not 0 <= rewind <= 128 or snapshot[1].get(start) != digest:
+                                raise ValueError("BF16 audit oracle requires an exact matching retained prefix")
+                            restored = []
+                            for tail in snapshot[2]:
+                                if tail is None:
+                                    restored.append(None)
+                                else:
+                                    valid = tail[0].shape[2] - rewind
+                                    if valid < min(1024, start):
+                                        raise ValueError("BF16 audit oracle retained tail is too short")
+                                    restored.append(tuple(t[:, :, :valid, :] for t in tail))
+                            logger.info(
+                                "GEMMA_BF16_ORACLE "
+                                + json.dumps(
+                                    {"start": start, "seed_end": snapshot[0], "rewind": rewind, "sha256": digest}
+                                )
+                            )
                         else:
                             restored = self._restore_prefill_history(state, page_table, slot, start)
                         previous = {"end": start, "layers": restored}
@@ -510,8 +524,13 @@ class Gemma4Generator:
             if history_keys is not None:
                 state.prefill_history[history_keys[row]] = {"end": length, "layers": histories}
                 if self._audit_control().get("retain_bf16", False):
-                    digest = hashlib.sha256(tokens[row, :length].numpy().tobytes()).hexdigest()
-                    self._audit_bf16_snapshot = (length, digest, list(histories))
+                    boundaries = {length, length // 128 * 128, (length // 128 - 1) * 128}
+                    digests = {
+                        end: hashlib.sha256(tokens[row, :end].numpy().tobytes()).hexdigest()
+                        for end in boundaries
+                        if end > 0 and 0 <= length - end <= 128
+                    }
+                    self._audit_bf16_snapshot = (length, digests, list(histories))
             outputs.append(
                 out if return_device else self._host_logits(out).reshape(1, -1, self.model.config.vocab_size)
             )
