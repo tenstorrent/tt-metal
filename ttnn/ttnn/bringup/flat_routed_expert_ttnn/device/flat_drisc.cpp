@@ -88,6 +88,18 @@ uint32_t free_tile(IDevice* device, uint32_t bank) {
 }
 }  // namespace
 
+namespace {
+// the GDDR memory controller's MPFE port of a DRAM tile: P1..P3 for its UMD subchannel 0..2 (P0 is tied off)
+uint32_t mpfe_port(IDevice* device, const CoreCoord& logical) {
+    device = chip(device);
+    const auto& soc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
+    const CoreCoord v = device->virtual_core_from_logical_core(logical, tt::CoreType::DRAM);
+    const auto sub = soc.translate_coord_to(
+        tt::umd::CoreCoord(v.x, v.y, tt::CoreType::DRAM, tt::CoordSystem::TRANSLATED), tt::CoordSystem::LOGICAL);
+    return sub.y + 1;
+}
+}  // namespace
+
 // MIMO_FL_DRISC_TILES: 1 (default) - the bank's tile that is no endpoint (its slot on NOC1, as the Tensix forwarders; a
 // second slot per tile would go on NOC0, but one tile sends ~21-28 GB/s: with MIMO_FL_DRISC_SLOTS 8 the other slots keep
 // Tensix readers); 2 - both Metal tiles of a bank, a slot each (tile 1, its bank's NOC1 endpoint, sends on NOC0)
@@ -189,11 +201,12 @@ void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t
     }
     for (IDevice* dev : mesh->get_devices()) {
         auto program = std::make_unique<Program>();
-        // one kernel per tile: its MPFE port is P(1 + endpoint index), as test_drisc_flat_bench.cpp
+        // one kernel per tile
         for (const auto& c : run.cores) {
             auto d = defs;
-            if (d.contains("SE_DRISC_MPFE")) {
-                d["SE_DRISC_MPFE_PORT"] = std::to_string(1 + c.y);
+            if (d.contains("SE_DRISC_MPFE")) {  // MPFE port P(1 + the tile's UMD subchannel), as the tensor prefetcher
+                d["SE_DRISC_MPFE_PORT"] = std::to_string(mpfe_port(dev, c));
+                d["SE_DRISC_MPFE_ORD_PORT"] = std::to_string(mpfe_port(dev, CoreCoord(c.x, 0)));
             }
             const auto& nocs = tile_nocs.at({c.x, c.y});
             // a bank's two tiles DMA on different streams: both on stream 0 with ~7 reads in flight each, next to heavy

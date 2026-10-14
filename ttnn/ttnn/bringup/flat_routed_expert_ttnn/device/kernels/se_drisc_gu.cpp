@@ -58,8 +58,8 @@ void kernel_main() {
     const uint32_t mpfe_port = SE_DRISC_MPFE_PORT, mpfe_old = gddr_mc_read_mpfe_weight(mpfe_port);
     gddr_mc_write_mpfe_weight(mpfe_port, SE_DRISC_MPFE);
 #ifdef SE_DRISC_MPFE_ORD
-    const uint32_t ord_old = gddr_mc_read_mpfe_weight(1);
-    gddr_mc_write_mpfe_weight(1, SE_DRISC_MPFE_ORD);
+    const uint32_t ord_old = gddr_mc_read_mpfe_weight(SE_DRISC_MPFE_ORD_PORT);
+    gddr_mc_write_mpfe_weight(SE_DRISC_MPFE_ORD_PORT, SE_DRISC_MPFE_ORD);
 #endif
 #endif
 #ifndef SE_DRISC_BURST
@@ -230,7 +230,7 @@ void kernel_main() {
 #ifdef SE_DRISC_MPFE
     gddr_mc_write_mpfe_weight(mpfe_port, mpfe_old);
 #ifdef SE_DRISC_MPFE_ORD
-    gddr_mc_write_mpfe_weight(1, ord_old);
+    gddr_mc_write_mpfe_weight(SE_DRISC_MPFE_ORD_PORT, ord_old);
 #endif
 #endif
     *word(SE_DRISC_READY) = 0;
