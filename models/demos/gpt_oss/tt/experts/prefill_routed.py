@@ -154,7 +154,48 @@ class RoutedPrefillExperts:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # HiFi4 for the slot selector matmul: its fp32 operand holds expert ids up to E - 1, which LoFi would truncate.
+        self._select_compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+        k, E = self.top_k, self.num_experts
+        # Slot one-hots of all k slots at once, [C, k*E] (column block j = slot j): the selector [k, k*E] copies
+        # index column j into block j (one nonzero term per output, exact), compared against the expert ids repeated
+        # k times; the fold [k*E, E] sums the k blocks into per-token expert counts.
+        select = torch.zeros(k, k * E)
+        fold = torch.zeros(k * E, E)
+        for j in range(k):
+            select[j, j * E : (j + 1) * E] = 1.0
+            fold[j * E : (j + 1) * E, :] = torch.eye(E)
+        self.slot_select = ttnn.from_torch(
+            select,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate,
+        )
+        self.slot_fold = ttnn.from_torch(
+            fold,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate,
+        )
+        self.slot_expert_ids_f32 = ttnn.from_torch(
+            torch.arange(E, dtype=torch.float32).repeat(k).reshape(1, k * E),
+            device=mesh_device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate,
+        )
         self.expert_ids_f32 = ttnn.from_torch(
             torch.arange(self.num_experts, dtype=torch.float32).reshape(1, self.num_experts),
             device=mesh_device,
@@ -365,6 +406,10 @@ class RoutedPrefillExperts:
         ttnn.deallocate(ones)
         consts["prefix_tri"] = ttnn.typecast(tri, ttnn.bfloat8_b)
         ttnn.deallocate(tri)
+        # Region start of the non-local experts: the spare tile, [1, E] fp32 per device ((1 - local) * spare).
+        nonlocal_f32 = ttnn.rsub(self.local_mask_f32, 1.0)
+        consts["nonlocal_spare"] = ttnn.mul(nonlocal_f32, float(spare))
+        ttnn.deallocate(nonlocal_f32)
         self._consts[C] = consts
         return consts
 
@@ -377,18 +422,30 @@ class RoutedPrefillExperts:
         fp32 on integers < 2^24, so it is exact."""
         C = indices.shape[-2]
         k = self.top_k
+        E = self.num_experts
         idx_f = ttnn.typecast(indices, ttnn.float32)
+        # Region start per expert: region_offsets for local experts, the spare tile for the others. A non-local pair
+        # then lands on the spare tile through the same lookup below (its expert's per-token count is masked to 0).
         region = ttnn.typecast(ttnn.to_layout(region_offsets, ttnn.TILE_LAYOUT), ttnn.float32)  # [1, E]
-        onehots = []
-        for j in range(k):
-            col = ttnn.slice(idx_f, (0, j), (C, j + 1))
-            eq = ttnn.eq(col, self.expert_ids_f32)  # [C, E]
-            ttnn.deallocate(col)
-            onehots.append(ttnn.mul(eq, self.local_mask_f32, output_tensor=eq))
+        region = ttnn.mul(region, self.local_mask_f32, output_tensor=region)
+        region = ttnn.add(region, consts["nonlocal_spare"], output_tensor=region)
+        slot_idx = ttnn.matmul(
+            idx_f,
+            self.slot_select,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self._select_compute_config,
+        )  # [C, k*E]: block j holds index column j
         ttnn.deallocate(idx_f)
-        per_token = ttnn.add(onehots[0], onehots[1])  # local pairs of each expert per token (0/1)
-        for oh in onehots[2:]:
-            per_token = ttnn.add(per_token, oh, output_tensor=per_token)
+        onehot = ttnn.eq(slot_idx, self.slot_expert_ids_f32, output_tensor=slot_idx)  # [C, k*E] 0/1
+        per_token = ttnn.matmul(
+            onehot,
+            self.slot_fold,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self._prefix_compute_config,
+        )  # [C, E]: pairs of each expert per token (0/1)
+        per_token = ttnn.mul(per_token, self.local_mask_f32, output_tensor=per_token)  # local experts only
         # Exclusive prefix over tokens (pairs of e from earlier tokens) as one multi-core matmul with the strictly
         # lower-triangular [C, C] ones matrix. Operands are 0/1 (exact in bf8 / tf32) and the sums (< C <= 2^13)
         # accumulate in the fp32 dest, so the result is exact.
@@ -403,16 +460,11 @@ class RoutedPrefillExperts:
         base = ttnn.add(before, region, output_tensor=before)
         ttnn.deallocate(region)
         cols = []
-        for oh in onehots:
-            hit = ttnn.sum(oh, dim=-1, keepdim=True)  # 1 if the slot's expert is local
-            p = ttnn.sum(ttnn.mul(oh, base, output_tensor=oh), dim=-1, keepdim=True)
+        for j in range(k):
+            oh = ttnn.slice(onehot, (0, j * E), (C, (j + 1) * E))  # tile-aligned block j
+            cols.append(ttnn.sum(ttnn.mul(oh, base, output_tensor=oh), dim=-1, keepdim=True))
             ttnn.deallocate(oh)
-            # p + (1 - hit) * spare
-            miss = ttnn.rsub(hit, 1.0)
-            ttnn.deallocate(hit)
-            p = ttnn.add(p, ttnn.mul(miss, float(consts["spare"]), output_tensor=miss), output_tensor=p)
-            ttnn.deallocate(miss)
-            cols.append(p)
+        ttnn.deallocate(onehot)
         ttnn.deallocate(base)
         pos = ttnn.concat(cols, dim=-1)  # [C, k] fp32 TILE
         for c in cols:
