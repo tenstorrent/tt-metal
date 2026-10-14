@@ -613,8 +613,14 @@ int main(int argc, char** argv) {
     // A RING, not a mesh, is what asks fabric for deadlock avoidance -- and with it bubble flow
     // control. Needs the bridged link intra-mesh too, which the 1x4 descriptor provides.
     g_ring = env_u32("TT_BRIDGE_PIPE_RING", 0) != 0;
+    // Only the descriptor knows how many axes it rings, and asking for more than it has is fatal:
+    // a 1D ring mesh takes FABRIC_1D_RING(3), a 2D mesh with one ringed axis FABRIC_2D_TORUS_X(5).
+    const auto fabric = static_cast<tt::tt_fabric::FabricConfig>(env_u32(
+        "TT_BRIDGE_PIPE_FABRIC",
+        static_cast<std::uint32_t>(
+            g_ring ? tt::tt_fabric::FabricConfig::FABRIC_1D_RING : tt::tt_fabric::FabricConfig::FABRIC_2D)));
     tt::tt_fabric::SetFabricConfig(
-        g_ring ? tt::tt_fabric::FabricConfig::FABRIC_1D_RING : tt::tt_fabric::FabricConfig::FABRIC_2D,
+        fabric,
         tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
         std::nullopt,
         tt::tt_fabric::FabricTensixConfig::DISABLED,
