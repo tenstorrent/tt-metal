@@ -9,6 +9,7 @@ from typing import Dict
 
 import pytest
 import torch
+from conftest import skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -475,7 +476,6 @@ def sfpu_binary(
     approx_mode=ApproximationMode.No,
     dst_rounding_mode=DstRoundingMode.Default,
     check_contract=True,
-    pin_block_geometry=False,
 ):
     """*unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
 
@@ -489,8 +489,9 @@ def sfpu_binary(
     # variant near its tolerance fail unreproducibly.
     torch.manual_seed(0)
 
-    # FP32 destination tiles occupy twice the register space. Keep four full destination
-    # blocks for those formats and four blocks of eight tiles for the remaining formats.
+    # Default tensor size. 32-bit formats use [128, 128]. 16-bit formats use
+    # [256, 128]: four blocks of eight tiles only when dest_acc=No and the perf
+    # pin is off. Perf regroups that tensor into the Yes shape (eight blocks of four).
     if input_dimensions is None:
         input_dimensions = (
             [128, 128] if formats.input_format.is_32_bit() else [256, 128]
@@ -498,30 +499,27 @@ def sfpu_binary(
 
     # Different L1 formats cannot share buffer_A: Operand strides one tile size.
     # Each operand gets its own buffer, and the golden is interleaved afterwards.
+    # Only Float16_b x Bfp8_b is modeled: a 32-bit operand would set unpack_to_dest
+    # and hang on the dest handshake.
     mixed_formats = formats.input_format != formats.input_format_B
     if mixed_formats:
+        if (formats.input_format, formats.input_format_B) != (
+            DataFormat.Float16_b,
+            DataFormat.Bfp8_b,
+        ):
+            raise ValueError("mixed input formats only support Float16_b x Bfp8_b")
         if broadcast_type not in (None, LlkBroadcastType.None_):
             raise ValueError("mixed input formats do not support broadcast")
         if src_A_override is not None or spec_A is not None or spec_B is not None:
             raise ValueError(
                 "mixed input formats take neither an override nor a domain spec"
             )
-        src_A, tile_cnt_A, _, _ = generate_stimuli(
+        src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
             stimuli_format_A=formats.input_format,
-            input_dimensions_A=input_dimensions,
-            stimuli_format_B=formats.input_format,
-            input_dimensions_B=input_dimensions,
-        )
-        src_B, tile_cnt_B, _, _ = generate_stimuli(
-            stimuli_format_A=formats.input_format_B,
             input_dimensions_A=input_dimensions,
             stimuli_format_B=formats.input_format_B,
             input_dimensions_B=input_dimensions,
         )
-        if tile_cnt_A != tile_cnt_B:
-            raise ValueError(
-                "mixed input formats need the same tile count on both operands"
-            )
         elements_per_tile = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
         golden_a = quantize_input_to_unpack_format(
             src_A.flatten(), formats.input_format
@@ -654,10 +652,8 @@ def sfpu_binary(
 
     bcast = broadcast_type if broadcast_type else LlkBroadcastType.None_
 
-    # dest_acc=Yes halves 16-bit Dest capacity, so a Yes-vs-No delta otherwise
-    # includes a different block handshake. The float perf family pins both
-    # modes to the Yes geometry; every other caller keeps the requested one.
-    geometry_dest_acc = DestAccumulation.Yes if pin_block_geometry else dest_acc
+    # perf runs dest_acc No with the Yes block shape.
+    geometry_dest_acc = DestAccumulation.Yes if is_perf else dest_acc
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half, geometry_dest_acc, formats, block_dimensions, TILE_DIMENSIONS
     )
@@ -910,19 +906,23 @@ def test_eltwise_binary_sfpu_float(
         dest_acc,
         mathop,
         broadcast_type=bcast_dim,
-        pin_block_geometry=bool(run_kwargs.get("is_perf")),
         **run_kwargs,
     )
 
 
 # One directed point: Float16_b x Bfp8_b -> Float16_b. Quasar has no block-float.
-@parametrize(
+# Shared with perf_eltwise_binary_sfpu.py so the two sweeps stay aligned.
+MIXED_FORMAT_SWEEP = dict(
     formats=[
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp8_b)
     ],
     mathop=[MathOperation.SfpuElwadd],
     dest_acc=[DestAccumulation.No],
 )
+
+
+@skip_for_quasar
+@parametrize(**MIXED_FORMAT_SWEEP)
 def test_eltwise_binary_sfpu_mixed_format(formats, mathop, dest_acc, **run_kwargs):
     sfpu_binary(
         formats,
@@ -2273,7 +2273,7 @@ def _run_sfpu_binary_bcast(
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A + tile_cnt_B),
-            WORK_TILES(loop_factor * num_blocks * num_tiles_in_block),
+            WORK_TILES(loop_factor * (tile_cnt_A + tile_cnt_B)),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             LOOP_FACTOR(loop_factor),
