@@ -1,4 +1,4 @@
-# Llama-8b + audio 4-mesh RELAXED line (no loopback): 1x2 -> 1x2 -> 4x2 -> 4x2.
+# Llama-8b + audio 4-mesh line (RELAXED inter-mesh) (no loopback): 1x2 -> 1x2 -> 4x2 -> 4x2.
 # 80 chips (32+32+8+8); maps on 3 galaxies.
 mesh_descriptors {
   name: "1x2"

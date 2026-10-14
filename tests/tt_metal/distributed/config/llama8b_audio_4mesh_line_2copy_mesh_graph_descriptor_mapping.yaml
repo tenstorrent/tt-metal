@@ -3,5 +3,5 @@
 # rank bindings. Each copy is 80 chips / 34 ranks and maps on 3 galaxies; the two land disjoint.
 # Paths are relative to TT_METAL_HOME (repo root).
 subcontext_id_to_mesh_graph_descriptor:
-  0: tests/tt_metal/tt_fabric/custom_mesh_descriptors/llama8b_audio_4mesh_line_relaxed_mesh_graph_descriptor.textproto
-  1: tests/tt_metal/tt_fabric/custom_mesh_descriptors/llama8b_audio_4mesh_line_relaxed_mesh_graph_descriptor.textproto
+  0: tests/tt_metal/tt_fabric/custom_mesh_descriptors/llama8b_audio_4mesh_line_mesh_graph_descriptor.textproto
+  1: tests/tt_metal/tt_fabric/custom_mesh_descriptors/llama8b_audio_4mesh_line_mesh_graph_descriptor.textproto

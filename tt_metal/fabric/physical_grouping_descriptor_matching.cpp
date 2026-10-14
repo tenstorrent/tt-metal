@@ -2878,10 +2878,9 @@ bool build_sat_placement_constraints(
         if (!constraints.set_same_rank_groups_constraint({}, host_seat_groups)) {
             return false;
         }
-        // HARD host-count cap = bin-packing bound on CHIPS (not mesh count): sum the single-host meshes'
-        // chip footprints and divide by the largest host. Using each mesh's own size (not the largest mesh
-        // for all) lets a heterogeneous MGD pack small meshes together and compact to the true minimum.
-        // Infeasible caps are retried via next() (grow pools, then drop the cap).
+        // HARD host-count cap = bin-packing bound on CHIPS, not mesh count: sum the single-host meshes'
+        // chip footprints and divide by the largest host, so a heterogeneous MGD packs small meshes
+        // together and compacts to the true minimum. An infeasible cap is retried via next(), then dropped.
         std::size_t total_single_host_asics = 0;
         for (const auto& [mesh_id, pool] : pools) {
             (void)mesh_id;
@@ -2917,20 +2916,16 @@ bool build_sat_placement_constraints(
         }
         if (max_host_asics > 0 && total_single_host_asics > 0) {
             const std::size_t k = (total_single_host_asics + max_host_asics - 1) / max_host_asics;
-            // Only cap when it can actually reduce the host count. If the meshes need every available host
-            // anyway (k >= host groups -- e.g. a superpod that fully packs all its hosts), the cap constrains
-            // nothing but bolts an expensive at-most-k CNF onto an already-large solve, so the grow loop stalls.
-            // Skip it: the unconstrained solve already yields the only (all-hosts-full) packing.
+            // Only cap when it can reduce the host count; otherwise it adds an expensive at-most-k CNF for nothing.
             if (k < host_seat_groups.size()) {
                 constraints.set_max_same_rank_groups_used(k);
                 log_info(
                     tt::LogFabric,
-                    "SAT joint placement: HARD host-count cap k={} over {} single-host seat group(s) ({} "
-                    "single-host chip(s), {} chips/host max); seats spanning hosts are unusable while the cap holds",
+                    "SAT joint placement: HARD host-count cap k={} over {} single-host seat group(s) ({} mesh(es)); "
+                    "seats spanning hosts are unusable while the cap holds",
                     k,
                     host_seat_groups.size(),
-                    total_single_host_asics,
-                    max_host_asics);
+                    pools.size());
             }
         }
     }

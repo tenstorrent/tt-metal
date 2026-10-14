@@ -118,13 +118,6 @@ bool check_connection_requested(
     return std::string(enchantum::to_string(port_id.first)) + std::to_string(port_id.second);
 }
 
-struct MeshFabricConfigObservation {
-    MeshId mesh_id;
-    uint32_t rank;
-    uint32_t mesh_host_rank;
-    FabricConfig fabric_config;
-};
-
 }  // namespace
 
 const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
@@ -881,48 +874,33 @@ void ControlPlane::validate_fabric_config_across_ranks() {
             gathered_observations.begin() + rank_offset + count);
     }
 
-    std::string observed_values;
     for (const auto& observation : observations) {
         TT_FATAL(
             observation.mesh_host_rank != *MESH_HOST_RANK_UNSET,
             "mesh_host_rank must be set for all gathered observations (rank {}, mesh {})",
             observation.rank,
             *observation.mesh_id);
-        observed_values += fmt::format(
-            "\n  mesh_id={}, mesh_host_rank={}, rank={}, fabric_config={}",
-            *observation.mesh_id,
-            observation.mesh_host_rank,
-            observation.rank,
-            enchantum::to_string(observation.fabric_config));
     }
-
-    const auto reference_config = observations.front().fabric_config;
-    const bool all_ranks_agree = std::all_of(observations.begin(), observations.end(), [reference_config](const auto& o) {
-        return o.fabric_config == reference_config;
-    });
 
     const auto& mesh_graph_desc_path = this->mesh_graph_->get_mesh_graph_descriptor_path();
     const std::string mesh_graph_path = mesh_graph_desc_path.has_value() ? mesh_graph_desc_path->string()
                                                                           : std::string("<auto-discovered>");
-    TT_FATAL(
-        all_ranks_agree,
-        "FabricConfig must match across all ranks before control-plane and fabric initialization. MGD path: {}. "
-        "Observed:{}\nFuture support may allow different configs per mesh, but 1D and 2D configs cannot be mixed, "
-        "mesh host ranks within a big mesh must still align, and 1D meshes cannot be multi-mesh.",
-        mesh_graph_path,
-        observed_values);
 
-    const auto mesh_count = this->mesh_graph_->get_mesh_ids().size();
-    const bool is_1d_fabric = reference_config == FabricConfig::FABRIC_1D || reference_config == FabricConfig::FABRIC_1D_RING;
-    const bool is_multi_mesh = mesh_count > 1;
-    TT_FATAL(
-        !is_1d_fabric || !is_multi_mesh,
-        "FabricConfig {} is not supported when more than one mesh is present (mesh_count={}, MGD path: {}). "
-        "Future support may allow different configs per mesh, but 1D and 2D configs cannot be mixed, mesh host "
-        "ranks within a big mesh must still align, and 1D meshes cannot be multi-mesh.",
-        enchantum::to_string(reference_config),
-        mesh_count,
-        mesh_graph_path);
+    // Collect the mesh pairs joined by an intermesh link (either connection form) for the seam check.
+    std::vector<std::pair<uint32_t, uint32_t>> intermesh_mesh_pairs;
+    for (const auto& [src, dst_to_count] : this->mesh_graph_->get_requested_intermesh_connections()) {
+        for (const auto& [dst, _count] : dst_to_count) {
+            intermesh_mesh_pairs.emplace_back(src, dst);
+        }
+    }
+    for (const auto& [src, dst_to_ports] : this->mesh_graph_->get_requested_intermesh_ports()) {
+        for (const auto& [dst, _ports] : dst_to_ports) {
+            intermesh_mesh_pairs.emplace_back(src, dst);
+        }
+    }
+
+    validate_fabric_configs(
+        observations, intermesh_mesh_pairs, this->mesh_graph_->get_mesh_ids().size(), mesh_graph_path);
 
     this->validated_fabric_config_ = this->fabric_config_;
 }
