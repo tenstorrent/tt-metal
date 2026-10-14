@@ -13,9 +13,10 @@ The input is laid out as dispatch_fabric2d leaves it: per local expert, tokens g
 they came from, starting at the page `expert_offsets` gives. Every page holds its own random token,
 so a token delivered to the wrong slot cannot match by accident.
 
-Combine reads each origin chip's run length from `expert_offsets` and does not check capacity, so a
-buffer dispatch dropped tokens from is not valid input. Every case sizes the buffer to fit every
-routed token.
+Dispatch drops a token whose page would fall past the end of its buffer, while `expert_offsets` still
+counts it. Combine clamps every run to the buffer's end, so it brings back the tokens dispatch kept and
+reads nothing past it. `test_combine_fabric2d_overflow` covers that; every other case sizes the buffer
+to fit every routed token.
 
 Cases default to the production chunk: 5120 tokens over an 8-chip dispatch group, so
 seq_len_per_chip is 640. `test_combine_fabric2d_partial_last_tile` varies it on purpose.
@@ -155,7 +156,7 @@ class _Routing(NamedTuple):
 
 def _route(indices, H, num_routed_experts, seq_len_per_chip, topk):
     """The control tables and layout for one draw. All come from one get_gate_outputs call, so they
-    agree: the op trusts `offs` to size every run it sends or forwards."""
+    agree: the op sizes every run it sends or forwards from `offs`, clamped to the buffer's end."""
     G = indices.shape[0]
     experts_per_chip = num_routed_experts // G // H
     table = _expert_dispatch_table(num_routed_experts, H, G)
@@ -202,8 +203,8 @@ class _Fixture:
     """One routing draw laid out as dispatch leaves it, on device, plus its torch reference.
 
     `routing` is None for in-group picks, "production" for PRODUCTION_ROUTING, or a (G, H, seq, topk)
-    index tensor. `capacity`
-    is None for `_roomy_capacity` or "exact" for the smallest buffer that holds the draw.
+    index tensor. `capacity` is None for `_roomy_capacity`, "exact" for the smallest buffer that holds
+    the draw, or a page count; a pick whose page falls past it is dropped, as dispatch drops it.
 
     The payload is the shared pool rotated by seed + payload_shift pages, so fixtures with different
     rotations differ at every page and stale data from another launch cannot match.
@@ -234,16 +235,16 @@ class _Fixture:
             self.routing = _route(routing, H, num_routed_experts, seq_len_per_chip, topk)
         r = self.routing
         assert tuple(r.indices.shape) == (G, H, seq_len_per_chip, topk), r.indices.shape
-        # A kept pick's expert is in this dispatch group, so combine brings it back.
-        self.kept = r.holder_pos >= 0
-
         used = int(r.page.max()) + 1
         if capacity is None:
             capacity = _roomy_capacity(seq_len_per_chip, topk, self.experts_per_chip)
+            assert used <= capacity, f"the draw needs {used} pages per chip, the roomy buffer holds {capacity}"
         elif capacity == "exact":
             capacity = used
-        assert used <= capacity, f"the draw needs {used} pages per chip, the buffer holds {capacity}"
         self.capacity = capacity
+        # A kept pick's expert is in this dispatch group, so combine brings it back, unless dispatch dropped
+        # it for want of room.
+        self.kept = (r.holder_pos >= 0) & (r.page < capacity)
 
         # Pages no pick lands on stay random too: the op must never read them into an output slot.
         self.payload = torch.roll(_payload_pool(H, G, capacity, emb_dim), shifts=seed + payload_shift, dims=2)
@@ -305,8 +306,8 @@ class _Fixture:
     def check(self, output, label):
         """Every output slot a kept pick maps to, byte-exact against the page dispatch put it at.
 
-        Slots of picks routed to another group are not written and not compared: the op does not
-        initialise its output.
+        Slots of picks routed to another group, or dropped by dispatch for want of room, are not written
+        and not compared: the op does not initialise its output.
         """
         r = self.routing
         got_all = ttnn.get_device_tensors(output)  # row-major over the (H, G) mesh
@@ -418,6 +419,77 @@ def test_combine_fabric2d_relaunch(mesh_device, device_params, num_links, emb_di
     # Each layout's first launch builds one program and the repeats must hit the cache. A key that is too
     # specific rebuilds every launch and still passes the byte-exact checks, but costs prefill perf.
     assert added == [1, 1, 0, 0], f"programs the four launches added: {added}, expected [1, 1, 0, 0]"
+
+
+# The production mesh only: if the clamp regresses, this hangs the device rather than failing, and the CI
+# boxes run the 8x1 mesh.
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _PRODUCTION_MESH,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("routing", [None, "production"], ids=lambda r: r or "in-group")
+# Each layout shifts the payload differently: the op does not initialise its output, so the other
+# layout's leftover output could otherwise match.
+@pytest.mark.parametrize(
+    "input_layout, payload_shift",
+    [pytest.param(ttnn.ROW_MAJOR_LAYOUT, 0, id="rm"), pytest.param(ttnn.TILE_LAYOUT, 1, id="tile")],
+)
+@pytest.mark.timeout(900)
+def test_combine_fabric2d_overflow(mesh_device, device_params, num_links, routing, input_layout, payload_shift):
+    """A buffer dispatch dropped tokens from combines byte-exact, and so does the full-size launch after it.
+
+    The buffer holds three quarters of the pages the busiest chip needs, so the last expert regions of the
+    busier chips run past its end and the offsets tables count tokens that were never written there.
+    Reading them would send pages from past the buffer to whatever slots their stale metadata names. The
+    capacity also ends part way into a tile, so TILE untilizes a last tile that is only partly made of
+    the buffer's slots.
+
+    The second launch on the same device holds every pick. Its arrival counters start from whatever the
+    clamped launch left, so a sender and receiver that clamped a run differently would show up there.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    H, G = cfg.dispatch_group_size, cfg.num_dispatch_groups
+    topk, num_routed_experts, seed = 8, 256, 11
+    # Positional, as _Fixture calls it, so both share the one cached draw.
+    drawn = _drawn_routing(G, H, SEQ_LEN_PER_CHIP, topk, num_routed_experts, seed, routing)
+    used = int(drawn.page.max()) + 1
+    capacity = used * 3 // 4
+    if capacity % ttnn.TILE_SIZE == 0:
+        capacity -= 1
+    # A run straddling the capacity is the case the clamp exists for: some of its tokens kept, the rest not.
+    run_end = torch.cat([drawn.offs[:, 1:, :], drawn.region[:, :1, :] + drawn.counts[:, :1, :]], dim=1)
+    assert bool(((drawn.offs < capacity) & (run_end > capacity)).any()), f"no run straddles capacity {capacity}"
+    fx = _Fixture(
+        mesh_device,
+        H,
+        G,
+        num_routed_experts=num_routed_experts,
+        topk=topk,
+        seed=seed,
+        routing=routing,
+        capacity=capacity,
+        payload_shift=payload_shift,
+    )
+    routed = int((fx.routing.holder_pos >= 0).sum())
+    kept = int(fx.kept.sum())
+    logger.info(f"capacity {capacity} of the {used} pages the draw needs: {routed - kept} of {routed} picks dropped")
+    assert 0 < kept < routed, f"{kept} of {routed} picks kept; the case needs some dropped and some kept"
+    output = fx.run(cfg.sp_axis, num_links, layout=input_layout)
+    fx.check(output, f"capacity {capacity} of {used} pages")
+
+    roomy = _Fixture(
+        mesh_device,
+        H,
+        G,
+        num_routed_experts=num_routed_experts,
+        topk=topk,
+        seed=seed + 1,
+        routing=routing,
+        payload_shift=payload_shift + 2,
+    )
+    output = roomy.run(cfg.sp_axis, num_links, layout=input_layout)
+    roomy.check(output, "full-size launch after the clamped one")
 
 
 @pytest.mark.parametrize(
