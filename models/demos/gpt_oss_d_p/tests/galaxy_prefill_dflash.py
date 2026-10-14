@@ -152,7 +152,8 @@ def _write_consumer_fixture(
         "prompt_token_ids": list(token_ids),
         "reduced_hidden": trace_reduced,
         "next_token": next_token,
-        "block_size": int(os.getenv("PREFILL_DFLASH_BLOCK_SIZE", (seed or {}).get("block_size", 10))),
+        # The Blaze consumer runs blaze.models.dflash.config.BLOCK_SIZE (8), below the drafter's trained 10.
+        "block_size": int(os.getenv("PREFILL_DFLASH_BLOCK_SIZE", "8")),
         "hidden_dim": int(reduced_pre.shape[-1]),
         "target_layer_ids": TARGET_LAYERS,
     }
