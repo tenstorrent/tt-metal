@@ -826,9 +826,7 @@ struct MeshFabricConfigObservation {
 // Different 2D configs across meshes are allowed, including meshes joined by an intermesh link.
 // Throws (TT_FATAL) on any violation; mesh_graph_path is only used for error context.
 void validate_fabric_configs(
-    const std::vector<MeshFabricConfigObservation>& observations,
-    std::size_t mesh_count,
-    const std::string& mesh_graph_path) {
+    const std::vector<MeshFabricConfigObservation>& observations, const std::string& mesh_graph_path) {
     std::string observed_values;
     for (const auto& o : observations) {
         observed_values += fmt::format(
@@ -840,6 +838,9 @@ void validate_fabric_configs(
     }
 
     // Every rank that owns a given mesh must report the same config; different meshes may differ.
+    // (The 1D-cannot-span-multiple-meshes rule lives in MeshGraph, which sees each mesh's *resolved*
+    // per-mesh config -- MGD-declared, process-wide override, or derived -- whereas these observations
+    // only carry the process-wide config and so cannot see an MGD-declared 1D mesh.)
     std::map<MeshId, FabricConfig> per_mesh_config;
     for (const auto& o : observations) {
         const auto [it, inserted] = per_mesh_config.try_emplace(o.mesh_id, o.fabric_config);
@@ -853,18 +854,6 @@ void validate_fabric_configs(
             mesh_graph_path,
             observed_values);
     }
-
-    // A 1D config cannot span more than one mesh, and cannot be mixed with 2D.
-    const auto is_1d = [](FabricConfig c) { return c == FabricConfig::FABRIC_1D || c == FabricConfig::FABRIC_1D_RING; };
-    const bool any_1d = std::any_of(
-        per_mesh_config.begin(), per_mesh_config.end(), [&is_1d](const auto& kv) { return is_1d(kv.second); });
-    TT_FATAL(
-        !any_1d || mesh_count <= 1,
-        "A 1D FabricConfig cannot be used with more than one mesh (mesh_count={}), and 1D configs cannot be "
-        "mixed with 2D configs. MGD path: {}. Observed:{}",
-        mesh_count,
-        mesh_graph_path,
-        observed_values);
 }
 
 }  // namespace
@@ -946,7 +935,7 @@ void ControlPlane::validate_fabric_config_across_ranks() {
     const std::string mesh_graph_path = mesh_graph_desc_path.has_value() ? mesh_graph_desc_path->string()
                                                                           : std::string("<auto-discovered>");
 
-    validate_fabric_configs(observations, this->mesh_graph_->get_mesh_ids().size(), mesh_graph_path);
+    validate_fabric_configs(observations, mesh_graph_path);
 
     this->validated_fabric_config_ = this->fabric_config_;
 }
