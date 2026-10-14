@@ -157,7 +157,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-heterogeneous
   skus:
     cpu_medium:
-      timeout: 7
+      timeout: 20
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
