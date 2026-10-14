@@ -392,9 +392,15 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         p.rdown = std::atoi(rd) != 0;
     }
     p.drisc = flat_drisc_enabled();
-    if (p.drisc) {  // (the reader tails' down columns read gate/up weights too: not in DRISC mode)
+    if (p.drisc) {
         TT_FATAL(p.nsg == 1, "MIMO_FL_DRISC: one subgrid only");
-        p.rdown = false;
+        // default: one DRISC slot per bank (the hybrid: GLM-Flash us / expert vs Tensix readers M 64 34.0 / 35.4, 256
+        // 49.0 / 49.7, 512 71.3 / 70.6, 2048 273.9 / 273.4); all 16 (two tiles per bank, MIMO_FL_DRISC_TILES=2): 2048
+        // 265.7 but 512 77.0 (half the weights on the x multicast's NOC0). (Clamped to the readers below.)
+        const char* dn = std::getenv("MIMO_FL_DRISC_SLOTS");
+        p.drisc_n = dn ? std::atoi(dn) : p.banks;
+        // reader down columns (se9_rdown reads gate/up weights too) stay on Tensix-reader slots; none are left at 16
+        p.rdown = p.rdown && p.drisc_n < 16;
     }
     // h units (MIMO_FL_HU = row tiles per unit): one M-group, one subgrid, no reader down columns
     if (const char* hu = std::getenv("MIMO_FL_HU")) {
@@ -516,12 +522,14 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         }
     }
     if (p.drisc) {  // the DRISC slots' reader cells but the launcher's go to the relays / down cores
-        const char* dn = std::getenv("MIMO_FL_DRISC_SLOTS");
-        p.drisc_n = std::min<uint32_t>(dn ? std::atoi(dn) : p.readers.size(), p.readers.size());
+        p.drisc_n = std::min<uint32_t>(p.drisc_n, p.readers.size());
+        TT_FATAL(!p.rdown || p.readers.size() - p.drisc_n >= 7, "MIMO_FL_DRISC: reader down columns need 7 Tensix readers");
         TT_FATAL(p.drisc_n >= 1, "MIMO_FL_DRISC_SLOTS >= 1");
         p.launcher = p.readers[0];
+        // the freed cells as down cores (MIMO_FL_DRISC_RD_DOWN, default: only with every slot on DRISC; next to the
+        // remaining Tensix readers they slow large M: hybrid 2048 290 vs 274 idle)
         const char* rdd = std::getenv("MIMO_FL_DRISC_RD_DOWN");
-        if (rdd == nullptr || std::atoi(rdd) != 0) {
+        if (rdd ? std::atoi(rdd) != 0 : p.drisc_n == p.readers.size()) {
             for (uint32_t r = 1; r < p.drisc_n; ++r) {
                 taken.erase({p.readers[r].x, p.readers[r].y});
             }
@@ -954,7 +962,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
                 std::optional<uint32_t> best;
                 for (uint32_t r = 0; r < n_rd; ++r) {
                     const bool used = std::any_of(p.rdn.begin(), p.rdn.end(), [r](auto t) { return t.first == r; });
-                    if (used || p.sg_rd(r) != k) {
+                    if (used || p.sg_rd(r) != k || !p.tensix_reader(r)) {
                         continue;
                     }
                     if (!best || noc_hops(phys(p.down[tail]), phys(p.readers[r]), 1) <

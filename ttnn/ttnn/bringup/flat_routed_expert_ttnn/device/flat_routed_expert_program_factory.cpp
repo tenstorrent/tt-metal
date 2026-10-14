@@ -393,7 +393,10 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         return static_cast<uint32_t>((v.x << 16) | v.y);
     };
     if (p.drisc) {
-        TT_FATAL(!p.rdown && p.nsg == 1 && p.r_ <= 8, "MIMO_FL_DRISC: no reader down columns, one subgrid");
+        TT_FATAL(p.nsg == 1 && p.r_ <= 8, "MIMO_FL_DRISC: one subgrid");
+        for (const auto& [r, tail] : p.rdn) {
+            TT_FATAL(p.tensix_reader(r), "MIMO_FL_DRISC: a reader down column on a DRISC slot");
+        }
         auto* mesh = dynamic_cast<distributed::MeshDevice*>(device);
         TT_FATAL(mesh != nullptr, "MIMO_FL_DRISC: a mesh device");
         flat_drisc_ensure(mesh, p.drisc_n, banks);
