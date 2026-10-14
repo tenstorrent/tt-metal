@@ -1,8 +1,25 @@
-Thanks — fair question, and the answer is "it depends on fidelity", which the PR should have said. I re-ran
-the whole thing; numbers below are **device cycles**, not wall-clock. (Wall-clock µs is not trustworthy here:
-AICLK moves with load and the bs16 shape sits between two clock states, so the same config re-measured a few
-minutes later moved 9%. Device cycles reproduce to 0.2–0.6%, and the same arm measured twice under two names
+# Reply to @pavlejosipovic's review on #59695 (carried over)
+
+> Which exact workload and configuration make the MATH-thread row sums faster: Q/K/V shape, chunk sizes,
+> `reuse_kv`, math fidelity, `math_approx_mode`, `fp32_dest_acc_en`? The PR gives Blackhole latencies but not
+> the fidelity. Could you also share matched PACK-vs-MATH profiles at the same settings, ideally MATH/PACK busy
+> or stall cycles? And why Blackhole only — Blackhole has roughly 2x Wormhole's packer bandwidth, so why does
+> moving work *off* PACK help there? SDPA originally moved the row reduction onto PACK because MATH was the
+> bottleneck.
+
+(Paraphrased from the thread on #59695 — please correct me if I have flattened anything.)
+
+Thanks — fair question, and the answer is "it depends on fidelity", which the original PR should have said. I
+re-ran the whole thing; numbers below are **device cycles**, not wall-clock. (Wall-clock µs is not trustworthy
+here: AICLK moves with load and the bs16 shape sits between two clock states, so the same config re-measured a
+few minutes later moved 9%. Device cycles reproduce to 0.2–0.6%, and the same arm measured twice under two names
 agrees to 0.03 pp.)
+
+**One note on the split.** The speed table below was taken on the original stack, where `reuse_kv` kept K/V
+resident on each core. This flag is now its own PR off main carrying no K/V retention, so at d=128 those batched
+shapes are bandwidth-bound and the flag is a wash there (within 0.5% either way). It still shows −8.9% at d=64
+and −6.7% at one Q chunk per core, and the HiFi2/HiFi4 penalty is unchanged at +6% / +9%. The mechanism below is
+what matters and is identical either way.
 
 ### 1. Workload and configuration
 
