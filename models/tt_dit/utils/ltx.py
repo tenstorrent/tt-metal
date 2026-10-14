@@ -203,6 +203,21 @@ LTX25_SPATIAL_UPSAMPLER = "latent_upscale_models/ltx-2.5-latent-spatial-upscaler
 
 _MLPERF_LTX25_HUB = "/mnt/MLPerf/huggingface/hub/models--Lightricks--LTX-2.5"
 
+# The packed Gemma-4 encoder Lightricks published before HF commit 1b92891ced (2026-08-17), which
+# did not match the 2.5 DiT. It keeps the replacement's name and tensor shapes, so only its size
+# and its chat template (17466 bytes in the fixed file) tell them apart.
+LTX25_STALE_TEXT_ENCODER_SIZE = 26263860594
+LTX25_STALE_CHAT_TEMPLATE_LEN = 18683
+
+
+def ltx25_text_encoder_is_stale(path: str) -> bool:
+    """True if ``path`` is the pre-2026-08-17 LTX-2.5 text encoder. Reads only the header."""
+    if os.path.getsize(path) == LTX25_STALE_TEXT_ENCODER_SIZE:
+        return True
+    with safe_open(path, framework="pt") as f:
+        name = "hf_asset__chat_template.jinja"
+        return name in f.keys() and f.get_slice(name).get_shape() == [LTX25_STALE_CHAT_TEMPLATE_LEN]
+
 
 def default_ltx25_root() -> str | None:
     """Resolve an LTX-2.5 split-checkpoint root, or ``None`` if none is present.
