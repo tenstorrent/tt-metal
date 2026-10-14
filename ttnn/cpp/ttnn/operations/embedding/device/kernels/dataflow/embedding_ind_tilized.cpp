@@ -47,19 +47,15 @@ void kernel_main() {
     // dfb_in0 stages one weight stick per output row; the writer kernel drains it to the output
     // tensor, so it doubles as this program's output buffer.
     DataflowBuffer dfb_in0(dfb::in0);
-    // dfb_in1 is this reader's private scratch page for the tile of indices it is working through.
-    DataflowBuffer dfb_in1(dfb::in1);
-
-    dfb_in1.reserve_back(1);
-    uint32_t input_l1_addr = dfb_in1.get_write_ptr();
-    volatile tt_l1_ptr input_token_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr input_token_t*>(input_l1_addr);
+    // index_scratch is this reader's private scratch page for the tile of indices it is working through.
+    Scratchpad<volatile input_token_t> index_scratch(scratch::in1);
 
     const uint32_t input_page_size = input.get_aligned_page_size();
 
     auto read_block = [&](const uint32_t& token_idx, const uint32_t& width_size, const uint32_t& offset = 0) {
         dfb_in0.reserve_back(1);
         uint32_t weight_l1_addr = dfb_in0.get_write_ptr();
-        input_token_t token = static_cast<input_token_t>(input_l1_ptr[token_idx + offset]);
+        input_token_t token = static_cast<input_token_t>(index_scratch[token_idx + offset]);
         read_token_async(noc, token, weights, weight_l1_addr, width_size);
         noc.async_read_barrier();
         dfb_in0.push_back(1);
@@ -74,7 +70,7 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {
-            noc.async_read(input, CoreLocalMem<uint32_t>(input_l1_addr), input_page_size, {.page_id = curr_tile}, {});
+            noc.async_read(input, index_scratch, input_page_size, {.page_id = curr_tile}, {});
             noc.async_read_barrier();
             read_indices = false;
         }
@@ -129,7 +125,4 @@ void kernel_main() {
             }
         }
     }
-    // dfb_in1 is reserved once as an index scratch buffer (no downstream consumer); commit the
-    // reservation so the buffer is left balanced.
-    dfb_in1.push_back(1);
 }

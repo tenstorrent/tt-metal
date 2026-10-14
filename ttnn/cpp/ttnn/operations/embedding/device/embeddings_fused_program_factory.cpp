@@ -84,8 +84,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     uint32_t g1_numcores = core_group_1.num_cores();
 
     // Create Buffers
-    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
         embeddings_index_type = EmbeddingsIndexType::BFP16;
@@ -162,14 +160,13 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     const KernelSpecName COMPUTE_G2{"compute_group_2"};
 
     const DFBSpecName WEIGHTS_STAGING{"weights_staging"};
-    const DFBSpecName INDEX_SCRATCH{"index_scratch"};
-    // On Quasar the index scratch page is a node-local scratchpad, not a self-loop DFB (Gen2 forbids a
-    // DM kernel binding a DFB as both PRODUCER and CONSUMER, which is how the reader uses it below).
+    // The reader's private page for the block of indices it is working through.
     const ScratchpadSpecName INDEX_SCRATCH_SP{"index_scratch_sp"};
     const DFBSpecName OUTPUT{"output"};
     const DFBSpecName WEIGHT_CACHE{"weight_cache"};
-    // On Quasar the weight cache is a node-local scratchpad too (same Gen2 self-loop rule as the index
-    // scratch): the reader fills it and reads tokens back out of it, both over the NoC.
+    // On Quasar the weight cache is a node-local scratchpad, not a self-loop DFB (Gen2 forbids a DM
+    // kernel binding a DFB as both PRODUCER and CONSUMER): the reader fills it and reads tokens back out
+    // of it, both over the NoC.
     const ScratchpadSpecName WEIGHT_CACHE_SP{"weight_cache_sp"};
 
     const TensorParamName INPUT_PARAM{"input"};
@@ -191,19 +188,10 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         .data_format_metadata = weights_data_format,
     });
 
-    const bool index_as_scratchpad = device->arch() == tt::ARCH::QUASAR;
+    const bool weight_cache_as_scratchpad = device->arch() == tt::ARCH::QUASAR;
     Group<ScratchpadSpec> scratchpads;
-    if (index_as_scratchpad) {
-        scratchpads.push_back(
-            ScratchpadSpec{.unique_id = INDEX_SCRATCH_SP, .size_per_node = TILE_HEIGHT * input_element_size_bytes});
-    } else {
-        spec.dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = INDEX_SCRATCH,
-            .entry_size = TILE_HEIGHT * input_element_size_bytes,
-            .num_entries = 1,
-            .data_format_metadata = input_data_format,
-        });
-    }
+    scratchpads.push_back(
+        ScratchpadSpec{.unique_id = INDEX_SCRATCH_SP, .size_per_node = TILE_HEIGHT * input_element_size_bytes});
 
     uint32_t output_dfb_total_size;
     if (output_sharded) {
@@ -237,7 +225,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
         // PADDED caches the single pad row; BINARY caches rows 0 and 1.
         const uint32_t cache_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u;
-        if (index_as_scratchpad) {
+        if (weight_cache_as_scratchpad) {
             scratchpads.push_back(
                 ScratchpadSpec{.unique_id = WEIGHT_CACHE_SP, .size_per_node = cache_entries * cache_page_size});
         } else {
@@ -282,31 +270,16 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         .accessor_name = "in0",
         .endpoint_type = DFBEndpointType::PRODUCER,
     });
-    // The index scratch page never leaves the reader: it reserves the page once, decodes indices out
-    // of it, and commits it at the end only to leave the buffer balanced. Both roles are the reader's.
-    // On Quasar that self-loop is illegal, so bind a node-local scratchpad once instead — same "in1"
-    // accessor, so the kernel selects scratch::in1 vs dfb::in1 under #ifdef ARCH_QUASAR.
+    // The index scratch page never leaves the reader: it decodes indices out of it, so it is the
+    // reader's private scratchpad.
     Group<KernelSpec::ScratchpadBinding> reader_scratchpad_bindings;
-    if (index_as_scratchpad) {
-        reader_scratchpad_bindings.push_back(
-            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = INDEX_SCRATCH_SP, .accessor_name = "in1"});
-    } else {
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = INDEX_SCRATCH,
-            .accessor_name = "in1",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = INDEX_SCRATCH,
-            .accessor_name = "in1",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        });
-    }
+    reader_scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = INDEX_SCRATCH_SP, .accessor_name = "in1"});
     if (use_local_cache) {
-        // Likewise the weight cache: the reader fills it and reads tokens back out of it, with no
-        // hand-off to another kernel. On Quasar that self-loop is illegal, so bind a node-local
-        // scratchpad once instead (same "local_cache" accessor -> scratch::local_cache vs dfb::local_cache).
-        if (index_as_scratchpad) {
+        // The weight cache: the reader fills it and reads tokens back out of it, with no hand-off to
+        // another kernel. On Quasar that self-loop is illegal, so bind a node-local scratchpad once
+        // instead (same "local_cache" accessor -> scratch::local_cache vs dfb::local_cache).
+        if (weight_cache_as_scratchpad) {
             reader_scratchpad_bindings.push_back(
                 KernelSpec::ScratchpadBinding{.scratchpad_spec_name = WEIGHT_CACHE_SP, .accessor_name = "local_cache"});
         } else {
@@ -361,7 +334,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
-    // Empty on non-Quasar; on Quasar carries the reader's index scratchpad.
+    // The reader's index scratchpad, plus its weight cache on Quasar.
     spec.scratchpads = std::move(scratchpads);
 
     // -----------------------------------------------------------------------

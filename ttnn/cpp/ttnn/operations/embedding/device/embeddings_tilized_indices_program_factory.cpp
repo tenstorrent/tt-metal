@@ -73,8 +73,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
 
     uint32_t g1_numcores = core_group_1.num_cores();
 
-    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-
     tt::DataFormat weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
 
     uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
@@ -90,7 +88,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
     const KernelSpecName WRITER{"writer"};
 
     const DFBSpecName OUTPUT{"output"};
-    const DFBSpecName INDEX_SCRATCH{"index_scratch"};
+    const ScratchpadSpecName INDEX_SCRATCH{"index_scratch"};
     const DFBSpecName WEIGHT_CACHE{"weight_cache"};
 
     const TensorParamName INPUT_PARAM{"input"};
@@ -119,11 +117,9 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
     // The reader loads one full input page of indices (`input.get_aligned_page_size()`) into this scratch buffer,
     // then decodes faces via face_offset. Size it to the input's aligned page size to avoid Watcher NOC sanitize overflows.
     uint32_t index_tile_page_size = a.buffer()->aligned_page_size();
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+    spec.scratchpads.push_back(ScratchpadSpec{
         .unique_id = INDEX_SCRATCH,
-        .entry_size = index_tile_page_size,
-        .num_entries = 1,
-        .data_format_metadata = input_data_format,
+        .size_per_node = index_tile_page_size,
     });
 
     if (use_local_cache) {
@@ -156,21 +152,9 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
         .accessor_name = "in0",
         .endpoint_type = DFBEndpointType::PRODUCER,
     });
-    // The index scratch page never leaves the reader: it reserves the page once, decodes indices out
-    // of it, and commits it at the end only to leave the buffer balanced. Both roles are the reader's.
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_SCRATCH,
-        .accessor_name = "in1",
-        .endpoint_type = DFBEndpointType::PRODUCER,
-    });
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_SCRATCH,
-        .accessor_name = "in1",
-        .endpoint_type = DFBEndpointType::CONSUMER,
-    });
     if (use_local_cache) {
-        // Likewise the weight cache: the reader fills it and reads tokens back out of it, with no
-        // hand-off to another kernel.
+        // The weight cache: the reader fills it and reads tokens back out of it, with no hand-off to
+        // another kernel.
         reader_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = WEIGHT_CACHE,
             .accessor_name = "local_cache",
@@ -208,6 +192,12 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
         .source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embedding_ind_tilized.cpp",
         .compiler_options = {.defines = std::move(embedding_defines)},
         .dfb_bindings = std::move(reader_dfb_bindings),
+        // The index scratch page never leaves the reader: it decodes indices out of it, so it is the
+        // reader's private scratchpad.
+        .scratchpad_bindings =
+            {
+                KernelSpec::ScratchpadBinding{.scratchpad_spec_name = INDEX_SCRATCH, .accessor_name = "in1"},
+            },
         .tensor_bindings =
             {
                 TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
