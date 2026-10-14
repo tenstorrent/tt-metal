@@ -112,9 +112,20 @@ def test_short_m_sharded_layout_rejects_unshardable_k(k_tiles, expect_error):
         short_m_sharded_memcfg(device, 256, k_tiles)
 
 
-# Rows per device after the TP row split: 64 / 128 / 256 at chunk 2048 / 4096 / 8192.
+# Rows per device after the TP row split: 64 / 128 / 256 at chunk 2048 / 4096 / 8192. An odd tile-row count
+# (32 / 96 / 160 rows at chunk 1024 / 3072 / 5120) takes one-row blocks rather than the interleaved fallback.
 @pytest.mark.parametrize(
-    "rows, expected", [(64, (2, 14, 1, 12)), (128, (2, 14, 2, 12)), (256, (2, 14, 4, 12)), (1024, (4, 21, 8, 8))]
+    "rows, expected",
+    [
+        (64, (2, 14, 1, 12)),
+        (128, (2, 14, 2, 12)),
+        (256, (2, 14, 4, 12)),
+        (1024, (4, 21, 8, 8)),
+        (32, (1, 14, 1, 12)),
+        (96, (1, 14, 3, 12)),
+        (160, (1, 14, 5, 12)),
+        (288, (3, 14, 3, 12)),
+    ],
 )
 def test_rms_norm_block_shard_geometry(rows, expected):
     assert _block_shard_geometry(rows, 5376) == expected
