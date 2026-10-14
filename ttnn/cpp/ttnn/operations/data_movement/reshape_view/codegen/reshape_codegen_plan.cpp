@@ -29,9 +29,9 @@ tt::tt_metal::CoreRangeSet reshape_core_grid(
 
 uint64_t static_l1_budget(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec) {
     auto* device = input.device();
-    const uint64_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const uint64_t ceiling = static_cast<uint64_t>(device->l1_size_per_core());
-    uint64_t budget = ceiling > base ? ceiling - base : 0;
+    // The same ceiling the live side caps at (available_program_l1_capacity): the bank already excludes the allocator
+    // base and any reserved L1_SMALL region.
+    uint64_t budget = device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
 
     const auto l1_banks = device->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
     const auto l1_alignment = device->allocator()->get_alignment(tt::tt_metal::BufferType::L1);
