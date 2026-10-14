@@ -84,13 +84,13 @@ CONFIG_PATH = Path(__file__).resolve().parents[1] / "configs" / "deepseek_v41_fl
 
 def clamp_text(text, site):
     """The config text with the swiglu clamp of ``site`` (decode / prefill / spec / mtp: every place that builds a ``moe_compute`` front-end from the YAML) switched off when
-    DSV41_DEC_SWIGLU_CLAMP=0 or when the site is not in DSV41_SWIGLU_CLAMP_SITES (comma list, default decode,prefill,mtp).
+    DSV41_DEC_SWIGLU_CLAMP=0 or when the site is not in DSV41_SWIGLU_CLAMP_SITES (comma list, default decode,prefill,spec,mtp: all of them).
 
-    ``spec`` (the speculative VERIFY block) is NOT in the default: with the clamp on there the vLLM server generates garbage (decode + MTP + prefill clamped and verify unclamped is
-    coherent: GSM8K / greedy probes; any set with ``spec`` is garbage, cause not found; the same kernel is exact at every token count 1..64 per device in
-    tests/test_moe_clamp_device.py, and the demo with every site clamped is coherent). Verify then differs from the plain decode only where a gate / up projection exceeds the limit.
+    The clamped activation (``SILU_CLAMPED``) is a kernel of ``moe_compute``: the JIT of a host server compiles the kernel sources of the tree its ``ttnn`` package lives in, so that tree
+    (e.g. the ``wt/vllm_test`` worktree of the venv) must be at the same commit as the C++ build. With older kernel sources the unknown activation is an empty no-op and every clamped
+    ``moe_compute`` (decode, verify, ...) computes garbage, whatever the limit is; the docker image is one consistent tree.
     """
-    sites = os.environ.get("DSV41_SWIGLU_CLAMP_SITES", "decode,prefill,mtp").split(",")
+    sites = os.environ.get("DSV41_SWIGLU_CLAMP_SITES", "decode,prefill,spec,mtp").split(",")
     if os.environ.get("DSV41_DEC_SWIGLU_CLAMP", "1") == "0" or site not in sites:
         text = text.replace("swiglu_limit: 10.0", "swiglu_limit: 0.0", 1)
     return text
