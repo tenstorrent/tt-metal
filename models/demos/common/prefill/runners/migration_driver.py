@@ -4,7 +4,6 @@
 
 import json
 import os
-import struct
 import sys
 import time
 
@@ -845,7 +844,7 @@ def main() -> None:
     driver.attach()
 
     slot_traces, slot_lengths, pools_by_trace = producer._resolve_slot_prompts(cfg)
-    cfg.slot_lengths = slot_lengths
+    cfg.slot_lengths = slot_lengths or cfg.slot_lengths
 
     def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, actual_isl: int) -> float:
         pool = pools_by_trace[slot_traces[slot_id]]
@@ -860,7 +859,9 @@ def main() -> None:
         )
         return (time.perf_counter() - push_start) * 1000.0
 
-    stats = producer.run_schedule(cfg, push_fn=push_chunk)
+    stats = producer.run_service_schedule(
+        cfg, service, payload_bytes, pools_by_trace, slot_traces, push_chunk, "[migration_driver]"
+    )
     service.barrier()
     logger.info(
         f"[migration_driver] prefill done wall={stats.wall_s:.1f}s pushes={stats.total_pushes} "
@@ -941,16 +942,7 @@ def main() -> None:
         all_ranks_ok = all(verdicts)
 
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
-        sentinel = struct.pack("<iii", -1, -1, -1)
-        logger.info("[migration_driver] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
-        producer._push(
-            service,
-            payload_bytes,
-            producer._h2d_rows(producer._chunk_slice([], 0)),
-            producer._mtp_rows([], 0),
-            sentinel,
-        )
-        service.barrier()
+        producer.push_shutdown(service, payload_bytes, "[migration_driver]")
     else:
         logger.info("[migration_driver] exiting (the runner keeps its sync-op loop running).")
 

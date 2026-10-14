@@ -22,3 +22,16 @@ def test_ci_pcc_matrix_reports_gqa_and_preserves_mla_index(tmp_path, capsys):
     assert lines[1].split() == ["layer", "kvpe.nope", "kvpe.pe", "K", "V", "index"]
     assert lines[2].split() == ["16", "0.98500", "0.97500", "0.99980", "0.99924", "0.96500"]
     assert lines[-1].endswith("0.965000")
+
+
+# A batched step's lanes are chunks c, c + 1, ..., each with the step's start and duration.
+def test_ci_timing_from_ranklogs_expands_batched_steps(tmp_path):
+    from models.demos.common.prefill.runners.ci.summarize_ci_run import _timing_from_ranklogs
+
+    (tmp_path / "rank0.log").write_text(
+        "[pp rank 0] CHUNK_START c=0 compute_start=10.000000 slot=0 [0,2048) provided=0\n"
+        "[pp rank 0] CHUNK_COMPUTE c=0 compute_ms=50.000\n"
+        "[pp rank 0] STEP_START c=1 compute_start=11.000000 lanes=[(0, 2048, 4096), (1, 0, 2048)]\n"
+        "[pp rank 0] STEP_COMPUTE c=1 lanes=2 compute_ms=80.000\n"
+    )
+    assert _timing_from_ranklogs(tmp_path) == {0: {0: [10.0, 50.0], 1: [11.0, 80.0], 2: [11.0, 80.0]}}

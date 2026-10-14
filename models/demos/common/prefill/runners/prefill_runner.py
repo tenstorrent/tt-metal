@@ -14,6 +14,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.common.prefill import step_message
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
 from models.demos.common.prefill.runners.migration import (
     migration_file_export_enabled,
@@ -108,7 +109,11 @@ assert MTP_LEVELS >= 0, f"PREFILL_MTP_LEVELS must be >= 0, got {MTP_LEVELS}"
 NUM_MTP_TOKENS = num_mtp_tokens(MTP_LEVELS)
 TOKEN_ID_BYTES = 4
 _MTP_PAD_AS_INT32 = MTP_PAD_TOKEN_ID - (1 << 32)
-CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
+# Each H2D message carries up to MAX_LANES chunks; see common/prefill/step_message.py.
+MAX_LANES = int(os.environ.get("PREFILL_BATCH_MAX_LANES", 1))
+CHUNK_METADATA_SIZE_BYTES = step_message.metadata_size_bytes(MAX_LANES)
+assert MAX_LANES == 1 or ADAPTER.supports_batched_steps, f"{ADAPTER.name} does not support PREFILL_BATCH_MAX_LANES > 1"
+assert MAX_LANES == 1 or not (MTP_LEVELS or DFLASH_ENABLED), "batched steps support neither MTP nor DFlash"
 
 D2D_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
@@ -189,13 +194,16 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers, ack_idx_of
     return on_layer_complete
 
 
-def _decode_metadata(metadata_msg: ttnn.Tensor) -> dict:
-    m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-    return {
-        "slot_id": int(m[0]),
-        "actual_start": int(m[1]),
-        "actual_end": int(m[2]),
+def _decode_metadata(metadata_msg: ttnn.Tensor, max_lanes: int = 1) -> dict:
+    m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten().tolist()
+    meta = {
+        "slot_id": m[0],
+        "actual_start": m[1],
+        "actual_end": m[2],
     }
+    if max_lanes > 1 and not step_message.is_shutdown(m):
+        meta["lanes"] = step_message.unpack_words(m, max_lanes)
+    return meta
 
 
 def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
@@ -245,7 +253,7 @@ def _socket_next(h2d_service, n_mtp: int = 0) -> tuple:
     else:
         tt_mtp_tokens = None
         tt_ids, tt_metadata = outs
-    meta = _decode_metadata(tt_metadata)
+    meta = _decode_metadata(tt_metadata, MAX_LANES)
     return tt_ids, tt_mtp_tokens, meta, tt_metadata
 
 
@@ -419,6 +427,10 @@ def _compute_and_send(
         ttnn.synchronize_device(runtime.mesh_device)
     t_start = time.time()
     t_perf = time.perf_counter()
+    if "lanes" in meta:
+        return _compute_step(
+            runtime, kv_caches, rank, c, inp, meta["lanes"], d2h_service, metadata_msg, t_start, t_perf
+        )
     where = f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     logger.info(
         f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} {where} "
@@ -457,6 +469,28 @@ def _compute_and_send(
         )
     if d2d_out is not None:
         d2d_out.release_fabric_links()
+    return t_start
+
+
+def _compute_step(
+    runtime, kv_caches, rank: int, c: int, inp, lanes, d2h_service, metadata_msg, t_start, t_perf
+) -> float:
+    """One batched step (single rank only). For layer acks its lanes count as chunks c, c + 1, ..."""
+    # The engine writes the message, so the legality rules are checked here, at the boundary, not only in tests.
+    step_message.validate_lanes(
+        lanes, chunk_size=CHUNK_SIZE, max_lanes=MAX_LANES, max_seq_len=MAX_SEQ_LEN, num_slots=NUM_USERS
+    )
+    logger.info(
+        f"[pp rank {rank}] STEP_START c={c} compute_start={t_start:.6f} lanes={[tuple(lane) for lane in lanes]}"
+    )
+    runtime.prefill_step(inp, kv_caches, lanes=lanes, request_id=c, d2h_service=d2h_service, metadata_msg=metadata_msg)
+    if SYNC_PER_CHUNK:
+        ttnn.synchronize_device(runtime.mesh_device)
+        compute_ms = (time.perf_counter() - t_perf) * 1000.0
+        logger.info(f"[pp rank {rank}] STEP_COMPUTE c={c} lanes={len(lanes)} compute_ms={compute_ms:.3f}")
+        # Each lane is a chunk (c, c + 1, ...) that starts and ends with the step.
+        for lane in range(len(lanes)):
+            _record_chunk_timing(rank, c + lane, t_start, compute_ms)
     return t_start
 
 
@@ -534,7 +568,7 @@ def run_request_loop(
         )
         if first is None:
             first = t
-        c += 1
+        c += len(meta["lanes"]) if "lanes" in meta else 1
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
 
 
@@ -557,6 +591,7 @@ def _print_config() -> None:
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "0")),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
+        ("PREFILL_BATCH_MAX_LANES", str(MAX_LANES)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
         ("PREFILL_NUM_USERS", str(NUM_USERS)),
         ("PREFILL_CAPACITY_FACTOR", str(CAPACITY_FACTOR)),
@@ -591,6 +626,7 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "adapter": ADAPTER.name,
         "num_layers": NUM_LAYERS,
         "chunk_size": CHUNK_SIZE,
+        "max_lanes": MAX_LANES,
         "max_seq_len": MAX_SEQ_LEN,
         "num_users": NUM_USERS,
         "mesh_shape": GLOBAL_MESH_SHAPE,
@@ -626,6 +662,8 @@ def main() -> None:
     rank = int(ttnn.distributed_context_get_rank())
     num_ranks = int(ttnn.distributed_context_get_size())
     _assert_ranks_agree_on_config(rank, num_ranks)
+    if MAX_LANES > 1 and num_ranks > 1:
+        raise ValueError("batched steps (PREFILL_BATCH_MAX_LANES > 1) run on a single rank")
 
     layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS), MTP_LEVELS)
     first_layer_idx, num_my_layers = layer_split[rank]
@@ -661,6 +699,7 @@ def main() -> None:
         dflash_enabled=DFLASH_ENABLED,
         dflash_checkpoint_path=DFLASH_MODEL,
         mtp_levels=MTP_LEVELS,
+        max_lanes=MAX_LANES,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=USE_TRACE,
@@ -718,7 +757,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             return service
 
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-        h2d_service = _open_h2d(make_h2d_spec(GLOBAL_MESH_SHAPE, CHUNK_SIZE, MTP_LEVELS), service_id)
+        h2d_service = _open_h2d(make_h2d_spec(GLOBAL_MESH_SHAPE, CHUNK_SIZE * MAX_LANES, MTP_LEVELS), service_id)
 
     d2d_in = d2d_out = None
     if num_ranks > 1:

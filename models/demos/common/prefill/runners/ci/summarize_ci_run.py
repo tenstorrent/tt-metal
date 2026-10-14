@@ -10,6 +10,9 @@ _GQA = re.compile(r"layer\s+(\d+):\s+K=([-\d.]+)\s+V=([-\d.]+)")
 _INDEX = re.compile(r"slot\s+(\d+)\s+layer\s+(\d+)\s+\(index rank\s+(\d+)\)\s+index PCC:\s+([-\d.]+)")
 _CHUNK_START = re.compile(r"\[pp rank (\d+)\] CHUNK_START c=(\d+) compute_start=([\d.]+)")
 _CHUNK_COMPUTE = re.compile(r"\[pp rank (\d+)\] CHUNK_COMPUTE c=(\d+) compute_ms=([\d.]+)")
+# A batched step's lanes are chunks c, c + 1, ...; each starts and ends with the step.
+_STEP_START = re.compile(r"\[pp rank (\d+)\] STEP_START c=(\d+) compute_start=([\d.]+)")
+_STEP_COMPUTE = re.compile(r"\[pp rank (\d+)\] STEP_COMPUTE c=(\d+) lanes=(\d+) compute_ms=([\d.]+)")
 
 # Chunks spanned by a throughput probe. A single chunk can run half again as long as its neighbours,
 # so one interval is too noisy to be a rate; eight is still under 5% of the shortest measured request.
@@ -102,7 +105,18 @@ def _timing_from_csvs(timing_dir):
 
 def _timing_from_ranklogs(root):
     ranks = {}
+    step_starts = {}
     for line in _iter_lines(root):
+        m = _STEP_START.search(line)
+        if m:
+            step_starts[int(m.group(1)), int(m.group(2))] = float(m.group(3))
+            continue
+        m = _STEP_COMPUTE.search(line)
+        if m:
+            rank, c, lanes = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            for lane in range(lanes):
+                ranks.setdefault(rank, {})[c + lane] = [step_starts.get((rank, c)), float(m.group(4))]
+            continue
         m = _CHUNK_START.search(line)
         if m:
             ranks.setdefault(int(m.group(1)), {}).setdefault(int(m.group(2)), [None, None])[0] = float(m.group(3))
