@@ -3,7 +3,6 @@ set(TT_METAL_PUBLIC_API
     api/internal/service/service_core_manager.hpp
     api/internal/disaggregation/layer_completion_message.hpp
     api/internal/disaggregation/layer_completion_queue.hpp
-    api/internal/disaggregation/layer_completion_reorder_buffer.hpp
     api/internal/disaggregation/layer_completion_router.hpp
     api/internal/reload_table.hpp
     api/tt-metalium/allocator.hpp
