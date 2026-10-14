@@ -17,6 +17,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
+#include "impl/program/program_impl.hpp"
+
 #include <exception>
 #include <memory>
 #include <vector>
@@ -65,7 +67,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 // BU-1: JIT-compiles the producer for both data-movement RISCs across every
 // mode/creation-flag variant, without enqueue, dispatch, X280 runtime or
-// prepared LIM state. CompileProgram needs only an initialised device.
+// prepared LIM state. Compiling a program needs only an initialised device.
 TEST(PacketInjectionCompile, BothRiscsCompileForEveryVariant) {
     std::shared_ptr<ttmd::MeshDevice> mesh;
     try {
@@ -90,7 +92,7 @@ TEST(PacketInjectionCompile, BothRiscsCompileForEveryVariant) {
             ttm::Program program;
             const suite::ProducerKernels kernels = suite::create_producer_kernels(program, cfg, kernel_dir, cores);
             EXPECT_NE(kernels.brisc, kernels.ncrisc) << point.label << ": expected distinct BRISC and NCRISC kernels";
-            ttm::detail::CompileProgram(mesh->get_device(0, 0), program);
+            program.impl().compile(mesh->get_device(0, 0));
         } catch (const std::exception& e) {
             ADD_FAILURE() << point.label << ": producer JIT compile failed: " << e.what();
         }
