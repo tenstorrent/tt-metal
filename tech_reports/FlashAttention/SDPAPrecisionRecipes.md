@@ -21,6 +21,7 @@ PV and row sums are added. The recipes differ in the arithmetic of each step.
 |---|---|---|---|---|---|
 | QK matmul | HiFi2 | HiFi2 | HiFi4 | HiFi4 | LoFi |
 | Scores S, P | BF16 | BF16 | FP32 | FP32 | BF16 |
+| Row max m | BF16 | BF16 | FP32 | FP32 | BF16 |
 | S − m | FPU, BF16 | FPU, BF16 | FPU, TF32 operands, FP32 dest | packer FP32 L1 add | FPU, BF16 |
 | exp(P) | approximate exp | approximate exp | bit-trick exp + cubic | bit-trick exp + cubic (tighter fit) | approximate exp |
 | Correction c | approximate exp | approximate exp | accurate FP32 exp | accurate FP32 exp | approximate exp |
@@ -43,7 +44,10 @@ PV and row sums are added. The recipes differ in the arithmetic of each step.
 - **BALANCED / ACCURATE** hold scores and state in FP32. The score exp is Schraudolph's bit trick on a 2⁻¹⁰
   grid in log2, refined by a cubic, and carries a constant factor of about 0.970 that cancels in O / l.
   Across the mantissa, the refined exp ripples ±0.24% (BALANCED) or ±0.10% (ACCURATE). See
-  `streaming/recipe_sfpu.hpp`.
+  `streaming/recipe_sfpu.hpp`. The row maxima are FP32 tiles. The max reduce reads S through srcA (19 bits), so
+  m is exact on that grid and S − m and the corrections take it without rounding. A BF16 m would sit up to
+  2⁻⁹·|scale·m| from the scores, beyond the grid's range once |scale·m| exceeds about 1.1·10⁴, and zero a whole
+  row of P.
 - **FAST** runs both matmuls at LoFi, which truncates SrcA to 5 and SrcB to 7 significant bits.
   `prepare_sdpa_input` rounds Q to 7 bits and K/V to 5 bits (or onto the BFP4 grid) with round-to-nearest-even
   beforehand, so the truncation loses nothing further. Its state is kept like STANDARD's, and the final

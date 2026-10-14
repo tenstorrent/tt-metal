@@ -7,16 +7,18 @@
 template <bool fp32, uint32_t q_tiles, uint32_t request_cb, uint32_t ack_cb, uint32_t d_tiles = 4, typename Accessor>
 void transfer_recipe_state(Noc& noc, const Accessor& backing) {
     using Transfer = sdpa::streaming::StateTransfer;
+    // The FP32 recipes' maxima are FP32 tiles.
+    constexpr uint32_t max_bytes = fp32 ? 4096 : 2048;
     CircularBuffer request(request_cb), ack(ack_cb);
     request.wait_front(1);
     ack.reserve_back(1);
     const auto* words = reinterpret_cast<const volatile uint32_t*>(request.get_read_ptr());
     const bool restore = words[Transfer::Operation] == Transfer::Restore;
-    const uint32_t base = words[Transfer::Slot] * (Transfer::pages<q_tiles, d_tiles> + 1);
+    const uint32_t base = words[Transfer::Slot] * (Transfer::pages<q_tiles, d_tiles, max_bytes> + 1);
     uint32_t page = base + 1;
     for (uint32_t plane = 0; plane < 3; ++plane) {
         const uint32_t cb = words[Transfer::Numerator + plane];
-        const uint32_t bytes = Transfer::plane_bytes<q_tiles, d_tiles>(plane);
+        const uint32_t bytes = Transfer::plane_bytes<q_tiles, d_tiles, max_bytes>(plane);
         // These full-capacity state banks are at their allocation origin at
         // every segment boundary. Dataflow never advances their CB pointers.
         const uint32_t address = CircularBuffer(cb).get_read_ptr();
@@ -29,7 +31,7 @@ void transfer_recipe_state(Noc& noc, const Accessor& backing) {
             const uint32_t tile = offset / Transfer::page_bytes;
             return ((tile / d_tiles) * 2 * d_tiles + tile % d_tiles) * Transfer::page_bytes + offset % Transfer::page_bytes;
         };
-        if constexpr (Transfer::page_aligned<q_tiles, d_tiles>) {
+        if constexpr (Transfer::page_aligned<q_tiles, d_tiles, max_bytes>) {
             for (uint32_t offset = 0; offset < bytes; offset += Transfer::page_bytes, ++page) {
                 if (restore) {
                     noc.async_read(
