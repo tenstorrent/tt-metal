@@ -216,15 +216,18 @@
     # the tests kept here are host-only (monkeypatched, no device), so 120 s is ample.
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_bucket_trace_teardown_releases_all_stores or test_condense_remaps_gdn_before_decode_in_both_sampling_modes or test_decode_warmup_stages_every_width_before_capture or test_decode_warmup_restages_when_num_blocks_changes or test_prefill_warmup_prepares_eagerly_and_only_records_when_traced or test_prefill_prepare_is_idempotent_and_record_requires_it"
     TT_METAL_TRACE_ALLOC_TRACKING=1 pytest --timeout 900 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_vllm_warmup_leaves_no_late_allocations"
-    # MTP speculative decode (unit-test coverage only until batch>1 lands; e2e runs plain decode).
+    # MTP speculative decode, single-user and batched (B <= 8); unit-test coverage, e2e runs plain decode.
     # QWEN36_SPEC_TEST_N_LAYERS=8: lossless/determinism hold on a truncated model, and the 8 layers are
     # already in the tensor cache from test_model_tp, so no 64-layer load happens in this leg.
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_spec_sampling_math.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_spec_batch_helpers.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mtp_torch_ref.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py -k "not perf and not (no_initial_state and (blackhole-1 or blackhole-2))"
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mtp_tp.py
     QWEN36_SPEC_TEST_N_LAYERS=8 pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_lossless.py
     QWEN36_SPEC_TEST_N_LAYERS=8 pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_determinism.py -k "not (test_spec_decode_is_deterministic and 128)"
+    # Batched spec decode at B=8, K=3 (all 32 verify rows): lossless vs plain, determinism, traced == eager.
+    QWEN36_SPEC_TEST_N_LAYERS=8 pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_batched.py -k "test_spec_batched_lossless and 8"
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_vision_block.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py

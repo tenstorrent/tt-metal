@@ -88,6 +88,13 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init()));
+#ifdef COMPUTE_SEMAPHORE_MAX
+    // Seed the compute semaphore (host-baked only when the kernel binds one): Value 0, Max = its capacity.
+    // TODO: once the Quasar compute API is ported to 2.0, move this into compute_semaphore_hw_startup()
+    // (semaphore_compute_impl.h) as an ARCH_QUASAR branch, called from the 2.0 hw_startup, and drop it here.
+    // https://github.com/tenstorrent/tt-metal/issues/60164
+    PACK((ckernel::trisc::t6_semaphore_init(ckernel::trisc::semaphore::PACK_UNPACK, 0, COMPUTE_SEMAPHORE_MAX)));
+#endif
 #endif
 }
 
