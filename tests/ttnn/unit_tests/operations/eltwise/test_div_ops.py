@@ -383,9 +383,9 @@ def test_remainder_negative_zero(testing_dtype, device):
     torch_dtype = getattr(torch, testing_dtype)
     ttnn_dtype = getattr(ttnn, testing_dtype)
 
-    # remainder(-0.0, b) is zero, not b. SFPSETCC is unspecified for -0.0 (VectorUnit.md), so the
-    # sign correction's zero guard admitted it. Only b > 0 trips it, since the correction is
-    # gated on result and b disagreeing in the sign bit.
+    # remainder(-0.0, b) is zero, not b. SFPSETCC compares the raw bits, so -0.0 (0x80000000) counts
+    # as nonzero and passed the sign correction's zero guard. Only b > 0 trips it, since the correction
+    # is gated on result and b disagreeing in the sign bit.
     torch_input_a = torch.tensor([-0.0, -0.0, -0.0, -0.0, 0.0, 0.0], dtype=torch_dtype)
     torch_input_b = torch.tensor([2.0, 3.0, 0.5, -3.0, 3.0, -3.0], dtype=torch_dtype)
 

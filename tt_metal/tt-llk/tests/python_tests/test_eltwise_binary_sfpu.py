@@ -858,10 +858,7 @@ def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop, **run_kwa
     )
 
 
-# Signed zeros as the remainder dividend, over divisors of both signs. The extended sweep draws from
-# the positive-only format default, so it never hands remainder a -0.0 dividend: the case where the
-# sign-correction guard compared a negative zero (SFPSETCC leaves that unspecified) and added the
-# divisor to an answer that was already zero. Ordinary pairs of every sign combination ride along.
+# -0.0 dividends, the extended sweep only feeds remainder positive values
 _REMAINDER_SIGNED_ZERO_PAIRS = [
     (a, b) for a in (-0.0, 0.0) for b in (2.0, 3.0, 0.5, 7.25, -2.0, -3.0, -0.5)
 ] + [(a, b) for a in (5.5, -5.5) for b in (2.0, -2.0)]
