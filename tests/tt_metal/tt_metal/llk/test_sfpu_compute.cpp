@@ -1970,6 +1970,33 @@ std::vector<uint32_t> run_sfpu_pipeline(
     return dest_buffer_data;
 }
 
+// Triage for an fp32 unpack-to-dest mismatch: per output tile, the fraction of words equal to every golden tile (g) and
+// every input tile (in), plus the zero count. "tile t == g(t+1)" means the next section overwrote this one before pack
+// read it; "== in(t)" means the SFPU did not touch it; all near 0 means garbage.
+void log_fp32_tile_match_fractions(
+    const std::vector<uint32_t>& dest_buffer_data,
+    const std::vector<uint32_t>& packed_golden,
+    const std::vector<uint32_t>& packed_input,
+    size_t num_tiles) {
+    constexpr size_t wpt = tt::constants::TILE_HW;
+    for (size_t t = 0; t < num_tiles; ++t) {
+        std::string line;
+        for (size_t j = 0; j < num_tiles; ++j) {
+            size_t eq_g = 0, eq_in = 0;
+            for (size_t i = 0; i < wpt; ++i) {
+                eq_g += (dest_buffer_data[t * wpt + i] == packed_golden[j * wpt + i]);
+                eq_in += (dest_buffer_data[t * wpt + i] == packed_input[j * wpt + i]);
+            }
+            line += fmt::format(" g{}={:.2f} in{}={:.2f}", j, double(eq_g) / wpt, j, double(eq_in) / wpt);
+        }
+        size_t zeros = 0;
+        for (size_t i = 0; i < wpt; ++i) {
+            zeros += (dest_buffer_data[t * wpt + i] == 0);
+        }
+        log_info(tt::LogTest, "fp32 out tile {} match fractions:{} zeros={}/{}", t, line, zeros, wpt);
+    }
+}
+
 /// @brief Does Dram --> Reader --> CB --> Sfpu Compute --> CB --> Writer --> Dram. So far, enqueue APIs only added to
 /// grayskull
 /// @param device
@@ -2047,26 +2074,7 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     const bool ok = is_fp32 ? sfpu_util::is_close_packed_sfpu_output_f32(dest_buffer_data, packed_golden, test_config.sfpu_op)
                             : sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
     if (!ok && is_fp32) {
-        // Diagnostic: for each output tile, the fraction of words equal to every golden tile (g) and input tile (in).
-        // "tile t == g(t+1)" means the next section overwrote this one before pack read it; "== in(t)" means the
-        // SFPU did not touch it; all near 0 means garbage.
-        constexpr size_t wpt = 32 * 32;
-        for (size_t t = 0; t < test_config.num_tiles; ++t) {
-            std::string line;
-            for (size_t j = 0; j < test_config.num_tiles; ++j) {
-                size_t eq_g = 0, eq_in = 0;
-                for (size_t i = 0; i < wpt; ++i) {
-                    eq_g += (dest_buffer_data[t * wpt + i] == packed_golden[j * wpt + i]);
-                    eq_in += (dest_buffer_data[t * wpt + i] == packed_input[j * wpt + i]);
-                }
-                line += fmt::format(" g{}={:.2f} in{}={:.2f}", j, double(eq_g) / wpt, j, double(eq_in) / wpt);
-            }
-            size_t zeros = 0;
-            for (size_t i = 0; i < wpt; ++i) {
-                zeros += (dest_buffer_data[t * wpt + i] == 0);
-            }
-            log_info(tt::LogTest, "fp32 out tile {} match fractions:{} zeros={}/{}", t, line, zeros, wpt);
-        }
+        log_fp32_tile_match_fractions(dest_buffer_data, packed_golden, packed_input, test_config.num_tiles);
     }
     return ok;
 }
@@ -3588,17 +3596,23 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_QuasarSfpuRelu) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuReluPackBackpressure) {
-    // 4 tiles through a ONE-entry output DFB: the packer waits on the writer every section, so the unpacker is
-    // admitted to a third section only if the DEST occupancy count says a bank is free (tt-metal #58903).
-    for (const auto [num_tiles, dst_full_sync_en] :
-         {std::pair{3u, false}, std::pair{3u, false}, std::pair{4u, false}, std::pair{4u, false}}) {
-        SCOPED_TRACE(std::string("num_tiles=") + std::to_string(num_tiles) + (dst_full_sync_en ? " SyncFull" : " SyncHalf"));
-        run_quasar_sfpu_unpack_to_dest_fp32(this->device(), num_tiles, "relu", dst_full_sync_en, /*out_dfb_entries=*/1);
+    // 3 and 4 tiles through a ONE-entry output DFB: the packer waits on the writer every section, so the unpacker is
+    // admitted to the next section only when the DEST occupancy count says a bank is free (tt-metal #58903): the
+    // single bank in SyncFull, a third section into two banks in SyncHalf.
+    for (const uint32_t num_tiles : {3u, 4u}) {
+        for (const bool dst_full_sync_en : {true, false}) {
+            SCOPED_TRACE(
+                std::string("num_tiles=") + std::to_string(num_tiles) + (dst_full_sync_en ? " SyncFull" : " SyncHalf"));
+            run_quasar_sfpu_unpack_to_dest_fp32(
+                this->device(), num_tiles, "relu", dst_full_sync_en, /*out_dfb_entries=*/1);
+        }
     }
-    // Same with a 16-bit DEST (bank-1 base at row 512 instead of 256): separates "flips inert" from "flip size wrong".
-    for (const uint32_t num_tiles : {2u, 3u, 3u, 4u}) {
+    // Same in SyncHalf with a 16-bit DEST (bank-1 base at row 512 instead of 256): separates "flips inert" from "flip
+    // size wrong".
+    for (const uint32_t num_tiles : {2u, 3u, 4u}) {
         SCOPED_TRACE(std::string("16b num_tiles=") + std::to_string(num_tiles) + " SyncHalf");
-        run_quasar_sfpu_unpack_to_dest_16b(this->device(), num_tiles, "relu", false, /*out_dfb_entries=*/1);
+        run_quasar_sfpu_unpack_to_dest_16b(
+            this->device(), num_tiles, "relu", /*dst_full_sync_en=*/false, /*out_dfb_entries=*/1);
     }
 }
 
@@ -3633,7 +3647,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUnpackToDestDestIndex) {
                 std::string(fp32_dest ? "FP32" : "16b") + (dst_full_sync_en ? " SyncFull" : " SyncHalf");
             for (const uint32_t dst : {1u, capacity - 1}) {
                 SCOPED_TRACE(mode + " copy_tile dst=" + std::to_string(dst));
-                run_quasar_unpack_to_dest_dest_index(this->device(), fp32_dest, 2, dst_full_sync_en, dst, 0, false);
+                run_quasar_unpack_to_dest_dest_index(
+                    this->device(),
+                    fp32_dest,
+                    /*num_tiles=*/2,
+                    dst_full_sync_en,
+                    dst,
+                    /*section_ntiles=*/0,
+                    /*section_use_copy_tile=*/false);
             }
             for (const bool use_copy_tile : {false, true}) {
                 for (const uint32_t ntiles : {2u, 4u}) {
@@ -3642,7 +3663,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUnpackToDestDestIndex) {
                             mode + (use_copy_tile ? " copy_tile x" : " copy_block ") + std::to_string(ntiles) +
                             " start=" + std::to_string(start));
                         run_quasar_unpack_to_dest_dest_index(
-                            this->device(), fp32_dest, 2 * ntiles, dst_full_sync_en, start, ntiles, use_copy_tile);
+                            this->device(),
+                            fp32_dest,
+                            /*num_tiles=*/2 * ntiles,
+                            dst_full_sync_en,
+                            start,
+                            /*section_ntiles=*/ntiles,
+                            /*section_use_copy_tile=*/use_copy_tile);
                     }
                 }
             }

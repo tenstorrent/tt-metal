@@ -67,19 +67,20 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         static_cast<DataFormat>(unpack_dst_format[unpA_operand_id]),
         static_cast<DataFormat>(unpack_dst_format[unpB_operand_id]));
 
-    // Unpack-to-dest: the unpack thread owns the DEST section base, and this is its once-per-program init. Every
-    // compute-API site that calls llk_unpack_hw_configure pairs it with llk_math_pack_sync_init, so unpack and
-    // math reset their bank parity together. The reset must NOT live in the per-op llk_unpack_A_init: op writers
-    // call copy_init inside their tile loop, and a per-op reset would pin unpack to bank 0 while pack keeps alternating in SyncHalf.
+    // Unpack-to-dest: the unpack thread carries its DEST bank in the UNP_DEST tile index (the SEC registers do not move
+    // UNPACR_DEST), and this is the once-per-program reset of that bank. Every compute-API site that calls
+    // llk_unpack_hw_configure pairs it with llk_math_pack_sync_init, so unpack and math reset their bank parity
+    // together. The reset must NOT live in the per-op llk_unpack_A_init: op writers call copy_init inside their tile
+    // loop, and a per-op reset would pin unpack to bank 0 while pack keeps alternating in SyncHalf.
     if constexpr (UnpackToDestEn) {
         _llk_unpack_dest_init_();
         // Seed the unpack-posted semaphores on this thread, the first to wait on and post them: a SEMINIT issued from
         // the math thread can land after the first post here and wipe it. Math seeds MATH_PACK, which it posts first,
         // in llk_math_pack_sync_init.
         constexpr std::uint32_t N = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
-        _llk_sync_init_(semaphore::UNPACK_MATH, N, 0);
+        _llk_sync_init_(semaphore::UNPACK_MATH, N /*max*/, 0 /*init*/);
         // DEST occupancy: unpack posts, pack gets; the unpacker's only gate, see llk_unpack_wait_for_dest_available.
-        _llk_sync_init_(semaphore::UNPACK_PACK, N, 0);
+        _llk_sync_init_(semaphore::UNPACK_PACK, N /*max*/, 0 /*init*/);
     }
 }
 

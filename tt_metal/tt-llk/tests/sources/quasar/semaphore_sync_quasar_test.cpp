@@ -53,8 +53,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // math thread can land after the first post here and wipe it (seen on the emulator as the unpacker running through
         // every tile before the packer's first read).
         constexpr std::uint32_t N = (dest_sync == ckernel::DstSync::SyncFull) ? 1 : 2;
-        _llk_sync_init_(semaphore::UNPACK_MATH, N, 0);
-        _llk_sync_init_(semaphore::UNPACK_PACK, N, 0);
+        _llk_sync_init_(semaphore::UNPACK_MATH, N /*max*/, 0 /*init*/);
+        _llk_sync_init_(semaphore::UNPACK_PACK, N /*max*/, 0 /*init*/);
         for (std::uint32_t i = 0; i < TILE_CNT; ++i)
         {
             _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::UNPACK_PACK);

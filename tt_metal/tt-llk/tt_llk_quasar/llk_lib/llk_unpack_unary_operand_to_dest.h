@@ -51,7 +51,9 @@ inline void _llk_unpack_dest_section_advance_()
  * @brief The current DEST bank base of this thread, in 32x32-tile units of the UNP_DEST tile index counter.
  *
  * dest_register_offset is kept in DEST rows (0, 256 or 512); a 32x32 tile spans 1 << get_dest_tile_size_log2 rows, the
- * same stride @ref _set_dst_write_addr_ uses on the math thread, so the two sides agree on where bank 1 starts.
+ * same stride @ref _set_dst_write_addr_ uses on the math thread, so the two sides agree on where bank 1 starts. The
+ * shift assumes full 32x32 tiles: the UNP_DEST tile counter steps in buffer-descriptor tiles, and a tiny-tile operand
+ * is described in one-face tiles, which would put bank 1 at the wrong rows. The API init asserts the shape.
  */
 inline std::uint32_t _llk_unpack_dest_bank_tile_offset_()
 {

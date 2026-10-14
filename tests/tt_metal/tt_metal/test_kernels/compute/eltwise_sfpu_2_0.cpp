@@ -13,12 +13,16 @@
 // DEST placement knobs of the unary path (QuasarUnpackToDestDestIndex). DST_TILE_START: DEST index the tile lands
 // at and is packed back from. SECTION_NTILES: one DEST section of that many tiles per tile_regs_acquire instead of
 // one tile, placed with one copy_block or, with SECTION_USE_COPY_TILE, one copy_tile per tile, and packed back from
-// the same indices. Section mode runs no SFPU chain: every chain in this file targets DEST tile 0.
+// the same indices. Both are datacopy-only knobs: every SFPU chain in this file targets DEST tile 0, and the binary /
+// ternary inputs sit at fixed indices 1 / 2.
 #ifndef DST_TILE_START
 #define DST_TILE_START 0
 #endif
 #if defined(SECTION_NTILES) && (defined(SFPU_OP_CHAIN_0) || defined(SFPU_BINARY_OP) || defined(SFPU_TERNARY_OP))
 #error "SECTION_NTILES is a unary datacopy mode: the SFPU chains target DEST tile 0"
+#endif
+#if (DST_TILE_START != 0) && (defined(SFPU_OP_CHAIN_0) || defined(SFPU_BINARY_OP) || defined(SFPU_TERNARY_OP))
+#error "DST_TILE_START is a unary datacopy knob: SFPU chains target DEST tile 0, binary / ternary inputs sit at 1 / 2"
 #endif
 
 void kernel_main() {

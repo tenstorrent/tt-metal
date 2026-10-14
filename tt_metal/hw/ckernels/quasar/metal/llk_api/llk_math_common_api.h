@@ -110,7 +110,8 @@ inline void llk_math_wait_for_dest_available() {
 /**
  * @brief Signals that the current destination section is done.
  * After math is done, posts to the MATH_PACK semaphore so the packer can proceed; on the unpack-to-dest path it then
- * gets UNPACK_MATH, releasing the unpacker's count for this section.
+ * gets UNPACK_MATH, releasing the unpacker's count for this section. SyncHalf: flips this thread's section base in
+ * both paths, so under unpack-to-dest the SFPU follows the bank the unpacker wrote.
  * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
  *
  * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
