@@ -66,6 +66,9 @@ def fused_decode_layout_supported(
 DENSE_MOE_TOKENS = 32
 DENSE_MOE_CORES = 45
 DENSE_MOE_WORKERS_PER_BANK = 3
+# Cores of the elementwise steps between gate|up and down (bias adds, SwiGLU, routing-weight scaling): twice the
+# matmul cores (8 tiles each), the gate/up outputs resharded there and the scaled activation back.
+DENSE_MOE_ELTWISE_CORES = 90
 
 
 def dense_moe_decode_layout_supported(

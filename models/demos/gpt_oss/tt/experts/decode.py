@@ -200,7 +200,7 @@ class DenseDecodePlan:
     """Memory and program configs of decode_forward_dense for one (device grid, shapes) combination."""
 
     def __init__(self, mesh_device, hidden, intermediate_local, num_experts, tokens):
-        from ..fused_decode.config import DENSE_MOE_CORES, DENSE_MOE_WORKERS_PER_BANK
+        from ..fused_decode.config import DENSE_MOE_CORES, DENSE_MOE_ELTWISE_CORES, DENSE_MOE_WORKERS_PER_BANK
 
         tile = ttnn.TILE_SIZE
         self.tokens = tokens
@@ -210,10 +210,10 @@ class DenseDecodePlan:
         assert hidden % (tile * cores) == 0 and n_act % (tile * cores) == 0, (hidden, n_act, cores)
         core_set = ttnn.num_cores_to_corerangeset(cores, grid, row_wise=True)
 
-        def width_sharded(cols):
+        def width_sharded(cols, cores_used=core_set):
             return ttnn.create_sharded_memory_config(
                 (tokens, cols),
-                core_set,
+                cores_used,
                 ttnn.ShardStrategy.WIDTH,
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
@@ -228,11 +228,11 @@ class DenseDecodePlan:
                 num_workers_per_dram_bank=DENSE_MOE_WORKERS_PER_BANK,
             )
 
-        def mcast_1d(per_core_n):
+        def mcast_1d(per_core_n, n_cores=cores):
             # [tokens, num_experts] routing weights times a [num_experts, n] constant, written straight into the
             # width-sharded layout of the tensor it scales / is added to.
             return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, -(-cores // grid.x)),
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, -(-n_cores // grid.x)),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -250,7 +250,10 @@ class DenseDecodePlan:
         self.out_memory_config = width_sharded(hidden // cores)
         self.gate_up_program_config = dram_sharded(hidden // tile // cores, n_act // tile // cores)
         self.down_program_config = dram_sharded(n_act // tile // cores, hidden // tile // cores)
-        self.expand_program_config = mcast_1d(n_act // tile // cores)
+        ew = DENSE_MOE_ELTWISE_CORES
+        assert n_act % (tile * ew) == 0, (n_act, ew)
+        self.eltwise_memory_config = width_sharded(n_act // ew, ttnn.num_cores_to_corerangeset(ew, grid, row_wise=True))
+        self.expand_program_config = mcast_1d(n_act // tile // ew, ew)
         self.down_bias_program_config = mcast_1d(hidden // tile // cores)
         # LoFi like the sparse matmuls it replaces (BFP8 activations x BFP4 weights).
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -298,15 +301,21 @@ def decode_forward_dense(hidden_states, routing_weights, weights, plan: DenseDec
         compute_kernel_config=ck,
     )
     x.deallocate(True)
-    gate = ttnn.add(gate, weights.gate_bias, memory_config=plan.act_memory_config, output_tensor=gate)
-    up = ttnn.add(up, weights.up_bias, memory_config=plan.act_memory_config, output_tensor=up)
+    # The elementwise steps run on twice the matmul's cores (plan.eltwise_memory_config).
+    ew = plan.eltwise_memory_config
+    gate_ew = ttnn.to_memory_config(gate, ew)
+    gate.deallocate(True)
+    up_ew = ttnn.to_memory_config(up, ew)
+    up.deallocate(True)
+    gate = ttnn.add(gate_ew, weights.gate_bias, memory_config=ew, output_tensor=gate_ew)
+    up = ttnn.add(up_ew, weights.up_bias, memory_config=ew, output_tensor=up_ew)
     w = ttnn.to_memory_config(routing_weights, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
     w = ttnn.reshape(w, (1, 1, w.shape[-2], w.shape[-1]))
     w_cols = ttnn.matmul(
         w,
         weights.expand,
         program_config=plan.expand_program_config,
-        memory_config=plan.act_memory_config,
+        memory_config=ew,
         dtype=ttnn.bfloat16,
     )
     # (clamp(up, -l, l) + 1) * g * sigmoid(alpha * g), g = clamp(gate, max=l); g * sigmoid(alpha g) = silu(alpha g) / alpha.
@@ -320,12 +329,15 @@ def decode_forward_dense(hidden_states, routing_weights, weights, plan: DenseDec
             UWP(U.SILU),
             UWP(U.MUL_UNARY_SFPU, 1.0 / alpha),
         ],
-        memory_config=plan.act_memory_config,
+        memory_config=ew,
     )
     gate.deallocate(True)
     up.deallocate(True)
-    act = ttnn.multiply(act, w_cols, memory_config=plan.act_memory_config, output_tensor=act)
+    act = ttnn.multiply(act, w_cols, memory_config=ew, output_tensor=act)
     w_cols.deallocate(True)
+    act_ew = act
+    act = ttnn.to_memory_config(act_ew, plan.act_memory_config)
+    act_ew.deallocate(True)
     down = ttnn.matmul(
         act,
         weights.down,

@@ -217,9 +217,10 @@ class TopKRouter:
         )
         values, indices = ttnn.topk(logits, k=self.top_k, dim=-1, sorted=True)
         indices.deallocate(True)
-        kth = ttnn.slice(values, [0, 0, 0, self.top_k - 1], [1, 1, tokens, self.top_k])
-        top = ttnn.slice(values, [0, 0, 0, 0], [1, 1, tokens, 1])
+        # Reductions, not column slices: a slice inside a tile becomes untilize + slice + tilize.
+        kth = ttnn.min(values, dim=-1, keepdim=True)
         values.deallocate(True)
+        top = ttnn.max(logits, dim=-1, keepdim=True)
         selected = ttnn.ge(logits, kth)
         kth.deallocate(True)
         e = ttnn.exp(ttnn.subtract(logits, top, output_tensor=logits), output_tensor=logits)
