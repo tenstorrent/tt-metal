@@ -16,6 +16,17 @@ Prior bring-up: ``prior: models/demos/<slug>`` names an earlier bring-up of the 
 configuration). This spec then shares its checkpoint download and goldens (hf/ and golden/ resolve to the prior's
 unless paths.hf / paths.golden say otherwise), its hooks reuse the prior's CPU reference, and every step's brief lists
 the prior's matching files to start from (orchestrator PRIOR_READS).
+
+Deployment target and boxes (F64). Without these keys the box the spec names is also the target (as before):
+
+    deploy: {box: galaxy_8x4, seq: 1048576, chunk: 8192}   # the system the plan is for
+    boxes:                                                 # every box the model may run on
+      galaxy_8x4: {name: ..., chip: ..., mesh: [8, 4], chip_dram_gb: 32, device_params: {...}}
+      quietbox_2x2: {mesh: [2, 2], chip_dram_gb: 32, overrides: {device: {experts_dtype: bfp4}}}
+    run: {box: quietbox_2x2, mode: partial}                # partial: the `layers` subset; full: every layer
+
+The run's box becomes ``box`` (so every ``box.*`` reader sees it) and its ``overrides`` (spec keys) are merged into
+the spec. ``target`` stays this run's context at the model's real dimensions. ``raw`` is the file as written.
 """
 
 from __future__ import annotations
@@ -76,11 +87,34 @@ def parse_layers(v, num_layers: int | None = None) -> list[int]:
     return sorted(set(out))
 
 
+MODES = ("partial", "full")
+
+
+def _merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def _resolve(raw: dict) -> dict:
+    """The spec as the run sees it: ``box`` from ``boxes[run.box]`` plus that box's overrides (F64)."""
+    run, boxes = raw.get("run"), raw.get("boxes")
+    if not isinstance(run, dict) or not isinstance(boxes, dict) or run.get("box") not in boxes:
+        return raw
+    box = dict(boxes[run["box"]] or {})
+    over = box.pop("overrides", None) or {}
+    data = _merge(raw, over)
+    data["box"] = box
+    return data
+
+
 class Spec:
     def __init__(self, data: dict, path: Path | None = None):
         if "model" not in data:
             raise SpecError("spec has no 'model'")
-        self.data = data
+        self.raw = data
+        self.data = _resolve(data)
         self.path = Path(path).resolve() if path else None
 
     @classmethod
@@ -211,6 +245,84 @@ class Spec:
         cannot be sliced out of the final state, so goldens store a snapshot at every chunk start tests need."""
         return list(self.get("state.fixed") or [])
 
+    # ---- deployment target and boxes (F64)
+    @property
+    def has_deploy(self) -> bool:
+        """The spec plans for a target system that may differ from the box this run uses."""
+        return isinstance(self.raw.get("deploy"), dict)
+
+    @property
+    def boxes(self) -> dict[str, dict]:
+        """Every box by name, each with its own overrides; just {"box": box} for a spec without ``boxes``."""
+        if not isinstance(self.raw.get("boxes"), dict):
+            return {"box": dict(self.data.get("box") or {})}
+        return {k: dict(v or {}) for k, v in self.raw["boxes"].items()}
+
+    @property
+    def run_box(self) -> str:
+        return (self.data.get("run") or {}).get("box") or "box"
+
+    @property
+    def deploy_box(self) -> str:
+        return (self.raw.get("deploy") or {}).get("box") or self.run_box
+
+    @property
+    def deploy_seq(self) -> int:
+        return int((self.raw.get("deploy") or {}).get("seq") or self.get("target.seq"))
+
+    @property
+    def deploy_chunk(self) -> int:
+        return int((self.raw.get("deploy") or {}).get("chunk") or self.get("target.chunk"))
+
+    @property
+    def mode(self) -> str:
+        """partial (a layer subset brings up the layout) or full (every layer, every end-to-end check)."""
+        m = (self.data.get("run") or {}).get("mode")
+        if m:
+            return m
+        return "full" if self.layers() == list(range(self.num_layers)) else "partial"
+
+    def _validate_boxes(self) -> list[str]:
+        keys = [k for k in ("deploy", "boxes", "run") if k in self.raw]
+        if not keys:
+            return []
+        if len(keys) < 3:
+            return [f"deploy, boxes and run go together (have {keys})"]
+        errs = []
+        if self.raw.get("box"):
+            errs.append("with run / boxes the run's box comes from boxes: drop 'box'")
+        boxes, dep, run = self.raw["boxes"], self.raw["deploy"], self.raw["run"]
+        if not isinstance(boxes, dict) or not boxes:
+            return errs + ["boxes must map box names to boxes"]
+        for name, b in boxes.items():
+            m = (b or {}).get("mesh")
+            if not (isinstance(m, list) and len(m) == 2 and all(isinstance(x, int) and x > 0 for x in m)):
+                errs.append(f"boxes.{name}.mesh must be [rows, cols]")
+            if not isinstance((b or {}).get("chip_dram_gb"), (int, float)):
+                errs.append(f"boxes.{name}.chip_dram_gb must be a number")
+            bad = {"box", "boxes", "run", "deploy"} & set((b or {}).get("overrides") or {})
+            if bad:
+                errs.append(f"boxes.{name}.overrides cannot set {sorted(bad)}")
+        for what, d in (("deploy", dep), ("run", run)):
+            if not isinstance(d, dict) or d.get("box") not in boxes:
+                errs.append(f"{what}.box must name one of boxes {sorted(boxes)}")
+        if isinstance(dep, dict):
+            for k in ("seq", "chunk"):
+                if not isinstance(dep.get(k), int):
+                    errs.append(f"deploy.{k} must be an int")
+            if isinstance(dep.get("seq"), int) and isinstance(dep.get("chunk"), int) and dep["seq"] % dep["chunk"]:
+                errs.append("deploy.seq is not a multiple of deploy.chunk")
+        if isinstance(run, dict):
+            if run.get("mode") not in MODES:
+                errs.append(f"run.mode must be one of {MODES}")
+            elif run["mode"] == "full" and isinstance(self.num_layers, int):
+                try:
+                    if self.layers() != list(range(self.num_layers)):
+                        errs.append("run.mode full brings up every layer: set layers: all")
+                except SpecError:
+                    pass
+        return errs
+
     def rung(self, name: str) -> dict:
         for r in self.data.get("ladder", []):
             if r["name"] == name:
@@ -242,7 +354,9 @@ class Spec:
     # ---- validation
     def validate(self) -> list[str]:
         """Schema errors for a model spec (empty list = valid)."""
-        errs = []
+        errs = self._validate_boxes()
+        if errs:
+            return errs
         for k, t in REQUIRED.items():
             if k not in self.data:
                 errs.append(f"missing '{k}'")

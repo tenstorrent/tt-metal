@@ -486,6 +486,7 @@ class Orchestrator:
         vals["defer"] = self.defer_text(task, comp, vals) if can_defer else ""
         vals["deferred"] = self.deferred_text()
         vals["serving"] = self.serving_text(task, role)
+        vals["boxes"] = self.boxes_text(role)
         vals["role_text"] = Template(self.roles[role]).safe_substitute(vals)
         # spec agents.read.<role>: files every brief of that role lists (e.g. the HF modeling code for the reference role)
         reads = list(task.get("tests") or []) + list(extra_read) + list(brief.get("read") or [])
@@ -546,6 +547,42 @@ class Orchestrator:
             "When this attempt's gate fails and the check passes, the orchestrator marks the task DEFERRED and commits "
             "the request; a request the check rejects counts as a failed attempt. Launching op-gen is the owner's call.\n"
         )
+
+    def boxes_text(self, role: str) -> str:
+        """F64: the deployment box this run stands in for, and for the plan role how to plan for it ('' without one)."""
+        s = self.spec
+        if not s.has_deploy:
+            return ""
+        mesh = lambda b: "x".join(map(str, s.boxes[b]["mesh"]))  # noqa: E731
+        dep, run = s.deploy_box, s.run_box
+        rows = "\n".join(
+            f"- `{b}`: mesh {mesh(b)}, {s.boxes[b]['chip_dram_gb']} GB per chip"
+            + (" (deployment)" if b == dep else "")
+            + (" (this run)" if b == run else "")
+            for b in s.boxes
+        )
+        text = (
+            f"## Boxes\nThis run uses `{run}` (mesh {mesh(run)}) in {s.mode} mode. The model is planned for the "
+            f"deployment box `{dep}` (mesh {mesh(dep)}) at {s.deploy_seq:,} tokens in {s.deploy_chunk:,}-token chunks. "
+            "The code must work on every box below, not only this one (agent rule 15).\n" + rows + "\n"
+        )
+        if role == "plan":
+            text += (
+                "\nPlan for the deployment box, then fit the plan to every box (schema and checks in "
+                "`models/demos/common/bringup/plan/boxes.py`). In `plan.yaml`: `roles` (which mesh axes split the "
+                "sequence, the heads, the experts, ...); a placement for every tensor of every layer (no `skip` for "
+                "layers outside this run's subset: the check applies the subset); state entries with total `heads` and "
+                "the roles they are split over (`split_heads`, `split_seq`), not per-chip numbers; and in "
+                "`conditions` every per-chip count that decides a code path (an op's limit on experts or heads per "
+                "chip, tile alignment of a chip's share of a chunk), with the path taken otherwise in `else`. "
+                "Per-box dtype or activation differences go under `boxes`. The gate prints the per-box table (scale, "
+                "scaled context, full-model fit and longest context, the run's layers scaled and at real size, each "
+                "condition's path) and writes `results/plan_boxes.json`. `plan.md` needs a `## Boxes` section with "
+                "that table and, for every path that differs from the deployment box, either the change that makes "
+                "the box take the deployment's path, or why it stays different and what goes untested until the "
+                "deployment box (list those as deployment-only checks).\n"
+            )
+        return text
 
     def serving_text(self, task: dict, role: str) -> str:
         """The serving contract this step builds to (testing/serving.py): the plan reads all of it; a component step
