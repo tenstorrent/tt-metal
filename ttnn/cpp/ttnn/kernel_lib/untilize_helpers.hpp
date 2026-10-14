@@ -55,6 +55,13 @@ enum class FastChunk : uint8_t {
     FourTiles
 };
 
+// Blackhole pack untilize DEST sections: OnMathAcquire has the math thread clear each section instead of the pack
+// release, for a kernel with no 32-bit unpack source (otherwise it keeps OnRelease).
+enum class DestClear : uint8_t {
+    OnRelease,  // Default
+    OnMathAcquire
+};
+
 }  // namespace untilize_config
 
 // Standalone init/uninit wrappers for manual lifecycle control.
@@ -185,7 +192,8 @@ template <
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
     untilize_config::RemapMode remap_mode = untilize_config::RemapMode::Configure,
-    untilize_config::FastChunk fast_chunk = untilize_config::FastChunk::Auto>
+    untilize_config::FastChunk fast_chunk = untilize_config::FastChunk::Auto,
+    untilize_config::DestClear dest_clear = untilize_config::DestClear::OnRelease>
 ALWI void untilize(uint32_t num_blocks);
 
 }  // namespace compute_kernel_lib

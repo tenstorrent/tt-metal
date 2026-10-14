@@ -33,6 +33,19 @@ constexpr static std::uint32_t format_size_in_bytes(std::uint32_t data_format)
     }
 }
 
+
+// As the untilize kernels: the math thread clears each DEST section when no 32-bit source writes DEST (Blackhole)
+inline bool math_clears_dest(const std::uint32_t unpack_src)
+{
+#ifdef ARCH_BLACKHOLE
+    return unpack_src != ckernel::to_underlying(DataFormat::Float32) && unpack_src != ckernel::to_underlying(DataFormat::Int32) &&
+           unpack_src != ckernel::to_underlying(DataFormat::UInt32);
+#else
+    (void)unpack_src;
+    return false;
+#endif
+}
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
@@ -121,6 +134,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t block_num = 0; block_num < num_blocks_per_col; ++block_num) // Loop over blocks in the tile-row.
         {
             _llk_math_wait_for_dest_available_<dest_sync>();
+#ifdef ARCH_BLACKHOLE
+            if (math_clears_dest(formats.unpack_A_src))
+            {
+                _llk_math_clear_dest_section_<dest_sync, is_fp32_dest_acc_en>();
+            }
+#endif
             for (std::uint32_t tile_index_within_block = 0; tile_index_within_block < BLOCK_CT_DIM; ++tile_index_within_block) // Loop over tiles in the block
             {
                 LLK_ASSERT(
@@ -201,7 +220,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 false /* dense */,
                 PACK_UNTILIZE_SRC_DATUM_SIZE,
                 PACK_UNTILIZE_DST_DATUM_SIZE>(pack_addr_16B, formats.pack_dst, FACE_R_DIM, params.num_faces, 0 /* tile_dst_rt_offset */);
-            _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+#ifdef ARCH_BLACKHOLE
+            if (math_clears_dest(formats.unpack_A_src))
+            {
+                _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en, false>();
+            }
+            else
+#endif
+            {
+                _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+            }
         }
     }
 

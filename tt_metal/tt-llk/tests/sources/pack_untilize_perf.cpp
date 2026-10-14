@@ -177,6 +177,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t block = 0; block < TILE_CNT / BLOCK_CT_DIM; block++)
             {
                 _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+#ifdef ARCH_BLACKHOLE
+                // As the untilize kernels: the math thread clears each section when no 32-bit source writes DEST
+                if constexpr (!unpack_to_dest)
+                {
+                    _llk_math_clear_dest_section_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                }
+#endif
                 for (std::uint32_t block_tile = 0; block_tile < BLOCK_CT_DIM; block_tile++)
                 {
                     LLK_ASSERT(
@@ -276,7 +283,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         PACK_UNTILIZE_SRC_DATUM_SIZE,
                         PACK_UNTILIZE_DST_DATUM_SIZE>(
                         PERF_ADDRESS(PERF_OUTPUT, i), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
+#ifdef ARCH_BLACKHOLE
+                    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en, unpack_to_dest>();
+#else
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+#endif
                 }
             }
         }
