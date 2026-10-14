@@ -769,9 +769,15 @@ def assert_boxes_close(expected, actual, pcc=0.99):
 
 
 # The device's selected scores against the reference's at the same pairs, and the share of the
-# reference's top-k the device selects: twice the worst seen end to end with the dummy weights
-# (score error 0.009, overlap 0.967), so a regression in the logits fails here too.
-MAX_SCORE_ERROR = 0.02
+# reference's top-k the device selects. The score error is gated at its 99th percentile, with a
+# looser bound on the worst pair: with the BEVFormer-base checkpoint, the second frame's BEV is
+# off most at the grid's edges, where the previous BEV, rotated and shifted by the ego motion,
+# turns to zeros and the self-attention samples across that step; a query there, one in 300, is
+# off by up to 0.11 (0.08 with the earlier grid_sample attention), while the 99th percentile
+# stays at 0.026. Both bounds are about 1.5x those, so a regression in the logits fails here too.
+SCORE_ERROR_QUANTILE = 0.99
+MAX_SCORE_ERROR = 0.04
+MAX_WORST_SCORE_ERROR = 0.15
 MIN_TOPK_OVERLAP = 0.9
 
 
@@ -779,7 +785,8 @@ def assert_topk_close(cls_scores, bbox_preds, tt_cls_scores, tt_bbox_preds, tt_t
     """The coder's device top-k against the reference head's outputs, per sample: the pairs it
     selects lie within twice the score error of the reference's top-k and cover at least
     ``MIN_TOPK_OVERLAP`` of it, its scores are the reference's at the same (query, class) pairs
-    within ``MAX_SCORE_ERROR``, and its decoded boxes are its own box predictions' at the selected
+    within ``MAX_SCORE_ERROR`` at the ``SCORE_ERROR_QUANTILE`` and ``MAX_WORST_SCORE_ERROR`` at
+    worst, and its decoded boxes are its own box predictions' at the selected
     queries, decoded on the host, at PCC ``pcc``. The box predictions themselves are the caller's
     to check against the reference's, over all queries: the selected ones span narrower ranges,
     where the error carried from the BEV lowers the PCC further.
@@ -810,12 +817,16 @@ def assert_topk_close(cls_scores, bbox_preds, tt_cls_scores, tt_bbox_preds, tt_t
         pairs = set((query_index * NUM_CLASSES + labels).tolist())
         ref_pairs = set((ref_query_index * NUM_CLASSES + ref_labels).tolist())
         overlap = len(pairs & ref_pairs) / len(ref_pairs)
-        selected_error = (selected - tt_scores[i].float()).abs().max().item()
+        errors = (selected - tt_scores[i].float()).abs()
+        selected_error = errors.quantile(SCORE_ERROR_QUANTILE).item()
+        worst_error = errors.max().item()
         logger.info(
-            f"sample {i}: top-{reference.max_num} overlap {overlap:.3f}, selected score error {selected_error:.5f}"
+            f"sample {i}: top-{reference.max_num} overlap {overlap:.3f}, selected score error "
+            f"p{SCORE_ERROR_QUANTILE * 100:.0f} {selected_error:.5f}, max {worst_error:.5f}"
         )
         assert overlap >= MIN_TOPK_OVERLAP, f"sample {i}: top-{reference.max_num} overlap {overlap:.3f}"
         assert selected_error <= MAX_SCORE_ERROR, f"sample {i}: selected score error {selected_error:.5f}"
+        assert worst_error <= MAX_WORST_SCORE_ERROR, f"sample {i}: worst selected score error {worst_error:.5f}"
         expected_boxes = denormalize_bbox(tt_bbox_preds[i, query_index].float())
         if bottom_center:
             expected_boxes = reference_bottom_center(expected_boxes)
