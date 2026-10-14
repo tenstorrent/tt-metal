@@ -809,6 +809,66 @@ ControlPlane::ControlPlane(
     initialize_fabric_context();
 }
 
+namespace {
+
+// One rank's view of a mesh's FabricConfig, gathered across ranks for validation. Trivially copyable so it
+// can be exchanged as raw bytes between ranks.
+struct MeshFabricConfigObservation {
+    MeshId mesh_id;
+    uint32_t rank;
+    uint32_t mesh_host_rank;
+    FabricConfig fabric_config;
+};
+
+// Validate the gathered per-mesh FabricConfigs. Rules:
+//   - every rank that owns a given mesh must report the same config,
+//   - a 1D config may not be used when more than one mesh is present (and cannot be mixed with 2D).
+// Different 2D configs across meshes are allowed, including meshes joined by an intermesh link.
+// Throws (TT_FATAL) on any violation; mesh_graph_path is only used for error context.
+void validate_fabric_configs(
+    const std::vector<MeshFabricConfigObservation>& observations,
+    std::size_t mesh_count,
+    const std::string& mesh_graph_path) {
+    std::string observed_values;
+    for (const auto& o : observations) {
+        observed_values += fmt::format(
+            "\n  mesh_id={}, mesh_host_rank={}, rank={}, fabric_config={}",
+            *o.mesh_id,
+            o.mesh_host_rank,
+            o.rank,
+            enchantum::to_string(o.fabric_config));
+    }
+
+    // Every rank that owns a given mesh must report the same config; different meshes may differ.
+    std::map<MeshId, FabricConfig> per_mesh_config;
+    for (const auto& o : observations) {
+        const auto [it, inserted] = per_mesh_config.try_emplace(o.mesh_id, o.fabric_config);
+        TT_FATAL(
+            inserted || it->second == o.fabric_config,
+            "FabricConfig must match across all ranks of a mesh, but mesh {} has ranks reporting both {} and {}. "
+            "MGD path: {}. Observed:{}",
+            *o.mesh_id,
+            enchantum::to_string(it->second),
+            enchantum::to_string(o.fabric_config),
+            mesh_graph_path,
+            observed_values);
+    }
+
+    // A 1D config cannot span more than one mesh, and cannot be mixed with 2D.
+    const auto is_1d = [](FabricConfig c) { return c == FabricConfig::FABRIC_1D || c == FabricConfig::FABRIC_1D_RING; };
+    const bool any_1d = std::any_of(
+        per_mesh_config.begin(), per_mesh_config.end(), [&is_1d](const auto& kv) { return is_1d(kv.second); });
+    TT_FATAL(
+        !any_1d || mesh_count <= 1,
+        "A 1D FabricConfig cannot be used with more than one mesh (mesh_count={}), and 1D configs cannot be "
+        "mixed with 2D configs. MGD path: {}. Observed:{}",
+        mesh_count,
+        mesh_graph_path,
+        observed_values);
+}
+
+}  // namespace
+
 void ControlPlane::validate_fabric_config_across_ranks() {
     using tt::tt_metal::distributed::multihost::ReduceOp;
     const auto& distributed_context = this->distributed_context_.get();
@@ -886,21 +946,7 @@ void ControlPlane::validate_fabric_config_across_ranks() {
     const std::string mesh_graph_path = mesh_graph_desc_path.has_value() ? mesh_graph_desc_path->string()
                                                                           : std::string("<auto-discovered>");
 
-    // Collect the mesh pairs joined by an intermesh link (either connection form) for the seam check.
-    std::vector<std::pair<uint32_t, uint32_t>> intermesh_mesh_pairs;
-    for (const auto& [src, dst_to_count] : this->mesh_graph_->get_requested_intermesh_connections()) {
-        for (const auto& [dst, _count] : dst_to_count) {
-            intermesh_mesh_pairs.emplace_back(src, dst);
-        }
-    }
-    for (const auto& [src, dst_to_ports] : this->mesh_graph_->get_requested_intermesh_ports()) {
-        for (const auto& [dst, _ports] : dst_to_ports) {
-            intermesh_mesh_pairs.emplace_back(src, dst);
-        }
-    }
-
-    validate_fabric_configs(
-        observations, intermesh_mesh_pairs, this->mesh_graph_->get_mesh_ids().size(), mesh_graph_path);
+    validate_fabric_configs(observations, this->mesh_graph_->get_mesh_ids().size(), mesh_graph_path);
 
     this->validated_fabric_config_ = this->fabric_config_;
 }
