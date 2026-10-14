@@ -16,6 +16,7 @@ This directory is test scaffolding for an experiment branch. It is not meant to 
 
 Find out whether the 720p hangs are hardware (device 9) or software (PR #60190 / chunked VAE):
 
+0. **First, run `hang_loop.sh 3 720p chunk` (it now uses `tt-smi -glx_reset`).** Every hang so far followed a `tt-smi -r`, which may not fully reset this Galaxy. If the hangs disappear with `-glx_reset`, they were stale chip state, not a bad core or a software bug.
 1. Rebuild `main` (see "Switching builds"), reset, and run `run_wan.sh 720p chunk` 2–3 times. No such run on `main` has hung yet, but there has only been one.
 2. Run `run_wan.sh 720p chunk` on this branch 2–3 more times. Each time it hangs, run triage (below) and record **which device and which core** is the straggler. If it is always device 9 / core `4-10`, that is strong evidence of a bad chip.
 3. If possible, stress device 9 on its own (for example, a single-device matmul or SDPA unit test in a loop on that chip) to confirm a hardware fault without Wan.
@@ -26,7 +27,8 @@ Find out whether the 720p hangs are hardware (device 9) or software (PR #60190 /
 - **Bin6 DRAM:** every chip has 1 of 8 DRAM channels harvested. `device.dram_grid_size()` = `7x1`. Harvest masks are **mixed**: each of `1, 2, 4, …, 128` appears on 4 chips (`check_links.py --dram`). UMD warns "inconsistent DRAM harvesting information" at startup; that warning is expected here.
 - **Firmware bundle 19.13.2.** PR #60190 notes that with this firmware no DRAM subchannel is free on every harvest case. This affects its second commit (DRISC core), not this test.
 - **No X-axis wraparound cabling.** None of the 8 four-chip rows has a link between its end chips (e.g. T1L1↔T1L4). Of the single-Galaxy descriptors, only `single_bh_galaxy_torus_y` opens; `torus_x` and `torus_xy` fail placement. On a Galaxy, `FABRIC_1D_RING` always requests `TORUS_XY` (`tt_metal/fabric/fabric_host_utils.cpp:58-60`). So the issue's exact config (`4x8sp1tp0nl2_ring_is_fsdp0`) **cannot run here**. Use `4x8sp1tp0nl2_linear_is_fsdp0`. It has the same `is_fsdp=False` weight placement, and it hits the identical OOM.
-- **Ethernet links are flaky across resets.** Most resets leave a different set of links down. Device 9 (T2L2) failed to train its ports 0/1 to T1L2 on 2 consecutive resets. Always run `check_links.py` after a reset. A neighbour pair with **zero** links makes the 8x4 mesh unbuildable, so reset again.
+- **Reset with `tt-smi -glx_reset`, not `tt-smi -r`.** On this Galaxy `-r` warns that it needs CPLD FW v1.16+. It may not fully reset the chips. `-glx_reset` does an IPMI power reset of all 32 chips (about 1–2 minutes). All 7 device-9 hangs happened after `-r`. The first run after a `-glx_reset` (480p) did not hang.
+- **Ethernet links are flaky across `-r` resets.** Most of them leave a different set of links down. Device 9 (T2L2) failed to train its ports 0/1 to T1L2 on 2 consecutive resets. Always run `check_links.py` after a reset. A neighbour pair with **zero** links makes the 8x4 mesh unbuildable, so reset again.
 - **The machine is shared.** Another user (apaola) ran fabric jobs here earlier. Two jobs on the chips at once caused a Bus error and `Sysmem mapped at unexpected NOC address`. Before every reset or run, check `ps -eo user,cmd | grep -E "[p]ytest|[t]trun|[t]t-smi"`.
 
 ## Setup
@@ -37,7 +39,9 @@ cd ~/tt-metal && source python_env/bin/activate
 uv pip install --no-deps -r models/tt_dit/utils/vbench-requirements.txt
 ```
 
-`run_wan.sh` sets the rest: `TT_MESH_GRAPH_DESC_PATH`, `NO_PROMPT=1`, `TT_DIT_CACHE_DIR`, `VBENCH_CACHE_DIR=/mnt/models/vbench`, `TORCH_HOME`, and `--timeout 2100`. pytest.ini's default 300 s timeout is too short for model load.
+`run_wan.sh` sets the rest: `TT_MESH_GRAPH_DESC_PATH`, `NO_PROMPT=1`, `TT_DIT_CACHE_DIR`, `VBENCH_CACHE_DIR`, `TORCH_HOME`, and `--timeout 2100`. pytest.ini's default 300 s timeout is too short for model load.
+
+VBench cache: CI uses `/mnt/models/vbench`, but on this machine it holds no model files and is read-only, so VBench fails with "Permission denied". The scripts default to `~/.cache/vbench`, where VBench downloads its models on first use. VBench also shells out to `unzip` (not installed here) for the RAFT model. If you hit `FileNotFoundError: 'unzip'`, extract it by hand: `cd ~/.cache/vbench/raft_model && python -I -c "import zipfile; zipfile.ZipFile('models.zip').extractall('.')"`. jameslee's `~/.cache/vbench` is already populated. VBench reads only the `.mp4`, so you can score a saved video on CPU without the board: `assert_vbench_quality(path, prompt=..., thresholds=...)` from `models/tt_dit/utils/vbench.py`.
 
 ### Switching builds
 
@@ -47,7 +51,7 @@ Python loads the *installed* copies (`build/lib/*.so`, `ttnn/ttnn/_ttnn.so`). `c
 git switch <branch>
 cmake --build build -j$(nproc) && cmake --build build --target install   # incremental ≈15 min
 strings build/lib/libtt_metal.so | grep -c harvested_dram_views           # >0 means the PR #60190 build
-tt-smi -r                                                                  # required after switching (PR #60190 notes)
+tt-smi -glx_reset                                                          # required after switching (PR #60190 notes)
 python -I handoff/wan-bin6/check_links.py                                  # no output means all links trained
 ```
 
@@ -73,7 +77,7 @@ python tools/tt-triage.py --llm-output --disable-progress --skip-version-check >
 - `dump_callstacks.py`: per-core callstacks. Group the straggler's cores by callstack; the core whose stack differs from all others is the one to look at. Take two snapshots minutes apart (`--run=dump_callstacks`). If that core's program counters are identical in both, it is frozen, not polling.
 - If every device shows `(idle)`, the hang is on the host. Attach `gdb -p <pid> -batch -ex "thread apply all bt 15"`.
 
-Then kill the test (`kill <python pid>`; don't use a `pkill -f` pattern that also matches your own shell), `tt-smi -r`, and run `check_links.py`.
+Then kill the test (`kill <python pid>`; don't use a `pkill -f` pattern that also matches your own shell), `tt-smi -glx_reset`, and run `check_links.py`.
 
 ## Results so far
 
@@ -88,7 +92,9 @@ All runs use `4x8sp1tp0nl2_linear_is_fsdp0` with `TT_MESH_GRAPH_DESC_PATH=single
 | PR #60190 | 720p | 7 | **hang** at denoise step 14/40: device 9 stuck in ring SDPA, core `4-10 (3,8)` compute frozen |
 | PR #60190 | 720p | 7 | **hang** after warmup: all devices idle, host waiting for a completion-queue event that never arrived |
 | PR #60190 | 720p | 7 | **hang** at denoise step 1/40: device 9 stuck in MinimalMatmul, odd core again `4-10 (3,8)` |
-| PR #60190 | 720p | 7 | `hang_loop.sh` ×5 (reset before each run): **5/5 hang**, all on device 9, odd core `4-10 (3,8)` every time: SDPA after step 1, SDPA after step 2, matmul in warmup, SDPA after step 4, matmul after step 2 |
+| PR #60190 | 480p | none (preset) | after `tt-smi -r`: **hang** at denoise step 15/40, device 9 matmul, odd core `4-10 (3,8)` |
+| PR #60190 | 480p | none (preset) | after **`tt-smi -glx_reset`**: **no hang**. Video written; frames show the prompt (two cats boxing on a spotlit stage, moving). CLIP 36.81 PASS. VBench PASS (scored offline): subject 0.9535, background 0.9727, motion smoothness 0.9789, dynamic degree 1.0, imaging 0.5678. The in-test VBench failed only on the read-only cache |
+| PR #60190 | 720p | 7 | `hang_loop.sh` ×5 (`tt-smi -r` before each run): **5/5 hang**, all on device 9, odd core `4-10 (3,8)` every time: SDPA after step 1, SDPA after step 2, matmul in warmup, SDPA after step 4, matmul after step 2 |
 
 Loop reports: `~jameslee/wan_hang_reports/run_01..05/` (`summary.txt`, `triage.txt`, `triage_callstacks_2.txt`, `host_stacks.txt`, `test.log`, `links.txt`), index in `~jameslee/wan_hang_reports/index.txt`. The state after reset (0–4 chips with down ports) made no difference.
 
@@ -130,7 +136,7 @@ See "Results so far". Device 9 = T2L2 = tray 2, ASIC location 2, logical mesh ro
 - `run_wan.sh`: runs the test with the right environment.
 - `vae_chunk_patch.py`: pytest plugin that sets BH 4x8 `vae_t_chunk_size=7` in memory only (`-p vae_chunk_patch`).
 - `check_links.py`: ethernet link state (`--map`: full neighbour map; `--dram`: harvest masks), via UMD without opening a device.
-- `hang_loop.sh [runs] [res] [chunk|nochunk] [out_dir]`: N × (check no other users → `tt-smi -r` → links → run). On a stall over 3 minutes it captures triage twice, gdb host stacks and an `analyze_triage.py` summary, then kills the run. It writes one line per run to `<out_dir>/index.txt`.
+- `hang_loop.sh [runs] [res] [chunk|nochunk] [out_dir]`: N × (check no other users → `tt-smi -glx_reset` → links → run). On a stall over 3 minutes it captures triage twice, gdb host stacks and an `analyze_triage.py` summary, then kills the run. It writes one line per run to `<out_dir>/index.txt`.
 - `analyze_triage.py triage.txt [triage_callstacks_2.txt]`: running ops per device, straggler device(s), cores grouped by kernel callstack with the outliers listed, and frozen-PC cores.
 
 Full triage dumps and logs from the session above were in a session scratch directory and were **not** committed (about 110k lines each).

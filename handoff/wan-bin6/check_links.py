@@ -9,7 +9,7 @@
     python -I handoff/wan-bin6/check_links.py --dram    # DRAM harvest mask histogram
 
 Chips are named T<tray>L<asic_location>. On this machine a healthy board prints nothing in the
-default mode: every chip has ports 0-9 trained. Run it after every `tt-smi -r`; resets on this
+default mode: every chip has ports 0-9 trained. Run it after every `tt-smi -glx_reset`; resets on this
 board often leave a different set of links down.
 """
 

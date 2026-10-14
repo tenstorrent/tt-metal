@@ -29,8 +29,8 @@ export TT_METAL_HOME="$repo"
 export PYTHONPATH="$repo:$here"
 export NO_PROMPT=1
 export TT_DIT_CACHE_DIR="${TT_DIT_CACHE_DIR:-/tmp/TT_DIT_CACHE_wan_bin6}"
-export VBENCH_CACHE_DIR=/mnt/models/vbench
-export TORCH_HOME=/mnt/models/vbench/torch_hub
+export VBENCH_CACHE_DIR="${VBENCH_CACHE_DIR:-$HOME/.cache/vbench}"  # /mnt/models/vbench here is empty and read-only
+export TORCH_HOME="${TORCH_HOME:-$VBENCH_CACHE_DIR/torch_hub}"
 export TT_MESH_GRAPH_DESC_PATH="$repo/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
 
 plugin=()
@@ -53,7 +53,7 @@ for (( i = first; i < first + runs; i++ )); do
         exit 1
     fi
 
-    timeout 600 tt-smi -r > "$d/reset.log" 2>&1
+    timeout 900 tt-smi -glx_reset > "$d/reset.log" 2>&1
     python -I "$here/check_links.py" 2>/dev/null | grep '^T' > "$d/links.txt"
     links="$(wc -l < "$d/links.txt") chips with down ports"
 

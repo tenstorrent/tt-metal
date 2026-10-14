@@ -23,8 +23,8 @@ export TT_METAL_HOME="$repo"
 export PYTHONPATH="$repo:$repo/handoff/wan-bin6"
 export NO_PROMPT=1
 export TT_DIT_CACHE_DIR="${TT_DIT_CACHE_DIR:-/tmp/TT_DIT_CACHE_wan_bin6}"
-export VBENCH_CACHE_DIR=/mnt/models/vbench
-export TORCH_HOME=/mnt/models/vbench/torch_hub
+export VBENCH_CACHE_DIR="${VBENCH_CACHE_DIR:-$HOME/.cache/vbench}"  # /mnt/models/vbench here is empty and read-only
+export TORCH_HOME="${TORCH_HOME:-$VBENCH_CACHE_DIR/torch_hub}"
 # Required: without an explicit descriptor, fabric auto-discovery fails on this board (README.md, finding 1).
 export TT_MESH_GRAPH_DESC_PATH="$repo/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
 
