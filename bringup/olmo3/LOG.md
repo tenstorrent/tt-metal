@@ -91,3 +91,15 @@
 - evidence: /home/ubuntu/ssinghal/olmo3-logs/bench_x.log
 - paths: models/demos/olmo_galaxy
 - data: {"tpot_greedy_ms": 40.7, "tpot_sampled_ms": 42.6, "ttft_ms": 1336, "demo_tpot_ms": 38.3}
+
+## 2026-10-14 long-generation / eval check (NOT resolved)
+- 32 users x 24000 tokens, sampled, through tt-inference-server: all complete (756K tokens, 194 tok/s aggregate). KV pool (~166K tokens) limits
+  concurrent long generations to ~11 at 24K each; the rest queue.
+- `--workflow evals --limit-samples-mode smoke-test` (r1_aime24, 3 problems, T0.6/top_p0.95/top_k32): 1/3 correct. One sample (23K tokens) correct,
+  one (8K) wrong, one degenerated into a "Wait,\n\n" loop from ~24.5K tokens (no </think>). Model-card AIME24 is 80.6, so this is not yet evidence either way.
+- Replaying that 24.6K-token prefix on a fresh server: greedy top-1 at the end of prefill matches an HF CPU bf16 reference (" ("), but
+  sampled output (T0.6) is garbage from the first token, and repeated sampled requests on short/medium prompts (2K-16K) degrade request by request.
+  => suspect the device-sampling path (prefill-sampling branch / per-slot params / seeds), not attention. Needs a controlled sequence test
+  (scratchpad seq.py: sampled x6, greedy, sampled, top_k=0 host reference).
+- Server hit "device timeout in fetch queue wait" in prefill of a 24.6K prompt after ~1h40m uptime; a fresh server handled it.
+- Host state at end: chip 16 reads 0xffffffff over PCIe; `tt-smi -glx_reset` and `-r` fail. Needs host reboot / power cycle.
