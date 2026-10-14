@@ -420,9 +420,9 @@ TEST(PipelineStageLocalSpans, AcceptsDeclaredComputeAndForwardSpanSets) {
     const uint64_t begin = PIPELINE_STAGE_PREPARED_LIM_BEGIN;
     const std::array<std::pair<uint64_t, uint64_t>, 4> compute = {{
         {begin, 88u},
-        {begin + 128u, 4160u},
-        {begin + 4352u, 64u},
-        {begin + 4416u, PIPELINE_STAGE_SAMPLES_REGION_BYTES},
+        {begin + 128u, X280_PINNED_INPUT_SPAN},
+        {begin + 4416u, 64u},
+        {begin + 4480u, PIPELINE_STAGE_SAMPLES_REGION_BYTES},
     }};
     for (const auto& [addr, bytes] : compute) {
         EXPECT_TRUE(is_span_contained(addr, bytes, kLimLayout));
