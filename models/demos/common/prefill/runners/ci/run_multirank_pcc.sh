@@ -32,10 +32,8 @@ CHUNK_SIZE=5120
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 GOLDEN_LEN=56320
-# Off by default. Reads the runner-side probe in summarize_ci_run.py's perf JSON, not the producer's
-# log line, which times the push schedule and returns long before the model is done.
 EXPECTED_TPS="${PREFILL_EXPECTED_TPS:-}"
-PERF_MARGIN="${PREFILL_PERF_MARGIN:-0.15}"
+PERF_BASELINES="${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_baselines.json"
 # Demand a measurement even before a baseline exists, so a leg being calibrated cannot pass green
 # on nothing.
 REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-0}"
@@ -351,43 +349,16 @@ if [ "${PROD_RC}" -eq 0 ]; then
   fi
 fi
 
-TPS_GATE_RC=0
-if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ]; then
+PERF_GATE_RC=0
+if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINES}" ]; then
   # The summary normally runs in the EXIT trap, after this point; force it early so the gate has
   # a file to read. The trap's own call is a no-op once this one has run.
   emit_summary
-  python3 - "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" "${EXPECTED_TPS}" "${PERF_MARGIN}" \
-    <<'TPSPY' || TPS_GATE_RC=$?
-import json, sys
-
-path, expected, margin = sys.argv[1], sys.argv[2], float(sys.argv[3])
-try:
-    rec = json.load(open(path))
-except Exception as e:
-    print(f"TPS GATE FAIL: no perf metrics at {path}: {type(e).__name__}: {e}", file=sys.stderr)
-    sys.exit(1)
-
-probes, index = rec.get("throughput_tok_s") or {}, rec.get("chunk_index") or {}
-# Gate the deepest probe: throughput falls as the KV cache grows, so it is the worst case and the
-# one a full-context user sees.
-label = max(probes, key=lambda k: index.get(k, -1), default=None)
-if label is None:
-    print(f"TPS GATE FAIL: {path} has no throughput probes; the run measured nothing", file=sys.stderr)
-    sys.exit(1)
-
-tps = probes[label]
-if not expected:
-    print(f"TPS: {tps:,.0f} tok/s {label} (no PREFILL_EXPECTED_TPS set -- reporting, not gating)")
-    sys.exit(0)
-
-expected = float(expected)
-lo, hi = expected * (1 - margin), expected * (1 + margin)
-print(f"TPS GATE {label}: {tps:,.0f} tok/s vs {expected:,.0f} +/- {margin * 100:.0f}% [{lo:,.0f}, {hi:,.0f}]")
-if not lo <= tps <= hi:
-    print(f"TPS GATE FAIL: {tps:,.0f} outside [{lo:,.0f}, {hi:,.0f}]", file=sys.stderr)
-    sys.exit(1)
-print("TPS GATE PASS")
-TPSPY
+  python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_gate.py" \
+    "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" \
+    --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" \
+    --expected-tps "${EXPECTED_TPS}" --margin "${PREFILL_PERF_MARGIN:-}" \
+    --require "${REQUIRE_TPS}" || PERF_GATE_RC=$?
 fi
 
 PCC_GATE_RC=0
@@ -448,7 +419,7 @@ if [ "${RUNNER_RC}" -ne 0 ]; then
   echo "runner exited non-zero after producer success (rc=${RUNNER_RC})" >&2
   exit "${RUNNER_RC}"
 fi
-if [ "${TPS_GATE_RC}" -ne 0 ]; then
-  exit "${TPS_GATE_RC}"
+if [ "${PERF_GATE_RC}" -ne 0 ]; then
+  exit "${PERF_GATE_RC}"
 fi
 exit "${PCC_GATE_RC}"
