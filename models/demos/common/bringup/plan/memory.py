@@ -55,7 +55,8 @@ DTYPE_BYTES = {
 }
 PLACEMENTS = ("replicate", "shard", "expert", "shard_rows", "shard_cols", "split", "skip")
 GB = 2**30
-LAYER_RE = re.compile(r"(?:^|\.)(?:model|language_model)\.layers\.(\d+)\.")
+# decoder layers: "layers.N.", "model.layers.N.", "model.language_model.layers.N." (not a vision tower's layers)
+LAYER_RE = re.compile(r"^(?:model\.)?(?:language_model\.)?layers\.(\d+)\.")
 
 
 def checkpoint_tensors(hf_dir: str | Path) -> dict[str, list[int]]:
