@@ -46,7 +46,7 @@ inline void calculate_square() {
     using Output = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat, ADDR_MOD_6>>;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_unary_operands<SquareMath, 1>(Input{}, Output{});
+        calculate_unary_operands<SquareMath, 1 /*ITERATIONS*/>(Input{}, Output{});
     }
 }
 

@@ -319,7 +319,7 @@ void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_f
     using Algo = ExpAlgo<APPROXIMATION_MODE, EN_32BIT_DEST>;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_unary_operands<Algo, 1>(Operand{}, Operand{});
+        calculate_unary_operands<Algo, 1 /*ITERATIONS*/>(Operand{}, Operand{});
         sfpi::dst_reg++;
     }
 }

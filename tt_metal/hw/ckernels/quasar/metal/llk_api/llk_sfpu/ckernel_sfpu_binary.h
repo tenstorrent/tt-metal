@@ -57,7 +57,7 @@ inline void calculate_sfpu_binary(
             using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>>;
             constexpr bool round_to_bf16 = !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
             using Output = SfpuOperand<SfpuReg::Dest, DestBf16RneFormat<round_to_bf16>>;
-            calculate_binary_operands<AddFloatMath, 1>(
+            calculate_binary_operands<AddFloatMath, 1 /*ITERATIONS*/>(
                 Operand{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
                 Operand{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)},
                 Output{static_cast<int>(dst_index_out * dst_tile_size_sfpi)});

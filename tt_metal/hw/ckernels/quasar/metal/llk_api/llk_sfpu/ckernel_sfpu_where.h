@@ -86,7 +86,7 @@ inline void calculate_where(
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_where_operands<1>(
+        calculate_where_operands<1 /*ITERATIONS*/>(
             Operand{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
             Operand{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)},
             Operand{static_cast<int>(dst_index_in2 * dst_tile_size_sfpi)},
