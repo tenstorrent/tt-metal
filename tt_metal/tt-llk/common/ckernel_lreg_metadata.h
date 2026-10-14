@@ -116,6 +116,10 @@ TT_LLK_RAW_LREG_FN unsigned read(unsigned x) {
         case 0x92: return bit(cc) | bit(dd) | bit(4 + (cc & 3)) | bit(4 + (dd & 3));
         // The configured LOADMACRO sequence is not encoded in this word.
         // Model every LREG as an input and output rather than hiding effects.
+        // The scheduled sub-ops finish after issue, but this marks the issue
+        // point only: typed SFPI code must not sit between a LOADMACRO and its
+        // drain. The compiler never moves typed SFPU instructions there, since
+        // they are volatile and so ordered against raw words.
         case 0x93: return 0xff;
         case 0x94: return shft2_r(x);
         case 0x95: return ((m & 10) == 10 ? 0x0fu : 0x7fu) | ((m & 8) ? 0x80u : 0u);
