@@ -22,7 +22,7 @@ import torch
 
 from models.demos.common.bringup.core.spec import parse_layers
 from models.demos.common.bringup.testing import op_report, profiler
-from models.demos.common.bringup.testing.harness import device_timeout, mesh_parametrize, spec
+from models.demos.common.bringup.testing.harness import begin_chunk, device_timeout, mesh_parametrize, spec
 
 S = spec()
 pytestmark = device_timeout(S)
@@ -75,6 +75,7 @@ def test_op_report(mesh_device):
     all_toks = prompt_tokens(S, seq).to(torch.long)
 
     def run(s0):
+        begin_chunk(model, all_toks[s0 : s0 + chunk], s0)  # F65
         h = model.embed(all_toks[s0 : s0 + chunk])
         for i in layers:
             profiler.set_layer(i)

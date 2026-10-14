@@ -97,3 +97,29 @@ def test_swap_and_ladder_with_readers(sspec, monkeypatch, cfg):
     out = run_ladder(s, "s256", None)
     assert not out["failed"], out
     assert got()["pcc_layer_L02"] > 0.9999 and "pcc_state_key_L02" not in got()
+
+
+TOK = {"fixture": {"token_layers": [1]}}  # layer 1 adds a term keyed on the chunk's token ids (like engram)
+
+
+def test_token_keyed_step_in_parity_replay_and_component(fx, sspec, monkeypatch):
+    from models.demos.common.bringup.core.runs import IMPL_ENV
+
+    p = fx(**TOK)
+    check_hf.main(["--spec", p, "--seq", "128"])
+    assert min(v for k, v in got().items() if k.startswith("pcc_")) > 0.99999
+    check_reference.main(["--spec", p, "--seq", "256", "--chunk", "64"])
+    assert got()["graph_replay_maxabs"] == 0.0 and got()["pcc_hidden"] > 0.999999
+    s = sspec(TOK)
+    monkeypatch.setitem(fixture_model.NOISE, "value", 1e-3)
+    monkeypatch.setenv(IMPL_ENV, "device")
+    assert run_component_test(s, "attn_residual", layer=1)
+
+
+def test_ladder_gives_the_device_model_the_chunk_tokens(sspec, monkeypatch):
+    """Layer 1 run from a golden block input (subset 1-2) still gets its chunk's tokens through begin_chunk."""
+    s = sspec(TOK, layers="1-2")
+    monkeypatch.setitem(fixture_model.NOISE, "value", 0.0)
+    out = run_ladder(s, "s256", None)
+    assert not out["failed"], out
+    assert got()["pcc_layer_L01"] > 0.9999
