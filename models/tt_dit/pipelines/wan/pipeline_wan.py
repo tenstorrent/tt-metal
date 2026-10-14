@@ -76,6 +76,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "shard_text_embeddings": True,
         # 480p only: at 720p the resident FFN weights do not fit next to the activations
         "ffn_resident": _RESOLUTIONS_480P,
+        "vae_t_chunk_size": 5,
     },
 }
 
