@@ -1,0 +1,3 @@
+perf_rmsnorm_bcast_scalar_dest_reuse.py::test_perf_rmsnorm_bcast_scalar_dest_reuse[variant:(<MathOperation.Elwmul: OpSpec(cpp_enum_value='ELWMUL', operation_type=<MathOpType.FPU_BINARY: 6>)>, <MathFidelity.HiFi4: 4>, 1, True, True)]
+perf_rmsnorm_bcast_scalar_dest_reuse.py::test_perf_rmsnorm_bcast_scalar_dest_reuse[variant:(<MathOperation.Elwmul: OpSpec(cpp_enum_value='ELWMUL', operation_type=<MathOpType.FPU_BINARY: 6>)>, <MathFidelity.HiFi4: 4>, 2, True, True)]
+perf_rmsnorm_bcast_scalar_dest_reuse.py::test_perf_rmsnorm_bcast_scalar_dest_reuse[variant:(<MathOperation.Elwmul: OpSpec(cpp_enum_value='ELWMUL', operation_type=<MathOpType.FPU_BINARY: 6>)>, <MathFidelity.HiFi4: 4>, 8, True, True)]
