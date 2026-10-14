@@ -175,7 +175,8 @@ ALWI void generalized_moe_gate_fpu_copy4rows() {
 // remain those of the shared generalized gate.
 // sfpu_sort (Blackhole, ungrouped single block): the generic gate's SFPU-only sort replaces the merge tree and
 // finalize_sorted the finalize; the output keeps the layout above, and step2 transposes scores and indices only.
-// identity_indices (with sfpu_sort): the sort writes the expert ids 0-255 itself, so the caller copies no indices.
+// identity_indices (with sfpu_sort): the ids are the host's transposed arange, written on the SFPU, so the caller
+// copies no id tile.
 template <
     bool ungrouped_top8,
     bool enable_sigmoid = false,
@@ -228,7 +229,11 @@ ALWI void generalized_moe_gate(
 #if defined(ARCH_BLACKHOLE)
     if constexpr (sfpu_sort) {
         // Full sort, no normalize: the descending top-8 lands down column 0 of rows 0-7 for finalize_sorted.
-        MATH((sfpu::llk_math_sfpu_generic_moe_gate_topk<false, 8, 256, false, true, identity_indices>(0, 0)));
+        if constexpr (identity_indices) {
+            MATH((sfpu::llk_math_sfpu_generalized_moe_gate_identity_sort()));
+        } else {
+            MATH((sfpu::llk_math_sfpu_generic_moe_gate_topk<false, 8, 256, false, true, false>(0, 0)));
+        }
         MATH((SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,

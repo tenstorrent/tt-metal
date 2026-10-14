@@ -10,12 +10,18 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "llk_math_eltwise_sfpu_common.h"
+#include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpu/experimental/ckernel_sfpu_generalized_moe_gate_topk_single_face.h"
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
+
+// The one-block route with identity ids: the transposed arange written on the SFPU, then the generic SFPU-only sort.
+inline void llk_math_sfpu_generalized_moe_gate_identity_sort() {
+    _llk_math_eltwise_unary_sfpu_params_(_generalized_moe_gate_identity_sort_<false>, 0, VectorMode::RC_custom);
+}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void generalized_moe_gate_sum_top2() {
