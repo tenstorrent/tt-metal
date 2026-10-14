@@ -51,6 +51,35 @@ def owned_tree(root, uid):
     return allocated
 
 
+def load_runtime(source):
+    if sys.version_info[:2] != (3, 12):
+        raise ValueError("runtime Python must be 3.12")
+    model = source / "models/demos/blackhole/qwen38_flash_next"
+    for name, digest in SOURCE_HASHES.items():
+        if hashlib.sha256((model / name).read_bytes()).hexdigest() != digest:
+            raise ValueError("source digest " + name)
+    sys.path.insert(0, str(source))
+    from models.demos.blackhole.qwen38_flash_next.tools.download_checkpoint import Download, RELEASE_REVISION
+    from models.demos.blackhole.qwen38_flash_next.tools.verify_release import verify
+
+    assert RELEASE_REVISION == REVISION
+    origins = {}
+    for name, digest in SOURCE_HASHES.items():
+        module_name = "models.demos.blackhole.qwen38_flash_next." + name[:-3].replace("/", ".")
+        actual = Path(sys.modules[module_name].__file__).resolve()
+        if actual != (model / name).resolve():
+            raise ValueError("runtime origin " + name)
+        origins[name] = {"path": str(actual), "sha256": hashlib.sha256(actual.read_bytes()).hexdigest()}
+        assert origins[name]["sha256"] == digest
+    for fd in Path("/proc/self/fd").iterdir():
+        try:
+            target = os.readlink(fd)
+        except FileNotFoundError:
+            continue
+        assert not target.startswith("/dev/tenstorrent/")
+    return Download, verify, origins
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", type=Path, required=True)
@@ -67,10 +96,6 @@ def main():
     for parent in root.parents:
         if parent.is_symlink():
             raise ValueError("symlink parent")
-    model = a.source / "models/demos/blackhole/qwen38_flash_next"
-    for name, digest in SOURCE_HASHES.items():
-        if hashlib.sha256((model / name).read_bytes()).hexdigest() != digest:
-            raise ValueError("source digest " + name)
     rows = entries(a.manifest.read_bytes())
     allocated = owned_tree(root, os.getuid())
     marker = root / ".download/campaign-owner.json"
@@ -80,18 +105,8 @@ def main():
             raise ValueError("unowned checkpoint namespace")
     free = shutil.disk_usage(root.parent).free
     required = capacity(free, allocated)
-    sys.path.insert(0, str(a.source))
-    from models.demos.blackhole.qwen38_flash_next.tools.download_checkpoint import Download, RELEASE_REVISION
-    from models.demos.blackhole.qwen38_flash_next.tools.verify_release import verify
-
-    assert RELEASE_REVISION == REVISION
+    Download, verify, origins = load_runtime(a.source)
     assert not any(p.read_text() for p in drivers)
-    for fd in Path("/proc/self/fd").iterdir():
-        try:
-            target = os.readlink(fd)
-        except FileNotFoundError:
-            continue
-        assert not target.startswith("/dev/tenstorrent/")
     print(
         json.dumps(
             {
@@ -103,6 +118,8 @@ def main():
                 "files": len(rows),
                 "source": str(a.source),
                 "admit_only": a.admit_only,
+                "python": sys.version,
+                "origins": origins,
             }
         ),
         flush=True,

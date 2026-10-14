@@ -2,9 +2,10 @@ import hashlib, http.server, json, os, sys, tempfile, threading, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path.cwd() / "source"))
-from stage_checkpoint import SOURCE_HASHES
+from stage_checkpoint import SOURCE_HASHES, load_runtime
 
 assert sys.version_info[:2] == (3, 12), sys.version
+RuntimeDownload, runtime_verify, runtime_origins = load_runtime(Path.cwd() / "source")
 from models.demos.blackhole.qwen38_flash_next.tools import download_checkpoint as download
 from models.demos.blackhole.qwen38_flash_next.tools import verify_release as verify
 
@@ -71,6 +72,7 @@ Path("evidence/runtime.json").write_text(
         {
             "python": sys.version,
             "origins": origins,
+            "actual_stage_runtime_loader": runtime_origins,
             "ttnn_imported": False,
             "fds": fds,
             "original_download_loopback": "PASS",
