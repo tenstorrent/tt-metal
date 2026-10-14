@@ -545,7 +545,7 @@ TEST(PacketInjectionLayout, ArenaConstantMatchesTheReservedLimRange) {
 
 TEST(PacketInjectionLayoutRejects, NullOutputIsRefused) {
     EXPECT_EQ(
-        pi_compute_layout(280, 140, 16, 8, 4096, PI_MODE_THROUGHPUT, 0, NULL).code, (uint32_t)PI_LAYOUT_BAD_PARAM);
+        pi_compute_layout(280, 140, 16, 8, 4096, PI_MODE_THROUGHPUT, 0, nullptr).code, (uint32_t)PI_LAYOUT_BAD_PARAM);
 }
 
 TEST(PacketInjectionLayoutRejects, EveryInvalidParameterLeavesOutputUntouched) {
@@ -3019,7 +3019,8 @@ struct ConsumerTestFixture {
             if (next_p > total) {
                 next_p = (uint32_t)total;
             }
-            if (next_p > produced(w)->value) {
+            // A volatile slot, stored only when it advances.
+            if (next_p > produced(w)->value) {  // NOLINT(readability-use-std-min-max)
                 produced(w)->value = next_p;
             }
 

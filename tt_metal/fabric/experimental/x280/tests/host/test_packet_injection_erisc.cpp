@@ -61,6 +61,7 @@ TEST(PacketInjectionErisc, WritersAreASortedNestedPrefix) {
 // device has; "all" resolves to every core up to one device's Ethernet tiles.
 TEST(PacketInjectionErisc, ShortfallIsReportedAndAllIsCapped) {
     std::vector<LogicalCoord> inactive;
+    inactive.reserve(kMaxEthernetWriters + 2u);
     for (uint32_t y = 0; y < kMaxEthernetWriters + 2u; ++y) {
         inactive.push_back(LogicalCoord{0u, y});
     }
