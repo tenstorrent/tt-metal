@@ -32,8 +32,6 @@ namespace {
 constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/data_movement/reshape_view/codegen/kernels";
 constexpr uint32_t kCbIn = tt::CBIndex::c_0;
 constexpr uint32_t kCbMid = tt::CBIndex::c_1;
-// Sticks the non-aligned reader gathers per NOC barrier.
-constexpr uint32_t kReaderBatchSticks = 8;
 constexpr uint32_t kCbPlan = tt::CBIndex::c_0;
 constexpr uint32_t kCbStaged = tt::CBIndex::c_1;
 constexpr uint32_t kCbRing = tt::CBIndex::c_2;
@@ -135,7 +133,17 @@ ProgramDescriptor build_rm(const rcg::RmPlan& p, const Tensor& input, Tensor& ou
     reader.kernel_source = op_kernel("reader_reshape_rm.cpp");
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = all_cores;
-    reader.compile_time_args = {kCbIn, p.old_stick, p.old_aligned, p.can_coalesce ? 0u : 1u, kReaderBatchSticks};
+    // The scratch layout and the repacked page pitch come from the plan, so the reader fills exactly the CBs sized
+    // for it.
+    reader.compile_time_args = {
+        kCbIn,
+        p.old_stick,
+        p.old_aligned,
+        p.can_coalesce ? 0u : 1u,
+        rcg::kRmScratchSticks,
+        kCbMid,
+        p.cb_page,
+        rcg::kRmScratchSlackBytes};
     TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
     reader.config = ReaderConfigDescriptor{};
 
@@ -165,8 +173,7 @@ ProgramDescriptor build_rm(const rcg::RmPlan& p, const Tensor& input, Tensor& ou
                  p.old_stick,
                  p.new_stick,
                  p.ratio,
-                 p.split_nonaligned ? 1u : 0u,
-                 1u});
+                 p.split_nonaligned ? 1u : 0u});
         }
         writer.emplace_runtime_args(core, {out_buf, w.num_new_reads, w.new_per_read, w.new_per_push, w.curr_new});
         start += n;
