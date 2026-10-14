@@ -53,7 +53,7 @@ void ChunkGdnPrepOperation::validate_on_program_cache_miss(
     check(in.tril_c, "tril_c", DataType::FLOAT32);
     check(in.ones_c, "ones_c", DataType::FLOAT32);
     check(in.masks_c, "masks_c", DataType::FLOAT32);
-    TT_FATAL(attrs.chunk_size % TILE_HEIGHT == 0, "chunk_size must be a multiple of 32");
+    validate_gdn_chunk_size(attrs.chunk_size);
     TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
     validate_gdn_tinv(attrs.tinv, attrs.chunk_size, in.q);
@@ -170,7 +170,7 @@ void ChunkGdnScanOperation::validate_on_program_cache_miss(
     // Required: the scan reader streams S from this buffer unconditionally (no in-kernel zeroing); the
     // public op builds a zero state when its own initial_state is omitted.
     check(in.initial_state, "initial_state", DataType::FLOAT32);
-    TT_FATAL(attrs.chunk_size % TILE_HEIGHT == 0, "chunk_size must be a multiple of 32");
+    validate_gdn_chunk_size(attrs.chunk_size);
     TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
 }

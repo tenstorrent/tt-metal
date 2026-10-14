@@ -7,6 +7,7 @@
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 
 #include <mutex>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::operations::unary {
@@ -75,21 +76,23 @@ std::optional<UnaryShardSpecs> get_shard_specs(
     // For ROW_MAJOR layout, shard element count must be a multiple of tile_hw
     // for the sharded borrowed-DFB path to work (it requires whole-tile pages).
     // Fall back to the interleaved path otherwise.
+    // Each shard row is its own page, padded up to the L1 alignment, so the dense tile pages the
+    // borrowed DFB walks only line up with the buffer when that padding is zero.
     if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-        auto is_shard_tile_aligned = [](const tt::tt_metal::TensorSpec& spec) {
+        auto fits_borrowed_dfb = [](const tt::tt_metal::TensorSpec& spec) {
             const auto& shard = *get_shard_spec(spec);
             const auto tile_hw = spec.tile().get_tile_hw();
             const uint64_t shard_elements = static_cast<uint64_t>(shard.shape[0]) * shard.shape[1];
-            return shard_elements % tile_hw == 0;
+            return shard_elements % tile_hw == 0 &&
+                   spec.compute_page_size_bytes() % tt::tt_metal::hal::get_l1_alignment() == 0;
         };
 
-        if ((input_sharded && !is_shard_tile_aligned(input_spec)) ||
-            (output_sharded && !is_shard_tile_aligned(output_spec))) {
+        if ((input_sharded && !fits_borrowed_dfb(input_spec)) || (output_sharded && !fits_borrowed_dfb(output_spec))) {
             static std::once_flag warn_flag;
             std::call_once(warn_flag, [] {
                 log_warning(
                     tt::LogOp,
-                    "Unary: ROW_MAJOR shard element count is not tile-aligned; "
+                    "Unary: ROW_MAJOR shard element count is not tile-aligned or its rows are not L1-aligned; "
                     "falling back to interleaved path");
             });
             return std::nullopt;
