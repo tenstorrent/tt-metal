@@ -159,6 +159,7 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileRowsProgramFactory::create_wo
     const uint32_t tile_bytes =
         input.tensor_spec().tile().get_tile_size(datatype_to_dataformat_converter(input.dtype()));
 
+    // Routing already sent calls with no fitting plan to native, so only the forced entry reaches this error.
     const auto chosen = rcg::live_tile_rows_choice(input, out_shape, operation_attributes.plan.tile_rows);
     TT_FATAL(
         chosen.has_value(),

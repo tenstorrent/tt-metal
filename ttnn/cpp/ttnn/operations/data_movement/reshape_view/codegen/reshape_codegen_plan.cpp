@@ -48,11 +48,27 @@ uint64_t static_l1_budget(const Tensor& input, const tt::tt_metal::TensorSpec& o
     return budget;
 }
 
+uint64_t pending_output_l1_bytes(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec) {
+    // require_constructible: output_spec is the spec the op allocates, so a failure to build it is a bug, not a
+    // reason to reserve nothing and route a call the factory then rejects.
+    return get_pending_l1_output_reservation(
+        input,
+        output_spec.padded_shape(),
+        output_spec.memory_config(),
+        output_spec.data_type(),
+        output_spec.layout(),
+        /*require_constructible=*/true);
+}
+
 std::optional<TileRowsChoice> live_tile_rows_choice(
-    const Tensor& input, const ttnn::Shape& logical_output_shape, const TileRowsChoice& planned) {
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const TileRowsChoice& planned,
+    uint64_t reserved_l1_bytes) {
     const uint32_t tile_bytes =
         input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
-    const uint64_t free_l1 = get_max_l1_space(input);
+    const uint64_t max_l1 = get_max_l1_space(input);
+    const uint64_t free_l1 = max_l1 > reserved_l1_bytes ? max_l1 - reserved_l1_bytes : 0;
     const auto fits = [&](const TileRowsChoice& choice) { return tile_rows_l1_bytes(choice, tile_bytes) <= free_l1; };
     if (fits(planned)) {
         return planned;

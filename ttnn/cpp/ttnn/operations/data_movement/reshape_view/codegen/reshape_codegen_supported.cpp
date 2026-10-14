@@ -197,6 +197,13 @@ std::optional<LaunchPlan> routed_launch_plan(
         static_fit_violation(input, logical_output_shape, output_mem_config, *choice) != nullptr) {
         return std::nullopt;
     }
+    // Native needs only a few CB pages, so a call whose smallest plan does not fit live L1 runs there instead of
+    // reaching the program factory's no-plan error. The output is reserved because the op allocates it before the
+    // program factory samples live L1.
+    const auto reserved = pending_output_l1_bytes(input, output_spec(input, logical_output_shape, output_mem_config));
+    if (!live_tile_rows_choice(input, logical_output_shape, *choice, reserved)) {
+        return std::nullopt;
+    }
     return LaunchPlan{.tile_rows = std::move(*choice)};
 }
 

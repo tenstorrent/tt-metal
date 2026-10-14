@@ -259,6 +259,23 @@ def test_reshape_codegen_shrinks_plan_under_l1_pressure(device):
     _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
     assert device.num_program_cache_entries() == entries + 1
     ttnn.deallocate(hog)
+    # With the L1 free again the full plan fits, so the call hits the full plan's entry.
+    _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+    assert device.num_program_cache_entries() == entries + 1
+
+
+def test_reshape_codegen_routes_native_when_no_plan_fits_l1(device, expect_error):
+    # The same head split's smallest plan takes 173 KiB per core, so with 128 KiB free no plan fits: auto must run
+    # native, while the forced entry still refuses.
+    in_shape, out_shape, dtype = [1, 256, 4096], [1, 256, 32, 128], ttnn.float32
+    source = _make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
+    hog = _l1_hog_leaving(device, 128 * 1024)
+    _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+    with expect_error(RuntimeError, "no tile-row plan fits"):
+        _force_codegen(x, out_shape, memory_config=_DRAM)
+    ttnn.deallocate(hog)
 
 
 _OUT_OF_SCOPE = [
