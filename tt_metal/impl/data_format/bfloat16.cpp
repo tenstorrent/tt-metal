@@ -176,36 +176,33 @@ std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
 
 // Equality functions
 bool equal_within_n_sig_figs(float a, float b, int n) {
-    std::string str_a = std::to_string(a);
-    std::string str_b = std::to_string(b);
-
-    // Iterate until no more zeroes
-    int i = 0;
-    while (i < std::min(str_a.size(), str_b.size()) and (str_a.at(i) == '0' or str_a.at(i) == '.')) {
-        i++;
+    // NaN has no significant figures, but two NaN results are the same outcome.
+    if (std::isnan(a) && std::isnan(b)) {
+        return true;
+    }
+    if (!std::isfinite(a) || !std::isfinite(b)) {
+        return a == b;
     }
 
-    // Compare sig figs
-    int num_correct_sig_figs = 0;
-    for (; i < std::min(str_a.size(), str_b.size()); i++) {
-        char cur_char = str_a.at(i);
+    const double abs_a = std::fabs(static_cast<double>(a));
+    const double abs_b = std::fabs(static_cast<double>(b));
+    const double scale = std::max(abs_a, abs_b);
+    const double diff = std::fabs(static_cast<double>(a) - static_cast<double>(b));
 
-        if (cur_char == str_b.at(i)) {
-            if (cur_char != '.') {  // Ignore decimal point
-                num_correct_sig_figs++;
-            }
-        } else {
-            std::cout << "Floats being compared: A: " << a << ", B: " << b << std::endl;
-            return false;
-        }
-
-        if (num_correct_sig_figs == n) {
-            break;
-        }
+    // log10(0) is undefined. Both zeros agree. For n >= 1 the decade tolerance
+    // is smaller than any non-zero magnitude, so zero matches only zero.
+    if (scale == 0.0) {
+        return true;
     }
 
-    return true;
-};
+    // The float32 rounding of 1e-23 is 0x19416d9a. Its log10 is 7.82e-11 below
+    // -23. A nudge of 1e-10 steps into the next decade and widens the tolerance
+    // by 10x. 1e-12 sits above double log10 error (~1e-15) and below that gap.
+    constexpr double kLog10TieEpsilon = 1e-12;
+    const double decade = std::floor(std::log10(scale) + kLog10TieEpsilon);
+    const double tolerance = 0.5 * std::pow(10.0, decade - static_cast<double>(n) + 1.0);
+    return diff <= tolerance;
+}
 
 // this follows the implementation of numpy's is_close
 bool is_close(float a, float b, float rtol, float atol) {

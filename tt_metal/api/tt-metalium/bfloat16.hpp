@@ -91,7 +91,7 @@ std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
     const std::vector<std::uint32_t>& data,
     const std::function<bfloat16(const bfloat16&)>& transform = bfloat16_identity_transform);
 
-// Equality functions
+// |a - b| within half a unit in the nth significant digit of the larger magnitude.
 bool equal_within_n_sig_figs(float a, float b, int n);
 
 // this follows the implementation of numpy's is_close
