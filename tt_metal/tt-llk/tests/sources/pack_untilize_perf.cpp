@@ -72,11 +72,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
 #ifdef ARCH_BLACKHOLE
-            // As pack_untilize_block: one context per block row of three or more tiles that are not 32-bit
-            const std::uint32_t src_format = formats.unpack_A_src;
-            const bool src_32bit           = src_format == ckernel::to_underlying(DataFormat::Float32) || src_format == ckernel::to_underlying(DataFormat::Int32) ||
-                                   src_format == ckernel::to_underlying(DataFormat::UInt32);
-            if (BLOCK_CT_DIM > 2 && !src_32bit)
+            // As pack_untilize_block: one context per block row of three or more tiles that are not 32-bit (this test unpacks those to DEST)
+            if constexpr (BLOCK_CT_DIM > 2 && !unpack_to_dest)
             {
                 // Production's CB pages lie back to back: a dense block walks them with the Z counter
                 const bool dense = !IS_BFP_FORMAT(formats.unpack_A_src);
