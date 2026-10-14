@@ -26,7 +26,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     // Metal 2.0 named resource handles (locals to avoid unity-build name collisions).
     const DFBSpecName CB_IN{"cb_in"};                // legacy c_24: reader -> compute tile staging
     const DFBSpecName CB_TILIZE{"cb_tilize"};        // legacy c_25: tilize self-loop intermediate
-    const DFBSpecName CB_OUT_STAGE{"cb_out_stage"};  // legacy c_27: compute -> writer staging (ht>8)
+    const DFBSpecName CB_OUT_STAGE{"cb_out_stage"};  // legacy c_27: compute -> writer staging
     const DFBSpecName CB_OUT0{"cb_out0"};            // legacy c_16: output shard (borrowed)
 
     const TensorParamName INPUT_TENSOR{"input"};
@@ -80,7 +80,9 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     const bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32;
     const auto& all_cores = shard_spec.grid;
 
-    const bool ht_gt_8 = ht > 8;
+    // Quasar has no narrow-row pack, so it always stages: compute packs whole tiles and the writer copies
+    // each output row out of the padded tile rows.
+    const bool stage_output = ht > 8 || input_tensor.device()->arch() == tt::ARCH::QUASAR;
 
     // Reader/writer geometry (CTAs), verbatim from legacy.
     const uint32_t H_per_tile = H > TILE_HEIGHT ? TILE_HEIGHT : H % TILE_HEIGHT;
@@ -96,7 +98,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     // ------------------------------------------------------------------------
     // DataflowBufferSpecs. cb_in0 / cb_out0 are borrowed-memory DFBs aliasing the input/output shard
     // buffers (legacy CBDescriptor::buffer); cb_in / cb_tilize are program-scope L1 intermediates;
-    // cb_out_stage exists only on the ht>8 path (compute -> writer staging).
+    // cb_out_stage exists only on the staging path (compute -> writer).
     // ------------------------------------------------------------------------
     std::vector<DataflowBufferSpec> dfbs;
     dfbs.reserve(3);
@@ -114,8 +116,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         .num_entries = ht * wt,
         .data_format_metadata = src0_cb_data_format,
     });
-    if (!ht_gt_8) {
-        // ht<=8: compute writes the output shard in place via a borrowed INTRA self-loop DFB.
+    if (!stage_output) {
+        // No staging: compute writes the output shard in place via a borrowed INTRA self-loop DFB.
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = CB_OUT0,
             .entry_size = output_page_size,
@@ -124,7 +126,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
             .borrowed_from = OUTPUT_TENSOR,
         });
     } else {
-        // ht>8: compute drains to a staging DFB; the writer scatters it to the output shard, which it
+        // Staging: compute drains to a staging DFB; the writer scatters it to the output shard, which it
         // reaches via tensor::output (local TensorAccessor), not a borrowed self-loop fake-CB.
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = CB_OUT_STAGE,
@@ -144,7 +146,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     // ------------------------------------------------------------------------
     // Kernels. reader gathers rows from the borrowed input shard (cb_in0, read by address) into the
     // tile-staging cb_in; compute tilizes + transposes + pack-untilizes into cb_out (mapped to the
-    // borrowed output shard on ht<=8, or to cb_out_stage on ht>8); the ht>8 writer drains cb_out_stage
+    // borrowed output shard, or to cb_out_stage when staging); the staging writer drains cb_out_stage
     // into the borrowed output shard (cb_out0, written by address).
     // ------------------------------------------------------------------------
     KernelSpec reader_spec{
@@ -182,7 +184,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         compute_hw.unpack_modes.emplace(CB_TILIZE, tt::tt_metal::UnpackMode::UnpackToDest);
     }
 
-    // Output binding: ht<=8 -> compute self-loops the borrowed output shard directly; ht>8 -> compute
+    // Output binding: no staging -> compute self-loops the borrowed output shard directly; staging -> compute
     // is PRODUCER-only of the staging DFB (the compute kernel's producer-side wait_front does not make
     // it a consumer; the writer is the real consumer).
     std::vector<DFBBinding> compute_bindings = {
@@ -191,7 +193,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
             .dfb_spec_name = CB_TILIZE, .accessor_name = "cb_tilize", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{
             .dfb_spec_name = CB_TILIZE, .accessor_name = "cb_tilize", .endpoint_type = DFBEndpointType::CONSUMER}};
-    if (ht_gt_8) {
+    if (stage_output) {
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = CB_OUT_STAGE, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER});
     } else {
@@ -226,7 +228,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     wu_kernels.push_back(READER_KERNEL);
     wu_kernels.push_back(COMPUTE_KERNEL);
 
-    if (ht_gt_8) {
+    if (stage_output) {
         KernelSpec writer_spec{
             .unique_id = WRITER_KERNEL,
             .source =
