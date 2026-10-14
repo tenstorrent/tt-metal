@@ -5,11 +5,11 @@
 import argparse
 import shutil
 import sqlite3
+import time
 from datetime import datetime, timezone
-
 from pathlib import Path
 
-from . import canvas, index, jira_sync, report, tickets, triage, validate
+from . import canvas, hosts, index, jira_sync, live, report, tickets, triage, validate
 from .config import CANVAS_PATH, DCAMP_HC_ROOT, PROJECT_DIR
 
 
@@ -68,10 +68,16 @@ def _as_of(text: str | None) -> float | None:
 
 
 def cmd_triage(args: argparse.Namespace) -> None:
-    conn = index.connect()
-    stats = triage.fleet_stats(conn)
+    as_of = _as_of(args.as_of) or time.time()
+    if args.index:
+        conn = index.connect()
+        stats = triage.fleet_stats(conn)
     for host in args.host:
-        report = triage.triage(conn, host, as_of=_as_of(args.as_of), window_days=args.days, stats=stats)
+        host = hosts.normalize_host(host) or host
+        if not args.index:
+            conn = live.connect(host, as_of, args.days)
+            stats = live.fleet_stats()
+        report = triage.triage(conn, host, as_of=as_of, window_days=args.days, stats=stats)
         print(triage.report_json(report) if args.json else triage.render(report, verbose=args.verbose))
         print()
 
@@ -176,8 +182,13 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--limit", type=int, help="at most N units per source (for testing)")
     p.set_defaults(func=cmd_index)
 
-    p = sub.add_parser("triage", help="status and likely issue for one or more hosts")
+    p = sub.add_parser("triage", help="status and likely issue for one or more hosts (reads their logs live)")
     p.add_argument("host", nargs="+")
+    p.add_argument(
+        "--index",
+        action="store_true",
+        help="use the index instead of reading logs live: fleet-relative weights, sweeps, older DCAMP history",
+    )
     p.add_argument("--days", type=int, default=30, help="evidence window (default 30)")
     p.add_argument("--as-of", help="evaluate as of this UTC time, e.g. 2026-10-01T12:00 (default now)")
     p.add_argument("--json", action="store_true")

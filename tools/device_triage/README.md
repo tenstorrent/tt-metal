@@ -10,15 +10,26 @@ Stdlib Python 3.10, no installs. Run everything from this directory.
 
 ```bash
 cd tools/device_triage
+python3 -m device_triage triage bh-glx-120-b02u08     # no setup: reads this host's logs live, ~10-30 s
+python3 -m device_triage triage bh-glx-110-a10u14 --as-of 2026-10-04T15:00 --days 14 -v
+```
+
+`triage` reads only that host's runs, straight from `/data`. With a Jira token (below) it also lists the
+host's tickets, queried live. It sees one host, so it weighs signals with a fleet snapshot
+(`device_triage/signal_rarity.json`) and doesn't recognise failures that hit many hosts in the same minutes.
+
+The index is for fleet-wide work and for `triage --index` (fleet-relative weights, sweep filtering, history
+rebuilt from DCAMP tickets):
+
+```bash
 python3 -m device_triage index          # incremental; first run ~10 min (niced, idle I/O), then ~1 min
 python3 -m device_triage jira-sync      # optional, after index: tickets + older HC history; needs a Jira token
-python3 -m device_triage triage bh-glx-120-b02u08
-python3 -m device_triage triage bh-glx-110-a10u14 --as-of 2026-10-04T15:00 --days 14 -v
+python3 -m device_triage triage --index bh-glx-120-b02u08
 python3 -m device_triage fleet          # every host with recent machine HC runs -> docs/fleet.md
 python3 -m device_triage categories     # per DIIM category: tickets vs log evidence -> docs/categories.md
 python3 -m device_triage validate       # replay at ticket creation -> docs/validation.md
 python3 -m device_triage publish --to /data/device_triage    # read-only snapshot + reports for everyone
-DEVICE_TRIAGE_CACHE=/data/device_triage python3 -m device_triage triage bh-glx-120-b02u08  # as a reader
+DEVICE_TRIAGE_CACHE=/data/device_triage python3 -m device_triage triage --index bh-glx-120-b02u08  # as a reader
 ```
 
 Shared setup (one scheduled writer, read-only readers): `docs/deployment.md`.

@@ -154,22 +154,27 @@ def load_cached_tickets() -> list[dict]:
             }
     if issues_dir.is_dir():
         for path in issues_dir.glob("*.json"):
-            issue = json.loads(path.read_text())
-            summary, description = issue.get("summary", ""), issue.get("description", "")
-            comments = "\n".join(c.get("body", "") for c in issue.get("comments", []))
-            tickets[issue["key"]] = {
-                "key": issue["key"],
-                "project": issue["key"].split("-")[0],
-                "created": _parse_jira_ts(issue.get("created")),
-                "resolved": _parse_jira_ts(issue.get("resolved")),
-                "status": issue.get("status", ""),
-                "summary": summary,
-                "description": description,
-                "comments": comments,
-                "text": "\n".join([summary, description, comments]),
-                "source": "rest",
-            }
+            ticket = ticket_from_issue(json.loads(path.read_text()))
+            tickets[ticket["key"]] = ticket
     return list(tickets.values())
+
+
+def ticket_from_issue(issue: dict) -> dict:
+    """A synced issue record (`jira_sync.normalize`) as a ticket row."""
+    summary, description = issue.get("summary", ""), issue.get("description", "")
+    comments = "\n".join(c.get("body", "") for c in issue.get("comments", []))
+    return {
+        "key": issue["key"],
+        "project": issue["key"].split("-")[0],
+        "created": _parse_jira_ts(issue.get("created")),
+        "resolved": _parse_jira_ts(issue.get("resolved")),
+        "status": issue.get("status", ""),
+        "summary": summary,
+        "description": description,
+        "comments": comments,
+        "text": "\n".join([summary, description, comments]),
+        "source": "rest",
+    }
 
 
 def ticket_hosts_by_part(t: dict, known: set[str]) -> dict[str, str]:
@@ -276,8 +281,14 @@ def build(conn: sqlite3.Connection) -> int:
         conn.execute(f"DROP TABLE IF EXISTS {table}")
     conn.executescript(SCHEMA)
     known = {h for (h,) in conn.execute("SELECT DISTINCT host FROM run_hosts")}
-    jql = load_jql_categories()
     tickets = load_cached_tickets()
+    insert_tickets(conn, tickets, known, load_jql_categories())
+    scan_attachments(conn)
+    conn.commit()
+    return len(tickets)
+
+
+def insert_tickets(conn: sqlite3.Connection, tickets: list[dict], known: set[str], jql: dict[str, set[str]]) -> None:
     for t in tickets:
         cats = text_categories(t["summary"])
         jql_cats = [c for c, keys in jql.items() if t["key"] in keys]
@@ -311,6 +322,3 @@ def build(conn: sqlite3.Connection) -> int:
         conn.executemany(
             "INSERT OR IGNORE INTO ticket_refs VALUES (?,?)", [(t["key"], r) for r in hosts.ticket_chip_refs(t["text"])]
         )
-    scan_attachments(conn)
-    conn.commit()
-    return len(tickets)

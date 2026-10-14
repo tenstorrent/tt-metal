@@ -103,7 +103,7 @@ def lower_priority() -> None:
     subprocess.run(["ionice", "-c", "3", "-p", str(os.getpid())], check=False, capture_output=True)
 
 
-def _parse(job: tuple[str, str]) -> UnitResult:
+def parse_unit(job: tuple[str, str]) -> UnitResult:
     source, unit = job
     try:
         return SOURCES[source][1](unit)
@@ -117,7 +117,7 @@ def _delete_unit(conn: sqlite3.Connection, unit: str) -> None:
         conn.execute(f"DELETE FROM {table} WHERE unit = ?", (unit,))
 
 
-def _store(conn: sqlite3.Connection, source: str, res: UnitResult, mtime: float, size: int, version: str) -> None:
+def store_unit(conn: sqlite3.Connection, source: str, res: UnitResult, mtime: float, size: int, version: str) -> None:
     _delete_unit(conn, res.unit)
     for r in res.runs:
         conn.execute(
@@ -205,8 +205,8 @@ def build(
         stamps = {u: (m, s) for u, m, s in todo}
         done = errors = 0
         with Pool(workers) as pool:
-            for res in pool.imap_unordered(_parse, [(source, u) for u, _, _ in todo], chunksize=4):
-                _store(conn, source, res, *stamps[res.unit], version)
+            for res in pool.imap_unordered(parse_unit, [(source, u) for u, _, _ in todo], chunksize=4):
+                store_unit(conn, source, res, *stamps[res.unit], version)
                 done += 1
                 errors += bool(res.error)
                 if done % 500 == 0:

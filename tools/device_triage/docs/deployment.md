@@ -1,7 +1,8 @@
 # Making device_triage a shared tool
 
-Today it runs from one checkout with a personal Jira token. The target: anyone on an exabox host (or in Slack /
-a dashboard later) can ask "what's wrong with bh-glx-X" without indexing anything or holding a token.
+`triage HOST` already works for anyone on an exabox host with no setup (it reads that host's logs live). This is
+about the index-backed parts: fleet-wide reports, `triage --index` (fleet-relative weights, sweep filtering, older
+history) and tickets for people without a Jira token.
 
 Nothing here is deployed. The scheduled job needs a k8s request (see "Ask").
 
@@ -10,7 +11,7 @@ Nothing here is deployed. The scheduled job needs a k8s request (see "Ask").
 ```
 k8s CronJob (every 30 min, niced, 1 pod)            readers (anyone with /data mounted)
   jira-sync        incremental, GET only              DEVICE_TRIAGE_CACHE=/data/device_triage \
-  index            incremental, ~1 min if quiet         python3 -m device_triage triage bh-glx-120-b02u08
+  index            incremental, ~1 min if quiet         python3 -m device_triage triage --index bh-glx-120-b02u08
   fleet / categories / validate -> docs/*.md
   publish --to /data/device_triage                 /data/device_triage/docs/fleet.md, categories.md, ...
       index.sqlite (read-only snapshot, atomic swap)
