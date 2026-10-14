@@ -475,9 +475,11 @@ Metal 2.0 factory (`create_program_mcast_in0_artifacts`): either the DRAM-sender
 - `transpose_b=false`, and the pipes' receivers must be exactly the workers that compute an output
   block: the receiver at row-major position `i` computes output column block `i` and must be sent that
   block's K-blocks in K order.
-- Tensor prefetcher (DRAM-sender) pipes add the prefetcher's contract: a receiver-contiguous weight
-  and a bank pairing that sends worker `i` weight shard `i`. The matmul cannot check what a
-  worker-sender pipe's producer sends, so there that contract is the producer's.
+- Tensor prefetcher (DRAM-sender) pipes add the prefetcher's contract: a bank pairing that sends
+  worker `i` the weight's columns for output block `i` -- shard `i` of a receiver-contiguous weight, or
+  slice `i % R` of bank `i / R`'s shard of a K-row-major one, which needs one pipe per bank, each with
+  the same `R` receivers. The matmul cannot check what a worker-sender pipe's producer sends, so there
+  that contract is the producer's.
 
 #### Gather-in0 over PrefetcherPipes
 

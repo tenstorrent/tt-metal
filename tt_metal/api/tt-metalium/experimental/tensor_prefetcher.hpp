@@ -202,11 +202,11 @@ void QueueTensorPrefetcherRequest(
 //   - every pipe has a DRAM sender, comes from the same factory call, and shares one ring size;
 //     every pipe of that call is listed, each once;
 //   - receiver sets are disjoint across every pipe;
-//   - every tensor must resolve to the receiver-contiguous layout (each receiver owning a disjoint
-//     contiguous shard). One receiver per bank qualifies: a bank's whole shard is then that
-//     receiver's slab, which is why such a weight is read as receiver-contiguous here even though
-//     ttnn reports it as legacy WIDTH_SHARDED (the two layouts name the same bytes, and a GCB still
-//     reads it as K-row-major).
+//   - a K-row-major tensor (legacy WIDTH_SHARDED, one shard per bank sliced across that bank's
+//     receivers) needs one sender per bank, i.e. pipes created with support_multi_receiver_shards.
+//     One receiver per bank is the exception: a bank's whole shard is then that receiver's slab, so
+//     such a weight is read as receiver-contiguous (the two layouts name the same bytes, and a GCB
+//     still reads it as K-row-major).
 //
 // Everything else carries over: the streaming `rotation` works the same way it does for a GCB, and
 // a tensor's per-receiver block size need not equal the pipes' `entry_size` nor divide the ring --

@@ -77,8 +77,8 @@ void start_tensor_prefetcher(
 // and re-sent on every execute_trace of that trace; when false the request is always sent
 // immediately.
 // Exactly one of `global_cb` / `prefetcher_pipes` must be supplied; whichever it is selects the
-// delivery transport. See the metal-level QueueTensorPrefetcherRequest overloads for the one extra
-// precondition PrefetcherPipe delivery imposes: every tensor must be receiver-contiguous.
+// delivery transport. See the metal-level QueueTensorPrefetcherRequest overloads for the extra
+// preconditions PrefetcherPipe delivery imposes.
 //
 // `prefetcher_pipes` is one PrefetcherPipe per DRAM sender core, from one
 // create_prefetcher_pipes_for_tensor_prefetcher call. Each pipe already knows the bank-local slabs
