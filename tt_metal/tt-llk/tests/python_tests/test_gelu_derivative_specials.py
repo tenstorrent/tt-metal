@@ -9,10 +9,10 @@ else 0). SFPU compares order NaNs by sign and magnitude, so +NaN sorts above +in
 and -NaN below -inf: without an explicit case +NaN comes out as 1.0 and -NaN as 0
 instead of propagating (tenstorrent/tt-llk#1701 item 12).
 
-Blackhole propagates NaN with an fp32 destination. The bfloat16-destination arm
-keeps 1.0 / 0 on both architectures: it ends in convert<vFloat16b>
+Wormhole and Blackhole propagate NaN with an fp32 destination. The
+bfloat16-destination arm keeps 1.0 / 0 on both: it ends in convert<vFloat16b>
 (SFPSTOCHRND), which turns any NaN into an infinity, so it could not return NaN
-anyway. Wormhole keeps the old behaviour on both arms.
+anyway.
 
 Inputs are written as raw bit patterns through an integer view, so both NaN signs
 reach L1 as asked -- torch's float -> bfloat16 conversion would collapse every NaN
@@ -30,7 +30,6 @@ import numpy as np
 import pytest
 import torch
 from conftest import skip_for_quasar
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
@@ -172,11 +171,7 @@ def test_gelu_derivative_specials(out_fmt, dest_acc, approx):
     # saturates to 1 and can tell the two apart.
     assert got["+inf"] == "1", "the +inf probe did not reach the kernel: %s" % got
 
-    propagates = (
-        get_chip_architecture() == ChipArchitecture.BLACKHOLE
-        and out_fmt == DataFormat.Float32
-    )
-    nan = "NaN" if propagates else None
+    nan = "NaN" if out_fmt == DataFormat.Float32 else None
     expected = {
         "+inf": "1",
         "-inf": "+0.0",

@@ -6,7 +6,6 @@ import pytest
 import torch
 import ttnn
 
-from models.common.device_utils import is_blackhole
 from tests.ttnn.utils_for_testing import (
     assert_allclose,
     assert_with_ulp,
@@ -39,8 +38,6 @@ SPECIAL_VALUE_DTYPES = (
 SPECIAL_VALUE_CASES = (
     pytest.param(ttnn.GeluVariant.Accurate, "none", float("inf"), "one", id="none-pos-inf"),
     pytest.param(ttnn.GeluVariant.Accurate, "none", float("-inf"), "zero", id="none-neg-inf"),
-    # NaN propagates only on Blackhole with a float32 operand (fp32 destination); see the
-    # runtime xfail in test_gelu_bw_special_values for the other combinations.
     pytest.param(ttnn.GeluVariant.Accurate, "none", float("nan"), "nan", id="none-nan"),
     pytest.param(ttnn.GeluVariant.Tanh, "tanh", float("inf"), "one", id="tanh-pos-inf"),
     pytest.param(ttnn.GeluVariant.Tanh, "tanh", float("-inf"), "zero", id="tanh-neg-inf"),
@@ -134,17 +131,8 @@ def test_gelu_bw_special_values(
 ):
     if approximate == "tanh" and torch.isinf(torch.tensor(input_value)) and ttnn_dtype == ttnn.float32:
         pytest.xfail("FP32 tanh GELU backward overflows for infinite inputs and produces NaN")
-    if approximate == "tanh" and torch.isnan(torch.tensor(input_value)) and ttnn_dtype == ttnn.bfloat16:
-        pytest.xfail("BF16 tanh GELU backward treats NaN as a large positive value and returns 1.0")
-    if (
-        approximate == "none"
-        and torch.isnan(torch.tensor(input_value))
-        and not (is_blackhole() and ttnn_dtype == ttnn.float32)
-    ):
-        pytest.xfail(
-            "GELU polynomial backward propagates NaN only on Blackhole with an fp32 destination; "
-            "the bf16 arm and Wormhole treat NaN as a large positive value and return 1.0"
-        )
+    if torch.isnan(torch.tensor(input_value)) and ttnn_dtype == ttnn.bfloat16:
+        pytest.xfail("BF16 GELU backward treats NaN as a large positive value and returns 1.0")
 
     input_data = torch.tensor([input_value] + [0.0] * 31, dtype=torch_dtype)
     grad_data = torch.ones_like(input_data)
