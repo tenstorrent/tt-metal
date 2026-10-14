@@ -15,12 +15,13 @@ two-cycle reopen qualification remain unfinished. The source package's accuracy
 and throughput numbers are not validation of this code.
 
 The model's decode wrapper and vLLM adapter use current main's explicit input,
-page-table and sampling-state commands. The original 87 model host tests and 20 compact-prefill host tests pass with
-actual compiled TTNN/model imports on the combined current-main tree. They cover
+page-table and sampling-state commands. The original 87 model host tests and 47 compact-prefill host tests pass with
+actual compiled TTNN/model imports ([CPU validation](https://github.com/tenstorrent/tt-metal/actions/runs/38600987845)).
+This tree includes the exact tested compact-prefill padding and layout guards. They cover
 async token feedback, page-only refresh, teacher forcing, trace recapture and
 sampling-state reuse, using CPU tensors and mocked device operations. They do
-not qualify device execution. Include the separately reviewed prerequisites
-when validating the combined tree with the recipes below.
+not qualify device execution. The compact-prefill prerequisite remains separately reviewed in #58504;
+its source is included here for coherent validation with the recipes below.
 
 ## Configuration
 
