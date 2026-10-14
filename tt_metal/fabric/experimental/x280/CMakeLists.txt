@@ -56,7 +56,19 @@ set(_x280_asm_headers
     x280_hart_protocol.h
 )
 set(_x280_header_stamps "")
+# _x280_check_header(<header> <lang> [<include-dir>...]): <header> is found in include/ or in one of
+# the extra include directories, which are also on the compile line.
 function(_x280_check_header header lang)
+    set(path "${CMAKE_CURRENT_SOURCE_DIR}/include/${header}")
+    foreach(dir IN LISTS ARGN)
+        if(EXISTS "${dir}/${header}")
+            set(path "${dir}/${header}")
+        endif()
+    endforeach()
+    if(NOT EXISTS "${path}")
+        message(FATAL_ERROR "x280: header check: ${header} not found")
+    endif()
+    list(TRANSFORM ARGN PREPEND "-I" OUTPUT_VARIABLE dirs)
     string(MAKE_C_IDENTIFIER "${header}.${lang}" id)
     set(stamp "${X280_IMAGE_DIR}/headers/${id}.stamp")
     if(lang STREQUAL "c")
@@ -82,12 +94,12 @@ function(_x280_check_header header lang)
         OUTPUT
             "${stamp}"
         COMMAND
-            "${X280_GCC}" ${X280_CFLAGS} ${flags} -MD -MT "${stamp}" -MF "${stamp}.d" -x ${lang} -include "${header}"
-            /dev/null
+            "${X280_GCC}" ${X280_CFLAGS} ${dirs} ${flags} -MD -MT "${stamp}" -MF "${stamp}.d" -x ${lang} -include
+            "${header}" /dev/null
         COMMAND
             ${CMAKE_COMMAND} -E touch "${stamp}"
         DEPENDS
-            "${CMAKE_CURRENT_SOURCE_DIR}/include/${header}"
+            "${path}"
         DEPFILE "${stamp}.d"
         COMMENT "x280: compile-checking ${header} as ${lang}"
         VERBATIM
@@ -106,7 +118,6 @@ endforeach()
 foreach(_header IN LISTS _x280_asm_headers)
     _x280_check_header(${_header} assembler-with-cpp)
 endforeach()
-add_custom_target(x280_abi_headers ALL DEPENDS ${_x280_header_stamps})
 
 # src/x280_pinned_input.c refuses to compile without exactly one valid operation define. Each case
 # passes only on its own #error, so a broken compiler invocation does not read as a refusal.
@@ -219,17 +230,22 @@ set_target_properties(
 )
 add_test(NAME x280_runtime_host_tests COMMAND x280_runtime_host_tests)
 
-# _x280_device_test(<name> <source>...): a gtest executable over x280_device and Metal. Executables
-# stay separate where a test must not share a process: prime is destructive, active_failure
-# retains a fault, and shape, pll and pinned_input change chip state behind an opt-in.
+# _x280_device_test(<name> <source>... [KERNELS <dir>...] [SLOW_DISPATCH]): a gtest executable over
+# x280_device and Metal. Executables stay separate where a test must not share a process: prime is
+# destructive, active_failure retains a fault, and shape, pll and pinned_input change chip state behind
+# an opt-in. KERNELS adds kernels/<dir> include roots; SLOW_DISPATCH links x280_slow_dispatch, which a
+# test that launches on a core-local RISC needs (harness/slow_dispatch.hpp).
 function(_x280_device_test name)
-    add_executable(${name} ${ARGN})
+    cmake_parse_arguments(PARSE_ARGV 1 ARG "SLOW_DISPATCH" "" "KERNELS")
+    add_executable(${name} ${ARG_UNPARSED_ARGUMENTS})
+    list(TRANSFORM ARG_KERNELS PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/kernels/")
     target_include_directories(
         ${name}
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}
             ${CMAKE_CURRENT_SOURCE_DIR}/src/device
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/device
+            ${ARG_KERNELS}
             "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
     )
     target_link_libraries(
@@ -238,6 +254,9 @@ function(_x280_device_test name)
             x280_device
             test_metal_common_libs
     )
+    if(ARG_SLOW_DISPATCH)
+        target_link_libraries(${name} PRIVATE x280_slow_dispatch)
+    endif()
     set_target_properties(
         ${name}
         PROPERTIES
@@ -352,3 +371,112 @@ foreach(_case Unharvested Harvested Disagreement)
                 "\\[  FAILED  \\]"
     )
 endforeach()
+
+# ---------------------------------------------------------------------------
+# The benchmark harness (header-only, under harness/) and the kernel primitives every benchmark
+# family shares (kernels/shared/).
+# ---------------------------------------------------------------------------
+# Linked by exactly the executables that launch a Metal kernel on a core-local RISC (idle or active
+# ERISC, DRISC); its static initialiser sets TT_METAL_SLOW_DISPATCH_MODE=1 before Metal reads it.
+# An object library keeps the linker from dropping the initialiser.
+add_library(x280_slow_dispatch OBJECT harness/slow_dispatch.cpp)
+
+# Suite headers compile on their own, as C and C++ or, for templates, C++ only.
+set(_x280_shared_dir "${CMAKE_CURRENT_SOURCE_DIR}/kernels/shared")
+foreach(
+    _header
+    ubench_cookies.h
+    ubench_backend_ids.h
+    ubench_region.h
+    ubench_units.h
+    ubench_layout_cookie.h
+    ubench_section_load.h
+    ubench_outcome.h
+    tensix_live_timer.h
+    core_sync_layout.h
+    core_sync_core_family.h
+    core_sync_probe_args.h
+    credit_counter.h
+    p2p_latency_frontend.h
+    p2p_latency_layout.h
+    fabric_shadow.h
+)
+    _x280_check_header(${_header} c ${_x280_shared_dir})
+    _x280_check_header(${_header} c++ ${_x280_shared_dir})
+endforeach()
+foreach(
+    _header
+    core_sync_arrival.hpp
+    core_sync_barrier.hpp
+    core_sync_transport_x280.hpp
+    core_sync_transport_metal.hpp
+    p2p_latency_frontend_cxx.hpp
+    p2p_latency_entry_cxx.hpp
+    x280_section_load.hpp
+    fabric_shadow_header.hpp
+)
+    _x280_check_header(${_header} c++ ${_x280_shared_dir})
+endforeach()
+
+# Host-only benchmark tests: like x280_runtime_host_tests, no Metal and no device. Each family adds
+# its sources and its kernels/<family> include root.
+add_executable(
+    x280_bench_host_tests
+    tests/host/test_harness_artifacts.cpp
+    tests/host/test_harness_inventory.cpp
+    tests/host/test_harness_output.cpp
+    tests/host/test_harness_regions.cpp
+    tests/host/test_harness_slow_dispatch.cpp
+    tests/host/test_measurement.cpp
+    tests/host/test_core_sync_barrier.cpp
+)
+target_include_directories(
+    x280_bench_host_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/device
+        ${_x280_shared_dir}
+)
+target_link_libraries(
+    x280_bench_host_tests
+    PRIVATE
+        x280_state
+        gtest_main
+        TT::Metalium::HostDevCommon
+)
+set_target_properties(
+    x280_bench_host_tests
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${X280_TEST_OUTPUT_DIR}
+)
+add_test(NAME x280_bench_host_tests COMMAND x280_bench_host_tests)
+
+# Harness device tests; need hardware, so no CTest. test_fabric_shadow_layout.cpp is static
+# assertions only.
+_x280_device_test(x280_bench_device_tests
+    tests/device/test_harness_open_config.cpp
+    tests/device/test_harness_targets.cpp
+    tests/device/test_fabric_shadow_layout.cpp
+    KERNELS shared
+    SLOW_DISPATCH
+)
+
+# The release selector on the unharvested-L2CPU coordinate overlay, whose chip 0 keeps the
+# descriptor's harvested Tensix columns.
+_x280_device_test(x280_bench_release_selector_tests tests/device/test_release_selector.cpp KERNELS shared)
+add_test(
+    NAME x280_release_selector
+    COMMAND
+        ${CMAKE_COMMAND} -E env --unset=TT_VISIBLE_DEVICES "TT_METAL_RUNTIME_ROOT=${_coord_root}"
+        "TT_METAL_MOCK_CLUSTER_DESC_PATH=${_coord_root}/unharvested.yaml"
+        $<TARGET_FILE:x280_bench_release_selector_tests> "--gtest_filter=ReleaseSelector.*"
+)
+set_tests_properties(
+    x280_release_selector
+    PROPERTIES
+        PASS_REGULAR_EXPRESSION
+            "\\[  PASSED  \\] [1-9]"
+)
+
+add_custom_target(x280_abi_headers ALL DEPENDS ${_x280_header_stamps})

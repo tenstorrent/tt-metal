@@ -11,7 +11,7 @@
 
 #include <string>
 
-// x280_host_tests does not link x280_slow_dispatch, whose initialiser would set
+// x280_bench_host_tests does not link x280_slow_dispatch, whose initialiser would set
 // the variable for the whole process; this stands in for its definition.
 namespace x280::harness {
 extern const bool kSlowDispatchLinked = true;
