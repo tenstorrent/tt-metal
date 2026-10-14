@@ -73,6 +73,21 @@ def dump_router(risc_debug: RiscDebug, dispatcher_data: DispatcherData, elfs_cac
         message += " ".join(vals)
     except Exception as e:  # noqa: BLE001
         message += f"elf/mem error: {e}"
+    if os.environ.get("CRAQ_TRIAGE_STREAM_CFG", "0") != "0":
+        # Stream configuration/state registers for the first few streams (free-slots counters live here):
+        # 2 ONETIME_MISC_CFG, 3 MISC_CFG, 7 REMOTE_DEST, 8 REMOTE_DEST_BUF_START, 10 REMOTE_DEST_BUF_SIZE,
+        # 29 CURR_PHASE, 34 PHASE_AUTO_CFG_HEADER, 257 WAIT_STATUS, 259 NUM_MSGS_RECEIVED, 297 SPACE_AVAILABLE, 4 scratch
+        cfg = []
+        for sid in range(0, 5):
+            vals = []
+            for idx in (2, 3, 7, 8, 10, 29, 34, 257, 259, 297, 4):
+                try:
+                    vals.append(f"{idx}={read_word_from_device(location, stream_reg_addr(sid, idx), context=context):#x}")
+                except Exception as e:  # noqa: BLE001
+                    vals.append(f"{idx}=err")
+                    break
+            cfg.append(f"s{sid}[" + " ".join(vals) + "]")
+        message += "\n    stream_cfg: " + " ".join(cfg)
     if want_streams:
         regs = []
         for sid in range(64):
