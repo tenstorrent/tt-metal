@@ -71,8 +71,12 @@ TT_LLK_RAW_LREG_FN unsigned shft2_r(unsigned x) {
         case 0: return 0x0e; case 1: return 0x0f;
         case 2: return 0x0e | bit(c(x));
         case 3: case 4: return bit(c(x));
-        case 5: return bit(d(x)) | bit(c(x));
-        case 6: return bit(d(x)); default: return 0xff;
+        // WH/BH shift LReg[Imm12 & 15] into VD (by VC in mode 5, by Imm12 in
+        // mode 6); Quasar documents VD as the source. Read both: VD is already
+        // an input through the destination write.
+        case 5: return bit(b(x)) | bit(c(x)) | bit(d(x));
+        case 6: return bit(b(x)) | bit(d(x));
+        default: return 0xff;
     }
 }
 TT_LLK_RAW_LREG_FN unsigned shft2_w(unsigned x) {

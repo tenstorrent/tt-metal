@@ -62,9 +62,11 @@ static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSHFT2(1, 5, 3, 3)) == 0x20
 static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPSHFT2(1, 5, 3, 3)) == 0x08u);
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSHFT2(1, 5, 3, 4)) == 0x20u);
 static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPSHFT2(1, 5, 3, 4)) == 0x08u);
-static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSHFT2(1, 5, 3, 5)) == 0x28u);
+static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSHFT2(1, 5, 3, 5)) == 0x2au);
 static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPSHFT2(1, 5, 3, 5)) == 0x08u);
-static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSHFT2(1, 5, 3, 6)) == 0x08u);
+static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSHFT2(1, 5, 3, 6)) == 0x0au);
+// Production shape: TTI_SFPSHFT2(LREG0, LREG13, LREG2, 5) shifts LREG0.
+static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSHFT2(0, 13, 2, 5)) & 0x01u);
 static_assert(ckernel::raw_lreg_effect::supported(TT_OP(0x93, 0)));
 static_assert(ckernel::raw_lreg_effect::read(TT_OP(0x93, 0)) == 0xffu);
 static_assert(ckernel::raw_lreg_effect::write(TT_OP(0x93, 0)) == 0xffu);
