@@ -50,6 +50,11 @@ on:
         type: number
         default: 0
         description: "If > 0, skip time budget verification and use this as job timeout (e.g. 240 for APC watcher, 120 for BHPC watcher)."
+      sim-timeout-minutes-override:
+        required: false
+        type: number
+        default: 0
+        description: "If > 0, use this as the sim_* test step timeout instead of timeout-minutes-override. GitHub-hosted runners stop a job at 360 min."
       collect-coverage:
         required: false
         type: boolean
@@ -435,7 +440,7 @@ jobs:
       # Runs under the ttsim env from setup-ttsim.
       - name: ${{ matrix.test-group.name }} tests (simulator)
         if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
-        timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
+        timeout-minutes: ${{ inputs.sim-timeout-minutes-override > 0 && inputs.sim-timeout-minutes-override || inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log
