@@ -82,6 +82,9 @@ _PATHS = [
     # Segment map: a width that is not a multiple of 32.
     ("tile_mapped_bf16", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
     ("tile_mapped_fp32", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.float32, ttnn.TILE_LAYOUT),
+    # Sliced segment map: 4 output tiles on a grid of 21 or more cores, each reading 32 source tiles, so every output
+    # tile is cut into ranges written by different cores.
+    ("tile_mapped_sliced", [1, 1, 4, 1000], [1, 1, 125, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
     # LCM: a width change tile rows does not win, through the compute engine, which round-trips 32-bit data unchanged.
     ("lcm_fp32", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.float32, ttnn.TILE_LAYOUT),
     # Row-major stick program: dividing widths.
@@ -102,11 +105,10 @@ def test_reshape_codegen_bit_exact(device, path, in_shape, out_shape, dtype, lay
     _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
 
 
-@pytest.mark.parametrize(
-    "path,in_shape,out_shape,dtype,layout",
-    [p for p in _PATHS if p[0] in ("tile_rows", "rm_split")],
-    ids=["tile_rows", "rm_split"],
-)
+_KEYED = [p for p in _PATHS if p[0] in ("tile_rows", "tile_mapped_fp32", "tile_mapped_sliced", "lcm_fp32", "rm_split")]
+
+
+@pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _KEYED, ids=[p[0] for p in _KEYED])
 def test_reshape_codegen_sub_core_grids(device, path, in_shape, out_shape, dtype, layout):
     source = _make(in_shape, dtype)
     x = _to_device(device, source, dtype, layout, _DRAM)
@@ -175,7 +177,7 @@ _ROUTES = [
     # Width change: tile rows saves only 2x the reads on far fewer cores, and bf16 cannot take the LCM kernel.
     ("tile_width_native", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.bfloat16, ttnn.TILE_LAYOUT, "native"),
     ("tile_width_uint16", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.uint16, ttnn.TILE_LAYOUT, "codegen"),
-    # The same width change in fp32: one LCM chunk of six tiles against six native rounds.
+    # The same width change in fp32: one core's LCM chunk of six input tiles against native's single round.
     ("tile_width_lcm", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.float32, ttnn.TILE_LAYOUT, "codegen"),
     # A width that is not a multiple of 32 takes the segment map.
     ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
@@ -197,11 +199,7 @@ def test_reshape_codegen_routing(device, case, in_shape, out_shape, dtype, layou
     assert device.num_program_cache_entries() == entries, f"auto did not take {route}"
 
 
-@pytest.mark.parametrize(
-    "path,in_shape,out_shape,dtype,layout",
-    [p for p in _PATHS if p[0] in ("tile_rows", "rm_split")],
-    ids=["tile_rows", "rm_split"],
-)
+@pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _KEYED, ids=[p[0] for p in _KEYED])
 def test_reshape_codegen_cache_hit_new_addresses(device, path, in_shape, out_shape, dtype, layout):
     source = _make(in_shape, dtype)
     x = _to_device(device, source, dtype, layout, _DRAM)
@@ -336,9 +334,25 @@ def test_reshape_codegen_bf16_never_takes_lcm(device):
     _assert_bits(source.reshape(out_shape), ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
 
 
+def test_reshape_codegen_lcm_multi_chunk_one_core(device):
+    # Three 96 -> 192 chunks on one core: compute tilizes 6 tiles at a time while the writer drains 8, so the output
+    # CB must wrap at a multiple of both and leave compute room while the writer holds a batch.
+    in_shape, out_shape, dtype = [1, 1, 3 * 64, 96], [1, 1, 3 * 32, 192], ttnn.float32
+    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    source = _make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
+    out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
+    _assert_bits(expected, ttnn.to_torch(out), dtype)
+    entries = device.num_program_cache_entries()
+    out = ttnn.reshape(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
+    _assert_bits(expected, ttnn.to_torch(out), dtype)
+    assert device.num_program_cache_entries() == entries, "auto did not take the LCM program"
+
+
 def test_reshape_codegen_lcm_routes_native_when_no_plan_fits_l1(device, expect_error):
     # A 96 -> 128 width change chunks lcm = 384 datums: 12 input and 12 output tiles, so the smallest LCM plan takes
-    # 36 fp32 tiles (144 KiB) per core. 140 chunks give every core more than one round of native's tiles, so LCM wins
+    # 28 fp32 tiles (112 KiB) per core, a 4-tile output CB written one tile at a time. 140 chunks give every core more than one round of native's tiles, so LCM wins
     # with L1 free; with 96 KiB free auto must run native, while the forced entry still refuses.
     in_shape, out_shape, dtype = [1, 1, 140 * 128, 96], [1, 1, 140 * 96, 128], ttnn.float32
     source = _make(in_shape, dtype)

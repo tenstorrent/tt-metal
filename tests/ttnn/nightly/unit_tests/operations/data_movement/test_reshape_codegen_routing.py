@@ -329,16 +329,6 @@ def test_reshape_codegen_mapped_edge_shapes(device, case, in_shape, out_shape, d
 _TILE_KEYED = [p for p in gate._PATHS if p[0] in ("tile_mapped_fp32", "lcm_fp32")]
 
 
-@pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _TILE_KEYED, ids=[p[0] for p in _TILE_KEYED])
-def test_reshape_codegen_tile_sub_core_grids(device, path, in_shape, out_shape, dtype, layout):
-    gate.test_reshape_codegen_sub_core_grids(device, path, in_shape, out_shape, dtype, layout)
-
-
-@pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _TILE_KEYED, ids=[p[0] for p in _TILE_KEYED])
-def test_reshape_codegen_tile_cache_hit_new_addresses(device, path, in_shape, out_shape, dtype, layout):
-    gate.test_reshape_codegen_cache_hit_new_addresses(device, path, in_shape, out_shape, dtype, layout)
-
-
 @pytest.mark.parametrize("mem", [_DRAM, _L1], ids=["dram", "l1"])
 @pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _TILE_KEYED, ids=[p[0] for p in _TILE_KEYED])
 def test_reshape_codegen_tile_program_key_stable_while_full_plan_fits(
@@ -347,6 +337,48 @@ def test_reshape_codegen_tile_program_key_stable_while_full_plan_fits(
     gate.test_reshape_codegen_program_key_stable_while_full_plan_fits(
         device, path, in_shape, out_shape, dtype, layout, mem
     )
+
+
+def test_reshape_codegen_lcm_shrinks_write_batch_under_l1_pressure(device):
+    # Three 96 -> 192 fp32 chunks on one core. The full plan takes 144 KiB: 12 in and mid tiles and a 24-tile output CB
+    # for 8-tile write batches. With 120 KiB free only 2-tile batches fit, over a 12-tile output CB.
+    in_shape, out_shape, dtype = [1, 1, 3 * 64, 96], [1, 1, 3 * 32, 192], ttnn.float32
+    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    source = gate._make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT)
+
+    def run():
+        out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
+        gate._assert_bits(expected, ttnn.to_torch(out), dtype)
+
+    run()
+    entries = device.num_program_cache_entries()
+    hog = gate._l1_hog_leaving(device, 120 * 1024)
+    run()
+    assert device.num_program_cache_entries() == entries + 1
+    ttnn.deallocate(hog)
+    run()
+    assert device.num_program_cache_entries() == entries + 1
+
+
+def test_reshape_codegen_mapped_shrinks_input_depth_under_l1_pressure(device):
+    # The fp32 segment map's map row is under 2 KiB, so its 8-, 4- and 1-deep input CBs take about 38, 22 and 10 KiB.
+    # 30 and 14 KiB free pick the 4- and 1-deep programs, each a new cache entry, and auto still takes them. Native
+    # needs a map page and two tiles as well, so no free size runs native where no segment map fits.
+    in_shape, out_shape, dtype = [1, 1, 32, 100], [1, 1, 100, 32], ttnn.float32
+    source = gate._make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT)
+    gate._assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+    entries = device.num_program_cache_entries()
+    for step, free_kib in enumerate((30, 14), start=1):
+        hog = gate._l1_hog_leaving(device, free_kib * 1024)
+        gate._assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+        assert device.num_program_cache_entries() == entries + step
+        gate._assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+        assert device.num_program_cache_entries() == entries + step
+        ttnn.deallocate(hog)
 
 
 # (id, in shape, out shape, dtype, layout, expected route), as in the gate's _ROUTES.

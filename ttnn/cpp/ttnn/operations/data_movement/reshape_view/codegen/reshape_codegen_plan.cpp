@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_plan.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <limits>
 #include <numeric>
@@ -27,8 +28,8 @@ constexpr uint32_t kMaxSlabBytes = 4096;
 constexpr uint32_t kMaxSlabBatch = 8;
 // A CB's received and acked page counters are 16 bits, so program creation rejects a CB of more pages.
 constexpr uint64_t kMaxCbPages = std::numeric_limits<uint16_t>::max();
-// The LCM writer drains this many tiles per barrier; its output CB double-buffers one batch.
-constexpr uint32_t kLcmWriteBatch = 8;
+// Write batches the LCM writer tries, largest first; it drains one batch per barrier.
+constexpr std::array<uint32_t, 4> kLcmWriteBatches = {8, 4, 2, 1};
 
 // Program creation starts every CB at a DRAM-aligned address, so a CB takes its size rounded up to that alignment.
 uint64_t cb_footprint(uint64_t bytes) { return tt::round_up(bytes, tt::tt_metal::hal::get_dram_alignment()); }
@@ -190,18 +191,29 @@ std::optional<TilePlan> tile_geometry(
 }
 
 std::optional<TilePlan> fit_tile(TilePlan plan, uint64_t l1_budget) {
-    // The in and mid CBs hold a whole chunk and the out CB one chunk's output; deeper out CBs only overlap compute
-    // with the writer.
+    // The in and mid CBs hold a whole chunk. The out CB must take what the two kernels move without wrapping: compute
+    // tilizes Wt_out tiles in one write and the writer reads a batch from one offset, so its depth is a multiple of
+    // both. The batched writer holds one batch while it waits for the next, so compute still needs Wt_out free slots
+    // while fewer than two batches are pushed: depth >= 2 * batch + Wt_out - 1. The unbatched writer waits only on an
+    // empty CB. Deeper out CBs, up to a chunk, only overlap compute with the writer.
     const uint64_t budget_tiles = l1_budget / plan.tile_bytes;
-    if (budget_tiles < 2ull * plan.in_tiles + plan.out_tiles) {
+    if (budget_tiles <= 2ull * plan.in_tiles) {
         return std::nullopt;
     }
     const uint64_t out_room = budget_tiles - 2ull * plan.in_tiles;
-    plan.out_cb_depth =
-        static_cast<uint32_t>(std::min<uint64_t>(std::max(plan.out_tiles, 2 * kLcmWriteBatch), out_room));
-    plan.write_batch = std::max<uint32_t>(1, std::min(kLcmWriteBatch, plan.out_cb_depth / 2));
-    plan.l1_bytes = static_cast<uint64_t>(2 * plan.in_tiles + plan.out_cb_depth) * plan.tile_bytes;
-    return plan;
+    for (const uint32_t batch : kLcmWriteBatches) {
+        const uint64_t unit = std::lcm(plan.wt_out, batch);
+        const uint64_t needed = batch == 1 ? plan.wt_out : 2ull * batch + plan.wt_out - 1;
+        if (tt::round_up(needed, unit) > out_room) {
+            continue;
+        }
+        const uint64_t wanted = tt::round_up(std::max<uint64_t>(plan.out_tiles, needed), unit);
+        plan.out_cb_depth = static_cast<uint32_t>(std::min(wanted, out_room / unit * unit));
+        plan.write_batch = batch;
+        plan.l1_bytes = static_cast<uint64_t>(2 * plan.in_tiles + plan.out_cb_depth) * plan.tile_bytes;
+        return plan;
+    }
+    return std::nullopt;
 }
 
 std::optional<TileMappedChoice> fit_tile_mapped(
