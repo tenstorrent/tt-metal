@@ -103,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             return;
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             _perf_math_loop_clear_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
             return;
@@ -164,7 +164,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             return;
         }
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
             {
