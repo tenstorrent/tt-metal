@@ -134,10 +134,10 @@ def test_wrappers_check_before_device_work(expect_error, fabric, make_module):
         make_module(_mesh(8, 4))
 
 
-def test_dispatch_rejects_top_k_above_8(expect_error, fabric):
-    _dispatch(_mesh(8, 4), num_experts_per_tok=8)
-    with expect_error(ValueError, "top-k up to 8"):
-        _dispatch(_mesh(8, 4), num_experts_per_tok=16)
+def test_dispatch_rejects_top_k_above_16(expect_error, fabric):
+    _dispatch(_mesh(8, 4), num_experts_per_tok=16)
+    with expect_error(ValueError, "top-k up to 16"):
+        _dispatch(_mesh(8, 4), num_experts_per_tok=17)
 
 
 def test_combine_has_no_top_k_limit(fabric):
@@ -222,9 +222,9 @@ def test_tt_moe_fabric2d_checks_before_device_work(expect_error, fabric, monkeyp
         _tt_moe(monkeypatch, **{name: "fabric2d"})
 
 
-def test_tt_moe_fabric2d_dispatch_rejects_top_k_above_8(expect_error, fabric, monkeypatch):
-    with expect_error(ValueError, "top-k up to 8"):
-        _tt_moe(monkeypatch, num_experts_per_tok=16, dispatch_impl="fabric2d")
+def test_tt_moe_fabric2d_dispatch_rejects_top_k_above_16(expect_error, fabric, monkeypatch):
+    with expect_error(ValueError, "top-k up to 16"):
+        _tt_moe(monkeypatch, num_experts_per_tok=17, dispatch_impl="fabric2d")
 
 
 # Only dispatch_fabric2d is refused: a traced combine_fabric2d is what the routed expert overlap runs.
