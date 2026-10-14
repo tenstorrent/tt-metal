@@ -171,6 +171,7 @@ void add_history_exchange(
             .hw_config = ttnn::create_writer_datamovement_config(),
         };
         if (sp_size > 1) {
+            // The fabric API-type defines; lowering adds only the control plane's routing and header-size ones.
             for (const auto& [name, value] : tt::tt_metal::internal::get_fabric_kernel_defines()) {
                 kernel.compiler_options.defines.insert({name, value});
             }

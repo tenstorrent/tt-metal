@@ -14,7 +14,9 @@
 namespace ttnn::experimental::prim {
 
 // The fabric history exchange runs on the compute grid's last core, which the convolution leaves free.
-inline CoreCoord qkv_causal_conv1d_silu_exchange_core(const CoreCoord& grid) { return {grid.x - 1, grid.y - 1}; }
+inline tt::tt_metal::CoreCoord qkv_causal_conv1d_silu_exchange_core(const tt::tt_metal::CoreCoord& grid) {
+    return {grid.x - 1, grid.y - 1};
+}
 
 // Every convolution core stages an equal share of the channel tiles of the rows the exchange core sends.
 inline uint32_t qkv_causal_conv1d_silu_staged_ct(uint32_t channel_tiles, uint32_t convolution_cores) {
