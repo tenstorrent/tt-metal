@@ -3,36 +3,29 @@
 
 import pytest
 from helpers.format_config import DataFormat
-from helpers.llk_params import (
-    DestAccumulation,
-    MathOperation,
-    PerfRunType,
-    ReduceDimension,
-    ReducePool,
-)
-from helpers.param_config import (
-    input_output_formats,
-    parametrize,
-)
-from helpers.perf.core import PerfConfig
-from helpers.stimuli_config import StimuliConfig
-from helpers.test_variant_parameters import (
-    LOOP_FACTOR,
-    MATH_OP,
-    REDUCE_POOL_TYPE,
-    TILE_COUNT,
-)
+from helpers.llk_params import MathFidelity, ReducePool
+from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.core import ALL_PERF_RUN_TYPES
+from test_reduce import REDUCE_SWEEP, _run_reduce_test
 
-REDUCE_MATHOP = {
-    ReduceDimension.Row: MathOperation.ReduceRow,
-    ReduceDimension.Column: MathOperation.ReduceColumn,
-    ReduceDimension.Scalar: MathOperation.ReduceScalar,
-}
+PERF_TILE_COUNT = 16
 
 
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats(
+def perf_math_fidelities(pool_type):
+    # GMPOOL ignores fidelity; LoFi and HiFi4 bracket the GAPOOL phase count.
+    if pool_type == ReducePool.Max:
+        return [MathFidelity.LoFi]
+    return [MathFidelity.LoFi, MathFidelity.HiFi4]
+
+
+def perf_input_dimensions(tile_dimensions, tile_count=PERF_TILE_COUNT):
+    return [tile_dimensions[0] * tile_count, tile_dimensions[1]]
+
+
+REDUCE_PERF_SWEEP = {
+    **REDUCE_SWEEP,
+    "tile_dimensions": [[32, 32]],
+    "formats": input_output_formats(
         [
             DataFormat.Float16_b,
             DataFormat.Float16,
@@ -40,46 +33,42 @@ REDUCE_MATHOP = {
             DataFormat.Bfp8_b,
         ]
     ),
-    dest_acc=[DestAccumulation.No],
-    reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
-    pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
+    "math_fidelity": perf_math_fidelities,
+    "is_reduce_to_one": [False],
+}
+
+
+@pytest.mark.perf
+@parametrize(
+    **REDUCE_PERF_SWEEP,
+    run_types=[ALL_PERF_RUN_TYPES],
+    loop_factor=[64],
+    is_perf=[True],
 )
 def test_perf_reduce(
     perf_report,
+    tile_dimensions,
     formats,
     dest_acc,
     reduce_dim,
     pool_type,
+    math_fidelity,
+    is_reduce_to_one,
+    run_types,
+    loop_factor,
+    is_perf,
 ):
-
-    tile_count = 16
-    configuration = PerfConfig(
-        "sources/reduce_perf.cpp",
+    _run_reduce_test(
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ],
-        templates=[
-            MATH_OP(mathop=REDUCE_MATHOP[reduce_dim]),
-            REDUCE_POOL_TYPE(pool_type),
-        ],
-        runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(64)],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_count,
-            tile_count_B=tile_count,
-            tile_count_res=tile_count,
-        ),
-        unpack_to_dest=False,
-        dest_acc=dest_acc,
+        dest_acc,
+        reduce_dim,
+        pool_type,
+        math_fidelity,
+        is_reduce_to_one,
+        tile_dimensions,
+        input_dimensions=perf_input_dimensions(tile_dimensions),
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
-
-    configuration.run(perf_report)
