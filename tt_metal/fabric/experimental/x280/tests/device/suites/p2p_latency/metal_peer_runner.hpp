@@ -25,6 +25,7 @@
 #include <tt-metalium/tt_metal.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/host_device_transfer.hpp"
 #include "llrt/tt_cluster.hpp"
 
 #include <chrono>
@@ -232,8 +233,8 @@ inline void launch_peer(
         std::vector<uint32_t> dram_write = {0xD4A00001u};
         std::vector<uint32_t> dram_read;
         const uint32_t dram_addr = device->allocator()->get_base_allocator_addr(ttm::HalMemType::DRAM);
-        ASSERT_TRUE(ttm::detail::WriteToDeviceDRAMChannel(device, 0, dram_addr, dram_write));
-        ASSERT_TRUE(ttm::detail::ReadFromDeviceDRAMChannel(device, 0, dram_addr, sizeof(uint32_t), dram_read));
+        ASSERT_TRUE(ttm::slow_dispatch::WriteToDeviceDRAMChannel(*device, 0, dram_addr, dram_write));
+        ASSERT_TRUE(ttm::slow_dispatch::ReadFromDeviceDRAMChannel(*device, 0, dram_addr, sizeof(uint32_t), dram_read));
         ASSERT_EQ(dram_read, dram_write);
     }
 
