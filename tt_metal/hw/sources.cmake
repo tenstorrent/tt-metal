@@ -232,6 +232,7 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/semaphore_binding_token.h
     inc/api/core_local_mem.h
     inc/api/tensor/noc_traits.h
+    inc/hostdev/buf_rw_common.h
     inc/hostdev/debug_ring_buffer_common.h
     inc/hostdev/dev_msgs.h
     inc/hostdev/device_print_common.h
@@ -275,6 +276,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/vptr_uint.h
     inc/internal/dataflow/dataflow_api_addrgen.h
     inc/internal/dataflow/dataflow_api_common.h
+    inc/internal/dataflow/dataflow_api_raw.h
     inc/internal/dataflow/dataflow_cmd_bufs.h
     inc/internal/dataflow/noc_address_backend_xy.h
     inc/internal/debug/assert_common.h
