@@ -8,6 +8,8 @@
 
 #include <tt_stl/assert.hpp>
 
+#include "kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
+
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
 namespace {
