@@ -60,6 +60,78 @@ from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 
 
+class ChunkedAttention:
+    """Run the model's own attention on ``chunk`` query rows at a time, so no [heads, N, N] score matrix exists whole.
+
+    Each query row's softmax reads only that row's scores, so the result is the same function; memory drops from
+    heads x N x N to heads x chunk x N. Nothing is renamed, because model code dispatches on both the name and the
+    function: GLM-5.2 and MiniMax-M3 build their sparse masks only when the name is "eager" / "sdpa", and MiMo passes
+    its sinks only when the function ``is`` its own eager_attention_forward. So transformers' "sdpa" is wrapped in the
+    registry, and each model file's own eager_attention_forward is wrapped in that file's namespace (``patch``, once
+    the model exists); both are put back on exit. chunk = 0 changes nothing.
+    """
+
+    def __init__(self, chunk: int):
+        self.chunk, self.restore = chunk, []
+
+    def __enter__(self):
+        if self.chunk > 0:
+            from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+
+            local = ALL_ATTENTION_FUNCTIONS._local_mapping
+            self.restore.append(
+                lambda had="sdpa" in local, old=local.get("sdpa"): local.update(sdpa=old) if had else local.pop("sdpa")
+            )
+            ALL_ATTENTION_FUNCTIONS["sdpa"] = self.wrap(ALL_ATTENTION_FUNCTIONS["sdpa"], additive_mask=False)
+        return self
+
+    def patch(self, model: torch.nn.Module) -> None:
+        """Wrap eager_attention_forward in every model file this model's modules come from."""
+        if self.chunk <= 0:
+            return
+        for name in {type(m).__module__ for m in model.modules()}:
+            module = sys.modules[name]
+            eager = getattr(module, "eager_attention_forward", None)
+            if eager is not None and not getattr(eager, "chunked", False):
+                module.eager_attention_forward = self.wrap(eager, additive_mask=True)
+                self.restore.append(
+                    lambda module=module, eager=eager: setattr(module, "eager_attention_forward", eager)
+                )
+
+    def __exit__(self, *exc):
+        while self.restore:
+            self.restore.pop()()
+
+    def wrap(self, fn, additive_mask: bool):
+        chunk = self.chunk
+
+        def chunked(module, query, key, value, attention_mask, **kwargs):
+            q_len, k_len = query.shape[-2], key.shape[-2]
+            if q_len <= chunk:
+                return fn(module, query, key, value, attention_mask, **kwargs)
+            # sdpa gets no mask for a plain causal prefill (is_causal); a chunk of queries needs its offset rows.
+            causal = attention_mask is None and kwargs.get("is_causal", getattr(module, "is_causal", True))
+            outputs = []
+            for s in range(0, q_len, chunk):
+                e = min(s + chunk, q_len)
+                mask = attention_mask
+                if mask is not None and mask.shape[-2] != 1:
+                    mask = mask[..., s:e, :]
+                elif causal:
+                    rows = torch.arange(s, e, device=query.device)[:, None] + (k_len - q_len)
+                    mask = (torch.arange(k_len, device=query.device)[None, :] <= rows)[None, None]
+                    if additive_mask:  # eager adds its mask to the scores
+                        mask = torch.zeros(mask.shape, dtype=query.dtype, device=query.device).masked_fill(
+                            ~mask, torch.finfo(query.dtype).min
+                        )
+                out, _ = fn(module, query[..., s:e, :], key, value, mask, **kwargs)
+                outputs.append(out)  # [batch, rows, heads, head_dim], as every attention function returns it
+            return torch.cat(outputs, dim=1), None  # no attention weights: they are what chunking avoids
+
+        chunked.chunked = True
+        return chunked
+
+
 @dataclass
 class Recipe:
     """What to store beyond the hidden states, per architecture.
@@ -93,6 +165,17 @@ class RunState:
     carry: dict[str, Any] = field(default_factory=dict)  # extra kwargs the next layer receives
     input_ids: torch.Tensor | None = None  # set by the engine, for layers that read token ids (hash routing)
     extra: dict[str, Any] = field(default_factory=dict)
+
+
+def recorded_config(config, keys: tuple[str, ...]) -> dict:
+    """The keys the config has. Not hasattr: newer transformers configs can raise other errors for absent keys."""
+    out = {}
+    for k in keys:
+        try:
+            out[k] = getattr(config, k)
+        except Exception:
+            continue
+    return out
 
 
 class LayerwiseGolden:
@@ -217,6 +300,9 @@ class LayerwiseGolden:
         ap.add_argument("--num-layers", type=int, default=None, help="REDUCED depth: a diagnostic, never a grade")
         ap.add_argument("--sublayers", action="store_true", help="also store the recipe's sub-layer outputs")
         ap.add_argument("--attn", default=self.attn, choices=self.attn_choices)
+        ap.add_argument(
+            "--attn-chunk", type=int, default=0, help="attention on this many query rows at a time (0: all at once)"
+        )
         ap.add_argument("--device", default="auto", help="auto (cuda if visible, else cpu), cpu, cuda, cuda:N")
         ap.add_argument("--compute-dtype", default="bfloat16", choices=("bfloat16", "float32"))
         ap.add_argument("--store-dtype", default="bfloat16", choices=("bfloat16", "float32"))
@@ -235,7 +321,8 @@ class LayerwiseGolden:
             torch.set_num_threads(args.threads)
         if args.selftest:
             return 0 if all(self.selftest(args, c) for c in ("bfloat16", "float32")) else 1
-        self.generate(args)
+        with ChunkedAttention(args.attn_chunk) as self.attn_chunker:
+            self.generate(args)
         return 0
 
     @torch.no_grad()  # else every layer output holds a graph back to all weights so far, and release frees nothing
@@ -279,6 +366,8 @@ class LayerwiseGolden:
         with torch.device("meta"):
             model = self.build(config, compute)
         model.eval()
+        if (chunker := getattr(self, "attn_chunker", None)) is not None:
+            chunker.patch(model)
         backbone = model.get_decoder()
         stages = self.stages(model, backbone, text_config)
         materialize = Loader(model, compute, device)
@@ -369,11 +458,12 @@ class LayerwiseGolden:
             "reduced": bool(args.num_layers),
             "layer_kinds": kinds,
             "hidden_size": text_config.hidden_size,
-            "config": {k: getattr(text_config, k) for k in self.recipe.config if hasattr(text_config, k)},
+            "config": recorded_config(text_config, self.recipe.config),
             "compute_dtype": args.compute_dtype,
             "store_dtype": args.store_dtype,
             "fp32_tensors": ["logits", *self.recipe.keep_fp32],
             "attn_implementation": args.attn,
+            "attn_chunk": args.attn_chunk or None,
             "experts_implementation": getattr(text_config, "_experts_implementation", None),
             "device": torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu",
             "threads": torch.get_num_threads() if device.type == "cpu" else None,
@@ -483,7 +573,9 @@ class LayerwiseGolden:
 
             run = argparse.Namespace(**{**vars(args), "hf_repo": str(ckpt), "isl": isl, "root": Path(tmp)})
             run.tmp, run.num_layers, run.sublayers, run.compute_dtype = Path(tmp), None, True, compute
-            trace = self.generate(run)
+            # Streamed with chunking, compared with an unchunked whole-model forward: this tests chunking too.
+            with ChunkedAttention(args.attn_chunk) as self.attn_chunker:
+                trace = self.generate(run)
             got = {}
             for f in trace.rglob("*.safetensors"):
                 got.update(load_file(str(f)))

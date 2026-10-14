@@ -21,12 +21,14 @@ the dtype, the layers it exists on and what it is.
 | `generate_golden_deepseek_v4_flash.py` | deepseek-ai/DeepSeek-V4-Flash | transformers `deepseek_v4`, FP8/FP4 dequantized |
 | `generate_golden_deepseek_v4_pro_0813.py` | deepseek-ai/DeepSeek-V4-Pro-0813 | same class as Flash |
 | `generate_golden_glm_5_2.py` | zai-org/GLM-5.2 | transformers `glm_moe_dsa` |
+| `generate_golden_xing4_0_29b_a4b.py` | XingChen-AGI/Xing4.0-29B-A4B | repo remote code (MLA + mHC + MoE) |
+| `generate_golden_mimo_v2_6_flash_rl.py` | XiaomiMiMo/MiMo-V2.6-Flash-RL | repo remote code, FP8/MXFP4 dequantized (see below) |
+| `generate_golden_glm_5_3_flash.py` | zai-org/GLM-5.3-Flash-BF16 | transformers `glm5_next` (KDA + DSA + mHC), needs transformers >= 5.17 |
+| `generate_golden_hy4_preview.py` | tencent/Hy4-preview | transformers `hy_v4` (DSA + sinks + IHC), needs transformers >= 5.17 |
 | `generate_golden_whole_model.py` | Qwen/Qwen3.8-27B, Llama-3.1-8B, Mistral-Medium-3.5 | whole model, one forward (see below) |
 
 Not covered yet:
 - **DeepSeek-V4.1-Flash**: transformers has no implementation and the repo ships no modeling code.
-- **MiMo-V2.6-Flash-RL** (in progress): the script passes its selftest, but a full-depth run peaks at ~525 GB of
-  host memory; layer weights are not being released yet.
 - **Kimi-K3** (deferred): its remote code needs `fla` Triton kernels (CUDA only), forces flash-attention, and does
   not import under transformers 5.12.
 
@@ -34,7 +36,18 @@ Not covered yet:
 python generate_golden_<checkpoint>.py --isl 10240                          # the trace
 python generate_golden_<checkpoint>.py --isl 1024 --num-layers 4 --root /tmp/smoke   # a diagnostic, never a grade
 python generate_golden_<checkpoint>.py --selftest [--device cuda]           # layer by layer == one HF forward
+python generate_golden_<checkpoint>.py --isl 51200 --attn-chunk 4096        # long ISL: attention 4096 query rows at a time
 ```
+
+**transformers >= 5.17** (GLM-5.3-Flash, Hy4-preview): the repo's `python_env` pins 5.12.1 for tt-metal, so run these
+through a uv overlay that adds a newer transformers on top of it for that one command, nothing installed:
+
+```
+uv run --no-project --python python_env/bin/python --with transformers==5.19.0 python generate_golden_hy4_preview.py --isl 10240
+```
+
+**MiMo-V2.6-Flash-RL:** the script passes its selftest and a full-depth run completes, but that run peaked at ~525 GB
+of host memory at isl 256, so layer weights are not all being released yet. Check memory before a long run.
 
 `generate_golden_whole_model.py` is the original script behind the Qwen, Llama and Mistral traces. It loads the whole
 model, runs one forward, and writes the older format the device-side grader (`galaxy_prefill_kv_pcc.py`) reads:
@@ -91,7 +104,12 @@ Defaults:
   routing weights and logits, which are stored fp32. Those are compute-dtype values widened to fp32, not values
   recomputed in fp32.
 - Sliding-window layers store K/V for every position. The device needs only the last window.
-- Models with attention sinks (gpt-oss, MiMo, DeepSeek-V4) run `--attn eager`, the only kernel that applies the
+- Models with attention sinks (gpt-oss, MiMo, DeepSeek-V4, Hy4) run `--attn eager`, the only kernel that applies the
   sinks.
+- `--attn-chunk N` runs the model's own attention on N query rows at a time, so no [heads, N, N] score matrix exists
+  whole (needed past ~10k for eager attention, and for MLA models whose head sizes keep sdpa on its math path). Each
+  query row's softmax reads only its own row, so traces are bit-identical to unchunked ones (checked at isl 8192 on
+  Gemma-4, gpt-oss and Xing4.0, and by every selftest with chunking forced). It does not cover N^2 work outside the
+  attention function, such as DSA indexers.
 - MoE routing near the top-k cut is sensitive to precision (about 1% of expert picks change between bf16 and fp32 on
   Gemma-4-26B). Compare routing and indexer top-k as sets, with a tolerance.
