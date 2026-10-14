@@ -134,9 +134,9 @@ struct RecipeBlocking {
     RecipeL1Estimate l1{};
 };
 
-// False when a dense/joint geometry's program (every RISC image plus runtime args and CB configs) is known to exceed
-// the 70656 B kernel config buffer; the chooser never emits one. Measured exclusion, not a size model: see the
-// definition. Ring and exp ring programs are not covered.
+// False when a dense/joint/ring geometry's program (every RISC image plus runtime args and CB configs) is known to
+// exceed the 70656 B kernel config buffer; the chooser never emits one. Measured exclusion, not a size model: see the
+// definition. Exp ring programs are not covered.
 bool recipe_program_fits(const RecipeBlockingProblem& problem, uint32_t q_tiles, uint32_t k_tiles);
 
 // Every feasible blocking with its modeled cost, cheapest first (the chooser's candidate list).
@@ -178,7 +178,8 @@ SDPAProgramConfig resolve_ring_recipe_blocking(
     const std::optional<Tensor>& joint_q,
     const std::optional<Tensor>& joint_k,
     uint32_t ring_size,
-    const SDPAProgramConfig& program_config);
+    const SDPAProgramConfig& program_config,
+    uint32_t v_head_dim = 0);  // 0: Q's
 
 SDPAProgramConfig resolve_exp_ring_recipe_blocking(
     const PrecisionPolicy& policy,

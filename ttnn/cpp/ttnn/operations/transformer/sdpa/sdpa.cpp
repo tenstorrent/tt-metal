@@ -100,15 +100,20 @@ bool route_fp32_prefill(
     return !precision && routes_fp32_dest(q, compute_kernel_config);
 }
 
-// Ring: the caller's chunk sizes unless the recipe does not support that geometry, in which case both are left to the
-// op's blocking chooser.
+// Ring: the caller's chunk sizes unless the recipe does not support that geometry or its program is known not to fit
+// the kernel config buffer (recipe_program_fits), in which case both are left to the op's blocking chooser.
 void drop_unsupported_routed_chunks(
-    ttnn::operations::transformer::SDPAProgramConfig& program_config, uint32_t head_dim) {
+    ttnn::operations::transformer::SDPAProgramConfig& program_config, uint32_t head_dim, uint32_t v_head_dim) {
     const bool tile_aligned = program_config.q_chunk_size % 32 == 0 && program_config.k_chunk_size % 32 == 0 &&
                               program_config.q_chunk_size > 0 && program_config.k_chunk_size > 0;
+    numeric::RecipeBlockingProblem ring;
+    ring.op = numeric::RecipeOp::Ring;
+    ring.d_tiles = head_dim / 32;
+    ring.vd_tiles = v_head_dim != head_dim ? v_head_dim / 32 : 0;
     if (!tile_aligned || head_dim % 32 != 0 ||
         !numeric::recipe_geometry_supported(
-            program_config.q_chunk_size / 32, program_config.k_chunk_size / 32, head_dim / 32)) {
+            program_config.q_chunk_size / 32, program_config.k_chunk_size / 32, head_dim / 32) ||
+        !numeric::recipe_program_fits(ring, program_config.q_chunk_size / 32, program_config.k_chunk_size / 32)) {
         program_config.q_chunk_size = 0;
         program_config.k_chunk_size = 0;
     }
@@ -801,7 +806,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         const auto policy = numeric::resolve_recipe_policy(
             input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, program_config);
         if (routed) {
-            drop_unsupported_routed_chunks(program_config, input_tensor_q.logical_shape()[3]);
+            drop_unsupported_routed_chunks(
+                program_config, input_tensor_q.logical_shape()[3], input_tensor_v.logical_shape()[3]);
         }
         const bool auto_q_chunk = program_config.q_chunk_size == 0;
         program_config = numeric::resolve_ring_recipe_blocking(
@@ -811,7 +817,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
             joint_tensor_q,
             joint_tensor_k,
             static_cast<uint32_t>(ring_size),
-            program_config);
+            program_config,
+            input_tensor_v.logical_shape()[3]);
         TT_FATAL(
             input_tensor_k.logical_shape()[3] == input_tensor_q.logical_shape()[3] &&
                 input_tensor_v.logical_shape()[3] <= input_tensor_q.logical_shape()[3],

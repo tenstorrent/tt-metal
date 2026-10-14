@@ -292,7 +292,14 @@ RecipeL1Estimate recipe_l1_bytes(
 bool recipe_program_fits(const RecipeBlockingProblem& p, uint32_t q_tiles, uint32_t k_tiles) {
     // A program's RISC images, runtime args, semaphores and CB configs share one 70656 B kernel config buffer per core.
     // Measured exclusions on one P150b; the per-case program sizes are in test_recipe_blocking.cpp (ProgramsFit*,
-    // FeatureCombinations*). Ring and exp ring programs are not covered.
+    // FeatureCombinations*). Exp ring programs are not covered.
+    if (p.op == RecipeOp::Ring) {
+        // MLA-width rings (D576 Q/K with a narrower V, the DeepSeek MLA prefill shape) sit within ~100 B of the
+        // buffer from Q160 up: causal balanced ACCURATE with BFP8 K/V on a 2x2 P150b mesh measured 70672 B at
+        // Q160/K192 and K448, 70688 at Q160/K256, 70720 at Q160/K384 (K160, K224, K288, K320 and K512 fit by a few
+        // bytes) and 71184-71696 B at Q320; every Q32 and Q64 blocking fits.
+        return !(p.vd_tiles != 0 && p.vd_tiles < p.d_tiles && p.d_tiles >= 16 && q_tiles >= 5);
+    }
     if (p.op != RecipeOp::Dense && p.op != RecipeOp::Joint) {
         return true;
     }
@@ -427,7 +434,7 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
             if (!recipe_geometry_supported(qt, kt, p.d_tiles)) {
                 continue;
             }
-            if (dense && !recipe_program_fits(p, qt, kt)) {
+            if ((dense || p.op == RecipeOp::Ring) && !recipe_program_fits(p, qt, kt)) {
                 size_excluded = true;
                 continue;
             }
@@ -794,11 +801,13 @@ SDPAProgramConfig resolve_ring_recipe_blocking(
     const std::optional<Tensor>& joint_q,
     const std::optional<Tensor>& joint_k,
     uint32_t ring_size,
-    const SDPAProgramConfig& program_config) {
+    const SDPAProgramConfig& program_config,
+    uint32_t v_head_dim) {
     if (!recipe_blocking_requested(program_config)) {
         return program_config;
     }
     auto problem = base_problem(RecipeOp::Ring, policy, q, program_config);
+    problem.vd_tiles = v_head_dim != 0 && v_head_dim != q.logical_shape()[3] ? div_up(v_head_dim, kTile) : 0;
     problem.q_rows = q.padded_shape()[2];
     problem.k_rows = k.padded_shape()[2];
     const bool has_joint = joint_q && joint_q->logical_shape()[2] > 0;
