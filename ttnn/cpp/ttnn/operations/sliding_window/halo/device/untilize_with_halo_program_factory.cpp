@@ -407,7 +407,8 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
     auto tensor_metadata =
         sliding_window::generate_tensor_metadata(pad_metadata, operation_attributes.config, input_shard_height);
 
-    const uint32_t num_cores_x = input_tensor.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
+    const auto& shard_grid = input_tensor.memory_config().shard_spec()->grid;
+    const uint32_t num_cores_x = shard_grid.bounding_box().grid_size().x;
 
     auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(
         tensor_metadata,
@@ -418,7 +419,8 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
         *device,
         num_cores_x,
         is_in_tiled,
-        UNTILIZE_BLOCK_SIZE);
+        UNTILIZE_BLOCK_SIZE,
+        shard_grid);
 
     const auto& pad_config0 = kernel_config.pad_config0;
     const auto& pad_config1 = kernel_config.pad_config1;

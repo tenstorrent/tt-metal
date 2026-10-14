@@ -780,6 +780,36 @@ static std::pair<GatherConfig, GatherConfig> divide_transfers_between_cores(cons
     return std::make_pair(reduce_flattened_transfers(first), reduce_flattened_transfers(second));
 }
 
+uint32_t sliding_window_shard_row_width(const CoreRangeSet& grid, bool is_block_sharded) {
+    if (is_block_sharded) {
+        TT_FATAL(!grid.ranges().empty(), "Block-sharded sliding-window grid has no core ranges");
+        return grid.ranges().front().end_coord.x + 1;
+    }
+    return grid.bounding_box().grid_size().x;
+}
+
+void validate_sliding_window_shard_grid(const CoreRangeSet& grid, bool is_block_sharded) {
+    // corerange_to_cores walks each range in order. That matches the origin-anchored
+    // row walk below only for a grid filled row by row from (0, 0), including a short last row.
+    const auto cores = corerange_to_cores(grid, std::nullopt, /*row_wise=*/true);
+    if (cores.empty()) {
+        return;
+    }
+    const uint32_t row_width = sliding_window_shard_row_width(grid, is_block_sharded);
+    TT_FATAL(row_width > 0, "Sliding-window shard grid row width must be positive");
+    for (uint32_t core_index = 0; core_index < cores.size(); ++core_index) {
+        const CoreCoord expected(core_index % row_width, core_index / row_width);
+        TT_FATAL(
+            cores[core_index] == expected,
+            "Sliding-window shard grid core {} is {} but the origin-anchored row walk addresses it as {}. "
+            "Only an origin-anchored, row-filled grid is supported; any other grid hangs "
+            "max_pool2d/avg_pool2d or silently returns wrong conv2d results (#60513).",
+            core_index,
+            cores[core_index].str(),
+            expected.str());
+    }
+}
+
 HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
@@ -789,7 +819,10 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     const tt::tt_metal::distributed::MeshDevice& device,
     uint32_t num_cores_x,
     bool is_in_tiled,
-    int block_size) {
+    int block_size,
+    const CoreRangeSet& shard_grid) {
+    validate_sliding_window_shard_grid(shard_grid, is_block_sharded);
+
     auto core_id_to_noc_coords =
         [is_block_sharded, transpose_mcast, &device, num_cores_x](uint32_t core_id) -> CoreCoord {
         auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
