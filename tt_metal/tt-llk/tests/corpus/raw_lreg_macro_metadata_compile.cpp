@@ -71,6 +71,22 @@ static_assert(ckernel::raw_lreg_effect::write(TT_OP(0x93, 0)) == 0xffu);
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPCONFIG(0, 2, 1)) == 0x01u);
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPCONFIG(0, 4, 1)) == 0x00u);
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPCONFIG(0, 4, 0)) == 0x01u);
+// Opcodes outside this architecture's SFPU range fail the gate, and an opcode
+// the decoder does not model reports every LREG rather than none.
+#if defined(TEST_WH)
+static_assert(ckernel::raw_lreg_effect::supported(TT_OP(0x95, 0)));
+static_assert(!ckernel::raw_lreg_effect::supported(TT_OP(0x96, 0)));
+#else
+static_assert(ckernel::raw_lreg_effect::supported(TT_OP(0x99, 0)));
+#endif
+static_assert(!ckernel::raw_lreg_effect::supported(TT_OP(0x6f, 0)));
+static_assert(!ckernel::raw_lreg_effect::supported(TT_OP(0x9a, 0)));
+static_assert(ckernel::raw_lreg_effect::read(TT_OP(0x9a, 0)) == 0xffu);
+static_assert(ckernel::raw_lreg_effect::write(TT_OP(0x9a, 0)) == 0xffu);
+static_assert(ckernel::raw_lreg_effect::read(TT_OP(0x8f, 0)) == 0x00u);
+static_assert(ckernel::raw_lreg_effect::write(TT_OP(0x8f, 0)) == 0x00u);
+static_assert(ckernel::raw_lreg_effect::write(TT_OP(0x72, 0)) == 0x00u);
+static_assert(ckernel::raw_lreg_effect::write(TT_OP(0x91, 0)) == 0x00u);
 #if defined(TEST_QSR)
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSETCC(0, 2, 0)) == 0x04u);
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSETCC(1, 2, 1)) == 0x00u);

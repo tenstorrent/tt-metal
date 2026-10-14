@@ -47,7 +47,13 @@ constexpr bool supported(unsigned x) {
     // Sign retention (4) and indirect destination (8) are independent flags.
     // The ISA admits 0,2,3,4,6,7,A,E; all other modifier values are reserved.
     if (op(x) == 0x95) return (0x44ddu & (1u << mod(x))) != 0;
+    // Each architecture's assembly.yaml defines every SFPU opcode in this
+    // range; WH stops at SFPLUTFP32.
+#if defined(TT_LLK_SFPU_ARCH_WH)
+    return op(x) >= 0x70 && op(x) <= 0x95;
+#else
     return op(x) >= 0x70 && op(x) <= 0x99;
+#endif
 }
 constexpr unsigned math_r(unsigned x, bool has_c = true) {
     unsigned r = bit(a(x)) | bit(b(x)) | (has_c ? bit(c(x)) : 0u);
@@ -118,7 +124,10 @@ constexpr unsigned read(unsigned x) {
 #else
             return bit(cc);
 #endif
-        default: return 0;
+        // CC stack, lane-enable and NOP instructions name no LREG.
+        case 0x87: case 0x88: case 0x8a: case 0x8b: case 0x8f: return 0;
+        // An opcode without a model must not yield an empty mask.
+        default: return 0xff;
     }
 }
 constexpr unsigned write(unsigned x) {
@@ -139,7 +148,10 @@ constexpr unsigned write(unsigned x) {
         case 0x94: return shft2_w(x);
         case 0x95: return (m & 8) ? 0xff : bit(dd);
         case 0x96: case 0x97: return (m & 8) ? bit(dd) : 0u;
-        default: return 0;
+        // Stores, CC updates and SFPCONFIG write no LREG in 0..7.
+        case 0x72: case 0x7b: case 0x87: case 0x88: case 0x8a: case 0x8b:
+        case 0x8f: case 0x91: return 0;
+        default: return 0xff;
     }
 }
 // Raw instructions execute under externally managed lane predicates. The
