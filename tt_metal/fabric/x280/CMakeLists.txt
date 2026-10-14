@@ -172,6 +172,9 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/src/device
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
 )
+# Device-side executables default to the images this build produces.
+target_compile_definitions(x280_device INTERFACE X280_IMAGE_DIR="${X280_IMAGE_DIR}")
+add_dependencies(x280_device x280_images)
 
 set(X280_TEST_OUTPUT_DIR "${PROJECT_BINARY_DIR}/test/tt_metal/x280")
 
@@ -231,9 +234,6 @@ function(_x280_device_test name)
             RUNTIME_OUTPUT_DIRECTORY
                 ${X280_TEST_OUTPUT_DIR}
     )
-    # The tests default to the images this build produces.
-    target_compile_definitions(${name} PRIVATE X280_IMAGE_DIR="${X280_IMAGE_DIR}")
-    add_dependencies(${name} x280_images)
 endfunction()
 
 _x280_device_test(x280_runtime_device_tests
@@ -251,8 +251,7 @@ _x280_device_test(x280_pll_test tests/device/test_x280_pll_hw.cpp)
 # Mock-cluster runtime root for the coordinate tests. Mock mode reads the SoC descriptor YAML, and
 # blackhole_140_arch.yaml lists the L2CPU tiles under router_only, so the tests run on an overlay
 # of this tree whose descriptor names them; the source tree is untouched.
-set(X280_COORDINATE_RUNTIME_ROOT "${CMAKE_CURRENT_BINARY_DIR}/coordinate-test-runtime")
-set(_coord_root "${X280_COORDINATE_RUNTIME_ROOT}")
+set(_coord_root "${CMAKE_CURRENT_BINARY_DIR}/coordinate-test-runtime")
 file(MAKE_DIRECTORY "${_coord_root}/tt_metal/soc_descriptors")
 foreach(_item runtime tt_stl .cpmcache)
     file(
@@ -340,9 +339,6 @@ target_link_libraries(
         x280_device
         TT::Metalium
 )
-# The resident-idle image defaults to the one this build produces.
-target_compile_definitions(x280_runtime_cli PRIVATE X280_IMAGE_DIR="${X280_IMAGE_DIR}")
-add_dependencies(x280_runtime_cli x280_images)
 set_target_properties(
     x280_runtime_cli
     PROPERTIES

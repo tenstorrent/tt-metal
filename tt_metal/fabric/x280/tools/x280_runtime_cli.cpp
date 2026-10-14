@@ -301,13 +301,9 @@ bool parse(int argc, char** argv, Options& options) {
     }
 
     if (options.image_path.empty()) {
-        // The component hard-codes no build-tree location, so resolving a
-        // default is the driver's job.
-        if (const char* from_env = std::getenv(kImageEnvVar); from_env != nullptr && *from_env != '\0') {
-            options.image_path = from_env;
-        } else {
-            options.image_path = kDefaultIdleImage;
-        }
+        // The component hard-codes no build-tree location; this driver defaults to its own build's.
+        const char* from_env = std::getenv(kImageEnvVar);
+        options.image_path = (from_env != nullptr && *from_env != '\0') ? from_env : kDefaultIdleImage;
     }
     if (options.lim_ways_specified && options.pinned_input != PinnedInputOperation::None) {
         std::fprintf(

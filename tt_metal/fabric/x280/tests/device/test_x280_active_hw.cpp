@@ -60,14 +60,12 @@ std::vector<std::string> split_image_list(const std::string& list) {
 std::vector<std::string> images_from_env() {
     const char* many = std::getenv("X280_ACTIVE_FW_IMAGES");
     const char* one = std::getenv("X280_ACTIVE_FW_IMAGE");
-    std::string list;
+    std::string list = std::string(X280_IMAGE_DIR) + "/firmware.bin:" +
+                       x280::test::test_image("X280_ATOMIC_BENCH_FW_IMAGE", "firmware-atomic-bench.bin");
     if (many != nullptr) {
         list = many;
     } else if (one != nullptr) {
         list = one;
-    } else {
-        list = x280::test::test_image("X280_ACTIVE_FW_IMAGE", "firmware.bin") + ":" +
-               x280::test::test_image("X280_ATOMIC_BENCH_FW_IMAGE", "firmware-atomic-bench.bin");
     }
 
     std::vector<std::string> images;
@@ -259,7 +257,7 @@ TEST(X280ActiveContractImages, EveryRequestedImageResolves) {
     const char* list = std::getenv("X280_ACTIVE_FW_IMAGES");
     if (list == nullptr) {
         GTEST_SKIP() << "X280_ACTIVE_FW_IMAGES unset: skipping image-resolution guard (X280ActiveContract may still "
-                        "run via X280_ACTIVE_FW_IMAGE fallback)";
+                        "run via the X280_ACTIVE_FW_IMAGE fallback or the build's images)";
     }
     const auto requested = split_image_list(list);
     if (requested.empty()) {
