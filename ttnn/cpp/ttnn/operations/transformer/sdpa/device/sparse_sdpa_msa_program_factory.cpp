@@ -6,7 +6,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <array>
@@ -249,7 +248,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
     auto [math_fidelity, math_approx, fp32_acc, packer_l1_acc, dst_full_sync] =
-        get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), attrs.compute_kernel_config);
+        get_compute_kernel_config_args(t.q.device()->arch(), attrs.compute_kernel_config);
     (void)packer_l1_acc;
 
     // Query sub-blocking: qsb tile rows must fit in DEST.

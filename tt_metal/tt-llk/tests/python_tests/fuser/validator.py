@@ -159,6 +159,13 @@ def require_src_a_tiles(*shapes):
     )
 
 
+def require_src_b_tiles(*shapes):
+    return reject(
+        lambda s, a, b: b is not None and b.tile_shape.tile_dims not in shapes,
+        f"Only {format_tile_dims(shapes)} in1 tiles are supported for this operation",
+    )
+
+
 def require_dest_tiles(*shapes):
     return reject(
         lambda s, a, b: s._dest_tile_shape is None
@@ -546,6 +553,7 @@ class FpuMathSchemaBase(BaseModel):
     _unpacker_map: ClassVar[dict] = {}
     _output_dims: ClassVar[dict] = {}
     _dest_tile_shape: Optional[TileShape] = None
+    _dest_acc: bool = False
 
     type: Literal["Fpu"]
     operation: str
@@ -836,6 +844,7 @@ class OperationSchemaBase(BaseModel):
         for m in self.math:
             if isinstance(m, FpuMathSchemaBase):
                 m._dest_tile_shape = tile_shape
+                m._dest_acc = dest_acc
 
         pack_nodes = []
         for i, p in enumerate(self.pack):

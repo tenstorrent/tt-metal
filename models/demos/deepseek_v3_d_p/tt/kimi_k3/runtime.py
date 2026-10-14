@@ -11,8 +11,9 @@
 * the KDA carries must be zeroed at the head of a request. A carry summarises the whole prefix
   behind it, so leaving the previous request's carry in place is not a small error — it conditions
   every token of the new one on text it never saw; and
-* both chunk bounds must be 32-token aligned for KDA. Host bounds are checked before execution;
-  device-only trace metadata must satisfy the same contract on every replay.
+* the chunk start must be 32-token aligned for KDA; the end may be any real length. Host bounds
+  are checked before execution; device-only trace metadata must satisfy the same contract on
+  every replay.
 """
 
 from __future__ import annotations
@@ -287,7 +288,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         bound = inspect.signature(TtPrefillRuntime.prefill_chunk).bind_partial(self, *args, **kwargs)
         actual_start = bound.arguments.get("actual_start")
         # Validate before resetting carries or replaying a trace. Device-only
-        # metadata must satisfy the same aligned, nonempty-interval contract.
+        # metadata must satisfy the same aligned-start, nonempty-interval contract.
         validate_kda_bounds(actual_start, bound.arguments.get("actual_end"))
         if actual_start == 0:
             states = getattr(self.model, "kda_states", None)

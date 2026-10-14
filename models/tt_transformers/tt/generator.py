@@ -2700,44 +2700,33 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 "submission; restart the model runner before sampling again"
             )
 
-    def _sample_decode(
+    def _get_sampling_dp(self):
+        # Sampling groups can follow mesh rows even when data_parallel is 1.
+        sampling_dp_values = [getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel)]
+        assert (
+            len(set(sampling_dp_values)) == 1
+        ), f"All model instances must have the same sampling_dp, got {sampling_dp_values}"
+        # Data parallelism and row-sharded sampling are mutually exclusive.
+        return max(self.data_parallel, sampling_dp_values[0])
+
+    def _prepare_decode_sampling_state(
         self,
-        tt_logits,
         sampling_params,
         *,
         start_pos,
         prompt_tokens,
         output_tokens,
         slot_remap,
-        enable_trace,
-        skip_precompile,
         reload_inputs,
         reload_sampling_params,
         reset_sampling_state,
-        grammar_bitmask,
     ):
-        # sampling_dp may differ from data_parallel for models that internally
-        # shard users across mesh rows (users_row_sharded) — each row samples
-        # 32 users independently, so sampling params must be chunked by the
-        # number of rows even though data_parallel=1 for the forward pass.
-        sampling_dp_values = [getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel)]
-        assert (
-            len(set(sampling_dp_values)) == 1
-        ), f"All model instances must have the same sampling_dp, got {sampling_dp_values}"
+        """Apply decode sampling commands without sampling a token.
 
-        # NOTE: This assumes data_parallel and sampling_dp are mutually exclusive
-        # (one is always 1). If a future model needs both DP>1 and row-sharded
-        # sampling, this should become data_parallel * sampling_dp_values[0].
-        sampling_dp = max(self.data_parallel, sampling_dp_values[0])
-        if grammar_bitmask is not None and sampling_dp != self.data_parallel:
-            raise ValueError(
-                "device grammar sampling does not support row-sharded sampling: "
-                f"data_parallel={self.data_parallel}, sampling_dp={sampling_dp}"
-            )
-
-        if grammar_bitmask is not None and self._sampling_params_enable_logprobs(sampling_params):
-            raise ValueError("device grammar sampling does not support logprobs; sample these requests on host")
-
+        start_pos contains one position tensor per model. The return value
+        contains each model's active seed slots for the next actual sample.
+        """
+        sampling_dp = self._get_sampling_dp()
         sampling_params_list = chunk_sampling_params(sampling_params, sampling_dp)
         prompt_chunks = (
             torch.chunk(prompt_tokens, sampling_dp, 0) if prompt_tokens is not None else [None] * sampling_dp
@@ -2745,35 +2734,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         output_chunks = (
             torch.chunk(output_tokens, sampling_dp, 0) if output_tokens is not None else [None] * sampling_dp
         )
-        grammar_chunks: list[torch.Tensor | None] = [None] * self.data_parallel
-        if grammar_bitmask is not None:
-            if not isinstance(grammar_bitmask, torch.Tensor):
-                raise TypeError("grammar_bitmask must be a torch.Tensor, got " f"{type(grammar_bitmask).__name__}")
-            if self.data_parallel == 1:
-                grammar_chunks = [grammar_bitmask]
-            else:
-                per_model_batch = [int(self.model_args[i].max_batch_size) for i in range(self.data_parallel)]
-                expected_rows = sum(per_model_batch)
-                if grammar_bitmask.shape[0] != expected_rows:
-                    raise ValueError(
-                        "multi-model grammar_bitmask must cover every local "
-                        f"slot: got rows={grammar_bitmask.shape[0]}, "
-                        f"per_model_batch={per_model_batch}"
-                    )
-                offset = 0
-                grammar_chunks = []
-                for batch_size in per_model_batch:
-                    grammar_chunks.append(grammar_bitmask[offset : offset + batch_size])
-                    offset += batch_size
-
-        if grammar_bitmask is not None:
-            for i, grammar_chunk in enumerate(grammar_chunks):
-                sampling_module = getattr(self.model[i], "sampling", None)
-                if sampling_module is None:
-                    raise RuntimeError(f"model {i} received a grammar bitmask without a device sampler")
-                sampling_module.validate_grammar_bitmask(grammar_chunk)
 
         self._apply_sampling_slot_remap(slot_remap)
+        active_seed_slots_per_model = []
         for i in range(self.data_parallel):
             sampling_module = getattr(self.model[i], "sampling", None)
             assert sampling_module is not None, "Sampling module not found in model for sampling on device."
@@ -2810,20 +2773,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # remap, so retire seed state that no longer belongs to a live row.
             if active_seed_slots is not None:
                 sampling_module.seed_manager.deactivate_slots_except(active_seed_slots)
-            # Register each request's explicit seed into the seed manager and
-            # tie its RNG counter to the absolute decode position before
-            # advancing. Without registration the per-request seed never reaches
-            # the device (the seed manager stays unseeded), so sampling falls
-            # back to per-slot boot RNG and two requests sharing a seed diverge
-            # (this regressed when #45166 dropped these calls from the decode
-            # flow). Position alignment then keeps the stream reproducible even
-            # when vLLM evicts a running request and re-admits it in a different
-            # slot under async scheduling. Mirrors the llama3_70b_galaxy decode path.
-            #
-            # Align only from a trustworthy position (#51981): the counter
-            # self-advances per token, so re-anchoring to a lagging host start_pos
-            # is what breaks reproducibility. Trustworthy means the caller
-            # commanded reload_inputs, or the slot was explicitly reset/reseeded.
+            # Register request seeds so SeedManager uses the requested seeded stream instead of unseeded RNG.
+            # Host positions may realign RNG counters only when reload_inputs
+            # makes positions authoritative or a command resets the seed slot.
             if active_seed_slots is not None and (reload_inputs or reload_sampling_params or reset_sampling_state):
                 seed_bs = sampling_module.tt_sampling.max_batch_size
                 if len(model_chunks) == 1:
@@ -2845,12 +2797,83 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     )
                 else:
                     reseeded_slots = []
+                # A lagging start_pos would rewind RNG counters and make seeded output timing-dependent.
                 align_slots = active_seed_slots if reload_inputs else reseeded_slots
                 if align_slots:
                     sampling_module.seed_manager.align_seed_counters_to_positions(
                         seed_values, align_slots, start_values
                     )
-            sampling_module.seed_manager.get_new_values(active_seed_slots)
+            active_seed_slots_per_model.append(active_seed_slots)
+
+        return active_seed_slots_per_model
+
+    def _sample_decode(
+        self,
+        tt_logits,
+        sampling_params,
+        *,
+        start_pos,
+        prompt_tokens,
+        output_tokens,
+        slot_remap,
+        enable_trace,
+        skip_precompile,
+        reload_inputs,
+        reload_sampling_params,
+        reset_sampling_state,
+        grammar_bitmask,
+    ):
+        if grammar_bitmask is not None:
+            sampling_dp = self._get_sampling_dp()
+            if sampling_dp != self.data_parallel:
+                raise ValueError(
+                    "device grammar sampling does not support row-sharded sampling: "
+                    f"data_parallel={self.data_parallel}, sampling_dp={sampling_dp}"
+                )
+
+        if grammar_bitmask is not None and self._sampling_params_enable_logprobs(sampling_params):
+            raise ValueError("device grammar sampling does not support logprobs; sample these requests on host")
+
+        grammar_chunks: list[torch.Tensor | None] = [None] * self.data_parallel
+        if grammar_bitmask is not None:
+            if not isinstance(grammar_bitmask, torch.Tensor):
+                raise TypeError("grammar_bitmask must be a torch.Tensor, got " f"{type(grammar_bitmask).__name__}")
+            if self.data_parallel == 1:
+                grammar_chunks = [grammar_bitmask]
+            else:
+                per_model_batch = [int(self.model_args[i].max_batch_size) for i in range(self.data_parallel)]
+                expected_rows = sum(per_model_batch)
+                if grammar_bitmask.shape[0] != expected_rows:
+                    raise ValueError(
+                        "multi-model grammar_bitmask must cover every local "
+                        f"slot: got rows={grammar_bitmask.shape[0]}, "
+                        f"per_model_batch={per_model_batch}"
+                    )
+                offset = 0
+                grammar_chunks = []
+                for batch_size in per_model_batch:
+                    grammar_chunks.append(grammar_bitmask[offset : offset + batch_size])
+                    offset += batch_size
+
+        if grammar_bitmask is not None:
+            for i, grammar_chunk in enumerate(grammar_chunks):
+                sampling_module = getattr(self.model[i], "sampling", None)
+                if sampling_module is None:
+                    raise RuntimeError(f"model {i} received a grammar bitmask without a device sampler")
+                sampling_module.validate_grammar_bitmask(grammar_chunk)
+
+        active_seed_slots_per_model = self._prepare_decode_sampling_state(
+            sampling_params,
+            start_pos=start_pos,
+            prompt_tokens=prompt_tokens,
+            output_tokens=output_tokens,
+            slot_remap=slot_remap,
+            reload_inputs=reload_inputs,
+            reload_sampling_params=reload_sampling_params,
+            reset_sampling_state=reset_sampling_state,
+        )
+        for model, active_seed_slots in zip(self.model, active_seed_slots_per_model):
+            model.sampling.seed_manager.get_new_values(active_seed_slots)
 
         sampled_outputs = []
         for i in range(self.data_parallel):
