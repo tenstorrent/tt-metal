@@ -547,7 +547,7 @@ def assert_matches_reference(
         natural_output[:, : expected_output.shape[1]],
         name=f"{label} output",
         pcc_threshold=pcc_threshold,
-        rmse_threshold=0.05,
+        nrmse_threshold=0.05,
         linf_threshold=0.25,
     )
 
@@ -563,7 +563,7 @@ def assert_matches_reference(
             reconstruct_state_at_sp_rank(state.recurrent, mesh_device, sp_axis, tp_axis, sp_rank),
             name=f"{label} sp_rank={sp_rank} recurrent",
             pcc_threshold=pcc_threshold,
-            rmse_threshold=0.05,
+            nrmse_threshold=0.05,
             linf_threshold=state_linf_threshold,
         )
         assert_accurate(
@@ -571,6 +571,6 @@ def assert_matches_reference(
             reconstruct_convolution_at_sp_rank(state.convolution, mesh_device, sp_axis, tp_axis, sp_rank, local_width),
             name=f"{label} sp_rank={sp_rank} convolution",
             pcc_threshold=pcc_threshold,
-            rmse_threshold=0.05,
+            nrmse_threshold=0.05,
             linf_threshold=0.1,
         )

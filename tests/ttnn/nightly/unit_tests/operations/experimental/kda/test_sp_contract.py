@@ -195,7 +195,7 @@ def test_sp_summary_prefix_and_scan(mesh_device: ttnn.MeshDevice, axis: int, gro
                     expected,
                     actual,
                     name=f"SP {name} rank={rank} actual_start={actual_start_value}",
-                    rmse_threshold=0.04,
+                    nrmse_threshold=0.04,
                 )
         _assert_immutable(owned, before)
         current = [*owned, *summaries, entries, output, final]

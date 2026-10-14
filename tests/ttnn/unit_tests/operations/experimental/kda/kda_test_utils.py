@@ -145,24 +145,26 @@ def assert_accurate(
     *,
     name: str = "accuracy",
     pcc_threshold: float = 0.999,
-    rmse_threshold: float | None = None,
+    nrmse_threshold: float | None = None,
+    nrmse_keep_dims: Sequence[int] = (),
     linf_threshold: float | None = None,
 ) -> float:
-    """Require matching metadata, finite tensors, PCC, relative RMSE and relative L-inf.
+    """Require matching metadata, finite tensors, PCC, NRMSE and relative L-inf.
 
-    Three metrics because they fail differently. PCC is a correlation and RMSE is a
-    mean, so both average over the whole tensor: eleven wrong rows in 1280 held PCC
-    at 0.9996 and lifted relative RMSE only from 1.3e-2 to 1.6e-2, inside the BF16
-    output's own noise. Relative L-inf does not average, and on the same data it
-    separated cleanly -- 1.6e-2 when correct against 1.3e-1 to 2.7e-1 when a few
-    rows were fed the wrong carry. That is the failure mode this layer keeps
-    producing, so the peak matters more than the mean.
+    PCC and NRMSE fail differently. PCC is a correlation: it catches a structurally wrong
+    result but stays near 1 under a uniform scale error (a state decayed 5% too much keeps
+    PCC 1.0). NRMSE (``nrmse``) measures the error's energy against the expected signal, so
+    it sees scale errors and precision regressions; its threshold is measured for the tensor
+    at hand. With ``nrmse_keep_dims`` the gate applies to the worst slice (e.g. per head of a
+    recurrent state), so one drifting slice is not averaged away.
 
-    Relative L-inf is always reported but gated only when ``linf_threshold`` is
-    given, because a peak divided by a whole-tensor RMS
-    depends on how concentrated the signal is: correct runs here span 1.4e-2 on a
-    convolution carry to 1.6e+0 on a recurrent state, so no single bound is both
-    safe and useful. Pass the clean value you measured for the tensor at hand.
+    Both still average: eleven wrong rows in 1280 held PCC at 0.9996 and lifted NRMSE only
+    from 1.3e-2 to 1.6e-2, inside the BF16 output's own noise. Relative L-inf does not
+    average, and on the same data it separated cleanly -- 1.6e-2 when correct against
+    1.3e-1 to 2.7e-1 when a few rows were fed the wrong carry. It is always reported but
+    gated only when ``linf_threshold`` is given, because a peak divided by a whole-tensor
+    RMS depends on how concentrated the signal is: correct runs here span 1.4e-2 on a
+    convolution carry to 1.6e+0 on a recurrent state. Pass the clean value you measured.
     """
     failures = []
     if expected.shape != actual.shape:
@@ -177,17 +179,20 @@ def assert_accurate(
         raise AssertionError("\n".join(failures))
 
     pcc = _pcc(expected, actual)
-    rmse = float(nrmse(expected, actual)) if expected.numel() else 0.0
+    per_slice = nrmse(expected, actual, nrmse_keep_dims) if expected.numel() else torch.zeros(())
+    worst_slice = int(per_slice.argmax()) if per_slice.numel() > 1 else None
+    error = float(per_slice.max())
     max_abs = float((expected.float() - actual.float()).abs().max()) if expected.numel() else 0.0
     scale = float(expected.float().pow(2).mean().sqrt()) if expected.numel() else 0.0
     linf = max_abs / scale if scale > 0 else max_abs
     print(expected_summary)
     print(actual_summary)
-    print(f"{name}: PCC={pcc:.6f}, rel_RMSE={rmse:.3e}, rel_Linf={linf:.3e}, max_abs={max_abs:.6e}")
+    worst = "" if worst_slice is None else f" (worst slice {worst_slice} over dims {tuple(nrmse_keep_dims)})"
+    print(f"{name}: PCC={pcc:.6f}, NRMSE={error:.3e}{worst}, rel_Linf={linf:.3e}, max_abs={max_abs:.6e}")
     if pcc < pcc_threshold:
         raise AssertionError(f"{name} PCC {pcc:.6f} < {pcc_threshold}")
-    if rmse_threshold is not None and rmse > rmse_threshold:
-        raise AssertionError(f"{name} relative RMSE {rmse:.3e} > {rmse_threshold:.3e}")
+    if nrmse_threshold is not None and error > nrmse_threshold:
+        raise AssertionError(f"{name} NRMSE {error:.3e}{worst} > {nrmse_threshold:.3e}")
     if linf_threshold is not None and linf > linf_threshold:
         raise AssertionError(
             f"{name} relative L-inf {linf:.3e} > {linf_threshold:.3e} (max_abs {max_abs:.3e}) -- "

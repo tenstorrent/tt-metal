@@ -205,21 +205,31 @@ def test_collect_accuracy_and_determinism_reports_any_output_mismatch(fake_devic
     assert marker.item() == 1
 
 
-def test_rmse_gating_is_opt_in(expect_error) -> None:
+def test_nrmse_gate_fails_a_scale_error_that_passes_pcc(expect_error) -> None:
     expected = torch.arange(1024, dtype=torch.float32)
     actual = expected * 2
-    assert_accurate(expected, actual)
-    with expect_error(AssertionError, "relative RMSE"):
-        assert_accurate(expected, actual, rmse_threshold=0.05)
+    assert_accurate(expected, actual, pcc_threshold=0.999999)
+    with expect_error(AssertionError, "NRMSE 1.000e\\+00 > 5.000e-02"):
+        assert_accurate(expected, actual, nrmse_threshold=0.05)
+
+
+def test_nrmse_keep_dims_gates_the_worst_slice(expect_error) -> None:
+    expected = torch.ones(8, 64)
+    expected[:, ::2] = -1.0  # every head the same pattern of +-1, norm 8
+    actual = expected.clone()
+    actual[5] *= 1.2  # one head 20% off: whole-tensor NRMSE 0.2 * 8 / sqrt(8 * 64) = 0.0707
+    assert_accurate(expected, actual, pcc_threshold=0.99, nrmse_threshold=0.1)
+    with expect_error(AssertionError, "NRMSE 2.000e-01 \\(worst slice 5 over dims \\(0,\\)\\)"):
+        assert_accurate(expected, actual, pcc_threshold=0.99, nrmse_threshold=0.1, nrmse_keep_dims=(0,))
 
 
 def test_offset_peak_gate_detects_local_carry_fault(expect_error) -> None:
     expected = torch.linspace(-1, 1, 1280 * 32).reshape(1280, 32)
     actual = expected.clone()
     actual[640, :] += 0.2
-    assert_accurate(expected, actual, pcc_threshold=0.999, rmse_threshold=0.05)
+    assert_accurate(expected, actual, pcc_threshold=0.999, nrmse_threshold=0.05)
     with expect_error(AssertionError, "relative L-inf"):
-        assert_accurate(expected, actual, pcc_threshold=0.999, rmse_threshold=0.05, linf_threshold=0.25)
+        assert_accurate(expected, actual, pcc_threshold=0.999, nrmse_threshold=0.05, linf_threshold=0.25)
 
 
 def test_nrmse_is_error_norm_over_expected_norm() -> None:
