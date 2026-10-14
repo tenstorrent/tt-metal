@@ -608,6 +608,17 @@ public:
             } else {
                 results_out[logical_core] = std::vector<uint32_t>(num_elements, 0);
             }
+            if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+                // Slow dispatch (e.g. Fabric 2.0 DRISC kernels): no FD command queue, read L1 directly.
+                auto& v = results_out.at(logical_core);
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    logical_core,
+                    address,
+                    std::span<uint8_t>(reinterpret_cast<uint8_t*>(v.data()), size_bytes),
+                    CoreType::ETH);
+                continue;
+            }
             dynamic_cast<tt::tt_metal::distributed::FDMeshCommandQueue&>(mesh_device_->mesh_command_queue())
                 .enqueue_read_shard_from_core(
                     tt::tt_metal::distributed::DeviceMemoryAddress{device_coord, virtual_core, address},
@@ -627,6 +638,11 @@ public:
         auto* device = mesh_device_->impl().get_device(device_coord);
         for (const auto& logical_core : cores) {
             auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
+            if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+                tt::tt_metal::detail::WriteToDeviceL1(
+                    device, logical_core, address, std::span<const uint8_t>(data.data(), data.size()), CoreType::ETH);
+                continue;
+            }
 
             dynamic_cast<tt::tt_metal::distributed::FDMeshCommandQueue&>(mesh_device_->mesh_command_queue())
                 .enqueue_write_shard_to_core(
