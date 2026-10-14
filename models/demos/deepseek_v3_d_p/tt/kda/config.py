@@ -30,6 +30,15 @@ KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
 # The decay gate stays in interleaved L1 from its projection until chunk preparation has read it when its share of
 # each worker core fits this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
 KDA_DECAY_L1_BYTES_PER_CORE = 48 * 1024
+# The gated norm's output stays in interleaved L1 until the output projection reads it when each core's share fits
+# this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
+KDA_NORM_OUTPUT_L1_BYTES_PER_CORE = 48 * 1024
+# The output projection's partial sums stay in interleaved L1 until the TP reduce-scatter reads them when each core's
+# share fits this budget (75 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
+KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE = 96 * 1024
+# The gathered transforms and the chain's FP32 entry state and final carry stay in interleaved L1 when each core's share
+# fits this budget (131 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
+KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE = 160 * 1024
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
