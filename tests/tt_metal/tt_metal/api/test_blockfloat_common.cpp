@@ -118,16 +118,16 @@ TEST(BlockfloatCommonTests, ExpAValuesBelowMinNormalFlushToZero) {
         }
     }
 
-    EXPECT_EQ(convert_u32_to_bfp<tt::DataFormat::Bfp4, false>(kBelowMinNormalBits, 0, true), 0u);
-    EXPECT_EQ(convert_u32_to_bfp<tt::DataFormat::Bfp2, false>(kBelowMinNormalBits, 0, true), 0u);
+    EXPECT_EQ((convert_u32_to_bfp<tt::DataFormat::Bfp4, false>(kBelowMinNormalBits, 0, true)), 0u);
+    EXPECT_EQ((convert_u32_to_bfp<tt::DataFormat::Bfp2, false>(kBelowMinNormalBits, 0, true)), 0u);
 
     constexpr uint32_t kMinNormalSharedExp = 1;
-    EXPECT_EQ(convert_u32_to_bfp<tt::DataFormat::Bfp8, false>(kMinNormalBits, kMinNormalSharedExp, true), 0x40u);
+    EXPECT_EQ((convert_u32_to_bfp<tt::DataFormat::Bfp8, false>(kMinNormalBits, kMinNormalSharedExp, true)), 0x40u);
     EXPECT_EQ(
-        convert_u32_to_bfp<tt::DataFormat::Bfp8, false>(kMinNormalBits | kSign, kMinNormalSharedExp, true), 0xc0u);
+        (convert_u32_to_bfp<tt::DataFormat::Bfp8, false>(kMinNormalBits | kSign, kMinNormalSharedExp, true)), 0xc0u);
     EXPECT_EQ(convert_bfp_to_u32(tt::DataFormat::Bfp8, 0x40, kMinNormalSharedExp, true), kMinNormalBits);
 
-    EXPECT_EQ(convert_u32_to_bfp<tt::DataFormat::Bfp8_b, false>(kBelowMinNormalBits, 112, false), 0x40u);
+    EXPECT_EQ((convert_u32_to_bfp<tt::DataFormat::Bfp8_b, false>(kBelowMinNormalBits, 112, false)), 0x40u);
 }
 
 // FP8_E4M3 is supported on Blackhole and Quasar but not Wormhole. Verify the arch guard in
