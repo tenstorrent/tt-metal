@@ -73,8 +73,41 @@ report page is only republished while you follow it here.
    (`$D export-policy <name> --version vN --as <name>-vN --description "..."`).
    For `blocked` or `error`, show the message and the last log lines from
    `$D status <name>`, and propose the fix.
+4. Last step of every campaign that produced a best branch (`finished`, or
+   stopped and then `finalize`d): publish a before/after explainer (next
+   section) and give the user its link.
 
 If the Monitor tool isn't available, refresh on request: `$D report` + republish.
+
+## Explain the result (before/after page)
+
+A plain-English, visual page that tells a reader who doesn't know the kernel
+how the op worked before, what `dream/<name>/best` changed, and why that
+helped. `explainer-example.html` next to this file is the reference: reuse
+its stylesheet (colors, light/dark tokens, lanes, bit rulers, tables) and its
+section order, and adapt the content.
+
+1. Read what changed, not just the score: the campaign's `brief.md`,
+   `git diff --stat <base> dream/<name>/best -- . ':!agent_orch'`, the
+   comments added in the diff (`git diff ... | grep -E '^\+\s*//'`), and the
+   best node's `reflection.md`. Check any claim about model usage in the code.
+2. Write `<scratchpad>/<name>-before-after.html` with:
+   - a header: op and branch, a title, and a lede with the headline result
+     (accuracy or speed before vs after, and its cost);
+   - what the op does, in plain words, and where it is used;
+   - the pipeline as two lanes, before and after, one card per step, marking
+     where precision or time was lost (orange) and where the fix applies (green);
+   - one diagram of the mechanism (e.g. bit rulers for precision, a timeline
+     for latency, a tiling/core grid for data movement);
+   - a worked example with real, computed numbers (run them in python; label
+     made-up inputs as illustrative);
+   - results per case from the campaign (before, after, time/slowdown), and
+     what is still not fixed and why;
+   - caveats for using it in the model (e.g. inputs it needs, paths it skips);
+   - a footer: branch, commit, attempt, files changed, campaign cost, the tests.
+3. Publish it with the Artifact tool (icon `diagram`, a one-sentence
+   description), give the user the link, summarize it in a few bullets, and say
+   it is private until shared.
 
 ## Manage
 

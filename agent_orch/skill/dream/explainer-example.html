@@ -1,0 +1,305 @@
+<title>Top-K Precision Fix</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: one reading column; the before/after pipeline is two side-by-side lanes that stack on phones; bit rulers drawn with CSS grids. */
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --fg: #19202b;
+  --muted: #5a6474;
+  --line: #d9dee6;
+  --accent: #2b55c7;
+  --kept: #0f8a72;
+  --kept-soft: #dcf2ec;
+  --lost: #c2410c;
+  --lost-soft: #fbe6da;
+  --tag: #7c4dbd;
+  --tag-soft: #ece3f8;
+  --exp: #8a94a6;
+  --exp-soft: #e6e9ef;
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11151c; --surface: #1a2029; --fg: #e5e9f0; --muted: #9aa4b5; --line: #2c3440;
+    --accent: #86a6ff; --kept: #4fd1b0; --kept-soft: #15332d; --lost: #ff9a62; --lost-soft: #3a2418;
+    --tag: #c3a2f2; --tag-soft: #2e2440; --exp: #7d8799; --exp-soft: #262d38;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11151c; --surface: #1a2029; --fg: #e5e9f0; --muted: #9aa4b5; --line: #2c3440;
+  --accent: #86a6ff; --kept: #4fd1b0; --kept-soft: #15332d; --lost: #ff9a62; --lost-soft: #3a2418;
+  --tag: #c3a2f2; --tag-soft: #2e2440; --exp: #7d8799; --exp-soft: #262d38;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 16px/1.6 var(--body); padding-inline: 16px; padding-block: 0 72px; }
+main { max-width: 880px; margin: 0 auto; }
+.prose { max-width: 66ch; }
+header { padding-block: 44px 8px; }
+.eyebrow { font: 600 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h1 { font: 800 clamp(30px, 5.4vw, 44px)/1.08 var(--display); margin: 12px 0 14px; letter-spacing: -.01em; text-wrap: balance; }
+h2 { font: 600 24px/1.25 var(--display); margin: 60px 0 12px; text-wrap: balance; }
+h3 { font: 600 16px/1.35 var(--body); margin: 0 0 4px; }
+p { margin: 0 0 14px; }
+.lede { font-size: 18px; color: var(--muted); }
+code, .mono { font-family: var(--mono); font-size: .9em; }
+code { background: var(--exp-soft); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.kept { color: var(--kept); font-weight: 600; }
+.lost { color: var(--lost); font-weight: 600; }
+
+/* what it does */
+.flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 22px 0 6px; }
+@media (max-width: 680px) { .flow { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.flow div { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px; min-width: 0; }
+.flow b { display: block; font: 600 22px/1.1 var(--display); color: var(--accent); margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+.flow span { font-size: 14px; color: var(--muted); }
+
+/* pipeline lanes */
+.lanes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; margin-top: 18px; }
+@media (max-width: 760px) { .lanes { grid-template-columns: minmax(0, 1fr); } }
+.lane { min-width: 0; }
+.lane > h3 { font: 600 13px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.step { position: relative; background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 6px; padding: 12px 14px; font-size: 14.5px; }
+.step + .step { margin-top: 18px; }
+.step + .step::before { content: ""; position: absolute; left: 22px; top: -19px; height: 18px; border-left: 2px dashed var(--line); }
+.step.bad { border-left-color: var(--lost); }
+.step.good { border-left-color: var(--kept); }
+.step.gone { opacity: .75; border-style: dashed; border-left-style: solid; }
+.step h4 { margin: 0 0 3px; font: 600 15px/1.35 var(--body); }
+.step p { margin: 0; color: var(--muted); }
+.pill { display: inline-block; font: 600 11px/1 var(--mono); padding: 4px 7px; border-radius: 999px; margin-top: 8px; margin-right: 4px; }
+.pill.lost { background: var(--lost-soft); color: var(--lost); }
+.pill.kept { background: var(--kept-soft); color: var(--kept); }
+.pill.tag { background: var(--tag-soft); color: var(--tag); }
+.pill.n { background: var(--exp-soft); color: var(--muted); }
+
+/* bit rulers */
+.ruler { margin: 22px 0; display: grid; gap: 18px; }
+.row { min-width: 0; }
+.row .label { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 14px; margin-bottom: 6px; }
+.row .label b { font-weight: 600; }
+.row .label span { color: var(--muted); }
+.bits { display: grid; grid-template-columns: repeat(32, minmax(0, 1fr)); gap: 2px; }
+.bits i { display: block; height: 22px; border-radius: 2px; }
+.b-s { background: var(--exp); }
+.b-e { background: var(--exp-soft); outline: 1px solid var(--exp); outline-offset: -1px; }
+.b-k { background: var(--kept); }
+.b-l { background: var(--lost-soft); outline: 1px dashed var(--lost); outline-offset: -1px; }
+.b-t { background: var(--tag); }
+.b-c { background: var(--tag-soft); outline: 1px solid var(--tag); outline-offset: -1px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--muted); margin-top: 4px; }
+.legend i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -1px; margin-right: 5px; }
+
+/* worked example */
+.example { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin: 18px 0; }
+.ex-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+@media (max-width: 560px) { .ex-grid { grid-template-columns: minmax(0, 1fr); } }
+.expert { border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
+.expert h4 { margin: 0 0 8px; font: 600 15px/1.2 var(--body); }
+.expert dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 14px; }
+.expert dt { color: var(--muted); }
+.expert dd { margin: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
+.verdicts { display: grid; gap: 8px; margin-top: 14px; font-size: 14.5px; }
+.verdict { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 10px; align-items: baseline; padding: 10px 12px; border-radius: 6px; }
+@media (max-width: 480px) { .verdict { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
+.verdict.lost { background: var(--lost-soft); color: var(--fg); font-weight: 400; }
+.verdict.kept { background: var(--kept-soft); color: var(--fg); font-weight: 400; }
+.verdict b { font-family: var(--mono); font-size: 13px; }
+.verdict.lost b { color: var(--lost); }
+.verdict.kept b { color: var(--kept); }
+
+/* results table */
+.tbl { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; margin: 14px 0; }
+table { border-collapse: collapse; width: 100%; background: var(--surface); font-size: 14.5px; font-variant-numeric: tabular-nums; }
+th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 12px/1.3 var(--mono); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); background: var(--bg); }
+td.num { text-align: right; font-family: var(--mono); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.chip { display: inline-block; font: 600 11px/1 var(--mono); padding: 4px 7px; border-radius: 999px; white-space: nowrap; }
+.chip.kept { background: var(--kept-soft); color: var(--kept); }
+.chip.lost { background: var(--lost-soft); color: var(--lost); }
+.note { border-left: 3px solid var(--lost); background: var(--lost-soft); padding: 14px 16px; border-radius: 0 8px 8px 0; margin: 18px 0; }
+.note p:last-child { margin: 0; }
+footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13.5px; }
+footer p { margin: 0 0 6px; }
+</style>
+
+<main>
+<header>
+  <div class="eyebrow">topk_large_indices · dream/topk-accuracy/best</div>
+  <h1>How the attention indexer picks keys, before and after the fix</h1>
+  <p class="lede prose">For each query, the sparse-attention indexer keeps the 1,536–2,048 highest-scoring keys out of tens of thousands. The top-k op was keeping a wrong key about 1 to 4 times in every 1,000 picks. The fix lets the op read 32-bit scores and focus its limited precision right at the cut-off line. Three of four test shapes now make zero wrong picks, and the fourth makes about one wrong pick in 250,000. The op is 4–5% slower.</p>
+</header>
+
+<section>
+  <h2>What the op does</h2>
+  <p class="prose"><code>ttnn.experimental.topk_large_indices</code> is used by the DeepSeek sparse-attention (DSA) indexer in <code>models/demos/deepseek_v3_d_p/tt/mla/indexer.py</code>. Each row is one query. Each column is the score of one past key. The op returns the positions of the k highest scores, highest first.</p>
+  <div class="flow" role="list">
+    <div role="listitem"><b>128–640</b><span>queries (rows) per chip</span></div>
+    <div role="listitem"><b>8K–64K</b><span>keys scored per query</span></div>
+    <div role="listitem"><b>1,536–2,048</b><span>keys kept per query (k)</span></div>
+    <div role="listitem"><b>1 op call</b><span>per indexer step</span></div>
+  </div>
+  <p class="prose">The work happens on each core in three stages:</p>
+  <ul class="prose">
+    <li><strong>Cut the row into windows</strong> of 2,048 columns (1,024 or 512 when k is smaller).</li>
+    <li><strong>Sort each window and merge it into a running "survivor" list</strong> of the best 2,048 seen so far. A hardware sorter on the vector unit does this.</li>
+    <li><strong>Write out the survivor's top k positions.</strong></li>
+  </ul>
+  <p class="prose">The sorter works on 32-bit words. Each word holds the score <em>and</em> the column number packed together, so the column number travels with the score through every sort and merge. That packing is the root of the problem: whatever bits the column number takes, the score loses.</p>
+  <p class="prose">A wrong pick happens when the k-th and (k+1)-th best scores are so close that the sorter sees them as equal. It then keeps whichever comes first, which may be the smaller one.</p>
+</section>
+
+<section>
+  <h2>The pipeline, step by step</h2>
+  <p class="prose">Orange marks a step where precision was thrown away. Green marks a step that now keeps it.</p>
+  <div class="lanes">
+    <div class="lane">
+      <h3>Before</h3>
+      <ol class="steps">
+        <li class="step bad">
+          <h4>Round the scores to bf16</h4>
+          <p>The indexer computes 32-bit scores, but the op accepted only bf16 (7 fraction bits). Many close scores became exactly equal before the op even started.</p>
+          <span class="pill lost">bf16 input only</span>
+        </li>
+        <li class="step bad">
+          <h4>Pack score + column number</h4>
+          <p>Upper 16 bits: the bf16 score. Lower 16 bits: the column number (5 bits of window number, 11 bits of position in the window).</p>
+          <span class="pill lost">7-bit score</span><span class="pill tag">16-bit column</span>
+        </li>
+        <li class="step bad">
+          <h4>Sort windows, merge into survivor</h4>
+          <p>Scores closer than about 1 part in 128 compare equal, and the first one seen wins.</p>
+          <span class="pill lost">≈1/128 resolution</span>
+        </li>
+        <li class="step">
+          <h4>Write the top k</h4>
+          <p>Whatever the survivor holds at ranks 0 … k−1, ties included.</p>
+        </li>
+      </ol>
+    </div>
+    <div class="lane">
+      <h3>After (32-bit input)</h3>
+      <ol class="steps">
+        <li class="step good">
+          <h4>Accept 32-bit scores</h4>
+          <p>The op now takes FLOAT32 input and copies each window into the vector registers at full 32-bit precision. BF16 input still runs the old code unchanged.</p>
+          <span class="pill kept">fp32 input</span>
+        </li>
+        <li class="step good">
+          <h4>Estimate the cut-off T</h4>
+          <p>From the first window's mean and spread, guess where the k-th best score will be. Sort that window, read the value at the matching rank, and use it as T. After 4 windows, refine T from the survivor list.</p>
+          <span class="pill kept">T ≈ k-th score</span>
+        </li>
+        <li class="step good">
+          <h4>Pack (score − T) + column number</h4>
+          <p>Subtracting the same T from every score keeps their order, but now scores near the cut-off are close to zero. The same few bits then measure tiny differences near the cut-off instead of the whole value. The window-number field also shrinks to just what the row needs: 1 bit for 2 windows, 5 bits for 32.</p>
+          <span class="pill kept">7–11 bits of x−T</span><span class="pill tag">12–16-bit column</span>
+        </li>
+        <li class="step good">
+          <h4>Sort windows, merge into survivor</h4>
+          <p>Same hardware sorter. Near the cut-off it now tells apart scores that differ by about 1 part in 100,000.</p>
+        </li>
+        <li class="step good">
+          <h4>Fix the boundary with exact values</h4>
+          <p>The writer core reads the exact 32-bit scores around rank k and re-sorts them. When k is below the window size (k = 1,536), it checks the 32 ranks around k. When k = 2,048 there are no spare ranks, so the writer (helped by the reader core on the last row) scans the row again for any dropped score that beats the weakest kept one. A deadline stops this scan before the busiest core finishes, so it never adds to the op's time.</p>
+          <span class="pill kept">exact boundary</span><span class="pill n">time-boxed</span>
+        </li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Where the bits go</h2>
+  <p class="prose">The sorter compares whole 32-bit words. In every packed word the column number takes the low bits, so the score keeps only what's left. The fix doesn't get many more bits; it <strong>moves the zero point</strong> so the bits it has are spent where they matter.</p>
+  <div class="ruler">
+    <div class="row">
+      <div class="label"><b>The indexer's 32-bit score</b><span>23 fraction bits</span></div>
+      <div class="bits" aria-label="1 sign bit, 8 exponent bits, 23 fraction bits"><i class="b-s"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i></div>
+    </div>
+    <div class="row">
+      <div class="label"><b>Before: bf16 score + column</b><span>7 fraction bits of x · about 1 part in 128</span></div>
+      <div class="bits" aria-label="sign, 8 exponent bits, 7 fraction bits of the bf16 score, 5 window bits, 11 position bits"><i class="b-s"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-l"></i><i class="b-l"></i><i class="b-l"></i><i class="b-l"></i><i class="b-l"></i><i class="b-l"></i><i class="b-l"></i><i class="b-c"></i><i class="b-c"></i><i class="b-c"></i><i class="b-c"></i><i class="b-c"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i></div>
+    </div>
+    <div class="row">
+      <div class="label"><b>After, a 32-window row (64K columns)</b><span>7 fraction bits of x − T</span></div>
+      <div class="bits" aria-label="sign, 8 exponent bits, 7 fraction bits of x minus T, 5 window bits, 11 position bits"><i class="b-s"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-c"></i><i class="b-c"></i><i class="b-c"></i><i class="b-c"></i><i class="b-c"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i></div>
+    </div>
+    <div class="row">
+      <div class="label"><b>After, a 2-window row (4K columns)</b><span>11 fraction bits of x − T</span></div>
+      <div class="bits" aria-label="sign, 8 exponent bits, 11 fraction bits of x minus T, 1 window bit, 11 position bits"><i class="b-s"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-e"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-k"></i><i class="b-c"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i><i class="b-t"></i></div>
+    </div>
+    <div class="legend">
+      <span><i class="b-s"></i>sign</span>
+      <span><i class="b-e"></i>exponent</span>
+      <span><i class="b-k"></i>score bits compared</span>
+      <span><i class="b-l"></i>score bits, but of a rounded bf16 value</span>
+      <span><i class="b-c"></i>window number</span>
+      <span><i class="b-t"></i>position in window</span>
+    </div>
+  </div>
+  <p class="prose">A float's fraction bits are relative to its own size. Seven bits on a score of 3.2 resolve steps of 0.016. Seven bits on a difference of 0.004 resolve steps of 0.00003. That's 500 times finer, from the same 7 bits.</p>
+
+  <h3>A near-tie, worked through (illustrative scores, exact float arithmetic)</h3>
+  <div class="example">
+    <p class="prose">Suppose the row's k-th best score is about 3.2. Two keys sit right at the line. Key A (column 900) should be kept; key B (column 300) should be dropped. Only one place is left.</p>
+    <div class="ex-grid">
+      <div class="expert">
+        <h4>Key A · column 900</h4>
+        <dl>
+          <dt>32-bit score</dt><dd>3.2046101</dd>
+          <dt>as bf16</dt><dd>3.203125</dd>
+          <dt>x − T (T = 3.2)</dt><dd>0.0046101</dd>
+          <dt>packed key, 7 bits</dt><dd>0.0046082</dd>
+        </dl>
+      </div>
+      <div class="expert">
+        <h4>Key B · column 300</h4>
+        <dl>
+          <dt>32-bit score</dt><dd>3.2041199</dd>
+          <dt>as bf16</dt><dd>3.203125</dd>
+          <dt>x − T (T = 3.2)</dt><dd>0.0041199</dd>
+          <dt>packed key, 7 bits</dt><dd>0.0041199</dd>
+        </dl>
+      </div>
+    </div>
+    <div class="verdicts">
+      <div class="verdict lost"><b>Before</b><span>Both become 3.203125 in bf16. The sorter sees a tie and keeps whichever came first, here B: a wrong pick.</span></div>
+      <div class="verdict kept"><b>After</b><span>The keys are 0.0046082 and 0.0041199, clearly different. A is kept, even though the key holds only 7 fraction bits.</span></div>
+    </div>
+    <p class="prose" style="margin:12px 0 0;color:var(--muted);font-size:14px">T only has to be close, not exact: shifting by any constant keeps the order. A rougher T just means slightly coarser steps near the line. The final exact-value pass then catches the rare tie that survives.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Results per shape</h2>
+  <p class="prose">The test feeds indexer-like 32-bit scores and averages over 10 timed calls. "Wrong picks" is the share of returned positions whose true score is below the row's true k-th score.</p>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>rows × columns</th><th>k</th><th>boundary fix</th><th class="num">wrong picks before</th><th class="num">after</th><th class="num">time before → after</th></tr></thead>
+      <tbody>
+        <tr><td>256 × 8,192</td><td>2,048</td><td>row rescan</td><td class="num">0.096%</td><td class="num"><span class="chip kept">0</span></td><td class="num">111 → 116 µs (+4.6%)</td></tr>
+        <tr><td>128 × 32,768</td><td>2,048</td><td>row rescan</td><td class="num">0.26%</td><td class="num"><span class="chip lost">≈0.0004%</span></td><td class="num">278 → 292 µs (+5.0%)</td></tr>
+        <tr><td>640 × 51,200</td><td>1,536</td><td>re-rank ±16 ranks</td><td class="num">0.38%</td><td class="num"><span class="chip kept">0</span></td><td class="num">1,285 → 1,344 µs (+4.6%)</td></tr>
+        <tr><td>128 × 65,536, first 40,960 valid</td><td>2,048</td><td>row rescan</td><td class="num">0.29%</td><td class="num"><span class="chip kept">0</span></td><td class="num">347 → 362 µs (+4.2%)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="prose">The one wrong pick left in the 32K case sits on the last row of the busiest cores. That row ends the kernel, so the time-boxed rescan never reaches it. Fixing it would mean saving compute time on those cores first, because the case already runs right at the 5% limit.</p>
+  <div class="note">
+    <p><strong>To benefit, the model has to pass 32-bit scores.</strong> BF16 input still behaves exactly as before. Also, the k = 2,048 row rescan runs only when the valid length is a plain number. When it comes from an on-device tensor (<code>valid_length_tensor</code>, which the indexer's metadata path uses), the op still gets the finer x − T keys but skips the exact rescan.</p>
+  </div>
+</section>
+
+<footer>
+  <p>Source: <code>dream/topk-accuracy/best</code> (commit 2dfda98ff20, attempt r05-b02-a03). 12 files changed, about 2,200 lines: the op's program factory and reader/compute/writer kernels, plus new Blackhole TopK XL LLK functions that only this op calls.</p>
+  <p>Campaign: 60 attempts, $178. Measured by <code>tests/ttnn/nightly/unit_tests/operations/experimental/test_topk_large_indices_accuracy.py</code>. All 154 BF16 exactness tests in <code>test_topk_large_indices.py</code> still pass.</p>
+</footer>
+</main>
