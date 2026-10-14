@@ -44,3 +44,14 @@
 - claim: Handoff: branch ssinghal/olmo3-galaxy-main @256d9b8 (local, not pushed). Goal: optimize batch-32 decode, no precision lowering (human decision 2026-10-13). Blocker before perf work: decode determinism gate fails (see entries above). Next: bisect nondeterminism (eager-vs-eager twice; force-argmax vs top-k sampling path; per-layer batch-identity probes across two runs), then Tracy op table via models/demos/olmo_galaxy/tests/test_olmo_decode_perf.py. Tools: ~/ssinghal/olmo3/run_demo.sh <tag> <cfg>, scripts/compare_decode_tokens.py.
 - evidence: -
 - paths: models/demos/olmo_galaxy
+
+## E261014-0357-b67
+- date: 2026-10-14T03:57:48
+- commit: d78f786419e
+- branch: ssinghal/olmo3-galaxy-main
+- host: UF-EV-A9-GWH02
+- track: correctness
+- status: inferred
+- claim: Interpretation (not proven): marginal hardware/ring-matmul behaviour on chip 14 (slot 22) cores (6,6)/(6,7) or their DRAM banks; effect is ~1 ulp on one column so output quality is unaffected but sampled continuations diverge near ties. Next: run same repro on a different Galaxy; try non-ring (DRAM-sharded) w1/w3 matmul; ask HW team if chip 14 is known flaky. Bitwise run-to-run gate cannot pass on this host until then; use per-step logit tolerance + GSM8K/AIME accuracy instead.
+- evidence: -
+- paths: models/demos/olmo_galaxy
