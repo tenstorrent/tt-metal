@@ -119,6 +119,9 @@ struct FlatRoutedExpertPlan {
     // dual (MIMO_FL_DRISC_DUAL, default): the DRISC slots keep their Tensix reader too; per call (every kernel the same
     // rule) counts <= SE_DRISC_MAXCNT stream from the DRAM cores, larger ones from the Tensix readers
     bool dual = false;
+    // x read once with forwarding (MIMO_FL_XFWD): the relays' forward ring (FW_SLOTS super-blocks at fw_off)
+    bool xfwd = false;
+    uint32_t fw_off = 0, fw_slots = 2;
     bool drisc_slot(uint32_t r) const { return drisc && r < drisc_n; }
     bool tensix_reader(uint32_t r) const { return !drisc_slot(r) || dual; }
     // down

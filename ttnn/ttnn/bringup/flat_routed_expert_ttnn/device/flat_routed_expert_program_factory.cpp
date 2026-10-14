@@ -130,8 +130,16 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     TT_FATAL(
         !x_once || (NR == 2 && p.nsg == 1 && !p.group_rect),
         "MIMO_FL_X1: two rectangles, one subgrid, no M-groups by rectangle only");
+    // MIMO_FL_X2=1: x read once with both multicasters: rectangle k's relays read and tilize the super-blocks g with
+    // g % 2 == k (helpers sharing them as before) and its primary multicasts each into BOTH rectangles, setting its own
+    // arrival counter (rectangle 0's XARR, rectangle 1's semaphore 3); the gate/up cores merge the two streams
+    // (se5_recv.cpp SE_X_RELAY2) and report their freed slots to both primaries.
+    const bool x_two = std::getenv("MIMO_FL_X2") && std::atoi(std::getenv("MIMO_FL_X2")) != 0;
+    TT_FATAL(
+        !x_two || (NR == 2 && p.nsg == 1 && !p.group_rect && !x_once),
+        "MIMO_FL_X2: two rectangles, one subgrid, no M-groups by rectangle, not with MIMO_FL_X1");
     auto word_rel = [&](uint32_t ci) {
-        if (x_once) {
+        if (x_once || x_two) {
             return 4 * ci;  // every gate/up core's word on rectangle 0's primary
         }
         const auto& rc = rect_cores[p.rect_of(p.gu[ci])];
@@ -583,19 +591,24 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                xrd_def);
         const auto ktz = cp("se11_tz.cpp", xrel, {0, 1, MT}, with(dyn_def, {{"SE_SBT", sbt}}));
         const std::vector<CoreCoord> prim(p.relays.begin(), p.relays.begin() + (x_once ? 1 : NR));
-        const auto kxm =
-            dm("se11_xmc.cpp",
-               prim,
-               DataMovementProcessor::RISCV_1,
-               x_mc_noc,
-               {1, MT, p.x_tile, p.x_slots, XARR, WORD, KBLK, E, p.nsb},
-               with(
-                   dyn_def,
-                   {{"SE_SBT", sbt},
-                    {"XMC_WHOLE_SB", "1"},
-                    {"XMC_HELPER", "1"},
-                    {"SE_XNH", std::to_string(p.nh)},
-                    {"XMC_ZERO_WORDS", "1"}}));
+        const Defines xmc_def = with(
+            dyn_def,
+            {{"SE_SBT", sbt},
+             {"XMC_WHOLE_SB", "1"},
+             {"XMC_HELPER", "1"},
+             {"SE_XNH", std::to_string(p.nh)},
+             {"XMC_ZERO_WORDS", "1"}});
+        // (x read once with forwarding: one kernel per primary, its half XMC_FWD_K)
+        std::vector<KernelHandle> kxms;
+        for (uint32_t q = 0; q < (p.xfwd ? prim.size() : 1u); ++q) {
+            kxms.push_back(
+                dm("se11_xmc.cpp",
+                   p.xfwd ? std::vector<CoreCoord>{prim[q]} : prim,
+                   DataMovementProcessor::RISCV_1,
+                   x_mc_noc,
+                   {1, MT, p.x_tile, p.x_slots, XARR, WORD, KBLK, E, p.nsb},
+                   p.xfwd ? with(xmc_def, {{"XMC_FWD", "1"}, {"XMC_FWD_K", std::to_string(q)}}) : xmc_def));
+        }
         std::vector<KernelHandle> khl;
         for (uint32_t j = 0; j < p.nh; ++j) {
             const std::vector<CoreCoord> hl(
@@ -607,7 +620,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                    DataMovementProcessor::RISCV_1,
                    x_mc_noc,
                    {1, MT, p.x_tile, p.land_slots, data_sem, 5, E, p.nsb},
-                   with(dyn_def, {{"SE_SBT", sbt}})));
+                   x_two || p.xfwd ? with(dyn_def, {{"SE_SBT", sbt}, {"SE_X2", "1"}})
+                                   : with(dyn_def, {{"SE_SBT", sbt}})));
         }
         const uint32_t sbb = MT * p.sbt * p.x_tile;
         for (uint32_t idx = 0; idx < p.relays.size(); ++idx) {
@@ -618,7 +632,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             }
             const auto [x0, x1, y0, y1] = p.rects[k];
             Args xr;
-            xr.a(AddrSrc::X).lit(p.vstride).lit(rl_off(idx)).cat(dyn).lits(sgx(k));
+            if (x_two || p.xfwd) {  // this rectangle's half of the stream (g % 2 == k), shared with its helpers
+                xr.a(AddrSrc::X).lit(NR * p.vstride).lit(NR * rl_off(idx) + k).cat(dyn).lits(sgx(k));
+            } else {
+                xr.a(AddrSrc::X).lit(p.vstride).lit(rl_off(idx)).cat(dyn).lits(sgx(k));
+            }
             if (indexed) {
                 xr.a(AddrSrc::TokenIndex);
             }
@@ -631,10 +649,15 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                     .lit(pk(xswap ? CoreCoord(x0, y0) : CoreCoord(x1, y1)))
                     .lit((x1 - x0 + 1) * (y1 - y0 + 1))
                     .a(AddrSrc::Words)
-                    .lit(x_once ? ngu : static_cast<uint32_t>(rect_cores[k].size()))
-                    .lits({V * p.nsb, XARR, 1, 0, p.group_rect ? ((idx * MTG) | ((idx + 1) * MTG << 8)) : 0});
-                if (x_once) {  // the second rectangle this primary multicasts into (se11_xmc.cpp RT 11-13)
-                    const auto [u0, u1, v0, v1] = p.rects[1];
+                    .lit(x_once || x_two ? ngu : static_cast<uint32_t>(rect_cores[k].size()))
+                    .lits(
+                        {V * p.nsb,
+                         x_two && k == 1 ? 3u : XARR,
+                         x_two ? NR : 1u,
+                         x_two ? k : 0u,
+                         p.group_rect ? ((idx * MTG) | ((idx + 1) * MTG << 8)) : 0});
+                if (x_once || x_two) {  // the second rectangle this primary multicasts into (se11_xmc.cpp RT 11-13)
+                    const auto [u0, u1, v0, v1] = p.rects[x_two ? 1 - k : 1];
                     xm.lit((u1 - u0 + 1) * (v1 - v0 + 1))
                         .lit(pk(xswap ? CoreCoord(u1, v1) : CoreCoord(u0, v0)))
                         .lit(pk(xswap ? CoreCoord(u0, v0) : CoreCoord(u1, v1)));
@@ -649,7 +672,10 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                     xm.lit(pk(p.relays[NR + NR * j + idx]));
                 }
                 xm.cat(dyn).lits(sgx(k));
-                add_rt(kxm, rl, xm);
+                if (p.xfwd) {  // the forward ring, the other primary, the ring's slots (se11_xmc.cpp XMC_FWD)
+                    xm.a(AddrSrc::Arena, p.fw_off).lit(pk(p.relays[1 - idx])).lit(p.fw_slots);
+                }
+                add_rt(kxms[p.xfwd ? idx : 0], rl, xm);
             } else {
                 const uint32_t j = (idx - NR) / NR;
                 Args hl;
@@ -660,6 +686,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                     .lit(j + 1)
                     .cat(dyn)
                     .lits(sgx(k));
+                if (x_two || p.xfwd) {  // (se13_xhelp.cpp SE_X2: the primary's own stream: every NR-th from k)
+                    hl.lit(NR).lit(k);
+                }
                 add_rt(khl[j], rl, hl);
             }
         }
@@ -672,7 +701,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // any chip), a hardware hang the NoC probe test reproduces from the traffic alone
         // (tests/ttnn/unit_tests/operations/noc_hang_probe, op_skeleton); with these writes on NOC1 it never did.
         // DRISC mode: the DRISC slots' receivers count their grants locally (SE_DRISC), the others credit their reader
-        const Defines recv_def = with(dyn_def, {{"SE_GU_ONLY", "1"}, {"SE_X_RELAY", "1"}, {"SE_NO_PARTNER", "1"}});
+        Defines recv_def = with(dyn_def, {{"SE_GU_ONLY", "1"}, {"SE_X_RELAY", "1"}, {"SE_NO_PARTNER", "1"}});
+        if (x_two) {  // two x streams alternating by super-block (runs of SBT / KBLK blocks)
+            recv_def["SE_X_RELAY2"] = std::to_string(p.sbt / KBLK);
+            recv_def["SE_X_NRELAY"] = "2";
+        }
         std::vector<CoreCoord> gu_t, gu_d;
         for (uint32_t ci = 0; ci < ngu; ++ci) {
             (p.drisc_slot(ci / p.r_) ? gu_d : gu_t).push_back(p.gu[ci]);
@@ -739,11 +772,12 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                     .lit(GATH)
                     .a(AddrSrc::Arena, p.x_off)
                     .lits({0, 0, 0})
-                    .lit(pk(p.relays[x_once ? 0 : p.rect_of(gc)]))
+                    .lit(pk(p.relays[x_once || x_two ? 0 : p.rect_of(gc)]))
                     .a(AddrSrc::Words, word_rel(ci))
                     .a(AddrSrc::Arena, p.h_off)
                     .lit(j % G)
-                    .lits({0, 2, 3, 0, SFREE, WORD})
+                    .lit(x_two ? pk(p.relays[1]) : 0)  // (RT 15: X2, the second primary for the freed reports)
+                    .lits({2, 3, 0, SFREE, WORD})
                     .lits(head_xy_sg[sg])
                     .cat(dyn)
                     .lits(sgx(sg));

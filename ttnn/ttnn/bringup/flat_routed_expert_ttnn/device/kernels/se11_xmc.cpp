@@ -94,19 +94,51 @@ void kernel_main() {
         return lo;
     };
     uint32_t sent = 0;
+#ifdef XMC_FWD
+    // x read once (MIMO_FL_XFWD): this rectangle's relays read / tilize the super-blocks g with g % 2 == XMC_FWD_K
+    // (helpers sharing them as before, in this half's own order n = g / 2); this primary multicasts them here and
+    // forwards each (tilized) to the other primary's forward ring, and multicasts the other half from its own forward
+    // ring. RT after the dyn args: the forward ring address, the other primary's xy, the ring's slots. Semaphores
+    // (relays): 14 forwarded super-blocks landed here, 15 forward slots the other primary freed.
+    constexpr uint32_t fw_data_sem = 14, fw_credit_sem = 15;
+    const uint32_t fw_a = dyn0 + SE_DYN_NARGS;
+    const uint32_t fw_ring = get_arg_val<uint32_t>(fw_a), oxy = get_arg_val<uint32_t>(fw_a + 1);
+    const uint32_t fw_slots = get_arg_val<uint32_t>(fw_a + 2);
+    const uint64_t o_ring = get_noc_addr(oxy >> 16, oxy & 0xFFFF, fw_ring);
+    const uint64_t o_data = get_noc_addr(oxy >> 16, oxy & 0xFFFF, get_semaphore(fw_data_sem));
+    const uint64_t o_credit = get_noc_addr(oxy >> 16, oxy & 0xFFFF, get_semaphore(fw_credit_sem));
+    volatile tt_l1_ptr uint32_t* fw_data = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(fw_data_sem));
+    volatile tt_l1_ptr uint32_t* fw_credit =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(fw_credit_sem));
+    constexpr uint32_t sb_bytes = sb_tiles * tb;
+#endif
     for (uint32_t b = 0; b < num_sb; ++b) {
+#ifdef XMC_FWD
+        const bool own = b % 2 == XMC_FWD_K;
+        const uint32_t ob = b / 2;  // this super-block's place in its half
+#else
+        constexpr bool own = true;
+        const uint32_t ob = b;
+#endif
 #ifdef XMC_HELPER
         // Super-blocks b with b % (1 + NH) = h + 1 were read and tilized by helper h (se13_xhelp.cpp) into landing
         // ring h here (RT 14 helper 0 xy, 17.. helpers 1.. xy, 15 landing address (ring h follows ring h - 1), 16
         // landing slots; DATA sem se_help_sem(h) here counts arrivals, CREDIT sem 5 on the helper counts freed slots).
         constexpr uint32_t hs = 1 + SE_XNH;
 #ifdef SE_SMALL_T
-        const bool from_helper = b % hs != 0 && !dyn.small;  // small-M role split: the primary tilized everything
+        const bool from_helper = own && ob % hs != 0 && !dyn.small;  // small-M role split: the primary tilized all
 #else
-        const bool from_helper = b % hs != 0;
+        const bool from_helper = own && ob % hs != 0;
 #endif
-        const uint32_t hh = b % hs - 1, hb = b / hs;
+        const uint32_t hh = ob % hs - 1, hb = ob / hs;
         uint32_t src;
+#ifdef XMC_FWD
+        if (!own) {  // the other half: forwarded by the other primary
+            ZW("XMC_FW");
+            noc_semaphore_wait_min(fw_data, ob + 1);
+            src = fw_ring + (ob % fw_slots) * sb_bytes;
+        } else
+#endif
         if (from_helper) {
             ZW("XMC_HELP");
             constexpr uint32_t help_sem[4] = {4, 7, 8, 10};
@@ -175,6 +207,19 @@ void kernel_main() {
             i += n;
             noc_async_writes_flushed();
         }
+#ifdef XMC_FWD
+        if (own) {  // forward it to the other primary (its slot ob % fw_slots, once freed there)
+            if (ob >= fw_slots) {
+                noc_semaphore_wait_min(fw_credit, ob + 1 - fw_slots);
+            }
+            noc_async_write(src, o_ring + (ob % fw_slots) * sb_bytes, sb_bytes);
+            noc_async_write_barrier();  // (landed before its count moves; and the source slot is released below)
+            noc_semaphore_inc(o_data, 1);
+        } else {
+            noc_semaphore_inc(o_credit, 1);  // its forward slot is free again (the multicasts have left: flushed above)
+            continue;
+        }
+#endif
 #ifdef XMC_HELPER
         if (from_helper) {
             const uint32_t hxy = get_arg_val<uint32_t>(hh ? 16 + hh : 14);
