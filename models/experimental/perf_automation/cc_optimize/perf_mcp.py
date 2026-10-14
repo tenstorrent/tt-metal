@@ -2779,6 +2779,20 @@ def _adaptive_run(cmd, cwd, env, label="device run", stall_s=None, backstop=None
                 proc.communicate(timeout=30)
             except Exception:  # noqa: BLE001
                 pass
+            # THE KILL IS RECOVERED HERE, ONCE, FOR EVERY CALLER. This is the one place this module
+            # SIGKILLs a device run, and it used to leave the board exactly as the kill found it: the
+            # full-pipeline gate reset only inside its trace-region grow, which stops once the region
+            # is at its ceiling, and the op-sig probe never reset at all. Run 1791980272 (2026-10-14,
+            # minicpm5_2b, --devices 0) then spent 4 back-to-back 662 s attempts stuck in
+            # fetch_queue_reserve_back on the board the previous kill left behind. The reset goes
+            # through the one rule every other killing path uses (probes.reset_after_ended_child),
+            # so a single-chip run still meets the veto and its work probe exactly as before.
+            try:
+                from agent.probes import reset_after_ended_child
+
+                reset_after_ended_child(error_text="".join(buf)[-4000:], env=env)
+            except Exception:  # noqa: BLE001 -- the next run's own device open says if it is still needed
+                pass
             raise _sp.TimeoutExpired(cmd, limit if now - last_progress >= limit else backstop)
     rc = proc.returncode
     pt.join(timeout=30)
@@ -3522,10 +3536,11 @@ def _run_full_pipeline_ms():
     for _ in range(_FULLPIPE_SAMPLES):
         # A stall with NO trace is the silent-overflow signature: a too-small region can HANG the mesh,
         # and _adaptive_run then SIGKILLs it and RAISES -- so it never reaches the grow below. Handle it
-        # HERE: reset the wedged device, double the region up to the DRAM ceiling, and retry the SAME
-        # sample (without spending the measurement budget), so a hang that printed nothing self-corrects
-        # instead of just burning samples. Only a timeout-type stall triggers this; a clean crash still
-        # returns and takes the message-based grow path below.
+        # HERE: double the region up to the DRAM ceiling and retry the SAME sample (without spending
+        # the measurement budget), so a hang that printed nothing self-corrects instead of just burning
+        # samples. _adaptive_run has already reset the board it killed, at the ceiling too. Only a
+        # timeout-type stall triggers this; a clean crash still returns and takes the message-based
+        # grow path below.
         r = None
         for _stall_try in range(int(_STALL_GROW_ROUNDS) + 1):
             try:
@@ -3538,15 +3553,9 @@ def _run_full_pipeline_ms():
                     break
                 env["TT_PERF_TRACE_REGION"] = str(min(cur * 2, _TRACE_REGION_MAX))
                 sys.stderr.write(
-                    "[full-pipeline-gate] run stalled with no trace (silent overflow); resetting device "
-                    "and growing trace region to %s B, retrying\n" % env["TT_PERF_TRACE_REGION"]
+                    "[full-pipeline-gate] run stalled with no trace (silent overflow); growing trace "
+                    "region to %s B, retrying\n" % env["TT_PERF_TRACE_REGION"]
                 )
-                try:
-                    from agent.probes import _device_reset
-
-                    _device_reset(error_text=str(exc))
-                except Exception:  # noqa: BLE001
-                    pass
         if r is None:
             continue
         # ENDED ITSELF FOR HEAT (agent.probes.thermal_yield): no reading, and no reason to take the next
@@ -5576,6 +5585,11 @@ def _check_full_pipeline_latency_body() -> dict:
     cq = 1
     ms, method, err, path = _measure_full_pipeline_guarded()
     if ms is None:
+        # THE SAME CRASH POLICY AS EVERY OTHER DEVICE TOOL. measure_candidate and check_pcc feed
+        # note_crash (a dead-board signature resets at once, an ambiguous crash counts toward the
+        # two-strike reset); this gate fed it nothing, so its crashes never reached recovery at all.
+        if not _is_measurement_failure(err or ""):
+            _note_device_crash("check_full_pipeline_latency", err or "")
         return _emit_fullpipe({"status": "crash", "error": err, "cq": cq})
     # A HEADLINE OF ZERO IS A RUN THAT MEASURED NOTHING, and it used to be reported as `ok`. The
     # perf test prints TRACE_PER_TOKEN_MS=0.0000 and exits PASSED when every stage's timing hook
@@ -5604,6 +5618,7 @@ def _check_full_pipeline_latency_body() -> dict:
                 ),
             }
         )
+    _note_device_ok()  # a positive reading: the device ran the whole pipeline, so the crash streak ends
     metric = "trace_per_token_ms" if method == "trace" else "eager_full_pipeline_ms"
     mode = _fullpipe_mode(method, path)
     base_path = _FULLPIPE_BASELINE_1CQ_PATH
