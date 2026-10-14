@@ -27,7 +27,7 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 import torch
-from conftest import skip_for_quasar
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
@@ -47,8 +47,8 @@ from test_topk import (
     transform_result_tensor_to_right_form,
 )
 
-# Quasar has no topk SFPU implementation.
-pytestmark = [skip_for_quasar]
+# Quasar has no topk SFPU implementation and the Wormhole LLK has no stable network.
+pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 NUM_ROWS = (
     64  # two tile rows: the second call per kernel runs the warm replay-cache path
