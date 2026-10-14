@@ -183,6 +183,8 @@ void kernel_main() {
         rb[TT_FABRIC_MISC_INDEX + 11] = static_cast<uint32_t>(signal_cycles);
         rb[TT_FABRIC_MISC_INDEX + 12] = static_cast<uint32_t>(signal_cycles >> 32);
         rb[TT_FABRIC_MISC_INDEX + 13] = waited;
+        rb[TT_FABRIC_MISC_INDEX + 20] = sender_config->traffic_config_ptrs[0]->diag_rd_changes;
+        rb[TT_FABRIC_MISC_INDEX + 21] = sender_config->traffic_config_ptrs[0]->diag_rd_jump_sum;
         // Credit window as the worker sees it at the end: its write counter, the router's last read
         // counter, and the slot count (effective window = num_buffers - (wr - rd)).
         if constexpr (NUM_TRAFFIC_CONFIGS == 1 && BENCHMARK_MODE) {

@@ -1066,6 +1066,8 @@ struct SenderKernelTrafficConfig {
     uint64_t diag_wait_cycles = 0;
     uint64_t diag_signal_cycles = 0;
     uint32_t diag_waited = 0;
+    uint32_t diag_rd_changes = 0;    // times the read counter was seen to advance across a wait
+    uint32_t diag_rd_jump_sum = 0;   // total credits gained across those advances
 
     FORCE_INLINE void setup_credit_update_noc_state(const EdmSenderT& adapter, uint8_t noc) {
         auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
@@ -1113,8 +1115,18 @@ struct SenderKernelTrafficConfig {
         if constexpr (BENCHMARK_MODE) {
             // Worker-side diagnostics (CRAQ #52): cycles spent waiting for a slot vs. signalling the router.
             const uint64_t diag_t0 = get_timestamp();
+            auto* conn_d = static_cast<EdmSenderT*>(connection_ptr_);
+            const uint32_t rd_before = *conn_d->edm_buffer_local_free_slots_read_ptr;
             connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
             const uint64_t diag_t1 = get_timestamp();
+            {
+                invalidate_l1_cache();
+                const uint32_t rd_after = *conn_d->edm_buffer_local_free_slots_read_ptr;
+                if (rd_after != rd_before) {
+                    ++diag_rd_changes;
+                    diag_rd_jump_sum += rd_after - rd_before;
+                }
+            }
             // STEP 3: Send packet
             auto* conn = static_cast<EdmSenderT*>(connection_ptr_);
             if (num_packets_processed < conn->num_buffers_per_channel) {
