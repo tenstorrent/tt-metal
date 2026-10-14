@@ -38,22 +38,25 @@ find_weakened() {
     done
 }
 
-COMMON="-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math
- -fno-exceptions -fno-rtti -fno-use-cxa-atexit -mcpu=tt-bh -fno-tree-loop-distribute-patterns"
+COMMON="-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one
+ -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti
+ -fno-use-cxa-atexit -mcpu=tt-bh -fno-tree-loop-distribute-patterns"
 CFLAGS="-Os -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros
- -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function"
+ -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function
+ --param=min-pagesize=0"
 # Device-shape defines normally come from the opened device and reach no
 # eth_credit code; plausible values compile.
 DEVDEFS="-DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=128 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3
  -DLOG_BASE_2_OF_NUM_L1_BANKS=7 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0
  -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=0 -DKERNEL_BUILD -DCOMPILE_FOR_ERISC -DERISC -DRISC_B0_HW
- -DENABLE_2_ERISC_MODE -DNOC_MODE=0"
+ -DENABLE_2_ERISC_MODE -DNOC_MODE=0 -DPROGRAMMABLE_CORE_TYPE=1"
 INC=""
-for d in . .. "" ttnn ttnn/cpp tt_metal tt_metal/hw/inc tt_metal/tt-llk/common tt_metal/hostdevcommon/api \
-         tt_metal/api/ tt_metal/hw/ckernels/blackhole/metal/common tt_metal/hw/ckernels/blackhole/metal/llk_io \
-         tt_metal/hw/inc/internal/tt-1xx tt_metal/hw/inc/internal/tt-1xx/blackhole \
-         tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines tt_metal/hw/inc/internal/tt-1xx/blackhole/noc \
-         tt_metal/tt-llk/tt_llk_blackhole/common/inc tt_metal/tt-llk/tt_llk_blackhole/llk_lib \
+for d in . .. "" ttnn ttnn/cpp tt_metal/hw/inc tt_metal/tt-llk/common tt_metal/tt-llk/tools/include \
+         tt_metal/hostdevcommon/api tt_metal/api/ tt_metal/hw/ckernels/blackhole/metal/common \
+         tt_metal/hw/ckernels/blackhole/metal/llk_io tt_metal/hw/inc/internal/tt-1xx \
+         tt_metal/hw/inc/internal/tt-1xx/blackhole tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines \
+         tt_metal/hw/inc/internal/tt-1xx/blackhole/noc tt_metal/tt-llk/tt_llk_blackhole/common/inc \
+         tt_metal/tt-llk/tt_llk_blackhole/llk_lib tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal \
          tt_metal/hw/inc/ethernet tt_metal/hw/firmware/src/tt-1xx; do
     case "$d" in
         .|..) INC+=" -I$d" ;;
