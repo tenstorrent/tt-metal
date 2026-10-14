@@ -13,6 +13,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import skip_routed_on_simulator
 
 # (b, nh, nkv, s, d, q_chunk, k_chunk, grid): q_chunk does not divide s, and crossing lowers the per-core chunk count
 CROSSING_CASES = [
@@ -78,6 +79,7 @@ def check_concat_wrap_non_streaming(device, b, nh, nkv, s, d, q_chunk, k_chunk, 
     """fp32_dest_acc_en=True runs the non-streaming kernel, whose writer drains a whole Q chunk with write_block
     instead of write_block_row_grouped. A chunk's rows run into the next query head of the group, so write_block must
     wrap them too."""
+    skip_routed_on_simulator()
     (q, k, v), (tq, tk, tv) = _inputs(device, b, nh, nkv, s, d, ttnn.bfloat16, grid)
     pc = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
