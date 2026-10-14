@@ -17,7 +17,9 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_DECAY_L1_BYTES_PER_CORE,
     KDA_HISTORY_EXCHANGE_ROWS,
     KDA_HISTORY_EXCHANGE_SEMAPHORES,
+    KDA_NORM_OUTPUT_L1_BYTES_PER_CORE,
     KDA_OUTPUT_MEMORY_CONFIG,
+    KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE,
     KDA_QKV_L1_BYTES_PER_CORE,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
@@ -186,6 +188,17 @@ class ttKDA:
         self.qkv_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * self._convolution_width * 2, KDA_QKV_L1_BYTES_PER_CORE
         )
+        self.norm_output_memory_config = l1_when_it_fits(
+            mesh_device, self.active_seq_len_local * self.config.v_dim * 2, KDA_NORM_OUTPUT_L1_BYTES_PER_CORE
+        )
+        # The partial sums only feed the reduce-scatter; a single TP rank returns the projection itself.
+        self.partial_output_memory_config = (
+            l1_when_it_fits(
+                mesh_device, self.active_seq_len_local * config.hidden_size * 2, KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE
+            )
+            if self.tensor_parallel_size > 1
+            else ttnn.DRAM_MEMORY_CONFIG
+        )
         if self.tensor_parallel_size > 1 and tt_ccl is None:
             raise ValueError("tt_ccl is required for tensor-parallel KDA")
         self.tt_ccl = tt_ccl
@@ -207,7 +220,7 @@ class ttKDA:
             tuned_projection_matmul_configs(
                 mesh_device.compute_with_storage_grid_size(),
                 self.active_seq_len_local,
-                self.weights.input_projection.shape[-1],
+                *tuple(self.weights.input_projection.shape)[-2:],
                 *tuple(self.weights.output_projection.shape)[-2:],
             )
             if program_config.tuned_projection_matmuls
@@ -394,7 +407,7 @@ class ttKDA:
             weights.norm,
             config.num_heads,
             epsilon=config.norm_eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.norm_output_memory_config,
             compute_kernel_config=self.kda_compute_config,
             output_dtype=self.gated_rms_output_dtype,
             gate_column_offset=output_gate_offset,
@@ -409,7 +422,7 @@ class ttKDA:
         output = ttnn.linear(
             output,
             weights.output_projection,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.partial_output_memory_config,
             program_config=self.output_projection_program_config,
             compute_kernel_config=self.output_projection_compute_config,
         )
@@ -491,5 +504,7 @@ class ttKDA:
             release_gate=True,
         )
         output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset)
+        # The norm read the output gate, the projection's last columns in use.
+        ttnn.deallocate(inputs.projected)
         output = self._project_output(output)
         return output, KdaState(recurrent=result.final_state, convolution=new_convolution)
