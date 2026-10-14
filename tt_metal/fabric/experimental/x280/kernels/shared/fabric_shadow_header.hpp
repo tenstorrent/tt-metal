@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * Concrete deployed fabric packet layout shared by lookup and forwarding.
+ * Concrete fabric packet layout shared by lookup and forwarding.
  */
 #ifndef X280_FABRIC_SHADOW_HEADER_HPP
 #define X280_FABRIC_SHADOW_HEADER_HPP
