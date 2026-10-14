@@ -29,7 +29,7 @@
 #include "internal/ethernet/tt_eth_ss_regs.h"
 #include "llrt/tt_cluster.hpp"
 
-#include <umd/device/arc/arc_telemetry_reader.hpp>
+#include <umd/device/arc/firmware_telemetry_reader.hpp>
 #include <umd/device/tt_device/tt_device.hpp>
 #include <umd/device/types/telemetry.hpp>
 
@@ -75,7 +75,7 @@ inline tt::umd::TTDevice& umd_device(const tt::Cluster& cluster, const tt::tt_me
 // Reads the firmware-programmed maximum AICLK in Hz. The required CMFW tag has
 // no compiled fallback; absence and MHz-to-Hz overflow throw.
 inline uint64_t programmed_aiclk_hz(const tt::Cluster& cluster, const tt::tt_metal::IDevice& device) {
-    auto* telemetry = umd_device(cluster, device).get_arc_telemetry_reader();
+    auto* telemetry = umd_device(cluster, device).get_firmware_telemetry_reader();
     if (telemetry == nullptr || !telemetry->is_entry_available(tt::umd::TelemetryTag::AICLK_LIMIT_MAX)) {
         throw std::runtime_error("CMFW AICLK_LIMIT_MAX telemetry is unavailable");
     }
@@ -167,7 +167,7 @@ inline measurement::HostClockSample read_live_timer_sample(
 // tags and read failures throw; the caller records TelemetryUnavailable.
 inline measurement::CmfwClockSample read_cmfw_clock_sample(
     const tt::Cluster& cluster, const tt::tt_metal::IDevice& device) {
-    auto* telemetry = umd_device(cluster, device).get_arc_telemetry_reader();
+    auto* telemetry = umd_device(cluster, device).get_firmware_telemetry_reader();
     constexpr tt::umd::TelemetryTag tags[] = {
         tt::umd::TelemetryTag::AICLK_LIMIT_MAX,
         tt::umd::TelemetryTag::AICLK,
