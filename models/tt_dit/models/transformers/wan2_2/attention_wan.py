@@ -23,7 +23,7 @@ class WanAttention(Module):
     # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
     sdpa_chunk_size_map = {
         (False, 2, 4): (256, 256),
-        (False, 8, 4): (256, 256),
+        (False, 8, 4): (256, 512),  # WH Galaxy 4x8 480p sweep: 13.06 ms per block ring SDPA, (256, 256) 14.69 ms
         (True, 2, 2): (128, 512),
         (True, 8, 4): (288, 512),
         (True, 32, 4): (224, 512),
