@@ -156,6 +156,10 @@ class TTConv2D:
         self.linear_weight = None
         self.linear_bias = None
         self.linear_activation = None
+        # ttnn.linear fuses its activation into the matmul only when it is given a core grid;
+        # otherwise it runs it as a separate unary pass over the output.
+        grid = device.compute_with_storage_grid_size()
+        self.linear_core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
         if self.dram_activation and self.is_pointwise and activation is not None:
             assert (
                 activation.op_type == ttnn.UnaryOpType.RELU
@@ -208,6 +212,7 @@ class TTConv2D:
             dtype=self.output_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_config,
+            core_grid=self.linear_core_grid,
         )
 
     def __call__(self, x):
