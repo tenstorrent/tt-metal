@@ -28,8 +28,9 @@ namespace ckernel
 // ckernel_defs.h, and the same reduction in ckernel.h's mailbox self-checks.
 constexpr std::uint32_t TRISC_ID = COMPILE_FOR_TRISC % 4;
 
-// Validates the define itself: the id must name a compute processor of the 4-Neo cluster. (Asserting
+// Validates the define itself: the id must name a compute processor of the 4-Neo cluster. Both bounds
+// matter: a negative id would make the reduction negative and wrap when stored in TRISC_ID. (Asserting
 // TRISC_ID < 4 would be vacuous - the reduction above already guarantees it.)
-static_assert(COMPILE_FOR_TRISC < 16, "COMPILE_FOR_TRISC must be a Quasar compute processor id in [0, 15]");
+static_assert(COMPILE_FOR_TRISC >= 0 && COMPILE_FOR_TRISC < 16, "COMPILE_FOR_TRISC must be a Quasar compute processor id in [0, 15]");
 
 } // namespace ckernel
