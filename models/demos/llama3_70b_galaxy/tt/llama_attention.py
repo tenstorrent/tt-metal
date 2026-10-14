@@ -7,6 +7,12 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.demos.llama3_70b_galaxy.tt.custom_ops.qwen_q_prep import qwen_q_prep
+from models.demos.llama3_70b_galaxy.tt.qwen_opt_limits import (
+    attach_prefill_opt_eps,
+    prefill_norm,
+    prefill_norm_eps,
+    qwen_prefill_opt_ok,
+)
 
 
 class TtLlamaAttention(LightweightModule):
@@ -353,8 +359,6 @@ class TtLlamaAttention(LightweightModule):
                 inplace=False,
             )
 
-            # Qwen3 uses the HF config's rms_norm_eps (1e-06) for q_norm/k_norm; others keep the RMSNorm default.
-            qk_norm_eps_kwargs = {"eps": configuration.norm_eps} if self.is_qwen else {}
             # Create Q norm
             self.q_norm = RMSNorm(
                 device=self.mesh_device,
@@ -363,7 +367,6 @@ class TtLlamaAttention(LightweightModule):
                 state_dict_prefix=None,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=q_norm_str,
-                **qk_norm_eps_kwargs,
                 sharded_program_config=self.norm_program_cfg,
                 sharded_output_config=self.reshape_output_q_mem_cfg,
             )
@@ -376,10 +379,15 @@ class TtLlamaAttention(LightweightModule):
                 state_dict_prefix=None,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=k_norm_str,
-                **qk_norm_eps_kwargs,
                 sharded_program_config=self.norm_program_cfg,
                 sharded_output_config=self.reshape_output_k_mem_cfg,
             )
+
+            if self.is_qwen:
+                # Qwen3's HF rms_norm_eps (1e-06) for prefills of S <= QWEN_OPT_MAX_SEQ_LEN only (prefill_norm); decode
+                # and longer prefills keep the RMSNorm default eps, as on main. The twins share the weights.
+                attach_prefill_opt_eps(self.q_norm, configuration.norm_eps)
+                attach_prefill_opt_eps(self.k_norm, configuration.norm_eps)
 
             self.q_norm_weight = self.state_dict[q_norm_str + ".weight"]
             self.k_norm_weight = self.state_dict[k_norm_str + ".weight"]
@@ -1121,7 +1129,7 @@ class TtLlamaAttention(LightweightModule):
                 rot_mats[1],
                 self.transformation_mats["prefill"],
                 self.q_norm.weight,
-                eps=self.q_norm.eps,
+                eps=prefill_norm_eps(self.q_norm, seq_len, getattr(self, "model_config", None)),
             )
         return self._qwen_local_q_prep_stock(q_pre_bf8, rot_mats, seq_len)
 
@@ -1138,7 +1146,8 @@ class TtLlamaAttention(LightweightModule):
         q_local_bf16 = ttnn.typecast(q_local, dtype=ttnn.bfloat16)
         ttnn.deallocate(q_local)
         if self.qk_norm:
-            q_local_bf16 = self.q_norm(q_local_bf16, mode="prefill")
+            q_norm = prefill_norm(self.q_norm, seq_len, getattr(self, "model_config", None))
+            q_local_bf16 = q_norm(q_local_bf16, mode="prefill")
         q_local_rot = ttnn.experimental.rotary_embedding_llama(
             q_local_bf16,
             cos_local,
@@ -1158,17 +1167,22 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(q_local_8b)
         return q_pre_bf8
 
-    def _k_prep_stock(self, k_heads_1KSD_pre_rot, rot_mats):
+    def _k_prep_stock(self, k_heads_1KSD_pre_rot, rot_mats, seq_len=None):
         """Prefill K prep with stock ops: typecast to bf16 (if needed), k_norm (if qk_norm), RoPE, typecast to bf8.
         Every path that does not take qwen_q_prep(all_rows=True) runs this; test_qwen_k_prep_op.py uses it as the
-        reference for the op."""
+        reference for the op. seq_len: the prefill length S for the k_norm eps (prefill_norm, which also reads the
+        recorded total context and cached prefix from model_config when the attention has one); None means the K
+        rows."""
+        if seq_len is None:
+            seq_len = k_heads_1KSD_pre_rot.shape[-2]
         if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             k_heads_1KSD_pre_rot_bf8 = k_heads_1KSD_pre_rot
             k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
             ttnn.deallocate(k_heads_1KSD_pre_rot_bf8)
 
         if self.qk_norm:
-            k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
+            k_norm = prefill_norm(self.k_norm, seq_len, getattr(self, "model_config", None))
+            k_heads_1KSD_pre_rot = k_norm(k_heads_1KSD_pre_rot, mode="prefill")
 
         k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
             k_heads_1KSD_pre_rot,
@@ -1202,7 +1216,7 @@ class TtLlamaAttention(LightweightModule):
             rot_mats[1],
             self.transformation_mats["prefill"],
             self.q_norm.weight,
-            eps=self.q_norm.eps,
+            eps=prefill_norm_eps(self.q_norm, seq_len, getattr(self, "model_config", None)),
             src=xqkv_fused,
             src_col=0,
         )
@@ -1212,7 +1226,7 @@ class TtLlamaAttention(LightweightModule):
             rot_mats[1],
             self.transformation_mats["prefill"],
             self.k_norm.weight,
-            eps=self.k_norm.eps,
+            eps=prefill_norm_eps(self.k_norm, seq_len, getattr(self, "model_config", None)),
             all_rows=True,
             src=xqkv_fused,
             src_col=H * D,
@@ -1250,7 +1264,11 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
 
-        if self.is_qwen and self.use_prefetcher and not self.is_blackhole and batch_size == 1 and seq_len > 8192:
+        # Qwen long-prefill optimizations below apply for S > 8192 while the total context (cached prefix + S) is
+        # <= QWEN_OPT_MAX_SEQ_LEN only (qwen_opt_limits.py); longer contexts take main's ops and configs. The q/k norm
+        # eps is Qwen's only without a cached prefix within the cap (prefill_norm); otherwise main's.
+        qwen_long_opt = self.is_qwen and seq_len > 8192 and qwen_prefill_opt_ok(self.model_config, seq_len)
+        if qwen_long_opt and self.use_prefetcher and not self.is_blackhole and batch_size == 1:
             # Qwen long prefill on Wormhole: minimal_matmul (fp32-dest-safe subblock, 7x10 grid) is faster than
             # ttnn.linear with XQKV_PREFILL_PROGCFG and bit-identical. Same HiFi2 config and output dtype.
             xqkv = ttnn.experimental.minimal_matmul(
@@ -1313,11 +1331,10 @@ class TtLlamaAttention(LightweightModule):
 
         # Qwen long prefill on Wormhole: Q/K/V prep reads the fused buffer directly (_qwen_qkv_prep_direct).
         use_direct_qkv = (
-            self.is_qwen
+            qwen_long_opt
             and self.use_prefetcher
             and not self.is_blackhole
             and batch_size == 1
-            and seq_len > 8192
             and seq_len % 256 == 0
             and (chunk_start_idx is None or chunk_start_idx == 0)
             and self.qk_norm
@@ -1353,11 +1370,10 @@ class TtLlamaAttention(LightweightModule):
         # (typecast, q_norm, RoPE, typecast) runs on those two S/8 slices and is written back into the bf8 Q buffer.
         use_local_q_prep = (
             not use_direct_qkv
-            and self.is_qwen
+            and qwen_long_opt
             and self.use_prefetcher
             and not self.is_blackhole
             and batch_size == 1
-            and seq_len > 8192
             and (chunk_start_idx is None or chunk_start_idx == 0)
             and q_heads_1QSD_pre_rot.dtype == ttnn.bfloat8_b
         )
@@ -1372,7 +1388,9 @@ class TtLlamaAttention(LightweightModule):
                 ttnn.deallocate(q_heads_1QSD_pre_rot_bf8)
 
             if self.qk_norm:
-                q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
+                q_heads_1QSD_pre_rot = prefill_norm(self.q_norm, seq_len, self.model_config)(
+                    q_heads_1QSD_pre_rot, mode="prefill"
+                )
 
             q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
                 q_heads_1QSD_pre_rot,
@@ -1397,11 +1415,11 @@ class TtLlamaAttention(LightweightModule):
                 rot_mats[1],
                 self.transformation_mats["prefill"],
                 self.k_norm.weight,
-                eps=self.k_norm.eps,
+                eps=prefill_norm_eps(self.k_norm, seq_len, self.model_config),
                 all_rows=True,
             )
         else:
-            k_heads_1KSD_8b = self._k_prep_stock(k_heads_1KSD_pre_rot, rot_mats)
+            k_heads_1KSD_8b = self._k_prep_stock(k_heads_1KSD_pre_rot, rot_mats, seq_len)
 
         # Fill KV-Cache
         if kv_cache:
@@ -1464,12 +1482,7 @@ class TtLlamaAttention(LightweightModule):
             # Qwen sets SDPA_RING_PROGCFG (qwen_model_config.py); other models use SDPA_PROGCFG as before.
             ring_sdpa_progcfg = self.model_config.get("SDPA_RING_PROGCFG", self.model_config["SDPA_PROGCFG"])
             ring_sdpa_ckc = self.compute_kernel_config_hifi4
-            if (
-                self.is_qwen
-                and not self.is_blackhole
-                and seq_len > 8192
-                and self.compute_kernel_config_ring_sdpa_long is not None
-            ):
+            if qwen_long_opt and not self.is_blackhole and self.compute_kernel_config_ring_sdpa_long is not None:
                 ring_sdpa_ckc = self.compute_kernel_config_ring_sdpa_long
             attn_output_1QSD = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
@@ -1601,7 +1614,7 @@ class TtLlamaAttention(LightweightModule):
         else:
             # Qwen long prefill on Wormhole: fp32 dest accumulation (S=40960 isolated op 1.25 -> 1.28 ms, error vs
             # an fp32 reference of the same bf8 inputs 1.46e-2 -> 0.82e-2 relative L2; bf8 output rounding 0.79e-2).
-            wo_fp32_acc = self.is_qwen and not self.is_blackhole and batch_size == 1 and seq_len > 8192
+            wo_fp32_acc = qwen_long_opt and not self.is_blackhole and batch_size == 1
             output_11SH = ttnn.experimental.minimal_matmul(
                 input_tensor=attn_output_11SH,
                 weight_tensor=self.wo_interleaved,

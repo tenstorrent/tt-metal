@@ -83,8 +83,8 @@ class TtTransformerBlock(LightweightModule):
             )
         else:
             attn_norm_output_memcfg = self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
-        # Qwen3 uses the HF config's rms_norm_eps (1e-06); Llama keeps the RMSNorm default (1e-05).
-        norm_eps_kwargs = {"eps": args.norm_eps} if getattr(args, "is_qwen", False) else {}
+        # Both norms keep the RMSNorm default eps (main); DistributedNorm adds Qwen3's HF rms_norm_eps (1e-06) for
+        # prefills of S <= QWEN_OPT_MAX_SEQ_LEN only.
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -94,7 +94,6 @@ class TtTransformerBlock(LightweightModule):
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key="attention_norm",
-                **norm_eps_kwargs,
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
@@ -114,7 +113,6 @@ class TtTransformerBlock(LightweightModule):
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key="ffn_norm",
-                **norm_eps_kwargs,
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
@@ -180,7 +178,11 @@ class TtTransformerBlock(LightweightModule):
             # Sequence-parallel: the norm output is all-gathered along the sequence; gather it in bf8 (the
             # matmuls after it run on bf8 activations anyway), half the bytes of bf16 (1.69 -> 1.03 ms at 40960).
             norm_out_dtype = ttnn.bfloat8_b if seq_parallel else None
-            attn_in_sharded, _ = self.attention_norm(x, None, mode, output_dtype=norm_out_dtype)
+            # Prefill length S for the norm eps choice (DistributedNorm.forward); seq-parallel x holds S / rows.
+            norm_seq_len = x.shape[-2] * (self.args.cluster_shape[0] if seq_parallel else 1)
+            attn_in_sharded, _ = self.attention_norm(
+                x, None, mode, output_dtype=norm_out_dtype, seq_len=norm_seq_len if mode == "prefill" else None
+            )
             h = x
             if seq_parallel:
                 # x is this mesh row's S/8 chunk; attention needs the full sequence on every row.
@@ -213,7 +215,9 @@ class TtTransformerBlock(LightweightModule):
         if mode == "prefill":
             h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=res_dtype)  # bf16 on BH no-prefetch
             x.deallocate(True)
-            ff_in_sharded, _ = self.ff_norm(h, None, mode, output_dtype=ttnn.bfloat8_b if seq_parallel else None)
+            ff_in_sharded, _ = self.ff_norm(
+                h, None, mode, output_dtype=ttnn.bfloat8_b if seq_parallel else None, seq_len=norm_seq_len
+            )
             if seq_parallel:
                 ff_in_local = ff_in_sharded
                 ff_in_sharded = self.tt_ccl.ring_all_gather_seq(ff_in_local, ttnn.DRAM_MEMORY_CONFIG, "FF2")

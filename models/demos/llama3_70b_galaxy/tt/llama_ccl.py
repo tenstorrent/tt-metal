@@ -6,6 +6,7 @@ import ttnn
 import torch
 import os
 from loguru import logger
+from models.demos.llama3_70b_galaxy.tt.qwen_opt_limits import qwen_prefill_opt_ok
 
 # Only for prefill, check tt-metal/models/demos/llama3_70b_galaxy/README.md
 LINE_RS = os.environ.get("LINE_RS", "0") == "1"
@@ -939,9 +940,10 @@ class TT_CCL:
                 # Qwen FF2 above the traced lengths (> max(support_seqlens) = 4096): bf16 ring
                 # reduce-scatter + all-gather (the generic path below, same as WO at > 4096; no FF2
                 # persistent buffers exist at these lengths). Traced lengths keep the rank-ordered
-                # gather + local sum.
+                # gather + local sum, and so does a total context (cached + new) > QWEN_OPT_MAX_SEQ_LEN (main's FF2
+                # path at every length).
                 total_len = input_tensor_mesh.shape[1] * input_tensor_mesh.shape[-2]
-                if total_len <= max(self.support_seqlens):
+                if total_len <= max(self.support_seqlens) or not qwen_prefill_opt_ok(self.model_config, total_len):
                     return self._prefill_ff2_gather_reduce(input_tensor_mesh, cluster_axis, memory_config)
             if buffer_key == "WO_AG" or lm_head:
                 ttnn_tensor_gathered = self.line_all_gather(

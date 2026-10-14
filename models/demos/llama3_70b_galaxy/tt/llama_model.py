@@ -18,6 +18,7 @@ from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetche
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.demos.llama3_70b_galaxy.tt import qwen_cp_prefill
+from models.demos.llama3_70b_galaxy.tt.qwen_opt_limits import qwen_prefill_opt_ok, set_prefill_total_len
 from models.common.sampling.generator import SamplingGenerator
 
 
@@ -124,7 +125,6 @@ class TtTransformer(LightweightModule):
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key="norm",
-                **({"eps": args.norm_eps} if getattr(args, "is_qwen", False) else {}),
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
@@ -1054,6 +1054,13 @@ class TtTransformer(LightweightModule):
             )
             rot_mats = (rot_cos_slice, rot_sin_slice)
 
+        if mode == "prefill":
+            # Total context of this prefill (cached prefix + new rows) and its cached prefix: the Qwen long-prefill
+            # gates in attention, MLP, CCL and the config getters read the total (qwen_opt_limits.qwen_prefill_opt_ok);
+            # the prefill norms (also the output norm in process_output_prefill* after this call) read both
+            # (qwen_opt_limits.prefill_norm: main's eps for any cached prefix).
+            set_prefill_total_len(self.model_config, start_pos + x.shape[-2], num_cached=start_pos)
+
         # Qwen long prefill on Wormhole (batch 1, no prefix, S > 8192): context-parallel layout B
         # (tt/qwen_cp_prefill.py; QWEN_CP_PREFILL=0 keeps the seq-parallel path below). Returns the same natural
         # [1, 1, S, 1280] pre-norm output as that path.
@@ -1076,6 +1083,7 @@ class TtTransformer(LightweightModule):
             and batch_size == 1
             and start_pos == 0
             and x.shape[-2] > 8192
+            and qwen_prefill_opt_ok(self.model_config, x.shape[-2])  # > QWEN_OPT_MAX_SEQ_LEN: main's residual
             and x.shape[-2] % (rows * 32) == 0
         )
         if seq_parallel:
