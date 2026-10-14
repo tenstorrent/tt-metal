@@ -519,8 +519,8 @@ class FormatConfig:
         self.pack_S_src = pack_S_src if pack_S_src is not None else self.pack_src
         self.pack_S_dst = pack_S_dst if pack_S_dst is not None else self.pack_dst
 
-        # MxFp4_2x_A/B and Int8_2x/UInt8_2x are 2x-packed Src Register formats. They have no L1,
-        # math, or pack representation — only unpack_A_dst / unpack_B_dst (the in-register format) may use them.
+        # MxFp4_2x_A/B and Int8_2x/UInt8_2x are 2x-packed Src Register formats. They have no L1
+        # or pack representation, only unpack_A_dst / unpack_B_dst and the matching math format may use them.
         for field_name, value in (
             ("unpack_A_src", self.unpack_A_src),
             ("unpack_B_src", self.unpack_B_src),
