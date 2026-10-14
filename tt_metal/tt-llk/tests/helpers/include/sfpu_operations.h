@@ -1872,6 +1872,17 @@ constexpr SfpuType get_binary_comp_sfpu_type()
  * DST_SYNC_MODE and DST_ACCUM_MODE are the first two template parameters (matching
  * the SFPU_BINARY_CALL / _sfpu_binary_check_ convention) so the dst-bound
  * LLK_ASSERTs run against the kernel's actual sync/accumulation mode.
+ *
+ * DST_ROUNDING is forwarded only on the generic float arm (ADD, SUB, RSUB, MUL,
+ * XLOGY, POW). The ckernel applies NearestEven only for ADD, SUB, and RSUB
+ * with a 16-bit Dest. DIV, the integer arms, fp32 Dest, and the production-MUL
+ * arm drop it.
+ *
+ * PRODUCTION_MUL routes MUL to calculate_sfpu_binary_mul, the kernel
+ * mul_binary_tile dispatches on Wormhole and Blackhole, and is ignored for
+ * every other op. That kernel always applies software RNE and then forces the
+ * result to 0 when either input is 0 and Dest is 16-bit. It does not read
+ * DST_ROUNDING.
  */
 template <
     DstSync DST_SYNC_MODE,
@@ -1896,6 +1907,13 @@ void call_binary_sfpu_operation(
     // matching how every production llk_math_eltwise_binary_sfpu_* wrapper
     // dispatches into _calculate_sfpu_binary_ / _calculate_*_shift_.
     static_assert(ITERATIONS == 8 || ITERATIONS == 32, "Binary SFPU tests support legacy 8/32 iteration values; execution uses 8 rows per face.");
+    // A sweep that published these columns for a kernel that did not apply them
+    // would time the unmodified path. Reject that at compile time.
+    static_assert(!PRODUCTION_MUL || BINOP == BinaryOp::MUL, "PRODUCTION_MUL routes MUL to calculate_sfpu_binary_mul and is ignored for every other op");
+    static_assert(
+        DST_ROUNDING == ckernel::DstRoundingMode::Default ||
+            ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !DST_ACCUM_MODE && !PRODUCTION_MUL),
+        "A non-Default DST_ROUNDING is applied only for ADD/SUB/RSUB with a 16-bit Dest");
     constexpr int PER_FACE_ITERATIONS = 8;
     if constexpr (BINOP == BinaryOp::DIV)
     {

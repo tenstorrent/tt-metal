@@ -169,8 +169,10 @@ def test_perf_eltwise_binary_sfpu_mul_production(
     )
 
 
-# ADD/SUB/RSUB on Float16_b with dest_acc=No, the only place DstRoundingMode
-# changes the store. Default stays on the float sweep; this family carries both.
+# ADD/SUB/RSUB measured on Float16_b with a 16-bit Dest. The ckernel applies
+# NearestEven for any 16-bit Dest, not only Float16_b. Default already comes
+# from the float sweep, so this family is NearestEven only: a Default row
+# would duplicate that sweep's key and combine_perf_reports would drop the CSV.
 _BF16_RNE_SWEEP = dict(
     formats=input_output_formats([DataFormat.Float16_b], same=True),
     bcast_dim=[LlkBroadcastType.None_],
@@ -180,7 +182,7 @@ _BF16_RNE_SWEEP = dict(
         MathOperation.SfpuElwrsub,
     ],
     dest_acc=[DestAccumulation.No],
-    dst_rounding=[DstRoundingMode.Default, DstRoundingMode.NearestEven],
+    dst_rounding=[DstRoundingMode.NearestEven],
 )
 
 
@@ -214,7 +216,8 @@ def test_perf_eltwise_binary_sfpu_bf16_rne(
     )
 
 
-# Production depth is 1 tile, or 2 when sharded. Two tiles, add and mul only.
+# [64, 32] is one in0/in1 pair: one result tile, production depth 1.
+# [128, 32] is two pairs: sharded depth 2. Add and mul only.
 _SHALLOW_SWEEP = dict(
     formats=input_output_formats(
         [DataFormat.Float16_b, DataFormat.Float32],
@@ -223,7 +226,7 @@ _SHALLOW_SWEEP = dict(
     bcast_dim=[LlkBroadcastType.None_],
     mathop=[MathOperation.SfpuElwadd, MathOperation.SfpuElwmul],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    input_dimensions=[[64, 32]],
+    input_dimensions=[[64, 32], [128, 32]],
 )
 
 

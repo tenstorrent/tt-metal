@@ -461,6 +461,7 @@ def sfpu_binary(
     approx_mode=ApproximationMode.No,
     dst_rounding_mode=DstRoundingMode.Default,
     mul_kernel=SfpuMulImpl.Generic,
+    check_contract=True,
 ):
     """*unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
 
@@ -644,6 +645,11 @@ def sfpu_binary(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
+    # The contract tolerance cannot tell truncation from round-to-nearest-even.
+    # Callers that pass check_contract=False compare bit-exactly themselves.
+    if not check_contract:
+        return res_tensor, golden_tensor
+
     if unspecified_nonfinite_sign and generated_nan_chunks:
         # Clear the sign only on lanes that held a generated NaN and where both sides are
         # non-finite, so this excuses one bit on the lanes the ISA declines to pin and nothing
@@ -817,6 +823,114 @@ def test_eltwise_binary_sfpu_float(
         broadcast_type=bcast_dim,
         **run_kwargs,
     )
+
+
+def _bf16(bits):
+    """One bfloat16 value, as a Python float, from its 16-bit pattern."""
+    return float(torch.tensor([bits], dtype=torch.int16).view(torch.bfloat16).item())
+
+
+def _tile_from_pairs(pairs):
+    """Row-major operand tiles from cycled (a, b) pairs. One tile each."""
+    src = _build_paired_tile_override(pairs, torch.float32)
+    a = src[:_ELEMENTS_PER_TILE].to(torch.bfloat16)
+    b = src[_ELEMENTS_PER_TILE:].to(torch.bfloat16)
+    return src, a, b
+
+
+def _assert_separates_rne(wide):
+    """Fail when every lane rounds the same under truncation and RNE.
+
+    A bit-exact NearestEven check is vacuous on values that are already bf16.
+    """
+    rne = wide.to(torch.bfloat16)
+    trunc = (wide.view(torch.int32) & 0xFFFF0000).view(torch.float32).to(torch.bfloat16)
+    if torch.equal(rne.view(torch.int16), trunc.view(torch.int16)):
+        raise AssertionError("stimulus does not separate NearestEven from truncation")
+
+
+def _assert_bit_exact(got, want, what):
+    if got.dtype != want.dtype:
+        raise AssertionError(f"{what}: dtype {got.dtype} vs {want.dtype}")
+    if torch.equal(got, want):
+        return
+    differ = int((got.view(torch.int16) != want.view(torch.int16)).sum())
+    raise AssertionError(f"{what}: {differ} of {got.numel()} lanes differ")
+
+
+# One in0/in1 pair. The golden's first tile is the result in row-major order.
+_EXACT_DIMS = [64, 32]
+_BF16_FORMATS = InputOutputFormat(
+    input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
+)
+# Sums whose low 16 bits are a tie and whose kept mantissa bit is odd, so
+# round-to-nearest-even steps up and truncation does not.
+_RNE_ADD_PAIRS = (
+    (0x3F00, 0x3F03),
+    (0x3F00, 0x3F0F),
+    (0x3F00, 0x3F1B),
+    (0x3F00, 0x3F27),
+)
+# Finite products that separate the two roundings, then 0 * +inf. Production
+# mul stores that lane as 0; the generic mul leaves a NaN, packed as +inf.
+_PRODUCTION_MUL_PAIRS = (
+    (0x0000, 0x7F80),
+    (0x3F01, 0x3F42),
+    (0x3F01, 0x3F45),
+    (0x3F01, 0x3F48),
+)
+
+
+@skip_for_quasar
+def test_eltwise_binary_sfpu_bf16_rne_exact():
+    """NearestEven ADD on Float16_b with a 16-bit Dest, bit-exact against RNE.
+
+    The contract tolerance also passes a truncated store, so this compares
+    the device result to the golden with torch.equal.
+    """
+    src, a, b = _tile_from_pairs([(_bf16(x), _bf16(y)) for x, y in _RNE_ADD_PAIRS])
+    _assert_separates_rne(a.float() + b.float())
+    res, golden = sfpu_binary(
+        _BF16_FORMATS,
+        DestAccumulation.No,
+        MathOperation.SfpuElwadd,
+        src_A_override=src,
+        input_dimensions=_EXACT_DIMS,
+        dst_rounding_mode=DstRoundingMode.NearestEven,
+        check_contract=False,
+    )
+    _assert_bit_exact(res, golden, "NearestEven ADD")
+
+
+@skip_for_quasar
+def test_eltwise_binary_sfpu_mul_production_exact():
+    """Production mul is RNE, and 0 * inf stores 0 rather than a NaN."""
+    src, a, b = _tile_from_pairs(
+        [(_bf16(x), _bf16(y)) for x, y in _PRODUCTION_MUL_PAIRS]
+    )
+    finite = torch.isfinite(a.float() * b.float())
+    _assert_separates_rne((a.float() * b.float())[finite])
+    res, golden = sfpu_binary(
+        _BF16_FORMATS,
+        DestAccumulation.No,
+        MathOperation.SfpuElwmul,
+        src_A_override=src,
+        input_dimensions=_EXACT_DIMS,
+        mul_kernel=SfpuMulImpl.Production,
+        check_contract=False,
+    )
+    zero = (a == 0) | (b == 0)
+    if not bool(zero.any()):
+        raise AssertionError("production mul stimulus has no zero input")
+    expected = golden.clone()
+    expected[:_ELEMENTS_PER_TILE] = torch.where(
+        zero, torch.zeros((), dtype=expected.dtype), expected[:_ELEMENTS_PER_TILE]
+    )
+    # The stock golden turns 0 * inf into an infinity. A golden that is already
+    # zero on that lane would let the generic kernel pass.
+    if torch.equal(expected, golden):
+        raise AssertionError("0 * inf lane did not change the golden")
+    _assert_bit_exact(res, expected, "production mul")
 
 
 @parametrize(**DIV_SWEEP)
@@ -1860,6 +1974,10 @@ def _run_sfpu_binary_bcast(
             ITERATIONS(iterations),
             BROADCAST_TYPE(LlkBroadcastType.None_),
             SFPU_BCAST_DIM(bcast_dim),
+            # Defaults only. The bcast kernel does not read them; every row of
+            # the module report has to carry the same columns as sfpu_binary.
+            SFPU_DST_ROUNDING_MODE(),
+            SFPU_MUL_IMPL(),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A + tile_cnt_B),
