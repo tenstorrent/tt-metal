@@ -3,8 +3,9 @@
 """Device smoke tests: SDPA recipes on the D64 joint attentions of SD3.5 (SD35JointAttention) and Motif
 (blocks/attention.py with context head scaling), variants and gates from sdpa_smoke.py (gate_vs_legacy).
 
-Random weights, small shapes (4 heads, D64), 1x1 (joint SDPA) and 1x2 (ring joint SDPA, sp=2), with the
-non-tile-aligned SD3.5/Motif prompt length 333; Motif also with an unaligned (padded) spatial length on 1x2.
+Random weights, small shapes (4 heads, D64), 1x1 and 1x2 (sp=2), with the non-tile-aligned SD3.5/Motif prompt
+length 333; Motif also with an unaligned (padded) spatial length on 1x2. SD3.5 runs joint SDPA on 1x1 and ring
+joint SDPA on 1x2; Motif runs ring joint SDPA on both (its 1x1 is a fabric submesh, see RING_MESHES).
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from ...models.transformers.transformer_motif import MotifTransformer, convert_m
 from ...reference.motif.modeling_dit import JointAttn as MotifAttentionReference
 from ...utils import tensor
 from ...utils.tensor import bf16_tensor
-from .sdpa_smoke import MESHES, gate_vs_legacy, parallel, run_variants
+from .sdpa_smoke import MESHES, RING_MESHES, gate_vs_legacy, parallel, run_variants, submesh
 
 HEADS = 4
 HEAD_DIM = 64
@@ -105,7 +106,7 @@ def test_sd35_attention_sdpa_recipes(
 # ---------------------------------------------------------------------------------------------
 
 
-@MESHES
+@RING_MESHES
 @pytest.mark.parametrize(
     ("spatial_seq_len", "prompt_seq_len"),
     [
@@ -114,9 +115,10 @@ def test_sd35_attention_sdpa_recipes(
     ],
 )
 def test_motif_attention_sdpa_recipes(
-    mesh_device, sp_axis, tp_axis, spatial_seq_len, prompt_seq_len, record_property
+    mesh_device, submesh_shape, sp_axis, tp_axis, spatial_seq_len, prompt_seq_len, record_property
 ) -> None:
     torch.manual_seed(0)
+    mesh_device = submesh(mesh_device, submesh_shape)
     ccl_manager, parallel_config, sp_factor = parallel(mesh_device, sp_axis, tp_axis)
     if sp_factor == 1 and spatial_seq_len % 32:
         pytest.skip("Motif pads the spatial sequence only with sequence parallelism")

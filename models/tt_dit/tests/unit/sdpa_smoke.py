@@ -43,8 +43,10 @@ VARIANTS = {
     "FAST_bfp8": (ttnn.SDPAPrecision.FAST, ttnn.bfloat8_b),
 }
 
-LINE_1D = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
-# 1x1 runs without fabric (a 1x1 submesh with FABRIC_1D fails the router handshake on a 2-chip host).
+# 1x2 runs on 2-chip hosts only, like the other tt_dit fabric tests (a 1x2 submesh with FABRIC_1D times out in the
+# fabric router handshake on a 4-chip QB2). 1x1 runs without fabric (a 1x1 submesh with FABRIC_1D fails the router
+# handshake on a 2-chip host).
+LINE_1D = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}
 MESHES = pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "device_params"),
     [
@@ -53,6 +55,24 @@ MESHES = pytest.mark.parametrize(
     ],
     indirect=["mesh_device", "device_params"],
 )
+# The shared joint Attention (blocks/attention.py) runs ring joint SDPA whenever the spatial sequence is whole tiles,
+# also at sequence-parallel factor 1, and ring joint SDPA needs a fabric config even on one device. A single-device
+# mesh cannot open fabric, so the 1x1 case is a submesh of a FABRIC_1D 1x2 mesh (2-chip hosts only, like 1x2).
+RING_MESHES = pytest.mark.parametrize(
+    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "device_params"),
+    [
+        pytest.param((1, 2), (1, 1), 0, 1, LINE_1D, id="1x1"),
+        pytest.param((1, 2), (1, 2), 1, 0, LINE_1D, id="1x2sp1"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+
+
+def submesh(mesh_device, shape):
+    """``mesh_device``, or its submesh of ``shape`` (RING_MESHES)."""
+    if tuple(mesh_device.shape) == tuple(shape):
+        return mesh_device
+    return mesh_device.create_submesh(ttnn.MeshShape(*shape))
 
 
 def _without_recipe(op):

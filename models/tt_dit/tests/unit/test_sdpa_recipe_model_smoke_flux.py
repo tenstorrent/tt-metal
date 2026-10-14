@@ -4,8 +4,9 @@
 Attention (blocks/attention_opt.py), variants and gates from sdpa_smoke.py (gate_vs_legacy).
 
 Random weights, small shapes (4 heads, D128):
-- FLUX.1 joint (added KV projection, prompt stream) and no-prompt (empty joint segment), on 1x1
-  (joint SDPA) and 1x2 (ring joint SDPA, sp=2); plus an unaligned spatial length on 1x2 (padded).
+- FLUX.1 joint (added KV projection, prompt stream) and no-prompt (empty joint segment), on 1x1 and 1x2
+  (ring joint SDPA on both, sp=1 and sp=2; the 1x1 is a fabric submesh, see RING_MESHES); plus an unaligned
+  spatial length on 1x2 (padded).
 - FLUX.2 dual-stream joint attention and the single-stream concatenated sequence (empty joint),
   on 1x1 and 1x2.
 """
@@ -20,7 +21,7 @@ from ...blocks import attention as flux1_attention
 from ...blocks import attention_opt as flux2_attention
 from ...utils import tensor
 from ...utils.tensor import bf16_tensor
-from .sdpa_smoke import MESHES, gate_vs_legacy, parallel, run_variants
+from .sdpa_smoke import MESHES, RING_MESHES, gate_vs_legacy, parallel, run_variants, submesh
 
 HEADS = 4
 HEAD_DIM = 128
@@ -44,7 +45,7 @@ def _rope(seq: int) -> tuple[torch.Tensor, torch.Tensor]:
 # ---------------------------------------------------------------------------------------------
 
 
-@MESHES
+@RING_MESHES
 @pytest.mark.parametrize(
     ("spatial_seq_len", "prompt_seq_len"),
     [
@@ -54,9 +55,10 @@ def _rope(seq: int) -> tuple[torch.Tensor, torch.Tensor]:
     ],
 )
 def test_flux1_attention_sdpa_recipes(
-    mesh_device, sp_axis, tp_axis, spatial_seq_len, prompt_seq_len, record_property
+    mesh_device, submesh_shape, sp_axis, tp_axis, spatial_seq_len, prompt_seq_len, record_property
 ) -> None:
     torch.manual_seed(0)
+    mesh_device = submesh(mesh_device, submesh_shape)
     ccl_manager, parallel_config, sp_factor = parallel(mesh_device, sp_axis, tp_axis)
     if sp_factor == 1 and spatial_seq_len % 32:
         pytest.skip("FLUX.1 Attention pads the spatial sequence only with sequence parallelism")
