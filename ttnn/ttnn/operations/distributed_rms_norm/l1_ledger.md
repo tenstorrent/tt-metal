@@ -158,3 +158,42 @@ increment is multicast per rectangle of the shard grid, so it only reaches cores
 | output | 0 | Compute packs into the shard (native). |
 | gamma | `S_r` reads per call (HEIGHT: one per shard; WIDTH: one per W chunk), or `S_r·stat batches` when fused + streamed | — |
 | records | 0 | They stay in L1. WIDTH NoC traffic: `Ht·S_w·128 B` worker→combiner, `Ht·128 B` combiner→port, `S_w·Ht·G·128 B` port→worker pulls. |
+
+## Refinement 3 — R2 multi-round exchange (interleaved): status **built**
+
+`block_rows < core_rows` is now live on the interleaved path. The plan picks `rounds` and derives `block_rows = ceil(core_rows_max / rounds)`:
+- **Split.** `_rounds_split` uses `EXCHANGE_ROUNDS = 2`. It caps `S_r` at `ceil(Ht / 2)` and relaxes the W-chunk floor so `S_w` can double. It is taken only when the tiles per worker do not exceed the one-round split.
+  - 640×1792: `S_r` 20→10, `S_w` 4→8, still 14 tiles per worker.
+- **L1 fit (`_fit_rounds`).** If the footprint fails, `rounds` grows until it fits. The prescale path is preferred over the fused one.
+
+The worker kernels run a lookahead schedule with `ROUND_LOOKAHEAD = 1`: `front(b+1)` (load / sumsq / publish / prescale) runs before `back(b)` (gather / finalize / normalize / store).
+
+**CBs whose capacity changes with `block_rows` / rounds:**
+
+| CB | Capacity | Why |
+|----|----------|-----|
+| cb_x_resident | prescale: `(1 + ROUND_LOOKAHEAD) · block_rows · cw` (`x_blocks()`). No prescale (no gamma, or fused gamma): `num_blocks · block_rows · cw` (the whole assignment). | With prescale, x is popped every round, so the CB is a plain FIFO of the blocks in flight. Without prescale, round b's x stays at the CB front until its normalize, and round b+1's sumsq reads past it at a tile offset. That offset is linear from the read pointer and not wrap-safe. A `(1+LA)`-block ring wraps from round 3 on: fp32 4096×1024 at 4 rounds failed (rel-RMS 0.008 / 0.019) before this sizing. So the CB never wraps within a call. |
+| cb_xg | `(1 + ROUND_LOOKAHEAD) · block_rows · cw` | Prescale of round b+1 runs before round b's normalize pops round b. |
+| cb_sq_acc, cb_partial, cb_rstd, cb_stats_combine | unchanged formula (`stat_rows = block_rows`) | These CBs shrink with `block_rows`. Their earlier "kept separate for R2" notes now hold: round b+1's sumsq runs while round b's rstd is live. |
+| cb_output_tiles, cb_gamma_tiles | unchanged | — |
+
+**Footprint (interleaved):**
+```
+F = X_BLOCKS_IN_FLIGHT · x_blocks · block_rows·cw·T_x + PRESCALE · (1+LA)·block_rows·cw·T_f + (unchanged rest)
+```
+**P_resident:** the RuntimeError now fires only if no number of rounds fits.
+- With prescale, the x and xg blocks shrink with more rounds. (2, 2048, 4096) bf16 + gamma used to need the fused fallback. It now runs 4 rounds of one-row blocks on the prescale path: ~0.8 MB, 346 → ~200 µs.
+- Without prescale, x is whole-assignment resident (same as R1), so rounds do not lift that path.
+
+**Semaphores (all cores).**
+- `SEM_LOCAL_ARRIVALS + b % (1+LA)`: rotating local-arrival counters on the ports. A single counter let a fast worker's round b+1 increment complete a slow worker's round b, so a port sent round b before all of its records had landed. This was observed: round-0 rows wrong on 4096×1024 / 2048×1280.
+- `SEM_LOCAL_COMBINE`.
+- `SEM_STATS_READY_BASE + 2l + d`: one stats-ready counter per port. A worker waits on both ports of its link for ≥ round + 1.
+- Total `3 + LA + 2L ≤ 16`, checked on the host.
+
+**Exchange scratch:** the slot is round-major.
+- `slot_bytes = 128 · num_blocks · max_l round_recs[l]`.
+- `round_recs[l] = rec_w · Σ_{g∈l} min(block_rows, core_rows[g])`.
+- One round reproduces the dense R1 layout. A ragged last round leaves an unread gap.
+
+**Data-movement budget:** unchanged. x crosses DRAM once (never re-read) and the output once. Stats bytes are the same per tile row. Fabric carries one entry per round per source, each `round_recs·128 B`.

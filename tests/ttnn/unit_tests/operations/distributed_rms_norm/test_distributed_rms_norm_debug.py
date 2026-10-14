@@ -87,3 +87,32 @@ def test_four_rows_per_core(mesh_device):
     print("\nBAD TILE ROWS", len(bad), bad[:40])
     print("ERR", [round(v, 3) for v in per_row.tolist()[:16]])
     assert not bad
+
+
+@_MESH
+@_FABRIC
+@pytest.mark.parametrize("shape", [(1, 1, 4096, 1024), (1, 1, 2048, 1280), (1, 1, 640, 1792)], ids=lambda s: str(s[-2]))
+def test_r2_round_values(mesh_device, shape):
+    """R2 (2 exchange rounds): x row r of tile row t = (1 + t % 7), no gamma -> every output 1.0. Print the value
+    per tile row so a wrong round shows which stats it got (got = scale / scale_of_used_stats)."""
+    from ttnn.operations.distributed_rms_norm import distributed_rms_norm
+
+    rows, cols = tuple(mesh_device.shape)
+    scale = torch.tensor([1.0 + ((r // 32) % 7) for r in range(shape[-2])]).reshape(-1, 1)
+    x = torch.ones((rows, cols, *shape), dtype=torch.float32) * scale
+    glob = torch.cat([torch.cat(list(x[r]), dim=1) for r in range(rows)], dim=0)
+    tx = ttnn.from_torch(
+        glob,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=tuple(mesh_device.shape)),
+    )
+    out = distributed_rms_norm(tx, cluster_axis=1)
+    got = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float().reshape(-1, shape[-1])
+    vals = got[::32, 0].tolist()
+    print("\nROWVALS", [round(v, 3) for v in vals[:16]])
+    bad = [i for i, v in enumerate(vals) if abs(v - 1.0) > 0.05]
+    print("BAD", len(bad), bad[:32])
+    assert not bad

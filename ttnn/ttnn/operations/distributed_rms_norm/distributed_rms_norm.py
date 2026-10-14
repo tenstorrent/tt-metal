@@ -204,7 +204,13 @@ def distributed_rms_norm(
         compute_kernel_config=compute_kernel_config,
     )
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
-    plan = build_plan(input_tensor, cluster_axis=cluster_axis, topology=topology, num_links=num_links)
+    plan = build_plan(
+        input_tensor,
+        cluster_axis=cluster_axis,
+        topology=topology,
+        num_links=num_links,
+        gamma_dtype=gamma.dtype if gamma is not None else None,
+    )
     return run_distributed_rms_norm(
         input_tensor,
         gamma,

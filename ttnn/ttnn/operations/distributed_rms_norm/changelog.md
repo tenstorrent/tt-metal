@@ -96,3 +96,59 @@
   - The new unit test injects garbage into the padding. Without the mask it fails (rel-RMS ≈ 0.98 on every placement); with the mask it passes.
   - The sharded mask writes zeros into the padding of the input's resident shard. That region is tile padding (not logical data), so the input's logical value is unchanged.
 - Tests added: `tests/ttnn/unit_tests/operations/distributed_rms_norm/test_distributed_rms_norm_w_non_aligned.py`, 7 cases with garbage in the tile padding: interleaved / HEIGHT / WIDTH, fp32 + bf16, w_tail 4/8/15/17/18 (both the faces-{0,2} and faces-{1,3} branches).
+
+## Refinement 3 — Speed up the perf-flagged profile (overlap the exchange with DRAM)
+- Date: 2026-10-14
+- What was done:
+  - **R2 multi-round regime built** (interleaved). `block_rows < core_rows`. All three worker kernels split each round into:
+    - `front(b)`: load / sumsq / publish / prescale.
+    - `back(b)`: gather / finalize / normalize / store.
+
+    They run `front(b + ROUND_LOOKAHEAD)` before `back(b)`. Round b's exchange therefore runs under round b+1's DRAM reads and sumsq, and round b+1's exchange under round b's normalize and writes. `ROUND_LOOKAHEAD = 1` is a host knob passed as a CT arg; 0 gives the serial schedule.
+  - **Port:** loops the rounds. Each round:
+    - waits on round b's local-arrival threshold;
+    - sends round b's region of each slot (the slot is round-major; one entry = `round_recs·128 B`);
+    - waits for arrivals ≥ `(b+1)·expect_in`;
+    - multicasts +1 to its own stats-ready counter.
+
+    The ready fence is still once per call, and the arrival counter is re-armed by `num_rounds·expect_in`.
+  - **Synchronization (two races found and fixed):**
+    - One shared stats-ready counter (≥ `2L·(round+1)`) would let a fast port's round b+1 stand in for a slow port's round b. Now there is one counter per port, `SEM_STATS_READY_BASE + 2l + d`, and workers wait on both ports of their link.
+    - One shared local-arrival counter did let a fast worker's round-1 increment complete a slow worker's round 0. Observed: round-0 rows wrong on 4096×1024 / 2048×1280. Now there are `1 + ROUND_LOOKAHEAD` rotating counters (round b → `b % (1+LA)`). A worker publishes round b+1+LA only after its round-b gather, so no counter can run ahead.
+  - **Split** (`_rounds_split`):
+    - `EXCHANGE_ROUNDS = 2` caps `S_r` at `ceil(Ht/2)` and relaxes the W-chunk floor so `S_w` may double (the design's "S_r = Ht/2, S_w doubled"). It is taken only if the tiles per worker do not grow.
+    - The first try kept the floor at 8 (640×1792 → `S_w` 7, 16 tiles per worker). That measured worse on max-device (25.5 µs median) than the floor-relaxed `S_w` 8 / 14-tile split (21.7 µs).
+  - **P_resident lift** (`_fit_rounds`): when the footprint does not fit, `rounds` grows (prescale path preferred). (2, 2048, 4096) bf16 + gamma left the fused fallback for 4 one-row prescale rounds.
+  - **cb_x_resident sizing (`x_blocks`):**
+    - With prescale (x popped every round): `1 + LA` blocks.
+    - Without prescale: the whole assignment. The next round's sumsq reads past the held block at a tile offset that is not wrap-safe; a `1+LA` ring corrupted fp32 4096×1024 at 4 rounds.
+  - **Reader:** gamma loads after the lookahead x blocks. Between them it delayed round 1 (fused fallback measured +0.6% until moved).
+  - Sharded placements keep one round. The shard is the block, and R5 runs once.
+  - **Reused / Added:**
+    - Reused: every helper call, the gather / publish lambdas, the record layout per round, the port send loop, and the CB grouping.
+    - Added: front/back lambdas plus the lookahead loop, per-round port thresholds, per-port stats-ready counters, rotating local-arrival counters, `_rounds_split` / `_fit_rounds` / `x_blocks`, and the knobs `EXCHANGE_ROUNDS`, `ROUND_LOOKAHEAD`, `GAMMA_PRESCALE`.
+- Accuracy achieved: golden tolerances (fp32 PCC ≥ 0.9999 / rel-RMS ≤ 0.005; bf16 PCC ≥ 0.999 / rel-RMS ≤ 0.01). Shapes: 640×1792, 2048×1280, 4096×1024 (ragged rounds), 100×512, (2, 2048, 4096), and every golden interleaved shape.
+- **Perf** (median over calls of the max over 4 devices, bf16 + gamma, axis 1, Linear, 2 links unless noted):
+
+  | Shape | Before | After |
+  |-------|--------|-------|
+  | **640×1792 (flagged)** | **25.1 µs** | **21.9–22.5 µs** (min device 21.7 → 18.8) |
+  | 2048×1280 | 45.2 | 37.3–40.7 |
+  | 32×1792 | 10.8 | 10.5 |
+  | fp32 no-gamma 640×1792 | 38.8 | 34.3–35.4 |
+  | (2, 2048, 4096) | 346.5 | 196–204 |
+  | HEIGHT 640×1792 | 19.8 | 19.8 |
+  | WIDTH 640×1792 | 70.9 | 70.9–71.7 |
+  | Ring mock 640×1792 L2 (single calls) | 54.6 / 55.3 | 51.7 / 54.3 |
+
+  Gamma prescale vs fused: fused is ~2× slower (640×1792: 52 µs) because of the reader's RISC row replication, so prescale stays.
+- **Finding:** max-over-devices is now set by cross-device launch skew. 2–5 µs typical, with 10+ µs spikes in ~1 of 10 calls. Per-device work is 18.8 µs. Refinement 5 (per-link stats-ready, port placement) is next.
+- Golden test progress:
+  - Interleaved + sharded slice (fp32/bf16, `fp32_dest_acc_en=True`, `num_links=2`, both axes / axis 1 sharded), plus loose and ring mock: 667 passed, 0 failed (648 skipped as INVALID / topology).
+  - Translated: 235 passed, 43 xfailed, 0 failed.
+  - Unit directory: 69/69.
+- Issues encountered: the two counter races and the CB wrap above, each found by a deterministic debug test before landing.
+- Tests added:
+  - `test_distributed_rms_norm_rounds.py`: `EXCHANGE_ROUNDS` 2/4 × `ROUND_LOOKAHEAD` 0/1/2 × prescale / fused, ragged rounds, h_non_aligned, two calls each (counter re-arm), plus the P_resident-lift shape.
+  - `test_distributed_rms_norm_debug.py::test_r2_round_values`: per-tile-row values that expose a round reading the wrong stats.
+  - `test_distributed_rms_norm_perf_bench.py`: 21 calls per shape, plus `test_guard_bench` (the guard set).

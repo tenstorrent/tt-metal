@@ -55,6 +55,7 @@ void kernel_main() {
     constexpr bool local_combine = get_compile_time_arg_val(13) != 0;
     constexpr uint32_t cb_lc = get_compile_time_arg_val(14);
     constexpr uint32_t cb_lc_out = get_compile_time_arg_val(15);
+    constexpr uint32_t round_lookahead = get_compile_time_arg_val(16);  // rounds whose front half runs ahead
 
     uint32_t a = 0;
     const uint32_t core_rows = get_arg_val<uint32_t>(a++);
@@ -115,8 +116,18 @@ void kernel_main() {
         cb_reserve_back(cb_output_tiles, core_rows * cw_phys);
     }
 
-    for (uint32_t r0 = 0; r0 < core_rows; r0 += block_rows) {
-        const uint32_t rows = (core_rows - r0) < block_rows ? (core_rows - r0) : block_rows;
+    const uint32_t num_blocks = (core_rows + block_rows - 1) / block_rows;
+    auto rows_of = [&](uint32_t b) {
+        const uint32_t r0 = b * block_rows;
+        return (core_rows - r0) < block_rows ? (core_rows - r0) : block_rows;
+    };
+
+    // ---- front half of round b: sumsq -> cb_partial (records), R5 local combine, gamma prescale ----
+    // held: interleaved x tiles of earlier rounds still at the front of cb_x_resident (R2 without prescale: round b-1's
+    // block waits there for its normalize while round b's sumsq runs ahead)
+    auto front = [&](uint32_t round, uint32_t held) {
+        [[maybe_unused]] const uint32_t r0 = round * block_rows;
+        const uint32_t rows = rows_of(round);
 
         // ---- sumsq_block: x^2 accumulated across the W chunk in DEST, one packed tile per row ----
         for (uint32_t b0 = 0; b0 < rows; b0 += stat_rows) {
@@ -130,6 +141,19 @@ void kernel_main() {
                 DestAccumulation::PerRow);
             if constexpr (x_sharded) {
                 const StridedTileRange xr{(r0 + b0) * cw_phys, cw_phys};
+                eltwise_chain(
+                    IterationShape::grid(nb, cw),
+                    BinaryFpu<
+                        BinaryFpuOp::Mul,
+                        x_in,
+                        input(x_in, BroadcastDim::None),
+                        Dst::D0,
+                        DestAccumulation::PerRow>{xr, xr},
+                    PackTile<sq_out>{});
+            } else if (held > 0) {
+                // interleaved, behind an earlier round's resident block: wait for my block, read it past `held`
+                cb_wait_front(cb_x_resident, held + (b0 + nb) * cw);
+                const StridedTileRange xr{held + b0 * cw, cw};
                 eltwise_chain(
                     IterationShape::grid(nb, cw),
                     BinaryFpu<
@@ -206,7 +230,12 @@ void kernel_main() {
                     PackTile<output(cb_xg)>{});
             }
         }
+    };
 
+    // ---- back half of round b: combine/finalize -> rstd, normalize -> cb_output_tiles ----
+    auto back = [&](uint32_t round) {
+        [[maybe_unused]] const uint32_t r0 = round * block_rows;
+        const uint32_t rows = rows_of(round);
         for (uint32_t b0 = 0; b0 < rows; b0 += stat_rows) {
             const uint32_t nb = (rows - b0) < stat_rows ? (rows - b0) : stat_rows;
 
@@ -301,6 +330,29 @@ void kernel_main() {
                     PackTile<output(cb_output_tiles)>{});
             }
         }
+    };
+
+    // R2 schedule: round b+lookahead's sumsq / prescale run before round b's combine waits on the exchange (the host
+    // sizes cb_x_resident / cb_xg for 1 + lookahead blocks). One round: front(0), back(0) == the R1 schedule.
+    // held: x tiles of the rounds still waiting for their normalize sit ahead of the new round's block in
+    // cb_x_resident, unless the prescale already consumed them (sharded x is addressed absolutely).
+    auto held_before = [&](uint32_t first, uint32_t last) {
+        uint32_t held = 0;
+        if constexpr (!x_sharded && !gamma_prescale) {
+            for (uint32_t r = first; r < last; ++r) {
+                held += rows_of(r) * cw;
+            }
+        }
+        return held;
+    };
+    for (uint32_t round = 0; round < round_lookahead && round < num_blocks; ++round) {
+        front(round, held_before(0, round));
+    }
+    for (uint32_t round = 0; round < num_blocks; ++round) {
+        if (round + round_lookahead < num_blocks) {
+            front(round + round_lookahead, held_before(round, round + round_lookahead));
+        }
+        back(round);
     }
     if constexpr (out_native) {
         cb_push_back(cb_output_tiles, core_rows * cw_phys);

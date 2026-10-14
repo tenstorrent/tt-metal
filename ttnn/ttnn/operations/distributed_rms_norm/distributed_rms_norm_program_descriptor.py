@@ -43,15 +43,28 @@ CB_LC = 9  # R5 pre-combine: S_w W-chunk records per tile row (combiners only)
 CB_LC_OUT = 10  # R5 pre-combine: one combined record per tile row (combiners only)
 
 # ---- program-local semaphores (declared over every core, before any fabric connection setup) ------------------
-SEM_LOCAL_ARRIVALS = 0  # on ports: workers of the link increment once their records have landed
-SEM_STATS_READY = 1  # on workers: every port multicasts +1 once its slots are complete
-SEM_LOCAL_COMBINE = 2  # on combiners: every W chunk of the row group increments once its records are in my inbox
+ROUND_LOOKAHEAD = 1  # R2: rounds whose load/sumsq/publish run ahead of the oldest round's gather/normalize/store
+# on ports: workers of the link increment once per round their records have landed, round b on counter
+# SEM_LOCAL_ARRIVALS + b % LOCAL_ARRIVAL_SEMS. A worker publishes round b + 1 + ROUND_LOOKAHEAD only after its round b
+# gather, i.e. after every worker of the link published round b; so with 1 + ROUND_LOOKAHEAD rotating counters an
+# increment can never stand in for an earlier round's (one shared counter would let a fast worker's round b+1
+# increment complete a slow worker's round b).
+SEM_LOCAL_ARRIVALS = 0
+LOCAL_ARRIVAL_SEMS = 1 + ROUND_LOOKAHEAD
+SEM_LOCAL_COMBINE = SEM_LOCAL_ARRIVALS + LOCAL_ARRIVAL_SEMS  # on combiners: W chunks of the row group, once each
+# on workers: one counter per port (l, d) at SEM_STATS_READY_BASE + 2*l + d; port (l, d) multicasts +1 per round once
+# its round's slots are complete. Per-port (not one shared) counters: with several rounds in flight a fast port's
+# round b+1 increment must never stand in for a slow port's round b one.
+SEM_STATS_READY_BASE = SEM_LOCAL_COMBINE + 1
+NUM_SEMAPHORES = 16  # per core (tt_metal semaphore.hpp)
 
 # ---- blocking knobs (single source of truth) -------------------------------------------------------------------
 MIN_CORE_W_TILES = (
     8  # floor of the W chunk per worker; record pulls grow as S_w^2 (perf lamp "grid synchronization": 8 measured best)
 )
-X_BLOCKS_IN_FLIGHT = 1  # cb_x_resident depth in blocks (residency, not pipelining)
+X_BLOCKS_IN_FLIGHT = 1  # cb_x_resident depth in blocks per round in flight (residency, not pipelining)
+EXCHANGE_ROUNDS = 2  # R2: target exchange rounds per call (interleaved); 1 = the single-round R1 schedule
+GAMMA_PRESCALE = True  # x*gamma in the exchange stall (cb_xg) when it fits; False: fused gamma in normalize
 OUT_DEPTH = 2  # cb_output_tiles depth in out batches (double buffer)
 HEADER_RING = 8  # fabric packet headers in flight per port (pool holds 12 per RISC)
 RECORD_BYTES = 128  # one fp32 record: 32 per-row partial sums of one tile row
@@ -61,9 +74,23 @@ SCRATCH_BUDGET = 1 << 20  # exchange scratch bytes per port core (P_scratch)
 TILE = 32
 
 
-def block_rows_knob(core_rows_max):
-    """Rows per block. Phase 0 (R1): the whole per-core assignment, one block, one exchange round."""
-    return core_rows_max
+def block_rows_knob(core_rows_max, rounds):
+    """Rows per block: the per-core assignment split into `rounds` blocks (rounds == 1: the whole assignment)."""
+    return math.ceil(core_rows_max / rounds)
+
+
+def blocks_in_flight(num_blocks):
+    """Blocks resident at once in the per-block worker CBs (cb_x_resident, cb_xg): the oldest round plus the
+    rounds running ahead of it."""
+    return min(num_blocks, 1 + ROUND_LOOKAHEAD)
+
+
+def x_blocks(num_blocks, gamma_prescale):
+    """cb_x_resident capacity in blocks. Prescale pops x every round, so x is a plain FIFO of the blocks in flight.
+    Otherwise round b's x stays at the CB front until its normalize while round b+1's sumsq reads past it at a tile
+    offset; a tile offset is linear from the read pointer and not wrap-safe, so the CB holds the whole assignment
+    (it never wraps within a call; the same bytes as the one-round R1 block)."""
+    return blocks_in_flight(num_blocks) if gamma_prescale else num_blocks
 
 
 def out_batch_tiles_knob(core_w_tiles):
@@ -161,11 +188,13 @@ def caller_link_checks(mesh_device, cluster_axis, topology, num_links):
 # ----------------------------------------------------------------------------------------------------------------
 
 
-def _choose_split(tensor_row_tiles, tensor_w_tiles, num_workers, min_core_w_tiles=MIN_CORE_W_TILES):
-    """(S_r, S_w, core_w_tiles): lexicographically smallest (max tiles per worker, S_w)."""
+def _choose_split(tensor_row_tiles, tensor_w_tiles, num_workers, min_core_w_tiles=MIN_CORE_W_TILES, max_s_r=None):
+    """(S_r, S_w, core_w_tiles): lexicographically smallest (max tiles per worker, S_w). `max_s_r` caps the row
+    groups (R2: every group keeps >= rounds tile rows, so the freed workers go to W chunks)."""
     best = None
+    s_r_cap = tensor_row_tiles if max_s_r is None else min(tensor_row_tiles, max_s_r)
     for s_w in range(1, max(1, min(num_workers, math.ceil(tensor_w_tiles / min_core_w_tiles))) + 1):
-        s_r = min(tensor_row_tiles, num_workers // s_w)
+        s_r = min(s_r_cap, num_workers // s_w)
         if s_r == 0:
             break
         cost = math.ceil(tensor_row_tiles / s_r) * math.ceil(tensor_w_tiles / s_w)
@@ -174,7 +203,7 @@ def _choose_split(tensor_row_tiles, tensor_w_tiles, num_workers, min_core_w_tile
     s_w = best[1]
     core_w_tiles = math.ceil(tensor_w_tiles / s_w)
     s_w = math.ceil(tensor_w_tiles / core_w_tiles)  # no empty trailing chunk
-    s_r = min(tensor_row_tiles, num_workers // s_w)
+    s_r = min(s_r_cap, num_workers // s_w)
     return s_r, s_w, core_w_tiles
 
 
@@ -182,9 +211,32 @@ def _tile_bytes(dtype):
     return ttnn.tile_size(dtype)
 
 
+def _split_cost(tensor_row_tiles, Wt, split):
+    S_r, S_w, cw = split
+    return math.ceil(tensor_row_tiles / S_r) * cw
+
+
+def _rounds_split(tensor_row_tiles, Wt, num_workers):
+    """(rounds, (S_r, S_w, core_w_tiles)). R2 (op_design.md overlap lamp): EXCHANGE_ROUNDS rounds with S_r capped so
+    every row group holds >= rounds tile rows, and the W-chunk floor relaxed so S_w may grow by the same factor as
+    S_r shrinks ("S_r = Ht/2, S_w doubled"). Taken only when it does not raise the tiles per worker over the
+    one-round split (the overlap hides the exchange; it cannot pay for extra DRAM/compute per worker)."""
+    r1 = _choose_split(tensor_row_tiles, Wt, num_workers)
+    rounds = max(1, min(EXCHANGE_ROUNDS, tensor_row_tiles))
+    if rounds == 1:
+        return 1, r1
+    floor = min(MIN_CORE_W_TILES, math.ceil(Wt / (rounds * r1[1])))
+    r2 = _choose_split(
+        tensor_row_tiles, Wt, num_workers, min_core_w_tiles=floor, max_s_r=math.ceil(tensor_row_tiles / rounds)
+    )
+    if _split_cost(tensor_row_tiles, Wt, r2) > _split_cost(tensor_row_tiles, Wt, r1):
+        return 1, r1
+    return rounds, r2
+
+
 def _interleaved_layout(tensor_row_tiles, Wt, gx, gy):
-    """R1: rows x W-chunks over the worker rectangle (logical rows 1..), ports in logical row 0."""
-    S_r, S_w, cw = _choose_split(tensor_row_tiles, Wt, gx * (gy - 1))
+    """R1 / R2: rows x W-chunks over the worker rectangle (logical rows 1..), ports in logical row 0."""
+    rounds, (S_r, S_w, cw) = _rounds_split(tensor_row_tiles, Wt, gx * (gy - 1))
     base, extra = divmod(tensor_row_tiles, S_r)
     core_rows = [base + (1 if g < extra else 0) for g in range(S_r)]
     row_start = [sum(core_rows[:g]) for g in range(S_r)]
@@ -209,6 +261,7 @@ def _interleaved_layout(tensor_row_tiles, Wt, gx, gy):
         )
     worker_cores = [ttnn.CoreCoord(x, y) for y in range(1, y_last + 1) for x in range(gx)]
     return dict(
+        rounds=rounds,
         S_r=S_r,
         S_w=S_w,
         core_w_tiles=cw,
@@ -273,6 +326,7 @@ def _sharded_layout(mem_config, tensor_row_tiles, Wt, gx, gy):
     free = [ttnn.CoreCoord(x, y) for y in range(gy) for x in range(gx) if (x, y) not in taken]
     rects = [(r.start, r.end) for r in spec.grid.ranges()]
     return dict(
+        rounds=1,  # the shard is the block; R5 pre-combine runs once
         S_r=S_r,
         S_w=S_w,
         core_w_tiles=w_per if S_w > 1 else Wt,
@@ -286,7 +340,33 @@ def _sharded_layout(mem_config, tensor_row_tiles, Wt, gx, gy):
     )
 
 
-def build_plan(input_tensor, *, cluster_axis, topology, num_links):
+def _fit_rounds(lay, x_dtype, gamma_dtype, n_src_tiles, budget=WORKER_L1_BUDGET):
+    """(rounds, prescale_fits) for the interleaved path: R2 also lifts the P_resident ceiling. With 1 + ROUND_LOOKAHEAD
+    blocks in flight, more rounds shrink the resident set; take the fewest rounds (>= the split's) whose footprint
+    fits, preferring the gamma-prescale path (cb_xg) over the fused-gamma fallback (measured ~2x slower)."""
+    core_rows_max = max(lay["core_rows"])
+
+    def plan_at(rounds):
+        br = block_rows_knob(core_rows_max, rounds)
+        return dict(
+            block_rows=br,
+            num_blocks=max(math.ceil(r / br) for r in lay["core_rows"]),
+            core_w_tiles=lay["core_w_tiles"],
+            sharded=False,
+            n_src_tiles=n_src_tiles,
+            local_combine=False,
+            lc_per=[0],
+        )
+
+    prefs = [True, False] if gamma_dtype is not None and GAMMA_PRESCALE else [False]
+    for prescale in prefs:
+        for rounds in range(lay["rounds"], core_rows_max + 1):
+            if _worker_footprint(plan_at(rounds), x_dtype, gamma_dtype, prescale) <= budget:
+                return rounds
+    return lay["rounds"]  # nothing fits: run_distributed_rms_norm's footprint check reports it
+
+
+def build_plan(input_tensor, *, cluster_axis, topology, num_links, gamma_dtype=None):
     mesh_device = input_tensor.device()
     mesh_shape = tuple(mesh_device.shape)
     ring = topology == Topology.Ring and mesh_shape[cluster_axis] > 2
@@ -328,18 +408,33 @@ def build_plan(input_tensor, *, cluster_axis, topology, num_links):
     lc_per = [math.ceil(r / S_w) for r in core_rows] if local_combine else [0] * S_r
     publishers = [math.ceil(core_rows[g] / lc_per[g]) if local_combine else S_w for g in range(S_r)]
 
-    recs_link = [rec_w * sum(core_rows[g] for g in range(S_r) if link_of[g] == l) for l in range(L_eff)]
-    publishers_link = [sum(publishers[g] for g in range(S_r) if link_of[g] == l) for l in range(L_eff)]
-    link_rec_base = []
-    for g in range(S_r):
-        link_rec_base.append(rec_w * sum(core_rows[h] for h in range(g) if link_of[h] == link_of[g]))
-    slot_bytes = RECORD_BYTES * max(recs_link)
     n_src_tiles = math.ceil(G * rec_w / TILE)
-
     core_rows_max = max(core_rows)
-    block_rows = block_rows_knob(core_rows_max)
+    rounds = lay["rounds"] if sharded else _fit_rounds(lay, input_tensor.dtype, gamma_dtype, n_src_tiles)
+    block_rows = block_rows_knob(core_rows_max, rounds)
     num_blocks = max(math.ceil(r / block_rows) for r in core_rows)
-    assert num_blocks == 1, "multi-round exchange (R2) is a deferred regime: the port kernel runs one round"
+    assert num_blocks == 1 or not local_combine, "R5 pre-combine runs one round"
+    if SEM_STATS_READY_BASE + 2 * L_eff > NUM_SEMAPHORES:
+        raise RuntimeError(f"distributed_rms_norm: {L_eff} links need more than {NUM_SEMAPHORES} semaphores")
+
+    # Record slot layout, round-major: round b of link l occupies [b * round_recs[l], (b + 1) * round_recs[l]) and
+    # holds, per row group g of the link, min(block_rows, core_rows[g]) tile rows x rec_w records from
+    # link_rec_base[g]. One round (R1) is the dense whole-call layout. A group with fewer rows in its last round
+    # leaves a gap that is sent but never read.
+    rows_b = [min(block_rows, r) for r in core_rows]
+    round_recs = [rec_w * sum(rows_b[g] for g in range(S_r) if link_of[g] == l) for l in range(L_eff)]
+    link_rec_base = [rec_w * sum(rows_b[h] for h in range(g) if link_of[h] == link_of[g]) for g in range(S_r)]
+
+    # local arrivals at a port of link l by the end of round b, on round b's rotating counter (cumulative over the
+    # rounds that share it): every publisher with rows in round b increments once
+    def pubs(l, b):
+        return sum(publishers[g] for g in range(S_r) if link_of[g] == l and core_rows[g] > b * block_rows)
+
+    publishers_round = [
+        [sum(pubs(l, c) for c in range(b % LOCAL_ARRIVAL_SEMS, b + 1, LOCAL_ARRIVAL_SEMS)) for b in range(num_blocks)]
+        for l in range(L_eff)
+    ]
+    slot_bytes = RECORD_BYTES * num_blocks * max(round_recs)
 
     return dict(
         mesh_device=mesh_device,
@@ -366,8 +461,8 @@ def build_plan(input_tensor, *, cluster_axis, topology, num_links):
         mcast_rects=lay["mcast_rects"],
         port_cores=port_cores,
         link_of=link_of,
-        recs_link=recs_link,
-        publishers_link=publishers_link,
+        round_recs=round_recs,
+        publishers_round=publishers_round,
         link_rec_base=link_rec_base,
         slot_bytes=slot_bytes,
         n_src_tiles=n_src_tiles,
@@ -376,6 +471,7 @@ def build_plan(input_tensor, *, cluster_axis, topology, num_links):
         lc_per=lc_per,
         n_lc_tiles=math.ceil(S_w / TILE) if local_combine else 0,
         block_rows=block_rows,
+        num_blocks=num_blocks,
     )
 
 
@@ -388,11 +484,13 @@ def _worker_footprint(plan, x_dtype, gamma_dtype, gamma_prescale, stat_rows=None
     s = br if stat_rows is None else stat_rows
     gc = cw if gamma_chunk is None else min(gamma_chunk, cw)
     has_gamma = gamma_dtype is not None
-    f = 0 if plan["sharded"] else X_BLOCKS_IN_FLIGHT * br * cw * T_x
+    nf = blocks_in_flight(plan["num_blocks"])
+    prescale = has_gamma and gamma_prescale
+    f = 0 if plan["sharded"] else X_BLOCKS_IN_FLIGHT * x_blocks(plan["num_blocks"], prescale) * br * cw * T_x
     if has_gamma:
         f += gc * (1 if gc >= cw else 2) * _tile_bytes(gamma_dtype)
-    if has_gamma and gamma_prescale:
-        f += br * cw * T_f
+    if prescale:
+        f += nf * br * cw * T_f
     f += _tile_bytes(ttnn.bfloat16)
     f += s * T_f * (3 + plan["n_src_tiles"])
     if plan["local_combine"]:
@@ -415,7 +513,7 @@ def _choose_knobs(plan, x_dtype, gamma_dtype, out_native, budget):
         return _worker_footprint(plan, x_dtype, gamma_dtype, prescale, s, gc, out_native) <= budget
 
     if not plan["sharded"]:
-        prescale = has_gamma and fits(True, br, cw)
+        prescale = has_gamma and GAMMA_PRESCALE and fits(True, br, cw)
         return br, cw, prescale
     halvings = lambda n: sorted({max(1, n >> k) for k in range(n.bit_length() + 1)}, reverse=True)
     for prescale in [True, False] if has_gamma else [False]:
@@ -548,15 +646,14 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
     stat_rows, gamma_chunk, gamma_prescale = _choose_knobs(plan, x_dtype, g_dtype, out_native, budget)
     footprint = _worker_footprint(plan, x_dtype, g_dtype, gamma_prescale, stat_rows, gamma_chunk, out_native)
     if footprint > budget:
-        raise RuntimeError(
-            f"distributed_rms_norm: per-worker working set {footprint} B exceeds {budget} B "
-            "(multi-round regime R2 is deferred)"
-        )
+        raise RuntimeError(f"distributed_rms_norm: per-worker working set {footprint} B exceeds {budget} B")
     if G * slot_bytes > SCRATCH_BUDGET:
         raise RuntimeError(f"distributed_rms_norm: exchange scratch {G * slot_bytes} B exceeds budget")
 
     # ---- formats / sizes ----
     block_rows = plan["block_rows"]
+    num_blocks = plan["num_blocks"]
+    n_in_flight = blocks_in_flight(num_blocks)
     n_src_tiles = plan["n_src_tiles"]
     n_lc_tiles = plan["n_lc_tiles"]
 
@@ -602,14 +699,15 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
         assert cw_group % out_batch == 0, "out_batch_tiles must divide the core's W chunk"
         out_batch_of[cw_group] = out_batch
         if not sharded:
-            cbs.append(cb(CB_X_RESIDENT, x_dtype, X_BLOCKS_IN_FLIGHT * block_rows * cw_group, cores_set))
+            n_x = X_BLOCKS_IN_FLIGHT * x_blocks(num_blocks, gamma_prescale)
+            cbs.append(cb(CB_X_RESIDENT, x_dtype, n_x * block_rows * cw_group, cores_set))
         if not out_native:
             cbs.append(cb(CB_OUTPUT_TILES, x_dtype, OUT_DEPTH * out_batch, cores_set))
         if has_gamma:
             # one chunk held for the call, or a double-buffered stream of gamma_chunk-tile chunks
             cbs.append(cb(CB_GAMMA_TILES, gamma.dtype, gc_group * (1 if gc_group >= cw_group else 2), cores_set))
         if gamma_prescale:
-            cbs.append(cb(CB_XG, ttnn.float32, block_rows * cw_group, cores_set))
+            cbs.append(cb(CB_XG, ttnn.float32, n_in_flight * block_rows * cw_group, cores_set))
 
     # ---- compile-time args ----
     x_acc = list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
@@ -627,7 +725,7 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
             CB_SCALER,
             CB_STATS_COMBINE,
             int(has_gamma),
-            SEM_STATS_READY,
+            SEM_STATS_READY_BASE,
             gamma_elem,
             int(gamma.buffer_aligned_page_size()) if has_gamma else 0,
             RECORD_BYTES,
@@ -636,6 +734,7 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
             CB_LC,
             SEM_LOCAL_COMBINE,
             plan["W"] % TILE,  # w_tail: valid columns of the last W tile (0 = tile-aligned, no mask)
+            ROUND_LOOKAHEAD,
         ]
         + x_acc
         + g_acc
@@ -650,6 +749,7 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
         CB_LC_OUT,
         SEM_LOCAL_COMBINE,
         int(sharded),
+        ROUND_LOOKAHEAD,
     ] + o_acc
     compute_ct = [
         CB_X_RESIDENT,
@@ -668,8 +768,9 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
         int(local_combine),
         CB_LC,
         CB_LC_OUT,
+        ROUND_LOOKAHEAD,
     ]
-    port_ct = [SEM_LOCAL_ARRIVALS, SEM_STATS_READY, HEADER_RING]
+    port_ct = [SEM_LOCAL_ARRIVALS, HEADER_RING, LOCAL_ARRIVAL_SEMS]
 
     inv_w_bits = _f32_bits(1.0 / (G * plan["W"]))
     eps_bits = _f32_bits(epsilon)
@@ -711,9 +812,10 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
             program = ttnn.ProgramDescriptor()
             program.cbs = cbs
             program.semaphores = [
-                ttnn.SemaphoreDescriptor(id=SEM_LOCAL_ARRIVALS, core_ranges=all_set, initial_value=0),
-                ttnn.SemaphoreDescriptor(id=SEM_STATS_READY, core_ranges=all_set, initial_value=0),
-                ttnn.SemaphoreDescriptor(id=SEM_LOCAL_COMBINE, core_ranges=all_set, initial_value=0),
+                ttnn.SemaphoreDescriptor(id=sem, core_ranges=all_set, initial_value=0)
+                for sem in [SEM_LOCAL_ARRIVALS + i for i in range(LOCAL_ARRIVAL_SEMS)]
+                + [SEM_LOCAL_COMBINE]
+                + [SEM_STATS_READY_BASE + i for i in range(2 * L)]
             ]
 
             # ---- worker runtime args ----
@@ -749,7 +851,8 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
                         plan["rec_w"],
                         n_src_tiles,
                         G,
-                        2 * L,
+                        l,
+                        plan["round_recs"][l],
                     ]
                     + src_ports
                     + sharded_args(
@@ -789,6 +892,7 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
                         S_w if local_combine else plan["rec_w"],
                         w,
                         out_batch_of[cw_here],
+                        plan["round_recs"][l],
                         len(pub),
                     ]
                     + pub_args
@@ -820,9 +924,10 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
                         plan["rec_w"],
                         n_src_tiles,
                         G,
-                        2 * L,
+                        0,
+                        0,
                     ] + [0, 0] * G
-                    writer_rt[core.x][core.y] = [o_addr, 0, 0, block_rows, 0, 0, Wt, scratch_addr, 0, 1, 0, 1, 0]
+                    writer_rt[core.x][core.y] = [o_addr, 0, 0, block_rows, 0, 0, Wt, scratch_addr, 0, 1, 0, 1, 0, 0]
                     compute_rt[core.x][core.y] = [0, block_rows, 0, n_src_tiles, inv_w_bits, eps_bits]
 
             # ---- port runtime args ----
@@ -840,11 +945,12 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
                     args = [
                         scratch_addr,
                         slot_bytes,
-                        plan["recs_link"][l] * RECORD_BYTES,
+                        plan["round_recs"][l] * RECORD_BYTES,  # one entry = one round of the slot
                         packet_bytes,
                         arrival_addr,
                         ready_addr,
-                        plan["publishers_link"][l] if my_sends else 0,
+                        SEM_STATS_READY_BASE + 2 * l + d,
+                        num_blocks,
                         len(inbound[d]),
                         int(send_ready),
                         rv.x,
@@ -859,6 +965,8 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
                     else:
                         args += [0, 0]
                     args += [len(my_sends)] + list(my_sends)
+                    # cumulative local arrivals per round (0: I send nothing, no local wait)
+                    args += list(plan["publishers_round"][l]) if my_sends else [0] * num_blocks
                     args += [len(mcast)]
                     for rect in mcast:
                         args += list(rect)

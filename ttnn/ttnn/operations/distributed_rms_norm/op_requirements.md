@@ -117,7 +117,7 @@
 - 0 supported_fail / 0 xpass_drift.
 - Prior phases stay green.
 
-### [ ] Refinement 3 — Speed up the perf-flagged profile (overlap the exchange with DRAM)
+### [x] Refinement 3 — Speed up the perf-flagged profile (overlap the exchange with DRAM)
 
 **Type**: perf
 
@@ -138,6 +138,23 @@
 - The golden suite stays green.
 - No regression across the guard set (one representative per distinct kernel path × layout × placement): 32×1792 decode, 2048×1280, a fp32 + no-gamma interleaved shape, the fused-gamma fallback shape (2, 2048, 4096), one HEIGHT_SHARDED and one WIDTH_SHARDED shape, and one ring-mock Ring shape.
 - The multi-round regime also lifts the remaining `P_resident` ceiling. Record in `l1_ledger.md` the R2 row's new status and any CB whose capacity changes with `block_rows`.
+
+**Outcome**:
+- **Built:** R2 multi-round with a lookahead-1 schedule on all three worker kernels.
+  - The port loops rounds, with rotating per-round local-arrival counters and one stats-ready counter per port.
+  - The split doubles `S_w`: 640×1792 → `S_r` 10 × `S_w` 8, 2 rounds of one tile row, 14 tiles per worker as before.
+  - An L1-fit round search lifts `P_resident` on the prescale path.
+- **Flagged config, 640×1792** (median over 20 calls of the max over 4 devices): **25.1 → 21.9–22.5 µs**. The min device went 21.7 → 18.8 µs.
+- **Guard set (median-max):**
+  - 32×1792: 10.8 → 10.5 (one round, same path).
+  - 2048×1280: 45.2 → 37.3–40.7.
+  - fp32 no-gamma 640×1792: 38.8 → 34.3–35.4.
+  - (2, 2048, 4096): 346.5 → 196–204. It now takes the prescale path over 4 rounds instead of the fused fallback.
+  - HEIGHT 640×1792: 19.8 = 19.8. WIDTH 640×1792: 70.9 → 70.9–71.7 (noise; sharded stays one round).
+  - Ring mock 640×1792 L2: 54.6/55.3 → 51.7/54.3 (single calls).
+- **Gamma prescale vs fused** (also measured): fused is ~2× slower at 640×1792 (52 vs 23 µs) because the reader replicates gamma rows with RISC stores, so prescale stays the default (`GAMMA_PRESCALE` knob).
+- **What binds now:** cross-device launch skew. In 20 calls the max device sits 2–5 µs above the min device, with occasional 10+ µs spikes. Each device's own work is ~18.8 µs against the ~9 µs DRAM floor plus the 8.8 µs program floor.
+- **Next lever:** Refinement 5's per-link stats-ready and port placement. Also: more rounds at 640×1792 would need `S_r` < 10, which raises the tiles per worker. That trade is not taken; `_rounds_split` rejects any split that raises the per-worker tile count.
 
 ### [ ] Refinement 4 — Numerical configurability (bfloat8_b + fp32_dest_acc_en=False)
 

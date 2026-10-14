@@ -10,7 +10,10 @@
 //                          load_block only publishes the shard's tiles (no NoC read).
 //   local_gather          : (R5 pre-combine, combiners) wait until every W chunk of my row group has written its
 //                          records into my inbox, then place the S_w records of each of my tile rows into cb_lc.
-//   gather_sources_block : wait stats-ready, pull the G*rec_w fp32 records of every tile row of the block from the
+//   R2 (several exchange rounds): round b+lookahead's load_block is issued before round b's gather, so DRAM reads run
+//   under round b's exchange (host ROUND_LOOKAHEAD; cb_x_resident holds 1 + lookahead blocks).
+//   gather_sources_block : wait stats-ready (one counter per port of my link, >= round + 1), pull the G*rec_w fp32
+//   records of every tile row of the block from the
 //                          port cores into cb_stats_combine (source s -> row s%32 of combine tile s/32), one
 //                          stat_rows batch at a time.
 //
@@ -30,7 +33,7 @@ void kernel_main() {
     constexpr uint32_t cb_scaler = get_compile_time_arg_val(2);
     constexpr uint32_t cb_stats_combine = get_compile_time_arg_val(3);
     constexpr bool has_gamma = get_compile_time_arg_val(4) != 0;
-    constexpr uint32_t sem_stats_ready = get_compile_time_arg_val(5);
+    constexpr uint32_t sem_stats_ready_base = get_compile_time_arg_val(5);  // port (l, d) -> base + 2l + d
     constexpr uint32_t gamma_elem_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t gamma_page_bytes = get_compile_time_arg_val(7);  // one stick = the whole W_local slice
     constexpr uint32_t record_bytes = get_compile_time_arg_val(8);      // host RECORD_BYTES: 32 fp32 partial sums
@@ -39,7 +42,8 @@ void kernel_main() {
     constexpr uint32_t cb_lc = get_compile_time_arg_val(11);
     constexpr uint32_t sem_local_combine = get_compile_time_arg_val(12);
     constexpr uint32_t w_tail = get_compile_time_arg_val(13);  // valid columns of the last W tile (0: aligned)
-    constexpr auto x_args = TensorAccessorArgs<14>();
+    constexpr uint32_t round_lookahead = get_compile_time_arg_val(14);  // rounds whose loads run ahead (host knob)
+    constexpr auto x_args = TensorAccessorArgs<15>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t half_record = record_bytes / 2;  // 16 fp32 = one face row
@@ -62,7 +66,8 @@ void kernel_main() {
     const uint32_t s_w = get_arg_val<uint32_t>(a++);
     const uint32_t n_src_tiles = get_arg_val<uint32_t>(a++);
     const uint32_t group_size = get_arg_val<uint32_t>(a++);
-    const uint32_t ready_per_round = get_arg_val<uint32_t>(a++);  // stats-ready increments per round (2L)
+    const uint32_t my_link = get_arg_val<uint32_t>(a++);
+    const uint32_t round_recs = get_arg_val<uint32_t>(a++);       // records per round in my link's slot region
     const uint32_t ports_idx = a;                                 // G x (noc x, noc y): port holding slot q
     a += 2 * group_size;
     // sharded-path args (R9/R10); the interleaved path keeps its Phase 0 arg list and these defaults
@@ -90,8 +95,11 @@ void kernel_main() {
 
     const uint32_t x_tile_bytes = get_tile_size(cb_x_resident);
     const auto x = TensorAccessor(x_args, x_addr, x_tile_bytes);
-    volatile tt_l1_ptr uint32_t* stats_ready =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_stats_ready));
+    // one stats-ready counter per port of my link (direction 0 / 1); each counts that port's completed rounds
+    volatile tt_l1_ptr uint32_t* stats_ready_fwd =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_stats_ready_base + 2 * my_link));
+    volatile tt_l1_ptr uint32_t* stats_ready_bwd =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_stats_ready_base + 2 * my_link + 1));
     Noc noc;
     CircularBuffer x_cb(cb_x_resident);
 
@@ -140,7 +148,7 @@ void kernel_main() {
         }
     };
 
-    // gamma (once per call, after the first x block so the hot single-page read does not delay x):
+    // gamma (once per call, after the x blocks loaded ahead so the hot single-page read does not delay x):
     // one contiguous read of the chunk's cw*32 elements into the front of each group of <= 32 tiles, then
     // tile t's segment is placed in its row 0 (elements 0..15 -> face 0 row 0, 16..31 -> face 1 row 0).
     // Placement runs from the last tile down: tile t >= 1 lands beyond the staging bytes, tile 0 last.
@@ -261,11 +269,18 @@ void kernel_main() {
         cb_push_back(cb, n_tiles);
     };
 
-    uint32_t round = 0;
-    for (uint32_t r0 = 0; r0 < core_rows; r0 += block_rows, ++round) {
-        const uint32_t rows = (core_rows - r0) < block_rows ? (core_rows - r0) : block_rows;
+    const uint32_t num_blocks = (core_rows + block_rows - 1) / block_rows;
+    auto rows_of = [&](uint32_t b) {
+        const uint32_t r0 = b * block_rows;
+        return (core_rows - r0) < block_rows ? (core_rows - r0) : block_rows;
+    };
 
-        // ---- load_block ----
+    const uint32_t gamma_round = (round_lookahead < num_blocks - 1) ? round_lookahead : num_blocks - 1;
+
+    // ---- front half of round b: load_block (+ gamma, R5 local gather and prescale gamma in round 0) ----
+    auto front = [&](uint32_t round) {
+        const uint32_t r0 = round * block_rows;
+        const uint32_t rows = rows_of(round);
         if constexpr (x_sharded) {
             // the shard is already resident in cb_x_resident's L1: publish its valid tile rows, no NoC traffic
             cb_reserve_back(cb_x_resident, rows * cw_phys);
@@ -290,7 +305,9 @@ void kernel_main() {
                 cb_push_back(cb_x_resident, cw);
             }
         }
-        if (round == 0 && !gamma_chunked) {
+        // gamma once per call, after the x blocks the schedule loads ahead (round 0 alone with one round), so its
+        // single-page read and row placement never sit between two x blocks the exchange is waiting on
+        if (round == gamma_round && !gamma_chunked) {
             load_gamma(0, cw, cw);
         }
 
@@ -312,9 +329,14 @@ void kernel_main() {
         if (round == 0 && gamma_chunked && !gamma_full_rows) {
             stream_gamma_chunks();  // prescale consumes them before the exchange
         }
+    };
 
-        // ---- gather_sources_block, one stats batch at a time ----
-        noc_semaphore_wait_min(stats_ready, ready_per_round * (round + 1));
+    // ---- back half of round b: gather_sources_block, one stats batch at a time ----
+    auto back = [&](uint32_t round) {
+        const uint32_t rows = rows_of(round);
+        noc_semaphore_wait_min(stats_ready_fwd, round + 1);
+        noc_semaphore_wait_min(stats_ready_bwd, round + 1);
+        const uint32_t round_base = rec_base + round * round_recs;
         for (uint32_t b0 = 0; b0 < rows; b0 += stat_rows) {
             const uint32_t nb = (rows - b0) < stat_rows ? (rows - b0) : stat_rows;
             gather(
@@ -326,11 +348,22 @@ void kernel_main() {
                 [&](uint32_t q) { return get_arg_val<uint32_t>(ports_idx + 2 * q); },
                 [&](uint32_t q) { return get_arg_val<uint32_t>(ports_idx + 2 * q + 1); },
                 [&](uint32_t q, uint32_t j) {
-                    return scratch_addr + q * slot_bytes + (rec_base + (r0 + b0 + j) * s_w) * record_bytes;
+                    return scratch_addr + q * slot_bytes + (round_base + (b0 + j) * s_w) * record_bytes;
                 });
             if (gamma_chunked && gamma_full_rows) {
                 stream_gamma_chunks();  // the fused normalize of this batch walks every chunk
             }
         }
+    };
+
+    // R2 schedule: round b+lookahead's loads run before round b's gather, so they overlap round b's exchange
+    for (uint32_t round = 0; round < round_lookahead && round < num_blocks; ++round) {
+        front(round);
+    }
+    for (uint32_t round = 0; round < num_blocks; ++round) {
+        if (round + round_lookahead < num_blocks) {
+            front(round + round_lookahead);
+        }
+        back(round);
     }
 }
