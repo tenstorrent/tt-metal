@@ -4,6 +4,7 @@
 
 #include <tt-metalium/experimental/allocation/allocation.hpp>
 
+#include <cstdint>
 #include <utility>
 
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
@@ -39,16 +40,13 @@ Allocation Allocation::adopt_from_meshtensor(MeshTensor tensor) {
     }
     TT_FATAL(buffer != nullptr, "Cannot adopt a MeshTensor that does not own its buffer allocation");
     TT_FATAL(buffer->is_allocated(), "Cannot adopt a deallocated MeshTensor device buffer");
+    TT_FATAL(buffer->buffer_type() == BufferType::L1, "Allocation only supports MeshTensors backed by L1 buffers");
 
-    const auto size = buffer->aligned_size_per_bank();
-    const auto span_size = static_cast<DeviceSpan::size_type>(size);
+    const auto size = static_cast<uint32_t>(buffer->aligned_size_per_bank());
 
     if (per_core_allocation::is_per_core_allocation(*buffer)) {
-        std::unordered_map<CoreCoord, DeviceSpan> spans;
-        for (const auto& [core, address] : per_core_allocation::get_per_core_addresses(*buffer)) {
-            spans.emplace(core, DeviceSpan(address, span_size));
-        }
-        return Allocation(AllocationImpl(PerNodeAllocation(std::move(spans), std::move(tensor))));
+        return Allocation(AllocationImpl(
+            PerNodeAllocation(per_core_allocation::get_per_core_addresses(*buffer), size, std::move(tensor))));
     } else if (range_lockstep_allocation::is_range_lockstep_allocation(*buffer)) {
         // Match the allocator: the distribution spec takes precedence over the shard grid,
         // which can include cores without data.
@@ -58,11 +56,10 @@ Allocation Allocation::adopt_from_meshtensor(MeshTensor tensor) {
         } else {
             allocated_nodes = buffer->shard_spec().grid();
         }
-        return Allocation(AllocationImpl(RangeLockstepAllocation(
-            DeviceSpan(buffer->address(), span_size), std::move(allocated_nodes), std::move(tensor))));
+        return Allocation(AllocationImpl(
+            RangeLockstepAllocation(buffer->address(), size, std::move(allocated_nodes), std::move(tensor))));
     } else {
-        return Allocation(
-            AllocationImpl(LockstepAllocation(DeviceSpan(buffer->address(), span_size), std::move(tensor))));
+        return Allocation(AllocationImpl(LockstepAllocation(buffer->address(), size, std::move(tensor))));
     }
 }
 
@@ -78,27 +75,5 @@ MeshTensor Allocation::release_as_meshtensor(Allocation allocation) {
 AllocationImpl& Allocation::impl() { return *pimpl_; }
 
 const AllocationImpl& Allocation::impl() const { return *pimpl_; }
-
-bool is_per_node_allocation(const Allocation& alloc) {
-    return std::holds_alternative<PerNodeAllocation>(alloc.impl()._detail);
-}
-
-DeviceSpan per_node_reservation_at(const Allocation& alloc, const CoreCoord& coord) {
-    return std::visit(
-        ttsl::overloaded{
-            [](const NoAlloc&) { return DeviceSpan{}; },
-            [](const LockstepAllocation& la) { return la.address_space; },
-            [&](const PerNodeAllocation& pa) -> DeviceSpan {
-                const auto& addr_map = pa.address_space_per_node;
-                auto itr = addr_map.find(coord);
-                TT_FATAL(itr != addr_map.end(), "Cannot find allocation space for {}", coord);
-                return itr->second;
-            },
-            [&](const RangeLockstepAllocation& ra) {
-                TT_FATAL(ra.allocated_nodes.contains(coord), "Cannot find allocation space for {}", coord);
-                return ra.address_space;
-            }},
-        alloc.impl()._detail);
-}
 
 }  // namespace tt::tt_metal::experimental
