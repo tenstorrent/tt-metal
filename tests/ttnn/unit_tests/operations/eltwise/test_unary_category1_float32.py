@@ -930,11 +930,15 @@ def test_expm1_special_values(device):
     | Input                      | Expected                              |
     |----------------------------|---------------------------------------|
     | -inf                       | -1                                    |
-    | ±0                         | ±0                                    |
+    | +0                         | +0                                    |
+    | -0                         | +0 (torch gives -0; sign not checked) |
     | subnormals                 | 0 (input and golden flushed)          |
     | ±1e-30                     | ±1e-30 (expm1(x) ≈ x for tiny x)      |
     | +inf                       | +inf                                  |
     | NaN, negative NaN          | NaN                                   |
+
+    The ULP check treats -0 and +0 as equal, so the device's +0 for
+    expm1(-0) passes.
     """
     positive_nan = torch.tensor([float("nan")], dtype=torch.float32)
     subnormals = torch.tensor([1e-40, -1e-40, 1.1e-38, -1.1e-38], dtype=torch.float32)
