@@ -26,6 +26,8 @@
 
 #include <cstdint>
 #include <limits>
+#include <mutex>
+#include <tt-logger/tt-logger.hpp>
 
 namespace ttnn::operations::reduction::topk {
 namespace {
@@ -639,8 +641,7 @@ std::vector<Tensor> topk(
     const auto pad_val = largest ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
 
     // A caller-supplied indices tensor must keep describing the same tile grid as the input the
-    // device op actually sees, so it is padded in lockstep. The pad slots hold +/-inf values and
-    // can never be selected, so the index value used to pad is irrelevant.
+    // device op actually sees, so it is padded in lockstep.
     auto padded_indices_tensor = indices_tensor;
     if (pad_amount > 0) {
         ttsl::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
@@ -668,6 +669,25 @@ std::vector<Tensor> topk(
         output_tensors = {preallocated_values, preallocated_indices};
     } else {
         output_tensors = std::optional<std::tuple<Tensor, Tensor>>{std::nullopt};
+    }
+
+    const bool row_is_padded = pad_amount > 0 || current_dim_size % static_cast<int>(tile_width) != 0;
+    if (row_is_padded && !stable) {
+        // Once per process: topk runs inside per-step model loops.
+        static std::once_flag padded_unstable_warned;
+        std::call_once(padded_unstable_warned, [&] {
+            log_warning(
+                tt::LogOp,
+                "topk: the reduced dimension (size {}) is padded with {}; with stable=false, a row with fewer than "
+                "k={} values other than {} can select padding. Positional indices can then point past the reduced "
+                "dimension; a custom indices_tensor instead returns its padding label (0 by default). Pass "
+                "stable=true for positional indices if such rows can occur; stable=true is not supported with a "
+                "custom indices_tensor. This warning is emitted once per process.",
+                current_dim_size,
+                pad_val,
+                k,
+                pad_val);
+        });
     }
 
     // Execute TopK operation
