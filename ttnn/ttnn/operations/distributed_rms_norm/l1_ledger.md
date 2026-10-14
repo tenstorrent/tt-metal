@@ -115,3 +115,46 @@ Data-movement budget at 640×1792 bf16 (G = 2, L = 2, 11×10 grid → S_w = 4, S
 | `cb_xg` | always allocated with gamma | allocated only when `GAMMA_PRESCALE` (prescale footprint fits `L1_BUDGET`); otherwise gamma is fused into normalize as a DEST-reuse Mul (`cb_gamma_tiles` row-replicated by the reader) | (2, 2048, 4096) bf16 + gamma needed 1.39 MB with the fp32 `cb_xg` block. The fused path needs 0.68 MB. No more RuntimeError on any golden / translated shape. The perf-focus shapes keep the prescale path (unchanged). |
 | `out_batch_tiles` | host knob for the CB size only; the writer hard-coded `cw` as its batch | writer RT arg `out_batch`, walks each tile row in `out_batch` batches; host asserts it divides the chunk | DRY: one source for the batch. Verified live by running the acceptance suite at `out_batch = 1`. |
 | `RECORD_BYTES` | host constant + literal `128` in reader and writer | host constant passed as a CT arg | DRY. |
+
+## Refinement 1 deltas (native sharded placement, regimes R9 / R10 + R5 pre-combine)
+
+Sharded calls (HEIGHT / WIDTH, L1) run the same CB set on the **shard grid**. The per-call knobs are chosen by
+`_choose_knobs` against the CB room the allocator actually leaves: `_l1_free_below_buffers` reads the L1 block table
+(`ttnn._ttnn.device.GetMemoryView`), so it counts the shards, the scratch, the inbox, and any other live L1 tensor.
+The interleaved path is unchanged: `stat_rows = block_rows`, `gamma_chunk = core_w_tiles`, and the budget stays
+`WORKER_L1_BUDGET`.
+
+| CB / buffer | Sharded capacity | Producer | Consumer | Shares with / why not |
+|-------------|------------------|----------|----------|-----------------------|
+| cb_x_resident | **the input shard** (`cb_descriptor_from_sharded_tensor`): 0 CB bytes | reader (publishes `core_rows·cw_phys` resident tiles, no NoC read) | compute (Strided, row stride `cw_phys`, never popped) | **Is** the shard: zero-copy. No TensorAccessor read of a core's own shard exists. |
+| cb_output_tiles | **the output shard** when its shard spec equals the input's (0 CB bytes); otherwise `OUT_DEPTH·out_batch` streamed to the writer (TensorAccessor store, any output memory config) | compute (Strided pack in place; reserve once, push once) | — (native) / writer | Pack into the destination: the writer's store disappears on the native path. |
+| cb_sq_acc, cb_partial, cb_rstd | `stat_rows` | as Phase 0 | as Phase 0 | **Streamed in `stat_rows` batches.** A WIDTH shard holds every tile row (Ht up to 128), so a full block of per-row stats would be 0.5 MB per CB. `stat_rows` is the largest power-of-two fraction of the block that fits. |
+| cb_stats_combine | `n_src_tiles·stat_rows` | reader | compute | as above; `n_src_tiles = ceil(G·rec_w/32)`, with `rec_w = 1` under R5 |
+| cb_gamma_tiles | `gamma_chunk` (== cw: held for the call) or `2·gamma_chunk` (a double-buffered stream of `gamma_chunk`-page chunks; the ragged last chunk still occupies `gamma_chunk` pages so the ring wraps on a chunk boundary) | reader | compute | **Streamed** when a HEIGHT shard's full W_local of gamma does not fit next to the in/out shards: 32×8192 bf16 + fp32 gamma would need 1 MB of gamma tiles beside 2×512 KB of shards. Only the fused normalize streams (prescale needs `cb_xg`, which is larger than gamma and so never fits when gamma does not). |
+| cb_xg | `block_rows·cw` (prescale only) | compute | compute | unchanged; dropped (fused path) when it does not fit |
+| cb_lc (new, combiners) | `n_lc_tiles·lc_per`, `n_lc_tiles = ceil(S_w/32)`, `lc_per = ceil(core_rows/S_w)` | reader (local gather from my inbox) | compute (REDUCE_COL) | R5 only. **No share**: it is live while cb_partial streams. |
+| cb_lc_out (new, combiners) | `lc_per` | compute | writer (publishes to the ports) | R5 only. Row 0 of each tile is the combined record (REDUCE_COL, no transpose). |
+| R5 inbox (L1 sharded tensor over the worker set) | `lc_per·S_w·128 B` per core | every W chunk's writer (NoC write of its record into the owning combiner) | combiner's reader | Same address on every core (lockstep allocation). It is a buffer, not a CB, because remote writers address it. |
+
+**Why R5 (device-local pre-combine) is built now.** A WIDTH shard pins `S_w` to the shard core count (up to 86 on
+the 11×10 grid). With flat records, the exchange scratch is `G·S_w·Ht·128 B`: 1 MB for 4096×1024. It is allocated
+in lockstep on every core, and each worker pulls `G·S_w` records per tile row (quadratic in `S_w`). With R5 the
+scratch is `G·Ht·128 B` (32 KB) and each worker pulls G records per row. The design's deferral reason ("≤ 3 packets
+per link") assumed `S_w ≤ 4` from `_choose_split`; it does not hold for a pinned WIDTH `S_w`. R5 is path-gated to
+sharded `S_w > 1`. The interleaved split keeps flat records.
+
+**Footprint (sharded).** `F = HAS_GAMMA·gamma_chunk·(1|2)·T_g + GAMMA_PRESCALE·block_rows·cw·T_f + 2048 +
+stat_rows·T_f·(3 + n_src_tiles) + R5·lc_per·T_f·(n_lc_tiles + 1) + (¬native)·OUT_DEPTH·out_batch·T_x`. x and a
+native output cost 0.
+
+**Ports (sharded).** These are the first `2·L_eff` grid cores the shard grid leaves free. The stats-ready
+increment is multicast per rectangle of the shard grid, so it only reaches cores of this program.
+
+**Data-movement budget (sharded).**
+
+| Tensor | DRAM crossings | Why |
+|--------|----------------|-----|
+| x | 0 | It is read in place from the shard. |
+| output | 0 | Compute packs into the shard (native). |
+| gamma | `S_r` reads per call (HEIGHT: one per shard; WIDTH: one per W chunk), or `S_r·stat batches` when fused + streamed | — |
+| records | 0 | They stay in L1. WIDTH NoC traffic: `Ht·S_w·128 B` worker→combiner, `Ht·128 B` combiner→port, `S_w·Ht·G·128 B` port→worker pulls. |

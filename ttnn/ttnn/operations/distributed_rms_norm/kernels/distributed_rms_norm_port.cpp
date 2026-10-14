@@ -58,14 +58,13 @@ void kernel_main() {
     const uint32_t peer_y = get_arg_val<uint32_t>(a++);
     const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
     const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
-    const uint32_t mc_x0 = get_arg_val<uint32_t>(a++);  // worker rectangle (NoC coords, start <= end)
-    const uint32_t mc_y0 = get_arg_val<uint32_t>(a++);
-    const uint32_t mc_x1 = get_arg_val<uint32_t>(a++);
-    const uint32_t mc_y1 = get_arg_val<uint32_t>(a++);
-    const uint32_t mc_num_dests = get_arg_val<uint32_t>(a++);
     const uint32_t num_entries = get_arg_val<uint32_t>(a++);
     const uint32_t entries_idx = a;
     a += num_entries;
+    // worker rectangles (NoC coords, start <= end, num dests): only cores of this program
+    const uint32_t num_rects = get_arg_val<uint32_t>(a++);
+    const uint32_t rects_idx = a;
+    a += 5 * num_rects;
 
     volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
 
@@ -131,11 +130,18 @@ void kernel_main() {
     if (expect_in > 0) {
         noc_semaphore_wait_min(arrived, expect_in);
     }
-    // stats-ready: one increment per port; workers wait for 2L of them.
+    // stats-ready: one increment per port to every worker rectangle; workers wait for 2L of them.
     const uint32_t stats_ready = get_semaphore(sem_stats_ready);
-    const uint64_t mc_addr = noc_index == 0 ? get_noc_multicast_addr(mc_x0, mc_y0, mc_x1, mc_y1, stats_ready)
-                                            : get_noc_multicast_addr(mc_x1, mc_y1, mc_x0, mc_y0, stats_ready);
-    noc_semaphore_inc_multicast(mc_addr, 1, mc_num_dests);
+    for (uint32_t r = 0; r < num_rects; ++r) {
+        const uint32_t mc_x0 = get_arg_val<uint32_t>(rects_idx + 5 * r);
+        const uint32_t mc_y0 = get_arg_val<uint32_t>(rects_idx + 5 * r + 1);
+        const uint32_t mc_x1 = get_arg_val<uint32_t>(rects_idx + 5 * r + 2);
+        const uint32_t mc_y1 = get_arg_val<uint32_t>(rects_idx + 5 * r + 3);
+        const uint32_t mc_num_dests = get_arg_val<uint32_t>(rects_idx + 5 * r + 4);
+        const uint64_t mc_addr = noc_index == 0 ? get_noc_multicast_addr(mc_x0, mc_y0, mc_x1, mc_y1, stats_ready)
+                                                : get_noc_multicast_addr(mc_x1, mc_y1, mc_x0, mc_y0, stats_ready);
+        noc_semaphore_inc_multicast(mc_addr, 1, mc_num_dests);
+    }
     // re-arm for the next call
     if (expect_in > 0) {
         noc_semaphore_inc(get_noc_addr(arrival_addr), 0u - expect_in);

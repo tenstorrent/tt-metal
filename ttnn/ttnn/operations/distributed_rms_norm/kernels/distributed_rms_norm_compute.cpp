@@ -13,6 +13,14 @@
 //                            drops cb_xg when it does not fit L1) the gamma multiply is fused after the rstd multiply
 //                            as a DEST-reuse Mul against row-replicated gamma tiles.
 //
+// Sharded x (R9/R10): cb_x_resident is backed on the resident shard (row stride cw_phys tiles), published once by
+// the reader and read in place through Strided addressing, never popped. With a native sharded output,
+// cb_output_tiles is the output shard: reserved once, packed in place (Strided), pushed once. The per-row stats
+// CBs stream in stat_rows batches, and gamma may stream in gamma_chunk-tile chunks (both host knobs, == the
+// whole block / W chunk on the interleaved path).
+//   local_combine_block    : (R5 pre-combine, combiners) reduce<SUM, REDUCE_COL> over the S_w W-chunk records of
+//                            each of my tile rows -> cb_lc_out; row 0 is the combined record (no transpose).
+//
 // Post-op bodies are raw SFPU / transpose calls on a DEST tile inside reduce (no chain element can act on the
 // reduce's DEST tile; transpose_dest has no chain element). The reduce helper programs the packer's reduce edge
 // mask (keeps only the reduced column/row); after the transpose the valid data is in the other orientation, so
@@ -42,6 +50,11 @@ void kernel_main() {
     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(8);
     constexpr bool has_gamma = get_compile_time_arg_val(9) != 0;
     constexpr bool gamma_prescale = has_gamma && get_compile_time_arg_val(10) != 0;
+    constexpr bool x_sharded = get_compile_time_arg_val(11) != 0;
+    constexpr bool out_native = get_compile_time_arg_val(12) != 0;
+    constexpr bool local_combine = get_compile_time_arg_val(13) != 0;
+    constexpr uint32_t cb_lc = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_lc_out = get_compile_time_arg_val(15);
 
     uint32_t a = 0;
     const uint32_t core_rows = get_arg_val<uint32_t>(a++);
@@ -50,6 +63,15 @@ void kernel_main() {
     const uint32_t n_src_tiles = get_arg_val<uint32_t>(a++);
     const uint32_t inv_w_bits = get_arg_val<uint32_t>(a++);  // fp32 bits of 1 / (G * W_local)
     const uint32_t eps_bits = get_arg_val<uint32_t>(a++);    // fp32 bits of epsilon
+    // sharded-path args (R9/R10); the interleaved path keeps its Phase 0 arg list and these defaults
+    uint32_t cw_phys = cw, stat_rows = block_rows, gamma_chunk = cw, lc_rows = 0, n_lc_tiles = 0;
+    if constexpr (x_sharded) {
+        cw_phys = get_arg_val<uint32_t>(a++);      // row stride (tiles) of the resident x / out shard
+        stat_rows = get_arg_val<uint32_t>(a++);    // tile rows per stats batch (knob)
+        gamma_chunk = get_arg_val<uint32_t>(a++);  // gamma tiles per chunk (knob; == cw: one chunk)
+        lc_rows = get_arg_val<uint32_t>(a++);      // tile rows I pre-combine (0: not a combiner)
+        n_lc_tiles = get_arg_val<uint32_t>(a++);   // ceil(S_w / 32)
+    }
 
     if (core_rows == 0) {
         return;  // idle core of the worker rectangle
@@ -77,96 +99,210 @@ void kernel_main() {
     };
 
     constexpr uint32_t cb_norm_src = gamma_prescale ? cb_xg : cb_x_resident;
+    // x block (sharded): the reader published core_rows * cw_phys resident tiles once
+    constexpr auto x_in = input(
+        cb_x_resident,
+        WaitPolicy::None,
+        PopPolicy::None,
+        InputTileMapping::Block,
+        DataFormatReconfig::Enabled,
+        TileAddressing::Strided);
+    const bool gamma_chunked = gamma_chunk < cw;
+    if constexpr (x_sharded) {
+        cb_wait_front(cb_x_resident, core_rows * cw_phys);
+    }
+    if constexpr (out_native) {
+        cb_reserve_back(cb_output_tiles, core_rows * cw_phys);
+    }
 
     for (uint32_t r0 = 0; r0 < core_rows; r0 += block_rows) {
         const uint32_t rows = (core_rows - r0) < block_rows ? (core_rows - r0) : block_rows;
 
         // ---- sumsq_block: x^2 accumulated across the W chunk in DEST, one packed tile per row ----
-        eltwise_chain(
-            IterationShape::grid(rows, cw),
-            BinaryFpu<
-                BinaryFpuOp::Mul,
-                input(cb_x_resident, WaitPolicy::Cumulative, PopPolicy::None, InputTileMapping::Block),
-                input(
-                    input(cb_x_resident, WaitPolicy::Cumulative, PopPolicy::None, InputTileMapping::Block),
-                    BroadcastDim::None),
-                Dst::D0,
-                DestAccumulation::PerRow>{},
-            PackTile<output(
+        for (uint32_t b0 = 0; b0 < rows; b0 += stat_rows) {
+            const uint32_t nb = (rows - b0) < stat_rows ? (rows - b0) : stat_rows;
+            constexpr auto sq_out = output(
                 cb_sq_acc,
                 ReservePolicy::PerOuter,
                 PushPolicy::PerOuter,
                 DataFormatReconfig::Enabled,
                 TileAddressing::Direct,
-                DestAccumulation::PerRow)>{});
-        reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            cb_sq_acc,
-            cb_scaler,
-            cb_partial,
-            ReduceInputPolicy::BulkWaitBulkPop,
-            ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-            ReduceFp32Mode::Accurate>(
-            ReduceInputBlockShape::of(rows, 1), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, sumsq_post);
+                DestAccumulation::PerRow);
+            if constexpr (x_sharded) {
+                const StridedTileRange xr{(r0 + b0) * cw_phys, cw_phys};
+                eltwise_chain(
+                    IterationShape::grid(nb, cw),
+                    BinaryFpu<
+                        BinaryFpuOp::Mul,
+                        x_in,
+                        input(x_in, BroadcastDim::None),
+                        Dst::D0,
+                        DestAccumulation::PerRow>{xr, xr},
+                    PackTile<sq_out>{});
+            } else {
+                // interleaved: one block of rows (stat_rows == block_rows), tiles consumed as the reader lands them
+                eltwise_chain(
+                    IterationShape::grid(nb, cw),
+                    BinaryFpu<
+                        BinaryFpuOp::Mul,
+                        input(cb_x_resident, WaitPolicy::Cumulative, PopPolicy::None, InputTileMapping::Block),
+                        input(
+                            input(cb_x_resident, WaitPolicy::Cumulative, PopPolicy::None, InputTileMapping::Block),
+                            BroadcastDim::None),
+                        Dst::D0,
+                        DestAccumulation::PerRow>{},
+                    PackTile<sq_out>{});
+            }
+            reduce<
+                PoolType::SUM,
+                ReduceDim::REDUCE_ROW,
+                cb_sq_acc,
+                cb_scaler,
+                cb_partial,
+                ReduceInputPolicy::BulkWaitBulkPop,
+                ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                ReduceFp32Mode::Accurate>(
+                ReduceInputBlockShape::of(nb, 1), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, sumsq_post);
+        }
+
+        // ---- local_combine_block (R5): sum the S_w W-chunk records of each of my tile rows ----
+        if constexpr (local_combine) {
+            if (lc_rows > 0) {
+                reduce<
+                    PoolType::SUM,
+                    ReduceDim::REDUCE_COL,
+                    cb_lc,
+                    cb_scaler,
+                    cb_lc_out,
+                    ReduceInputPolicy::WaitUpfrontNoPop,
+                    ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                    ReduceFp32Mode::Accurate>(
+                    ReduceInputBlockShape::of(n_lc_tiles, lc_rows), ReduceInputMemoryLayout::contiguous());
+                cb_pop_front(cb_lc, n_lc_tiles * lc_rows);
+            }
+        }
 
         // ---- gamma_prescale_block: in the exchange stall (x*rstd*gamma == (x*gamma)*rstd) ----
         if constexpr (gamma_prescale) {
-            eltwise_chain(
-                IterationShape::grid(rows, cw),
-                BinaryFpu<
-                    BinaryFpuOp::Mul,
-                    input(cb_x_resident, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
-                    input(
+            if constexpr (x_sharded) {
+                eltwise_chain(
+                    IterationShape::grid(rows, cw),
+                    BinaryFpu<
+                        BinaryFpuOp::Mul,
+                        x_in,
+                        input(
+                            input(cb_gamma_tiles, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
+                            BroadcastDim::Row)>{StridedTileRange{r0 * cw_phys, cw_phys}},
+                    PackTile<output(cb_xg)>{});
+            } else {
+                eltwise_chain(
+                    IterationShape::grid(rows, cw),
+                    BinaryFpu<
+                        BinaryFpuOp::Mul,
+                        input(cb_x_resident, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
+                        input(
+                            input(cb_gamma_tiles, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
+                            BroadcastDim::Row)>{},
+                    PackTile<output(cb_xg)>{});
+            }
+        }
+
+        for (uint32_t b0 = 0; b0 < rows; b0 += stat_rows) {
+            const uint32_t nb = (rows - b0) < stat_rows ? (rows - b0) : stat_rows;
+
+            // ---- combine_finalize_block: sources are rows of n_src_tiles combine tiles per tile row ----
+            // Tiles are laid out row-major (source tile k of tile row j at k * nb + j), so the helper waits for the
+            // whole batch upfront and indexes it; the pop is ours (WaitUpfrontNoPop hands it to the caller).
+            reduce<
+                PoolType::SUM,
+                ReduceDim::REDUCE_COL,
+                cb_stats_combine,
+                cb_scaler,
+                cb_rstd,
+                ReduceInputPolicy::WaitUpfrontNoPop,
+                ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                ReduceFp32Mode::Accurate>(
+                ReduceInputBlockShape::of(n_src_tiles, nb),
+                ReduceInputMemoryLayout::contiguous(),
+                NoAccumulation{},
+                finalize_post);
+            cb_pop_front(cb_stats_combine, n_src_tiles * nb);
+
+            // ---- normalize_block: (xg | x) * rstd, rstd broadcast along each tile row ----
+            if constexpr (x_sharded) {
+                constexpr auto rstd_in = input(
+                    input(cb_rstd, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Col), BroadcastDim::Col);
+                // normalize chunks: gamma's chunks on the fused path, else the whole W chunk
+                const uint32_t chunk = (has_gamma && !gamma_prescale) ? gamma_chunk : cw;
+                for (uint32_t c0 = 0; c0 < cw; c0 += chunk) {
+                    const uint32_t wc = (cw - c0) < chunk ? (cw - c0) : chunk;
+                    const StridedTileRange xr{(r0 + b0) * cw_phys + c0, cw_phys};
+                    auto norm = [&](auto pack) {
+                        if constexpr (gamma_prescale) {
+                            eltwise_chain(
+                                IterationShape::grid(nb, wc),
+                                BinaryFpu<BinaryFpuOp::Mul, input(cb_xg), rstd_in>{},
+                                pack);
+                        } else if constexpr (has_gamma) {
+                            eltwise_chain(
+                                IterationShape::grid(nb, wc),
+                                BinaryFpu<BinaryFpuOp::Mul, x_in, rstd_in>{xr},
+                                DestReuseBinary<
+                                    BinaryFpuOp::Mul,
+                                    input(cb_gamma_tiles, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
+                                    DestReuseType::DEST_TO_SRCA>{},
+                                pack);
+                        } else {
+                            eltwise_chain(
+                                IterationShape::grid(nb, wc), BinaryFpu<BinaryFpuOp::Mul, x_in, rstd_in>{xr}, pack);
+                        }
+                    };
+                    if constexpr (out_native) {
+                        norm(PackTile<output(
+                                 cb_output_tiles,
+                                 ReservePolicy::None,
+                                 PushPolicy::None,
+                                 DataFormatReconfig::Enabled,
+                                 TileAddressing::Strided)>{xr});
+                    } else {
+                        norm(PackTile<output(cb_output_tiles)>{});
+                    }
+                    if constexpr (has_gamma && !gamma_prescale) {
+                        if (gamma_chunked) {
+                            cb_pop_front(cb_gamma_tiles, gamma_chunk);
+                        }
+                    }
+                }
+                cb_pop_front(cb_rstd, nb);
+            } else if constexpr (has_gamma && !gamma_prescale) {
+                // fused: (x * rstd) in DEST, then * gamma (tiles hold gamma in every row: DEST reuse has no broadcast)
+                eltwise_chain(
+                    IterationShape::grid(nb, cw),
+                    BinaryFpu<
+                        BinaryFpuOp::Mul,
+                        input(cb_x_resident),
+                        input(
+                            input(cb_rstd, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
+                            BroadcastDim::Col)>{},
+                    DestReuseBinary<
+                        BinaryFpuOp::Mul,
                         input(cb_gamma_tiles, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
-                        BroadcastDim::Row)>{},
-                PackTile<output(cb_xg)>{});
+                        DestReuseType::DEST_TO_SRCA>{},
+                    PackTile<output(cb_output_tiles)>{});
+            } else {
+                eltwise_chain(
+                    IterationShape::grid(nb, cw),
+                    BinaryFpu<
+                        BinaryFpuOp::Mul,
+                        input(cb_norm_src),
+                        input(
+                            input(cb_rstd, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
+                            BroadcastDim::Col)>{},
+                    PackTile<output(cb_output_tiles)>{});
+            }
         }
-
-        // ---- combine_finalize_block: sources are rows of n_src_tiles combine tiles per tile row ----
-        // Tiles are laid out row-major (source tile k of tile row j at k * rows + j), so the helper waits for the
-        // whole block upfront and indexes it; the pop is ours (WaitUpfrontNoPop hands it to the caller).
-        reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_COL,
-            cb_stats_combine,
-            cb_scaler,
-            cb_rstd,
-            ReduceInputPolicy::WaitUpfrontNoPop,
-            ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-            ReduceFp32Mode::Accurate>(
-            ReduceInputBlockShape::of(n_src_tiles, rows),
-            ReduceInputMemoryLayout::contiguous(),
-            NoAccumulation{},
-            finalize_post);
-        cb_pop_front(cb_stats_combine, n_src_tiles * rows);
-
-        // ---- normalize_block: (xg | x) * rstd, rstd broadcast along each tile row ----
-        if constexpr (has_gamma && !gamma_prescale) {
-            // fused: (x * rstd) in DEST, then * gamma (tiles hold gamma in every row: DEST reuse has no broadcast)
-            eltwise_chain(
-                IterationShape::grid(rows, cw),
-                BinaryFpu<
-                    BinaryFpuOp::Mul,
-                    input(cb_x_resident),
-                    input(
-                        input(cb_rstd, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
-                        BroadcastDim::Col)>{},
-                DestReuseBinary<
-                    BinaryFpuOp::Mul,
-                    input(cb_gamma_tiles, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
-                    DestReuseType::DEST_TO_SRCA>{},
-                PackTile<output(cb_output_tiles)>{});
-        } else {
-            eltwise_chain(
-                IterationShape::grid(rows, cw),
-                BinaryFpu<
-                    BinaryFpuOp::Mul,
-                    input(cb_norm_src),
-                    input(
-                        input(cb_rstd, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
-                        BroadcastDim::Col)>{},
-                PackTile<output(cb_output_tiles)>{});
-        }
+    }
+    if constexpr (out_native) {
+        cb_push_back(cb_output_tiles, core_rows * cw_phys);
     }
 }

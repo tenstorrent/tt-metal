@@ -54,7 +54,7 @@
 - **Golden baseline**: 931 supported_pass, 0 supported_fail, 0 xpass_drift, 1 xfail_wrong_mode. The wrong-mode cell is a harness artifact (L1-profiling `peak_total=0` on a correct refusal; see verification_report.md).
 - **Device time (bf16, gamma, axis 1, L=2; max over devices)**: 640×1792 24.9 µs · 32×1792 10.9 µs · 2048×1280 44.6 µs.
 
-### [ ] Refinement 1 — Native sharded placement (HEIGHT_SHARDED + WIDTH_SHARDED)
+### [x] Refinement 1 — Native sharded placement (HEIGHT_SHARDED + WIDTH_SHARDED)
 
 **Goal**:
 - Add `ttnn.TensorMemoryLayout.HEIGHT_SHARDED` and `ttnn.TensorMemoryLayout.WIDTH_SHARDED` to `SUPPORTED["memory_layout"]`, with **native zero-copy** I/O. `cb_x_resident` is backed on the input shard and `cb_output_tiles` on the output shard, both via `ttnn.cb_descriptor_from_sharded_tensor`. The output follows `memory_config` (the golden suite passes the input's own sharded config).
@@ -84,6 +84,14 @@
 - The verifier CLI shows 0 supported_fail / 0 xpass_drift.
 - The dataflow shows no TensorAccessor read of a core's own shard.
 - The interleaved cells and the ring mock stay green.
+
+**Outcome**:
+- **Landed.** HEIGHT and WIDTH (L1) are in SUPPORTED with zero-copy x / output CBs. The sharded golden slice is 1404 passed / 0 failed (36 harness `INFEASIBLE_L1` skips). Interleaved 720/720, translated, and ring mock are green.
+- **WIDTH needed more than the knob-turn.** It also needed the design's R5 device-local pre-combine (a pinned S_w ≤ 86 makes flat records quadratic), stats CBs streamed in `stat_rows` batches, and HEIGHT gamma streamed in `gamma_chunk` chunks; see the l1_ledger "Refinement 1 deltas".
+- **Perf finding.**
+  - HEIGHT 640×1792 runs 19.8 µs, against 24.5 µs interleaved.
+  - WIDTH is compute-bound per tile row (~2.6 µs/row: 640×1792 ~81 µs, 2048×2048 ~171 µs), because every W chunk runs the per-row reduce/transpose/finalize for all Ht rows.
+  - Levers for a later perf pass: finalize on the combiners plus an rstd multicast, and combiners on both links.
 
 ### [ ] Refinement 2 — W_local non-tile-aligned (`w_non_aligned`)
 

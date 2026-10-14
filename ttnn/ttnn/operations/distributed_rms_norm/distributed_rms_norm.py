@@ -7,6 +7,8 @@ One ttnn.generic_op (MeshProgramDescriptor, one program per device) per call:
   workers   : read x once (resident in L1), sum x^2 per row of their W chunk, publish one fp32 record per
               (tile row, W chunk) to the port cores of their link; after the exchange, gather the G*S_w
               records of their rows, finalize rstd, normalize (x*gamma prescaled during the exchange stall).
+  sharded   : (HEIGHT / WIDTH, L1) the worker set is the shard grid and each worker's block is its resident
+              shard, read in place; WIDTH pre-combines the W-chunk records on chip (R5) before the exchange.
   ports     : per (link, direction), relay the per-device record slots over Fabric (ready fence, arrival
               counters, one-hop relay), then multicast a stats-ready increment to the worker rectangle.
 See op_design.md for the blocking model.
@@ -71,7 +73,13 @@ SUPPORTED = {
     "rank": [2, 3, 4],
     "gamma_mode": ["gamma", "no_gamma"],
     "gamma_dtype": [ttnn.float32, ttnn.bfloat16, "none"],
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
+    # *_SHARDED (L1): native zero-copy — the shard is the worker's block (cb_x_resident backed on it) and the
+    # output packs straight into its shard when the output shard spec matches (op_design.md R9 / R10).
+    "memory_layout": [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    ],
     "cluster_axis": [0, 1],
     # Ring: generic in G via _schedule; verified on the snake-ring mock (1xN / Nx1), G = 4, 1 and 2 links.
     "topology": [Topology.Linear, Topology.Ring],
@@ -115,6 +123,9 @@ def _caller_errors(input_tensor, cluster_axis, gamma, topology, num_links):
             raise ValueError(
                 f"distributed_rms_norm: gamma last dim {gshape[-1]} != input last dim (W_local) {shape[-1]}"
             )
+    mem = input_tensor.memory_config()
+    if mem.is_sharded() and mem.buffer_type != ttnn.BufferType.L1:
+        raise ValueError(f"distributed_rms_norm: a sharded input must live in L1, got {mem.buffer_type}")
     if num_links is not None and num_links <= 0:
         raise ValueError(f"distributed_rms_norm: num_links must be > 0, got {num_links}")
     caller_link_checks(mesh_device, cluster_axis, topology, num_links)
@@ -198,5 +209,8 @@ def distributed_rms_norm(
         plan,
         epsilon=float(epsilon),
         compute_kernel_config=cfg,
-        memory_config=memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
+        # default: a sharded input keeps its shard spec (native zero-copy output); interleaved -> DRAM
+        memory_config=memory_config
+        if memory_config is not None
+        else (input_tensor.memory_config() if input_tensor.memory_config().is_sharded() else ttnn.DRAM_MEMORY_CONFIG),
     )

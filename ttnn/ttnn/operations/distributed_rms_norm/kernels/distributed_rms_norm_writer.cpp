@@ -5,8 +5,13 @@
 //   publish_records_block : cb_partial (fp32 tile per tile row; row 0 = the 32 per-row partial sums after the
 //                           in-DEST transpose) -> one 128 B record per tile row into my device's slot of every
 //                           sending port of my link; one barrier, then one local-arrival increment per port.
+//                           R5 pre-combine (sharded WIDTH): the records go instead to the inbox of the combiner
+//                           owning each tile row, then one local-combine increment per combiner; a combiner later
+//                           publishes its combined records (cb_lc_out, one record per tile row) to the ports.
 //   store_block           : cb_output_tiles -> DRAM, out_batch_tiles per barrier (host knob out_batch_tiles_knob;
-//                           it divides the core's W chunk, so a batch never straddles a tile row or the CB end).
+//                           it divides every normalize chunk, so a batch never straddles a tile row or the CB end).
+//                           Walk order = compute's: stats batch, normalize chunk, tile row, tile. Absent when the
+//                           output is a native shard (compute packs into it).
 //
 // Raw-API justification: a record is a sub-tile row (two 64 B face rows) landing in a port core's L1 scratch at a
 // host-computed offset; no dataflow helper places partial tiles into a remote L1 slot.
@@ -20,7 +25,12 @@ void kernel_main() {
     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t sem_local_arrivals = get_compile_time_arg_val(2);
     constexpr uint32_t record_bytes = get_compile_time_arg_val(3);  // host RECORD_BYTES: 32 fp32 partial sums
-    constexpr auto out_args = TensorAccessorArgs<4>();
+    constexpr bool out_native = get_compile_time_arg_val(4) != 0;   // cb_output_tiles backed on the output shard
+    constexpr bool local_combine = get_compile_time_arg_val(5) != 0;  // R5 device-local pre-combine
+    constexpr uint32_t cb_lc_out = get_compile_time_arg_val(6);
+    constexpr uint32_t sem_local_combine = get_compile_time_arg_val(7);
+    constexpr bool x_sharded = get_compile_time_arg_val(8) != 0;  // sharded-path runtime args present
+    constexpr auto out_args = TensorAccessorArgs<9>();
 
     constexpr uint32_t half_record = record_bytes / 2;
     constexpr uint32_t f32_face_bytes = 1024;
@@ -36,8 +46,8 @@ void kernel_main() {
     const uint32_t wt_total = get_arg_val<uint32_t>(a++);
     const uint32_t my_slot_addr = get_arg_val<uint32_t>(a++);  // scratch + p * slot_bytes (same on every port)
     const uint32_t rec_base = get_arg_val<uint32_t>(a++);
-    const uint32_t s_w = get_arg_val<uint32_t>(a++);
-    const uint32_t w_idx = get_arg_val<uint32_t>(a++);
+    const uint32_t s_w = get_arg_val<uint32_t>(a++);        // records per tile row of the block I publish into
+    const uint32_t w_idx = get_arg_val<uint32_t>(a++);      // my W chunk
     const uint32_t out_batch = get_arg_val<uint32_t>(a++);  // tiles per writer barrier (divides cw)
     const uint32_t num_ports = get_arg_val<uint32_t>(a++);  // sending ports of my link (1 or 2)
     uint32_t port_x[max_ports], port_y[max_ports];
@@ -45,6 +55,18 @@ void kernel_main() {
         port_x[i] = get_arg_val<uint32_t>(a++);
         port_y[i] = get_arg_val<uint32_t>(a++);
     }
+    // sharded-path args (R9/R10); the interleaved path keeps its Phase 0 arg list and these defaults
+    uint32_t stat_rows = block_rows, norm_chunk = cw, lc_rows = 0, lc_start = 0, inbox_addr = 0, lc_per = 1, n_comb = 0;
+    if constexpr (x_sharded) {
+        stat_rows = get_arg_val<uint32_t>(a++);   // tile rows per stats batch (knob)
+        norm_chunk = get_arg_val<uint32_t>(a++);  // W tiles per normalize chunk (== cw unless gamma streams)
+        lc_rows = get_arg_val<uint32_t>(a++);     // tile rows I pre-combine (0: not a combiner)
+        lc_start = get_arg_val<uint32_t>(a++);    // first of them
+        inbox_addr = get_arg_val<uint32_t>(a++);
+        lc_per = get_arg_val<uint32_t>(a++);  // tile rows per combiner
+        n_comb = get_arg_val<uint32_t>(a++);  // combiners of my row group, then their (x, y)
+    }
+    const uint32_t comb_idx = a;
 
     if (core_rows == 0) {
         return;  // idle core of the worker rectangle
@@ -55,41 +77,92 @@ void kernel_main() {
     const auto out = TensorAccessor(out_args, out_addr, out_tile_bytes);
     const uint32_t local_arrivals = get_semaphore(sem_local_arrivals);
 
+    // publish one record (two 64 B face-row halves of the partial tile's row 0) into a [half 0 of w][half 1 of w]
+    // block of rw records at (x, y)
+    auto send_record = [&](uint32_t src, uint32_t x, uint32_t y, uint32_t block, uint32_t rw, uint32_t w) {
+        noc_async_write(src, get_noc_addr(x, y, block + w * half_record), half_record);
+        noc_async_write(src + f32_face_bytes, get_noc_addr(x, y, block + (rw + w) * half_record), half_record);
+    };
+
     for (uint32_t r0 = 0; r0 < core_rows; r0 += block_rows) {
         const uint32_t rows = (core_rows - r0) < block_rows ? (core_rows - r0) : block_rows;
 
-        // ---- publish_records_block ----
-        cb_wait_front(cb_partial, rows);
-        const uint32_t rp = get_read_ptr(cb_partial);
-        // record block of tile row j: [half 0 of w = 0..s_w-1][half 1 of w = 0..s_w-1] (see the reader's gather)
-        for (uint32_t j = 0; j < rows; ++j) {
-            const uint32_t src = rp + j * partial_tile_bytes;
-            const uint32_t block = my_slot_addr + (rec_base + (r0 + j) * s_w) * record_bytes;
-            const uint32_t dst0 = block + w_idx * half_record;          // rows 0-15 of the tile row
-            const uint32_t dst1 = block + (s_w + w_idx) * half_record;  // rows 16-31
-            for (uint32_t i = 0; i < num_ports; ++i) {
-                noc_async_write(src, get_noc_addr(port_x[i], port_y[i], dst0), half_record);
-                noc_async_write(src + f32_face_bytes, get_noc_addr(port_x[i], port_y[i], dst1), half_record);
+        // ---- publish_records_block, one stats batch at a time ----
+        for (uint32_t b0 = 0; b0 < rows; b0 += stat_rows) {
+            const uint32_t nb = (rows - b0) < stat_rows ? (rows - b0) : stat_rows;
+            cb_wait_front(cb_partial, nb);
+            const uint32_t rp = get_read_ptr(cb_partial);
+            for (uint32_t j = 0; j < nb; ++j) {
+                const uint32_t src = rp + j * partial_tile_bytes;
+                const uint32_t row = r0 + b0 + j;
+                if constexpr (local_combine) {
+                    // record of my W chunk for this tile row -> the inbox of the combiner owning the row
+                    const uint32_t c = row / lc_per;
+                    const uint32_t cx = get_arg_val<uint32_t>(comb_idx + 2 * c);
+                    const uint32_t cy = get_arg_val<uint32_t>(comb_idx + 2 * c + 1);
+                    send_record(src, cx, cy, inbox_addr + (row - c * lc_per) * s_w * record_bytes, s_w, w_idx);
+                } else {
+                    const uint32_t block = my_slot_addr + (rec_base + row * s_w) * record_bytes;
+                    for (uint32_t i = 0; i < num_ports; ++i) {
+                        send_record(src, port_x[i], port_y[i], block, s_w, w_idx);
+                    }
+                }
             }
+            noc_async_writes_flushed();
+            cb_pop_front(cb_partial, nb);
         }
         noc_async_write_barrier();
-        for (uint32_t i = 0; i < num_ports; ++i) {
-            noc_semaphore_inc(get_noc_addr(port_x[i], port_y[i], local_arrivals), 1);
-        }
-        cb_pop_front(cb_partial, rows);
-
-        // ---- store_block: out_batch tiles of my W chunk per barrier ----
-        for (uint32_t j = 0; j < rows; ++j) {
-            const uint32_t row_tile0 = (row_start + r0 + j) * wt_total + w_start;
-            for (uint32_t t0 = 0; t0 < cw; t0 += out_batch) {
-                cb_wait_front(cb_output_tiles, out_batch);
-                uint32_t rd = get_read_ptr(cb_output_tiles);
-                for (uint32_t t = 0; t < out_batch; ++t) {
-                    noc_async_write_page(row_tile0 + t0 + t, out, rd);
-                    rd += out_tile_bytes;
+        if constexpr (local_combine) {
+            for (uint32_t c = 0; c < n_comb; ++c) {
+                noc_semaphore_inc(
+                    get_noc_addr(
+                        get_arg_val<uint32_t>(comb_idx + 2 * c),
+                        get_arg_val<uint32_t>(comb_idx + 2 * c + 1),
+                        get_semaphore(sem_local_combine)),
+                    1);
+            }
+            // combiner: publish the combined record of each of my tile rows (one record per row on the exchange)
+            if (lc_rows > 0) {
+                cb_wait_front(cb_lc_out, lc_rows);
+                const uint32_t lp = get_read_ptr(cb_lc_out);
+                for (uint32_t j = 0; j < lc_rows; ++j) {
+                    const uint32_t block = my_slot_addr + (rec_base + lc_start + j) * record_bytes;
+                    for (uint32_t i = 0; i < num_ports; ++i) {
+                        send_record(lp + j * partial_tile_bytes, port_x[i], port_y[i], block, 1, 0);
+                    }
                 }
                 noc_async_write_barrier();
-                cb_pop_front(cb_output_tiles, out_batch);
+                for (uint32_t i = 0; i < num_ports; ++i) {
+                    noc_semaphore_inc(get_noc_addr(port_x[i], port_y[i], local_arrivals), 1);
+                }
+                cb_pop_front(cb_lc_out, lc_rows);
+            }
+        } else {
+            for (uint32_t i = 0; i < num_ports; ++i) {
+                noc_semaphore_inc(get_noc_addr(port_x[i], port_y[i], local_arrivals), 1);
+            }
+        }
+
+        // ---- store_block: out_batch tiles per barrier, in compute's (batch, chunk, row, tile) order ----
+        if constexpr (!out_native) {
+            for (uint32_t b0 = 0; b0 < rows; b0 += stat_rows) {
+                const uint32_t nb = (rows - b0) < stat_rows ? (rows - b0) : stat_rows;
+                for (uint32_t c0 = 0; c0 < cw; c0 += norm_chunk) {
+                    const uint32_t wc = (cw - c0) < norm_chunk ? (cw - c0) : norm_chunk;
+                    for (uint32_t j = 0; j < nb; ++j) {
+                        const uint32_t row_tile0 = (row_start + r0 + b0 + j) * wt_total + w_start + c0;
+                        for (uint32_t t0 = 0; t0 < wc; t0 += out_batch) {
+                            cb_wait_front(cb_output_tiles, out_batch);
+                            uint32_t rd = get_read_ptr(cb_output_tiles);
+                            for (uint32_t t = 0; t < out_batch; ++t) {
+                                noc_async_write_page(row_tile0 + t0 + t, out, rd);
+                                rd += out_tile_bytes;
+                            }
+                            noc_async_write_barrier();
+                            cb_pop_front(cb_output_tiles, out_batch);
+                        }
+                    }
+                }
             }
         }
     }

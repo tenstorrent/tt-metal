@@ -28,3 +28,50 @@
   - **Caller errors added:** non-ROW_MAJOR gamma, and an explicit `num_links` beyond the port-column cap. The latter was silently clamped before.
   - `l1_ledger.md` was brought current (`MIN_CORE_W_TILES`=8, conditional `cb_xg`, worst-case footprints on the 11×10 grid).
 - **Tests added**: test_distributed_rms_norm.py (planner), test_distributed_rms_norm_precision_baseline.py, test_distributed_rms_norm_perf_bench.py (device-time bench for the LOOSE_CASES configs), probes/probe_001.py (Ring verification probe).
+
+## Refinement 1 — Native sharded placement (HEIGHT_SHARDED + WIDTH_SHARDED)
+- **Date**: 2026-10-14
+- **What was done**:
+  - `SUPPORTED["memory_layout"]` gains HEIGHT_SHARDED and WIDTH_SHARDED (L1). A DRAM-sharded input is a caller error. With `memory_config=None`, a sharded input now keeps its shard spec for the output.
+  - **Native zero-copy.**
+    - `cb_x_resident` is `cb_descriptor_from_sharded_tensor(input)`. The reader only publishes the resident tiles; there is no NoC read and no TensorAccessor on the core's own shard. Compute reads x in place through `TileAddressing::Strided` (row stride = shard width).
+    - When the output shard spec equals the input's, `cb_output_tiles` is the output shard. Compute packs into it (Strided) and the writer's store disappears.
+    - Otherwise the writer stores through a TensorAccessor to any output config (the translated tests use other output grids).
+  - **Worker set = shard grid.**
+    - HEIGHT (R9): `S_w = 1`, one row group per shard.
+    - WIDTH (R10): `S_r = 1`, `S_w` = shard cores. A ragged last shard is handled by valid `cw` vs physical `cw_phys`.
+    - Ports go on the first free grid cores.
+    - Stats-ready is multicast per shard-grid rectangle (port kernel: a list of rectangles).
+  - **R5 device-local pre-combine (WIDTH).**
+    - Each W chunk writes its per-row record into the inbox of the combiner owning that tile row: an L1 sharded tensor, with rows split `lc_per` per chunk. Combiners REDUCE_COL the S_w records (new `cb_lc` → `cb_lc_out`) and publish one record per tile row.
+    - Why: flat records at a pinned S_w ≤ 86 would need `G·S_w·Ht·128 B` of lockstep scratch (1 MB at 4096×1024) and quadratic pulls.
+  - **New knobs (single source in `_choose_knobs`).**
+    - `stat_rows`: the per-row stats CBs stream in batches; WIDTH holds up to 128 tile rows.
+    - `gamma_chunk`: gamma streams double-buffered in chunks on the fused path; HEIGHT 32×8192 needs 1 MB of gamma tiles beside 2×512 KB of shards.
+    - Both are chosen as the coarsest that fits the CB room the allocator really leaves (L1 block table via `GetMemoryView`, so tensors left alive by earlier OOM-skipped cells are counted).
+    - Interleaved defaults are unchanged: the whole block and the whole gamma.
+  - The interleaved path keeps its Phase 0 per-core runtime-arg lists: sharded-only args are compile-time gated. Appending them unconditionally added host dispatch time, and so cross-device launch skew, measured as +2–12 µs of exchange wait on 640×1792.
+- **Reused / Added**:
+  - Reused: the R1 record exchange (port kernel, fence, relay), the sumsq / finalize / normalize helper calls, the gather (now a lambda shared by the stats gather and the R5 local gather), the record-publish code (now a lambda), and the ragged-chunk CB grouping.
+  - Added: the sharded layout plan, shard-backed CBs, Strided chains on the sharded path, the R5 inbox + 2 CBs + 1 semaphore, stats batching, and gamma chunking.
+- **Accuracy achieved**: same tolerance gates as the golden suite (bf16 PCC ≥ 0.999 class, fp32 tighter), passing on every shape below.
+- **Golden test progress**:
+  - Supported sharded cells (`*_SHARDED`, fp32/bf16, `fp32_dest_acc_en=True`, tile_aligned / h_non_aligned): 1404 passed, 0 failed, 36 `INFEASIBLE_L1` skips (harness buffer OOMs); the rest are INVALID.
+  - Interleaved supported slice: 720/720 passed.
+  - Loose 3/3; translated 231 passed, 47 xfailed (bf8b), 0 failed; ring mock 16/16; unit dir all green.
+- **Device time** (bf16 + gamma, axis 1, max over 4 devices):
+  - Interleaved unchanged: 640×1792 24.3–27.1 µs (baseline on this box 24.3–24.5), 2048×1280 ~45 µs.
+  - HEIGHT 640×1792: 19.8 µs, below interleaved because there are no DRAM crossings.
+  - WIDTH: 32×1792 9.3 µs, 640×1792 ~81 µs, 2048×2048 ~171 µs.
+- **Finding (WIDTH perf)**:
+  - WIDTH costs ~2.6 µs per tile row and is compute-bound (TRISC0 is the long pole). Every W-chunk core runs the per-row stats pipeline for all Ht rows: REDUCE_ROW + transpose, then REDUCE_COL + transpose + rsqrt finalize, on 1-tile-wide rows.
+  - Next levers:
+    - finalize once per row on the combiners and multicast rstd (R4 for the sharded path);
+    - batch the per-tile transposes;
+    - spread combiners over both links (WIDTH runs `L_eff = 1` since `S_r = 1`).
+  - Not done here: this refinement is generality.
+- **Issues encountered**:
+  - In a long golden session, a cell whose input shard or output OOM-skips leaves its tensors alive. A fixed L1-base budget then let CBs clash with them.
+  - Fixed by budgeting against the allocator's block table.
+  - Tracy capture crashed on a multi-case profile of the sharded test file; single-case profiles were used instead.
+- **Tests added**: `tests/ttnn/unit_tests/operations/distributed_rms_norm/test_distributed_rms_norm_sharded.py` (12 cases: HEIGHT prescale / h_non_aligned / gamma-chunked, WIDTH one-combiner / many-combiner / stats-batched / ragged last shard, axis 0 with 2 links).
