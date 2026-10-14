@@ -72,8 +72,9 @@ const DFBSpecName SAMPLING_RAND_TILE{"rand_tile"};
 const DFBSpecName SAMPLING_OUTPUT{"output"};
 // Per-user k, p and temperature. Each is NOC-read whole, in one entry covering every core, so no core
 // issues an unaligned read for its own value; `temp` doubles as the scalar operand compute broadcasts.
-const DFBSpecName SAMPLING_K{"k"};
-const DFBSpecName SAMPLING_P{"p"};
+// `k` and `p` are writer-private scratchpads; `temp` is a dataflow buffer handed to compute.
+const ScratchpadSpecName SAMPLING_K{"k"};
+const ScratchpadSpecName SAMPLING_P{"p"};
 const DFBSpecName SAMPLING_TEMP{"temp"};
 
 const TensorParamName SAMPLING_INPUT_VALUES_TENSOR{"input_values"};
@@ -131,10 +132,6 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     tt::DataFormat input_indices_dfb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_indices_tensor.dtype());
     tt::DataFormat index_dfb_data_format = use_32bit_index ? tt::DataFormat::Int32 : tt::DataFormat::UInt16;
-    // On the 32-bit path (e.g. Quasar), validation already requires k to be INT32 (UInt32 DFB
-    // metadata is unsupported there), so the dtype-derived format is correct as-is.
-    tt::DataFormat k_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(k.dtype());
-    tt::DataFormat p_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(p.dtype());
     tt::DataFormat temp_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(temp.dtype());
 
     uint32_t input_values_tile_size = tile_size(input_values_dfb_data_format);
@@ -244,8 +241,6 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
             Ht * tile_height,
             input_indices_dfb_data_format),
         make_dfb(SAMPLING_OUTPUT, aligned_out0_unit_size, 1, index_dfb_data_format),
-        make_dfb(SAMPLING_K, k_chunk_size, 1, k_dfb_data_format),
-        make_dfb(SAMPLING_P, p_chunk_size, 1, p_dfb_data_format),
         make_dfb(SAMPLING_TEMP, temp_chunk_size, 1, temp_dfb_data_format),
     };
 
@@ -414,9 +409,9 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
 
     // One writer per running core. `core_id` is the only value that differs between them, and it is a
     // compile-time argument, so each core gets its own KernelSpec rather than one shared spec.
-    // `output`, `k` and `p` are bound as both PRODUCER and CONSUMER because this kernel is their only
-    // toucher: `k` and `p` are NOC-read staging it then indexes by core, and `output` is a plain SRAM
-    // window it fills and sends without running a FIFO operation on it at all.
+    // `output` is bound as both PRODUCER and CONSUMER because this kernel is its only toucher: it is a
+    // plain SRAM window the writer fills and sends without running a FIFO operation on it at all. `k`
+    // and `p` are scratchpads: NOC-read staging the writer then indexes by core.
     auto make_writer = [&](uint32_t core_index) {
         return KernelSpec{
             .unique_id = sampling_writer_name(core_index),
@@ -468,29 +463,18 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
                      .endpoint_type = DFBEndpointType::CONSUMER,
                  },
                  DFBBinding{
-                     .dfb_spec_name = SAMPLING_K,
-                     .accessor_name = "k",
-                     .endpoint_type = DFBEndpointType::PRODUCER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = SAMPLING_K,
-                     .accessor_name = "k",
-                     .endpoint_type = DFBEndpointType::CONSUMER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = SAMPLING_P,
-                     .accessor_name = "p",
-                     .endpoint_type = DFBEndpointType::PRODUCER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = SAMPLING_P,
-                     .accessor_name = "p",
-                     .endpoint_type = DFBEndpointType::CONSUMER,
-                 },
-                 DFBBinding{
                      .dfb_spec_name = SAMPLING_TEMP,
                      .accessor_name = "temp",
                      .endpoint_type = DFBEndpointType::PRODUCER,
+                 }},
+            .scratchpad_bindings =
+                {ScratchpadBinding{
+                     .scratchpad_spec_name = SAMPLING_K,
+                     .accessor_name = "k",
+                 },
+                 ScratchpadBinding{
+                     .scratchpad_spec_name = SAMPLING_P,
+                     .accessor_name = "p",
                  }},
             .tensor_bindings =
                 {TensorBinding{
@@ -548,6 +532,10 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         .name = "sampling",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
+        // One k_chunk_size / p_chunk_size entry each, as the former DFBs held.
+        .scratchpads =
+            {ScratchpadSpec{.unique_id = SAMPLING_K, .size_per_node = k_chunk_size * 1},
+             ScratchpadSpec{.unique_id = SAMPLING_P, .size_per_node = p_chunk_size * 1}},
         .tensor_parameters =
             {TensorParameter{.unique_id = SAMPLING_INPUT_VALUES_TENSOR, .spec = input_values_tensor.tensor_spec()},
              TensorParameter{.unique_id = SAMPLING_INPUT_INDICES_TENSOR, .spec = input_indices_tensor.tensor_spec()},

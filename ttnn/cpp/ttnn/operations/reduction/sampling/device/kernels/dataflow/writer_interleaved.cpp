@@ -9,6 +9,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
@@ -59,8 +60,8 @@ void kernel_main() {
     // read k, p, temp
 
     const Noc noc;
-    DataflowBuffer dfb_k(dfb::k);
-    DataflowBuffer dfb_p(dfb::p);
+    const Scratchpad<volatile uint32_t> k_chunk(scratch::k);
+    const Scratchpad<volatile uint16_t> p_chunk(scratch::p);
     DataflowBuffer dfb_temp(dfb::temp);
     DataflowBuffer dfb_rand(dfb::rand);
     DataflowBuffer dfb_final_indices(dfb::final_indices);
@@ -69,26 +70,26 @@ void kernel_main() {
     const DataflowBuffer dfb_out(dfb::out);
 
     const auto addrg_k = TensorAccessor(tensor::k);
-    dfb_k.reserve_back(1);
-    const uint32_t dfb_k_ptr = dfb_k.get_write_ptr();
     // Read the entire aligned chunk to avoid NOC alignment issues
-    noc.async_read(addrg_k, dfb_k, k_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read(addrg_k, k_chunk, k_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    dfb_k.push_back(1);
-    const CoreLocalMem<volatile uint32_t> k_ptr(dfb_k_ptr);
     // Index into the chunk to get this core's value
-    const uint32_t k = k_ptr[core_id];
+    uint32_t k;
+    {
+        const auto k_lock = k_chunk.scoped_lock(core_id, 1);
+        k = k_chunk[core_id];
+    }
 
     const auto addrg_p = TensorAccessor(tensor::p);
-    dfb_p.reserve_back(1);
-    const uint32_t dfb_p_ptr = dfb_p.get_write_ptr();
     // Read the entire aligned chunk to avoid NOC alignment issues
-    noc.async_read(addrg_p, dfb_p, p_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read(addrg_p, p_chunk, p_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    dfb_p.push_back(1);
-    const CoreLocalMem<volatile uint16_t> p_ptr(dfb_p_ptr);
     // Index into the chunk to get this core's value
-    const uint32_t p = p_ptr[core_id];
+    uint32_t p;
+    {
+        const auto p_lock = p_chunk.scoped_lock(core_id, 1);
+        p = p_chunk[core_id];
+    }
 
     const auto addrg_temp = TensorAccessor(tensor::temp);
     // dfb_temp.reserve_back(1);
