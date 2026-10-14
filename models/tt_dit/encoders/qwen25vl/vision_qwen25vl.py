@@ -315,7 +315,11 @@ class Qwen25VlVisionPatchMerger(Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """`(patches, hidden_size)` -> `(patches // merge ** 2, out_hidden_size)`."""
-        x = ttnn.reshape(ttnn.typecast(self.norm.forward(x), ttnn.bfloat16), (-1, self.merged_size))
+        x = ttnn.typecast(self.norm.forward(x), ttnn.bfloat16)
+        # Reshaped in row-major. TODO: add link to issue
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.reshape(x, (-1, self.merged_size))
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         return row_parallel_forward(self.linear_fc2, ttnn.gelu(self.linear_fc1.forward(x)), self._p)
 
 
