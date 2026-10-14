@@ -20,7 +20,6 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
     binary_broadcast_input_dimensions,
     binary_broadcast_math_fidelities,
     binary_broadcast_tile_dimensions,
-    skip_if_quasar_binary_broadcast_unsupported,
 )
 from quasar.test_eltwise_binary_broadcast_quasar import (
     test_eltwise_binary_broadcast_quasar as run_eltwise_binary_broadcast,
@@ -49,7 +48,7 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
         dest_acc, dest_sync, tile_dimensions, is_perf=True
     ),
     acc_to_dest=lambda input_dimensions, tile_dimensions: binary_broadcast_acc_to_dest_modes(
-        input_dimensions, tile_dimensions, is_perf=True
+        input_dimensions, tile_dimensions
     ),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
@@ -72,9 +71,6 @@ def test_perf_eltwise_binary_broadcast_quasar(
     loop_factor,
     is_perf,
 ):
-    skip_if_quasar_binary_broadcast_unsupported(
-        tile_dimensions, math_fidelity, acc_to_dest
-    )
     run_eltwise_binary_broadcast(
         formats,
         dest_acc,

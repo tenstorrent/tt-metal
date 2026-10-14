@@ -127,7 +127,9 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     cq_to_event_locks(num_hw_cqs),
     prefetcher_cores(num_hw_cqs),
     prefetch_q_dev_ptrs(num_hw_cqs),
-    prefetch_q_dev_fences(num_hw_cqs) {
+    prefetch_q_dev_fences(num_hw_cqs),
+    // The ring starts zeroed, which reads as phase 0, so the first lap writes phase 1.
+    prefetch_q_phases(num_hw_cqs, 1) {
     this->prefetch_q_windows.reserve(num_hw_cqs);
     this->completion_q_windows.reserve(num_hw_cqs);
 
@@ -756,6 +758,9 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         prefetch_q_base + (mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes());
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
+        if (mem_map.prefetch_q_cached()) {
+            this->prefetch_q_phases[cq_id] ^= 1U;
+        }
         wait_for_fetch_q_space();
     }
 }
@@ -885,6 +890,16 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     // prefetcher is MSB of FetchQ entry.
     if (stall_prefetcher) {
         entry_val |= 1u << shift_for_msb;
+    }
+
+    if (dispatch_mem_map.prefetch_q_cached()) {
+        constexpr uint32_t phase_bit = PrefetchConstants::PREFETCH_Q_PHASE_BIT;
+        TT_ASSERT(entry_bytes == 4, "Cached fetch queue entries must be 4 bytes");
+        // The entry holds a uint32_t size shifted down by PREFETCH_Q_LOG_MINSIZE, so it never reaches the phase bit.
+        static_assert(
+            sizeof(command_size_B) * 8 - DispatchSettings::PREFETCH_Q_LOG_MINSIZE <= phase_bit,
+            "FetchQ entry size field would overlap the phase bit");
+        entry_val |= this->prefetch_q_phases[cq_id] << phase_bit;
     }
 
     if (entry_bytes == 2) {
