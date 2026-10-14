@@ -152,6 +152,11 @@ std::optional<RmPlan> rm_geometry(
     if (plan.old_stick == 0 || plan.new_stick == 0 || num_old_sticks == 0 || num_new_sticks == 0) {
         return std::nullopt;
     }
+    // The work split and the kernels' page ids are 32-bit.
+    constexpr uint64_t kMaxSticks = std::numeric_limits<uint32_t>::max();
+    if (num_old_sticks > kMaxSticks || num_new_sticks > kMaxSticks) {
+        return std::nullopt;
+    }
     // A repartition that keeps the stick size is a metadata view and never reaches the kernels.
     if (plan.old_stick == plan.new_stick) {
         return std::nullopt;
