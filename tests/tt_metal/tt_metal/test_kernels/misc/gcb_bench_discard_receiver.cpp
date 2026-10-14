@@ -2,13 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Bandwidth-bench worker receiver for the DRAM-core vs worker-core prefetcher
-// BW comparison. Per-page wait_front + pop_front in a loop, discards data.
+// Bandwidth-bench worker receiver for the worker-core prefetcher BW bench.
+// Per-page wait_front + pop_front in a loop, discards data.
 //
-// Unlike gcb_smoke_receiver.cpp (one big wait_front(num_pages) + pop_front(num_pages)),
-// this kernel drains pages one-at-a-time so the GCB fifo (which only holds a few
-// pages of in-flight data) keeps refilling as the sender pushes through num_iters
-// total pages.
+// It drains pages one at a time, rather than with one big wait_front(num_pages) +
+// pop_front(num_pages), so the GCB fifo (which only holds a few pages of in-flight
+// data) keeps refilling as the sender pushes through num_iters total pages.
 
 #include <stdint.h>
 

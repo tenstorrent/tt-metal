@@ -2,13 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Loading a DRAM-sender PrefetcherPipe's config page into plain values, for the Tensor prefetcher's
-// receiver-contiguous loop (impl/buffers/kernels/tensor_prefetcher.cpp). That loop drives both of
-// its transports -- DRAM-sender GlobalCircularBuffers and PrefetcherPipes -- through one
-// RemoteSenderCBInterface and one copy of its credit code, so it reads a pipe's page into that
-// interface rather than pushing through the device PrefetcherPipe class. Everything else a DRAM
-// sender does with a pipe -- an entry-size change, a drain, a plain push -- goes through the class
-// (PrefetcherPipe's DramSenderConfigPage constructor).
+// Loading a DRAM-sender PrefetcherPipe's config page into plain values, and the credit bookkeeping
+// done on them, for the Tensor prefetcher's delivery loops (impl/buffers/kernels/tensor_prefetcher.cpp).
+// Those loops write many receivers' blocks per round and credit them all at once, so they work on a
+// pipe's page directly rather than pushing entry by entry through the device PrefetcherPipe class.
+// An entry-size change still goes through the class (PrefetcherPipe's DramSenderConfigPage
+// constructor).
+//
+// Include order: the credit helpers below name invalidate_l1_cache(), so this header must follow the
+// dataflow API a DRISC kernel already includes.
 //
 // The page is the one the host stamps into DRISC L1 (impl/buffers/prefetcher_pipe.cpp,
 // build_dram_sender_config_pages); its layout is remote_dfb_config_layout.h's. What this header
@@ -92,16 +94,53 @@ FORCE_INLINE uint32_t pipe_sender_wr_offset(const PipeSenderCtx& ctx, uint32_t r
     return *pipe_local_wr_offset_ptr(ctx, r);
 }
 
-// Publish `wr_offset` as every receiver's cursor, given the base of a sender's SENT block. Takes
-// that base rather than a PipeSenderCtx so the prefetcher's receiver-contiguous loop -- which
-// keeps one working cursor for a whole round in its RemoteSenderCBInterface, because it credits
-// every receiver the same bytes -- can put the round's result back without rebuilding the context.
-FORCE_INLINE void pipe_store_wr_offset(uint32_t local_sent_base, uint32_t num_receivers, uint32_t wr_offset) {
+// Publish `wr_offset` as every receiver's cursor. The prefetcher keeps one working cursor for a whole
+// pipe, because each round credits every receiver the same bytes, and puts it back with this.
+FORCE_INLINE void pipe_store_wr_offset(const PipeSenderCtx& ctx, uint32_t wr_offset) {
     volatile tt_l1_ptr uint32_t* offset_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_sent_base) + PREFETCHER_PIPE_SLOT_WR_OFFSET_WORD;
-    for (uint32_t r = 0; r < num_receivers; ++r) {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.local_sent_base) + PREFETCHER_PIPE_SLOT_WR_OFFSET_WORD;
+    for (uint32_t r = 0; r < ctx.num_receivers; ++r) {
         *offset_ptr = wr_offset;
         offset_ptr += L1_ALIGNMENT / sizeof(uint32_t);
+    }
+}
+
+// Free credit units at the most-backed-up receiver, without blocking. The ring's capacity in the same
+// units doubles as the answer when nothing is outstanding.
+FORCE_INLINE uint32_t pipe_sender_min_free_units(const PipeSenderCtx& ctx) {
+    const uint32_t ring_units = ctx.ring_bytes / L1_ALIGNMENT;
+    volatile tt_l1_ptr uint32_t* sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.local_sent_base);
+    volatile tt_l1_ptr uint32_t* acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.local_acked_base);
+    uint32_t min_free = ring_units;
+    invalidate_l1_cache();
+    for (uint32_t r = 0; r < ctx.num_receivers; ++r) {
+        const uint32_t outstanding = *sent_ptr - *acked_ptr;
+        // Clamp rather than subtract blindly: a resize padding credit (sent bumped without a
+        // free-space reserve) can transiently push sent further ahead of acked than the ring holds,
+        // and an underflow here would wrap to a huge value and defeat receiver backpressure.
+        const uint32_t free_units = outstanding >= ring_units ? 0u : ring_units - outstanding;
+        if (free_units < min_free) {
+            min_free = free_units;
+        }
+        sent_ptr += L1_ALIGNMENT / sizeof(uint32_t);
+        acked_ptr += L1_ALIGNMENT / sizeof(uint32_t);
+    }
+    return min_free;
+}
+
+// Spin until every receiver has acked everything this sender published.
+FORCE_INLINE void pipe_sender_barrier(const PipeSenderCtx& ctx) {
+    volatile tt_l1_ptr uint32_t* sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.local_sent_base);
+    volatile tt_l1_ptr uint32_t* acked_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.local_acked_base);
+    for (uint32_t r = 0; r < ctx.num_receivers; ++r) {
+        while (true) {
+            invalidate_l1_cache();
+            if (*acked_ptr == *sent_ptr) {
+                break;
+            }
+        }
+        sent_ptr += L1_ALIGNMENT / sizeof(uint32_t);
+        acked_ptr += L1_ALIGNMENT / sizeof(uint32_t);
     }
 }
 

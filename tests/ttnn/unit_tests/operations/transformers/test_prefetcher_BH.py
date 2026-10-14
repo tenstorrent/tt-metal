@@ -597,7 +597,7 @@ def test_tensor_prefetcher_multichip_dram_harvesting(mesh_device):
     device. The discriminating check -- comparing each bank's resolved sender across the mesh, and
     reporting when the device pair is too homogeneous to tell the paths apart -- needs the
     per-device SOC descriptors, which Python cannot reach; it lives in the C++ regression
-    DramSenderGCBMultiDeviceFixture.ConfigAndSenderStateUsePerDeviceDramTopology.
+    PrefetcherPipeDramSenderMultiDeviceFixture.ConfigPagesUsePerDeviceDramTopology.
     """
     require_tensor_prefetcher(mesh_device)
 
@@ -637,18 +637,26 @@ def test_tensor_prefetcher_multichip_dram_harvesting(mesh_device):
         (bank, bank_receivers_contiguous(bank, recv_per_bank=1, ring_cols=ring_grid_cols(num_dram_banks, ring_size)))
         for bank in range(num_dram_banks)
     ]
-    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
-        mesh_device, bank_to_receivers, 4 * push_page_size
+    receiver_domain = ttnn.CoreRangeSet({r for _, receivers in bank_to_receivers for r in receivers.ranges()})
+    pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
+        mesh_device,
+        sender_cores=ttnn.CoreRangeSet(set()),
+        receiver_domain=receiver_domain,
+        ring_size=4 * push_page_size,
+        max_receivers_per_pipe=1,
+        num_dram_senders=2 * num_dram_banks,
     )
+    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(pipe_space, bank_to_receivers)
 
     with tensor_prefetcher_session(mesh_device):
-        ttnn.experimental.queue_tensor_prefetcher_request(mesh_device, [(tt_weight, ring_size)], global_cb=gcb)
-        ttnn.experimental.test_dram_prefetcher_validator(
+        ttnn.experimental.queue_tensor_prefetcher_request(mesh_device, [(tt_weight, ring_size)], prefetcher_pipes=pipes)
+        ttnn.experimental.test_tensor_prefetcher_pipe_validator(
             mesh_device,
             tt_weight,
             num_layers=1,
             print_stride=max(1, ring_size // 4),
-            global_cb=gcb,
+            prefetcher_pipes=pipes,
+            bank_to_receivers=bank_to_receivers,
         )
 
 
