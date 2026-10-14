@@ -251,10 +251,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
         single_block_size_cliff_col * single_block_size / single_sub_block_size;
 
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (input_data_format == tt::DataFormat::Int32 || input_data_format == tt::DataFormat::UInt32 ||
-        input_data_format == tt::DataFormat::Float32) {
-        compute_defines.insert({"DST_ACCUM_MODE", "1"});
-    }
 
     // The compute kernel stays split per region -- each region has its own block *count* -- but each
     // instance binds the buffer set matching its cores' block *width*. The region's block-width CTA

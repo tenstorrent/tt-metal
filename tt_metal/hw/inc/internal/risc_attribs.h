@@ -56,7 +56,7 @@ inline __attribute__((always_inline)) uint64_t tt_l1_load(volatile tt_uint64_t* 
 
 // In certain cases enabling watcher can cause the code size to be too large. Give an option to
 // disable inlining if we need to.
-#if defined(WATCHER_ENABLED) && defined(WATCHER_NOINLINE)
+#if defined(FORCE_INLINE) || (defined(WATCHER_ENABLED) && defined(WATCHER_NOINLINE))
 #define FORCE_INLINE
 #else
 #define FORCE_INLINE inline __attribute__((always_inline))

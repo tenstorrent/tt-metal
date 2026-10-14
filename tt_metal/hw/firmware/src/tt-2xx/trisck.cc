@@ -8,6 +8,11 @@
 //      Need to make sure no other file includes these lists since it also include global parameter definitions
 // 2) instantiate global variables
 
+// Kernel defines go first, ahead of every firmware/LLK header, as they do for data-movement
+// kernels (passed as -D there). risc_attribs.h keys FORCE_INLINE off whether the kernel defines
+// it, so it has to see the kernel's defines.
+#include "defines_generated.h"
+
 #include "ckernel.h"
 #include "internal/firmware_common.h"
 #include "api/compile_time_args.h"
