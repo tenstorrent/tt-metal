@@ -1,0 +1,184 @@
+# Model spec for the gated bring-up framework (models/demos/common/bringup). Written by the /bringup intake skill,
+# approved by a person (python -m models.demos.common.bringup approve intake --spec <this file>).
+# deepseek-ai/DeepSeek-V4.1-Flash, text decoder only (vision encoder, aligner and the DSpark/MTP draft layers skipped).
+# Planned for a Blackhole Galaxy 4x4 at 1M tokens; brought up here in partial mode on the 4-chip QuietBox (mesh 2x2):
+# one layer of each kind (window-only, engram, encoder KV source, encoder reuse, decoder candidate source, decoder
+# reuse, decoder re-index), at real size for accuracy and scaled (heads and experts cut per the plan) for the
+# deployment's per-chip shapes. The full model (289 GB of fp4 experts) needs the Galaxy; a LoudBox holds a subset only.
+model: deepseek_v41_flash_d_p                      # slug: package models/demos/<model>, commit tag [<model>][<task>]
+display_name: DeepSeek-V4.1-Flash (layers 0-3, 14, 20, 21, 24)
+hf_id: deepseek-ai/DeepSeek-V4.1-Flash
+model_dir: models/demos/deepseek_v41_flash_d_p
+hooks: models.demos.deepseek_v41_flash_d_p.bringup.hooks
+num_layers: 40
+prior: null
+layers: "0-3,14,20,21,24"          # one of each block type (a subset result is never reported as full-model)
+deploy: {box: galaxy_4x4, seq: 1048576, chunk: 8192}   # the system the plan is for (F64)
+boxes:
+  galaxy_4x4:
+    name: Blackhole Galaxy, 4 rows as a 4x4 torus (FABRIC_2D_TORUS_XY)
+    chip: Blackhole p150b
+    mesh: [4, 4]
+    chip_dram_gb: 32
+    device_params: {fabric_config: FABRIC_2D_TORUS_XY, l1_small_size: 24576}
+    test_timeout_s: 3600
+  galaxy_8x4:
+    name: Blackhole Galaxy, mesh 8x4 (FABRIC_2D)
+    chip: Blackhole p150b
+    mesh: [8, 4]
+    chip_dram_gb: 32
+    device_params: {fabric_config: FABRIC_2D, l1_small_size: 24576}
+    test_timeout_s: 3600
+  loudbox_2x4:
+    name: Blackhole LoudBox, 8x p150b, mesh 2x4 (FABRIC_2D)
+    chip: Blackhole p150b
+    mesh: [2, 4]
+    chip_dram_gb: 32
+    device_params: {fabric_config: FABRIC_2D, l1_small_size: 24576}
+    test_timeout_s: 3600
+  quietbox_2x2:
+    name: 4x Blackhole p300c (2 cards), mesh 2x2 (FABRIC_2D)
+    chip: Blackhole p300c
+    mesh: [2, 2]
+    chip_dram_gb: 32
+    device_params: {fabric_config: FABRIC_2D, l1_small_size: 24576}   # owner: always 2D fabric
+    test_timeout_s: 3600
+run: {box: quietbox_2x2, mode: partial}
+target: {seq: 56320, chunk: 5120, dtype: bf16}          # this run's context at real size
+ladder:                            # rungs in order; the first rung with full_dumps feeds component and swap tests
+  - {name: s4096, seq: 4096, chunk: 2048, full_dumps: true}     # 2k->2k; > the window (128) and the compressed top-k
+  - {name: s16384, seq: 16384, chunk: 8192}                     # 8k->8k
+  - {name: last, seq: 56320, chunk: 5120, golden: s56320, prefix_from_golden: true}   # golden 51k prefix, device 51k->56k
+  - {name: s56320, seq: 56320, chunk: 5120}                     # all 11 chunks on device
+# scaled.ladder (the scaled run, capped at 64k by the owner) is set once the plan's roles fix the sequence factor
+block_types:                       # every layer exactly once; representative = the layer swap tests use
+  swa:                             # attention over the 128-token window only (compress ratio 0)
+    layers: [0]
+    representative: 0
+  swa_engram:                      # window-only attention + engram (n-gram hash table lookup into the residual)
+    layers: [1]
+    representative: 1
+  enc_source:                      # encoder (ratio 2): owns the compressed KV, indexer keys and top-k its readers reuse
+    layers: [2, 8]
+    representative: 2
+  enc_source_engram:               # enc_source + engram
+    layers: [14]
+    representative: 14
+  enc_reuse:                       # encoder (ratio 2): attends over its source's compressed KV with its top-k
+    layers: "3-7,9-13,15-19"
+    representative: 3
+  dec_candidate:                   # decoder (ratio 1) KV / index source; builds the candidate pool later indexers use
+    layers: [20]
+    representative: 20
+  dec_reindex:                     # decoder: own top-k over layer 20's KV, restricted to the candidate pool
+    layers: [24, 28, 32, 36]
+    representative: 24
+  dec_reuse:                       # decoder: reuses a source's KV and top-k
+    layers: "21-23,25-27,29-31,33-35,37-39"
+    representative: 21
+state:
+  kind: mixed
+  # names the reference returns per layer; a reader layer reads its source's state (hooks state_sources, F65)
+  tensors: [window_kv, compress_kv, compress_partial, index_k, topk_idx, candidates, engram_tail]
+  by_block_type:
+    swa: [window_kv]
+    swa_engram: [window_kv, engram_tail]
+    enc_source: [window_kv, compress_kv, compress_partial, index_k, topk_idx]
+    enc_source_engram: [window_kv, compress_kv, compress_partial, index_k, topk_idx, engram_tail]
+    enc_reuse: [window_kv]
+    dec_candidate: [window_kv, compress_kv, index_k, topk_idx, candidates]
+    dec_reindex: [window_kv, topk_idx]
+    dec_reuse: [window_kv]
+  fixed: [window_kv, compress_partial, topk_idx, candidates, engram_tail]   # not growing along the sequence
+golden: {keep_fp32: [compress_partial]}
+thresholds: {component: 0.99, block: 0.98, layer: 0.97, state: 0.97, final_hidden: 0.97, top5: 0.9}
+text:                              # the canonical prompt, built once at R.1 (reference/prompt.py)
+  source: models/tt_transformers/tests/tale-of-two-cities.txt.bz2
+  wrap: model_turn                 # instruction-tuned (reasoning effort, chat encoding)
+  request: "Recite the Project Gutenberg text of A Tale of Two Cities by Charles Dickens, from the start."
+  min_top1: 0.4
+hf:
+  revision: 5254448103b6254fc646dacbca1cbbf20e9216c1
+  parity_seq: 4096                 # > the window (128) and the compressed top-k reach, so parity exercises the selection
+  custom_loader: true              # transformers has no deepseek_v41: hooks.hf_model is DeepSeek's inference code on CPU
+intake:
+  smoke: {prompt: "What is the capital of France? Answer in one word.", expect: "Paris"}
+checkpoint:
+  expect:
+    "embed.weight": [129280, 5120]
+    "head.weight": [129280, 5120]
+    "norm.weight": [5120]
+    "layers.0.attn.wq_b.weight": [32768, 1280]           # fp8 e4m3 + ue8m0 block scales
+    "layers.0.attn.wkv.weight": [512, 5120]
+    "layers.0.ffn.gate.weight": [384, 5120]
+    "layers.*.ffn.experts.*.w1.weight": [2304, 2560]     # fp4 e2m1 packed 2 per byte + ue8m0 scale per 32
+    "layers.*.ffn.experts.*.w2.weight": [5120, 1152]
+    "layers.2.attn.compressor.wkv.weight": [512, 5120]
+    "layers.2.attn.indexer.wq_b.weight": [4096, 1280]
+    "layers.1.engram.embed.weight": [384006168, 256]     # engram table, fp8 + ue8m0 scale per 32
+    "layers.14.engram.embed.weight": [384016682, 256]
+    "layers.*.hc_attn_fn": [24, 20480]                   # mHC, 4 streams
+  config:
+    num_hidden_layers: 40
+    hidden_size: 5120
+    num_attention_heads: 64
+    head_dim: 512
+    n_routed_experts: 384
+    num_experts_per_tok: 6
+    sliding_window: 128
+    candidate_source_layer_id: 20
+    hc_mult: 4
+  trim_drop: ["vision.*", "aligner.*", "mtp.*", "image_*"]   # R.4 keeps layers 0-24 (the subset's prefix)
+contract: {adapter: deepseek_v41_flash_d_p}
+serving:
+  server_repo: /localdev/$USER/tt-d-gen
+  require_engine: false            # QuietBox: tt-d-gen does not run here; tt-metal's prefill_producer stands in
+agents:
+  rules:                           # the owner's rules, shown in every brief
+    - "Always use 2D fabric: the mesh opens with the spec's device_params; never FABRIC_1D or FABRIC_1D_RING."
+    - "Text decoder only: never build, load or test the vision encoder (vision.*, aligner.*, image_*) or the DSpark /
+      MTP draft layers (mtp.*)."
+    - "The model's ground truth is DeepSeek's own inference code shipped with the checkpoint (hf/inference/: model.py,
+      engram.py, kernel.py, config.json; hf/encoding/encoding.py builds prompts): transformers has no deepseek_v41.
+      Port its GPU kernels to CPU exactly (fp8 / fp4 quantize-dequantize included) and dequantize weights exactly as
+      the checkpoint defines them (fp8 e4m3 with ue8m0 block scales; experts fp4 e2m1 with a ue8m0 scale per 32)."
+    - "Engram: the n-gram hash and the table lookup depend only on the token ids; they run on the host before each
+      chunk's forward and their rows go to the device as an input. Read the tables from the checkpoint files on demand
+      (memory-mapped): never hold the 203 GB of tables in host RAM. Everything after the lookup runs on the device."
+    - "Host RAM is shared (503 GB): load and dequantize weights one layer (or one expert) at a time."
+    - "Precision during bring-up: HiFi4, fp32 accumulation, bf16 KV cache. Routed experts on the device in the format
+      that holds the checkpoint's fp4 values exactly (measure it; expected bfp8); a lossy format only by owner decision."
+  model: null
+  timeout_s: 14400
+  read:
+    reference:
+      - /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/hf/inference/model.py
+      - /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/hf/inference/engram.py
+      - /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/hf/inference/kernel.py
+      - /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/hf/inference/config.json
+      - /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/hf/config.json
+      - /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/hf/README.md
+      - /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/hf/encoding/encoding.py
+      - models/demos/deepseek_v3_d_p/reference/deepseek_v4
+      - models/demos/deepseek_v3_d_p/reference/mhc
+      - models/demos/glm53_flash_d_p/reference
+      - models/demos/common/bringup/selftest/fixture_model.py
+    plan:
+      - ttnn/ttnn/bringup/INDEX.md
+      - models/demos/deepseek_v3_d_p/tt/mla
+      - models/demos/deepseek_v3_d_p/tt/moe
+      - models/demos/deepseek_v3_d_p/tt/mhc
+      - models/demos/glm53_flash_d_p/tt
+      - models/demos/mimo_v2_6_d_p/tt
+    implement:
+      - ttnn/ttnn/bringup/INDEX.md
+      - models/demos/deepseek_v3_d_p/tt/mla
+      - models/demos/deepseek_v3_d_p/tt/moe
+      - models/demos/deepseek_v3_d_p/tt/mhc
+      - models/demos/glm53_flash_d_p/tt
+      - models/demos/mimo_v2_6_d_p/tt
+  policy: {}
+  swap_review: none
+dashboard: {styles: [standard, teletext]}
+paths:
+  hf: /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/hf
