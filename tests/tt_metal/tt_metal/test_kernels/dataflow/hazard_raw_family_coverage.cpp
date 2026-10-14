@@ -66,10 +66,14 @@ void kernel_main() {
 #elif defined(FAMILY_WRITE_ONE_PACKET_WITH_TRID)
     noc_async_write_one_packet_with_trid(l1, self_addr, size, /*trid=*/1);
     noc_async_write_barrier_with_trid(1);
+    // write_cmd_buf's NOC_PACKET_TAG is left at 1; the watcher requires it back at 0 before the next
+    // kernel on this core runs (implicit-trid users assume they start from transaction id 0).
+    noc_async_write_set_trid(0);
 #elif defined(FAMILY_WRITE_ONE_PACKET_WITH_TRID_SET_STATE)
     noc_async_write_one_packet_with_trid_set_state(self_addr);
     noc_async_write_one_packet_with_trid_with_state(l1, l1, size, /*trid=*/1);
     noc_async_write_barrier_with_trid(1);
+    noc_async_write_set_trid(0);  // see FAMILY_WRITE_ONE_PACKET_WITH_TRID above
 #elif defined(FAMILY_INLINE_DW_WRITE)
     noc_inline_dw_write(self_addr, 0x1234);
     noc_async_write_barrier();
