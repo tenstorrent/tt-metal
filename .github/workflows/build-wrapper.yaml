@@ -50,6 +50,11 @@ jobs:
         timeout-minutes: 12
         run: |
           set -euo pipefail
+          # Test-only current-main fixture correction; production source/native remain pinned above.
+          git fetch --depth=1 origin f4c19b2bb7118114b41b831cdeba3a52634f6e19
+          git show f4c19b2bb7118114b41b831cdeba3a52634f6e19:models/demos/gpt_oss_120b_qb2/tests/test_serving_host.py > models/demos/gpt_oss_120b_qb2/tests/test_serving_host.py
+          echo "5e6aed63bc42ff8fe0c7f7f7f175e594fc88002a08b07c94e47dc84e495dc275  models/demos/gpt_oss_120b_qb2/tests/test_serving_host.py" | sha256sum -c -
+          git diff --exit-code -- . ':!models/demos/gpt_oss_120b_qb2/tests/test_serving_host.py'
           cat > /tmp/gpt-import-host.py <<'PY'
           """CPU-only admission of the exact built GPT source, followed by original host tests."""
           import hashlib
