@@ -1,0 +1,3 @@
+P allbits.txt
+N allbits.txt
+NT fn.txt
