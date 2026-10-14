@@ -32,6 +32,7 @@ def decode_forward(
     fused=False,
     return_partial=False,
     batched_qkv=None,
+    batched_oproj=None,
 ):
     """
     Decode forward pass - optimized for single token (seq_len=1).
@@ -242,6 +243,10 @@ def decode_forward(
     # Concat heads and apply output projection
     tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
     tt_sdpa_tensor.deallocate(True)
+    if return_partial and batched_oproj is not None:
+        partial = batched_oproj(tt_sdpa_out)
+        tt_sdpa_out.deallocate(True)
+        return partial
 
     tt_out = ttnn.linear(
         tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG

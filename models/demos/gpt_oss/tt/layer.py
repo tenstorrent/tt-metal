@@ -130,10 +130,13 @@ class DecoderLayer:
                 hf_config.hidden_size, mesh_config.tp_axis
             )
             self.self_attn.decode_returns_partial = True
-            from .batched_decode import BatchedQKV
+            from .batched_decode import BatchedOProj, BatchedQKV
 
             self.self_attn.batched_qkv = BatchedQKV(
                 mesh_device, self.self_attn.weights.wqkv, self.self_attn.config.head_dim
+            )
+            self.self_attn.batched_oproj = BatchedOProj(
+                mesh_device, self.self_attn.weights.o_proj, self.self_attn.weights.o_proj_bias, hf_config.hidden_size
             )
             self.mlp.experts.decode_all_reduce = self.decode_all_reduce
 
@@ -146,9 +149,8 @@ class DecoderLayer:
             hidden_states = ttnn.to_memory_config(embeddings, self.residual_memory_config, dtype=ttnn.bfloat16)
             embeddings.deallocate(True)
         residual = hidden_states
-        normed = self.input_layernorm.forward_sharded(hidden_states)
-        attn_in = ttnn.to_memory_config(normed, ttnn.L1_MEMORY_CONFIG)
-        normed.deallocate(True)
+        # The DRAM-sharded QKV (batched_decode.BatchedQKV) reshards the normed shards straight into its input layout.
+        attn_in = self.input_layernorm.forward_sharded(hidden_states)
         attn_partial = self.self_attn(
             attn_in,
             rope_mats=position_embeddings,

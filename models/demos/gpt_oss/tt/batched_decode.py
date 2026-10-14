@@ -168,3 +168,70 @@ class BatchedQKV:
         heads = ttnn.to_memory_config(out, self.heads_memory_config)
         out.deallocate(True)
         return heads
+
+
+class BatchedOProj:
+    """o_proj of the batched decode as a DRAM-sharded matmul on the unpadded weight (the decode weight carries 64 zero
+    columns of CCL tile padding, which the one-op all-reduce does not need), BF8 out with the bias added, i.e. the
+    all-reduce's input precision, so no typecast / slice follows. Weight and bias are cut from the decode tensors once,
+    on device."""
+
+    CORES = 8  # divides K = 32 tiles; the measured best for [32, 1024] x [1024, 2880]
+    WORKERS = 2
+
+    def __init__(self, mesh_device, o_proj, o_proj_bias, hidden, tokens=32):
+        k = o_proj.shape[-2]
+        tile = ttnn.TILE_SIZE
+        grid = mesh_device.compute_with_storage_grid_size()
+        w_shape = list(o_proj.shape)
+        sliced = ttnn.slice(o_proj, [0] * len(w_shape), w_shape[:-1] + [hidden])
+        self.weight = ttnn.to_memory_config(sliced, dram_width_sharded_memory_config(mesh_device, k, hidden))
+        sliced.deallocate(True)
+        b_shape = list(o_proj_bias.shape)
+        self.bias = ttnn.slice(o_proj_bias, [0] * len(b_shape), b_shape[:-1] + [hidden])
+        cores = ttnn.num_cores_to_corerangeset(self.CORES, grid, row_wise=True)
+        per_core_n = -(-hidden // (tile * self.CORES))
+        self.in0_memory_config = ttnn.create_sharded_memory_config(
+            (tokens, k // self.CORES),
+            cores,
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.out_memory_config = ttnn.create_sharded_memory_config(
+            (tokens, per_core_n * tile),
+            cores,
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        k_tiles = k // tile // self.CORES
+        self.program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=k_tiles,
+            per_core_M=tokens // tile,
+            per_core_N=per_core_n,
+            fused_activation=None,
+            num_workers_per_dram_bank=self.WORKERS,
+        )
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+    def __call__(self, heads):
+        x = ttnn.to_memory_config(heads, self.in0_memory_config)
+        out = ttnn.matmul(
+            x,
+            self.weight,
+            program_config=self.program_config,
+            memory_config=self.out_memory_config,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        x.deallocate(True)
+        biased = ttnn.add(out, self.bias, memory_config=self.out_memory_config, dtype=ttnn.bfloat8_b)
+        out.deallocate(True)
+        return biased
