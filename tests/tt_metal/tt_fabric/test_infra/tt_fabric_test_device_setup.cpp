@@ -137,7 +137,9 @@ void FabricConnectionManager::process(
     for (auto& [key, conn] : connections_) {
         // Mux is needed if more than 1 client (any type) uses this link
         size_t total_clients = conn.sender_cores.size() + conn.receiver_cores.size() + conn.sync_cores.size();
-        conn.needs_mux = total_clients > 1;
+        // Fabric 2.0: every worker has its own injection ring on the control plane, so no mux is needed
+        // (and the stock mux kernel speaks the EDM protocol the fabric2 data mover does not implement).
+        conn.needs_mux = total_clients > 1 && std::getenv("TT_FABRIC2") == nullptr;
 
         if (conn.needs_mux) {
             assign_and_validate_channels(conn, key);
