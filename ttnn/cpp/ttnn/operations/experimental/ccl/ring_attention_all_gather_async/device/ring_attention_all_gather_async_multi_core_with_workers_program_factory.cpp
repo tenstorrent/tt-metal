@@ -285,6 +285,21 @@ void ring_attention_neighbor_halo_exchange_helper(
     }
 
     const uint32_t num_inputs = input_tensors.size();
+    // Group packet pages by destination bank only when the reader can infer the exact
+    // output head stride. Oversized scratch buffers and ND-sharded outputs retain the
+    // contiguous logical-page schedule.
+    const bool striped_bank_owned =
+        halo.striped && supports_output_bank_owned_schedule(output_tensors, kSequenceDimension, page_size) &&
+        std::equal(
+            input_tensors.begin(),
+            input_tensors.end(),
+            output_tensors.begin(),
+            [ring_size](const Tensor& input, const Tensor& output) {
+                return output.padded_shape()[kSequenceDimension] ==
+                       input.padded_shape()[kSequenceDimension] * ring_size;
+            });
+    const uint32_t striped_dram_banks =
+        input_tensors.front().device()->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     KernelDescriptor reader_kernel{};
     reader_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
@@ -309,6 +324,10 @@ void ring_attention_neighbor_halo_exchange_helper(
         static_cast<uint32_t>(halo.collects_arrivals()),
         halo.arrivals_expected,
         static_cast<uint32_t>(halo.multicast())};
+    if (halo.striped) {
+        reader_kernel.compile_time_args.push_back(static_cast<uint32_t>(striped_bank_owned));
+        reader_kernel.compile_time_args.push_back(striped_dram_banks);
+    }
     for (uint32_t input = 0; input < num_inputs; ++input) {
         reader_kernel.compile_time_args.push_back(page_size);
     }
@@ -346,6 +365,10 @@ void ring_attention_neighbor_halo_exchange_helper(
         writer_meta_cb,
         static_cast<uint32_t>(halo.multicast()),
     };
+    if (halo.striped) {
+        writer_kernel.compile_time_args.push_back(static_cast<uint32_t>(striped_bank_owned));
+        writer_kernel.compile_time_args.push_back(striped_dram_banks);
+    }
     for (uint32_t input = 0; input < num_inputs; ++input) {
         writer_kernel.compile_time_args.push_back(page_size);
     }

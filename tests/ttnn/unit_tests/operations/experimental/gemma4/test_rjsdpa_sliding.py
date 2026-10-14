@@ -30,6 +30,7 @@ class SlidingCase(PackedCase):
         kv_heads=1,
         window=1024,
         nd_sharded=True,
+        receive_nd_rows=0,
         cache_slots=4,
         communication="all_gather",
     ):
@@ -51,8 +52,23 @@ class SlidingCase(PackedCase):
         self.tt_k = self.upload(self.k[:, :, self.cache_positions], ttnn.bfloat8_b, memory_config=memory)
         self.tt_v = self.upload(self.v[:, :, self.cache_positions], ttnn.bfloat8_b, memory_config=memory)
         # One cache slot is gathered even when input caches contain several users/layers.
-        self.buffer_k = self.upload(torch.zeros_like(self.k[:1]), ttnn.bfloat8_b, gathered=True)
-        self.buffer_v = self.upload(torch.zeros_like(self.v[:1]), ttnn.bfloat8_b, gathered=True)
+        receive_memory = None
+        if receive_nd_rows:
+            receive_memory = ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.DRAM,
+                nd_shard_spec=ttnn.NdShardSpec(
+                    shard_shape=[1, 1, 32 * receive_nd_rows, head_dim],
+                    grid=nd_sharded_dram_memory_config(self.mesh, head_dim).nd_shard_spec.grid,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+                ),
+            )
+        self.buffer_k = self.upload(
+            torch.zeros_like(self.k[:1]), ttnn.bfloat8_b, gathered=True, memory_config=receive_memory
+        )
+        self.buffer_v = self.upload(
+            torch.zeros_like(self.v[:1]), ttnn.bfloat8_b, gathered=True, memory_config=receive_memory
+        )
         halo = ((window - 1 + 127) // 128) * 128 * 2
         self.halo_k = self.upload(torch.zeros_like(self.k[:1, :, :halo]), ttnn.bfloat8_b, gathered=True)
         self.halo_v = self.upload(torch.zeros_like(self.v[:1, :, :halo]), ttnn.bfloat8_b, gathered=True)
@@ -288,5 +304,41 @@ def test_sliding_halo_rejects_invalid_transport(runtime, bad_case, expect_error)
         message = "communication must be" if bad_case == "communication" else "requires a CP axis and Linear topology"
         with expect_error(RuntimeError, message):
             case.call(**overrides)
+    finally:
+        case.close()
+
+
+@pytest.mark.parametrize(
+    "tokens,head_dim,num_links,input_nd,receive_nd_rows",
+    [
+        (512, 256, 2, True, 0),
+        (1280, 64, 1, True, 0),
+        (1280, 64, 2, False, 0),
+        (1280, 64, 2, True, 1),
+        (1280, 64, 2, True, 7),
+    ],
+)
+def test_sliding_halo_transport_layouts(runtime, tokens, head_dim, num_links, input_nd, receive_nd_rows):
+    # Start with zeroed receive buffers: preceding all-gather calls must not hide missing halo writes.
+    # Short chunks and misaligned prefixes exercise partial packets and multi-head destination strides.
+    case = SlidingCase(
+        runtime,
+        communication="halo",
+        tokens=tokens,
+        head_dim=head_dim,
+        kv_heads=2,
+        nd_sharded=input_nd,
+        receive_nd_rows=receive_nd_rows,
+    )
+    try:
+        case.stage(4128, slot=1)
+        halo = case.call(num_links=num_links)[0]
+        case.check(halo)
+        halo_value = ttnn.to_torch(halo, mesh_composer=case.composer)[:, :, case.output_indices]
+        case.communication = "all_gather"
+        gathered = case.call(num_links=num_links)[0]
+        case.check(gathered)
+        gathered_value = ttnn.to_torch(gathered, mesh_composer=case.composer)[:, :, case.output_indices]
+        torch.testing.assert_close(halo_value, gathered_value, rtol=0, atol=0)
     finally:
         case.close()
