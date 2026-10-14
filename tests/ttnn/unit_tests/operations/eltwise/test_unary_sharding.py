@@ -763,3 +763,25 @@ def test_unary_sharded_reshape_view_on_accessor_path(device, strategy, shard_sha
     assert view.memory_config().is_sharded()
     out = ttnn.relu(view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     assert torch.equal(ttnn.to_torch(out), torch.relu(base.reshape(1, 4, 32, 64)))
+
+
+@pytest.mark.parametrize("shard_width", [4, 12], ids=["width_4", "width_12"])
+def test_unary_row_major_sharded_unaligned_rows(device, shard_width):
+    """Each row-major shard row is padded to the L1 alignment, so dense tile pages miss the tail rows."""
+    torch.manual_seed(0)
+    num_cores = 4
+    shard_height = 256
+    torch_input = torch.randn((1, 1, shard_height * num_cores, shard_width), dtype=torch.bfloat16)
+    shard_mem_config = ttnn.create_sharded_memory_config(
+        (shard_height, shard_width),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (num_cores - 1, 0))}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    # from_torch shards directly, without the alignment check that to_memory_config applies.
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=shard_mem_config
+    )
+    ttnn_output = ttnn.to_torch(ttnn.abs(ttnn_input, memory_config=shard_mem_config))
+    assert torch.equal(ttnn_output, torch.abs(torch_input))
