@@ -29,8 +29,9 @@ from ttnn.bringup.flat_routed_expert_ttnn._helpers import crs_single as _crs_sin
 
 
 def _drisc_close_hook():
-    """MIMO_FL_DRISC (prototype): the op's persistent DRISC gate/up senders keep running between calls; stop them
-    before the device closes (ttnn.close_device / close_mesh_device are wrapped once)."""
+    """DRISC mode (default; MIMO_FL_DRISC=0 off): the op's persistent DRISC gate/up senders keep running between calls;
+    stop them before the device closes (ttnn.close_device / close_mesh_device are wrapped once; a no-op when none
+    run)."""
     if getattr(ttnn, "_flat_drisc_hooked", False):
         return
     ttnn._flat_drisc_hooked = True
@@ -47,7 +48,7 @@ def _drisc_close_hook():
         setattr(ttnn, name, wrapped)
 
 
-if os.environ.get("MIMO_FL_DRISC", "0") not in ("", "0"):
+if os.environ.get("MIMO_FL_DRISC", "1") not in ("", "0"):  # (DRISC mode is the default where DRAM cores exist)
     _drisc_close_hook()
 
 
