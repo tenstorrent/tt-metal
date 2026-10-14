@@ -68,6 +68,8 @@ MAX_LEADING_DIMS = 4
 # Sharded regimes (op_design.md): pin the work split to a side's resident shards when that side's
 # grid holds at least this fraction of min(R, grid) cores; else fall back to the full-grid split.
 PIN_OCCUPANCY_RATIO = 0.5
+# Row-only split: per-core row-count weights f(device, logical core) -> float (None = even split).
+ROW_SPLIT_WEIGHTS = None
 # Fill-row source offset: src = fill_base + (dst % FILL_PHASE_BYTES) keeps every local fill copy
 # NoC-alignment congruent (any alignment <= this) and in element phase.
 FILL_PHASE_BYTES = 64
@@ -155,6 +157,24 @@ def _split_extent(total, parts, unit=1):
     return ranges
 
 
+def _split_weighted(total, weights):
+    """Contiguous partition of `total` into len(weights) ranges with counts ~ proportional to the
+    weights (largest remainder, every range >= 1). Returns [(start, count)]."""
+    parts = len(weights)
+    assert total >= parts
+    spare, wsum = total - parts, sum(weights)
+    exact = [spare * w / wsum for w in weights]
+    counts = [1 + int(e) for e in exact]
+    for k in sorted(range(parts), key=lambda k: int(exact[k]) - exact[k])[: total - sum(counts)]:
+        counts[k] += 1
+    ranges, start = [], 0
+    for c in counts:
+        ranges.append((start, c))
+        start += c
+    assert start == total
+    return ranges
+
+
 def _choose_split(num_cores, rows, col_units):
     """(cores_r, cores_c): the regime selector of op_design.md.
 
@@ -184,6 +204,9 @@ def _rect_assignment(device, tensor_rows_tiles, tensor_cols_tiles, col_unit_tile
     _, all_cores, _, _, _, _ = ttnn.split_work_to_cores(grid, cores_r * cores_c, row_wise=True)
     cores = ttnn.corerange_to_cores(all_cores, None, True)
     row_ranges = _split_extent(tensor_rows_tiles, cores_r)
+    if ROW_SPLIT_WEIGHTS is not None and cores_c == 1:
+        w = [ROW_SPLIT_WEIGHTS(device, cores[k]) for k in range(cores_r)]
+        row_ranges = _split_weighted(tensor_rows_tiles, w)
     col_ranges = _split_extent(tensor_cols_tiles, cores_c, col_unit_tiles)
     assignment = []
     for ri, (row_start, rows) in enumerate(row_ranges):

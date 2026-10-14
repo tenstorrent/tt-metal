@@ -4,6 +4,7 @@
 
 Knob sweeps: TILIZE_PERF_KNOBS='{"OUT_DEPTH_TILE_ROWS": 4}' overrides program-descriptor knobs;
 TILIZE_PERF_ITERS=N runs the op N times (N profiled samples).
+TILIZE_PERF_ROW_WEIGHTS=path.json sets per-core row-split weights (logical core coords).
 """
 
 import json
@@ -35,6 +36,14 @@ def test_tilize_perf(device, monkeypatch, shape):
     for name, value in json.loads(os.environ.get("TILIZE_PERF_KNOBS", "{}")).items():
         assert hasattr(pd, name), name
         monkeypatch.setattr(pd, name, value)
+    weights_path = os.environ.get("TILIZE_PERF_ROW_WEIGHTS")  # JSON {"x,y": weight} (logical coords)
+    if weights_path:
+        table = json.load(open(weights_path))
+
+        def weight(dev, core):
+            return table[f"{core.x},{core.y}"]
+
+        monkeypatch.setattr(pd, "ROW_SPLIT_WEIGHTS", weight)
     x = torch.randn(shape, dtype=torch.bfloat16)
     tt_in = ttnn.from_torch(
         x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG

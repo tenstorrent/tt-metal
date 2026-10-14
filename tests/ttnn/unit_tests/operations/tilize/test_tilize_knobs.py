@@ -70,3 +70,15 @@ def test_tilize_coalesced_reader_knobs(device, monkeypatch, shape, tile_h, knobs
     )
     out = ttnn.to_torch(tilize(tt_in, tile=ttnn.Tile([tile_h, 32])))
     assert torch.equal(out, x)
+
+
+@pytest.mark.parametrize("shape", [(1, 1, 16384, 64), (1, 1, 4096, 160)])
+def test_tilize_weighted_row_split(device, monkeypatch, shape):
+    """ROW_SPLIT_WEIGHTS: uneven per-core row counts (1..~3x) on the coalesced and segment readers."""
+    monkeypatch.setattr(pd, "ROW_SPLIT_WEIGHTS", lambda dev, core: 1.0 + (core.x + 2 * core.y) % 3)
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(
+        x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    assert torch.equal(ttnn.to_torch(tilize(tt_in)), x)
