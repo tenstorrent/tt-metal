@@ -133,8 +133,8 @@ _BFP8_MLP_GATEUP_LOGGED = False
 
 
 def bfp8_mlp_gateup_enabled():
-    """QWEN36_MLP_GATEUP_BFP8 (default 0): dense-MLP gate/up (w1/w3, packed gate_up) weights in bfloat8_b instead of bfloat4_b."""
-    return os.environ.get(BFP8_MLP_GATEUP_ENV, "0") == "1"
+    """QWEN36_MLP_GATEUP_BFP8 (default 1 (on); 0 reverts to bfloat4_b): dense-MLP gate/up (w1/w3, packed gate_up) weights in bfloat8_b instead of bfloat4_b."""
+    return os.environ.get(BFP8_MLP_GATEUP_ENV, "1") == "1"
 
 
 def resolve_mlp_gateup_dtype(gateup_dtype=None):
@@ -155,13 +155,13 @@ _MLP_FIDELITY_LOGGED = False
 
 
 def mlp_fidelity(math_fidelity=None):
-    """QWEN36_MLP_FIDELITY (default lofi): math fidelity of the dense-MLP matmuls (gate/up, down, fused swiglu AGMM;
+    """QWEN36_MLP_FIDELITY (default hifi2; lofi still selectable): math fidelity of the dense-MLP matmuls (gate/up, down, fused swiglu AGMM;
     prefill and decode). Values: lofi | hifi2 | hifi3 | hifi4. An explicit math_fidelity wins (MoE shared expert
     passes LoFi). Logs the dense-MLP choice once per process."""
     global _MLP_FIDELITY_LOGGED
     if math_fidelity is not None:
         return math_fidelity
-    name = os.environ.get(MLP_FIDELITY_ENV, "lofi").strip().lower()
+    name = os.environ.get(MLP_FIDELITY_ENV, "hifi2").strip().lower()
     table = {
         "lofi": ttnn.MathFidelity.LoFi,
         "hifi2": ttnn.MathFidelity.HiFi2,

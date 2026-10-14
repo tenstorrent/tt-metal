@@ -14,9 +14,9 @@ import ttnn
 
 @dataclass(frozen=True)
 class MLPWeights:
-    w1: ttnn.Tensor  # gate_proj [in, out], bfloat4_b (bfloat8_b if QWEN36_MLP_GATEUP_BFP8=1, dense only)
+    w1: ttnn.Tensor  # gate_proj [in, out], bfloat8_b (bfloat4_b if QWEN36_MLP_GATEUP_BFP8=0, dense only)
     w2: ttnn.Tensor  # down_proj [in, out], bfloat8_b (bfloat4_b if QWEN36_BFP4_MLP_DOWN=1, dense only)
-    w3: ttnn.Tensor  # up_proj [in, out], bfloat4_b (bfloat8_b if QWEN36_MLP_GATEUP_BFP8=1, dense only)
+    w3: ttnn.Tensor  # up_proj [in, out], bfloat8_b (bfloat4_b if QWEN36_MLP_GATEUP_BFP8=0, dense only)
     w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
 
 
@@ -161,7 +161,7 @@ def load_mlp_weights(
             cache_file_name=(tensor_cache_path / f"mlp.{name}.weight") if tensor_cache_path else None,
         )
 
-    # gate/up: bfloat4_b (bandwidth; QWEN36_MLP_GATEUP_BFP8=1 -> bfloat8_b); down: bfloat8_b (QWEN36_BFP4_MLP_DOWN=1 -> bfloat4_b).
+    # gate/up: bfloat8_b (QWEN36_MLP_GATEUP_BFP8=0 -> bfloat4_b); down: bfloat8_b (QWEN36_BFP4_MLP_DOWN=1 -> bfloat4_b).
     return MLPWeights(
         w1=load("gate_proj", gateup_dtype),
         w2=load("down_proj", down_dtype),
@@ -210,7 +210,7 @@ class Qwen36MLP:
             down_dtype=down_dtype,
             gateup_dtype=gateup_dtype,
         )
-        # Dense MLP: QWEN36_MLP_FIDELITY (default lofi). MoE shared expert (down_dtype passed) stays LoFi.
+        # Dense MLP: QWEN36_MLP_FIDELITY (default hifi2). MoE shared expert (down_dtype passed) stays LoFi.
         fid = tpc.mlp_fidelity(ttnn.MathFidelity.LoFi if down_dtype is not None else None)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=False

@@ -72,8 +72,8 @@ Results:
 | 2.1 | MLP down weights BFP4 (dense only; MoE shared expert unchanged) | `QWEN36_BFP4_MLP_DOWN` (0) | 32.84 → 34.29 t/s/u (+4.4%), acc 98.63/100 (=) | costs accuracy (see §3) |
 | 2.2 | GDN in-proj BFP4 + LoFi decode | `QWEN36_BFP4_GDN_IN` (0) | +3.6% (35.54), acc 97.66/99.80 (−0.97); B32 GDN PCC 0.935 | costs accuracy |
 | 2.3 | Attention QKV and wo BFP4 + LoFi decode | `QWEN36_BFP4_ATTN` (0) | +2.0% (34.98), acc 98.44/99.80 (−1 token) | costs accuracy |
-| — | MLP gate/up BFP8 (base is BFP4) | `QWEN36_MLP_GATEUP_BFP8` (0) | — | fixes most of the 3.8 gap, −10% decode |
-| — | MLP math fidelity (lofi \| hifi2 \| hifi3 \| hifi4) | `QWEN36_MLP_FIDELITY` (lofi) | no effect with BFP4 weights | hifi2 needed with BFP8 gate/up (+1 pt, free) |
+| — | MLP gate/up BFP8 (base is BFP4) | `QWEN36_MLP_GATEUP_BFP8` (1) | — | fixes most of the 3.8 gap, −10% decode |
+| — | MLP math fidelity (lofi \| hifi2 \| hifi3 \| hifi4) | `QWEN36_MLP_FIDELITY` (hifi2) | no effect with BFP4 weights | hifi2 needed with BFP8 gate/up (+1 pt, free) |
 | — | LM head compute config | `QWEN36_LMHEAD_CFG` (default \| hifi2_fp32 \| hifi4_fp32) | — | no measurable effect |
 
 - 2.4, DRAM-sharded multi-reader decode matmuls for the BFP4 groups (expected +1-2%), is implemented but UNTESTED and not applied: `qwen38_handoff/patches/2_4_dram_sharded_UNTESTED.patch`, with its README.

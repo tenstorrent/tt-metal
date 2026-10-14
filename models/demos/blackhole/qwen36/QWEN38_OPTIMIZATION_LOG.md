@@ -789,7 +789,7 @@ A task-level GPQA-Diamond comparison of the final combination against the baseli
 
 ### Qwen3.8: precision options measured on device (2026-10-09)
 Quick check: accuracy_512 and accuracy_1536 top-1/top-5 against the HF BF16 3.8 reference. Decode figures are traced_128 tok/s.
-All rows have Tier-2 flags off unless noted. New knobs (default = previous behavior): `QWEN36_MLP_GATEUP_BFP8` (0), `QWEN36_MLP_FIDELITY` (lofi), `QWEN36_LMHEAD_CFG` (default).
+All rows have Tier-2 flags off unless noted. New knobs (defaults at introduction; now `QWEN36_MLP_GATEUP_BFP8` 1, `QWEN36_MLP_FIDELITY` hifi2): `QWEN36_MLP_GATEUP_BFP8` (0), `QWEN36_MLP_FIDELITY` (lofi), `QWEN36_LMHEAD_CFG` (default).
 
 | Config | decode t/s/u | acc512 | acc1536 | t4k t/s | b8 per user |
 |---|---|---|---|---|---|
@@ -835,3 +835,5 @@ All Tier-2 precision flags default to OFF (opt-in), pending the task-level evals
 | `QWEN36_LMHEAD_CFG` | default |
 
 With these defaults the model behaves exactly as at commit 755a0d6461d. See `QWEN38_HANDOFF.md` for the configs to evaluate (A/C/D), how to run the evals, and what remains.
+
+Update 2026-10-13: `QWEN36_MLP_GATEUP_BFP8` now defaults to 1 and `QWEN36_MLP_FIDELITY` to hifi2 (config D). With the gdn_decode_step fp32-state fix, config D passes AIME / GPQA / MMLU-Pro against the GPU reference at 32 concurrent users; config C fails AIME there.
