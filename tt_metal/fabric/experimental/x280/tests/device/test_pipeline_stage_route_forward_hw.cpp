@@ -7,6 +7,7 @@
 #include "harness/artifacts/artifacts.hpp"
 #include "harness/gtest_dispatch.hpp"
 #include "harness/runner.hpp"
+#include "suites/pipeline_stage/pinned_input.hpp"
 #include "suites/pipeline_stage/route_forward.hpp"
 
 #include "pipeline_stage_common.h"
@@ -17,7 +18,7 @@ namespace {
 
 namespace suite = x280::suites::pipeline_stage::route_forward;
 
-class PipelineStageRouteForward : public x280::harness::Runner<suite::Axis> {
+class PipelineStageRouteForward : public x280::suites::pipeline_stage::pinned_input::EpochRunner<suite::Axis> {
 protected:
     x280::harness::RunSpec make_spec() override {
         return x280::harness::RunSpec{
