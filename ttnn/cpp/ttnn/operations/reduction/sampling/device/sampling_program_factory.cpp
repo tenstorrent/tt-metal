@@ -69,7 +69,7 @@ const DFBSpecName SAMPLING_LOCAL_VALS{"local_vals"};
 const DFBSpecName SAMPLING_OUTPUT_IND{"output_ind"};
 const DFBSpecName SAMPLING_RAND_TILE{"rand_tile"};
 // The sampled index, staged in SRAM before the writer sends this core's word to the output tensor.
-const DFBSpecName SAMPLING_OUTPUT{"output"};
+const ScratchpadSpecName SAMPLING_OUTPUT{"output"};
 // Per-user k, p and temperature. Each is NOC-read whole, in one entry covering every core, so no core
 // issues an unaligned read for its own value; `temp` doubles as the scalar operand compute broadcasts.
 // `k` and `p` are writer-private scratchpads; `temp` is a dataflow buffer handed to compute.
@@ -240,7 +240,6 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
             aligned_final_indices_rm_unit_size,
             Ht * tile_height,
             input_indices_dfb_data_format),
-        make_dfb(SAMPLING_OUTPUT, aligned_out0_unit_size, 1, index_dfb_data_format),
         make_dfb(SAMPLING_TEMP, temp_chunk_size, 1, temp_dfb_data_format),
     };
 
@@ -409,25 +408,14 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
 
     // One writer per running core. `core_id` is the only value that differs between them, and it is a
     // compile-time argument, so each core gets its own KernelSpec rather than one shared spec.
-    // `output` is bound as both PRODUCER and CONSUMER because this kernel is its only toucher: it is a
-    // plain SRAM window the writer fills and sends without running a FIFO operation on it at all. `k`
-    // and `p` are scratchpads: NOC-read staging the writer then indexes by core.
+    // `output`, `k` and `p` are writer-private scratchpads: `k` and `p` are NOC-read staging it then
+    // indexes by core, and `output` is a plain SRAM window it fills and sends.
     auto make_writer = [&](uint32_t core_index) {
         return KernelSpec{
             .unique_id = sampling_writer_name(core_index),
             .source = SAMPLING_WRITER_SOURCE,
             .dfb_bindings =
                 {DFBBinding{
-                     .dfb_spec_name = SAMPLING_OUTPUT,
-                     .accessor_name = "out",
-                     .endpoint_type = DFBEndpointType::PRODUCER,
-                 },
-                 DFBBinding{
-                     .dfb_spec_name = SAMPLING_OUTPUT,
-                     .accessor_name = "out",
-                     .endpoint_type = DFBEndpointType::CONSUMER,
-                 },
-                 DFBBinding{
                      .dfb_spec_name = SAMPLING_TOPK_MASK,
                      .accessor_name = "mask",
                      .endpoint_type = DFBEndpointType::PRODUCER,
@@ -469,6 +457,10 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
                  }},
             .scratchpad_bindings =
                 {ScratchpadBinding{
+                     .scratchpad_spec_name = SAMPLING_OUTPUT,
+                     .accessor_name = "out",
+                 },
+                 ScratchpadBinding{
                      .scratchpad_spec_name = SAMPLING_K,
                      .accessor_name = "k",
                  },
@@ -532,9 +524,10 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         .name = "sampling",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
-        // One k_chunk_size / p_chunk_size entry each, as the former DFBs held.
+        // One aligned_out0_unit_size / k_chunk_size / p_chunk_size entry each, as the former DFBs held.
         .scratchpads =
-            {ScratchpadSpec{.unique_id = SAMPLING_K, .size_per_node = k_chunk_size * 1},
+            {ScratchpadSpec{.unique_id = SAMPLING_OUTPUT, .size_per_node = aligned_out0_unit_size * 1},
+             ScratchpadSpec{.unique_id = SAMPLING_K, .size_per_node = k_chunk_size * 1},
              ScratchpadSpec{.unique_id = SAMPLING_P, .size_per_node = p_chunk_size * 1}},
         .tensor_parameters =
             {TensorParameter{.unique_id = SAMPLING_INPUT_VALUES_TENSOR, .spec = input_values_tensor.tensor_spec()},

@@ -67,7 +67,7 @@ void kernel_main() {
     DataflowBuffer dfb_final_indices(dfb::final_indices);
     DataflowBuffer dfb_local_values(dfb::local_values);
     DataflowBuffer dfb_local_indices(dfb::local_indices);
-    const DataflowBuffer dfb_out(dfb::out);
+    const Scratchpad<volatile uint32_t> index_out(scratch::out);
 
     const auto addrg_k = TensorAccessor(tensor::k);
     // Read the entire aligned chunk to avoid NOC alignment issues
@@ -139,9 +139,6 @@ void kernel_main() {
     const CoreLocalMem<volatile uint32_t> final_indices(
         dfb_final_indices.get_read_ptr() + (core_id * final_indices_stick_size));
 
-    const uint32_t out_addr = dfb_out.get_write_ptr();
-    const CoreLocalMem<volatile uint32_t> index_out(out_addr);
-
     uint32_t start_id_local_phase_0 = core_id * FACE_WIDTH;
     // each user is on 1 core, so core_id = user_id
     // users 0-16 have their data on first 2 faces (2 * FACE_WIDTH * FACE_HEIGHT = 2*16*16 = 512 values)
@@ -203,24 +200,27 @@ void kernel_main() {
     // Stochastic sampling in float32
     const float rand_f = (rand_hi * 256.0f + rand_lo) * RAND_LATTICE_SCALE;
     float cum_sum_f = 0.0f;
-    index_out[core_id] = final_indices[local_indices[start_id_local_phase_0]];
-    bool index_found = false;
+    {
+        const auto out_lock = index_out.scoped_lock(core_id, 1);
+        index_out[core_id] = final_indices[local_indices[start_id_local_phase_0]];
+        bool index_found = false;
 
-    for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
-        cum_sum_f += bf16_to_f32(local_values[i]) / cum_prob_f;
-        if (cum_sum_f > rand_f) {
-            index_out[core_id] = final_indices[local_indices[i]];
-            index_found = true;
-            break;
-        }
-    }
-    if (!index_found) {
-        for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
+        for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
             cum_sum_f += bf16_to_f32(local_values[i]) / cum_prob_f;
             if (cum_sum_f > rand_f) {
                 index_out[core_id] = final_indices[local_indices[i]];
                 index_found = true;
                 break;
+            }
+        }
+        if (!index_found) {
+            for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
+                cum_sum_f += bf16_to_f32(local_values[i]) / cum_prob_f;
+                if (cum_sum_f > rand_f) {
+                    index_out[core_id] = final_indices[local_indices[i]];
+                    index_found = true;
+                    break;
+                }
             }
         }
     }
@@ -233,10 +233,6 @@ void kernel_main() {
 
     const auto s_out = TensorAccessor(tensor::output);
     // Write individual core result - output buffer should handle alignment
-    // Treat `output` as a plain SRAM window, not a FIFO: do not add reserve_back / push_back /
-    // pop_front. The fill above writes at get_write_ptr() and this send reads from get_read_ptr();
-    // they are the same address only while both cursors sit at the buffer base. A pop_front moves
-    // the read cursor, so this send would transmit the wrong bytes instead of the sampled index.
-    noc.async_write(dfb_out, s_out, 4, {.offset_bytes = core_id * 4}, {.page_id = 0, .offset_bytes = core_id * 4});
+    noc.async_write(index_out, s_out, 4, {.offset_bytes = core_id * 4}, {.page_id = 0, .offset_bytes = core_id * 4});
     noc.async_write_barrier();
 }
