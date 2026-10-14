@@ -3,12 +3,11 @@
 Split out of #59695. Adds one opt-in flag to `ttnn.transformer.scaled_dot_product_attention`; default `False`,
 so nothing changes unless a caller asks for it.
 
-> **Draft — sequenced behind the K/V retention work** (`amorrison/sdpa-gqa-kv-sharing`). This branch carries no
-> K/V retention, so at `d=128` each core re-reads K/V for every one of its query chunks and the batched shapes
-> are bandwidth-bound, where this flag has nothing to save. It is still a clear win on compute-bound shapes
-> (`d=64`: −8.9%; one Q chunk per core: −6.7%), and the measurements below show the batched shapes recovering
-> −5.3 / −6.6 / −6.4% once K/V stays resident. Landing it after that PR is what makes the batched case worth
-> having; the correctness and the accuracy trade-off below stand on their own either way.
+> **Draft — sequenced behind the K/V retention work** (`amorrison/sdpa-gqa-kv-sharing`). Everything below is
+> measured with K/V retention **in** (this branch merged with that one), because that is the configuration this
+> flag is meant to serve and it lands first. On this branch alone, without retention, each core re-reads K/V for
+> every one of its query chunks, the `d=128` batched shapes go bandwidth-bound, and the flag is within 0.5%
+> either way; `d=64` still gives −8.9% and one Q chunk per core −6.7%, and the HiFi2/HiFi4 penalty is unchanged.
 
 ## What it does
 
@@ -24,57 +23,25 @@ chunk (`k_chunk_size >= s`), no `attention_sink`. The host gates it and sizes th
 
 Whether it wins depends on which thread paces the softmax, and that flips with math fidelity.
 
-Blackhole P150b, 32/8 heads, s=512, non-causal, K/V in L1, `exp_approx_mode=True`, device cycles,
-flag off → on (negative = faster with it on):
+Blackhole P150b, 32/8 heads, s=512, d=128, non-causal, q_chunk 128, K/V in L1 and retained across a core's
+chunks, `exp_approx_mode=True`, device cycles, flag off → on (negative = faster with it on):
 
-| config | batch 8 | batch 16 | batch 32 |
+| fidelity | batch 8 | batch 16 | batch 32 |
 |---|---|---|---|
-| **LoFi**, d=128, q_chunk 128 | −0.5% | −0.0% | −0.6% |
-| HiFi2, d=128, q_chunk 128 | **+6.0%** | **+5.6%** | **+6.5%** |
-| HiFi4, d=128, q_chunk 128 | **+8.8%** | **+8.5%** | **+8.7%** |
+| **LoFi** | **−5.6%** | **−6.3%** | **−6.5%** |
+| HiFi2 | +7.2% | +7.2% | +7.4% |
+| HiFi4 | +8.6% | +8.6% | +8.8% |
 
-The flat LoFi row is the K/V-retention gap, not a flaw in the flag: with each core re-reading K/V per query
-chunk, those d=128 calls are bandwidth-bound and there is no compute left to save. The gain is there as soon as
-the call is compute-bound again:
+Run-to-run spread is 0.1–0.9%. Other axes, at LoFi and batch 16:
 
-| compute-bound config (LoFi) | delta |
+| axis | delta |
 |---|---|
-| d=**64**, q_chunk 128, batch 16 | **−8.9%** |
-| d=128, q_chunk **512**, batch 1 (one chunk per core) | **−6.7%** |
-| d=128, q_chunk 256, batch 1, d=64 | −6.9% |
-| d=128, q_chunk 256, batch 2 | −5.4% |
+| d = 64 / 128 / 256 | **−8.9%** / −6.3% / −2.0% |
+| K/V in L1 vs. all DRAM | −6.3% / −2.3% |
 
-The same batched shapes measured on the older stack *with* `reuse_kv` were **−5.3 / −6.6 / −6.4%** at batch
-8 / 16 / 32 — same binary, same method, K/V simply resident. That is the configuration this PR is meant to serve,
-and the reason it is sequenced to land after K/V retention.
-
-The streaming kernel runs the exp on the pack thread, so that thread carries the exp *and* the row-sum packs.
-The flag removes the same ~339 cycles of row-sum packs from the pack thread at either fidelity — what changes is
-whether the math thread was waiting for them:
-
-| per `sub_exp` call (8 score tiles) | LoFi off → on | HiFi2 off → on |
-|---|---|---|
-| MATH `SUB` — mostly the `tile_regs_acquire` wait on PACK | **701 → 390** | **293 → 293** |
-| MATH `Q@KT MM+Pack` | 1353 → 1367 | 1903 → 1903 |
-| PACK `EXP` | 558 → 556 | 608 → 676 |
-| PACK `PACK SUB_EXP` (incl. the L1-acc row-sum packs) | **486 → 147** | **479 → 146** |
-| MATH `NORM_MATMUL_RECIP` (per row group) | 459 → 1357 | 414 → 1850 |
-| MATH `TRISC-KERNEL` | **25456 → 23943** | **30178 → 31915** |
-
-At LoFi the math thread idles 701 cycles per call waiting on PACK, and the flag turns most of that into real
-time. At HiFi2 its wait is 293 and **does not move**: its own Q·Kᵀ has grown 1353 → 1903 cycles and is now the
-long pole, so the pack thread's saving lands in slack while the normalize matmul the flag adds costs +1436.
-
-Head dim moves it on the same axis, and so does whether the op is compute- or bandwidth-bound:
-
-| axis (LoFi, batch 16, d=128 unless stated) | delta |
-|---|---|
-| d = 64 / 128 / 256 | **−8.9%** / −0.0% / +0.5% |
-| `exp_approx_mode` True / False | −0.0% / +0.4% |
-| K/V in L1 vs. all DRAM | −0.0% / −0.3% |
-
-`exp_approx_mode` barely matters because the flag does not take the exp off the pack thread, only the row-sum
-packs, and those cost the same either way.
+Head dim moves it because it sets the math thread's Q·Kᵀ cost per score tile — the thing that decides whether
+MATH was waiting on PACK at all. Leaving K/V in DRAM makes the call bandwidth-bound, and what this saves is
+compute, so most of the gain goes away.
 
 ## Accuracy
 
