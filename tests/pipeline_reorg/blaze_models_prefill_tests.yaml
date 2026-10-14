@@ -121,7 +121,7 @@
 
     kimi_dflash() (
       export MESH_DEVICE=TG
-      export DFLASH_HF_MODEL=/mnt/models/blaze/closed_do_not_share/Kimi-K2.7-Code-DFlash
+      export DFLASH_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-DFlash
 
       timeout -k 2m 18m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
