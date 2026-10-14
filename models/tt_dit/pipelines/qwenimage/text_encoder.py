@@ -94,12 +94,18 @@ class TextEncoder:
         prompt_format: PromptFormat = TEXT_TO_IMAGE_FORMAT,
         offload: bool = False,
         offload_vision: bool = False,
+        vision_image_sizes: Sequence[tuple[int, int]] = (),
+        max_images: int = 0,
     ) -> None:
         """Build the encoder, and the vision tower if ``prompt_format`` takes images.
 
         With ``offload``, the device weights are loaded for each ``encode_cfg`` and freed after it,
         which leaves their memory to the transformer. Encoding is then never traced. With
         ``offload_vision``, only the vision tower's weights are, and only around encoding the images.
+
+        The vision tower pads its patches to one length per image count up to ``max_images``: that
+        many images of the largest patch count among ``vision_image_sizes``, the (width, height) the
+        images are shown in. Any of those sizes then share the tower's programs.
         """
         self._device = device
         self._parallel_config = parallel_config
@@ -110,6 +116,15 @@ class TextEncoder:
         self._processor: transformers.Qwen2VLProcessor | None = None
         if prompt_format.image_prompt is not None:
             self._processor = transformers.Qwen2VLProcessor.from_pretrained(checkpoint_name, subfolder="processor")
+
+        self._vision_patch_buckets: list[int] = []
+        if self._processor is not None and vision_image_sizes:
+            processor = self._processor.image_processor
+            largest = max(
+                processor(images=[Image.new("RGB", s)], return_tensors="pt").pixel_values.shape[0]
+                for s in vision_image_sizes
+            )
+            self._vision_patch_buckets = [largest * k for k in range(1, max_images + 1)]
 
         for bucket in sequence_length_buckets:
             if bucket <= 0 or bucket % 32 != 0:
@@ -224,7 +239,9 @@ class TextEncoder:
             device = self._device
             if self._offload_vision:
                 self._checkpoint.load_vision_weights(self._vision, device=device, parallel_config=self._parallel_config)
-            vision_inputs = self._vision.prepare_inputs(pixel_values, grid_thw)
+            patch_count = pixel_values.shape[0]
+            min_patches = next((b for b in self._vision_patch_buckets if b >= patch_count), 0)
+            vision_inputs = self._vision.prepare_inputs(pixel_values, grid_thw, min_patches=min_patches)
             embeds = self._vision.forward(
                 tensor.from_torch(vision_inputs.patches, device=device),
                 rope=(
