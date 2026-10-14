@@ -1,0 +1,6 @@
+test_eltwise_binary_sfpu.py::test_eltwise_binary_sfpu_int[formats:Int32->Int32-mathop:SfpuElwadd-dest_acc:Yes]
+test_eltwise_binary_sfpu.py::test_eltwise_binary_sfpu_int[formats:Int32->Int32-mathop:SfpuElwsub-dest_acc:Yes]
+test_eltwise_binary_sfpu.py::test_eltwise_binary_sfpu_int_arith_across_zero[formats:Int32->Int32-mathop:SfpuElwadd-dest_acc:Yes]
+test_eltwise_binary_sfpu.py::test_eltwise_binary_sfpu_int_arith_across_zero[formats:Int32->Int32-mathop:SfpuElwsub-dest_acc:Yes]
+test_eltwise_binary_sfpu.py::test_eltwise_binary_sfpu_int_arith_wide_signed[formats:Int32->Int32-mathop:SfpuElwadd-dest_acc:Yes]
+test_eltwise_binary_sfpu.py::test_eltwise_binary_sfpu_int_arith_wide_signed[formats:Int32->Int32-mathop:SfpuElwsub-dest_acc:Yes]
