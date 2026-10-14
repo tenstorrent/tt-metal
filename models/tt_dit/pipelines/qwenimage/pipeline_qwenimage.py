@@ -560,7 +560,8 @@ class QwenImagePipeline(PipelineAPIMixin):
         """Generates an image from the prompt.
 
         ``width`` and ``height`` must be one of the configured resolutions. They default to
-        1024 x 1024, and when editing to the size of the last input image.
+        1024 x 1024, when inpainting to the configured resolution closest to the image in aspect
+        ratio, and when editing to the size of the last input image.
 
         Inpainting: pass ``image`` and ``mask_image``. The white part of the mask is regenerated,
         the rest is kept. ``strength`` sets how much the white part may change: 1 ignores what was
@@ -603,7 +604,12 @@ class QwenImagePipeline(PipelineAPIMixin):
             msg = "pass both width and height, or neither"
             raise ValueError(msg)
         if width is None or height is None:
-            size = conditions[-1] if conditions else self._image_sizes.get((1024, 1024))
+            if conditions:
+                size = conditions[-1]
+            elif inpaint:
+                size = self._nearest_size(images[0])
+            else:
+                size = self._image_sizes.get((1024, 1024))
         else:
             size = self._image_sizes.get((width, height))
         if size is None:

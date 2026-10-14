@@ -201,13 +201,14 @@ def test_qwenimage_edit_multiple_images(
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), EDIT_MESH_DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("checkpoint_name", EDIT_CHECKPOINTS)
 def test_qwenimage_edit_inpaint(
-    *, mesh_device: ttnn.MeshDevice, is_ci_env: bool, monkeypatch: pytest.MonkeyPatch
+    *, mesh_device: ttnn.MeshDevice, checkpoint_name: str, is_ci_env: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     if is_ci_env:
         monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
 
-    pipeline = QwenImagePipeline.create_pipeline(mesh_device=mesh_device, checkpoint_name="Qwen/Qwen-Image-Edit")
+    pipeline = QwenImagePipeline.create_pipeline(mesh_device=mesh_device, checkpoint_name=checkpoint_name)
 
     image = Image.open(DOG_IMAGE_PATH).convert("RGB")
     mask = Image.new("L", image.size, 0)
@@ -221,7 +222,8 @@ def test_qwenimage_edit_inpaint(
         mask_image=mask,
         strength=1.0,
     )
-    edited.save("qwenimage_edit_inpaint_output.png")
+    tag = checkpoint_name.rsplit("/", 1)[-1].lower()
+    edited.save(f"qwenimage_{tag}_inpaint_output.png")
 
     before = np.asarray(image.resize(edited.size), dtype=np.float32)
     after = np.asarray(edited, dtype=np.float32)
