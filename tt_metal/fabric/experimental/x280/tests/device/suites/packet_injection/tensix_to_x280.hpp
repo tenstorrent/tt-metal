@@ -165,11 +165,6 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
     const uint64_t expected_aiclk_hz =
         x280::harness::execution::programmed_aiclk_hz(x280::harness::cluster(), *clock_device);
 
-    std::string fw_img = hart_::image_path(spec.open.image_env_var);
-    if (fw_img.empty() || !std::filesystem::exists(fw_img)) {
-        GTEST_SKIP() << "set " << spec.open.image_env_var << " to a built firmware image";
-    }
-
     // Prelaunch admission: ensure loaded image matches parameterized selector
     std::string expected_sub;
     if (axis.mode == PI_MODE_LATENCY) {
@@ -179,6 +174,8 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
     } else {
         expected_sub = axis.include_creation ? "backpressure-include" : "backpressure-exclude";
     }
+    const std::string default_image = "firmware-packet-injection-" + expected_sub + ".bin";
+    const std::string fw_img = hart_::image_path(spec.open.image_env_var, default_image.c_str());
     if (fw_img.find(expected_sub) == std::string::npos) {
         GTEST_SKIP() << "Image " << fw_img << " does not match test selector " << (axis.label ? axis.label : "")
                      << " (expected '" << expected_sub << "')";

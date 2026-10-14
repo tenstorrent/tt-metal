@@ -58,7 +58,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <filesystem>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -559,10 +558,7 @@ inline uint64_t run_once(
 }
 
 inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::RunSpec& spec, const Axis& axis) {
-    const std::string fw_img = hart_::image_path(spec.open.image_env_var);
-    if (fw_img.empty() || !std::filesystem::exists(fw_img)) {
-        GTEST_SKIP() << "set " << spec.open.image_env_var << " to a built firmware image";
-    }
+    const std::string fw_img = hart_::image_path(spec.open.image_env_var, spec.open.image_file);
     if (fw_img.find("throughput") == std::string::npos) {
         throw std::runtime_error(
             "image " + fw_img + " is not the packet-injection throughput image the ERISC member runs");
