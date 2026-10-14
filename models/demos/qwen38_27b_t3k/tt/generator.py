@@ -54,6 +54,9 @@ def configure_fabric(*, payload_bytes=None):
 # One live snapshot per serving slot. Each costs 19.24 MB per device, so the whole set is about
 # 5% of the state budget left beside a two-context KV pool.
 MAX_PREFIX_SNAPSHOTS = MAX_SERVING_BATCH
+# A prefill trace measures 11-15 MiB whatever the bucket, against a 128 MiB region that already
+# holds a decode pair of up to 24 MiB. Four leaves room the eighth bucket would not.
+MAX_RESIDENT_PREFILL = int(os.getenv("QWEN_RESIDENT_PREFILL_TRACES", "4"))
 
 
 def batched_prefill_shape(slots, starts, prompt_lens, all_logits):
@@ -149,9 +152,8 @@ class Qwen38Generator:
         self.owns_cache = True
         self.cache = None
         self.trace = self.sample_trace = None
-        self.prefill_trace = None
-        self.prefill_sample_trace = None
         self.prefill_sample_input = None
+        self._prefill_sample_only_trace = None
         self.prefill_prepared = None
         self.trace_records_history = None
         self.token_history = self.history_cursor = None
@@ -165,6 +167,9 @@ class Qwen38Generator:
         self._next_snapshot_handle = 0
         self.prefill_signatures = set()
         self.batched_prefill_shapes = set()
+        # Bucket key -> prepared buffers and the traces built around them. Insertion order is
+        # recency, so the first entry is the one eviction takes.
+        self.prefill_resident = {}
         self._prefill_selectors = {}
         self.page_host = None
         self.counters = Counter()
@@ -218,19 +223,39 @@ class Qwen38Generator:
         return history[: self.history_count, 0, 0, :].long()
 
     def _release_traces(self, *, keep_prefill=False):
-        for trace in (self.trace, self.sample_trace, self.prefill_trace, self.prefill_sample_trace):
+        for trace in (self.trace, self.sample_trace, self._prefill_sample_only_trace):
             if trace is not None:
                 ttnn.release_trace(self.mesh, trace)
-        self.trace = self.sample_trace = self.prefill_trace = self.prefill_sample_trace = None
+        self.trace = self.sample_trace = self._prefill_sample_only_trace = None
+        for prepared in self.prefill_resident.values():
+            for name in ("trace", "sample_trace"):
+                if prepared.get(name) is not None:
+                    ttnn.release_trace(self.mesh, prepared[name])
+                    prepared[name] = None
         if getattr(self.model, "_resident_decode_bucket", None) is not None:
             self.model.flush_decode_bucket()
         self.trace_records_history = None
         if not keep_prefill:
+            # Dropping the entries frees their buffers, which only ever happens with no trace
+            # live to be holding those addresses.
+            self.prefill_resident.clear()
             self.prefill_prepared = None
 
-    def _prefill_trace_logits(self):
+    @property
+    def prefill_trace(self):
+        """The active bucket's prefill trace; buckets own their traces, not the generator."""
+        return None if self.prefill_prepared is None else self.prefill_prepared.get("trace")
+
+    @property
+    def prefill_sample_trace(self):
+        """The active bucket's sampler trace, or the packed-batch one when no bucket is active."""
+        if self.prefill_prepared is not None:
+            return self.prefill_prepared.get("sample_trace")
+        return self._prefill_sample_only_trace
+
+    def _prefill_trace_logits(self, prepared=None):
         """Device-only prefill over generator-owned inputs; output remains transient."""
-        prepared = self.prefill_prepared
+        prepared = self.prefill_prepared if prepared is None else prepared
         resident = getattr(self.model, "_resident_decode_bucket", None)
         cache = self.cache
         if resident is not None and resident[1] == (0,) and self.model._resident_decode_valid:
@@ -246,10 +271,11 @@ class Qwen38Generator:
         )
         return ttnn.pad(logits, [(0, 0), (0, 0), (0, 31), (0, 0)], value=0.0)
 
-    def _prefill_trace_step(self):
+    def _prefill_trace_step(self, prepared=None):
         # The copy target predates every trace. No capture-created output may
         # remain alive when an earlier decode trace is replayed.
-        ttnn.copy(self._prefill_trace_logits(), self.prefill_prepared["output"])
+        prepared = self.prefill_prepared if prepared is None else prepared
+        ttnn.copy(self._prefill_trace_logits(prepared), prepared["output"])
 
     def _prefill_for_generate(self, tokens, *, trace_sampling=False):
         """Own one prefill result until first-token sampling consumes it."""
@@ -275,14 +301,22 @@ class Qwen38Generator:
             False,  # Last-token logits only; public all-logits prefill stays eager.
             trace_sampling,
         )
-        if self.prefill_prepared is None or self.prefill_prepared["key"] != key:
-            # Fresh persistent buffers must not overlap any live trace's scratch.
-            self._release_traces()
-            self.prefill_prepared = dict(
+        prepared = self.prefill_resident.get(key)
+        if prepared is None or prepared["trace_sampling"] != trace_sampling:
+            # Fresh persistent buffers must not overlap any live trace's scratch, so every trace
+            # goes before anything is freed or allocated.
+            self._release_traces(keep_prefill=True)
+            self.prefill_resident.pop(key, None)
+            while len(self.prefill_resident) >= MAX_RESIDENT_PREFILL:
+                self.prefill_resident.pop(next(iter(self.prefill_resident)))
+                self.counters["prefill_bucket_evictions"] += 1
+            prepared = dict(
                 key=key,
                 length=length,
                 valid=valid,
                 trace_sampling=trace_sampling,
+                trace=None,
+                sample_trace=None,
                 selectors=None if length == valid else self._bucket_selectors(length),
                 tokens=self.model.upload(tokens.int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
                 positions=self.model.upload(
@@ -291,25 +325,32 @@ class Qwen38Generator:
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 ),
             )
+            self.prefill_resident[key] = prepared
+            self.prefill_prepared = prepared
             # This is the real prefill, so it both warms the graph and advances
             # request state exactly once. Allocate and warm the output copy too.
             self._aim_prefill_selectors(valid)
-            logits = self._prefill_trace_logits()
-            self.prefill_prepared["output"] = ttnn.clone(logits)
-            ttnn.copy(logits, self.prefill_prepared["output"])
+            logits = self._prefill_trace_logits(prepared)
+            prepared["output"] = ttnn.clone(logits)
+            ttnn.copy(logits, prepared["output"])
+            self.counters["prefill_bucket_allocations"] += 1
             self.counters["prefill_eager_calls"] += 1
         else:
-            self._copy(tokens.int(), self.prefill_prepared["tokens"], "prefill_token_refreshes")
+            # Re-inserting makes this the most recent, so eviction takes the coldest bucket.
+            self.prefill_resident.pop(key)
+            self.prefill_resident[key] = prepared
+            self.prefill_prepared = prepared
+            self._copy(tokens.int(), prepared["tokens"], "prefill_token_refreshes")
             self._aim_prefill_selectors(valid)
-            if self.prefill_trace is None:
+            if prepared["trace"] is None:
                 # G=1 need not create a decode pair just to capture prefill.
-                self._prefill_trace_step()
+                self._prefill_trace_step(prepared)
                 self.counters["prefill_eager_calls"] += 1
             else:
-                ttnn.execute_trace(self.mesh, self.prefill_trace, cq_id=0, blocking=False)
+                ttnn.execute_trace(self.mesh, prepared["trace"], cq_id=0, blocking=False)
                 self.counters["prefill_replays"] += 1
         self.prefill_signatures.add((self.cache.batch_size, tuple(self.page_table.shape), 0, 0, length, False))
-        return self.prefill_prepared["output"]
+        return prepared["output"]
 
     def _bucket_selectors(self, bucket):
         """One selector set per bucket, kept for the generator's life.
@@ -852,7 +893,8 @@ class Qwen38Generator:
         ttnn.synchronize_device(self.mesh)
         captured = []
         open_trace = None
-        prefill_trace = prefill_sample_trace = None
+        prefill_traces = []
+        prefill_sample_trace = None
         try:
             open_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
             captured.append(open_trace)
@@ -866,24 +908,25 @@ class Qwen38Generator:
                 self._append_history()
             ttnn.end_trace_capture(self.mesh, open_trace, cq_id=0)
             open_trace = None
-            if self.prefill_prepared is not None:
+            # Every resident bucket is recorded, so a prompt that changes bucket replays rather
+            # than recompiling and recapturing. Each was warmed when its buffers were allocated,
+            # and recording executes nothing, so the decode state below is untouched.
+            for prepared in self.prefill_resident.values():
                 # Record only after decode logits have acquired a stable address.
-                # The real prefill already warmed this exact graph. Recording it
-                # does not execute or mutate the current decode cache state.
                 open_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
                 captured.append(open_trace)
-                prefill_trace = open_trace
-                self._prefill_trace_step()
+                prefill_traces.append((prepared, "trace", open_trace))
+                self._prefill_trace_step(prepared)
                 ttnn.end_trace_capture(self.mesh, open_trace, cq_id=0)
                 open_trace = None
-                if self.prefill_prepared["trace_sampling"]:
+                if prepared["trace_sampling"]:
                     open_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
                     captured.append(open_trace)
-                    prefill_sample_trace = open_trace
-                    self._sampling_step(self.prefill_prepared["output"])
+                    prefill_traces.append((prepared, "sample_trace", open_trace))
+                    self._sampling_step(prepared["output"])
                     ttnn.end_trace_capture(self.mesh, open_trace, cq_id=0)
                     open_trace = None
-            elif self.prefill_sample_input is not None:
+            if not self.prefill_resident and self.prefill_sample_input is not None:
                 open_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
                 captured.append(open_trace)
                 prefill_sample_trace = open_trace
@@ -897,13 +940,17 @@ class Qwen38Generator:
                 ttnn.release_trace(self.mesh, trace)
             raise
         self.trace, self.sample_trace = captured[:2]
-        self.prefill_trace = prefill_trace
-        self.prefill_sample_trace = prefill_sample_trace
+        for prepared, name, trace in prefill_traces:
+            prepared[name] = trace
+        if prefill_sample_trace is not None:
+            self._prefill_sample_only_trace = prefill_sample_trace
         self.trace_records_history = record_history
         self.logits = logits
         self.counters["trace_captures"] += 2
-        self.counters["prefill_trace_captures"] += int(self.prefill_trace is not None)
-        self.counters["prefill_sampling_trace_captures"] += int(self.prefill_sample_trace is not None)
+        self.counters["prefill_trace_captures"] += sum(name == "trace" for _, name, _ in prefill_traces)
+        self.counters["prefill_sampling_trace_captures"] += sum(
+            name == "sample_trace" for _, name, _ in prefill_traces
+        ) + int(prefill_sample_trace is not None)
 
     def decode_forward(
         self,

@@ -42,7 +42,7 @@ class StartupWarmupTests(unittest.TestCase):
         adapter.warmup_model_prefill(kv_cache=adapter.cache)
         self.assertEqual(adapter.generator.prefill_forward.call_count, 0)
         warmed = [call.kwargs["prompt_lens"][0] for call in adapter.generator.serving_prefill_tokens.call_args_list]
-        self.assertEqual(warmed, [32, 64, 96, 128])
+        self.assertEqual(warmed, [128, 96, 64, 32])
         self.assertTrue(adapter._prefill_startup_warmed)
 
     @patch("models.demos.qwen38_27b_t3k.tt.generator_vllm.ttnn.synchronize_device")
@@ -58,7 +58,9 @@ class StartupWarmupTests(unittest.TestCase):
         # A lone request takes the slot-zero serving path, whose programs the occupancy sweep
         # above never builds, so each bucket is compiled through the call that will replay it.
         warmed = [call.kwargs["prompt_lens"][0] for call in adapter.generator.serving_prefill_tokens.call_args_list]
-        self.assertEqual(warmed, [32, 64, 96, 128])
+        # Largest first: only the last few buckets keep a trace, and a chat turn alternates
+        # among the small ones.
+        self.assertEqual(warmed, [128, 96, 64, 32])
         for call in adapter.generator.serving_prefill_tokens.call_args_list:
             self.assertEqual(call.kwargs["slots"], [0])
             self.assertEqual(call.kwargs["start_pos"], [0])
@@ -99,6 +101,20 @@ class StartupWarmupTests(unittest.TestCase):
         adapter.cache = SimpleNamespace(num_pages=16, capacity=128)
         adapter.generator.cache = adapter.cache
         self.assertEqual(adapter._warm_bucket_widths(adapter.cache), [32, 64, 96])
+
+    def test_the_smallest_buckets_are_warmed_last_so_they_stay_resident(self):
+        # Only MAX_RESIDENT_PREFILL buckets keep their buffers and trace; the rest are evicted as
+        # the ladder runs, so warm order decides which survive into serving.
+        from models.demos.qwen38_27b_t3k.tt.generator import MAX_RESIDENT_PREFILL
+
+        adapter = self.make_adapter(1)
+        adapter.prefill_warmup_buckets = [32, 64, 96, 128, 160, 192, 224, 256]
+        adapter.cache = SimpleNamespace(num_pages=64, capacity=256)
+        adapter.generator.cache = adapter.cache
+        adapter.warmup_model_prefill(kv_cache=adapter.cache)
+        warmed = [call.kwargs["prompt_lens"][0] for call in adapter.generator.serving_prefill_tokens.call_args_list]
+        self.assertEqual(warmed, sorted(warmed, reverse=True))
+        self.assertEqual(sorted(warmed[-MAX_RESIDENT_PREFILL:]), [32, 64, 96, 128])
 
     def test_failure_restores_state_without_marking_ready(self):
         adapter = self.make_adapter()
