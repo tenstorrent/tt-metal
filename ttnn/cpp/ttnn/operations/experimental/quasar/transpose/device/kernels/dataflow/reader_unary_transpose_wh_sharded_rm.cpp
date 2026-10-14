@@ -44,6 +44,11 @@ void kernel_main() {
     // Local input-shard base L1 address from the resident input TensorAccessor (no borrowed self-loop CB).
     const auto s = TensorAccessor(tensor::input);
     uint32_t src_addr = noc_address_backend::extract_local_address(s.get_noc_addr(0));
+#ifdef ARCH_QUASAR
+    // The previous op wrote the shard without going through this core's cache; drop any stale lines first.
+    invalidate_l2_cache_range(
+        src_addr, num_hw_blocks_per_core * ((Ht - 1) * H_per_tile + H_per_tile_last) * stick_size_bytes);
+#endif
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         for (uint32_t h = 0; h < Ht; ++h) {
