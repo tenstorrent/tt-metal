@@ -504,4 +504,38 @@ set_tests_properties(
             "\\[  PASSED  \\] [1-9]"
 )
 
+# ---------------------------------------------------------------------------
+# transport_bandwidth: Tensix -> X280 (a Tensix kernel writes into passive LIM; no X280 image) and
+# X280 -> Tensix (hart 0 stores through one NoC window into Tensix L1).
+# ---------------------------------------------------------------------------
+x280_add_image(
+    NAME firmware-transport-bandwidth-x280-to-tensix
+    SOURCES src/transport_bandwidth_x280_to_tensix.cpp
+    INCLUDES
+        kernels/shared
+        kernels/transport_bandwidth
+        kernels/transport_bandwidth/backends
+)
+set(_x280_transport_bandwidth_dirs
+    ${_x280_shared_dir}
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/transport_bandwidth
+)
+foreach(_header transport_bandwidth_common.h tensix_to_x280.h x280_to_tensix.h)
+    _x280_check_header(${_header} c ${_x280_transport_bandwidth_dirs})
+    _x280_check_header(${_header} c++ ${_x280_transport_bandwidth_dirs})
+endforeach()
+_x280_check_header(transport_bandwidth_frontend_cxx.hpp c++ ${_x280_transport_bandwidth_dirs}
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/transport_bandwidth/backends
+)
+target_sources(x280_bench_host_tests PRIVATE tests/host/test_transport_bandwidth.cpp)
+target_include_directories(x280_bench_host_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/kernels/transport_bandwidth)
+_x280_device_test(x280_transport_bandwidth_tensix_to_x280
+    tests/device/test_transport_bandwidth_tensix_to_x280_hw.cpp
+    KERNELS shared transport_bandwidth
+)
+_x280_device_test(x280_transport_bandwidth_x280_to_tensix
+    tests/device/test_transport_bandwidth_x280_to_tensix_hw.cpp
+    KERNELS shared transport_bandwidth
+)
+
 add_custom_target(x280_abi_headers ALL DEPENDS ${_x280_header_stamps})
