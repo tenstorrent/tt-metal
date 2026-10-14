@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <gtest/gtest.h>
+#include "common/device_fixture.hpp"
 
 #include <enchantum/enchantum.hpp>
 #include <cstdint>
@@ -14,7 +14,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "jit_build/build.hpp"
@@ -50,16 +49,15 @@ std::string get_latest_kernel_binary_path(const std::string& kernel_root_path, c
     return kernel->name() + "/" + latest_hash;
 }
 
-void construct_program(Program& program, IDevice* device, CoreCoord& core) {
+void construct_program(Program& program, distributed::MeshDevice& mesh_device, CoreCoord& core) {
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 2048;
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
-    InterleavedBufferConfig buff_config{
-        .device = device, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
-
-    auto src_dram_buffer = CreateBuffer(buff_config);
-    auto dst_dram_buffer = CreateBuffer(buff_config);
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size};
+    auto src_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &mesh_device);
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &mesh_device);
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 8;
@@ -98,28 +96,8 @@ void construct_program(Program& program, IDevice* device, CoreCoord& core) {
 
 }  // namespace
 
-// Custom fixture for multi-device test
-class CompileSetsKernelBinariesFixture : public ::testing::Test {
-protected:
-    void SetUp() override {
-        num_devices_ = GetNumAvailableDevices();
-        std::vector<int> ids;
-        ids.reserve(num_devices_);
-        for (int id = 0; id < num_devices_; id++) {
-            ids.push_back(id);
-        }
-        devices_ = detail::CreateDevices(ids);
-    }
-
-    void TearDown() override {
-        if (!devices_.empty()) {
-            detail::CloseDevices(devices_);
-        }
-    }
-
-    std::map<int, IDevice*> devices_;
-    int num_devices_ = 0;
-};
+// Multi-device compile test: one unit mesh per chip.
+class CompileSetsKernelBinariesFixture : public AnyDispatchMeshDeviceFixture {};
 
 TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
     CoreCoord core = {0, 0};
@@ -127,14 +105,15 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
     std::map<uint64_t, std::vector<const ll_api::memory*>> compute_binaries;
     std::map<uint64_t, std::vector<const ll_api::memory*>> brisc_binaries;
     std::map<uint64_t, std::vector<const ll_api::memory*>> ncrisc_binaries;
+    const auto num_devices = devices_.size();
 
-    for (int i = 0; i < num_devices_; i++) {
-        auto* device = devices_[i];
+    for (size_t i = 0; i < num_devices; i++) {
+        auto* device = devices_[i].get();
 
         programs.push_back(Program());
         Program& program = programs.back();
 
-        construct_program(program, device, core);
+        construct_program(program, *device, core);
 
         uint32_t programmable_core_index =
             MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
@@ -162,7 +141,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
         auto mask = BuildEnvManager::get_instance(extract_context_id(device))
                         .get_device_build_env(device->build_id())
                         .build_key();
-        detail::CompileProgram(device, program);
+        program.impl().compile(device);
         compute_binaries.insert({mask, compute_kernel->binaries(mask)});
         TT_FATAL(compute_binaries.at(mask).size() == 3, "Expected 3 Compute binaries!");
         brisc_binaries.insert({mask, riscv0_kernel->binaries(mask)});
@@ -174,37 +153,37 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
     int num_compiles = 3;
     for (int iter = 0; iter < 3; iter++) {
         std::vector<std::string> kernel_names = {"reader_unary_push_4", "writer_unary", "eltwise_copy_3m"};
-        for (int i = 0; i < num_devices_; i++) {
+        for (size_t i = 0; i < num_devices; i++) {
             for (const auto& kernel_name : kernel_names) {
                 std::filesystem::remove_all(
-                    BuildEnvManager::get_instance(extract_context_id(devices_[i]))
-                        .get_device_build_env(devices_[i]->id())
+                    BuildEnvManager::get_instance(extract_context_id(devices_[i].get()))
+                        .get_device_build_env(devices_[i]->build_id())
                         .build_env.get_out_kernel_root_path() +
                     kernel_name);
             }
         }
         jit_build_cache_clear();
         std::vector<Program> new_programs;
-        for (int i = 0; i < num_devices_; i++) {
-            auto& device = devices_[i];
+        for (size_t i = 0; i < num_devices; i++) {
+            auto* device = devices_[i].get();
             new_programs.push_back(Program());
             Program& program = new_programs.back();
-            construct_program(program, device, core);
+            construct_program(program, *device, core);
         }
 
         std::vector<std::thread> ths;
-        ths.reserve(num_devices_);
+        ths.reserve(num_devices);
         uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
         uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-        for (int i = 0; i < num_devices_; i++) {
-            auto& device = devices_[i];
-            auto& program = new_programs[i];
-            ths.emplace_back([&] {
+        for (size_t i = 0; i < num_devices; i++) {
+            ths.emplace_back([&, i] {
+                auto* device = devices_[i].get();
+                auto& program = new_programs[i];
                 for (int j = 0; j < num_compiles; j++) {
                     auto mask = BuildEnvManager::get_instance(extract_context_id(device))
                                     .get_device_build_env(device->build_id())
                                     .build_key();
-                    detail::CompileProgram(device, program);
+                    program.impl().compile(device);
                     uint32_t programmable_core_index = MetalContext::instance().hal().get_programmable_core_type_index(
                         HalProgrammableCoreType::TENSIX);
                     const KernelGroup* kernel_group = program.impl().kernels_on_core(core, programmable_core_index);

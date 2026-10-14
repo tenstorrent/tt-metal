@@ -21,7 +21,11 @@ ttnn::Tensor adamw(
     float beta2_pow,
     float epsilon,
     float weight_decay,
-    StochasticRounding stochastic_rounding) {
+    StochasticRounding stochastic_rounding,
+    std::optional<uint32_t> stochastic_rounding_seed) {
+    TT_FATAL(
+        (stochastic_rounding == StochasticRounding::Enabled) == stochastic_rounding_seed.has_value(),
+        "a stochastic rounding seed must be supplied iff stochastic rounding is enabled");
     return ttnn::prim::adamw(
         param_in,
         grad,
@@ -36,7 +40,8 @@ ttnn::Tensor adamw(
         epsilon,
         weight_decay,
         max_exp_avg_sq.has_value(),
-        stochastic_rounding);
+        stochastic_rounding,
+        stochastic_rounding_seed);
 }
 
 }  // namespace ttml::metal

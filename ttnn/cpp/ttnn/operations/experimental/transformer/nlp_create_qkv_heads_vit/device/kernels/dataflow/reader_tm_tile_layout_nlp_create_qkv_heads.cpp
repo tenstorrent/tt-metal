@@ -24,7 +24,9 @@ void kernel_main() {
     constexpr uint32_t q_num_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t kv_num_tiles = get_compile_time_arg_val(1);
     constexpr auto in0_args = TensorAccessorArgs<2>();
+#ifdef READ_FROM_INPUT_TENSOR_KV
     constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+#endif
 
     constexpr uint32_t cb_id_qv = 1;  // cb for Q, V heads
 #ifdef TRANSPOSE_K_HEADS
@@ -34,7 +36,6 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t onetile = 1;
-    const DataFormat data_format = get_dataformat(cb_id_qv);
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
 
 #ifdef READ_FROM_INPUT_TENSOR_KV

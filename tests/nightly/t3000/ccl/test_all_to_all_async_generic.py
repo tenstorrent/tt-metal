@@ -10,6 +10,12 @@ from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
 
+def create_fabric_router_config(max_payload_size):
+    config = ttnn.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
 def run_with_trace(
     mesh_device,
     topology,
@@ -82,12 +88,18 @@ def run_all_to_all_impl(
     do_check=True,
     reuse_inputs=False,
     cluster_axis=None,
+    worker_core_range=None,
 ):
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
 
+    # A sequence exercises distinct link-selection keys within the same program cache.
+    if isinstance(num_links, (list, tuple)):
+        assert not trace_mode and len(num_links) == num_iters
+        mesh_device.enable_program_cache()
+
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
+    ccl_sub_device_crs = worker_core_range or ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
     worker_sub_device = ttnn.SubDevice(
@@ -179,18 +191,24 @@ def run_all_to_all_impl(
         )
         tt_out_tensor_list.append(tt_out_tensor)
     else:
+        entries_before = mesh_device.num_program_cache_entries()
+        seen_links = set()
         for i in range(num_iters):
+            links = num_links[i] if isinstance(num_links, (list, tuple)) else num_links
             tt_out_tensor = ttnn.experimental.all_to_all_async_generic(
                 input_tensor_mesh_list[i if not reuse_inputs else 0],
                 in_dim=in_dim,
                 out_dim=out_dim,
-                num_links=num_links,
+                num_links=links,
                 memory_config=output_mem_config,
                 topology=topology,
                 subdevice_id=worker_sub_device_id,
                 cluster_axis=cluster_axis,
             )
             tt_out_tensor_list.append(tt_out_tensor)
+            if isinstance(num_links, (list, tuple)):
+                seen_links.add(links)
+                assert mesh_device.num_program_cache_entries() == entries_before + len(seen_links)
 
         logger.info(f"Waiting for op")
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
@@ -300,7 +318,12 @@ def run_all_to_all_impl(
             ),
         ),  # test 3-2
     ],
-    ids=["test1-2:mesh1x8:dram", "test2-1:mesh2x4:1:block", "test2-3:mesh2x4:1:l1_h", "test3-2:mesh2x4:0:l1_w"],
+    ids=[
+        "test1-2:mesh1x8:dram",
+        "test2-1:mesh2x4:1:block",
+        "test2-3:mesh2x4:1:l1_h",
+        "test3-2:mesh2x4:0:l1_w",
+    ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -354,6 +377,76 @@ def test_all_to_all_fabric_1d_ring(mesh_device):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         topology=ttnn.Topology.Ring,
+        num_iters=2,
+        input_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        do_check=True,
+        trace_mode=False,
+        reuse_inputs=False,
+        cluster_axis=1,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 100000,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_router_config": create_fabric_router_config(14336),
+        }
+    ],
+    indirect=True,
+)
+def test_all_to_all_fabric_1d_ring_bank_owned_mux(mesh_device):
+    run_all_to_all_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        [1, 128, 128, 512],
+        in_dim=1,
+        out_dim=2,
+        num_links=1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        topology=ttnn.Topology.Ring,
+        num_iters=2,
+        input_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        cluster_axis=1,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 100000,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_router_config": create_fabric_router_config(14336),
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "logical_shape",
+    [
+        pytest.param([1, 128, 128, 512], id="muxed-large-message"),
+        pytest.param([1, 16, 128, 512], id="legacy-small-message"),
+    ],
+)
+def test_all_to_all_fabric_1d_linear_bank_owned(mesh_device, logical_shape):
+    run_all_to_all_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        logical_shape,
+        in_dim=1,
+        out_dim=2,
+        num_links=1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        topology=ttnn.Topology.Linear,
         num_iters=2,
         input_mem_config=ttnn.DRAM_MEMORY_CONFIG,
         output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -457,6 +550,58 @@ def test_all_to_all_fabric_1d_ring(mesh_device):
             False,
             id="axis0-link2-ring-3to2-dram",
         ),
+        pytest.param(
+            1,
+            2,
+            [1, 128, 128, 512],
+            1,
+            2,
+            ttnn.Topology.Linear,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            False,
+            False,
+            id="axis1-link2-linear-1to2-dram-reader-half-tile",
+        ),
+        pytest.param(
+            1,
+            2,
+            [1, 128, 128, 512],
+            2,
+            1,
+            ttnn.Topology.Linear,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            False,
+            False,
+            id="axis1-link2-linear-2to1-dram-writer-half-tile",
+        ),
+        pytest.param(
+            1,
+            2,
+            [1, 128, 128, 512],
+            1,
+            2,
+            ttnn.Topology.Linear,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+            ttnn.DRAM_MEMORY_CONFIG,
+            False,
+            False,
+            id="axis1-link2-linear-1to2-l1-interleaved-to-dram",
+        ),
+        pytest.param(
+            1,
+            2,
+            [1, 4, 128, 32],
+            1,
+            2,
+            ttnn.Topology.Linear,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            False,
+            False,
+            id="axis1-link2-linear-1to2-dram-fewer-blocks-than-links",
+        ),
     ],
 )
 def test_all_to_all_fabric_2d(
@@ -490,3 +635,158 @@ def test_all_to_all_fabric_2d(
         reuse_inputs=reuse_inputs,
         cluster_axis=cluster_axis,
     )
+
+
+# A 1x8 view of the 2x4 board follows its perimeter, so axis 1 turns corners. Initialization multicast cannot route it.
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_all_to_all_fabric_2d_bent_axis(mesh_device):
+    run_all_to_all_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        logical_shape=[1, 128, 128, 512],
+        in_dim=1,
+        out_dim=2,
+        num_links=2,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        topology=ttnn.Topology.Ring,
+        num_iters=2,
+        input_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        do_check=True,
+        trace_mode=False,
+        reuse_inputs=False,
+        cluster_axis=1,
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params,cluster_axis",
+    [
+        pytest.param(
+            (2, 4),
+            {"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X},
+            0,
+            id="torus-x-ring-on-non-wrapping-axis-y",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_all_to_all_ring_falls_back_on_partial_torus_non_wrapping_axis(mesh_device, cluster_axis):
+    """A logical ring on the open partial-torus axis must not create a physical wrap connection."""
+    run_all_to_all_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        logical_shape=[1, 128, 128, 512],
+        in_dim=1,
+        out_dim=2,
+        num_links=2,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        topology=ttnn.Topology.Ring,
+        num_iters=2,
+        input_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        do_check=True,
+        trace_mode=False,
+        reuse_inputs=False,
+        cluster_axis=cluster_axis,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "worker_grid_end",
+    [
+        pytest.param((1, 6), id="two-mux-workers-per-direction"),  # 14 cores: 7 per link
+        pytest.param((0, 5), id="one-direct-worker-per-direction"),  # 6 cores: 3 per link
+    ],
+)
+def test_all_to_all_adapts_direction_workers_to_subdevice(mesh_device, worker_grid_end):
+    run_all_to_all_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        logical_shape=[1, 128, 128, 512],
+        in_dim=1,
+        out_dim=2,
+        num_links=2,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        topology=ttnn.Topology.Linear,
+        num_iters=2,
+        input_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        cluster_axis=1,
+        worker_core_range=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(*worker_grid_end))}),
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 100000,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(14336),
+        }
+    ],
+    indirect=True,
+)
+def test_all_to_all_bank_owned_falls_back_on_restricted_subdevice(mesh_device):
+    run_all_to_all_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        logical_shape=[1, 128, 128, 512],
+        in_dim=1,
+        out_dim=2,
+        num_links=2,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        topology=ttnn.Topology.Linear,
+        num_iters=2,
+        input_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        cluster_axis=1,
+        worker_core_range=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 5))}),
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
+@pytest.mark.parametrize("topology", [None, ttnn.Topology.Linear, ttnn.Topology.Ring])
+def test_all_to_all_cached_discovery(mesh_device, topology, expect_error):
+    """Auto/explicit links stay distinct and reuse routes with fresh input/output buffers."""
+    run_all_to_all_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        logical_shape=[1, 8, 256, 32],
+        in_dim=2,
+        out_dim=1,
+        num_links=[None, 1, 2, None, 1, 2],
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        topology=topology,
+        num_iters=6,
+        input_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        cluster_axis=1,
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch.zeros(1, 4, 64, 32, dtype=torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT
+    )
+    with expect_error(RuntimeError, "at least one fabric link"):
+        ttnn.experimental.all_to_all_async_generic(
+            input_tensor, in_dim=2, out_dim=1, num_links=0, topology=topology, cluster_axis=1
+        )

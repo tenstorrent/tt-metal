@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
+#include "impl/profiler/tt_metal_profiler.hpp"
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -106,9 +106,9 @@ void benchmark_args_combinations_single_core(
     auto* const input_device_buffer = input_mesh_buffer->get_device_buffer(mesh_coordinate);
 
     auto profiler_dir = res_path + "/" + params.test_name;
-    tt::tt_metal::detail::SetDeviceProfilerDir(profiler_dir);
+    tt::tt_metal::detail::SetDeviceProfilerDir(*mesh_device_, profiler_dir);
     log_info(tt::LogTest, "Setting profiler dir to: {}", profiler_dir);
-    tt::tt_metal::detail::FreshProfilerDeviceLog();
+    tt::tt_metal::detail::FreshProfilerDeviceLog(*mesh_device_);
     for (const auto& arg_config : args_combinations) {
         auto args_bitmask = arg_config.raw();
 

@@ -68,28 +68,17 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          # No tier arg: vLLM Model Tests run every entry at one cadence, so the
-          # budget is summed across all SKU entries under the plain models.vllm key.
-          # (The per-entry `tier` field is classification metadata, not a filter.)
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "vllm"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
-        run: |
-          # vLLM entries have no `cmd` — the impl builds the command from structured
-          # fields — so opt into the allow-missing-cmd relaxation. Other pipelines keep
-          # the strict "every leg has a non-empty cmd" contract.
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml \
-            --allow-missing-cmd
+        # vLLM entries have no `cmd` — the impl builds the command from structured
+        # fields — so opt into the allow-missing-cmd relaxation. Other pipelines keep
+        # the strict "every leg has a non-empty cmd" contract.
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
+          allow-missing-cmd: "true"
       - name: Apply tier and model filters
         id: apply-filters
         run: |
@@ -139,6 +128,7 @@ jobs:
       FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG: "./output/vllm_benchmark_structured_output.log"
       FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
       FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
+      FILE_CHUNKED_PREFILL_TESTS_LOG: "./output/vllm_chunked_prefill_tests.log"
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -162,7 +152,9 @@ jobs:
         FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG: "./output/vllm_benchmark_structured_output.log"
         FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
         FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
+        FILE_CHUNKED_PREFILL_TESTS_LOG: "./output/vllm_chunked_prefill_tests.log"
         FILE_COHERENCE_TEST_LOG: "./output/vllm_coherence_test.log"
+        FILE_PREFIX_CACHING_LOG: "./output/vllm_prefix_caching.log"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -173,7 +165,13 @@ jobs:
         # weights-cache-mode field comes from .github/sku_config.yaml via
         # prepare_test_matrix.py. The same ro/rw toggle applies to either source.
         - ${{ (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
-      options: "--device /dev/tenstorrent"
+      # Since vLLM 0.27, each DP engine requires 160 MiB free in /dev/shm for its
+      # message queue (10 x 16 MiB). Docker's default /dev/shm is 64 MiB.
+      # DP=8 needs up to 8 x 160 MiB = 1.25 GiB, so 2g leaves room to spare.
+      # The size is only a limit: RAM is used as data is written, not reserved upfront.
+      # Affected jobs: Llama-3.1-8B-Instruct DP=4 and Gemma3-27B DP=4 [wh_galaxy_perf],
+      # Llama-3.1-8B-Instruct with sampling-tests (P150x8, DP=8) [bh_loudbox].
+      options: "--device /dev/tenstorrent --shm-size=2g"
     defaults:
       run:
         shell: bash
@@ -290,6 +288,13 @@ jobs:
             DEFAULT_CHAT_TEMPLATE_KWARGS=()
           fi
 
+          SERVER_DEFAULT_TOP_K='${{ matrix.test-group.server-default-top-k }}'
+          if [ -n "$SERVER_DEFAULT_TOP_K" ]; then
+            DEFAULT_TOP_K_ARGS=(--override-generation-config "$(jq -nc --argjson k "$SERVER_DEFAULT_TOP_K" '{top_k: $k}')")
+          else
+            DEFAULT_TOP_K_ARGS=()
+          fi
+
           export MESH_DEVICE="${{ matrix.test-group.mesh-device }}"
           if [ -n "${{ matrix.test-group.tt-llama-text-ver }}" ]; then
             export TT_LLAMA_TEXT_VER="${{ matrix.test-group.tt-llama-text-ver }}"
@@ -325,19 +330,87 @@ jobs:
             google/gemma-4-*)
               export TT_LEAN_DECODE_WARMUP=1
               export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
-              # 31B: with hybrid KV groups disabled every layer allocates a
-              # full-length KV buffer, and the default all-user pool OOMs DRAM
-              # on QB2/T3K. Cap the pool (the real DRAM lever, distinct from
-              # --max_model_len). See tt-metal #49257 / #49083.
-              if [ "$HF_MODEL" = "google/gemma-4-31B-it" ]; then
-                export GEMMA4_MAX_TOKENS_ALL_USERS=32768
+              # Wormhole: force the async-decode capability OFF.
+              #
+              # Dropping --async-scheduling from additional-server-args is NOT
+              # enough. Gemma4 advertises supports_async_decode from
+              # GEMMA4_SUPPORTS_ASYNC_DECODE, which defaults to "1", and the TT
+              # platform then turns async scheduling on by itself — run
+              # 32375657713 removed the flag and the server still logged
+              # "Asynchronous scheduling is enabled". Unlike the
+              # tt-inference-server model specs, this pipeline launches
+              # server_example_tt.py directly and never picks up the spec env,
+              # so the kill-switch has to be set here.
+              #
+              # Async decode is implicated in the WH-T3K-only decode hang
+              # (#49494) and measures no throughput benefit on WH at
+              # concurrency 32, so WH legs run without it. Blackhole legs keep
+              # async on and are unaffected by this branch.
+              if [ "${{ matrix.test-group.arch }}" = "arch-wormhole_b0" ]; then
+                export GEMMA4_SUPPORTS_ASYNC_DECODE=0
+                echo "Gemma4 WH: GEMMA4_SUPPORTS_ASYNC_DECODE=0 (async decode disabled on Wormhole)"
+              fi
+              # 31B/12B: hybrid-OFF allocates a full-length KV buffer per layer, so
+              # the all-user pool must match the served max_model_len (BH 256k /
+              # WH-T3K 16k). Blindly pinning 262144 OOMs Wormhole T3K (run
+              # 30270375854). See tt-metal #49257 / #49083.
+              if [ "$HF_MODEL" = "google/gemma-4-31B-it" ] || [ "$HF_MODEL" = "google/gemma-4-12B-it" ]; then
+                MAX_MODEL_LEN=""
+                for ((i = 0; i < ${#ADDITIONAL_SERVER_ARGS[@]}; i++)); do
+                  if [ "${ADDITIONAL_SERVER_ARGS[$i]}" = "--max_model_len" ] && [ $((i + 1)) -lt ${#ADDITIONAL_SERVER_ARGS[@]} ]; then
+                    MAX_MODEL_LEN="${ADDITIONAL_SERVER_ARGS[$((i + 1))]}"
+                    break
+                  fi
+                done
+                export GEMMA4_MAX_TOKENS_ALL_USERS="${MAX_MODEL_LEN:-262144}"
+                export GEMMA4_VLLM_SINGLE_CHUNK=0
+                export GEMMA4_DEMO_SINGLE_CHUNK=0
+                export GEMMA4_CHUNKED_PREFILL_TRACE=1
+                # WH T3K 31B: pin metal prefill chunk to 2048 (12 GB/ASIC headroom).
+                # Keep chunked-prefill *trace* on — sp0 capture hard-clears the
+                # sliding persistent ring so compile/capture match (see
+                # _release_sliding_prefill_tail(clear_persistent=True)).
+                if [ "$HF_MODEL" = "google/gemma-4-31B-it" ] && [ "${{ matrix.test-group.mesh-device }}" = "T3K" ]; then
+                  export GEMMA4_GEN_PREFILL_CHUNK=2048
+                  echo "Gemma4 WH-T3K: GEMMA4_GEN_PREFILL_CHUNK=$GEMMA4_GEN_PREFILL_CHUNK"
+                fi
+                # 12B on P150x8 (LoudBox): serve the validated target config —
+                # bounded sliding KV + batched prefill + eager chunks (overrides
+                # the CHUNKED_PREFILL_TRACE=1 export above). The gated
+                # traced-sequential-prefill default deterministically wedges 12B
+                # on a 1x8 BH mesh under concurrent prefill+decode (chip-local
+                # NOC1 write/ack stall); same reason the tt-inference-server
+                # P150X8 spec defaults to bounded.
+                if [ "$HF_MODEL" = "google/gemma-4-12B-it" ] && [ "${{ matrix.test-group.mesh-device }}" = "P150x8" ]; then
+                  export GEMMA4_BOUNDED_SLIDING_KV_CACHE=1
+                  export G4_FORCE_BATCH_PREFILL=1
+                  export GEMMA4_CHUNKED_PREFILL_TRACE=0
+                  # linear CCL is part of the validated P150X8 spec (the default
+                  # resolves to Ring here).
+                  export GEMMA4_CCL_TOPOLOGY=linear
+                  echo "Gemma4 P150x8: bounded sliding + batched prefill + eager chunks + linear CCL (gated wedges on 1x8)"
+                fi
+                echo "Gemma4 KV pool: GEMMA4_MAX_TOKENS_ALL_USERS=$GEMMA4_MAX_TOKENS_ALL_USERS (from max_model_len=${MAX_MODEL_LEN:-default})"
               fi
               ;;
           esac
 
+          # Per-entry environment, space-separated KEY=VALUE pairs, exported after
+          # the per-model case block so an entry can override it.
+          if [ -n "${{ matrix.test-group.extra-env }}" ]; then
+            for _kv in ${{ matrix.test-group.extra-env }}; do
+              case "$_kv" in
+                *=*) export "$_kv"; echo "extra-env: ${_kv%%=*}" ;;
+                *) echo "extra-env: ignoring malformed entry '$_kv'" ;;
+              esac
+            done
+          fi
+
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
+          # Placed before the per-entry args so an entry can override it.
+          VLLM_SERVER_ARGS+=("${DEFAULT_TOP_K_ARGS[@]}")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
           VLLM_SERVER_ARGS+=("${DEFAULT_CHAT_TEMPLATE_KWARGS[@]}")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_CONFIG[@]}")
@@ -474,6 +547,8 @@ jobs:
           # decode trace) still returns deterministic, well-formed-but-garbage
           # tokens, so those checks pass while the model emits gibberish. Requiring
           # a verbatim echo of a simple sentence catches that class of bug directly.
+          # Thinking off per-request and a budget that fits it anyway: a <think> preamble
+          # would eat the tokens and fail the grep for reasons unrelated to coherence.
           SENTENCE="The quick brown fox jumps over the lazy dog."
           curl http://localhost:8000/v1/chat/completions \
             -H "Content-Type: application/json" \
@@ -486,7 +561,8 @@ jobs:
                   \"content\": \"Repeat the following sentence exactly, with no extra words, no quotes, and no commentary: $SENTENCE\"
                 }
               ],
-              \"max_tokens\": 32,
+              \"chat_template_kwargs\": {\"enable_thinking\": false},
+              \"max_tokens\": 512,
               \"temperature\": 0.0,
               \"stream\": false,
               \"ignore_eos\": false
@@ -502,9 +578,86 @@ jobs:
           fi
           echo "✅ Coherence guard passed: verbatim echo found"
 
+      - name: 🗂️ Run prefix-caching gate (cache-hit resume)
+        if: ${{ matrix.test-group.prefix-caching-test }}
+        timeout-minutes: 15
+        run: |
+          # Prefix-caching gate: a second request sharing a ~24K-token document with a completed one must
+          # answer from the cached blocks correctly and show the engine's prefix-cache counters engaged.
+          python3 - <<'EOF' 2>&1 | tee "${FILE_PREFIX_CACHING_LOG}"
+          import json, sys, time, urllib.request
+
+          MODEL = "${{ matrix.test-group.model }}"
+          URL = "http://localhost:8000/v1/chat/completions"
+          secret = f"vault-{int(time.time())}"
+          paras = []
+          for i in range(550):
+              paras.append(
+                  f"[archive section {i:03d}] The archive catalogs shipment manifests, "
+                  f"calibration notes and survey logs for bay {i % 17}; entry checksum "
+                  f"{(i * 7919) % 100000:05d} was verified during audit cycle {i % 9}."
+              )
+              if i == 275:
+                  paras.append(f"IMPORTANT RECORD: the vault passphrase is '{secret}'.")
+          doc = "\n".join(paras)
+
+          def ask(question):
+              body = json.dumps({
+                  "model": MODEL,
+                  "messages": [{"role": "system", "content": doc}, {"role": "user", "content": question}],
+                  "max_tokens": 32, "temperature": 0.0, "stream": True,
+                  "chat_template_kwargs": {"enable_thinking": False},
+              }).encode()
+              req = urllib.request.Request(URL, data=body, headers={"Content-Type": "application/json", "X-User-ID": "vllm_test"})
+              t0 = time.perf_counter()
+              ttft, text = None, ""
+              with urllib.request.urlopen(req, timeout=1800) as resp:
+                  for raw in resp:
+                      line = raw.decode("utf-8", "ignore").strip()
+                      if not line.startswith("data:") or line.endswith("[DONE]"):
+                          continue
+                      piece = (json.loads(line[5:])["choices"][0].get("delta") or {}).get("content") or ""
+                      if piece:
+                          ttft = ttft if ttft is not None else time.perf_counter() - t0
+                          text += piece
+              return ttft, text
+
+          def cache_counters():
+              # vLLM's prefix-cache counters (tokens queried / tokens served from cache)
+              txt = urllib.request.urlopen("http://localhost:8000/metrics", timeout=60).read().decode()
+              q = h = 0.0
+              for line in txt.splitlines():
+                  if line.startswith("vllm:prefix_cache_queries_total"):
+                      q += float(line.rsplit(" ", 1)[1])
+                  elif line.startswith("vllm:prefix_cache_hits_total"):
+                      h += float(line.rsplit(" ", 1)[1])
+              return q, h
+
+          cold_ttft, cold = ask("What is the vault passphrase recorded in the archive above? Answer with just the passphrase.")
+          q0, h0 = cache_counters()
+          warm_ttft, warm = ask("Quote the vault passphrase from the archive above, and nothing else.")
+          q1, h1 = cache_counters()
+          queried, hits = q1 - q0, h1 - h0
+          print(f"cold request: ttft={cold_ttft:.2f}s answer={cold.strip()[:80]!r}")
+          print(f"cache-hit resume: ttft={warm_ttft:.2f}s answer={warm.strip()[:80]!r}")
+          print(f"resume prefix-cache counters: queried={queried:.0f} tokens, hits={hits:.0f} tokens")
+          ok = True
+          if secret not in cold:
+              print("❌ cold request did not recall the passphrase"); ok = False
+          if secret not in warm:
+              print("❌ cache-hit resume did not recall the passphrase (wrong prefix or window tail)"); ok = False
+          # The prompts are identical up to the question, so nearly all of the resume should hit the cache.
+          # Gate on the engine's counters, not TTFT, which also carries queueing and the resume cost.
+          if queried <= 0 or hits < 0.8 * queried:
+              print(f"❌ prefix cache not engaged for the resume: {hits:.0f} of {queried:.0f} queried tokens were cache hits"); ok = False
+          if ok:
+              print(f"✅ Prefix-caching gate passed: resume correct, {hits:.0f}/{queried:.0f} tokens from cache, TTFT {warm_ttft:.2f}s vs cold {cold_ttft:.2f}s")
+          sys.exit(0 if ok else 1)
+          EOF
+
       - name: 📐 Run structured output benchmark
         if: ${{ matrix.test-group.structured-output }}
-        timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
+        timeout-minutes: ${{ matrix.test-group.structured-output-timeout || matrix.test-group.benchmark-timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: ${{ env.FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG }}
@@ -597,6 +750,36 @@ jobs:
               pytest "${PLUGIN_DIR}/tests/tt" -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
             fi
 
+      - name: 🧪 Run chunked prefill tests
+        if: ${{ matrix.test-group.chunked-prefill-budget }}
+        timeout-minutes: ${{ matrix.test-group.chunked-prefill-test-timeout || 15 }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: ${{ env.FILE_CHUNKED_PREFILL_TESTS_LOG }}
+          run: |
+            # Confirm the server really has the feature on at this budget before
+            # trusting the tests. Without this they would pass against a server that
+            # silently disabled chunked prefill, e.g. one whose model class does
+            # not declare the capability.
+            BUDGET=${{ matrix.test-group.chunked-prefill-budget }}
+            EXPECTED="Chunked prefill enabled"
+            if ! grep -q "$EXPECTED" "${FILE_SERVER_LOG}"; then
+              echo "❌ server log has no '$EXPECTED' line, so chunked prefill is not active"
+              exit 1
+            fi
+            RESOLVED=$(grep "$EXPECTED" "${FILE_SERVER_LOG}" | tail -1 \
+              | grep -o "max_num_batched_tokens=[0-9]\+" | cut -d= -f2 || true)
+            if [ "$RESOLVED" != "$BUDGET" ]; then
+              echo "❌ server resolved max_num_batched_tokens=$RESOLVED, tests were told $BUDGET"
+              exit 1
+            fi
+            echo "✅ chunked prefill active at max_num_batched_tokens=$RESOLVED"
+
+            pytest "${PLUGIN_DIR}/tests/tt/test_chunked_prefill.py" -v \
+              --tt-server-url=http://localhost:8000 \
+              --tt-model-name=${{ matrix.test-group.model }} \
+              --tt-chunked-prefill-budget="$BUDGET"
+
       - name: 🧹 Cleanup server process
         if: always()
         run: |
@@ -671,7 +854,10 @@ jobs:
   ai-run-summary:
     name: "AI Run Summary"
     needs: [load-test-matrix, vllm-tests]
-    if: always()
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -16,6 +17,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -33,13 +35,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_B         = params.buffer_B;
 #endif
     constexpr std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
-    tdma_descriptor_t td_val;
-    const std::uint32_t buf_desc_id           = 0;
-    const std::uint32_t num_tiles_per_unpack  = TILE_CNT;
     const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         if constexpr (unpack_to_dest)
         {
             // Only the end-to-end path uses the unpack→pack dest-dvalid
@@ -47,37 +46,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // persisted wait mask rather than leaving UNP_DEST blocked.
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+                set_up_unpack_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
             }
             else
             {
                 set_up_zero_dest_dvalid_handshake_for_unpack();
             }
-
-            DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-            if constexpr (is_fp32_dest_acc_en)
-            {
-                if (pack_src_format == DataFormat::Float32)
-                {
-                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
-                }
-                else if (pack_src_format == DataFormat::Int32)
-                {
-                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
-                }
-                else
-                {
-                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
-                }
-            }
-            else
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
-            }
         }
         else
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
         }
 
         unsigned l1_addr_16B;
@@ -90,33 +68,33 @@ void run_kernel(RUNTIME_PARAMETERS params)
             l1_addr_16B = L1_ADDRESS(buffer_A[0]);
         }
 
-        td_val = ckernel::trisc::construct_tdma_desc(tensor_shape_A, l1_addr_16B, formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
+        const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_A, l1_addr_16B, formats.unpack_A_src);
 
-        _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
         if constexpr (unpack_to_dest)
         {
-            _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
+            _llk_unpack_configure_unary_<SELECTED_UNPACKER>(static_cast<DataFormat>(formats.unpack_A_dst));
             // Unpack one tile row at a time for double-buffering with packer (SyncHalf).
             // Writing all tiles at once would cause _llk_pack_dest_dvalid_section_done_'s
             // ZEROACC to wipe subsequent tile rows after packing the first one.
-            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, tensor_shape_A, BLOCK_CT_DIM);
+            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape_A, BLOCK_CT_DIM);
         }
         else
         {
             if constexpr (is_fp32_dest_acc_en)
             {
-                _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);
+                _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+                    static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
             }
             else
             {
-                _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val);
+                _llk_unpack_configure_unary_<SELECTED_UNPACKER>(static_cast<DataFormat>(formats.unpack_A_dst));
             }
-            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, tensor_shape_A, num_tiles_per_unpack);
+            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape_A, TILE_CNT);
         }
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
@@ -125,15 +103,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             if constexpr (!unpack_to_dest)
             {
                 // Math consumes every tile in every block row.
+                const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT;
                 if constexpr (is_fp32_dest_acc_en)
                 {
                     // 32-bit datacopy uses ELWADD and consumes both SrcA
                     // and the dummy SrcB produced by unpack.
-                    _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(src_handshake_iters);
                 }
                 else
                 {
-                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(LOOP_FACTOR * TILE_CNT);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(src_handshake_iters);
                 }
             }
         }
@@ -182,57 +161,43 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces       = params.num_faces;
     const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
 #endif
-    if constexpr (!unpack_to_dest)
+    // Every thread opens both zones even when it has no work here: the rendezvous waits for all four.
     {
+        START_PERF_MEASURE("INIT")
+        if constexpr (!unpack_to_dest)
         {
-            ZONE_SCOPED("INIT")
             // PACK_ISOLATE and L1_CONGESTION measure pack without the
             // FPU→PACK dest-dvalid handshake (WH/BH style).
             if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
 
-            DataFormat math_format     = static_cast<DataFormat>(formats.math);
-            DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-            if constexpr (is_fp32_dest_acc_en)
-            {
-                if (pack_src_format == DataFormat::Float32)
-                {
-                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-                }
-                else if (pack_src_format == DataFormat::Int32)
-                {
-                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-                }
-                else
-                {
-                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-                }
-            }
-            else
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-            }
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(
+                static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
 
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
                 num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
-            PROFILER_SYNC();
         }
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (!unpack_to_dest)
         {
-            ZONE_SCOPED("TILE_LOOP")
             if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
             {
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
             {
+                const std::uint32_t src_handshake_iters = LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM;
                 if constexpr (is_fp32_dest_acc_en)
                 {
-                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(src_handshake_iters);
                 }
                 else
                 {
-                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(LOOP_FACTOR * BLOCK_RT_DIM * BLOCK_CT_DIM);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(src_handshake_iters);
                 }
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -262,8 +227,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                 }
             }
-            PROFILER_SYNC();
         }
+        PROFILER_SYNC();
     }
 }
 
@@ -272,6 +237,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cpack_common.h"
+#include "llk_bfd_alloc.h"
 #include "llk_pack_common.h"
 #include "llk_pack_untilize.h"
 #include "params.h"
@@ -286,56 +252,53 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
-    std::uint32_t const buf_desc_id         = 31;
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // Match WH/BH PACK_ISOLATE and L1_CONGESTION: no math↔pack handshake;
         // pack from whatever is in dest.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
-            cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+            set_up_zero_dest_dvalid_handshake_for_pack();
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             if constexpr (unpack_to_dest)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+                set_up_unpack_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
             }
             else
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
             }
         }
 
-        tdma_descriptor_t tdma_desc;
-
+        std::uint8_t bfd_pack;
         if (tensor_shape.face_r_dim < ckernel::pack::PACR_STRIDE_OFFSET_ROWS)
         {
             // PACR_STRIDE quirk: tiny-tiles index L1 rows as tiles, so the BD is built with y_dim = 1.
-            tdma_desc = ckernel::trisc::construct_tdma_desc<ckernel::trisc::L1AccessMode::Strided>(
-                tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
+            bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, ckernel::trisc::L1AccessMode::Strided>(
+                tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         }
         else
         {
-            tdma_desc = ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
+            bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, ckernel::trisc::L1AccessMode::Continuous>(
+                tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         }
 
-        _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
+        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         if (tensor_shape.total_num_faces() == NUM_FACES)
         {
-            _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);
+            _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(bfd_pack, tensor_shape);
         }
         else
         {
-            _llk_pack_untilize_strided_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);
+            _llk_pack_untilize_strided_init_<FULL_CT_DIM, BLOCK_CT_DIM>(bfd_pack, tensor_shape);
         }
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         // _llk_pack_untilize_ packs one block ct_dim of tiles (one tile row) at a time.
         const std::uint32_t y_stride_external = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 
@@ -354,11 +317,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // and switches the packer to the other bank.
                     if (tensor_shape.total_num_faces() == NUM_FACES)
                     {
-                        _llk_pack_untilize_(0 /*dest_idx*/, y * y_stride_external);
+                        _llk_pack_untilize_set_dst_offset_(tensor_shape, y * y_stride_external);
+                        _llk_pack_untilize_(0 /*dest_idx*/, 0 /*l1_tile_idx*/);
                     }
                     else
                     {
-                        _llk_pack_untilize_strided_<FULL_CT_DIM>(buf_desc_id, tensor_shape, y * y_stride_external, 0 /*src_tile_idx*/);
+                        _llk_pack_untilize_strided_<FULL_CT_DIM>(
+                            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, y * y_stride_external, 0 /*src_tile_idx*/);
                     }
                 }
             }
@@ -371,11 +336,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     if (tensor_shape.total_num_faces() == NUM_FACES)
                     {
-                        _llk_pack_untilize_(0 /*dest_idx*/, y * y_stride_external);
+                        _llk_pack_untilize_set_dst_offset_(tensor_shape, y * y_stride_external);
+                        _llk_pack_untilize_(0 /*dest_idx*/, 0 /*l1_tile_idx*/);
                     }
                     else
                     {
-                        _llk_pack_untilize_strided_<FULL_CT_DIM>(buf_desc_id, tensor_shape, y * y_stride_external, 0 /*src_tile_idx*/);
+                        _llk_pack_untilize_strided_<FULL_CT_DIM>(
+                            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, y * y_stride_external, 0 /*src_tile_idx*/);
                     }
                     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }

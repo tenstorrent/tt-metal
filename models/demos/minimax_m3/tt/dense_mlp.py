@@ -14,11 +14,15 @@ moe/activation.apply_swiglu); anchor: transformers minimax_m3_vl MLP.
 from types import SimpleNamespace
 
 import ttnn
+from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
 
-from .moe.activation import apply_swiglu
+from .attention.operations import assert_sharded_residual_unpadded
+from .moe.activation import apply_swiglu_fused, swiglu
+from .moe.shared_overlap import shared_expert_program_configs
+from .residual import use_sharded_residual
 
 
 class DenseMLP:
@@ -33,11 +37,17 @@ class DenseMLP:
         ccl_manager=None,
         weight_dtype=ttnn.bfloat16,
         tensor_cache_path=None,
+        scatter_output=None,
     ):
+        """scatter_output: True => close with a TP reduce-scatter (output emb/tp, the sharded-residual
+        contract); False => all-reduce (output full emb). None derives it from the residual scheme.
+        Both call sites want the derived value — the dense layers 0-2 and the MoE layers' shared
+        expert — which is exactly why the shared expert stops paying its own all-gather when sharded."""
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
         self.ccl_manager = ccl_manager
         self.hidden_size = hf_config.hidden_size
+        self.scatter_output = use_sharded_residual() if scatter_output is None else scatter_output
         # apply_swiglu only reads .swiglu_limit and .alpha.
         self.swiglu_cfg = SimpleNamespace(
             swiglu_limit=getattr(hf_config, "swiglu_limit", 7.0),
@@ -61,6 +71,7 @@ class DenseMLP:
                 mesh_mapper=mapper,
                 cache_file_name=get_cache_file_name(tensor_cache_path, name),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_dump_mode=CACHE_DUMP_MODE,
             )
 
         if state_dict:
@@ -77,17 +88,60 @@ class DenseMLP:
         self.down_proj = _load("down_proj", down_w, row_mapper)
 
     def __call__(self, x):
+        return self.reduce(self.partial(x))
+
+    def partial(self, x, sub_device=None, keep_alive=None):
+        """down(swiglu(gate(x), up(x))) before the TP collective: each TP device's partial sum over its
+        intermediate shard.
+
+        sub_device: None -> ops pick their own grid. (SubDeviceId, CoreRangeSet) -> every op is confined to
+        that sub-device (2D matmul configs sized to its grid), for running concurrently with work on
+        another sub-device. Nothing is freed then: gate / up / act go to keep_alive, which the caller frees
+        once the sub-device manager is cleared.
+        """
+        if sub_device is not None:
+            return self._partial_on_sub_device(x, sub_device, keep_alive)
         with zone("gate_up_proj", FINE):
             gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat16)
             up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat16)
         with zone("swiglu", FINE):
-            act = apply_swiglu(gate, up, self.swiglu_cfg)  # clamped swigluoai (M3)
+            act = swiglu(gate, up, self.swiglu_cfg)  # clamped swigluoai (M3); consumes gate and up
         with zone("down_proj", FINE):
             out = ttnn.linear(act, self.down_proj, dtype=ttnn.bfloat16)
         act.deallocate(True)
-        # down is row-parallel: each TP device holds a partial sum over the intermediate
-        # shard -> all-reduce to complete the hidden output.
+        return out
+
+    def _partial_on_sub_device(self, x, sub_device, keep_alive):
+        assert keep_alive is not None, "a sub-device partial must hand its intermediates to keep_alive"
+        sd_id, cores = sub_device
+        gate_cfg, up_cfg, down_cfg = shared_expert_program_configs(cores, x, self.gate_proj, self.down_proj)
+        with zone("gate_up_proj", FINE):
+            gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat16, program_config=gate_cfg, sub_device_id=sd_id)
+            up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat16, program_config=up_cfg, sub_device_id=sd_id)
+        with zone("swiglu", FINE):
+            act = apply_swiglu_fused(gate, up, self.swiglu_cfg, sub_core_grids=cores)
+        with zone("down_proj", FINE):
+            out = ttnn.linear(act, self.down_proj, dtype=ttnn.bfloat16, program_config=down_cfg, sub_device_id=sd_id)
+        keep_alive.extend((gate, up, act))
+        return out
+
+    def reduce(self, out):
+        """The TP collective closing partial(): reduce-scatter (sharded residual) or all-reduce."""
+        # down is row-parallel: each TP device holds a partial sum over the intermediate shard, so a TP
+        # collective is required either way. Sharded residual -> reduce-scatter only (emb/tp out, which
+        # the caller adds straight into its residual); replicated residual -> full all-reduce (RS + AG).
         if self.mesh_config.tp > 1:
-            with zone("tp_allreduce"):
-                out = self.mesh_config.allreduce(out, self.ccl_manager, axis=self.mesh_config.tp_axis)
+            if self.scatter_output:
+                # Same guard attention's apply_reduce_scatter runs: a non-tile-aligned hidden/tp would
+                # land output-dim padding inside one TP column's residual slice after the scatter.
+                assert_sharded_residual_unpadded(self.mesh_config, self.hidden_size)
+                with zone("tp_reduce_scatter"):
+                    scattered = self.mesh_config.reduce_scatter(
+                        out, self.ccl_manager, dim=3, axis=self.mesh_config.tp_axis
+                    )
+                out.deallocate(True)
+                out = scattered
+            else:
+                with zone("tp_allreduce"):
+                    out = self.mesh_config.allreduce(out, self.ccl_manager, axis=self.mesh_config.tp_axis)
         return out

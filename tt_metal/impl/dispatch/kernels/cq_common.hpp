@@ -14,7 +14,6 @@
 
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
-#include <limits>
 #include <array>
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
@@ -64,8 +63,9 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
     return diff > 0;
 }
 
-// On Quasar, accesses to L1 semaphores must bypass the L1 D$ via the uncached alias so that
-// updates from other RISCs/cores are visible. No-op on BH/WH.
+// On Quasar, an L1 word shared with another agent must use the uncached alias, on both the writing and
+// the reading side: NoC writes and atomics do not snoop the DM caches, and the NIU reads TL1 directly.
+// No-op on BH/WH.
 constexpr FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
 #ifdef ARCH_QUASAR
     return addr + MEM_L1_UNCACHED_BASE;
@@ -90,11 +90,44 @@ FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
     return reinterpret_cast<volatile T tt_l1_ptr*>(l1_uncached_addr(addr));
 }
 
+// Credits dispatch and dispatch_s return to prefetch. A cached AMO only reaches the local node's
+// pool row, which works because Quasar FD is hd-only -- all three stages share one dispatch engine,
+// enforced by the #error in cq_prefetch.cpp. Emule has no cached pool.
+#if defined(ARCH_QUASAR) && !defined(TT_EMULE_USE_L1_POOL)
+constexpr SemScope fd_upstream_sem_scope = SemScope::DM_LOCAL_CACHED;
+#else
+constexpr SemScope fd_upstream_sem_scope = SemScope::LOCAL_NONATOMIC;
+#endif
+
+// Never store in a global: the constructor resolves through sem_l1_base, which firmware populates only
+// in firmware_config_init(). The token is built here, not host-generated, because only it takes a scope.
+template <uint32_t sem_id, SemScope scope>
+FORCE_INLINE auto fd_semaphore() {
+    return Semaphore<programmable_core_type>(SemaphoreBindingToken{sem_id, scope});
+}
+
+// The host's init write lands in the ordinary semaphore slot, not the pool, so copy it across. Remove this
+// if FD becomes a Metal 2.0 kernel -- the firmware's init_dm_local_cached() does it. A plain store is safe here:
+// a consumer returns credits only after consuming a command, which prefetch can only send after seeding.
+template <uint32_t sem_id>
+FORCE_INLINE void fd_seed_upstream_sem() {
+    if constexpr (fd_upstream_sem_scope == SemScope::DM_LOCAL_CACHED) {
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+        static_assert(
+            sem_id < MEM_SEM_CACHED_POOL_SIZE / MEM_SEM_CACHED_POOL_ROW, "semaphore id has no row in the cached pool");
+        *reinterpret_cast<uint32_t*>(
+            static_cast<uintptr_t>(MEM_SEM_CACHED_POOL_BASE) + sem_id * MEM_SEM_CACHED_POOL_ROW) =
+            *uncached_l1_ptr<uint32_t>(get_semaphore<programmable_core_type>(sem_id));
+#endif
+    }
+}
+
 #ifdef ARCH_QUASAR
 // Returns a pointer to the L1 worker completion counter for `stream`. Workers signal completion
 // into L1 (DISPATCH_MESSAGE_ADDR) on Quasar rather than NOC stream registers. `completion_counter_offset`
 // selects this CQ's range of counters, when multiple CQs share this dispatch core. `first_stream_used`
-// is the index of the first stream used by this CQ.
+// is the index of the first stream used by this CQ. Workers increment it with a NoC atomic, so every
+// access to it uses the uncached view.
 FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(
     uint32_t stream, uint32_t first_stream_used, uint32_t completion_counter_offset) {
     return uncached_l1_ptr<uint32_t>(
@@ -104,19 +137,103 @@ FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(
 
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
 
+#ifdef ARCH_BLACKHOLE
+// NOC_RET_ADDR_MID holds the high 32 bits of the destination and the with_state issuers only reprogram the low
+// 32, so a destination that carries past 2^32 part way through a transfer would keep writing into the previous
+// 4GB window.
+FORCE_INLINE void cq_noc_set_ret_addr_mid(uint32_t noc, uint32_t cmd_buf, uint64_t dst_addr) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_addr >> 32));
+}
+#endif
+
+// Compose a multicast destination from a host-packed NOC_MULTICAST_ENCODING
+// rectangle and a local offset. On XY backends this is the ordinary packed
+// composition. Under ATT a packed rectangle must not go through
+// get_noc_addr_helper.
+FORCE_INLINE uint64_t cq_mcast_noc_addr(uint32_t packed_rect, uint64_t offset) {
+#if defined(NOC_ATT_ENABLED)
+    return noc_v3_cq_packed_mcast_base(packed_rect) | (offset & NOC_V3_CQ_MCAST_LOCAL_MASK);
+#else
+    return get_noc_addr_helper(packed_rect, offset);
+#endif
+}
+
+#if defined(NOC_ATT_ENABLED)
+// Stateful CQ reads whose source is a bank id. The address backend turns the bank id
+// into the operand's base (under ATT a DRAM bank maps straight to its selector, with no
+// table search). So the command-queue kernels can name DRAM and L1 banks by bank number
+// and let the address backend produce the address, instead of naming them by coordinates
+// and converting. These sit here, not in the V3 API header, because the backend and the
+// bank tables are only available once the dataflow address layer has been included.
+template <bool is_dram>
+inline __attribute__((always_inline)) uint64_t noc_v3_cq_bank_base(uint32_t bank, uint8_t noc) {
+    return noc_address_backend::bank_address<is_dram>(bank, 0, noc);
+}
+
+// The split-source noc_read_with_state with the source base taken from a bank id.
+// Kept as its own function so the bank resolve only happens under the NOC flag.
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    bool is_dram,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT>
+inline __attribute__((always_inline)) void noc_read_with_state_bank(
+    uint32_t noc, uint32_t bank, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+
+    if constexpr (flags & CQ_NOC_FLAG_SRC) {
+        noc_v3_cq_state[cmd_buf].src_local = src_addr;
+    }
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        noc_v3_cq_state[cmd_buf].src_base = noc_v3_cq_bank_base<is_dram>(bank, noc);
+    }
+    if constexpr (flags & (CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC)) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf,
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8,
+            noc_v3_cq_state[cmd_buf].src_base | noc_v3_cq_state[cmd_buf].src_local);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_DST) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, noc_v3_local_operand(dst_addr));
+    }
+    if constexpr (flags & CQ_NOC_FLAG_LEN) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, size);
+    }
+    if constexpr (send) {
+        __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+        noc_reads_num_issued[noc] += 1;
+    }
+}
+#endif  // NOC_ATT_ENABLED
+
 template <
     enum CQNocFlags flags,
     enum CQNocWait wait = CQ_NOC_WAIT,
     enum CQNocSend send = CQ_NOC_SEND,
     uint32_t cmd_buf = NCRISC_WR_CMD_BUF,
-    bool update_counters = false>
+    bool update_counters = false,
+    bool set_ret_mid = false>
 FORCE_INLINE void cq_noc_async_write_with_state(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
+    static_assert(!set_ret_mid || wait, "set_ret_mid writes NOC_RET_ADDR_MID, which needs the ready wait first");
     if constexpr (wait) {
         WAYPOINT("CNSW");
         while (!noc_cmd_buf_ready(noc, cmd_buf));
         WAYPOINT("CNSD");
     }
+
+#ifdef ARCH_BLACKHOLE
+    // Only for callers whose MID comes from this dst_addr. A caller that points MID somewhere else, such as a
+    // PCIe batch opened by cq_noc_async_write_init_state_pcie, must leave this off or its routing is lost.
+    // The command buffer has to be idle to accept this, which is what the wait above guarantees.
+    if constexpr (set_ret_mid) {
+        cq_noc_set_ret_addr_mid(noc, cmd_buf, dst_addr);
+    }
+#endif
 
     noc_write_with_state<DM_DEDICATED_NOC, cmd_buf, flags, CQ_NOC_send, CQ_NOC_wait, false>(
         noc, src_addr, dst_addr, size, ndests);
@@ -158,21 +275,30 @@ FORCE_INLINE void cq_noc_async_wwrite_with_state(
 
 // More generic version of cq_noc_async_write_with_state: Allows writing an arbitrary amount of data, when the NOC
 // config (dst_noc, VC..) have been specified.
+// flush_last_transfer sets the flush packet tag on the final transfer so that a credit atomic issued after
+// this call -- typically from CBWriter::release_pages -- cannot commit to L1 ahead of the payload.
+// No-op on tt-1xx, which has no packet tags.
+
+// send is exposed so a test can drive the address walk without putting traffic on the wire. Production callers
+// leave it at CQ_NOC_SEND.
 template <
     bool write_last_packet = true,
     bool update_counters = false,
     enum CQNocWait wait_first = CQ_NOC_WAIT,
-    uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
+    uint32_t cmd_buf = NCRISC_WR_CMD_BUF,
+    bool flush_last_transfer = false,
+    enum CQNocSend send = CQ_NOC_SEND,
+    bool set_ret_mid = false>
 inline uint32_t cq_noc_async_write_with_state_any_len(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
     if (size > NOC_MAX_BURST_SIZE) {
-        cq_noc_async_write_with_state<CQ_NOC_SnDL, wait_first, CQ_NOC_SEND, cmd_buf, update_counters>(
+        cq_noc_async_write_with_state<CQ_NOC_SnDL, wait_first, send, cmd_buf, update_counters, set_ret_mid>(
             src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests);
         src_addr += NOC_MAX_BURST_SIZE;
         dst_addr += NOC_MAX_BURST_SIZE;
         size -= NOC_MAX_BURST_SIZE;
         while (size > NOC_MAX_BURST_SIZE) {
-            cq_noc_async_write_with_state<CQ_NOC_SnDl, CQ_NOC_WAIT, CQ_NOC_SEND, cmd_buf, update_counters>(
+            cq_noc_async_write_with_state<CQ_NOC_SnDl, CQ_NOC_WAIT, send, cmd_buf, update_counters, set_ret_mid>(
                 src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests, noc);
             src_addr += NOC_MAX_BURST_SIZE;
             dst_addr += NOC_MAX_BURST_SIZE;
@@ -180,10 +306,24 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
         }
     }
     if constexpr (write_last_packet) {
-        cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, cmd_buf, update_counters>(
+#if defined(ARCH_QUASAR)
+        if constexpr (flush_last_transfer) {
+            noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/true);
+        }
+#endif
+        cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, send, cmd_buf, update_counters, set_ret_mid>(
             src_addr, dst_addr, size, ndests, noc);
+#if defined(ARCH_QUASAR)
+        if constexpr (flush_last_transfer) {
+            noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/false);
+        }
+#endif
         return 0;
     } else {
+        static_assert(
+            !flush_last_transfer,
+            "flush_last_transfer requires write_last_packet: this call does not issue the final transfer, so there "
+            "is nothing to tag here. Tag it at the call that does.");
         return size;
     }
 }
@@ -206,6 +346,32 @@ FORCE_INLINE void cq_noc_async_write_init_state(
 
     noc_write_init_state<cmd_buf, cmd_flags>(noc, vc);
     cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(src_addr, dst_addr, size, ndests);
+}
+
+// Same as cq_noc_async_write_init_state, but for a destination routed through the PCIe core. The with_state
+// issuers do not program NOC_RET_ADDR_MID, so the routing bit is set once here and stays for the whole
+// batch. Pair every call with noc_async_write_clear_pcie_state on the same command buffer.
+template <uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
+FORCE_INLINE void cq_noc_async_write_init_state_pcie(uint64_t dst_noc_addr, uint8_t noc = noc_index) {
+#ifdef ARCH_BLACKHOLE
+    WAYPOINT("CNIW");
+    uint32_t heartbeat = 0;
+    while (!noc_cmd_buf_ready(noc, cmd_buf)) {
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+    }
+    WAYPOINT("CNID");
+
+    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
+
+    noc_write_init_state<cmd_buf, CQ_NOC_mkp>(noc, NOC_UNICAST_WRITE_VC);
+    noc_cmd_buf_set_ret_addr_mid_pcie(noc, cmd_buf, dst_noc_addr);
+    NOC_CMD_BUF_WRITE_REG(
+        noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+#else
+    // Only Blackhole keeps PCIe routing in a MID register that the with_state issuers leave alone, so
+    // everywhere else the ordinary init_state already programs the routing.
+    cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, cmd_buf>(0, dst_noc_addr, 0, 1, noc);
+#endif
 }
 // Similar to the above function but this one takes noc-xy coordinates as a separate argument to permit 64-bit
 // addressing at NOC tile
@@ -309,6 +475,8 @@ FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     WAYPOINT("TAPD");
 }
 
+// my_sem_scope applies only to my_sem_id, the credits a consumer returns here; downstream_sem_id is
+// always reached over the NoC.
 template <
     uint32_t my_sem_id,
     uint8_t noc_idx,
@@ -316,24 +484,20 @@ template <
     uint32_t downstream_sem_id,
     uint32_t buffer_base = 0,
     uint32_t buffer_end = 0,
-    uint32_t buffer_page_size = 0>
+    uint32_t buffer_page_size = 0,
+    SemScope my_sem_scope = SemScope::LOCAL_NONATOMIC>
 class CBWriter {
 public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
-
-        // Ensure last sem_inc has landed
-        noc_async_atomic_barrier();
+        auto my_sem = fd_semaphore<my_sem_id, my_sem_scope>();
 
         WAYPOINT("DAPW");
         // Use a wrapping compare here to compare distance
         // Required for trace which steals downstream credits and may make the value negative
         uint32_t heartbeat = 0;
         do {
-            invalidate_l1_cache();
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-        } while (wrap_gt(n, additional_count + *sem_addr));
+        } while (wrap_gt(n, additional_count + my_sem.value()));
         WAYPOINT("DAPD");
         additional_count -= n;
     }
@@ -341,17 +505,15 @@ public:
     // Wait for all n pages to be available. If the consumer is using blocks, it may never return all pages at once
     // unless it calls release_all_pages to return partially-consumed blocks.
     FORCE_INLINE void wait_all_pages(uint32_t n) {
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
+        auto my_sem = fd_semaphore<my_sem_id, my_sem_scope>();
 
         // Downstream component sets the MSB as a terminate bit
         // Mask that off to avoid a race between the sem count and terminate
         n &= 0x7fffffff;
 
         WAYPOINT("TAPW");
-        do {
-            invalidate_l1_cache();
-        } while (((additional_count + *sem_addr) & 0x7fffffff) != n);  // mask off terminate bit
+        while (((additional_count + my_sem.value()) & 0x7fffffff) != n) {  // mask off terminate bit
+        }
         WAYPOINT("TAPD");
     }
 
@@ -397,12 +559,10 @@ public:
             }
         }
 #endif
-#ifdef ARCH_QUASAR
-        Semaphore<programmable_core_type>(downstream_sem_id).up(n);
-#else
         noc_semaphore_inc(
-            get_noc_addr_helper(downstream_noc_xy, get_semaphore<programmable_core_type>(downstream_sem_id)), n, noc_idx);
-#endif
+            get_noc_addr_helper(downstream_noc_xy, get_semaphore<programmable_core_type>(downstream_sem_id)),
+            n,
+            noc_idx);
     }
 
     uint32_t additional_count{0};
@@ -434,8 +594,8 @@ template <
 class CBReader {
 public:
     FORCE_INLINE void wait_all_pages() {
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
+        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
 
         uint32_t to_wait_for = upstream_count_;
 
@@ -478,8 +638,8 @@ protected:
     template <typename T = NoTelemetryBlockGuard>
     FORCE_INLINE uint32_t acquire_pages() {
         static_assert(is_telemetry_block_guard<T>::value, "T must be a telemetry block guard");
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
+        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
 
         if (local_count_ == upstream_count_) {
             WAYPOINT("UAPW");
@@ -703,9 +863,31 @@ constexpr uint32_t l1_to_local_cache_copy_chunk = 6;
 // NOTE: CAREFUL USING THIS FUNCTION
 // It is call "careful_copy" because you need to be careful...
 // It copies beyond count by up to 5 elements make sure src and dst addresses are safe
-template <uint32_t l1_to_local_cache_copy_chunk, uint32_t l1_cache_elements_rounded>
+// first_line_invalidated says the caller already invalidated the line holding l1_ptr, so this skips it. Set it
+// only when the source cannot have wrapped away from the command header whose invalidate covers that line.
+template <
+    uint32_t l1_to_local_cache_copy_chunk,
+    uint32_t l1_cache_elements_rounded,
+    bool invalidate_source = false,
+    bool first_line_invalidated = false>
 FORCE_INLINE void careful_copy_from_l1_to_local_cache(
     volatile uint32_t tt_l1_ptr* l1_ptr, uint32_t count, uint32_t* l1_cache) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    if constexpr (invalidate_source) {
+        // The source arrived over the NoC, which does not snoop, so a cached copy left over from an earlier
+        // ring wrap is stale. Range covers the up-to-chunk-1 elements this function reads past count.
+        uintptr_t start = reinterpret_cast<uintptr_t>(l1_ptr);
+        uint32_t size = sizeof(uint32_t) * (count + l1_to_local_cache_copy_chunk - 1);
+        if constexpr (first_line_invalidated) {
+            // Shrink by what is skipped, not just advance: keeping the size would push the range one line
+            // past the array and hand back the line just saved. A short array can skip past its own end.
+            const uint32_t skipped = round_up_pow2(start, L2_CACHE_LINE_SIZE) - start;
+            start += skipped;
+            size = skipped < size ? size - skipped : 0;
+        }
+        invalidate_l2_cache_range(start, size);
+    }
+#endif
     uint32_t n = 0;
     ASSERT(l1_to_local_cache_copy_chunk == 6);
     ASSERT(count <= l1_cache_elements_rounded);
@@ -732,10 +914,15 @@ FORCE_INLINE uint32_t set_sub_device_worker_counts(
     std::array<uint32_t, max_num_worker_sems>& workers_per_sub_device,
     volatile tt_l1_ptr uint32_t* sub_device_worker_counts_update,
     uintptr_t dispatch_telemetry_base) {
-    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
+    volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
     uint32_t num_sub_devices = cmd->set_sub_device_worker_counts.num_sub_devices;
     ASSERT(num_sub_devices <= max_num_worker_sems);
-    volatile tt_l1_ptr uint32_t* data_ptr = uncached_l1_ptr<uint32_t>(cmd_ptr + sizeof(CQDispatchCmd));
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Reaches past the header window invalidated at command entry.
+    invalidate_l2_cache_range(cmd_ptr + sizeof(CQDispatchCmd), num_sub_devices * sizeof(uint32_t));
+#endif
+    volatile tt_l1_ptr uint32_t* data_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd_ptr + sizeof(CQDispatchCmd));
 
     static uint32_t local_sub_device_worker_counts_update = 0;
 
@@ -763,4 +950,18 @@ FORCE_INLINE uint32_t set_sub_device_worker_counts(
     *sub_device_worker_counts_update = ++local_sub_device_worker_counts_update;
     uint32_t command_size = sizeof(CQDispatchCmd) + num_sub_devices * sizeof(uint32_t);
     return round_up_pow2(command_size, L1_ALIGNMENT);
+}
+
+// Single wide load of a field in a `packed` struct, which the compiler would otherwise reassemble from
+// byte loads (packed sets struct alignment to 1).
+//
+// The `void*` parameter is required: taking the address of a packed member as `T*` trips
+// -Waddress-of-packed-member, which this build promotes to an error.
+//
+// Unchecked caller obligations: T must match the field's width (a narrower T silently truncates), and
+// the field must be naturally aligned.
+template <typename T>
+FORCE_INLINE T load_aligned(const volatile void* ptr) {
+    ASSERT((reinterpret_cast<uintptr_t>(ptr) & (alignof(T) - 1)) == 0);
+    return *reinterpret_cast<const volatile T*>(ptr);
 }

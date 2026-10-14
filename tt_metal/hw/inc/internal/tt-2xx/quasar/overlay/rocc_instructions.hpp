@@ -7,7 +7,7 @@
 
 #include <stdint.h>
 #include "xcustom_test.hpp"
-#include "meta/registers/overlay_reg.h"
+#include "registers/overlay_reg.h"
 /////////////////
 // MISC
 /////////////////

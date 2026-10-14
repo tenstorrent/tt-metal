@@ -28,6 +28,8 @@
 
 namespace tt::tt_metal {
 class IDevice;
+class MetalContext;
+class MetalEnvImpl;
 class ThreadPool;
 }  // namespace tt::tt_metal
 
@@ -60,7 +62,7 @@ struct SyncInfo {
 
 struct FabricEventMarkers {
     std::vector<tracy::TTDeviceMarker> fabric_write_markers;
-    tracy::TTDeviceMarker fabric_routing_fields_marker;
+    tracy::TTDeviceMarker fabric_routing_metadata_marker;
     tracy::TTDeviceMarker local_noc_write_marker;
     std::optional<tracy::TTDeviceMarker> fabric_mux_marker;
 };
@@ -73,8 +75,10 @@ private:
     // Device ID
     ChipId device_id{};
 
-    // ContextID extracted from the device
-    ContextId context_id;
+    // The context and env this profiler's device belongs to, resolved once at construction. A DeviceProfiler is owned
+    // by the ProfilerStateManager, which MetalContext owns, so both outlive it.
+    MetalContext& ctx_;
+    MetalEnvImpl& env_;
 
     // Device frequency
     int device_core_frequency{};
@@ -123,6 +127,7 @@ private:
 
     // Storage for trace ids that are currently being recorded
     std::unordered_set<uint32_t> traces_being_recorded;
+    std::unordered_set<uint32_t> named_lane_threads;
 
     // Runtime ids associated with each trace
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>> runtime_ids_per_trace;
@@ -300,6 +305,9 @@ public:
     // Freshen device logs
     void freshDeviceLog();
 
+    // Get the output dir for noc trace data
+    const std::filesystem::path& getNocTraceDataOutputDir() const { return noc_trace_data_output_dir; }
+
     // Change the output dir of device profile logs
     void setOutputDir(const std::string& new_output_dir);
 
@@ -320,10 +328,6 @@ public:
         ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {},
         const std::optional<std::map<CoreCoord, std::set<tracy::RiscType>>>& riscs_to_include = {});
-
-    void dumpRoutingInfo() const;
-
-    void dumpClusterCoordinates() const;
 
     // Dump device results to files and tracy
     void dumpDeviceResults(bool is_mid_run_dump = false);
@@ -373,14 +377,14 @@ public:
     void pollDebugDumpResults(IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool is_final_poll);
 };
 
-bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device, ContextId context_id);
+bool useFastDispatch(MetalContext& ctx, distributed::MeshDevice* mesh_device, IDevice* device);
 
 void writeToCoreControlBuffer(
+    MetalContext& ctx,
     distributed::MeshDevice* mesh_device,
     IDevice* device,
     const CoreCoord& virtual_core,
     const std::vector<uint32_t>& data,
-    bool force_slow_dispatch,
-    ContextId context_id);
+    bool force_slow_dispatch);
 
 }  // namespace tt::tt_metal

@@ -6,6 +6,19 @@
 
 #include "api/dataflow/noc.h"
 #include "api/tensor/tensor_accessor.h"
+#include "noc_address_backend.h"
+
+// Op-to-op R/W inference: these endpoints read/write their accessor's tensor (api/dataflow/buf_rw_note.h).
+namespace tt_buf_rw {
+template <typename Accessor>
+struct endpoint<PageView<Accessor>> : endpoint<Accessor> {};
+template <typename Accessor>
+struct endpoint<ShardView<Accessor>> : endpoint<Accessor> {};
+template <typename Accessor>
+struct endpoint<tensor_accessor::AccessorPage<Accessor>> : endpoint<Accessor> {};
+template <typename Accessor>
+struct endpoint<tensor_accessor::ShardPage<Accessor>> : endpoint<Accessor> {};
+}  // namespace tt_buf_rw
 
 // TODO(#29597): The traits classes for TensorAccessor and related classes could be moved to tensor_accessor.h
 // (need to break the include dependency dataflow_api.h -> tensor_accessor.h.).
@@ -22,20 +35,22 @@ struct noc_traits_t<TensorAccessor<DSpecT>> {
     template <Noc::AddressType address_type>
     static auto src_addr(const TensorAccessor<DSpecT>& src, const Noc& noc, const src_args_type& args)
         -> std::conditional_t<address_type == Noc::AddressType::LOCAL_L1, uint32_t, uint64_t> {
-        uint64_t noc_addr = src.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
+        uint64_t noc_addr =
+            tensor_accessor::detail::transfer_noc_addr(src, args.page_id, args.offset_bytes, noc.get_noc_id());
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             ASSERT(noc.is_local_addr(noc_addr));
-            return static_cast<uint32_t>(noc_addr);
+            return noc_address_backend::extract_local_address(noc_addr);
         }
         return noc_addr;
     }
     template <Noc::AddressType address_type>
     static auto dst_addr(const TensorAccessor<DSpecT>& dst, const Noc& noc, const dst_args_type& args)
         -> std::conditional_t<address_type == Noc::AddressType::LOCAL_L1, uint32_t, uint64_t> {
-        uint64_t noc_addr = dst.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
+        uint64_t noc_addr =
+            tensor_accessor::detail::transfer_noc_addr(dst, args.page_id, args.offset_bytes, noc.get_noc_id());
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             ASSERT(noc.is_local_addr(noc_addr));
-            return static_cast<uint32_t>(noc_addr);
+            return noc_address_backend::extract_local_address(noc_addr);
         }
         return noc_addr;
     }
@@ -54,20 +69,22 @@ struct noc_traits_t<PageView<Accessor>> {
     template <Noc::AddressType address_type>
     static auto src_addr(const PageView<Accessor>& src, const Noc& noc, const src_args_type& args)
         -> std::conditional_t<address_type == Noc::AddressType::LOCAL_L1, uint32_t, uint64_t> {
-        uint64_t noc_addr = src.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
+        uint64_t noc_addr =
+            tensor_accessor::detail::transfer_noc_addr(src.accessor, args.page_id, args.offset_bytes, noc.get_noc_id());
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             ASSERT(noc.is_local_addr(noc_addr));
-            return static_cast<uint32_t>(noc_addr);
+            return noc_address_backend::extract_local_address(noc_addr);
         }
         return noc_addr;
     }
     template <Noc::AddressType address_type>
     static auto dst_addr(const PageView<Accessor>& dst, const Noc& noc, const dst_args_type& args)
         -> std::conditional_t<address_type == Noc::AddressType::LOCAL_L1, uint32_t, uint64_t> {
-        uint64_t noc_addr = dst.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
+        uint64_t noc_addr =
+            tensor_accessor::detail::transfer_noc_addr(dst.accessor, args.page_id, args.offset_bytes, noc.get_noc_id());
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             ASSERT(noc.is_local_addr(noc_addr));
-            return static_cast<uint32_t>(noc_addr);
+            return noc_address_backend::extract_local_address(noc_addr);
         }
         return noc_addr;
     }
@@ -86,22 +103,24 @@ struct noc_traits_t<ShardView<Accessor>> {
     template <Noc::AddressType address_type>
     static auto src_addr(const ShardView<Accessor>& src, const Noc& noc, const src_args_type& args)
         -> std::conditional_t<address_type == Noc::AddressType::LOCAL_L1, uint32_t, uint64_t> {
-        uint64_t noc_addr = src.get_noc_addr(args.shard_id, args.offset_bytes, noc.get_noc_id());
+        uint64_t noc_addr = tensor_accessor::detail::transfer_shard_noc_addr(
+            src.accessor, args.shard_id, args.offset_bytes, noc.get_noc_id());
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             ASSERT(src.is_local_shard(args.shard_id, noc.get_noc_id()));
             ASSERT(noc.is_local_addr(noc_addr));
-            return static_cast<uint32_t>(noc_addr);
+            return noc_address_backend::extract_local_address(noc_addr);
         }
         return noc_addr;
     }
     template <Noc::AddressType address_type>
     static auto dst_addr(const ShardView<Accessor>& dst, const Noc& noc, const dst_args_type& args)
         -> std::conditional_t<address_type == Noc::AddressType::LOCAL_L1, uint32_t, uint64_t> {
-        uint64_t noc_addr = dst.get_noc_addr(args.shard_id, args.offset_bytes, noc.get_noc_id());
+        uint64_t noc_addr = tensor_accessor::detail::transfer_shard_noc_addr(
+            dst.accessor, args.shard_id, args.offset_bytes, noc.get_noc_id());
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             ASSERT(dst.is_local_shard(args.shard_id, noc.get_noc_id()));
             ASSERT(noc.is_local_addr(noc_addr));
-            return static_cast<uint32_t>(noc_addr);
+            return noc_address_backend::extract_local_address(noc_addr);
         }
         return noc_addr;
     }
@@ -121,7 +140,7 @@ struct noc_traits_t<tensor_accessor::Page> {
         uint64_t noc_addr = src.noc_addr() + args.offset_bytes;
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             ASSERT(noc.is_local_addr(noc_addr));
-            return static_cast<uint32_t>(noc_addr);
+            return noc_address_backend::extract_local_address(noc_addr);
         }
         return noc_addr;
     }
@@ -131,11 +150,16 @@ struct noc_traits_t<tensor_accessor::Page> {
         uint64_t noc_addr = dst.noc_addr() + args.offset_bytes;
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             ASSERT(noc.is_local_addr(noc_addr));
-            return static_cast<uint32_t>(noc_addr);
+            return noc_address_backend::extract_local_address(noc_addr);
         }
         return noc_addr;
     }
 };
+
+template <typename Accessor>
+struct noc_traits_t<tensor_accessor::AccessorPage<Accessor>> : noc_traits_t<tensor_accessor::Page> {};
+template <typename Accessor>
+struct noc_traits_t<tensor_accessor::ShardPage<Accessor>> : noc_traits_t<tensor_accessor::Page> {};
 
 template <>
 struct noc_traits_t<AbstractTensorAccessorWrapper> {
@@ -154,7 +178,7 @@ struct noc_traits_t<AbstractTensorAccessorWrapper> {
         uint64_t noc_addr = src.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             ASSERT(noc.is_local_addr(noc_addr));
-            return static_cast<uint32_t>(noc_addr);
+            return noc_address_backend::extract_local_address(noc_addr);
         }
         return noc_addr;
     }
@@ -165,7 +189,7 @@ struct noc_traits_t<AbstractTensorAccessorWrapper> {
         uint64_t noc_addr = dst.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             ASSERT(noc.is_local_addr(noc_addr));
-            return static_cast<uint32_t>(noc_addr);
+            return noc_address_backend::extract_local_address(noc_addr);
         }
         return noc_addr;
     }

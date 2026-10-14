@@ -81,16 +81,56 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     const tt::DataFormat mask_cb_data_format =
         has_mask ? datatype_to_dataformat_converter(tensor_args.mask.value().dtype()) : tt::DataFormat::Float16_b;
     const std::uint32_t mask_tile_size = tt::tile_size(mask_cb_data_format);
+    // The writer fills the padding tile with bfloat16 -inf whatever the mask dtype.
+    const std::uint32_t mask_padded_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
-    const tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    // The intermediate buffers split into two groups with different needs, and treating them alike
+    // is what makes fp32 accumulation look expensive in L1.
+    //
+    // The bulk buffers - EXPS, X, SCALE_MASK - are Wt deep in the small kernel and capped near 80
+    // entries in the large one. They hold one value per element, so widening them buys element
+    // precision, which is not what is wrong, and costs L1 that grows with the row length. Widening
+    // them also pulls the use_large_kernel switch below down to shorter rows. They stay 16-bit. A
+    // float32 input keeps the wide buffers it has always had, since narrowing those would throw
+    // away input precision rather than accumulator precision.
+    //
+    // The sum accumulators - RECIP_SUM_EXPS, its PREV_REDUCE ping-pong partner in the large kernel,
+    // and RECIP - are one entry each and carry the running sum, which round-trips through L1 once
+    // per pass. That round trip is exactly where a 16-bit store undoes what an fp32 Dest just
+    // earned, and one entry of it costs 2 KB. They follow fp32_dest_acc_en.
+    //
+    // MAX and PREV_MAX stay with the bulk group. They are subtracted from the bulk buffers for
+    // numeric stability, and fp32 there against 16-bit operands widened the per-row spread at
+    // w <= 4096 (worst row 0.9916 -> 0.9648) for no gain in the mean.
+    //
+    // All of the above is for the defaulted compute config. A caller that passes fp32_dest_acc_en
+    // explicitly keeps Float32 bulk buffers, as before fp32 accumulation became the default: an
+    // explicit accurate config (e.g. HiFi4, approx off, fp32 acc) relies on exp(x - max) staying
+    // fp32 until the final multiply, and its program, including the use_large_kernel switch below,
+    // must not change underneath it.
+    const bool bulk_fp32 = fp32_dest_acc_en && (in0_cb_data_format == tt::DataFormat::Float32 ||
+                                                attributes.has_explicit_compute_kernel_config);
+    const tt::DataFormat im_cb_data_format = bulk_fp32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const std::uint32_t im_tile_size = tt::tile_size(im_cb_data_format);
 
-    const tt::DataFormat sum_scaler_cb_data_format =
-        im_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    const std::uint32_t sum_scaler_tile_size = tt::tile_size(sum_scaler_cb_data_format);
+    const tt::DataFormat acc_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const std::uint32_t acc_tile_size = tt::tile_size(acc_cb_data_format);
 
-    std::uint32_t block_size =
-        fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
+    const tt::DataFormat sum_scaler_cb_data_format = acc_cb_data_format;
+    const std::uint32_t sum_scaler_tile_size = acc_tile_size;
+
+    // Fixed block size that maximizes dest register usage: 4 with fp32 accumulation, 8 otherwise.
+    // Widths not divisible by block_size are handled by the kernels via a clamped final block.
+    std::uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
+
+    // Prefer an exact divisor of Wt when it costs no extra register batches: uniform blocks keep every
+    // CB capacity a multiple of the block, so no fifo needs realignment between tile rows.
+    if (Wt % block_size != 0) {
+        const std::uint32_t divisor = static_cast<std::uint32_t>(tt::tt_metal::find_max_divisor(Wt, block_size));
+        if (tt::div_up(Wt, block_size) == Wt / divisor) {
+            block_size = divisor;
+        }
+    }
 
     // calc_numeric_stable() in softmax.cpp uses indexed access over Wt tiles of its input CB and a
     // WaitUpfrontNoPop reduce, so whichever CB it consumes must be sized to Wt:
@@ -115,9 +155,8 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     std::uint32_t im2_t = 1;
     std::uint32_t im4_t = tt::div_up(Wt, block_size) * block_size;
 
-    // cb_exps - keeps exps in tt::CBIndex in L1 to avoid recomputing
+    // cb_exps - keeps exps in tt::CBIndex in L1 to avoid recomputing (rounded up to a multiple of block_size)
     std::uint32_t im0_t = block_size * tt::div_up(Wt, block_size);
-    TT_FATAL(im0_t == Wt, "im0_t: {} == Wt: {}, (Non user error)", im0_t, Wt);
 
     // used for buffering scale-mask
     // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
@@ -148,13 +187,17 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         im4_t = large_kernel_cb_size;
         im0_t = large_kernel_cb_size;
         im3_t = large_kernel_cb_size;
+        // c_4 is streamed a pass at a time too, and both large kernels align its pad to cb_length_t.
+        in4_t = large_kernel_cb_size;
     }
     if (!use_large_kernel) {
         TT_FATAL(
-            im3_t == Wt + block_size, "im3_t {} == Width in tiles {} + num_dest_regs to use {}", im3_t, Wt, block_size);
+            im3_t >= Wt + block_size,
+            "im3_t {} must be >= Width in tiles {} + num_dest_regs to use {}",
+            im3_t,
+            Wt,
+            block_size);
     }
-    TT_FATAL(Wt % block_size == 0, "Wt: {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
-    TT_FATAL((block_size != -1), "Wt: {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
     TT_FATAL(
         im0_t % block_size == 0,
         "Size of cb: {} must be divisible by the size of block used by the reader and compute kernel.",
@@ -218,15 +261,15 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         .data_format_metadata = out0_cb_data_format});
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = RECIP_SUM_EXPS,
-        .entry_size = im_tile_size,
+        .entry_size = acc_tile_size,
         .num_entries = im1_t,
-        .data_format_metadata = im_cb_data_format});
+        .data_format_metadata = acc_cb_data_format});
     if (use_large_kernel) {
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = PREV_REDUCE,
-            .entry_size = im_tile_size,
+            .entry_size = acc_tile_size,
             .num_entries = im1_t,
-            .data_format_metadata = im_cb_data_format});
+            .data_format_metadata = acc_cb_data_format});
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = PREV_MAX,
             .entry_size = im_tile_size,
@@ -234,9 +277,9 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
             .data_format_metadata = im_cb_data_format});
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = RECIP,
-            .entry_size = im_tile_size,
+            .entry_size = acc_tile_size,
             .num_entries = im1_t,
-            .data_format_metadata = im_cb_data_format});
+            .data_format_metadata = acc_cb_data_format});
     }
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = MAX_SCALER,
@@ -272,9 +315,9 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     }
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = MASK_PADDED,
-        .entry_size = mask_tile_size,
+        .entry_size = mask_padded_tile_size,
         .num_entries = in5_t,
-        .data_format_metadata = mask_cb_data_format});
+        .data_format_metadata = tt::DataFormat::Float16_b});
     if (attributes.numeric_stable) {
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = MAX,
@@ -341,6 +384,13 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         }
     }
     KernelSpec::CompileTimeArgs reader_cta;
+    if (use_large_kernel) {
+        // The large reader pads in0/fused_attn so each streamed pass ends on the fifo base.
+        reader_cta.insert({"dfb_length", dfb_length});
+    } else {
+        // The small reader pads in0 up to this capacity so its fifo ends each tile row on the base.
+        reader_cta.insert({"in0_t", in0_t});
+    }
     if (has_mask && attributes.is_causal_mask) {
         const std::uint32_t num_tiles_causal_mask = tensor_args.mask.value().padded_shape()[-1] *
                                                     tensor_args.mask.value().padded_shape()[-2] / tile_width /
@@ -357,7 +407,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         .tensor_bindings = reader_tensor_bindings,
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ---- Writer kernel ----
@@ -373,8 +423,8 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
                  .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"}},
         .compile_time_args = {{"num_datum_padded", num_datum_padded}, {"tile_hw", tile_height * tile_width}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset", "blk", "mask_padded_data"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset", "blk", "mask_padded_data", "Wt"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // for broadcasting in H direction we need to
@@ -438,20 +488,23 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
 
     // Compute hardware config (Style A). Legacy defaulted unpack_to_dest_mode (=> UnpackToSrc); Metal 2.0
     // requires an explicit entry for every Float32 DFB the compute consumes under enable_32_bit_dest.
-    auto compute_hw = ttnn::to_compute_hardware_config(arch, attributes.compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(attributes.compute_kernel_config);
     if (fp32_dest_acc_en) {
-        auto& gen1 = std::get<ComputeGen1Config>(compute_hw);
+        auto& gen1 = compute_hw;
         auto add_unpack = [&](const DFBSpecName& name, tt::DataFormat fmt) {
             if (fmt == tt::DataFormat::Float32) {
                 gen1.unpack_modes.insert({name, tt::tt_metal::UnpackMode::UnpackToSrc});
             }
         };
+        // Each DFB registers under the format it was declared with. The sum accumulators
+        // follow acc_cb_data_format, the bulk buffers follow im_cb_data_format, and the two
+        // differ for a non-fp32 input.
         add_unpack(IN0, in0_cb_data_format);
         add_unpack(MAX_SCALER, max_scaler_cb_data_format);
         add_unpack(SUM_SCALER, sum_scaler_cb_data_format);
-        add_unpack(MASK_PADDED, mask_cb_data_format);
+        add_unpack(MASK_PADDED, tt::DataFormat::Float16_b);
         add_unpack(EXPS, im_cb_data_format);
-        add_unpack(RECIP_SUM_EXPS, im_cb_data_format);
+        add_unpack(RECIP_SUM_EXPS, acc_cb_data_format);
         if (has_mask) {
             add_unpack(FUSED_SCALE, tt::DataFormat::Float16_b);
             add_unpack(FUSED_ATTN, mask_cb_data_format);
@@ -464,10 +517,16 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
             add_unpack(X, im_cb_data_format);
         }
         if (use_large_kernel) {
-            add_unpack(PREV_REDUCE, im_cb_data_format);
+            add_unpack(PREV_REDUCE, acc_cb_data_format);
             add_unpack(PREV_MAX, im_cb_data_format);
-            add_unpack(RECIP, im_cb_data_format);
+            add_unpack(RECIP, acc_cb_data_format);
         }
+    }
+
+    KernelSpec::CompileTimeArgs compute_cta;
+    if (!use_large_kernel) {
+        // The small compute drains the pad the reader pushed to in0, so both agree on the capacity.
+        compute_cta.insert({"in0_t", in0_t});
     }
 
     KernelSpec compute{
@@ -476,6 +535,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
                   (use_large_kernel ? "/compute/softmax_large_tensor.cpp" : "/compute/softmax.cpp"),
         .compiler_options = {.defines = compute_defines, .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
         .dfb_bindings = compute_bindings,
+        .compile_time_args = compute_cta,
         .runtime_arg_schema = {.runtime_arg_names = compute_rta_names},
         .hw_config = compute_hw,
     };
@@ -548,7 +608,8 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
             {{"num_tiles", num_tile_rows_per_core * Wt},
              {"tile_offset", tile_offset},
              {"blk", block_size},
-             {"mask_padded_data", static_cast<std::uint32_t>(mask_padded_data)}});
+             {"mask_padded_data", static_cast<std::uint32_t>(mask_padded_data)},
+             {"Wt", Wt}});
 
         if (use_large_kernel) {
             AddRuntimeArgsForNode(

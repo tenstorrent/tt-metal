@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/program_descriptors.hpp>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -84,6 +85,9 @@ struct TestCaseConfig {
     // When set: per-packet randomized payload size (shared PRNG with receiver) and
     // sender-only random inter-packet delay. Host byte-count checks are skipped.
     bool randomize_payload_size_and_delay = false;
+    // Add the fabric mux v2 kernels (forwarder and manager) through the ProgramDescriptor overload of
+    // add_fabric_mux_v2_to_program.
+    bool build_mux_from_descriptor = false;
 };
 
 struct SenderMemoryLayout {
@@ -156,7 +160,7 @@ struct ReceiverDeviceContext {
     MuxDeployment receiver_mux_deployment;
 };
 
-ChipId get_physical_device_id(const MeshDevicePtr& device) { return device->get_devices()[0]->id(); }
+ChipId get_physical_device_id(const MeshDevicePtr& device) { return device->get_device_ids()[0]; }
 
 uint32_t align_up(uint32_t value, uint32_t alignment) { return ((value + alignment - 1) / alignment) * alignment; }
 
@@ -506,21 +510,36 @@ std::optional<MuxDeployment> create_mux_deployment(
         return std::nullopt;
     }
 
-    auto program = std::make_shared<tt::tt_metal::Program>(tt::tt_metal::CreateProgram());
     auto mux_config = std::make_unique<tt::tt_fabric::FabricMuxV2Config>(
+        *device,
         num_channels,
         num_buffers_per_channel,
         channel_buffer_size_bytes,
         device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
 
-    tt::tt_fabric::add_fabric_mux_v2_to_program(
-        *program,
-        *mux_config,
-        mux_logical_core,
-        src_fabric_node_id,
-        anchor_dst_fabric_node_id,
-        link_indices.front(),
-        test_case.forwarder_noc);
+    std::shared_ptr<tt::tt_metal::Program> program;
+    if (test_case.build_mux_from_descriptor) {
+        tt::tt_metal::ProgramDescriptor desc;
+        tt::tt_fabric::add_fabric_mux_v2_to_program(
+            desc,
+            *mux_config,
+            mux_logical_core,
+            src_fabric_node_id,
+            anchor_dst_fabric_node_id,
+            link_indices.front(),
+            test_case.forwarder_noc);
+        program = std::make_shared<tt::tt_metal::Program>(desc);
+    } else {
+        program = std::make_shared<tt::tt_metal::Program>(tt::tt_metal::CreateProgram());
+        tt::tt_fabric::add_fabric_mux_v2_to_program(
+            *program,
+            *mux_config,
+            mux_logical_core,
+            src_fabric_node_id,
+            anchor_dst_fabric_node_id,
+            link_indices.front(),
+            test_case.forwarder_noc);
+    }
 
     return MuxDeployment{
         device,
@@ -670,13 +689,8 @@ uint64_t read_word_count(const std::vector<uint32_t>& worker_status) {
 std::vector<uint32_t> read_worker_status(
     const MeshDevicePtr& device, const tt::tt_metal::CoreCoord& logical_core, uint32_t test_results_address) {
     std::vector<uint32_t> worker_status;
-    tt::tt_metal::detail::ReadFromDeviceL1(
-        device->get_devices()[0],
-        logical_core,
-        test_results_address,
-        kTestResultsSizeBytes,
-        worker_status,
-        CoreType::WORKER);
+    tt::tt_metal::slow_dispatch::ReadFromL1(
+        *device, logical_core, test_results_address, kTestResultsSizeBytes, worker_status, CoreType::WORKER);
     return worker_status;
 }
 
@@ -791,16 +805,12 @@ void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) 
         const auto& receiver_device_context = receiver_device_context_entry.second;
         fixture.RunProgramNonblocking(
             receiver_device_context.receiver_mux_deployment.device,
-            *receiver_device_context.receiver_mux_deployment.program);
+            std::move(*receiver_device_context.receiver_mux_deployment.program));
     }
-    fixture.RunProgramNonblocking(sender_mux_deployment->device, *sender_mux_deployment->program);
-
-    fixture.WaitForSingleProgramDone(sender_mux_deployment->device, *sender_mux_deployment->program);
+    tt_metal::LaunchProgram(*sender_mux_deployment->device, std::move(*sender_mux_deployment->program));
     for (const auto& receiver_device_context_entry : receiver_device_contexts.value()) {
         const auto& receiver_device_context = receiver_device_context_entry.second;
-        fixture.WaitForSingleProgramDone(
-            receiver_device_context.receiver_mux_deployment.device,
-            *receiver_device_context.receiver_mux_deployment.program);
+        fixture.WaitForSingleProgramDone(receiver_device_context.receiver_mux_deployment.device);
     }
 
     const uint64_t expected_bytes =
@@ -856,7 +866,21 @@ class FabricMuxV2Functional2DFixture : public Fabric2DFixture, public ::testing:
 
 TEST_P(FabricMuxV2Functional2DFixture, SharedMuxFunctionalCoverage) { run_test_case(*this, GetParam()); }
 
-constexpr std::array<TestCaseConfig, 6> kSmokeCases = {{
+constexpr std::array<TestCaseConfig, 8> kSmokeCases = {{
+    // Same as the two SingleSender cases below, with the mux built from a ProgramDescriptor.
+    TestCaseConfig{
+        .name = "SingleSender_DefaultPayload_Riscv0_FromDescriptor",
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .build_mux_from_descriptor = true,
+    },
+    TestCaseConfig{
+        .name = "SingleSender_DefaultPayload_Riscv1_FromDescriptor",
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .forwarder_noc = tt::tt_metal::NOC::RISCV_1_default,
+        .build_mux_from_descriptor = true,
+    },
     TestCaseConfig{
         .name = "SingleSender_DefaultPayload_Riscv0",
         .num_packets = kShortPacketCount,

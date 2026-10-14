@@ -14,21 +14,29 @@ TP sharding (following gpt-oss pattern):
 - Allreduce after O_proj recombines results
 """
 
+import os
 from dataclasses import dataclass
+from typing import Union
 
 import torch
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig
+from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
+
+# DRAM-width-sharded QKV / O-proj decode matmuls (same size as the interleaved
+# weight → no memory cost). On by default for tp>1; GEMMA4_ATTN_DRAM_SHARD=0
+# falls back to plain interleaved matmuls.
+_DRAM_SHARD_ATTN = os.environ.get("GEMMA4_ATTN_DRAM_SHARD", "1") != "0"
 
 
 @dataclass(frozen=True)
 class AttentionWeights:
     """Container for attention weight tensors — immutable after creation."""
 
-    wqkv: ttnn.Tensor  # Fused Q+K+V per TP device, column-parallel sharded
-    o_proj: ttnn.Tensor  # Row-parallel sharded
+    wqkv: Union[ttnn.Tensor, DramShardedLinear]  # Fused Q+K+V, column-parallel
+    o_proj: Union[ttnn.Tensor, DramShardedLinear]  # Row-parallel sharded
     q_norm_weight: ttnn.Tensor  # Replicated across devices
     k_norm_weight: ttnn.Tensor  # Replicated across devices
     is_global: bool  # Controls K=V tying and partial RoPE
@@ -52,6 +60,9 @@ def load_attention_weights(
     q_size = config.num_attention_heads * config.head_dim
     kv_size = config.num_key_value_heads * config.head_dim
     tp = mesh_config.tp
+    fractured = bool(getattr(mesh_config, "weight_fracture", False))
+    if fractured and tp != mesh_config.mesh_shape[0]:
+        raise NotImplementedError("weight_fracture expects tp == mesh rows (heads over axis 0)")
 
     # When KV heads < TP, each device gets the KV head(s) its Q heads map to via GQA.
     # E.g. 16 Q / 2 KV / 8 TP: devices 0-3 get KV head 0, devices 4-7 get KV head 1.
@@ -123,8 +134,9 @@ def load_attention_weights(
         q_norm_w = None
         k_norm_w = None
 
-    # Mesh mappers
-    if tp > 1:
+    # Mesh mappers. Under weight_fracture attention still shards heads over tp_axis
+    # and replicates across the other axis, so the plain-TP mappers apply.
+    if tp > 1 or fractured:
         col_mapper = mesh_config.column_parallel(mesh_device)
         row_mapper = mesh_config.row_parallel(mesh_device)
         replicate_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
@@ -134,7 +146,7 @@ def load_attention_weights(
         replicate_mapper = None
 
     o_proj_cache_suffix = "_padded" if o_proj_pad_size > 0 and tp > 1 else ""
-    tp_suffix = f"_tp{tp}" if tp > 1 else ""
+    tp_suffix = f"_tp{tp}" if (tp > 1 or fractured) else ""
     # Tag the wqkv / o_proj cache filenames with their dtype so flipping
     # ``attention`` precision in precision_overrides.json doesn't reuse a
     # stale cached tensor at the previous dtype. q_norm / k_norm stay at
@@ -143,24 +155,53 @@ def load_attention_weights(
 
     dtype_suffix = f"_{dtype_to_str(weight_dtype)}"
 
-    wqkv = ttnn.as_tensor(
-        qkv,
-        device=mesh_device,
-        dtype=weight_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=col_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"wqkv{tp_suffix}{dtype_suffix}"),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    o_proj = ttnn.as_tensor(
-        o_w,
-        device=mesh_device,
-        dtype=weight_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=row_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{tp_suffix}{dtype_suffix}"),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    # Per-device fused-QKV output width and o_proj input width (concat_heads out).
+    num_local_heads = config.num_attention_heads // tp
+    head_dim = config.head_dim
+    q_per_dev = num_local_heads * head_dim
+    kv_per_dev = head_dim if kv_replicated else (config.num_key_value_heads // tp) * head_dim
+    qkv_n = q_per_dev + 2 * kv_per_dev
+    oproj_k = q_per_dev
+    oproj_n = hidden_size
+
+    # MoE (26B-A4B): sharded QKV/O-proj decode matmuls regress layer-decode PCC
+    # on BH 1x4 (~0.93 vs 0.99). Dense models keep the opt.
+    is_moe = bool(getattr(config, "enable_moe_block", False))
+    dram_shard = _DRAM_SHARD_ATTN and tp > 1 and not is_moe and not fractured
+    qkv_cache = get_cache_file_name(tensor_cache_path, f"wqkv{tp_suffix}{dtype_suffix}")
+    oproj_cache = get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{tp_suffix}{dtype_suffix}")
+    qkv_cache_ws = (qkv_cache + ".ws") if qkv_cache else None
+    oproj_cache_ws = (oproj_cache + ".ws") if oproj_cache else None
+
+    if dram_shard and can_dram_shard(hidden_size, qkv_n, dtype=weight_dtype):
+        wqkv = DramShardedLinear(
+            qkv, mesh_device, col_mapper, k=hidden_size, n=qkv_n, dtype=weight_dtype, cache_file_name=qkv_cache_ws
+        )
+    else:
+        wqkv = ttnn.as_tensor(
+            qkv,
+            device=mesh_device,
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=col_mapper,
+            cache_file_name=qkv_cache,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    if dram_shard and o_proj_pad_size == 0 and can_dram_shard(oproj_k, oproj_n, dtype=weight_dtype):
+        o_proj = DramShardedLinear(
+            o_w, mesh_device, row_mapper, k=oproj_k, n=oproj_n, dtype=weight_dtype, cache_file_name=oproj_cache_ws
+        )
+    else:
+        o_proj = ttnn.as_tensor(
+            o_w,
+            device=mesh_device,
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=row_mapper,
+            cache_file_name=oproj_cache,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
     q_norm_weight = ttnn.as_tensor(
         q_norm_w,
         device=mesh_device,

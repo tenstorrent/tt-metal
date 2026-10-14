@@ -34,7 +34,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/core_subset_write/tensor.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt_stl/aligned_allocator.hpp>
@@ -167,8 +167,10 @@ TEST_F(MeshTensorTest, Lifecycle) {
     const auto& view = mesh_device_->get_view();
     const auto buffer_address = input_tensor.mesh_buffer().address();
 
-    for (auto* device : view.get_devices()) {
-        auto coordinate = view.find_device(device->id());
+    for (const auto& coordinate : distributed::MeshCoordinateRange(view.shape())) {
+        if (!mesh_device_->is_local(coordinate)) {
+            continue;
+        }
         auto* buffer = input_tensor.mesh_buffer().get_device_buffer(coordinate);
 
         ASSERT_NE(buffer, nullptr);
@@ -651,7 +653,9 @@ TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_WritesOnlyFilteredCores) {
 
 TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_EmptyFilter_NoChange) {
     const ttnn::Shape shape{1, 1, 64, 32};
-    CoreRangeSet shard_grid(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));
+    // DRAM grids are 1D and only grow in X (bank_id == logical x-coordinate), so the grid is a
+    // single row: (0,0)-(1,0), not (0,0)-(0,1).
+    CoreRangeSet shard_grid(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));
     ShardSpec shard_spec(shard_grid, {32, 32});
     MemoryConfig mem_cfg(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::DRAM, shard_spec);
     tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, mem_cfg));

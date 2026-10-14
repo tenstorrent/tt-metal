@@ -346,7 +346,7 @@ using TilizeUntilizeParams = std::tuple<
 
 class TilizeUntilizeTestsFixture : public ::testing::TestWithParam<TilizeUntilizeParams> {};
 
-TEST_P(TilizeUntilizeTestsFixture, ConvertLayout) {
+TEST_P(TilizeUntilizeTestsFixture, CPU_ConvertLayout) {
     auto params = GetParam();
     int n_batches = std::get<0>(params);
     PhysicalSize shape = std::get<1>(params);
@@ -400,7 +400,7 @@ TEST_P(TilizeUntilizeTestsFixture, ConvertLayout) {
     run_for_type(uint32_t{});
 }
 
-TEST_P(TilizeUntilizeTestsFixture, TilizeUntilize) {
+TEST_P(TilizeUntilizeTestsFixture, CPU_TilizeUntilize) {
     auto params = GetParam();
     int n_batches = std::get<0>(params);
     PhysicalSize shape = std::get<1>(params);
@@ -472,7 +472,7 @@ INSTANTIATE_TEST_SUITE_P(
 using ThrowableTilizeUntilizeParams = std::tuple<PhysicalSize, TensorLayoutType, TensorLayoutType, size_t>;
 
 class ThrowableTilizeUntilizeFixture : public ::testing::TestWithParam<ThrowableTilizeUntilizeParams> {};
-TEST_P(ThrowableTilizeUntilizeFixture, TilizeUntilize) {
+TEST_P(ThrowableTilizeUntilizeFixture, CPU_TilizeUntilize) {
     auto params = GetParam();
     PhysicalSize shape = std::get<0>(params);
     auto from_layout = std::get<1>(params);
@@ -523,7 +523,7 @@ using NonSquareTilesParams =
 
 class NonSquareTilesTestFixture : public ::testing::TestWithParam<NonSquareTilesParams> {};
 
-TEST_P(NonSquareTilesTestFixture, ConvertLayout) {
+TEST_P(NonSquareTilesTestFixture, CPU_ConvertLayout) {
     auto params = GetParam();
     PhysicalSize shape = std::get<0>(params);
     auto from_layout = std::get<1>(params);

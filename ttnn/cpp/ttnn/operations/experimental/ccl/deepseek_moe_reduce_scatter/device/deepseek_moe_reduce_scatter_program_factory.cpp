@@ -8,6 +8,7 @@
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.hpp"
@@ -587,7 +588,7 @@ DeepseekMoEReduceScatterMeshWorkloadFactory::create_mesh_workload(
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
 
     ttsl::SmallVector<tt::tt_metal::SubDeviceId> sub_device_ids = {sd_id};
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, sub_device_ids);
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, sub_device_ids);
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(

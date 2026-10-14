@@ -20,6 +20,10 @@ template <bool APPROXIMATION_MODE>
 struct ActivationImpl<APPROXIMATION_MODE, ActivationType::Hardsigmoid> {
     static inline void apply(sfpi::vFloat& v) {
         sfpi::vFloat tmp = (v * sfpi::vConstFloatPrgm0) + sfpi::vConstFloatPrgm1;
+        // clamp(tmp, 0, 1) as two SFPSWAP folds against the constant registers (threshold first,
+        // then the relu clamp, so a NaN lands on 1.0): 7 instructions per row, 10 as two v_if
+        // blocks. Kept as the shared relu_max body rather than sfpi::clamp, which folds in the
+        // other order and would change what a NaN or a -0.0 lane returns.
         v = _relu_max_body_(tmp, 1.0f);
     }
 };

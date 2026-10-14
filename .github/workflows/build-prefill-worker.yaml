@@ -1,0 +1,157 @@
+name: "Build prefill-worker image"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image tag to push. Empty = dev-<branch-slug>."
+        required: false
+        type: string
+        default: ""
+      tt-llm-engine-image:
+        description: "tt-llm-engine image to copy _migration_client from, e.g. ghcr.io/tenstorrent/tt-llm-engine/migration-worker:598154ddb3b838e5a516c220db83442340a72f74"
+        required: true
+        type: string
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  build:
+    name: Build release-models image
+    needs: check-harbor
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+      packages: write
+    runs-on: tt-ubuntu-2204-large-stable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Set up env variables
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          echo "UBUNTU_VERSION=22.04" >> "$GITHUB_ENV"
+          echo "PYTHON_VERSION=3.10" >> "$GITHUB_ENV"
+
+          VERSION="$INPUT_VERSION"
+          if [ -z "$VERSION" ]; then
+            BRANCH_SLUG=$(printf '%s' "$GITHUB_REF_NAME" | sed -E 's/[^A-Za-z0-9_.-]+/-/g; s/^[.-]+//; s/[.-]+$//')
+            VERSION="dev-${BRANCH_SLUG:0:124}"
+          fi
+
+          # Release tags (latest*) belong to publish-release-image.yaml.
+          case "$VERSION" in
+            latest|latest-rc|v[0-9]*)
+              echo "::error::'$VERSION' is a release tag owned by publish-release-image.yaml; pick another tag."
+              exit 1
+              ;;
+          esac
+
+          if ! printf '%s' "$VERSION" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'; then
+            echo "::error::'$VERSION' is not a valid Docker tag."
+            exit 1
+          fi
+
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-ubuntu-22.04-release-models-amd64
+          echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> "$GITHUB_ENV"
+          echo "TAG_NAME=$REPO_IMAGE_NAME:$VERSION" >> "$GITHUB_ENV"
+
+      - name: Capture proxy env for the buildx builder
+        run: |
+          echo "PROXY_HTTP=${HTTP_PROXY:-${http_proxy:-}}" >> "$GITHUB_ENV"
+          echo "PROXY_HTTPS=${HTTPS_PROXY:-${https_proxy:-}}" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          driver-opts: |
+            network=host
+            env.HTTP_PROXY=${{ env.PROXY_HTTP }}
+            env.HTTPS_PROXY=${{ env.PROXY_HTTPS }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tool tags
+        id: tool-tags
+        run: |
+          TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "${{ github.repository }}")
+          {
+            echo "tool_tags<<EOF"
+            echo "$TOOL_TAGS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Prepare bake overrides
+        id: bake
+        env:
+          TOOL_TAGS: ${{ steps.tool-tags.outputs.tool_tags }}
+          TAG_NAME: ${{ env.TAG_NAME }}
+          UBUNTU_VERSION: ${{ env.UBUNTU_VERSION }}
+          PYTHON_VERSION: ${{ env.PYTHON_VERSION }}
+          HARBOR_PREFIX: ${{ needs.check-harbor.outputs.harbor-prefix }}
+          PROXY_HTTP: ${{ env.PROXY_HTTP }}
+          PROXY_HTTPS: ${{ env.PROXY_HTTPS }}
+          ENGINE_IMAGE: ${{ inputs.tt-llm-engine-image }}
+          GIT_REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          TARGET="release-models"
+          TOOLS=($(.github/scripts/get-target-tools.sh "$TARGET"))
+          SET=""
+          for tool in "${TOOLS[@]}"; do
+            tag=$(echo "$TOOL_TAGS" | jq -r ".\"${tool}-tag\"")
+            [ "$tag" = "null" ] && { echo "ERROR: missing tag for tool '$tool' in compute-tool-tags output"; exit 1; }
+            SET+="${TARGET}.contexts.${tool}-layer=docker-image://${HARBOR_PREFIX}${tag}"$'\n'
+          done
+          SET+="${TARGET}.tags=${TAG_NAME}"$'\n'
+          SET+="${TARGET}.output=type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true"$'\n'
+          SET+="${TARGET}.args.UBUNTU_VERSION=${UBUNTU_VERSION}"$'\n'
+          SET+="${TARGET}.args.PYTHON_VERSION=${PYTHON_VERSION}"$'\n'
+          SET+="${TARGET}.args.GIT_REF=${GIT_REF}"$'\n'
+          SET+="${TARGET}.args.TT_LLM_ENGINE_IMAGE=${ENGINE_IMAGE}"$'\n'
+          if [ -n "$PROXY_HTTP" ]; then
+            SET+="${TARGET}.args.HTTP_PROXY=${PROXY_HTTP}"$'\n'
+            SET+="${TARGET}.args.HTTPS_PROXY=${PROXY_HTTPS}"$'\n'
+          fi
+          {
+            echo "set<<EOF"
+            echo "$SET"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push release-models
+        uses: ./.github/actions/manual-docker-bake
+        with:
+          targets: release-models
+          set-lines: ${{ steps.bake.outputs.set }}
+          enable-attestations: "false"
+          enrich-sbom: "false"
+          retries: "2"
+          retry-delay-seconds: "15"
+          harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+
+      - name: Report pushed image
+        env:
+          TAG_NAME: ${{ env.TAG_NAME }}
+          REPO_IMAGE_NAME: ${{ env.REPO_IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+          DIGEST=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$TAG_NAME")
+          {
+            echo "### Pushed release-models image"
+            echo ""
+            echo '```'
+            echo "$TAG_NAME"
+            echo "${REPO_IMAGE_NAME}@${DIGEST}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

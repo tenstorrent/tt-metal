@@ -32,9 +32,11 @@ ProgramDescriptor ReshapeTileProgramFactory::create_descriptor(
 
     Buffer* src0_buffer = input_tensor.buffer();
 
-    uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
-
     auto output_shape = output_tensor.padded_shape();
+
+    // Tile count must come from the output tensor to match what the reader produces; deriving it
+    // from the input deadlocks when the input and output have different tile padding.
+    uint32_t num_tiles = output_tensor.physical_volume() / tt::constants::TILE_HW;
 
     Buffer* dst_buffer = output_tensor.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -58,7 +60,7 @@ ProgramDescriptor ReshapeTileProgramFactory::create_descriptor(
     bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
     uint32_t alignment = src0_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
 
-    std::vector<uint32_t> reader_compile_time_args = {alignment};
+    std::vector<uint32_t> reader_compile_time_args = {alignment, input_tensor.element_size()};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(src0_cb_index)};

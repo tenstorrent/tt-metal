@@ -421,9 +421,7 @@ def recurrent_gated_delta_rule_decode_ttnn(
     beta_t = ttnn.reshape(beta, [B, H], memory_config=ttnn.L1_MEMORY_CONFIG)
     g_t = ttnn.reshape(g, [B, H], memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Compute decay
-    decay_t = ttnn.exp(g_t, memory_config=ttnn.L1_MEMORY_CONFIG)
-
+    # Decay is exp(g); fused into the decay multiply below (no standalone ttnn.exp).
     # Ensure state is ready
     h = initial_state
     if h is None:
@@ -451,9 +449,11 @@ def recurrent_gated_delta_rule_decode_ttnn(
             pass
 
     # Decay before read; keep recurrence step L1-resident.
+    # decay = exp(g), fused as a pre-activation on the multiply's second operand — one fewer op
+    # than a standalone ttnn.exp + multiply.
     _L1 = ttnn.L1_MEMORY_CONFIG
-    decay_bhkv = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=_L1)
-    h = ttnn.multiply(h, decay_bhkv, memory_config=_L1)
+    g_bhkv = ttnn.reshape(g_t, [B, H, 1, 1], memory_config=_L1)
+    h = ttnn.multiply(h, g_bhkv, input_tensor_b_activations=[ttnn.UnaryOpType.EXP], memory_config=_L1)
 
     # v_read = k @ h (decayed state)
     v_read = ttnn.matmul(
@@ -464,8 +464,10 @@ def recurrent_gated_delta_rule_decode_ttnn(
     # Delta + state write (no re-decay).
     delta = ttnn.subtract(v_t, v_read, memory_config=_L1)
     k_t = ttnn.reshape(k_row, [B, H, K], memory_config=_L1)
+    # decay_t is unused downstream (apply_decay=False -> h already decayed above); pass g_bhkv to
+    # satisfy the signature without recomputing a decay tensor.
     h = fused_decay_and_write_ttnn(
-        h=h, k_t=k_t, delta=delta, decay_t=decay_t, beta_t=beta_t, device=device, apply_decay=False
+        h=h, k_t=k_t, delta=delta, decay_t=g_bhkv, beta_t=beta_t, device=device, apply_decay=False
     )
 
     # o = q @ h
@@ -574,3 +576,63 @@ def recurrent_gated_delta_rule_ttnn(
     o = ttnn.typecast(o, ttnn.bfloat16, memory_config=None)
 
     return o, h
+
+
+def fused_recurrent_gated_delta_rule_ttnn(
+    q,
+    k,
+    v,
+    beta,
+    g,
+    scale=None,
+    initial_state=None,
+    device=None,
+    output_per_token_state=False,
+    high_precision=True,
+    initial_state_block_idx=None,
+):
+    """Fused recurrent gated delta rule via the C++ ``ttnn.transformer.fused_recurrent_gated_delta_rule``
+    op. Collapses the per-token recurrence (decay -> k.S -> delta -> outer -> q.S) into ONE device
+    dispatch per call instead of the ~13-op Python composite.
+
+    Drop-in for ``recurrent_gated_delta_rule_decode_ttnn`` (T=1 single-token decode) and the base for
+    the multi-token speculative verify (T=K+1): with ``output_per_token_state=True`` it also returns the
+    recurrent state AFTER every token, for slot-based acceptance (mirrors FLA gdn2's per-token store).
+
+    q/k/v: [B, T, H, D] (H already GQA-expanded to the value-head count); beta/g: [B, T, H]
+    (beta post-sigmoid, g log-space decay). L2-norm over K + query scale are applied here to match
+    the FLA / composite contract; the op applies exp(g) and the recurrence.
+
+    Returns (o [B, T, H, V], state): state is [B, T, H, K, V] if output_per_token_state else the
+    final state [B, H, K, V] (fp32).
+
+    ``initial_state_block_idx`` enables the op's "ring" mode (deferred per-head initial-state select, in place).
+    It is a [BH] uint32/int32 ROW_MAJOR device tensor (BH = B*H, h = b*H + hv) and requires
+    ``output_per_token_state=True`` and an fp32 TILE ``initial_state`` ring of shape [T*BH, K, V]. Head h starts
+    from ring block idx[h] and writes its per-token states back into the same buffer, so the returned state is
+    the ring tensor itself, not a copy. Caller contract: idx[h] % BH == h.
+    """
+    Kd = q.shape[-1]
+    if scale is None:
+        scale = Kd**-0.5
+    if high_precision:
+        q = ttnn.typecast(q, ttnn.float32)
+        k = ttnn.typecast(k, ttnn.float32)
+        v = ttnn.typecast(v, ttnn.float32)
+        beta = ttnn.typecast(beta, ttnn.float32)
+        g = ttnn.typecast(g, ttnn.float32)
+    qn = l2_norm_ttnn(q, dim=-1)
+    kn = l2_norm_ttnn(k, dim=-1)
+    o, state = ttnn.transformer.fused_recurrent_gated_delta_rule(
+        qn,
+        kn,
+        v,
+        g,
+        beta,
+        scale=scale,
+        initial_state=initial_state,
+        initial_state_block_idx=initial_state_block_idx,
+        output_final_state=True,
+        output_per_token_state=output_per_token_state,
+    )
+    return o, state

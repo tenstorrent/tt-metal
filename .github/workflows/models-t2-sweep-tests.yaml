@@ -13,6 +13,8 @@ on:
         type: choice
         options:
           - all
+          - llama3.1-8b
+          - gemma-4-26b-a4b
           - llama3.3-70b
           - qwen3-32b
           - gemma-3-4b
@@ -89,6 +91,7 @@ jobs:
           fi
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -102,6 +105,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   models-sweep-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/models-sweep-tests-impl.yaml
     with:

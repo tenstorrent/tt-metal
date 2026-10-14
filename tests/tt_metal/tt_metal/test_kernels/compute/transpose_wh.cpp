@@ -19,7 +19,9 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb::in, dfb::out);
     transpose_init(dfb::in);
 #else
-    unary_op_init_common(dfb::in, dfb::out);
+    // SHORT_INIT path: same as unary_op_init_common(dfb::in, dfb::out) used to expand to.
+    compute_kernel_hw_startup(dfb::in, dfb::out);
+    copy_init(dfb::in);
     transpose_init(dfb::in);
 #endif
 

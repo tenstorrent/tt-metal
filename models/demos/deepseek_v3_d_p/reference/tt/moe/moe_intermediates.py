@@ -22,10 +22,14 @@ class MoEIntermediates:
     gate_logits: Optional[torch.Tensor] = None            # (dispatch_group_size * seq_len_per_chip, num_routed_experts)
     expert_token_counts: Optional[torch.Tensor] = None    # (num_dispatch_groups, 1, num_routed_experts)
     expert_region_offsets: Optional[torch.Tensor] = None  # (num_dispatch_groups, dispatch_group_size, num_routed_experts)
-    dispatched_buffer: Optional[torch.Tensor] = None      # (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_tokens, emb_dim)
+    dispatched_buffer: Optional[torch.Tensor] = None      # (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_tokens, routed_emb_dim)
     metadata: Optional[torch.Tensor] = None               # (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_tokens, metadata_len)
     expert_outputs: Optional[torch.Tensor] = None         # Same shape as dispatched_buffer
     shared_output: Optional[torch.Tensor] = None          # (dispatch_group_size, seq_len_per_chip, emb_dim)
-    combined_output: Optional[torch.Tensor] = None        # (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, emb_dim)
-    routed_output: Optional[torch.Tensor] = None          # (dispatch_group_size, seq_len_per_chip, emb_dim)
+    combined_output: Optional[torch.Tensor] = None        # (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, routed_emb_dim)
+    routed_output: Optional[torch.Tensor] = None          # (dispatch_group_size, seq_len_per_chip, emb_dim) -- routed contribution added to shared_output
+    # LatentMoE only (Kimi-K3). Post-reduce, PRE latent-norm/up-projection, i.e. still latent width.
+    # None when routed_emb_dim == emb_dim, in which case routed_output already is this tensor.
+    latent_routed_output: Optional[torch.Tensor] = None    # (dispatch_group_size, seq_len_per_chip, routed_emb_dim)
+    latent_input: Optional[torch.Tensor] = None            # (dispatch_group_size, seq_len_per_chip, routed_emb_dim) -- post down-projection, pre-dispatch
     # fmt: on

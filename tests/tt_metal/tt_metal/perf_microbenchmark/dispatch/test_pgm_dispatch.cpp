@@ -45,6 +45,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include "llrt/hal_types.hpp"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
@@ -84,8 +85,6 @@ struct TestInfo {
     bool brisc_enabled{true};
     bool ncrisc_enabled{true};
     bool trisc_enabled{true};
-    bool erisc_enabled{false};
-    uint32_t erisc_count{1};
     bool time_just_finish{false};
     bool use_global{false};
     bool use_trace{false};
@@ -146,8 +145,6 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
         log_info(LogTest, "  -b: disable brisc kernel (default enabled)");
         log_info(LogTest, "  -n: disable ncrisc kernel (default enabled)");
         log_info(LogTest, "  -t: disable trisc kernels (default enabled)");
-        log_info(LogTest, "  +e: enable erisc kernels (default disabled)");
-        log_info(LogTest, " -ec: erisc count (default 1 if enabled)");
         log_info(LogTest, "  -f: time just the finish call (default disabled)");
         log_info(LogTest, " -tr: enable trace (default disabled)");
         log_info(LogTest, " -de: dispatch from eth cores (default tensix)");
@@ -213,8 +210,6 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
     info.brisc_enabled = !test_args::has_command_option(input_args, "-b");
     info.ncrisc_enabled = !test_args::has_command_option(input_args, "-n");
     info.trisc_enabled = !test_args::has_command_option(input_args, "-t");
-    info.erisc_enabled = test_args::has_command_option(input_args, "+e");
-    info.erisc_count = test_args::get_command_option_uint32(input_args, "-ec", 1);
 
     info.workers = CoreRange({0, 0}, {core_x, core_y});
 
@@ -278,9 +273,6 @@ uint32_t get_num_kernels(const TestInfo& info) {
     }
     if (info.trisc_enabled) {
         num_kernels += 3;  // 3 compute kernels when enabled
-    }
-    if (info.erisc_enabled) {
-        num_kernels++;
     }
     return num_kernels;
 }
@@ -372,31 +364,6 @@ bool initialize_program(
         total_kg.start_coord.x = total_kg.end_coord.x;
     }
 
-    if (info.erisc_enabled) {
-        auto erisc_cores = mesh_device->impl().get_device(0, 0)->get_active_ethernet_cores(true);
-        if (info.erisc_count > erisc_cores.size()) {
-            log_fatal(
-                tt::LogTest,
-                "Requested number of erisc cores {} exceeds actual erisc core count {}",
-                info.erisc_count,
-                erisc_cores.size());
-            return false;
-        }
-        auto erisc_core = erisc_cores.begin();
-        for (uint32_t i = 0; i < info.erisc_count; i++, erisc_core++) {
-            auto eth_kernel = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
-                *erisc_core,
-                tt::tt_metal::EthernetConfig{
-                    .eth_mode = Eth::RECEIVER,
-                    .noc = NOC::NOC_0,
-                    .defines = defines,
-                });
-            tt_metal::SetRuntimeArgs(program, eth_kernel, *erisc_core, args);
-            tt_metal::SetCommonRuntimeArgs(program, eth_kernel, common_args);
-        }
-    }
     return true;
 }
 
@@ -489,9 +456,9 @@ MeshTraceId setup_trace_if_enabled(
     MeshTraceId tid;
     if (info.use_trace) {
         const std::size_t cq_id = 0;
-        tid = BeginTraceCapture(mesh_device.get(), cq_id);
+        tid = mesh_device->begin_mesh_trace(mesh_device->mesh_command_queue(cq_id));
         executor.execute_programs();
-        mesh_device->end_mesh_trace(cq_id, tid);
+        mesh_device->end_mesh_trace(mesh_device->mesh_command_queue(cq_id), tid);
         Finish(mesh_device->mesh_command_queue(cq_id));
     }
     return tid;
@@ -506,12 +473,11 @@ void run_benchmark_timing_loop(
     ProgramExecutor& executor,
     MeshTraceId tid,
     const std::shared_ptr<MeshDevice>& mesh_device) {
-    constexpr std::size_t cq_id = 0;
     auto execute_func = executor.execute_programs;
     for ([[maybe_unused]] auto _ : state) {
         auto start = std::chrono::system_clock::now();
         if (info.use_trace) {
-            mesh_device->replay_mesh_trace(cq_id, tid, false);
+            mesh_device->replay_mesh_trace(mesh_cq, tid, false);
         } else {
             execute_func();
         }
@@ -559,7 +525,6 @@ void set_benchmark_counters(
             state.counters["brisc_enabled"] = benchmark::Counter(info.brisc_enabled, benchmark::Counter::kDefaults);
             state.counters["ncrisc_enabled"] = benchmark::Counter(info.ncrisc_enabled, benchmark::Counter::kDefaults);
             state.counters["trisc_enabled"] = benchmark::Counter(info.trisc_enabled, benchmark::Counter::kDefaults);
-            state.counters["erisc_enabled"] = benchmark::Counter(info.erisc_enabled, benchmark::Counter::kDefaults);
             state.counters["cb_gs"] = benchmark::Counter(info.n_cb_gs, benchmark::Counter::kDefaults);
 
             // Add extra counters
@@ -667,6 +632,15 @@ template <typename T>
 static int pgm_dispatch(T& state, TestInfo info) {
     if constexpr (std::is_same_v<T, benchmark::State>) {
         log_info(LogTest, "Running {}", state.name());
+    }
+
+    if (info.use_trace && slow_dispatch_enabled()) {
+        if constexpr (std::is_same_v<T, benchmark::State>) {
+            state.SkipWithMessage("Trace capture is not supported for slow dispatch");
+        } else {
+            log_info(tt::LogTest, "Trace capture is not supported for slow dispatch; skipping test");
+        }
+        return 0;
     }
 
     // Apply configuration adjustments
@@ -806,6 +780,7 @@ static void KernelCycleArgs(benchmark::internal::Benchmark* b) {
     b->Arg(0)->Arg(1000)->Arg(2000)->Arg(3000)->Arg(4000)->Arg(5000)->Arg(10000);
 }
 
+// Which processors are enabled (BRISC/NCRISC/TRISC); single core unless *_all_cores.
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
     brisc_only_trace,
@@ -839,6 +814,8 @@ BENCHMARK_CAPTURE(
     TestInfo{.warmup_iterations = 5000, .use_trace = true, .use_all_cores = true})
     ->Apply(Max12288Args)
     ->UseManualTime();
+
+// Circular buffers: count (n_cbs), and CB groups (n_cb_gs) splitting cores into independent CB sets.
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
     all_processors_all_cores_1cb,
@@ -869,6 +846,8 @@ BENCHMARK_CAPTURE(
     TestInfo{.warmup_iterations = 5000, .n_cbs = 1, .n_sems = 1, .use_trace = true, .use_all_cores = true})
     ->Apply(Max8192Args)
     ->UseManualTime();
+
+// Unique runtime args (RTAs): per-core values, so cost should scale with core count.
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch, all_processors_1_core_1_rta, TestInfo{.warmup_iterations = 5000, .n_args = 1, .use_trace = true})
     ->Apply(Max8192Args)
@@ -899,18 +878,6 @@ BENCHMARK_CAPTURE(
     ->UseManualTime();
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
-    all_processors_1_core_1_crta,
-    TestInfo{.warmup_iterations = 5000, .n_common_args = 1, .use_trace = true})
-    ->Apply(Max8192Args)
-    ->UseManualTime();
-BENCHMARK_CAPTURE(
-    BM_pgm_dispatch,
-    all_processors_1_core_128_crta,
-    TestInfo{.warmup_iterations = 5000, .n_common_args = 128, .use_trace = true})
-    ->Apply(Max8192Args)
-    ->UseManualTime();
-BENCHMARK_CAPTURE(
-    BM_pgm_dispatch,
     all_processors_all_cores_1_rta,
     TestInfo{.warmup_iterations = 5000, .n_args = 1, .use_trace = true, .use_all_cores = true})
     ->Apply(Max8192Args)
@@ -925,6 +892,20 @@ BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
     all_processors_all_cores_128_rta,
     TestInfo{.warmup_iterations = 5000, .n_args = 128, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+
+// Common runtime args (CRTAs): shared across all cores, so cost should stay flat as core count grows.
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_1_core_1_crta,
+    TestInfo{.warmup_iterations = 5000, .n_common_args = 1, .use_trace = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_1_core_128_crta,
+    TestInfo{.warmup_iterations = 5000, .n_common_args = 128, .use_trace = true})
     ->Apply(Max8192Args)
     ->UseManualTime();
 BENCHMARK_CAPTURE(
@@ -945,6 +926,8 @@ BENCHMARK_CAPTURE(
     TestInfo{.warmup_iterations = 5000, .n_common_args = 128, .use_trace = true, .use_all_cores = true})
     ->Apply(Max8192Args)
     ->UseManualTime();
+
+// Semaphores.
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
     sems_1_core_1_processor_trace,
@@ -964,6 +947,8 @@ BENCHMARK_CAPTURE(
         .use_all_cores = true})
     ->Apply(Max8192Args)
     ->UseManualTime();
+
+// Combined high-cost configuration: 32 CBs, 128 per-core RTAs, 4 semaphores, all processors, and all cores.
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
     maxed_config_params_trace,
@@ -971,6 +956,8 @@ BENCHMARK_CAPTURE(
         .warmup_iterations = 5000, .n_cbs = 32, .n_args = 128, .n_sems = 4, .use_trace = true, .use_all_cores = true})
     ->Apply(Max8192Args)
     ->UseManualTime();
+
+// Kernel groups (n_kgs): splits cores into independently-configured groups of kernels.
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
     kernel_groups_trace,
@@ -989,7 +976,6 @@ BENCHMARK_CAPTURE(
     TestInfo{.warmup_iterations = 5000, .n_args = 128, .n_kgs = 8, .use_trace = true, .use_all_cores = true})
     ->Apply(Max8192Args)
     ->UseManualTime();
-
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
     kernel_groups_1_cb_trace,
@@ -1003,6 +989,7 @@ BENCHMARK_CAPTURE(
     ->Apply(Max8192Args)
     ->UseManualTime();
 
+// Slow (compute-bound) kernels: dispatch cost under a long-running kernel, 32 CBs, all cores.
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
     10000_kernel_all_cores_all_processors_32_cbs_trace,
@@ -1017,7 +1004,8 @@ BENCHMARK_CAPTURE(
         .warmup_iterations = 5000, .slow_kernel_cycles = 5000, .n_cbs = 32, .use_trace = true, .use_all_cores = true})
     ->Apply(Max8192Args)
     ->UseManualTime();
-// Intended to be GO-latency-bound
+
+// Sweep kernel cycles at a fixed, small (256B) kernel size; intended to be GO-latency-bound.
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch_vary_slow_cycles,
     256_bytes_brisc_only_all_processors_trace,
@@ -1053,22 +1041,76 @@ BENCHMARK_CAPTURE(
     ->Apply(Range512To12KArgs)
     ->UseManualTime();
 
+// Single core, no trace
+BENCHMARK_CAPTURE(BM_pgm_dispatch, all_processors_no_trace, TestInfo{.iterations = 1000, .warmup_iterations = 5000})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+// All cores, no trace
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_all_cores_no_trace,
+    TestInfo{.iterations = 1000, .warmup_iterations = 5000, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+// Run time args, no trace
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_all_cores_128_rta_no_trace,
+    TestInfo{.iterations = 1000, .warmup_iterations = 5000, .n_args = 128, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+// Circular Buffers, no trace
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_all_cores_32cb_no_trace,
+    TestInfo{.iterations = 1000, .warmup_iterations = 5000, .n_cbs = 32, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+// Combined worst case, no trace
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    maxed_config_params_no_trace,
+    TestInfo{
+        .iterations = 1000, .warmup_iterations = 5000, .n_cbs = 32, .n_args = 128, .n_sems = 4, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+// 8 kernel groups, no trace
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    kernel_groups_no_trace,
+    TestInfo{.iterations = 1000, .warmup_iterations = 5000, .n_kgs = 8, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+// Kernel groups plus 128 runtime args per core, no trace.
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    kernel_groups_128_rta_no_trace,
+    TestInfo{.iterations = 1000, .warmup_iterations = 5000, .n_args = 128, .n_kgs = 8, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+// Dispatch restricted to a subdevice's core range, no trace.
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch_vary_slow_cycles,
+    256_bytes_brisc_only_left_processors_subdevices_no_trace,
+    TestInfo{
+        .iterations = 1000,
+        .warmup_iterations = 5000,
+        .kernel_size = 256,
+        .n_subdevice_ranges = 6,
+        .ncrisc_enabled = false,
+        .trisc_enabled = false,
+        // Use only the left column to allow for a single CoreRange in the kernel group.
+        .use_left_cores = true})
+    ->Apply(KernelCycleArgs)
+    ->UseManualTime();
+
 int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "--custom")) {
         TestInfo info;
         init(input_args, info);
-        if (info.use_trace && slow_dispatch_enabled()) {
-            log_info(tt::LogTest, "Trace capture is not supported for slow dispatch; skipping test");
-            return 0;
-        }
         FakeBenchmarkState state;
         return pgm_dispatch(state, info);
-    }
-
-    if (slow_dispatch_enabled()) {
-        log_info(tt::LogTest, "Program dispatch trace benchmarks are not supported for slow dispatch; skipping suite");
-        return 0;
     }
 
     if (test_args::has_command_option(input_args, "--dump-test-info")) {
@@ -1098,6 +1140,32 @@ int main(int argc, char** argv) {
             .nfast_kernels = 5,
             .n_kgs = std::get<0>(core_count),
             .use_trace = true,
+            .use_all_cores = true})
+        ->Apply(Max8192Args)
+        ->UseManualTime();
+    // 4 fast kernels queued behind 1 slow one, testing worker RB queuing, no trace.
+    benchmark::RegisterBenchmark(
+        "BM_pgm_dispatch/kernel_groups_4_shadow_no_trace",
+        BM_pgm_dispatch,
+        TestInfo{
+            .iterations = 1000,
+            .warmup_iterations = 5000,
+            .slow_kernel_cycles = 40000,
+            .nfast_kernels = 4,
+            .n_kgs = std::get<0>(core_count),
+            .use_all_cores = true})
+        ->Apply(Max8192Args)
+        ->UseManualTime();
+    // Same as above with 5 queued fast kernels instead of 4, no trace.
+    benchmark::RegisterBenchmark(
+        "BM_pgm_dispatch/kernel_groups_5_shadow_no_trace",
+        BM_pgm_dispatch,
+        TestInfo{
+            .iterations = 1000,
+            .warmup_iterations = 5000,
+            .slow_kernel_cycles = 40000,
+            .nfast_kernels = 5,
+            .n_kgs = std::get<0>(core_count),
             .use_all_cores = true})
         ->Apply(Max8192Args)
         ->UseManualTime();
@@ -1147,7 +1215,6 @@ int main(int argc, char** argv) {
                 .brisc_enabled = true,
                 .ncrisc_enabled = false,
                 .trisc_enabled = false,
-                .erisc_enabled = false,
                 .use_trace = true,
                 .dispatch_from_eth = true})
             ->Apply(Max8192Args)

@@ -93,6 +93,99 @@ def export_to_video(
     return output_video_path
 
 
+def _add_audio_stream(container, audio: Audio | None):
+    """Add an AAC audio stream to an open write container. Must run before any packet is muxed
+    (PyAV forbids adding streams once muxing starts). Returns the stream, or None if no audio."""
+    if audio is None:
+        return None
+    audio_stream = container.add_stream("aac", rate=audio.sampling_rate)
+    audio_stream.codec_context.sample_rate = audio.sampling_rate
+    audio_stream.codec_context.layout = "stereo"
+    audio_stream.codec_context.time_base = Fraction(1, audio.sampling_rate)
+    return audio_stream
+
+
+def _mux_audio(container, audio_stream, audio: Audio) -> None:
+    """Encode + mux the decoded waveform into ``audio_stream`` (created by ``_add_audio_stream``)."""
+    import av
+
+    samples = audio.waveform
+    if samples.ndim == 1:
+        samples = samples[:, None]
+    if samples.shape[1] != 2 and samples.shape[0] == 2:
+        samples = samples.T
+    if samples.shape[1] != 2:
+        logger.warning(f"Audio has {samples.shape[1]} channels, expected 2 — duplicating mono")
+        samples = samples[:, :1].repeat(1, 2)
+
+    if samples.dtype != torch.int16:
+        samples = torch.clip(samples, -1.0, 1.0)
+        samples = (samples * 32767.0).to(torch.int16)
+
+    frame_in = av.AudioFrame.from_ndarray(
+        samples.contiguous().reshape(1, -1).cpu().numpy(),
+        format="s16",
+        layout="stereo",
+    )
+    frame_in.sample_rate = audio.sampling_rate
+
+    cc = audio_stream.codec_context
+    resampler = av.audio.resampler.AudioResampler(
+        format=cc.format or "fltp",
+        layout=cc.layout or "stereo",
+        rate=cc.sample_rate or audio.sampling_rate,
+    )
+    for resampled in resampler.resample(frame_in):
+        for packet in audio_stream.encode(resampled):
+            container.mux(packet)
+    for packet in audio_stream.encode():
+        container.mux(packet)
+
+
+def export_video_audio_yuv(yuv_planar, output_path: str, fps: int = 24, audio: Audio | None = None) -> None:
+    """Export a pre-computed yuv420p planar video (+ optional audio) to MP4 — fast-path
+    counterpart to :func:`export_video_audio`.
+
+    The RGB->YUV 4:2:0 conversion already ran on-device (``fast_device_to_host_yuv``), so we
+    hand libx264 native yuv420p frames and skip both the host-side color conversion and the
+    3x-larger float/RGB device->host gather. The encoded MP4 is yuv420p either way, so this is
+    not a fidelity change — only the conversion's location moves.
+
+    Args:
+        yuv_planar: ``(T, H*3//2, W)`` uint8 — PyAV yuv420p ndarray layout, one entry per frame.
+        output_path: output .mp4 path
+        fps: frame rate
+        audio: decoded ``Audio``, or None
+    """
+    import av
+
+    t, h32, width = yuv_planar.shape
+    height = h32 * 2 // 3
+
+    container = av.open(output_path, mode="w")
+    stream = container.add_stream("libx264", rate=int(fps))
+    stream.width = width
+    stream.height = height
+    stream.pix_fmt = "yuv420p"
+    stream.options = {"preset": "veryfast", "crf": "23"}
+    stream.thread_type = "AUTO"
+
+    audio_stream = _add_audio_stream(container, audio)
+
+    for frame_array in yuv_planar:
+        frame = av.VideoFrame.from_ndarray(frame_array, format="yuv420p")
+        for packet in stream.encode(frame):
+            container.mux(packet)
+    for packet in stream.encode():
+        container.mux(packet)
+
+    if audio is not None and audio_stream is not None:
+        _mux_audio(container, audio_stream, audio)
+
+    container.close()
+    logger.info(f"Saved: {output_path} ({t}f @ {fps}fps, yuv420p fast path)")
+
+
 def export_video_audio(video_pixels: torch.Tensor, output_path: str, fps: int = 24, audio: Audio | None = None) -> None:
     """Export decoded video (and optionally audio) to MP4.
 
@@ -131,13 +224,8 @@ def export_video_audio(video_pixels: torch.Tensor, output_path: str, fps: int = 
     stream.options = {"preset": "veryfast", "crf": "23"}
     stream.thread_type = "AUTO"
 
-    # Prepare audio stream if provided
-    audio_stream = None
-    if audio is not None:
-        audio_stream = container.add_stream("aac", rate=audio.sampling_rate)
-        audio_stream.codec_context.sample_rate = audio.sampling_rate
-        audio_stream.codec_context.layout = "stereo"
-        audio_stream.codec_context.time_base = Fraction(1, audio.sampling_rate)
+    # Prepare audio stream if provided (must be added before any packet is muxed)
+    audio_stream = _add_audio_stream(container, audio)
 
     # Write video frames
     for frame_array in frames:
@@ -151,38 +239,7 @@ def export_video_audio(video_pixels: torch.Tensor, output_path: str, fps: int = 
 
     # Write audio if provided
     if audio is not None and audio_stream is not None:
-        samples = audio.waveform
-        if samples.ndim == 1:
-            samples = samples[:, None]
-        if samples.shape[1] != 2 and samples.shape[0] == 2:
-            samples = samples.T
-        if samples.shape[1] != 2:
-            logger.warning(f"Audio has {samples.shape[1]} channels, expected 2 — duplicating mono")
-            samples = samples[:, :1].repeat(1, 2)
-
-        if samples.dtype != torch.int16:
-            samples = torch.clip(samples, -1.0, 1.0)
-            samples = (samples * 32767.0).to(torch.int16)
-
-        frame_in = av.AudioFrame.from_ndarray(
-            samples.contiguous().reshape(1, -1).cpu().numpy(),
-            format="s16",
-            layout="stereo",
-        )
-        frame_in.sample_rate = audio.sampling_rate
-
-        # Resample to encoder format and write
-        cc = audio_stream.codec_context
-        resampler = av.audio.resampler.AudioResampler(
-            format=cc.format or "fltp",
-            layout=cc.layout or "stereo",
-            rate=cc.sample_rate or audio.sampling_rate,
-        )
-        for resampled in resampler.resample(frame_in):
-            for packet in audio_stream.encode(resampled):
-                container.mux(packet)
-        for packet in audio_stream.encode():
-            container.mux(packet)
+        _mux_audio(container, audio_stream, audio)
 
     container.close()
     logger.info(f"Saved: {output_path} ({frames.shape[0]}f @ {fps}fps)")

@@ -9,55 +9,125 @@
 #include <limits>
 #include <algorithm>
 
+#include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat, tt::tile_size
+#include <ttnn/tensor/types.hpp>                 // tt::tt_metal::datatype_to_dataformat_converter
+
 namespace ttnn::prim {
 
 uint32_t GroupNormPadCorrection::scaler_bits(uint32_t reduce_factor_w) const {
-    const float sc = 1.0f / std::sqrt(
-                                static_cast<float>(reduce_factor_w) * static_cast<float>(logical_hw) /
-                                static_cast<float>(padded_hw));
+    const float sc =
+        1.0f /
+        std::sqrt(static_cast<float>(reduce_factor_w) * static_cast<float>(logical_hw) / static_cast<float>(padded_hw));
     return std::bit_cast<uint32_t>(sc);
 }
 
-GroupNormPadCorrection make_group_norm_pad_correction(uint32_t logical_hw, uint32_t padded_hw, bool use_welford) {
-    // Welford cannot express this: its kernels transpose H*W into the tile columns and track the
-    // sample count in tile units, so the padding rows cannot be excluded. ttnn::group_norm routes
-    // non-tile-aligned Welford requests to the two-pass path instead.
+GroupNormPadCorrection make_group_norm_pad_correction(
+    uint32_t logical_hw, uint32_t padded_hw, bool use_welford, uint32_t tile_height) {
+    // The SFPU two-pass path cannot express this: its kernels transpose H*W into the tile columns
+    // and track the sample count in tile units, so the padding rows cannot be excluded.
+    // ttnn::group_norm routes non-tile-aligned use_welford requests to the tile-reduction path.
     GroupNormPadCorrection pad;
     pad.active = !use_welford && (logical_hw != padded_hw);
     pad.logical_hw = logical_hw;
     pad.padded_hw = padded_hw;
     pad.kernel_logical_hw = pad.active ? logical_hw : padded_hw;
-    pad.k_bits = std::bit_cast<uint32_t>(static_cast<float>(padded_hw) / static_cast<float>(logical_hw) - 1.0f);
+    // padded_hw is logical_hw rounded up to a tile, so active implies a non-zero remainder.
+    pad.rows_in_last_tile = pad.active ? (logical_hw % tile_height) : 0;
     return pad;
-}
-
-void append_group_norm_pad_correction_cbs(
-    tt::tt_metal::ProgramDescriptor::CBDescriptors& cbs,
-    const GroupNormPadCorrection& pad,
-    std::array<uint32_t, 3> cb_indices,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    tt::DataFormat data_format,
-    uint32_t single_tile_size) {
-    if (!pad.active) {
-        return;
-    }
-    for (uint32_t cb_index : cb_indices) {
-        cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = single_tile_size,
-            .core_ranges = core_ranges,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_index),
-                .data_format = data_format,
-                .page_size = single_tile_size,
-            }}},
-        });
-    }
 }
 
 bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfig_formats) {
     return std::any_of(reconfig_formats.begin(), reconfig_formats.end(), [](tt::DataFormat format) {
         return format != tt::DataFormat::Float16_b;
     });
+}
+
+GroupNormInterleavedGeometry derive_groupnorm_interleaved_geometry(
+    uint32_t height,
+    uint32_t width,
+    uint32_t num_batches,
+    uint32_t num_groups,
+    tt::tt_metal::CoreCoord grid,
+    uint32_t tile_height,
+    uint32_t tile_width) {
+    GroupNormInterleavedGeometry geometry;
+    if (height == 0 || width == 0 || num_batches == 0 || num_groups == 0 || grid.x == 0 || grid.y == 0 ||
+        tile_height == 0 || tile_width == 0 || height % tile_height != 0 || width % tile_width != 0 ||
+        width % num_groups != 0) {
+        return geometry;
+    }
+
+    geometry.height_tiles = height / tile_height;
+    geometry.width_tiles = width / tile_width;
+    geometry.num_virtual_cols = std::min<uint32_t>(grid.x, num_groups);
+    while (geometry.num_virtual_cols > 0 &&
+           ((width / geometry.num_virtual_cols) % tile_width != 0 || num_groups % geometry.num_virtual_cols != 0)) {
+        --geometry.num_virtual_cols;
+    }
+    if (geometry.num_virtual_cols == 0) {
+        return geometry;
+    }
+
+    geometry.num_actual_cols = (grid.x / geometry.num_virtual_cols) * geometry.num_virtual_cols;
+    geometry.num_actual_rows = grid.y;
+    geometry.num_virtual_rows = (grid.x / geometry.num_virtual_cols) * geometry.num_actual_rows;
+    geometry.num_cores = geometry.num_actual_cols * geometry.num_actual_rows;
+    if (geometry.height_tiles < geometry.num_virtual_rows || geometry.height_tiles % geometry.num_virtual_rows != 0) {
+        return geometry;
+    }
+
+    geometry.per_core_height_tiles_group_1 = geometry.height_tiles / geometry.num_virtual_rows;
+    geometry.per_core_height_group_1 = geometry.per_core_height_tiles_group_1 * tile_height;
+    geometry.per_core_width = width / geometry.num_virtual_cols;
+    geometry.per_core_width_tiles = (geometry.per_core_width + tile_width - 1) / tile_width;
+    geometry.channels_per_group = width / num_groups;
+    geometry.channels_per_group_mod_tile_width =
+        geometry.channels_per_group % tile_width == 0 ? tile_width : geometry.channels_per_group % tile_width;
+    geometry.num_row_shards = height / geometry.per_core_height_group_1;
+    geometry.num_col_shards = width / geometry.per_core_width;
+    if (geometry.num_row_shards == 0 || geometry.num_col_shards == 0) {
+        return geometry;
+    }
+    geometry.num_cores_per_batch = num_batches > geometry.num_row_shards ? 1 : geometry.num_row_shards / num_batches;
+    geometry.num_cores_per_group = num_groups > geometry.num_col_shards ? 1 : geometry.num_col_shards / num_groups;
+    geometry.batches_per_core_group_1 =
+        num_batches > geometry.num_row_shards ? num_batches / geometry.num_row_shards : 1;
+    geometry.batches_per_core_group_2 = geometry.batches_per_core_group_1;
+    geometry.groups_per_core = num_groups > geometry.num_col_shards ? num_groups / geometry.num_col_shards : 1;
+    geometry.rows_per_batch_per_core_group_1 = geometry.per_core_height_group_1 / geometry.batches_per_core_group_1;
+    const auto [block_width_tiles, num_groups_per_reset] =
+        find_max_tile_span(geometry.per_core_width, geometry.channels_per_group, tile_width);
+    geometry.block_width_tiles = block_width_tiles;
+    geometry.num_groups_per_reset = num_groups_per_reset;
+    geometry.block_height_tiles_group_1 = geometry.per_core_height_tiles_group_1 / geometry.batches_per_core_group_1;
+    geometry.last_block_width_tiles =
+        (geometry.per_core_width_tiles + geometry.groups_per_core - 1) / geometry.groups_per_core;
+
+    if (num_batches >= geometry.num_row_shards) {
+        geometry.last_row_with_extra_batch = num_batches % geometry.num_row_shards;
+        geometry.equal_batches_per_core = geometry.last_row_with_extra_batch == 0;
+        if (!geometry.equal_batches_per_core) {
+            --geometry.last_row_with_extra_batch;
+            geometry.batches_per_core_group_2 = num_batches / geometry.num_row_shards;
+            geometry.batches_per_core_group_1 = geometry.batches_per_core_group_2 + 1;
+
+            if (geometry.height_tiles % num_batches != 0) {
+                return geometry;
+            }
+            const uint32_t per_batch_tiles = geometry.height_tiles / num_batches;
+            geometry.per_core_height_tiles_group_1 = geometry.batches_per_core_group_1 * per_batch_tiles;
+            geometry.per_core_height_tiles_group_2 = geometry.batches_per_core_group_2 * per_batch_tiles;
+            geometry.per_core_height_group_1 = geometry.per_core_height_tiles_group_1 * tile_height;
+            geometry.per_core_height_group_2 = geometry.per_core_height_tiles_group_2 * tile_height;
+            geometry.rows_per_batch_per_core_group_1 = per_batch_tiles * tile_height;
+            geometry.rows_per_batch_per_core_group_2 = per_batch_tiles * tile_height;
+            geometry.block_height_tiles_group_1 = per_batch_tiles;
+            geometry.block_height_tiles_group_2 = per_batch_tiles;
+        }
+    }
+
+    geometry.valid = true;
+    return geometry;
 }
 
 uint32_t groupnorm_tilized_group_tiles(uint32_t block_ht, uint32_t num_out_blocks, uint32_t block_wt) {
@@ -126,7 +196,9 @@ bool groupnorm_legacy_rm_input_fits_l1(
         return false;
     }
 
-    // num_out_blocks: -1 means use the factory's power-of-two heuristic.
+    // num_out_blocks: -1 means use the shared memory-based power-of-two heuristic.
+    // Do not apply the factories' BF16 accuracy override here: retaining the larger,
+    // unsplit per-out-block CBs keeps this L1-fit estimate conservative.
     uint32_t num_out_blocks;
     if (num_out_blocks_arg < 0) {
         num_out_blocks = groupnorm_heuristic_num_out_blocks(per_batch_hw * W, num_virtual_cols * num_virtual_rows);
@@ -166,6 +238,11 @@ bool groupnorm_legacy_rm_prefer_composite_for_perf(
     const bool imbalanced =
         num_virtual_rows != 0 && num_batches >= num_virtual_rows && (num_batches % num_virtual_rows) != 0;
     return num_cores <= kGroupnormLegacyRmMinCoresForOnChip || imbalanced;
+}
+
+bool groupnorm_use_sfpu_local_combine(bool use_welford, tt::ARCH arch, bool fp32_dest_acc_en, uint32_t tile_width) {
+    const bool supported_arch = arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
+    return use_welford && supported_arch && fp32_dest_acc_en && tile_width == tt::constants::TILE_WIDTH;
 }
 
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
@@ -259,6 +336,140 @@ std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size
     }
 
     return {max_tile_span, num_groups_before_start_again_at_tile_beginning};
+}
+
+uint32_t GroupNormShardedStaticCbSizes::total(const GroupNormShardedCbFlags& flags) const {
+    uint32_t t = 0;
+    t += in_CB_size;  // c_1 tilized input
+    // The no-negative-mask path keeps a second full-shard copy for untilize-out (c_30); the
+    // negative-mask path accumulates in place into c_1 and replaces c_30 with the (much
+    // smaller) negative-mask CB (c_14). This one line is the whole L1 trade-off.
+    t += flags.with_negative_mask ? in_negative_mask_CB_size : (flags.untilize_out ? in_CB_size : 0u);
+    t += in2_CB_size;  // c_2 scaler
+    t += in3_CB_size;  // c_3 eps
+    if (!flags.use_welford) {
+        t += in2_CB_size;  // c_4 scaler-c
+    }
+    if (flags.has_gamma) {
+        t += in5_CB_size;  // c_5
+    }
+    if (flags.has_beta) {
+        t += in6_CB_size;  // c_6
+    }
+    // c_7 is unconditional: the factory allocates it whether the writer NOC-reads a
+    // caller-supplied mask or synthesizes one in L1, and one of those is always true.
+    t += in_mask_CB_size;
+    if (flags.reader_repack_output) {
+        t += repack_CB_size;  // c_11/c_12
+    }
+    t += x_CB_size;           // c_13
+    t += ex_partial_CB_size;  // c_8
+    if (!flags.use_welford) {
+        t += single_tile_size;  // c_10 ex_external
+    }
+    t += ex_global_CB_size;  // c_9/c_15
+    t += ex2pe_CB_size;      // c_17
+    t += scalar_tile_size;   // c_26 ones
+    if (flags.pad_correction_active) {
+        // c_18 rowvalid + c_19 composed mask, created inline by the sharded factory (the
+        // append_group_norm_pad_correction_cbs helper this once referred to no longer exists).
+        t += rowvalid_CB_size + composed_mask_CB_size;
+    }
+    return t;
+}
+
+GroupNormShardedStaticCbSizes compute_sharded_gn_static_cb_sizes(
+    const ttnn::Tensor& input,
+    tt::tt_metal::DataType im_data_format,
+    std::optional<tt::tt_metal::DataType> gamma_dtype,
+    std::optional<tt::tt_metal::DataType> beta_dtype,
+    std::optional<tt::tt_metal::DataType> input_mask_dtype,
+    std::optional<tt::tt_metal::DataType> negative_mask_dtype,
+    bool use_welford,
+    uint32_t num_groups) {
+    using tt::tt_metal::datatype_to_dataformat_converter;
+
+    // Data formats, mirroring groupnorm_sharded_program_factory.cpp. Note beta overrides gamma
+    // when both are present -- they share one CB format there, so they must here too.
+    const tt::DataFormat in_data_format = datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(im_data_format);
+    tt::DataFormat gamma_beta_cb_data_format = tt::DataFormat::Float16_b;
+    if (gamma_dtype.has_value()) {
+        gamma_beta_cb_data_format = datatype_to_dataformat_converter(gamma_dtype.value());
+    }
+    if (beta_dtype.has_value()) {
+        gamma_beta_cb_data_format = datatype_to_dataformat_converter(beta_dtype.value());
+    }
+    // Absent mask tensors mean the writer synthesizes them, which it does in bfloat16.
+    const tt::DataFormat in_mask_cb_data_format = input_mask_dtype.has_value()
+                                                      ? datatype_to_dataformat_converter(input_mask_dtype.value())
+                                                      : tt::DataFormat::Float16_b;
+    const tt::DataFormat in_negative_mask_cb_data_format =
+        negative_mask_dtype.has_value() ? datatype_to_dataformat_converter(negative_mask_dtype.value())
+                                        : tt::DataFormat::Float16_b;
+
+    const uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    const uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    const uint32_t gamma_beta_single_tile_size = tt::tile_size(gamma_beta_cb_data_format);
+    const uint32_t in_mask_single_tile_size = tt::tile_size(in_mask_cb_data_format);
+    const uint32_t in_negative_mask_single_tile_size = tt::tile_size(in_negative_mask_cb_data_format);
+
+    // Geometry, again mirroring the factory. Only the derivations the CB sizes depend on.
+    const uint32_t tile_height = input.tensor_spec().tile().get_height();
+    const uint32_t tile_width = input.tensor_spec().tile().get_width();
+    const auto& shard_spec = input.shard_spec().value();
+    const uint32_t per_core_M = shard_spec.shape[0];
+    const uint32_t per_core_N = shard_spec.shape[1];
+    const uint32_t per_core_Mt = per_core_M / tile_height;
+    const uint32_t per_core_Nt = (per_core_N + tile_width - 1) / tile_width;
+
+    const auto& padded_shape = input.padded_shape();
+    const uint32_t num_batches = padded_shape[0];
+    const uint32_t H = padded_shape[2] * num_batches;
+    const uint32_t W = padded_shape[3];
+    const uint32_t group_size = W / num_groups;
+    const uint32_t block_wt = find_max_tile_span(per_core_N, group_size).first;
+
+    const uint32_t num_shards_r = H / per_core_M;
+    const uint32_t num_shards_c = W / per_core_N;
+    const uint32_t num_batches_per_core = num_batches > num_shards_r ? num_batches / num_shards_r : 1;
+    const uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
+    const uint32_t block_ht = per_core_Mt / num_batches_per_core;
+
+    const uint32_t in0_block_tiles = per_core_Nt * per_core_Mt;
+    const uint32_t interm_block_tiles = block_ht * block_wt;
+
+    GroupNormShardedStaticCbSizes sizes;
+    sizes.in_CB_size = in0_block_tiles * in_single_tile_size;
+    // cb_xmm (c_2) double buffer. After the Welford mask-multiply reorder
+    // (`((x - mu) * rsqrt) * mask`), only one tile is live in cb_xmm at a time, so the
+    // Welford allocation is 2 rather than 3.
+    // Scalar CBs are written as bf16 bit patterns, so they stay bf16 even on the legacy fp32
+    // path where cb_data_format is Float32. Welford repurposes c_2 as the fp32 cb_xmm
+    // intermediate; legacy uses it as the bf16 scaler. Mirrors the factory.
+    const uint32_t scalar_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint32_t in2_single_tile_size = use_welford ? single_tile_size : scalar_tile_size;
+    sizes.in2_CB_size = in2_single_tile_size * (use_welford ? 2 : 1);
+    sizes.in3_CB_size = scalar_tile_size;
+    sizes.in5_CB_size = per_core_Nt * gamma_beta_single_tile_size;
+    sizes.in6_CB_size = per_core_Nt * gamma_beta_single_tile_size;
+    // Non-Welford: double-buffered single set. Caller masks may carry a row-masked second set
+    // under the pad correction, but the sharded writer never streams it into c_7.
+    sizes.in_mask_CB_size = block_wt * in_mask_single_tile_size * (use_welford ? num_groups_per_core : 2);
+    sizes.in_negative_mask_CB_size = block_wt * in_negative_mask_single_tile_size * 2;
+    sizes.repack_CB_size = per_core_Nt * in_single_tile_size * 2;
+    sizes.x_CB_size = single_tile_size * (use_welford ? 1 : interm_block_tiles);
+    // In welford, mean and var are both stored here, so double the size.
+    sizes.ex_partial_CB_size = single_tile_size * (use_welford ? 2 : 1);
+    sizes.ex_global_CB_size = sizes.ex_partial_CB_size * (use_welford ? num_groups_per_core : 1);
+    sizes.ex2pe_CB_size = use_welford ? single_tile_size * num_groups_per_core : sizes.ex_partial_CB_size;
+    sizes.single_tile_size = single_tile_size;
+    sizes.scalar_tile_size = scalar_tile_size;
+    // Pad-correction CBs (c_18 rowvalid, c_19 composed mask), both bf16. Computed
+    // unconditionally; total() only counts them when the correction is active.
+    sizes.rowvalid_CB_size = scalar_tile_size;
+    sizes.composed_mask_CB_size = block_wt * scalar_tile_size;
+    return sizes;
 }
 
 }  // namespace ttnn::prim

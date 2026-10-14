@@ -93,6 +93,32 @@ TEST(GenerateRankBindingsHelpersTest, WriteRankfile_SortsByRankAscending) {
     EXPECT_EQ(ranks[2], 2);
 }
 
+TEST(GenerateRankBindingsHelpersTest, WriteRankfile_MockClusterUsesLocalhost) {
+    // Mock runs must place every rank on the literal "localhost" so OpenMPI/PRRTE launches locally instead of
+    // attempting an ssh to the (possibly unresolvable) real hostname returned by gethostname().
+    const auto dir = make_temp_dir("rankfile_mock");
+    const auto path = dir / "rankfile";
+    std::vector<RankBindingConfig> bindings = {
+        make_binding(0, 0, 0, "host-a", 0),
+        make_binding(1, 0, 0, "host-b", 1),
+    };
+
+    write_rankfile(bindings, path.string(), /*mock_cluster_rankfile=*/true);
+
+    std::ifstream in(path.string());
+    std::string line;
+    int line_count = 0;
+    while (std::getline(in, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        ++line_count;
+        EXPECT_NE(line.find("=localhost "), std::string::npos)
+            << "Mock rankfile line should target localhost: " << line;
+    }
+    EXPECT_EQ(line_count, 2);
+}
+
 TEST(GenerateRankBindingsHelpersTest, WritePhase2MockMapping_WritesRankToClusterDesc) {
     const auto dir = make_temp_dir("phase2");
     const auto path = dir / "phase2_mock_mapping.yaml";
@@ -148,6 +174,71 @@ TEST(GenerateRankBindingsHelpersTest, WritePhase2MockMapping_NoRankEntriesRemove
     EXPECT_FALSE(std::filesystem::exists(path));
 }
 
+TEST(GenerateRankBindingsHelpersTest, LoadMgdMappingYaml_SingleDenseSubcontext_ResolvesRelativeToMappingDir) {
+    const auto dir = make_temp_dir("mgd_map");
+    const auto mgd_dummy = dir / "dummy_mgd.textproto";
+    {
+        std::ofstream f(mgd_dummy);
+        f << "# placeholder\n";
+    }
+    const auto mapping = dir / "map.yaml";
+    {
+        std::ofstream f(mapping);
+        f << kSubcontextMgdMappingYamlKey << ":\n  0: dummy_mgd.textproto\n";
+    }
+
+    const auto out = load_subcontext_id_to_mesh_graph_descriptor_mapping(mapping);
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out.at(0), std::filesystem::weakly_canonical(mgd_dummy));
+}
+
+TEST(GenerateRankBindingsHelpersTest, LoadMgdMappingYaml_TwoDenseSubcontexts) {
+    const auto dir = make_temp_dir("mgd_map2");
+    const auto a = dir / "a.textproto";
+    const auto b = dir / "b.textproto";
+    for (const auto& p : {a, b}) {
+        std::ofstream f(p);
+        f << "x\n";
+    }
+    const auto mapping = dir / "map.yaml";
+    {
+        std::ofstream f(mapping);
+        f << kSubcontextMgdMappingYamlKey << ":\n  0: a.textproto\n  1: b.textproto\n";
+    }
+
+    const auto out = load_subcontext_id_to_mesh_graph_descriptor_mapping(mapping);
+    ASSERT_EQ(out.size(), 2u);
+    EXPECT_EQ(out.at(0), std::filesystem::weakly_canonical(a));
+    EXPECT_EQ(out.at(1), std::filesystem::weakly_canonical(b));
+}
+
+TEST(GenerateRankBindingsHelpersTest, LoadMgdMappingYaml_GapInSubcontextIds_Throws) {
+    const auto dir = make_temp_dir("mgd_gap");
+    const auto mgd = dir / "m.textproto";
+    {
+        std::ofstream f(mgd);
+        f << "x\n";
+    }
+    const auto mapping = dir / "map.yaml";
+    {
+        std::ofstream f(mapping);
+        f << kSubcontextMgdMappingYamlKey << ":\n  0: m.textproto\n  2: m.textproto\n";
+    }
+
+    EXPECT_THROW(load_subcontext_id_to_mesh_graph_descriptor_mapping(mapping), std::invalid_argument);
+}
+
+TEST(GenerateRankBindingsHelpersTest, LoadMgdMappingYaml_MissingMgdFile_Throws) {
+    const auto dir = make_temp_dir("mgd_missing");
+    const auto mapping = dir / "map.yaml";
+    {
+        std::ofstream f(mapping);
+        f << kSubcontextMgdMappingYamlKey << ":\n  0: does_not_exist.textproto\n";
+    }
+
+    EXPECT_THROW(load_subcontext_id_to_mesh_graph_descriptor_mapping(mapping), std::invalid_argument);
+}
+
 TEST(GenerateRankBindingsHelpersTest, GetActualHostname_PassesThroughNonLocalhost) {
     EXPECT_EQ(get_actual_hostname("my.cluster.host"), "my.cluster.host");
 }
@@ -172,4 +263,92 @@ TEST(GenerateRankBindingsHelpersTest, AllWritersProduceThreeFilesInTempDir) {
         ++n;
     }
     EXPECT_EQ(n, 3);
+}
+
+// -----------------------------------------------------------------------------
+// Multi-solution helpers (see README_generate_rank_bindings_all_solutions.md)
+// -----------------------------------------------------------------------------
+
+TEST(GenerateRankBindingsHelpersTest, SolutionHash_IsStableAndOrderIndependent) {
+    std::vector<RankBindingConfig> a = {
+        make_binding(0, 0, 0, "host-a", 0),
+        make_binding(1, 1, 0, "host-b", 0),
+    };
+    a[0].env_overrides["TT_VISIBLE_DEVICES"] = "0,1";
+    a[1].env_overrides["TT_VISIBLE_DEVICES"] = "2,3";
+
+    // Same solution, bindings supplied in a different order -> identical hash.
+    std::vector<RankBindingConfig> a_reordered = {a[1], a[0]};
+
+    const std::string h1 = compute_solution_signature_hash(a);
+    const std::string h2 = compute_solution_signature_hash(a_reordered);
+    EXPECT_EQ(h1, h2) << "hash must be order-independent";
+    EXPECT_EQ(h1.size(), 16u) << "hash is 16 hex chars";
+    EXPECT_EQ(h1.find_first_not_of("0123456789abcdef"), std::string::npos) << "hash is lowercase hex";
+}
+
+TEST(GenerateRankBindingsHelpersTest, SolutionHash_DiffersForDifferentMappingOnSameHosts) {
+    // Same host set {host-a, host-b}, but the (mesh,host-rank) -> host assignment is swapped.
+    std::vector<RankBindingConfig> s1 = {
+        make_binding(0, 0, 0, "host-a", 0),
+        make_binding(1, 1, 0, "host-b", 0),
+    };
+    std::vector<RankBindingConfig> s2 = {
+        make_binding(0, 0, 0, "host-b", 0),
+        make_binding(1, 1, 0, "host-a", 0),
+    };
+    EXPECT_NE(compute_solution_signature_hash(s1), compute_solution_signature_hash(s2))
+        << "same hosts but different mapping must produce different directories";
+}
+
+TEST(GenerateRankBindingsHelpersTest, WriteSolutionsIndex_HasEnumerationAndSolutions) {
+    const auto dir = make_temp_dir("index");
+    const auto path = dir / "solutions_index.yaml";
+
+    std::vector<SolutionIndexEntry> entries;
+    SolutionIndexEntry e0;
+    e0.id = "3f9c1a20";
+    e0.num_ranks = 2;
+    e0.num_hosts = 2;
+    e0.host_set = {"host-a", "host-b"};
+    entries.push_back(e0);
+
+    write_solutions_index_yaml(
+        "/mesh.textproto", "distinct-host-sets", /*max_solutions=*/4, /*truncated=*/false, entries, path.string());
+
+    ASSERT_TRUE(std::filesystem::exists(path));
+    const YAML::Node root = YAML::LoadFile(path.string());
+    EXPECT_EQ(root["mesh_graph_desc_path"].as<std::string>(), "/mesh.textproto");
+    EXPECT_EQ(root["enumeration"]["mode"].as<std::string>(), "distinct-host-sets");
+    EXPECT_EQ(root["enumeration"]["max_solutions"].as<int>(), 4);
+    EXPECT_EQ(root["enumeration"]["found"].as<int>(), 1);
+    EXPECT_FALSE(root["enumeration"]["truncated"].as<bool>());
+    ASSERT_TRUE(root["solutions"]);
+    ASSERT_EQ(root["solutions"].size(), 1u);
+    EXPECT_EQ(root["solutions"][0]["id"].as<std::string>(), "3f9c1a20");
+    EXPECT_EQ(root["solutions"][0]["dir"].as<std::string>(), "3f9c1a20");
+    EXPECT_EQ(root["solutions"][0]["num_hosts"].as<int>(), 2);
+    EXPECT_EQ(root["solutions"][0]["rank_bindings"].as<std::string>(), "3f9c1a20/rank_bindings.yaml");
+    // host_set is emitted as a comma-joined scalar (host_set_csv), not a YAML sequence.
+    EXPECT_EQ(root["solutions"][0]["host_set"].as<std::string>(), "host-a,host-b");
+}
+
+TEST(GenerateRankBindingsHelpersTest, WriteSolutionMeta_ListsHostsAndCounts) {
+    const auto dir = make_temp_dir("meta");
+    const auto path = dir / "solution_meta.yaml";
+    std::vector<RankBindingConfig> bindings = {
+        make_binding(0, 0, 0, "host-a", 0),
+        make_binding(1, 0, 1, "host-a", 1),
+        make_binding(2, 1, 0, "host-b", 0),
+    };
+
+    write_solution_meta_yaml(bindings, "deadbeef00000000", "/mesh.textproto", path.string());
+
+    ASSERT_TRUE(std::filesystem::exists(path));
+    const YAML::Node root = YAML::LoadFile(path.string());
+    EXPECT_EQ(root["solution_id"].as<std::string>(), "deadbeef00000000");
+    EXPECT_EQ(root["num_ranks"].as<int>(), 3);
+    EXPECT_EQ(root["num_hosts"].as<int>(), 2);  // host-a, host-b
+    // host_set is emitted as a comma-joined scalar (host_set_csv), not a YAML sequence.
+    EXPECT_EQ(root["host_set"].as<std::string>(), "host-a,host-b");
 }

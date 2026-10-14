@@ -4,13 +4,15 @@
 
 #pragma once
 
+#include <fmt/base.h>
 #include <stdint.h>
+#include <cstddef>
 #include <functional>
 #include <ostream>
 #include <optional>
+#include <utility>
+#include <vector>
 #include <tt_stl/strong_type.hpp>
-
-#include <fmt/format.h>
 
 namespace tt::tt_fabric {
 
@@ -76,6 +78,48 @@ bool has_flag(FabricType flags, FabricType test_flag);
 // larger. Size-one and size-two dimensions retain ordinary mesh links.
 constexpr bool is_genuine_torus_dim(uint32_t dim_size) { return dim_size > 2; }
 
+constexpr bool is_genuine_torus_axis(int32_t dim_size) {
+    return dim_size > 0 && is_genuine_torus_dim(static_cast<uint32_t>(dim_size));
+}
+
+// MESH=0, first-dim wrap=1, second-dim wrap=2, both=3. First/second follow the
+// row-major dim order used by PGD flatten variants (TORUSX wraps dims[0]).
+constexpr int torus_variant_priority(bool wrap_first_dim, bool wrap_second_dim) {
+    if (wrap_first_dim && wrap_second_dim) {
+        return 3;
+    }
+    if (wrap_second_dim) {
+        return 2;
+    }
+    if (wrap_first_dim) {
+        return 1;
+    }
+    return 0;
+}
+
+inline std::vector<int32_t> row_major_coords_from_linear_index(
+    uint32_t linear_index, const std::vector<int32_t>& dims) {
+    std::vector<int32_t> coords(dims.size());
+    int32_t remaining = static_cast<int32_t>(linear_index);
+    for (int32_t dim_idx = static_cast<int32_t>(dims.size()) - 1; dim_idx >= 0; --dim_idx) {
+        const int32_t dim_size = dims[static_cast<size_t>(dim_idx)];
+        coords[static_cast<size_t>(dim_idx)] = remaining % dim_size;
+        remaining /= dim_size;
+    }
+    return coords;
+}
+
+inline uint32_t row_major_linear_index_from_coords(
+    const std::vector<int32_t>& coords, const std::vector<int32_t>& dims) {
+    uint32_t linear_index = 0;
+    uint32_t multiplier = 1;
+    for (int32_t dim_idx = static_cast<int32_t>(dims.size()) - 1; dim_idx >= 0; --dim_idx) {
+        linear_index += static_cast<uint32_t>(coords[static_cast<size_t>(dim_idx)]) * multiplier;
+        multiplier *= static_cast<uint32_t>(dims[static_cast<size_t>(dim_idx)]);
+    }
+    return linear_index;
+}
+
 // MeshShape axis 0 (north/south) maps to TORUS_Y; axis 1 (east/west) maps to TORUS_X.
 constexpr FabricType torus_flag_for_axis(uint32_t axis) {
     return axis == 0 ? FabricType::TORUS_Y : FabricType::TORUS_X;
@@ -112,14 +156,22 @@ constexpr MeshHostRankId MESH_HOST_RANK_UNSET{UINT32_MAX};
 // carry just the chip id.
 using LogicalChipId = uint32_t;
 
+// Node id within one PGD grouping's adjacency graph (proto Instance.id). Named so it is not
+// conflated with LogicalChipId (a mesh-local MGD chip) or a physical chip id.
+using GroupingChipId = uint32_t;
+
+// Stable numeric handle of one resolved PGD grouping instance (groupings are otherwise identified
+// by their name/type strings).
+using PhysicalGroupingId = uint32_t;
+
 /**
- * @brief Represents a fabric node identifier combining mesh ID and chip ID
+ * @brief Represents a fabric node identifier combining mesh ID and logical chip ID
  */
 class FabricNodeId {
 public:
-    explicit FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val);
+    explicit FabricNodeId(MeshId mesh_id_val, LogicalChipId chip_id_val);
     MeshId mesh_id{0};
-    std::uint32_t chip_id = 0;
+    LogicalChipId chip_id = 0;
 };
 
 bool operator==(const FabricNodeId& lhs, const FabricNodeId& rhs);

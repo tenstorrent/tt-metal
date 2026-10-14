@@ -139,8 +139,13 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             used.
 
         force_transpose : Optional[bool], default: true
-            Minimal matmul has better performance in transpose when M > N.  However, to alleviate noc congestion,
-            we want transpose to always be true.
+            Minimal matmul has better performance in transpose when M > N, so the core grid is normally
+            oriented by that heuristic. Leaving this true forces transpose regardless of shape, which
+            alleviates NOC congestion and satisfies grid-divisibility constraints (e.g. a full 12-wide
+            core grid) at the cost of the wrong orientation for M <= N shapes.
+            Set it to false to let the (M > N) heuristic pick the orientation -- worth measuring on
+            M <= N shapes. Note the non-transposed grid moves the in0 mux cores from the bottom row to
+            the right column, so the caller's matmul core grid must leave that column free instead.
 
         num_workers_per_link : Optional[int], default: 1
             The number of worker cores per link to use for the all gather portion of the operation.  More than 1 typically
@@ -240,7 +245,8 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("fsdp_multi_device_global_semaphore") = std::vector<GlobalSemaphore>{},
             nb::arg("persistent_weight_buffer") = nb::none(),
             nb::arg("fsdp_topology") = nb::none(),
-            nb::arg("fuse_swiglu") = false});
+            nb::arg("fuse_swiglu") = false,
+            nb::arg("chunk_sizes") = std::vector<uint32_t>{}});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

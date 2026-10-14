@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
 
@@ -37,25 +37,21 @@ struct InterleavedConfig {
 /// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const InterleavedConfig& test_config) {
-    // Get the actual device for this single-device test
-    IDevice* device = mesh_device->impl().get_device(0);
-
+bool run_dm(distributed::MeshDevice& mesh_device, const InterleavedConfig& test_config) {
     // Program
     Program program = CreateProgram();
 
     const size_t total_size_bytes = test_config.num_pages * test_config.page_size_bytes;
 
-    InterleavedBufferConfig interleaved_buffer_config{
-        .device = device,
-        .size = total_size_bytes,
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::ReplicatedBufferConfig global_config{.size = total_size_bytes};
+    distributed::DeviceLocalBufferConfig local_config{
         .page_size = test_config.page_size_bytes,
         .buffer_type = test_config.is_dram ? BufferType::DRAM : BufferType::L1};
-    std::shared_ptr<Buffer> input_buffer;
-    input_buffer = CreateBuffer(interleaved_buffer_config);
+    auto input_buffer = distributed::MeshBuffer::create(global_config, local_config, &mesh_device);
     uint32_t input_buffer_address = input_buffer->address();
 
-    auto output_buffer = CreateBuffer(interleaved_buffer_config);
+    auto output_buffer = distributed::MeshBuffer::create(global_config, local_config, &mesh_device);
     uint32_t output_buffer_address = output_buffer->address();
 
     TT_FATAL(input_buffer_address != output_buffer_address, "Input and output buffer addresses must be different");
@@ -155,15 +151,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
     vector<uint32_t> packed_output;
 
     if (test_config.read_kernel) {
-        detail::WriteToBuffer(input_buffer, packed_input);
+        distributed::EnqueueWriteMeshBuffer(cq, input_buffer, packed_input, /*blocking=*/true);
         if (test_config.is_dram) {
-            MetalContext::instance().get_cluster().dram_barrier(device->id());
+            MetalContext::instance().get_cluster().dram_barrier(mesh_device.get_device_ids().front());
         } else {
-            MetalContext::instance().get_cluster().l1_barrier(device->id());
+            MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids().front());
         }
     } else {
-        detail::WriteToDeviceL1(device, corerange_to_cores(test_config.cores)[0], l1_addr, packed_input);
-        MetalContext::instance().get_cluster().l1_barrier(device->id());
+        slow_dispatch::WriteToL1(mesh_device, corerange_to_cores(test_config.cores)[0], l1_addr, packed_input);
+        MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids().front());
     }
 
     auto mesh_workload = distributed::MeshWorkload();
@@ -172,15 +168,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
 
     if (test_config.write_kernel) {
-        detail::ReadFromBuffer(output_buffer, packed_output);
+        distributed::ReadShard(
+            cq, packed_output, output_buffer, distributed::MeshCoordinate(coord_data), /*blocking=*/true);
     } else {
-        detail::ReadFromDeviceL1(
-            device, corerange_to_cores(test_config.cores)[0], l1_addr, total_size_bytes, packed_output);
+        slow_dispatch::ReadFromL1(
+            mesh_device, corerange_to_cores(test_config.cores)[0], l1_addr, total_size_bytes, packed_output);
     }
 
     // Results comparison
@@ -201,12 +197,10 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
 /* ========== INTERLEAVED DRAM TESTS ========== */
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageNumbers) {
-    auto mesh_device = get_mesh_device();
-
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMInterleavedPageNumbers) {
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
     // Parameters
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
@@ -236,13 +230,13 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageNumbers) {
                 .cores = core_range_set};
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }
 
 /* ========== Test case for varying core location; Test id = 62 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageCoreLocations) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMInterleavedPageCoreLocations) {
     GTEST_SKIP() << "Skipping test";
 
     // Parameters
@@ -251,9 +245,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageCoreLocati
     uint32_t num_of_transactions = 16;
 
     // Cores
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = this->device().compute_with_storage_grid_size();
     log_info(tt::LogTest, "Grid size x: {}, y: {}", grid_size.x, grid_size.y);
     for (unsigned int x = 0; x < grid_size.x; x++) {
         for (unsigned int y = 0; y < grid_size.y; y++) {
@@ -269,17 +261,16 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageCoreLocati
                 .cores = core_range_set};
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }
 
 /* ========== Test noc_async_read_page kernel only; Test id = 63 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageReadNumbers) {
-    auto mesh_device = get_mesh_device();
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMInterleavedPageReadNumbers) {
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
     // Parameters
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
@@ -312,17 +303,16 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageReadNumber
                 .write_kernel = false};
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }
 
 /* ========== Test noc_async_write_page kernel only; Test id = 64 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageWriteNumbers) {
-    auto mesh_device = get_mesh_device();
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMInterleavedPageWriteNumbers) {
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
     // Parameters
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
@@ -355,17 +345,16 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageWriteNumbe
                 .write_kernel = true};
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }
 
 /* ========== Directed Ideal Test Case; Test id = 65 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageDirectedIdeal) {
-    auto mesh_device = get_mesh_device();
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMInterleavedPageDirectedIdeal) {
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
     // Parameters
     uint32_t page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t num_pages = 16;
@@ -385,17 +374,16 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageDirectedId
         .cores = core_range_set};
 
     // Run
-    EXPECT_TRUE(run_dm(mesh_device, test_config));
+    EXPECT_TRUE(run_dm(this->device(), test_config));
 }
 
 /* ========== Test noc_async_read_page kernel only with swapped noc; Test id = 72 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageReadNocSwap) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMInterleavedPageReadNocSwap) {
     GTEST_SKIP() << "Skipping test";
 
-    auto mesh_device = get_mesh_device();
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
     // Parameters
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
@@ -429,19 +417,18 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageReadNocSwa
                 .default_noc = false};
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }
 
 /* ========== Test noc_async_write_page kernel only with swapped noc; Test id = 73 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageWriteNocSwap) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMInterleavedPageWriteNocSwap) {
     GTEST_SKIP() << "Skipping test";
 
-    auto mesh_device = get_mesh_device();
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
     // Parameters
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
@@ -475,7 +462,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageWriteNocSw
                 .default_noc = false};
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }
@@ -483,11 +470,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMInterleavedPageWriteNocSw
 /* ========== INTERLEAVED L1 TESTS ========== */
 
 /* ========== Test case for varying number of pages using interleaved L1; Test id = 66 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageNumbers) {
-    auto mesh_device = get_mesh_device();
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementL1InterleavedPageNumbers) {
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
     // Parameters
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
@@ -518,13 +504,13 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageNumbers) {
                 .is_dram = false};
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }
 
 /* ========== Test case for varying core location; Test id = 67 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageCoreLocations) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementL1InterleavedPageCoreLocations) {
     GTEST_SKIP() << "Skipping test";
 
     // Parameters
@@ -532,9 +518,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageCoreLocation
     uint32_t page_size_bytes = 32 * 32 * 2;  // = tile
 
     // Cores
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = this->device().compute_with_storage_grid_size();
     log_info(tt::LogTest, "Grid size x: {}, y: {}", grid_size.x, grid_size.y);
     for (unsigned int x = 0; x < grid_size.x; x++) {
         for (unsigned int y = 0; y < grid_size.y; y++) {
@@ -551,17 +535,16 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageCoreLocation
                 .is_dram = false};
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }
 
 /* ========== Test noc_async_read_page only; Test id = 68 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageReadNumbers) {
-    auto mesh_device = get_mesh_device();
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementL1InterleavedPageReadNumbers) {
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
     // Parameters
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
@@ -594,16 +577,15 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageReadNumbers)
                 .write_kernel = false};
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }
 /* ========== Test noc_async_write_page only; Test id = 69 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageWriteNumbers) {
-    auto mesh_device = get_mesh_device();
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementL1InterleavedPageWriteNumbers) {
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
     // Parameters
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
@@ -636,17 +618,16 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageWriteNumbers
                 .write_kernel = true};
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }
 
 /* ========== Directed Ideal Test Case; Test id = 71 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageDirectedIdeal) {
-    auto mesh_device = get_mesh_device();
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementL1InterleavedPageDirectedIdeal) {
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
     // Parameters
     uint32_t page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t num_pages = 16;
@@ -667,17 +648,16 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageDirectedIdea
         .is_dram = false};
 
     // Run
-    EXPECT_TRUE(run_dm(mesh_device, test_config));
+    EXPECT_TRUE(run_dm(this->device(), test_config));
 }
 
 /* ========== Test noc_async_read_page only with swapped noc; Test id = 74 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageReadNocSwap) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementL1InterleavedPageReadNocSwap) {
     GTEST_SKIP() << "Skipping test";
 
-    auto mesh_device = get_mesh_device();
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
     // Parameters
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
@@ -711,18 +691,17 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageReadNocSwap)
                 .default_noc = false};
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }
 /* ========== Test noc_async_write_page only; Test id = 75 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageWriteNocSwap) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementL1InterleavedPageWriteNocSwap) {
     GTEST_SKIP() << "Skipping test";
 
-    auto mesh_device = get_mesh_device();
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(this->device());
     // Parameters
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
@@ -756,7 +735,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementL1InterleavedPageWriteNocSwap
                 .default_noc = false};
 
             // Run
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+            EXPECT_TRUE(run_dm(this->device(), test_config));
         }
     }
 }

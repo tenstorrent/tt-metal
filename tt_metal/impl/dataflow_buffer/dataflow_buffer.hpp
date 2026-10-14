@@ -10,7 +10,6 @@
 #include <variant>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
@@ -54,18 +53,15 @@ struct DataflowBufferConfig {
     // Data format and tile formats for LLKs
     DataFormat data_format = tt::DataFormat::Float16_b;
     std::optional<Tile> tile = std::nullopt;
-    /**
-     * Optional override for how the compute engine interprets this DFB's tile faces. When set, it overrides the
-     * face layout otherwise derived from @ref tile. Use it when an operand's data is laid out with a non-default
-     * number of faces or rows-per-face.
-     */
-    std::optional<FaceGeometry> unpack_face_geometry = std::nullopt;
     // Set only when both producer and consumer are the same compute kernel
     std::optional<TensixScope> tensix_scope = std::nullopt;
     // When true, the DFB borrows L1 memory from an externally managed buffer
     // instead of allocating its own L1 region. The actual base address must be
     // supplied before launch via DataflowBufferImpl::set_borrowed_memory_base_addr.
     bool borrows_memory = false;
+    // When true, this local DFB is a CrossNode/PrefetcherPipe relay (borrowed ring +
+    // DM/TRISC credit bridge). Host binding generation emits RelayDFBBindingToken.
+    bool is_relay = false;
 };
 
 // Note: This API and the DataflowBufferConfig are placeholder only, the final DataflowBuffer APIs will conform with

@@ -10,11 +10,11 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/types.hpp"  // exposes ttnn::MemoryConfig alias used in member/signature declarations
+#include "ttnn/types.hpp"              // exposes ttnn::MemoryConfig alias used in member/signature declarations
 #include "ttnn/distributed/types.hpp"  // exposes ttnn::MeshCoordinate used in override_runtime_arguments()
+#include "ttnn/metal_v2_artifacts.hpp"
 
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -24,7 +24,9 @@ struct NlpCreateHeadsDeviceOperation {
         uint32_t num_kv_heads;
         uint32_t head_dim;
         bool transpose_k_heads;
+        bool kv_tied;
         MemoryConfig output_mem_config;
+        std::optional<uint32_t> q_head_split;  // Q-only: output 0/1 hold the two channel regions.
     };
 
     struct tensor_args_t {
@@ -37,18 +39,33 @@ struct NlpCreateHeadsDeviceOperation {
         std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
 
+    // Both factories are Metal 2.0 spec factories on CustomProgramSpecFactoryConcept: the framework builds
+    // and caches the Program from the returned ProgramSpec, and re-applies the ProgramRunArgs returned by
+    // override_runtime_arguments on every program-cache hit.
     struct Interleaved {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
+
+        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
     struct Sharded {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
+
+        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
     using program_factory_t = std::variant<Interleaved, Sharded>;
@@ -69,18 +86,6 @@ struct NlpCreateHeadsDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    // Patch the cached program's per-dispatch state in place on every cache hit: the buffer-address
-    // runtime args of whichever factory built it (the Sharded reader/writer bake raw base AND per-core
-    // `base + head_offset` start addresses, which a Buffer* binding cannot express) plus the Sharded
-    // output CB addresses.  Defined in nlp_create_qkv_heads_program_factory.cpp so it can reuse the
-    // same per-core builders create_descriptor() uses; no descriptor is rebuilt.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::transformer
@@ -93,6 +98,8 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
     std::optional<uint32_t> num_kv_heads,
     uint32_t head_dim,
     bool transpose_k_heads,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors);
+    bool kv_tied = false,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt,
+    std::optional<uint32_t> q_head_split = std::nullopt);
 }  // namespace ttnn::prim

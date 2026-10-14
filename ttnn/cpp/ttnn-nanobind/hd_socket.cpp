@@ -17,7 +17,6 @@
 
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
-
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
@@ -58,6 +57,40 @@ void py_module_types(nb::module_& mod) {
                     h2d_mode (H2DMode): Transfer mode: HOST_PUSH or DEVICE_PULL.
             )doc")
         .def(
+            nb::init<
+                tt::tt_metal::distributed::MeshDevice&,
+                const tt::tt_metal::distributed::MeshCoreCoord&,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                tt::tt_metal::distributed::H2DMode>(),
+            nb::arg("mesh_device"),
+            nb::arg("recv_l2cpu"),
+            nb::arg("fifo_size"),
+            nb::arg("config_buffer_address"),
+            nb::arg("data_fifo_address"),
+            nb::arg("h2d_mode") = tt::tt_metal::distributed::H2DMode::HOST_PUSH,
+            R"doc(
+                Construct an H2DSocket targeting an L2CPU receiver.
+
+                Behaves as the standard constructor, with an L2CPU tile as the receiver.
+                L2CPU LIM has no allocator in tt-metal, so the config buffer and data FIFO
+                addresses are caller-supplied rather than allocated here.
+
+                Args:
+                    mesh_device (MeshDevice): Mesh containing the receiver L2CPU.
+                    recv_l2cpu (MeshCoreCoord): The receiving L2CPU tile. ``core_coord`` must
+                        be the TRANSLATED NOC coord of an L2CPU tile on the target device.
+                    fifo_size (int): Size of the circular FIFO buffer in bytes. Must be
+                        PCIe-aligned.
+                    config_buffer_address (int): LIM address for the socket metadata.
+                    data_fifo_address (int): LIM address for the data FIFO. In HOST_PUSH this
+                        is the ring itself and must fit with fifo_size inside the L2CPU's
+                        IoWindow; in DEVICE_PULL the ring lives in pinned host memory
+                        and this is the base the device computes ring offsets against.
+                    h2d_mode (H2DMode, optional): Transfer mode. Defaults to ``HOST_PUSH``.
+            )doc")
+        .def(
             "get_page_size",
             &tt::tt_metal::distributed::H2DSocket::get_page_size,
             R"doc(
@@ -85,6 +118,7 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::distributed::H2DSocket::write,
             nb::arg("data"),
             nb::arg("num_pages"),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Writes data pages to the socket FIFO.
 
@@ -112,6 +146,7 @@ void py_module_types(nb::module_& mod) {
                     data_span.size(),
                     page_size);
                 uint32_t num_writes = data_span.size() / page_size;
+                nb::gil_scoped_release release;
                 for (uint32_t i = 0; i < num_writes; i++) {
                     self.write(data_span.data() + (i * page_size), 1);
                 }
@@ -141,6 +176,7 @@ void py_module_types(nb::module_& mod) {
                     page_size);
                 auto* base = static_cast<std::byte*>(const_cast<void*>(tensor.data()));
                 uint32_t num_writes = nbytes / page_size;
+                nb::gil_scoped_release release;
                 for (uint32_t i = 0; i < num_writes; i++) {
                     self.write(base + (i * page_size), 1);
                 }
@@ -162,6 +198,7 @@ void py_module_types(nb::module_& mod) {
             "barrier",
             &tt::tt_metal::distributed::H2DSocket::barrier,
             nb::arg("timeout_ms") = nb::none(),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Blocks until the device has acknowledged all written data.
 
@@ -214,6 +251,7 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::distributed::H2DSocket::connect,
             nb::arg("socket_id"),
             nb::arg("timeout_ms") = nb::none(),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Connects to an existing H2DSocket from another process.
             )doc");
@@ -234,6 +272,31 @@ void py_module_types(nb::module_& mod) {
                     mesh_device (MeshDevice): The mesh device containing the sender core.
                     sender_core (MeshCoreCoord): The source core coordinate that sends data.
                     fifo_size (int): Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
+            )doc")
+        .def(
+            nb::init<
+                tt::tt_metal::distributed::MeshDevice&,
+                const tt::tt_metal::distributed::MeshCoreCoord&,
+                uint32_t,
+                uint32_t>(),
+            nb::arg("mesh_device"),
+            nb::arg("sender_l2cpu"),
+            nb::arg("fifo_size"),
+            nb::arg("config_buffer_address"),
+            R"doc(
+                Construct a D2HSocket with an L2CPU sender.
+
+                Behaves as the standard constructor, with an L2CPU tile as the sender.
+                L2CPU LIM has no allocator in tt-metal, so the config buffer address is
+                caller-supplied rather than allocated here.
+
+                Args:
+                    mesh_device (MeshDevice): Mesh containing the sender L2CPU.
+                    sender_l2cpu (MeshCoreCoord): The sending L2CPU tile. ``core_coord`` must
+                        be the TRANSLATED NOC coord of an L2CPU tile on the target device.
+                    fifo_size (int): Size of the circular FIFO buffer in bytes. Must be
+                        PCIe-aligned.
+                    config_buffer_address (int): LIM address for the socket metadata.
             )doc")
         .def(
             "get_page_size",
@@ -265,6 +328,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("data"),
             nb::arg("num_pages"),
             nb::arg("notify_sender") = true,
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Reads data pages from the socket FIFO.
 
@@ -295,14 +359,17 @@ void py_module_types(nb::module_& mod) {
                 uint32_t num_pages = data_span.size() / page_size;
                 int32_t remaining_bytes_to_read = num_pages * page_size;
                 uint32_t bytes_read = 0;
-                while (remaining_bytes_to_read > 0) {
-                    uint32_t num_pages_to_read = 1;
-                    self.read(
-                        reinterpret_cast<void*>(((uintptr_t)data_span.data()) + bytes_read),
-                        num_pages_to_read,
-                        notify_sender);
-                    bytes_read += num_pages_to_read * page_size;
-                    remaining_bytes_to_read -= num_pages_to_read * page_size;
+                {
+                    nb::gil_scoped_release release;
+                    while (remaining_bytes_to_read > 0) {
+                        uint32_t num_pages_to_read = 1;
+                        self.read(
+                            reinterpret_cast<void*>(((uintptr_t)data_span.data()) + bytes_read),
+                            num_pages_to_read,
+                            notify_sender);
+                        bytes_read += num_pages_to_read * page_size;
+                        remaining_bytes_to_read -= num_pages_to_read * page_size;
+                    }
                 }
             },
             nb::arg("tensor"),
@@ -337,11 +404,14 @@ void py_module_types(nb::module_& mod) {
                 uint32_t num_pages = nbytes / page_size;
                 int32_t remaining_bytes_to_read = num_pages * page_size;
                 uint32_t bytes_read = 0;
-                while (remaining_bytes_to_read > 0) {
-                    uint32_t num_pages_to_read = 1;
-                    self.read(reinterpret_cast<void*>(base + bytes_read), num_pages_to_read, notify_sender);
-                    bytes_read += num_pages_to_read * page_size;
-                    remaining_bytes_to_read -= num_pages_to_read * page_size;
+                {
+                    nb::gil_scoped_release release;
+                    while (remaining_bytes_to_read > 0) {
+                        uint32_t num_pages_to_read = 1;
+                        self.read(reinterpret_cast<void*>(base + bytes_read), num_pages_to_read, notify_sender);
+                        bytes_read += num_pages_to_read * page_size;
+                        remaining_bytes_to_read -= num_pages_to_read * page_size;
+                    }
                 }
             },
             nb::arg("tensor"),
@@ -364,6 +434,7 @@ void py_module_types(nb::module_& mod) {
             "barrier",
             &tt::tt_metal::distributed::D2HSocket::barrier,
             nb::arg("timeout_ms") = nb::none(),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Blocks until all sent data has been acknowledged.
 
@@ -427,6 +498,7 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::distributed::D2HSocket::connect,
             nb::arg("socket_id"),
             nb::arg("timeout_ms") = nb::none(),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Connects to an existing D2HSocket from another process.
             )doc");

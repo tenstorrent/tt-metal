@@ -28,31 +28,16 @@ constexpr int FIRST_COLUMN_SLOT_STRIDE = 2;
 enum class SamplingBinaryOp { add, sub, mul };
 
 /**
- * @brief Compute 1/in for one SFPU slot, selecting the legacy-compatible or the sign-correct variant.
+ * @brief Compute a scalar sampling reciprocal with the configured approximation and DEST precision.
  *
- * Returns by value on purpose. The caller copy-initializes from this prvalue, which is the same
- * construct as the original single-expression init, so C++17 guaranteed elision keeps `out` directly
- * initialized by the reciprocal call. Selecting the variant with a local `vFloat out;` + assignment
- * would instead route through vVal::operator= (__builtin_rvtt_sfpassign_lv) and change the emitted
- * SFPU sequence on the legacy path -- which must stay bit-identical for blaze.
- *
- * @tparam legacy_compat: Use blaze's bit-identical reciprocal, values = <true/false>
- * @param in: Value to invert.
- * @note Callers must pass in > 0. The two branches disagree on sign: _reciprocal_compat_ opens with
- *       setsgn(in, 1) and so returns the magnitude |1/in| (legacy_compat = true gives +0.25 for -4.0),
- *       while legacy_compat = false is sign-correct. Every caller today feeds a softmax partition
- *       function or a cumulative probability, both strictly positive. The legacy path must stay
- *       bit-identical for blaze, so the divergence is documented rather than fixed.
- * @note Call @ref sampling_recip_init with the matching legacy_compat before this function; the
- *       legacy_compat = false path reads vConstFloatPrgm0 as its Newton-Raphson constant.
+ * @note Call @ref sampling_recip_init first. The Newton-Raphson iterations read the shared
+ * vConstFloatPrgm0 register; reinitialize it if another SFPU operation has overwritten it.
  */
-template <bool legacy_compat>
+template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat sampling_recip_value(sfpi::vFloat in) {
-    if constexpr (legacy_compat) {
-        return ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
-    } else if constexpr (APPROX) {
+    if constexpr (APPROX) {
         return ckernel::sfpu::sfpu_reciprocal_iter<0>(in);
-    } else if constexpr (DST_ACCUM_MODE) {
+    } else if constexpr (is_fp32_dest_acc_en) {
         return ckernel::sfpu::sfpu_reciprocal_iter<2>(in);
     } else {
         return ckernel::sfpu::sfpu_reciprocal_iter<1>(in);
@@ -60,42 +45,27 @@ sfpi_inline sfpi::vFloat sampling_recip_value(sfpi::vFloat in) {
 }
 
 /**
- * @brief Program the SFPU constants the sampling reciprocal needs.
+ * @brief Initialize the constants used by the scalar sampling reciprocal.
  *
- * @tparam legacy_compat: Must match the calculate_sampling_recip_scalar call it precedes.
- * @note Call before @ref calculate_sampling_recip_scalar. The legacy_compat = false path calls
- *       sfpu_reciprocal_iter, which reads sfpi::vConstFloatPrgm0 (LREG12) as its Newton-Raphson
- *       constant; only sfpu_reciprocal_init<false> writes the 2.0f it expects. recip_init /
- *       recip_tile_init do not. Without this, a kernel that ran e.g. exp_tile_init earlier leaves
- *       1.442695f there and every Newton step is silently wrong -- no assert, no build error.
- *       The legacy_compat = true path carries its own constants and needs no setup, so this is a
- *       no-op there.
+ * @note Establishes vConstFloatPrgm0 for the Newton-Raphson iterations. This is shared SFPU
+ * state, so call again after an intervening operation that changes the reciprocal constants.
+ * Unlike the full-tile reciprocal initializer, this does not program LOADMACRO or replay state.
  */
-template <bool legacy_compat = true>
-inline void sampling_recip_init() {
-    if constexpr (!legacy_compat) {
-        sfpu_reciprocal_init<APPROX>();
-    }
-}
+inline void sampling_recip_init() { sfpu_reciprocal_init<APPROX>(); }
 
 /**
  * @brief Replace one SFPU slot (DEST rows 0-3 of face 0) with its reciprocal, in place.
  *
- * The public entry point for the sampling reciprocal; @ref sampling_recip_value is the leaf that
- * picks the variant. On a 16-bit DEST outside APPROX it converts to bf16 with round-to-nearest
+ * On a 16-bit DEST outside APPROX it converts to bf16 with round-to-nearest
  * first, so the store does not truncate.
  *
- * @tparam legacy_compat: Use blaze's bit-identical reciprocal, values = <true/false>
- * @note Callers must pass values > 0: with legacy_compat = true the result is the magnitude
- *       |1/in| rather than 1/in -- see @ref sampling_recip_value for why that divergence stands.
- * @note Call @ref sampling_recip_init with the same legacy_compat before this function; the
- *       legacy_compat = false path reads vConstFloatPrgm0 as its Newton-Raphson constant.
+ * @note Call @ref sampling_recip_init before this function.
  */
-template <bool legacy_compat = true>
+template <bool is_fp32_dest_acc_en>
 inline void calculate_sampling_recip_scalar() {
     sfpi::vFloat in = sfpi::dst_reg[0];
-    sfpi::vFloat out = sampling_recip_value<legacy_compat>(in);
-    if constexpr (!(DST_ACCUM_MODE || APPROX)) {
+    sfpi::vFloat out = sampling_recip_value<is_fp32_dest_acc_en>(in);
+    if constexpr (!(is_fp32_dest_acc_en || APPROX)) {
         out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
     }
     sfpi::dst_reg[0] = out;
@@ -137,16 +107,16 @@ inline void calculate_sampling_binary_comp_first_column(
     for (int d = 0; d < ITERATIONS_FIRST_COLUMN; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vFloat result = sfpi::vConst0;
+        sfpi::vFloat result = 0.0f;
 
         if constexpr (OP == SfpuType::le) {
-            v_if(in0 <= in1) { result = sfpi::vConst1; }
+            v_if(in0 <= in1) { result = 1.0f; }
             v_endif;
         } else if constexpr (OP == SfpuType::lt) {
-            v_if(in0 < in1) { result = sfpi::vConst1; }
+            v_if(in0 < in1) { result = 1.0f; }
             v_endif;
         } else {
-            v_if(in0 >= in1) { result = sfpi::vConst1; }
+            v_if(in0 >= in1) { result = 1.0f; }
             v_endif;
         }
 

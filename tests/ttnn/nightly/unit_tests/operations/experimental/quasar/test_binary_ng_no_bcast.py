@@ -74,6 +74,26 @@ _MIXED_WIDTH = _width_sharded_config([16 * 32, 4 * 32], ttnn.CoreRangeSet({ttnn.
 # same shape and 64 tiles/core, but the grid differs from _MIXED_HEIGHT so an input on it is NoC-read,
 # not borrowed.
 _MIXED_HEIGHT_ALT = _height_sharded_config([4 * 32, 16 * 32], ttnn.CoreRangeSet({ttnn.CoreRange((1, 0), (1, 3))}))
+# Width shards on _MIXED_HEIGHT's grid: the same cores, a different shard spec. Borrowing in place would
+# map core i's input rows onto output columns it does not hold.
+_MIXED_WIDTH_ON_HEIGHT_GRID = _width_sharded_config(
+    [16 * 32, 4 * 32], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))})
+)
+# Height and block shards with ONE shard spec on a 2x2 grid: the height layout puts its two [256, 512]
+# shards on (0,0) and (1,0), the block layout, one shard column wide, on (0,0) and (0,1). Only the full
+# memory config tells them apart, so borrowing in place would move the second shard to another core.
+_SAME_SPEC_GRID = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 1))})
+_SAME_SPEC_HEIGHT = _height_sharded_config([8 * 32, 16 * 32], _SAME_SPEC_GRID)
+_SAME_SPEC_BLOCK = _block_sharded_config([8 * 32, 16 * 32], _SAME_SPEC_GRID)
+# Height shards on that grid in row-major and in column-major core order: shard 1 sits on (1,0) in one
+# and on (0,1) in the other. Built from a ShardSpec, because create_sharded_memory_config transposes the
+# shard shape for column-major.
+_ORIENT_ROW = _height_sharded_config([4 * 32, 16 * 32], _SAME_SPEC_GRID)
+_ORIENT_COL = ttnn.MemoryConfig(
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ttnn.BufferType.L1,
+    ttnn.ShardSpec(_SAME_SPEC_GRID, [4 * 32, 16 * 32], ttnn.ShardOrientation.COL_MAJOR),
+)
 _I = ttnn.DRAM_MEMORY_CONFIG
 # L1-interleaved (vs DRAM-interleaved _I). is_native_L1_sharding can hold with an L1-interleaved input
 # (a single L1-sharded operand satisfies it), but an interleaved operand has no shard spec to borrow, so
@@ -82,8 +102,8 @@ _IL1 = ttnn.L1_MEMORY_CONFIG
 
 # --- Generality matrix: all three operands sharded with DIFFERENT strategies, and/or each operand on a
 # DISTINCT core grid. All describe the same _MIXED_SHAPE (16x16 tiles); all grids fit the Quasar 8x4
-# worker grid. The factory borrows only when all three operands are L1-sharded on ONE matching grid (the
-# is_native case); three different strategies (or grids) is not native, so NOTHING is borrowed -- every
+# worker grid. The factory borrows only when all three operands are L1-sharded with ONE memory config (the
+# is_native case); three different strategies (or grids) are not native, so NOTHING is borrowed -- every
 # operand, output included, is read/written via its sharding-aware TensorAccessor. This exercises the
 # all-NoC path across strategy AND grid boundaries, which the H/B same-strategy matrix above never does.
 #
@@ -257,8 +277,8 @@ def test_no_bcast_sfpu_divide(device, dtype_tt, layout):
 # (a_mem, b_mem, out_mem) permutations beyond the uniform III / SSS already covered by
 # test_no_bcast_interleaved / test_no_bcast_sharded. The id encodes the layout of each operand:
 #   I = DRAM-interleaved (NoC), IL1 = L1-interleaved (NoC), H/B/W = height/block/width sharded. The
-#   factory borrows ONLY when all three operands are L1-sharded on one matching grid (the is_native
-#   case); any interleaved operand, or a strategy/grid mismatch, takes the all-NoC path where every
+#   factory borrows ONLY when all three operands are L1-sharded with one memory config (the is_native
+#   case); any interleaved operand, or a different memory config, takes the all-NoC path where every
 #   operand (output included) is read/written via its own sharding-aware TensorAccessor.
 _MIXED_CASES = [
     # NOTE: the interleaved-OUTPUT mixed cases (H.I.I, I.H.I, H.H.I, W.I.I) live in _MIXED_INTERLEAVED_OUT_CASES
@@ -280,6 +300,14 @@ _MIXED_CASES = [
     # --- Grid-mismatch: input-a sharded on a DIFFERENT grid than the sharded output => grids do not all
     #     match (not is_native) => nothing borrowed, every operand NoC-read/written. ---
     pytest.param(_MIXED_HEIGHT_ALT, _MIXED_HEIGHT, _MIXED_HEIGHT, id="Halt.H.H"),  # S(grid!=out).S.S
+    # --- Same grid, different shard spec: height-sharded inputs into a width-sharded output on the same
+    #     column. The grids match but the specs do not, so nothing may be borrowed. ---
+    pytest.param(_MIXED_HEIGHT, _MIXED_HEIGHT, _MIXED_WIDTH_ON_HEIGHT_GRID, id="H.H.W@same-grid"),
+    # --- One shard spec, different layout: height-sharded inputs into a block-sharded output. The shard
+    #     specs compare equal, but the shards sit on different cores, so nothing may be borrowed. ---
+    pytest.param(_SAME_SPEC_HEIGHT, _SAME_SPEC_HEIGHT, _SAME_SPEC_BLOCK, id="H.H.B@same-spec"),
+    # --- One shard shape and grid, different core order: row-major inputs into a column-major output. ---
+    pytest.param(_ORIENT_ROW, _ORIENT_ROW, _ORIENT_COL, id="H.H.Hcol@same-grid"),
     # --- Width sharding: one uniform all-width case (borrowed) + mixed-width case (all NoC). The
     #     interleaved-output W.I.I case is in _MIXED_INTERLEAVED_OUT_CASES (needs _BIG_SHAPE). ---
     pytest.param(_MIXED_WIDTH, _MIXED_WIDTH, _MIXED_WIDTH, id="W.W.W"),  # uniform width, one grid (all borrowed)
@@ -296,8 +324,25 @@ def test_no_bcast_mixed_layout(device, op_name, a_mem, b_mem, out_mem):
     _run_mixed(device, op_name, a_mem, b_mem, out_mem, ttnn.bfloat16, pcc=pcc)
 
 
+@pytest.mark.parametrize("op_name", ["add", "multiply"])
+def test_no_bcast_sharded_output_tensor_decides_borrowing(device, op_name):
+    # memory_config matches the inputs, but the supplied output tensor is block-sharded with the same shard
+    # spec. The op must follow the output tensor's own config, so nothing may be borrowed.
+    pcc = 0.99 if op_name == "multiply" else None
+    _run_mixed(
+        device,
+        op_name,
+        _SAME_SPEC_HEIGHT,
+        _SAME_SPEC_HEIGHT,
+        _SAME_SPEC_HEIGHT,
+        ttnn.bfloat16,
+        pcc=pcc,
+        output_tensor_mem=_SAME_SPEC_BLOCK,
+    )
+
+
 # --- Generality cases: all-three-sharded with DIFFERENT strategies, and distinct-grid-per-operand. ---
-# With three different strategies (or grids) the operands are not all on one matching grid, so the config
+# With three different strategies (or grids) the operands do not share one memory config, so the config
 # is not is_native and NOTHING is borrowed -- every operand, the output included, is read/written via its
 # sharding-aware TensorAccessor. The id is a.b.out where H/W/B is the strategy; a "@gN" suffix marks an
 # operand on a distinct (non-canonical) grid.

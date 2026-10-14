@@ -13,7 +13,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -46,6 +45,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -213,8 +213,7 @@ bool validation(
     uint32_t core_id = 0;
     for (auto core : all_cores) {
         std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromDeviceL1(
-            device->get_devices()[0], core, cb_addr, num_tiles_cb * single_tile_size, result_vec);
+        slow_dispatch::ReadFromL1(*device, core, cb_addr, num_tiles_cb * single_tile_size, result_vec);
 
         uint32_t num_datum_per_block = block_h * block_w * num_datum_per_slice;
         uint32_t tensor_slice_stride = core_id * num_datum_per_slice;

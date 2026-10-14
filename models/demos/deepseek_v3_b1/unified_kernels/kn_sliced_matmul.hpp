@@ -13,7 +13,7 @@
 #elif defined(COMPILE_FOR_TRISC)
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/matmul.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
+#include "api/compute/experimental/custom_mm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/experimental/pack_block.h"
 #endif
@@ -108,7 +108,7 @@ struct KNSlicedMatmul {
             constexpr bool finalize = true;
             constexpr uint32_t out_w = CTArgs::out_w;
 
-            reconfig_data_format<SrcOrder::Reverse, true>(args.act_cb, args.weights_cb);
+            reconfig_full_operand<SrcOrder::Reverse>(args.act_cb, args.weights_cb);
             pack_reconfig_data_format<true>(args.out_cb);
 
             custom_mm_block_init_short<transpose, split_acc, dense_packing>(

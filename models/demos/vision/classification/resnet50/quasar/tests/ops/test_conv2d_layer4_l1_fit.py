@@ -181,7 +181,7 @@ def _id4(cfg):
     return f"{tag}_{k[0]}x{k[1]}_{ic}to{oc}_s{s}_{h}x{w}_HS"
 
 
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("cfg", _LAYER4, ids=[_id4(c) for c in _LAYER4])
 def test_quasar_conv2d_layer4_l1_fit(mesh_device, cfg):

@@ -28,27 +28,39 @@ namespace detail {
 // SFPU MAX fold
 template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_init() {
-    static_assert(format == DataFormat::Int32, "SFPU reduce MAX fold: Int32 only");
-    binary_max_int32_tile_init();
+    if constexpr (format == DataFormat::Int32) {
+        binary_max_int32_tile_init();
+    } else {
+        binary_max_tile_init();
+    }
 }
 
 template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
-    static_assert(format == DataFormat::Int32, "SFPU reduce MAX fold: Int32 only");
-    binary_max_int32_tile(a, b, out);
+    if constexpr (format == DataFormat::Int32) {
+        binary_max_int32_tile(a, b, out);
+    } else {
+        binary_max_tile(a, b, out);
+    }
 }
 
 // SFPU MIN fold
 template <DataFormat format>
 ALWI void sfpu_reduce_min_fold_init() {
-    static_assert(format == DataFormat::Int32, "SFPU reduce MIN fold: Int32 only");
-    binary_min_int32_tile_init();
+    if constexpr (format == DataFormat::Int32) {
+        binary_min_int32_tile_init();
+    } else {
+        binary_min_tile_init();
+    }
 }
 
 template <DataFormat format>
 ALWI void sfpu_reduce_min_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
-    static_assert(format == DataFormat::Int32, "SFPU reduce MIN fold: Int32 only");
-    binary_min_int32_tile(a, b, out);
+    if constexpr (format == DataFormat::Int32) {
+        binary_min_int32_tile(a, b, out);
+    } else {
+        binary_min_tile(a, b, out);
+    }
 }
 
 // SFPU cross-tile add. Int32 uses add_int_tile; Float32 uses add_binary_tile for
@@ -62,7 +74,7 @@ ALWI void sfpu_reduce_sum_fold_init() {
 #ifndef ARCH_QUASAR
         add_binary_tile_init();
 #else
-        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU mean is not supported on Quasar");
+        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU reduce is not supported on Quasar");
 #endif
     }
 }
@@ -75,13 +87,13 @@ ALWI void sfpu_reduce_sum_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
 #ifndef ARCH_QUASAR
         add_binary_tile(a, b, out);
 #else
-        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU mean is not supported on Quasar");
+        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU reduce is not supported on Quasar");
 #endif
     }
 }
 
-// Pool-type dispatched cross-tile fold init (MAX -> binary_max, MIN -> binary_min, SUM -> add_int).
-// Used by compute_kernel_lib::reduce() for the Int32 SFPU path.
+// Pool-type dispatched cross-tile fold init (MAX -> binary_max, MIN -> binary_min, SUM -> add).
+// Used by compute_kernel_lib::reduce() for the Int32 SFPU path and for accurate fp32 reduces.
 template <PoolType pool_type, DataFormat format>
 ALWI void sfpu_reduce_fold_init() {
     if constexpr (pool_type == PoolType::SUM) {
@@ -199,18 +211,16 @@ ALWI constexpr uint32_t get_dst_index(const AccumulateT& accumulate) {
     }
 }
 
-template <
-    PoolType reduce_type,
-    ReduceDim reduce_dim,
-    DataFormat reduce_format,
-    typename AccumulateT,
-    bool is_sfpu = false>
+template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool is_sfpu = false>
 ALWI void reload_accumulator_if_needed(
-    DataflowBuffer& accum_dfb, uint32_t input_dfb_id, uint32_t scaler_dfb_id, const AccumulateT& accumulate) {
+    DataflowBuffer& accum_dfb,
+    uint32_t input_dfb_id,
+    uint32_t scaler_dfb_id,
+    const AccumulateT& accumulate,
+    uint32_t dest_chunk_size = 1) {
     if constexpr (is_accumulate_v<AccumulateT>) {
         if (!accumulate.is_first()) {  // Reload on all iterations except first
-            constexpr uint32_t onetile = 1;
-            accum_dfb.wait_front(onetile);
+            accum_dfb.wait_front(dest_chunk_size);
             constexpr bool swap_operands = reduce_swaps_operands<reduce_type, reduce_dim, is_sfpu>();
             const uint32_t prev_srca_cb = swap_operands ? scaler_dfb_id : input_dfb_id;
 
@@ -221,23 +231,28 @@ ALWI void reload_accumulator_if_needed(
             // A vanilla copy_tile reload would leave the running max at col 0, but the
             // next GMPOOL iteration only reads row 0 — so it would be silently dropped.
             // Within-face-16x16-transpose on reload puts col 0 of each face back at row 0
-            // of that face, restoring the exact layout GMPOOL expects.
+            // of that face, restoring the exact layout GMPOOL expects. The SFPU path never runs
+            // GMPOOL — its running max is a plain full-tile value — so it must not transpose.
             constexpr bool reload_within_face_transpose =
-                (reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW);
+                (reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW && !is_sfpu);
 
             reconfig_data_format_srca(prev_srca_cb, accumulate.config.cb_accumulator);
-            copy_tile_to_dst_init_short(
+            copy_init(
                 accumulate.config.cb_accumulator,
                 /*transpose_of_faces=*/0,
                 /*transpose_within_16x16_face=*/reload_within_face_transpose ? 1u : 0u);
-            copy_tile(accumulate.config.cb_accumulator, 0, accumulate.config.dst_index);
-            accum_dfb.pop_front(onetile);
+            for (uint32_t tile = 0; tile < dest_chunk_size; ++tile) {
+                copy_tile(accumulate.config.cb_accumulator, tile, accumulate.config.dst_index + tile);
+            }
+            accum_dfb.pop_front(dest_chunk_size);
 
             // CRITICAL: Re-init after copy_tile corrupts SRCA config
             // Use short version since packer config is still valid from initial init
             // Pass accumulator DFB as old_dfb_id to reconfigure data format from accumulator to input DFB
             if constexpr (is_sfpu) {
-                detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
+                // Point SrcA back at the input for the next fold; the caller does the fold init.
+                reconfig_data_format_srca(accumulate.config.cb_accumulator, input_dfb_id);
+                copy_init(input_dfb_id);
             } else {
                 reduce_init_short_with_dt<reduce_type, reduce_dim>(
                     accumulate.config.cb_accumulator, input_dfb_id, scaler_dfb_id);
@@ -258,15 +273,9 @@ ALWI void assert_input_dfb_size(uint32_t input_dfb_id, uint32_t tiles_per_bulk, 
     }
 }
 
-template <ReduceInputPolicy input_policy>
-ALWI void assert_output_dfb_size(uint32_t output_dfb_id, uint32_t total_outputs) {
-    if constexpr (should_pop(input_policy)) {
-        // Per-tile reserve/push: only needs 1 page
-        ASSERT(get_dfb_num_pages(output_dfb_id) >= 1);
-    } else {
-        // Bulk reserve upfront: needs all outputs
-        ASSERT(get_dfb_num_pages(output_dfb_id) >= total_outputs);
-    }
+ALWI void assert_output_dfb_size(uint32_t output_dfb_id) {
+    // Outputs are reserved and pushed one tile at a time for every input policy.
+    ASSERT(get_dfb_num_pages(output_dfb_id) >= 1);
 }
 
 // =============================================================================
@@ -289,7 +298,7 @@ ALWI void reduce(
     ReduceInputMemoryLayout input_memory_layout,
     AccumulateT accumulate,
     PostReduceOp post_reduce_op) {
-    // Int32 MAX is routed to the SFPU path via is_sfpu_reduce_path<>(); all other formats use FPU/GMPOOL.
+    // Int32 and Accurate fp32 route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
     // =============================================================================
     // Static Assertions (compile-time validation)
@@ -303,7 +312,8 @@ ALWI void reduce(
         "Int32 AVG (mean) is not supported");
     static_assert(
         reduce_type != PoolType::MIN || is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>(),
-        "MIN is only valid on the Int32 SFPU reduce path; the FPU path implements MIN as -MAX(-x)");
+        "MIN requires an SFPU path: Int32, bf16, or Accurate fp32, bf16 only on Quasar, on REDUCE_ROW/COL. "
+        "The FPU has no min pool at all, so every other MIN is lowered to -MAX(-x) and arrives as PoolType::MAX");
     static_assert(
         is_accumulation_type_v<AccumulateT>,
         "AccumulateT must be a valid accumulation type (NoAccumulation or Accumulate)");
@@ -379,8 +389,10 @@ ALWI void reduce(
     }
     // Initialization
     if constexpr (is_sfpu) {
-        init_sfpu(input_dfb_id, output_dfb_id);
-        copy_tile_to_dst_init_short(input_dfb_id);
+        // The datacopy path into DEST; the one compute_kernel_hw_startup in kernel_main plus the
+        // reconfig above already established the HW config, so this only re-points the unpacker
+        // (replaces the old init_sfpu + copy_tile_to_dst_init_short, which redid a full hw config).
+        copy_init(input_dfb_id);
     } else {
         reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, output_dfb_id);
     }
@@ -399,14 +411,8 @@ ALWI void reduce(
         const uint32_t stride = (input_memory_layout.row_stride > 0) ? input_memory_layout.row_stride : Wt;
         const uint32_t tiles_per_bulk = Ht * stride;
         const uint32_t total_input_tiles = tiles_per_bulk * num_batches;
-        const uint32_t total_output_tiles = num_batches;
         UNPACK((assert_input_dfb_size<input_policy>(input_dfb_id, tiles_per_bulk, total_input_tiles)));
-        PACK((assert_output_dfb_size<input_policy>(output_dfb_id, total_output_tiles)));
-
-        // No-pop modes: bulk reserve output upfront
-        if constexpr (!should_pop(input_policy)) {
-            output_dfb.reserve_back(total_output_tiles);
-        }
+        PACK((assert_output_dfb_size(output_dfb_id)));
 
         // PersistentPolicy: wait for all tiles upfront
         if constexpr (waits_upfront(input_policy)) {
@@ -423,7 +429,7 @@ ALWI void reduce(
             tile_regs_acquire();
 
             // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-            reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
+            reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
                 accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
 
             const uint32_t dst_idx = get_dst_index(accumulate);
@@ -451,17 +457,12 @@ ALWI void reduce(
             // No-op when PostReduceOp is the default NoOp.
             post_reduce_op(dst_idx);
 
-            // Pop modes: reserve per-batch
-            if constexpr (should_pop(input_policy)) {
-                output_dfb.reserve_back(onetile);
-            }
+            output_dfb.reserve_back(onetile);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(get_dst_index(accumulate), output_dfb_id);
             tile_regs_release();
-            if constexpr (should_pop(input_policy)) {
-                output_dfb.push_back(onetile);
-            }
+            output_dfb.push_back(onetile);
 
             // BulkWaitBulkPop: pop all tiles after processing
             if constexpr (waits_bulk(input_policy)) {
@@ -473,25 +474,14 @@ ALWI void reduce(
                 batch_offset += tiles_per_bulk;
             }
         }
-
-        // No-pop modes: bulk push output at end
-        if constexpr (!should_pop(input_policy)) {
-            output_dfb.push_back(total_output_tiles);
-        }
     } else if constexpr (reduce_dim == ReduceDim::REDUCE_ROW) {
         // =================================================================
         // REDUCE_ROW: W reduction - each row -> 1 output tile (Ht outputs per batch)
         // =================================================================
         const uint32_t stride = (input_memory_layout.row_stride > 0) ? input_memory_layout.row_stride : Wt;
-        const uint32_t total_output_tiles = Ht * num_batches;
         const uint32_t total_input_tiles = Ht * stride * num_batches;
         UNPACK((assert_input_dfb_size<input_policy>(input_dfb_id, Wt, total_input_tiles)));
-        PACK((assert_output_dfb_size<input_policy>(output_dfb_id, total_output_tiles)));
-
-        // No-pop modes: bulk reserve output upfront
-        if constexpr (!should_pop(input_policy)) {
-            output_dfb.reserve_back(total_output_tiles);
-        }
+        PACK((assert_output_dfb_size(output_dfb_id)));
 
         // PersistentPolicy: wait for all tiles upfront
         if constexpr (waits_upfront(input_policy)) {
@@ -509,10 +499,11 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
-                    if (Wt > 1) {
+                    // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
+                    if (Wt > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
                         detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
                     }
                 }
@@ -551,34 +542,20 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize
                 if constexpr (is_sfpu) {
-#ifndef ARCH_QUASAR
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     sfpu_reduce<reduce_type, reduce_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
-#else
-                    // The SFPU reduce path (Int32, or accurate-fp32 SUM) is unported on Quasar:
-                    // sfpu_reduce/_init are ARCH_QUASAR-guarded out. is_sfpu_reduce_path() is false for the
-                    // FPU/GMPOOL paths Quasar does support (e.g. avg_pool SUM, MAX), so this branch is dead
-                    // there; static_assert makes an actual Quasar SFPU-reduce instantiation fail loudly
-                    // rather than silently drop the finalize.
-                    static_assert(!is_sfpu, "SFPU reduce path is not supported on Quasar");
-#endif
                 }
 
                 // Call post-reduce operation (e.g., recip_tile for softmax)
                 // User's lambda can include reduce_uninit() if needed before custom ops
                 post_reduce_op(dst_idx);
 
-                // Pop modes: reserve per-row to avoid deadlock
-                if constexpr (should_pop(input_policy)) {
-                    output_dfb.reserve_back(onetile);
-                }
+                output_dfb.reserve_back(onetile);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst_idx, output_dfb_id);
                 tile_regs_release();
-                if constexpr (should_pop(input_policy)) {
-                    output_dfb.push_back(onetile);
-                }
+                output_dfb.push_back(onetile);
 
                 // BulkWaitBulkPop: pop all tiles after processing
                 if constexpr (waits_bulk(input_policy)) {
@@ -590,11 +567,6 @@ ALWI void reduce(
                     index_offset += stride;
                 }
             }
-        }
-
-        // No-pop modes: bulk push output at end
-        if constexpr (!should_pop(input_policy)) {
-            output_dfb.push_back(total_output_tiles);
         }
     } else {
         // =================================================================
@@ -609,15 +581,12 @@ ALWI void reduce(
         constexpr uint32_t chunk_size = is_sfpu ? (DEST_AUTO_LIMIT - 1) : DEST_AUTO_LIMIT;
         const uint32_t stride = (input_memory_layout.row_stride > 0) ? input_memory_layout.row_stride : Wt;
         const uint32_t tiles_per_bulk = Ht * stride;
-        const uint32_t total_output_tiles = Wt * num_batches;
         const uint32_t total_input_tiles = tiles_per_bulk * num_batches;
-        UNPACK((assert_input_dfb_size<input_policy>(input_dfb_id, Ht * chunk_size, total_input_tiles)));
-        PACK((assert_output_dfb_size<input_policy>(output_dfb_id, total_output_tiles)));
-
-        // No-pop modes: bulk reserve output upfront
-        if constexpr (!should_pop(input_policy)) {
-            output_dfb.reserve_back(total_output_tiles);
-        }
+        // Largest bulk wait is Ht * min(chunk_size, Wt): a narrow input (e.g. Wt == 1) never waits
+        // on a full DEST-sized chunk, so don't demand a DFB that deep.
+        const uint32_t max_chunk = (Wt < chunk_size) ? Wt : chunk_size;
+        UNPACK((assert_input_dfb_size<input_policy>(input_dfb_id, Ht * max_chunk, total_input_tiles)));
+        PACK((assert_output_dfb_size(output_dfb_id)));
 
         // PersistentPolicy: wait for all tiles upfront
         if constexpr (waits_upfront(input_policy)) {
@@ -639,10 +608,11 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
-                    accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
+                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
+                    accum_dfb, input_dfb_id, scaler_dfb_id, accumulate, current_chunk);
                 if constexpr (is_sfpu) {
-                    if (Ht > 1) {
+                    // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
+                    if (Ht > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
                         detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
                     }
                 }
@@ -690,18 +660,12 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize per output slot
                 if constexpr (is_sfpu) {
-#ifndef ARCH_QUASAR
                     const uint32_t sfpu_base_dst = get_dst_index(accumulate);
                     sfpu_reduce_init<reduce_type, reduce_format>();
                     for (uint32_t k = 0; k < current_chunk; ++k) {
                         sfpu_reduce<reduce_type, reduce_format, reduce_dim>(
                             sfpu_base_dst + k, /*ct_dim=*/1, /*rt_dim=*/1);
                     }
-#else
-                    // SFPU reduce path unported on Quasar (see the matching guard above); dead for the
-                    // FPU/GMPOOL paths Quasar supports, static_assert catches a real Quasar SFPU reduce.
-                    static_assert(!is_sfpu, "SFPU reduce path is not supported on Quasar");
-#endif
                 }
 
                 // Post-reduce operation for each output tile in chunk
@@ -713,14 +677,9 @@ ALWI void reduce(
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t i = 0; i < current_chunk; ++i) {
-                    // Pop modes: reserve/push per output tile
-                    if constexpr (should_pop(input_policy)) {
-                        output_dfb.reserve_back(onetile);
-                    }
+                    output_dfb.reserve_back(onetile);
                     pack_tile(base_dst + i, output_dfb_id);
-                    if constexpr (should_pop(input_policy)) {
-                        output_dfb.push_back(onetile);
-                    }
+                    output_dfb.push_back(onetile);
                 }
                 tile_regs_release();
 
@@ -733,11 +692,6 @@ ALWI void reduce(
             if constexpr (!should_pop(input_policy)) {
                 batch_offset += tiles_per_bulk;
             }
-        }
-
-        // No-pop modes: bulk push output at end
-        if constexpr (!should_pop(input_policy)) {
-            output_dfb.push_back(total_output_tiles);
         }
     }
 

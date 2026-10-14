@@ -9,7 +9,7 @@
 namespace ttsl {
 namespace {
 
-TEST(IndestructibleTest, Basic) {
+TEST(IndestructibleTest, CPU_Basic) {
     struct DangerouslyDestructible {
         ~DangerouslyDestructible() {
             // Wrapping in a lambda, as `FAIL()` returns `void`.

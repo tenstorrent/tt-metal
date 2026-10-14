@@ -14,9 +14,12 @@ using namespace tt::constants;
 
 namespace ttnn::prim {
 
-namespace {
-bool can_use_sharded_optimized_factory(
+bool can_use_tilize_with_val_padding_sharded_factory(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
+    // Its CBs alias the input and output shards, so both must be in L1.
+    if (!input_tensor.memory_config().is_l1() || !operation_attributes.output_mem_config.is_l1()) {
+        return false;
+    }
     if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED) {
         return false;
     }
@@ -38,12 +41,10 @@ bool can_use_sharded_optimized_factory(
     return !operation_attributes.sub_core_grids.has_value();
 }
 
-}  // namespace
-
 TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDeviceOperation::select_program_factory(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     if (input_tensor.memory_config().is_sharded()) {
-        if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
+        if (can_use_tilize_with_val_padding_sharded_factory(operation_attributes, input_tensor)) {
             return TilizeWithValPaddingMultiCoreShardedFactory{};
         }
         return TilizeWithValPaddingMultiCoreDefaultFactory{};
@@ -101,6 +102,16 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             is_floating_point(out_dt) && out_dt != DataType::FP8_E4M3,
             "FP8_E4M3 input to tilize requires a float TILE output (FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B)");
+        // The Blackhole 8-bit unpack-tilize path corrupts odd rows when the output block is a single
+        // column tile (ct_dim == 1, i.e. one tile per row); wider outputs are correct. Reject the broken
+        // narrow case for fp8 to avoid silently-wrong data (tt-llk narrow 8-bit tilize bug).
+        TT_FATAL(
+            operation_attributes.output_padded_shape[-1] / TILE_WIDTH > 1,
+            "FP8_E4M3 tilize_with_val_padding requires more than one tile per row (padded width {} must exceed "
+            "one tile of {}); the single-tile-per-row 8-bit unpack-tilize path is currently broken on this "
+            "architecture",
+            operation_attributes.output_padded_shape[-1],
+            TILE_WIDTH);
     }
 
     if (input_shape.rank() == 1) {
@@ -169,7 +180,7 @@ tt::tt_metal::TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_spe
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
 
-    if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
+    if (can_use_tilize_with_val_padding_sharded_factory(operation_attributes, input_tensor)) {
         // This case only applies when we expect the optimized sharded path to be taken. This bit forces the output
         // tensor to be width-sharded.
         log_warning(
@@ -224,7 +235,11 @@ Tensor tilize_with_val_padding(
             .output_padded_shape = output_padded_shape,
             .pad_value = pad_value,
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
-            .output_dtype = output_dtype.value_or(input_tensor.dtype()),
+            // FP8_E4M3 is ROW_MAJOR-only, so it can never be the TILE output dtype. When the caller
+            // doesn't request a specific output dtype, default an FP8 input to FLOAT32 (the format it
+            // unpacks to in DEST) instead of echoing the illegal FP8 dtype.
+            .output_dtype = output_dtype.value_or(
+                input_tensor.dtype() == DataType::FP8_E4M3 ? DataType::FLOAT32 : input_tensor.dtype()),
             .use_multicore = use_multicore,
             .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,

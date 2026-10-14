@@ -15,7 +15,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/tile_move_copy.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/eltwise_mul_scalar.h"
+#include "api/compute/experimental/eltwise_mul_scalar.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -126,7 +126,7 @@ struct GatedReduce {
             // Init once before the loop
             // Assumes all input cbs are configured the same, and the intermediate cb is configured the same as the
             // output cb
-            reconfig_data_format<SrcOrder::Regular, true>(args.group1_cb, args.group1_cb);
+            reconfig_full_operand(args.group1_cb, args.group1_cb);
             pack_reconfig_data_format<true>(args.out_cb);
             silu_tile_init();
             for (uint32_t k = 0; k < k_num_tiles; k++) {

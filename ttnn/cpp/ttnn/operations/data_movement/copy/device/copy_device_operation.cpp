@@ -53,7 +53,7 @@ bool can_use_specialized_factory(const CopyParams& operation_attributes, const C
         total_cb_size += num_output_units * aligned_output_unit_size;
     }
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     const uint32_t max_l1_size =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 

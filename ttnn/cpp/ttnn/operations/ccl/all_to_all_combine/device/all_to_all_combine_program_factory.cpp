@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::ccl {
@@ -349,7 +350,7 @@ tt::tt_metal::WorkloadDescriptor AllToAllCombineDeviceOperation::AllToAllCombine
     auto final_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
     tt::tt_metal::distributed::Synchronize(
-        mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+        *mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
 
     WorkloadDescriptor workload_descriptor;
     workload_descriptor.semaphores.push_back(init_barrier_semaphore);

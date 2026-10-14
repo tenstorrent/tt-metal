@@ -1,6 +1,9 @@
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/tools/scaleout)
 
-add_executable(test_factory_system_descriptor test_factory_system_descriptor.cpp)
+include(sources.cmake)
+
+add_executable(test_factory_system_descriptor)
+target_sources(test_factory_system_descriptor PRIVATE ${TEST_FACTORY_SYSTEM_DESCRIPTOR_SRCS})
 
 # Add the protobuf generated headers directory for tests
 target_include_directories(test_factory_system_descriptor SYSTEM PRIVATE ${Metalium_BINARY_DIR}/tools/scaleout)
@@ -19,7 +22,8 @@ target_link_libraries(
 add_dependencies(test_factory_system_descriptor scaleout_generated_protos)
 
 # Test for descriptor merger functionality
-add_executable(test_descriptor_merger test_descriptor_merger.cpp)
+add_executable(test_descriptor_merger)
+target_sources(test_descriptor_merger PRIVATE ${TEST_DESCRIPTOR_MERGER_SRCS})
 
 target_include_directories(test_descriptor_merger SYSTEM PRIVATE ${Metalium_BINARY_DIR}/tools/scaleout)
 
@@ -36,13 +40,8 @@ target_link_libraries(
 add_dependencies(test_descriptor_merger scaleout_generated_protos)
 
 # Test for link retraining validation
-add_executable(
-    test_link_retraining
-    test_link_retraining.cpp
-    ${PROJECT_SOURCE_DIR}/tools/scaleout/validation/utils/cluster_validation_utils.cpp
-    ${PROJECT_SOURCE_DIR}/tools/scaleout/validation/utils/ethernet_link_metrics_serialization.cpp
-    ${PROJECT_SOURCE_DIR}/tools/scaleout/validation/utils/ethernet_link_api.cpp
-)
+add_executable(test_link_retraining)
+target_sources(test_link_retraining PRIVATE ${TEST_LINK_RETRAINING_SRCS})
 
 target_include_directories(
     test_link_retraining
@@ -76,7 +75,8 @@ target_link_libraries(
 add_dependencies(test_link_retraining scaleout_generated_protos)
 
 # Test for MGD generation from cabling descriptors
-add_executable(test_cabling_descriptor_mgd_generation test_cabling_descriptor_mgd_generation.cpp)
+add_executable(test_cabling_descriptor_mgd_generation)
+target_sources(test_cabling_descriptor_mgd_generation PRIVATE ${TEST_CABLING_DESCRIPTOR_MGD_GENERATION_SRCS})
 
 target_include_directories(
     test_cabling_descriptor_mgd_generation
@@ -109,7 +109,8 @@ add_dependencies(test_cabling_descriptor_mgd_generation fabric_generated_protos)
 add_dependencies(test_cabling_descriptor_mgd_generation tt_metal)
 
 # Test for host_id assignment in DFS order (matching Python tt-CableGen behavior)
-add_executable(test_host_id_assignment test_host_id_assignment.cpp)
+add_executable(test_host_id_assignment)
+target_sources(test_host_id_assignment PRIVATE ${TEST_HOST_ID_ASSIGNMENT_SRCS})
 
 target_include_directories(test_host_id_assignment SYSTEM PRIVATE ${Metalium_BINARY_DIR}/tools/scaleout)
 
@@ -126,7 +127,8 @@ target_link_libraries(
 add_dependencies(test_host_id_assignment scaleout_generated_protos)
 
 # Test for opt-in include/exclude instance filtering
-add_executable(test_instance_filter test_instance_filter.cpp)
+add_executable(test_instance_filter)
+target_sources(test_instance_filter PRIVATE ${TEST_INSTANCE_FILTER_SRCS})
 
 target_include_directories(test_instance_filter SYSTEM PRIVATE ${Metalium_BINARY_DIR}/tools/scaleout)
 
@@ -142,7 +144,8 @@ target_link_libraries(
 # Make sure protobuf files are generated before compiling instance filter tests
 add_dependencies(test_instance_filter scaleout_generated_protos)
 
-add_executable(test_generate_rank_bindings test_generate_rank_bindings.cpp)
+add_executable(test_generate_rank_bindings)
+target_sources(test_generate_rank_bindings PRIVATE ${TEST_GENERATE_RANK_BINDINGS_SRCS})
 
 target_include_directories(
     test_generate_rank_bindings

@@ -9,6 +9,7 @@ from loguru import logger
 from tracy import signpost
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.common.utility_functions import skip_for_wormhole_b0
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
@@ -87,14 +88,29 @@ def compute_reference_reduce_to_root(
     return torch.cat(l_final_cores, dim=1), torch.cat(s_final_cores, dim=1), torch.cat(m_final_cores, dim=1)
 
 
-@pytest.mark.skip(
-    reason="Consistently failing with data mismatch after trace replay on all BH multi-chip setups. See #39098"
-)
+# Tolerances for bfloat16 with exponentials.
+RTOL = 0.01
+ATOL = 0.06
+PCC = 0.99
+
+
+def assert_output_matches(name, output, reference, context=""):
+    """Element-wise closeness plus PCC, so a systematic shift and a few corrupted elements both fail."""
+    suffix = f" {context}" if context else ""
+    assert torch.allclose(
+        output, reference, rtol=RTOL, atol=ATOL
+    ), f"{name} tensor output does not match reference{suffix}"
+
+    passing, message = comp_pcc(reference, output, PCC)
+    logger.info(f"{name} tensor{suffix}: {message}")
+    assert passing, f"{name} tensor output failed PCC check{suffix}: {message}"
+
+
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 225280}),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 524288}),
     ],
     indirect=["device_params"],
     ids=["fabric_1d_linear_trace"],
@@ -311,24 +327,112 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     out_s_root = out_s_torch[root_device_idx]
     out_m_root = out_m_torch[root_device_idx]
 
-    # Tolerances for bfloat16 with exponentials
-    rtol = 0.01
-    atol = 0.06
+    # S and M only carry a meaningful value in the first column of each core's shard.
+    cols_to_check = [i * 32 for i in range(num_cores)]
 
-    # Check L tensor
-    l_match = torch.allclose(out_l_root, l_ref, rtol=rtol, atol=atol)
-    assert l_match, "L tensor output does not match reference after trace execution"
+    assert_output_matches("L", out_l_root, l_ref, "after trace execution")
+    assert_output_matches("S", out_s_root[:, cols_to_check], s_ref[:, cols_to_check], "after trace execution")
+    assert_output_matches("M", out_m_root[:, cols_to_check], m_ref[:, cols_to_check], "after trace execution")
 
-    # Check S tensor (only column 0)
-    s_cols_to_check = [i * 32 for i in range(8)]
-    s_output_col0 = out_s_root[:, s_cols_to_check]
-    s_ref_col0 = s_ref[:, s_cols_to_check]
-    s_match = torch.allclose(s_output_col0, s_ref_col0, rtol=rtol, atol=atol)
-    assert s_match, "S tensor output does not match reference after trace execution"
 
-    # Check M tensor (only column 0)
-    m_cols_to_check = [i * 32 for i in range(8)]
-    m_output_col0 = out_m_root[:, m_cols_to_check]
-    m_ref_col0 = m_ref[:, m_cols_to_check]
-    m_match = torch.allclose(m_output_col0, m_ref_col0, rtol=rtol, atol=atol)
-    assert m_match, "M tensor output does not match reference after trace execution"
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_1d_linear"],
+)
+def test_reduce_to_root_auto_intermediate(bh_2d_mesh_device):
+    """Same reduction without an intermediate_tensor, so the op computes the intermediate spec itself."""
+
+    num_devices = 4
+    root_coord = (1, 0)
+    root_device_idx = root_coord[0]
+    num_cores = 8
+
+    topology = ttnn.Topology.Linear
+    validate_test(num_devices, topology, bh_2d_mesh_device.shape, 0)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+
+    l_shape = [8, 128 * num_cores]
+    s_shape = [8, 32 * num_cores]
+    dtype = ttnn.bfloat16
+    layout = ttnn.TILE_LAYOUT
+    tile = ttnn.Tile((8, 32))
+
+    mux_cores = [ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 1), ttnn.CoreCoord(2, 2), ttnn.CoreCoord(2, 3)]
+
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3)),
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 3)),
+        }
+    )
+    mem_config_l = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.types.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, [8, 128], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    mem_config_s = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.types.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, [8, 32], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    mesh_mapper = ttnn.create_mesh_mapper(
+        submesh_device,
+        ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh_device.shape),
+    )
+
+    torch.manual_seed(42)
+    l_data_per_device = []
+    s_data_per_device = []
+    m_data_per_device = []
+    for device_idx in range(num_devices):
+        l_data_per_device.append(torch.randn(l_shape, dtype=torch.bfloat16) * 0.5 + device_idx)
+        s_data_per_device.append(torch.rand(s_shape, dtype=torch.bfloat16) * 0.5 + 1.0 + device_idx * 0.1)
+        m_data_per_device.append(torch.randn(s_shape, dtype=torch.bfloat16) * 0.5 + device_idx)
+
+    def to_device(per_device, mem_config):
+        return ttnn.from_torch(
+            torch.stack(per_device, dim=0),
+            device=submesh_device,
+            layout=layout,
+            tile=tile,
+            dtype=dtype,
+            memory_config=mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+
+    l_tensor = to_device(l_data_per_device, mem_config_l)
+    s_tensor = to_device(s_data_per_device, mem_config_s)
+    m_tensor = to_device(m_data_per_device, mem_config_s)
+
+    scale_value = float(1)
+    l_ref, s_ref, m_ref = compute_reference_reduce_to_root(
+        l_data_per_device, s_data_per_device, m_data_per_device, root_device_idx, num_cores, scale_value
+    )
+
+    out_l, out_s, out_m = ttnn.reduce_to_root(
+        l_tensor,
+        s_tensor,
+        m_tensor,
+        root_coord=ttnn.MeshCoordinate(root_coord),
+        scale_fp32=scale_value,
+        topology=topology,
+        input_mux_cores=mux_cores,
+    )
+    ttnn.synchronize_device(submesh_device)
+
+    composer = ttnn.ConcatMeshToTensor(submesh_device, dim=0)
+    out_l_root = ttnn.to_torch(out_l, mesh_composer=composer)[root_device_idx]
+    out_s_root = ttnn.to_torch(out_s, mesh_composer=composer)[root_device_idx]
+    out_m_root = ttnn.to_torch(out_m, mesh_composer=composer)[root_device_idx]
+
+    cols_to_check = [i * 32 for i in range(num_cores)]
+
+    assert_output_matches("L", out_l_root, l_ref)
+    assert_output_matches("S", out_s_root[:, cols_to_check], s_ref[:, cols_to_check])
+    assert_output_matches("M", out_m_root[:, cols_to_check], m_ref[:, cols_to_check])

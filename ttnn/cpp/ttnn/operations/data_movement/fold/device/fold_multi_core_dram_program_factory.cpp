@@ -41,6 +41,8 @@ DataflowBufferSpec make_dfb(
     };
 }
 
+// Work-split at super-block (= stride_h input H-rows) so the writer gathers stride_h*W pixels
+// into SRC2 scratch and emits one aligned output stick per patch, avoiding sub-page scatter.
 ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
     auto* device = input_tensor.device();
@@ -50,6 +52,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     // without collision.
     const DFBSpecName SRC0{"src0"};
     const DFBSpecName SRC1{"src1"};
+    const DFBSpecName SRC2{"src2"};
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
     const KernelSpecName READER{"reader"};
@@ -85,23 +88,25 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     log_debug(tt::LogOp, "input_tensor_shape: {}", input_padded_shape);
     log_debug(tt::LogOp, "output_tensor_shape: {}", output_padded_shape);
 
-    // Memory layout parameters
-    auto stick_nbytes = output_padded_shape[3] * tt::datum_size(datatype_to_dataformat_converter(output.dtype()));
-    uint32_t ntiles = input_tensor.physical_volume() / TILE_HW;
+    // Fold on logical C (matches compute_output_specs); untilize row stride uses padded C.
+    const uint32_t c_bytes = input_tensor.logical_shape()[-1] * tt::datum_size(out_dfb_data_format);
     uint32_t tiles_per_channel_dim = tt::div_up(input_padded_shape[-1], TILE_WIDTH);
     uint32_t tiles_per_width_dim = tt::div_up(input_padded_shape[-2], TILE_HEIGHT);
-    uint32_t tiles_per_complete_row = tiles_per_width_dim * tiles_per_channel_dim;
-    // Total number of blocks for batch * height
-    uint32_t num_blocks = std::ceil(static_cast<float>(ntiles) / (tiles_per_complete_row));
 
-    uint32_t aligned_stick_nbytes = tt::align(stick_nbytes, TILE_WIDTH * tt::datum_size(out_dfb_data_format));
+    const uint32_t c_padded_bytes = tiles_per_channel_dim * TILE_WIDTH * tt::datum_size(out_dfb_data_format);
+    // compute_output_specs already requires stride_h | H, so N*(H/sh) is exact.
+    const uint32_t num_super_blocks = input_tensor.logical_shape()[0] * (input_tensor.logical_shape()[1] / stride_h);
+
     log_debug(
-        tt::LogOp, "tiles_per_channel_dim: {}, ntiles: {}, num_blocks: {}", tiles_per_channel_dim, ntiles, num_blocks);
+        tt::LogOp,
+        "tiles_per_channel_dim: {}, tiles_per_width_dim: {}, num_super_blocks: {}",
+        tiles_per_channel_dim,
+        tiles_per_width_dim,
+        num_super_blocks);
 
-    // Split work across cores for parallel processing
     auto grid_size = device->compute_with_storage_grid_size();
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        ttnn::split_blocks_for_tilize(grid_size, num_blocks);
+        ttnn::split_blocks_for_tilize(grid_size, num_super_blocks);
 
     log_debug(
         tt::LogOp,
@@ -110,16 +115,19 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         nblocks_per_core,
         nblocks_per_core_cliff);
 
-    const uint32_t num_input_tiles = tiles_per_channel_dim;
+    // kFoldSrcCbDepthPerCTile lets reader/compute/writer overlap; predicate scales cb_bytes by the same constant.
+    const uint32_t num_input_tiles = tiles_per_channel_dim * kFoldSrcCbDepthPerCTile;
 
-    // Source DFB and untilized-output DFB for the tiled DRAM fold path.
+    // src0/src1: tile-format input + untilized output; src2: RM scratch sized to one full output row.
     DataflowBufferSpec src0_dfb = make_dfb(SRC0, single_tile_size, num_input_tiles, dfb_data_format);
     DataflowBufferSpec src1_dfb = make_dfb(SRC1, out_single_tile_size, num_input_tiles, out_dfb_data_format);
+    const uint32_t src2_bytes = static_cast<uint32_t>(tile_native_fold_scratch_bytes(input_tensor, stride_h, stride_w));
+    DataflowBufferSpec src2_dfb = make_dfb(SRC2, src2_bytes, 1, out_dfb_data_format);
 
     TensorParameter input_param{.unique_id = INPUT, .spec = input_tensor.tensor_spec()};
     TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
 
-    // Reader kernel: DRAM -> DFB. Input tensor is bound; SRC0 is the reader's producer DFB binding.
+    // Reader: DRAM -> src0 (tile CB). Batches stride_h * W_tiles untilize groups per super-block.
     KernelSpec reader_spec{
         .unique_id = READER,
         .source = std::filesystem::path{READER_TILED},
@@ -127,42 +135,40 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
             .dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
         .compile_time_args =
-            {{"tiles_per_channel_dim", tiles_per_channel_dim}, {"tiles_per_width_dim", tiles_per_width_dim}},
+            {{"tiles_per_channel_dim", tiles_per_channel_dim},
+             {"tiles_per_width_dim", tiles_per_width_dim},
+             {"stride_height", stride_h}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block_id", "num_blocks"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    // Writer kernel: DFB -> DRAM.
+    // Writer: src1 (untilized CB) -> src2 (RM scratch, one output row) -> DRAM (one aligned write per stick).
     KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = std::filesystem::path{WRITER_TILED},
-        .dfb_bindings = {DFBBinding{
-            .dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{.dfb_spec_name = SRC2, .accessor_name = "in2", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{.dfb_spec_name = SRC2, .accessor_name = "in2", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args =
             {{"input_width", input_width},
              {"stride_height", stride_h},
              {"stride_width", stride_w},
-             {"stick_nbytes", stick_nbytes},
-             {"aligned_stick_nbytes", aligned_stick_nbytes},
+             {"c_bytes", c_bytes},
+             {"c_padded_bytes", c_padded_bytes},
              {"tiles_per_channel_dim", tiles_per_channel_dim},
-             {"tiles_per_width_dim", tiles_per_width_dim},
-             {"element_size", datum_size(out_dfb_data_format)}},
-        .runtime_arg_schema =
-            {.runtime_arg_names = {"start_block_id", "num_blocks", "patch_height_offset", "output_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+             {"tiles_per_width_dim", tiles_per_width_dim}},
+        .runtime_arg_schema = {.runtime_arg_names = {"start_block_id", "num_blocks"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    // Compute kernel (untilize). One KernelSpec per legacy compute KernelDescriptor (main + cliff),
-    // preserving the per-group block-count multiplicity. ComputeConfig set directly (Style B):
-    // only fp32_dest_acc_en was set by the legacy op -> enable_32_bit_dest.
+    // fp32 needs `UnpackToDest` — packer truncates mantissa otherwise and `torch.equal` fails vs the RM path.
     const bool fp32_dest_acc_en = dfb_data_format == tt::DataFormat::Float32;
     auto make_compute_spec = [&](const KernelSpecName& id, uint32_t nblocks) {
-        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
-        // The compute kernel consumes SRC0. When SRC0 is Float32 and enable_32_bit_dest is set,
-        // the validator requires an explicit unpack mode. Legacy set none (default) -> UnpackToSrc.
+        ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
-            compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToSrc});
+            compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
         }
         return KernelSpec{
             .unique_id = id,
@@ -173,7 +179,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
                 {DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "src", .endpoint_type = DFBEndpointType::CONSUMER},
                  DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .compile_time_args =
-                {{"per_core_block_cnt", nblocks * tiles_per_width_dim},
+                {{"per_core_block_cnt", nblocks * stride_h * tiles_per_width_dim},
                  {"per_core_block_tile_cnt", tiles_per_channel_dim}},
             .hw_config = std::move(compute_cfg),
         };
@@ -200,15 +206,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     auto ncores_y = std::ceil(static_cast<float>(ncores) / ncores_x);
     auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, true);
 
-    const uint32_t patch_size = stride_h * stride_w;       // Size of each patch
-    const uint32_t output_width = input_width / stride_w;  // Output width
     for (auto core : cores) {
-        uint32_t curr_input_height_idx = block_start_id;
-        uint32_t curr_output_height_idx = curr_input_height_idx / stride_h;
-        uint32_t patch_height_offset = curr_input_height_idx % stride_h;
-        // Total output height * width
-        uint32_t output_offset =
-            (patch_size * curr_output_height_idx * output_width) + (patch_height_offset * stride_w);
         if (!full_cores.contains(core)) {
             continue;
         }
@@ -219,19 +217,11 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         AddRuntimeArgsForNode(
             writer_run.runtime_arg_values,
             core,
-            {{"start_block_id", block_start_id},
-             {"num_blocks", nblocks_per_core},
-             {"patch_height_offset", patch_height_offset},
-             {"output_offset", output_offset}});
+            {{"start_block_id", block_start_id}, {"num_blocks", nblocks_per_core}});
         block_start_id += nblocks_per_core;
     }
 
     if (ncores_full < ncores) {
-        uint32_t curr_input_height_idx = block_start_id;
-        uint32_t curr_output_height_idx = curr_input_height_idx / stride_h;
-        uint32_t patch_height_offset = curr_input_height_idx % stride_h;
-        uint32_t output_offset =
-            (patch_size * curr_output_height_idx * output_width) + (patch_height_offset * stride_w);
         CoreCoord core = CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x};
         AddRuntimeArgsForNode(
             reader_run.runtime_arg_values,
@@ -240,16 +230,13 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         AddRuntimeArgsForNode(
             writer_run.runtime_arg_values,
             core,
-            {{"start_block_id", block_start_id},
-             {"num_blocks", nblocks_per_core_cliff},
-             {"patch_height_offset", patch_height_offset},
-             {"output_offset", output_offset}});
+            {{"start_block_id", block_start_id}, {"num_blocks", nblocks_per_core_cliff}});
     }
 
     ProgramSpec spec{
         .name = "fold_multi_core_tiled_interleaved",
         .kernels = {reader_spec, writer_spec, compute_spec},
-        .dataflow_buffers = {src0_dfb, src1_dfb},
+        .dataflow_buffers = {src0_dfb, src1_dfb, src2_dfb},
         .tensor_parameters = {input_param, output_param},
         .work_units = {WorkUnitSpec{
             .name = "main",
@@ -316,16 +303,21 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     log_debug(tt::LogOp, "output_tensor_shape: {}", output.padded_shape());
 
     uint32_t patches_per_core = tt::div_up(total_patches, num_cores_total);
+    // Only launch cores that actually hold work; per-core work is a runtime arg so the cliff core carries a partial
+    // tail without over-reading past total_patches.
+    uint32_t num_active_cores = tt::div_up(total_patches, patches_per_core);
 
     log_debug(
         tt::LogOp,
-        "total_patches: {}, num_cores_total: {}, patches_per_core: {}",
+        "total_patches: {}, num_cores_total: {}, patches_per_core: {}, num_active_cores: {}",
         total_patches,
         num_cores_total,
-        patches_per_core);
+        patches_per_core,
+        num_active_cores);
 
-    CoreRangeSet all_cores{CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1})};
-    auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, true);
+    CoreRangeSet all_cores =
+        tt::tt_metal::num_cores_to_corerangeset(num_active_cores, compute_grid_size, /*row_wise=*/true);
+    auto cores = grid_to_cores(num_active_cores, num_cores_x, num_cores_y, /*row_wise=*/true);
 
     uint32_t stick_nbytes = input_tensor.padded_shape()[3] * tt::datum_size(dfb_data_format);
     // Align to DRAM read alignment.
@@ -352,13 +344,13 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     TensorParameter input_param{.unique_id = INPUT, .spec = input_tensor.tensor_spec()};
     TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
 
+    // work_per_core is per-core runtime (see active-core split above); every other arg is uniform across cores.
     const KernelSpec::CompileTimeArgs common_cta{
         {"stick_nbytes", stick_nbytes},
         {"aligned_stick_nbytes_dram", aligned_stick_nbytes},
         {"stride_h", stride_h},
         {"stride_w", stride_w},
         {"input_width", input_width},
-        {"work_per_core", patches_per_core},
     };
 
     // Emit the NOT_L1_ALIGNED define to the writer only when the src1 scratch is bound
@@ -375,8 +367,8 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
             .dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
         .compile_time_args = common_cta,
-        .runtime_arg_schema = {.runtime_arg_names = {"src_index", "curr_src_row_index"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .runtime_arg_schema = {.runtime_arg_names = {"work_per_core", "src_index", "curr_src_row_index"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // Writer: consumes src0; when !is_l1_aligned it also uses src1 as a self-loop scratch.
@@ -395,8 +387,8 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         .dfb_bindings = writer_dfbs,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args = common_cta,
-        .runtime_arg_schema = {.runtime_arg_names = {"dst_index"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .runtime_arg_schema = {.runtime_arg_names = {"work_per_core", "dst_index"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Per-core runtime args (name-first tables built from the legacy node-first loop).
@@ -407,32 +399,36 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     const uint32_t output_width = input_width / stride_w;
     const uint32_t patch_size = stride_h * stride_w;
     const uint32_t output_hw = output_height * output_width;
-    uint32_t curr_patches = 0;
-    uint32_t src_idx = 0;
-    uint32_t dst_idx = 0;
-    uint32_t src_col_offset = 0;
     for (uint32_t i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
 
-        if (curr_patches < total_patches) {
-            uint32_t output_offset = i * patches_per_core;
-            uint32_t batch_idx = output_offset / output_hw;
-            uint32_t batch_offset = output_offset % output_hw;
-            uint32_t out_height = batch_offset / output_width;
-            uint32_t out_width = batch_offset % output_width;
+        const uint32_t output_offset = i * patches_per_core;
+        // Cliff core carries a partial tail: patches_this_core = min(patches_per_core, total_patches - output_offset).
+        const uint32_t patches_this_core =
+            (output_offset + patches_per_core <= total_patches) ? patches_per_core : (total_patches - output_offset);
 
-            uint32_t src_batch_offset = batch_idx * output_height * output_width * patch_size;
-            uint32_t src_row_offset = out_height * stride_h * input_width;
-            src_col_offset = out_width * stride_w;
+        const uint32_t batch_idx = output_offset / output_hw;
+        const uint32_t batch_offset = output_offset % output_hw;
+        const uint32_t out_height = batch_offset / output_width;
+        const uint32_t out_width = batch_offset % output_width;
 
-            src_idx = src_batch_offset + src_row_offset + src_col_offset;
-            dst_idx = output_offset;
-        }
+        const uint32_t src_batch_offset = batch_idx * output_height * output_width * patch_size;
+        const uint32_t src_row_offset = out_height * stride_h * input_width;
+        const uint32_t src_col_offset = out_width * stride_w;
 
-        curr_patches += patches_per_core;
+        const uint32_t src_idx = src_batch_offset + src_row_offset + src_col_offset;
+        const uint32_t dst_idx = output_offset;
+
         AddRuntimeArgsForNode(
-            reader_run.runtime_arg_values, core, {{"src_index", src_idx}, {"curr_src_row_index", src_col_offset}});
-        AddRuntimeArgsForNode(writer_run.runtime_arg_values, core, {{"dst_index", dst_idx}});
+            reader_run.runtime_arg_values,
+            core,
+            {{"work_per_core", patches_this_core},
+             {"src_index", src_idx},
+             {"curr_src_row_index", src_col_offset}});
+        AddRuntimeArgsForNode(
+            writer_run.runtime_arg_values,
+            core,
+            {{"work_per_core", patches_this_core}, {"dst_index", dst_idx}});
     }
 
     ProgramSpec spec{

@@ -4,14 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include "common_globals.h"
 #include "sentinel/compute_kernel_sentinel.h"
 #include "sanitizer/api.h"
 #ifdef TRISC_PACK
 #include "llk_pack_tile_api.h"
-#ifndef ARCH_QUASAR
-#include "llk_pack_rows_api.h"
-#endif
 #endif
 
 namespace ckernel {
@@ -31,7 +29,7 @@ namespace ckernel {
  * | Function   | ocb  | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void pack_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+ALWI void pack_init(std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::PACK>(ocb, call_line);
     PACK((llk_pack_init(ocb)));
 }
@@ -85,11 +83,11 @@ ALWI void pack_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
  * | Function   | output_tile_index| The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                 | False    |
  */
 // clang-format on
-template <bool out_of_order_output = false>
-ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0) {
+template <bool out_of_order_output = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t output_tile_index = 0) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
-    PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
+    PACK((llk_pack<is_fp32_dest_acc_en, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
 #else
     PACK((llk_pack<out_of_order_output>(ifrom_dst, icb, output_tile_index)));
 #endif
@@ -132,14 +130,41 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
  * | Function   | ntiles    | The number of tiles to copy from DEST to CB       | uint32_t | Must be less than the size of the DEST register (16) | True     |
  */
 // clang-format on
-ALWI void pack_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
-    PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
+    PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
 #else
     PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
 #endif
 }
+
+// clang-format off
+/**
+ * Issues a single no-write packer op: it steps the packer engine only -- no DST is committed to L1 and it
+ * does NOT push/advance the CB (the surrounding cb_push_back does that). Call it between cb_reserve_back
+ * and cb_push_back when a CB is being pushed but its tile data is not needed.
+ *
+ * On Quasar this is required: the hardware needs a real packer op between a WAIT_TILES and its PUSH_TILES
+ * on the same output CB, or the PUSH can retire before the space is available (TEN-4746 / #48552). This op
+ * programs the strided packer to write nothing (PACK_STRIDE_NO_WRITE, all rows masked) and issues one
+ * PACR_STRIDE to satisfy that ordering while leaving the output buffer untouched. On WH/BH there is no such
+ * ordering requirement and this compiles to a no-op. Each architecture supplies its own llk_pack_dummy();
+ * this helper dispatches to it through PACK(...). This call is only available on the compute engine.
+ *
+ * This is a temporary workaround, only needed because these kernels drive reserve/push loops directly over
+ * hand-written L1. It goes away once those loops are replaced by the real fix -- LocalTensorAccessors, which
+ * bypass the wait/pop and reserve/push loops entirely.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                              | Data type | Valid range | required |
+ * |----------|----------------------------------------------------------|-----------|-------------|----------|
+ * | cb_id    | The identifier of the CB whose WAIT/PUSH this orders      | uint32_t  | 0 to 31     | True     |
+ * */
+// clang-format on
+ALWI void dummy_pack(std::uint32_t cb_id) { PACK((llk_pack_dummy(cb_id))); }
 
 // clang-format off
 /**
@@ -155,9 +180,10 @@ ALWI void pack_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
  * | Function   | ntiles    | The number of tiles to copy from DEST to CB       | uint32_t | Must be less than the size of the DEST register (16) | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated("Renamed to pack_block(); pack_tile_block will be removed after August 15th, 2026.")]] ALWI void
-pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
-    pack_block(ifrom_dst, icb, ntiles);
+pack_tile_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
+    pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles);
 }
 
 // clang-format off
@@ -181,77 +207,7 @@ pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
  * | Function   | l1_acc_en | L1 accumulation enable flag        | uint32_t | 0 or 1      | True     |
  */
 // clang-format on
-ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) { PACK((llk_pack_reconfig_l1_acc(l1_acc_en))); }
-
-// clang-format off
-/**
- * Initializes the pack rows operation. This function configures the packer to pack
- * a specified number of rows from the destination register to L1 memory in row-major order.
- * Each row contains 16 datums.
- *
- * Call this function before using `pack_rows`. After the pack_rows operation is complete,
- * call `pack_rows_uninit` to restore the packer state.
- *
- * Return value: None
- *
- * | Param Type | Name     | Description                                                    | Type     | Valid Range | Required |
- * |------------|----------|----------------------------------------------------------------|----------|-------------|----------|
- * | Function   | num_rows | Number of rows to pack from dest to L1 (each row = 16 datums)  | uint32_t | 1 to 64     | True     |
- */
-// clang-format on
-#ifndef ARCH_QUASAR
-ALWI void pack_rows_init(uint32_t num_rows) {
-    PACK((llk_pack_rows_init(num_rows)));
-}
-#endif
-
-// clang-format off
-/**
- * Packs rows from a destination register to the output circular buffer in row-major order.
- * Before calling this function:
- * 1. Initialize the pack rows operation with `pack_rows_init`
- * 2. Ensure cb_reserve_back has been called on the output CB
- * 3. Data must be present in the destination register (from unpack/math operations)
- *
- * Each call to `pack_rows` will pack the configured number of rows (set via `pack_rows_init`)
- * from the data in the destination register to the output circular buffer.
- *
- * After pack_rows operation is complete, call `pack_rows_uninit` to restore the packer
- * to its default state.
- *
- * Return value: None
- *
- * | Param Type | Name         | Description                                       | Type     | Valid Range                                          | Required |
- * |------------|--------------|---------------------------------------------------|----------|------------------------------------------------------|----------|
- * | Function   | idst         | The index in the DEST register                    | uint32_t | Must be less than the size of the DEST register (16) | True     |
- * | Function   | ocb          | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                              | True     |
- * | Function   | output_index | The index in the output CB to write to            | uint32_t | Must be less than the size of the CB                 | False    |
- */
-// clang-format on
-#ifndef ARCH_QUASAR
-ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
-    PACK((llk_pack_rows(idst, ocb, output_index)));
-}
-#endif
-
-// clang-format off
-/**
- * Uninitializes the pack rows operation and restores the packer to its default state.
- * This function should be called after the pack_rows operation is complete.
- *
- * The function restores packer address modifiers and counters to default values,
- * allowing subsequent standard packing operations (e.g., pack_tile) to function correctly.
- * This is necessary because pack_rows uses a specialized packer configuration that differs
- * from the default tile packing setup.
- *
- * Return value: None
- */
-// clang-format on
-#ifndef ARCH_QUASAR
-ALWI void pack_rows_uninit() {
-    PACK((llk_pack_rows_uninit()));
-}
-#endif
+ALWI void pack_reconfig_l1_acc(const std::uint32_t l1_acc_en) { PACK((llk_pack_reconfig_l1_acc(l1_acc_en))); }
 
 /**
  * Configures packer ReLU activation at runtime.

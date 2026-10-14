@@ -20,7 +20,8 @@ void kernel_main() {
     constexpr int dst0 = 0;
     constexpr int dst1 = 1;
 
-    unary_op_init_common(dfb::input, dfb::out);
+    compute_kernel_hw_startup(dfb::input, dfb::out);
+    copy_init(dfb::input);
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         bool enable_reload = false;
         for (uint32_t j = 0; j < num_input_tiles; ++j) {

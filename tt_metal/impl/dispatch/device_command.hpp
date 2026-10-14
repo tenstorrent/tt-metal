@@ -28,11 +28,10 @@ namespace tt::tt_metal {
 template <bool hugepage_write = false>
 class DeviceCommand {
 public:
-    DeviceCommand() = default;
-    DeviceCommand(void* cmd_region, uint32_t cmd_sequence_sizeB);
-
+    explicit DeviceCommand(MetalContext& ctx);
+    DeviceCommand(MetalContext& ctx, void* cmd_region, uint32_t cmd_sequence_sizeB);
     template <bool hp_w = hugepage_write, typename std::enable_if_t<!hp_w, int> = 0>
-    DeviceCommand(uint32_t cmd_sequence_sizeB);
+    DeviceCommand(MetalContext& ctx, uint32_t cmd_sequence_sizeB);
 
     DeviceCommand& operator=(const DeviceCommand& other);
     DeviceCommand& operator=(DeviceCommand&& other) noexcept;
@@ -120,8 +119,6 @@ public:
         uint32_t go_signal,
         uint32_t wait_stream,
         uint8_t multicast_go_offset,
-        uint8_t num_unicast_txns,
-        uint8_t noc_data_start_index,
         DispatcherSelect dispatcher_type);
 
     void add_notify_dispatch_s_go_signal_cmd(uint8_t wait, uint16_t index_bitmask);
@@ -161,9 +158,6 @@ public:
 
     void add_dispatch_set_sub_device_worker_counts(
         ttsl::Span<const uint32_t> workers_per_sub_device, DispatcherSelect dispatcher_type);
-
-    void add_dispatch_set_go_signal_noc_data(
-        const vector_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type);
 
     void add_dispatch_set_write_offsets(ttsl::Span<const uint32_t> write_offsets);
 
@@ -314,12 +308,14 @@ private:
         }
     }
 
+    void init_from_context(MetalContext& ctx);
+
     uint32_t cmd_sequence_sizeB = 0;
     void* cmd_region = nullptr;
     uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment =
-        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
-    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    MetalContext* ctx_ = nullptr;
+    uint32_t pcie_alignment = 0;
+    uint32_t l1_alignment = 0;
 
     vector_aligned<uint32_t> cmd_region_vector;
 };

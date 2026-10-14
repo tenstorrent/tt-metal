@@ -83,6 +83,41 @@ bool check_min_connection_count_satisfied(
     return all_satisfied;
 }
 
+std::set<PhysicalChannelConnection> get_all_fsd_connections(const fsd::proto::FactorySystemDescriptor& fsd_proto) {
+    std::set<PhysicalChannelConnection> golden_connections;
+
+    if (!fsd_proto.has_eth_connections()) {
+        throw std::runtime_error("FSD missing eth_connections");
+    }
+
+    const auto& hosts = fsd_proto.hosts();
+    for (const auto& connection : fsd_proto.eth_connections().connection()) {
+        const auto& endpoint_a = connection.endpoint_a();
+        const auto& endpoint_b = connection.endpoint_b();
+
+        const std::string& hostname_1 = hosts[endpoint_a.host_id()].hostname();
+        const std::string& hostname_2 = hosts[endpoint_b.host_id()].hostname();
+
+        PhysicalChannelEndpoint conn_1{
+            hostname_1,
+            TrayId(endpoint_a.tray_id()),
+            AsicChannel{endpoint_a.asic_location(), ChanId(endpoint_a.chan_id())}};
+        PhysicalChannelEndpoint conn_2{
+            hostname_2,
+            TrayId(endpoint_b.tray_id()),
+            AsicChannel{endpoint_b.asic_location(), ChanId(endpoint_b.chan_id())}};
+
+        // Sort to ensure consistent ordering; duplicates collapse in the set.
+        if (conn_1 < conn_2) {
+            golden_connections.insert(std::make_pair(conn_1, conn_2));
+        } else {
+            golden_connections.insert(std::make_pair(conn_2, conn_1));
+        }
+    }
+
+    return golden_connections;
+}
+
 std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
     const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& generated_fsd,
     const YAML::Node& discovered_gsd,

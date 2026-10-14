@@ -4,20 +4,41 @@
 
 #pragma once
 
+#include <optional>
+#include <string>
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/operations/data_movement/common/fold_common.hpp"
 
 namespace ttnn::operations::data_movement {
+
+// Re-export shared tile-native-fold gate symbols; single source of truth in common/fold_common.hpp.
+using fold_common::fold_output_dtype;
+using fold_common::is_tile_native_fold_supported;
+using fold_common::kFoldL1CodeStackReserveBytes;
+using fold_common::kFoldSrcCbDepthPerCTile;
+using fold_common::tile_native_fold_rejection_reason;
+using fold_common::tile_native_fold_scratch_bytes;
+
+// Fast path: L1 + HS + RM + concrete shard_spec. Shared by composite and device_op.
+bool is_fast_path_input(const Tensor& t);
+
+// Fresh shard-spec for specless sharded outputs, sized to the populated shard count (not the
+// full compute grid): H/W → num_cores_to_corerangeset over used cores; B → rectangular CoreRange.
+// Shared by compute_output_specs and derive_effective_override_memory_config.
+tt::tt_metal::ShardSpec synthesize_fold_output_shard_spec(
+    const Tensor& input_tensor, tt::tt_metal::TensorMemoryLayout layout, uint32_t rows, uint32_t cols);
 
 struct Fold {
     struct operation_attributes_t {
         uint32_t stride_h{};
         uint32_t stride_w{};
-        bool is_sharded{};
+        // true → emit collapsed (1,1,N·H'·W',C·sh·sw); false → folded_4d.
+        bool collapse_output{};
     };
 
     struct tensor_args_t {
@@ -54,5 +75,5 @@ struct Fold {
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::Fold::tensor_return_value_t fold(
-    const ttnn::Tensor& input_tensor, uint32_t stride_h, uint32_t stride_w);
+    const ttnn::Tensor& input_tensor, uint32_t stride_h, uint32_t stride_w, bool collapse_output = false);
 }  // namespace ttnn::prim

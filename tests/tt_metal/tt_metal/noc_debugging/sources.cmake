@@ -2,6 +2,7 @@
 # Module owners should update this file when adding/removing/renaming source files
 
 set(UNIT_TESTS_NOC_DEBUGGING_SRC
+    test_noc_counter_wrap.cpp
     test_reads_writes.cpp
     test_scoped_lock.cpp
 )

@@ -31,6 +31,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // This test verifies that the slow dispatch path can perform device reads and writes when the page size is not a
@@ -40,8 +41,7 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-TEST_F(MeshDeviceSingleCardFixture, UnalignedReadWriteCore) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+TEST_F(UnitMeshFixture, UnalignedReadWriteCore) {
     bool pass = true;
 
     try {
@@ -54,20 +54,18 @@ TEST_F(MeshDeviceSingleCardFixture, UnalignedReadWriteCore) {
             (single_tile_size * num_tiles) +
             2; /*** Non 4-byte aligned buffer size for BFLOAT16s. This is the point of this unaligned test. ***/
 
-        tt_metal::InterleavedBufferConfig dram_interleaved_buffer_config{
-            .device = dev,
-            .size = dram_buffer_size,
-            .page_size = dram_buffer_size,
-            .buffer_type = tt_metal::BufferType::DRAM};
-        auto device_dram_interleaved_buffer = CreateBuffer(dram_interleaved_buffer_config);
+        auto device_dram_interleaved_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = dram_buffer_size},
+            {.page_size = dram_buffer_size, .buffer_type = BufferType::DRAM},
+            &this->device());
 
         std::vector<uint8_t> src_vec_dram_interleaved_case(dram_buffer_size);
         for (auto& v : src_vec_dram_interleaved_case) {
             v = static_cast<uint8_t>(std::rand() % 256);
         }
-        tt_metal::detail::WriteToBuffer(device_dram_interleaved_buffer, src_vec_dram_interleaved_case);
+        slow_dispatch::WriteToBuffer(*device_dram_interleaved_buffer, src_vec_dram_interleaved_case);
         std::vector<uint8_t> result_vec_dram_interleaved_case;
-        tt_metal::detail::ReadFromBuffer(device_dram_interleaved_buffer, result_vec_dram_interleaved_case);
+        slow_dispatch::ReadFromBuffer(*device_dram_interleaved_buffer, result_vec_dram_interleaved_case);
         pass &= (src_vec_dram_interleaved_case == result_vec_dram_interleaved_case);
         TT_FATAL(pass, "Error");
         log_info(LogTest, "Passed Non-4-byte-aligned Read Write DRAM Interleaved Buffer Test");
@@ -82,23 +80,22 @@ TEST_F(MeshDeviceSingleCardFixture, UnalignedReadWriteCore) {
             tt_metal::ShardOrientation::ROW_MAJOR,
             {1, dram_buffer_size / sizeof(uint16_t)},
             {1, 1});
-        auto device_dram_sharded_buffer = CreateBuffer(tt_metal::ShardedBufferConfig{
-            .device = dev,
-            .size = dram_buffer_size,
-            .page_size = dram_buffer_size,
-            .buffer_type = tt_metal::BufferType::DRAM,
-            .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-            .shard_parameters = shard_spec});
+        auto device_dram_sharded_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = dram_buffer_size},
+            {.page_size = dram_buffer_size,
+             .buffer_type = BufferType::DRAM,
+             .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED)},
+            &this->device());
 
         std::vector<uint8_t> src_vec_dram_sharded_case(dram_buffer_size);
         for (auto& v : src_vec_dram_sharded_case) {
             v = static_cast<uint8_t>(std::rand() % 256);
         }
 
-        tt_metal::detail::WriteToBuffer(device_dram_sharded_buffer, src_vec_dram_sharded_case);
+        slow_dispatch::WriteToBuffer(*device_dram_sharded_buffer, src_vec_dram_sharded_case);
 
         std::vector<uint8_t> result_vec_dram_sharded_case;
-        tt_metal::detail::ReadFromBuffer(device_dram_sharded_buffer, result_vec_dram_sharded_case);
+        slow_dispatch::ReadFromBuffer(*device_dram_sharded_buffer, result_vec_dram_sharded_case);
         pass &= (src_vec_dram_sharded_case == result_vec_dram_sharded_case);
         TT_FATAL(pass, "Error");
         log_info(LogTest, "Passed Non-4-byte-aligned Read Write DRAM Sharded Buffer Test");
@@ -109,22 +106,20 @@ TEST_F(MeshDeviceSingleCardFixture, UnalignedReadWriteCore) {
         uint32_t l1_buffer_size =
             (single_tile_size * 4) +
             2; /*** Non 4-byte aligned buffer size for BFLOAT16s. This is the point of this unaligned test. ***/
-        tt_metal::InterleavedBufferConfig l1_interleaved_buffer_config{
-            .device = dev,
-            .size = l1_buffer_size,
-            .page_size = l1_buffer_size,
-            .buffer_type = tt_metal::BufferType::L1};
-        auto device_l1_interleaved_buffer = CreateBuffer(l1_interleaved_buffer_config);
+        auto device_l1_interleaved_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = l1_buffer_size},
+            {.page_size = l1_buffer_size, .buffer_type = BufferType::L1},
+            &this->device());
 
         std::vector<uint8_t> src_vec_l1_interleaved_case(l1_buffer_size);
         for (auto& v : src_vec_l1_interleaved_case) {
             v = static_cast<uint8_t>(std::rand() % 256);
         }
 
-        tt_metal::detail::WriteToBuffer(device_l1_interleaved_buffer, src_vec_l1_interleaved_case);
+        slow_dispatch::WriteToBuffer(*device_l1_interleaved_buffer, src_vec_l1_interleaved_case);
 
         std::vector<uint8_t> result_vec_l1_interleaved_case;
-        tt_metal::detail::ReadFromBuffer(device_l1_interleaved_buffer, result_vec_l1_interleaved_case);
+        slow_dispatch::ReadFromBuffer(*device_l1_interleaved_buffer, result_vec_l1_interleaved_case);
         pass &= (src_vec_l1_interleaved_case == result_vec_l1_interleaved_case);
         TT_FATAL(pass, "Error");
         log_info(LogTest, "Passed Non-4-byte-aligned Read Write L1 Interleaved Buffer Test");
@@ -139,23 +134,22 @@ TEST_F(MeshDeviceSingleCardFixture, UnalignedReadWriteCore) {
             tt_metal::ShardOrientation::ROW_MAJOR,
             {1, l1_buffer_size / sizeof(uint16_t)},
             {1, 1});
-        auto device_l1_sharded_buffer = CreateBuffer(tt_metal::ShardedBufferConfig{
-            .device = dev,
-            .size = l1_buffer_size,
-            .page_size = l1_buffer_size,
-            .buffer_type = tt_metal::BufferType::L1,
-            .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-            .shard_parameters = l1_shard_spec});
+        auto device_l1_sharded_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = l1_buffer_size},
+            {.page_size = l1_buffer_size,
+             .buffer_type = BufferType::L1,
+             .sharding_args = BufferShardingArgs(l1_shard_spec, TensorMemoryLayout::HEIGHT_SHARDED)},
+            &this->device());
 
         std::vector<uint8_t> src_vec_l1_sharded_case(l1_buffer_size);
         for (auto& v : src_vec_l1_sharded_case) {
             v = static_cast<uint8_t>(std::rand() % 256);
         }
 
-        tt_metal::detail::WriteToBuffer(device_l1_sharded_buffer, src_vec_l1_sharded_case);
+        slow_dispatch::WriteToBuffer(*device_l1_sharded_buffer, src_vec_l1_sharded_case);
 
         std::vector<uint8_t> result_vec_l1_sharded_case;
-        tt_metal::detail::ReadFromBuffer(device_l1_sharded_buffer, result_vec_l1_sharded_case);
+        slow_dispatch::ReadFromBuffer(*device_l1_sharded_buffer, result_vec_l1_sharded_case);
         pass &= (src_vec_l1_sharded_case == result_vec_l1_sharded_case);
         TT_FATAL(pass, "Error");
         log_info(LogTest, "Passed Non-4-byte-aligned Read Write L1 Sharded Buffer Test");

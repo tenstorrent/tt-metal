@@ -8,12 +8,15 @@
 #include <cctype>
 #include <cerrno>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <random>
 #include <string>
 #include <system_error>
@@ -70,6 +73,74 @@ std::vector<std::string> tokenize_flags(const std::string& flags) {
     return tokens;
 }
 
+std::string compiler_version(const std::string& gpp) {
+    static std::mutex mutex;
+    static std::unordered_map<std::string, std::string> versions;
+    std::lock_guard lock(mutex);
+    if (auto it = versions.find(gpp); it != versions.end()) {
+        return it->second;
+    }
+
+    auto args = tokenize_flags(gpp);
+    if (args.empty()) {
+        throw std::runtime_error("Cannot query an empty compiler command");
+    }
+    args.emplace_back("--version");
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (auto& arg : args) {
+        argv.push_back(arg.data());
+    }
+    argv.push_back(nullptr);
+
+    // A private, automatically removed file captures stdout without a pipe buffer limit.
+    // Stderr remains separate so diagnostics cannot become the compiler identity.
+    const auto close_file = [](FILE* file) { std::fclose(file); };
+    const std::unique_ptr<FILE, decltype(close_file)> output(std::tmpfile(), close_file);
+    if (!output || fcntl(fileno(output.get()), F_SETFD, FD_CLOEXEC) == -1) {
+        throw std::runtime_error(fmt::format("Cannot capture compiler version for {}: {}", gpp, std::strerror(errno)));
+    }
+    posix_spawn_file_actions_t actions;
+    int error = posix_spawn_file_actions_init(&actions);
+    if (error != 0) {
+        throw std::runtime_error(fmt::format("Cannot initialize compiler version probe: {}", std::strerror(error)));
+    }
+    error = posix_spawn_file_actions_adddup2(&actions, fileno(output.get()), STDOUT_FILENO);
+    pid_t pid = 0;
+    if (error == 0) {
+        error = posix_spawnp(&pid, argv[0], &actions, nullptr, argv.data(), ::environ);
+    }
+    posix_spawn_file_actions_destroy(&actions);
+    if (error != 0) {
+        throw std::runtime_error(fmt::format("Cannot query compiler version for {}: {}", gpp, std::strerror(error)));
+    }
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            throw std::runtime_error(
+                fmt::format("Cannot wait for compiler version from {}: {}", gpp, std::strerror(errno)));
+        }
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        throw std::runtime_error(fmt::format("Compiler version probe failed for {} (wait status {})", gpp, status));
+    }
+    if (fseek(output.get(), 0, SEEK_SET) != 0) {
+        throw std::runtime_error(fmt::format("Cannot read compiler version for {}", gpp));
+    }
+    std::string version;
+    for (int ch; (ch = fgetc(output.get())) != EOF;) {
+        version.push_back(static_cast<char>(ch));
+        if (ch == '\n') {
+            break;
+        }
+    }
+    if (ferror(output.get()) || version.empty() || version == "\n") {
+        throw std::runtime_error(fmt::format("Compiler version probe returned no readable version for {}", gpp));
+    }
+    versions.emplace(gpp, version);
+    return version;
+}
+
 std::vector<std::string> build_gpp_argv(
     const std::string& gpp,
     const std::string& opt_level,
@@ -88,8 +159,8 @@ std::vector<std::string> build_gpp_argv(
     };
     append(cflags);
     append(includes);
-    // Each define is one argv element, passed verbatim (no shell) — this is what makes
-    // map-valued defines like -DKERNEL_COMPILE_TIME_ARG_MAP={"cb_in0",1},... survive.
+    // Each define is one argv element, passed verbatim (no shell) — this is what makes defines
+    // carrying shell metacharacters, like -DFULL_KERNEL_NAME="<name>", survive unescaped.
     args.insert(args.end(), defines.begin(), defines.end());
     switch (action) {
         case GppAction::Compile:
@@ -217,6 +288,40 @@ std::vector<tt::jit_build::GeneratedFile> read_directory_files(
         }
     }
     return files;
+}
+
+std::string format_named_ct_arg_map(const std::unordered_map<std::string, std::uint32_t>& named_args) {
+    std::vector<const std::pair<const std::string, std::uint32_t>*> sorted;
+    sorted.reserve(named_args.size());
+    for (const auto& entry : named_args) {
+        sorted.push_back(&entry);
+    }
+    std::sort(sorted.begin(), sorted.end(), [](const auto* a, const auto* b) { return a->first < b->first; });
+
+    // Whole-model kernels reach 100 KB+ here; size it up front rather than growing ~1750 times.
+    std::size_t reserved = 0;
+    for (const auto* entry : sorted) {
+        reserved += entry->first.size() + 16;
+    }
+    std::string out;
+    out.reserve(reserved);
+
+    for (const auto* entry : sorted) {
+        if (!out.empty()) {
+            out += ',';
+        }
+        out += "{\"";
+        out += entry->first;
+        out += "\",";
+        out += std::to_string(entry->second);
+        out += '}';
+    }
+    return out;
+}
+
+std::string format_named_ct_arg_map_header(const std::unordered_map<std::string, std::uint32_t>& named_args) {
+    return "// AUTO-GENERATED -- do not edit.\n#pragma once\n\n#define KERNEL_COMPILE_TIME_ARG_MAP " +
+           format_named_ct_arg_map(named_args) + "\n";
 }
 
 void create_file(const std::string& file_path_str) {

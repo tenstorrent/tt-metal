@@ -2,8 +2,9 @@ name: "(infra) Test Owner Escalation"
 
 on:
   schedule:
-    # 04:00 UTC every day.
-    - cron: "0 4 * * *"
+    # 04:00 UTC every Tuesday. Org/Slack membership changes are infrequent
+    # enough that a daily check wasn't worth the noise.
+    - cron: "0 4 * * 2"
 
 permissions:
   contents: read

@@ -52,6 +52,15 @@ enum ThreadId
     IsolateSfpuThreadId = 3
 };
 
+// Selects how a float32 SFPU result is narrowed when it is stored back into a
+// bf16 DEST. Ignored when fp32 DEST accumulation is enabled, since no narrowing
+// happens in that case.
+enum class DstRoundingMode : std::uint8_t
+{
+    Default     = 0, // SFPSTORE truncates fp32->bf16 on all architectures; no software rounding
+    NearestEven = 1, // IEEE 754 round-to-nearest-even, applied in software before the store
+};
+
 enum class BinaryOp : std::uint8_t
 {
     ADD,
@@ -67,6 +76,58 @@ enum class BinaryOp : std::uint8_t
     QUANT,
     REQUANT,
     DEQUANT,
+    ATAN2,
+    COPY_DEST,
+    LOGSIGMOID,
+    ISCLOSE,
+    MASK,
+    MASK_POSINF,
+    INT_MASK,
+    FMOD,
+    REMAINDER,
+    POW,
+    BITWISE_AND,
+    BITWISE_OR,
+    BITWISE_XOR,
+    FMOD_INT32,
+    REMAINDER_INT32,
+    RSUB_INT32,
+    DIV_INT32,
+    DIV_INT32_FLOOR,
+    INT_SUM_ADD,
+    CLAMPED_SILU_GLU,
+    SITU_GLU,
+    REMAINDER_UINT32,
+    LGAMMA_STIRLING_FP32,
+    ADD_TOP_ROW,
+    RSHFT,
+    LSHFT,
+    LOGICAL_RSHFT,
+    LOGADDEXP,
+    LOGADDEXP2,
+};
+
+enum class DataLayout
+{
+    TILE      = 0,
+    ROW_MAJOR = 1
+};
+
+enum class ActivationType
+{
+    Celu        = 0,
+    Elu         = 1,
+    Gelu        = 2,
+    Hardtanh    = 3,
+    Hardsigmoid = 4,
+};
+
+// Rounding applied to an SFPU float result (rdiv), as on Blackhole.
+enum class RoundingMode : std::uint8_t
+{
+    None  = 0,
+    Trunc = 1,
+    Floor = 2,
 };
 
 // For instructions that address lower/upper 16 bits of a register

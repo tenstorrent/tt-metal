@@ -2,16 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
 import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import ClassVar
 
+import numpy as np
 import pandas as pd
 
 from .device_io import read_words_from_device
 from .llk_params import PerfRunType
-from .perf_schema import MARKER, MEAN, STD, stat_column, stat_prefix
+from .perf.schema import MARKER, MEAN, STD, stat_column, stat_prefix
 from .test_config import TestConfig
 
 
@@ -153,6 +155,10 @@ class ProfilerData:
         """Filter: Pack thread data"""
         return ProfilerData(self.df, self.mask & (self.df["thread"] == "pack"))
 
+    def sfpu(self) -> "ProfilerData":
+        """Filter: SFPU thread data"""
+        return ProfilerData(self.df, self.mask & (self.df["thread"] == "sfpu"))
+
     # Filter by type
     def zones(self) -> "ProfilerData":
         """Filter: Profiler zones"""
@@ -200,11 +206,20 @@ def _stats_timings(perf_data: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _sfpu_has_compute_zones(raw_data: pd.DataFrame) -> bool:
+    # Real 4-TRISC kernels emit INIT/TILE_LOOP on SFPU; sfpu_stub.h does not
+    # (trisc.cpp still emits KERNEL, which must not switch aggregation).
+    return bool(
+        (
+            (raw_data["thread"] == "sfpu")
+            & raw_data[MARKER].isin(("INIT", "TILE_LOOP"))
+        ).any()
+    )
+
+
 def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     raw_data = data.zones().raw()
 
-    # WC build (PERF_COUNTERS_COMPILED) emits no ZONE_START/ZONE_END events because
-    # ZONE_SCOPED is muted; only HW counter values are produced. Skip wall_clock stats.
     if raw_data.empty:
         return pd.DataFrame()
 
@@ -215,18 +230,22 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
             "Set profiler_data.df['run_index'] = <run_number> after collecting data."
         )
 
-    # Group by both marker and run_index to ensure events from the same run are paired
-    groups = raw_data.groupby([MARKER, "run_index"])
+    if _sfpu_has_compute_zones(raw_data):
+        return _stats_l1_to_l1_four_trisc(raw_data)
 
-    timings = []
-    for (marker, run_index), group in groups:
-        unpack_start = group[
-            (group["thread"] == "unpack") & (group["type"] == "ZONE_START")
-        ].reset_index(drop=True)
+    markers = raw_data[MARKER].to_numpy(dtype=object)
+    runs = raw_data["run_index"].to_numpy(dtype=np.int64)
+    threads = raw_data["thread"].to_numpy(dtype=object)
+    types = raw_data["type"].to_numpy(dtype=object)
+    stamps = raw_data["timestamp"].to_numpy()
+    is_start = (threads == "unpack") & (types == "ZONE_START")
+    is_end = (threads == "pack") & (types == "ZONE_END")
 
-        pack_end = group[
-            (group["thread"] == "pack") & (group["type"] == "ZONE_END")
-        ].reset_index(drop=True)
+    timing_markers, timing_values = [], []
+    for marker, run_index in sorted(set(zip(markers, runs))):
+        group = (markers == marker) & (runs == run_index)
+        unpack_start = np.flatnonzero(group & is_start)
+        pack_end = np.flatnonzero(group & is_end)
 
         if len(unpack_start) == 0 or len(pack_end) == 0:
             raise ValueError(
@@ -241,39 +260,90 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
                 f"unpack_count={len(unpack_start)}, pack_count={len(pack_end)})"
             )
 
-        durations = pack_end["timestamp"] - unpack_start["timestamp"]
+        timing_markers += [marker] * len(unpack_start)
+        timing_values.append(stamps[pack_end] - stamps[unpack_start])
 
-        marker_timings = pd.DataFrame(
+    return _stats_timings(
+        pd.DataFrame(
             {
-                MARKER: marker,
-                PerfRunType.L1_TO_L1.name: durations,
+                MARKER: timing_markers,
+                PerfRunType.L1_TO_L1.name: np.concatenate(timing_values),
             }
         )
-        timings.append(marker_timings)
+    )
+
+
+def _parallel_zone_entries(
+    group: pd.DataFrame, thread: str, entry_type: str
+) -> pd.DataFrame:
+    return group[
+        (group["thread"] == thread) & (group["type"] == entry_type)
+    ].reset_index(drop=True)
+
+
+def _stats_l1_to_l1_four_trisc(raw_data: pd.DataFrame) -> pd.DataFrame:
+    prefix = PerfRunType.L1_TO_L1.name
+    timings = []
+    for (marker, run_index), group in raw_data.groupby([MARKER, "run_index"]):
+        fpu_start = _parallel_zone_entries(group, "unpack", "ZONE_START")
+        fpu_end = _parallel_zone_entries(group, "pack", "ZONE_END")
+        sfpu_start = _parallel_zone_entries(group, "sfpu", "ZONE_START")
+        sfpu_end = _parallel_zone_entries(group, "sfpu", "ZONE_END")
+
+        counts = {
+            "fpu_start": len(fpu_start),
+            "fpu_end": len(fpu_end),
+            "sfpu_start": len(sfpu_start),
+            "sfpu_end": len(sfpu_end),
+        }
+        if not counts["fpu_start"] or len(set(counts.values())) != 1:
+            raise ValueError(
+                "FPU and SFPU zones must be present and paired for "
+                f"4-TRISC L1_TO_L1 (marker={marker}, run_index={run_index}, "
+                f"counts={counts})"
+            )
+
+        fpu_duration = fpu_end["timestamp"] - fpu_start["timestamp"]
+        sfpu_duration = sfpu_end["timestamp"] - sfpu_start["timestamp"]
+        overall_start = pd.concat(
+            [fpu_start["timestamp"], sfpu_start["timestamp"]], axis=1
+        ).min(axis=1)
+        overall_end = pd.concat(
+            [fpu_end["timestamp"], sfpu_end["timestamp"]], axis=1
+        ).max(axis=1)
+
+        timings.append(
+            pd.DataFrame(
+                {
+                    MARKER: marker,
+                    f"{prefix}[FPU]": fpu_duration,
+                    f"{prefix}[SFPU]": sfpu_duration,
+                    prefix: overall_end - overall_start,
+                }
+            )
+        )
 
     return _stats_timings(pd.concat(timings, ignore_index=True))
 
 
 def _stats_thread(stat: str, raw_thread: pd.DataFrame) -> pd.DataFrame:
-    # WC build emits no zone events — skip wall_clock stats, counters provide values instead.
     if raw_thread.empty:
         return pd.DataFrame()
 
-    start_entries = raw_thread[(raw_thread["type"] == "ZONE_START")].reset_index(
-        drop=True
-    )
-
-    end_entries = raw_thread[(raw_thread["type"] == "ZONE_END")].reset_index(drop=True)
+    types = raw_thread["type"].to_numpy(dtype=object)
+    start_entries = np.flatnonzero(types == "ZONE_START")
+    end_entries = np.flatnonzero(types == "ZONE_END")
 
     if len(start_entries) != len(end_entries):
         raise ValueError(
             f"Mismatched start/end zones: {len(start_entries)} != {len(end_entries)}"
         )
 
+    stamps = raw_thread["timestamp"].to_numpy()
     timings = pd.DataFrame(
         {
-            MARKER: start_entries[MARKER],
-            stat: end_entries["timestamp"] - start_entries["timestamp"],
+            MARKER: raw_thread[MARKER].array[start_entries],
+            stat: stamps[end_entries] - stamps[start_entries],
         }
     )
 
@@ -290,6 +360,10 @@ def _stats_math_isolate(data: ProfilerData) -> pd.DataFrame:
 
 def _stats_pack_isolate(data: ProfilerData) -> pd.DataFrame:
     return _stats_thread(PerfRunType.PACK_ISOLATE.name, data.pack().raw())
+
+
+def _stats_sfpu_isolate(data: ProfilerData) -> pd.DataFrame:
+    return _stats_thread(PerfRunType.SFPU_ISOLATE.name, data.sfpu().raw())
 
 
 def _stats_l1_congestion(data: ProfilerData) -> pd.DataFrame:
@@ -341,6 +415,7 @@ class Profiler:
         PerfRunType.UNPACK_ISOLATE: _stats_unpack_isolate,
         PerfRunType.MATH_ISOLATE: _stats_math_isolate,
         PerfRunType.PACK_ISOLATE: _stats_pack_isolate,
+        PerfRunType.SFPU_ISOLATE: _stats_sfpu_isolate,
         PerfRunType.L1_CONGESTION: _stats_l1_congestion,
     }
     SUPPORTED_RUNS = STATS_FUNCTION.keys()
@@ -375,6 +450,7 @@ class Profiler:
             return None
 
     @staticmethod
+    @functools.cache
     def _get_meta(testname: str, variant_id: str) -> dict[id, ProfilerFullMarker]:
         profiler_data_dir = TestConfig.PROFILER_META / testname / variant_id
         metadata = {}

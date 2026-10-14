@@ -1,11 +1,61 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Helpers for the Generator contract: pack the (cos,sin) rope pair into one
-tensor (copy_host_to_device cannot carry a nested tuple), and the shared
-short/long prefill dispatch (so the wrapper and demo define the seam once)."""
+"""Helpers for the Generator contract: RoPE packing, prefill dispatch, and decode warmup."""
+import gc
+import os
+
 import torch
+from loguru import logger
 
 import ttnn
+
+
+def warmup_decode_buckets(generator, warmup, *args, **kwargs):
+    """Compile every decode width before capturing any bucket trace."""
+    max_batch_size = kwargs.get("max_batch_size")
+    if os.environ.get("TT_DECODE_BUCKETING", "1") != "1" or not isinstance(max_batch_size, int) or max_batch_size <= 1:
+        return warmup(*args, **kwargs)
+
+    widths = []
+    width = 1
+    while width < max_batch_size:
+        widths.append(width)
+        width *= 2
+    widths.append(max_batch_size)
+
+    result = None
+    compile_key = (
+        tuple(widths),
+        kwargs.get("num_blocks"),
+        kwargs.get("can_sample_on_device"),
+        kwargs.get("greedy_only", False),
+    )
+    trace_enabled = kwargs.get("enable_trace", False)
+    if getattr(generator, "_decode_bucket_compile_key", None) != compile_key:
+        # Drop inputs staged for an older warmup shape; uncaptured widths re-stage below.
+        for entry in getattr(generator, "_bucket_trace_store", {}).values():
+            entry[3].clear()
+        for width in widths:
+            bucket_kwargs = dict(kwargs, max_batch_size=width, enable_trace=False)
+            logger.info(f"Qwen decode compile warmup: bucket width={width}")
+            result = warmup(*args, **bucket_kwargs)
+        generator._decode_bucket_compile_key = compile_key
+
+    if not trace_enabled:
+        return result
+
+    ttnn.synchronize_device(generator.mesh_device)
+    gc.collect()
+    for width in widths:
+        bucket_kwargs = dict(
+            kwargs,
+            max_batch_size=width,
+            enable_trace=True,
+            skip_trace_precompile=True,
+        )
+        logger.info(f"Qwen decode trace capture: bucket width={width}")
+        result = warmup(*args, **bucket_kwargs)
+    return result
 
 
 def pack_rope_host(cos_host, sin_host):
@@ -79,6 +129,15 @@ def prime_decode_trace(generator, model, tokens, current_pos, page_table):
     """
     saved = model._save_deltanet_states()
     generator.decode_forward(
-        tokens, current_pos, page_table=page_table, kv_cache=None, enable_trace=True, read_from_device=True
+        tokens,
+        current_pos,
+        page_table=page_table,
+        kv_cache=None,
+        enable_trace=True,
+        read_from_device=True,
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
     )
     model._restore_deltanet_states(saved, model.mesh_device)

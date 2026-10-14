@@ -201,8 +201,8 @@ Notes:
     tt::tt_metal::CoreRangeSet rx_core_set(tt::tt_metal::CoreRange(p.receiver_core, p.receiver_core));
     static std::optional<tt::tt_metal::GlobalSemaphore> gsem;
     if (!gsem) {
-        gsem = tt::tt_metal::CreateGlobalSemaphore(
-            mesh.get(),
+        gsem = tt::tt_metal::GlobalSemaphore(
+            *mesh,
             rx_core_set,
             /*initial_value=*/0);
     }

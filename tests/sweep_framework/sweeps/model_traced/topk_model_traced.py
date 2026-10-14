@@ -185,6 +185,16 @@ def run(
             if isinstance(indices_tensor_info["shape"], (list, tuple))
             else indices_tensor_info["shape"]
         )
+        # ttnn.topk now rejects an indices tensor whose shape differs from the input's, and one
+        # supplied for a reduction that is not on the last dimension (#52928). Traces recorded
+        # before that fix can carry a half-width or pow2-padded indices shape from the old
+        # sampling code; production no longer passes indices_tensor at all, so replay such
+        # vectors without one instead of aborting at the TT_FATAL. The values are unaffected
+        # either way -- the kernel generates identical indices itself.
+        dim_is_last = dim_val in (-1, len(shape) - 1)
+        if idx_shape != shape or not dim_is_last:
+            indices_tensor_info = None
+    if indices_tensor_info and indices_tensor_info["shape"] is not None:
         idx_dtype = indices_tensor_info.get("dtype") or ttnn.uint16
         idx_layout = indices_tensor_info.get("layout") or ttnn.TILE_LAYOUT
         idx_mem = indices_tensor_info.get("memory_config") or ttnn.DRAM_MEMORY_CONFIG
@@ -216,7 +226,11 @@ def run(
     if ttnn_indices_tensor is not None:
         topk_kwargs["indices_tensor"] = ttnn_indices_tensor
     topk_result = ttnn.topk(input_tensor_a, k=k_val, dim=dim_val, **topk_kwargs)
-    output_tensor = mesh_tensor_to_torch(topk_result[0], device if is_mesh_device else None)
+    output_tensor = mesh_tensor_to_torch(
+        topk_result[0],
+        device if is_mesh_device else None,
+        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     if is_mesh_device:

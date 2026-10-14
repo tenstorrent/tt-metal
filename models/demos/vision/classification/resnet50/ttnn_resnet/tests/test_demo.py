@@ -24,6 +24,8 @@ test_run_resnet50_trace_2cqs_inference.__test__ = False
     ((16, 100),),
 )
 def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_location_generator, mesh_device):
+    if ttnn.get_num_devices() != 8:
+        pytest.skip("8-chip ResNet-50 test; needs a T3000")
     run_resnet_imagenet_inference(batch_size, iterations, imagenet_label_dict, model_location_generator, mesh_device)
 
 
@@ -33,6 +35,8 @@ def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_locati
     ((16, "models/demos/vision/classification/resnet50/ttnn_resnet/demo/images/"),),
 )
 def test_demo_sample(mesh_device, batch_size, input_loc, imagenet_label_dict, model_location_generator):
+    if ttnn.get_num_devices() != 8:
+        pytest.skip("8-chip ResNet-50 test; needs a T3000")
     run_resnet_inference(batch_size, input_loc, imagenet_label_dict, mesh_device, model_location_generator)
 
 
@@ -53,6 +57,8 @@ def test_demo_trace_with_imagenet(
     weight_dtype,
     model_location_generator,
 ):
+    if ttnn.get_num_devices() != 8:
+        pytest.skip("8-chip ResNet-50 test; needs a T3000")
     test_run_resnet50_trace_2cqs_inference(
         mesh_device,
         batch_size,

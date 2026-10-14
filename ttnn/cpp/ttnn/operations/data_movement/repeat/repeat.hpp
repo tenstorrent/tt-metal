@@ -3,22 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <string>
+
+#include <optional>
 
 #include "ttnn/types.hpp"
 
 namespace ttnn {
 
-// `implementation`: "auto" (default) picks codegen when the codegen prim
-// supports the call and it isn't perf-demoted, else native; "native" and
-// "codegen" force the respective prim ("codegen" TT_FATALs if unsupported).
 ttnn::Tensor repeat(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<uint32_t>& repetition_vector,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::string& implementation = "auto");
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 ttnn::Tensor repeat(
-    const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims, const std::string& implementation = "auto");
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Shape& repeat_dims,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 }  // namespace ttnn

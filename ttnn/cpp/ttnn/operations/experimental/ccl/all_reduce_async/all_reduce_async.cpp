@@ -9,7 +9,6 @@
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "device/all_reduce_async_device_operation.hpp"
-#include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
@@ -186,8 +185,9 @@ ttnn::Tensor all_reduce_async(
     topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
     auto* mesh_device_ptr = input_tensor.device();
     TT_FATAL(mesh_device_ptr != nullptr, "Mesh device is required for all_reduce_async operation");
-    uint32_t resolved_num_links =
-        num_preferred_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device_ptr, std::nullopt));
+    uint32_t resolved_num_links = num_preferred_links.has_value()
+                                      ? *num_preferred_links
+                                      : ttnn::operations::ccl::common::get_num_links(*mesh_device_ptr, std::nullopt);
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     const bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t dim = ttnn::operations::experimental::ccl::detail::finding_scatter_dim(
@@ -330,8 +330,9 @@ ttnn::Tensor all_reduce_async(
     }
 
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
-    uint32_t resolved_num_links =
-        num_preferred_links.value_or(ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis));
+    uint32_t resolved_num_links = num_preferred_links.has_value()
+                                      ? *num_preferred_links
+                                      : ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis);
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     const bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -523,43 +524,6 @@ ttnn::Tensor all_reduce_async(
         use_noc1_only,
         use_optimal_ccl_for_llama,
         fp32_dest_acc);
-}
-
-std::vector<ttnn::Tensor> all_reduce_async(
-    const std::vector<ttnn::Tensor>& input_tensors,
-    ttnn::Tensor& buffer_tensor,
-    const uint32_t cluster_axis,
-    MeshDevice& mesh_device,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
-    const std::optional<const DataType> dtype,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    ttnn::ccl::Topology topology,
-    const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
-    bool use_noc1_only,
-    bool use_optimal_ccl_for_llama) {
-    topology = ::ttnn::ccl::get_usable_topology(input_tensors.at(0), topology, cluster_axis);
-    ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
-
-    log_debug(tt::LogOp, "Using minimal all_reduce_async with multiple tensors");
-    std::vector<ttnn::Tensor> output_tensors;
-    output_tensors.reserve(input_tensors.size());
-    for (size_t i = 0; i < input_tensors.size(); ++i) {
-        output_tensors.push_back(ttnn::prim::all_reduce_async(
-            input_tensors[i],
-            buffer_tensor,
-            cluster_axis,
-            mesh_device,
-            topology,
-            multi_device_global_semaphore.global_semaphores[i],
-            dtype,
-            out_memory_config,
-            num_preferred_links,
-            worker_subdevice_id_opt,
-            use_noc1_only,
-            use_optimal_ccl_for_llama));
-    }
-    return output_tensors;
 }
 
 }  // namespace ttnn::experimental

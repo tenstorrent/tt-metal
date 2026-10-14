@@ -9,25 +9,18 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t input0_dfb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t input1_dfb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t input0_transpose_dfb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t input1_transpose_dfb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t concat_dfb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t output_transpose_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(6);
-
-    constexpr uint32_t input0_num_tiles_height = get_compile_time_arg_val(7);
-    constexpr uint32_t input0_num_tiles_width = get_compile_time_arg_val(8);
-    constexpr uint32_t input1_num_tiles_height = get_compile_time_arg_val(9);
-    constexpr uint32_t input1_num_tiles_width = get_compile_time_arg_val(10);
+    constexpr uint32_t input0_num_tiles_height = get_arg(args::input0_num_tiles_height);
+    constexpr uint32_t input0_num_tiles_width = get_arg(args::input0_num_tiles_width);
+    constexpr uint32_t input1_num_tiles_height = get_arg(args::input1_num_tiles_height);
+    constexpr uint32_t input1_num_tiles_width = get_arg(args::input1_num_tiles_width);
 
     constexpr uint32_t output_num_tiles_width = input0_num_tiles_width + input1_num_tiles_width;
 
-    constexpr uint32_t tile_size = get_compile_time_arg_val(11);
-    constexpr uint32_t groups = get_compile_time_arg_val(12);
+    constexpr uint32_t tile_size = get_arg(args::tile_size);
+    constexpr uint32_t groups = get_arg(args::groups);
 
     constexpr uint32_t bf16_tile_size = 32 * 32 * 2;
 #ifdef BF8
@@ -40,11 +33,13 @@ void kernel_main() {
     constexpr uint32_t group_stride = input0_stride + input1_stride;
 
     Noc noc;
-    DataflowBuffer input0_dfb(input0_dfb_id);
-    DataflowBuffer input1_dfb(input1_dfb_id);
-    DataflowBuffer input0_transpose_dfb(input0_transpose_dfb_id);
-    DataflowBuffer input1_transpose_dfb(input1_transpose_dfb_id);
-    DataflowBuffer concat_dfb(concat_dfb_id);
+    // input0 / input1 borrow their tensors' shard memory; this kernel hands their tiles to compute.
+    // The transpose buffers come back from compute, and the concatenated result goes out on concat.
+    DataflowBuffer input0_dfb(dfb::input0);
+    DataflowBuffer input1_dfb(dfb::input1);
+    DataflowBuffer input0_transpose_dfb(dfb::input0_transpose);
+    DataflowBuffer input1_transpose_dfb(dfb::input1_transpose);
+    DataflowBuffer concat_dfb(dfb::concat);
 
     const uint32_t base_l1_read_addr_0 = input0_transpose_dfb.get_read_ptr();
     const uint32_t base_l1_read_addr_1 = input1_transpose_dfb.get_read_ptr();

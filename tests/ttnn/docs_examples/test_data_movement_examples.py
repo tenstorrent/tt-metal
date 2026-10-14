@@ -235,7 +235,12 @@ def test_indexed_fill(device):
 def test_gather(device):
     # Create a tensor and an index tensor
     ttnn_input = ttnn.rand((4, 4), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
-    ttnn_index = ttnn.rand((4, 2), dtype=ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_index = ttnn.from_torch(
+        torch.tensor([[0, 1], [1, 2], [2, 3], [3, 0]], dtype=torch.int32),
+        dtype=ttnn.uint16,
+        layout=ttnn.Layout.TILE,
+        device=device,
+    )
 
     # Gather elements along dimension 1 using the index tensor
     ttnn.gather(ttnn_input, 1, index=ttnn_index)

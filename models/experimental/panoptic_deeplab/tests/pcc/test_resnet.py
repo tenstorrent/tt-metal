@@ -25,6 +25,7 @@ from models.experimental.panoptic_deeplab.tt.common import (
     preprocess_nchw_input_tensor,
 )
 from models.experimental.panoptic_deeplab.tests.pcc.common import (
+    bf16_conv_via_fp32,
     check_ttnn_output,
     skip_if_not_blackhole_110_cores,
     skip_if_not_blackhole_20_cores,
@@ -130,7 +131,7 @@ def test_resnet_stem_pcc(device, input_shape_nchw, reset_seeds, model_location_g
     ttnn_input = preprocess_nchw_input_tensor(device, torch_input)
 
     ttnn_stem_output = ttnn_model.backbone.stem(ttnn_input)
-    with torch.no_grad():
+    with torch.no_grad(), bf16_conv_via_fp32():
         torch_stem_output = pytorch_model.backbone.stem(torch_input)
 
     ttnn_output_torch = ttnn.to_torch(ttnn_stem_output).permute(0, 3, 1, 2).reshape(torch_stem_output.shape)
@@ -203,7 +204,7 @@ def test_resnet_layer_pcc(
             ttnn_layer_input = block(ttnn_layer_input)
         ttnn_layer_output = ttnn_layer_input
 
-    with torch.no_grad():
+    with torch.no_grad(), bf16_conv_via_fp32():
         if layer_name == "res2":
             torch_layer_output = pytorch_model.backbone.res2(torch_layer_input)
         elif layer_name == "res3":
@@ -280,7 +281,7 @@ def test_resnet_full_pcc(
     ttnn_input = preprocess_nchw_input_tensor(device, torch_input)
 
     ttnn_outputs = ttnn_model.backbone(ttnn_input)
-    with torch.no_grad():
+    with torch.no_grad(), bf16_conv_via_fp32():
         torch_outputs = pytorch_model.backbone(torch_input)
 
     failed_layers = []

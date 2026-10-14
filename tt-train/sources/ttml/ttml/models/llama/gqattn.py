@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
 import ttnn
 import ttml
@@ -31,6 +31,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         rope_params: ttml.ops.rope.RotaryEmbeddingParams,
         bias_linears: bool = False,
         use_tp: bool = False,
+        out_proj_init: Optional[Callable] = None,
     ) -> None:
         super().__init__()
 
@@ -79,6 +80,7 @@ class GroupedQueryAttention(AbstractModuleBase):
                 embedding_size,
                 embedding_size,
                 has_bias=bias_linears,
+                weight_init=out_proj_init,
                 bias_init=ttml.init.zeros(),
                 input_is_parallel=True,
                 axis_name="tp",
@@ -100,6 +102,7 @@ class GroupedQueryAttention(AbstractModuleBase):
                 embedding_size,
                 embedding_size,
                 bias_linears,
+                weight_init=out_proj_init,
                 bias_init=ttml.init.zeros(),
             )
 

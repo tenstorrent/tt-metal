@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -30,6 +31,10 @@ if TYPE_CHECKING:
 # tradeoff — SDPA pads+masks a partial last chunk internally, so nothing needs to be aligned
 # to it. (Also reused as the flash-SDPA q/k chunk size, an independent perf-tiling knob.)
 SEQ_BUCKET_SIZE = 128
+# Largest SP shard whose fp32-accumulate ring SDPA program fits Wormhole's kernel-config buffer;
+# see `Qwen3VlAttention._ring_compute_kernel_config`. This was the largest power of 2 that was
+# empirically observed to be okay with fp32_accumulate = True, but may change in the future.
+_RING_FP32_ACC_MAX_LOCAL_ROWS_WH = 512
 
 
 @dataclass
@@ -38,6 +43,85 @@ class Qwen3VlContext:
     tp_axis: int | None
     ccl_manager: CCLManager | None
     fsdp_mesh_axis: int | None = None
+    # When set, every decoder linear (qkv/o/gate/up/down projections) is built with this compute
+    # kernel config instead of the tt_dit-wide default from `linear_compute_config`. See
+    # `Qwen3VlTextEncoder`'s `high_fidelity_linears`.
+    linear_compute_kernel_config: object | None = None
+    # Sequence-parallel axis: shards the sequence and uses causal ring attention (causal path only).
+    # Composes with FSDP on the same axis (FSDP shards weights, SP shards activation rows).
+    sp_axis: int | None = None
+    # Ring K/V gather rows to allocate, so every sequence length up to it shares one buffer pair.
+    kv_gather_capacity: int | None = None
+    use_persistent_ccl_buffers: bool = True
+
+    def __post_init__(self) -> None:
+        if self.sp_axis is None:
+            return
+        if self.sp_axis == self.tp_axis:
+            raise ValueError(f"sp_axis ({self.sp_axis}) must differ from tp_axis ({self.tp_axis})")
+        if self.ccl_manager is None:
+            raise ValueError("decoder SP needs a ccl_manager for the ring all-gather")
+
+
+def vision_token_runs(input_ids: torch.Tensor, image_token_id: int | Sequence[int]) -> list[tuple[int, int]]:
+    """`(start, length)` of each contiguous run of a vision pad token in a single sequence.
+
+    Qwen3-VL presentations never interleave a vision block with anything: MiniMax-H3 emits a
+    `"<Picture i>: "` label, then `<|vision_start|>`, then one run of `<|image_pad|>`, then
+    `<|vision_end|>`. So one image is one run, and the merged vision tokens map onto the runs in order.
+
+    `image_token_id` may be several ids, which `ref2va` needs: its presentation mixes
+    `<|image_pad|>` runs (one per image reference) with `<|video_pad|>` runs (one per merged frame
+    pair of a video reference). Runs come back in sequence order regardless of pad id, in one
+    interleaved list, because `Qwen3VlTextEncoder.merge_vision` consumes the tower's rows in run order
+    and the caller assembles that output in presentation order.
+
+    A run boundary is a change of token, so two adjacent runs of different pad ids are two runs. That
+    does not arise in a MiniMax-H3 presentation, where a `"<{t} seconds>"` label separates two video
+    blocks, but merging them would mis-slice.
+    """
+    pad_ids = {int(image_token_id)} if isinstance(image_token_id, int) else {int(i) for i in image_token_id}
+    if input_ids.ndim == 2:
+        if input_ids.shape[0] != 1:
+            msg = f"expected a single sequence, got batch {input_ids.shape[0]}"
+            raise ValueError(msg)
+        input_ids = input_ids[0]
+    runs: list[tuple[int, int]] = []
+    start, current = None, None
+    for index, token in enumerate(input_ids.tolist()):
+        if token in pad_ids:
+            if start is None:
+                start, current = index, token
+            elif token != current:
+                # A different pad id: close the run and open a new one at this row.
+                runs.append((start, index - start))
+                start, current = index, token
+        elif start is not None:
+            runs.append((start, index - start))
+            start, current = None, None
+    if start is not None:
+        runs.append((start, len(input_ids) - start))
+    return runs
+
+
+def vision_gather_indices(runs: Sequence[tuple[int, int]], seq_len: int, *, vision_offset: int) -> torch.Tensor:
+    """Source-table row of each of `seq_len` sequence rows, for a gather that places vision tokens.
+
+    The rows of `runs` take consecutive table rows from `vision_offset` (at least 1), in run order.
+    Every other row maps to row 0.
+    """
+    indices = torch.zeros(seq_len, dtype=torch.int64)
+    cursor = taken = 0
+    for start, length in runs:
+        if start < cursor:
+            msg = f"runs must be sorted and disjoint; {start} overlaps {cursor}"
+            raise ValueError(msg)
+        if start + length > seq_len:
+            msg = f"run ({start}, {length}) ends past the sequence length {seq_len}"
+            raise ValueError(msg)
+        indices[start : start + length] = torch.arange(vision_offset + taken, vision_offset + taken + length)
+        cursor, taken = start + length, taken + length
+    return indices.to(torch.int32)
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L769
@@ -55,13 +139,35 @@ class Qwen3VlTextEncoder(Module):
         rms_norm_eps: float,
         rope_theta: float,
         mrope_section: Sequence[int],
+        head_dim: int | None = None,
         activation_layers: Sequence[int] | None = None,
         device: ttnn.MeshDevice,
         parallel_config: EncoderParallelConfig | None = None,
         ccl_manager: CCLManager | None = None,
         is_fsdp: bool = False,
+        high_fidelity_linears: bool = False,
+        kv_gather_capacity: int | None = None,
+        use_persistent_ccl_buffers: bool = True,
     ) -> None:
         super().__init__()
+
+        # Qwen3-VL declares `head_dim` explicitly and it is NOT always `hidden_size // num_heads`:
+        # Qwen3-VL-8B happens to satisfy that (4096 // 32 == 128), but MiniMax-H3's conditioner does
+        # not (5120 // 64 == 80, while the checkpoint's head_dim is 128, giving an inner dimension of
+        # 8192 wider than the residual stream). Pass the config's value; the derivation is only a
+        # fallback for callers whose checkpoint omits it.
+        if head_dim is None:
+            if hidden_size % num_attention_heads != 0:
+                msg = (
+                    f"cannot derive head_dim: hidden_size {hidden_size} is not divisible by "
+                    f"num_attention_heads {num_attention_heads}. Pass `head_dim` explicitly."
+                )
+                raise ValueError(msg)
+            head_dim = hidden_size // num_attention_heads
+
+        sp_axis = None
+        if parallel_config is not None and parallel_config.sequence_parallel is not None:
+            sp_axis = parallel_config.sequence_parallel.mesh_axis
 
         # FSDP: For encoders, we can only use FSDP if there's a separate axis from TP.
         # Since the encoder runs on a submesh (e.g., 1x4), we need to check if the other axis
@@ -73,10 +179,25 @@ class Qwen3VlTextEncoder(Module):
             other_axis = 1 - tp_axis  # If TP is on axis 1, check axis 0; if TP is on axis 0, check axis 1
             if device.shape[other_axis] > 1:
                 fsdp_mesh_axis = other_axis
+
         if is_fsdp and fsdp_mesh_axis is None:
             logger.warning(
                 f"Qwen3-VL: FSDP was requested but is disabled — no mesh axis other than the "
                 f"tensor-parallel axis has size > 1 (mesh shape {tuple(device.shape)})."
+            )
+
+        # `high_fidelity_linears` builds every decoder linear at HiFi4 instead of the tt_dit-wide
+        # HiFi2 default. Everything else (fp32 DEST accumulate, packer L1 accumulate, non-approx)
+        # matches the default. Off by default: one model's measurement is not evidence about the
+        # others sharing this module.
+        linear_compute_kernel_config = None
+        if high_fidelity_linears:
+            linear_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
             )
 
         ctx = Qwen3VlContext(
@@ -84,6 +205,10 @@ class Qwen3VlTextEncoder(Module):
             tp_axis=parallel_config.tensor_parallel.mesh_axis if parallel_config is not None else None,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            linear_compute_kernel_config=linear_compute_kernel_config,
+            sp_axis=sp_axis,
+            kv_gather_capacity=kv_gather_capacity,
+            use_persistent_ccl_buffers=use_persistent_ccl_buffers,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
@@ -99,6 +224,7 @@ class Qwen3VlTextEncoder(Module):
                 num_attention_heads=num_attention_heads,
                 num_key_value_heads=num_key_value_heads,
                 rms_norm_eps=rms_norm_eps,
+                head_dim=head_dim,
                 ctx=ctx,
             )
             for _ in range(num_hidden_layers)
@@ -108,8 +234,12 @@ class Qwen3VlTextEncoder(Module):
         self._device = ctx.device
         self._tp_axis = ctx.tp_axis
         self._ccl_manager = ctx.ccl_manager
+        self._sp_axis = ctx.sp_axis
+        self._sp_factor = device.shape[ctx.sp_axis] if ctx.sp_axis is not None else 1
         self._mrope_section = mrope_section
-        self._head_dim = hidden_size // num_attention_heads
+        # See Qwen3VlAttention: head_dim is not derivable from hidden_size / num_heads for every
+        # Qwen3-VL checkpoint. The rope tables are built at this width, so it must agree.
+        self._head_dim = head_dim if head_dim is not None else hidden_size // num_attention_heads
         self._rope_theta = rope_theta
         # When set, forward returns the raw hidden states after each of these decoder layers
         # (no final norm) — the Ideogram4 multi-layer feature tap. Otherwise returns the
@@ -122,7 +252,27 @@ class Qwen3VlTextEncoder(Module):
         *,
         attention_mask: ttnn.Tensor | None = None,
         pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor],
+        vision_embeds: ttnn.Tensor | None = None,
+        vision_runs: Sequence[tuple[int, int]] | None = None,
+        deepstack_embeds: Sequence[ttnn.Tensor] | None = None,
     ) -> list[ttnn.Tensor]:
+        """Args beyond the text path, all optional so text-only callers are unaffected:
+
+        vision_embeds: the vision tower's merged tokens, which *replace* the embeddings of the
+            `<|image_pad|>` rows named by `vision_runs` (see [`vision_token_runs`]).
+        deepstack_embeds: one feature per entry of the tower's `deepstack_visual_indexes`, *added* to
+            the vision rows after decoder layers `0 .. len(deepstack_embeds) - 1`. The reference keys
+            these off the list length, not the vision layer indexes they came from.
+        """
+        if (vision_embeds is None) != (vision_runs is None):
+            msg = "vision_embeds and vision_runs must be passed together"
+            raise ValueError(msg)
+        if deepstack_embeds and vision_runs is None:
+            msg = "deepstack_embeds needs vision_runs to know which rows to add to"
+            raise ValueError(msg)
+        if self._sp_axis is not None and attention_mask is not None:
+            msg = "sequence-parallel decoder supports only the causal (no-mask) path"
+            raise ValueError(msg)
         batch_size, seq_len = input_ids.shape
 
         if attention_mask is not None:
@@ -139,6 +289,12 @@ class Qwen3VlTextEncoder(Module):
             assert attention_mask.shape == (batch_size, seq_len)
             attention_mask = ttnn.pad(attention_mask, [(0, padded_seq_len - seq_len)], value=0)
             attention_bias = prepare_attention_bias(attention_mask)
+        elif self._sp_axis is not None:
+            padded_seq_len = -(-seq_len // (self._sp_factor * 32)) * (self._sp_factor * 32)
+            if padded_seq_len != seq_len:
+                input_ids = ttnn.pad(input_ids, [(0, padded_seq_len - seq_len)], value=0)
+                pos_embeds = tuple(ttnn.pad(x, [(0, padded_seq_len - seq_len), (0, 0)], value=0) for x in pos_embeds)
+            attention_bias = None
         else:
             # padding is only required by `ttnn.transformer.scaled_dot_product_attention` when using
             # an attention mask
@@ -151,11 +307,19 @@ class Qwen3VlTextEncoder(Module):
         input_embeds = self.embed_tokens.forward(input_ids)
 
         if self._tp_axis is not None:
-            input_embeds = self._ccl_manager.all_gather_persistent_buffer(
+            input_embeds = self._ccl_manager.all_gather(
                 input_embeds, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True
             )
             # clone to move out of persistent buffer
             input_embeds = ttnn.clone(input_embeds)
+
+        if self._sp_axis is not None:
+            input_embeds = ttnn.mesh_partition(input_embeds, dim=1, cluster_axis=self._sp_axis)
+            pos_embeds = tuple(ttnn.mesh_partition(x, dim=2, cluster_axis=self._sp_axis) for x in pos_embeds)
+
+        deepstack_rows: list[ttnn.Tensor] = []
+        if vision_embeds is not None:
+            input_embeds, deepstack_rows = self.merge_vision(input_embeds, vision_embeds, vision_runs, deepstack_embeds)
 
         hidden_states = input_embeds
         captured: list[ttnn.Tensor] = []
@@ -166,6 +330,10 @@ class Qwen3VlTextEncoder(Module):
                 attention_bias=attention_bias,
                 pos_embeds=pos_embeds,
             )
+            # Vision also enters here, not only at the embeddings: the tower's intermediate features are
+            # added to the vision rows of the first few layers.
+            if layer_idx < len(deepstack_rows):
+                hidden_states = ttnn.add(hidden_states, deepstack_rows[layer_idx])
             if self._activation_layers is not None and layer_idx in self._activation_layers:
                 captured.append(hidden_states)
 
@@ -173,10 +341,60 @@ class Qwen3VlTextEncoder(Module):
             # default: final normalized hidden state
             captured = [self.norm.forward(hidden_states)]
 
+        if self._sp_axis is not None:
+            captured = [
+                self._ccl_manager.all_gather(x, dim=1, mesh_axis=self._sp_axis, use_hyperparams=True) for x in captured
+            ]
+
         if padded_seq_len != seq_len:
             captured = [x[:, :seq_len, :] for x in captured]
 
         return captured
+
+    def merge_vision(
+        self,
+        input_embeds: ttnn.Tensor,
+        vision_embeds: ttnn.Tensor,
+        vision_runs: Sequence[tuple[int, int]],
+        deepstack_embeds: Sequence[ttnn.Tensor] | None = None,
+    ) -> tuple[ttnn.Tensor, list[ttnn.Tensor]]:
+        """`input_embeds` with the `vision_runs` rows replaced by the tower's tokens, and each deepstack
+        feature laid out along the sequence (zeros off the vision rows), ready to add to the hidden states.
+
+        `input_embeds` is this device's sequence shard under SP, and so is everything returned. Each
+        output is a row gather from `[zeros | tower rows]` rather than slices around each run, so every
+        program is keyed only on the sequence length and the tower's row count; the run layout lives in
+        the index values. The text rows come back through a 0/1 row select, which keeps the table to the
+        tower's rows: `ttnn.embedding` takes a row-major copy of it. `vision_embeds` may carry the tower's
+        SP pad rows after the real tokens: nothing indexes them.
+        """
+        seq_len, hidden = input_embeds.shape[-2] * self._sp_factor, input_embeds.shape[-1]
+        real_tokens = sum(length for _, length in vision_runs)
+        if real_tokens > vision_embeds.shape[-2]:
+            msg = f"runs cover {real_tokens} rows but the tower emitted {vision_embeds.shape[-2]}"
+            raise ValueError(msg)
+
+        indices = vision_gather_indices(vision_runs, seq_len, vision_offset=ttnn.TILE_SIZE)
+        text_mask = tensor.from_torch(
+            (indices == 0).float().reshape(1, -1, 1), device=self._device, mesh_axes=[None, self._sp_axis, None]
+        )
+        indices = tensor.from_torch(
+            indices.reshape(1, -1),
+            device=self._device,
+            dtype=ttnn.uint32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            mesh_axes=[None, self._sp_axis],
+        )
+        zeros = tensor.from_torch(torch.zeros(ttnn.TILE_SIZE, hidden), device=self._device, mesh_axes=[None, None])
+
+        def gather(rows: ttnn.Tensor) -> ttnn.Tensor:
+            table = ttnn.concat([zeros, rows], dim=0)
+            placed = ttnn.embedding(indices, table, layout=ttnn.TILE_LAYOUT)
+            ttnn.deallocate(table)
+            return placed
+
+        merged = ttnn.add(ttnn.multiply(input_embeds, text_mask), gather(vision_embeds))
+        return merged, [gather(feature) for feature in deepstack_embeds or ()]
 
     def create_rope_tensors(
         self, batch_size: int, sequence_length: int, attention_mask: torch.Tensor | None
@@ -202,6 +420,7 @@ class Qwen3VlDecoderLayer(Module):
         intermediate_size: int,
         hidden_act: str,
         rms_norm_eps: float,
+        head_dim: int | None = None,
         ctx: Qwen3VlContext,
     ) -> None:
         super().__init__()
@@ -211,6 +430,7 @@ class Qwen3VlDecoderLayer(Module):
             num_heads=num_attention_heads,
             num_key_value_heads=num_key_value_heads,
             rms_norm_eps=rms_norm_eps,
+            head_dim=head_dim,
             ctx=ctx,
         )
         self.mlp = Qwen3VlMlp(
@@ -246,6 +466,7 @@ class Qwen3VlAttention(Module):
         num_heads: int,
         num_key_value_heads: int,
         rms_norm_eps: float,
+        head_dim: int | None = None,
         ctx: Qwen3VlContext,
     ) -> None:
         super().__init__()
@@ -253,11 +474,19 @@ class Qwen3VlAttention(Module):
         if ctx.tp_axis is not None:
             assert ctx.ccl_manager is not None
 
-        if hidden_size % num_heads != 0:
-            msg = f"hidden_size {hidden_size} must be divisible by num_heads {num_heads}"
-            raise ValueError(msg)
-
-        head_dim = hidden_size // num_heads
+        # Qwen3-VL does not require `head_dim == hidden_size // num_heads`, and the larger
+        # checkpoints do not satisfy it: the 32B-class model MiniMax-H3 conditions on has
+        # hidden_size 5120 with 64 heads of 128, so `q_proj` is [8192, 5120] rather than square.
+        # `num_heads * head_dim` need not equal `hidden_size`: the projections below are sized from
+        # `head_dim` throughout, so a q/k/v inner dimension wider (or narrower) than the residual
+        # stream is supported. Passing head_dim explicitly is therefore required for those
+        # checkpoints; the derivation stays the default because it is correct for the 8B
+        # (4096 / 32 = 128) that Ideogram-4 loads.
+        if head_dim is None:
+            if hidden_size % num_heads != 0:
+                msg = f"hidden_size {hidden_size} must be divisible by num_heads {num_heads}"
+                raise ValueError(msg)
+            head_dim = hidden_size // num_heads
 
         # Qwen3 (unlike Qwen2.5) applies per-head RMSNorm to q and k (over head_dim),
         # after the qkv projection / head split and before RoPE.
@@ -279,6 +508,7 @@ class Qwen3VlAttention(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
+            compute_kernel_config=ctx.linear_compute_kernel_config,
         )
         self.o_proj = ColParallelLinear(
             padded_heads * head_dim,
@@ -288,6 +518,7 @@ class Qwen3VlAttention(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
+            compute_kernel_config=ctx.linear_compute_kernel_config,
         )
 
         self._sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -309,6 +540,9 @@ class Qwen3VlAttention(Module):
         self._tp_factor = tp_factor
         self._device = ctx.device
         self._ccl_manager = ctx.ccl_manager
+        self._sp_axis = ctx.sp_axis
+        self._sp_factor = ctx.device.shape[ctx.sp_axis] if ctx.sp_axis is not None else 1
+        self._kv_gather_capacity = ctx.kv_gather_capacity
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         def _prepare_qkv(q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
@@ -387,25 +621,29 @@ class Qwen3VlAttention(Module):
         q = _apply_rope(q, cos, sin)
         k = _apply_rope(k, cos, sin)
 
-        x = ttnn.transformer.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            attn_mask=attention_bias,
-            is_causal=attention_bias is None,
-            program_config=self._sdpa_program_config(q.shape[2]),
-            compute_kernel_config=self._sdpa_compute_kernel_config,
-        )
+        if self._sp_axis is not None:
+            assert attention_bias is None, "SP decoder attention supports only the causal path (attention_bias=None)"
+            x = self._ring_attention(q, k, v)
+        else:
+            x = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=attention_bias,
+                is_causal=attention_bias is None,
+                program_config=self._sdpa_program_config(q.shape[2]),
+                compute_kernel_config=self._sdpa_compute_kernel_config,
+            )
 
         x = ttnn.transformer.concatenate_heads(x)
 
         if self._tp_axis is not None:
-            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+            x = self._ccl_manager.all_gather(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         x = self.o_proj.forward(x)
 
         if self._tp_axis is not None:
-            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+            x = self._ccl_manager.all_gather(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         return x
 
@@ -418,9 +656,83 @@ class Qwen3VlAttention(Module):
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
             q_chunk_size=chunk_size,
-            k_chunk_size=chunk_size,
+            k_chunk_size=min(seq_len, 512),
             exp_approx_mode=False,
         )
+
+    def _ring_program_config(self, local_seq_len: int) -> tuple[ttnn.SDPAProgramConfig, tuple[int, int]]:
+        """Ring SDPA config sized from the local shard; reserves the last core column for CCL workers."""
+        full_grid = self._device.compute_with_storage_grid_size()
+        worker_grid = (full_grid.x - 1, full_grid.y)
+        chunk = min(-(-local_seq_len // 32) * 32, SEQ_BUCKET_SIZE)
+        cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=worker_grid,
+            q_chunk_size=chunk,
+            k_chunk_size=min(-(-local_seq_len // 32) * 32, 512),
+            exp_approx_mode=False,
+        )
+        return cfg, worker_grid
+
+    def _ring_compute_kernel_config(self, local_seq_len: int):
+        """This helper turns off fp32_dest_acc_en from the kernel config when it wouldn't fit
+        on the kernel config buffer.
+
+        By default we set `fp32_dest_acc_en=True` but that selects the ring joint SDPA's
+        legacy compute path, whose kernels are larger than the streaming path's. Some ring
+        SDPA configs on Wormhole are too big to fit on the kernel config buffer, so
+        we set it to false in that case so it can fit. TODO: Consider maybe not making
+        this a silent change/fallback for an edge case but require it at the beginning for WH.
+
+        Only tested for wormhole, TODO: unify for both wormhole and blackhole.
+        """
+        rows = -(-local_seq_len // 32) * 32
+        if self._device.arch() == ttnn.device.Arch.WORMHOLE_B0 and rows > _RING_FP32_ACC_MAX_LOCAL_ROWS_WH:
+            return ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+            )
+        return self._sdpa_compute_kernel_config
+
+    def _ring_attention(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
+        """Causal ring attention over a sequence sharded on the SP axis (zero-width joint slots)."""
+        sp_axis, ccl = self._sp_axis, self._ccl_manager
+        local_seq_len = q.shape[2]
+        pc, worker_grid = self._ring_program_config(local_seq_len)
+        compute_kernel_config = self._ring_compute_kernel_config(local_seq_len)
+        empty_q = tensor.bf16_tensor(torch.zeros(1, self._num_local_heads, 0, self._head_dim), device=self._device)
+        empty_kv = tensor.bf16_tensor(torch.zeros(1, self._num_local_kv_heads, 0, self._head_dim), device=self._device)
+        attn, _joint, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            empty_q,
+            empty_kv,
+            empty_kv,
+            persistent_output_buffer_k=ccl.get_ag_ping_pong_buffer(
+                k.shape, 2, sp_axis, dtype=k.dtype, capacity=self._kv_gather_capacity
+            ),
+            persistent_output_buffer_v=ccl.get_ag_ping_pong_buffer(
+                v.shape, 2, sp_axis, dtype=v.dtype, capacity=self._kv_gather_capacity
+            ),
+            joint_strategy="rear",
+            logical_n=local_seq_len * self._sp_factor,
+            program_config=pc,
+            compute_kernel_config=compute_kernel_config,
+            dim=2,
+            scale=self._head_dim**-0.5,
+            multi_device_global_semaphore=ccl.get_ag_ping_pong_semaphore(sp_axis),
+            num_links=ccl.num_links,
+            cluster_axis=sp_axis,
+            mesh_device=self._device,
+            topology=ccl.topology,
+            subdevice_id=ccl.ccl_sub_device_id,
+            ccl_core_grid_offset=(worker_grid[0], 0),
+            use_column_major_ccl=True,
+            is_causal=True,
+            is_balanced=False,
+        )
+        return attn
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L529
@@ -446,6 +758,7 @@ class Qwen3VlMlp(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
+            compute_kernel_config=ctx.linear_compute_kernel_config,
         )
         self.up_proj = ColParallelLinear(
             hidden_size,
@@ -455,6 +768,7 @@ class Qwen3VlMlp(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
+            compute_kernel_config=ctx.linear_compute_kernel_config,
         )
         self.down_proj = RowParallelLinear(
             intermediate_size,
@@ -464,6 +778,7 @@ class Qwen3VlMlp(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
+            compute_kernel_config=ctx.linear_compute_kernel_config,
         )
 
         if hidden_act != "silu":
@@ -473,13 +788,14 @@ class Qwen3VlMlp(Module):
 
         self._ccl_manager = ctx.ccl_manager
         self._tp_axis = ctx.tp_axis
+        self._use_persistent_ccl_buffers = ctx.use_persistent_ccl_buffers
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.act_fn(self.gate_proj.forward(x)) * self.up_proj.forward(x)
-        x = self.down_proj(x)
+        x = self.down_proj(x, use_persistent_buffer=self._use_persistent_ccl_buffers)
 
         if self._tp_axis is not None:
-            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+            x = self._ccl_manager.all_gather(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         return x
 
@@ -506,9 +822,9 @@ def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tens
     # the fused ttnn.experimental.rotary_embedding_llama (rope_halfsplit_to_interleaved*); that
     # conversion is numerically neutral there. Not adopted here: it needs a head_dim channel
     # permutation baked into the qkv weights, and the encoder RoPE is a negligible slice of latency
-    # (the encoder is ~1.5% of end-to-end), so the fused op buys ~nothing. (An earlier interleaved
-    # attempt regressed PCC only because cos/sin were left half-split while the rotate switched to
-    # adjacent-pair -- a bug in that attempt, not the layout.)
+    # (the encoder is ~1.5% of end-to-end), so the fused op buys ~nothing. If it is ever adopted,
+    # cos/sin must be converted to adjacent-pair along with the rotate -- mixing the two layouts
+    # regresses PCC silently.
     return x * cos + _rotate_half(x) * sin
 
 
@@ -570,6 +886,109 @@ def prepare_attention_bias(attention_mask: ttnn.Tensor) -> ttnn.Tensor:
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L491
 # and https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L545
+def vision_position_ids(
+    start_position: int,
+    grid_thw: Sequence[int] | torch.Tensor,
+    *,
+    temp_merge_size: int = 1,
+    spatial_merge_size: int = 1,
+    time_interval: int = 1,
+) -> torch.Tensor:
+    """The `(3, num_vision_tokens)` M-RoPE grid of one image or video block, offset by `start_position`.
+
+    The `(t, h, w)` axes carry *different* positions here, unlike a text run where all three share the
+    token index. That divergence is what makes the interleaved layout observable -- see
+    [`create_rope_tensors`].
+
+    The repeat patterns below are load-bearing and mirror the reference exactly; `start_position` is
+    added to the temporal axis only *after* `time_interval` is applied, and order matters.
+    """
+    llm_grid_t = int(grid_thw[0]) // temp_merge_size
+    llm_grid_h = int(grid_thw[1]) // spatial_merge_size
+    llm_grid_w = int(grid_thw[2]) // spatial_merge_size
+
+    position_temporal = torch.arange(llm_grid_t) * time_interval
+    position_width = torch.arange(llm_grid_w) + start_position
+    position_height = torch.arange(llm_grid_h) + start_position
+
+    position_width = position_width.repeat(llm_grid_h * llm_grid_t)
+    position_height = position_height.repeat_interleave(llm_grid_w).repeat(llm_grid_t)
+    position_temporal = position_temporal.repeat_interleave(llm_grid_h * llm_grid_w) + start_position
+
+    return torch.stack([position_temporal, position_height, position_width], dim=0)
+
+
+def mrope_position_ids(
+    mm_token_type_ids: torch.Tensor,
+    *,
+    image_grid_thw: torch.Tensor | None = None,
+    video_grid_thw: torch.Tensor | None = None,
+    spatial_merge_size: int = 2,
+) -> torch.Tensor:
+    """The `(3, batch_size, sequence_length)` M-RoPE grid of a multimodal prompt.
+
+    The sequence is walked as runs of one modality, which is what `mm_token_type_ids` (0 text, 1
+    image, 2 video -- as produced by `Qwen3VLProcessor.create_mm_token_type_ids`) encodes. A text run
+    advances all three axes together by its length; a vision run consumes the next entry of the
+    matching `*_grid_thw` and advances the clock by `max(h, w) // spatial_merge_size`.
+
+    Only the position grid is returned. The reference also produces `mrope_position_deltas`, which
+    exists to re-base positions for cached incremental decoding; the conditioner runs a single
+    prefill with `use_cache=False` and never needs it.
+
+    Padding is not handled: this takes one unpadded sequence per batch item, which is what the
+    conditioner feeds (its attention mask is all ones).
+    """
+    if video_grid_thw is not None:
+        # Timestamps separate the frames of a video, so each frame is its own grid.
+        video_grid_thw = torch.repeat_interleave(video_grid_thw, video_grid_thw[:, 0], dim=0).clone()
+        video_grid_thw[:, 0] = 1
+
+    grid_iters = {
+        1: iter(image_grid_thw) if image_grid_thw is not None else None,
+        2: iter(video_grid_thw) if video_grid_thw is not None else None,
+    }
+
+    batch_size, sequence_length = mm_token_type_ids.shape
+    position_ids = torch.zeros(3, batch_size, sequence_length, dtype=torch.long)
+    for batch_idx in range(batch_size):
+        current_pos = 0
+        runs = []
+        for modality, group in itertools.groupby(enumerate(mm_token_type_ids[batch_idx].tolist()), lambda x: x[1]):
+            group = list(group)
+            runs.append((modality, group[0][0], group[-1][0] + 1))
+
+        segments = []
+        for modality, start_idx, end_idx in runs:
+            if modality == 0:
+                text_len = end_idx - start_idx
+                segments.append(torch.arange(text_len).view(1, -1).expand(3, -1) + current_pos)
+                current_pos += text_len
+            else:
+                if grid_iters[modality] is None:
+                    msg = f"mm_token_type_ids contains modality {modality} but no matching grid was passed"
+                    raise ValueError(msg)
+                grid_thw = next(grid_iters[modality])
+                segments.append(vision_position_ids(current_pos, grid_thw, spatial_merge_size=spatial_merge_size))
+                current_pos += max(int(grid_thw[1]), int(grid_thw[2])) // spatial_merge_size
+        position_ids[:, batch_idx] = torch.cat(segments, dim=1).reshape(3, -1)
+
+    return position_ids
+
+
+def _apply_interleaved_mrope(freqs: torch.Tensor, mrope_section: Sequence[int]) -> torch.Tensor:
+    """Reorganize `(3, batch, seq, head_dim // 2)` freqs from chunked `[TTT..HHH..WWW]` to interleaved
+    `[THWTHW..TT]`, preserving frequency continuity. Returns `(batch, seq, head_dim // 2)`."""
+    freqs_t = freqs[0]
+    for dim, offset in enumerate((1, 2), start=1):  # H, W
+        length = mrope_section[dim] * 3
+        idx = slice(offset, length, 3)
+        freqs_t[..., idx] = freqs[dim, ..., idx]
+    return freqs_t
+
+
+# adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L491
+# and https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L545
 def create_rope_tensors(
     batch_size: int,
     sequence_length: int,
@@ -577,8 +996,27 @@ def create_rope_tensors(
     head_dim: int,
     rope_theta: float,
     mrope_section: Sequence[int],
+    position_ids: torch.Tensor | None = None,
+    interleaved: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    if attention_mask is not None:
+    """`(cos, sin)` of shape `(batch, 1, seq, head_dim)` for the decoder's rotary embedding.
+
+    Args:
+        position_ids: `(3, batch, sequence_length)` from [`mrope_position_ids`]. Defaults to the token
+            index shared by all three axes, which is what a text-only prompt needs.
+        interleaved: whether the checkpoint declares `rope_scaling.mrope_interleaved`. The two layouts
+            assign the same *frequency* to each output slot and differ only in which axis's position
+            feeds it, so they coincide exactly while all three axes agree -- i.e. for a text-only
+            prompt, where this flag is a no-op. It becomes observable as soon as `position_ids`
+            carries a vision run.
+    """
+    if position_ids is not None:
+        assert position_ids.shape == (
+            3,
+            batch_size,
+            sequence_length,
+        ), f"position_ids must be (3, {batch_size}, {sequence_length}), got {tuple(position_ids.shape)}"
+    elif attention_mask is not None:
         assert attention_mask.shape == (batch_size, sequence_length)
 
         position_ids = attention_mask.long().cumsum(-1) - 1
@@ -587,10 +1025,23 @@ def create_rope_tensors(
     else:
         position_ids = torch.arange(sequence_length).view(1, 1, -1).expand(3, batch_size, -1)
 
+    # `theta ** -x` rather than the reference's `1 / theta ** x`: mathematically identical, one fp32
+    # ulp apart (~1.2e-7 relative), and *not* invisible after the bf16 cast the caller applies -- a few
+    # entries land on the other side of a rounding boundary. Do not switch forms: existing callers
+    # depend on this one bit-for-bit, and its 1-ulp divergence from the reference is absorbed in the
+    # measured PCC.
     inv_freq = rope_theta ** (-torch.arange(0, head_dim, 2, dtype=torch.int64).to(dtype=torch.float) / head_dim)
     inv_freq_expanded = inv_freq[None, None, :, None].float().expand(3, batch_size, -1, 1)
     position_ids_expanded = position_ids[:, :, None, :].float()
     freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
+
+    if interleaved:
+        # The axis selection happens on the freqs, before the duplication and the cos/sin.
+        freqs = _apply_interleaved_mrope(freqs, mrope_section)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        return emb.cos().unsqueeze(1), emb.sin().unsqueeze(1)
+
+    # Chunked: select per contiguous section, after the cos/sin.
     emb = torch.cat((freqs, freqs), dim=-1)
     cos = emb.cos()
     sin = emb.sin()

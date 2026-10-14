@@ -28,6 +28,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.model import Model
+from models.demos.minimax_m3.tt.residual import use_sharded_residual
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 
@@ -209,15 +210,21 @@ def test_model_sp_dense_vs_ref(mesh_device, device_params, seq_len, reset_seeds)
         sequence_parallel=True,
     )
 
-    # --- SP input shard: one sequence, S/sp rows per device, hidden replicated across TP cols ---
+    # --- SP input shard: one sequence, S/sp rows per device. Hidden is replicated across the TP cols
+    # under the default residual scheme and emb/tp-sharded under M3_SHARDED_RESIDUAL — the model's
+    # residual contract, which this test bypasses the embedding to feed directly. The RoPE tables keep
+    # the replicated-hidden dims either way (rotary_dim is never TP-sharded), hence the separate list. ---
     in_dims = [None, None]
     in_dims[sp_axis] = 2  # seq -> SP rows
+    x_dims = list(in_dims)
+    if use_sharded_residual():
+        x_dims[mesh_config.tp_axis] = 3  # emb -> TP cols
     x_tt = ttnn.from_torch(
         x.reshape(1, 1, seq_len, HIDDEN),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=in_dims),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=x_dims),
     )
 
     # --- per-row RoPE: take the model's own (format-exact) prefill cos/sin and RE-SHARD it across SP

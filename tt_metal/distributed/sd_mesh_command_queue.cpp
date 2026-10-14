@@ -2,11 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <tt_stl/fmt.hpp>
+#include <mutex>
 #include "sd_mesh_command_queue.hpp"
+#include "mesh_event_impl.hpp"
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/host_device_transfer.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
+#include "tt_metal/impl/program/slow_dispatch.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
@@ -15,7 +21,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #ifdef TT_METAL_USE_EMULE
-#include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule mesh register/run split
+#include "emule_deferred_mesh_dispatch.hpp"
+#include "emulated_program_runner.hpp"  // emule mesh register/run split
 #endif
 #include <utility>
 #include <unordered_set>
@@ -52,6 +59,24 @@ bool logical_cores_intersect(
     return false;
 }
 
+#ifdef TT_METAL_USE_EMULE
+// Drive this mesh's parked run to completion. FENCE POINTS ONLY: draining a FEED path wedges it.
+void drain_emule_run(tt::tt_metal::distributed::MeshDevice* mesh_device, tt::TargetDevice target) {
+    if (target != tt::TargetDevice::Emule) {
+        return;
+    }
+    tt::tt_metal::emule::flush_deferred_mesh_dispatch();
+    std::vector<int> device_ids;
+    device_ids.reserve(mesh_device->get_devices().size());
+    for (auto device_id : mesh_device->get_device_ids()) {
+        device_ids.push_back(static_cast<int>(device_id));
+    }
+    tt::tt_metal::emule::drain_device(device_ids);
+}
+#else
+void drain_emule_run(tt::tt_metal::distributed::MeshDevice*, tt::TargetDevice) {}
+#endif
+
 }  // namespace
 
 namespace tt::tt_metal::distributed {
@@ -72,6 +97,23 @@ SDMeshCommandQueue::SDMeshCommandQueue(
     auto local_devices = mesh_device_->get_devices();
     if (local_devices.size() > 1) {
         launch_thread_pool_ = create_device_bound_thread_pool(mesh_device_->impl().get_context_id(), local_devices);
+    }
+}
+
+SDMeshCommandQueue::~SDMeshCommandQueue() {
+    // Drain workloads enqueued non-blocking before the queue goes away, matching FDMeshCommandQueue's
+    // destructor. Otherwise a program still running at device close is killed mid-flight by the core
+    // reset on the next open, and the Tensix state it leaves behind can hang or corrupt the next
+    // program on the same cores.
+    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    try {
+        std::lock_guard<std::mutex> guard(logical_cores_mutex_);
+        wait_for_cores_idle();
+    } catch (const std::exception& e) {
+        // Destructors must not throw; leave the cores as they are and report it.
+        log_warning(tt::LogMetal, "SDMeshCommandQueue destructor: failed waiting for in-flight programs: {}", e.what());
     }
 }
 
@@ -102,19 +144,18 @@ bool SDMeshCommandQueue::write_shard_to_device(
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
-    auto shard_view = device_buffer->view(region_value);
+    auto shard_view = device_buffer->impl().view(*device_buffer, region_value);
 
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
         return false;
     }
 
-    auto payload =
-        ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
+    auto payload = ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
     if (logical_core_filter != nullptr) {
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
     } else {
-        tt::tt_metal::detail::WriteToBuffer(*shard_view, payload);
+        tt::tt_metal::slow_dispatch::WriteToBuffer(*shard_view, payload);
     }
     return false;  // Slow dispatch doesn't support pinned memory
 }
@@ -133,17 +174,19 @@ void SDMeshCommandQueue::read_shard_from_device(
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;  // Skip hardware read for mock devices
     }
-    // Wait for idle here to ensure that programs emitting this data are complete.
+    // Wait for idle so the programs emitting this data are complete; under emule the drain is what does it.
+    drain_emule_run(mesh_device_, get_target_device_type());
     wait_for_cores_idle();
     auto* device_buffer = buffer.get_device_buffer(device_coord);
-    auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
+    auto shard_view =
+        device_buffer->impl().view(*device_buffer, region.value_or(BufferRegion(0, device_buffer->size())));
 
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
     if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
         return;
     }
 
-    tt::tt_metal::detail::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
+    tt::tt_metal::slow_dispatch::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
 }
 
 void SDMeshCommandQueue::submit_memcpy_request(
@@ -156,17 +199,19 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 }
 
 void SDMeshCommandQueue::wait_for_cores_idle() {
+    auto& context = MetalContext::instance(mesh_device_->impl().get_context_id());
     if (!logical_cores_for_previous_workload_.empty()) {
         // In emulated mode this map is always empty (LaunchProgram is synchronous),
         // so this block is effectively a no-op for emulated devices.
         for (const auto& [device_id, logical_cores] : logical_cores_for_previous_workload_) {
-            tt::llrt::internal_::wait_for_idle(device_id, logical_cores);
+            tt::llrt::internal_::wait_for_idle(context, device_id, logical_cores);
         }
         logical_cores_for_previous_workload_.clear();
     }
 }
 
 void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range, Program& program, bool blocking) {
+    auto& context = MetalContext::instance(mesh_device_->impl().get_context_id());
     const auto& program_cores = program.impl().logical_cores();
 
     // Collect local devices for this program, handling async idle checks
@@ -199,7 +244,7 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
         }
 
         if (need_wait) {
-            tt::llrt::internal_::wait_for_idle(device_id, cores_to_wait);
+            tt::llrt::internal_::wait_for_idle(context, device_id, cores_to_wait);
         }
 
         local_devices.push_back(device);
@@ -212,10 +257,20 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
     // Emule note: the register/run split is bracketed by enqueue_mesh_workload around the whole
     // workload, not here per-program, so cross-chip sender/receiver programs co-run in one scheduler
     // generation. LaunchProgram / DispatchCompiledProgramToDevice below only register (defer flag set
-    // by the outer begin_mesh_dispatch). See tt-emule docs/fiber-engine.md.
+    // by the outer begin_mesh_dispatch).
 
-    // First device: full LaunchProgram (compiles, finalizes, allocates CBs, dispatches)
-    tt_metal::detail::LaunchProgram(local_devices[0], program, false);
+    if (configure_only_) {
+        log_warning(tt::LogMetal, "DISPATCH_PROGRAM cfg_only={}", configure_only_);
+        // Configure every device and stop: no go signal, nothing runs, nothing to wait for. These
+        // cores are not registered as busy, so a later dispatch does not wait on them.
+        for (auto* device : local_devices) {
+            tt_metal::experimental::ConfigureProgramWithoutLaunch(device, program);
+        }
+        return;
+    }
+
+    // First device: full launch (compiles, finalizes, allocates CBs, dispatches)
+    tt_metal::slow_dispatch::LaunchProgramAsync(*local_devices[0], program, /*force_slow_dispatch=*/false);
 
     // Remaining devices: dispatch pre-compiled binary only.
     // TODO: This loop can be parallelized with a inner thread loop
@@ -228,7 +283,8 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
     if (blocking) {
         // Can be parallelized: wait across all devices
         for (auto* device : local_devices) {
-            tt_metal::detail::WaitProgramDone(device, program);
+            tt_metal::slow_dispatch::WaitProgramDone(*device, program);
+            tt_metal::detail::ReadDeviceProfilerResults(device);
         }
     } else {
         {
@@ -265,6 +321,7 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     if (!asynchronous_slow_dispatch_enabled_) {
         wait_for_cores_idle();
     }
+    num_workloads_enqueued_++;
 
     auto& range_program_map = mesh_workload.get_programs();
 
@@ -273,10 +330,30 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // Co-schedule every program in this workload in one fiber run so cross-chip sender/receiver
         // programs co-run in one scheduler generation and the teleport's fiber wake reaches the
         // parked receiver. Register all (deferred) sequentially (not the thread pool, to avoid a
-        // fiber-registration race), then run once. See tt-emule docs/fiber-engine.md.
+        // fiber-registration race), then run once.
+        // Excludes the socket feeders' pump_device(): a dispatch onto a parked run resumes it.
+        bool already_registered = false;
+        if (tt::tt_metal::emule::deferred_mesh_dispatch_enabled() && !blocking) {
+            already_registered = tt::tt_metal::emule::deferred_mesh_dispatch_has_queue(this);
+        }
+        if (already_registered) {
+            // This queue already registered into the pending generation; running it now keeps that
+            // registration's core state intact (see emule_pending_queues).
+            tt::tt_metal::emule::flush_deferred_mesh_dispatch();
+        }
+        tt::tt_metal::emule::MeshDispatchLock dispatch_lock;
         tt::tt_metal::emule::begin_mesh_dispatch();
         for (auto& [coord_range, program] : range_program_map) {
             dispatch_program(coord_range, program, /*blocking=*/false);  // register only (defer)
+        }
+        if (tt::tt_metal::emule::deferred_mesh_dispatch_enabled() && !blocking) {
+            // Leave the programs registered so a peer queue's workload can join this generation;
+            // the run happens at the next fence (see emule_flush_deferred). A blocking enqueue must
+            // still run here — its caller is entitled to assume the work completed on return.
+            tt::tt_metal::emule::register_deferred_mesh_dispatch_queue(this);
+            std::lock_guard<std::mutex> guard(logical_cores_mutex_);
+            logical_cores_for_previous_workload_.clear();
+            return;
         }
         tt::tt_metal::emule::run_mesh_dispatch();  // one concurrent run across all programs/chips
         // run_until_idle completed every program synchronously, so all cores are idle now; keep the
@@ -319,14 +396,14 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event(
     ttsl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
-    // No synchronization is needed for slow dispatch, returning a dummy value
-    return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+    // Slow dispatch records no event; the id says how many workloads this queue had enqueued
+    return MeshEvent(num_workloads_enqueued_, *this, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host_nolock(
     ttsl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
-    // No synchronization is needed for slow dispatch, returning a dummy value
-    return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+    // Slow dispatch records no event; the id says how many workloads this queue had enqueued
+    return MeshEvent(num_workloads_enqueued_, *this, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
@@ -335,9 +412,22 @@ MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
     return this->enqueue_record_event_to_host_nolock(sub_device_ids, device_range);
 }
 
-void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {
+void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
     auto lock = lock_api_function_();
-    wait_for_cores_idle();
+    drain_emule_run(mesh_device_, get_target_device_type());
+    // Slow dispatch records no event. Without asynchronous dispatch a queue's next workload waits for its previous one,
+    // so the work the event follows has finished if the recording queue has enqueued anything since; otherwise it has
+    // finished once that queue's cores are idle. With asynchronous dispatch the queue only tracks the cores of all its
+    // outstanding workloads, so the wait also covers workloads enqueued after the event: a later workload on the
+    // recording queue must not depend on the waiter.
+    auto& event_cq =
+        dynamic_cast<SDMeshCommandQueue&>(mesh_device_->mesh_command_queue(sync_event.impl().mesh_cq_id()));
+    if (event_cq.asynchronous_slow_dispatch_enabled_ || (event_cq.num_workloads_enqueued_ == sync_event.impl().id())) {
+        event_cq.wait_for_cores_idle();
+    }
+    if (&event_cq != this) {
+        wait_for_cores_idle();
+    }
 }
 
 void SDMeshCommandQueue::enqueue_write_dram_core_counter(
@@ -376,14 +466,13 @@ void SDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId>) {
         return;
     }
     auto lock = lock_api_function_();
+    drain_emule_run(mesh_device_, get_target_device_type());
     wait_for_cores_idle();
-    for (const auto& device : mesh_device_->get_devices()) {
+    for (auto device_id : mesh_device_->get_device_ids()) {
         tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
             .get_cluster()
-            .dram_barrier(device->id());
-        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
-            .get_cluster()
-            .l1_barrier(device->id());
+            .dram_barrier(device_id);
+        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster().l1_barrier(device_id);
     }
 
     // Barrier across all active hosts of the mesh
@@ -393,11 +482,7 @@ void SDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId>) {
 void SDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId>) {}
 
 void SDMeshCommandQueue::reset_worker_state(
-    bool,
-    uint32_t,
-    const vector_aligned<uint32_t>&,
-    const std::vector<std::pair<CoreRangeSet, uint32_t>>&,
-    ttsl::Span<const uint32_t>) {}
+    bool, uint32_t, const std::vector<std::pair<CoreRangeSet, uint32_t>>&, ttsl::Span<const uint32_t>) {}
 
 void SDMeshCommandQueue::record_begin(const MeshTraceId&, const std::shared_ptr<MeshTraceDescriptor>&) {
     TT_THROW("Not supported for slow dispatch");

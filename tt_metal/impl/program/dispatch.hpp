@@ -8,9 +8,10 @@
 #include <device.hpp>
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
-#include <vector_aligned.hpp>
+#include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
 #include <array>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <utility>
@@ -29,6 +30,7 @@
 namespace tt::tt_metal {
 class Device;
 class IDevice;
+class MetalContext;
 class Program;
 class Semaphore;
 class SystemMemoryManager;
@@ -66,18 +68,21 @@ struct ExpectedNumWorkerUpdates {
 };
 
 uint32_t configure_rta_offsets_for_kernel_groups(
+    const MetalContext& metal_ctx,
     uint32_t programmable_core_type_index,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset);
 
 uint32_t configure_crta_offsets_for_kernel_groups(
+    const MetalContext& metal_ctx,
     uint32_t programmable_core_type_index,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t crta_base_offset);
 
 uint32_t finalize_rt_args(
+    const MetalContext& metal_ctx,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset,
@@ -85,6 +90,7 @@ uint32_t finalize_rt_args(
     uint32_t& rta_offset);
 
 uint32_t finalize_sems(
+    const MetalContext& metal_ctx,
     uint32_t programmable_core_type_index,
     uint32_t sem_base_offset,
     const std::vector<Semaphore>& semaphores,
@@ -92,6 +98,7 @@ uint32_t finalize_sems(
     uint32_t& semaphore_size);
 
 uint32_t finalize_cbs(
+    const MetalContext& metal_ctx,
     uint32_t programmable_core_type_index,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset,
@@ -105,6 +112,57 @@ uint32_t finalize_cbs(
 void finalize_dfb_masks(
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers);
+
+// Size the CrossNodeDFB dense kernel-config index from the workload-wide max slot count.
+// Each fixed entry is [absolute_config_buffer_addr, entry_size, relay_dfb_id].
+uint32_t finalize_cross_node_dfbs(
+    const MetalContext& metal_ctx,
+    uint32_t programmable_core_type_index,
+    ttsl::Span<detail::ProgramImpl*> programs,
+    uint32_t base_offset);
+
+uint32_t finalize_prefetcher_pipes(
+    const MetalContext& metal_ctx,
+    uint32_t programmable_core_type_index,
+    ttsl::Span<detail::ProgramImpl*> programs,
+    uint32_t base_offset);
+
+// Cores of a kernel group that share the same CrossNodeDFB kernel-config payload.
+// Each rectangle in `cores` can be covered by a single multicast.
+struct CrossNodeDFBCoreGroup {
+    // word[0]=num_slots, then num_slots x [config_page_addr, entry_size, relay_dfb_id].
+    std::vector<uint32_t> payload;
+    // Any core of the group; used to recover the participant records behind the payload.
+    CoreCoord representative_core;
+    CoreRangeSet cores;
+};
+
+struct PrefetcherPipeCoreGroup {
+    std::vector<uint32_t> payload;
+    CoreCoord representative_core;
+    CoreRangeSet cores;
+};
+
+// A kernel-group range is not necessarily homogeneous: non-participant cores can sit next to
+// participants, and relay_dfb_id differs between sender and receiver cores. Multicasting one
+// core's payload to the whole range would skip participants or overwrite others with the wrong
+// slot/relay config, so group by identical payload first. Non-participant cores are omitted.
+// Host participant records are sparse; num_program_slots sizes the dense device payload.
+std::vector<CrossNodeDFBCoreGroup> partition_cores_by_cross_node_dfb_payload(
+    const CoreRangeSet& kernel_group_cores,
+    const std::unordered_map<CoreCoord, std::vector<detail::ProgramImpl::CrossNodeDFBParticipant>>&
+        per_core_cross_node_dfbs,
+    uint8_t num_program_slots);
+
+// Dense per-core PrefetcherPipe slot payload. The relay word of each slot also carries the
+// pipe's active credit lane count, resolved from the program's attachment at build time so a
+// relay / Attach that armed lanes after this core's participant record was added is picked up.
+std::vector<uint32_t> build_prefetcher_pipe_config_payload(
+    const detail::ProgramImpl& program,
+    const std::vector<detail::ProgramImpl::PrefetcherPipeParticipant>& sparse_participants);
+
+std::vector<PrefetcherPipeCoreGroup> partition_cores_by_prefetcher_pipe_payload(
+    const detail::ProgramImpl& program, const CoreRangeSet& kernel_group_cores);
 
 uint32_t finalize_kernel_bins(
     IDevice* device,
@@ -128,31 +186,33 @@ void reserve_space_in_kernel_config_buffer(
     ProgramBinaryStatus program_binary_status,
     uint32_t num_program_workers,
     uint32_t expected_num_workers_completed,
+    // Non-zero: stall before config writes until this many workers complete. Used to
+    // order re-launches of the same CrossNode program.
+    uint32_t program_ordering_sync_count,
     ProgramDispatchMetadata& dispatch_md);
+
+// Refresh cached CB payloads without reserving or submitting queue commands.
+void update_circular_buffer_configs(ProgramCommandSequence& cached_program_command_sequence);
 
 void update_program_dispatch_commands(
     detail::ProgramImpl& program,
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
-    uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
-    std::pair<bool, int> unicast_go_signal_update,
     uint8_t cq_id);
 
 void update_traced_program_dispatch_commands(
     const TraceNode& node,
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
-    uint32_t unicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     ProgramBinaryStatus program_binary_status,
-    std::pair<bool, int> unicast_go_signal_update,
     uint8_t cq_id);
 
 TraceNode create_trace_node(
@@ -160,6 +220,22 @@ TraceNode create_trace_node(
     distributed::MeshDevice* mesh_device,
     uint32_t num_workers,
     bool use_prefetcher_cache);
+
+// Serialize the same command fragments as write_program_command_sequence for reuse across devices.
+void pack_program_command_sequence(
+    const ProgramCommandSequence& program_command_sequence,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    vector_aligned<uint32_t>& packed);
+
+// Visits the command chunks in their canonical device-execution order.
+void for_each_program_command_sequence_chunk(
+    const ProgramCommandSequence& sequence,
+    bool stall_first,
+    bool stall_before_program,
+    bool send_binary,
+    const std::function<void(const void*, uint32_t)>& process_chunk);
 
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
@@ -184,16 +260,14 @@ void reset_worker_dispatch_state_on_device(
     uint8_t cq_id,
     CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
-    bool reset_launch_msg_state);
+    bool reset_launch_msg_state,
+    ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
 
 void set_num_worker_sems_on_dispatch(
     SystemMemoryManager& manager,
     uint8_t cq_id,
     uint32_t num_worker_sems,
     ttsl::Span<const uint32_t> workers_per_sub_device);
-
-void set_go_signal_noc_data_on_dispatch(
-    const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id);
 
 // Wait for number of workers to complete and then reset the counter on the device
 void reset_expected_num_workers_completed_on_device(
@@ -206,11 +280,13 @@ void reset_expected_num_workers_completed_on_device(
 ExpectedNumWorkerUpdates get_expected_num_workers_completed_updates(
     uint32_t num_workers, uint32_t num_additional_workers);
 
-void set_core_go_message_mapping_on_device(
+// Immutable setup batches, each bounded by the device's maximum fetch size.
+std::vector<vector_aligned<uint32_t>> build_sub_device_setup_commands(
     Device* device,
+    uint8_t cq_id,
+    ttsl::Span<const uint32_t> workers_per_sub_device,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
-    SystemMemoryManager& manager,
-    uint8_t cq_id);
+    bool reset_launch_msg_state);
 
 // ProgramImpl version - does not support CQs
 uint32_t program_base_addr_on_core(detail::ProgramImpl& program, IDevice* device, HalProgrammableCoreType core_type);

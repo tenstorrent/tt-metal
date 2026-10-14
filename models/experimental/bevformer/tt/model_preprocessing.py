@@ -45,6 +45,22 @@ def convert_parameterdict_to_object(param_dict):
     return params_obj
 
 
+def _convert_sca_parameters_to_object(parameters):
+    """Convert spatial-cross-attention parameters, keeping the nested level nested.
+
+    ``convert_parameterdict_to_object`` is one level deep, which would flatten the
+    nested attention's layers into bare tensors. The nested attention needs its own
+    namespace so its ``output_proj`` is not confused with the SCA's.
+    """
+    params_obj = convert_parameterdict_to_object(parameters)
+
+    deform_parameters = parameters["deformable_attention"] if "deformable_attention" in parameters else None
+    if deform_parameters is not None:
+        params_obj.deformable_attention = convert_parameterdict_to_object(deform_parameters)
+
+    return params_obj
+
+
 # Helper functions for common preprocessing operations
 def _build_ttnn_kwargs(dtype=None, layout=None, weights_mesh_mapper=None, device=None):
     """Build kwargs dict for ttnn.from_torch based on available parameters"""
@@ -288,7 +304,7 @@ def preprocess_spatial_cross_attention_parameters(
     cached_params = _manage_cache_load(cache_file_name, device)
     if cached_params is not None:
         # Convert cached params to object format for dot notation access
-        return convert_parameterdict_to_object(cached_params)
+        return _convert_sca_parameters_to_object(cached_params)
 
     parameters = {}
 
@@ -298,27 +314,22 @@ def preprocess_spatial_cross_attention_parameters(
             torch_model.output_proj, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
         )
 
-    # Extract deformable attention parameters from the nested module
+    # The nested attention keeps its own namespace. Both modules own an
+    # ``output_proj`` and both apply it, so flattening them together drops one of
+    # the two and makes the other run twice.
     if hasattr(torch_model, "deformable_attention"):
         deform_attn = torch_model.deformable_attention
 
-        # Process deformable attention layers
-        deform_layer_names = ["value_proj", "sampling_offsets", "attention_weights"]
-        for layer_name in deform_layer_names:
+        deform_parameters = {}
+        for layer_name in ["value_proj", "sampling_offsets", "attention_weights", "output_proj"]:
             if hasattr(deform_attn, layer_name):
                 layer = getattr(deform_attn, layer_name)
-                parameters[layer_name] = _process_linear_layer(
+                deform_parameters[layer_name] = _process_linear_layer(
                     layer, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
                 )
+        parameters["deformable_attention"] = deform_parameters
 
-        # Handle deformable attention output projection (if separate from main output_proj)
-        if hasattr(deform_attn, "output_proj") and not hasattr(torch_model, "output_proj"):
-            parameters["output_proj"] = _process_linear_layer(
-                deform_attn.output_proj, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
-            )
-
-    # Convert flat dictionary to object structure for dot notation access
-    params_obj = convert_parameterdict_to_object(parameters)
+    params_obj = _convert_sca_parameters_to_object(parameters)
 
     # Save to cache and return
     _manage_cache_save(parameters, cache_file_name, device, "SCA ")

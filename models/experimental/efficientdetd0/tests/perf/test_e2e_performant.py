@@ -70,9 +70,14 @@ def create_efficientdet_d0_pipeline_model(ttnn_model):
     indirect=True,
 )
 @pytest.mark.parametrize("num_iterations", [32])
+# expected_throughput_fps feeds prep_perf_report only -- nothing asserts on it. 7.0 is the
+# mean of the first two CI measurements (7.49 fps run 32378297838, 6.52 fps run
+# 32388317325); the 11.3 it replaces was an author-time value this pipeline never reached
+# on a CI runner. Tier 3 carries no perf obligation and this pipeline is host-dispatch
+# bound (use_trace=False, 1 CQ), so it is reported, not gated.
 @pytest.mark.parametrize(
     "batch_size, size, expected_compile_time, expected_throughput_fps, use_torch_maxpool",
-    [(1, 512, 25.4, 11.3, True)],
+    [(1, 512, 25.4, 7.0, True)],
 )
 @pytest.mark.models_performance_bare_metal
 def test_efficientdet_d0_e2e_performant(
@@ -158,8 +163,9 @@ def test_efficientdet_d0_e2e_performant(
     pipeline.cleanup()
 
     inference_time = (end - start) / num_iterations
+    throughput_fps = num_iterations * batch_size / (end - start)
     logger.info(f"Average model time={1000.0 * inference_time : .2f} ms")
-    logger.info(f"Average model performance={num_iterations * batch_size / (end-start) : .2f} fps")
+    logger.info(f"Average model performance={throughput_fps : .2f} fps")
 
     total_num_samples = batch_size
     prep_perf_report(

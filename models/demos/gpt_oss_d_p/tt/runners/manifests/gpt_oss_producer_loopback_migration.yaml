@@ -1,0 +1,46 @@
+# Producer manifest: GPT-OSS Gate 2 (loopback migration, slots 0,1 -> 2,3) via migration_driver.
+#
+# MODEL-SPECIFIC transport: SP=4 TP=8 (TP cols == num_kv_heads). Pair with
+# gpt_oss_binding_loopback_migration.yaml.
+#
+# Run (after endpoint + runner are up / WORKER_READY):
+#   export PREFILL_MIGRATION_CLIENT_DIR=<tt-llm-engine>/disaggregation/migration/build_RelWithDebInfo/python
+#   export PREFILL_TRACE_DIR=<golden trace dir>
+#   python -m models.demos.common.prefill.runners.migration_driver \
+#     --manifest models/demos/gpt_oss_d_p/tt/runners/manifests/gpt_oss_producer_loopback_migration.yaml
+#
+# Every verdict is logged HERE — the runner validates nothing. Sources come from check_pcc below,
+# destinations from --verify-migration (default dst-bytes).
+
+transport:
+  sp: 4
+  tp: 8
+  h2d_service_id: gpt_oss_prefill
+  connect_timeout_s: 60
+
+model:
+  variant: gpt_oss_d_p
+  num_layers: 36
+  max_seq_len: 131072
+  chunk_size: 8192
+
+workload:
+  num_users: 2
+  chunks: "16"
+  max_requests: 2
+  interleave: round_robin
+  check_pcc: true                 # SOURCE-slot golden PCC; --verify-migration covers the destinations
+
+migration:
+  issue: true
+  dest_endpoint_id: 1
+  dst_slot_offset: 2
+  timeout_ms: 3600000
+  done_file: /tmp/migration_done.sentinel
+  table_path: /tmp/prefill_kv_chunk_table.pb
+  cmd_queue: /mig_ep1_cmd
+  table_queue: /mig_ep1_table
+  resp_queue: /mig_ep1_resp
+
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/prefill_kv_chunk_table.pb

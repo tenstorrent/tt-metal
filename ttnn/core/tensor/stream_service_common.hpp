@@ -14,7 +14,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -160,7 +159,7 @@ inline std::map<distributed::MeshCoordinate, CoreCoord> claim_service_cores(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
     const std::vector<distributed::MeshCoordinate>& coords,
     const char* side) {
-    auto& svc = internal::service_core_manager();
+    auto& svc = internal::service_core_manager(*mesh);
     std::map<distributed::MeshCoordinate, CoreCoord> service_cores;
     for (const auto& coord : coords) {
         auto* d = mesh->get_device(coord);

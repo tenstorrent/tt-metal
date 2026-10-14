@@ -26,6 +26,25 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 
+def _weights_have_output_channel_dim(weights_shape: tuple[int, ...], combine_output_shape: tuple[int, ...]) -> bool:
+    """Return whether weights already broadcast as ``[..., topk, 1]``.
+
+    Gate scores may omit leading mesh dimensions.  For ``topk == 1``, their
+    final score dimension is also one, so it cannot by itself distinguish
+    ``[..., topk]`` from ``[..., topk, 1]``.  Right-align the candidate with
+    the complete combine output: only the latter form can broadcast through
+    the embedding dimension.
+    """
+    if not weights_shape or weights_shape[-1] != 1 or len(weights_shape) > len(combine_output_shape):
+        return False
+
+    padded_weights_shape = (1,) * (len(combine_output_shape) - len(weights_shape)) + weights_shape
+    return all(
+        weight_dim == 1 or weight_dim == output_dim
+        for weight_dim, output_dim in zip(padded_weights_shape, combine_output_shape)
+    )
+
+
 class TtReduceModule(LightweightModule):
     """TTNN implementation: fused weighted sum over topk + reduce_scatter."""
 
@@ -81,8 +100,11 @@ class TtReduceModule(LightweightModule):
             output: Per-chip tensor of shape [seq_len, emb_dim / num_chips_in_axis]
         """
         if weights is not None:
-            # Ensure weights has trailing dim=1 for broadcast: [..., topk] -> [..., topk, 1]
-            if weights.shape[-1] != 1:
+            # Scores can omit leading mesh dimensions. For topk=1 a trailing
+            # singleton is ambiguous. Treat it as an existing output-channel
+            # dimension only when the full right-aligned shape broadcasts to
+            # combine_output; otherwise append the missing channel dimension.
+            if not _weights_have_output_channel_dim(tuple(weights.shape), tuple(combine_output.shape)):
                 weights = ttnn.unsqueeze(weights, dim=-1)
 
             # Add batch dimensions if needed to match combine_output rank

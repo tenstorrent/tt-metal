@@ -1,15 +1,19 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <optional>
+#include <variant>
+
+#include <tt-metalium/program.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "minimal_matmul_device_operation_types.hpp"
-#include "minimal_matmul_program_factory.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
 
@@ -21,7 +25,15 @@ struct MinimalMatmulDeviceOperation {
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
-    using program_factory_t = std::variant<MinimalMatmulProgramFactory>;
+    struct ProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const MinimalMatmulParams& operation_attributes,
+            const MinimalMatmulInputs& tensor_args,
+            std::vector<Tensor>& tensor_return_value);
+    };
+
+    using program_factory_t = std::variant<ProgramFactory>;
+
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
@@ -66,6 +78,9 @@ std::vector<Tensor> minimal_matmul(
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<Tensor>& fused_ternary_input_a = std::nullopt,
     const std::optional<Tensor>& fused_ternary_input_b = std::nullopt,
-    bool fuse_swiglu = false);
+    bool fuse_swiglu = false,
+    // Fused concat (concat-free): when set, in0's K is input_tensor (prefix) then optional_input_tensor
+    // (suffix); the split point is input_tensor's K width and the weight is stacked [W_prefix; W_suffix].
+    const std::optional<Tensor>& optional_input_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -170,7 +170,24 @@ class SubDeviceTraceController:
 
     def release(self):
         """Release every captured trace. Safe to call repeatedly."""
-        for kind, payload in self._program:
-            if kind == self._TRACE:
-                ttnn.release_trace(self.mesh_device, payload)
-        self._program = []
+        if self._capturing:
+            raise RuntimeError("cannot release traces while capture is active")
+
+        # Trace buffers belong to the sub-device manager that was active during their capture. Walk
+        # the same manager transitions used by replay so every trace ID is resolved under its owner.
+        # ACKs are replay-only side effects and must not fire during cleanup.
+        manager_loaded = False
+        try:
+            for kind, payload in self._program:
+                if kind == self._TRACE:
+                    ttnn.release_trace(self.mesh_device, payload)
+                elif kind == self._LOAD:
+                    self.mesh_device.load_sub_device_manager(payload)
+                    manager_loaded = True
+                elif kind == self._CLEAR:
+                    self.mesh_device.clear_loaded_sub_device_manager()
+                    manager_loaded = False
+        finally:
+            if manager_loaded:
+                self.mesh_device.clear_loaded_sub_device_manager()
+            self._program = []

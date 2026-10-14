@@ -132,7 +132,7 @@ inline void reduce_max_row_configure_addrmod_reinit_minimal()
  * Use the standard reduce MOP configuration with _llk_math_reduce_init_ for general-purpose reduction.
  */
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
-inline void _llk_math_reduce_block_max_row_mop_config_(const ckernel::TensorShape& tensor_shape)
+inline void _llk_math_reduce_block_max_row_mop_config_(const ckernel::TensorShape tensor_shape)
 {
     // Constraint on the outerloop and innerloop dim
     static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
@@ -270,7 +270,7 @@ inline void _llk_math_reduce_block_max_row_mop_config_(const ckernel::TensorShap
  * Use when the MOP was clobbered (e.g., by eltwise binary ops) but the replay buffer is intact.
  */
 template <std::uint32_t block_ct_dim>
-inline void _llk_math_reduce_block_max_row_mop_reprogram_only_(const ckernel::TensorShape& tensor_shape)
+inline void _llk_math_reduce_block_max_row_mop_reprogram_only_(const ckernel::TensorShape tensor_shape)
 {
     static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
@@ -331,6 +331,11 @@ inline void _llk_math_reduce_block_max_row_init_(const ckernel::TensorShape& ten
     math::reset_counters(p_setrwc::SET_ABD_F);
 
     _llk_math_reduce_block_max_row_mop_config_<block_ct_dim, is_fp32_dest_acc_en>(tensor_shape);
+
+    // The reduce runs on the FPU pool (GMPOOL). Restore the operand-driven zero-flag baseline so a
+    // preceding datacopy/copy_init that left PRESERVE (keep denormals) does not leak into it, mirroring
+    // the standard _llk_math_reduce_init_.
+    math::_configure_default_zero_flag_state_();
 }
 
 template <bool is_fp32_dest_acc_en = false>
@@ -354,7 +359,7 @@ inline void _llk_math_reduce_block_max_row_uninit_()
  * for general-purpose block reduction across multiple tiles.
  */
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
-inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
+inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
@@ -377,7 +382,7 @@ inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const
             // Tf32 that the pool wrote, so override SrcA to Tf32 (and disable the zero-flag source)
             // for the replayed transpose, exactly as the num_faces=4 path does below.
             TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+            math::_configure_src_zero_flag_(true);
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
 
             // Replay the 13 instructions (recorded slots 2-14): hi/lo transpose of the single reduced
@@ -385,7 +390,7 @@ inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const
             lltt::replay(2, 13);
 
             TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+            math::_configure_src_zero_flag_(false);
         }
         else
         {
@@ -399,7 +404,7 @@ inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const
     if constexpr (is_fp32_dest_acc_en)
     {
         TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+        math::_configure_src_zero_flag_(true);
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
     }
 
@@ -409,6 +414,6 @@ inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const
     if constexpr (is_fp32_dest_acc_en)
     {
         TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+        math::_configure_src_zero_flag_(false);
     }
 }

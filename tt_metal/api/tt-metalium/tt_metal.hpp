@@ -4,24 +4,15 @@
 
 #pragma once
 #include <stdint.h>
-#include <cstddef>
-#include <map>
 #include <memory>
-#include <optional>
 #include <string>
 #include <span>
 #include <vector>
 
-#include <hostdevcommon/common_values.hpp>
 #include <tt_stl/span.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/cluster.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/profiler_optional_metadata.hpp>
-#include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/device_types.hpp>
 // UMD: re-exports CoreType (used in SetRuntimeArgs/GetRuntimeArgs default parameter).
 #include <umd/device/types/core_coordinates.hpp>
@@ -34,29 +25,6 @@ class Program;
 namespace detail {
 
 bool DispatchStateCheck(bool isFastDispatch);
-
-std::map<ChipId, IDevice*> CreateDevices(
-    // TODO: delete this in favour of DeviceManager
-    const std::vector<ChipId>& device_ids,
-    uint8_t num_hw_cqs = 1,
-    size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-    size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-    const tt_metal::DispatchCoreConfig& dispatch_core_config = tt_metal::DispatchCoreConfig{},
-    const std::vector<uint32_t>& l1_bank_remap = {},
-    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
-    bool init_profiler = true,
-    [[deprecated]] bool ignored = false,  // This argument was not used
-    bool initialize_fabric_and_dispatch_fw = true);
-
-/**
- * Close all devices in the given map.
- *
- * This function closes all devices in the given map, releasing many associated resources. After this call, this process
- * still controls all devices. Call ReleaseOwnership() to fully release ownership.
- *
- * Return value: void
- */
-void CloseDevices(const std::map<ChipId, IDevice*>& devices);
 
 /**
  * Release ownership of the MetalContext singleton instance.
@@ -95,6 +63,9 @@ IDevice* GetActiveDevice(ChipId device_id);
  * host_buffer | Buffer on host to copy data from                | Span<const uint8_t> &   | Host buffer size must match
  * buffer               | Yes      |
  */
+[[deprecated(
+    "Use distributed::WriteShard or distributed::EnqueueWriteMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer);
 /**
  * Copies data from a host buffer into the specified buffer
@@ -108,17 +79,30 @@ void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer);
  * buffer               | Yes      |
  */
 template <typename DType>
+[[deprecated(
+    "Use distributed::WriteShard or distributed::EnqueueWriteMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void WriteToBuffer(Buffer& buffer, const std::vector<DType>& host_buffer) {
+// Compatibility shim: calling the deprecated overload is intentional (GCC warns even without instantiation).
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     WriteToBuffer(
         buffer,
         ttsl::Span<const uint8_t>(
             reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(DType)));
+#pragma GCC diagnostic pop
 }
 template <typename DType>
+[[deprecated(
+    "Use distributed::WriteShard or distributed::EnqueueWriteMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void WriteToBuffer(const std::shared_ptr<Buffer>& buffer, const std::vector<DType>& host_buffer) {
     WriteToBuffer(*buffer, host_buffer);
 }
 
+[[deprecated(
+    "Use distributed::ReadShard or distributed::EnqueueReadMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer);
 /**
  * Copies data from a buffer into a host buffer
@@ -131,13 +115,23 @@ void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer);
  * host_buffer | Buffer on host to copy data into                | std::vector<DType> &    | | Yes      | |
  */
 template <typename DType>
+[[deprecated(
+    "Use distributed::ReadShard or distributed::EnqueueReadMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void ReadFromBuffer(Buffer& buffer, std::vector<DType>& host_buffer) {
     auto buffer_size = buffer.size();
     TT_FATAL(buffer_size % sizeof(DType) == 0, "Buffer size is not divisible by dtype size");
     host_buffer.resize(buffer.size() / sizeof(DType));
+// Compatibility shim: calling the deprecated overload is intentional (GCC warns even without instantiation).
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     ReadFromBuffer(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()));
+#pragma GCC diagnostic pop
 }
 template <typename DType>
+[[deprecated(
+    "Use distributed::ReadShard or distributed::EnqueueReadMeshBuffer instead. This API will be removed after "
+    "2026-10-30.")]]
 void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<DType>& host_buffer) {
     ReadFromBuffer(*buffer, host_buffer);
 }
@@ -160,42 +154,10 @@ void ReadShard(Buffer& buffer, std::vector<DType>& host_buffer, const uint32_t& 
     ReadShard(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()), core_id);
 }
 
-// Launches all kernels on cores specified with kernels in the program.
-// All kernels on a given Tensix core must be launched.
-void LaunchProgram(
-    IDevice* device, Program& program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
-void LaunchProgram(
-    IDevice* device,
-    const std::shared_ptr<Program>& program,
-    bool wait_until_cores_done = true,
-    bool force_slow_dispatch = false);
+[[deprecated(
+    "Use MeshCommandQueue synchronization (e.g. distributed::Finish) instead. This API will be removed after "
+    "2026-10-28.")]]
 void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results = true);
-
-/**
- *  Compiles all kernels within the program, and generates binaries that are written to
- * `<tt-metal-cache directory>/<build_key>/kernels/<kernel name>/<kernel hash>`
- *
- *  The build key component accounts for device architecture as binaries are not compatible across architectures.
- *  To speed up compilation there is a kernel compilation cache that skips over generating binaries for the previously
- * compiled kernels. Kernel uniqueness is determined by the kernel hash which is computed based on compile time args,
- * defines, and kernel type specific attributes such as NOC for data movement kernels and math fidelity for compute
- * kernels.
- *  On cache hits the kernel is not recompiled if the output binary directory exists, otherwise the kernel is compiled.
- *  This cache is static and is enabled for the duration of the running process.
- *  Across runs, previously compiled kernels are recompiled if the source code or dependencies have changed.
- *
- *  Return value: void
- *
- * | Argument                  | Description                                                      | Type      | Valid
- * Range                                        | Required |
- * |---------------------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
- * | device                    | Which device the program is compiled for                         | IDevice*  | Must be
- * initialized via tt_metal::InitializeDevice | Yes      | | program                   | The program to compile |
- * Program & |                                                    | Yes      | | force_slow_dispatch        | Set when
- * a user wants to compile a program with Slow Dispatch Force Enabled (advanced feature, currently used internally to
- * launch Fast Dispatch Firmware and in the Device Performance Profiler)           | bool      | | No |
- */
-void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**
  * Writes runtime args that are saved in the program to device
@@ -209,12 +171,18 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch 
  * | program             | The program holding the runtime args                                   | const Program & | |
  * Yes      |
  */
+[[deprecated(
+    "distributed::EnqueueMeshWorkload writes runtime args as part of the launch. This API will be removed after "
+    "2026-10-28.")]]
 void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 // Configures a given device with a given program.
 // - Loads all kernel binaries into L1s of assigned Tensix cores
 // - Configures circular buffers (inits regs with buffer data)
 // - Takes the device out of reset
+[[deprecated(
+    "Use distributed::EnqueueMeshWorkload, or experimental::ConfigureProgramWithoutLaunch to configure without "
+    "launching. This API will be removed after 2026-10-28.")]]
 bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**
@@ -232,21 +200,9 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
  * | is_host_fallback_op  | (Optional): Specifies if this op runs entirely on host                              | bool
  * |                          | no       |
  */
+// The profiler keeps a lightweight declaration to avoid the full API include.
+// NOLINTNEXTLINE(readability-redundant-declaration)
 uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op = false);
-
-/**
- * Decode per device program ID to get encoded values (base program id, device id, and a flag indicating whether
- * it's an op run entirely on host).
- *
- * Return value: tuple<uint32_t, uint32_t, bool>
- *
- * | Argument             | Description                                                                         |  Data
- * type            | Valid range              | required |
- * |----------------------|-------------------------------------------------------------------------------------|-----------------------|--------------------------|----------|
- * | device_program_id    | Encoded device specific id used by the performance profiler  |
- * uint32_t        | 0 - 2^32 - 1             | yes      |
- */
-DeviceProgramId DecodePerDeviceProgramID(uint32_t device_program_id);
 
 // clang-format off
 /**
@@ -262,6 +218,7 @@ DeviceProgramId DecodePerDeviceProgramID(uint32_t device_program_id);
  * | host_buffer  | Buffer on host to copy data from                       | std::span<const uint8_t> | Host buffer must be fully fit DRAM buffer | Yes      |
  */
 // clang-format on
+[[deprecated("WriteToDeviceDRAMChannel is an internal-only API; it will be removed after 2026-10-30.")]]
 bool WriteToDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, std::span<const uint8_t> host_buffer);
 /**
@@ -278,6 +235,7 @@ bool WriteToDeviceDRAMChannel(
  * | [DRAM_UNRESERVED_BASE, dram_size)         | Yes      | | host_buffer  | Buffer on host to copy data from |
  * std::vector<uint32_t> | Host buffer must be fully fit DRAM buffer | Yes      |
  */
+[[deprecated("WriteToDeviceDRAMChannel is an internal-only API; it will be removed after 2026-10-30.")]]
 bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer);
 
 // clang-format off
@@ -294,6 +252,7 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
  * | host_buffer  | Buffer on host to copy data into                             | std::span<uint8_t>    |                                | Yes      |
  */
 // clang-format on
+[[deprecated("ReadFromDeviceDRAMChannel is an internal-only API; it will be removed after 2026-10-30.")]]
 bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer);
 
 /**
@@ -311,6 +270,7 @@ bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addre
  * device in bytes                  | uint32_t              |                                | Yes      | | host_buffer
  * | Buffer on host to copy data into                             | std::vector<uint32_t> | | Yes      |
  */
+[[deprecated("ReadFromDeviceDRAMChannel is an internal-only API; it will be removed after 2026-10-30.")]]
 bool ReadFromDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer);
 

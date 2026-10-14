@@ -18,6 +18,8 @@ from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
     ttnn_layer_norm_post_all_gather,
 )
 
+# Module-scoped device: every test here shares one device configuration
+pytestmark = pytest.mark.use_module_device
 
 TEST_PADDING_VALUE = -42
 
@@ -457,6 +459,9 @@ def test_layernorm_part_1_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
 
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
+    # Module-scoped device: clear first (not disable_and_clear, which turns caching off) or `== 1` is vacuous.
+    device.clear_program_cache()
+
     for i in range(2):
         if i > 0:
             dummy_tensors.append(
@@ -470,9 +475,9 @@ def test_layernorm_part_1_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
             )
         run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device)
 
-    assert device.num_program_cache_entries() == 1, "Program cache should have only one entry" + str(
-        device.num_program_cache_entries()
-    )
+    assert (
+        device.num_program_cache_entries() == 1
+    ), f"Program cache should have exactly one entry, got {device.num_program_cache_entries()}"
 
 
 @pytest.mark.parametrize(
@@ -710,6 +715,8 @@ def test_residual_logical_shape_mismatch_rejected(device, op_name, inp_shape, re
     "inp_shape",
     [
         (1, 1, 32, 128),
+        (1, 1, 32, 256),
+        (1, 1, 32, 288),
         (1, 1, 32, 1024),
         (1, 1, 37, 72),
     ],
@@ -1053,3 +1060,184 @@ def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offs
         f"--- MEAN: {'PASSED' if mean_passed else 'FAILED'} ---\n{mean_msg}\n"
         f"--- VARIANCE: {'PASSED' if var_passed else 'FAILED'} ---\n{var_msg}"
     )
+
+
+# Shapes that give a core of the 2D core grid more than one tile row. The 2D grid splits the tile rows over the
+# largest divisor of their count that is at most grid.y, so a tile-row count only gives several rows per core if
+# that divisor is smaller than the count. 14 and 21 tile rows have 7 as that divisor on grids with 7 to 13 rows,
+# and 32 tile rows have 8 on grids with 8 to 15 rows, so on grids with 7 to 13 rows these shapes give every core
+# 2, 3 or 4 tile rows, except 32 tile rows on a 7-row grid, which gives 8. The widths split each tile row over
+# 2, 4 or 8 cores, or over 1 core, in which case the merge core has no other cores in its column.
+PRE_ALL_GATHER_2D_MULTI_ROW_SHAPES = [
+    (1, 1, 448, 64),
+    (1, 1, 672, 256),
+    (1, 1, 1024, 1024),
+    (1, 1, 448, 32),
+]
+
+
+@pytest.mark.parametrize(
+    "variant, shape",
+    [
+        ("layer_norm", (1, 1, 32, 128)),
+        ("rms_norm", (1, 1, 32, 128)),
+        ("rms_norm_2d", (1, 1, 32, 128)),
+    ]
+    + [("rms_norm_2d", shape) for shape in PRE_ALL_GATHER_2D_MULTI_ROW_SHAPES],
+)
+@pytest.mark.parametrize("use_residual", [False, True])
+@pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["sfpu_accurate", "fpu_fast_approx"])
+def test_pre_all_gather_non_welford_fp32_precision(device, variant, shape, use_residual, fast_and_approximate_mode):
+    """Float32 non-Welford pre_all_gather stats vs an fp64 reference."""
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=torch.float32)
+    torch_residual = torch.randn(shape, dtype=torch.float32) if use_residual else None
+    golden = torch_input + torch_residual if use_residual else torch_input
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_residual = None
+    if use_residual:
+        tt_residual = ttnn.from_torch(
+            torch_residual,
+            dtype=ttnn.float32,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    if variant == "layer_norm":
+        tt_out = ttnn_layer_norm_pre_all_gather(
+            tt_input,
+            dtype=ttnn.float32,
+            compute_kernel_config=kernel_config,
+            fast_and_approximate_mode=fast_and_approximate_mode,
+            residual_input_tensor=tt_residual,
+        )
+    else:
+        tt_out = ttnn_rms_norm_pre_all_gather(
+            tt_input,
+            dtype=ttnn.float32,
+            compute_kernel_config=kernel_config,
+            fast_and_approximate_mode=fast_and_approximate_mode,
+            residual_input_tensor=tt_residual,
+            use_2d_core_grid=(variant == "rms_norm_2d"),
+        )
+    actual = ttnn.to_torch(tt_out)
+
+    # Quasar always takes the FPU path, even when fast_and_approximate_mode=False.
+    if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR:
+        rtol, atol, frob = 2e-3, 0.75, 2e-3
+    else:
+        rtol, atol, frob = 1e-5, 1e-5, 1e-5
+
+    # col 0 = sum(x^2); layernorm also stores sum(x) at col 32.
+    ref_sumx2 = golden.to(torch.float64).pow(2).sum(dim=-1)
+    tt_sumx2 = actual[..., 0].to(torch.float64).squeeze(-1)
+    assert_numeric_metrics(
+        ref_sumx2,
+        tt_sumx2,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frob,
+        pcc_threshold=0.99999,
+    )
+    if variant == "layer_norm":
+        ref_sumx = golden.to(torch.float64).sum(dim=-1)
+        tt_sumx = actual[..., 32].to(torch.float64).squeeze(-1)
+        assert_numeric_metrics(
+            ref_sumx,
+            tt_sumx,
+            rtol=rtol,
+            atol=atol,
+            frobenius_threshold=frob,
+            pcc_threshold=0.99999,
+        )
+
+
+@pytest.mark.parametrize("shape", PRE_ALL_GATHER_2D_MULTI_ROW_SHAPES)
+@pytest.mark.parametrize("use_residual", [False, True])
+def test_rms_norm_pre_all_gather_2d_bfloat16_multiple_tile_rows(device, shape, use_residual):
+    """bfloat16 2D core grid sum(x^2) vs an fp64 reference, with more than one tile row per core.
+
+    With fp32_dest_acc_en the x^2 intermediate is Float32 and the output is bfloat16, so the merge of one tile
+    row and the statistics pass of the next pack into different data formats.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_residual = torch.randn(shape, dtype=torch.bfloat16) if use_residual else None
+    golden = torch_input.to(torch.float64)
+    if use_residual:
+        golden = golden + torch_residual.to(torch.float64)
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    def to_device(t):
+        return ttnn.from_torch(
+            t, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    tt_out = ttnn_rms_norm_pre_all_gather(
+        to_device(torch_input),
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=kernel_config,
+        residual_input_tensor=to_device(torch_residual) if use_residual else None,
+        use_2d_core_grid=True,
+    )
+    actual = ttnn.to_torch(tt_out)
+
+    # col 0 = sum(x^2). bfloat16 has 8 significant bits, so the output alone is off by up to 2^-8 relative
+    # with round-to-nearest, or 2^-7 with truncation. Smaller errors come before that: with bfloat16 input
+    # the kernel reads its Float32 intermediates (the residual sum, x^2 and the per-core partial sums)
+    # through SrcA/SrcB, which rounds each to TF32, with 11 significant bits, about 2^-11 relative.
+    ref_sumx2 = golden.pow(2).sum(dim=-1)
+    tt_sumx2 = actual[..., 0].to(torch.float64)
+    assert_numeric_metrics(
+        ref_sumx2,
+        tt_sumx2,
+        rtol=1e-2,
+        atol=1e-1,
+        frobenius_threshold=1e-2,
+        pcc_threshold=0.999,
+    )
+
+
+@pytest.mark.parametrize(
+    "op",
+    [ttnn.layer_norm_pre_all_gather, ttnn.rms_norm_pre_all_gather],
+    ids=["layer_norm", "rms_norm"],
+)
+def test_pre_all_gather_non_welford_fp32_requires_fp32_dest_acc(device, op, expect_error):
+    """fp32 in without fp32_dest_acc_en would silently truncate in the unpacker, so it is a hard
+    error rather than a quiet fallback."""
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    tt_inp = ttnn.from_torch(
+        torch.randn((1, 1, 32, 128), dtype=torch.float32),
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with expect_error(RuntimeError, "requires fp32_dest_acc_en=true"):
+        op(tt_inp, dtype=ttnn.float32, compute_kernel_config=kernel_config)

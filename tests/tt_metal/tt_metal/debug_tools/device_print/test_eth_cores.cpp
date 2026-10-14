@@ -76,6 +76,9 @@ void RunTest(
 }  // namespace
 
 TEST_F(DevicePrintFixture, ActiveEthTestPrint) {
+    if (!this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
         // Skip if no ethernet cores on this device
@@ -102,6 +105,7 @@ TEST_F(DevicePrintFixture, IdleEthTestPrint) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
+    this->RequestFreshDevicesAfterThisTest();
     for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
         // Skip if no ethernet cores on this device

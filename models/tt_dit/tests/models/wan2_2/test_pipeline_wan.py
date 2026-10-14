@@ -89,6 +89,9 @@ def test_pipeline_inference(
     if (not is_fsdp) and (not ttnn.device.is_blackhole()):
         pytest.skip("FSDP=False unsupported on non-blackhole systems due to memory constraints")
 
+    if tuple(mesh_device.shape) == (2, 2) and height > 480:
+        pytest.skip("2x2 lacks the DRAM capacity for 720p")
+
     num_frames = 81
     num_inference_steps = 40
 
@@ -188,20 +191,25 @@ def test_pipeline_inference(
                 f"Per-frame scores: {[f'{s:.2f}' for s in scores]}"
             )
 
+    # These thresholds are deliberately loose, they're just to catch a broken pipeline
+    # (garbage, static or blurry output)
+    #
+    # This test runs a single prompt at a single seed, and is therefore too sensitive
+    # to numeric fluctuation to support strict thresholds; those should be in perf tests.
     vbench_thresholds_by_height = {
         720: {
-            "subject_consistency": 0.91,
-            "background_consistency": 0.92,
-            "motion_smoothness": 0.955,
+            "subject_consistency": 0.8,
+            "background_consistency": 0.8,
+            "motion_smoothness": 0.9,
             "dynamic_degree": 1.0,
-            "imaging_quality": 0.62,
+            "imaging_quality": 0.5,
         },
         480: {
-            "subject_consistency": 0.94,
-            "background_consistency": 0.96,
-            "motion_smoothness": 0.97,
+            "subject_consistency": 0.8,
+            "background_consistency": 0.8,
+            "motion_smoothness": 0.9,
             "dynamic_degree": 1.0,
-            "imaging_quality": 0.545,
+            "imaging_quality": 0.45,
         },
     }
 

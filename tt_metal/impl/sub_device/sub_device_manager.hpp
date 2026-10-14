@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/vector_aligned.hpp>
+#include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
 #include <array>
 #include <atomic>
@@ -16,7 +16,9 @@
 #include <vector>
 
 #include "allocator.hpp"
+#include "impl/allocator/persistent_l1_arena.hpp"
 #include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "sub_device.hpp"
 #include "sub_device_types.hpp"
 #include <impl/context/context_types.hpp>
@@ -50,15 +52,13 @@ public:
     const std::vector<SubDeviceId>& get_sub_device_ids() const;
     const SubDevice& sub_device(SubDeviceId sub_device_id) const;
 
-    const vector_aligned<uint32_t>& noc_mcast_unicast_data() const;
     bool has_noc_mcast_txns(SubDeviceId sub_device_id) const;
-    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const;
-    uint8_t noc_unicast_data_start_index(SubDeviceId sub_device_id) const;
 
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& get_core_go_message_mapping() const;
 
     const std::unique_ptr<AllocatorImpl>& allocator(SubDeviceId sub_device_id) const;
     std::unique_ptr<AllocatorImpl>& sub_device_allocator(SubDeviceId sub_device_id);
+    const std::vector<std::unique_ptr<AllocatorImpl>>& allocators() const { return sub_device_allocators_; }
 
     std::shared_ptr<distributed::MeshTraceBuffer>& create_trace(const distributed::MeshTraceId& trace_id);
     void release_trace(const distributed::MeshTraceId& trace_id);
@@ -68,6 +68,7 @@ public:
     uint8_t num_sub_devices() const;
     bool has_allocations() const;
     DeviceAddr local_l1_size() const;
+    DeviceAddr global_l1_bottom_reservation_size() const;
 
     const std::vector<SubDeviceId>& get_sub_device_stall_group() const;
     void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids);
@@ -93,14 +94,16 @@ private:
     tt::tt_metal::ContextId context_id_;
 
     DeviceAddr local_l1_size_;
+    DeviceAddr global_l1_bottom_reservation_size_ = 0;
     std::vector<std::unique_ptr<AllocatorImpl>> sub_device_allocators_;
+    // One seal per sub-device Tensix grid carved in populate_sub_allocators.
+    // Empty when local_l1_size_ == 0. Destructors unseal even during MeshDevice
+    // tracker teardown, when device_->allocator_impl() is no longer usable.
+    std::vector<PersistentL1Arena::Seal> persistent_l1_seals_;
 
     std::array<uint32_t, NumHalProgrammableCoreTypes> num_cores_{};
 
-    vector_aligned<uint32_t> noc_mcast_unicast_data_;
     std::vector<bool> has_noc_mcast_txns_;
-    std::vector<uint8_t> num_noc_unicast_txns_;
-    std::vector<uint8_t> noc_unicast_data_start_index_;
 
     std::vector<std::pair<CoreRangeSet, uint32_t>> core_go_message_mapping_;
 

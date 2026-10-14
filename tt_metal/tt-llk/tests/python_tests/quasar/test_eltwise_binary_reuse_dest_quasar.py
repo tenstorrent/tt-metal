@@ -5,9 +5,11 @@
 # Test for eltwise binary operations with reuse_dest on Quasar.
 import pytest
 import torch
+from helpers.constraints import get_perf_math_operations, get_valid_math_fidelities
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
+    _flush_product_underflow,
     quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
@@ -25,12 +27,13 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
-from helpers.perf import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
@@ -42,9 +45,9 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
     OUTPUT_TILE_CNT,
-    PERF_RUN_TYPE,
     REUSE_DEST_TYPE,
     TEST_FACE_DIMS,
+    TILE_COUNT,
     generate_input_dim,
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
@@ -62,14 +65,8 @@ REUSE_DEST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ],
-)
+) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 
 TILE_DIMENSIONS = [32, 32]
 
@@ -79,25 +76,18 @@ def reuse_dest_dest_sync_modes(*, is_perf=False):
 
 
 def reuse_dest_mathops(formats, *, is_perf=False):
-    if is_perf:
-        return [MathOperation.Elwadd]
-    if (
-        formats.input_format == DataFormat.MxFp8R
-        or formats.input_format == DataFormat.MxFp8P
-    ):
-        return [MathOperation.Elwadd, MathOperation.Elwsub]
-    return [MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul]
-
-
-def reuse_dest_math_fidelities(mathop, *, is_perf=False):
-    if is_perf or mathop in [MathOperation.Elwadd, MathOperation.Elwsub]:
-        return [MathFidelity.LoFi]
-    return [
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
+    supported_mathops = [
+        MathOperation.Elwadd,
+        MathOperation.Elwsub,
+        MathOperation.Elwmul,
     ]
+    if is_perf:
+        return [
+            mathop
+            for mathop in get_perf_math_operations()
+            if mathop in supported_mathops
+        ]
+    return supported_mathops
 
 
 def reuse_dest_implied_math_format(formats, *, is_perf=False):
@@ -151,7 +141,7 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
 @parametrize(
     formats=REUSE_DEST_FORMATS,
     mathop=lambda formats: reuse_dest_mathops(formats, is_perf=False),
-    math_fidelity=lambda mathop: reuse_dest_math_fidelities(mathop, is_perf=False),
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     reuse_dest_type=[
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
@@ -271,8 +261,21 @@ def test_eltwise_binary_reuse_dest_quasar(
             else None
         )
 
+        # The masking models the source registers, so it works in the format the operands
+        # unpack into: MX and BFP land in Float16_b, everything else keeps its own. Forcing
+        # Float16_b for every MX output costs a Float16 input three mantissa bits it never
+        # loses on the device, and this test chains four multiplies through Dest.
+        src_reg_format = (
+            DataFormat.Float16_b
+            if (
+                formats.input_format.is_mx_format()
+                or formats.input_format
+                in (DataFormat.Bfp2_b, DataFormat.Bfp4_b, DataFormat.Bfp8_b)
+            )
+            else formats.input_format
+        )
         math_format_for_fidelity = (
-            (DataFormat.Float16_b if use_mx else formats.output_format)
+            (src_reg_format if use_mx else formats.output_format)
             if eltwise_golden is not None
             else None
         )
@@ -321,6 +324,19 @@ def test_eltwise_binary_reuse_dest_quasar(
                     else:
                         dest = srcA * srcB
 
+            # Hardware decides a product has underflowed from the two Src exponents, before
+            # the mantissa product can carry into the next binade -- one binade coarser than
+            # "the result is subnormal in Dest". Same rule as EltwiseBinaryGolden's.
+            if mathop == MathOperation.Elwmul:
+                dest = _flush_product_underflow(
+                    srcA_m if eltwise_golden is not None else srcA,
+                    srcB_m if eltwise_golden is not None else srcB,
+                    dest,
+                    15 if internal_dtype == torch.float16 else 127,
+                )
+            else:
+                tiny = torch.finfo(internal_dtype).tiny
+                dest = torch.where(dest.abs() < tiny, torch.zeros_like(dest), dest)
             golden_tensor[out_start : out_start + tile_elements] = dest.to(golden_dtype)
 
     if is_perf and perf_report is None:
@@ -338,6 +354,7 @@ def test_eltwise_binary_reuse_dest_quasar(
         ],
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
+            TILE_COUNT(tile_cnt_input),
             INPUT_TILE_CNT(tile_cnt_input),
             OUTPUT_TILE_CNT(tile_cnt_output),
             NUM_TILES_IN_BLOCK(
@@ -373,19 +390,16 @@ def test_eltwise_binary_reuse_dest_quasar(
         "disable_format_inference": disable_format_inference,
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+        boot_mode=boot_mode,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "boot_mode": boot_mode,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
     res_from_L1 = configuration.run().result
 
     # Verify results match golden

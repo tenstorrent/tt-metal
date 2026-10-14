@@ -23,11 +23,11 @@
 #include "impl/program/program_impl.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 
 namespace tt::tt_metal {
 
-using CompilerIncludePathsTest = GenericMeshDeviceFixture;
+using CompilerIncludePathsTest = UnitMeshAnyDispatchFixture;
 
 // Verifies that DataMovementConfig::compiler_include_paths is honored by the JIT build:
 // the user-supplied directory is added as an `-I` flag, so a header placed there is
@@ -59,8 +59,6 @@ void kernel_main() {
 }
 )";
 
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
     Program program = CreateProgram();
 
     DataMovementConfig config{
@@ -71,7 +69,7 @@ void kernel_main() {
 
     EXPECT_NO_THROW({
         CreateKernelFromString(program, kernel_src, CoreCoord{0, 0}, config);
-        detail::CompileProgram(device, program);
+        program.impl().compile(&this->device());
     });
 
     fs::remove_all(include_dir);
@@ -108,8 +106,6 @@ void kernel_main() {
 }
 )";
 
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
     Program program = CreateProgram();
 
     DataMovementConfig config{
@@ -120,7 +116,7 @@ void kernel_main() {
 
     EXPECT_NO_THROW({
         CreateKernelFromString(program, kernel_src, CoreCoord{0, 0}, config);
-        detail::CompileProgram(device, program);
+        program.impl().compile(&this->device());
     });
 
     fs::remove_all(absolute_include_dir);
@@ -210,9 +206,6 @@ void kernel_main() {
 }
 )";
 
-    auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
-
     auto compile_and_get_elf_path = [&]() -> fs::path {
         Program program = CreateProgram();
         DataMovementConfig config{
@@ -221,15 +214,15 @@ void kernel_main() {
             .compiler_include_paths = {include_dir},
         };
         auto kernel_handle = CreateKernelFromString(program, kernel_src, CoreCoord{0, 0}, config);
-        detail::CompileProgram(device, program);
+        program.impl().compile(&this->device());
 
         const uint32_t tensix_core_type =
             MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
         const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(DataMovementProcessor::RISCV_0);
         const JitBuildState& build_state =
-            BuildEnvManager::get_instance(extract_context_id(device))
-                .get_kernel_build_state(device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+            BuildEnvManager::get_instance(extract_context_id(&this->device()))
+                .get_kernel_build_state(this->device().build_id(), tensix_core_type, dm_class_idx, riscv_id);
         const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
         const std::string full_kernel_name = kernels.at(kernel_handle)->get_full_kernel_name();
         return build_state.get_target_out_path(full_kernel_name);

@@ -25,6 +25,12 @@ struct AdamWDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    // The update writes `param` in place and hands it back as the op output. Pin the output's topology to the
+    // parameter's own: without this the framework re-derives it from the union of all inputs, so a gradient carrying
+    // a stale label (a CCL output that kept a Shard on a reduced axis, say) would relabel the parameter, and the
+    // checkpointer gathers by that label.
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
@@ -47,6 +53,7 @@ ttml::metal::optimizers::adamw::device::AdamWDeviceOperation::tensor_return_valu
     float epsilon,
     float weight_decay,
     bool amsgrad,
-    ttml::metal::StochasticRounding stochastic_rounding);
+    ttml::metal::StochasticRounding stochastic_rounding,
+    std::optional<uint32_t> stochastic_rounding_seed);
 
 }  // namespace ttnn::prim

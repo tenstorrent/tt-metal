@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -140,6 +141,8 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     uint32_t semaphore_addr = get_semaphore(partial_semaphore);
     volatile tt_l1_ptr uint32_t* my_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
+    Semaphore<> partial_sem(partial_semaphore);
+    Noc noc_obj(1);
 
     const uint64_t partial_semaphore_noc_addr1 =
         get_noc_addr(neighbor1_physical_x, neighbor1_physical_y, semaphore_addr);
@@ -190,9 +193,6 @@ void kernel_main() {
     const uint32_t local_group_masks_addr = cb_w2c_in5.get_write_ptr();
     const uint64_t group_masks_noc_addr = get_noc_multicast_addr(
         first_physical_x, first_physical_y, collector_physical_x, collector_physical_y, local_group_masks_addr);
-    const uint64_t group_semaphore_noc_addr = get_noc_multicast_addr(
-        first_physical_x, first_physical_y, collector_physical_x, collector_physical_y, semaphore_addr);
-
     //-------------------------------------------------------------------------
     // Top8 partials (7 cores -> 1 collector core)
     //-------------------------------------------------------------------------
@@ -383,8 +383,14 @@ void kernel_main() {
 
         // Set the semaphore to let the clients know they got the data
         *my_semaphore_ptr = 1;
-        noc_semaphore_set_multicast(
-            semaphore_addr, group_semaphore_noc_addr, /*num_dests=*/7, /*linked=*/false, /*noc=*/1);
+        partial_sem.set_multicast(
+            noc_obj,
+            first_physical_x,
+            first_physical_y,
+            collector_physical_x,
+            collector_physical_y,
+            /*num_dests=*/7,
+            /*linked=*/false);
 
         cb_w2c_in5.pop_front(1);
 

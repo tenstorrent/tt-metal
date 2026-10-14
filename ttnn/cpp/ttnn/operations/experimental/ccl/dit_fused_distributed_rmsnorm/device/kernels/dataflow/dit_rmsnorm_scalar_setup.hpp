@@ -20,6 +20,9 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
@@ -47,10 +50,11 @@ FORCE_INLINE void dit_rmsnorm_generate_scalars_and_transmat(uint32_t eps_bits, c
     generate_bcast_col_scalar(CircularBuffer(eps_cb), eps_bits);
 
     if constexpr (fuse_rope) {
-        cb_reserve_back(transmat_cb, 1);
-        const uint32_t transmat_wr_ptr = get_write_ptr(transmat_cb);
-        noc_async_read_page(0, tmat_acc, transmat_wr_ptr);
-        noc_async_read_barrier();
-        cb_push_back(transmat_cb, 1);
+        Noc noc;
+        CircularBuffer cb_transmat(transmat_cb);
+        cb_transmat.reserve_back(1);
+        noc.async_read(tmat_acc, cb_transmat, tmat_acc.get_aligned_page_size(), {.page_id = 0}, {});
+        noc.async_read_barrier();
+        cb_transmat.push_back(1);
     }
 }

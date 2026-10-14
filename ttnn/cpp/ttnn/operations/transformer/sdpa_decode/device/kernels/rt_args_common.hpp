@@ -34,7 +34,6 @@ inline uint8_t nearest_pow_of_2_up_to_8(uint32_t x) {
 
 inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_workload_for_core(
     int cur_pos,
-    int cur_batch,
     int core_num,
     int num_cores_per_batch,
     uint32_t k_chunk_size,

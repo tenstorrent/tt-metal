@@ -45,6 +45,7 @@ inline YAML::Node string_to_yaml_node(const std::string& input) {
 inline std::string get_core_descriptor_file(
     tt::tt_metal::MetalEnvImpl& env,
     const tt::ARCH& arch,
+    const metal_SocDescriptor& soc_desc,
     const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
     std::string core_desc_dir = env.get_rtoptions().get_root_dir();
@@ -53,10 +54,16 @@ inline std::string get_core_descriptor_file(
     }
     core_desc_dir += "tt_metal/core_descriptors/";
 
+    const bool quasar_tensix_dispatch_fd =
+        arch == tt::ARCH::QUASAR && env.get_rtoptions().get_fast_dispatch() &&
+        tt::tt_metal::detail::resolve_dispatch_core_type(
+            arch, dispatch_core_config, soc_desc, env.get_rtoptions().get_use_quasar_tensix_dispatch_cores()) ==
+            CoreType::WORKER;
+
     if (env.get_rtoptions().get_simulator_enabled()) {
-        auto soc_desc = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(
+        const std::string soc_desc_path = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(
             env.get_rtoptions().get_simulator_path());
-        tt_xy_pair grid_size = tt::umd::SocDescriptor::get_grid_size_from_soc_descriptor_path(soc_desc);
+        tt_xy_pair grid_size = tt::umd::SocDescriptor::get_grid_size_from_soc_descriptor_path(soc_desc_path);
         if (grid_size.y <= 2 || grid_size.x <= 2) {  // small simulation grids (any dimension <= 2)
             switch (arch) {
                 default:
@@ -67,8 +74,8 @@ inline std::string get_core_descriptor_file(
                 case tt::ARCH::QUASAR:
                     // Small Quasar sims: x_size=1 -> 1x3, x_size=2 -> 2x3
                     if (grid_size.x >= 2) {
-                        return core_desc_dir + ((env.get_rtoptions().get_fast_dispatch())
-                                                    ? "quasar_simulation_2x3_arch_fast_dispatch.yaml"
+                        return core_desc_dir + (quasar_tensix_dispatch_fd
+                                                    ? "quasar_simulation_2x3_arch_tensix_dispatch.yaml"
                                                     : "quasar_simulation_2x3_arch.yaml");
                     }
                     return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
@@ -100,7 +107,9 @@ inline std::string get_core_descriptor_file(
             } else {
                 return core_desc_dir + "blackhole_140_arch.yaml";
             }
-        case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_8x4_arch.yaml";
+        case tt::ARCH::QUASAR:
+            return core_desc_dir + (quasar_tensix_dispatch_fd ? "quasar_simulation_8x4_arch_tensix_dispatch.yaml"
+                                                              : "quasar_simulation_8x4_arch.yaml");
     };
     return "";
 }
@@ -173,7 +182,8 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
         return core_descriptor_cache_.at(cache_key);
     }
 
-    YAML::Node core_descriptor_yaml = YAML::LoadFile(get_core_descriptor_file(*this, arch, dispatch_core_config));
+    YAML::Node core_descriptor_yaml = YAML::LoadFile(
+        get_core_descriptor_file(*this, arch, get_cluster().get_soc_desc(device_id), dispatch_core_config));
     YAML::Node desc_yaml =
         core_descriptor_yaml[product_name][(resolved_axis == tt_metal::DispatchCoreAxis::ROW) ? "row" : "col"]
                             [std::to_string(num_hw_cqs)];
@@ -231,7 +241,10 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
     // Quasar dispatch-engine FD uses dedicated dispatch tiles from the soc `dispatch:` list, so
     // Tensix workers listed under dispatch_cores in the fast-dispatch core descriptor YAML are not
     // reserved (same effective worker pool as slow dispatch).
-    if ((!fast_dispatch && !get_rtoptions().is_simulator_or_emulated()) || quasar_dispatch_engine_fd) {
+    // A worker-grid override (TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE) is honoured on the dispatch-engine
+    // path too, falling through to the descriptor-derived grid below.
+    if ((!fast_dispatch && !get_rtoptions().is_simulator_or_emulated()) ||
+        (quasar_dispatch_engine_fd && !get_rtoptions().is_core_grid_override_todeprecate())) {
         compute_grid_size = get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
         if (quasar_dispatch_engine_fd) {
             log_info(
@@ -290,7 +303,8 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
         dispatch_cores.push_back(coord);
     }
     TT_ASSERT(
-        !dispatch_cores.empty() || get_rtoptions().is_simulator_or_emulated(),
+        !dispatch_cores.empty() || get_rtoptions().is_simulator_or_emulated() ||
+            get_rtoptions().get_target_device() == tt::TargetDevice::Mock,
         "Dispatch cores size must be positive");
 
     // Parse fabric_mux_cores
@@ -433,12 +447,12 @@ std::vector<tt::tt_metal::CoreCoord> get_logical_fabric_mux_cores_wh_b0_worker_f
     return logical_fabric_mux_cores;
 }
 
-const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
+const std::tuple<uint32_t, tt_metal::CoreRange>& get_physical_worker_grid_config(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     uint8_t num_hw_cqs,
     const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    static std::unordered_map<uint64_t, std::tuple<uint32_t, CoreRange>> physical_grid_config_cache = {};
+    static std::unordered_map<uint64_t, std::tuple<uint32_t, tt_metal::CoreRange>> physical_grid_config_cache = {};
     tt_fabric::FabricTensixConfig fabric_tensix_config_phys = env.get_fabric_tensix_config();
     tt_metal::DispatchCoreAxis resolved_axis_phys =
         tt_metal::resolve_dispatch_core_axis(dispatch_core_config, env.get_cluster().arch(), fabric_tensix_config_phys);
@@ -458,7 +472,8 @@ const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
         tt::tt_metal::CoreCoord tensix_worker_start_phys = soc_desc.get_physical_tensix_core_from_logical(tt::tt_metal::CoreCoord(0, 0));
         tt::tt_metal::CoreCoord tensix_worker_end_phys = soc_desc.get_physical_tensix_core_from_logical(
             tt::tt_metal::CoreCoord(tensix_num_worker_cols - 1, tensix_num_worker_rows - 1));
-        CoreRange tensix_worker_physical_grid = CoreRange(tensix_worker_start_phys, tensix_worker_end_phys);
+        tt_metal::CoreRange tensix_worker_physical_grid =
+            tt_metal::CoreRange(tensix_worker_start_phys, tensix_worker_end_phys);
         physical_grid_config_cache.insert(
             {config_hash, std::make_tuple(tensix_num_worker_cores, tensix_worker_physical_grid)});
     }

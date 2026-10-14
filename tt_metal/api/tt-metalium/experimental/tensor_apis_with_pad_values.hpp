@@ -7,8 +7,8 @@
 #include <span>
 #include <vector>
 
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 
 namespace tt::tt_metal {
 
@@ -43,6 +43,7 @@ HostTensor host_tensor_from_vector_with_pad_value(const std::vector<T>& buffer, 
  * Same as HostTensor::from_vector, but the padded values are filled with **pad_value**.
  */
 template <typename T>
+// NOLINTNEXTLINE(performance-unnecessary-value-param) -- Preserve the by-value factory API and caller move semantics.
 HostTensor host_tensor_from_vector_with_pad_value(std::vector<T>&& buffer, TensorSpec spec, T pad_value);
 
 /**

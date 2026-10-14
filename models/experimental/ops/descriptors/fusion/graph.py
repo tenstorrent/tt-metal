@@ -34,6 +34,7 @@ from models.experimental.ops.descriptors.fusion.common import (
     _BuildResult,
     _NOOP_OP,
     _SemaphoreSpec,
+    _allocate_fusion_semaphore_bank,
     _core_range_set_to_coords,
     _core_ranges_key,
     _coords_to_core_range_set,
@@ -45,7 +46,6 @@ from models.experimental.ops.descriptors.fusion.cb_allocator import (
     _restore_cb_state,
     _verify_cb_restore,
 )
-
 
 # No-op phases have no entry in the global CB pool
 NOOP_PHASE_INDEX = None
@@ -229,8 +229,7 @@ def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
     """Merge multiple _BuildResults into one.
 
     Combines ProgramDescriptors, deduplicates input tensors (by identity),
-    concatenates output tensors, unions semaphore refs, and merges source maps
-    with CB index offsets.
+    concatenates output tensors, and merges source maps with CB index offsets.
     """
     if len(results) == 1:
         return results[0]
@@ -249,9 +248,6 @@ def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
 
     # Output tensors: one per result, in order
     all_outputs = [t for r in results for t in r.output_tensors]
-
-    # Union semaphore refs
-    all_semaphores = tuple(ref for r in results for ref in r.semaphores)
 
     # Concatenate semaphore specs and addresses
     all_sem_specs = tuple(spec for r in results for spec in r.sem_specs)
@@ -284,7 +280,6 @@ def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
         descriptor=merged_desc,
         input_tensors=all_inputs,
         output_tensors=all_outputs,
-        semaphores=all_semaphores,
         kernel_labels=all_labels,
         kernel_phase_map=all_kpm,
         cb_source_map=all_cb_src,
@@ -316,8 +311,8 @@ class OpGraphBuilder:
     3. Build one fused kernel binary per group.
     4. Merge all group binaries into a single ProgramDescriptor.
 
-    Groups sharing a barrier scope (e.g. the stem) reuse the same
-    GlobalSemaphore addresses for cross-kernel synchronization.
+    Groups sharing a barrier scope (e.g. the stem) reuse the same bank-word
+    addresses for cross-kernel synchronization.
 
     Usage::
 
@@ -340,11 +335,11 @@ class OpGraphBuilder:
         Output tensors are ordered by leaf in left-to-right DFS order.
 
         Args:
-            device: Optional device for GlobalSemaphore allocation.
+            device: Optional device for build-time semaphore-bank allocation.
                 If *None*, auto-extracted from the first tensor found
                 in the tree's OpDescriptors.
         """
-        from models.experimental.ops.descriptors.fusion.fusion import FusedOp
+        from models.experimental.ops.descriptors.fusion.fusion import FusedOp, _compute_address_slots
 
         if self._built:
             raise ValueError("Already built")
@@ -356,11 +351,13 @@ class OpGraphBuilder:
             return FusedOp(op=op)
 
         r = self._build_internal(device)
-        return FusedOp(
+        fused = FusedOp(
             op=OpDescriptor(r.descriptor, r.input_tensors, r.output_tensors),
-            semaphores=r.semaphores,
             sem_specs=r.sem_specs,
         )
+        io_tensors = list(fused.input_tensors) + list(fused.output_tensors)
+        fused._address_slots = _compute_address_slots(fused.descriptor, io_tensors, r.sem_addrs)
+        return fused
 
     def _build_internal(self, device: Any = None) -> _BuildResult:
         """Internal build returning intermediate _BuildResult."""
@@ -396,28 +393,8 @@ class OpGraphBuilder:
         # Compute union of all leaf core ranges
         union_range = self._compute_union_ranges()
 
-        # Allocate shared per-core monotonic semaphores on union range.
-        sem_compute_done = ttnn.create_global_semaphore(device, union_range, 0)
-        sem_writer_done = ttnn.create_global_semaphore(device, union_range, 0)
-        sem_reset_done = ttnn.create_global_semaphore(device, union_range, 0)
-        sem_pack_drained = ttnn.create_global_semaphore(device, union_range, 0)
-        sem_math_drained = ttnn.create_global_semaphore(device, union_range, 0)
-        compute_done_addr = ttnn.get_global_semaphore_address(sem_compute_done)
-        writer_done_addr = ttnn.get_global_semaphore_address(sem_writer_done)
-        reset_done_addr = ttnn.get_global_semaphore_address(sem_reset_done)
-        pack_drained_addr = ttnn.get_global_semaphore_address(sem_pack_drained)
-        math_drained_addr = ttnn.get_global_semaphore_address(sem_math_drained)
-        all_sem_refs = [
-            sem_compute_done,
-            sem_writer_done,
-            sem_reset_done,
-            sem_pack_drained,
-            sem_math_drained,
-        ]
-
-        # Collect semaphore specs (allocation blueprints) and current
-        # addresses in matching order.  Used post-build to compute
-        # semaphore address slots for ephemeral patching at dispatch time.
+        # Collect all logical semaphore specs before allocating storage. The
+        # first five are shared per-core monotonic flags on the full graph.
         sem_specs = [
             _SemaphoreSpec(core_ranges=union_range, initial_value=0),
             _SemaphoreSpec(core_ranges=union_range, initial_value=0),
@@ -425,34 +402,38 @@ class OpGraphBuilder:
             _SemaphoreSpec(core_ranges=union_range, initial_value=0),
             _SemaphoreSpec(core_ranges=union_range, initial_value=0),
         ]
-        sem_addrs = [
-            compute_done_addr,
-            writer_done_addr,
-            reset_done_addr,
-            pack_drained_addr,
-            math_drained_addr,
-        ]
 
-        # Pre-allocate barrier configs for each unique (release, arrive) scope
-        # pair across all groups.  Groups sharing a release scope MUST use the
-        # same arrive/release GlobalSemaphore L1 addresses so that cores
-        # running different kernel binaries synchronize at the same barrier.
-        # Different arrive scopes need different arrive thresholds, so the
-        # cache key includes both release AND arrive scopes.
+        # Build barrier geometry for each unique (release, arrive) scope pair.
+        # Groups sharing a cache entry receive the same bank word addresses.
         segment_cache: Dict[Tuple[frozenset, frozenset], BarrierConfig] = {}
+        segment_configs: List[BarrierConfig] = []
         for group in groups:
             for release_scope, arrive_scope in zip(group.barrier_scopes, group.barrier_arrive_scopes):
                 release_key = _core_ranges_key(release_scope)
                 arrive_key = _core_ranges_key(arrive_scope) if arrive_scope is not None else frozenset()
                 cache_key = (release_key, arrive_key)
                 if cache_key not in segment_cache:
-                    segment_cache[cache_key] = _create_barrier_segment_config(
-                        device, release_scope, arrive_ranges=arrive_scope
+                    config = _create_barrier_segment_config(device, release_scope, arrive_ranges=arrive_scope)
+                    segment_cache[cache_key] = config
+                    segment_configs.append(config)
+                    sem_specs.extend(
+                        (
+                            _SemaphoreSpec(core_ranges=release_scope, initial_value=0),
+                            _SemaphoreSpec(core_ranges=release_scope, initial_value=0),
+                        )
                     )
-                    all_sem_refs.extend(segment_cache[cache_key]._sem_refs)
-                    for sem_ref in segment_cache[cache_key]._sem_refs:
-                        sem_specs.append(_SemaphoreSpec(core_ranges=release_scope, initial_value=0))
-                        sem_addrs.append(ttnn.get_global_semaphore_address(sem_ref))
+
+        # Use one temporary lockstep-sharded L1 tensor to assign real, distinct
+        # build-time addresses. Dispatches always allocate and patch their own
+        # command-lifetime bank.
+        semaphore_bank = _allocate_fusion_semaphore_bank(device, sem_specs)
+        sem_addrs = list(semaphore_bank.addresses)
+
+        compute_done_addr, writer_done_addr, reset_done_addr, pack_drained_addr, math_drained_addr = sem_addrs[:5]
+        for segment_index, config in enumerate(segment_configs):
+            address_index = 5 + 2 * segment_index
+            config.global_arrive_addr = sem_addrs[address_index]
+            config.global_release_addr = sem_addrs[address_index + 1]
 
         # When there are multiple groups (branching tree), phases may have
         # different native core ranges than the group's range (e.g. stem
@@ -499,7 +480,6 @@ class OpGraphBuilder:
                 reset_done_addr,
                 pack_drained_addr,
                 math_drained_addr,
-                all_sem_refs,
                 segment_cache,
                 needs_target_core_range=multi_group,
                 cb_pool=per_group_pools[g_idx],
@@ -511,9 +491,7 @@ class OpGraphBuilder:
         _verify_cb_restore(saved_all_cb_state)
 
         merged = _merge_build_results(results)
-        # Attach semaphore specs and addresses collected at this level
-        # (the group-level _BuildResults have duplicated sem refs via
-        # shared_sem_refs — specs/addrs are authoritative here).
+        # Attach semaphore specs and addresses collected at this level.
         merged.sem_specs = tuple(sem_specs)
         merged.sem_addrs = tuple(sem_addrs)
         return merged
@@ -653,7 +631,6 @@ class OpGraphBuilder:
         reset_done_addr: int,
         pack_drained_addr: int,
         math_drained_addr: int,
-        shared_sem_refs: List[Any],
         segment_cache: Dict[Tuple[frozenset, frozenset], BarrierConfig],
         needs_target_core_range: bool = False,
         cb_pool: Optional["CBPoolAllocator"] = None,
@@ -690,7 +667,6 @@ class OpGraphBuilder:
             pack_drained_addr=pack_drained_addr,
             math_drained_addr=math_drained_addr,
             transition_map=transition_map,
-            _sem_refs=list(shared_sem_refs),
         )
 
         # Build PhaseInfo list — no-op phases get empty cb_info
@@ -723,7 +699,7 @@ class OpGraphBuilder:
 
         Consecutive transitions with the same barrier scope share a segment.
         The ``segment_cache`` ensures groups sharing a scope (e.g. the stem)
-        use the same GlobalSemaphore addresses for synchronization.
+        use the same bank-word addresses for synchronization.
 
         The cache key is ``(release_scope_key, arrive_scope_key)`` — different
         arrive counts at the same release scope produce different segments
@@ -763,9 +739,8 @@ class OpGraphBuilder:
     def _compute_union_ranges(self) -> Any:
         """Compute the union CoreRangeSet of ALL node core ranges.
 
-        Includes every node in the tree — not just leaves — so that
-        early-exit parent cores (in disjoint topologies) also get
-        GlobalSemaphore allocations for compute_done/writer_done/reset_done.
+        Includes every node in the tree — not just leaves — so that early-exit
+        parent cores also get shards containing the local barrier words.
         """
         all_coords: Set[Tuple[int, int]] = set()
 

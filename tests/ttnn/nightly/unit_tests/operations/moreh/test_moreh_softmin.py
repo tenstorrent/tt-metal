@@ -17,6 +17,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
 )
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def get_torch_dtype(dtype):
     if dtype == ttnn.int32:
@@ -40,8 +43,6 @@ def run_moreh_softmin_test(
     strategy=None,
     compute_kernel_options=None,
 ):
-    if ttnn_dtype == ttnn.bfloat8_b:
-        pytest.skip(f"bfloat8_b is not supported")
     torch_dtype = get_torch_dtype(ttnn_dtype)
     if use_randint == True:
         torch_input = torch.randint(low=0, high=4, size=shape).to(torch_dtype) + 100
@@ -178,12 +179,18 @@ def test_softmin_for_dim_hw(shape_dim, dtype, compute_kernel_options, device):
     "dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_softmin_large_algorithm_for_dim_hw(shape_dim, dtype, compute_kernel_options, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
+    strategy = (
+        ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_W
+        if dim == 3
+        else ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_H
+    )
     rtol = atol = 0.05
     run_moreh_softmin_test(
         shape,
@@ -195,7 +202,39 @@ def test_softmin_large_algorithm_for_dim_hw(shape_dim, dtype, compute_kernel_opt
         atol,
         True,
         compute_kernel_options=compute_kernel_options,
+        strategy=strategy,
     )
+
+
+@pytest.mark.parametrize(
+    "shape, dim, strategy",
+    [
+        ([1, 1, 32, 32], 3, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_W),
+        ([1, 1, 32, 32], 2, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_H),
+        ([1, 1, 32, 64], 3, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_W),
+        ([1, 1, 64, 32], 2, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_H),
+    ],
+)
+def test_softmin_large_last_tile_subtracts_max(shape, dim, strategy, device):
+    # Force LARGE_*; these shapes would otherwise pick SMALL_*.
+    torch_input = torch.empty(shape, dtype=torch.bfloat16)
+    if shape[dim] == 32:
+        torch_input.fill_(100)
+    elif dim == 3:
+        torch_input[..., :32] = 103
+        torch_input[..., 32:] = 100
+    else:
+        torch_input[..., :32, :] = 103
+        torch_input[..., 32:, :] = 100
+
+    torch_output = F.softmin(torch_input, dim)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.to_torch(ttnn.operations.moreh.softmin(ttnn_input, dim, strategy=strategy)).to(torch.bfloat16)
+
+    # atol=0.05 would accept an all-zero output on the constant (1/32) case.
+    passing, out = comp_allclose_and_pcc(torch_output, ttnn_output, rtol=0.02, atol=1e-3)
+    logger.debug(out)
+    assert passing, out
 
 
 @pytest.mark.parametrize(
@@ -473,6 +512,8 @@ def test_softmin_callback(shape_dim_strategy, dtype, device):
     shape, dim, strategy = shape_dim_strategy
     torch.manual_seed(0)
     rtol = atol = 0.05
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     for i in range(2):
         run_moreh_softmin_test(shape, dim, dtype, ttnn.TILE_LAYOUT, device, rtol, atol, True, strategy=strategy)
         if i == 0:
@@ -505,6 +546,8 @@ def test_softmin_backward_callback(shape_dim_strategy, dtype, device):
     torch.manual_seed(0)
     rtol = atol = 0.05
     num_program_cache_entries = None
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     for i in range(2):
         run_moreh_softmin_backward_test(
             shape, dim, dtype, ttnn.TILE_LAYOUT, device, rtol, atol, True, strategy=strategy

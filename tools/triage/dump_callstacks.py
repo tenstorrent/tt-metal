@@ -29,7 +29,7 @@ import os
 from triage import ScriptConfig, log_check_risc, run_script
 from callstack_provider import run as get_callstack_provider, CallstackProvider, CallstacksData
 from run_checks import run as get_run_checks
-from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.hardware.risc_debug import RiscDebug
 from ttexalens.context import Context
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
@@ -40,18 +40,20 @@ script_config = ScriptConfig(
 
 
 def dump_callstacks(
-    location: OnChipCoordinate,
-    risc_name: str,
+    risc_debug: RiscDebug,
     callstack_provider: CallstackProvider,
     show_all_cores: bool = False,
 ) -> CallstacksData | None:
+    risc_location = risc_debug.risc_location
+    location = risc_location.location
+    risc_name = risc_location.risc_name
     try:
         if not callstack_provider.dispatcher_data.risc_enabled(risc_name):
             return None
         # Skip DONE / not-enabled-by-design cores unless --all-cores is specified
-        if not show_all_cores and callstack_provider.dispatcher_data.is_idle_in_default_view(location, risc_name):
+        if not show_all_cores and callstack_provider.dispatcher_data.is_idle_in_default_view(risc_location):
             return None
-        return callstack_provider.get_cached_callstacks(location, risc_name)
+        return callstack_provider.get_cached_callstacks(risc_debug)
     except TimeoutDeviceRegisterError:
         raise
     except Exception as e:
@@ -70,9 +72,8 @@ def run(args, context: Context):
     run_checks = get_run_checks(args, context)
     callstack_provider = get_callstack_provider(args, context)
     return run_checks.run_per_core_check(
-        lambda location, risc_name: dump_callstacks(
-            location,
-            risc_name,
+        lambda risc_debug: dump_callstacks(
+            risc_debug,
             callstack_provider,
             show_all_cores,
         ),

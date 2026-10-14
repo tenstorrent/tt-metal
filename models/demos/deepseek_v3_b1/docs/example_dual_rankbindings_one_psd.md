@@ -2,9 +2,13 @@
 
 **Status**
 
-- **Design** (MPI sub-context split, `inter_context_*` API, merged launch): described below; most of that C++ / `tt-run` work is **not merged yet**.
-- **In-tree today (mock / CPU):** two overlay rank-binding YAMLs (optionally **different** `mesh_graph_desc_path` per overlay), a **`subcontext_id_to_rank_bindings` mapping** file, **`tt-run --rank-bindings-mapping`**, and a **mock cluster mapping** (`rank_to_cluster_mock_cluster_desc`, keyed by **MPI world rank**) under `tests/tt_metal/distributed/config/` and `tt_metal/third_party/tt-cluster-descriptors/`. See **Target CLI** and fabric CPU-only workflow for the BH sub-context test line (4×4 vs dual-2×4+intermesh).
-- **Not in-tree:** `tests/tt_metal/multihost/single_host_mp_tests/test_sub_context.cpp` and the `inter_context_*` helpers are **plan-only** until implemented; the code blocks below are the target shape.
+- **Design** (MPI sub-context split, `inter_context_*` API, merged launch): described below; many **C++ helpers** (`get_world_context`, `local_to_world_rank`, `inter_context_*` as sketched) remain **planned** or partial—see **Files: landed vs planned**.
+- **In-tree today (`tt-run` / mock / CPU):**
+  - **`--rank-bindings-mapping`** with **`subcontext_id_to_rank_bindings`** — hand-authored overlays (possibly different **`mesh_graph_desc_path`** each). Parsed by **`parse_rank_bindings_mapping`**; merged global ranks, **`TT_RUN_SUBCONTEXT_ID`**, **`TT_RUN_SUBCONTEXT_SIZES`**, **`TT_MESH_GRAPH_DESC_PATH`**. Mutually exclusive with **`-m` / `-M`** mesh-graph Phase 1 (see **[Mesh graph inputs vs rank-bindings mapping](#mesh-graph-inputs-vs-rank-bindings-mapping)**).
+  - **Auto allocation Phase 1 (`generate_rank_bindings`)** — **`-m path.textproto`** (single MGD) or **`-M mgd_mapping.yaml`** ( **`subcontext_id_to_mesh_graph_descriptor`** ). Multi-MGD writes **`rank_bindings_subctx_<id>.yaml`**, **`rank_bindings_mapping.yaml`** (same **`subcontext_id_to_rank_bindings`** key pointing at sibling filenames), one **global** **`rankfile`**, **`phase2_mock_mapping.yaml`**; **`tt-run -M`** reuses Phase 2 **rank-bindings mapping** loading. **`tt-run`** separates **`-m`** and **`-M`** — do not pass **`--mesh-graph-descriptor`** for a mapping file.
+  - **Mock cluster mapping** (**`rank_to_cluster_mock_cluster_desc`**, keyed by MPI world rank) as today.
+  - Fixtures under **`tests/tt_metal/distributed/config/`**, **`tt_metal/third_party/tt-cluster-descriptors/`**; CI: **`MpiSubContext.SingleGalaxySplitContext`** (**`--rank-bindings-mapping`**) and **Generate Rank Bindings E2E** (**`-M`** + **`--mock-cluster-rank-binding`**). See **`ttnn/ttnn/distributed/README_ttrun.md`**.
+- **Not in-tree:** `tests/tt_metal/multihost/single_host_mp_tests/test_sub_context.cpp` (full skeleton in this doc) and some **`inter_context_*`** paths may still be **plan-only**; code blocks labelled **planned** retain that intent.
 
 ---
 
@@ -18,11 +22,24 @@ Launch **one** MPI job where **PhysicalSystemDescriptor (PSD)** is built **once*
 
 ---
 
+## Mesh graph inputs vs rank-bindings mapping
+
+**`tt-run` enforces one launcher dimension per invocation** (among **`--rank-binding`**, **`--rank-bindings-mapping`**, **`-m` / `--mesh-graph-descriptor`**, **`-M` / `--mesh-graph-descriptor-mapping`**). You cannot combine **rank-binding options** with **mesh-graph Phase 1** options.
+
+| Path | Meaning |
+|------|--------|
+| **`-m` / `-M`** | **Discovery + topology Phase 1** — **`generate_rank_bindings`** runs (MPI). **`-m`**: single **`.textproto`**. **`-M`**: YAML with **`subcontext_id_to_mesh_graph_descriptor`** pointing at **N** MGDs. Outputs live under **`generated/ttrun/`** plus a fingerprint-based cache subdirectory. For **`-M`**, Phase 1 also writes **`rank_bindings_mapping.yaml`** ( **`subcontext_id_to_rank_bindings` → sibling overlay filenames**) so Phase 2 uses the **same merged semantics** as the legacy row—but overlays are **generated**, not hand-authored here. See **`README_ttrun.md`**. |
+| **`--rank-bindings-mapping`** | **Legacy / hand-authored overlays** — you supply **`subcontext_id_to_rank_bindings`** and one YAML per sub-context (**`rank:`**, **`mesh_graph_desc_path`**, …). **`parse_rank_bindings_mapping`** merges to global ranks. Use when rank placement is curated without re-running **`generate_rank_bindings`**. |
+
+**Same YAML key for rank overlays:** **`subcontext_id_to_rank_bindings`** — whether emitted by **`generate_rank_bindings`** (multi-**`-M`**) or written by developers. **`subcontext_id_to_mesh_graph_descriptor`** appears **only** in the **`-M`** mesh-graph mapping input to **`tt-run`** / **`generate_rank_bindings -M`**.
+
+---
+
 ## Target CLI: `--rank-bindings-mapping` (sub-context id → overlay path)
 
-One `tt-run` invocation passes **`--rank-bindings-mapping`** pointing at a small YAML. The mapping mirrors **`--mock-cluster-rank-binding`**: **keys are indices** and **values are paths**. Here keys are **sub-context id** (`0`, `1`, …); values are **rank-binding overlay YAMLs** for that sub-context.
+One `tt-run` invocation passes **`--rank-bindings-mapping`** pointing at a small YAML **without** using **`-m`/`-M`**. The mapping mirrors **`--mock-cluster-rank-binding`**: **keys are indices** and **values are paths**. Here keys are **sub-context id** (`0`, `1`, …); values are **rank-binding overlay YAMLs** for that sub-context.
 
-**Example mapping** (planned path; not required to exist in-tree until someone adds it for CI):
+**Example mapping** (checked-in under **`tests/tt_metal/distributed/config/`**):
 
 ```yaml
 # Same spirit as rank_to_cluster_mock_cluster_desc, but sub_context_id -> rank_binding overlay.
@@ -630,21 +647,18 @@ TEST(SubContextTest, PrefillDecodeDisaggregated) {
 
 ---
 
-## tt-run changes
+## `tt-run` behavior (current)
 
-**File:** `ttnn/ttnn/distributed/ttrun.py`
+**File:** **`ttnn/ttnn/distributed/ttrun.py`**
 
-1. Add **`--rank-bindings-mapping`** (`Path`): YAML containing **`subcontext_id_to_rank_bindings`**, each value a path to a rank-binding overlay (same schema as today's single `--rank-binding` file).
-2. Add **`parse_rank_bindings_mapping(mapping_path)`** (name illustrative):
-   - Load the mapping; sort keys numerically (`0`, `1`, …).
-   - For each key `id`, load that overlay; `n_id = len(rank_bindings)`.
-   - Build one merged `TTRunConfig` with `sum n_id` rows: sub-contexts are concatenated in key order; **global** MPI ranks are contiguous blocks `0..n_0-1`, `n_0..n_0+n_1-1`, …
-   - Tag each row with **`subcontext_id`** = map key and **`subcontext_size`** = `n_id` for that overlay.
-3. In `get_rank_environment`, when overlay metadata exists, inject:
-   - `TT_RUN_SUBCONTEXT_ID` = string form of the map key
-   - `TT_RUN_SUBCONTEXT_SIZES` = comma-separated `n_id` for each sub-context in key order (same on every rank)
-   - Per-row mesh env from the overlay row whose **`rank:`** matches context rank
-4. **Interaction with `--rank-binding`:** either accept **only** the mapping for multi-overlay jobs, or define explicit precedence; single-overlay runs can keep one `--rank-binding` with no mapping.
+**Landed:**
+
+- **`--rank-bindings-mapping`** — YAML **`subcontext_id_to_rank_bindings`**; **`parse_rank_bindings_mapping`** merges overlays, sets **`TT_RUN_SUBCONTEXT_ID`**, **`TT_RUN_SUBCONTEXT_SIZES`**, per-rank **`TT_MESH_GRAPH_DESC_PATH`**, **`subcontext_id` / `subcontext_size`** on merged **`RankBinding`**. Mutually exclusive with **`--rank-binding`** and with **`-m`/`-M`**.
+- **`-m` / `-M`** — **`-m`** single MGD; **`-M`** mesh-graph mapping (**`subcontext_id_to_mesh_graph_descriptor`**). Phase 1 fingerprint and **`generate_rank_bindings`** forwarding use an explicit **`mgd_is_mapping_yaml`** flag (**no inferring solely from extension**).
+- **`phase1_rank_bindings_input_path` / cache checks** — cache dir validates **`rank_bindings.yaml`** *or* **`rank_bindings_mapping.yaml`** (multi-MGD) plus **`rankfile`**.
+- **`--force-rediscovery`**, **`README_ttrun.md`**, etc. — see repo docs.
+
+**Still planned / evolving:** fuller **`DistributedContext`** accessors and **`inter_context_*`** parity as elsewhere in this document.
 
 ---
 
@@ -656,18 +670,19 @@ TEST(SubContextTest, PrefillDecodeDisaggregated) {
 |------|--------|
 | `tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_a_rank_bindings.yaml` | Sub-context **0**: **4×4** mesh graph, two ranks on mesh_id **0** |
 | `tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_b_rank_bindings.yaml` | Sub-context **1**: dual **2×4** + intermesh, mesh_id **0** / **1** |
-| `tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_rank_bindings_mapping.yaml` | `subcontext_id_to_rank_bindings` (overlays may use different `mesh_graph_desc_path`) |
+| `tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_rank_bindings_mapping.yaml` | **`subcontext_id_to_rank_bindings`** ( **`--rank-bindings-mapping`** ); overlays may use different **`mesh_graph_desc_path`** |
+| `tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_mesh_graph_descriptor_mapping.yaml` | **`subcontext_id_to_mesh_graph_descriptor`** — **`-M`** input for **Generate Rank Bindings E2E** / **`generate_rank_bindings -M`** |
 | `tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_single_4x4_mesh.textproto` | One **4×4** BH mesh (prefill / “big mesh” overlay) |
 | `tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_dual_2x4_intermesh.textproto` | Two **2×4** BH meshes + one inter-mesh connection (decode overlay) |
-| `tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml` | Mock cluster mapping → `bh_6u_cluster_desc.yaml` (ranks 0–3) |
+| `tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/mock_galaxy_quad_2x4_four_rank_cluster_desc_mapping.yaml` | Mock cluster mapping → `bh_6u_cluster_desc.yaml` (ranks 0–3); used with **`--rank-bindings-mapping`** demo |
 | `tests/tt_metal/distributed/test_mpi_subcontext.cpp` | `MpiSubContext.SingleGalaxySplitContext` |
-| `.github/workflows/fabric-cpu-only-tests-impl.yaml` | Fabric CPU-only workflow (`--rank-bindings-mapping` for quad-2×4 sub-context test) |
+| `.github/workflows/fabric-cpu-only-tests-impl.yaml` | Fabric CPU-only: **`MpiSubContext`** line uses **`--rank-bindings-mapping`**; **`GenerateRankBindingsE2ETest.*`** uses **`-M`** + mock cluster mapping |
 
 **Planned (not necessarily present yet):**
 
 | File | Action |
 |------|--------|
-| `ttnn/ttnn/distributed/ttrun.py` | **`--rank-bindings-mapping` landed**; C++ `get_world_context()` / `inter_context_*` still planned |
+| `ttnn/ttnn/distributed/ttrun.py` | **`--rank-bindings-mapping`** and **`-m`/`-M`** landed; C++ **`get_world_context()`** / **`inter_context_*`** still planned beyond mock smoke tests |
 | `tt_metal/distributed/multihost/mpi_distributed_context.cpp` | Auto-split in `create()`, store `world_context_` |
 | `tt_metal/distributed/multihost/mpi_distributed_context.hpp` | `world_context_` static field |
 | `tt_metal/api/tt-metalium/distributed_context.hpp` | `get_world_context()`; **`subcontext_id()`**, **`subcontext_count()`**, **`subcontext_size(id)`**, **`subcontext_sizes()`**; **`local_to_world_rank(subcontext_id, local_rank)`** (names illustrative) |

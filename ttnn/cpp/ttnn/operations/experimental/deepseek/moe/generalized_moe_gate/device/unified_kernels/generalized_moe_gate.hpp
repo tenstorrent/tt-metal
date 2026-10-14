@@ -53,48 +53,50 @@ struct GeneralizedMoeGate {
     struct ReaderCTArgs {};
 
     // Writer CTArgs (BRISC)
-    template <uint32_t output_cb_, uint32_t output_indices_cb_>
+    template <std::uint32_t output_cb_, std::uint32_t output_indices_cb_>
     struct WriterCTArgs {
-        static constexpr uint32_t output_cb = output_cb_;
-        static constexpr uint32_t output_indices_cb = output_indices_cb_;
+        static constexpr std::uint32_t output_cb = output_cb_;
+        static constexpr std::uint32_t output_indices_cb = output_indices_cb_;
     };
 
     // Compute CTArgs (TRISC)
     // enable_sigmoid must be compile-time (template parameter for generalized_moe_gate<>)
     template <
-        uint32_t input_cb_,
-        uint32_t bias_cb_,
-        uint32_t input_indices_cb_,
-        uint32_t output_cb_,
-        uint32_t output_indices_cb_,
-        uint32_t eps_,
-        uint32_t scaling_factor_,
-        uint32_t enable_sigmoid_,
-        uint32_t num_blocks_ = 1,
-        uint32_t run_scores_cb_ = 5,
-        uint32_t run_idx_cb_ = 6,
-        uint32_t run_bias_cb_ = 7,
-        uint32_t cb_tilize_ = 8,
-        uint32_t cb_tilize_idx_ = 9,
-        uint32_t topk_ = 8,
-        uint32_t output_softmax_ = 0>
+        std::uint32_t input_cb_,
+        std::uint32_t bias_cb_,
+        std::uint32_t input_indices_cb_,
+        std::uint32_t output_cb_,
+        std::uint32_t output_indices_cb_,
+        std::uint32_t eps_,
+        std::uint32_t scaling_factor_,
+        std::uint32_t enable_sigmoid_,
+        std::uint32_t ungrouped_top8_,
+        std::uint32_t num_blocks_ = 1,
+        std::uint32_t run_scores_cb_ = 5,
+        std::uint32_t run_idx_cb_ = 6,
+        std::uint32_t run_bias_cb_ = 7,
+        std::uint32_t cb_tilize_ = 8,
+        std::uint32_t cb_tilize_idx_ = 9,
+        std::uint32_t topk_ = 8,
+        std::uint32_t output_softmax_ = 0>
     struct ComputeCTArgs {
-        static constexpr uint32_t input_cb = input_cb_;
-        static constexpr uint32_t bias_cb = bias_cb_;
-        static constexpr uint32_t input_indices_cb = input_indices_cb_;
-        static constexpr uint32_t output_cb = output_cb_;
-        static constexpr uint32_t output_indices_cb = output_indices_cb_;
-        static constexpr uint32_t eps = eps_;
-        static constexpr uint32_t scaling_factor = scaling_factor_;
+        static constexpr std::uint32_t input_cb = input_cb_;
+        static constexpr std::uint32_t bias_cb = bias_cb_;
+        static constexpr std::uint32_t input_indices_cb = input_indices_cb_;
+        static constexpr std::uint32_t output_cb = output_cb_;
+        static constexpr std::uint32_t output_indices_cb = output_indices_cb_;
+        static constexpr std::uint32_t eps = eps_;
+        static constexpr std::uint32_t scaling_factor = scaling_factor_;
         static constexpr bool enable_sigmoid = enable_sigmoid_ == 1;
-        static constexpr uint32_t num_blocks = num_blocks_;
-        static constexpr uint32_t run_scores_cb = run_scores_cb_;
-        static constexpr uint32_t run_idx_cb = run_idx_cb_;
-        static constexpr uint32_t run_bias_cb = run_bias_cb_;
-        static constexpr uint32_t cb_tilize = cb_tilize_;
-        static constexpr uint32_t cb_tilize_idx = cb_tilize_idx_;
-        static constexpr uint32_t topk = topk_;
+        static constexpr std::uint32_t num_blocks = num_blocks_;
+        static constexpr std::uint32_t run_scores_cb = run_scores_cb_;
+        static constexpr std::uint32_t run_idx_cb = run_idx_cb_;
+        static constexpr std::uint32_t run_bias_cb = run_bias_cb_;
+        static constexpr std::uint32_t cb_tilize = cb_tilize_;
+        static constexpr std::uint32_t cb_tilize_idx = cb_tilize_idx_;
+        static constexpr std::uint32_t topk = topk_;
         static constexpr bool output_softmax = output_softmax_ == 1;
+        static constexpr bool ungrouped_top8 = ungrouped_top8_ == 1;
         // topk is restricted to {4, 6, 8}: the finalize rank-mask is correct only for these (topk 1-3 leave
         // ranks 0-3 unmasked, 5/7 are untested). The device op rejects other values on the host (TT_FATAL)
         // before this kernel is ever compiled; this static_assert is the compile-time mirror, so a kernel
@@ -120,7 +122,7 @@ struct GeneralizedMoeGate {
         // Run the full per-256 pipeline on block b, ending at merge16_to_run (a re-mergeable top-8
         // RUN at rows {0,2}, idx made global via +b*256), and pack its 3 fields (score/idx/bias)
         // to the L1 stash CBs (page b).
-        template <uint32_t b>
+        template <std::uint32_t b>
         void process_block_to_run() {
             CircularBuffer bias_cb(CTArgs::bias_cb);
             CircularBuffer input_cb(CTArgs::input_cb);
@@ -130,7 +132,7 @@ struct GeneralizedMoeGate {
             bias_cb.wait_front(1);
             input_cb.wait_front(1);
             reconfig_data_format_srca(CTArgs::input_indices_cb);
-            copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
+            copy_init(CTArgs::input_indices_cb);
             tile_regs_acquire();
             // Per-block GLOBAL indices: block b uses indices tile b (uploaded as arange + b*256). The
             // in-kernel idx_offset add was a no-op (sfpi/TTI both failed), so global ids come from the
@@ -138,7 +140,7 @@ struct GeneralizedMoeGate {
             copy_tile(CTArgs::input_indices_cb, b, 1);
             reconfig_data_format_srca(CTArgs::input_cb);
             generalized_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
-            generalized_moe_gate<CTArgs::enable_sigmoid, false, /*produce_run=*/true, 0, 2, 0>(
+            generalized_moe_gate<CTArgs::ungrouped_top8, CTArgs::enable_sigmoid, false, /*produce_run=*/true, 0, 2, 0>(
                 CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);  // math run at {0,2}
             // Relocate {0,2}->{0,4} BEFORE step2: step2 is built for the finalize layout (store8_even_cols
             // at offsets {0,4}); applied to a {0,2} run it mis-strides and 2-period-duplicates col 2 (and
@@ -203,7 +205,7 @@ struct GeneralizedMoeGate {
             // ================================================================
 
             // Input indices CB should have the same tile shape as the input CB
-            reconfig_data_format<SrcOrder::Regular, true>(CTArgs::input_indices_cb, CTArgs::bias_cb);
+            reconfig_full_operand(CTArgs::input_indices_cb, CTArgs::bias_cb);
             // Output indices CB should have the same tile shape as the output CB
             pack_reconfig_data_format<true>(CTArgs::output_cb);
 
@@ -220,13 +222,14 @@ struct GeneralizedMoeGate {
                 CircularBuffer output_indices_cb(CTArgs::output_indices_cb);
                 // ============ single ≤256-block path: the proven fused single-op gate (128/256 top-8) ============
                 bias_cb.wait_front(1);
-                copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
+                copy_init(CTArgs::input_indices_cb);
                 tile_regs_acquire();
                 copy_tile(CTArgs::input_indices_cb, 0, 1);  // indices (arange 0-255) -> idx region
                 reconfig_data_format_srca(CTArgs::input_cb);
                 generalized_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
                 input_cb.wait_front(1);
                 generalized_moe_gate<
+                    CTArgs::ungrouped_top8,
                     CTArgs::enable_sigmoid,
                     false,
                     false,
@@ -270,7 +273,7 @@ struct GeneralizedMoeGate {
                 run_scores_cb.wait_front(CTArgs::num_blocks);
                 reconfig_data_format_srca(CTArgs::run_scores_cb);
                 tilize_init(CTArgs::run_scores_cb, 1, CTArgs::cb_tilize);
-                for (uint32_t b = 0; b < CTArgs::num_blocks; ++b) {
+                for (std::uint32_t b = 0; b < CTArgs::num_blocks; ++b) {
                     cb_tilize.reserve_back(1);
                     tilize_block(CTArgs::run_scores_cb, 1, CTArgs::cb_tilize);
                     cb_tilize.push_back(1);
@@ -280,7 +283,7 @@ struct GeneralizedMoeGate {
                 run_bias_cb.wait_front(CTArgs::num_blocks);
                 reconfig_data_format_srca(CTArgs::run_bias_cb);
                 tilize_init(CTArgs::run_bias_cb, 1, CTArgs::cb_tilize);
-                for (uint32_t b = 0; b < CTArgs::num_blocks; ++b) {
+                for (std::uint32_t b = 0; b < CTArgs::num_blocks; ++b) {
                     cb_tilize.reserve_back(1);
                     tilize_block(CTArgs::run_bias_cb, 1, CTArgs::cb_tilize);
                     cb_tilize.push_back(1);
@@ -291,7 +294,7 @@ struct GeneralizedMoeGate {
                 run_idx_cb.wait_front(CTArgs::num_blocks);
                 reconfig_data_format_srca(CTArgs::run_idx_cb);
                 tilize_init(CTArgs::run_idx_cb, 1, CTArgs::cb_tilize_idx);
-                for (uint32_t b = 0; b < CTArgs::num_blocks; ++b) {
+                for (std::uint32_t b = 0; b < CTArgs::num_blocks; ++b) {
                     cb_tilize_idx.reserve_back(1);
                     tilize_block(CTArgs::run_idx_cb, 1, CTArgs::cb_tilize_idx);
                     cb_tilize_idx.push_back(1);

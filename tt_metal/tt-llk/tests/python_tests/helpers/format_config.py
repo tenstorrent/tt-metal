@@ -77,6 +77,12 @@ class DataFormat(Enum):
     MxFp4_2x_B = DataFormatInfo(
         "MxFp4_2x_B", Fraction(1, 2)
     )  # QSR specific - 2x-packed FP4 in Src Reg, 8-bit exp (FP16_b family) - 10 bits per element in one double-datumed element in src reg.
+    Int8_2x = DataFormatInfo(
+        "Int8_2x", 1
+    )  # 4row_arch specific - 2x-packed INT8 in Src Reg (two sign+magnitude int8 per datum). Src-reg-only.
+    UInt8_2x = DataFormatInfo(
+        "UInt8_2x", 1
+    )  # 4row_arch specific - 2x-packed UINT8 in Src Reg. Src-reg-only.
     MxInt8 = DataFormatInfo("MxInt8", 1)  # QSR specific - S1.6, 8 bits per element
     MxInt4 = DataFormatInfo(
         "MxInt4", Fraction(1, 2)
@@ -405,6 +411,8 @@ class FormatConfig:
     pack_S_src (DataFormat): The source format for the S path in the Packer. Defaults to `pack_src` when omitted.
     pack_S_dst (DataFormat): The destination format for the S path in the Packer. Defaults to `pack_dst` when omitted.
     math (DataFormat): The format used for _llk_math_ functions.
+    sfpu_src (DataFormat): The format SFPU reads from the destination register.
+    sfpu_dst (DataFormat): The format SFPU writes to the destination register.
 
     Optional Parameters:
     same_src_format (bool): If `True`, the formats for source registers A and B will be the same for unpack operations.
@@ -442,7 +450,8 @@ class FormatConfig:
     pack_S_src: DataFormat
     pack_S_dst: DataFormat
     math: DataFormat
-    sfpu_math: DataFormat
+    sfpu_src: DataFormat
+    sfpu_dst: DataFormat
 
     def __init__(
         self,
@@ -451,9 +460,12 @@ class FormatConfig:
         pack_src: DataFormat,
         pack_dst: DataFormat,
         math: DataFormat,
-        sfpu_math: Optional[
+        sfpu_src: Optional[
             DataFormat
-        ] = None,  # SFPU-side math format; defaults to `math`. Differs only when the SFPU operates in a format with no native register/dest representation (e.g. UInt16 on Quasar, routed through an Int16 data path).
+        ] = None,  # Format loaded by SFPU; defaults to math.
+        sfpu_dst: Optional[
+            DataFormat
+        ] = None,  # Format stored by SFPU; defaults to sfpu_src for non-converting operations.
         same_src_format: bool = True,  # If True, A and B share unpack formats; omit unpack_B_src / unpack_B_dst (they are set from A).
         # Optional unpack_S_* and pack_S_* default to the A and main pack paths when omitted (mirrors common "S same as A" usage).
         unpack_B_src: Optional[DataFormat] = None,
@@ -469,7 +481,8 @@ class FormatConfig:
         self.pack_src = pack_src
         self.pack_dst = pack_dst
         self.math = math
-        self.sfpu_math = sfpu_math if sfpu_math is not None else math
+        self.sfpu_src = sfpu_src if sfpu_src is not None else math
+        self.sfpu_dst = sfpu_dst if sfpu_dst is not None else self.sfpu_src
         if same_src_format:
             self.unpack_B_src = unpack_A_src
             self.unpack_B_dst = unpack_A_dst
@@ -489,21 +502,31 @@ class FormatConfig:
             self.unpack_S_dst = DataFormat.Float16
         elif self.unpack_A_dst == DataFormat.MxFp4_2x_B:
             self.unpack_S_dst = DataFormat.Float16_b
+        elif self.unpack_A_dst == DataFormat.Int8_2x:
+            self.unpack_S_dst = DataFormat.Int8
+        elif self.unpack_A_dst == DataFormat.UInt8_2x:
+            self.unpack_S_dst = DataFormat.UInt8
         else:
             self.unpack_S_dst = self.unpack_A_dst
         self.pack_S_src = pack_S_src if pack_S_src is not None else self.pack_src
         self.pack_S_dst = pack_S_dst if pack_S_dst is not None else self.pack_dst
 
-        # MxFp4_2x_A/B are 2x-packed Src Register formats. They have no L1, math, or pack
-        # representation — only unpack_A_dst / unpack_B_dst (the in-register format) may use them.
-        srcab_only = {DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B}
+        # MxFp4_2x_A/B and Int8_2x/UInt8_2x are 2x-packed Src Register formats. They have no L1,
+        # math, or pack representation — only unpack_A_dst / unpack_B_dst (the in-register format) may use them.
+        srcab_only = {
+            DataFormat.MxFp4_2x_A,
+            DataFormat.MxFp4_2x_B,
+            DataFormat.Int8_2x,
+            DataFormat.UInt8_2x,
+        }
         for field_name, value in (
             ("unpack_A_src", self.unpack_A_src),
             ("unpack_B_src", self.unpack_B_src),
             ("unpack_S_src", self.unpack_S_src),
             ("unpack_S_dst", self.unpack_S_dst),
             ("math", self.math),
-            ("sfpu_math", self.sfpu_math),
+            ("sfpu_src", self.sfpu_src),
+            ("sfpu_dst", self.sfpu_dst),
             ("pack_src", self.pack_src),
             ("pack_dst", self.pack_dst),
             ("pack_S_src", self.pack_S_src),
@@ -540,7 +563,8 @@ struct FormatConfig
     std::uint32_t unpack_B_dst = 0;
     std::uint32_t unpack_S_dst = 0;
     std::uint32_t math = 0;
-    std::uint32_t sfpu_math = 0;
+    std::uint32_t sfpu_src = 0;
+    std::uint32_t sfpu_dst = 0;
     std::uint32_t pack_src = 0;
     std::uint32_t pack_dst = 0;
     std::uint32_t pack_S_src = 0;
@@ -560,7 +584,8 @@ FORMATS_CONFIG_STRUCT_COMPILETIME = [
     "    const std::uint32_t unpack_B_dst;",
     "    const std::uint32_t unpack_S_dst;",
     "    const std::uint32_t math;",
-    "    const std::uint32_t sfpu_math;",
+    "    const std::uint32_t sfpu_src;",
+    "    const std::uint32_t sfpu_dst;",
     "    const std::uint32_t pack_src;",
     "    const std::uint32_t pack_dst;",
     "    const std::uint32_t pack_S_src;",
@@ -574,7 +599,8 @@ FORMATS_CONFIG_STRUCT_COMPILETIME = [
     "        std::uint32_t unpack_B_dst_,",
     "        std::uint32_t unpack_S_dst_,",
     "        std::uint32_t math_,",
-    "        std::uint32_t sfpu_math_,",
+    "        std::uint32_t sfpu_src_,",
+    "        std::uint32_t sfpu_dst_,",
     "        std::uint32_t pack_src_,",
     "        std::uint32_t pack_dst_,",
     "        std::uint32_t pack_S_src_,",
@@ -586,7 +612,8 @@ FORMATS_CONFIG_STRUCT_COMPILETIME = [
     "        unpack_B_dst(unpack_B_dst_),",
     "        unpack_S_dst(unpack_S_dst_),",
     "        math(math_),",
-    "        sfpu_math(sfpu_math_),",
+    "        sfpu_src(sfpu_src_),",
+    "        sfpu_dst(sfpu_dst_),",
     "        pack_src(pack_src_),",
     "        pack_dst(pack_dst_),",
     "        pack_S_src(pack_S_src_),",
@@ -643,6 +670,8 @@ QUASAR_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.MxInt2: 11,
     DataFormat.MxFp4_2x_A: 27,
     DataFormat.MxFp4_2x_B: 24,
+    DataFormat.Int8_2x: 26,
+    DataFormat.UInt8_2x: 28,
     DataFormat.Int32: 8,
     DataFormat.Int8: 14,
     DataFormat.UInt8: 17,

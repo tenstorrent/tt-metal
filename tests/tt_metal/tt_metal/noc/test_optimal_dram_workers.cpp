@@ -14,8 +14,8 @@
 
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
@@ -44,10 +44,15 @@ class OptimalDramWorkers : public ::testing::TestWithParam<DispatchCoreAxis> {};
 //
 // Blackhole rejects ROW dispatch (the Device guard emits
 // "ROW dispatch core axis is not supported for blackhole arch"), so we omit ROW on BH.
+// Quasar core descriptors only define a row axis.
 std::vector<DispatchCoreAxis> supported_dispatch_axes() {
+    const char* arch_env = std::getenv("ARCH_NAME");
+    const std::string arch = arch_env == nullptr ? "" : arch_env;
+    if (arch == "quasar") {
+        return {DispatchCoreAxis::ROW};
+    }
     std::vector<DispatchCoreAxis> axes = {DispatchCoreAxis::COL};
-    const char* arch = std::getenv("ARCH_NAME");
-    if (arch == nullptr || std::string(arch) != "blackhole") {
+    if (arch != "blackhole") {
         axes.push_back(DispatchCoreAxis::ROW);
     }
     return axes;

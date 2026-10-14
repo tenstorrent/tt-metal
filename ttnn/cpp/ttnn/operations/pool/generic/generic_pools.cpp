@@ -19,6 +19,7 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include <tt-metalium/bfloat16.hpp>
@@ -331,7 +332,7 @@ static std::vector<Tensor> pool2d_L1(
 
     // call the halo uop
     const auto resolved_compute_kernel_config = init_device_compute_kernel_config(
-        tt::tt_metal::hal::get_arch(),
+        input_tensor.device()->arch(),
         compute_kernel_config,
         tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
@@ -1101,12 +1102,32 @@ static std::vector<Tensor> pool2d(
             input = ttnn::to_layout(input, Layout::ROW_MAJOR);
         }
 
+        // pad_to_tile pads W on every H row, which the fold below would sum as data.
+        // Slice to the logical shape unless the padding is already a trailing suffix.
+        if (input.layout() == Layout::ROW_MAJOR) {
+            const auto& logical = input.logical_shape();
+            const auto& padded = input.padded_shape();
+            const bool tight_w = padded[2] == logical[2];
+            const bool tight_h = padded[1] == logical[1];
+            const bool readable_suffix =
+                (tight_w && (tight_h || batch_size == 1)) || (batch_size == 1 && logical[1] == 1);
+            if (!readable_suffix) {
+                const auto rank = logical.rank();
+                // slice end is exclusive.
+                input = ttnn::prim::slice(
+                    input,
+                    ttnn::Shape(ttsl::SmallVector<uint32_t>(rank, 0)),
+                    logical,
+                    ttnn::Shape(ttsl::SmallVector<uint32_t>(rank, 1)),
+                    input.memory_config(),
+                    /*use_tensor_args=*/false);
+            }
+        }
+
         // Canonicalize to (batch_size, 1, H*W, C) form using an explicit logical+padded reshape.
-        // This is format-agnostic: it accepts both flat (1, 1, N*H*W, C) input from direct
-        // avg_pool2d callers and NHWC (N, H, W, C) input from the global_avg_pool2d Python
-        // wrapper, and it preserves any pre-existing padding (e.g., legacy callers that
-        // pad_to_tile zero-pad the spatial dim) by carrying padded_shape through. The gate
-        // above ensures total_padded_spatial divides cleanly by batch_size.
+        // This accepts both flat (1, 1, N*H*W, C) input from direct avg_pool2d callers and NHWC
+        // (N, H, W, C) input from the global_avg_pool2d Python wrapper. The gate above ensures
+        // total_padded_spatial divides cleanly by batch_size.
         const auto& post_padded = input.padded_shape();
         uint32_t total_padded_spatial = post_padded[0] * post_padded[1] * post_padded[2];
         uint32_t channels_padded = post_padded[3];
@@ -1123,14 +1144,33 @@ static std::vector<Tensor> pool2d(
         // ttnn::sum exposes a scalar parameter, but pool_sum is the only reduction entry point
         // that accepts (N, 1, H*W, C) tensors with H*W padding without producing garbage.
         // Replace once ttnn::sum gains equivalent handling.
-        Tensor output = ttnn::operations::reduction::pool_sum(canonical, 2, reduce_mem, compute_kernel_config, scalar);
+        //
+        // Forwarding output_layout into pool_sum makes the to_layout below a no-op; nullopt keeps
+        // the reduce's native layout and defers the conversion.
+        //
+        // ROW_MAJOR: forwarded at any batch size. Untilizing the (N, 1, 1, C) result spreads over
+        // the batch rows, and the fold of N into H below is then a free view instead of a device
+        // op. Block-float is the exception — the reduce rejects a ROW_MAJOR request because
+        // block-float exists only as TILE — so its native TILE result reaches the to_layout below,
+        // which untilizes and widens to BFLOAT16.
+        //
+        // TILE: forwarded only for batch==1, where the following view does not fold axes. At
+        // batch>1 both orders — folding a TILE result, or folding the ROW_MAJOR one and tilizing
+        // after — cost about the same, so the reduce keeps its native layout.
+        const bool forward_output_layout =
+            output_layout == Layout::ROW_MAJOR ? !tt::tt_metal::is_block_float(canonical.dtype()) : batch_size == 1;
+        const std::optional<Layout> reduce_output_layout =
+            forward_output_layout ? std::optional<Layout>(output_layout) : std::nullopt;
+        Tensor output = ttnn::operations::reduction::pool_sum(
+            canonical, 2, reduce_mem, compute_kernel_config, scalar, reduce_output_layout);
         // pool_sum returns (N, 1, 1, C). For batch=1 this is (1, 1, 1, C), the avg_pool2d output
         // convention (1, 1, N*out_H*out_W, C) coincides. For batch>1 we reshape to (1, 1, N, C).
         const auto& output_padded_shape = output.padded_shape();
         if (batch_size == 1) {
-            // Set logical channel count (zero-copy view).
+            // Set logical channel count (zero-copy view). Padded H comes from the reduce, which pads
+            // it to a full tile row for a TILE result.
             ttnn::Shape out_logical({1, 1, 1, channels});
-            ttnn::Shape out_padded({output_padded_shape[0], 1, 1, output_padded_shape[3]});
+            ttnn::Shape out_padded({output_padded_shape[0], 1, output_padded_shape[2], output_padded_shape[3]});
             output = ttnn::experimental::view(output, out_logical, out_padded);
         } else {
             ttnn::Shape correct_logical({1, 1, batch_size, channels});

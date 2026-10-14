@@ -5,11 +5,17 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -23,7 +29,7 @@ struct TelemetryTokenData {
     double max_val{-std::numeric_limits<double>::infinity()};
 };
 
-// Opaque handle returned by BuildCacheTelemetry::register_metric().
+// Opaque handle returned by BuildCacheTelemetry::get_or_register_metric().
 // Maintains mutex-protected running total/count/min/max per value stream.
 // record() and snapshot() are safe for concurrent use.
 // References stay valid for the lifetime of BuildCacheTelemetry::inst();
@@ -32,18 +38,22 @@ struct TelemetryTokenData {
 class TelemetryToken {
 public:
     TelemetryToken() = default;
-    explicit TelemetryToken(std::string name);
+    explicit TelemetryToken(std::string name, std::string unit = "ms");
 
     void record(double value);
     TelemetryTokenData snapshot() const;
 
     const std::string& name() const { return name_; }
+    const std::string& unit() const { return unit_; }
 
 private:
     friend class BuildCacheTelemetry;
     void set_recording_enabled(bool enabled);
+    // Replace a cumulative window's snapshot instead of appending overlapping samples.
+    void set_single_sample(double value);
 
     std::string name_;
+    std::string unit_{"ms"};
     std::atomic<bool> recording_enabled_{true};
     mutable std::mutex data_mutex_;
     TelemetryTokenData data_;
@@ -53,7 +63,7 @@ struct BuildCacheTelemetryImpl;  // forward declaration
 
 // Process-wide telemetry for JIT build cache merge diagnostics.
 //
-// register_metric() returns a TelemetryToken (running aggregate stats) that is
+// get_or_register_metric() returns a TelemetryToken (running aggregate stats) that is
 // owned in owned_tokens_ for the life of the inst() singleton; disable()/enable()
 // tear down impl_ and rebuild the token registry (enable() is a no-op if already
 // enabled). Tokens are not destroyed across disable/enable; only recording is toggled.
@@ -86,16 +96,32 @@ public:
     uint32_t get_genfile_merge_count() const;
     uint32_t get_jit_once_dedup_count() const;
 
+    // Extend the process-wide JIT build window with [start, end]. The window is the wall-clock
+    // span from the earliest build entry to the latest build exit. dump_metrics() replaces the
+    // single sample in "jit_build_window", so repeated dumps do not accumulate overlapping spans.
+    // It is the parallelism-aware companion to the per-call build metrics: summing those
+    // over-counts when builds run on the thread pool,
+    // whereas the window is what a wall clock next to the process would show. A workload that
+    // compiles lazily in bursts folds the idle gaps between bursts into the span.
+    void note_build_window(std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end);
+
     void log_compile_summary() const;
 
-    // Register a named metric stream and return a non-owning reference to a
-    // TelemetryToken owned in owned_tokens_. The reference remains valid until
-    // the process-wide singleton (inst()) is destroyed; it is not invalidated by
-    // disable()/enable(), which only clear impl_ and rebuild the registry while
-    // leaving tokens allocated. Callers must not take ownership. While telemetry
-    // is disabled, TelemetryToken::record() is a no-op; snapshot() still reflects
-    // aggregates recorded while enabled.
-    TelemetryToken& register_metric(const std::string& name);
+    // Return the metric stream named `name`, registering it on first use. The returned
+    // TelemetryToken is owned in owned_tokens_ and the reference remains valid until the
+    // process-wide singleton (inst()) is destroyed; it is not invalidated by disable()/enable(),
+    // which only clear impl_ and rebuild the registry while leaving tokens allocated. Callers
+    // must not take ownership. While telemetry is disabled, TelemetryToken::record() is a no-op;
+    // snapshot() still reflects aggregates recorded while enabled.
+    //
+    // `unit` labels the stream on first registration and defaults to milliseconds; omitting it
+    // on a name that already exists is a plain lookup, so a caller that just wants the token does
+    // not have to restate the unit. Repeat calls that do name a unit should agree with the
+    // registered one: a mismatch means two call sites are feeding one stream values of different
+    // kinds, which is logged as a warning (once per name) while the first unit is kept. It does
+    // not abort -- a mislabelled diagnostic metric is not worth failing a build over.
+    TelemetryToken& get_or_register_metric(
+        const std::string& name, std::optional<std::string_view> unit = std::nullopt);
 
     void dump_metrics() const;
 
@@ -104,7 +130,72 @@ private:
     ~BuildCacheTelemetry();
     std::unique_ptr<BuildCacheTelemetryImpl> impl_;
     std::vector<std::unique_ptr<TelemetryToken>> owned_tokens_;
+    // Name -> token index into owned_tokens_; guarded by owned_tokens_mutex_ alongside the vector.
+    std::unordered_map<std::string, TelemetryToken*> tokens_by_name_;
+    // Names already reported as having conflicting units, so a call site inside a build loop
+    // warns once instead of once per build. Guarded by owned_tokens_mutex_.
+    std::unordered_set<std::string> unit_conflict_warned_;
     std::mutex owned_tokens_mutex_;
+    // Registered in the constructor so the const dump_metrics() can record the window span
+    // without registering a metric during teardown.
+    TelemetryToken* build_window_token_{nullptr};
 };
+
+// Times the scope it lives in: takes a steady_clock timestamp on construction and records the
+// elapsed milliseconds in `token` on destruction. The token must outlive the timer -- references
+// from BuildCacheTelemetry::get_or_register_metric() are valid for the life of the inst() singleton.
+// The delta is recorded even when the scope is left by an exception.
+class ScopedTelemetryTimer {
+public:
+    explicit ScopedTelemetryTimer(TelemetryToken& token) : token_(token), start_(std::chrono::steady_clock::now()) {}
+
+    ~ScopedTelemetryTimer() {
+        token_.record(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_).count());
+    }
+
+    ScopedTelemetryTimer(const ScopedTelemetryTimer&) = delete;
+    ScopedTelemetryTimer& operator=(const ScopedTelemetryTimer&) = delete;
+    ScopedTelemetryTimer(ScopedTelemetryTimer&&) = delete;
+    ScopedTelemetryTimer& operator=(ScopedTelemetryTimer&&) = delete;
+
+private:
+    TelemetryToken& token_;
+    std::chrono::steady_clock::time_point start_;
+};
+
+// Folds the scope it lives in into the process-wide JIT build window (see
+// BuildCacheTelemetry::note_build_window). Deliberately not a ScopedTelemetryTimer with static
+// storage: such a timer would only record at process exit, so every test, inference, or idle
+// stretch after the last compile would land in the metric. This ends the window at the last
+// build instead. Contributes on every exit path from the scope, including exceptions and the
+// build-cache early returns.
+class ScopedBuildWindow {
+public:
+    ScopedBuildWindow();
+    ~ScopedBuildWindow();
+
+    ScopedBuildWindow(const ScopedBuildWindow&) = delete;
+    ScopedBuildWindow& operator=(const ScopedBuildWindow&) = delete;
+    ScopedBuildWindow(ScopedBuildWindow&&) = delete;
+    ScopedBuildWindow& operator=(ScopedBuildWindow&&) = delete;
+
+    std::chrono::steady_clock::time_point start() const { return start_; }
+
+private:
+    std::chrono::steady_clock::time_point start_;
+};
+
+// Invokes `fn(args...)` and records how long it took (in ms) in `token`, forwarding both the
+// arguments and the return value through unchanged. The timing is recorded even if `fn` throws.
+template <typename Fn, typename... Args>
+decltype(auto) record_elapsed(TelemetryToken& token, Fn&& fn, Args&&... args) {
+    ScopedTelemetryTimer timer(token);
+    return std::forward<Fn>(fn)(std::forward<Args>(args)...);
+}
+
+// Convenience wrapper over BuildCacheTelemetry::get_or_register_metric() for metrics that are
+// broken down by target: builds the "<metric_name>.<target_name>" key and returns that stream.
+TelemetryToken& per_target_telemetry_token(
+    std::string_view metric_name, std::string_view target_name, std::string_view unit);
 
 }  // namespace tt::tt_metal

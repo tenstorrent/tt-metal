@@ -29,8 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
-from models.common.tensor_utils import TILE_SIZE, get_rot_transformation_mat
-from models.common.utility_functions import nearest_32
+from models.common.tensor_utils import TILE_SIZE, get_rot_transformation_mat, nearest_32
 
 # =============================================================================
 # Config dataclass

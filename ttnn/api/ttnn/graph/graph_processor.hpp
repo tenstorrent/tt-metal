@@ -11,21 +11,60 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <mutex>
+#include <optional>
+#include <set>
 #include <stack>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <any>
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
-}
+class MeshWorkload;
+}  // namespace tt::tt_metal::distributed
 
 namespace ttnn::graph {
 
 // Node identifiers in the graph
 using node_id = int;
+
+// One sub-device of a sub-device manager. Sub-device managers partition a MeshDevice uniformly, so
+// this is a mesh-level fact and carries no physical device id.
+struct SubDeviceTopology {
+    uint8_t sub_device_id = 0;
+    tt::tt_metal::CoreRangeSet worker_core_ranges;
+};
+
+// Where one program of a MeshWorkload actually ran. `device_id` is the MeshDevice id so it joins
+// the report's `devices` table; `physical_device_id` is the chip the program landed on.
+//
+// `sub_device_id` is empty when capture could not place the program (see resolve_program_placement).
+// The execution is still recorded: which chip ran the operation is worth reporting on its own, and
+// an absent placement is more useful to a report consumer than a missing row. `worker_core_ranges`
+// is the placed sub-device's cores and is empty for the same reason.
+struct ProgramExecutionPlacement {
+    uint32_t device_id = 0;
+    uint32_t physical_device_id = 0;
+    uint64_t sub_device_manager_id = 0;
+    std::optional<uint8_t> sub_device_id;
+    tt::tt_metal::CoreRangeSet worker_core_ranges;
+    uint64_t runtime_id = 0;
+    uint32_t global_call_count = 0;
+    uint8_t command_queue_id = 0;
+};
+
+// Records where `workload` just ran into every capture active on the calling thread. No-op when no
+// capture is active. GraphTracker's processor stack is per-thread, so a workload enqueued on a
+// thread that is not capturing is intentionally not observed.
+void track_mesh_workload_execution(
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    uint64_t runtime_id);
 
 class ProcessorHooks : public tt::tt_metal::IGraphHooks {
 private:
@@ -69,9 +108,38 @@ public:
         bool is_globally_allocated,
         const tt::tt_metal::IDevice* device) override;
 
+    void track_allocate_dataflow_buffer(
+        const tt::tt_metal::CoreRangeSet& core_range,
+        uint64_t addr,
+        uint64_t size,
+        bool borrows_memory,
+        const tt::tt_metal::IDevice* device) override;
+
+    void track_allocate_scratchpad(
+        const tt::tt_metal::CoreRangeSet& core_range,
+        uint64_t addr,
+        uint64_t size,
+        const tt::tt_metal::IDevice* device) override;
+
     void track_deallocate_cb(const tt::tt_metal::IDevice* device) override;
 
     void track_program(tt::tt_metal::Program* program, const tt::tt_metal::IDevice* device) override;
+
+    void track_program_execution(const ProgramExecutionPlacement& placement);
+
+    // True while this capture has not yet recorded the partition of this sub-device manager.
+    // Lets the caller skip building the topology on the hot path once it has been captured.
+    bool needs_sub_device_manager_snapshot(uint32_t device_id, uint64_t sub_device_manager_id);
+
+    // Records a sub-device manager's full partition, so the report describes every sub-device and
+    // not only those that happened to run an operation. Idempotent per (device, manager).
+    void track_sub_device_manager(
+        uint32_t device_id, uint64_t sub_device_manager_id, const std::vector<SubDeviceTopology>& sub_devices);
+
+    // True the first time this capture sees a program it could not place on a sub-device, false
+    // afterwards. Keeps the diagnostic to one line per capture instead of one per enqueue, which
+    // on a whole-model capture is the difference between a hint and thousands of identical lines.
+    bool should_warn_unresolved_placement();
 
     void track_function_start(
         std::string_view function_name, std::span<tt::tt_metal::TrackedArgument> input_parameters) override;
@@ -117,6 +185,10 @@ private:
 
     // Device info captured at track time (keyed by device_id)
     std::unordered_map<uint32_t, nlohmann::json> captured_device_info;
+    // (device_id, sub_device_manager_id) pairs whose partition this capture has already recorded
+    std::set<std::pair<uint32_t, uint64_t>> captured_sub_device_managers;
+    // Whether this capture has already warned about a program it could not place
+    bool warned_unresolved_placement = false;
     // Device pointers for buffer pages (only valid during capture)
     std::vector<tt::tt_metal::distributed::MeshDevice*> captured_mesh_devices;
     // Per-operation buffer snapshots (function_start counter -> buffers)
@@ -148,7 +220,17 @@ private:
     template <typename T>
     void end_function_process(const std::vector<T>& tensor_vec);
 
-    void track_function_end_impl();
+    // Appends the function_end vertex for the innermost open scope and returns its node id, so
+    // callers can decorate it. Does not pop `current_op_id`.
+    node_id track_function_end_impl();
+
+    // Closes the innermost open scope, marking its function_end aborted with `reason`.
+    // Callers must hold `mutex` and must have checked has_open_function().
+    void abort_open_function_impl(std::string_view reason);
+
+    // Whether a function_start is open, i.e. whether `current_op_id` holds more than the
+    // capture_start sentinel it is seeded with. Callers must hold `mutex`.
+    bool has_open_function() const { return current_op_id.size() > 1; }
 
     void clean_hook();
 
@@ -160,12 +242,22 @@ public:
 
     static nlohmann::json end_graph_capture_to_file(const std::filesystem::path& report_path);
 
+    static bool has_active_instance();
+    static void set_pending_program_factory(std::string type, std::size_t index, bool cache_hit);
+
     // Detailed buffer tracing control
     static void enable_detailed_buffer_tracing();
     static void disable_detailed_buffer_tracing();
     static bool is_detailed_buffer_tracing_enabled();
 
 private:
+    struct PendingProgramFactory {
+        std::string type;
+        std::size_t index = 0;
+        bool cache_hit = false;
+    };
+    static thread_local std::optional<PendingProgramFactory> pending_program_factory_;
+
     static std::atomic<bool> capture_detailed_buffer_tracing_;
 };
 

@@ -94,12 +94,12 @@ double time_avg_us(uint32_t num_warmup, uint32_t num_measure, ttnn::distributed:
     for (uint32_t i = 0; i < num_warmup; ++i) {
         fn();
     }
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
     const auto t0 = std::chrono::high_resolution_clock::now();
     for (uint32_t i = 0; i < num_measure; ++i) {
         fn();
     }
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
     const auto t1 = std::chrono::high_resolution_clock::now();
     return std::chrono::duration<double, std::micro>(t1 - t0).count() / static_cast<double>(num_measure);
 }

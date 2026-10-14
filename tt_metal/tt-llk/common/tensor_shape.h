@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <array>
 #include <cstdint>
 
 #include "llk_assert.h"
@@ -75,6 +74,19 @@ struct __attribute__((packed)) TensorShape
 
 static_assert(sizeof(TensorShape) == 4, "TensorShape must be 4 bytes");
 
+/**
+ * @brief Get the register-file stride between tiny faces, in hardware tile indices.
+ *
+ * Faces shorter than MAX_FPU_ROWS occupy sparse MAX_FPU_ROWS-row slots.
+ * @param tensor_shape: Shape with a valid face row dimension (1, 2, 4, 8, or 16).
+ * @return Hardware tile index increment for one face; 1 for dense faces.
+ * @note Use only when one hardware tile represents one face, rather than a full four-face tile.
+ */
+constexpr std::uint32_t tiny_face_stride(const TensorShape& tensor_shape)
+{
+    return tensor_shape.face_r_dim < MAX_FPU_ROWS ? MAX_FPU_ROWS / tensor_shape.face_r_dim : 1;
+}
+
 constexpr TensorShape DEFAULT_TENSOR_SHAPE = {MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
 
 /// Build a TensorShape from explicit face dimensions and face-grid counts.
@@ -113,6 +125,48 @@ constexpr TensorShape tensor_shape_from_num_faces(const std::uint32_t face_r_dim
     return TensorShape {static_cast<std::uint8_t>(face_r_dim), MAX_FACE_C_DIM, num_faces_r_dim, num_faces_c_dim};
 }
 
+constexpr bool is_valid_face_r_dim(const std::uint8_t face_r_dim)
+{
+    return face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == MAX_FACE_R_DIM;
+}
+
+/**
+ * @brief Returns whether Input 0 (SrcB) and Input 1 (SrcA) form a supported matmul TensorShape pair.
+ *
+ * @param src_b_shape: Input 0/SrcB tile shape.
+ * @param src_a_shape: Input 1/SrcA tile shape.
+ */
+constexpr bool validate_matmul_tensor_shapes_(const TensorShape src_b_shape, const TensorShape src_a_shape)
+{
+    if (src_b_shape.face_c_dim != MAX_FACE_C_DIM || src_a_shape.face_c_dim != MAX_FACE_C_DIM || src_a_shape.face_r_dim != MAX_FACE_R_DIM ||
+        !is_valid_face_r_dim(src_b_shape.face_r_dim))
+    {
+        return false;
+    }
+    if (src_b_shape.face_r_dim != MAX_FACE_R_DIM && (src_b_shape.num_faces_r_dim != 1 || src_b_shape.num_faces_c_dim != 2))
+    {
+        return false;
+    }
+
+    constexpr std::uint8_t supported_pairs[][4] = {
+        {1, 2, 2, 1}, // (1x32, 2x32, 4x32, 8x32, 16x32) * 32x16
+        {1, 2, 2, 2}, // (1x32, 2x32, 4x32, 8x32, 16x32) * 32x32
+        {2, 2, 2, 1}, // 32x32 * 32x16
+        {2, 2, 2, 2}, // 32x32 * 32x32
+        {1, 1, 1, 1}, // 16x16 * 16x16
+        {2, 1, 1, 2}, // 32x16 * 16x32
+    };
+    for (const auto& pair : supported_pairs)
+    {
+        if (src_b_shape.num_faces_r_dim == pair[0] && src_b_shape.num_faces_c_dim == pair[1] && src_a_shape.num_faces_r_dim == pair[2] &&
+            src_a_shape.num_faces_c_dim == pair[3])
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 /**
  * @brief Construct a TensorShape from the legacy (face_r_dim, num_faces) pair.
  *
@@ -135,8 +189,25 @@ __attribute__((noinline)) inline bool validate_tensor_shape_tile_dependent_ops_(
     const std::uint8_t num_faces  = tensor_shape.total_num_faces();
     const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
     const std::uint8_t face_c_dim = tensor_shape.face_c_dim;
-    return (num_faces == 1 || num_faces == 2 || num_faces == 4) &&
-           (face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16) && (face_c_dim == 16);
+    return (num_faces == 1 || num_faces == 2 || num_faces == 4) && is_valid_face_r_dim(face_r_dim) && (face_c_dim == 16);
+}
+
+/**
+ * @brief Whether a tile shape is supported by the SDPA blocked bcast-col SUB path.
+ *
+ * Stricter than @ref validate_tensor_shape_tile_dependent_ops_ on purpose: the COL face pattern needs
+ * two full 16-row faces per face-row (the math walk covers a face-row with four 8-row ops and reads
+ * the face-row's first SrcB face twice), so only a 2-face-column grid of full faces works - 32x32
+ * (2x2 faces) or 16x32 (1x2 faces). A shape with one face column (32x16) or short faces
+ * (face_r_dim < 16) would make the walk write more dest rows than the tile owns.
+ *
+ * One predicate for all three call sites of the op: Unpack init, Math init, and the math
+ * execute that derives the dest slot stride from the same shape, instead of hand-synced copies.
+ **/
+constexpr bool validate_tensor_shape_sub_bcast_col_custom_(const TensorShape& tensor_shape)
+{
+    return tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.face_c_dim == MAX_FACE_C_DIM && tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM &&
+           (tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM || tensor_shape.num_faces_r_dim == 1);
 }
 
 } // namespace ckernel

@@ -11,7 +11,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <cstdint>
 #include <exception>
 #include <iomanip>
@@ -221,7 +220,7 @@ int main(int argc, char** argv) {
     try {
         auto mesh_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0 /*device_id*/);
         auto& cq = mesh_device->mesh_command_queue();
-        auto device_id = mesh_device->get_devices()[0]->id();
+        auto device_id = mesh_device->get_device_ids()[0];
 
         auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
         tt_metal::Program program = tt_metal::CreateProgram();
@@ -232,6 +231,7 @@ int main(int argc, char** argv) {
         uint32_t dram_banked = 0;
         uint32_t write_dram = 0;
         uint32_t issue_mcast = 0;
+        uint32_t pcie_transfer = 0;
         uint32_t num_mcast_dests = mcast_src_workers_g.size();
         uint32_t mcast_noc_addr_end_x = 0;
         uint32_t mcast_noc_addr_end_y = 0;
@@ -256,6 +256,7 @@ int main(int argc, char** argv) {
                 noc_addr_x = pcie_cores[0].x;
                 noc_addr_y = pcie_cores[0].y;
                 noc_mem_addr = dev_pcie_base + pcie_offset;
+                pcie_transfer = 1;
             } break;
             case 1: {
                 src_mem = test_write ? "TO_DRAM" : "FROM_DRAM";
@@ -328,6 +329,7 @@ int main(int argc, char** argv) {
             {"MCAST_NOC_END_ADDR_Y", std::to_string(mcast_noc_addr_end_y)},
             {"NOP_COUNT", std::to_string(nop_count_g)},
             {"WRITE_DRAM", std::to_string(write_dram)},
+            {"PCIE_TRANSFER", std::to_string(pcie_transfer)},
         };
         if (!page_size_as_runtime_arg_g) {
             defines.insert(std::pair<std::string, std::string>("PAGE_SIZE", std::to_string(page_size_g)));

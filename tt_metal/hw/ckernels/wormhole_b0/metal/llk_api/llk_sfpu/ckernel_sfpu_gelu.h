@@ -207,21 +207,15 @@ void gelu_init() {
     if constexpr (APPROXIMATION_MODE) {
         sfpi::vConstFloatPrgm0 = 0.5f;
 
-        // LUT segments (6-entry piecewise linear, each hi/lo pair packed into one imm32):
-        // [0.0, 0.5): slope=0.1928, intercept=-0.0150  (lreg0)
-        // [0.5, 1.0): slope=0.4939, intercept=-0.1605  (lreg0 hi / lreg4 hi)
-        // [1.0, 1.5): slope=0.6189, intercept=-0.2797  (lreg1)
-        // [1.5, 2.0): slope=0.6099, intercept=-0.2635  (lreg1 hi / lreg5 hi)
-        // [2.0, 3.0): slope=0.5402, intercept=-0.1194  (lreg2)
-        // [3.0, ∞):   slope=0.5,    intercept=0.0      (lreg2 hi / lreg6 hi)
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x37E7322B);
-        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vUInt(0xB12286D8);
+        // LUT segments (6-entry piecewise linear)
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.1928f, 0.4939f);
+        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(-0.00010443f, -0.1604f);
 
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x38E138F3);
-        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vUInt(0xB437B479);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut16ss(0.6188f, 0.6099f);
+        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vLut16ii(-0.2796f, -0.2635f);
 
-        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0x38003852);
-        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vUInt(0x7c00afa4);
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut16ss(0.5402f, 0.5f);
+        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vLut16ii(-0.1194f, 0.0f);
     } else if constexpr (is_fp32_dest_acc_en) {
         // FP32 accurate mode: rational erf evaluation requires reciprocal init
         sfpu_reciprocal_init<false>();
@@ -231,31 +225,31 @@ void gelu_init() {
 
 template <int ITERATIONS>
 inline void calculate_gelu_appx() {
-    sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
-    sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
-    sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];
-    sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];
-    sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];
+    sfpi::vLut16ss s01 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vLut16ss s23 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vLut16ss s45 = sfpi::l_reg[sfpi::LRegs::LReg2];
+    sfpi::vLut16ii i01 = sfpi::l_reg[sfpi::LRegs::LReg4];
+    sfpi::vLut16ii i23 = sfpi::l_reg[sfpi::LRegs::LReg5];
+    sfpi::vLut16ii i45 = sfpi::l_reg[sfpi::LRegs::LReg6];
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat half = sfpi::vConstFloatPrgm0;
         sfpi::vFloat half_in = in * half;
-        sfpi::vFloat result = lut2_sign(in, l0, l1, l2, l4, l5, l6);
+        sfpi::vFloat result = sfpi::lut(in, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Update);
         result = half_in + result;
 
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 
-    sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
-    sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
-    sfpi::l_reg[sfpi::LRegs::LReg2] = l2;
-    sfpi::l_reg[sfpi::LRegs::LReg4] = l4;
-    sfpi::l_reg[sfpi::LRegs::LReg5] = l5;
-    sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
+    sfpi::l_reg[sfpi::LRegs::LReg0] = s01;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = s23;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = s45;
+    sfpi::l_reg[sfpi::LRegs::LReg4] = i01;
+    sfpi::l_reg[sfpi::LRegs::LReg5] = i23;
+    sfpi::l_reg[sfpi::LRegs::LReg6] = i45;
 }
 
 // FP32 erf: n16/d16 parity rational coefficients, MaxULP=1 vs FP64.
@@ -381,11 +375,77 @@ inline void calculate_gelu_tanh() {
     }
 }
 
-template <bool is_fp32_dest_acc_en>
 inline void gelu_tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // initialise constants for _sfpu_tanh_fp32_accurate_
     tanh_init<false, true>();
+}
+
+// =============================================================================
+// Fast GELU tanh approximation (opt-in, BF16-grade):
+//   0.5 * x * (1 + tanh(u)) == x * sigmoid(2u) == x / (1 + exp(-2u)),  u = sqrt(2/pi) * (x + 0.044715 * x^3)
+// exp(-2u) = 2^(-2u * log2(e)) uses the exp_21f bit trick (_float_to_int32_for_exp_21f_) with a degree-4
+// polynomial for 2^f (max relative error 2.6e-6; exp_21f's quadratic is 1.7e-3), then two Newton steps on
+// the reciprocal. Max error vs torch gelu(approximate="tanh") is ~1e-6 absolute, <= 1 BF16 ULP, in about
+// 22 SFPU ops against ~38 for calculate_gelu_tanh. For FP32 outputs, prefer calculate_gelu_tanh.
+// =============================================================================
+
+// 2^f on [0, 1), fitted for relative error (mean +1.5e-8: unbiased), with the 2^-23 mantissa scale folded in:
+// c_k * 2^(-23k). Blackhole uses a cheaper BF16-exact fit kept in programmable constants; here the reciprocal
+// needs those constants, so the coefficients load inline.
+// setexp() below overwrites the exponent, so the polynomial must stay in [1, 2) for every mantissa: it spans
+// [1.0000025, 1.9999948] over all 2^23 (a degree-3 fit dips below 1 at f = 0 and is off by 2x there).
+constexpr float GELU_TANH_FAST_EXP2_C0 = 1.0000025517e+00f;
+constexpr float GELU_TANH_FAST_EXP2_C1 = 8.2612558619e-08f;
+constexpr float GELU_TANH_FAST_EXP2_C2 = 3.4310902370e-15f;
+constexpr float GELU_TANH_FAST_EXP2_C3 = 8.8111597259e-23f;
+constexpr float GELU_TANH_FAST_EXP2_C4 = 2.7332817452e-30f;
+
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void calculate_gelu_tanh_fast() {
+    constexpr float GELU_TANH_K = 0.044715f;
+    constexpr float NEG_2_SQRT_2_OVER_PI_LOG2E = -2.3022081981f;  // -2 * sqrt(2/pi) * log2(e)
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat x = sfpi::dst_reg[0];
+
+        sfpi::vFloat x2 = x * x;
+        sfpi::vFloat p = GELU_TANH_K * x2 + 1.0f;
+        sfpi::vFloat q = x * p;
+
+        // Biased log2 of exp(-2u). Clamped so the exponent stays finite: 0 gives exp(-2u) ~ 0 (result x),
+        // 254 gives exp(-2u) ~ 2^127, whose reciprocal flushes to 0 (result 0).
+        sfpi::vFloat xlog2 = q * NEG_2_SQRT_2_OVER_PI_LOG2E + 127.0f;
+        xlog2 = sfpi::clamp(xlog2, 0.0f, 254.0f);
+
+        sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
+        sfpi::vInt exponential_part = sfpi::exexp(z, sfpi::ExponentMode::Biased);
+        sfpi::vMag fractional_part = sfpi::exman(z);
+        sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
+        frac = PolynomialEvaluator::eval(
+            frac,
+            GELU_TANH_FAST_EXP2_C0,
+            GELU_TANH_FAST_EXP2_C1,
+            GELU_TANH_FAST_EXP2_C2,
+            GELU_TANH_FAST_EXP2_C3,
+            GELU_TANH_FAST_EXP2_C4);
+        sfpi::vFloat e = sfpi::setexp(frac, exponential_part);
+
+        // Two Newton steps: one alone lands at or below 1/d and biases |GELU| low.
+        sfpi::vFloat result = x * sfpu_reciprocal_iter<2>(e + 1.0f);
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+inline void gelu_tanh_fast_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpu_reciprocal_init<false>();
 }
 
 // =============================================================================

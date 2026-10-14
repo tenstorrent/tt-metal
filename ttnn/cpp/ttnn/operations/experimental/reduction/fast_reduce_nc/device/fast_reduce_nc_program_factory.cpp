@@ -54,7 +54,8 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
 tt::tt_metal::ProgramDescriptor FastReduceNCProgramFactory::create_descriptor(
     const FastReduceNCParams& operation_attributes,
     const FastReduceNCInputs& tensor_args,
-    Tensor& tensor_return_value) {
+    std::vector<Tensor>& outputs) {
+    auto& tensor_return_value = outputs.front();
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -75,7 +76,10 @@ tt::tt_metal::ProgramDescriptor FastReduceNCProgramFactory::create_descriptor(
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] =
         extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(operation_attributes.dim));
     const auto num_reduce_input_tile = input_shape[operation_attributes.dim];
-    const auto num_output_tiles = tensor_return_value.physical_volume() / TILE_HW;
+    const auto num_output_tiles =
+        (tensor_return_value.physical_volume() +
+         (operation_attributes.split_output_width.has_value() ? outputs.at(1).physical_volume() : 0)) /
+        TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(tensor_args.input.device()->arch(), operation_attributes.compute_kernel_config);
     // Choose granularity as the largest factor of num_reduce_input_tile that is less than or equal to 8.
@@ -139,10 +143,9 @@ tt::tt_metal::ProgramDescriptor FastReduceNCProgramFactory::create_descriptor(
          num_cols_per_core_group_2] =
             divide_by_shards
                 ? dspec.core_groups_tuple()
-                : (use_sub_core_grids
-                       ? tt::tt_metal::split_work_to_cores(
-                             *operation_attributes.sub_core_grids, num_output_tiles, /*row_wise=*/true)
-                       : tt::tt_metal::split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true));
+                : (use_sub_core_grids ? tt::tt_metal::split_work_to_cores(
+                                            *operation_attributes.sub_core_grids, num_output_tiles, /*row_wise=*/true)
+                                      : tt::tt_metal::split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true));
     num_cols_per_core_group_1 *= shard_factor;
     num_cols_per_core_group_2 *= shard_factor;
 
@@ -200,8 +203,12 @@ tt::tt_metal::ProgramDescriptor FastReduceNCProgramFactory::create_descriptor(
     std::vector<uint32_t> reader_compile_time_args = {input_granularity, shard_factor, num_cores_to_be_used};
     TensorAccessorArgs(*tensor_args.input.buffer()).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {shard_factor, num_cores_to_be_used};
+    std::vector<uint32_t> writer_compile_time_args = {
+        shard_factor, num_cores_to_be_used, operation_attributes.split_output_width.value_or(0) / TILE_WIDTH, Wt};
     TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_compile_time_args);
+    // Keep the accessor positions stable; the unsplit writer discards the second accessor.
+    TensorAccessorArgs(operation_attributes.split_output_width.has_value() ? outputs.at(1).buffer() : nullptr)
+        .append_to(writer_compile_time_args);
 
     const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";
@@ -333,11 +340,14 @@ tt::tt_metal::ProgramDescriptor FastReduceNCProgramFactory::create_descriptor(
              reduce_tile_size,
              inner_tile_size});
 
-        writer_kernel_desc.emplace_runtime_args(
-            core,
-            {output_buffer,
-             /*id_range_length=*/num_tiles_per_core * num_cores_to_be_used,
-             tile_offset});
+        KernelDescriptor::RTArgList writer_args;
+        writer_args.push_back(output_buffer);
+        writer_args.push_back(num_tiles_per_core * num_cores_to_be_used);
+        writer_args.push_back(tile_offset);
+        if (operation_attributes.split_output_width.has_value()) {
+            writer_args.push_back(outputs.at(1).buffer());
+        }
+        writer_kernel_desc.emplace_runtime_args(core, writer_args);
 
         tile_offset += shard_factor;
     }

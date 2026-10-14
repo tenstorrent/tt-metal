@@ -29,7 +29,7 @@ def vit_patch_embeddings_weight_vars(
     stride_w = 1
 
     pixel_values = ttnn.reshape(pixel_values, (batch_size, img_h, img_w // patch_size, 4 * patch_size))
-    pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)
+    pixel_values = ttnn.fold(pixel_values, stride_h, stride_w, collapse_output=True)
     pixel_values = ttnn.to_layout(pixel_values, layout=ttnn.TILE_LAYOUT)
 
     patch_embedding_output = ttnn.linear(
@@ -61,7 +61,7 @@ def siglip_patch_embeddings(
     stride_w = 1
 
     pixel_values = ttnn.reshape(pixel_values, (batch_size, img_h, img_w // patch_size, 4 * patch_size))
-    pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)
+    pixel_values = ttnn.fold(pixel_values, stride_h, stride_w, collapse_output=True)
     pixel_values = ttnn.to_layout(pixel_values, layout=ttnn.TILE_LAYOUT)
 
     patch_embedding_output = ttnn.linear(

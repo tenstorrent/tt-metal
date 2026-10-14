@@ -57,16 +57,6 @@ ttnn::Tensor composite_all_gather(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
     bool use_l1_small_for_semaphores = false);
-// same as above but for vector of mesh
-std::vector<ttnn::Tensor> composite_all_gather(
-    const std::vector<ttnn::Tensor>& input_tensors,
-    int32_t dim,
-    std::optional<uint32_t> num_links,
-    std::optional<ttnn::ccl::Topology> topology,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    std::optional<uint32_t> cluster_axis,
-    bool use_l1_small_for_semaphores = false);
 
 ttnn::Tensor composite_all_to_all(
     ttnn::Tensor input_tensor,
