@@ -110,27 +110,22 @@ class move_only_function<R(Args...)> {
 public:
     using result_type = R;
 
+    // [func.wrap.move.ctor] constructors, assignment, and destructor
     move_only_function() noexcept : tag_(empty_tag()) {}
     move_only_function(std::nullptr_t) noexcept : tag_(empty_tag()) {}
 
     move_only_function(move_only_function&& other) noexcept { take(other); }
 
     template <typename F>
-        requires(
-            detail::MoveOnlyFunctionTarget<F, move_only_function, R, Args...> &&
-            !detail::is_nullable_callable_v<std::decay_t<F>>)
+        requires detail::MoveOnlyFunctionTarget<F, move_only_function, R, Args...>
     move_only_function(F&& f) {
-        emplace<std::decay_t<F>>(std::forward<F>(f));
-    }
-
-    template <typename F>
-        requires(
-            detail::MoveOnlyFunctionTarget<F, move_only_function, R, Args...> &&
-            detail::is_nullable_callable_v<std::decay_t<F>>)
-    move_only_function(F&& f) : tag_(empty_tag()) {
-        if (!detail::is_empty_callable(f)) {
-            emplace<std::decay_t<F>>(std::forward<F>(f));
+        if constexpr (detail::is_nullable_callable_v<std::decay_t<F>>) {
+            if (detail::is_empty_callable(f)) {
+                tag_ = empty_tag();
+                return;
+            }
         }
+        emplace<std::decay_t<F>>(std::forward<F>(f));
     }
 
     template <typename T, typename... CArgs>
@@ -145,9 +140,6 @@ public:
     explicit move_only_function(std::in_place_type_t<T>, std::initializer_list<U> il, CArgs&&... args) {
         emplace<T>(il, std::forward<CArgs>(args)...);
     }
-
-    move_only_function(const move_only_function&) = delete;
-    move_only_function& operator=(const move_only_function&) = delete;
 
     move_only_function& operator=(move_only_function&& other) noexcept {
         if (this != &other) {
@@ -172,11 +164,13 @@ public:
 
     ~move_only_function() { destroy_target(); }
 
+    // [func.wrap.move.inv] invocation
     explicit operator bool() const noexcept { return table() != &kEmptyTable; }
 
     // Calling an empty instance throws through the empty table, with no branch here.
     R operator()(Args... args) { return table()->call(buffer_, std::forward<Args>(args)...); }
 
+    // [func.wrap.move.util] utility
     void swap(move_only_function& other) noexcept {
         if (this != &other) {
             move_only_function tmp(std::move(other));
