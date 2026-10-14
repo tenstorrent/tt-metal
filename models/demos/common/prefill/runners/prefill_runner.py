@@ -192,11 +192,14 @@ def build_layer_completion_sink(producer, *, source_rank, num_layers, ack_idx_of
 
 def _decode_metadata(metadata_msg: ttnn.Tensor) -> dict:
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-    return {
+    meta = {
         "slot_id": int(m[0]),
         "actual_start": int(m[1]),
         "actual_end": int(m[2]),
     }
+    if m.numel() > 3:
+        meta["provided_levels"] = max(0, int(m[3]))
+    return meta
 
 
 def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
@@ -333,9 +336,6 @@ def _d2d_recv(inbound, metadata_buf, tokens_out=None, trace=None) -> tuple:
     else:
         act, metadata_msg = _d2d_drain_op(inbound, metadata_buf, tokens_out)
     meta = _decode_metadata(metadata_msg)
-    if MTP_LEVELS:
-        words = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
-        meta["provided_levels"] = max(0, int(words[3]))
     where = f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}"
     logger.info(f"[pp] RECV-d2d {where} [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
     return act, meta, metadata_msg
