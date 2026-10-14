@@ -13,11 +13,13 @@ same cycles share one: the sharing key is the test's speed-of-light header witho
 INIT_NEUTRAL[source] names, plus every other compilation input. The first test of a key builds the ELFs from its own
 header, so each test measures a speed-of-light INIT whose cycles equal those of its own.
 
-A name is listed only if leaving it out shares builds, and if, on the full Wormhole perf suite measured with
---speed-of-light, every key group then has one INIT value per thread: in the plain run, with 4 NOPs in the pack init and
-with a NOP in every hw_configure (and on 18 more legs it was not chosen on: NOPs in the unpack and math inits, the INIT
-faithfulness signals, prefetch off, an older INIT). Sources not listed share nothing, so a new test or parameter costs a
-build per configuration until its names are checked the same way.
+A name is listed only if leaving it out shares builds, and if, on the full Wormhole perf suite, every key group then
+holds only tests whose own speed-of-light INIT builds execute the same INIT window in every thread (Tensix instruction
+words in full, the same addresses and length; only RISC immediates may differ) and take the same cycles. A constant can
+change the code without changing a branch: eltwise binary's input formats make two unpack config words coincide or not,
+and GCC then materializes the value once or twice; so formats, tile sizes and the binary op are not neutral there.
+Sources not listed share nothing, so a new test or parameter costs a build per configuration until its names are checked
+the same way, and a change to the table needs that check again (test_test_config.py pins the checked table).
 """
 
 import re
@@ -34,7 +36,6 @@ INIT_NEUTRAL = {
             "ACC_TO_DEST",
             "BLOCK_CT_DIM",
             "BLOCK_RT_DIM",
-            "ELTWISE_BINARY_OP",
             "FULL_CT_DIM",
             "FULL_RT_DIM",
             "INPUT_NUM_BLOCKS",
@@ -44,13 +45,8 @@ INIT_NEUTRAL = {
             "OUTPUT_NUM_BLOCKS",
             "OUTPUT_NUM_TILES_IN_BLOCK",
             "REUSE_DEST_TYPE",
-            "TILE_SIZE_UNPACK_A",
-            "TILE_SIZE_UNPACK_B",
-            "UNPACK_A_IN",
             "UNPACK_A_OUT",
-            "UNPACK_B_IN",
             "UNPACK_B_OUT",
-            "UNPACK_S_IN",
             "UNPACK_S_OUT",
             "buffer_A",
             "buffer_B",
@@ -135,17 +131,7 @@ INIT_NEUTRAL = {
             "buffer_Res",
         }
     ),
-    "pack_dest_bank_perf.cpp": frozenset(
-        {
-            "INPUT_NUM_BLOCKS",
-            "INPUT_NUM_TILES_IN_BLOCK",
-            "LOOP_FACTOR",
-            "NUM_BLOCKS",
-            "NUM_TILES_IN_BLOCK",
-            "OUTPUT_NUM_BLOCKS",
-            "OUTPUT_NUM_TILES_IN_BLOCK",
-        }
-    ),
+    "pack_dest_bank_perf.cpp": frozenset({"LOOP_FACTOR"}),
     "pack_test.cpp": frozenset(
         {
             "BLOCK_CT_DIM",
