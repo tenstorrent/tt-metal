@@ -3555,6 +3555,27 @@ void set_go_signal_noc_addr_on_dispatch(
     submit_setup_commands(manager, cq_id, command_sequence.data(), command_sequence.size_bytes());
 }
 
+// Payload for a 4-byte write to a word that shares its L1-aligned line with other fields: the value is skewed to the
+// word's offset within the line, and the write (CQ_DISPATCH_CMD_WRITE_LINEAR_FLAG_SKEW_SRC_TO_DST) skips the leading
+// pad bytes.
+static std::vector<uint8_t> make_skewed_word_payload(const Hal& hal, uint32_t addr, uint32_t value) {
+    TT_ASSERT(addr % sizeof(uint32_t) == 0);
+    const uint32_t skew = addr % hal.get_alignment(HalMemType::L1);
+    std::vector<uint8_t> payload(skew + sizeof(uint32_t), 0);
+    std::memcpy(payload.data() + skew, &value, sizeof(uint32_t));
+    return payload;
+}
+
+// go_processed shares its L1-aligned line with go_message_index; its write covers go_processed and its pad bytes.
+// Returns {addr, payload}.
+static std::pair<uint32_t, std::vector<uint8_t>> make_go_processed_write(const Hal& hal, uint8_t go_processed) {
+    const uint32_t go_processed_addr =
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX) +
+        hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX)
+            .offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::go_processed);
+    return {go_processed_addr, make_skewed_word_payload(hal, go_processed_addr, go_processed)};
+}
+
 void clear_worker_go_messages_on_device(
     Device* device,
     uint8_t cq_id,
@@ -3579,15 +3600,7 @@ void clear_worker_go_messages_on_device(
         }
     }
 
-    // go_processed shares its L1-aligned line with go_message_index, so it is zeroed with a 4-byte write whose payload
-    // is skewed to the same offset within the line (the zeroed payload's leading pad bytes are skipped).
-    const uint32_t go_processed_addr =
-        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX) +
-        hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX)
-            .offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::go_processed);
-    TT_ASSERT(go_processed_addr % sizeof(uint32_t) == 0);
-    const uint32_t go_processed_skew = go_processed_addr % hal.get_alignment(HalMemType::L1);
-    const std::vector<uint8_t> go_processed_payload(go_processed_skew + sizeof(uint32_t), 0);
+    const auto [go_processed_addr, go_processed_payload] = make_go_processed_write(hal, 0);
 
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
@@ -3701,10 +3714,21 @@ static_assert(
 static HostMemDeviceCommand build_set_core_go_message_mapping_on_device(
     Device* device, const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping, uint8_t cq_id) {
     MetalContext& metal_ctx = MetalContext::instance(device->get_context_id());
+    const auto& hal = metal_ctx.hal();
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
-    uint32_t go_msg_size = metal_ctx.hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
-    uint32_t single_go_msg_size = go_msg_size / dev_msgs::go_message_num_entries;
-    calculator.add_dispatch_write_linear<true, true>(single_go_msg_size);
+    const uint32_t go_msg_size = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+    const uint32_t go_msg_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+    const uint32_t slot_size = go_msg_size / dev_msgs::go_message_num_entries;
+    const auto [go_processed_addr, go_processed_payload] = make_go_processed_write(hal, 1);
+    std::vector<std::vector<uint8_t>> slot_word0_payloads;
+    slot_word0_payloads.reserve(dev_msgs::go_message_num_entries);
+    for (uint32_t i = 0; i < dev_msgs::go_message_num_entries; ++i) {
+        slot_word0_payloads.push_back(make_skewed_word_payload(
+            hal, go_msg_addr + (i * slot_size), hal.make_go_msg_u32(1, dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST)));
+        calculator.add_dispatch_write_linear<true, true>(slot_word0_payloads.back().size());
+    }
+    calculator.add_dispatch_wait();
+    calculator.add_dispatch_write_linear<true, true>(go_processed_payload.size());
     calculator.add_dispatch_wait();
 
     std::vector<std::pair<const void*, uint32_t>> data;
@@ -3750,26 +3774,34 @@ static HostMemDeviceCommand build_set_core_go_message_mapping_on_device(
     CoreCoord virtual_end = device->virtual_core_from_logical_core(all_core_range_logical.end_coord, CoreType::WORKER);
     CoreRange all_core_range_virtual{virtual_start, virtual_end};
 
-    // Clear ONLY the "unused" GO message slot (go_message_num_entries - 1), which unassigned cores watch (see
-    // SubDeviceManager::populate_sub_device_data). The active sub-device slots [0..num_sub_devices) are left to
-    // reset_worker_dispatch_state_on_device's RESET go-signal, which syncs each slot's go_count to the dispatcher's
-    // mcast count and the worker's go_processed. Clearing an active slot here would write a fixed go_count that
-    // desyncs it from go_processed (the GO counter has no fixed "idle" value), making the worker phantom-run until
-    // the byte wraps. Tag the clear with RESET_READ_PTR_FROM_HOST so an unassigned worker routes to the control
-    // branch (go_processed = go_count) instead of reading go_count != go_processed as a program GO.
-    constexpr uint32_t unused_go_message_index = dev_msgs::go_message_num_entries - 1;
-    uint32_t unused_go_msg_addr =
-        metal_ctx.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG) +
-        unused_go_message_index * single_go_msg_size;
-    std::vector<uint32_t> go_data(single_go_msg_size / sizeof(uint32_t), 0);
-    go_data[0] = dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST;
-    TT_ASSERT(unused_go_msg_addr % metal_ctx.hal().get_alignment(HalMemType::L1) == 0);
+    // Runs after the reset gos have been acknowledged. Settle every worker on go_count == go_processed == 1 in every
+    // slot before remapping, so a worker sees no new GO in whichever slot it moves to. After the reset, a worker the
+    // outgoing manager left unassigned is still at go_processed 0, and the slots it may move to hold the reset go
+    // ({RESET_READ_PTR, 1}); reading that as new work would ack the reset a second time, after its completion stream
+    // was cleared. Each slot's word 0 becomes {RESET_READ_PTR_FROM_HOST, 1}, which matches the reset's count in the
+    // slots it reached. Word 1 (the done-return address) is not written: dispatch_s may already have sent the next
+    // owner's SET_GO_SIGNAL_NOC_ADDR, which nothing orders behind these writes. A worker that consumes the FROM_HOST
+    // tick before go_processed lands sets go_processed to the same 1, without an ack. go_processed must land after
+    // the slots (barrier): 1 under a stale go_count of 0 reads as new work.
+    for (uint32_t i = 0; i < dev_msgs::go_message_num_entries; ++i) {
+        command_sequence.add_dispatch_write_linear<true, true>(
+            all_core_range_logical.size(),
+            device->get_noc_multicast_encoding(noc_index, all_core_range_virtual),
+            go_msg_addr + (i * slot_size),
+            slot_word0_payloads[i].size(),
+            slot_word0_payloads[i].data(),
+            /*write_offset_index=*/0,
+            CQ_DISPATCH_CMD_WRITE_LINEAR_FLAG_SKEW_SRC_TO_DST);
+    }
+    command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, cq_id);
     command_sequence.add_dispatch_write_linear<true, true>(
         all_core_range_logical.size(),
         device->get_noc_multicast_encoding(noc_index, all_core_range_virtual),
-        unused_go_msg_addr,
-        single_go_msg_size,
-        go_data.data());
+        go_processed_addr,
+        go_processed_payload.size(),
+        go_processed_payload.data(),
+        /*write_offset_index=*/0,
+        CQ_DISPATCH_CMD_WRITE_LINEAR_FLAG_SKEW_SRC_TO_DST);
     // Wait for previous writes before updating index.
     command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, cq_id);
 

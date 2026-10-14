@@ -1326,14 +1326,15 @@ void FDMeshCommandQueue::reset_worker_state(
             reset_launch_msg_state,
             cached->device_batches[i]);
     }
-    // The reset go re-baselined each active sub-device's go_count_per_sync to 1 (go_processed catches up to 1), so the
-    // per-chip mirrors follow. Every slot is left unconfigured: the GO slot clear wrote word 1 for the outgoing
-    // manager's slots, and the incoming manager can map workers to different slots, so the first go on each slot
-    // sends SET_GO_SIGNAL_NOC_ADDR with the workload's mcast targeting. A non-resetting CQ only forgets its configured
-    // slots.
+    // The remap left every GO slot and every worker at go_count == go_processed == 1, so the per-chip mirrors of every
+    // slot follow. Every slot is left unconfigured: the GO slot clear wrote word 1 for the outgoing manager's slots,
+    // and the incoming manager can map workers to different slots, so the first go on each slot sends
+    // SET_GO_SIGNAL_NOC_ADDR, which also reseeds the dispatcher's go_count from the mirror. A non-resetting CQ only
+    // forgets its configured slots.
     for (auto* device : devices) {
         device->sysmem_manager().reset_worker_go_mirrors(
-            reset_launch_msg_state ? std::optional<uint32_t>(active_sub_devices) : std::nullopt);
+            reset_launch_msg_state ? std::optional<uint32_t>(DispatchSettings::DISPATCH_MESSAGE_ENTRIES)
+                                   : std::nullopt);
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),

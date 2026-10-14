@@ -132,8 +132,8 @@ public:
 
     WorkerGoMirror& worker_go_mirror(uint32_t sync_index) { return worker_go_mirrors_.at(sync_index); }
 
-    // Forget which CQ configured each slot. With rebaselined_slots, a RESET_READ_PTR go was also sent to the first
-    // rebaselined_slots slots, leaving their go count at 1; the remaining slots were cleared to 0.
+    // Forget which CQ configured each slot. With rebaselined_slots, a reset left the first rebaselined_slots slots at
+    // go count 1 and cleared the remaining slots to 0.
     void reset_worker_go_mirrors(std::optional<uint32_t> rebaselined_slots);
 
 private:

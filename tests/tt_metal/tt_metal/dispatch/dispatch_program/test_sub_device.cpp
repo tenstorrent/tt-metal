@@ -10,6 +10,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <exception>
 #include <map>
@@ -17,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -669,6 +671,45 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestCQOwnershipTakenByEmptyWork
     distributed::EnqueueMeshWorkload(cq1, empty_workload, false);
     distributed::EnqueueMeshWorkload(cq1, blank_workload, false);
     distributed::Finish(cq1);
+}
+
+// Switching sub-device managers moves cores the outgoing manager left unassigned onto slots that the switch's reset go
+// just reached. They must not take that reset go as new work: acking it a second time would leave extra counts in the
+// sub-device's completion counter, letting a later wait for workers pass before they finish. Block one core's program
+// on a semaphore and check that an event recorded behind it does not complete until the core is released.
+TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceSwitchToDefaultNoStrayResetAcks) {
+    auto mesh_device = devices_[0];
+    auto& cq = mesh_device->mesh_command_queue();
+
+    // Cores outside {0,0}-{2,2} are unassigned under this manager.
+    auto sub_device_manager = mesh_device->create_sub_device_manager(
+        {SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))})}, k_local_l1_size);
+    mesh_device->load_sub_device_manager(sub_device_manager);
+    mesh_device->clear_loaded_sub_device_manager();
+
+    const CoreCoord blocked_core{0, 0};
+    auto semaphore = CreateGlobalSemaphore(*mesh_device, CoreRangeSet(CoreRange(blocked_core, blocked_core)), 0);
+    tt_metal::Program program = tt_metal::CreateProgram();
+    auto kernel = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/syncer.cpp",
+        CoreRangeSet(CoreRange(blocked_core, blocked_core)),
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    tt_metal::SetRuntimeArgs(program, kernel, blocked_core, {static_cast<uint32_t>(semaphore.address())});
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range_, std::move(program));
+
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    auto event = cq.enqueue_record_event_to_host();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_FALSE(distributed::EventQuery(event));
+
+    std::vector<uint32_t> release = {1};
+    slow_dispatch::WriteToL1(*mesh_device, blocked_core, semaphore.address(), release);
+    distributed::EventSynchronize(event);
+    distributed::Finish(cq);
+    mesh_device->remove_sub_device_manager(sub_device_manager);
 }
 
 // Single CQ: switching sub-device managers right behind a non-blocking trace replay must not disturb the replay. The
