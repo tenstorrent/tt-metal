@@ -29,6 +29,9 @@ Reference: models/demos/deepseek_v3_d_p/tt/tt_prefill_runtime.py (interface) and
 tests/galaxy_prefill_kv_pcc.py (cache readback + RoPE swizzle convention).
 """
 
+import os
+import queue
+import threading
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -41,6 +44,50 @@ import ttnn
 from models.common.utils import block_cyclic_reorder
 from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
+
+
+class EventLayerAckFence:
+    """Publishes per-layer acks after a device event instead of a host ``synchronize_device``.
+
+    The model records a MeshEvent on CQ0 after each layer for a callback carrying ``record_device_fence``. One
+    worker thread waits on each event in order and then calls the ack callback, so the enqueue thread never
+    stalls and the KV reader still sees the layer's writes."""
+
+    def __init__(self):
+        self._q = queue.Queue()
+        self._t = threading.Thread(target=self._run, name="m3-layer-ack-fence", daemon=True)
+        self._t.start()
+
+    def bind(self, callback):
+        fence = self
+
+        class _Ack:
+            record_device_fence = True
+
+            def __call__(self, layer_idx, event):
+                fence._q.put((callback, layer_idx, event))
+
+        return _Ack()
+
+    def _run(self):
+        while True:
+            item = self._q.get()
+            try:
+                if item is None:
+                    return
+                callback, layer_idx, event = item
+                ttnn.event_synchronize(event)
+                callback(layer_idx)
+            finally:
+                self._q.task_done()
+
+    def drain(self):
+        """Block until every submitted ack has been published."""
+        self._q.join()
+
+    def close(self):
+        self._q.put(None)
+        self._t.join()
 
 
 @dataclass
@@ -112,6 +159,8 @@ class TtPrefillRuntime:
         self.model_built = False
         self.compiled = False
         self._on_layer_complete = None
+        # M3_LAYER_ACK_FENCE: event (default) publishes per-layer acks after a device event; sync does a host sync.
+        self.layer_ack_fence = EventLayerAckFence() if os.getenv("M3_LAYER_ACK_FENCE", "event") == "event" else None
         # Per-layer completion sink for pipelined prefill, registered via set_layer_completion_sink().
         self._layer_completion_sink = None
 
@@ -443,6 +492,8 @@ class TtPrefillRuntime:
 
         else:
             on_layer_complete = self._on_layer_complete
+        if on_layer_complete is not None and self.layer_ack_fence is not None:
+            on_layer_complete = self.layer_ack_fence.bind(on_layer_complete)
         out = self.model.prefill_forward(
             x_embd,
             rot_mats_global=self.rope_indexed,
