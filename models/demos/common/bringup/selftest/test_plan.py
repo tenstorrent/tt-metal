@@ -420,3 +420,122 @@ def test_runner_smoke_kind_gates_k1_on_its_answer(fx):
     assert "test_runner_smoke.py" in t["K.1"]["gate"]["cmd"]
     write(s, "contract_tests.yaml", {"tests": [{**smoke, "kind": "runner_smok"}]})
     assert any("unknown kind" in e for e in SV.check(s, s.repo))
+
+
+# ---- F64: a plan for the deployment box, checked on every box
+
+
+def boxes_spec(fx, mode="partial", layers="0-1", **run):
+    return Spec.load(
+        fx(
+            box=None,
+            layers=layers,
+            deploy={"box": "big", "seq": 4096, "chunk": 1024},
+            boxes={
+                "big": {"mesh": [8, 4], "chip_dram_gb": 0.01},
+                "small": {"mesh": [2, 2], "chip_dram_gb": 0.01, "overrides": {"device": {"experts_dtype": "bfp4"}}},
+            },
+            run={"box": "small", "mode": mode, **run},
+        )
+    )
+
+
+def deploy_plan(**over):
+    p = plan(
+        placements=[
+            {"pattern": "model.embed.weight", "placement": "replicate", "dtype": "bf16"},
+            {"pattern": "model.layers.*.q.weight", "placement": "split", "over": "heads", "dtype": "bf16"},
+            {"pattern": "model.layers.*.experts.*", "placement": "expert", "dtype": "bfp8"},
+            {"pattern": "vision.*", "placement": "skip"},
+        ],
+        state=[
+            {
+                "layers": "0-2",
+                "heads": 8,
+                "split_heads": "heads",
+                "head_dim": 64,
+                "dtype": "bf16",
+                "split_seq": "sequence",
+            }
+        ],  # fmt: skip
+        roles={"sequence": [0], "heads": [1], "experts": [0, 1]},
+        conditions=[
+            {"what": "experts per chip", "total": 64, "over": "experts", "max": 4, "else": "dispatch"},
+            {"what": "rows per chip per chunk", "total": "chunk", "over": "sequence", "multiple_of": 32},
+        ],
+        boxes={"small": {"dtypes": {"model.layers.*.experts.*": "bfp4"}}},
+    )
+    p.update(over)
+    return p
+
+
+def test_spec_resolves_the_run_box(fx):
+    s = boxes_spec(fx)
+    assert s.validate() == [] and s.has_deploy and s.mesh == [2, 2] and s.run_box == "small" and s.deploy_box == "big"
+    assert s.get("device.experts_dtype") == "bfp4" and not s.raw.get("box") and s.mode == "partial"
+    assert (s.deploy_seq, s.deploy_chunk) == (4096, 1024)
+    old = Spec.load(fx())  # no deploy: the box is the target, exactly as before
+    assert not old.has_deploy and old.raw is old.data and old.boxes == {"box": {"mesh": [1, 1]}}
+    assert old.deploy_box == old.run_box == "box" and old.deploy_seq == 256
+
+
+@pytest.mark.parametrize(
+    "over,needle",
+    [
+        ({"run": {"box": "nope", "mode": "partial"}}, "run.box must name"),
+        ({"run": {"box": "small", "mode": "half"}}, "run.mode must be"),
+        ({"box": {"mesh": [1, 1]}}, "drop 'box'"),
+        ({"deploy": {"box": "big", "seq": 4000, "chunk": 1024}}, "not a multiple"),
+    ],
+)
+def test_spec_box_errors(fx, over, needle):
+    good = boxes_spec(fx).raw
+    s = Spec.load(fx(**{**{k: good[k] for k in ("deploy", "boxes", "run", "layers")}, "box": None, **over}))
+    assert any(needle in e for e in s.validate()), s.validate()
+    full = boxes_spec(fx, mode="full")
+    assert any("set layers: all" in e for e in full.validate())
+
+
+def test_boxes_scale_fit_and_paths(fx):
+    from models.demos.common.bringup.plan.boxes import check_boxes, evaluate, table
+
+    s = boxes_spec(fx)
+    r = check_boxes(s, deploy_plan(), TENSORS, {"num_key_value_heads": 4})
+    assert r["errors"] == [], r["errors"]
+    big, small = r["rows"]
+    assert big["deploy"] and small["run"] and big["scale"] == {"sequence": 1, "heads": 1, "experts": 1}
+    assert small["scale"] == {"sequence": 0.25, "heads": 0.5, "experts": 0.125}
+    assert small["context"] == {"seq": 1024, "chunk": 256, "exact": True}
+    # experts: 2 per chip on the 8x4 (plan path), 16 on the 2x2 (dispatch): a path that differs
+    e_big, e_small = big["conditions"][0], small["conditions"][0]
+    assert (e_big["per_chip"], e_big["path"], e_small["per_chip"], e_small["path"]) == (2, "plan", 16, "dispatch")
+    assert e_big["same_as_deploy"] and not e_small["same_as_deploy"]
+    # rows per chip: the run box uses the spec's own target chunk (64 / 2 rows = 32, whole tiles)
+    assert small["conditions"][1]["per_chip"] == 32 and small["conditions"][1]["path"] == "plan"
+    assert big["full"]["longest_seq"] == 4096 and big["full"]["fits_deploy_seq"]
+    # the scaled run holds per chip what the deployment box holds for those layers; bfp4 experts on the small box
+    assert small["partial_scaled_gb"] < big["partial_scaled_gb"]
+    assert "**(differs)**" in table(r["rows"]) and evaluate("chunk / 4 + 1", {"chunk": 64, "seq": 0}) == 17
+
+
+def test_boxes_errors(fx):
+    from models.demos.common.bringup.plan.boxes import check_boxes
+
+    s = boxes_spec(fx)
+    hard = deploy_plan(conditions=[{"what": "rows", "total": "chunk", "over": "sequence", "multiple_of": 4096}])
+    assert any("fails" in e and "no 'else'" in e for e in check_boxes(s, hard, TENSORS)["errors"])
+    skip = deploy_plan()
+    skip["placements"].insert(0, {"pattern": "model.layers.1.*", "placement": "skip"})
+    assert any("skips decoder layers [1]" in e for e in check_boxes(s, skip, TENSORS)["errors"])
+    assert "roles" in check_boxes(s, deploy_plan(roles={"heads": [1]}), TENSORS)["errors"][0]
+    tight = deploy_plan(activations_gb_per_chip=0.0099)
+    assert any(e.startswith("deployment box big:") and "exceeds" in e for e in check_boxes(s, tight, TENSORS)["errors"])
+
+
+def test_run_check_keeps_the_runs_layers(fx):
+    s = boxes_spec(fx, layers="0")
+    every = check_plan(s, deploy_plan(), TENSORS, {"num_key_value_heads": 4})
+    mine = check_plan(s, deploy_plan(), TENSORS, {"num_key_value_heads": 4}, layers=s.layers())
+    gb = lambda r, g: next(x["gb"] for x in r["rows"] if x["group"] == g)  # noqa: E731
+    assert gb(mine, "model.layers.*.q.weight") * 2 == gb(every, "model.layers.*.q.weight")
+    assert mine["errors"] == [] and gb(mine, "state: state layers 0-2") * 3 == gb(every, "state: state layers 0-2")

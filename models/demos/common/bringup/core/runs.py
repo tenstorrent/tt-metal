@@ -166,7 +166,7 @@ def fork(spec: Spec, ledger: Ledger, tid: str, name: str) -> Spec:
     wt.parent.mkdir(parents=True, exist_ok=True)
     git(spec.repo, "worktree", "add", "-q", "-b", branch, str(wt), sha)
 
-    data = json.loads(json.dumps(spec.data))
+    data = json.loads(json.dumps(spec.raw))
     paths = data.setdefault("paths", {})
     paths["repo"] = str(wt)
     # Same artifact root, so goldens, weights and profiles are shared by path with the parent run.

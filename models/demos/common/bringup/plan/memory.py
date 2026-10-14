@@ -19,13 +19,16 @@ The plan agent writes ``<bringup_dir>/plan.yaml``:
     activations_gb_per_chip: 3.0        # peak transient activations for one chunk (planner's estimate, > 0)
 
 placement: replicate (every chip holds it), shard (split over all chips), expert (an expert-stacked tensor or an
-expert's weights split over all chips), shard_rows / shard_cols (split over mesh rows / columns only), skip.
+expert's weights split over all chips), shard_rows / shard_cols (split over mesh rows / columns only), split (over the
+mesh axes of a role, ``over: <role>``; plan ``roles``, see plan/boxes.py), skip.
 dtype: fp32, bf16, bfp8 (1088 B per 1024 values), bfp4 (576 B per 1024 values), int32, uint16, uint8.
 State bytes per chip = heads_per_chip * head_dim * tensors * dtype bytes * length * users, where length is
 ceil(min(target seq, window) / seq_stride / seq_divisor) (seq_stride: tokens per stored row, e.g. pooled keys;
 seq_divisor: chips the sequence axis is split over), or 1 with ``per_token: false`` (a fixed-size state such as a
 linear-attention recurrent state: head_dim is then the per-head size, e.g. 128 * 128, plus any conv tail).
-The check also requires heads_per_chip * chips >= the config's KV heads (or the entry's ``kv_heads``) unless the entry
+A state entry may give ``heads`` (the total) with ``split_heads: <role>`` and ``split_seq: <role>`` instead of
+heads_per_chip and seq_divisor: the per-chip numbers then follow the mesh being checked (F64, required with a
+deployment box). The check also requires heads_per_chip * chips >= the config's KV heads (or the entry's ``kv_heads``) unless the entry
 says ``replicated: true``; entries with ``per_token: false`` are checked only against their own ``kv_heads``.
 """
 
@@ -33,6 +36,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import re
 import struct
 from pathlib import Path
 
@@ -49,8 +53,9 @@ DTYPE_BYTES = {
     "uint16": 2.0,
     "uint8": 1.0,
 }
-PLACEMENTS = ("replicate", "shard", "expert", "shard_rows", "shard_cols", "skip")
+PLACEMENTS = ("replicate", "shard", "expert", "shard_rows", "shard_cols", "split", "skip")
 GB = 2**30
+LAYER_RE = re.compile(r"(?:^|\.)(?:model|language_model)\.layers\.(\d+)\.")
 
 
 def checkpoint_tensors(hf_dir: str | Path) -> dict[str, list[int]]:
@@ -87,21 +92,63 @@ def divisor(placement: str, mesh: list[int]) -> int:
     ]
 
 
-def check_plan(spec: Spec, plan: dict, tensors: dict[str, list[int]], hf_config: dict | None = None) -> dict:
-    """Returns {errors, per_chip_bytes (by group), total_gb, capacity_gb, fits, unplaced, rows}."""
-    mesh, chips = spec.mesh, spec.mesh[0] * spec.mesh[1]
-    cap_gb = float(spec.get("box.chip_dram_gb"))
-    headroom = float(plan.get("headroom_frac", 0.15))
+def ways(role: str | None, mesh: list[int], roles: dict) -> int:
+    """Chips a role is split over on this mesh (roles: role -> mesh axes); 1 for no role."""
+    if not role:
+        return 1
+    n = 1
+    for a in roles[role]:
+        n *= mesh[a]
+    return n
+
+
+def layer_of(name: str) -> int | None:
+    """The decoder layer a checkpoint tensor belongs to, or None (embedding, final norm, LM head, vision, ...)."""
+    m = LAYER_RE.search(name)
+    return int(m.group(1)) if m else None
+
+
+def check_plan(
+    spec: Spec,
+    plan: dict,
+    tensors: dict[str, list[int]],
+    hf_config: dict | None = None,
+    *,
+    mesh: list[int] | None = None,
+    cap_gb: float | None = None,
+    seq: int | None = None,
+    layers: list[int] | None = None,
+    box: str | None = None,
+) -> dict:
+    """Returns {errors, per_chip_bytes (by group), total_gb, capacity_gb, fits, unplaced, rows}.
+
+    Defaults check the run's own box at ``target.seq`` (``plan.boxes.<box>`` overrides apply). The keywords check
+    another box, context or layer set (F64): ``layers`` keeps the decoder-layer tensors and state of those layers only.
+    """
+    mesh = list(mesh or spec.mesh)
+    chips = mesh[0] * mesh[1]
+    cap_gb = float(cap_gb if cap_gb is not None else spec.get("box.chip_dram_gb"))
+    over = (plan.get("boxes") or {}).get(box or spec.run_box) or {}
+    roles = plan.get("roles") or {}
+    headroom = float(over.get("headroom_frac", plan.get("headroom_frac", 0.15)))
     errs = []
     placements = plan.get("placements") or []
     for p in placements:
         if p.get("placement") not in PLACEMENTS:
             errs.append(f"placement {p.get('pattern')!r}: unknown placement {p.get('placement')!r}")
+        if p.get("placement") == "split" and p.get("over") not in roles:
+            errs.append(
+                f"placement {p.get('pattern')!r}: split over {p.get('over')!r}, not one of roles {sorted(roles)}"
+            )
         if p.get("placement") != "skip" and p.get("dtype") not in DTYPE_BYTES:
             errs.append(f"placement {p.get('pattern')!r}: unknown dtype {p.get('dtype')!r}")
+    for pat, dt in (over.get("dtypes") or {}).items():
+        if dt not in DTYPE_BYTES:
+            errs.append(f"boxes.{box or spec.run_box}.dtypes {pat!r}: unknown dtype {dt!r}")
     if errs:
         return {"errors": errs, "fits": False}
 
+    sel = set(layers) if layers is not None else None
     groups, rows_out, unplaced, used = {}, [], [], [0] * len(placements)
     for name, shape in sorted(tensors.items()):
         k = next((k for k, p in enumerate(placements) if fnmatch.fnmatchcase(name, p["pattern"])), None)
@@ -112,7 +159,11 @@ def check_plan(spec: Spec, plan: dict, tensors: dict[str, list[int]], hf_config:
         p = placements[k]
         if p["placement"] == "skip":
             continue
-        b = _numel(shape) * DTYPE_BYTES[p["dtype"]] / divisor(p["placement"], mesh)
+        if sel is not None and layer_of(name) is not None and layer_of(name) not in sel:
+            continue
+        dtype = next((d for pat, d in (over.get("dtypes") or {}).items() if fnmatch.fnmatchcase(name, pat)), p["dtype"])
+        div = ways(p["over"], mesh, roles) if p["placement"] == "split" else divisor(p["placement"], mesh)
+        b = _numel(shape) * DTYPE_BYTES[dtype] / div
         key = p.get("group") or p["pattern"]
         groups[key] = groups.get(key, 0.0) + b
     for k, p in enumerate(placements):
@@ -121,33 +172,44 @@ def check_plan(spec: Spec, plan: dict, tensors: dict[str, list[int]], hf_config:
     if unplaced:
         errs.append(f"{len(unplaced)} checkpoint tensors match no placement, e.g. {unplaced[:5]}")
 
-    seq = int(spec.get("target.seq"))
+    seq = int(seq if seq is not None else spec.get("target.seq"))
     users = int(plan.get("users", 1))
     kv_heads = (hf_config or {}).get("num_key_value_heads")
     covered = []
     for st in plan.get("state") or []:
         try:
-            layers = parse_layers(st["layers"], spec.num_layers)
-            b_tok = st["heads_per_chip"] * st["head_dim"] * st.get("tensors", 2) * DTYPE_BYTES[st["dtype"]]
+            layers_st = parse_layers(st["layers"], spec.num_layers)
+            if "heads" in st:
+                hpc = -(-int(st["heads"]) // ways(st.get("split_heads"), mesh, roles))
+            else:
+                hpc = st["heads_per_chip"]
+            b_tok = hpc * st["head_dim"] * st.get("tensors", 2) * DTYPE_BYTES[st["dtype"]]
         except (KeyError, TypeError) as e:
             errs.append(f"state entry {st}: missing or bad field {e}")
             continue
+        if sel is not None:
+            layers_st = [i for i in layers_st if i in sel]
         per_token = st.get("per_token", True)
         heads_total = st.get("kv_heads", kv_heads if per_token else None)
-        if heads_total and not st.get("replicated") and st["heads_per_chip"] * chips < heads_total:
-            errs.append(
-                f"state {st['layers']}: {st['heads_per_chip']} heads/chip x {chips} chips < {heads_total} KV heads"
-            )
-        div = int(st.get("seq_stride", 1)) * int(st.get("seq_divisor", 1))
+        if heads_total and not st.get("replicated"):
+            if "heads" in st and int(st["heads"]) < heads_total:
+                errs.append(f"state {st['layers']}: heads {st['heads']} < {heads_total} KV heads")
+            elif "heads" not in st and st["heads_per_chip"] * chips < heads_total:
+                errs.append(
+                    f"state {st['layers']}: {st['heads_per_chip']} heads/chip x {chips} chips < {heads_total} KV heads"
+                )
+        div = int(st.get("seq_stride", 1)) * (
+            ways(st["split_seq"], mesh, roles) if st.get("split_seq") else int(st.get("seq_divisor", 1))
+        )
         length = -(-min(seq, st.get("window") or seq) // div) if per_token else 1
-        groups[f"state: {st.get('what', 'state')} layers {st['layers']}"] = len(layers) * b_tok * length * users
-        covered += layers
-    missing_state = sorted(set(spec.layers()) - set(covered))
+        groups[f"state: {st.get('what', 'state')} layers {st['layers']}"] = len(layers_st) * b_tok * length * users
+        covered += layers_st
+    missing_state = sorted(set(spec.layers() if sel is None else sel) - set(covered))
     if missing_state:
         errs.append(f"no state entry covers layers {missing_state}")
     for k, v in (plan.get("extra_gb_per_chip") or {}).items():
         groups[f"extra: {k}"] = float(v) * GB
-    act = float(plan.get("activations_gb_per_chip") or 0)
+    act = float(over.get("activations_gb_per_chip", plan.get("activations_gb_per_chip")) or 0)
     if act <= 0:
         errs.append("activations_gb_per_chip must be a positive estimate")
     groups["activations (planner estimate)"] = act * GB
