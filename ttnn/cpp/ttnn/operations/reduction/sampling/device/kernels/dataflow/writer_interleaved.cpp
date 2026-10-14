@@ -200,29 +200,29 @@ void kernel_main() {
     // Stochastic sampling in float32
     const float rand_f = (rand_hi * 256.0f + rand_lo) * RAND_LATTICE_SCALE;
     float cum_sum_f = 0.0f;
-    {
-        const auto out_lock = index_out.scoped_lock(core_id, 1);
-        index_out[core_id] = final_indices[local_indices[start_id_local_phase_0]];
-        bool index_found = false;
+    uint32_t sampled_index = final_indices[local_indices[start_id_local_phase_0]];
+    bool index_found = false;
 
-        for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
+    for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
+        cum_sum_f += bf16_to_f32(local_values[i]) / cum_prob_f;
+        if (cum_sum_f > rand_f) {
+            sampled_index = final_indices[local_indices[i]];
+            index_found = true;
+            break;
+        }
+    }
+    if (!index_found) {
+        for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
             cum_sum_f += bf16_to_f32(local_values[i]) / cum_prob_f;
             if (cum_sum_f > rand_f) {
-                index_out[core_id] = final_indices[local_indices[i]];
-                index_found = true;
+                sampled_index = final_indices[local_indices[i]];
                 break;
             }
         }
-        if (!index_found) {
-            for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
-                cum_sum_f += bf16_to_f32(local_values[i]) / cum_prob_f;
-                if (cum_sum_f > rand_f) {
-                    index_out[core_id] = final_indices[local_indices[i]];
-                    index_found = true;
-                    break;
-                }
-            }
-        }
+    }
+    {
+        const auto out_lock = index_out.scoped_lock(core_id, 1);
+        index_out[core_id] = sampled_index;
     }
 
     // Release consumed buffers

@@ -524,11 +524,13 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         .name = "sampling",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
-        // One aligned_out0_unit_size / k_chunk_size / p_chunk_size entry each, as the former DFBs held.
+        // k/p hold the whole per-user chunk: the writer NOC-reads all of it and indexes by core_id.
+        // out is one full output stick, so index_out[core_id] sits at the same byte offset as its
+        // slot in the output tensor.
         .scratchpads =
-            {ScratchpadSpec{.unique_id = SAMPLING_OUTPUT, .size_per_node = aligned_out0_unit_size * 1},
-             ScratchpadSpec{.unique_id = SAMPLING_K, .size_per_node = k_chunk_size * 1},
-             ScratchpadSpec{.unique_id = SAMPLING_P, .size_per_node = p_chunk_size * 1}},
+            {ScratchpadSpec{.unique_id = SAMPLING_OUTPUT, .size_per_node = aligned_out0_unit_size},
+             ScratchpadSpec{.unique_id = SAMPLING_K, .size_per_node = k_chunk_size},
+             ScratchpadSpec{.unique_id = SAMPLING_P, .size_per_node = p_chunk_size}},
         .tensor_parameters =
             {TensorParameter{.unique_id = SAMPLING_INPUT_VALUES_TENSOR, .spec = input_values_tensor.tensor_spec()},
              TensorParameter{.unique_id = SAMPLING_INPUT_INDICES_TENSOR, .spec = input_indices_tensor.tensor_spec()},
