@@ -278,7 +278,7 @@ inline RunResult run_once(
     workload.add_program(ttmd::MeshCoordinateRange(f.mesh->shape()), std::move(program));
 
     hexec::X280Launch launch{
-        .image_path = hart_::image_path("X280_CORE_SYNC_DIRECTOR_FW_IMAGE"),
+        .image_path = hart_::image_path("X280_CORE_SYNC_DIRECTOR_FW_IMAGE", "firmware-core-sync-director.bin"),
         .run_value = (static_cast<uint64_t>(0xC5C5u) << 32) | nonce,
         .args_addr = XR.args.addr,
         .args_bytes = XR.args.bytes,
@@ -582,7 +582,7 @@ inline void run_mixed_tier(x280::harness::session::Fixture& f, const x280::harne
     workload.add_program(ttmd::MeshCoordinateRange(f.mesh->shape()), std::move(program));
 
     hexec::X280Launch launch{
-        .image_path = hart_::image_path("X280_CORE_SYNC_DIRECTOR_FW_IMAGE"),
+        .image_path = hart_::image_path("X280_CORE_SYNC_DIRECTOR_FW_IMAGE", "firmware-core-sync-director.bin"),
         .run_value = (static_cast<uint64_t>(0xC5C6u) << 32) | nonce,
         .args_addr = XR.args.addr,
         .args_bytes = XR.args.bytes,
@@ -666,7 +666,7 @@ inline void run_release_probe(x280::harness::session::Fixture& f, uint32_t group
     hreg::write_args(*f.tile, regions.args, args);
 
     hexec::X280Launch launch{
-        .image_path = hart_::image_path("X280_CORE_SYNC_RELEASE_PROBE_FW_IMAGE"),
+        .image_path = hart_::image_path("X280_CORE_SYNC_RELEASE_PROBE_FW_IMAGE", "firmware-core-sync-release-probe.bin"),
         .run_value = (static_cast<uint64_t>(0xC5C7u) << 32) | nonce,
         .args_addr = regions.args.addr,
         .args_bytes = regions.args.bytes,
@@ -700,9 +700,6 @@ inline void run_release_probe(x280::harness::session::Fixture& f, uint32_t group
 /* Runs the singleton probe, then the ordered two-group probe, on one fixture. */
 inline void run_release_groups(x280::harness::session::Fixture& f) {
     ASSERT_NE(f.mesh, nullptr);
-    if (hart_::image_path("X280_CORE_SYNC_RELEASE_PROBE_FW_IMAGE").empty()) {
-        GTEST_SKIP() << "set X280_CORE_SYNC_RELEASE_PROBE_FW_IMAGE to the built probe image";
-    }
     run_release_probe(f, 1u);
     if (::testing::Test::HasFatalFailure()) {
         return;
@@ -742,9 +739,6 @@ inline std::optional<uint32_t> first_renumbered_block_x(const x280::harness::ses
  * device has no such block. */
 inline void run_renumbered_column(x280::harness::session::Fixture& f, const x280::harness::RunSpec& spec) {
     ASSERT_NE(f.mesh, nullptr);
-    if (hart_::image_path("X280_CORE_SYNC_RELEASE_PROBE_FW_IMAGE").empty()) {
-        GTEST_SKIP() << "set X280_CORE_SYNC_RELEASE_PROBE_FW_IMAGE to the built probe image";
-    }
     const auto x0 = first_renumbered_block_x(f);
     if (!x0) {
         GTEST_SKIP() << "availability: every Tensix column's virtual coordinate equals NOC0 "
@@ -969,7 +963,7 @@ inline ActiveEriscResult run_active_erisc_once(
     workload.add_program(ttmd::MeshCoordinateRange(f.mesh->shape()), std::move(program));
 
     const hexec::X280Launch launch{
-        .image_path = hart_::image_path("X280_CORE_SYNC_DIRECTOR_FW_IMAGE"),
+        .image_path = hart_::image_path("X280_CORE_SYNC_DIRECTOR_FW_IMAGE", "firmware-core-sync-director.bin"),
         .run_value = (static_cast<uint64_t>(0xC5C6u) << 32) | nonce,
         .args_addr = XR.args.addr,
         .args_bytes = XR.args.bytes,

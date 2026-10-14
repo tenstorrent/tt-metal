@@ -19,6 +19,7 @@ protected:
             .open =
                 {
                     .image_env_var = "X280_CORE_SYNC_DIRECTOR_FW_IMAGE",
+                    .image_file = "firmware-core-sync-director.bin",
                     .kernel_dir = x280::harness::artifacts::kernel_dir_of(__FILE__),
                 },
             .suite_label = "core_sync_characterization",
