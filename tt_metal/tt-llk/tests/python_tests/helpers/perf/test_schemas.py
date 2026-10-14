@@ -1380,6 +1380,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
+            "is_reduce_to_one",
             "loop_factor",
             "marker",
             "math_fidelity",
