@@ -134,27 +134,34 @@ L1Layout compute_l1_layout(
     return l;
 }
 
-// Five counters: `filled` and `freed` are the reader/sender queue handshake, `fwd_arrived` is raised by
-// the upstream chip's sender as it fills this stream's fwd_section, `launch_credit` is raised by the
+// Six counters: `filled` and `freed` are the reader/sender queue handshake, `fwd_arrived` is raised by
+// the upstream chip's sender as it fills this stream's fwd_section, `final_arrived` is raised by that same
+// sender as it writes tokens straight into this chip's output, `launch_credit` is raised by the
 // downstream chip when it starts a launch, and `untilized` is raised by this chip's untilizer writers as
 // they write tile rows to staging.
+//
+// `final_arrived` is the receive count for the last-hop writes. Nothing else on this chip sees those land,
+// and the sender's drain only proves its packets reached this chip, not that their DRAM writes finished, so
+// without it this chip's program can finish -- and the next op on it read the output -- while a neighbour
+// is still delivering. The reader waits for the count it expects before exiting.
 //
 // The launch credit crosses direction: our stream s sender grants it to the downstream chip's reverse stream
 // core, and our own `launch_credit` is granted by that core's sender. Our sender takes one before its first
 // send, so nothing it writes reaches the downstream chip before that chip is in the same launch.
 //
 // GlobalSemaphores so they sit at the same address on every chip: a neighbouring chip signals
-// `fwd_arrived` and `launch_credit` and has to know their address.
+// `fwd_arrived`, `final_arrived` and `launch_credit` and has to know their address.
 //
 // Nothing resets them between launches, so the kernels undo each launch's count. `filled` and `freed` are
 // set to zero at end of run, and `untilized` too for a TILE input. `fwd_arrived` is lowered by the count
-// consumed, which stays right without relying on the launch credit. `launch_credit` is lowered by the one
-// credit taken at the start of the send loop, because the downstream chip can grant the next launch's credit
-// before this launch ends.
+// consumed and `final_arrived` by the count expected, which stays right without relying on the launch credit.
+// `launch_credit` is lowered by the one credit taken at the start of the send loop, because the downstream chip can
+// grant the next launch's credit before this launch ends.
 struct StreamSemaphores {
     tt::tt_metal::GlobalSemaphore filled;
     tt::tt_metal::GlobalSemaphore freed;
     tt::tt_metal::GlobalSemaphore fwd_arrived;
+    tt::tt_metal::GlobalSemaphore final_arrived;
     tt::tt_metal::GlobalSemaphore launch_credit;
     // Allocated for both input layouts so the reader's argument list is the same; a row-major input never
     // uses it.
@@ -162,7 +169,12 @@ struct StreamSemaphores {
 
     uint32_t lowest_address() const {
         return static_cast<uint32_t>(std::min(
-            {filled.address(), freed.address(), fwd_arrived.address(), launch_credit.address(), untilized.address()}));
+            {filled.address(),
+             freed.address(),
+             fwd_arrived.address(),
+             final_arrived.address(),
+             launch_credit.address(),
+             untilized.address()}));
     }
 };
 
@@ -170,7 +182,7 @@ StreamSemaphores allocate_stream_semaphores(ttnn::MeshDevice* mesh, const CoreRa
     const auto make = [&] {
         return ttnn::global_semaphore::create_global_semaphore(mesh, allowed_cores, 0, tt::tt_metal::BufferType::L1);
     };
-    StreamSemaphores sems{make(), make(), make(), make(), make()};
+    StreamSemaphores sems{make(), make(), make(), make(), make(), make()};
     tt::tt_metal::distributed::Synchronize(*mesh, std::nullopt, {});
     return sems;
 }
@@ -301,6 +313,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     workload.semaphores.push_back(sems.filled);
     workload.semaphores.push_back(sems.freed);
     workload.semaphores.push_back(sems.fwd_arrived);
+    workload.semaphores.push_back(sems.final_arrived);
     workload.semaphores.push_back(sems.launch_credit);
     workload.semaphores.push_back(sems.untilized);
     workload.buffers.push_back({fwd.owner, fwd.buffer});
@@ -339,6 +352,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             plan.queue_filled_addr = static_cast<uint32_t>(sems.filled.address());
             plan.queue_freed_addr = static_cast<uint32_t>(sems.freed.address());
             plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
+            plan.final_arrived_addr = static_cast<uint32_t>(sems.final_arrived.address());
             plan.launch_credit_addr = static_cast<uint32_t>(sems.launch_credit.address());
             plan.untilize_sem_addr = static_cast<uint32_t>(sems.untilized.address());
             plan.untilize_tile_rows = untilize_tile_rows;
