@@ -370,9 +370,7 @@ def test_fused_msda_v1_grid_space(device, align_corners):
     # 2*loc-1 is not exact in bf16, so this is close-but-not-equal by construction.
     _assert_close(unit, grid_space, pcc=0.999)
     _assert_close(
-        _msda_reference(
-            value, grid, attn, spatial_shapes, align_corners=align_corners, locations_in_grid_space=True
-        ),
+        _msda_reference(value, grid, attn, spatial_shapes, align_corners=align_corners, locations_in_grid_space=True),
         grid_space,
     )
 
