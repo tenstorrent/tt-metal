@@ -62,7 +62,7 @@ void PadCodegenDeviceOperation::validate_on_program_cache_hit(
 
 // The CB batching follows the L1 free right now (plan_batches_live runs on every dispatch), so it is part of the key:
 // an occupancy change that moves the plan is a miss that rebuilds, not a hit that replays CBs sized for L1 that is no
-// longer free.
+// longer free. Because the hash depends on live L1, a trace captured under one L1 state replays that state's plan.
 ttsl::hash::hash_t PadCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto batches =

@@ -16,6 +16,13 @@
 
 namespace ttnn::operations::data_movement::pad_codegen {
 
+// Terms used below:
+//   gate       a correctness or device-resource check; an input that fails it cannot run on codegen.
+//   demotion   the input passes the gate and codegen is correct, but slower than native, so routing picks native.
+//   static L1 budget  the L1 bank minus the pending output reservation; does not depend on what is allocated now,
+//                     so the gate gives the same answer at routing and at the prim's validate.
+//   live L1 budget    the L1 free on the device right now (get_max_l1_space); moves with every allocation.
+
 // Output CB depth in pages for the given batching.
 uint32_t cb_depth(uint32_t read_batch, uint32_t write_batch);
 
@@ -36,10 +43,15 @@ uint64_t cb_footprint_bytes(const Tensor& input, const ttnn::prim::PadCodegenPar
 // that does not fit.
 std::optional<BatchPlan> plan_batches(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, uint64_t budget);
 
-// plan_batches against the L1 free on the device right now. Only the program hash and the program factory call it:
-// both run after the output is allocated, so the live query already accounts for it. The routing gate budgets the
-// static window instead, so a live read there would change the answer between routing and validate.
+// plan_batches against the live L1 budget. The program hash and the program factory call it after the output is
+// allocated, so the live query already accounts for it. The gate budgets the static window instead, so a live read
+// there would change the answer between routing and validate.
 std::optional<BatchPlan> plan_batches_live(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs);
+
+// Routing-only: whether the smallest CB plan fits the live L1 budget once the outputs routing has not allocated yet
+// are reserved. Auto routing declines to native when it does not; forced codegen skips it and raises in the program
+// factory instead.
+bool fits_live_l1(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs);
 
 // A nonzero fill of a block-float tensor has no scalar page pattern, so the caller pads a bfloat16 copy instead.
 bool composes_via_bf16(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs);
@@ -55,24 +67,27 @@ ttnn::prim::PadCodegenParams make_codegen_params(
     float value,
     const tt::tt_metal::MemoryConfig& output_mem_config);
 
-// Routing entry: the attributes when the codegen gate accepts the call, nullopt when it declines. Same decision as
-// make_codegen_params followed by supported_by_codegen, but declines before the L1 query when it can. Nonzero
-// `front` padding is declined.
+// Padding-independent part of the gate: structural support (device, arch, rank 4, layout, sharding, tile geometry,
+// dtype) and no block-float partial tile.
+bool in_codegen_scope(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
+
+// Routing entry: the attributes when the gate accepts the call, nullopt when it declines. in_codegen_scope first so
+// cheap rejections skip building params, then make_codegen_params and supported_by_codegen. The caller must already
+// have declined nonzero leading padding.
 std::optional<ttnn::prim::PadCodegenParams> plan_codegen(
     const Tensor& input,
-    std::span<const uint32_t> front,
     std::span<const uint32_t> after,
     float value,
     const tt::tt_metal::MemoryConfig& output_mem_config);
 
-// True when the input has a partial border tile.
+// True when the TILE input has a partial border tile.
 bool has_partial_tile(const Tensor& input);
 
 // Output spec the codegen path builds; a caller-supplied output must match it.
 tt::tt_metal::TensorSpec codegen_output_spec(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs);
 
-// Correctness and device-resource gate for already-built attributes; the codegen prim's validation calls it.
-// Routing and pad_force_codegen reach the same decision through plan_codegen.
+// The gate for already-built attributes, against the static L1 budget; the codegen prim's validation calls it and
+// plan_codegen delegates to it.
 bool supported_by_codegen(
     const Tensor& input,
     const ttnn::prim::PadCodegenParams& attrs,

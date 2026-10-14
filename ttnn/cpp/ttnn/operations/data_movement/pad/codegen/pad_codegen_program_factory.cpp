@@ -222,8 +222,8 @@ ProgramDescriptor build_pad_tiled(
 }  // namespace
 
 // The batching follows the L1 free right now, sampled after the output is allocated; compute_program_hash keys the
-// same plan so a cached program never outlives the L1 it was sized for. The routing gate only checked the smallest
-// plan against the static window, so live occupancy can still leave no room: that is an error here, not a fallback.
+// same plan so a cached program never outlives the L1 it was sized for. Auto routing already declined when the live
+// budget had no room, but forced codegen only checked the static window, so reaching here without room is an error.
 ProgramDescriptor PadCodegenProgramFactory::create_descriptor(
     const PadCodegenParams& operation_attributes, const PadCodegenInputs& tensor_args, Tensor& tensor_return_value) {
     namespace pc = operations::data_movement::pad_codegen;

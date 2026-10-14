@@ -21,9 +21,9 @@
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
 
 # Codegen-path coverage for every op that has one. `-k codegen` picks the tests that force the
-# codegen kernels and compare them with native; a new op joins by appending its unit-test file.
-# The nightly routing matrices under tests/ttnn/nightly only check fallback to native, and they
-# are too slow for the gate, so they stay in nightly.
+# codegen kernels and check them against a golden (torch for pad); a new op joins by appending its
+# unit-test file. The selection is 103 tests, about a minute on N300. Auto routing over the op's
+# full config matrix is covered by the nightly routing tests under tests/ttnn/nightly.
 # Hardware only: the simulator would take minutes to cover what hardware covers in seconds.
 - name: "ttnn codegen ops"
   cmd: >-

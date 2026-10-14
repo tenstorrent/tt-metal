@@ -16,28 +16,14 @@
 
 namespace ttnn::operations::data_movement::detail {
 
-enum class PadRoute { Auto, Native, Codegen };
+// Verification-only entry points that pin which pad implementation runs.
+//
+// `ttnn.pad` chooses on its own and takes no argument to override that. These exist so the choice stays checkable:
+// tests and benchmarks compare the two paths for bit-exactness and device time, which an entry point that silently
+// picks one cannot show. They are bound only under `ttnn._ttnn.operations.data_movement`, not registered into
+// `ttnn.*`, and sit in `detail` so a caller reaching for one has to say so. Do not use them in production code.
 
-// Shared body of every entry; recursive paths re-enter here with the same route, never through ttnn::pad.
-ttnn::Tensor pad_with_route(
-    const ttnn::Tensor& input_tensor,
-    const ttsl::SmallVector<PadSpecDim>& padding,
-    float value,
-    bool use_multicore,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    PadRoute route);
-
-// The native implementation, with no codegen routing.
-ttnn::Tensor pad_native(
-    const ttnn::Tensor& input_tensor,
-    const ttsl::SmallVector<PadSpecDim>& padding,
-    float value,
-    bool use_multicore,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<CoreRangeSet>& sub_core_grids);
-
-// Always native.
+// The native implementation, unconditionally.
 ttnn::Tensor pad_force_native(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
@@ -46,7 +32,9 @@ ttnn::Tensor pad_force_native(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids);
 
-// Always codegen; fails instead of falling back and ignores the perf demotions.
+// The codegen implementation. Raises for an input outside its support scope instead of falling back to native, so a
+// comparison cannot end up measuring native twice, and ignores the perf demotions. A pad that adds nothing still
+// returns the input, as ttnn.pad does.
 ttnn::Tensor pad_force_codegen(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,

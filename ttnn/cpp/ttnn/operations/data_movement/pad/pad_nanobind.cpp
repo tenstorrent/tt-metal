@@ -75,6 +75,9 @@ void bind_pad(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()));
 
+    // Bound with a plain def rather than ttnn::bind_function: the latter tags the callable for
+    // auto_register_ttnn_cpp_operations, which would republish these as ttnn.* operations. They are
+    // meant to stay reachable only via this private module. See pad_force.hpp.
     mod.def(
         "pad_force_native",
         &pad_force_native,
@@ -85,7 +88,26 @@ void bind_pad(nb::module_& mod) {
         nb::arg("use_multicore") = true,
         nb::arg("memory_config") = nb::none(),
         nb::arg("sub_core_grids") = nb::none(),
-        nb::call_guard<nb::gil_scoped_release>());
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Verification only: runs the native pad implementation unconditionally. Not part of the ttnn
+            API; use ttnn.pad, which selects an implementation on its own.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+                padding (list[Tuple[int,int]]): (before, after) elements to add per dimension.
+                value (Union[float,int]): value to pad with.
+
+            Keyword Args:
+                use_multicore (bool, optional): switch to use the multicore implementation. Defaults to `True`.
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the output.
+                    Defaults to `None`, which derives it from the input.
+                sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids to run the operation on.
+                    Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+        )doc");
 
     mod.def(
         "pad_force_codegen",
@@ -97,6 +119,27 @@ void bind_pad(nb::module_& mod) {
         nb::arg("use_multicore") = true,
         nb::arg("memory_config") = nb::none(),
         nb::arg("sub_core_grids") = nb::none(),
-        nb::call_guard<nb::gil_scoped_release>());
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Verification only: runs the codegen pad implementation, raising for a case outside its
+            support scope rather than falling back to native, and ignoring the perf demotions. A pad
+            that adds nothing returns the input. Not part of the ttnn API; use ttnn.pad, which selects
+            an implementation on its own.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+                padding (list[Tuple[int,int]]): (before, after) elements to add per dimension.
+                value (Union[float,int]): value to pad with.
+
+            Keyword Args:
+                use_multicore (bool, optional): switch to use the multicore implementation. Defaults to `True`.
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the output.
+                    Defaults to `None`, which derives it from the input.
+                sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids to run the operation on.
+                    Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+        )doc");
 }
 }  // namespace ttnn::operations::data_movement::detail
