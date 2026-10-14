@@ -204,10 +204,6 @@ class CapturedCall:
         self.cq_id = cq_id
         self._tid = None
 
-    @property
-    def captured(self):
-        return self._tid is not None
-
     def capture(self, fn):
         """Record `fn`'s device work as a trace instead of running it now."""
         assert self._tid is None, "already captured"
