@@ -67,6 +67,7 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     constexpr uint8_t odd_geom_index_cb = tt::CBIndex::c_11;
     constexpr uint8_t odd_geom_weight_cb = tt::CBIndex::c_12;
     constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;
+    constexpr uint8_t odd_output_tile_cb = tt::CBIndex::c_17;
     constexpr uint32_t CORNERS = 4;
 
     auto push_cb =
@@ -84,16 +85,19 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     // Reader-only arenas, one stick per row of a block.
     push_cb(offset_mask_arena_cb, TILE_ROWS, offset_mask_page_nbytes);
     // The four corners of a kernel position, row-major in tile-sized pages, and one scalar tile
-    // per corner, for each reader. Each reader lands its next position while compute tilizes the
-    // other's.
+    // per corner, for each reader, two positions deep: a reader lands its next position while
+    // compute still holds its last one.
     for (const uint8_t cb : {corner_block_cb, odd_corner_block_cb}) {
-        push_cb(cb, CORNERS * channel_tiles, tile_nbytes);
+        push_cb(cb, 2 * CORNERS * channel_tiles, tile_nbytes);
     }
     for (const uint8_t cb : {scalar_tile_cb, odd_scalar_tile_cb}) {
-        push_cb(cb, CORNERS, tile_nbytes);
+        push_cb(cb, 2 * CORNERS, tile_nbytes);
     }
     push_cb(tiled_block_cb, CORNERS * channel_tiles, tile_nbytes);
-    push_cb(output_tile_cb, 2 * channel_tiles, tile_nbytes);
+    // Each reader writes the output of its own kernel positions.
+    for (const uint8_t cb : {output_tile_cb, odd_output_tile_cb}) {
+        push_cb(cb, 2 * channel_tiles, tile_nbytes);
+    }
     // A block's geometry, [row, kernel position] tiles: the first reader's offsets, mask logits and window
     // origins in fp32, and compute's corner pages (int32) and weights, one copy per reader and two
     // blocks deep so compute hands over the next block's while the readers work on this one. The
@@ -109,9 +113,9 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
         push_cb(cb, 2 * CORNERS, tile_nbytes);
     }
 
-    // Both readers run the same kernel: the first, on its usual RISC-V and NoC, takes the even
-    // kernel positions and stages the geometry; the second, on the other RISC-V and NoC, takes
-    // the odd ones and writes the output.
+    // Both readers run the same kernel and write the output of their own kernel positions: the
+    // first, on its usual RISC-V and NoC, takes the even ones; the second, on the other RISC-V and
+    // NoC, the odd ones, one fewer, and stages the geometry too.
     auto reader_ct = [&](bool first) {
         KernelDescriptor::CompileTimeArgs ct{
             offset_mask_arena_cb,
@@ -137,10 +141,9 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
             first ? geom_index_cb : odd_geom_index_cb,
             first ? geom_weight_cb : odd_geom_weight_cb,
             geom_kernel_cb,
-            first ? 1u : 0u,  // stages the geometry
+            first ? 0u : 1u,  // stages the geometry
             first ? 0u : 1u,  // first kernel position
-            first ? 0u : 1u,  // writes the output
-            output_tile_cb,
+            first ? output_tile_cb : odd_output_tile_cb,
             tile_nbytes,
         };
         TensorAccessorArgs(*input.buffer()).append_to(ct);
@@ -185,7 +188,8 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
         odd_corner_block_cb,
         odd_scalar_tile_cb,
         odd_geom_index_cb,
-        odd_geom_weight_cb};
+        odd_geom_weight_cb,
+        odd_output_tile_cb};
     // The geometry runs in fp32 and keeps eight tiles in dest at once, which takes full-sync dest;
     // its fp32 inputs unpack straight to dest, as srcA would round them to TF32.
     ComputeConfigDescriptor compute_config{};

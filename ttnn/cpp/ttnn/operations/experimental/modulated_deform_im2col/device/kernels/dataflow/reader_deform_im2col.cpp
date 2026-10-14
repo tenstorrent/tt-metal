@@ -26,9 +26,10 @@
 //
 // Two copies of this kernel run per core, one on each data-movement RISC-V and
 // NoC, as issuing the corner reads is most of the work: the first takes the even
-// kernel positions and stages the geometry, the second the odd ones and writes
-// the output. Each gets its own copy of the geometry from compute and its own
-// corner and scalar buffers, which compute drains in kernel-position order.
+// kernel positions, the second the odd ones, one fewer, and stages the geometry.
+// Each gets its own copy of the geometry from compute and its own corner, scalar
+// and output buffers, which compute serves in kernel-position order, and writes
+// the output of its own positions.
 //
 // A corner is read only when its weight is nonzero. Every other row, and every
 // row past the block's end, is zeroed rather than skipped: a stale NaN or Inf
@@ -67,15 +68,14 @@ constexpr uint32_t geom_in_cb_index = get_compile_time_arg_val(19);
 constexpr uint32_t geom_index_cb_index = get_compile_time_arg_val(20);
 constexpr uint32_t geom_weight_cb_index = get_compile_time_arg_val(21);
 constexpr uint32_t geom_kernel_cb_index = get_compile_time_arg_val(22);
-// This copy's role: whether it stages the geometry, its first kernel position (it takes every
-// other one), and whether it writes the output.
+// This copy's role: whether it stages the geometry, and its first kernel position (it takes
+// every other one).
 constexpr bool STAGES_GEOMETRY = get_compile_time_arg_val(23);
 constexpr uint32_t FIRST_POSITION = get_compile_time_arg_val(24);
-constexpr bool WRITES_OUTPUT = get_compile_time_arg_val(25);
-constexpr uint32_t output_cb_index = get_compile_time_arg_val(26);
-constexpr uint32_t output_tile_nbytes = get_compile_time_arg_val(27);
+constexpr uint32_t output_cb_index = get_compile_time_arg_val(25);
+constexpr uint32_t output_tile_nbytes = get_compile_time_arg_val(26);
 
-constexpr auto input_args = TensorAccessorArgs<28>();
+constexpr auto input_args = TensorAccessorArgs<27>();
 constexpr auto offset_mask_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<offset_mask_args.next_compile_time_args_offset()>();
 
@@ -85,6 +85,9 @@ constexpr uint32_t CORNERS = 4;
 constexpr uint32_t STICK_NBYTES = C * sizeof(uint16_t);  // the C channels read per corner
 constexpr uint32_t BLOCK_ROW_NBYTES = CORNERS * STICK_NBYTES;
 constexpr uint32_t OUTPUT_TILES_PER_BLOCK = kernel_positions * CHANNEL_TILES;
+// This copy's last kernel position, when it has any.
+constexpr uint32_t LAST_POSITION =
+    FIRST_POSITION < kernel_positions ? FIRST_POSITION + (kernel_positions - 1 - FIRST_POSITION) / 2 * 2 : 0;
 
 // Tiles of geom_in_cb, per block, and of geom_kernel_cb, once, in compute's order: fp32
 // [row, kernel position].
@@ -234,20 +237,18 @@ void kernel_main() {
         geom_in_cb.push_back(GEOM_IN_TILES);
     };
 
-    // Writes the block's outputs of kernel positions [first, end), in the order compute packs them.
-    auto write_outputs = [&](uint32_t block, uint32_t first, uint32_t end) {
-        for (uint32_t kk = first; kk < end; ++kk) {
-            output_cb.wait_front(CHANNEL_TILES);
-            const uint32_t tiles_l1 = output_cb.get_read_ptr();
-            const uint32_t first_tile = block * OUTPUT_TILES_PER_BLOCK + kk * CHANNEL_TILES;
-            for (uint32_t t = 0; t < CHANNEL_TILES; ++t) {
-                CoreLocalMem<uint32_t> src(tiles_l1 + t * output_tile_nbytes);
-                noc.async_write(src, output_acc, output_tile_nbytes, {.offset_bytes = 0}, {.page_id = first_tile + t});
-            }
-            // The tiles only need to have left L1 before compute refills the slots.
-            noc.async_writes_flushed();
-            output_cb.pop_front(CHANNEL_TILES);
+    // Writes the block's output of one of this copy's kernel positions.
+    auto write_output = [&](uint32_t block, uint32_t kk) {
+        output_cb.wait_front(CHANNEL_TILES);
+        const uint32_t tiles_l1 = output_cb.get_read_ptr();
+        const uint32_t first_tile = block * OUTPUT_TILES_PER_BLOCK + kk * CHANNEL_TILES;
+        for (uint32_t t = 0; t < CHANNEL_TILES; ++t) {
+            CoreLocalMem<uint32_t> src(tiles_l1 + t * output_tile_nbytes);
+            noc.async_write(src, output_acc, output_tile_nbytes, {.offset_bytes = 0}, {.page_id = first_tile + t});
         }
+        // The tiles only need to have left L1 before compute refills the slots.
+        noc.async_writes_flushed();
+        output_cb.pop_front(CHANNEL_TILES);
     };
 
     if constexpr (STAGES_GEOMETRY) {
@@ -281,7 +282,6 @@ void kernel_main() {
             }
         }
 
-        uint32_t written = 0;
         for (uint32_t kk = FIRST_POSITION; kk < kernel_positions; kk += 2) {
             // Only column 0 of each row is read by the column broadcast.
             scalar_tile_cb.reserve_back(CORNERS);
@@ -320,19 +320,16 @@ void kernel_main() {
             noc.async_read_barrier();
             corner_block_cb.push_back(CORNERS * CHANNEL_TILES);
 
-            // The outputs before this position no longer wait on this copy's corners.
-            if constexpr (WRITES_OUTPUT) {
-                write_outputs(block, written, kk);
-                written = kk;
+            // This copy's previous position, now that its next corners are on their way to compute.
+            if (kk >= FIRST_POSITION + 2) {
+                write_output(block, kk - 2);
             }
         }
-        if constexpr (WRITES_OUTPUT) {
-            write_outputs(block, written, kernel_positions);
+        if constexpr (FIRST_POSITION < kernel_positions) {
+            write_output(block, LAST_POSITION);
         }
         index_cb.pop_front(1);
         weight_cb.pop_front(CORNERS);
     }
-    if constexpr (WRITES_OUTPUT) {
-        noc.async_write_barrier();
-    }
+    noc.async_write_barrier();
 }

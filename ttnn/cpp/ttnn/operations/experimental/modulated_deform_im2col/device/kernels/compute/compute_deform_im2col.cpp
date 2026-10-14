@@ -16,8 +16,8 @@
 // soon as it needs it.
 //
 // Two readers split the kernel positions, even and odd, and each gets its own
-// copy of the geometry and its own corner and scalar buffers, which this kernel
-// drains alternately. For each (block, kernel position) a reader lands the four
+// copy of the geometry and its own corner, scalar and output buffers, which this
+// kernel serves alternately. For each (block, kernel position) a reader lands the four
 // corners as one row-major block, 32 rows of [corner 0 | corner 1 | corner 2 | corner 3],
 // plus one scalar tile per corner holding that corner's weight in column 0.
 // This kernel tilizes the block on the unpacker, then multiplies each corner's
@@ -66,6 +66,7 @@ constexpr uint32_t odd_corner_block_cb_index = get_compile_time_arg_val(14);
 constexpr uint32_t odd_scalar_cb_index = get_compile_time_arg_val(15);
 constexpr uint32_t odd_geom_index_cb_index = get_compile_time_arg_val(16);
 constexpr uint32_t odd_geom_weight_cb_index = get_compile_time_arg_val(17);
+constexpr uint32_t odd_output_cb_index = get_compile_time_arg_val(18);
 constexpr uint32_t CORNERS = 4;
 constexpr uint32_t BLOCK_TILES = CORNERS * channel_tiles;
 
@@ -212,7 +213,6 @@ void kernel_main() {
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
     CircularBuffer tiled_cb(tiled_cb_index);
-    CircularBuffer output_cb(output_cb_index);
     CircularBuffer geom_in_cb(geom_in_cb_index);
     CircularBuffer index_cb(geom_index_cb_index);
     CircularBuffer weight_cb(geom_weight_cb_index);
@@ -233,8 +233,10 @@ void kernel_main() {
         for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
             const uint32_t corner_cb_index = (kk & 1) ? odd_corner_block_cb_index : corner_block_cb_index;
             const uint32_t scalar_index = (kk & 1) ? odd_scalar_cb_index : scalar_cb_index;
+            const uint32_t out_index = (kk & 1) ? odd_output_cb_index : output_cb_index;
             CircularBuffer corner_block_cb(corner_cb_index);
             CircularBuffer scalar_cb(scalar_index);
+            CircularBuffer output_cb(out_index);
 
             // The packer must overwrite tiled_cb, not accumulate into it.
             pack_reconfig_l1_acc(0);
@@ -260,7 +262,7 @@ void kernel_main() {
                     tile_regs_wait();
                     // Packs to slot t explicitly; the default would advance the write
                     // pointer past the reserved tiles after the first corner.
-                    pack_tile<true>(0, output_cb_index, t);
+                    pack_tile<true>(0, out_index, t);
                     tile_regs_release();
                 }
                 scalar_cb.pop_front(1);
