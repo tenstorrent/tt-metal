@@ -146,6 +146,14 @@ class RoutedPrefillExperts:
         for g in range(self.num_devices):
             dispatch_table[g, g * self.experts_per_chip : (g + 1) * self.experts_per_chip] = g
         self._consts = {}
+        # fp32 dest + L1 packer accumulation keep the integer prefix sums of _pair_positions exact across K blocks.
+        self._prefix_compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         replicate = ttnn.ReplicateTensorToMesh(mesh_device)
         self.expert_ids_f32 = ttnn.from_torch(
             torch.arange(self.num_experts, dtype=torch.float32).reshape(1, self.num_experts),
@@ -343,6 +351,19 @@ class RoutedPrefillExperts:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             ),
         }
+        # Strictly lower-triangular ones [C, C] (row t has ones at columns < t), built on device: the exclusive
+        # prefix-sum operator of _pair_positions. 0/1 are exact in bfloat8_b.
+        ones = ttnn.ones(
+            (C, C),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tri = ttnn.tril(ones, diagonal=-1)
+        ttnn.deallocate(ones)
+        consts["prefix_tri"] = ttnn.typecast(tri, ttnn.bfloat8_b)
+        ttnn.deallocate(tri)
         self._consts[C] = consts
         return consts
 
@@ -366,8 +387,16 @@ class RoutedPrefillExperts:
         per_token = ttnn.add(onehots[0], onehots[1])  # local pairs of each expert per token (0/1)
         for oh in onehots[2:]:
             per_token = ttnn.add(per_token, oh, output_tensor=per_token)
-        before = ttnn.cumsum(per_token, dim=0)
-        before = ttnn.sub(before, per_token, output_tensor=before)  # exclusive: pairs of e from earlier tokens
+        # Exclusive prefix over tokens (pairs of e from earlier tokens) as one multi-core matmul with the strictly
+        # lower-triangular [C, C] ones matrix. Operands are 0/1 (exact in bf8 / tf32) and the sums (< C <= 2^13)
+        # accumulate in the fp32 dest, so the result is exact.
+        before = ttnn.matmul(
+            consts["prefix_tri"],
+            per_token,
+            dtype=ttnn.float32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self._prefix_compute_config,
+        )
         ttnn.deallocate(per_token)
         base = ttnn.add(before, region, output_tensor=before)
         ttnn.deallocate(region)

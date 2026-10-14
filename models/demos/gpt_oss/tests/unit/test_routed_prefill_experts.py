@@ -319,3 +319,60 @@ def test_routed_prefill_layers_back_to_back(mesh_device, device_params, seq_len,
             results.append((rnd, layer_idx, ok, pcc))
     bad = [r for r in results if not r[2]]
     assert not bad, f"routed vs dense below {ROUTED_VS_DENSE_PCC}: {bad}"
+
+
+@parametrize_mesh_with_fabric([(1, 4)])
+@pytest.mark.parametrize("seq_len", [128, 1024, 8192], ids=["S128", "S1024", "S8192"])
+def test_routed_pair_positions_exact(mesh_device, device_params, seq_len, routed_env, reset_seeds):
+    """Dispatch-buffer row of every (token, slot) pair equals the integer reference on every device: region start of
+    the pair's expert + its rank among that expert's pairs (token order) for local pairs, the spare tile otherwise.
+    Random routing and the worst case (every token -> experts 0..k-1, ranks up to S - 1)."""
+    if not routed_prefill_mesh_supported(mesh_device):
+        pytest.skip("routed prefill needs a single-row Blackhole mesh with > 1 device")
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
+    config = setup["config"]
+    model_path = os.environ.get("HF_MODEL", setup["model_args"].model_path)
+    router_sd, experts_sd = _load_layer_moe(model_path, 0)
+    state_dict = {f"router.{k}": v for k, v in router_sd.items()}
+    state_dict.update({f"experts.{k}": v for k, v in experts_sd.items()})
+    tt_mlp = MLP(
+        mesh_device,
+        config,
+        state_dict,
+        setup["ccl_manager"],
+        dtype=ttnn.bfloat8_b,
+        tensor_cache_path=None,
+        mesh_config=setup["mesh_config"],
+        use_throughput_experts=False,
+    )
+    routed = tt_mlp.routed_prefill
+    E, k, epc = routed.num_experts, routed.top_k, routed.experts_per_chip
+    patterns = {
+        "random": torch.stack([torch.randperm(E)[:k] for _ in range(seq_len)]),
+        "skew": torch.arange(k).repeat(seq_len, 1),
+    }
+    for name, idx in patterns.items():
+        tt_idx = _to_tt(idx.to(torch.int32), mesh_device, ttnn.uint16)
+        _, counts, region_offsets = routed._routing(tt_idx)
+        consts = routed._chunk_constants(seq_len)
+        pos = routed._pair_positions(tt_idx, region_offsets, consts)
+        pos_d = [ttnn.to_torch(t).reshape(-1).to(torch.int64) for t in ttnn.get_device_tensors(pos)]
+        reg_d = [ttnn.to_torch(t).reshape(-1)[:E].to(torch.int64) for t in ttnn.get_device_tensors(region_offsets)]
+        cnt_d = [ttnn.to_torch(t).reshape(-1)[:E].to(torch.int64) for t in ttnn.get_device_tensors(counts)]
+        onehot = torch.nn.functional.one_hot(idx, E).sum(dim=1)  # [S, E]
+        rank = torch.cumsum(onehot, dim=0) - onehot  # pairs of e from earlier tokens
+        for d in range(routed.num_devices):
+            local = (idx >= d * epc) & (idx < (d + 1) * epc)
+            ref = torch.where(
+                local,
+                reg_d[d][idx] + torch.gather(rank, 1, idx),
+                torch.full_like(idx, consts["spare"]),
+            ).reshape(-1)
+            mism = int((pos_d[d][: k * seq_len] != ref).sum())
+            assert mism == 0, f"{name} S={seq_len} device {d}: {mism} pair positions differ from the reference"
+            own = list(range(d * epc, (d + 1) * epc))
+            ends = [int(reg_d[d][e] + cnt_d[d][e]) for e in own]
+            starts = [int(reg_d[d][e]) for e in own]
+            assert all(ends[i] <= starts[i + 1] for i in range(epc - 1)), f"{name} device {d}: regions overlap"
+            assert ends[-1] <= consts["spare"], f"{name} device {d}: last region runs into the spare tile"
+        logger.info(f"S={seq_len} {name}: pair positions exact on {routed.num_devices} devices")
