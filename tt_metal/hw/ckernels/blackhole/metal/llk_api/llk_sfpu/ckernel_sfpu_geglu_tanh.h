@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <limits>
 
 #include "cmath_common.h"
 #include "sfpi.h"
@@ -20,11 +19,17 @@
 // and e^-|z| below; a1 = 1.5957691216057308, a3 = 0.07135481627260025.
 //
 // The leaves' magnitudes multiply unscaled, and one reciprocal divides by the product of their denominators.
-// A NaN input gives NaN; a result below the smallest normal float is 0.
+// A NaN input gives NaN with FP32 DEST and +inf with BF16 DEST (the BF16 round turns a NaN into an
+// infinity); a result below the smallest normal float is 0.
+//
+// BF16 (Float16_b) inputs, Blackhole only. The result is BF16-accurate in either DEST mode: at most 0.521 ULP of the
+// exact value over every finite BF16 pair. With FP32 DEST the FP32 result is not FP32-accurate: it is within 1.0e-04
+// relative of the exact value.
 
 namespace ckernel::sfpu {
 
-// One Newton step: the denominator is a positive normal value.
+// One Newton step on SFPARECIP's estimate: the denominator is a positive normal value. The 2.0f is a
+// literal rather than a programmable constant, so it does not depend on what the init loads.
 sfpi_inline sfpi::vFloat _geglu_tanh_reciprocal_(const sfpi::vFloat a) {
     sfpi::vFloat y = sfpi::approx_recip(a);
     sfpi::vFloat t = a * y - 2.0f;
@@ -39,9 +44,15 @@ inline void calculate_geglu_tanh(
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat gate_x = dst_reg[gate_tile_idx * dst_tile_size];
-        vFloat gate_a = sfpi::setsgn(gate_x, 0);
+        vFloat gate_a = sfpi::setsgn(gate_x, 0 /*sgn*/);
         vFloat gate_c2 = gate_x * gate_x;
         vFloat gate_g = gate_c2 * -0.10294324159622192f + -2.302208185195923f;
+        // e^-|z| through the exponent ALU: w_c = |z| * (-log2(e)) + 127 is the biased binary32 exponent of e^-|z| (127
+        // is the bias), held at 0.5 so e^-|z| underflows to 0. w_f is the fraction of w_c as an integer (0 to 2^23),
+        // and the polynomial in w_f is 2^fraction: its coefficients are those of
+        // data/coefficients/geglu_tanh_p3_s1_uniform_lsq_relative_block-exp2_fraction.csv, each times 2^(-23 k). The
+        // argument is folded: gate_g = -log2(e) * z / x = -log2(e) * (a1 + a3 x^2), with a1 = 1.5957691216057308, a3 =
+        // 0.07135481627260025, so w_c = |x| * gate_g + 127 is the same exponent.
         vFloat w_c = gate_a * gate_g + 127.0f;
         vFloat w_z = sfpi::max(w_c, 0.5f);
         vInt w_m = sfpi::exman(w_z, sfpi::MantissaMode::ImplicitOne);
@@ -72,7 +83,8 @@ inline void calculate_geglu_tanh(
     }
 }
 
-// Within the state geglu_tanh_init's own writes: 1 of its programmable constants.
+// The init resets the SFPU address counters and loads vConstFloatPrgm0 = the top coefficient of the 2^f polynomial. The
+// body reads them, so geglu_tanh_init runs after any other SFPU op's init and before this kernel.
 inline void geglu_tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 1.305414094153441e-22f;
