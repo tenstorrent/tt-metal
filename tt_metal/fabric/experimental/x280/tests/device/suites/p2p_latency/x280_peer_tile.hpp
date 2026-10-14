@@ -126,9 +126,9 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
         ASSERT_TRUE(state.observation_valid) << state.invalid_reason;
         if (!state.resident_idle_live) {
             GTEST_SKIP() << "L2CPU " << id.hw_index
-                         << " has no live resident idle; boot both tiles with "
-                            "x280_runtime_cli --boot --tile "
-                         << id_a.hw_index << ',' << id_b.hw_index;
+                         << " has no live resident idle. The session boots every L2CPU of a chip "
+                            "only when all of them are held in reset; reset the device "
+                            "(tt-smi -r <device>) before running this executable";
         }
     }
 
