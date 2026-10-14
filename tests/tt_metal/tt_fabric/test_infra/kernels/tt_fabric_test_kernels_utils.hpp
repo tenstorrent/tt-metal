@@ -1120,12 +1120,6 @@ struct SenderKernelTrafficConfig {
             if (num_packets_processed < conn->num_buffers_per_channel) {
                 conn->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
             } else {
-                // CRAQ #52 diag: stamp the write counter (this packet's ordinal) into the router's
-                // worker-location-info pad word before the stream-register signal, so the router can
-                // measure how far the stream register lags the L1 write.
-                noc_inline_dw_write(
-                    get_noc_addr(conn->edm_noc_x, conn->edm_noc_y, conn->edm_worker_location_info_addr + 60),
-                    conn->buffer_slot_write_counter.counter + 1);
                 fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn);
             }
             const uint64_t diag_t2 = get_timestamp();
