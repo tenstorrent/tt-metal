@@ -139,11 +139,12 @@ one normal runtime invocation:
 ```bash
 TT_VISIBLE_DEVICES=0 build/test/tt_metal/x280/x280_runtime_cli \
   --chip 0 --tile 0 --lim-ways 14 --require-prepared \
-  --boot --pll 1750 --timeout 5000 \
-  --idle-image build/x280/firmware-lim-idle.bin
+  --boot --pll 1750 --timeout 5000
 ```
 
-`--lim-ways` defaults to 15 and accepts 0 through 15. An explicit value requires
+The resident-idle image is `--idle-image`, else `$X280_IDLE_FW_IMAGE`, else the
+build's `build/x280/firmware-lim-idle.bin`. `--lim-ways` defaults to 15 and
+accepts 0 through 15. An explicit value requires
 `--require-prepared`, so shape provisioning cannot silently run the ECC primer.
 The runtime applies an increase-only shape only while every L2CPU remains in
 reset; it refuses a request that would expand LIM. Pinned-input commands reject
