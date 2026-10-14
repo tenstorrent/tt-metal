@@ -226,13 +226,17 @@ def score_host(
         for ev in evidence:
             ev.runs = len(signal_units[(cat, ev.signal)])
             ev.first_ts = signal_first.get((cat, ev.signal))
+        # Where = the chips of the strongest evidence; summing every event would let chips that checks merely
+        # list (the first BDF of a table) outweigh the tray that is actually missing.
+        lead = next((ev for ev in evidence if ev.chips), None)
+        chips = hosts.summarize_chips(dict.fromkeys(lead.chips.split(","), 1.0) if lead else chip_weight[cat])
         scores.append(
             CategoryScore(
                 category=cat,
                 score=round(sum(ev.weight for ev in best), 3),
                 runs=len(best),
                 days=len({int((ev.ts or 0) // DAY) for ev in best}),
-                chips=hosts.summarize_chips(chip_weight[cat]),
+                chips=chips,
                 evidence=evidence[:8],
             )
         )
@@ -399,8 +403,11 @@ def _has_tickets(conn: sqlite3.Connection) -> bool:
 
 def render(report: Report, verbose: bool = False) -> str:
     r = report
+    rule = "=" * 100
     lines = [
+        rule,
         f"{r.host}   status: {r.status}   (as of {fmt_ts(r.as_of)} UTC, window {r.window_days}d)",
+        rule,
         f"  why: {r.status_reason}",
     ]
     m = r.machine_hc
