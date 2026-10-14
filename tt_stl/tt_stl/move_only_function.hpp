@@ -90,9 +90,6 @@ R invoke_r(F& f, A&&... args) {
 //     being undefined;
 //   - only the unqualified R(Args...) signature is provided, not the const, reference or noexcept
 //     qualified forms.
-//
-// TODO(#57444): replace with std::move_only_function once every supported standard library ships
-// it; libc++ does not as of LLVM 20. Calling an empty instance then becomes undefined.
 template <typename Signature>
 class move_only_function;
 
