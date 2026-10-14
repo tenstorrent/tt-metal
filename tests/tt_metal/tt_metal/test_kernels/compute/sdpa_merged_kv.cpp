@@ -16,9 +16,9 @@ void kernel_main() {
     constexpr std::uint32_t v_offset = get_compile_time_arg_val(4);
     constexpr bool test_correction_fidelity = get_compile_time_arg_val(5);
     constexpr std::uint32_t corr_fidelity = test_correction_fidelity ? 4 : SDPA_FIDELITY_PROGRAM_DEFAULT;
-    constexpr std::uint32_t chunk_tiles = 2;
+    constexpr std::uint32_t chunk_tiles = get_compile_time_arg_val(6);
     constexpr std::uint32_t qk_tiles = 2;
-    constexpr std::uint32_t v_tiles = 2;
+    constexpr std::uint32_t v_tiles = get_compile_time_arg_val(7);
     constexpr std::uint32_t scale = 0x3f000000;  // 0.5f
     constexpr auto cb_q = tt::CBIndex::c_0;
     constexpr auto cb_k = tt::CBIndex::c_1;

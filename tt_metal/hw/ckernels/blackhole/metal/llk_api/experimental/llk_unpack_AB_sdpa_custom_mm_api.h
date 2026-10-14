@@ -45,3 +45,12 @@ inline void llk_unpack_AB_sdpa_custom_mm(
         get_operand_face_r_dim(operandB_id),
         row_stride);
 }
+
+inline void llk_unpack_A_sdpa_custom_mm_single_row(
+    const std::uint32_t operand, const std::uint32_t tile_index, const std::uint32_t nt_dim) {
+    SAN_HOOK(unsupported());
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t tile_size = get_local_cb_interface(operand_id).fifo_page_size;
+    const std::uint32_t address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1 + tile_index * tile_size;
+    _llk_unpack_A_sdpa_custom_mm_single_row_(address, tile_size, nt_dim);
+}

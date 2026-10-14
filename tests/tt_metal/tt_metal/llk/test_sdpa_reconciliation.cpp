@@ -275,19 +275,22 @@ void run_sdpa_tail(
 // across chunks. Layout 0 preserves the original shared K/V defaults; layout 1
 // preserves separate V; layout 2 stores [K, padding, V, padding] in each row.
 template <bool test_correction_fidelity = false>
-void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, bool full_sync) {
+void run_sdpa_merged_kv(
+    distributed::MeshDevice& mesh,
+    std::uint32_t layout,
+    bool full_sync,
+    std::uint32_t chunk_tiles = 2,
+    std::uint32_t v_tiles = 2) {
     auto& cq = mesh.mesh_command_queue();
     const CoreCoord core{0, 0};
     constexpr std::uint32_t rounds = 3;
     constexpr std::uint32_t chunks = test_correction_fidelity ? 3 : 2;
-    constexpr std::uint32_t chunk_tiles = 2;
     constexpr std::uint32_t qk_tiles = 2;
-    constexpr std::uint32_t v_tiles = 2;
     constexpr std::uint32_t width = qk_tiles * 32;
-    constexpr std::uint32_t tokens = chunks * chunk_tiles * 32;
+    const std::uint32_t tokens = chunks * chunk_tiles * 32;
     constexpr std::uint32_t short_tile_bytes = sdpa_tail_elements * sizeof(bfloat16);
     constexpr std::uint32_t full_tile_bytes = 1024 * sizeof(bfloat16);
-    const std::uint32_t row_tiles = layout == 2 ? 6 : qk_tiles;
+    const std::uint32_t row_tiles = layout == 2 ? qk_tiles + v_tiles + 2 : qk_tiles;
     const std::uint32_t v_offset = layout == 2 ? 3 : 0;
     const bool separate_v = layout == 1;
     Program program = CreateProgram();
@@ -303,7 +306,7 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
     auto output = make_buffer(rounds * v_tiles * short_tile_bytes);
     auto output_stats = make_buffer(rounds * short_tile_bytes);
     for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_16, tt::CBIndex::c_17}) {
-        const auto tiles = cb == tt::CBIndex::c_17 ? 1 : qk_tiles;
+        const auto tiles = cb == tt::CBIndex::c_17 ? 1 : (cb == tt::CBIndex::c_0 ? qk_tiles : v_tiles);
         CreateCircularBuffer(
             program,
             core,
@@ -319,7 +322,8 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
             CircularBufferConfig(tiles * full_tile_bytes, {{cb, tt::DataFormat::Float16_b}})
                 .set_page_size(cb, full_tile_bytes));
     }
-    const std::vector<std::uint32_t> args{rounds, chunks, layout, row_tiles, v_offset, test_correction_fidelity};
+    const std::vector<std::uint32_t> args{
+        rounds, chunks, layout, row_tiles, v_offset, test_correction_fidelity, chunk_tiles, v_tiles};
     const auto reader = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_sdpa_merged_kv.cpp",
@@ -363,7 +367,7 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
         }
         return static_cast<float>(static_cast<int>((round * 3 + row * 7 + dim * 5) % 17) - 8) / 16.0f;
     };
-    auto k_value = [](std::uint32_t round, std::uint32_t token, std::uint32_t dim) {
+    auto k_value = [=](std::uint32_t round, std::uint32_t token, std::uint32_t dim) {
         if constexpr (test_correction_fidelity) {
             // Uniform scores and exactly representable Q/K avoid LoFi operand
             // truncation. The second chunk raises the scaled max by 2.5; the
@@ -399,10 +403,13 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
             }
         }
         for (std::uint32_t token = 0; token < tokens; ++token) {
+            const auto tile_row = round * chunks * chunk_tiles + token / 32;
             for (std::uint32_t dim = 0; dim < width; ++dim) {
-                const auto tile_row = round * chunks * chunk_tiles + token / 32;
                 const auto within_tile = full_index(token % 32, dim % 32);
                 k[(tile_row * row_tiles + dim / 32) * 1024 + within_tile] = bfloat16(k_value(round, token, dim));
+            }
+            for (std::uint32_t dim = 0; dim < v_tiles * 32; ++dim) {
+                const auto within_tile = full_index(token % 32, dim % 32);
                 v[(tile_row * v_tiles + dim / 32) * 1024 + within_tile] = bfloat16(v_value(round, token, dim));
                 if (layout == 2) {
                     k[(tile_row * row_tiles + v_offset + dim / 32) * 1024 + within_tile] =
@@ -411,7 +418,7 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
             }
         }
         for (std::uint32_t row = 0; row < sdpa_tail_rows; ++row) {
-            std::array<double, tokens> scores{};
+            std::vector<double> scores(tokens, 0.0);
             for (std::uint32_t token = 0; token < tokens; ++token) {
                 for (std::uint32_t dim = 0; dim < width; ++dim) {
                     scores[token] += q_value(round, row, dim) * k_value(round, token, dim);
@@ -563,8 +570,44 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkCorrectionFidelityOverride) {
     // Three chunks and three invocations exercise restoration after both the
     // override and the no-max-change correction, across both DST sync modes.
     for (const bool full_sync : {false, true}) {
-        SCOPED_TRACE(::testing::Message() << "full_sync=" << full_sync);
-        run_sdpa_merged_kv<true>(*devices_.at(0), 2, full_sync);
+        for (const auto chunk_tiles : {1u, 2u}) {
+            SCOPED_TRACE(::testing::Message() << "full_sync=" << full_sync << ", chunk_tiles=" << chunk_tiles);
+            run_sdpa_merged_kv<true>(*devices_.at(0), 2, full_sync, chunk_tiles);
+        }
+    }
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, SdpaChunk32LayoutsAndReplayWidths) {
+    // Single-tile, even, odd, and wider OV replay windows. Repeated chunks and
+    // invocations check the direct replay's context/counter reset before QK.
+    for (const auto layout : {0u, 1u, 2u}) {
+        for (const auto v_tiles : {1u, 2u, 3u, 8u}) {
+            if (layout == 0 && v_tiles > 2) {
+                continue;  // Shared K/V must fit inside the two-tile K row.
+            }
+            for (const bool full_sync : {false, true}) {
+                SCOPED_TRACE(
+                    ::testing::Message() << "layout=" << layout << ", v_tiles=" << v_tiles
+                                         << ", full_sync=" << full_sync);
+                run_sdpa_merged_kv(*devices_.at(0), layout, full_sync, 1, v_tiles);
+            }
+        }
+    }
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, SdpaChunk32CompileLimits) {
+    // A one-tile OV chunk is valid, but QK's contraction remains even and >= 2.
+    // Zero chunks and odd multi-row chunks must still fail at compile time.
+    for (const auto chunk_tiles : {0u, 1u, 2u, 3u, 4u}) {
+        for (const auto qk_tiles : {1u, 2u, 3u}) {
+            SCOPED_TRACE(::testing::Message() << "chunk_tiles=" << chunk_tiles << ", qk_tiles=" << qk_tiles);
+            auto program = make_sdpa_chunk_compile_program({chunk_tiles, 1, 1, 6, 2, 3, qk_tiles, 0});
+            if ((chunk_tiles == 1 || (chunk_tiles >= 2 && chunk_tiles % 2 == 0)) && qk_tiles == 2) {
+                EXPECT_NO_THROW(program.impl().compile(&this->device()));
+            } else {
+                EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+            }
+        }
     }
 }
 

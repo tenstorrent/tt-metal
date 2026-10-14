@@ -170,8 +170,8 @@ def _pack_in1(
     (llk_unpack_AB_sdpa_custom_mm.h ``_llk_unpack_AB_sdpa_custom_mm_``):
       * read_transposed=False: contiguous read (block_increment == inner_increment ==
         tile_size), i.e. the walk reads tile linear-index ``k*ct + c`` -> pack K-MAJOR.
-      * read_transposed=True: block_increment = row_stride*tile_size, inner_increment =
-        -(((ct-1)*row_stride)-1)*tile_size, so the walk reads ``c*row_stride + k``
+      * read_transposed=True: block_increment = row_stride*tile_size (tile_size for
+        ct==1), inner_increment = -(((ct-1)*row_stride)-1)*tile_size, so the walk reads ``c*row_stride + k``
         -> pack C-MAJOR (outer c, inner k) so the transposed read reconstructs the exact
         same [K,N] matrix and the golden stays A@B. (The buffer, not the golden, absorbs
         the transpose; read_transposed is a SrcA L1 access-pattern axis, not a math change.)
@@ -346,8 +346,8 @@ def test_sdpa_custom_mm(request, shape):
     shape=SHAPES,
 )
 def test_sdpa_custom_mm_read_transposed(request, shape):
-    """read_transposed=True changes the SrcA L1 read order (block_increment = kt*tile,
-    inner_increment jumps back one tile), so the walk reads tile linear-index ``c*kt + k``
+    """read_transposed=True changes the SrcA L1 read order (contiguous for ct==1),
+    so the walk reads tile linear-index ``c*kt + k``
     instead of ``k*ct + c``. ``_pack_in1`` packs the buffer C-MAJOR to match, so the
     transposed read reconstructs the same [K,N] matrix and the golden stays A@B -- the
     buffer, not the golden, absorbs the transpose. Exercises the read_transposed unpack
@@ -355,18 +355,6 @@ def test_sdpa_custom_mm_read_transposed(request, shape):
     """
     _skip_on_simulator(request)
     (M, K, N) = shape[0] if len(shape) == 1 and isinstance(shape[0], tuple) else shape
-    # read_transposed on a single output c-tile is a semantic no-op (nothing to reorder),
-    # and this experimental LLK's ct_dim==1 MOP fast path is written for the canonical
-    # contiguous read (block_increment == inner_increment); read_transposed makes
-    # block_increment = kt*tile, which that fast path is not shaped for. The LLK is correct
-    # for its real (model-level) usage -- ct_dim==1 + read_transposed simply isn't a
-    # combination the standalone unit test can drive, so skip it; ct>=2 shapes give the
-    # real read_transposed coverage.
-    if N // DEFAULT_TILE_C_DIM == 1:
-        pytest.skip(
-            "read_transposed is a no-op for ct_dim==1 and the LLK's ct==1 fast path is "
-            "shaped for the canonical contiguous read; not drivable standalone"
-        )
     _run(M, K, N, signal_granularity=1, read_transposed=True, mm_transpose=False)
 
 
@@ -400,7 +388,7 @@ class SDPA_MASK_REENTRY(TemplateParameter):
 
 
 @parametrize(
-    shape=[(1, 64, 96), (8, 128, 128)],
+    shape=[(1, 64, 32), (8, 128, 32), (1, 64, 96), (8, 128, 128)],
     stride_mode=["implicit", "zero", "tight", "padded"],
     read_transposed=lambda stride_mode: (
         [False, True] if stride_mode == "padded" else [True]
@@ -436,9 +424,7 @@ def test_sdpa_custom_mm_row_stride(
 @parametrize(
     M=[1, 8],
     ct=[1, 3, 8],
-    # The ct==1 fast path requires contiguous reads, as in the existing
-    # test_sdpa_custom_mm_read_transposed contract above.
-    read_transposed=lambda ct: [False, True] if ct > 1 else [False],
+    read_transposed=[False, True],
     padded_stride=lambda read_transposed: (
         [False, True] if read_transposed else [False]
     ),

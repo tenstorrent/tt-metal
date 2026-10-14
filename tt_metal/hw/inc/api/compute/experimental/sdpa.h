@@ -347,14 +347,11 @@ void compute_sdpa_chunk(
     static_assert(
         chunk_size % qk_signal_granularity == 0,
         "compute_sdpa_chunk: chunk_size must be divisible by qk_signal_granularity");
-    // The custom-MM unpacks issue a single MOP of (kt_dim/2)-1 iterations and only support an even
-    // kt_dim >= 2 (see the "kt_dim: even number from 2 to 256" note in the unpack LLK headers). With
-    // kt_dim < 2 the count underflows to ~4 billion and the unpacker hangs silently. Fail at compile
-    // time instead. OV matmul: kt_dim = chunk_size (Sk_chunk_t); QK matmul: kt_dim = qk_kt.
+    // OV supports one tile row via direct replay, or an even number via the paired-row MOP.
+    // QK still requires an even contraction dimension to avoid underflowing its MOP count.
     static_assert(
-        chunk_size >= 2 && chunk_size % 2 == 0,
-        "compute_sdpa_chunk: chunk_size (Sk_chunk_t = OV-matmul kt_dim) must be even and >= 2; "
-        "k_chunk_size of 32 gives Sk_chunk_t=1, which underflows the OV custom-MM unpack MOP and hangs");
+        chunk_size == 1 || (chunk_size >= 2 && chunk_size % 2 == 0),
+        "compute_sdpa_chunk: chunk_size (OV-matmul kt_dim) must be 1 or even and >= 2");
     static_assert(
         qk_kt >= 2 && qk_kt % 2 == 0,
         "compute_sdpa_chunk: QK contraction must be even and >= 2 for the custom-MM unpack");
@@ -465,18 +462,26 @@ void compute_sdpa_chunk(
         ov_kt_dim == chunk_size || exp_signal_granularity == chunk_size,
         "OV-trim (ov_kt_dim != chunk_size) requires exp_signal_granularity == chunk_size"));
     sdpa_custom_mm_reuse_dest_srcb_block_init_short(cb_q, ov_cb, cb_out, transpose_v, chunk_size, num_tiles_v);
-    sdpa_custom_mm_reuse_dest_srcb_block<output_granularity, exp_signal_granularity>(
-        cb_q,
-        ov_cb,
-        0,
-        v_tile_offset,
-        mm1_dst_offset,
-        mm2_dst_offset,
-        transpose_v,
-        ov_kt_dim,
-        num_tiles_v,
-        in1_k_stride,
-        last_chunk);
+    if constexpr (chunk_size == 1) {
+        UNPACK(LLK_ASSERT(ov_kt_dim == 1, "single-row OV requires ov_kt_dim == 1"));
+        UNPACK((llk_unpack_A_sdpa_set_srcb_dummy_valid()));
+        UNPACK((llk_unpack_A_sdpa_custom_mm_single_row(ov_cb, v_tile_offset, num_tiles_v)));
+        MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb<MATH_FIDELITY, output_granularity, exp_signal_granularity>(
+            mm1_dst_offset, mm2_dst_offset, transpose_v, ov_kt_dim, num_tiles_v, last_chunk)));
+    } else {
+        sdpa_custom_mm_reuse_dest_srcb_block<output_granularity, exp_signal_granularity>(
+            cb_q,
+            ov_cb,
+            0,
+            v_tile_offset,
+            mm1_dst_offset,
+            mm2_dst_offset,
+            transpose_v,
+            ov_kt_dim,
+            num_tiles_v,
+            in1_k_stride,
+            last_chunk);
+    }
 
     // Reduce Sum (SFPU)
     PACK((ckernel::sfpu::_init_sdpa_reduce_sum_row_8x32_replay_buffers_()));

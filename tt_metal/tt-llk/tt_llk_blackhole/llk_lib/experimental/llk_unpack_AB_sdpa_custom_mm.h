@@ -39,7 +39,9 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
         LLK_ASSERT(in1_row >= kt_dim, "row_stride must contain the contraction tiles");
     }
     volatile std::uint32_t* cfg         = get_cfg_pointer();
-    const std::uint32_t block_increment = read_transposed ? in1_row * tile_size_a : tile_size_a;
+    // With one output tile, the MOP uses only its full-unpack block: consecutive
+    // contraction tiles are adjacent, even for the transposed read.
+    const std::uint32_t block_increment = read_transposed && ct_dim > 1 ? in1_row * tile_size_a : tile_size_a;
     const std::uint32_t inner_increment = read_transposed ? -(((ct_dim - 1) * in1_row) - 1) * tile_size_a : tile_size_a;
 
     const std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a;
@@ -66,4 +68,34 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
     }
 
     _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
+}
+
+// OV with one K tile row. Reuse the replay buffer configured by the standard
+// OV init, but issue one row directly instead of the MOP's pair of rows.
+inline void _llk_unpack_A_sdpa_custom_mm_single_row_(const std::uint32_t address_a, const std::uint32_t tile_size_a, const std::uint32_t nt_dim)
+{
+    volatile std::uint32_t* cfg = get_cfg_pointer();
+    wait_for_next_context(1);
+    reset_config_context();
+    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
+    cfg[SCRATCH_SEC0_val_ADDR32]             = tile_size_a;
+    cfg[SCRATCH_SEC1_val_ADDR32]             = tile_size_a; // Final address is unused.
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+    // Each replay block is [UNPACR SrcA, CFGSHIFTMASK, NOP]; the last block
+    // is at offset 27. Split wider rows to fit each replay's instruction limit.
+    if (nt_dim == 1)
+    {
+        lltt::replay(27, 3);
+    }
+    else
+    {
+        lltt::replay(0, 3 * ((nt_dim + 1) / 2));
+        lltt::replay(30 - 3 * (nt_dim / 2), 3 * (nt_dim / 2));
+    }
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    wait_for_next_context(1);
+    reset_config_context();
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
 }
