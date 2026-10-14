@@ -85,6 +85,7 @@ tests/pipeline_reorg/models_sweep_tests.yaml @tenstorrent/metalium-models-mainta
 tests/pipeline_reorg/models_unit_tests.yaml @tenstorrent/metalium-models-maintainers @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/vllm_model_tests.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
 tests/pipeline_reorg/ttsim-skip-list.yaml @roseli-TT @tdowdallTT @mcraigheadTT @tenstorrent-github-bot @dpopovTT
+tests/pipeline_reorg/llk_pr_gate_tests.yaml @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT
 tests/scripts/ @tenstorrent/metalium-developers-infra
 tests/scripts/quasar @kstevensTT @fvranicTT @tenstorrent/metalium-developers-infra
 tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_tune.py @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @tenstorrent/metalium-developers-infra
@@ -264,8 +265,18 @@ tt_metal/tt-llk/.claude/ @nstamatovicTT @njokovicTT
 tt_metal/tt-llk/.cursor/ @nstamatovicTT @njokovicTT
 tt_metal/tt-llk/.github/ @fvranicTT @nvelickovicTT
 tt_metal/tt-llk/common/ @amahmudTT @fvranicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01
-tt_metal/tt-llk/tests/ @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT
+tt_metal/tt-llk/tests/ @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT @mvlahovicTT
 tt_metal/tt-llk/tests/python_tests/fuser/ @fvranicTT @markoradosavljevicTT @ndivnicTT
+tt_metal/tt-llk/docs/performance_counters/ @mvlahovicTT @skrsmanovicTT @nvelickovicTT
+tt_metal/tt-llk/tools/include/perf_counters/ @mvlahovicTT @skrsmanovicTT @nvelickovicTT
+tt_metal/tt-llk/tools/python/tt_llk_perf/ @mvlahovicTT @skrsmanovicTT @nvelickovicTT
+# ── LLK perf infrastructure: restricted ownership
+tt_metal/tt-llk/perf/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @skrsmanovicTT @sstanisicTT @mvlahovicTT @nstojicTT
+tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
+tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
+tt_metal/tt-llk/tests/python_tests/**/test_perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
+tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
+tests/pipeline_reorg/llk_perf_tests.yaml @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tt_llk_blackhole/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01
 tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
 tt_metal/tt-llk/tt_llk_blackhole/llk_lib/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
@@ -628,7 +639,7 @@ models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
 models/demos/wormhole/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
 
 models/experimental/ @tenstorrent/metalium-models-maintainers
-models/experimental/bevformer/ @mbezuljTT @njovanovicTT @tenstorrent/metalium-models-maintainers
+models/experimental/bevformer/ @mbezuljTT @njovanovicTT @ctr-ikasicTT @ctr-mdukicTT @ctr-mmicicTT @tenstorrent/metalium-models-maintainers
 models/experimental/exaone45_vl @changh95 @tenstorrent/metalium-models-maintainers
 models/experimental/llama32_1b_quasar @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-models-maintainers
 /models/experimental/nomic_embed_text_v2_moe/ @avelickovTT @kgrujcic-tt @mbezuljTT @tenstorrent/metalium-models-maintainers
@@ -685,14 +696,5 @@ tt-train/**/CMakeLists.txt @tenstorrent/tt-train @lgalasTT @abustamanteTT @tenst
 tech_reports/LLMs/vLLM_integration.md @viktorpusTT @tchedaTT
 tech_reports/AdvancedPerformanceOptimizationsForModels/TraceCorrectness.md @tchedaTT @uaydonat
 tech_reports/real_time_profiler/ @mo-tenstorrent @yusufbashiTT
-
-# ── LLK perf infrastructure: restricted ownership ──
-# Later than the broad tt_metal/tt-llk/tests/ and .github/ rules above, so these
-# win for perf paths only (CODEOWNERS = last match wins). Layout-agnostic:
-# helpers/perf* matches both today's flat modules and the future helpers/perf/
-# package.
-tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
-tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
-tt_metal/tt-llk/tests/python_tests/**/test_perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 
 /models/experimental/qwen_image_2_1/ @changh95 @uaydonat @mtairum
