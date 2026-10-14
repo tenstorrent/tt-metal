@@ -44,8 +44,8 @@ ALWI void tilize_row_major_block(
 /*
  * Tilize all blocks of ROW_MAJOR input from dfb_in_rm into dfb_in (batch mode).
  * tilize_init and tilize_uninit wrap the full block loop; tilize_block is called per block.
- * Caller must reinitialize binary op hardware with binary_op_init_common after this returns,
- * since tilize_uninit reconfigures the hardware state.
+ * Leaves SrcA/SrcB on dfb_in_rm and PACK on dfb_in. The caller sets both for its next op with
+ * reconfig_data_format / pack_reconfig_data_format plus that op's short init.
  */
 template <uint32_t block_size>
 ALWI void tilize_all_blocks_to_dfb(DataflowBuffer& dfb_in_rm, DataflowBuffer& dfb_in, const uint32_t Wt) {

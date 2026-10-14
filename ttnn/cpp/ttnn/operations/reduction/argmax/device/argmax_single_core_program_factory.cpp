@@ -8,6 +8,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt_stl/fmt.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -126,7 +127,7 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
     const auto& dim = operation_attributes.dim;
     const bool keepdim = operation_attributes.keepdim;
 
-    const tt::tt_metal::distributed::MeshDevice& device = output.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = output.device();
     const bool reduce_all = not dim.has_value();
 
     // Resource names. Declared function-locally: both argmax factories share a unity-build

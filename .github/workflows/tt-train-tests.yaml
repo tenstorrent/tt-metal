@@ -127,14 +127,7 @@ jobs:
       image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         LOGURU_LEVEL: INFO
-        TT_METAL_HOME: /work
-        TT_METAL_RUNTIME_ROOT: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        PYTHONPATH: /work
-        TEST_DATA_DIR: /work/data
-        ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
         TT_LOGGER_LEVEL: warn
-        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -165,10 +158,12 @@ jobs:
           redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}${{ vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '' }}
           auto-triage: ${{ !inputs.enable-watcher }}
 
-      - name: Install ttml module
-        if: ${{ inputs.wheel-artifact-name }}
+      - name: Set up tt-train
+        uses: ./docker-job/.github/actions/setup-tt-train
         timeout-minutes: 10
-        run: bash -c ./tt-train/scripts/setup_pth.sh
+        with:
+          install-ttml: ${{ inputs.wheel-artifact-name != '' }}
+          hf-token: ${{ secrets.HUGGINGFACE_TOKEN }}
 
       - name: Install Python dependencies for metrics
         if: ${{ inputs.test-category == 'perf' }}

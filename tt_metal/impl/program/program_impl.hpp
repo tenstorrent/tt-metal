@@ -565,7 +565,6 @@ public:
     // Validates that a semaphore ID is within bounds and not already in use on overlapping cores
     void validate_semaphore_id(const CoreRangeSet& crs, uint32_t semaphore_id, CoreType core_type) const;
 
-    bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
 
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
@@ -779,6 +778,11 @@ private:
     // per device, since the layout steps also register the program against the device.
     bool compile_and_allocate_needed_{true};
     const IDevice* compile_and_allocate_device_{nullptr};
+    // For lockstep allocation without service-core claims, a single live L1 frontier
+    // check covers every static CB and DFB region validated during layout.
+    bool simple_l1_validation_cached_{false};
+    SubDeviceManagerId simple_l1_validation_manager_id_;
+    uint64_t simple_l1_validation_region_end_{0};
 
     // Scratchpads (Metal 2.0 only)
     // Guards allocate_scratchpads to ensure that it runs once per allocation cycle.

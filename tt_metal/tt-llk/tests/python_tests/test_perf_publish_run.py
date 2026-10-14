@@ -87,14 +87,14 @@ def test_publish_rejects_unknown_pipeline(tmp_path, monkeypatch):
     sub.mkdir()
     _write_csv(sub / "perf_a.csv", pd.DataFrame({"marker": ["INIT"], "tile_cnt": [4]}))
     _set_provenance(monkeypatch)
-    monkeypatch.setenv("PIPELINE", "staging")  # not pr / nightly / baseline
+    monkeypatch.setenv("PIPELINE", "staging")  # not a pipeline the warehouse knows
     with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
         ValueError, match="PIPELINE"
     ):
         publish(str(tmp_path), str(tmp_path / "x.parquet"), "wormhole")
 
 
-@pytest.mark.parametrize("pipeline", ["pr", "nightly", "baseline"])
+@pytest.mark.parametrize("pipeline", ["pr", "nightly", "baseline", "merge_baseline"])
 def test_publish_accepts_every_allowed_pipeline(tmp_path, monkeypatch, pipeline):
     sub = tmp_path / "perf_a"
     sub.mkdir()

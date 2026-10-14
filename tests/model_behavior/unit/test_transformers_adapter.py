@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import re
 import sys
 from pathlib import Path
@@ -151,18 +152,79 @@ def test_qwen_opens_mesh_with_gdn_scratch_and_linear_fabric(monkeypatch, backend
     assert closed == ["adapter", mesh]
 
 
+@pytest.mark.parametrize(
+    "backend, sku, arch, device_count, shape, fabric, l1_small_size",
+    [
+        # The Galaxy throughput-experts path builds a fabric mux in selective_reduce_combine,
+        # which TT_FATALs when the mesh is opened with l1_small_size=0 (#56784, #56769).
+        ("gpt-oss-120b", "wh_galaxy_perf", "wormhole_b0", 32, (4, 8), "ring", 16384),
+        ("gpt-oss-120b", "bh_quietbox_2", "blackhole", 4, (1, 4), "ring", 16384),
+        # Families outside the table keep the ttnn default.
+        ("llama3.1-8b", "wh_llmbox_perf", "wormhole_b0", 8, (1, 8), "ring", 0),
+    ],
+)
+def test_open_adapter_reserves_l1_small_by_family(
+    monkeypatch, backend, sku, arch, device_count, shape, fabric, l1_small_size
+):
+    opened, fabrics, closed = [], [], []
+    mesh = SimpleNamespace(enable_program_cache=lambda: None)
+    adapter = SimpleNamespace(warmup=lambda: None, close=lambda: closed.append("adapter"))
+    runtime = SimpleNamespace(
+        get_arch_name=lambda: arch,
+        get_num_devices=lambda: device_count,
+        FabricConfig=SimpleNamespace(DISABLED="disabled", FABRIC_1D="linear", FABRIC_1D_RING="ring"),
+        set_fabric_config=fabrics.append,
+        MeshShape=lambda *shape: shape,
+        open_mesh_device=lambda **kwargs: opened.append(kwargs) or mesh,
+        close_mesh_device=lambda device: closed.append(device),
+    )
+    monkeypatch.setitem(sys.modules, "ttnn", runtime)
+    monkeypatch.setitem(
+        sys.modules,
+        "models.demos.utils.trace_region_sizes",
+        SimpleNamespace(resolve_trace_region_size=lambda model, sku: 123456),
+    )
+    monkeypatch.setattr(adapters, "TransformersAdapter", lambda *args, **kwargs: adapter)
+
+    with adapters.open_adapter("eager", backend=backend, sku=sku) as result:
+        assert result is adapter
+        assert opened == [dict(mesh_shape=shape, trace_region_size=123456, l1_small_size=l1_small_size)]
+        assert fabrics == [fabric]
+    assert fabrics == [fabric, "disabled"]
+    assert closed == ["adapter", mesh]
+
+
 @pytest.mark.parametrize("backend", ["qwen3.6-27b", "qwen3.6-35b-a3b"])
 @pytest.mark.parametrize("warmup_mode", ["eager", "traced"])
 def test_qwen_warmup_compiles_sampling_sweep_before_decode_capture(monkeypatch, backend, warmup_mode):
     from models.common.warmup.warmup_utils import WarmupForwardMixin
+    from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
     monkeypatch.delenv("TT_LEAN_DECODE_WARMUP", raising=False)
     bound = []
-    prefill_captures = []
+    prefill_prepares = []
+    prefill_records = []
+    slot_warmups = []
+
+    def checked(name, calls):
+        signature = inspect.signature(getattr(Qwen36Model, name))
+
+        def call(*args, **kwargs):
+            signature.bind(None, *args, **kwargs)
+            calls.append(kwargs)
+
+        return call
+
+    def warmup_gdn_slot_ops():
+        assert not prefill_records, "Compile GDN slot ops before any trace capture"
+        slot_warmups.append(True)
+
     model = SimpleNamespace(
         _bind_gdn_prefill_scratch=lambda: bound.append(True) or "batched-state",
         _unbind_gdn_prefill_scratch=lambda previous: bound.pop(),
-        capture_prefill_trace_chunked=lambda *args, **kwargs: prefill_captures.append(kwargs),
+        prepare_prefill_trace_chunked=checked("prepare_prefill_trace_chunked", prefill_prepares),
+        record_prefill_trace_chunked=checked("record_prefill_trace_chunked", prefill_records),
+        warmup_gdn_slot_ops=warmup_gdn_slot_ops,
     )
 
     class CompileCheckedGenerator(WarmupForwardMixin):
@@ -184,6 +246,7 @@ def test_qwen_warmup_compiles_sampling_sweep_before_decode_capture(monkeypatch, 
                 assert key in self.compiled, "Cannot compile a new sampling configuration during trace capture"
                 self.replays += 1
             else:
+                assert not prefill_records, "Compile decode before recording the prefill trace"
                 assert kwargs["prepare_trace"]
                 self.compiled.add(key)
                 self.prepared_variants.add(kwargs["sampling_params"] is not None)
@@ -203,7 +266,9 @@ def test_qwen_warmup_compiles_sampling_sweep_before_decode_capture(monkeypatch, 
     adapter.generator = CompileCheckedGenerator()
     adapter.warmup()
 
-    assert prefill_captures == [dict(chunk_size=2048, capture_chunk_trace=True)]
+    assert prefill_prepares == [dict(chunk_size=2048)]
+    assert prefill_records == [{}]
+    assert slot_warmups == [True]
     assert len(adapter.generator.compiled) == 6  # Four penalty/logprob combinations, greedy, and host sampling.
     assert adapter.generator.captures == int(adapter.enable_trace)
     assert adapter.generator.replays == (6 if adapter.enable_trace else 0)

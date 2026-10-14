@@ -8,6 +8,9 @@
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/tensor_serialization_support.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 
 #include "layout/page_config_impl.hpp"
 #include "layout/tensor_layout_impl.hpp"
@@ -33,6 +36,14 @@ std::optional<std::string> get_shape_fits_shard_grid_error(
     const auto physical_shard_shape = tensor_layout.impl().get_physical_shard_shape();
     const auto physical_shard_height = physical_shard_shape.height();
     const auto physical_shard_width = physical_shard_shape.width();
+    const bool divides_by_height = memory_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED;
+    const bool divides_by_width = memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED;
+    if ((divides_by_height && physical_shard_height == 0) || (divides_by_width && physical_shard_width == 0)) {
+        return fmt::format(
+            "Shard shape must be greater than 0 in each sharded dim, got [{}, {}]",
+            physical_shard_height,
+            physical_shard_width);
+    }
 
     const auto& shard_spec = memory_config.shard_spec().value();
     uint32_t num_cores = shard_spec.num_cores();

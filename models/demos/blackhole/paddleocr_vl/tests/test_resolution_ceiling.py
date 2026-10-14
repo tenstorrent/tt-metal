@@ -139,6 +139,12 @@ def test_largest_bucket_terminates_without_looping(device, hf_goldens):
             page_table=None,
             kv_cache=None,
             enable_trace=False,
+            # Version-1 decode update commands (#51646): every call restages the host token,
+            # which a non-traced decode requires; no page table and host-side greedy sampling.
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         lg = out[0] if isinstance(out, tuple) else out
         token = int(_to_torch_logits(lg, device, text_args.vocab_size).argmax().item())
