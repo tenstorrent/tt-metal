@@ -24,7 +24,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/float8_utils.hpp"
 #include "tt_metal/test_utils/mx_utils.hpp"
@@ -319,7 +319,7 @@ namespace mxfp4_tc = unit_tests::llk::mxfp4_typecast;
 // Expected: no precision loss → rtol=0.0, atol=0.0.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16b) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16b) {
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -338,7 +338,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16b) {
     EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16bFp32Dest) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxFp4ToFloat16bFp32Dest) {
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -363,7 +364,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToFloat16bFp32Dest) {
 // Tolerances are intentionally loose to account for block-scaling behavior.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4) {
     constexpr uint32_t num_tiles = 64;
     auto src_vec = create_random_vector_of_bfloat16(
         tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -382,7 +383,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4) {
     EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/0.98));
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4Fp32Dest) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4Fp32Dest) {
     constexpr uint32_t num_tiles = 64;
     auto src_vec = create_random_vector_of_bfloat16(
         tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -406,7 +407,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp4Fp32Dest) {
 // Same format on both sides. The round-trip should be lossless.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4) {
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -420,7 +421,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4) {
     EXPECT_TRUE(mxfp4_tc::check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4Fp32Dest) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4Fp32Dest) {
     constexpr uint32_t num_tiles = 64;
     auto src_vec = mxfp4_tc::create_random_vector_of_mxfp4(
         tt::tile_size(tt::DataFormat::MxFp4) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
@@ -454,7 +455,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToMxFp4Fp32Dest) {
 //   0xF = -6.0
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxFp4ToBf16SpecialCases) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixMxFp4ToBf16SpecialCases) {
     auto layout = mxfp4_tc::get_mxfp4_tile_layout();
 
     // Block 0: scale = 0xFF → all 32 elements should be NaN (rule 1).
