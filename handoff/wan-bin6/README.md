@@ -10,7 +10,7 @@ This directory is test scaffolding for an experiment branch. It is not meant to 
 
 1. **Issue #59504 (OOM at Wan pipeline creation on Bin6) reproduces here, byte for byte.** Chunked VAE decode (`vae_t_chunk_size=7` for the BH 4x8 preset) makes pipeline creation succeed.
 2. **On `main`, Wan output on this machine is garbage** (flat gray / static frames, CLIP ≈ 19.4). **PR #60190 fixes it** (CLIP 37.07 at 480p). Likely cause: CCL kernels compute remote DRAM addresses with the *local* chip's bank-to-core map, and this Galaxy mixes all 8 DRAM harvest masks.
-3. **Open problem: 720p + chunked VAE on the PR branch hangs every time: 8 of 8 runs.** Every device-side hang (7 of 8) has the straggler on **device 9 (T2L2)**, with the **same physical core, `4-10` (logical `(3,8)`)**, as the single outlier. That holds across two unrelated kernels (ring SDPA ×5, matmul ×2) and at different points (warmup; denoise steps 1, 2, 4, 14). The 8th hang was host-side (all devices idle). This points strongly to a defective Tensix core on device 9. It is **not yet ruled out** that the PR or chunking is needed to trigger it: `main` + chunk at 720p has run only once (it passed).
+3. **Open problem: 720p + chunked VAE on the PR branch hangs every time: 15 of 15 runs** (plus 1 of 3 at 480p). Every device-side hang (13 of 16) has the straggler on **device 9 (T2L2)**, with the **same physical core, `4-10` (logical `(3,8)`)**, as the single outlier, across ring SDPA and matmul, `tt-smi -r` and `-glx_reset`, and with `TT_MM_THROTTLE_PERF=5`. The other 3 were host-side (all devices idle). This points strongly to a defective or marginal Tensix core on device 9. `main` has completed 2 runs and hung 0, too few to rule the PR build out.
 
 ## Your task
 
@@ -99,7 +99,7 @@ All runs use `4x8sp1tp0nl2_linear_is_fsdp0` with `TT_MESH_GRAPH_DESC_PATH=single
 | PR #60190 | 720p | 7 | `hang_loop.sh` ×3 with **`tt-smi -glx_reset`**: **3/3 hang**: device 9 matmul in warmup (odd core `4-10`); 2× host-side (all devices idle, host waits on a completion event; in one, triage could not open chip 0: "No such device") |
 | PR #60190 | 720p | 7 | `hang_loop.sh` ×3 with `-glx_reset` + **`TT_MM_THROTTLE_PERF=5`** (verified: 19 kernel builds with `MM_THROTTLE 5`; warmup steps 10.6 s vs 4.5 s): **3/3 hang**, all on device 9 in RingJointSDPA, odd core `4-10 (3,8)` every time |
 
-Totals: 15 runs at 720p chunked, 15 hangs. 13 device-side, all on device 9 / core `4-10 (3,8)`; 2 host-side.
+Totals: 15 runs at 720p chunked on the PR build, 15 hangs: 12 device-side, all on device 9 / core `4-10 (3,8)`; 3 host-side. Plus 1 hang at 480p (device 9 / core `4-10`). Overall 16 hangs, 13 device-side, every one on that core. The 15th 720p run (a final `-glx_reset` retry, no throttle) hung at denoise step 2 in MinimalMatmul, outlier `4-10`; reports in `~jameslee/wan_720p_retry/`.
 
 **Power / di/dt mitigations.** `TT_MM_THROTTLE_PERF=N` (1–5; level 5 caps matmul math at 33%) inserts NOPs between MVMULs. Via `throttle_mm_perf()` it reaches Wan's `MinimalMatmul` but **not** `RingJointSDPA`, whose Q·Kᵀ/PV math (`sdpa_matmul_block_no_mop`) is unthrottled, and that is where most hangs are. `TT_MM_STAGGER_TYPE`/`TT_MM_STAGGER_VALUE` have no effect on Blackhole: `apply_mm_stagger()` exists only in the Wormhole `llk_io_unpack.h`. Neither Wan op calls `add_stagger_defines_if_needed()` either. Testing the "weak Galaxy power delivery" theory properly would need throttling or staggering added to the SDPA compute kernel (a code change).
 
