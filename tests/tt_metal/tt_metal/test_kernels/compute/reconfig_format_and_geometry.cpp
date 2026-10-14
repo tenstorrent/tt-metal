@@ -12,10 +12,11 @@
 #include "api/dataflow/circular_buffer.h"
 
 // One unpacker starts out configured for c_2, then a conditional reconfig switches it to a CB that differs from
-// c_2 in both data format and tile geometry, and c_0 is passed through to c_16 unchanged:
+// c_2 in both data format and tile geometry, and the payload is passed through to c_16 unchanged:
 //   default:        reconfig_data_format_srca(c_2, c_0), then copy c_0 -> DST -> c_16.
 //   RECONFIG_SRCB:  SrcA is set up for c_0 and SrcB for c_2; reconfig_data_format_srcb(c_2, c_1), then
-//                   c_0 + c_1 -> c_16, where the host fills c_1 with zeros.
+//                   c_0 + c_1 -> c_16, where the host fills c_0 with zeros and c_1 with the payload, so the
+//                   reconfigured operand is the one carrying data.
 void kernel_main() {
     constexpr std::uint32_t onetile = 1;
     std::uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);

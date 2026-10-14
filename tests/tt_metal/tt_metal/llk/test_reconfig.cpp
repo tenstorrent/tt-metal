@@ -1181,10 +1181,10 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixPackReconfigQuasarDf
 
 // ============================================================================
 // Conditional reconfig_data_format_srca/srcb(old, new) where old and new differ in BOTH data format and tile
-// geometry: the unpacker is configured for a Float16_b 32x32 CB (c_2), switched to a Float32 tiny-tile CB, and c_0
-// is passed through to c_16 (a copy for srcA; c_0 + zeros for srcB). The reconfig must reprogram the face
-// geometry as well as the format, so the output equals the input. Inputs are bf16-representable so the Tf32
-// source path carries them exactly.
+// geometry: the unpacker is configured for a Float16_b 32x32 CB (c_2), switched to a Float32 tiny-tile CB, and the
+// payload is passed through to c_16 (a copy of c_0 for srcA; zeros in c_0 plus the payload in c_1 for srcB, so the
+// reconfigured operand is the one carrying data). The reconfig must reprogram the face geometry as well as the
+// format, so the output equals the input. Inputs are bf16-representable so the Tf32 source path carries them exactly.
 // ============================================================================
 namespace unit_tests::compute::reconfig {
 
@@ -1229,7 +1229,7 @@ std::vector<std::uint32_t> run_reconfig_format_and_geometry(
         add_cb(tt::CBIndex::c_1, tt::DataFormat::Float32, tiny_tile_size, &tile);
     }
     // Only configures the unpacker before the reconfig; never pushed.
-    add_cb(tt::CBIndex::c_2, tt::DataFormat::Float16_b, full_tile_size, nullptr);
+    add_cb(tt::CBIndex::c_2, tt::DataFormat::Float16_b, full_tile_size, /*cb_tile=*/nullptr);
     add_cb(tt::CBIndex::c_16, tt::DataFormat::Float32, tiny_tile_size, &tile);
 
     auto reader = CreateKernel(
@@ -1262,7 +1262,7 @@ std::vector<std::uint32_t> run_reconfig_format_and_geometry(
             program,
             reader,
             core,
-            {src_buffer->address(), k_dram_bank_id, zeros_buffer->address(), k_dram_bank_id, num_tiles});
+            {zeros_buffer->address(), k_dram_bank_id, src_buffer->address(), k_dram_bank_id, num_tiles});
     } else {
         SetRuntimeArgs(program, reader, core, {src_buffer->address(), k_dram_bank_id, num_tiles});
     }
@@ -1282,9 +1282,9 @@ TEST_F(LLKMeshDeviceFixture, TensixReconfigFormatAndGeometry) {
     constexpr std::uint32_t seed = 42;
     constexpr float value_range = 10.0f;
     constexpr std::uint32_t k_bf16_representable_mask = 0xFFFF0000u;
-    // 8x32 changes the face size. Without the geometry reprogramming, srcA 8x32 comes out wrong, and an LLK-assert
-    // build stops at the unpack-config check (srcB 8x32 data still matches with asserts off). 16x32 changes only
-    // the face count and passes either way; both 16x32 cases are controls.
+    // 8x32 changes the face size. Without the geometry reprogramming both 8x32 cases come out wrong, since the
+    // payload rides on the reconfigured operand, and an LLK-assert build stops at the unpack-config check. 16x32
+    // changes only the face count and passes either way; both 16x32 cases are controls.
     for (const auto& shape : {std::array<std::uint32_t, 2>{16, 32}, std::array<std::uint32_t, 2>{8, 32}}) {
         const Tile tile(shape);
         std::mt19937 rng(seed);
