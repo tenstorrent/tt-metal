@@ -418,13 +418,15 @@ TileMappedPlan build_tile_mapped_plan(
 }
 
 uint32_t tile_mapped_input_depth(const TileMappedLayout& layout, uint32_t tile_bytes, uint64_t l1_budget) {
-    const uint64_t fixed = layout.page_bytes();
+    // Map, input and scratch CBs, each starting at a DRAM-aligned address.
+    const auto footprint = [](uint64_t bytes) { return tt::round_up(bytes, tt::tt_metal::hal::get_dram_alignment()); };
+    const uint64_t fixed = footprint(layout.page_bytes()) + footprint(tile_bytes);
     for (const uint32_t depth : kPipelinedDepths) {
-        if (fixed + (depth + 1ull) * tile_bytes <= l1_budget) {
+        if (fixed + footprint(static_cast<uint64_t>(depth) * tile_bytes) <= l1_budget) {
             return depth;
         }
     }
-    return fixed + 2ull * tile_bytes <= l1_budget ? 1 : 0;
+    return fixed + footprint(tile_bytes) <= l1_budget ? 1 : 0;
 }
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen
