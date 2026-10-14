@@ -438,7 +438,7 @@ RingWritePlan build_ring_write_plan(
     // Chunked sliding consumes the local slab followed by its cyclic
     // predecessor. Keep that dependency on direction 1 for every device,
     // independent of the dense ring's parity-based split.
-    if (args.has_sliding_window() && tensor_args.is_chunked(args.kv_stripe_split, args.stripe_size) && !args.is_cross) {
+    if (args.uses_neighbor_halo() && tensor_args.is_chunked(args.kv_stripe_split, args.stripe_size) && !args.is_cross) {
         plan.forward_writes_expected = 1;
         plan.backward_writes_expected = 0;
         return plan;
@@ -610,7 +610,8 @@ std::optional<uint32_t> compute_gather_valid_Ht(
     }
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t n_local_q = tensor_args.input_q.padded_shape()[2];  // per-device Q slab (chunk_local)
-    const uint32_t kv_region = n_local_q / args.kv_stripe_split;
+    const uint32_t kv_region =
+        args.has_sliding_window() && args.stripe_size != 0 ? args.stripe_size : n_local_q / args.kv_stripe_split;
     const uint32_t chunk_global = kv_region * ring_size;
     if (tensor_args.has_metadata()) {
         // Metadata path: the all-gather reader recomputes this per dispatch from kv_actual_isl
@@ -657,7 +658,7 @@ void apply_ring_joint_scalar_runtime_args(
     const uint32_t num_ag_inputs = tensor_args.input_v.has_value() ? 2u : 1u;
     const std::array<const Tensor*, 2> ag_inputs = {
         &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
-    const bool uses_neighbor_halo = args.has_sliding_window();
+    const bool uses_neighbor_halo = args.uses_neighbor_halo();
     // One reader/writer kernel pair per halo hop, appended in hop order after the three SDPA kernels.
     std::optional<ring_joint::ChunkedSlidingHaloLayout> runtime_halo_layout;
     if (uses_neighbor_halo) {
@@ -783,7 +784,7 @@ void apply_ring_joint_scalar_runtime_args(
             ag_rt::kValidPagesFieldOffset);
     }
 
-    if (args.has_sliding_window() && (patch_indexed_kv_cache || patch_kv_pad_rotation)) {
+    if (args.uses_neighbor_halo() && (patch_indexed_kv_cache || patch_kv_pad_rotation)) {
         const auto& runtime_chunked_sliding_layout = runtime_halo_layout.value();
         // logical_n/kv_actual_isl are runtime-patched and excluded from the program hash. For
         // compact chunked sliding they also choose which cache-group tail each hop reads.
@@ -1154,7 +1155,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool kernel_chunked = runtime_plan.kernel_chunked;
     const bool kernel_is_causal = runtime_plan.kernel_is_causal;
     ring_joint::ChunkedSlidingHaloLayout chunked_sliding_halo_layout;
-    if (has_sliding_window) {
+    if (args.uses_neighbor_halo()) {
         chunked_sliding_halo_layout = ring_joint::build_chunked_sliding_halo_layout(
             q_local_padded_Nt,
             Sk_chunk_t,
@@ -1932,18 +1933,20 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         defines["SDPA_COMPUTE_LOFI"] = "1";
     }
     defines["SLIDING_HALO_SLOT_COUNT"] =
-        std::to_string(has_sliding_window ? chunked_sliding_halo_layout.halo_slot_count : 0);
+        std::to_string(args.uses_neighbor_halo() ? chunked_sliding_halo_layout.halo_slot_count : 0);
     const uint32_t sliding_halo_hops =
         has_sliding_window
             ? ring_joint::chunked_sliding_halo_hop_count(chunked_sliding_halo_layout.halo_tile_rows, q_local_padded_Nt)
             : 0;
     defines["SLIDING_MAX_SOURCE_RANGES"] = std::to_string(
         has_sliding_window
-            ? ring_joint::sliding_q_work_plan_source_ranges(sliding_halo_hops, chunked_sliding_halo_layout.halo_slot_count)
+            ? (args.stripe_size != 0 ? ring_size
+                                     : ring_joint::sliding_q_work_plan_source_ranges(
+                                           sliding_halo_hops, chunked_sliding_halo_layout.halo_slot_count))
             : 1);
     // Local slab first (so it computes while the halo is in flight) only for a multi-hop halo, where the exchange
     // is long enough to hide; a one-hop halo keeps the oldest-first accumulation order.
-    defines["SLIDING_LOCAL_FIRST"] = sliding_halo_hops > 1 ? "1" : "0";
+    defines["SLIDING_LOCAL_FIRST"] = (args.stripe_size != 0 || sliding_halo_hops > 1) ? "1" : "0";
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
@@ -3384,7 +3387,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         all_gather_input_tensors.push_back(*joint_tensor_v);
         all_gather_output_tensors.push_back(tensor_args.gathered_joint_v.value());
     }
-    if (has_sliding_window) {
+    if (args.uses_neighbor_halo()) {
         // A halo that fits in one Q slab is a single exchange with the +1 neighbour. A wider one reaches
         // several predecessors, and hop d ships the tail of the slab d positions back into its own block
         // of the receiver's compact buffer; the SDPA reader waits for all of them before its K loop. A
@@ -3659,7 +3662,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // consumer implements the second-half wait.
             sdpa_fused_op_signaler->split_forwarding_enabled,
             /*partial_readiness_enabled=*/false,
-            rank_mapping);
+            rank_mapping,
+            // Round the live end to an ownership cycle, independently of Q length.
+            // The extra stripe covers rounding at both ends of the visible interval.
+            has_sliding_window && args.stripe_size != 0
+                ? q_local_padded_Nt + (1 + tt::div_up(sliding_window_size - 1, args.stripe_size * ring_size)) *
+                                          (args.stripe_size / tt::constants::TILE_HEIGHT)
+                : 0,
+            Sk_chunk_t,
+            has_sliding_window ? args.stripe_size / tt::constants::TILE_HEIGHT : 0);
     }
 
     return desc;

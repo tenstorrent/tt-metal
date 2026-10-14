@@ -352,7 +352,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             chunk_capacity);
     }
 
-    if (args.has_sliding_window() && tensor_args.is_chunked(args.kv_stripe_split, args.stripe_size) &&
+    if (args.uses_neighbor_halo() && tensor_args.is_chunked(args.kv_stripe_split, args.stripe_size) &&
         (!kv_pad_rotation_active(args, tensor_args) || args.circular_kv_cache)) {
         const auto q_group_size = tensor_args.input_q.logical_shape()[2] * args.ring_size;
         // One complete group is enough: at logical_n == q_group_size device 0 clips its
@@ -376,7 +376,7 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
                 "Chunked sliding KV-pad rotation requires the new Q chunk to fill exactly one ring group");
         }
     }
-    if (args.has_sliding_window() && kv_pad_rotation_active(args, tensor_args)) {
+    if (args.uses_neighbor_halo() && kv_pad_rotation_active(args, tensor_args)) {
         const uint32_t local = tensor_args.input_q.logical_shape()[2];
         // Live metadata is checked against the halo capacity by every device consumer.
         const bool needs_two =
@@ -405,8 +405,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "rjsdpa stripe_size must be tile-aligned and divide both local Q and KV lengths");
         TT_FATAL(
             args.kv_stripe_split == 1 && args.is_causal && !args.is_balanced && !args.is_cross &&
-                !args.has_sliding_window() && !args.circular_kv_cache && !tensor_args.joint_q.has_value(),
-            "rjsdpa explicit stripes require unbalanced dense causal attention with matching Q/KV distributions");
+                !args.circular_kv_cache && !tensor_args.joint_q.has_value(),
+            "rjsdpa explicit stripes require unbalanced causal attention with matching Q/KV distributions");
         TT_FATAL(kv_pad_rotation_active(args, tensor_args), "rjsdpa explicit stripes require a host or device prefix");
     }
 
@@ -574,7 +574,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 
     std::optional<uint32_t> compact_gather_dim_minimum;
-    if (args.has_sliding_window()) {
+    if (args.uses_neighbor_halo()) {
         compact_gather_dim_minimum =
             sliding_halo_token_count(args.sliding_window_size.value(), args.get_k_chunk_size());
     }
@@ -674,8 +674,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     if (args.has_sliding_window()) {
         const uint32_t window_size = args.sliding_window_size.value();
-        const bool supported_q_chunk = q_chunk_size == 64 || q_chunk_size == 128;
-        const bool supported_k_chunk = k_chunk_size == 128;
+        const bool supported_q_chunk = args.stripe_size != 0 || q_chunk_size == 64 || q_chunk_size == 128;
+        const bool supported_k_chunk = args.stripe_size != 0 || k_chunk_size == 128;
         // These are the only ring sizes the chunked sliding halo is tested on. Extend the test matrix
         // (and sliding_max_halo_hops) before widening this allowlist.
         TT_FATAL(
@@ -714,8 +714,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
                 tensor_args.gathered_v->dtype() == DataType::BFLOAT8_B,
             "Chunked sliding attention requires BF16 Q and BFP8_B K/V");
         TT_FATAL(
-            gathered_buffer_n < N_local_kv * args.ring_size,
-            "Chunked sliding attention requires a compact halo buffer, got gathered rows {} for {} global rows",
+            args.stripe_size != 0 ? gathered_buffer_n == N_local_kv * args.ring_size
+                                  : gathered_buffer_n < N_local_kv * args.ring_size,
+            "Sliding attention requires a full gathered cache for explicit stripes, or a compact halo otherwise; "
+            "got gathered rows {} for {} global rows",
             gathered_buffer_n,
             N_local_kv * args.ring_size);
         TT_FATAL(
@@ -734,14 +736,14 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             N_local_q % q_chunk_size == 0,
             "q_chunk_size must divide the per-device Q slab for chunked sliding attention");
         TT_FATAL(
-            N_local_q % k_chunk_size == 0,
-            "k_chunk_size must divide the per-device Q slab for chunked sliding attention");
+            args.stripe_size != 0 ? N_local_kv % k_chunk_size == 0 : N_local_q % k_chunk_size == 0,
+            "k_chunk_size must divide the per-device KV cache with explicit stripes, or the Q slab for legacy sliding");
         // A halo wider than the per-device Q slab is delivered by several hops around the CP ring,
         // one slab tail each (sliding_window_work_plan.hpp), and cannot span more than the ring.
         const uint32_t halo_hops = ring_joint::chunked_sliding_halo_hop_count(
             halo_tokens / tt::constants::TILE_HEIGHT, N_local_q / tt::constants::TILE_HEIGHT);
         TT_FATAL(
-            halo_hops <= args.ring_size,
+            args.stripe_size != 0 || halo_hops <= args.ring_size,
             "Chunked sliding halo {} (window {}) needs {} hops over the per-device Q slab {}, more than the SP{} ring",
             halo_tokens,
             window_size,
@@ -751,7 +753,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         // The work plan returns an EMPTY plan past its fixed range count; reject that here instead
         // of computing no attention.
         TT_FATAL(
-            halo_hops <= ring_joint::sliding_max_halo_hops,
+            args.stripe_size != 0 || halo_hops <= ring_joint::sliding_max_halo_hops,
             "Chunked sliding halo needs {} hops; at most {} are supported",
             halo_hops,
             ring_joint::sliding_max_halo_hops);

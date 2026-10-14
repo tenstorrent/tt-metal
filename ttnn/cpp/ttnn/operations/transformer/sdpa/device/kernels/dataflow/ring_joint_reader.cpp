@@ -548,7 +548,7 @@ void kernel_main() {
         if constexpr (kv_pad_from_metadata) {
             uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
                 meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(4), meta_l1);
-            if constexpr (has_sliding_window) {
+            if constexpr (has_sliding_window && SLIDING_HALO_SLOT_COUNT > 0) {
                 kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
                     kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);
             } else {
@@ -822,7 +822,13 @@ void kernel_main() {
         // One signal per halo regardless of hop count: the collecting exchange waits for every hop's
         // arrival before signalling (ring_attention_neighbor_halo_reader.cpp).
         for (uint32_t ring_iter = 0; ring_iter < synchronization_iters; ++ring_iter) {
+#ifdef RING_JOINT_STRIPE_TILES
+            // All-gather publishes cumulative readiness, including its local pre-signal.
+            // Halo's consume-one protocol would mistake that token for the last remote source.
+            fused_op_receiver.get_next_ring_id_and_sync();
+#else
             fused_op_receiver.get_next_ring_id_and_consume_one_signal();
+#endif
         }
     };
     // K chunks past this device's last Q row are fully masked; compute skips the same ones.

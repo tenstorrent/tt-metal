@@ -118,6 +118,7 @@ struct RingJointSDPAParams {
     uint32_t q_ring_size() const { return static_cast<uint32_t>(ring_size) / kv_stripe_split; }
 
     bool has_sliding_window() const { return sliding_window_size.value_or(0) > 0; }
+    bool uses_neighbor_halo() const { return has_sliding_window() && stripe_size == 0; }
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "joint_strategy",

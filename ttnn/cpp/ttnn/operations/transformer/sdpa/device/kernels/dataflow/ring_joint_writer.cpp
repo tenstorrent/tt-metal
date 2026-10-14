@@ -701,7 +701,7 @@ void kernel_main() {
         CircularBuffer cb_meta_scratch(cb_out);
         uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
             noc, meta_args, get_common_arg_val<uint32_t>(0), cb_meta_scratch.get_write_ptr());
-        if constexpr (has_sliding_window) {
+        if constexpr (has_sliding_window && SLIDING_HALO_SLOT_COUNT > 0) {
             kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
                 kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);
         } else {
