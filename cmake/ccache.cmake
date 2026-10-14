@@ -11,11 +11,6 @@ function(useCcache)
         return()
     endif()
 
-    if(NOT CMAKE_DISABLE_PRECOMPILE_HEADERS)
-        message(STATUS "Overriding CCACHE_SLOPPINESS to work with PCH.")
-        set(CCACHE_ENV "CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime")
-    endif()
-
     # Default to zstd level-3 compression if the caller has not already chosen a compression setting.
     # This reduces remote storage (Redis) entry size by ~3-5x with negligible impact on build times.
     if(NOT DEFINED ENV{CCACHE_COMPRESS})
@@ -117,6 +112,24 @@ function(useCcache)
             "ICECC_SCHEDULER_HOST=${TT_ICECC_SCHEDULER_HOST}"
         )
         message(STATUS "Icecream distributed compilation enabled (scheduler: ${TT_ICECC_SCHEDULER_HOST}, env: ${_tt_icecc_env_name})")
+
+        # icecc and PCH don't mix: the PCH is built and consumed against the local header
+        # tree, but icecc preprocesses locally and compiles remotely, so the remote node
+        # can't load the (host-specific) PCH and jobs fall back to local or fail outright.
+        # Icecream wins -- quietly turn PCH off rather than making the dev choose. This
+        # must happen before any PCH targets are created (CMAKE_DISABLE_PRECOMPILE_HEADERS
+        # seeds DISABLE_PRECOMPILE_HEADERS at target creation), hence PARENT_SCOPE: we're
+        # in a function, and the caller's scope is what the rest of the tree inherits.
+        if(NOT CMAKE_DISABLE_PRECOMPILE_HEADERS)
+            message(STATUS "Icecream is enabled -- disabling precompiled headers (incompatible with distributed compilation)")
+        endif()
+        set(CMAKE_DISABLE_PRECOMPILE_HEADERS ON)
+        set(CMAKE_DISABLE_PRECOMPILE_HEADERS ON PARENT_SCOPE)
+    endif()
+
+    if(NOT CMAKE_DISABLE_PRECOMPILE_HEADERS)
+        message(STATUS "Overriding CCACHE_SLOPPINESS to work with PCH.")
+        list(APPEND CCACHE_ENV "CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime")
     endif()
 
     if(CMAKE_GENERATOR MATCHES "Ninja")
