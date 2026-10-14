@@ -11,7 +11,7 @@
 #include "llk_assert.h"
 #include "utils/gpr.h"
 
-namespace hal::gpr_ops
+namespace hal::scalar
 {
 namespace detail
 {
@@ -35,7 +35,7 @@ struct Immediate<detail::DynamicImmediateValue>
 template <std::uint32_t Value>
 inline constexpr auto immediate()
 {
-    static_assert(Value != detail::DynamicImmediateValue, "Immediate value is reserved by hal::gpr_ops::immediate()");
+    static_assert(Value != detail::DynamicImmediateValue, "Immediate value is reserved by hal::scalar::immediate()");
     return Immediate<Value> {};
 }
 
@@ -496,4 +496,4 @@ inline __attribute__((always_inline)) void compare(const hal::Gpr<Destination> d
     detail::emit_binary<detail::compare_operation<Predicate>>(destination, lhs, rhs);
 }
 
-} // namespace hal::gpr_ops
+} // namespace hal::scalar
