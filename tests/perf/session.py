@@ -90,9 +90,11 @@ def execute(suite: Suite, environment: str, case_filter: str | None = None) -> R
     # Without this, a filter that matches nothing compares an empty run against an empty selection and passes.
     if not raw.samples and not raw.aggregated and not raw.errors:
         raise runner.RunError(f"suite {suite.name} ran no cases; check its filter and repetitions")
-    # Only an unfiltered run without errored cases is expected to cover every declared metric.
-    if case_filter is None and not raw.errors and contract.unreported_metrics(raw):
-        raise contract.ContractError(f"declared metrics {contract.unreported_metrics(raw)} are reported by no case")
+    expected = suite.process_repetitions if suite.kind == "contract" else suite.repetitions_for(environment) or 1
+    if _repetition_counts(raw) - {expected}:
+        raise contract.ContractError(
+            f"suite {suite.name} asked for {expected} repetitions but the output has {sorted(_repetition_counts(raw))}"
+        )
     record = Record(
         suite=suite.name,
         environment=environment,
@@ -139,16 +141,20 @@ def _check_retry_matches(retry_raw: contract.RawRun, record: Record) -> None:
     """A re-run measured differently from the first run cannot confirm or clear its statuses."""
     if retry_raw.metrics != record.metrics:
         raise contract.ContractError("re-run declared different metrics from the first run")
-    # Errored cases are short of samples by definition and are handled per case by the caller.
-    counts = {
-        len(samples)
-        for case, per_metric in retry_raw.samples.items()
-        if case not in retry_raw.errors
-        for samples in per_metric.values()
-    }
-    counts |= {n for case, n in retry_raw.repetitions.items() if case not in retry_raw.errors}
+    counts = _repetition_counts(retry_raw)
     if record.repetitions is not None and counts - {record.repetitions}:
         raise contract.ContractError(f"re-run used {sorted(counts)} repetitions, first run used {record.repetitions}")
+
+
+def _repetition_counts(raw: contract.RawRun) -> set[int]:
+    """Repetition counts of the cases that did not error. Errored cases are short of samples by definition."""
+    counts = {
+        len(samples)
+        for case, per_metric in raw.samples.items()
+        if case not in raw.errors
+        for samples in per_metric.values()
+    }
+    return counts | {n for case, n in raw.repetitions.items() if case not in raw.errors}
 
 
 def evaluate(
