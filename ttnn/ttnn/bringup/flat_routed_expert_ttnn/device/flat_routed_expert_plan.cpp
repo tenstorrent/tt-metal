@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "flat_routed_expert_plan.hpp"
+#include "flat_drisc.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -176,8 +177,13 @@ uint32_t FlatRoutedExpertPlan::rect_of(const Core& c) const {
 
 std::vector<Core> FlatRoutedExpertPlan::arena_cores() const {
     std::vector<Core> out = gu;
-    for (const auto* l : {&down, &relays, &readers, &gu_idle}) {
+    for (const auto* l : {&down, &relays, &gu_idle}) {
         out.insert(out.end(), l->begin(), l->end());
+    }
+    if (drisc) {  // (the reader cells are down cores, relays or idle)
+        out.push_back(launcher);
+    } else {
+        out.insert(out.end(), readers.begin(), readers.end());
     }
     return out;
 }
@@ -382,6 +388,11 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     if (const char* rd = std::getenv("MIMO_FL_RDOWN")) {  // (perf probe: force the readers' down columns on / off)
         p.rdown = std::atoi(rd) != 0;
     }
+    p.drisc = flat_drisc_enabled();
+    if (p.drisc) {  // (the reader tails' down columns read gate/up weights too: not in DRISC mode)
+        TT_FATAL(p.nsg == 1, "MIMO_FL_DRISC: one subgrid only");
+        p.rdown = false;
+    }
     // h units (MIMO_FL_HU = row tiles per unit): one M-group, one subgrid, no reader down columns
     if (const char* hu = std::getenv("MIMO_FL_HU")) {
         p.hu = static_cast<uint32_t>(std::atoi(hu));
@@ -499,6 +510,15 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     for (const auto* l : {&p.readers, &gu_all}) {
         for (const auto& c : *l) {
             taken.insert({c.x, c.y});
+        }
+    }
+    if (p.drisc) {  // the readers' cells but the launcher's go to the relays / down cores
+        p.launcher = p.readers[0];
+        const char* rdd = std::getenv("MIMO_FL_DRISC_RD_DOWN");
+        if (rdd == nullptr || std::atoi(rdd) != 0) {
+            for (uint32_t r = 1; r < p.readers.size(); ++r) {
+                taken.erase({p.readers[r].x, p.readers[r].y});
+            }
         }
     }
     if (p.nsg > 2) {  // per rectangle, the free cells of the column just west of it nearest its middle row
@@ -775,9 +795,16 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             if (cand.empty()) {
                 cand = left;
             }
-            const Core rp = phys(p.readers[r]);
+            // the forwarder: the reader (NOC1), or its DRISC (DRAM tile, writes on NOC0)
+            // (perf probe MIMO_FL_DRISC_ASSIGN=0: DRISC mode with the readers' assignment)
+            const bool by_drisc = p.drisc && !(std::getenv("MIMO_FL_DRISC_ASSIGN") &&
+                                               std::atoi(std::getenv("MIMO_FL_DRISC_ASSIGN")) == 0);
+            // (DRISC: NOC0 coordinates on both ends; a DRAM tile's translated ones are not on the NoC grid)
+            const Core rp = by_drisc ? Core(flat_drisc_physical(device, r, p.banks)) : phys(p.readers[r]);
+            const int fnoc = by_drisc ? static_cast<int>(flat_drisc_noc(device, r, p.banks)) : 1;
+            auto at = [&](uint32_t ci) { return by_drisc ? Core(flat_worker_noc0(device, gu_all[ci])) : phys(gu_all[ci]); };
             const uint32_t best = *std::min_element(cand.begin(), cand.end(), [&](uint32_t a, uint32_t b) {
-                return noc_hops(rp, phys(gu_all[a]), 1) < noc_hops(rp, phys(gu_all[b]), 1);
+                return noc_hops(rp, at(a), fnoc) < noc_hops(rp, at(b), fnoc);
             });
             per_reader[r].push_back(best);
             left.erase(std::find(left.begin(), left.end(), best));
@@ -786,6 +813,16 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     for (uint32_t r = 0; r < n_rd; ++r) {
         for (uint32_t ci : per_reader[r]) {
             p.gu.push_back(gu_all[ci]);
+        }
+        if (p.drisc && std::getenv("MIMO_FL_DRISC_DBG")) {
+            const Core dp = flat_drisc_physical(device, r, p.banks);
+            std::string g;
+            for (uint32_t ci : per_reader[r]) {
+                const Core q = flat_worker_noc0(device, gu_all[ci]);
+                g += " (" + std::to_string(q.x) + "," + std::to_string(q.y) + ") h" +
+                     std::to_string(noc_hops(dp, q, flat_drisc_noc(device, r, p.banks)));
+            }
+            log_info(tt::LogOp, "flat DRISC slot {}: tile phys ({},{}) -> gate/up{}", r, dp.x, dp.y, g);
         }
     }
     for (uint32_t ci : left) {

@@ -28,6 +28,29 @@ from ttnn.bringup.flat_routed_expert_ttnn._helpers import BF8_TILE, noc_hops
 from ttnn.bringup.flat_routed_expert_ttnn._helpers import crs_single as _crs_single
 
 
+def _drisc_close_hook():
+    """MIMO_FL_DRISC (prototype): the op's persistent DRISC gate/up senders keep running between calls; stop them
+    before the device closes (ttnn.close_device / close_mesh_device are wrapped once)."""
+    if getattr(ttnn, "_flat_drisc_hooked", False):
+        return
+    ttnn._flat_drisc_hooked = True
+    stop = ttnn._ttnn.operations.bringup.flat_drisc_stop
+    dump = ttnn._ttnn.operations.bringup.flat_drisc_dump
+    for name in ("close_device", "close_mesh_device"):
+        orig = getattr(ttnn, name)
+
+        def wrapped(device, *a, _orig=orig, **kw):
+            dump(device)
+            stop(device)
+            return _orig(device, *a, **kw)
+
+        setattr(ttnn, name, wrapped)
+
+
+if os.environ.get("MIMO_FL_DRISC", "0") not in ("", "0"):
+    _drisc_close_hook()
+
+
 def _crs(cores):
     """crs_rects; ``MIMO_FL_CRS_SINGLE`` (prototype A/B): one CoreRange per core."""
     if os.environ.get("MIMO_FL_CRS_SINGLE"):

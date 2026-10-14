@@ -108,6 +108,11 @@ struct FlatRoutedExpertPlan {
     bool gu_full_sync = false;
     bool hl_in_arena = false;  // gate/up h_local (CB 3) in the arena (bf16 x / h), else a static CB
     bool group_rect = false;
+    // DRISC mode (MIMO_FL_DRISC, flat_drisc.hpp): the DRAM cores send the gate/up weights, the readers only post jobs
+    bool drisc = false;
+    // DRISC mode: the one Tensix core that posts every slot's job (the readers' cells are free: the down cores take
+    // them; MIMO_FL_DRISC_RD_DOWN=0 leaves them idle)
+    Core launcher{0, 0};
     // down
     bool rdown = false;
     uint32_t d_ch = 7, n_rdn = 0, pcd_r = 0, rem_cols = 0, kd_r = 0, nblk_r = 0, slot_dr = 0, ring_dr = 0;
