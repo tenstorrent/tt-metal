@@ -43,7 +43,7 @@ jobs:
           echo "29e69618b7c138a81bd1b5210f3fb107caf15e21d95c51b5d9d2357f90e80e96  ttm_any.tar.zst" | sha256sum -c -
           tar --zstd -xf ttm_any.tar.zst
           /opt/venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3,12), sys.version; print(sys.version)'
-          uv pip install --python /opt/venv/bin/python --no-deps --no-build-isolation -e .
+          uv pip install --python /opt/venv/bin/python --no-deps -e .
       - name: Real imports and original CPU host tests
         timeout-minutes: 12
         run: |
