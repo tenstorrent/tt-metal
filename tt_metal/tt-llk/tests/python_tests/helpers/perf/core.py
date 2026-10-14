@@ -1099,6 +1099,8 @@ class PerfConfig(TestConfig):
             for templates, runtimes, run_type in self.warmup_configs:
                 self._select_run_type(templates, runtimes, run_type)
                 self.build_elfs()
+                if os.environ.get("LLK_EXP_MAPDUMP"):  # experiment hook: report row key -> runtime bytes and ELF dir
+                    _exp_mapdump(self, run_type)
 
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
             pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
@@ -1143,13 +1145,19 @@ class PerfConfig(TestConfig):
                 if self._wormhole_perf_barrier()
                 else (CANONICAL_PHASE,)
             )
+            _gk = _exp_gap_settings(run_type)  # experiment hook (brphase): these phases instead, see _exp_gap_preset
+            if _gk:
+                phases = tuple(tuple(int(x) for x in g.split(",")) for g in _gk)
             if len(phases) > 1:
                 phased_run_types.add(run_type)
             else:
                 phases *= run_count
+            _gk = [f"{a},{b}" for a, b in phases] if len(phases) > 1 else []
+            _gk_vals = []
             for run_index, phase in enumerate(phases):
                 self.counted_zones = self._main_counted_zones()
                 self.write_runtimes_to_L1(release_phase=phase)
+                TestConfig.EXP_GAP_SETTING = "%d,%d" % phase  # experiment hook (brphase): for the zone dump
                 self.run_elf_files()
                 self.wait_for_tensix_operations_finished()
                 # Counter config is written by BRISC from built-in array (local L1 write).
@@ -1160,6 +1168,10 @@ class PerfConfig(TestConfig):
                     self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
                 )
                 assert_zones_dont_overlap(profiler_data)
+                if _gk and os.environ.get("LLK_EXP_SWEEP_DUMP"):  # experiment hook (brphase): per-setting values
+                    _gk_vals.append(_exp_sweep_value(profiler_data, run_type))
+                if os.environ.get("LLK_EXP_ZONE_DUMP") or os.environ.get("LLK_ZONE_DUMP"):  # experiment hook
+                    _exp_zone_dump(profiler_data, self, run_type, run_index)
                 if self._l1_congestion_phases():
                     assert_one_zone_per_phase(profiler_data)
 
@@ -1193,6 +1205,8 @@ class PerfConfig(TestConfig):
                 except Exception as e:
                     logger.warning("Error reading INIT counters: {}", e)
 
+            if _gk and os.environ.get("LLK_EXP_SWEEP_DUMP"):  # experiment hook (brphase)
+                _exp_sweep_dump(self, run_type, _gk, _gk_vals)
             get_stats = Profiler.STATS_FUNCTION[run_type]
             stats_df = get_stats(ProfilerData.concat(variant_raw_data))
             # Only the no-counter build must produce wall-clock stats; a counter build may return counters alone.
@@ -1266,6 +1280,9 @@ class PerfConfig(TestConfig):
                     TestConfig.TENSIX_LOCATION,
                 )
                 init_data.df["run_index"] = 0
+                if os.environ.get("LLK_EXP_INIT_DUMP"):  # experiment hook (init-opt2): every thread's INIT
+                    for _, _, run_type in rows:
+                        _exp_init_dump(self, run_type, init_data)
                 for templates, runtimes, run_type in rows:
                     init_stats = Profiler.STATS_FUNCTION[run_type](
                         ProfilerData.concat([init_data])
@@ -1538,3 +1555,120 @@ def merge_main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(merge_main())
+
+
+def _exp_init_dump(cfg, run_type, init_data):
+    """experiment hook (init-opt2), only with LLK_EXP_INIT_DUMP=<jsonl>: every thread's INIT zone of this INIT launch,
+    the node id and the INIT ELF dir"""
+    import json as _json
+
+    raw = init_data.zones().raw()
+    raw = raw[raw[MARKER] == "INIT"]
+    zones = {}
+    for thread in ("unpack", "math", "pack"):
+        t = raw[raw["thread"] == thread]
+        zones[thread] = [
+            [int(x) for x in t[t["type"] == "ZONE_START"]["timestamp"].to_numpy()],
+            [int(x) for x in t[t["type"] == "ZONE_END"]["timestamp"].to_numpy()],
+        ]
+    rec = {
+        "node": os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0],
+        "run_type": run_type.name,
+        "test": str(cfg.test_name),
+        "variant": cfg.variant_id,
+        "init_dir": str(cfg._init_build_dir() / "init_elf"),
+        "bytes": bytes(cfg.runtime_arguments_bytes()).hex(),
+        "zones": zones,
+    }
+    with open(os.environ["LLK_EXP_INIT_DUMP"], "a") as f:
+        f.write(_json.dumps(rec) + "\n")
+
+
+def _exp_zone_dump(profiler_data, cfg, run_type, run_index):
+    """experiment hook (holdall, congpr): every zone record of this kernel to <LLK_EXP_ZONE_DUMP or LLK_ZONE_DUMP>/zones_<worker>.jsonl"""
+    import json as _json
+
+    d = os.environ.get("LLK_EXP_ZONE_DUMP") or os.environ["LLK_ZONE_DUMP"]
+    os.makedirs(d, exist_ok=True)
+    z = profiler_data.zones().raw()
+    rows = [[str(t), str(m), str(ty), int(ts)] for t, m, ty, ts in zip(z["thread"], z[MARKER], z["type"], z["timestamp"])]
+    node = os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0]
+    rec = {"node": node, "nodeid": node, "test": str(cfg.test_name), "variant": cfg.variant_id, "run_type": run_type.name,
+           "run_index": run_index, "bytes": bytes(cfg.runtime_arguments_bytes()).hex(), "zones": rows, "setting": getattr(TestConfig, "EXP_GAP_SETTING", None)}
+    if os.environ.get("LLK_EXP_NREC_READ"):  # brphase: the sled NOP counts BRISC stored per thread (brisc.cpp LLK_EXP_NREC)
+        from ..device_io import read_words_from_device
+
+        rec["nrec"] = [
+            int(read_words_from_device(TestConfig.TENSIX_LOCATION, 0xFFB403E8 + t * 0x1000, safe_mode=False)[0]) // 4
+            for t in range(3)
+        ]
+    with open(os.path.join(d, f"zones_{os.environ.get('PYTEST_XDIST_WORKER', 'master')}.jsonl"), "a") as f:
+        f.write(_json.dumps(rec) + "\n")
+
+
+def _exp_mapdump(cfg, run_type):
+    """experiment hook (fidelity agent), LLK_EXP_MAPDUMP=<dir>: row key, runtime bytes, node id and ELF dir per run type"""
+    import json as _json
+
+    sweep = PerfConfig._build_sweep_frame(
+        {}, cfg.formats_config, cfg.unpack_to_dest, cfg.dest_acc, cfg.passed_templates, cfg.passed_runtimes
+    )
+    node = os.environ.get("PYTEST_CURRENT_TEST", "").split("::")[0].split("/")[-1].replace(".py", "")
+    rec = {"module": node, "run_type": run_type.name, "key": [str(v) for v in sweep.iloc[0].tolist()],
+           "cols": list(sweep.columns), "test": cfg.test_name, "variant": cfg.variant_id,
+           "bytes": cfg.runtime_arguments_bytes().hex(),
+           "nodeid": os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0],
+           "elf_dir": str(cfg._layout_elf_dir(build=False))}
+    with open(os.path.join(os.environ["LLK_EXP_MAPDUMP"], f"map_{os.getpid()}.jsonl"), "a") as f:
+        f.write(_json.dumps(rec) + "\n")
+
+
+def _exp_gap_settings(run_type):
+    """experiment hook (brphase): LLK_EXP_GAP_SWEEP='a,b;a,b;...' extra NOPs after the first / second scheduled release,
+    one kernel run per setting, for L1_TO_L1 (and the isolates with LLK_EXP_GAP_ISO=1); [] = the normal run count."""
+    sweep = _exp_gap_preset(os.environ.get("LLK_EXP_GAP_SWEEP", ""))
+    if not sweep or not (run_type == PerfRunType.L1_TO_L1 or os.environ.get("LLK_EXP_GAP_ISO")):
+        return []
+    return sweep
+
+
+def _exp_gap_preset(spec):
+    """experiment hook (brphase): sweep presets (no commas, so a CI leg ENV token can carry them). pm61: gap1 + 0..30 and
+    (gap1 - b, gap2 + b), b = 1..30 (each early thread's phase over one LFSR period); grid31: every (a, b) in [0, 30]^2;
+    lat31:<c>: (k, c * k mod 31), k = 0..30; anything else: 'a,b;a,b;...'."""
+    spec = spec.strip()
+    if spec == "pm61":
+        return ["0,0"] + [f"{a},0" for a in range(1, 31)] + [f"{-b},{b}" for b in range(1, 31)]
+    if spec == "grid31":
+        return [f"{a},{b}" for b in range(31) for a in range(31)]
+    if spec.startswith("lat31:"):
+        c = int(spec.split(":")[1])
+        return [f"{k},{(c * k) % 31}" for k in range(31)]
+    return [x.strip() for x in spec.split(";") if x.strip()]
+
+
+def _exp_sweep_value(profiler_data, run_type):
+    """experiment hook (brphase): the TILE_LOOP value of one kernel run (L1_TO_L1: pack end - unpack start)"""
+    z = profiler_data.zones().raw()
+    z = z[z[MARKER] == "TILE_LOOP"]
+    def ts(thread, ty, last=False):
+        t = z[(z["thread"] == thread) & (z["type"] == ty)]["timestamp"]
+        return int(t.iloc[-1] if last else t.iloc[0]) if len(t) else None
+    th = {PerfRunType.UNPACK_ISOLATE: "unpack", PerfRunType.MATH_ISOLATE: "math", PerfRunType.PACK_ISOLATE: "pack"}.get(run_type)
+    try:
+        if run_type == PerfRunType.L1_TO_L1:
+            return ts("pack", "ZONE_END", True) - ts("unpack", "ZONE_START")
+        return ts(th, "ZONE_END", True) - ts(th, "ZONE_START") if th else None
+    except TypeError:
+        return None
+
+
+def _exp_sweep_dump(cfg, run_type, settings, values):
+    """experiment hook (brphase), LLK_EXP_SWEEP_DUMP=<jsonl>: one record per test and run type with every setting's value"""
+    import json as _json
+
+    rec = {"node": os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0], "test": str(cfg.test_name),
+           "variant": cfg.variant_id, "run_type": run_type.name, "bytes": bytes(cfg.runtime_arguments_bytes()).hex(),
+           "settings": settings, "values": values}
+    with open(os.environ["LLK_EXP_SWEEP_DUMP"], "a") as f:
+        f.write(_json.dumps(rec) + "\n")
