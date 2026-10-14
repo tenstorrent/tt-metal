@@ -90,7 +90,7 @@ def test_an_op_the_capture_could_not_place_keeps_its_position():
 
 def test_the_stage_is_resolved_once_and_carried():
     """next_target used to recompute what the entry could have carried."""
-    assert 'entry["stage"] = stage_of_op(op_code, prof)' in _SRC
+    assert 'entry["stage"] = _req.stage(o) if _req.weights else stage_of_op(op_code, prof)' in _SRC
     assert 'stage_of_op(blocking[0]["op"], prof)' not in _SRC, "the second resolution is back"
 
 

@@ -84,7 +84,9 @@ def test_a_finished_stage_still_goes_last_whatever_its_weight(pm):
 
 def test_the_gate_weighs_before_it_sorts_and_reports_the_gap_unchanged():
     src = (_CC / "perf_mcp.py").read_text()
-    i = src.index("_weights = stage_cost_weights(prof)")
+    # the weights are read once, by the per-request reader the cutoff also uses, before the sort
+    i = src.index("_weights = _req.weights")
+    assert src.index("_req = _per_request_reader(_gate_prof)") < i
     j = src.index("blocking.sort(key=lambda b: _blocking_order_key(b, _short_names))")
     assert i < j
     assert 'b["cost_weight"] = round(float(_weights.get(b.get("stage") or "", 1.0)), 4)' in src[i:j]

@@ -5087,6 +5087,11 @@ def _stage_deltas(now: dict, bar: dict, spread: dict | None = None) -> dict:
     """
     out = {}
     _tol_by_stage = spread or {}
+    # WHAT A STEP'S DELTA IS WORTH TO ONE REQUEST. A stage the pipeline states a request repeats
+    # (stage_repeats_per_request) gets `repeats` and `delta_per_request_ms` beside its per-step
+    # delta, so a 0.02 ms step win on a 127-step stage reads as the ~2.5 ms it is. Additive: the win
+    # rule and the bars still judge the per-step number against the stage's own spread.
+    _reps = stage_repeats_per_request(list(now)) if now else {}
     for name, ms in sorted(now.items()):
         prev = bar.get(name)
         row = {"ms": round(ms, 4), "best": (round(prev, 4) if prev else None)}
@@ -5103,6 +5108,9 @@ def _stage_deltas(now: dict, bar: dict, spread: dict | None = None) -> dict:
             row["tol_ms"] = round(prev * tol, 4)
             row["improved"] = ms < prev * (1.0 - tol)
             row["regressed"] = ms > prev * (1.0 + tol)
+            if _reps.get(name):
+                row["repeats"] = int(_reps[name])
+                row["delta_per_request_ms"] = round((ms - prev) * int(_reps[name]), 4)
         else:
             row["delta_pct"] = None
             row["delta_ms"] = None
@@ -7210,8 +7218,10 @@ def _fold_gate(prof: dict, attempts: list) -> dict | None:
     if not cands:
         return None  # (1) not applicable: nothing recurs within a layer
     gap = sum(float(o.get("gap_ms") or 0.0) for o in cands)
-    if gap < _material_gap_ms(float(prof.get("device_ms") or 0.0)):
+    _req = _per_request_reader(prof)
+    if not _req.material_sum(cands):
         return None
+
     # THE LADDER IS PER GROUP. It was read off every attempt the model ever recorded, so one fold win on
     # one group answered the ladder for all of them: an image-edit port's early folds of its vision
     # reduction and its VAE convs closed it, and no repeated group of its 50-step denoise was ever
@@ -7220,16 +7230,10 @@ def _fold_gate(prof: dict, attempts: list) -> dict | None:
     # Ranked by what the group costs ONE REQUEST -- its gap times its stage's cost weight, the weight
     # the blocking ranking uses -- so a group in a stage a request repeats is not queued behind groups
     # in stages it runs once. Only the first _FUSION_GROUPS_ENV groups are held to the ladder.
-    # A stage is read off the op_code only when that code names ONE group: several open groups under one
-    # bare class name cannot be placed by name, and such a group keeps weight 1 rather than borrow the
-    # stage where its class costs most (which boosted a vision elementwise group 130x as "denoise").
-    _w = stage_cost_weights(prof)
-    _codes = [str(o.get("op_code") or "") for o in ops]
-
+    # Placed by fingerprint, and by the bare op_code only when that code names ONE group -- see
+    # _open_op_stage, the placement rule this gate and the blocking ranking share.
     def _per_request(o):
-        code = str(o.get("op_code") or "")
-        stage = stage_of_op(code, prof) if _codes.count(code) == 1 else ""
-        return float(o.get("gap_ms") or 0.0) * float(_w.get(stage or "", 1.0))
+        return _req.gap(o, o.get("gap_ms"))
 
     _held = int(os.environ.get(_FUSION_GROUPS_ENV, _FUSION_GROUPS_DEFAULT) or _FUSION_GROUPS_DEFAULT)
     lever = worst = None
@@ -7321,7 +7325,7 @@ def _order_gate(prof: dict, attempts: list) -> dict | None:
     if not cands:
         return None  # (1) not applicable: no projection is adjacent to a slice/gather
     gap = sum(float(o.get("gap_ms") or 0.0) for o in cands)
-    if gap < _material_gap_ms(float(prof.get("device_ms") or 0.0)):
+    if not _per_request_reader(prof).material_sum(cands):
         return None
     if _gate_retired(_ORDER_LEVER, attempts):
         return None  # (2) measured win, or (3) capped
@@ -7380,7 +7384,7 @@ def _conv_gate(prof: dict, attempts: list) -> dict | None:
     if not convs:
         return None  # (1) not applicable: this model has no convolution at all
     gap = sum(float(o.get("gap_ms") or 0.0) for o in convs)
-    if gap < _material_gap_ms(float(prof.get("device_ms") or 0.0)):
+    if not _per_request_reader(prof).material_sum(convs):
         return None
     if _gate_retired(_CONV_LEVER, attempts):
         return None  # (2) measured win, or (3) capped
@@ -7446,7 +7450,7 @@ def _split_gate(prof: dict, attempts: list) -> dict | None:
     if not cands:
         return None  # (1) not applicable: nothing fused has open gap here
     gap = sum(float(o.get("gap_ms") or 0.0) for o in cands)
-    if gap < _material_gap_ms(float(prof.get("device_ms") or 0.0)):
+    if not _per_request_reader(prof).material_sum(cands):
         return None
     if _gate_retired(_SPLIT_LEVER, attempts):
         return None  # (2) measured win, or (3) capped
@@ -8378,6 +8382,99 @@ def _blocking_order_key(b: dict, short_names) -> tuple:
     return (done, -float(gap) * float(b.get("cost_weight") or 1.0))
 
 
+def _open_op_stage(o: dict, profile, codes) -> str:
+    """Which stage one OPEN OP lives in, or "". An open op is a fingerprint (op_code + shape).
+
+    BY THE FINGERPRINT FIRST. The bare op_code names a class that runs in every stage -- a matmul runs
+    in all of them -- so placing by it put every recurring-step matmul in whichever stage matmuls cost
+    the most, and weighed it as that stage. The shape is what tells a one-row step projection from a
+    prompt-length one.
+
+    By the bare code only when it names ONE open fingerprint (`codes`: every open op's code): several
+    groups under one class name cannot be placed by name, and such a group keeps no stage rather than
+    borrow the one where its class costs most -- which once boosted a vision elementwise group 130x as
+    the denoise stage."""
+    code = str((o or {}).get("op_code") or "").strip()
+    if not code:
+        return ""
+    shape = str((o or {}).get("shape") or "").strip()
+    if shape:
+        placed = stage_of_op("%s %s" % (code, shape), profile)
+        if placed:
+            return placed
+    if list(codes or ()).count(code) != 1:
+        return ""
+    return stage_of_op(code, profile)
+
+
+def _per_request_reader(profile):
+    """How much closing an open op's gap saves ONE REQUEST, and whether that is material -- read once.
+
+    THE CUTOFF USED TO RUN BEFORE THE WEIGHT. termination_check dropped every op whose PROFILED gap was
+    under _material_gap_ms, and only the survivors were weighed by stage_cost_weights. The profile runs
+    a recurring step once, so a stage a request repeats 127 times showed every op under the cutoff:
+    all of them were dropped before the x127 could apply, the queue held only once-per-request stages,
+    and the stage the band check named as still short was never offered an op. The same raw-gap test
+    sat in every structural gate, so none of them could see that stage either.
+
+    Membership is the OLD test OR the new one, so it only ever widens: an op that was material is still
+    material, and an op is also material when its gap times its stage's weight clears the cutoff
+    restated per request (the profile's device_ms with each marked stage's share scaled by its weight,
+    never below 1, so the cutoff can only rise to meet the larger units).
+
+    A GAP ITS STAGE CANNOT RESOLVE IS NOT MULTIPLIED. Multiplying a gap multiplies its error with it,
+    so the weight is withheld from an op whose gap is inside its stage's measured run-to-run wobble
+    (read_stage_spread x the op's own device_ms). With no spread on file nothing is withheld; the
+    roofline has already left any gap within its absolute noise floor at_floor, and the per-op launch
+    cost is already inside every op's floor.
+
+    Fields: weights ({stage: weight}, stage_cost_weights), stage(o), gap(o, raw) -> per-request ms,
+    material(o, raw) -> bool, material_sum(ops) -> bool (a gate's summed gap_ms). Stage names are
+    whatever the capture and the pipeline report."""
+    import types as _types
+
+    profile = profile or {}
+    weights = stage_cost_weights(profile)
+    spread = _measured_spread() if weights else {}
+    codes = [str(o.get("op_code") or "").strip() for o in profile.get("open_ops") or [] if isinstance(o, dict)]
+    dev = float(profile.get("device_ms") or 0.0)
+    cutoff_raw = _material_gap_ms(dev)
+    req_dev = dev
+    for st, buckets in (profile.get("stage_buckets") or {}).items():
+        st_ms = sum(float(b.get("device_ms") or 0.0) for b in (buckets or []) if isinstance(b, dict))
+        req_dev += st_ms * (max(1.0, float(weights.get(st, 1.0))) - 1.0)
+    cutoff_req = _material_gap_ms(req_dev)
+
+    placed = {}  # one lookup per fingerprint: the cutoff and the entry both ask
+
+    def stage(o):
+        if not weights:
+            return ""
+        key = (str((o or {}).get("op_code") or ""), str((o or {}).get("shape") or ""))
+        if key not in placed:
+            placed[key] = _open_op_stage(o, profile, codes)
+        return placed[key]
+
+    def gap(o, raw):
+        raw = float(raw or 0.0)
+        st = stage(o)
+        w = float(weights.get(st or "", 1.0))
+        if w > 1.0 and spread.get(st) and raw <= float(o.get("device_ms") or 0.0) * float(spread[st]):
+            w = 1.0
+        return raw * w
+
+    def material(o, raw):
+        return float(raw or 0.0) >= cutoff_raw or gap(o, raw) >= cutoff_req
+
+    def material_sum(ops):
+        # A structural gate's applicability test, over the summed gap_ms of its candidates.
+        ops = [o for o in ops or [] if isinstance(o, dict)]
+        raw = sum(float(o.get("gap_ms") or 0.0) for o in ops)
+        return raw >= cutoff_raw or sum(gap(o, o.get("gap_ms")) for o in ops) >= cutoff_req
+
+    return _types.SimpleNamespace(weights=weights, stage=stage, gap=gap, material=material, material_sum=material_sum)
+
+
 def stage_of_op(op, profile) -> str:
     """Which stage this op costs the most in, read from the capture, or "" when it cannot say.
 
@@ -8691,13 +8788,17 @@ def termination_check() -> dict:
     attempts = [a for a in _load_attempts_all() if _attempt_counts_for_the_ladder(a)]
     blocking, cleared = [], []
     material = _material_gap_ms(dev)
+    # The gates read this view too (see _gate_prof below); built first so the cutoff is judged per
+    # request -- an op's gap times its stage's weight -- not per profiled pass (_per_request_reader).
+    _gate_prof = {**prof, "open_ops": rep.get("open_ops") or []}
+    _req = _per_request_reader(_gate_prof)
     for o in rep.get("open_ops") or []:
         gap = o.get("gap_ms") or 0.0
         # eff_gap is precision-aware for matmuls, == gap otherwise; keep the op if EITHER is material.
         eff_gap = o.get("eff_gap_ms")
         if eff_gap is None:
             eff_gap = gap
-        if max(gap, eff_gap) < material:
+        if not _req.material(o, max(gap, eff_gap)):
             continue
         op_code = o.get("op_code") or o.get("bucket") or ""
         entry = {
@@ -8738,7 +8839,9 @@ def termination_check() -> dict:
         # WHERE THIS OP LIVES, resolved once here rather than again for whichever entry wins: the
         # ordering below needs it for every candidate, and next_target used to recompute it for the
         # one it picked.
-        entry["stage"] = stage_of_op(op_code, prof)
+        # By fingerprint when the weights are in force (_open_op_stage): the bare code put every
+        # recurring-step matmul in whichever stage matmuls cost most. Unweighted, exactly as before.
+        entry["stage"] = _req.stage(o) if _req.weights else stage_of_op(op_code, prof)
         done, rung, reason = _op_ladder_status(o, op_code, attempts)
         if done:
             cleared.append({**entry, "verdict": reason})
@@ -8756,11 +8859,11 @@ def termination_check() -> dict:
     # the shape this caller had, so the gate logic was pinned while the wiring between the two was
     # never exercised at all.
     #
-    # A merged view rather than a mutation: `prof` is the cached profile object, and the roofline's
-    # work queue is a derived reading of it, not a property of the capture. Handed to every gate,
+    # A merged view rather than a mutation (built above the per-op loop, which reads it too): `prof`
+    # is the cached profile object, and the roofline's work queue is a derived reading of it, not a
+    # property of the capture. Handed to every gate,
     # including the two that read other fields today, so the next gate to read open_ops cannot
     # inherit this by being wired the older way.
-    _gate_prof = {**prof, "open_ops": rep.get("open_ops") or []}
     host_block = _host_gate(_gate_prof, blocking, attempts)
     if host_block:
         blocking.append(host_block)
@@ -8802,7 +8905,7 @@ def termination_check() -> dict:
     # WEIGHED BY WHAT THE STAGE REALLY COSTS (stage_cost_weights): the gap is read off a capped
     # profile that samples the stages unequally. The gap itself is reported unchanged; only the
     # order uses the weight, and with no weights every op's is 1 and the order is the old one.
-    _weights = stage_cost_weights(prof)
+    _weights = _req.weights
     for b in blocking:
         b["cost_weight"] = round(float(_weights.get(b.get("stage") or "", 1.0)), 4)
     blocking.sort(key=lambda b: _blocking_order_key(b, _short_names))

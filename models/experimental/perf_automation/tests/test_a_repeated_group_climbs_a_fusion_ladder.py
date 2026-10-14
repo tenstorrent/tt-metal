@@ -223,7 +223,8 @@ def test_a_class_name_shared_by_several_groups_borrows_no_stage(m, monkeypatch):
     """Several open groups under one bare name cannot be placed by name: they keep weight 1."""
     prof = _staged(("Elt", "8x16 @ 8x16", 90, 9.0), ("Elt", "8x32 @ 8x32", 90, 8.0), ("Mm 2 x 2 x 2", "", 90, 1.0))
     monkeypatch.setattr(m, "stage_cost_weights", lambda p: {"loop": 50.0})
-    monkeypatch.setattr(m, "stage_of_op", lambda op, p: "loop")
+    # the capture places each bare name in "loop" but neither Elt fingerprint (code + shape)
+    monkeypatch.setattr(m, "stage_of_op", lambda op, p: "loop" if op in ("Elt", "Mm 2 x 2 x 2") else "")
     assert m._fold_gate(prof, [])["op"] == "Mm 2 x 2 x 2", "the shared name is not boosted to 450 / 400"
 
 

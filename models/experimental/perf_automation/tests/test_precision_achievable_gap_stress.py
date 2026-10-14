@@ -127,7 +127,7 @@ def test_p7_blocking_gate_uses_eff_gap():
     j = src.index("can_stop = not blocking", i)
     body = src[i:j]
     assert 'o.get("eff_gap_ms")' in body, "blocking builder must read the precision-aware eff_gap"
-    assert "max(gap, eff_gap) < material" in body, "keep the op if EITHER gap is material"
+    assert "_req.material(o, max(gap, eff_gap))" in body, "keep the op if EITHER gap is material"
     # The ranking rule lives in ONE helper since the cost weighting (_blocking_order_key); the
     # stop gate sorts by it, and the helper ranks by eff_gap with gap_ms as the fallback.
     assert "blocking.sort(key=lambda b: _blocking_order_key(b, _short_names))" in body

@@ -74,7 +74,9 @@ def test_the_target_carries_the_stage_and_the_directive_shows_where_time_is():
     candidate needs it now that a finished stage is ordered last, so it is resolved once onto the
     entry instead of again for whichever entry wins."""
     src = (PERF / "cc_optimize" / "perf_mcp.py").read_text(encoding="utf-8")
-    assert 'entry["stage"] = stage_of_op(op_code, prof)' in src, "the entry must carry it"
+    assert (
+        'entry["stage"] = _req.stage(o) if _req.weights else stage_of_op(op_code, prof)' in src
+    ), "the entry must carry it -- by fingerprint when weighted (_open_op_stage)"
     assert '"stage": blocking[0].get("stage")' in src, "next_target must pass it on"
     assert "IN THE STAGE " in src, "the directive must tell the agent to work that stage"
     assert "_stage_time_note" in src, "the directive must show where the time actually is"
