@@ -391,9 +391,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     if (const char* rd = std::getenv("MIMO_FL_RDOWN")) {  // (perf probe: force the readers' down columns on / off)
         p.rdown = std::atoi(rd) != 0;
     }
-    p.drisc = flat_drisc_enabled();
+    // DRISC mode: one subgrid, not inside the combine overlap (not validated there)
+    p.drisc = flat_drisc_enabled() && p.nsg == 1 && cfg.cmb_rt == 0;
     if (p.drisc) {
-        TT_FATAL(p.nsg == 1, "MIMO_FL_DRISC: one subgrid only");
         // default: one DRISC slot per bank (the hybrid: GLM-Flash us / expert vs Tensix readers M 64 34.0 / 35.4, 256
         // 49.0 / 49.7, 512 71.3 / 70.6, 2048 273.9 / 273.4); all 16 (two tiles per bank, MIMO_FL_DRISC_TILES=2): 2048
         // 265.7 but 512 77.0 (half the weights on the x multicast's NOC0). (Clamped to the readers below.)

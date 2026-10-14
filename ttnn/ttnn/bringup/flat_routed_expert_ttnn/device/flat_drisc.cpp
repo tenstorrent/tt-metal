@@ -50,8 +50,9 @@ const Hal& hal() { return MetalContext::instance().hal(); }
 }  // namespace
 
 bool flat_drisc_enabled() {
+    // default on where the device has programmable DRAM cores (Blackhole DRISC firmware); MIMO_FL_DRISC=0: off
     const char* v = std::getenv("MIMO_FL_DRISC");
-    return v != nullptr && std::atoi(v) != 0;
+    return (v == nullptr || std::atoi(v) != 0) && hal().has_programmable_core_type(HalProgrammableCoreType::DRAM);
 }
 
 // (above the DRISC L1 arena's sender-state zone, as the tensor prefetcher's kernel)
