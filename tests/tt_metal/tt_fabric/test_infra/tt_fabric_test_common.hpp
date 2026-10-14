@@ -616,7 +616,7 @@ public:
                     logical_core,
                     address,
                     std::span<uint8_t>(reinterpret_cast<uint8_t*>(v.data()), size_bytes),
-                    CoreType::ETH);
+                    tt::CoreType::ETH);
                 continue;
             }
             dynamic_cast<tt::tt_metal::distributed::FDMeshCommandQueue&>(mesh_device_->mesh_command_queue())
@@ -640,7 +640,7 @@ public:
             auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
             if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
                 tt::tt_metal::detail::WriteToDeviceL1(
-                    device, logical_core, address, std::span<const uint8_t>(data.data(), data.size()), CoreType::ETH);
+                    device, logical_core, address, std::span<const uint8_t>(data.data(), data.size()), tt::CoreType::ETH);
                 continue;
             }
 
