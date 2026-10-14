@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <map>
+#include <sstream>
 #include <string>
 
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -233,7 +234,12 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     if (const char* fv = std::getenv("MIMO_FL_FWD_VC")) {  // (perf probe: the weight forward's unicast VC)
         dyn_def["SE_FWD_VC"] = fv;
     }
-    if (std::getenv("MIMO_FL_X_RESIDENT")) {
+    // x-path probes: MIMO_FL_XSOLO=N - x resident for every consumer, N relays only read their share of one copy of x
+    // (no tilize / multicast); MIMO_FL_XPRIM_ONLY=1 (with MIMO_FL_X1) - the one primary reads every super-block, its
+    // helpers idle
+    const uint32_t xsolo = std::getenv("MIMO_FL_XSOLO") ? std::atoi(std::getenv("MIMO_FL_XSOLO")) : 0;
+    const bool xprim_only = std::getenv("MIMO_FL_XPRIM_ONLY") != nullptr;
+    if (std::getenv("MIMO_FL_X_RESIDENT") || xsolo) {
         dyn_def["SE_X_RESIDENT"] = "1";
     }
     auto with = [](Defines base, std::initializer_list<std::pair<const std::string, std::string>> extra) {
@@ -609,6 +615,22 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // perf probes (read at program build; not in the program hash, so a process uses one setting):
         // MIMO_FL_XRD_SKIP=n: the relays read no x rows from DRAM (garbage tiles), MIMO_FL_XRD_BATCH: chunks per read
         // barrier (must divide RM_CHUNKS), MIMO_FL_XRD_BIG: the same bytes in half the requests (indexed; garbage)
+        if (xsolo) {
+            xrd_def["XRD_SOLO"] = "1";
+            if (const char* k = std::getenv("MIMO_FL_XSOLO_K")) {
+                xrd_def["XRD_SOLO_K"] = k;
+            }
+            if (const char* m = std::getenv("MIMO_FL_XSOLO_SEQ")) {  // row mask (4095: 4096 rows; 7: 8 rows)
+                xrd_def["XRD_SOLO_SEQ"] = m;
+            }
+            if (std::getenv("MIMO_FL_XSOLO_NOIDX")) {
+                xrd_def["XRD_SOLO_NOIDX"] = "1";
+            }
+        }
+        // (probe MIMO_FL_XRD_NOC=0/1: the x readers' NoC)
+        const NOC xrd_noc = std::getenv("MIMO_FL_XRD_NOC")
+                                ? (std::atoi(std::getenv("MIMO_FL_XRD_NOC")) ? NOC::NOC_1 : NOC::NOC_0)
+                                : x_rd_noc;
         if (std::getenv("MIMO_FL_XRD_BIG")) {
             xrd_def["XRD_BIG"] = "1";
         }
@@ -630,7 +652,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             dm("se11_xrd.cpp",
                xrel,
                DataMovementProcessor::RISCV_0,
-               x_rd_noc,
+               xrd_noc,
                {0, t.x.logical_shape()[-1] * 2, E, MT, p.nsb, S, xrd_batch, idx_arg, p.H / t.x.logical_shape()[-1]},
                xrd_def);
         // MIMO_FL_TZ_SKIP: the relays' tilizers only do the CB handshakes; MIMO_FL_XMC_NODATA: the multicasters send
@@ -648,6 +670,10 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
              {"XMC_HELPER", "1"},
              {"SE_XNH", std::to_string(p.nh)},
              {"XMC_ZERO_WORDS", "1"}});
+        if (xprim_only) {
+            TT_FATAL(x_once, "MIMO_FL_XPRIM_ONLY needs MIMO_FL_X1");
+            xmc_def["XMC_PRIM_ONLY"] = "1";
+        }
         if (std::getenv("MIMO_FL_XMC_NODATA")) {
             xmc_def["XMC_NODATA"] = "1";
         }
@@ -685,7 +711,24 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             }
             const auto [x0, x1, y0, y1] = p.rects[k];
             Args xr;
-            if (x_two || p.xfwd) {  // this rectangle's half of the stream (g % 2 == k), shared with its helpers
+            if (xsolo) {  // (probe) relay idx < N takes super-blocks g % N == idx of one copy of x, the others none
+                TT_FATAL(xsolo <= p.relays.size(), "MIMO_FL_XSOLO: at most {} relays", p.relays.size());
+                // MIMO_FL_XSOLO_IDS=a,b,..: which relays (indices into p.relays) take the N slots (default 0..N-1)
+                uint32_t slot = idx < xsolo ? idx : 0xFFFFFFu;
+                if (const char* ids = std::getenv("MIMO_FL_XSOLO_IDS")) {
+                    slot = 0xFFFFFFu;
+                    std::stringstream ss(ids);
+                    std::string tok;
+                    for (uint32_t q = 0; std::getline(ss, tok, ','); ++q) {
+                        if (static_cast<uint32_t>(std::stoul(tok)) == idx) {
+                            slot = q;
+                        }
+                    }
+                }
+                xr.a(AddrSrc::X).lit(xsolo).lit(slot).cat(dyn).lits(sgx(k));
+            } else if (xprim_only) {  // (probe) the primary reads everything, its helpers nothing
+                xr.a(AddrSrc::X).lit(1).lit(idx < NR ? 0 : 0xFFFFFFu).cat(dyn).lits(sgx(k));
+            } else if (x_two || p.xfwd) {  // this rectangle's half of the stream (g % 2 == k), shared with its helpers
                 xr.a(AddrSrc::X).lit(NR * p.vstride).lit(NR * rl_off(idx) + k).cat(dyn).lits(sgx(k));
             } else {
                 xr.a(AddrSrc::X).lit(p.vstride).lit(rl_off(idx)).cat(dyn).lits(sgx(k));
@@ -734,9 +777,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 Args hl;
                 hl.lit(pk(p.relays[idx % NR]))
                     .a(AddrSrc::Arena, p.land_off + j * p.land_slots * sbb)
-                    .lit(rl_sb(idx))
+                    .lit(xprim_only ? 0 : rl_sb(idx))
                     .lit(1 + p.nh)
-                    .lit(j + 1)
+                    .lit(xprim_only ? 0xFFFFFFu : j + 1)
                     .cat(dyn)
                     .lits(sgx(k));
                 if (x_two || p.xfwd) {  // (se13_xhelp.cpp SE_X2: the primary's own stream: every NR-th from k)
