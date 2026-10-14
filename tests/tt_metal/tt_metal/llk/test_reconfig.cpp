@@ -1190,19 +1190,31 @@ namespace unit_tests::compute::reconfig {
 
 enum class ReconfiguredSrc : std::uint8_t { A, B };
 
+// The CB the unpacker starts configured for (c_2, never pushed) and the CB that carries the payload. A null tile
+// is the full 32x32 tile.
+struct ReconfigOperands {
+    tt::DataFormat startup_format;
+    const Tile* startup_tile;
+    tt::DataFormat payload_format;
+    const Tile* payload_tile;
+};
+
 std::vector<std::uint32_t> run_reconfig_format_and_geometry(
     distributed::MeshDevice& mesh_device,
     ReconfiguredSrc src,
-    const Tile& tile,
+    const ReconfigOperands& ops,
     const std::vector<std::uint32_t>& src_vec,
     std::uint32_t num_tiles) {
     static constexpr std::uint32_t k_dram_bank_id = 0;
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
 
-    const std::uint32_t tiny_tile_size = tile.get_tile_size(tt::DataFormat::Float32);
-    const std::uint32_t full_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
-    const std::uint32_t buffer_size = num_tiles * tiny_tile_size;
+    auto tile_bytes = [](tt::DataFormat fmt, const Tile* t) {
+        return t != nullptr ? t->get_tile_size(fmt) : tt::tile_size(fmt);
+    };
+    const std::uint32_t payload_tile_size = tile_bytes(ops.payload_format, ops.payload_tile);
+    const std::uint32_t startup_tile_size = tile_bytes(ops.startup_format, ops.startup_tile);
+    const std::uint32_t buffer_size = num_tiles * payload_tile_size;
 
     auto make_dram_buffer = [&]() {
         return distributed::MeshBuffer::create(
@@ -1223,14 +1235,14 @@ std::vector<std::uint32_t> run_reconfig_format_and_geometry(
     auto dst_buffer = make_dram_buffer();
     std::shared_ptr<distributed::MeshBuffer> zeros_buffer;
 
-    add_cb(tt::CBIndex::c_0, tt::DataFormat::Float32, tiny_tile_size, &tile);
+    add_cb(tt::CBIndex::c_0, ops.payload_format, payload_tile_size, ops.payload_tile);
     if (srcb) {
         zeros_buffer = make_dram_buffer();
-        add_cb(tt::CBIndex::c_1, tt::DataFormat::Float32, tiny_tile_size, &tile);
+        add_cb(tt::CBIndex::c_1, ops.payload_format, payload_tile_size, ops.payload_tile);
     }
     // Only configures the unpacker before the reconfig; never pushed.
-    add_cb(tt::CBIndex::c_2, tt::DataFormat::Float16_b, full_tile_size, /*cb_tile=*/nullptr);
-    add_cb(tt::CBIndex::c_16, tt::DataFormat::Float32, tiny_tile_size, &tile);
+    add_cb(tt::CBIndex::c_2, ops.startup_format, startup_tile_size, ops.startup_tile);
+    add_cb(tt::CBIndex::c_16, ops.payload_format, payload_tile_size, ops.payload_tile);
 
     auto reader = CreateKernel(
         program,
@@ -1277,14 +1289,28 @@ std::vector<std::uint32_t> run_reconfig_format_and_geometry(
 }  // namespace unit_tests::compute::reconfig
 
 TEST_F(LLKMeshDeviceFixture, TensixReconfigFormatAndGeometry) {
+    using unit_tests::compute::reconfig::ReconfigOperands;
     using unit_tests::compute::reconfig::ReconfiguredSrc;
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "the Quasar binary unpack init supports full 32x32 tiles only, so the srcB variant cannot run";
+    }
     constexpr std::uint32_t num_tiles = 4;
     constexpr std::uint32_t seed = 42;
     constexpr float value_range = 10.0f;
     constexpr std::uint32_t k_bf16_representable_mask = 0xFFFF0000u;
-    // 8x32 changes the face size. Without the geometry reprogramming both 8x32 cases come out wrong, since the
-    // payload rides on the reconfigured operand, and an LLK-assert build stops at the unpack-config check. 16x32
-    // changes only the face count and passes either way; both 16x32 cases are controls.
+    auto run_both = [&](const ReconfigOperands& ops, const std::vector<std::uint32_t>& src_vec, const char* label) {
+        for (const auto src : {ReconfiguredSrc::A, ReconfiguredSrc::B}) {
+            for (auto& device : this->devices_) {
+                auto result = unit_tests::compute::reconfig::run_reconfig_format_and_geometry(
+                    *device, src, ops, src_vec, num_tiles);
+                EXPECT_EQ(src_vec, result) << "src" << (src == ReconfiguredSrc::A ? "A" : "B") << ", " << label;
+            }
+        }
+    };
+    // Full Float16_b 32x32 -> tiny Float32. 8x32 changes the face size: without the geometry reprogramming both
+    // 8x32 cases come out wrong, since the payload rides on the reconfigured operand, and an LLK-assert build stops
+    // at the unpack-config check. 16x32 changes only the face count and passes either way; both 16x32 cases are
+    // controls.
     for (const auto& shape : {std::array<std::uint32_t, 2>{16, 32}, std::array<std::uint32_t, 2>{8, 32}}) {
         const Tile tile(shape);
         std::mt19937 rng(seed);
@@ -1293,14 +1319,22 @@ TEST_F(LLKMeshDeviceFixture, TensixReconfigFormatAndGeometry) {
         for (auto& word : src_vec) {
             word = std::bit_cast<std::uint32_t>(dist(rng)) & k_bf16_representable_mask;
         }
-        for (const auto src : {ReconfiguredSrc::A, ReconfiguredSrc::B}) {
-            for (auto& device : this->devices_) {
-                auto result = unit_tests::compute::reconfig::run_reconfig_format_and_geometry(
-                    *device, src, tile, src_vec, num_tiles);
-                EXPECT_EQ(src_vec, result)
-                    << "src" << (src == ReconfiguredSrc::A ? "A" : "B") << ", tile " << shape[0] << "x" << shape[1];
-            }
+        const std::string label = "full -> tiny " + std::to_string(shape[0]) + "x" + std::to_string(shape[1]);
+        run_both({tt::DataFormat::Float16_b, nullptr, tt::DataFormat::Float32, &tile}, src_vec, label.c_str());
+    }
+    // Tiny Float32 8x32 -> full Float16_b 32x32: the direction a matmul reload takes when it switches srcA from
+    // a tiny partials CB back to a full-tile input. Two bf16 datums per word.
+    {
+        const Tile tiny({8, 32});
+        std::mt19937 rng(seed);
+        std::uniform_real_distribution<float> dist(-value_range, value_range);
+        std::vector<std::uint32_t> src_vec(num_tiles * tt::constants::TILE_HW / 2);
+        for (auto& word : src_vec) {
+            const std::uint32_t lo = std::bit_cast<std::uint32_t>(dist(rng)) >> 16;
+            const std::uint32_t hi = std::bit_cast<std::uint32_t>(dist(rng)) >> 16;
+            word = (hi << 16) | lo;
         }
+        run_both({tt::DataFormat::Float32, &tiny, tt::DataFormat::Float16_b, nullptr}, src_vec, "tiny 8x32 -> full");
     }
 }
 
