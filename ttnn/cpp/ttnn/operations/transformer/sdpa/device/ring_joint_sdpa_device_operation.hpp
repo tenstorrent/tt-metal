@@ -74,6 +74,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     // When set, the logical_n / logical_l params above are worst-case placeholders (see RingJointSDPAInputs).
     const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt,
     const std::optional<ttnn::Tensor>& logical_l_tensor = std::nullopt,
-    uint32_t stripe_size = 0);
+    uint32_t stripe_size = 0,
+    bool striped_halo = false);
 
 }  // namespace ttnn::prim

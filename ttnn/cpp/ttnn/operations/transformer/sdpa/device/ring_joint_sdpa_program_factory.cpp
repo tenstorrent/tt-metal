@@ -438,7 +438,8 @@ RingWritePlan build_ring_write_plan(
     // Chunked sliding consumes the local slab followed by its cyclic
     // predecessor. Keep that dependency on direction 1 for every device,
     // independent of the dense ring's parity-based split.
-    if (args.uses_neighbor_halo() && tensor_args.is_chunked(args.kv_stripe_split, args.stripe_size) && !args.is_cross) {
+    if ((args.uses_neighbor_halo() || args.striped_halo) &&
+        tensor_args.is_chunked(args.kv_stripe_split, args.stripe_size) && !args.is_cross) {
         plan.forward_writes_expected = 1;
         plan.backward_writes_expected = 0;
         return plan;
@@ -659,6 +660,8 @@ void apply_ring_joint_scalar_runtime_args(
     const std::array<const Tensor*, 2> ag_inputs = {
         &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
     const bool uses_neighbor_halo = args.uses_neighbor_halo();
+    const uint32_t striped_exchanges =
+        ring_write_plan.transport_rank > 0 && ring_write_plan.transport_rank + 1 < args.ring_size ? 2 : 1;
     // One reader/writer kernel pair per halo hop, appended in hop order after the three SDPA kernels.
     std::optional<ring_joint::ChunkedSlidingHaloLayout> runtime_halo_layout;
     if (uses_neighbor_halo) {
@@ -710,8 +713,9 @@ void apply_ring_joint_scalar_runtime_args(
                 }
             }
         };
-        if (uses_neighbor_halo) {
-            for (uint32_t exchange = 0; exchange < halo_exchanges.size(); ++exchange) {
+        if (uses_neighbor_halo || args.striped_halo) {
+            const uint32_t exchange_count = args.striped_halo ? striped_exchanges : halo_exchanges.size();
+            for (uint32_t exchange = 0; exchange < exchange_count; ++exchange) {
                 patch_reader_batch_base(
                     kNeighborHaloReaderKernelIndex + 2 * exchange,
                     ag_rt::kNeighborReaderRuntimeArgHeaderCount,
@@ -739,7 +743,7 @@ void apply_ring_joint_scalar_runtime_args(
     // across cores/links/devices, so producer/consumer page counts and the ring slice protocol stay
     // matched (the AG kernels clamp input_tile_id_end to it). Patch readers AND writers — both key
     // their loops off input_tile_id_end — at their respective header offsets (3 vs 5).
-    if (patch_kv_pad_rotation && !uses_neighbor_halo) {
+    if (patch_kv_pad_rotation && !uses_neighbor_halo && !args.striped_halo) {
         const uint32_t gather_valid_Ht = compute_gather_valid_Ht(args, tensor_args).value();
         const auto patch_valid_pages = [&](uint32_t kernel_id,
                                            uint32_t header_count,
@@ -782,6 +786,26 @@ void apply_ring_joint_scalar_runtime_args(
             ag_rt::kWriterRuntimeArgHeaderCount,
             tensor_descriptor_field_count,
             ag_rt::kValidPagesFieldOffset);
+    }
+
+    if (args.striped_halo && patch_kv_pad_rotation) {
+        for (uint32_t exchange = 0; exchange < striped_exchanges; ++exchange) {
+            for (uint32_t side = 0; side < 2; ++side) {
+                const uint32_t kernel = kNeighborHaloReaderKernelIndex + 2 * exchange + side;
+                const uint32_t base = side == 0 ? ag_rt::kNeighborReaderRuntimeArgHeaderCount +
+                                                      num_ag_inputs * neighbor_reader_tensor_descriptor_field_count
+                                                : ag_rt::kNeighborWriterRuntimeArgHeaderCount +
+                                                      num_ag_inputs * ag_rt::kNeighborWriterTensorDescriptorFieldCount;
+                for (auto& column : GetRuntimeArgs(program, kernel)) {
+                    for (auto& rt : column) {
+                        if (rt.size() > base + 1) {
+                            write_runtime_arg(rt, base, args.kv_actual_isl.value(), "striped_halo.prefix");
+                            write_runtime_arg(rt, base + 1, args.logical_n, "striped_halo.logical_n");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     if (args.uses_neighbor_halo() && (patch_indexed_kv_cache || patch_kv_pad_rotation)) {
@@ -1931,6 +1955,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // MATH_FIDELITY is not defined on the unpack TRISC, and all three must agree on how P.V is set up.
     if (math_fidelity == MathFidelity::LoFi) {
         defines["SDPA_COMPUTE_LOFI"] = "1";
+    }
+    if (args.striped_halo) {
+        defines["RING_JOINT_STRIPED_HALO"] = "1";
     }
     defines["SLIDING_HALO_SLOT_COUNT"] =
         std::to_string(args.uses_neighbor_halo() ? chunked_sliding_halo_layout.halo_slot_count : 0);
@@ -3387,7 +3414,83 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         all_gather_input_tensors.push_back(*joint_tensor_v);
         all_gather_output_tensors.push_back(tensor_args.gathered_joint_v.value());
     }
-    if (args.uses_neighbor_halo()) {
+    if (args.striped_halo) {
+        TT_FATAL(
+            tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+            "Striped halo currently requires 1D fabric");
+        const auto& ag = args.all_gather_operation_attributes;
+        const bool column_major = ag.core_allocation_strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR;
+        const auto offset = [&](uint32_t exchange) {
+            return CoreCoord{
+                args.ccl_core_grid_offset.x + (column_major ? 0 : exchange * ag.num_links),
+                args.ccl_core_grid_offset.y + (column_major ? exchange * ag.num_links : 0)};
+        };
+        const auto [collector_range, collector_cores] = ttnn::ccl::choose_worker_cores(
+            ag.num_links, 1, mesh_device, ag.sub_device_id, offset(0), std::nullopt, ag.core_allocation_strategy);
+        std::vector<CoreCoord> rendezvous;
+        for (const auto& core : collector_cores) {
+            rendezvous.push_back(mesh_device->worker_core_from_logical_core(core));
+        }
+        // One worker group per physical direction; no relay through intermediate DRAM.
+        // Group 0 always exists and gathers every remote source's arrival, even at an endpoint.
+        const uint32_t exchange_count = transport_rank > 0 && transport_rank + 1 < ring_size ? 2 : 1;
+        for (uint32_t exchange = 0; exchange < exchange_count; ++exchange) {
+            const bool backward = transport_rank + 1 == ring_size || exchange == 1;
+            const auto& neighbor = backward ? backward_coord : forward_coord;
+            TT_FATAL(neighbor.has_value(), "Striped halo requires a physical neighbor in its sending direction");
+            const ring_joint::StripedHaloGeometry geometry{
+                args.kv_actual_isl.value_or(0),
+                static_cast<uint32_t>(args.logical_n),
+                q_local_padded_Nt,
+                kv_local_padded_Nt,
+                args.stripe_size / 32,
+                Sk_chunk_t,
+                sliding_window_size,
+                ring_size,
+                transport_rank,
+                backward ? transport_rank : ring_size - transport_rank - 1,
+                static_cast<uint32_t>(backward),
+                ag.num_links};
+            const RingAttentionNeighborHaloConfig halo{
+                .send_to_next_start_Ht = 0,
+                .send_to_next_count_Ht = 1,
+                .send_backward = backward,
+                .distance = 1,
+                .hop = exchange + 1,
+                .tail_tile_rows = 1,
+                .dest_row_base = transport_rank * kv_local_padded_Nt,
+                .arrivals_expected = ring_size - 1,
+                .rendezvous_noc = rendezvous,
+                .slot_id = tensor_args.has_metadata() ? &tensor_args.slot_id.value() : nullptr,
+                .kv_actual_isl = tensor_args.has_metadata() ? &tensor_args.kv_actual_isl.value() : nullptr,
+                .kv_cache_num_layers = args.kv_cache_num_layers,
+                .kv_cache_layer_idx = args.kv_cache_layer_idx,
+                .q_local_tile_rows = q_local_padded_Nt,
+                .halo_tile_rows = 1,
+                .source_device = transport_rank,
+                .striped = geometry,
+            };
+            ring_attention_neighbor_halo_exchange_helper(
+                desc,
+                all_gather_input_tensors,
+                coord,
+                neighbor.value(),
+                neighbor.value(),
+                all_gather_output_tensors,
+                ag.num_links,
+                ring_size,
+                transport_rank,
+                ag.topology,
+                ag.semaphore,
+                ag.sub_device_id,
+                all_gather_fused_op_signaler.value(),
+                offset(exchange),
+                ag.core_allocation_strategy,
+                args.cache_batch_idx(),
+                std::nullopt,
+                halo);
+        }
+    } else if (args.uses_neighbor_halo()) {
         // A halo that fits in one Q slab is a single exchange with the +1 neighbour. A wider one reaches
         // several predecessors, and hop d ships the tail of the slab d positions back into its own block
         // of the receiver's compact buffer; the SDPA reader waits for all of them before its K loop. A

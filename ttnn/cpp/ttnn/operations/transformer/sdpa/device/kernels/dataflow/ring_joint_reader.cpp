@@ -822,7 +822,7 @@ void kernel_main() {
         // One signal per halo regardless of hop count: the collecting exchange waits for every hop's
         // arrival before signalling (ring_attention_neighbor_halo_reader.cpp).
         for (uint32_t ring_iter = 0; ring_iter < synchronization_iters; ++ring_iter) {
-#ifdef RING_JOINT_STRIPE_TILES
+#if defined(RING_JOINT_STRIPE_TILES) && !defined(RING_JOINT_STRIPED_HALO)
             // All-gather publishes cumulative readiness, including its local pre-signal.
             // Halo's consume-one protocol would mistake that token for the last remote source.
             fused_op_receiver.get_next_ring_id_and_sync();

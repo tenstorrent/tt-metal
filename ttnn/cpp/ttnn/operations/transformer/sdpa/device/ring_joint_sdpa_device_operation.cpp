@@ -397,6 +397,13 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
 
     validate_metadata_tensors(tensor_args);
+    if (args.striped_halo) {
+        TT_FATAL(args.stripe_size != 0 && args.has_sliding_window(), "Striped halo requires explicit sliding stripes");
+        TT_FATAL(
+            args.all_gather_operation_attributes.cluster_axis.has_value() &&
+                args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear,
+            "Striped halo requires a CP axis and Linear topology");
+    }
     if (args.stripe_size != 0) {
         const auto q_rows = input_tensor_q.logical_shape()[2];
         TT_FATAL(
@@ -1212,6 +1219,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.ring_size,
         args.kv_stripe_split,
         args.stripe_size,
+        args.striped_halo,
         args.compute_kernel_config,
         args.program_config,
         args.ccl_core_grid_offset,
@@ -1372,7 +1380,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const bool circular_kv_cache,
     const std::optional<ttnn::Tensor>& logical_n_tensor,
     const std::optional<ttnn::Tensor>& logical_l_tensor,
-    const uint32_t stripe_size) {
+    const uint32_t stripe_size,
+    const bool striped_halo) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1597,7 +1606,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         sliding_window_size,
         circular_kv_cache,
         resolved_kv_stripe_split,
-        stripe_size);
+        stripe_size,
+        striped_halo);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

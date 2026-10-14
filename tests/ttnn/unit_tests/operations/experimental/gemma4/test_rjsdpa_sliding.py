@@ -31,11 +31,13 @@ class SlidingCase(PackedCase):
         window=1024,
         nd_sharded=True,
         cache_slots=4,
+        communication="all_gather",
     ):
         self.rt, self.mesh = runtime, runtime.mesh_device
         self.tokens, self.stripe, self.capacity = tokens, stripe, capacity
         self.head_dim, self.tp, self.window = head_dim, MESH_CONFIG.tp_size, window
         self.cache_slots = cache_slots
+        self.communication = communication
         self.layers, self.layer = (2, 1) if cache_slots == 4 else (1, 0)
         self.allocated, self.trace_id = [], None
         gen = torch.Generator().manual_seed(931)
@@ -126,6 +128,7 @@ class SlidingCase(PackedCase):
                 persistent_output_buffer_v=self.buffer_v,
                 head_dim_v=self.head_dim,
                 stripe_size=self.stripe,
+                communication=self.communication,
                 **kwargs,
             )
         self.allocated.extend(t for t in results if t is not None)
@@ -170,8 +173,9 @@ class SlidingCase(PackedCase):
 
 
 @pytest.mark.parametrize("tokens", [256, 512, 768, 1024, 1280, 3072, 4096, 6144, 8192])
-def test_sliding_striped_chunks(runtime, tokens):
-    case = SlidingCase(runtime, tokens=tokens, capacity=16384)
+@pytest.mark.parametrize("communication", ["all_gather", "halo"])
+def test_sliding_striped_chunks(runtime, communication, tokens):
+    case = SlidingCase(runtime, communication=communication, tokens=tokens, capacity=16384)
     try:
         case.stage(4096 + 32)
         case.check(case.call()[0])
@@ -189,8 +193,9 @@ def test_sliding_striped_chunks(runtime, tokens):
         (2048, 32, 128, 128),
     ],
 )
-def test_sliding_window_edges(runtime, window, stripe, q_chunk, k_chunk):
-    case = SlidingCase(runtime, tokens=1024, window=window, stripe=stripe)
+@pytest.mark.parametrize("communication", ["all_gather", "halo"])
+def test_sliding_window_edges(runtime, communication, window, stripe, q_chunk, k_chunk):
+    case = SlidingCase(runtime, communication=communication, tokens=1024, window=window, stripe=stripe)
     try:
         for prefix in (0, 32, 6144):
             case.stage(prefix)
@@ -199,8 +204,9 @@ def test_sliding_window_edges(runtime, window, stripe, q_chunk, k_chunk):
         case.close()
 
 
-def test_sliding_partial_and_trace(runtime):
-    case = SlidingCase(runtime, tokens=768, capacity=8192)
+@pytest.mark.parametrize("communication", ["all_gather", "halo"])
+def test_sliding_partial_and_trace(runtime, communication):
+    case = SlidingCase(runtime, communication=communication, tokens=768, capacity=8192)
     try:
         case.stage(32, valid_tokens=256)
         case.check(case.call()[0])
@@ -231,8 +237,9 @@ def test_sliding_matches_legacy_geometry(runtime, tokens):
 
 
 @pytest.mark.parametrize("splits", [1, 3])
-def test_sliding_gemma_shape(runtime, splits):
-    case = SlidingCase(runtime, tokens=256, head_dim=256, kv_heads=4)
+@pytest.mark.parametrize("communication", ["all_gather", "halo"])
+def test_sliding_gemma_shape(runtime, communication, splits):
+    case = SlidingCase(runtime, communication=communication, tokens=256, head_dim=256, kv_heads=4)
     try:
         case.stage(4096)
         case.check(case.call(max_k_splits=splits, fidelity=ttnn.MathFidelity.LoFi, scale=1.0)[0], scale=1.0)
@@ -241,10 +248,11 @@ def test_sliding_gemma_shape(runtime, splits):
 
 
 @pytest.mark.parametrize("q_chunk", [128, 256])
-def test_sliding_split_queries_across_stripes(runtime, q_chunk):
+@pytest.mark.parametrize("communication", ["all_gather", "halo"])
+def test_sliding_split_queries_across_stripes(runtime, communication, q_chunk):
     # Early rows have no visible keys in some split bands at the start of a request.
     # Check every row, including those whose diagonal is on a different worker.
-    case = SlidingCase(runtime, tokens=CP * q_chunk, head_dim=256, kv_heads=4)
+    case = SlidingCase(runtime, communication=communication, tokens=CP * q_chunk, head_dim=256, kv_heads=4)
     try:
         for prefix in (0, 32, 4096):
             case.stage(prefix)
@@ -263,5 +271,22 @@ def test_legacy_rejects_small_or_nonmultiple_chunks(runtime, tokens, expect_erro
         case.stage(0)
         with expect_error(RuntimeError, "chunk_size must divide"):
             case.call(legacy=True, q_chunk=64)
+    finally:
+        case.close()
+
+
+@pytest.mark.parametrize("bad_case", ["communication", "ring", "no_axis"])
+def test_sliding_halo_rejects_invalid_transport(runtime, bad_case, expect_error):
+    case = SlidingCase(runtime, communication="invalid" if bad_case == "communication" else "halo")
+    try:
+        case.stage(0)
+        overrides = (
+            {"topology": ttnn.Topology.Ring}
+            if bad_case == "ring"
+            else ({"cluster_axis": None} if bad_case == "no_axis" else {})
+        )
+        message = "communication must be" if bad_case == "communication" else "requires a CP axis and Linear topology"
+        with expect_error(RuntimeError, message):
+            case.call(**overrides)
     finally:
         case.close()

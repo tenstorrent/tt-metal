@@ -36,7 +36,17 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa(
     std::optional<uint32_t> stripe_size,
     const std::optional<ttnn::Tensor>& input_tensor_v,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_v,
-    std::optional<uint32_t> sliding_window_size) {
+    std::optional<uint32_t> sliding_window_size,
+    const std::string& communication) {
+    TT_FATAL(
+        communication == "all_gather" || communication == "halo", "rjsdpa communication must be all_gather or halo");
+    const bool striped_halo = communication == "halo";
+    TT_FATAL(
+        !striped_halo || (stripe_size.has_value() && sliding_window_size.value_or(0) > 1 && input_tensor_v.has_value()),
+        "rjsdpa halo requires explicit stripes, separate K/V, and sliding_window_size > 1");
+    TT_FATAL(
+        !striped_halo || (cluster_axis.has_value() && topology == ttnn::ccl::Topology::Linear),
+        "Striped halo requires a CP axis and Linear topology");
     TT_FATAL(
         input_tensor_v.has_value() == persistent_output_buffer_v.has_value(),
         "rjsdpa separate V requires both input_tensor_v and persistent_output_buffer_v");
@@ -100,7 +110,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa(
         false,         // circular_kv_cache
         std::nullopt,  // logical_n_tensor
         std::nullopt,  // logical_l_tensor
-        stripe_size.value_or(0));
+        stripe_size.value_or(0),
+        striped_halo);
     return {
         output_tensors[ttnn::prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[ttnn::prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
