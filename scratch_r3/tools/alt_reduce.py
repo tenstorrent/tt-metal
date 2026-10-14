@@ -43,9 +43,10 @@ for rd in sorted(glob.glob(os.path.join(d, f"out_{tag}_*_*"))):
     close()
 print("| case | variant | pairs | median ns | change ns | change % | paired t | faster pairs |")
 print("|---|---|---|---|---|---|---|---|")
+variants = sorted({v for (_, v) in groups if v != 0})
 for case in order:
     base = groups.get((case, 0), {})
-    for v in (1, 2, 3, 4):
+    for v in variants:
         g = groups.get((case, v), {})
         keys = sorted(set(base) & set(g))
         if not keys:
@@ -56,5 +57,24 @@ for case in order:
         sd = statistics.stdev(diffs) if len(diffs) > 1 else 0.0
         t = statistics.mean(diffs) / (sd / math.sqrt(len(diffs))) if sd > 0 else float("nan")
         faster = sum(x < 0 for x in diffs)
-        print(f"| {case} | {v} {NAMES[v]} | {len(keys)} | {statistics.median(g[k] for k in keys):.0f} (none {m0:.0f}) | "
+        print(f"| {case} | {v} {NAMES.get(v, v)} | {len(keys)} | {statistics.median(g[k] for k in keys):.0f} (none {m0:.0f}) | "
               f"{md:+.0f} | {100 * md / m0:+.2f} | {t:+.1f} | {faster}/{len(keys)} |")
+
+# second table: each variant against variant 1 (the head), paired the same way
+print()
+print("| case | variant | pairs | change against v1 % | paired t |")
+print("|---|---|---|---|---|")
+for case in order:
+    b1 = groups.get((case, 1), {})
+    for v in variants:
+        if v == 1:
+            continue
+        g = groups.get((case, v), {})
+        keys = sorted(set(b1) & set(g))
+        if len(keys) < 2:
+            continue
+        diffs = [g[k] - b1[k] for k in keys]
+        m1 = statistics.median(b1[k] for k in keys)
+        sd = statistics.stdev(diffs)
+        t = statistics.mean(diffs) / (sd / math.sqrt(len(diffs))) if sd > 0 else float("nan")
+        print(f"| {case} | {v} {NAMES.get(v, v)} | {len(keys)} | {100 * statistics.median(diffs) / m1:+.2f} | {t:+.1f} |")
