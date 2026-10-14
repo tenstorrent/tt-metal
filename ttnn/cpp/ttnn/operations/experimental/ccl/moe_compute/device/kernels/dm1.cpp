@@ -7,6 +7,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "moe_ring_common.h"
 
@@ -175,19 +176,22 @@ void kernel_main() {
     const auto combine_semaphore_addr = get_semaphore(matmul_combine_sync_semaphore_id);
 
     // LOCAL_OUTPUT geometry: this core's slice of every token row is output_width_tiles_core tiles of
-    // the hidden dim starting at tile width_tile_base; the map scratch holds one e_t entry per token
-    // of the current chunk.
+    // the hidden dim starting at tile width_tile_base; the map scratch holds one chunk of the expert's
+    // packed (k slot, token id) entries (moe_ring::token_list: one DRAM page, `token_list_header_words`
+    // of segment starts, then every expert's entries back to back; the segment starts follow from the
+    // per-expert counts, so they are recomputed here instead of read).
     [[maybe_unused]] constexpr uint32_t total_tokens = get_named_compile_time_arg_val("total_tokens");
-    [[maybe_unused]] constexpr uint32_t e_t_entry_size = get_named_compile_time_arg_val("e_t_entry_size");
-    [[maybe_unused]] constexpr uint32_t e_t_entry_words = e_t_entry_size / sizeof(uint32_t);
-    static_assert(e_t_entry_size >= 2 * sizeof(uint32_t), "an e_t entry holds the token id and the k slot");
+    [[maybe_unused]] constexpr uint32_t token_list_header_words = moe_ring::token_list::header_words(num_experts);
+    [[maybe_unused]] constexpr uint32_t token_list_chunk_bytes = tile_height * moe_ring::token_list::ENTRY_BYTES;
     [[maybe_unused]] const uint32_t local_output_row_bytes = output_width_tiles_core * tile_width_size_bytes;
     [[maybe_unused]] const uint32_t local_output_col_offset_bytes = width_tile_base * tile_width_size_bytes;
     uint32_t local_output_map_addr = 0;
     if constexpr (local_output) {
+        // The map is the L1 destination of a DRAM read: DRAM-aligned inside the CB (the CB has the slack).
+        constexpr uint32_t dram_alignment = get_named_compile_time_arg_val("dram_alignment");
         CircularBuffer cb_local_output_map(get_named_compile_time_arg_val("local_output_map_cb_id"));
         cb_local_output_map.reserve_back(1);
-        local_output_map_addr = cb_local_output_map.get_write_ptr();
+        local_output_map_addr = (cb_local_output_map.get_write_ptr() + dram_alignment - 1) & ~(dram_alignment - 1);
     }
 
     //-------------------------------------------------------------------------
@@ -291,6 +295,8 @@ void kernel_main() {
     bool output_buffer_idx = 0;
     // both sections of the double buffer are initially free
     uint32_t combine_semaphore_val = 0;
+    // LOCAL_OUTPUT: start of the current expert's segment in the packed token lists (entries).
+    [[maybe_unused]] uint32_t token_list_segment_start = 0;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         const uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         const uint32_t active_tokens = NUM_TOKENS_PER_EXPERT[expert_id];
@@ -312,16 +318,20 @@ void kernel_main() {
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
             const uint32_t num_tokens_block = std::min(tile_height, active_tokens - chunk * tile_height);
             if constexpr (local_output) {
-                // Fetch this chunk's (token id, k slot) e_t entries; the read completes under the ring
-                // A2A below and is waited for right before the output writes. A core with an empty w2
-                // slice (hidden_tiles < ring size) owns no output columns and neither reads nor writes.
+                // Fetch this chunk's packed (k slot, token id) entries: always a whole chunk (the page keeps
+                // one chunk of tail past the last segment); the read completes under the ring A2A below
+                // and is waited for right before the output writes. A core with an empty w2 slice
+                // (hidden_tiles < ring size) owns no output columns and neither reads nor writes.
                 if (output_width_tiles_core > 0) {
                     const auto e_t_accessor = TensorAccessor(LoArgs::e_t_args, e_t_addr);
-                    noc_async_read(
-                        e_t_accessor.get_noc_addr(expert_id, chunk * tile_height * e_t_entry_size, /*noc=*/1),
-                        local_output_map_addr,
-                        num_tokens_block * e_t_entry_size,
-                        /*noc=*/1);
+                    const uint32_t chunk_entry =
+                        token_list_header_words + token_list_segment_start + chunk * tile_height;
+                    noc1_obj.async_read(
+                        e_t_accessor,
+                        CoreLocalMem<uint32_t>(local_output_map_addr),
+                        token_list_chunk_bytes,
+                        {.page_id = 0, .offset_bytes = chunk_entry * moe_ring::token_list::ENTRY_BYTES},
+                        {});
                 }
             }
 
@@ -434,20 +444,22 @@ void kernel_main() {
                 // page; this core's slice of it lands in page k * T + t of [k, T, H] at the core's
                 // column offset. Non-posted writes; the flush before pop_front below frees the source.
                 if (output_width_tiles_core > 0) {
-                    noc_async_read_barrier(/*noc=*/1);
+                    noc1_obj.async_read_barrier();
                     volatile tt_l1_ptr uint32_t* map =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_output_map_addr);
                     const auto output_accessor = TensorAccessor(LoArgs::out_args, local_output_addr);
                     for (uint32_t bt = 0; bt < num_tokens_block; ++bt) {
-                        const uint32_t token_id = map[bt * e_t_entry_words];
-                        const uint32_t k_slot = map[bt * e_t_entry_words + 1];
-                        const uint64_t dst_noc_addr = output_accessor.get_noc_addr(
-                            k_slot * total_tokens + token_id, local_output_col_offset_bytes, /*noc=*/1);
-                        noc_async_write(
-                            source_base_l1_addr + bt * source_width_tiles * tile_width_size_bytes,
-                            dst_noc_addr,
+                        const uint32_t entry = map[bt];
+                        const uint32_t token_id = moe_ring::token_list::entry_token(entry);
+                        const uint32_t k_slot = moe_ring::token_list::entry_k_slot(entry);
+                        noc1_obj.async_write(
+                            CoreLocalMem<uint8_t>(
+                                source_base_l1_addr + bt * source_width_tiles * tile_width_size_bytes),
+                            output_accessor,
                             local_output_row_bytes,
-                            /*noc=*/1);
+                            {},
+                            {.page_id = k_slot * total_tokens + token_id,
+                             .offset_bytes = local_output_col_offset_bytes});
                     }
                 }
             } else {
@@ -557,6 +569,11 @@ void kernel_main() {
         //  local_output: every chunk's writes were flushed before pop_front; the commit of the
         //  output is waited for once at the end.)
         output_buffer_idx = !output_buffer_idx;
+        if constexpr (local_output) {
+            // Same segment rule as the tilize drain that packs the lists.
+            token_list_segment_start =
+                moe_ring::token_list::next_segment_start(token_list_segment_start, active_tokens);
+        }
     }
 
     if constexpr (!has_combine) {
