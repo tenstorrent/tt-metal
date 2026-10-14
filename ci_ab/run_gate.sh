@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# Scratch A/B job (MoE gate, identity indices on the SFPU-only route), not for merge. generalized_moe_gate device time
-# under the device profiler, called with identity_indices=True: A = #60154's pushed device files (they ignore the flag
-# and copy the id tile), B = the head (ids written on the SFPU), B2 = an A/A copy of B; own fresh JIT cache per arm;
-# A B B2 B2 B A twice. Then the outputs of 9216 tokens per arm (3 stimulus kinds,
-# 12 configurations) for the offline compare, and the gate tests on B. Guard: compute ELF hashes; fails if A equals B.
+# Scratch A/B job (MoE gate, the sfpu_sort route's direct bias add and step2), not for merge. generalized_moe_gate device
+# time under the device profiler, identity_indices=True: A = #60154's pushed device files (c19f44e28bf), B = this head,
+# B2 = an A/A copy of B; own fresh JIT cache per arm; A B B2 B2 B A twice. Then outputs A against B and the gate tests on B.
 set +e +o pipefail
 cd /work; export TT_METAL_HOME=/work TRACY_NO_WEB_SERVER=1 GATE_NMEAS=${GATE_NMEAS:-8} HWLOCK_HELD=ci
 S=/work/ci_ab; OUT=/work/generated/gate; rm -rf $OUT; mkdir -p $OUT
