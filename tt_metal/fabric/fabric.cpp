@@ -798,13 +798,18 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
             (connection_link_indices.size() == 1 || connection_link_indices.size() == dst_nodes.size()),
         "connection_link_indices must be empty or have size 1 or the same size as dst_nodes");
 
+    // TODO(#52020): resolves the default context, because this tt-blaze API has no device or env
+    // parameter to resolve from. Take the HAL from this control plane too rather than adding a lookup.
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
+
     const std::pair<const std::vector<uint32_t>&, const char*> sem_arg_arrays[] = {
         {teardown_sem_args, "teardown_sem_args"}, {buffer_index_sem_args, "buffer_index_sem_args"}};
     if (sem_args_are_l1_addresses) {
         // Both are 16 B NoC targets: the EDM remotely increments the teardown flag and block-reads
         // a 16 B SenderChannelProducerCursor into the buffer-index address.
         constexpr uint32_t k_sem_address_alignment = 16;
-        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        const auto& hal = fabric_context.get_hal();
         const uint32_t l1_unreserved_base = hal.get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
         const uint32_t l1_end = l1_unreserved_base + hal.get_dev_size(
@@ -850,9 +855,6 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
             }
         }
     }
-
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
 
     std::vector<uint32_t> worker_args;
     worker_args.reserve(fabric_connection_rt_args_size(dst_nodes.size()));
