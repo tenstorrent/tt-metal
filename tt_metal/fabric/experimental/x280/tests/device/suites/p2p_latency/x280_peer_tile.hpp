@@ -25,6 +25,7 @@
 #include "rt/x280_noc_map.h"
 
 #include <gtest/gtest.h>
+#include <tt-metalium/kernel_types.hpp>
 
 #include <cstdint>
 #include <cstdio>
