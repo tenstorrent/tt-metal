@@ -744,8 +744,12 @@ def test_sqrt_family_negative_zero_regression(
 # below +0.0: ltz(-0.0) was 1 and gez(-0.0) was 0, where IEEE-754 and torch give 0 and 1. gtz and lez
 # are controls; they were already right for -0.0.
 #
-# NaN is left out: these kernels also rank NaN by its sign bit (gtz(+NaN) = 1, ltz(-NaN) = 1), a
-# separate deviation the fix does not change. Float32 -> Float32 at dest_acc=Yes is the only pipeline
+# eqz and nez cover item 6: they decide with _sfpu_is_fp16_zero_ (ckernel_sfpu_is_fp16_zero.h), whose
+# `v == 0.0F` lowers to SFPSETCC LREG_EQ0, an all-32-bits-zero test, so eqz(-0.0) was 0 and nez(-0.0)
+# was 1. They also get ±NaN, which must read as nonzero.
+#
+# NaN is left out of the ordered compares: these kernels also rank NaN by its sign bit (gtz(+NaN) = 1,
+# ltz(-NaN) = 1), a separate deviation the fix does not change. Float32 -> Float32 at dest_acc=Yes is the only pipeline
 # that hands the SFPU a real -0.0. Blackhole only: the Wormhole copy of the header is not changed.
 _ZERO_COMP_SIGNED_ZERO_INPUTS = (
     0.0,
@@ -767,7 +771,13 @@ _ZERO_COMP_TORCH = {
     MathOperation.GreaterThanEqualZero: torch.ge,
     MathOperation.GreaterThanZero: torch.gt,
     MathOperation.LessThanEqualZero: torch.le,
+    MathOperation.EqualZero: torch.eq,
+    MathOperation.NotEqualZero: torch.ne,
 }
+
+# torch keeps the sign of an fp32 NaN, so -nan reaches Dest as 0xFFC00000.
+_ZERO_COMP_NAN_INPUTS = (float("nan"), -float("nan"))
+_ZERO_COMP_NAN_SAFE = (MathOperation.EqualZero, MathOperation.NotEqualZero)
 
 
 @blackhole_only
@@ -786,6 +796,8 @@ def test_llk_zero_comp_signed_zero(mathop):
 
     num_elements = input_dimensions[0] * input_dimensions[1]
     inputs = list(_ZERO_COMP_SIGNED_ZERO_INPUTS)
+    if mathop in _ZERO_COMP_NAN_SAFE:
+        inputs += _ZERO_COMP_NAN_INPUTS
     src_A = torch.tensor(
         (inputs * (num_elements // len(inputs) + 1))[:num_elements],
         dtype=torch.float32,
@@ -836,6 +848,8 @@ def test_llk_zero_comp_signed_zero(mathop):
     golden = _ZERO_COMP_TORCH[mathop](src_A, 0.0).to(torch.float32)
 
     def fmt(x: float) -> str:
+        if x != x:
+            return "-nan" if math.copysign(1.0, x) < 0 else "+nan"
         if x == 0.0:
             return "-0.0" if math.copysign(1.0, x) < 0 else "+0.0"
         return f"{x:g}"

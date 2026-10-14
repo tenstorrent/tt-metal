@@ -8,8 +8,8 @@ from typing import Dict
 
 import pytest
 import torch
-from conftest import skip_for_quasar
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from conftest import blackhole_only, skip_for_quasar
+from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -896,10 +896,7 @@ def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop, **run_kwargs):
     )
 
 
-@pytest.mark.skipif(
-    get_chip_architecture() != ChipArchitecture.BLACKHOLE,
-    reason="tt-llk#1701 item 6: only the Blackhole _sfpu_is_fp16_zero_ treats a -0.0 mask as zero so far",
-)
+@blackhole_only
 @parametrize(
     formats=input_output_formats([DataFormat.Float32], same=True),
     mathop=[MathOperation.SfpuMask],
