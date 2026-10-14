@@ -193,7 +193,7 @@ def decode_forward(
             page_table_tensor=page_table,
             scale=config.scaling,
             program_config=(
-                sdpa_decode_program_config(config.sliding_window)
+                sdpa_decode_program_config(config.sliding_window, one_user=fused)
                 if fused or batched_qkv is not None
                 else program_config.get_decode_sdpa_config(mesh_device)
             ),

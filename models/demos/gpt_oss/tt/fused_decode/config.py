@@ -172,7 +172,25 @@ SDPA_DECODE_K_CHUNK_SLIDING = 128
 SDPA_DECODE_K_CHUNK_FULL = 256
 
 
-def sdpa_decode_program_config(sliding_window):
+# One-user decode (the fused decode layer), full attention: the K sequence of each of the device's 2 KV heads is split
+# over up to SDPA_DECODE_B1_CORES_PER_HEAD cores of the whole 11x10 grid. The op's default cap (16 cores per head, so
+# 32 of the 64 cores of an 8x8 grid) left the long-context SDPA compute-bound: at 131k positions 195 -> 133 us per
+# layer (182 -> 267 GB/s of KV), at 200 positions 11.9 -> 13.0 us (measured standalone, per-device gpt-oss-20b shapes).
+SDPA_DECODE_B1_GRID = (11, 10)
+SDPA_DECODE_B1_CORES_PER_HEAD = 32
+
+
+def sdpa_decode_program_config(sliding_window, one_user=False):
+    """one_user: the fused one-user decode layer (full attention takes the whole grid, see SDPA_DECODE_B1_*); otherwise
+    the batched layout (one user per core of the 8x8 grid)."""
+    if one_user and not sliding_window:
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(*SDPA_DECODE_B1_GRID),
+            q_chunk_size=0,
+            k_chunk_size=SDPA_DECODE_K_CHUNK_FULL,
+            exp_approx_mode=False,
+            max_cores_per_head_batch=SDPA_DECODE_B1_CORES_PER_HEAD,
+        )
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
         q_chunk_size=0,
