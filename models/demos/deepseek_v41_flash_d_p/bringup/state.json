@@ -25,6 +25,113 @@
   "started": "2026-10-14T17:14:17",
   "status": "PASS"
  },
+ "R.2": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "d972c5877d5f226f3529c211cc264441d93b17da",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "e6bea15f919500e0fea61577b8b06d765bec69e1",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "cc9b52d1721e12b4a3f71d7fc0eba1c2bcb58891",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "bd05d3f4-28f8-473e-a2b9-6975ba94849f"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/briefs/R.2.reference.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "d972c5877d5f226f3529c211cc264441d93b17da",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "e6bea15f919500e0fea61577b8b06d765bec69e1",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "cc9b52d1721e12b4a3f71d7fc0eba1c2bcb58891",
+      "dirty": false
+     }
+    },
+    "knowledge_contradicted": [],
+    "knowledge_report": "ok",
+    "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/agents/R.2.reference.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "reference",
+    "seconds": 9468.3,
+    "session_id": "bd05d3f4-28f8-473e-a2b9-6975ba94849f",
+    "t": "2026-10-14T19:52:24"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 2105.6,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-10-14T17:14:35"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-10-14T20:27:32"
+   }
+  ],
+  "last_run": "2026-10-14T20:27:32",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/R.2.log",
+  "metrics": {
+   "parity_layers": 25,
+   "pcc_hidden_L00": 1.0000000000000202,
+   "pcc_hidden_L01": 0.9999999999999061,
+   "pcc_hidden_L02": 1.0000000000001217,
+   "pcc_hidden_L03": 0.9999999999999449,
+   "pcc_hidden_L04": 0.9999999999998742,
+   "pcc_hidden_L05": 0.9999999999997858,
+   "pcc_hidden_L06": 0.9999999999999819,
+   "pcc_hidden_L07": 1.0000000000000482,
+   "pcc_hidden_L08": 0.9999999999999482,
+   "pcc_hidden_L09": 1.00000000000014,
+   "pcc_hidden_L10": 0.9999999999998412,
+   "pcc_hidden_L11": 1.0000000000000022,
+   "pcc_hidden_L12": 1.0000000000000553,
+   "pcc_hidden_L13": 1.000000000000207,
+   "pcc_hidden_L14": 1.0000000000001317,
+   "pcc_hidden_L15": 1.0000000000000697,
+   "pcc_hidden_L16": 1.00000000000019,
+   "pcc_hidden_L17": 0.9999999999999089,
+   "pcc_hidden_L18": 1.0000000000000706,
+   "pcc_hidden_L19": 1.0000000000001272,
+   "pcc_hidden_L20": 1.0000000000002334,
+   "pcc_hidden_L21": 1.0000000000007006,
+   "pcc_hidden_L22": 1.0000000000007598,
+   "pcc_hidden_L23": 1.0000000000010005,
+   "pcc_hidden_L24": 1.0000000000012919,
+   "pcc_logits": 1.0000000000001845,
+   "revision_ok": 1,
+   "revision_pinned": 1,
+   "smoke_ok": 1,
+   "text_next_token_acc": 0.035164836794137955,
+   "text_top1_acc": 0.9726428985595703,
+   "top1_match_frac": 1.0
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "reference",
+  "started": "2026-10-14T19:52:26",
+  "status": "PASS",
+  "waiting": null
+ },
  "_run": {
   "branch": "dnijemcevic/model_bringup",
   "created": "2026-10-14T16:15:35",
