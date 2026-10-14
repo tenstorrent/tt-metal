@@ -33,7 +33,7 @@ def test_reduce_auxiliary_host_rounding(dtype, scenario):
             )
             for width in widths
         ],
-        cb_ids=planner.ReduceSequenceCbIds(1, 2, 16),
+        cb_ids=planner.ReduceSequenceCbIds(1, 2, 16, accumulator_cb_tiles=1),
         hardware=planner.ReduceHardwareConfig(
             arch=ttnn.device.Arch.BLACKHOLE,
             fp32_dest_acc_en=dtype == ttnn.float32,

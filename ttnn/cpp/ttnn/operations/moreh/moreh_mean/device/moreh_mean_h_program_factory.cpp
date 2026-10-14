@@ -88,7 +88,7 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
          .dst_full_sync_en = dst_full_sync_en,
          .math_fidelity = math_fidelity},
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
-    const auto* auxiliary = reduce_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    const auto& auxiliary = reduce_plan.auxiliary_cb;
     // The optional endpoint has no generated dfb::scaler token when omitted.
     const KernelSpec::CompilerOptions::Defines auxiliary_defines{
         {"REDUCE_AUXILIARY_CB", auxiliary ? "dfb::scaler" : "ttnn::kernel_lib::reduce_plan_args::no_cb_id"}};
