@@ -27,6 +27,7 @@ CB_STICK_STAGING = 2  # reader-private scratch: bank-grouped sticks (coalesced) 
 CB_PAD_FILL = 3  # reader-private: one stick segment of the pad value (source of local fill copies)
 CB_COPY_JOB = 4  # reader -> writer: split-reorder copy job per tile-row {dst, slot base, first stick}
 CB_COPY_DONE = 5  # writer -> reader: split-reorder ack per tile-row (token page)
+CB_BFP4_ROUNDED = 6  # compute-internal (bfloat4_b output): RM stick pages rounded to the bfp4 grid, bf16
 CB_TILES_OUT = 16  # compute -> writer: tiled output pages
 CB_TILES_OUT_TAIL = 17  # same, for the ragged last column block
 
@@ -75,6 +76,16 @@ FILL_PHASE_BYTES = 64
 RETILE_STAGING_SLOTS = 2
 
 TILE_WIDTH = 32
+# bfloat4_b output: the packer TRUNCATES each 16-element shared-exponent group to 3 mantissa bits.
+# Compute first rounds the stick pages to nearest-even on the bfp4 grid (SFPU, in DEST) into
+# cb_bfp4_rounded (bf16 — the rounded values are exact there), then tilizes that; the packer's
+# truncation of an on-grid value is exact, so the output equals host round-to-nearest conversion.
+# False = the packer's plain truncation (no round pass; ~2.4x faster on large bfp4 shapes, BH).
+BFP4_ROUND_TO_NEAREST = True
+BFP4_ROUND_DTYPES = (ttnn.bfloat16, ttnn.float32, ttnn.fp8_e4m3)  # float inputs the SFPU pass reads
+# Tile-rows rounded per pass (cb_bfp4_rounded window = this x block width). The round pass and the
+# tilize share the TRISCs, so they alternate per window rather than pipeline.
+BFP4_ROUND_TILE_ROWS = 1
 
 # Input formats unpacked straight into a 32-bit DEST (UnpackToDestFp32 on the stick CBs): the
 # 32-bit formats tilize bit-exact this way (with the helper's Fp32Mode::Lossless — never fast
@@ -373,6 +384,12 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
     seg_bounce = not retile and seg_unit_bytes % read_alignment != 0
     bounce_col_bytes = tile_h * seg_unit_bytes if seg_bounce else 0  # per column tile
 
+    bfp4_round = (
+        BFP4_ROUND_TO_NEAREST and output_tensor.dtype == ttnn.bfloat4_b and input_tensor.dtype in BFP4_ROUND_DTYPES
+    )
+    bfp4_rounded_page_bytes = tile_h * TILE_WIDTH * 2  # one bf16 tile
+    bfp4_round_col_bytes = BFP4_ROUND_TILE_ROWS * bfp4_rounded_page_bytes if bfp4_round else 0
+
     def blocking_for(core_cols_tiles):
         return compute_blocking(
             core_cols_tiles=core_cols_tiles,
@@ -381,7 +398,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             in_elem_bytes=in_elem_bytes,
             low_l1=low_l1,
             read_alignment=read_alignment,
-            staging_col_bytes=retile_staging_col_bytes + bounce_col_bytes,
+            staging_col_bytes=retile_staging_col_bytes + bounce_col_bytes + bfp4_round_col_bytes,
         )
 
     # --- Regime selector (op_design.md "Selection function") ---------------------------------
@@ -499,6 +516,18 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
                     out_tile,
                 )
             )
+        if bfp4_round:
+            # Shared by the full and the ragged tail column blocks (sequential, disjoint lifetimes).
+            cbs.append(
+                _cb(
+                    CB_BFP4_ROUNDED,
+                    BFP4_ROUND_TILE_ROWS * block_width_tiles,
+                    bfp4_rounded_page_bytes,
+                    ttnn.bfloat16,
+                    group_cores,
+                    out_tile,
+                )
+            )
         if coalesce:
             cbs.append(_cb(CB_STICK_STAGING, 1, staging_bytes, input_tensor.dtype, group_cores))
         if seg_bounce and not coalesce and not in_resident:
@@ -603,7 +632,16 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             stick_page_bytes,
         ]
         writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-        compute_ct = [CB_RM_STICKS, CB_RM_STICKS_TAIL, CB_TILES_OUT, CB_TILES_OUT_TAIL, *col_geometry]
+        compute_ct = [
+            CB_RM_STICKS,
+            CB_RM_STICKS_TAIL,
+            CB_TILES_OUT,
+            CB_TILES_OUT_TAIL,
+            *col_geometry,
+            int(bfp4_round),
+            CB_BFP4_ROUNDED,
+            BFP4_ROUND_TILE_ROWS,
+        ]
 
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for core, row_start_tile, core_rows_tiles, col_start_tile, _ in entries:

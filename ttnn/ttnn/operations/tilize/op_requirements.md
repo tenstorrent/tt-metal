@@ -100,7 +100,7 @@
 
 **Done when**: every buildable golden cell with a non-bf16 `dtype` or `output_dtype` passes (bit-exact on the diagonal, within `helpers._transition_tolerance` on casts), the three regression tests above pass, and no Phase 0–4 cell regresses.
 
-### [ ] Refinement 5a — bfloat4_b round-to-nearest before pack (padded / tiny-sample bfp4 cells)
+### [x] Refinement 5a — bfloat4_b round-to-nearest before pack (padded / tiny-sample bfp4 cells)
 
 **Goal**: lift the bfloat4_b output PCC above the 0.98 floor on the remaining near-miss cells (`1x1x50x50` with a nonzero `pad_value`, rank-1 `[64]` auto-pad), all source dtypes.
 
@@ -109,6 +109,8 @@
 **Next lever**: an SFPU pre-round in DEST between unpack and pack — per 16-element face row, find the max exponent and add half an ulp of the bfp4 grid (3-bit mantissa at that exponent) so the packer's truncation becomes round-to-nearest. Compute kernel: `eltwise_chain`-style dest-resident step after the tilize datacopy (requires the non-fast tilize path or a copy_tile pass). Gate it on `output_dtype == bfloat4_b` only.
 
 **Done when**: the bfp4 golden cells pass reliably (≥ 0.98 over repeated runs) and no other cell regresses.
+
+**Outcome**: done in compute, not the reader. Each tile-row of stick pages goes through `unary<Bfp4Round>` (copy to DEST, then an SFPU round-to-nearest-even onto the group's bfp4 grid, then pack bf16 into `cb_bfp4_rounded`) before the tilize. Device bfp4 is now bit-identical to the host `from_torch(bfloat4_b)` conversion. The 3 near-miss cells went from PCC 0.979–0.980 to ≈ 0.992. Cost: SFPU-bound, ≈ 2.4× the truncating path on large shapes (BH core 0,0 kernel span: 4096×1024 bf16 95K vs 40K cycles; 16384×64 19.5K vs 12.6K). Ablation: the extra copy/pack pass costs ≈ 0; the 7-shuffle sub-vector max and the per-element rounding each cost ≈ 21K cycles. `BFP4_ROUND_TO_NEAREST = False` restores the old path. A first version that rounded on the reader RISC was bit-exact too, but cost +1.8–2.4 ms on 4096×1024, so it was replaced.
 
 ### [ ] Refinement 6 — Second perf pass on `[1,1,16384,64]`
 
