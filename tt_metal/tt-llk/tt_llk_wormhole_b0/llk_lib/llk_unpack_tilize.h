@@ -298,7 +298,8 @@ inline void _llk_unpack_tilize_(
 /**
  * @brief Program the unpacker MOP for tilize-A-with-unpack-B.
  *
- * Programs the MOP that unpacks the SrcA tilize rows and the SrcB face for one run;
+ * Programs the MOP that unpacks the SrcA tilize rows and the SrcB faces of one run: two faces of
+ * each for a full-width tile with two or four faces, one for a narrow or single-face tile.
  * @ref _llk_unpack_tilizeA_B_ sets the SrcA L1 address before each run.
  *
  * @tparam neginf_srcA: Clear SrcA to negative infinity before unpacking (e.g. for max-reduce).
@@ -306,14 +307,15 @@ inline void _llk_unpack_tilize_(
  * @tparam zero_srcA: Clear SrcA to zero before unpacking.
  * @tparam zero_srcA_reduce: Clear SrcA to zero before unpacking for a reduce fused with tilize.
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
- * @param narrow_tile: The tile is one face wide; each MOP run then unpacks a single face. Not supported
- *        with zero_srcA, whose MOP is sized from num_faces.
+ * @param narrow_tile: The tile is one face wide; each MOP run then unpacks a single face. With zero_srcA
+ *        only a single-face tile may be narrow: the zero_srcA MOP covers the whole tile in one run, so it
+ *        cannot be run once per face.
  */
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4, const bool narrow_tile = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    LLK_ASSERT(!(zero_srcA && narrow_tile), "tilizeA_B with zero_srcA does not support narrow tiles");
+    LLK_ASSERT(!(zero_srcA && narrow_tile && num_faces > 1), "tilizeA_B with zero_srcA supports a narrow tile only when it has a single face");
     static constexpr std::uint32_t unpack_srca =
         TT_OP_UNPACR(SrcA, (zero_srcA ? 0b010001 : 0b1), 0, 0, 0, 1, (zero_srcA ? 0 : 1), p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb = TT_OP_UNPACR(
@@ -378,7 +380,8 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4,
  * @tparam zero_srcA_reduce: Clear SrcA to zero before unpacking for a reduce fused with tilize.
  * @param unpack_src_format: Source data format of operand A in L1.
  * @param unpack_dst_format: Destination data format operand A is converted to.
- * @param narrow_tile: Whether the tile is narrow (single column of faces).
+ * @param narrow_tile: Whether the tile is narrow (single column of faces). With zero_srcA only a
+ *        single-face tile may be narrow; see @ref _llk_unpack_tilizeA_B_mop_config_.
  * @param ct_dim: Number of column tiles in the block, used to size the column stride.
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
  * @param unpA_face_r_dim: Rows per face for operand A.

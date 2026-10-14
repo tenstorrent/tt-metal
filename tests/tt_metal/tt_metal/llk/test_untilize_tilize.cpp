@@ -982,16 +982,17 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilizeA_BNarrowTile) {
                 core,
                 ComputeConfig{.compile_args = {num_tiles_r, num_tiles_c}});
 
-            // A: row-major [num_tiles_r * 32, num_tiles_c * 16], small integers.
+            // A: row-major [num_tiles_r * tile_h, num_tiles_c * 16], cycling through the integers in [-50, 50]:
+            // 37 and 101 are coprime, so (i * 37) % 101 visits every residue once per 101 datums.
             const std::uint32_t cols = num_tiles_c * tile_w;
             const std::uint32_t rows = num_tiles_r * tile_h;
             std::vector<bfloat16> a(rows * cols);
             for (std::uint32_t i = 0; i < a.size(); i++) {
                 a[i] = bfloat16(static_cast<float>(static_cast<int>((i * 37) % 101) - 50));
             }
-            const std::vector<bfloat16> b(rows * cols, bfloat16(b_value));
             distributed::EnqueueWriteMeshBuffer(cq, src0, pack_vector<std::uint32_t, bfloat16>(a), /*blocking=*/true);
-            distributed::EnqueueWriteMeshBuffer(cq, src1, pack_vector<std::uint32_t, bfloat16>(b), /*blocking=*/true);
+            distributed::EnqueueWriteMeshBuffer(
+                cq, src1, create_constant_vector_of_bfloat16(buffer_bytes, b_value), /*blocking=*/true);
             SetRuntimeArgs(
                 program, reader, core, {src0->address(), dram_bank_id, src1->address(), dram_bank_id, num_tiles});
             SetRuntimeArgs(program, writer, core, {dst->address(), dram_bank_id, num_tiles});
@@ -1001,7 +1002,8 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeUnpackTilizeA_BNarrowTile) {
             distributed::EnqueueReadMeshBuffer(cq, result_packed, dst, /*blocking=*/true);
             const auto result = unpack_vector<bfloat16, std::uint32_t>(result_packed);
 
-            // Golden in output tile order: per tile, face 0 (rows 0-15) then face 1 (rows 16-31), each row-major.
+            // Golden in output tile order: per tile, face 0 (rows 0-15) then, for 32-high tiles, face 1
+            // (rows 16-31), each row-major.
             std::vector<bfloat16> golden;
             golden.reserve(a.size());
             for (std::uint32_t tr = 0; tr < num_tiles_r; tr++) {
