@@ -111,8 +111,8 @@ struct TileMappedChoice {
 
 WorkSplit split_units(const tt::tt_metal::CoreRangeSet& grid, uint32_t units);
 
-// The TILE program a call runs. Tile rows needs both widths to be multiples of 32, the LCM program that too and no
-// tile padding, the segment map takes any widths.
+// The TILE program a call runs. Tile rows needs both widths to be multiples of 32, the LCM program that too, no tile
+// padding and 32-bit datums (lcm_bit_exact); the segment map takes any widths.
 enum class TileRoute : uint32_t { TileRows = 0, Lcm = 1, TileMapped = 2 };
 
 // What the entry planned for one call. A program-cache miss builds from it instead of planning again; live L1 then
@@ -168,8 +168,9 @@ std::optional<TileRowsChoice> live_tile_rows_choice(
     uint64_t reserved_l1_bytes = 0);
 
 // The program of `planned.tile_route` sized to the L1 free below the lowest live allocation less `reserved_l1_bytes`:
-// the largest tile-rows plan (live_tile_rows_choice), the deepest LCM output CB, or the sliced segment map with the
-// deepest input CB that fits; nullopt when none does. Same contract as live_tile_rows_choice.
+// the largest tile-rows plan (live_tile_rows_choice), the LCM plan with the largest write batch and deepest output CB,
+// or the segment map, sliced where slicing pays off and fits, with the deepest input CB that fits; nullopt when none
+// does. Same contract as live_tile_rows_choice.
 std::optional<TileChoice> live_tile_choice(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
