@@ -960,7 +960,15 @@ SWIGLU_OAI_SWEEP = dict(
 @parametrize(**SWIGLU_OAI_SWEEP)
 def test_eltwise_binary_sfpu_swiglu_oai(formats, dest_acc, mathop, **run_kwargs):
     # swiglu_oai(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel.
-    sfpu_binary(formats, dest_acc, mathop, **run_kwargs)
+    # Both signs, past each clamp and below where the logistic factor underflows.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-65.0, high=11.0),
+        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-11.0, high=11.0),
+        **run_kwargs,
+    )
 
 
 # =============================================================================

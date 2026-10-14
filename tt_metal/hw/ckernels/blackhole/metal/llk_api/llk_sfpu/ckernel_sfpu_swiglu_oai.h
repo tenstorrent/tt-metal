@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <limits>
 
 #include "cmath_common.h"
 #include "sfpi.h"
@@ -19,11 +18,17 @@
 // The logistic factor 1 / (1 + e^-z), z = 1.702 x, is sel / (1 + e^-|z|), with sel = 1 for x >= 0 and e^-|z| below.
 //
 // The leaves' magnitudes multiply unscaled, and one reciprocal divides by the product of their denominators.
-// A NaN input gives NaN; a result below the smallest normal float is 0.
+// A NaN input gives NaN with FP32 DEST and +inf with BF16 DEST (the BF16 round turns a NaN into an
+// infinity); a result below the smallest normal float is 0.
+//
+// BF16 (Float16_b) inputs, Blackhole only. The result is BF16-accurate in either DEST mode: at most 0.526 ULP of the
+// exact value over every finite BF16 pair. With FP32 DEST the FP32 result is not FP32-accurate: it is within 1.0e-04
+// relative of the exact value.
 
 namespace ckernel::sfpu {
 
-// One Newton step: the denominator is a positive normal value.
+// One Newton step on SFPARECIP's estimate: the denominator is a positive normal value. The 2.0f is a
+// literal rather than a programmable constant, so it does not depend on what the init loads.
 sfpi_inline sfpi::vFloat _swiglu_oai_reciprocal_(const sfpi::vFloat a) {
     sfpi::vFloat y = sfpi::approx_recip(a);
     sfpi::vFloat t = a * y - 2.0f;
@@ -39,7 +44,11 @@ inline void calculate_swiglu_oai(
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat gate_x = dst_reg[gate_tile_idx * dst_tile_size];
         auto [gate_v, gate_m] = sfpi::min_max(gate_x, vFloat(7.0f));
-        vFloat gate_a = sfpi::setsgn(gate_v, 0);
+        vFloat gate_a = sfpi::setsgn(gate_v, 0 /*sgn*/);
+        // e^-|z| through the exponent ALU: w_c = |z| * (-log2(e)) + 127 is the biased binary32 exponent of e^-|z| (127
+        // is the bias), held at 0.5 so e^-|z| underflows to 0. w_f is the fraction of w_c as an integer (0 to 2^23),
+        // and the polynomial in w_f is 2^fraction: its coefficients are those of
+        // data/coefficients/swiglu_oai_p3_s1_uniform_lsq_relative_block-exp2_fraction.csv, each times 2^(-23 k).
         vFloat w_c = gate_a * -2.4554669857025146f + 127.0f;
         vFloat w_z = sfpi::max(w_c, 0.5f);
         vInt w_m = sfpi::exman(w_z, sfpi::MantissaMode::ImplicitOne);
@@ -58,7 +67,7 @@ inline void calculate_swiglu_oai(
         vFloat w1 = w + 1.0f;
         vFloat num = gate_n;
         vFloat up_x = dst_reg[up_tile_idx * dst_tile_size];
-        auto [up_h, up_m] = sfpi::min_max(sfpi::setsgn(up_x, 0), vFloat(7.0f));
+        auto [up_h, up_m] = sfpi::min_max(sfpi::setsgn(up_x, 0 /*sgn*/), vFloat(7.0f));
         vFloat up_v = sfpi::copysgn(up_h, up_x);
         vFloat up_o = up_v + 1.0f;
         // 0, or NaN where a probe is NaN: minus the probes' sum is otherwise at most 0, and SFPSWAP ranks
@@ -76,19 +85,8 @@ inline void calculate_swiglu_oai(
     }
 }
 
-// The kernel is fitted on BF16 data; the SFPU reads DEST in the math thread's SrcB format.
-inline bool bf16_dest_swiglu_oai() {
-#if defined(TRISC_MATH) || defined(LLK_TRISC_MATH)
-    return ckernel::math::src_zero_flag_srcb_fmt == static_cast<std::uint32_t>(DataFormat::Float16_b);
-#elif defined(TRISC_PACK) || defined(LLK_TRISC_PACK)
-    return ((ckernel::cfg_read(THCON_SEC0_REG1_In_data_format_ADDR32) & THCON_SEC0_REG1_In_data_format_MASK) >>
-            THCON_SEC0_REG1_In_data_format_SHAMT) == static_cast<std::uint32_t>(DataFormat::Float16_b);
-#else
-    return false;
-#endif
-}
-
-// Within the state recip_init<false, false> writes: 0 of its programmable constants.
+// The init resets the SFPU address counters; the body reads no programmable constant (its reciprocal, SFPARECIP, needs
+// none).
 inline void swiglu_oai_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 }  // namespace ckernel::sfpu

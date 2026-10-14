@@ -2245,6 +2245,9 @@ BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwGt,  # as SfpuElwLt, operands swapped
         MathOperation.SfpuElwLe,  # weak_ordered pre-stores 1, then 0 if either operand is NaN
         MathOperation.SfpuElwGe,  # as SfpuElwLe, operands swapped
+        # A NaN reaches the product through a multiply-add; at every special pair the kernel gives its
+        # golden's class (a zero's sign aside), as its bit model does on every BF16 pair.
+        MathOperation.SfpuSwigluOai,
     }
 )
 
@@ -2274,9 +2277,6 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Effectively unary: the kernel reads operand B only on its x > 4 branch and the golden
         # ignores it, so a cat-B probe in B asserts nothing.
         MathOperation.SfpuLogsigmoid,
-        # The SFPU returns +0 where torch's zero is -0, and the stock kernel's NaN class is its own: a
-        # cat-B probe asserts torch's class on cells the kernel's PR states instead.
-        MathOperation.SfpuSwigluOai,
     }
 )
 
