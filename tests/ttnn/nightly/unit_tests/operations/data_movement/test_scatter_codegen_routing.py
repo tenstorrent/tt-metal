@@ -36,7 +36,13 @@ def _materialize(shape, kwargs, dtype, layout, device):
     dim = kwargs.get("dim", -1)
     axis = dim if dim >= 0 else len(shape) + dim
     axis_len = int(shape[axis])
-    index = torch.randint(0, axis_len, index_shape, dtype=torch.int32)
+    # Unique along the scatter axis and spanning the whole input extent: with a duplicate
+    # in a lane the winning source element is whichever the kernel visits last, which
+    # neither native nor the port promises, so a bit-exact leg would assert walk order.
+    permuted_shape = list(index_shape)
+    permuted_shape[axis] = max(axis_len, int(index_shape[axis]))
+    permuted = torch.argsort(torch.rand(permuted_shape), dim=axis) % axis_len
+    index = permuted.narrow(axis, 0, int(index_shape[axis])).to(torch.int32).contiguous()
     index_dtype = ttnn.int32
     out["index"] = ttnn.from_torch(index, dtype=index_dtype, layout=layout, device=device)
     src_shape = kwargs.get("src")
@@ -124,6 +130,28 @@ _CALL_CONTRACT_CASE = (
     ttnn.bfloat16,
     ttnn.ROW_MAJOR_LAYOUT,
 )
+_SHORTCUT_CASE = (
+    [1, 1, 1, 32],
+    {"dim": 2, "index": [1, 1, 1, 32], "src": [1, 1, 1, 32]},
+    ttnn.bfloat16,
+    ttnn.ROW_MAJOR_LAYOUT,
+)
+
+
+def test_scatter_codegen_forced_dispatches_past_the_frontend_shortcut(device):
+    shape, kwargs, dtype, layout = _SHORTCUT_CASE
+    xt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device)
+    kwargs = _materialize(shape, kwargs, dtype, layout, device)
+    # Both cache-count assertions below need a cache holding only the native program.
+    device.clear_program_cache()
+    golden = ttnn.to_torch(_force_native(xt, **kwargs))
+    entries_before = device.num_program_cache_entries()
+    assert_equal(golden, ttnn.to_torch(ttnn.scatter(xt, **kwargs)))
+    msg = "the routed entry dispatched a call the front-end shortcut answers"
+    assert device.num_program_cache_entries() == entries_before, msg
+    assert_equal(golden, ttnn.to_torch(_force_codegen(xt, **kwargs)))
+    msg = "forced codegen was swallowed by the front-end shortcut instead of dispatching"
+    assert device.num_program_cache_entries() > entries_before, msg
 
 
 def test_scatter_codegen_unsupported_output_memory_config_falls_back(device):
