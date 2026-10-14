@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: MIT
 """PyTorch FP32 CPU baseline on the TT host (BENCHMARK.md protocol, stage 0).
 

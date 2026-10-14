@@ -1,9 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: MIT
 """On-device bring-up tests with random weights (no checkpoint required)."""
 
 from __future__ import annotations
 
-import pytest
 import torch
 
 from models.experimental.esm2.tt.esm2.config import Esm2TTConfig

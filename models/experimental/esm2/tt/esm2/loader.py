@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: MIT
 """Load the pinned ESM-2 safetensors checkpoint into canonical module names.
 

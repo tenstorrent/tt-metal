@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: MIT
 """Portable CPU tests: config/shape logic, reference twin invariants (no device)."""
 

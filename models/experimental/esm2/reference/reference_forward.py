@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: MIT
 """Oracle bridge: transformers.EsmForMaskedLM reference forward (FP32).
 

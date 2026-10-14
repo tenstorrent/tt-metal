@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: MIT
 """CPU (PyTorch) reference implementation of ESM-2 for esm2_t33_650M_UR50D.
 
@@ -10,7 +12,6 @@ bringup batch-pad failure (see position_ids_from_input_ids).
 
 from __future__ import annotations
 
-import math
 
 import torch
 import torch.nn.functional as F

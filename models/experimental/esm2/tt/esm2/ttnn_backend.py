@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: MIT
 """TTNN device implementation of ESM-2 (33-layer masked-LM protein encoder).
 

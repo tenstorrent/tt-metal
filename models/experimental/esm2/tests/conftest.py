@@ -1,9 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: MIT
 """Shared fixtures for ESM-2 tests: checkpoint path, model config, device weights."""
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 

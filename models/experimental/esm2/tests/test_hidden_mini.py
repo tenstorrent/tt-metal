@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: MIT
 """End-to-end model test: full 33-layer ESM-2 on device with the real checkpoint."""
 
