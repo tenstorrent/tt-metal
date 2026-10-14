@@ -41,10 +41,27 @@ void SubtractAtTargetDeviceOperation::validate_on_program_cache_miss(
             "SubtractAtTarget: '{}' must use INTERLEAVED memory layout, got '{}'",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
+        TT_FATAL(
+            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "SubtractAtTarget: '{}' must be in DRAM, got '{}'",
+            name,
+            enchantum::to_string(tensor.buffer()->buffer_type()));
+
+        const auto canonical_spec = tt::tt_metal::TensorSpec(
+            tensor.logical_shape(),
+            tt::tt_metal::TensorLayout(required_dtype, required_layout, tensor.memory_config()));
+        TT_FATAL(
+            tensor.tensor_spec() == canonical_spec,
+            "SubtractAtTarget: '{}' must use the canonical physical shape and page geometry for its logical shape",
+            name);
     };
 
     check_tensor(tensor_args.input, "input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(tensor_args.target, "target", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
+
+    auto* device = tensor_args.input.device();
+    TT_FATAL(device != nullptr, "SubtractAtTarget: input must be on a (mesh) device");
+    TT_FATAL(tensor_args.target.device() == device, "SubtractAtTarget: target must be on the same device as input");
 
     TT_FATAL(
         tensor_args.input.logical_shape().rank() == 4U,
@@ -74,12 +91,15 @@ void SubtractAtTargetDeviceOperation::validate_on_program_cache_miss(
         target_pages,
         input_nc_pages);
 
-    TT_FATAL(args.local_V > 0U, "SubtractAtTarget: local_V must be > 0");
+    const uint32_t logical_width = tensor_args.input.logical_shape()[-1];
+    TT_FATAL(
+        args.local_V == logical_width,
+        "SubtractAtTarget: local_V ({}) must equal input logical width ({})",
+        args.local_V,
+        logical_width);
 
+    const auto mesh_shape = device->shape();
     if (args.cluster_axis.has_value()) {
-        auto* device = tensor_args.input.device();
-        TT_FATAL(device != nullptr, "SubtractAtTarget: input must be on a (mesh) device");
-        const auto mesh_shape = device->shape();
         TT_FATAL(
             *args.cluster_axis < mesh_shape.dims(),
             "SubtractAtTarget: cluster_axis ({}) is out of range for mesh shape with {} dim(s)",
@@ -87,12 +107,25 @@ void SubtractAtTargetDeviceOperation::validate_on_program_cache_miss(
             mesh_shape.dims());
     }
 
+    const uint64_t shard_count =
+        args.cluster_axis.has_value() ? mesh_shape[*args.cluster_axis] : mesh_shape.mesh_size();
+    const uint64_t final_last_v =
+        static_cast<uint64_t>(args.first_v) + shard_count * static_cast<uint64_t>(args.local_V);
+    TT_FATAL(
+        final_last_v <= std::numeric_limits<uint32_t>::max(),
+        "SubtractAtTarget: shard windows overflow uint32_t (first_v={}, local_V={}, shard_count={})",
+        args.first_v,
+        args.local_V,
+        shard_count);
+
     if (tensor_args.preallocated_output.has_value()) {
-        check_tensor(
-            tensor_args.preallocated_output.value(),
-            "preallocated_output",
-            tt::tt_metal::Layout::TILE,
-            tt::tt_metal::DataType::BFLOAT16);
+        const auto& output = tensor_args.preallocated_output.value();
+        check_tensor(output, "preallocated_output", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+        TT_FATAL(
+            output.device() == device, "SubtractAtTarget: preallocated_output must be on the same device as input");
+        TT_FATAL(
+            output.tensor_spec() == tensor_args.input.tensor_spec(),
+            "SubtractAtTarget: preallocated_output tensor spec must exactly match the input tensor spec");
     }
 }
 
@@ -117,13 +150,16 @@ ttsl::hash::hash_t SubtractAtTargetDeviceOperation::compute_program_hash(
     // first_v / local_V / subtract_value only affect runtime args (they're patched by
     // override_runtime_arguments per coord). cluster_axis, however, determines the mesh-workload
     // structure (one program per TP slab when set vs one per coordinate when unset) and the
-    // program-to-coordinate mapping, so it must be part of the hash. value_or keeps nullopt
-    // distinct from axis 0 (an optional hashes its payload directly, so nullopt and 0 would
-    // otherwise collide); the sentinel can never be a valid axis.
+    // program-to-coordinate mapping, so it must be part of the hash. The complete TensorSpecs
+    // cover every static TensorAccessorArgs field (placement and aligned page size) as well as the
+    // padded geometry used for core work splitting. value_or keeps nullopt distinct from axis 0;
+    // the sentinel can never be a valid axis.
+    const auto output_spec = compute_output_specs(args, tensor_args);
     return tt::tt_metal::operation::hash_operation<SubtractAtTargetDeviceOperation>(
         args.cluster_axis.value_or(std::numeric_limits<uint32_t>::max()),
-        tensor_args.input.dtype(),
-        tensor_args.input.logical_shape());
+        tensor_args.input.tensor_spec(),
+        tensor_args.target.tensor_spec(),
+        output_spec);
 }
 
 }  // namespace ttml::metal::ops::subtract_at_target::device
