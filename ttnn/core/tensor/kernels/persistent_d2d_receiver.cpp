@@ -79,9 +79,7 @@ constexpr uint32_t num_lanes = get_compile_time_arg_val(21);
 // the sender writes it directly over fabric — so no accessor is built.
 constexpr auto output_tensor_accessor_args = TensorAccessorArgs<22>();
 // Optional per-slot stage gate (named CT args). num_stage_gates == 0 compiles it out.
-// stage_gate_addr is this service core's num_stage_gates-word gate array (one binary
-// word per slot); the slot-id and gate_flags words are read from the landed metadata
-// blob at the given byte offsets.
+// stage_gate_addr is this service core's gate array, one word per slot.
 constexpr uint32_t num_stage_gates = get_named_compile_time_arg_val("num_stage_gates");
 constexpr uint32_t stage_gate_addr = get_named_compile_time_arg_val("stage_gate_addr");
 constexpr uint32_t stage_gate_slot_offset = get_named_compile_time_arg_val("stage_gate_slot_offset");
