@@ -52,7 +52,7 @@ class GdnPrefixStateCache:
 
     def __init__(self, model, num_slots=None):
         self.model = model
-        self.num_slots = int(num_slots if num_slots is not None else os.environ.get("QWEN36_PREFIX_CACHE_SLOTS", "64"))
+        self.num_slots = int(num_slots if num_slots is not None else os.environ.get("QWEN36_PREFIX_CACHE_SLOTS", "32"))
         assert self.num_slots >= 1
         self.debug = os.environ.get("QWEN36_PREFIX_CACHE_DEBUG", "0") == "1"
         # The B=1 scratch (and its init buffers) must exist first: the slots mirror its shapes.

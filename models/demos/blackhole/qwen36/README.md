@@ -216,7 +216,7 @@ single-device paths ignore `start_pos` and recompute from 0.
 | Env var | Default | Meaning |
 |---|---|---|
 | `QWEN36_PREFIX_CACHE` | `1` | advertise `supports_prefix_caching` and build the snapshot cache (`0` disables) |
-| `QWEN36_PREFIX_CACHE_SLOTS` | `64` | snapshot slots (about 19 MB of DRAM per device per slot, allocated before trace capture) |
+| `QWEN36_PREFIX_CACHE_SLOTS` | `32` | snapshot slots, allocated before trace capture: about 19 MB of DRAM per device per slot at TP=8, about 38 MB at TP=4. 32 fits next to the default BFP8 gate/up weights and the 1.05M-token KV pool on P150x4; 64 runs out of DRAM there |
 | `QWEN36_PREFIX_SNAPSHOT_MIN_LEN` | `8192` | minimum prompt length for the end-of-prompt snapshot (a prefill split); shorter prompts save at the last full-chunk boundary instead |
 | `QWEN36_PREFIX_SNAPSHOT_STRIDE` | `8192` | snapshot every N tokens (chunk boundaries, relative to the resume point) |
 | `QWEN36_PREFIX_CACHE_DEBUG` | `0` | `1` logs one line per prefix-cached prefill (hit position, saves, stats) |
