@@ -137,9 +137,9 @@ TT_KERNEL void reader(
                     // A slice: rows C_slice_first_M_tile.., columns K_chunk_first_K_tile.., entry (m_tile, k_tile).
                     // Rows past the edge of A are clipped: they trail, so they are simply not written.
                     A_slice.reserve_back(A_slice_tiles);
-                    if (A_mcast_receiver) {
+                    if (A_mcast_num_dests > 0 && A_mcast_receiver) {
                         A_data_ready.set(INVALID);
-                        A_receivers_ready.up(noc, A_mcast_sender_x, A_mcast_sender_y, 1);
+                        A_receivers_ready.up(noc, A_mcast_sender_x, A_mcast_sender_y, /*value=*/1);
                     }
                     for (uint32_t m_tile = 0; m_tile < A_rows_to_read && C_slice_first_M_tile + m_tile < M_tiles;
                          ++m_tile) {
@@ -169,9 +169,9 @@ TT_KERNEL void reader(
                     // B slice: rows K_chunk_first_K_tile.., columns C_slice_first_N_tile.., entry (k_tile, n_tile).
                     // Columns past the edge of B are clipped; they keep their entry, which only feeds clipped C.
                     B_slice.reserve_back(B_slice_tiles);
-                    if (B_mcast_receiver) {
+                    if (B_mcast_num_dests > 0 && B_mcast_receiver) {
                         B_data_ready.set(INVALID);
-                        B_receivers_ready.up(noc, B_mcast_sender_x, B_mcast_sender_y, 1);
+                        B_receivers_ready.up(noc, B_mcast_sender_x, B_mcast_sender_y, /*value=*/1);
                     }
                     for (uint32_t k_tile = 0; k_tile < B_rows_to_read; ++k_tile) {
                         const uint32_t B_row_first_tile =
