@@ -8,6 +8,9 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/isinf_isnan.h"
+#include "api/compute/eltwise_unary/where.h"
+#include "api/compute/copy_dest_values.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
@@ -130,6 +133,30 @@ void kernel_main() {
             add_binary_tile(DST_ACC, DST_IN, DST_T);      // t = acc + y
             sub_binary_tile(DST_T, DST_ACC, DST_COMP);    // (t - acc)
             sub_binary_tile(DST_COMP, DST_IN, DST_COMP);  // c = (t - acc) - y
+
+            // Guard (#58986): once t is +-inf -- an infinite input, or the running sum has just
+            // overflowed -- (t - acc) - y hits inf - inf and the line above lands NaN in c. Left
+            // alone, that NaN rides the comp FIFO into the next tile's "y = in - c" and poisons
+            // every remaining element of the scan, even once the running total would otherwise be
+            // a well-defined IEEE value again (e.g. a finite input following the inf/overflow).
+            // Zero the compensation term whenever t is non-finite so accumulation degrades to plain
+            // (uncompensated) summation from that point on -- matching IEEE/PyTorch cumsum, which
+            // never looks at a compensation term at all. DST_IN and DST_ACC are both dead at this
+            // point (y and the old acc, respectively), so they're reused as scratch: DST_IN becomes
+            // the isfinite(t) mask, DST_ACC becomes the 0.0f selected when t is non-finite. A select
+            // (where_tile) is required here, not a multiply by the mask: the mask is itself 0 on the
+            // non-finite lanes, and 0 * NaN (or 0 * inf, on the overflow path where c lands at inf
+            // rather than NaN) is NaN under IEEE 754, which would reintroduce exactly the bug this
+            // guard exists to fix.
+            copy_dest_values_init();
+            copy_dest_values<DataFormat::Float32>(DST_T, DST_IN);  // DST_IN := t
+            isfinite_tile_init();
+            isfinite_tile(DST_IN);  // DST_IN := isfinite(t) ? 1.0f : 0.0f
+            fill_tile_init();
+            FILL_TILE(DST_ACC, 0u);  // DST_ACC := 0.0f
+            where_tile_init();
+            where_tile<DataFormat::Float32>(DST_IN, DST_COMP, DST_ACC, DST_COMP);  // c := finite(t) ? c : 0
+
             constexpr uint32_t DST_RESULT = DST_T;
             dfb_comp_obj.pop_front(ONE_TILE);
 #else

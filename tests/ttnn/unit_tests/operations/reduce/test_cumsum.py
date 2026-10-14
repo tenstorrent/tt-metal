@@ -327,6 +327,117 @@ def test_cumsum_fp32_long_scan_accuracy(size, dim, sequence_type, device):
     )
 
 
+def _build_special_value_row(length, pattern):
+    """Build a 1D float32 row embedding a special-value case from #58986.
+
+    - "pos_inf" / "neg_inf": a single +-inf at index 1, 1.0 elsewhere. The running total goes
+      non-finite at index 1 and must stay a well-defined +-inf for every later element, matching
+      torch -- this is the regression itself (the Kahan compensation term's `(t - acc) - y` landed
+      NaN once `t` went infinite, which poisoned every element after it).
+    - "overflow": two values near the float32 max (2**127) at indices 0 and 1, so their sum
+      overflows to +inf purely from finite inputs (no inf in the input at all), 1.0 elsewhere. Same
+      failure mode as "pos_inf"/"neg_inf" but triggered by overflow instead of an infinite input.
+    - "nan": NaN at index 1, 1.0 elsewhere. Must keep propagating NaN (unchanged behavior: the guard
+      only changes what happens to the *compensation* term, never the running total itself).
+    - "inf_at_end": +inf only at the last index. Nothing downstream to poison -- unchanged behavior.
+    - "pos_then_neg_inf": +inf then -inf, i.e. inf + (-inf) = NaN by IEEE 754, then 1.0 elsewhere.
+      Unchanged behavior: NaN here comes from the running total itself, not from the compensation
+      term, so the guard does not (and must not) suppress it.
+    """
+    row = torch.ones(length, dtype=torch.float32)
+    if pattern == "pos_inf":
+        row[1] = float("inf")
+    elif pattern == "neg_inf":
+        row[1] = float("-inf")
+    elif pattern == "overflow":
+        row[0] = 2.0**127
+        row[1] = 2.0**127
+    elif pattern == "nan":
+        row[1] = float("nan")
+    elif pattern == "inf_at_end":
+        row[-1] = float("inf")
+    elif pattern == "pos_then_neg_inf":
+        row[0] = float("inf")
+        row[1] = float("-inf")
+    else:
+        raise ValueError(f"unknown pattern {pattern}")
+    return row
+
+
+def _assert_matches_torch_special(actual, expected):
+    """Elementwise compare against a golden tensor that may contain NaN/+-inf.
+
+    NaN positions must match exactly (NaN is "equal" to NaN here, unlike IEEE compare). Remaining
+    elements must match in finiteness; where both are infinite the sign must match; where both are
+    finite the values must match (exact, since every scenario here only ever adds 1.0 or 2**127,
+    both exact in fp32).
+    """
+    assert actual.shape == expected.shape, f"shape mismatch: {actual.shape} vs {expected.shape}"
+
+    expected_nan = torch.isnan(expected)
+    assert torch.equal(torch.isnan(actual), expected_nan), (
+        f"NaN positions differ: expected {expected_nan.nonzero().flatten().tolist()}, "
+        f"got {torch.isnan(actual).nonzero().flatten().tolist()}"
+    )
+
+    not_nan = ~expected_nan
+    exp_f = expected[not_nan]
+    act_f = actual[not_nan]
+
+    assert torch.equal(torch.isinf(act_f), torch.isinf(exp_f)), "inf positions differ outside NaN region"
+    inf_mask = torch.isinf(exp_f)
+    if inf_mask.any():
+        assert torch.equal(
+            torch.sign(exp_f[inf_mask]), torch.sign(act_f[inf_mask])
+        ), f"inf sign mismatch: expected {exp_f[inf_mask]}, got {act_f[inf_mask]}"
+
+    finite_mask = ~inf_mask
+    if finite_mask.any():
+        assert torch.equal(exp_f[finite_mask], act_f[finite_mask]), (
+            f"finite mismatch: expected {exp_f[finite_mask]}, got {act_f[finite_mask]}"
+        )
+
+
+@pytest.mark.parametrize("scan_length", [4, 8, 33])
+@pytest.mark.parametrize("dim", [0, -2])
+@pytest.mark.parametrize(
+    "pattern",
+    ["pos_inf", "neg_inf", "overflow", "nan", "inf_at_end", "pos_then_neg_inf"],
+)
+@pytest.mark.parametrize("disable_compensated_sum", [False, True])
+def test_cumsum_fp32_special_values(scan_length, dim, pattern, disable_compensated_sum, device):
+    """Regression test for #58986.
+
+    The compensated (Kahan) fp32 accumulation path computed its compensation term as
+    `(t - acc) - y` without checking whether the new running total `t` was finite. Once `t` went
+    +-inf -- either from an infinite input or from finite-input overflow -- that subtraction hit
+    `inf - inf` (NaN), and the NaN rode the compensation FIFO into every later scan element, even
+    though the running total itself remained well-defined. torch never looks at a compensation
+    term at all, so it keeps emitting +-inf; this test checks ttnn now matches it.
+
+    Runs both the default (compensated) path and the deprecated `disable_compensated_sum=True`
+    fallback -- the latter was never affected by this bug (its accumulation never computes a
+    compensation term), so it also serves as a control. Scan lengths 4 and 8 exercise a single
+    sub-tile scan; 33 crosses a tile boundary, which is where the comp FIFO carries a poisoned
+    value from one tile's last element into the next tile's first.
+    """
+    along = _build_special_value_row(scan_length, pattern)
+    size = [scan_length, 3] if dim == 0 else [2, scan_length, 5]
+    shape_along = [1] * len(size)
+    shape_along[dim] = scan_length
+    torch_input = along.view(shape_along).expand(size).contiguous()
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
+    output_tensor = ttnn.cumsum(input_tensor, dim=dim, disable_compensated_sum=disable_compensated_sum)
+    output = ttnn.to_torch(output_tensor)
+
+    expected = torch.cumsum(torch_input, dim=dim)
+
+    _assert_matches_torch_special(output, expected)
+
+
 def test_cumsum_disable_compensated_sum(device):
     """`disable_compensated_sum=True` must actually fall back to the plain sequential sum.
 
