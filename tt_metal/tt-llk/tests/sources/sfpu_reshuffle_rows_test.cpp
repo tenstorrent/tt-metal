@@ -71,8 +71,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::reshuffle_rows>();
     sfpu::reshuffle_rows_init();
-    _llk_math_eltwise_unary_sfpu_params_(
-        sfpu::calculate_reshuffle_rows<false /* APPROXIMATION_MODE */>, 0 /* dst_index */, VectorMode::RC_custom, params.buffer_B[0] - 16 /* idx_addr */);
+    if constexpr (RESHUFFLE_REPLAY)
+    {
+        _llk_math_eltwise_unary_sfpu_params_(
+            sfpu::calculate_reshuffle_rows_replayed<false /* APPROXIMATION_MODE */>,
+            0 /* dst_index */,
+            VectorMode::RC_custom,
+            params.buffer_B[0] - 16 /* idx_addr */,
+            0 /* dst_index */);
+    }
+    else
+    {
+        _llk_math_eltwise_unary_sfpu_params_(
+            sfpu::calculate_reshuffle_rows<false /* APPROXIMATION_MODE */>, 0 /* dst_index */, VectorMode::RC_custom, params.buffer_B[0] - 16 /* idx_addr */);
+    }
 
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }

@@ -9,7 +9,7 @@ from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import TILE_COUNT
+from helpers.test_variant_parameters import RESHUFFLE_ROWS_FORM, TILE_COUNT
 from helpers.tilize_untilize import tilize_block, untilize_block
 
 FORMATS = input_output_formats([DataFormat.Float16_b], same=True)
@@ -62,7 +62,7 @@ def _golden(input_rows, output_rows, indices):
     return golden
 
 
-def _run(formats, dest_acc, indices):
+def _run(formats, dest_acc, indices, replay):
     generator = torch.Generator().manual_seed(3)
     torch_format = format_dict[formats.input_format]
     shape = (TILE_DIM, TILE_DIM)
@@ -86,7 +86,7 @@ def _run(formats, dest_acc, indices):
     configuration = TestConfig(
         "sources/sfpu_reshuffle_rows_test.cpp",
         formats,
-        templates=[],
+        templates=[RESHUFFLE_ROWS_FORM(replay)],
         runtimes=[TILE_COUNT(1)],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -117,11 +117,12 @@ def _run(formats, dest_acc, indices):
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     pattern=sorted(INDEX_PATTERNS),
+    replay=[False, True],
 )
-def test_sfpu_reshuffle_rows(formats, dest_acc, pattern):
+def test_sfpu_reshuffle_rows(formats, dest_acc, pattern, replay):
     indices = INDEX_PATTERNS[pattern]
-    res_rows, golden_rows = _run(formats, dest_acc, indices)
+    res_rows, golden_rows = _run(formats, dest_acc, indices, replay)
     bad_rows = (res_rows != golden_rows).any(dim=1).nonzero().flatten().tolist()
     assert (
         not bad_rows
-    ), f"reshuffle_rows with the {pattern} index pattern: output rows {bad_rows} differ from the golden"
+    ), f"reshuffle_rows ({'replayed' if replay else 'direct'}) with the {pattern} index pattern: output rows {bad_rows} differ from the golden"

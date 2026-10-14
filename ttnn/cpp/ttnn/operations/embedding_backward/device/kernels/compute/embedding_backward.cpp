@@ -12,6 +12,7 @@ void kernel_main() {
 
     constexpr uint32_t max_tiles_per_core = get_compile_time_arg_val(0);
     constexpr uint32_t input_height = get_compile_time_arg_val(1);
+    constexpr bool reshuffle_replay = get_compile_time_arg_val(2) == 1;
 
     constexpr uint32_t cb_grad_idx = tt::CBIndex::c_0;
     constexpr uint32_t cb_index_idx = tt::CBIndex::c_1;
@@ -62,7 +63,7 @@ void kernel_main() {
                 // This isn't true, so we have to subtract 16 bytes from the address.
                 // Check implementation of reshuffle_rows_tile in LLK for more details.
                 // tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_reshuffle_rows.h
-                reshuffle_rows_tile(0, idx_addr - 16);
+                reshuffle_rows_tile<reshuffle_replay>(0, idx_addr - 16);
 
                 pack_tile(1, cb_out_idx, hidden_dim);  // reshuffle puts output into Tile 1 in DEST
 

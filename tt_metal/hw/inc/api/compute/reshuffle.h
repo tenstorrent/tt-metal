@@ -28,7 +28,24 @@ namespace ckernel {
  * | idx_addr        | Address at which array of output row indices is stored                     | uint32_t | Must be 4-byte aligned                                | True     |
  */
 // clang-format on
+// REPLAY (Blackhole) replays the row loads and stores at a per-row Dest offset: faster when calls carry three or more
+// live rows, slower when they carry one or two and the tile waits on its inputs.
+template <bool REPLAY = false>
 ALWI void reshuffle_rows_tile(uint32_t idst, uint32_t idx_addr) {
+#ifdef ARCH_BLACKHOLE
+    if constexpr (REPLAY) {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_reshuffle_rows_replayed,
+            (APPROX),
+            idst,
+            VectorMode::RC_custom,
+            idx_addr,
+            idst));
+        return;
+    }
+#endif
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_reshuffle_rows, (APPROX), idst, VectorMode::RC_custom, idx_addr));
 }

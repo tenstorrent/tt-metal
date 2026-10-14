@@ -2250,6 +2250,16 @@ class SFPU_MISC_OP(TemplateParameter):
 
 
 @dataclass
+class RESHUFFLE_ROWS_FORM(TemplateParameter):
+    """Select calculate_reshuffle_rows (direct) or calculate_reshuffle_rows_replayed in the reshuffle_rows test."""
+
+    replay: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool RESHUFFLE_REPLAY = {'true' if self.replay else 'false'};"
+
+
+@dataclass
 class GATED_REDUCE_PARAMS(TemplateParameter):
     gate: str
     up: str
