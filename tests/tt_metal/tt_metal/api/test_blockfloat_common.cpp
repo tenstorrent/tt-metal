@@ -11,7 +11,9 @@
 #include <random>
 #include <future>
 #include <chrono>
+#include <latch>
 #include <stdexcept>
+#include "common/executor.hpp"
 #include "impl/data_format/bfp_simd.hpp"
 #include "impl/data_format/bfp_tasks.hpp"
 
@@ -229,6 +231,21 @@ TEST(BfpSimdTiles, CPU_ConcurrentCalls) {
     for (auto& call : calls) {
         EXPECT_EQ(call.get(), expected);
     }
+}
+
+TEST(BfpSimdTiles, CPU_CallsFromSaturatedExecutor) {
+    std::vector<float> input(512 * 1024, 1.25f);
+    const auto expected = pack_as_bfp_tiles<tt::DataFormat::Bfp4, float>(input, true, false, std::nullopt);
+    auto& executor = tt::tt_metal::detail::GetExecutor();
+    std::latch started(executor.num_workers());
+    tf::Taskflow graph;
+    for (size_t i = 0; i < executor.num_workers(); ++i) {
+        graph.emplace([&] {
+            started.arrive_and_wait();
+            EXPECT_EQ((pack_as_bfp_tiles<tt::DataFormat::Bfp4_b, float>(input, true, false, std::nullopt)), expected);
+        });
+    }
+    executor.run(graph).get();
 }
 
 class BfpTaskLifetime : public ::testing::TestWithParam<bool> {};
