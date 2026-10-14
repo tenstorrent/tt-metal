@@ -136,9 +136,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "encoder_fsdp": (2, 0),
         "num_links": 1,
         "resolutions": ((1024, 1024),),
-        # The transformer's weights, replicated across the SP axis, leave too little DRAM for an
-        # edit's activations next to the text encoder.
-        "edit_dit_fsdp": True,
+        "offload_vision_tower": True,
     },
     (4, 8): {
         "cfg": (2, 1),
@@ -192,8 +190,8 @@ class QwenImagePipelineConfig:
     use_torch_vae_encoder: bool
     # Load the text encoder's device weights only while encoding.
     offload_text_encoder: bool
-    # Shard the transformer's weights across the sequence parallel axis as well.
-    dit_fsdp: bool
+    # Load the vision tower's device weights only while encoding the input images.
+    offload_vision_tower: bool
 
     resolutions: tuple[tuple[int, int], ...]
     spatial_sequence_length_buckets: tuple[int, ...]
@@ -218,7 +216,7 @@ class QwenImagePipelineConfig:
         use_torch_vae_decoder: bool = False,
         use_torch_vae_encoder: bool = False,
         offload_text_encoder: bool | None = None,
-        dit_fsdp: bool | None = None,
+        offload_vision_tower: bool | None = None,
         resolutions: Sequence[tuple[int, int]] | None = None,
         spatial_sequence_length_buckets: Sequence[int] | None = None,
         cfg_enabled: bool = True,
@@ -266,8 +264,8 @@ class QwenImagePipelineConfig:
             sequence_length_buckets = mode.sequence_length_buckets
         if offload_text_encoder is None:
             offload_text_encoder = max_images > 0 and preset.get("edit_offload_text_encoder", False)
-        if dit_fsdp is None:
-            dit_fsdp = max_images > 0 and preset.get("edit_dit_fsdp", False)
+        if offload_vision_tower is None:
+            offload_vision_tower = preset.get("offload_vision_tower", False)
 
         return cls(
             topology=topology,
@@ -279,7 +277,7 @@ class QwenImagePipelineConfig:
             use_torch_vae_decoder=use_torch_vae_decoder,
             use_torch_vae_encoder=use_torch_vae_encoder,
             offload_text_encoder=offload_text_encoder,
-            dit_fsdp=dit_fsdp,
+            offload_vision_tower=offload_vision_tower,
             resolutions=tuple(resolutions),
             spatial_sequence_length_buckets=tuple(spatial_sequence_length_buckets),
             cfg_enabled=cfg_enabled,
@@ -412,11 +410,12 @@ class QwenImagePipeline(PipelineAPIMixin):
             use_torch=config.use_torch_text_encoder,
             prompt_format=self._mode.prompt_format,
             offload=config.offload_text_encoder,
+            offload_vision=config.offload_vision_tower,
         )
 
         logger.info("creating transformers...")
         self._transformers = [
-            self._checkpoint.build(ccl_manager=m, parallel_config=config.dit_parallel_config, is_fsdp=config.dit_fsdp)
+            self._checkpoint.build(ccl_manager=m, parallel_config=config.dit_parallel_config, is_fsdp=False)
             for m in self._ccl_managers
         ]
 

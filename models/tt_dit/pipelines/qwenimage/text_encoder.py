@@ -93,16 +93,19 @@ class TextEncoder:
         use_torch: bool,
         prompt_format: PromptFormat = TEXT_TO_IMAGE_FORMAT,
         offload: bool = False,
+        offload_vision: bool = False,
     ) -> None:
         """Build the encoder, and the vision tower if ``prompt_format`` takes images.
 
         With ``offload``, the device weights are loaded for each ``encode_cfg`` and freed after it,
-        which leaves their memory to the transformer. Encoding is then never traced.
+        which leaves their memory to the transformer. Encoding is then never traced. With
+        ``offload_vision``, only the vision tower's weights are, and only around encoding the images.
         """
         self._device = device
         self._parallel_config = parallel_config
         self._format = prompt_format
         self._offload = offload and not use_torch
+        self._offload_vision = offload_vision and not use_torch
         self._tokenizer = transformers.Qwen2Tokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer")
         self._processor: transformers.Qwen2VLProcessor | None = None
         if prompt_format.image_prompt is not None:
@@ -132,6 +135,7 @@ class TextEncoder:
                 self._encoder = self._checkpoint.build(
                     device=device, parallel_config=parallel_config, ccl_manager=ccl_manager
                 )
+                self._encoder.final_linear = None
                 if self._processor is not None:
                     self._vision = self._checkpoint.build_vision(
                         device=device, parallel_config=parallel_config, ccl_manager=ccl_manager
@@ -139,6 +143,8 @@ class TextEncoder:
             ttnn.synchronize_device(device)
             if self._offload:
                 self._deallocate_weights()
+            elif self._offload_vision and self._vision is not None:
+                self._vision.deallocate_weights()
 
     @torch.no_grad()
     def encode_cfg(
@@ -216,6 +222,8 @@ class TextEncoder:
         embeds = None
         if self._vision is not None:
             device = self._device
+            if self._offload_vision:
+                self._checkpoint.load_vision_weights(self._vision, device=device, parallel_config=self._parallel_config)
             vision_inputs = self._vision.prepare_inputs(pixel_values, grid_thw)
             embeds = self._vision.forward(
                 tensor.from_torch(vision_inputs.patches, device=device),
@@ -232,6 +240,8 @@ class TextEncoder:
                 cu_seqlens=vision_inputs.cu_seqlens,
                 cu_window_seqlens=vision_inputs.cu_window_seqlens,
             )
+            if self._offload_vision:
+                self._vision.deallocate_weights()
         return _ImageInputs(images=list(images), pixel_values=pixel_values, grid_thw=grid_thw, embeds=embeds)
 
     def prompt_length(self, prompt: str, *, images: Sequence[Image.Image] = ()) -> int:
