@@ -21,6 +21,7 @@ GROUP="${1:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
 N_GROUPS="${2:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
 SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
 export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
+export LLK_EXP_CFLAGS="-DLLK_EXP_NOP_MATH -DLLK_EXP_NOP_PACK -DLLK_EXP_NOP_UNPACK -DLLK_EXP_HWC_K=0" # gate experiment arm k0
 
 case "$SPEED_OF_LIGHT" in
   true)
