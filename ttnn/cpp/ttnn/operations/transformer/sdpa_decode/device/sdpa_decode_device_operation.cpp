@@ -24,6 +24,23 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     const uint32_t spec_T = operation_attributes.spec_multi_pos_tiles;
     const bool spec_multi_pos = spec_T > 0;
 
+    if (operation_attributes.program_config.has_value() && operation_attributes.program_config->fp32_accumulation) {
+        // FP32 online-softmax state (kernels/compute/fp32_accumulation.hpp). The kernel path covers causal decode
+        // with a tiled Q; the masked, sink, sliding-window, MLA and speculative variants keep the default path.
+        const auto fp32_dest_acc_en = std::get<2>(ttnn::get_compute_kernel_config_args(
+            tensor_args.q.device()->arch(), operation_attributes.compute_kernel_config));
+        TT_FATAL(fp32_dest_acc_en, "fp32_accumulation requires fp32_dest_acc_en in the compute kernel config");
+        TT_FATAL(operation_attributes.is_causal, "fp32_accumulation supports causal decode only");
+        TT_FATAL(tensor_args.q.layout() == Layout::TILE, "fp32_accumulation requires a TILE layout Q tensor");
+        TT_FATAL(!tensor_args.attn_mask.has_value(), "fp32_accumulation is not supported with an explicit attn_mask");
+        TT_FATAL(!tensor_args.attention_sink.has_value(), "fp32_accumulation is not supported with an attention sink");
+        TT_FATAL(
+            operation_attributes.sliding_window_size.value_or(0) == 0,
+            "fp32_accumulation is not supported with sliding_window_size");
+        TT_FATAL(!use_mla, "fp32_accumulation is not supported with multi-latent attention");
+        TT_FATAL(!spec_multi_pos, "fp32_accumulation is not supported with spec_multi_pos_tiles");
+    }
+
     if (use_mla) {
         TT_FATAL(
             operation_attributes.head_dim_v.has_value(), "Must provide head_dim_v for multi-latent attention decode");
