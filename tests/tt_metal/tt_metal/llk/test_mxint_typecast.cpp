@@ -24,7 +24,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include "device_fixture.hpp"
+#include "llk_device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/float8_utils.hpp"
 #include "tt_metal/test_utils/mx_utils.hpp"
@@ -282,27 +282,33 @@ namespace mxint_tc = unit_tests::llk::mxint_typecast;
 // MxInt -> Float16_b (widening, lossless).
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt8ToFloat16b) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxInt8ToFloat16b) {
     mxint_tc::run_widening_or_identity_test(
         this->device(), tt::DataFormat::MxInt8, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/false);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt8ToFloat16bFp32Dest) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxInt8ToFloat16bFp32Dest) {
     mxint_tc::run_widening_or_identity_test(
         this->device(), tt::DataFormat::MxInt8, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/true);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt4ToFloat16b) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxInt4ToFloat16b) {
     mxint_tc::run_widening_or_identity_test(
         this->device(), tt::DataFormat::MxInt4, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/false);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt4ToFloat16bFp32Dest) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxInt4ToFloat16bFp32Dest) {
     mxint_tc::run_widening_or_identity_test(
         this->device(), tt::DataFormat::MxInt4, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/true);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt2ToFloat16b) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxInt2ToFloat16b) {
     mxint_tc::run_widening_or_identity_test(
         this->device(), tt::DataFormat::MxInt2, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/false);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt2ToFloat16bFp32Dest) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxInt2ToFloat16bFp32Dest) {
     mxint_tc::run_widening_or_identity_test(
         this->device(), tt::DataFormat::MxInt2, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/true);
 }
@@ -313,22 +319,28 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt2ToFloat16bFp32Dest) {
 // = 8 / {64, 4, 1} for MxInt8/4/2.
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt8) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixFloat16bToMxInt8) {
     mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt8, /*atol=*/0.125f, /*fp32_dest_acc_en=*/false);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt8Fp32Dest) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixFloat16bToMxInt8Fp32Dest) {
     mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt8, /*atol=*/0.125f, /*fp32_dest_acc_en=*/true);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt4) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixFloat16bToMxInt4) {
     mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt4, /*atol=*/2.0f, /*fp32_dest_acc_en=*/false);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt4Fp32Dest) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixFloat16bToMxInt4Fp32Dest) {
     mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt4, /*atol=*/2.0f, /*fp32_dest_acc_en=*/true);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt2) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixFloat16bToMxInt2) {
     mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt2, /*atol=*/8.0f, /*fp32_dest_acc_en=*/false);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt2Fp32Dest) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixFloat16bToMxInt2Fp32Dest) {
     mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt2, /*atol=*/8.0f, /*fp32_dest_acc_en=*/true);
 }
 
@@ -336,27 +348,33 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt2Fp32Dest) {
 // MxInt -> MxInt (identity, lossless round-trip).
 // ============================================================================
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt8ToMxInt8) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxInt8ToMxInt8) {
     mxint_tc::run_widening_or_identity_test(
         this->device(), tt::DataFormat::MxInt8, tt::DataFormat::MxInt8, /*fp32_dest_acc_en=*/false);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt8ToMxInt8Fp32Dest) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxInt8ToMxInt8Fp32Dest) {
     mxint_tc::run_widening_or_identity_test(
         this->device(), tt::DataFormat::MxInt8, tt::DataFormat::MxInt8, /*fp32_dest_acc_en=*/true);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt4ToMxInt4) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxInt4ToMxInt4) {
     mxint_tc::run_widening_or_identity_test(
         this->device(), tt::DataFormat::MxInt4, tt::DataFormat::MxInt4, /*fp32_dest_acc_en=*/false);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt4ToMxInt4Fp32Dest) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxInt4ToMxInt4Fp32Dest) {
     mxint_tc::run_widening_or_identity_test(
         this->device(), tt::DataFormat::MxInt4, tt::DataFormat::MxInt4, /*fp32_dest_acc_en=*/true);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt2ToMxInt2) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxInt2ToMxInt2) {
     mxint_tc::run_widening_or_identity_test(
         this->device(), tt::DataFormat::MxInt2, tt::DataFormat::MxInt2, /*fp32_dest_acc_en=*/false);
 }
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt2ToMxInt2Fp32Dest) {
+// Disabled due to hang: tenstorrent/tt-metal#59923
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixMxInt2ToMxInt2Fp32Dest) {
     mxint_tc::run_widening_or_identity_test(
         this->device(), tt::DataFormat::MxInt2, tt::DataFormat::MxInt2, /*fp32_dest_acc_en=*/true);
 }

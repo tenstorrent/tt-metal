@@ -194,13 +194,12 @@ The following example is a typical interleaved memory allocation for a DRAM buff
     constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
 
-    tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
-        .size = tile_size_bytes * n_tiles,
+    distributed::DeviceLocalBufferConfig dram_config{
         .page_size = tile_size_bytes,
         .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = tile_size_bytes * n_tiles};
 
-    auto src0_dram_buffer = CreateBuffer(dram_config);
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     auto in0_addr = src0_dram_buffer->address();
 
     // Tell the kernel how to access the memory
@@ -244,13 +243,12 @@ Allocating on SRAM is exactly the same as allocating on DRAM, except that the bu
 
 .. code-block:: cpp
 
-    tt_metal::InterleavedBufferConfig sram_config{
-        .device = device,
-        .size = tile_size_bytes * n_tiles,
+    distributed::DeviceLocalBufferConfig sram_config{
         .page_size = tile_size_bytes,
         .buffer_type = tt_metal::BufferType::L1}; // change here
+    distributed::ReplicatedBufferConfig buffer_config{.size = tile_size_bytes * n_tiles};
 
-    auto src0_sram_buffer = CreateBuffer(sram_config);
+    auto src0_sram_buffer = distributed::MeshBuffer::create(buffer_config, sram_config, mesh_device.get());
     auto in0_addr = src0_sram_buffer->address();
 
     std::vector<uint32_t> compile_time_args;
@@ -312,12 +310,12 @@ Sharding is usually only done for SRAM buffers.
         { height_tiles, width_tiles });                   // shape of the overall matrix/tensor in shards
 
     // Allocate a sharded buffer in L1
-    auto buf = CreateBuffer(ShardedBufferConfig{
-        .device = device,
-        .size = n_tiles * tile_size_bytes,
+    distributed::DeviceLocalBufferConfig l1_config{
         .page_size = tile_size_bytes,
-        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = shard_spec});
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED)};
+    distributed::ReplicatedBufferConfig buffer_config{.size = n_tiles * tile_size_bytes};
+    auto buf = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
 
     // Describe access pattern for kernel (compile-time args packing helper).
     std::vector<uint32_t> compile_time_args;

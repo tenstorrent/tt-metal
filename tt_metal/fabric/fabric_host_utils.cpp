@@ -29,27 +29,18 @@ namespace tt::tt_fabric {
 
 namespace {
 
-// Mock cluster mapping export uses cluster descriptor filenames (basename). Strip MPI-rank uniquifier
-// suffix appended during PSD discovery when multiple ranks share the same descriptor basename.
-HostName hostname_for_mapping_export(const HostName& hostname, bool mock_enabled) {
-    if (!mock_enabled) {
-        return hostname;
+// The export key is the machine name. Ranks that share a machine already share it; the MPI rank on
+// each chip is what separates them.
+HostName hostname_for_mapping_export(const HostName& hostname, bool /*mock_enabled*/) { return hostname; }
+
+// yaml-cpp does not terminate a document. Files copied into the repo as goldens are rejected by
+// pre-commit's end-of-file-fixer without a trailing newline.
+void write_yaml_document(std::ostream& out, const YAML::Emitter& emitter) {
+    const char* text = emitter.c_str();
+    out << text;
+    if (emitter.size() == 0 || text[emitter.size() - 1] != '\n') {
+        out << '\n';
     }
-    constexpr std::string_view cluster_desc_suffix = ".yaml";
-    const auto pos = hostname.rfind(cluster_desc_suffix);
-    if (pos == std::string::npos || pos + cluster_desc_suffix.size() >= hostname.size()) {
-        return hostname;
-    }
-    const std::string tail = hostname.substr(pos + cluster_desc_suffix.size());
-    if (tail.size() <= 1 || tail.front() != '_') {
-        return hostname;
-    }
-    for (char c : tail.substr(1)) {
-        if (!std::isdigit(static_cast<unsigned char>(c))) {
-            return hostname;
-        }
-    }
-    return hostname.substr(0, pos + cluster_desc_suffix.size());
 }
 
 }  // namespace
@@ -194,7 +185,6 @@ void serialize_asic_to_fabric_node_mapping_to_file(
     std::filesystem::create_directories(output_file_path.parent_path());
 
     const auto& mesh_graph = topology_mapper.get_mesh_graph();
-    const auto& physical_system_descriptor = topology_mapper.get_physical_system_descriptor();
 
     // Structure: hostname -> mesh_id -> umd_chip_id -> {asic_position, fabric_node_id, asic_id}
     struct AsicMapping {
@@ -218,9 +208,13 @@ void serialize_asic_to_fabric_node_mapping_to_file(
                 // Get physical chip ID (UMD chip ID) for this fabric node
                 ChipId umd_chip_id = topology_mapper.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
 
-                // Get ASIC position (tray_id and asic_location) from physical system descriptor
-                tt::tt_metal::TrayID tray_id = physical_system_descriptor.get_tray_id(asic_id);
-                tt::tt_metal::ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
+                // ASIC position straight from the mapper's address for this node. Asking the descriptor
+                // by asic_id instead would work only when the descriptor being solved on is also the one
+                // that labelled the chip -- on the factory path asic_id is a UMD id the descriptor has
+                // never heard of, and the catch below would silently drop every chip from the export.
+                const auto address = topology_mapper.get_physical_node_id_from_fabric_node_id(fabric_node_id);
+                tt::tt_metal::TrayID tray_id = address.tray;
+                tt::tt_metal::ASICLocation asic_location = address.loc;
 
                 // Get hostname for this fabric node (mock: cluster descriptor filename)
                 HostName hostname = hostname_for_mapping_export(
@@ -319,7 +313,7 @@ void serialize_asic_to_fabric_node_mapping_to_file(
     emitter << YAML::EndSeq;
     emitter << YAML::EndMap;
     emitter << YAML::EndMap;
-    out_file << emitter.c_str();
+    write_yaml_document(out_file, emitter);
     out_file.close();
 
     log_debug(tt::LogFabric, "Serialized ASIC to Fabric node ID mapping to file: {}", output_file_path.string());
@@ -390,7 +384,7 @@ void serialize_intermesh_port_assignment_to_file(
     }
     emitter << YAML::EndMap;
     emitter << YAML::EndMap;
-    out_file << emitter.c_str();
+    write_yaml_document(out_file, emitter);
     out_file.close();
 
     log_debug(tt::LogFabric, "Serialized inter-mesh port assignment to file: {}", output_file_path.string());
