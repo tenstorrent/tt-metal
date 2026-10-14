@@ -42,6 +42,27 @@ def _on_device(t, device, dtype=ttnn.bfloat16):
     return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
+def _golden(gate, up):
+    """The exact product of the leaves, from ttnn.silu_glu's golden function, in float64."""
+    return ttnn.get_golden_function(ttnn.silu_glu)(gate, up).to(torch.float64)
+
+
+def _assert_close(actual, golden, rtol=2.0**-7, atol=2.0**-100):
+    """Within 2 BF16 steps of the golden; a result the kernel flushes to 0 is tiny in the golden too."""
+    actual = actual.to(torch.float64)
+    error = (actual - golden).abs()
+    bad = error > atol + rtol * golden.abs()
+    assert not bool(
+        bad.any()
+    ), f"{int(bad.sum())} of {bad.numel()} lanes off the golden; worst error {error.max().item():.3e}"
+
+
+def _assert_pcc(actual, golden, bound):
+    a, b = actual.to(torch.float64).flatten(), golden.to(torch.float64).flatten()
+    pcc = torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+    assert pcc >= bound, f"PCC {pcc:.6f} against the golden, below {bound}"
+
+
 @pytest.mark.parametrize("order", ["gate_first", "up_first"])
 def test_multiply_with_the_leaves_activations_runs_silu_glu(device, order):
     """ttnn.multiply of BF16 operands carrying exactly the leaves' pre-activations is ttnn.silu_glu, as one program."""
@@ -58,8 +79,10 @@ def test_multiply_with_the_leaves_activations_runs_silu_glu(device, order):
             u, g, input_tensor_a_activations=[], input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)]
         )
     out, operations, arguments = _device_operations(call)
-    assert OP_TYPE in arguments and len(set(operations)) == 1
-    assert torch.equal(ttnn.to_torch(out).view(torch.int16), expected.view(torch.int16))
+    assert OP_TYPE in arguments and len(operations) == 1, f"launched {operations}, not one {OP_TYPE} program"
+    out = ttnn.to_torch(out)
+    assert torch.equal(out.view(torch.int16), expected.view(torch.int16))
+    _assert_close(out, _golden(gate, up))
 
 
 @pytest.mark.parametrize("case", ["bfloat8_b_output", "float32_operands", "post_activation"])
@@ -75,8 +98,13 @@ def test_multiply_keeps_binary_ng_elsewhere(device, case):
         kwargs["dtype"] = ttnn.bfloat8_b
     if case == "post_activation":
         kwargs["activations"] = [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]
-    _, _, arguments = _device_operations(lambda: ttnn.multiply(g, u, **kwargs))
+    out, _, arguments = _device_operations(lambda: ttnn.multiply(g, u, **kwargs))
     assert OP_TYPE not in arguments
+    # The stock path computes the same product: a BFLOAT8_B output keeps about 7 bits per block.
+    golden = _golden(gate, up)
+    if case == "post_activation":
+        golden = golden.clamp(min=0)
+    _assert_pcc(ttnn.to_torch(out), golden, 0.99 if case == "bfloat8_b_output" else 0.999)
 
 
 @pytest.mark.parametrize("dim", [-1])

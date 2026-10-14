@@ -350,6 +350,7 @@ Pointwise Binary
    ttnn.rpow
    ttnn.rsub
    ttnn.rsub_
+   ttnn.silu_glu
    ttnn.situ_glu
    ttnn.squared_difference
    ttnn.squared_difference_

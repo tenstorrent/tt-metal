@@ -960,7 +960,17 @@ SILU_GLU_SWEEP = dict(
 @parametrize(**SILU_GLU_SWEEP)
 def test_eltwise_binary_sfpu_silu_glu(formats, dest_acc, mathop, **run_kwargs):
     # silu_glu(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel.
-    sfpu_binary(formats, dest_acc, mathop, **run_kwargs)
+    # Both signs, past each clamp and below where the logistic factor underflows.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-110.0, high=16.0
+        ),
+        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-16.0, high=16.0),
+        **run_kwargs,
+    )
 
 
 # =============================================================================

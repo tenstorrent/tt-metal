@@ -200,6 +200,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/sentinel/sentinel_core.h
     inc/api/compute/sentinel/testing_spy.h
     inc/api/compute/sfpu_binary_bcast.h
+    inc/api/compute/silu_glu.h
     inc/api/compute/situ_glu.h
     inc/api/compute/softmax.h
     inc/api/compute/src_order.h

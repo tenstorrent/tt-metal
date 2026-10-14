@@ -1431,6 +1431,16 @@ Tensor silu_glu(
     TT_FATAL(
         !(sub_core_grids.has_value() && sub_device_id.has_value()),
         "silu_glu: pass sub_core_grids or sub_device_id, not both");
+    if (!sub_core_grids.has_value() && !sub_device_id.has_value()) {
+        // Unrestricted, binary_ng runs on the worker cores of get_sub_device_ids().front(): the whole grid only
+        // while one sub-device is loaded, as situ_glu and clamped_silu_glu require.
+        const auto& loaded_sub_devices = gate.device()->get_sub_device_ids();
+        TT_FATAL(
+            loaded_sub_devices.size() == 1,
+            "silu_glu: {} sub-devices are loaded, so leaving the cores unrestricted would run on sub-device 0 rather "
+            "than the full grid. Pass sub_core_grids or sub_device_id.",
+            loaded_sub_devices.size());
+    }
     // One binary_ng program whose only arithmetic is silu_glu_tile, this op's own SFPU kernel, for BF16
     // operands on a board that has it, at the parameters it is compiled for; every other call keeps the composite.
     if (gate.device() != nullptr && gate.device()->arch() == tt::ARCH::BLACKHOLE &&
@@ -1456,13 +1466,13 @@ Tensor silu_glu(
     return ttnn::multiply(
         gate,
         up,
-        std::nullopt,
+        /*output_dtype=*/std::nullopt,
         output_mem_config,
-        std::nullopt,
-        {},
+        /*output=*/std::nullopt,
+        /*post_activations=*/{},
         gate_activations,
         up_activations,
-        std::nullopt,
+        /*fast_and_approximate_mode=*/std::nullopt,
         sub_core_grids,
         sub_device_id);
 }

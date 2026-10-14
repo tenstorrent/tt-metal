@@ -18,8 +18,6 @@ import torch
 import ttnn
 from loguru import logger
 
-# The public parameters () silu_glu_tile is compiled for.
-PARAMETERS = ()
 # The boards the route runs silu_glu_tile on; Wormhole keeps the composite.
 ROUTE_BOARDS = ("blackhole",)
 OP_TYPE = "SILU_GLU"
@@ -39,13 +37,6 @@ def _device_operations(call):
     operations = [name for name in ttnn.graph.extract_calltrace(graph) if "DeviceOperation" in name]
     arguments = " ".join(str(argument) for node in graph for argument in node.get("arguments", []))
     return result, operations, arguments
-
-
-def _off_parameters():
-    """Each parameter one float32 step above the compiled one: the composite's own programs at the same cost."""
-    return tuple(
-        float(torch.nextafter(torch.tensor(p, dtype=torch.float32), torch.tensor(float("inf")))) for p in PARAMETERS
-    )
 
 
 TILE = 32 * 32
@@ -163,8 +154,6 @@ SPECIAL_RESULTS = {
 # (input, bound): at or below it the logistic factor's e^-|x| is below the smallest normal, so the result is 0.
 LOGISTIC_FLUSH = (0, -87.5)
 BOUNDARY_FLUSH = 0.000244140625  # relative distance above the smallest normal a result may flush from
-# The first leaf's own value below the smallest normal is formed before the last factor and flushes.
-LEAF_FLUSH = True
 
 
 def _skip_unless_routed(device):
@@ -191,16 +180,14 @@ def _on_device(t, device, **kwargs):
     return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, **kwargs)
 
 
-def _run(device, first, second, parameters=PARAMETERS):
+def _run(device, first, second):
     """ttnn.silu_glu over flat BF16 operands, padded to whole tiles; the output, the device operations and their arguments."""
     n = first.numel()
     pad = (-n) % TILE
     shape = [1, (n + pad) // TILE, 32, 32]
     a = torch.cat([first, torch.ones(pad, dtype=first.dtype)]).reshape(shape)
     b = torch.cat([second, torch.ones(pad, dtype=second.dtype)]).reshape(shape)
-    out, operations, arguments = _device_operations(
-        lambda: ttnn.silu_glu(_on_device(a, device), _on_device(b, device), *parameters)
-    )
+    out, operations, arguments = _device_operations(lambda: ttnn.silu_glu(_on_device(a, device), _on_device(b, device)))
     return ttnn.to_torch(out).flatten()[:n], operations, arguments
 
 
@@ -210,9 +197,8 @@ def _pure_ulp(actual, first, second):
     a = actual.to(torch.float64)
     normal = (exact.abs() >= SMALLEST_NORMAL) & (exact.abs() <= 3.3895313892515355e38)
     declared = normal & (a == 0) & (exact.abs() < SMALLEST_NORMAL * (1.0 + BOUNDARY_FLUSH))
-    if LOGISTIC_FLUSH is not None:
-        index, bound = LOGISTIC_FLUSH
-        declared |= normal & (a == 0) & ((first, second)[index].to(torch.float64) <= bound)
+    index, bound = LOGISTIC_FLUSH
+    declared |= normal & (a == 0) & ((first, second)[index].to(torch.float64) <= bound)
     f = first.to(torch.float64)
     f = torch.where(f.abs() < SMALLEST_NORMAL, torch.zeros_like(f), f)
     declared |= normal & (a == 0) & ((f / (1 + torch.exp(-f))).abs() < SMALLEST_NORMAL * (1 + 2.0**-8)) & (f != 0)
@@ -231,12 +217,13 @@ def test_silu_glu_every_bf16_input_against_the_exact_product(device, swept):
     held_values = held.repeat_interleave(every.numel())
     first, second = (swept_values, held_values) if swept == "gate" else (held_values, swept_values)
     actual, operations, arguments = _run(device, first, second)
-    assert len(set(operations)) == 1 and OP_TYPE in arguments, f"ran {operations}, not the one {OP_TYPE} program"
+    assert len(operations) == 1 and OP_TYPE in arguments, f"ran {operations}, not the one {OP_TYPE} program"
     ulp, declared = _pure_ulp(actual, first, second)
-    logger.info(
-        f"swept {swept}: max {ulp.max().item():.4f} ULP over {ulp.numel()} lanes, {declared} declared flush lanes"
-    )
-    assert ulp.max().item() < BOUND
+    worst, over = ulp.max().item(), int((ulp >= BOUND).sum())
+    logger.info(f"swept {swept}: max {worst:.4f} ULP over {ulp.numel()} lanes, {declared} declared flush lanes")
+    assert (
+        worst < BOUND
+    ), f"swept {swept}: max {worst:.4f} ULP; {over} of {ulp.numel()} scored lanes at or above {BOUND}"
 
 
 def test_silu_glu_special_value_classes(device):
@@ -256,7 +243,7 @@ def test_silu_glu_special_value_classes(device):
             return "-0" if torch.signbit(v) else "+0"
         return "finite"
 
-    stored = {"nan": "+inf", "subnormal": "+0"}
+    stored = {"nan": "+inf"}
     got = {pair: kind(actual[i]) for i, pair in enumerate(pairs)}
     want = {pair: stored.get(result, result) for pair, result in SPECIAL_RESULTS.items()}
     assert got == want
@@ -273,28 +260,26 @@ def _operands(shape):
 def test_silu_glu_every_placement_matches_interleaved_tiles(device, placement):
     _skip_unless_routed(device)
     a, b = _operands((1, 1, 64, 128))
-    expected = ttnn.to_torch(ttnn.silu_glu(_on_device(a, device), _on_device(b, device), *PARAMETERS))
+    expected = ttnn.to_torch(ttnn.silu_glu(_on_device(a, device), _on_device(b, device)))
     if placement == "l1":
         call = lambda: ttnn.silu_glu(
             _on_device(a, device, memory_config=ttnn.L1_MEMORY_CONFIG),
             _on_device(b, device, memory_config=ttnn.L1_MEMORY_CONFIG),
-            *PARAMETERS,
         )
     elif placement == "row_major":
         call = lambda: ttnn.silu_glu(
             ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
             ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
-            *PARAMETERS,
         )
     elif placement.startswith("broadcast"):
         b = b[..., :1, :]
         expected = ttnn.to_torch(
-            ttnn.silu_glu(_on_device(a, device), _on_device(b.expand(a.shape).contiguous(), device), *PARAMETERS)
+            ttnn.silu_glu(_on_device(a, device), _on_device(b.expand(a.shape).contiguous(), device))
         )
-        call = lambda: ttnn.silu_glu(_on_device(a, device), _on_device(b, device), *PARAMETERS)
+        call = lambda: ttnn.silu_glu(_on_device(a, device), _on_device(b, device))
     else:
         grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
-        call = lambda: ttnn.silu_glu(_on_device(a, device), _on_device(b, device), *PARAMETERS, sub_core_grids=grid)
+        call = lambda: ttnn.silu_glu(_on_device(a, device), _on_device(b, device), sub_core_grids=grid)
     # A row-major operand adds its layout conversions around the program.
     out, _, arguments = _device_operations(call)
     assert OP_TYPE in arguments, f"the {placement} call does not run the {OP_TYPE} program"
@@ -302,22 +287,16 @@ def test_silu_glu_every_placement_matches_interleaved_tiles(device, placement):
     assert out.shape == expected.shape and torch.equal(out.view(torch.int16), expected.view(torch.int16))
 
 
-@pytest.mark.parametrize("call", ["compiled_parameters", "float32"])
-def test_silu_glu_keeps_the_composite_elsewhere(device, call):
-    """Off the route's boards, parameters and dtype the op launches no SILU_GLU program."""
-    if call == "compiled_parameters" and _board(device) in ROUTE_BOARDS:
-        pytest.skip("the route serves this call here")
+@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
+def test_silu_glu_keeps_the_composite_elsewhere(device, dtype):
+    """Off the route's boards, and for FP32 operands, the op launches no SILU_GLU program."""
+    if dtype == "bfloat16" and _board(device) in ROUTE_BOARDS:
+        pytest.skip("the route serves BF16 operands here")
     a, b = _operands((1, 1, 64, 64))
-    if call == "float32":
+    if dtype == "float32":
         as_float32 = lambda t: ttnn.from_torch(t.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-        a, b, parameters = as_float32(a), as_float32(b), PARAMETERS
+        a, b = as_float32(a), as_float32(b)
     else:
         a, b = _on_device(a, device), _on_device(b, device)
-        parameters = PARAMETERS if call == "compiled_parameters" else _off_parameters()
-    try:
-        _, _, arguments = _device_operations(lambda: ttnn.silu_glu(a, b, *parameters))
-    except RuntimeError as error:
-        # The composite's own refusal on a board whose TT-NN lacks one of its ops.
-        assert OP_TYPE not in str(error)
-        return
+    _, _, arguments = _device_operations(lambda: ttnn.silu_glu(a, b))
     assert OP_TYPE not in arguments

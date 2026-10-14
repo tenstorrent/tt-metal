@@ -1374,6 +1374,46 @@ Tensor divide_(
         sub_core_grids,
         sub_device_id);
 }
+namespace {
+
+enum class SiluGluOperands { NONE, IN_ORDER, SWAPPED };
+
+// silu_glu's own SFPU kernel (activations/products/silu_glu.json) computes multiply(gate, up) as one
+// program when the operands carry exactly its leaves' pre-activations: BF16 operands and output on a board that has
+// the kernel, with no output tensor, post-activation or fast mode. Which operand is gate, if either.
+SiluGluOperands silu_glu_operands(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<bool>& fast_and_approximate_mode) {
+    using operations::unary::UnaryOpType;
+    using enum SiluGluOperands;
+    if (lhs.device() == nullptr || !(lhs.device()->arch() == tt::ARCH::BLACKHOLE) ||
+        lhs.dtype() != DataType::BFLOAT16 || rhs.dtype() != DataType::BFLOAT16 ||
+        output_dtype.value_or(DataType::BFLOAT16) != DataType::BFLOAT16 || output.has_value() ||
+        !post_activations.empty() || fast_and_approximate_mode.value_or(false)) {
+        return NONE;
+    }
+    if (lhs_activations.size() == 1 && lhs_activations[0].type() == UnaryOpType::SILU &&
+        !lhs_activations[0].has_parameter() && rhs_activations.empty()) {
+        return IN_ORDER;
+    }
+    // Operand A sets the output's placement when memory_config is unset, so the swapped order needs equal ones.
+    if (rhs_activations.size() == 1 && rhs_activations[0].type() == UnaryOpType::SILU &&
+        !rhs_activations[0].has_parameter() && lhs_activations.empty() &&
+        (memory_config.has_value() || lhs.memory_config() == rhs.memory_config())) {
+        return SWAPPED;
+    }
+    return NONE;
+}
+
+}  // namespace
+
 Tensor multiply(
     const Tensor& lhs,
     const Tensor& rhs,
@@ -1386,49 +1426,31 @@ Tensor multiply(
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    {
-        // silu_glu's own SFPU kernel computes this product as one program (activations/products/silu_glu.json): BF16
-        // operands and output on a board that has the kernel, no output tensor, post-activation or fast mode.
-        using operations::unary::UnaryOpType;
-        if (lhs.device() != nullptr && (lhs.device()->arch() == tt::ARCH::BLACKHOLE) &&
-            lhs.dtype() == DataType::BFLOAT16 && rhs.dtype() == DataType::BFLOAT16 &&
-            output_dtype.value_or(DataType::BFLOAT16) == DataType::BFLOAT16 && !output.has_value() &&
-            post_activations.empty() && !fast_and_approximate_mode.value_or(false)) {
-            if ((lhs_activations.size() == 1 && lhs_activations[0].type() == UnaryOpType::SILU &&
-                 !lhs_activations[0].has_parameter()) &&
-                rhs_activations.empty()) {
-                return ttnn::detail::invoke_binary_ng(
-                    lhs,
-                    rhs,
-                    operations::binary::BinaryOpType::SILU_GLU,
-                    output_dtype,
-                    memory_config,
-                    std::nullopt,
-                    {},
-                    {},
-                    {},
-                    std::nullopt,
-                    sub_core_grids,
-                    sub_device_id);
-            }
-            if ((rhs_activations.size() == 1 && rhs_activations[0].type() == UnaryOpType::SILU &&
-                 !rhs_activations[0].has_parameter()) &&
-                lhs_activations.empty()) {
-                return ttnn::detail::invoke_binary_ng(
-                    rhs,
-                    lhs,
-                    operations::binary::BinaryOpType::SILU_GLU,
-                    output_dtype,
-                    memory_config,
-                    std::nullopt,
-                    {},
-                    {},
-                    {},
-                    std::nullopt,
-                    sub_core_grids,
-                    sub_device_id);
-            }
-        }
+    if (const auto operands = silu_glu_operands(
+            lhs,
+            rhs,
+            output_dtype,
+            memory_config,
+            output,
+            post_activations,
+            lhs_activations,
+            rhs_activations,
+            fast_and_approximate_mode);
+        operands != SiluGluOperands::NONE) {
+        const bool in_order = operands == SiluGluOperands::IN_ORDER;
+        return ttnn::detail::invoke_binary_ng(
+            in_order ? lhs : rhs,
+            in_order ? rhs : lhs,
+            operations::binary::BinaryOpType::SILU_GLU,
+            output_dtype,
+            memory_config,
+            std::nullopt,
+            {},
+            {},
+            {},
+            std::nullopt,
+            sub_core_grids,
+            sub_device_id);
     }
     bool is_block_fmt_inp = (is_block_float(lhs.dtype()) || is_block_float(rhs.dtype()));
     bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);

@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <limits>
 
 #include "cmath_common.h"
 #include "sfpi.h"
@@ -19,11 +18,17 @@
 // The logistic factor 1 / (1 + e^-x) is sel / (1 + e^-|x|), with sel = 1 for x >= 0 and e^-|x| below.
 //
 // The leaves' magnitudes multiply unscaled, and one reciprocal divides by the product of their denominators.
-// A NaN input gives NaN; a result below the smallest normal float is 0.
+// A NaN input gives NaN with FP32 DEST and +inf with BF16 DEST (the BF16 round turns a NaN into an
+// infinity); a result below the smallest normal float is 0.
+//
+// BF16 (Float16_b) inputs, Blackhole only. The result is BF16-accurate in either DEST mode: at most 0.523 ULP of the
+// exact value over every finite BF16 pair. With FP32 DEST the FP32 result is not FP32-accurate: it is within 1.0e-04
+// relative of the exact value.
 
 namespace ckernel::sfpu {
 
-// One Newton step: the denominator is a positive normal value.
+// One Newton step on SFPARECIP's estimate: the denominator is a positive normal value. The 2.0f is a
+// literal rather than a programmable constant, so it does not depend on what the init loads.
 sfpi_inline sfpi::vFloat _silu_glu_reciprocal_(const sfpi::vFloat a) {
     sfpi::vFloat y = sfpi::approx_recip(a);
     sfpi::vFloat t = a * y - 2.0f;
@@ -38,7 +43,11 @@ inline void calculate_silu_glu(
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat gate_x = dst_reg[gate_tile_idx * dst_tile_size];
-        vFloat gate_a = sfpi::setsgn(gate_x, 0);
+        vFloat gate_a = sfpi::setsgn(gate_x, 0 /*sgn*/);
+        // e^-|z| through the exponent ALU: w_c = |z| * (-log2(e)) + 127 is the biased binary32 exponent of e^-|z| (127
+        // is the bias), held at 0.5 so e^-|z| underflows to 0. w_f is the fraction of w_c as an integer (0 to 2^23),
+        // and the polynomial in w_f is 2^fraction: its coefficients are those of
+        // data/coefficients/silu_glu_p3_s1_uniform_lsq_relative_block-exp2_fraction.csv, each times 2^(-23 k).
         vFloat w_c = gate_a * vConstFloatPrgm0 + 127.0f;
         vFloat w_z = sfpi::max(w_c, 0.5f);
         vInt w_m = sfpi::exman(w_z, sfpi::MantissaMode::ImplicitOne);
@@ -70,7 +79,9 @@ inline void calculate_silu_glu(
     }
 }
 
-// Within the state sigmoid_init<false> writes: 1 of its programmable constants.
+// The init resets the SFPU address counters and loads vConstFloatPrgm0 = -factor_scale * log2(e), which scales |x| to
+// the base-2 exponent of e^-|x|. The body reads them, so silu_glu_init runs after any other SFPU op's init and before
+// this kernel.
 inline void silu_glu_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = -1.4426950216293335f;
