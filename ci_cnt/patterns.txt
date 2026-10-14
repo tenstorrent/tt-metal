@@ -1,0 +1,4 @@
+A:Float16_b,B:Float16_b,out:Float16_b && DestAccumulation.No && SyncHalf && ([32, 1024], [1024, 256]) && math_fidelity:LoFi
+A:Float16_b,B:Float16_b,out:Float16_b && DestAccumulation.No && SyncHalf && ([32, 1024], [1024, 256]) && math_fidelity:HiFi2
+A:Float16_b,B:Float16_b,out:Float16_b && DestAccumulation.No && SyncHalf && ([32, 1024], [1024, 256]) && math_fidelity:HiFi4
+A:Bfp8_b,B:Bfp8_b,out:Float16_b && DestAccumulation.No && SyncHalf && ([32, 1024], [1024, 256]) && math_fidelity:LoFi
