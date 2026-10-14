@@ -58,8 +58,7 @@ bool is_empty_callable(const T& f) noexcept {
     }
 }
 
-// A target lives in the buffer when it fits and its move cannot throw: moves happen inside this
-// type's noexcept move, so a throwing one has to go to the heap.
+// A target whose move can throw goes to the heap, since this type's move is noexcept.
 template <typename T>
 inline constexpr bool stored_inline_v =
     sizeof(T) <= kMoveOnlyFunctionInlineSize && alignof(T) <= kMoveOnlyFunctionInlineAlign &&
