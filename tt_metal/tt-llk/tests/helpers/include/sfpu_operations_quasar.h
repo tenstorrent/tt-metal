@@ -171,6 +171,36 @@ constexpr std::uint32_t kDropoutScaleBits   = 0x40000000u; // scale = 2.0f
 #endif
 
 /**
+ * @brief Seed the PRNG for dropout with an explicit seed (fuser path; the dispatcher passes kDropoutSeed).
+ *
+ * @tparam APPROX Whether to use the approximate path (dropout has none).
+ * @param seed Seed handed to dropout_init.
+ */
+template <bool APPROX = false>
+void init_dropout_quasar(std::uint32_t seed)
+{
+    dropout_init<APPROX>(seed);
+}
+
+/**
+ * @brief Apply dropout in-place on one Dest tile with explicit parameters (fuser path).
+ *
+ * @tparam DST_SYNC Destination synchronization mode used for bounds checking.
+ * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode.
+ * @tparam APPROX Whether to use the approximate path (dropout has none).
+ * @tparam ITERATIONS Number of SFPU loop iterations.
+ * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
+ * @param probability Drop probability as p * INT_MAX.
+ * @param scale_bits fp32 bit pattern of the scale applied to kept data.
+ * @note Must be preceded by @ref init_dropout_quasar.
+ */
+template <DstSync DST_SYNC, bool is_fp32_dest_acc_en, bool APPROX = false, int ITERATIONS = SFPU_ITERATIONS>
+void call_dropout_quasar(std::uint32_t dst_index, std::uint32_t probability, std::uint32_t scale_bits)
+{
+    SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_dropout, (APPROX, ITERATIONS), dst_index, VectorMode::RC, probability, scale_bits);
+}
+
+/**
  * @brief Whether OPERATION is one of the six comparison-to-zero modes.
  *
  * The comp family needs a runtime format switch (@ref call_zero_comp_operation_quasar)
@@ -504,7 +534,7 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::dropout)
     {
-        dropout_init<APPROX>(kDropoutSeed);
+        init_dropout_quasar<APPROX>(kDropoutSeed);
     }
     // rsub_scalar_int32 is stateless: its compute API init is SFPU_UNARY_INIT(unused).
 }
@@ -858,8 +888,7 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::dropout)
     {
-        SFPU_UNARY_CALL(
-            DST_SYNC, is_fp32_dest_acc_en, calculate_dropout, (APPROX, ITERATIONS), dst_index, VectorMode::RC, kDropoutProbability, kDropoutScaleBits);
+        call_dropout_quasar<DST_SYNC, is_fp32_dest_acc_en, APPROX, ITERATIONS>(dst_index, kDropoutProbability, kDropoutScaleBits);
     }
     else if constexpr (OPERATION == SfpuType::floor)
     {

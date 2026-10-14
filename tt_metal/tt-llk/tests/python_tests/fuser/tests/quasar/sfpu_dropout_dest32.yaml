@@ -1,5 +1,5 @@
-# dropout at the harness defaults (p = 0, scale 2.0), called twice: golden x * 4.0. The drop path
-# needs probability/seed/scale the fuser can't set; it is covered by test_dropout_* instead.
+# dropout at the defaults (p = 0, scale 2.0), called twice: golden x * 4.0.
+# sfpu_dropout_real_scale / sfpu_dropout_drop_all set the dropout_* parameters.
 
 dest_acc: true
 
