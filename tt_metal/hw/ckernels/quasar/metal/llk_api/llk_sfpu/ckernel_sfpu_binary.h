@@ -106,7 +106,7 @@ inline void calculate_sfpu_binary(
     }
 }
 
-/// SrcS float ADD op type, Sfpi only.
+/** @brief SrcS float ADD op type; Sfpi only. */
 template <sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
 using AddSrcs = SrcsBinary<AddFloatMath, LAYOUT, resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
 

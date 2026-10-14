@@ -35,7 +35,11 @@ sfpi_inline auto sfpu_operand_access(int index)
 
 } // namespace detail
 
-/// Load/store policy: register LAYOUT <-> VALUE vector type. SrcS stores must use NOINC.
+/**
+ * @brief Load/store policy between a register LAYOUT and a VALUE vector type.
+ *
+ * @tparam STORE_ADDR_MODE: NOINC (default) or a Dest ADDR_MOD_*; SrcS stores must use NOINC.
+ */
 template <sfpi::DataLayout LAYOUT, typename VALUE, int STORE_ADDR_MODE = sfpi::SFPSTORE_ADDR_MODE_NOINC>
 struct SfpiFormat
 {
@@ -56,7 +60,11 @@ struct SfpiFormat
     }
 };
 
-/// One SFPU operand: register file, format and base offset. Indices are SFPI steps (SFP_ROWS rows each).
+/**
+ * @brief One SFPU operand: register file, format and base offset.
+ *
+ * Indices are SFPI steps (SFP_ROWS rows each), not tile indices.
+ */
 template <SfpuReg REG, typename FORMAT>
 class SfpuOperand
 {
@@ -83,7 +91,11 @@ private:
     int base_offset_;
 };
 
-/// output[d] = MATH::apply(input[d]) for d < ITERATIONS; shared by Dest and SrcS.
+/**
+ * @brief output[d] = MATH::apply(input[d]) for d < ITERATIONS, on Dest or SrcS operands.
+ *
+ * @tparam MATH: Math policy with a static apply().
+ */
 template <typename MATH, int ITERATIONS, typename Input, typename Output>
 sfpi_inline void calculate_unary_operands(const Input& input, const Output& output)
 {
@@ -98,7 +110,11 @@ sfpi_inline void calculate_unary_operands(const Input& input, const Output& outp
     }
 }
 
-/// output[d] = MATH::apply(input0[d], input1[d]) for d < ITERATIONS; shared by Dest and SrcS.
+/**
+ * @brief output[d] = MATH::apply(input0[d], input1[d]) for d < ITERATIONS, on Dest or SrcS operands.
+ *
+ * @tparam MATH: Math policy with a static apply().
+ */
 template <typename MATH, int ITERATIONS, typename Input0, typename Input1, typename Output>
 sfpi_inline void calculate_binary_operands(const Input0& input0, const Input1& input1, const Output& output)
 {

@@ -14,7 +14,7 @@
 namespace ckernel {
 namespace sfpu {
 
-/// Square math policy, shared by Dest and SrcS.
+/** @brief Square math policy, shared by Dest and SrcS. */
 struct SquareMath {
     sfpi_inline static sfpi::vFloat apply(sfpi::vFloat x) { return x * x; }
 };
@@ -35,7 +35,11 @@ inline void init_square() {
         .set(ADDR_MOD_6);
 }
 
-/// Square a Dest span in place. Call init_square first.
+/**
+ * @brief Square a Dest span in place.
+ *
+ * @note Call @ref init_square before this.
+ */
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_square() {
     using Input = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>>;
@@ -46,7 +50,7 @@ inline void calculate_square() {
     }
 }
 
-/// SrcS square op type, Sfpi only.
+/** @brief SrcS square op type; Sfpi only. */
 template <sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
 using SquareSrcs = SrcsUnary<SquareMath, LAYOUT, resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
 

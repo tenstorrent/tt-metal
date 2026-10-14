@@ -76,7 +76,7 @@ inline void llk_sfpu_srcs_unary_init(
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(unpack_S_dst_format);
     llk_sfpu_srcs_configure_pack_impl(srcs_shape, l1_out_addr_16B, pack_S_src_format, pack_S_dst_format);
 
-    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + ckernel::TRISC_ID] = !implied_math_format;
+    cfg_rmw(DISABLE_IMPLIED_SRCS_FORMAT_RMW, !implied_math_format);
 
     _llk_unpack_srcs_config_for_tile_<INSTRN_COUNT>(srcs_32bit_mode);
     _llk_pack_srcs_config_for_tile_<INSTRN_COUNT>(srcs_32bit_mode);
@@ -122,7 +122,7 @@ inline void llk_sfpu_srcs_binary_init(
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(unpack_S_dst_format);
     llk_sfpu_srcs_configure_pack_impl(srcs_shape, l1_out_addr_16B, pack_S_src_format, pack_S_dst_format);
 
-    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + ckernel::TRISC_ID] = !implied_math_format;
+    cfg_rmw(DISABLE_IMPLIED_SRCS_FORMAT_RMW, !implied_math_format);
 
     _llk_unpack_srcs_config_<1, 1>();
     _llk_unpack_srcs_binary_mop_config_(bfd_a, bfd_b);

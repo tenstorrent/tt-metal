@@ -9,14 +9,22 @@
 namespace ckernel::sfpu
 {
 
-/// Which implementation runs an SFPU op. Every value must give bit-identical results for the same math policy.
+/**
+ * @brief Which implementation runs an SFPU op.
+ *
+ * Every value must give bit-identical results for the same math policy.
+ */
 enum class SfpuImpl : std::uint8_t
 {
     Sfpi,      // SFPI-compiled loads, ops and stores
     LoadMacro, // SFPLOADMACRO sequences replayed from the replay buffer
 };
 
-/// Falls back to Sfpi under DISABLE_SFPLOADMACRO (ttsim). LoadMacro without a LoadMacro version fails to compile.
+/**
+ * @brief Resolve the requested implementation: Sfpi under DISABLE_SFPLOADMACRO (ttsim), else REQUESTED.
+ *
+ * @tparam HAS_LOADMACRO: Whether the op has a LoadMacro version; requesting LoadMacro without one fails to compile.
+ */
 template <SfpuImpl REQUESTED, bool HAS_LOADMACRO>
 constexpr SfpuImpl resolve_sfpu_impl()
 {

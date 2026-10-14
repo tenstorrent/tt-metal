@@ -15,7 +15,7 @@
 namespace ckernel {
 namespace sfpu {
 
-/// output = condition != 0 ? true_input : false_input.
+/** @brief output = condition != 0 ? true_input : false_input. */
 template <int ITERATIONS, typename Condition, typename TrueInput, typename FalseInput, typename Output>
 sfpi_inline void calculate_where_operands(
     const Condition& condition, const TrueInput& true_input, const FalseInput& false_input, const Output& output) {

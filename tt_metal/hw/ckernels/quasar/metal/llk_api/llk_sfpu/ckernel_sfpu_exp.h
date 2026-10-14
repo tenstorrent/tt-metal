@@ -298,7 +298,11 @@ struct ExpFp32Accurate {
 template <bool APPROXIMATION_MODE, bool FP32_RESULT>
 using ExpAlgo = std::conditional_t<(!FP32_RESULT || APPROXIMATION_MODE), ExpHwLut, ExpFp32Accurate>;
 
-// Dest EXP. The fp32 accurate path runs only for a 32-bit Dest without APPROXIMATION_MODE; else the HW LUT.
+/**
+ * @brief EXP over a Dest span.
+ *
+ * The fp32 accurate path runs only for a 32-bit Dest without APPROXIMATION_MODE; otherwise the HW LUT.
+ */
 template <
     bool APPROXIMATION_MODE,
     bool EN_32BIT_DEST,
@@ -333,14 +337,18 @@ void exp_init() {
 
 #ifndef DISABLE_SFPLOADMACRO
 
-// The replay holds one LOADMACRO per iteration.
+/** @brief Replay slot holding the exp LOADMACROs, one per iteration. */
 constexpr std::uint32_t EXP_LOADMACRO_REPLAY_SLOT = 0;
 inline constexpr std::uint32_t _exp_loadmacro_replay_len_(const int num_sfpu_iterations) {
     return static_cast<std::uint32_t>(num_sfpu_iterations);
 }
 
-// Record one self-contained macro per pass (load, EXP, store at +STORE_OFFSET) into EXP_LOADMACRO_REPLAY_SLOT.
-// The last macro's done bit resets the SrcS dvalids, so callers must not clear them.
+/**
+ * @brief Record one self-contained macro per pass (load, EXP, store) into EXP_LOADMACRO_REPLAY_SLOT.
+ *
+ * @tparam STORE_OFFSET: Load-to-store distance in rows; must be compile-time for the store immediate.
+ * @note The last macro's done bit resets the SrcS dvalids, so callers must not clear them.
+ */
 template <std::uint32_t STORE_OFFSET>
 inline void _exp_init_loadmacro_(
     const std::uint32_t load_base_addr,
@@ -380,8 +388,11 @@ inline void _exp_init_loadmacro_(
         });
 }
 
-/// SrcS EXP via SFPLOADMACRO, ExpHwLut only (bit-identical to Sfpi). Owns EXP_LOADMACRO_REPLAY_SLOT and macro sequence
-/// 0.
+/**
+ * @brief SrcS EXP via SFPLOADMACRO; LUT only, bit-identical to Sfpi.
+ *
+ * @note Owns EXP_LOADMACRO_REPLAY_SLOT and macro sequence 0.
+ */
 template <sfpi::DataLayout LAYOUT>
 struct SrcsUnary<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>
     : SfpuSrcsUnaryOp<SrcsUnary<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>> {
@@ -418,7 +429,11 @@ struct SrcsUnary<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>
 template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT>
 using ExpSrcsAlgo = ExpAlgo<APPROXIMATION_MODE, LAYOUT == sfpi::DataLayout::F32>;
 
-/// SrcS EXP op type. LoadMacro needs the LUT path (APPROXIMATION_MODE or a 16-bit layout).
+/**
+ * @brief SrcS EXP op type.
+ *
+ * @tparam IMPL: Sfpi or LoadMacro; LoadMacro needs the LUT path (APPROXIMATION_MODE or a 16-bit layout).
+ */
 template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
 using ExpSrcs = SrcsUnary<
     ExpSrcsAlgo<APPROXIMATION_MODE, LAYOUT>,

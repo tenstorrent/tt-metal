@@ -14,12 +14,16 @@
 namespace ckernel {
 namespace sfpu {
 
-/// Float ADD math policy, shared by Dest and SrcS.
+/** @brief Float ADD math policy, shared by Dest and SrcS. */
 struct AddFloatMath {
     sfpi_inline static sfpi::vFloat apply(sfpi::vFloat a, sfpi::vFloat b) { return a + b; }
 };
 
-/// Int32 ADD math policy. SIGN_MAGNITUDE_FORMAT casts sign-magnitude Dest values to 2's complement around the add.
+/**
+ * @brief Int32 ADD math policy.
+ *
+ * @tparam SIGN_MAGNITUDE_FORMAT: Operands and result are sign-magnitude; cast to 2's complement around the add.
+ */
 template <bool SIGN_MAGNITUDE_FORMAT>
 struct AddIntMath {
     sfpi_inline static sfpi::vInt apply(sfpi::vInt a, sfpi::vInt b) {
@@ -35,7 +39,16 @@ struct AddIntMath {
     }
 };
 
-/// Int32 ADD over Dest. Explicit I32 layout because implied integer formats are broken on Quasar (TEN-4674).
+/**
+ * @brief Int32 ADD over Dest: out = in0 + in1.
+ *
+ * Uses the explicit I32 layout because implied integer formats are broken on Quasar (TEN-4674).
+ *
+ * @tparam SIGN_MAGNITUDE_FORMAT: Dest holds sign-magnitude Int32.
+ * @param dst_index_in0: Dest tile index of the first operand.
+ * @param dst_index_in1: Dest tile index of the second operand.
+ * @param dst_index_out: Dest tile index of the result.
+ */
 template <
     [[maybe_unused]] bool APPROXIMATION_MODE,
     int ITERATIONS = SFPU_ITERATIONS,

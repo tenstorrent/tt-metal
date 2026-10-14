@@ -18,7 +18,11 @@ namespace ckernel::sfpu {
 
 static_assert(sfpi::SFP_SRCSREG_STRIDE == ckernel::math::SFP_ROWS, "one sfpi index step must be one SFPU op");
 
-/// Slot offsets (SFPI steps) of one SrcS slice; must match the base addresses in llk_sfpu_srcs_api.h.
+/**
+ * @brief Slot offsets (SFPI steps) and formats of one SrcS slice.
+ *
+ * @note Offsets must match the base addresses in llk_sfpu_srcs_api.h.
+ */
 template <sfpi::DataLayout LAYOUT>
 struct SrcsLayout {
     static_assert(
@@ -46,7 +50,11 @@ struct SrcsLayout {
                                                                                : p_sfpu::sfpmem::FP16B;
 };
 
-/// CRTP base for unary SrcS ops: Op supplies calculate(); init()/run() live in llk_sfpu_srcs_api.h.
+/**
+ * @brief CRTP base for unary SrcS ops; Op supplies calculate().
+ *
+ * @note init() and run() are defined in llk_sfpu_srcs_api.h; include it to use them.
+ */
 template <typename Op>
 struct SfpuSrcsUnaryOp {
     // True when the op's own instructions release the SrcS banks (SFPLOADMACRO).
@@ -67,7 +75,7 @@ struct SfpuSrcsUnaryOp {
     static void run(const std::uint32_t num_tiles);
 };
 
-/// Unary SrcS op. Sfpi serves every MATH; LoadMacro versions are specialized next to the op.
+/** @brief Unary SrcS op. Sfpi serves every MATH; LoadMacro versions are specialized next to the op. */
 template <typename MATH, sfpi::DataLayout LAYOUT, SfpuImpl IMPL>
 struct SrcsUnary {
     static_assert(sizeof(MATH) == 0, "This SFPU op has no SrcS implementation for the requested SfpuImpl");
@@ -83,9 +91,14 @@ struct SrcsUnary<MATH, LAYOUT, SfpuImpl::Sfpi> : SfpuSrcsUnaryOp<SrcsUnary<MATH,
     }
 };
 
-/// CRTP base for binary SrcS ops; both inputs share formats. init()/run() live in llk_sfpu_srcs_api.h.
+/**
+ * @brief CRTP base for binary SrcS ops; both inputs share formats.
+ *
+ * @note init() and run() are defined in llk_sfpu_srcs_api.h; include it to use them.
+ */
 template <typename Op>
 struct SfpuSrcsBinaryOp {
+    // True when the op's own instructions release the SrcS banks (SFPLOADMACRO).
     static constexpr bool hw_clears_valids = false;
 
     static void init_op() {}
@@ -103,7 +116,7 @@ struct SfpuSrcsBinaryOp {
     static void run(const std::uint32_t num_tiles);
 };
 
-/// Binary SrcS op. Only Sfpi exists.
+/** @brief Binary SrcS op; only Sfpi exists. */
 template <typename MATH, sfpi::DataLayout LAYOUT, SfpuImpl IMPL>
 struct SrcsBinary {
     static_assert(sizeof(MATH) == 0, "This SFPU op has no SrcS implementation for the requested SfpuImpl");
@@ -119,7 +132,7 @@ struct SrcsBinary<MATH, LAYOUT, SfpuImpl::Sfpi> : SfpuSrcsBinaryOp<SrcsBinary<MA
     }
 };
 
-/// Map the SrcS register format (not the L1 format) to a SrcsLayout, once outside the tile loop.
+/** @brief Map the SrcS register format (not the L1 format) to a SrcsLayout, once outside the tile loop. */
 template <typename Op>
 sfpi_inline void dispatch_sfpu_srcs_format(const DataFormat format, Op&& op) {
     switch (format) {
