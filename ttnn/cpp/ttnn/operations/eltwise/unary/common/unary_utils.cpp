@@ -66,10 +66,11 @@ bool is_native_L1_sharding(
 
 namespace {
 
-// Compute time per tile, measured with data in L1, against the DRAM time per tile: about 1 µs per core for a 2 KB page
-// on Blackhole. An op that computes for longer is bound by its SFPU work, and deeper reads cannot speed it up.
+// Compute time per tile, measured with data in L1, against a core's DRAM time per tile. An op that computes for longer
+// is bound by its SFPU work, and deeper reads cannot speed it up.
 enum class OpCost : uint8_t {
     Light,       // well below the DRAM time per tile
+    Moderate,    // below it, but close to it on a slower SFPU
     Mid,         // close to it
     Heavy,       // above it
     Unmeasured,  // keeps main's path
@@ -101,12 +102,11 @@ OpCost op_cost(const EltwiseUnaryWithParam& op) {
         case UnaryOpType::EXP:
         case UnaryOpType::LOG:
         case UnaryOpType::SIN:
-        case UnaryOpType::COS:
-        case UnaryOpType::SQRT:
-        case UnaryOpType::RSQRT:
         case UnaryOpType::ADD_UNARY_SFPU:
         case UnaryOpType::SUB_UNARY_SFPU:
         case UnaryOpType::MUL_UNARY_SFPU: return OpCost::Light;
+        case UnaryOpType::COS:
+        case UnaryOpType::RSQRT: return OpCost::Moderate;
         case UnaryOpType::SILU:
         case UnaryOpType::SOFTPLUS:
         case UnaryOpType::TANHSHRINK: return OpCost::Mid;
@@ -118,7 +118,9 @@ OpCost op_cost(const EltwiseUnaryWithParam& op) {
         case UnaryOpType::LOGIT:
         case UnaryOpType::LOGSIGMOID:
         case UnaryOpType::XIELU: return OpCost::Heavy;
-        // Parameter 1 of SIGMOID and parameter 0 of GELU and ERF select the fast variant.
+        // Parameter 1 of SIGMOID and parameter 0 of GELU, ERF and SQRT select the fast variant.
+        case UnaryOpType::SQRT:
+            return op.get_param_if<float>(0).value_or(0.0f) == 1.0f ? OpCost::Light : OpCost::Moderate;
         case UnaryOpType::SIGMOID:
             return op.get_param_if<float>(1).value_or(0.0f) == 1.0f ? OpCost::Light : OpCost::Mid;
         case UnaryOpType::GELU: return op.get_param_if<float>(0).value_or(0.0f) == 1.0f ? OpCost::Light : OpCost::Heavy;
@@ -127,9 +129,9 @@ OpCost op_cost(const EltwiseUnaryWithParam& op) {
     }
 }
 
-// A chain costs as much as its most expensive op.
+// A chain costs as much as its most expensive op, and at least as much as a moderate one: light ops add up.
 OpCost chain_cost(const std::vector<EltwiseUnaryWithParam>& op_chain) {
-    OpCost cost = OpCost::Light;
+    OpCost cost = op_chain.size() > 1 ? OpCost::Moderate : OpCost::Light;
     for (const auto& op : op_chain) {
         cost = std::max(cost, op_cost(op));
     }
@@ -144,9 +146,9 @@ struct TensorReads {
     bool large_pages;  // above 2 KB (fp32, int32): twice the DRAM time per tile
 };
 
-// Which flow an op chain takes; None keeps main's path. Every branch was measured against main on Blackhole and is
-// taken only where it never lost.
-DramReadFlow choose_flow(OpCost cost, const TensorReads& t, uint64_t pages_per_core) {
+// Flow for many cores per DRAM bank; None keeps main's path. Main's per-core ranges queue cores on one bank while
+// others idle, so the flows win up to close to the DRAM time per tile. Each branch is taken only where it beat main.
+DramReadFlow choose_flow_many_cores_per_bank(OpCost cost, const TensorReads& t, uint64_t pages_per_core) {
     // Below this the work queue has too little to balance: 128 pages is 8 chunks of the minimum size.
     constexpr uint64_t kMinPagesPerCoreForQueue = 128;
     // Below this, heavy ops read one page at a time, so their first tiles arrive early; above it the SFPU sets their
@@ -162,7 +164,7 @@ DramReadFlow choose_flow(OpCost cost, const TensorReads& t, uint64_t pages_per_c
     if (small && (t.width_shards || (t.interleaved && t.large_pages))) {
         return DramReadFlow::None;
     }
-    if (cost == OpCost::Light) {
+    if (cost <= OpCost::Moderate) {
         return deep;
     }
     // With every bank serving the tensor, DRAM keeps up with mid and heavy ops, so the flows only add overhead.
@@ -178,6 +180,40 @@ DramReadFlow choose_flow(OpCost cost, const TensorReads& t, uint64_t pages_per_c
     return t.large_pages ? deep : DramReadFlow::None;
 }
 
+// Flow for few cores per DRAM bank; None keeps main's path. Main's order leaves fewer cores idle there, so the flows
+// win only where DRAM clearly sets the time. Each branch is taken only where it beat main.
+DramReadFlow choose_flow_few_cores_per_bank(OpCost cost, const TensorReads& t, uint64_t pages_per_core) {
+    // Bursts get a height shard's first tiles in sooner: below this range the first burst is most of a core's share,
+    // above it they lose to main.
+    constexpr uint64_t kMinPagesPerCoreForBursts = 24;
+    constexpr uint64_t kMaxPagesPerCoreForBursts = 48;
+    // From this on the queue saves more than its start-up and last chunk cost.
+    constexpr uint64_t kMinPagesPerCoreForQueue = 96;
+    // Large pages were not measured with this rule.
+    if (cost == OpCost::Unmeasured || t.large_pages) {
+        return DramReadFlow::None;
+    }
+    // Interleaved pages already cross the banks: only light ops gain, from the queue.
+    if (t.interleaved) {
+        return cost == OpCost::Light && pages_per_core >= kMinPagesPerCoreForQueue ? DramReadFlow::WorkQueue
+                                                                                   : DramReadFlow::None;
+    }
+    // No bursts on width shards: main's order already crosses the banks.
+    DramReadFlow deep = DramReadFlow::None;
+    if (pages_per_core >= kMinPagesPerCoreForQueue) {
+        deep = DramReadFlow::WorkQueue;
+    } else if (
+        !t.width_shards && pages_per_core >= kMinPagesPerCoreForBursts && pages_per_core < kMaxPagesPerCoreForBursts) {
+        deep = DramReadFlow::StaticBurst;
+    }
+    // On fewer shards than banks main queues more cores on each bank, so the flows win up to mid ops.
+    if (!t.all_banks) {
+        return cost <= OpCost::Mid ? deep : DramReadFlow::None;
+    }
+    // With every bank serving, main's reads keep up with moderate ops.
+    return cost == OpCost::Light ? deep : DramReadFlow::None;
+}
+
 }  // namespace
 
 DramReadPlan get_dram_read_plan(
@@ -185,9 +221,11 @@ DramReadPlan get_dram_read_plan(
     const tt::tt_metal::TensorSpec& input_spec,
     const tt::tt_metal::TensorSpec& output_spec,
     uint32_t num_cores,
+    uint32_t num_device_cores,
     uint32_t num_dram_banks) {
-    // Below this, main's order already saturates DRAM (Blackhole has ~14 cores per bank, Wormhole n300 ~5).
-    constexpr uint32_t kMinCoresPerDramBank = 8;
+    // From this many cores per DRAM bank, main's order queues cores on a bank while others idle; with fewer it is
+    // closer to balanced and a stricter rule applies.
+    constexpr uint32_t kManyCoresPerDramBank = 8;
     // Smaller pages (bfp8, bfp4) leave most ops compute-bound, and the flows did not beat main's order for them.
     constexpr uint32_t kMinPageBytes = 2048;
     // A chunk is 1/150 of a core's share: smaller loads the scheduler, larger leaves a tail.
@@ -204,9 +242,9 @@ DramReadPlan get_dram_read_plan(
         return s.layout() == tt::tt_metal::Layout::TILE && mc.is_dram() &&
                (mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED || mc.shard_spec().has_value());
     };
-    if (op_chain.empty() || num_cores == 0 || num_cores < kMinCoresPerDramBank * num_dram_banks ||
-        input_spec.compute_page_size_bytes() < kMinPageBytes || output_spec.compute_page_size_bytes() < kMinPageBytes ||
-        !is_dram_tiled(input_spec) || !is_dram_tiled(output_spec) ||
+    if (op_chain.empty() || num_cores == 0 || input_spec.compute_page_size_bytes() < kMinPageBytes ||
+        output_spec.compute_page_size_bytes() < kMinPageBytes || !is_dram_tiled(input_spec) ||
+        !is_dram_tiled(output_spec) ||
         input_spec.memory_config().memory_layout() != output_spec.memory_config().memory_layout()) {
         return {};
     }
@@ -259,14 +297,21 @@ DramReadPlan get_dram_read_plan(
         .width_shards = !interleaved && shard_width != row_pages,
         .all_banks = interleaved || plan.num_shards >= num_dram_banks,
         .large_pages = input_spec.compute_page_size_bytes() > kMinPageBytes};
-    plan.flow = choose_flow(chain_cost(op_chain), reads, pages_per_core);
-    if (plan.flow == DramReadFlow::None) {
+    const bool many_cores_per_bank = num_cores >= kManyCoresPerDramBank * num_dram_banks;
+    // The stricter rule was measured on the whole grid; on part of it each core has more DRAM bandwidth.
+    if (!many_cores_per_bank && num_cores != num_device_cores) {
         return {};
     }
+    plan.flow = many_cores_per_bank ? choose_flow_many_cores_per_bank(chain_cost(op_chain), reads, pages_per_core)
+                                    : choose_flow_few_cores_per_bank(chain_cost(op_chain), reads, pages_per_core);
     if (plan.flow == DramReadFlow::WorkQueue &&
         (num_cores > dram_read::kMaxWorkers ||
          !utils::compute_kernel_supports_work_queue(op_chain[0].type(), input_spec.data_type()))) {
-        plan.flow = DramReadFlow::StaticBurst;
+        // With few cores per bank, bursts lose to main where the queue wins.
+        plan.flow = many_cores_per_bank ? DramReadFlow::StaticBurst : DramReadFlow::None;
+    }
+    if (plan.flow == DramReadFlow::None) {
+        return {};
     }
     if (plan.flow == DramReadFlow::StaticOnePage) {
         return plan;

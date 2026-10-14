@@ -4,7 +4,7 @@
 
 """Unary ops on DRAM height-sharded, width-sharded and interleaved TILE tensors must match main's path bit for bit
 in every read flow: bursts, one page in flight and the work queue. The reference runs the same op on DRAM interleaved
-on a few cores, below the cores-per-bank gate, so it always takes main's path."""
+on a few cores, below the cores-per-bank gate and off the whole grid, so it always takes main's path."""
 
 import pytest
 import torch
@@ -15,7 +15,7 @@ from tests.ttnn.utils_for_testing import assert_equal
 
 HEIGHT, WIDTH = ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.TensorMemoryLayout.WIDTH_SHARDED
 
-# 16 cores: fewer than 8 per DRAM bank, so the op takes main's path.
+# 16 cores: fewer than 8 per DRAM bank and not the whole grid, so the op takes main's path.
 MAIN_PATH_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
 
 # Every op class of the flow rule: light, mid (silu, softplus, sigmoid, fast erf), heavy and unmeasured (atan).

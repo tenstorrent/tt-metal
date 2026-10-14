@@ -56,12 +56,14 @@ struct DramReadPlan {
     }
 };
 
-// Picks the read flow from the op chain's compute cost, the tensor layout and the pages per core.
+// Picks the read flow from the op chain's compute cost, the tensor layout and the pages per core. num_cores counts the
+// op's worker grid, num_device_cores the device's whole compute grid.
 DramReadPlan get_dram_read_plan(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const tt::tt_metal::TensorSpec& input_spec,
     const tt::tt_metal::TensorSpec& output_spec,
     uint32_t num_cores,
+    uint32_t num_device_cores,
     uint32_t num_dram_banks);
 
 tt::tt_metal::CoreRangeSet get_worker_grid(

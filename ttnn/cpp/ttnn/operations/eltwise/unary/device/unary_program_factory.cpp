@@ -244,6 +244,7 @@ void enumerate_core_rt_args(
         input.tensor_spec(),
         output.tensor_spec(),
         all_device_cores.num_cores(),
+        input.device()->compute_with_storage_grid_size().x * input.device()->compute_with_storage_grid_size().y,
         input.device()->num_dram_channels());
     const uint32_t out_num_tiles =
         rm_interleaved ? (k.total_rows + k.rows_per_tile - 1) / k.rows_per_tile : output.physical_volume() / tile_hw;
@@ -499,6 +500,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
         input.tensor_spec(),
         output.tensor_spec(),
         all_device_cores.num_cores(),
+        input.device()->compute_with_storage_grid_size().x * input.device()->compute_with_storage_grid_size().y,
         input.device()->num_dram_channels());
     const bool dram_flow = plan.flow != DramReadFlow::None;
     const bool work_queue = plan.flow == DramReadFlow::WorkQueue;

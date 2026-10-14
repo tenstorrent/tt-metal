@@ -370,6 +370,8 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
             input_tensor.tensor_spec(),
             output_spec,
             attributes.worker_grid.num_cores(),
+            input_tensor.device()->compute_with_storage_grid_size().x *
+                input_tensor.device()->compute_with_storage_grid_size().y,
             input_tensor.device()->num_dram_channels())
             .flow);
 }
