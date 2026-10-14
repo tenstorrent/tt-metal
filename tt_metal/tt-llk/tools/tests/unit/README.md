@@ -12,7 +12,11 @@ the toolchain is absent.
 ## Layout
 
 - `lit/diagnostics/` is for compile-only Clang diagnostics.
+  Tests can use `-verify` to check expected diagnostics and `%split-file` to keep
+  related positive and negative cases in one source file.
 - `lit/functional/` is for tests that compile and execute a host binary.
+  Each test should use `RUN:` lines to compile its own temporary binary and
+  execute it without requiring a device.
 - `lit/hal/<architecture>/codegen/` is for target assembly and disassembly
   checks. Architecture-local `lit.local.cfg` files provide the target compiler,
   flags, and binary-tool substitutions.
