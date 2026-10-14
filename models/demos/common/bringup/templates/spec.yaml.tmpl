@@ -8,6 +8,13 @@ num_layers: $num_layers
 prior: null                        # models/demos/<slug> of an earlier bring-up of this checkpoint (other mesh or config):
                                    #   shares its hf/ and goldens, briefs list its files (`new --prior` writes this)
 layers: all                        # or a subset, e.g. "0-1,29" (a subset result is never reported as full-model)
+# Planning for a bigger deployment box (F64): replace `box` with deploy / boxes / run, e.g.
+#   deploy: {box: galaxy_8x4, seq: 1048576, chunk: 8192}   # the system the plan is for
+#   boxes:                                                 # every box the model may run on
+#     galaxy_8x4: {mesh: [8, 4], chip_dram_gb: 32, device_params: {fabric_config: FABRIC_2D, l1_small_size: 24576}}
+#     loudbox_2x4: {mesh: [2, 4], chip_dram_gb: 32, device_params: {...}, overrides: {}}   # overrides: spec keys
+#   run: {box: loudbox_2x4, mode: partial}   # partial: the `layers` subset brings up the layout; full: every layer
+# `target` then stays this run's context; the plan gate checks the plan on every box (plan/boxes.py).
 box:
   mesh: $mesh                      # [rows, cols]
   chip_dram_gb: $chip_dram_gb
