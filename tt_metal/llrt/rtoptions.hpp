@@ -418,8 +418,8 @@ class RunTimeOptions {
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
 
-    // Serve simulation devices over sockets, you can disable it with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=0.
-    bool simulator_serve_over_sockets = true;
+    // Serve simulation devices over sockets for a debug tool to attach; enable with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
+    bool simulator_serve_over_sockets = false;
 
     // NOC API version for Quasar
     uint32_t quasar_noc_api_version = 2;
