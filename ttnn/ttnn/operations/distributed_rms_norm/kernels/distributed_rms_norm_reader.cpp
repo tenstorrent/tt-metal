@@ -61,39 +61,53 @@ void kernel_main() {
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 
-    // gamma (once per call): tile t holds elements [32*(w_start+t), +32) in row 0 (faces 0 and 1)
-    if constexpr (has_gamma) {
-        const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiles);
-        const auto gamma = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);
-        constexpr uint32_t seg_bytes = 32 * gamma_elem_bytes;
-        constexpr uint32_t half_bytes = 16 * gamma_elem_bytes;
-        constexpr uint32_t face_bytes = 256 * gamma_elem_bytes;
-        cb_reserve_back(cb_gamma_tiles, cw);
-        const uint32_t base = get_write_ptr(cb_gamma_tiles);
-        for (uint32_t t = 0; t < cw; ++t) {
-            noc_async_read(gamma.get_noc_addr(0, (w_start + t) * seg_bytes), base + t * gamma_tile_bytes, seg_bytes);
-        }
-        noc_async_read_barrier();
-        invalidate_l1_cache();
-        for (uint32_t t = 0; t < cw; ++t) {
-            // elements 16..31 landed in face 0 row 1; move them to face 1 row 0
-            volatile tt_l1_ptr uint32_t* src =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + t * gamma_tile_bytes + half_bytes);
-            volatile tt_l1_ptr uint32_t* dst =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + t * gamma_tile_bytes + face_bytes);
-            for (uint32_t i = 0; i < half_bytes / 4; ++i) {
-                dst[i] = src[i];
-            }
-        }
-        cb_push_back(cb_gamma_tiles, cw);
-    }
-
     const uint32_t x_tile_bytes = get_tile_size(cb_x_resident);
     const auto x = TensorAccessor(x_args, x_addr, x_tile_bytes);
     volatile tt_l1_ptr uint32_t* stats_ready =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_stats_ready));
     Noc noc;
     CircularBuffer combine_cb(cb_stats_combine);
+
+    // gamma (once per call, after the first x block so the hot single-page read does not delay x):
+    // one contiguous read of the chunk's cw*32 elements into the front of each group of <= 32 tiles, then
+    // tile t's segment is placed in its row 0 (elements 0..15 -> face 0 row 0, 16..31 -> face 1 row 0).
+    // Placement runs from the last tile down: tile t >= 1 lands beyond the staging bytes, tile 0 last.
+    auto load_gamma = [&]() {
+        if constexpr (has_gamma) {
+            const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiles);
+            const auto gamma = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);
+            constexpr uint32_t seg_bytes = 32 * gamma_elem_bytes;
+            constexpr uint32_t half_words = 16 * gamma_elem_bytes / 4;
+            constexpr uint32_t face_bytes = 256 * gamma_elem_bytes;
+            constexpr uint32_t group_tiles = 32;  // staging (n * seg_bytes) stays inside the group's first tile
+            cb_reserve_back(cb_gamma_tiles, cw);
+            const uint32_t base = get_write_ptr(cb_gamma_tiles);
+            for (uint32_t g0 = 0; g0 < cw; g0 += group_tiles) {
+                const uint32_t n = (cw - g0) < group_tiles ? (cw - g0) : group_tiles;
+                const uint32_t gbase = base + g0 * gamma_tile_bytes;
+                noc_async_read(gamma.get_noc_addr(0, (w_start + g0) * seg_bytes), gbase, n * seg_bytes);
+                noc_async_read_barrier();
+                invalidate_l1_cache();
+                for (uint32_t t = n; t-- > 0;) {
+                    volatile tt_l1_ptr uint32_t* src =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gbase + t * seg_bytes);
+                    volatile tt_l1_ptr uint32_t* row0 =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gbase + t * gamma_tile_bytes);
+                    volatile tt_l1_ptr uint32_t* row0_face1 =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gbase + t * gamma_tile_bytes + face_bytes);
+                    for (uint32_t i = 0; i < half_words; ++i) {
+                        row0_face1[i] = src[half_words + i];
+                    }
+                    if (t > 0) {
+                        for (uint32_t i = 0; i < half_words; ++i) {
+                            row0[i] = src[i];
+                        }
+                    }
+                }
+            }
+            cb_push_back(cb_gamma_tiles, cw);
+        }
+    };
 
     uint32_t round = 0;
     for (uint32_t r0 = 0; r0 < core_rows; r0 += block_rows, ++round) {
@@ -111,32 +125,47 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_x_resident, cw);
         }
+        if (round == 0) {
+            load_gamma();
+        }
 
         // ---- gather_sources_block ----
         noc_semaphore_wait_min(stats_ready, ready_per_round * (round + 1));
+        // Records of (source device q, tile row j) sit in one block of s_w * 128 B: [half 0 of w = 0..s_w-1]
+        // [half 1 of w = 0..s_w-1]. Sources s = q*s_w + w are consecutive rows of the combine tiles, so a run of
+        // sources inside one 16-row face pair moves as two reads (one per half).
         const uint32_t n_tiles = n_src_tiles * rows;
-        cb_reserve_back(cb_stats_combine, n_tiles);
-        noc.async_write_zeros(combine_cb, n_tiles * f32_tile_bytes);  // rows beyond G*S_w must not enter the sum
-        noc.write_zeros_l1_barrier();
-        const uint32_t wbase = get_write_ptr(cb_stats_combine);
         const uint32_t n_src = group_size * s_w;
+        cb_reserve_back(cb_stats_combine, n_tiles);
+        if ((n_src & 31) != 0) {
+            // rows beyond G*S_w of the last source tile must not enter the sum
+            noc.async_write_zeros(
+                combine_cb, rows * f32_tile_bytes, {.offset_bytes = (n_src_tiles - 1) * rows * f32_tile_bytes});
+            noc.write_zeros_l1_barrier();
+        }
+        const uint32_t wbase = get_write_ptr(cb_stats_combine);
+        const uint32_t half_block = s_w * half_record;
         for (uint32_t q = 0; q < group_size; ++q) {
             const uint32_t px = get_arg_val<uint32_t>(ports_idx + 2 * q);
             const uint32_t py = get_arg_val<uint32_t>(ports_idx + 2 * q + 1);
             const uint32_t slot = scratch_addr + q * slot_bytes;
-            for (uint32_t w = 0; w < s_w; ++w) {
-                const uint32_t s = q * s_w + w;
-                const uint32_t r = s & 31;
-                const uint32_t face0 = (r >> 4) * 2 * f32_face_bytes + (r & 15) * f32_face_row_bytes;
-                for (uint32_t j = 0; j < rows; ++j) {
-                    const uint32_t src = slot + (rec_base + (r0 + j) * s_w + w) * record_bytes;
-                    const uint32_t dst = wbase + ((s >> 5) * rows + j) * f32_tile_bytes + face0;
-                    noc_async_read(get_noc_addr(px, py, src), dst, half_record);
-                    noc_async_read(get_noc_addr(px, py, src + half_record), dst + f32_face_bytes, half_record);
+            const uint32_t s_first = q * s_w;
+            for (uint32_t j = 0; j < rows; ++j) {
+                const uint32_t block = slot + (rec_base + (r0 + j) * s_w) * record_bytes;
+                for (uint32_t sa = s_first; sa < s_first + s_w;) {
+                    const uint32_t seg_end = (sa | 15) + 1;  // next 16-row face boundary
+                    const uint32_t sb = seg_end < s_first + s_w ? seg_end : s_first + s_w;
+                    const uint32_t r = sa & 31;
+                    const uint32_t dst = wbase + ((sa >> 5) * rows + j) * f32_tile_bytes +
+                                         (r >> 4) * 2 * f32_face_bytes + (r & 15) * f32_face_row_bytes;
+                    const uint32_t src = block + (sa - s_first) * half_record;
+                    const uint32_t bytes = (sb - sa) * half_record;
+                    noc_async_read(get_noc_addr(px, py, src), dst, bytes);
+                    noc_async_read(get_noc_addr(px, py, src + half_block), dst + f32_face_bytes, bytes);
+                    sa = sb;
                 }
             }
         }
-        (void)n_src;
         noc_async_read_barrier();
         cb_push_back(cb_stats_combine, n_tiles);
     }

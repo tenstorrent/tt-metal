@@ -59,13 +59,15 @@ void kernel_main() {
         // ---- publish_records_block ----
         cb_wait_front(cb_partial, rows);
         const uint32_t rp = get_read_ptr(cb_partial);
+        // record block of tile row j: [half 0 of w = 0..s_w-1][half 1 of w = 0..s_w-1] (see the reader's gather)
         for (uint32_t j = 0; j < rows; ++j) {
             const uint32_t src = rp + j * partial_tile_bytes;
-            const uint32_t dst = my_slot_addr + (rec_base + (r0 + j) * s_w + w_idx) * record_bytes;
+            const uint32_t block = my_slot_addr + (rec_base + (r0 + j) * s_w) * record_bytes;
+            const uint32_t dst0 = block + w_idx * half_record;          // rows 0-15 of the tile row
+            const uint32_t dst1 = block + (s_w + w_idx) * half_record;  // rows 16-31
             for (uint32_t i = 0; i < num_ports; ++i) {
-                noc_async_write(src, get_noc_addr(port_x[i], port_y[i], dst), half_record);  // rows 0-15
-                noc_async_write(
-                    src + f32_face_bytes, get_noc_addr(port_x[i], port_y[i], dst + half_record), half_record);
+                noc_async_write(src, get_noc_addr(port_x[i], port_y[i], dst0), half_record);
+                noc_async_write(src + f32_face_bytes, get_noc_addr(port_x[i], port_y[i], dst1), half_record);
             }
         }
         noc_async_write_barrier();
