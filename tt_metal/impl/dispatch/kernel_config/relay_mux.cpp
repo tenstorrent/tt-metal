@@ -6,7 +6,6 @@
 #include "context/context_descriptor.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
-#include "fabric/fabric_connection.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hal_types.hpp"
@@ -129,7 +128,7 @@ void RelayMux::GenerateStaticConfigs() {
         mux_rt_args_.push_back(static_cast<uint32_t>(address));
         mux_rt_args_.push_back(static_cast<uint32_t>(size));
     }
-    tt::tt_fabric::append_fabric_connection_rt_args_in_context(
+    tt::tt_fabric::append_fabric_connection_rt_args(
         fabric_context,
         src_fabric_node_id,
         dst_fabric_node_id,

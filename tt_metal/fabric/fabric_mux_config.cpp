@@ -90,6 +90,7 @@ FabricMuxConfig::FabricMuxConfig(
     size_t base_l1_address,
     CoreType core_type,
     size_t usable_l1_end_address) :
+    // TODO(#52020): resolves the default context; replace with the const MeshDevice& form.
     FabricMuxConfig(
         tt::tt_metal::MetalContext::instance().get_control_plane(),
         num_full_size_channels,

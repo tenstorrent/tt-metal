@@ -30,7 +30,6 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
-#include "fabric_connection.hpp"
 #include "fabric_host_utils.hpp"
 #include "fabric_context.hpp"
 #include "fabric_builder_context.hpp"
@@ -97,7 +96,7 @@ extern "C" int __emule_gchip_for_node(uint32_t mesh_id, uint32_t chip_id);
 #endif
 
 template <typename ProgramOrDescriptor>
-void append_fabric_connection_rt_args_in_context(
+void append_fabric_connection_rt_args(
     const FabricContext& fabric_context,
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
@@ -291,8 +290,9 @@ void append_fabric_connection_rt_args(
     const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type) {
+    // TODO(#52020): resolves the default context; take a const MeshDevice& instead.
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    append_fabric_connection_rt_args_in_context<ProgramOrDescriptor>(
+    append_fabric_connection_rt_args<ProgramOrDescriptor>(
         fabric_context,
         src_fabric_node_id,
         dst_fabric_node_id,
@@ -516,6 +516,7 @@ void append_routing_plane_connection_manager_rt_args(
 
 std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
+    // TODO(#52020): resolves the default context; take a const MeshDevice& instead.
     return get_forwarding_link_indices(
         tt::tt_metal::MetalContext::instance().get_control_plane(), src_fabric_node_id, dst_fabric_node_id);
 }
@@ -644,7 +645,7 @@ size_t get_number_of_available_routing_planes(
 
 }  // namespace experimental
 
-template void append_fabric_connection_rt_args_in_context<tt::tt_metal::Program>(
+template void append_fabric_connection_rt_args<tt::tt_metal::Program>(
     const FabricContext&,
     const FabricNodeId&,
     const FabricNodeId&,
@@ -654,7 +655,7 @@ template void append_fabric_connection_rt_args_in_context<tt::tt_metal::Program>
     std::vector<uint32_t>&,
     CoreType);
 
-template void append_fabric_connection_rt_args_in_context<tt::tt_metal::ProgramDescriptor>(
+template void append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
     const FabricContext&,
     const FabricNodeId&,
     const FabricNodeId&,
