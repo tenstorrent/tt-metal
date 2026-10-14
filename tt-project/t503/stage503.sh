@@ -16,5 +16,5 @@ for f in vae/ltx-2.5-audio-vae-bf16.safetensors latent_upscale_models/ltx-2.5-la
   echo "$f $(date -u +%T)"; "${RS[@]}" -L $S/$f $H:$R/ltx25/$f; done
 ssh $H "ln -sfn /var/tmp/fasth3/ltx25_vae/ltx-2.5-video-vae-conv-bf16.safetensors $R/ltx25/vae/ltx-2.5-video-vae-conv-bf16.safetensors"
 echo "new $(date -u +%T)"; "${RS[@]}" $NEW $H:$R/te0817/text_encoders/
-ssh $H "cd $R && ionice -c3 nice sha256sum te0817/text_encoders/*.safetensors && stat -c '%s %n' ltx25/*/* te0817/*/*" | tee /dev/stderr | grep -q ef7243612fdae7a75cb4d5cee9433e81380675fb6c213bd98ae74a9cd16561d1
+ssh $H "cd $R && ionice -c3 nice sha256sum te0817/text_encoders/*.safetensors && stat -c '%s %n' ltx25/*/* te0817/*/*" | tee /dev/stderr | grep ef7243612fdae7a75cb4d5cee9433e81380675fb6c213bd98ae74a9cd16561d1 >/dev/null
 echo "STAGE503 OK $(date -u +%T)"

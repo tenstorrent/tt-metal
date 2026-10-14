@@ -21,3 +21,9 @@
 1. ssh g14blx03 cat /var/tmp/fasth3/runner/done/t503-ab-r{1,2}.done; logs in /var/tmp/fasth3/t503/out_{old,new}/run.log.
 2. Copy out_* (emb_*.pt, *_t3s.png, run.log) back, run cmp498.py-style PCC (tt-project/t498/cmp498.py <dir>).
 3. Judge stills; if neutral or better: land on ltx-rt (standard e2e first), note sulphur.
+
+## 2026-10-14 12:50 PDT (run 1900)
+- stage503 "failed" rc=141 was a false alarm: final `tee | grep -q` SIGPIPE under pipefail. All files verified on blx03
+  (sizes match MLPerf; new encoder sha ef72...61d1). Fixed stage503.sh (grep >/dev/null).
+- Queued t503-ab-r1 and t503-ab-r2 on blx03's runner by hand (drv503 had exited 4 on the false alarm).
+  probe503.sh now checks only runner/done/t503-ab-r2.done.
