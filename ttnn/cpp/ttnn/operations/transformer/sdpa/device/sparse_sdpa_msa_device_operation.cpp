@@ -135,7 +135,7 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
     const auto& v = t.v;
     const auto& idx = t.indices;
 
-    TT_FATAL(tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE, "sparse_sdpa_msa is Blackhole-only");
+    TT_FATAL(q.device()->arch() == tt::ARCH::BLACKHOLE, "sparse_sdpa_msa is Blackhole-only");
 
     // q is bf16 or fp8_e4m3. K/V are tiled bf16 or bfp8_b. Indices are uint32 block ids.
     const bool q_is_fp8 = (q.dtype() == DataType::FP8_E4M3);
