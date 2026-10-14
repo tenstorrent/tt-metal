@@ -24,6 +24,9 @@ constexpr uint32_t kMaxSlabBytes = 4096;
 // Most slabs gathered behind one read barrier.
 constexpr uint32_t kMaxSlabBatch = 8;
 
+// Program creation starts every CB at a DRAM-aligned address, so a CB takes its size rounded up to that alignment.
+uint64_t cb_footprint(uint64_t bytes) { return tt::round_up(bytes, tt::tt_metal::hal::get_dram_alignment()); }
+
 uint64_t volume_before_last(const ttnn::Shape& shape) {
     uint64_t volume = 1;
     for (size_t i = 0; i + 1 < shape.rank(); ++i) {
@@ -175,11 +178,16 @@ std::optional<RmPlan> fit_rm(RmPlan plan, uint64_t l1_budget) {
     // CB pages produced by one split stick; a push is always a whole number of these.
     const uint64_t pages_per_split_stick = plan.split_by_old ? plan.ratio : 1;
     const uint64_t full_depth = static_cast<uint64_t>(max_sticks) * pages_per_split_stick * (plan.can_coalesce ? 1 : 2);
-    const auto fits = [&](uint64_t depth) { return depth * plan.cb_page + plan.scratch_bytes <= l1_budget; };
+    const uint64_t scratch_footprint = plan.scratch_bytes == 0 ? 0 : cb_footprint(plan.scratch_bytes);
+    // Bytes the stick CB may take. Rounded down to the CB alignment, a ring that fits it also fits once aligned.
+    const uint64_t ring_budget =
+        l1_budget > scratch_footprint
+            ? tt::round_down(l1_budget - scratch_footprint, tt::tt_metal::hal::get_dram_alignment())
+            : 0;
 
     uint64_t depth = full_depth;
     plan.push_sticks = 0;
-    if (!fits(full_depth)) {
+    if (full_depth * plan.cb_page > ring_budget) {
         // Two pushes in flight keep reader and writer overlapped; fewer is not worth running.
         if (plan.can_coalesce) {
             // Every core must push the same, evenly dividing stick count so the ring never wraps mid-push. The push
@@ -187,8 +195,7 @@ std::optional<RmPlan> fit_rm(RmPlan plan, uint64_t l1_budget) {
             const uint32_t common = std::gcd(plan.split.units_group1, plan.split.units_group2);
             const uint32_t split_stick_bytes = plan.split_by_old ? plan.old_stick : plan.new_stick;
             const uint64_t push_bytes = 2 * pages_per_split_stick * plan.cb_page;
-            const uint64_t fit_limit =
-                l1_budget > plan.scratch_bytes ? (l1_budget - plan.scratch_bytes) / push_bytes : 0;
+            const uint64_t fit_limit = ring_budget / push_bytes;
             const uint64_t read_limit = std::max<uint64_t>(1, kMaxReadSize / split_stick_bytes);
             uint64_t push = std::min({static_cast<uint64_t>(common), fit_limit, read_limit});
             while (push > 0 && common % push != 0) {
@@ -200,8 +207,7 @@ std::optional<RmPlan> fit_rm(RmPlan plan, uint64_t l1_budget) {
             plan.push_sticks = static_cast<uint32_t>(push);
             depth = 2 * push * pages_per_split_stick;
         } else {
-            const uint64_t slots = l1_budget > plan.scratch_bytes ? (l1_budget - plan.scratch_bytes) / plan.cb_page : 0;
-            const uint64_t pushes = slots / pages_per_split_stick;
+            const uint64_t pushes = ring_budget / (pages_per_split_stick * plan.cb_page);
             if (pushes < 2) {
                 return std::nullopt;
             }
@@ -209,7 +215,7 @@ std::optional<RmPlan> fit_rm(RmPlan plan, uint64_t l1_budget) {
         }
     }
     plan.cb_depth = static_cast<uint32_t>(depth);
-    plan.l1_bytes = depth * plan.cb_page + plan.scratch_bytes;
+    plan.l1_bytes = cb_footprint(depth * plan.cb_page) + scratch_footprint;
     return plan;
 }
 
@@ -271,7 +277,7 @@ std::optional<RmArbitraryPlan> fit_rm_arbitrary(RmArbitraryPlan plan, uint64_t l
     for (uint32_t batch = kMaxSlabBatch; batch >= 1; batch /= 2) {
         // One extra alignment unit lets the reader align the scratch base up.
         const uint32_t scratch = (batch * plan.region_stride) + plan.in_alignment;
-        const uint64_t bytes = scratch + (2ull * batch * plan.slot);
+        const uint64_t bytes = cb_footprint(scratch) + cb_footprint(2ull * batch * plan.slot);
         if (bytes <= l1_budget) {
             plan.batch = batch;
             plan.scratch_bytes = scratch;
