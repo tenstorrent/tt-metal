@@ -96,9 +96,14 @@ for capacity in 1 8 16; do
     server_pid=$!
     wait_started=$SECONDS
     while ! curl --max-time 2 -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; do
-        kill -0 "$server_pid"
+        if ! kill -0 "$server_pid" 2>/dev/null; then
+            echo "Qwen3.8 server exited before readiness at capacity=$capacity" >&2
+            tail -n 200 "$logs/qwen38_server_$capacity.log" >&2
+            exit 1
+        fi
         if (( SECONDS - wait_started > 1200 )); then
-            echo "Qwen3.8 readiness deadline exceeded at capacity=$capacity"
+            echo "Qwen3.8 readiness deadline exceeded at capacity=$capacity" >&2
+            tail -n 200 "$logs/qwen38_server_$capacity.log" >&2
             exit 1
         fi
         sleep 4
