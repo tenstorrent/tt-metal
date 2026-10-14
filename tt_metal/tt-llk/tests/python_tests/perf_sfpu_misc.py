@@ -30,6 +30,7 @@ _ROWS = [
     ("rand", _BF16, DestAccumulation.No, 0, False),
     ("rand", _BF16, DestAccumulation.No, 1, False),
     ("rand", _BF16, DestAccumulation.No, 0, True),
+    ("rand", _BF16, DestAccumulation.No, 3, False),
     ("dropout", _BF16, DestAccumulation.No, 0, False),
     ("dropout", _BF16, DestAccumulation.No, 0, True),
     ("dropout", _BF16, DestAccumulation.No, 1, False),
