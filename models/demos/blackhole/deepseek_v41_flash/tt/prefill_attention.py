@@ -60,6 +60,15 @@ def gate_user_state(ctx, new, old):
     if m is None:
         return new
     rm = new.layout == ttnn.ROW_MAJOR_LAYOUT
+    if os.environ.get("DSV41_MEMLOG") in (
+        "1",
+        "2",
+        "3",
+    ):  # (the transient cost of the gate: 3 full copies of the table at once: new, old, where output)
+        print(
+            f"MEMLOG gate_user_state new {tuple(new.shape)} {new.dtype} {new.layout} old {tuple(old.shape)} {old.dtype} mask {tuple(m.shape)} {m.dtype}",
+            flush=True,
+        )
     n_, o_ = (ttnn.to_layout(new, ttnn.TILE_LAYOUT), ttnn.to_layout(old, ttnn.TILE_LAYOUT)) if rm else (new, old)
     out = ttnn.where(m, n_, o_)
     if rm:

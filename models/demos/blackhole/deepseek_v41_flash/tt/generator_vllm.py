@@ -186,7 +186,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         os.environ["DSV41_SPEC"] = str(spec_k)
         if spec_k:
             os.environ.setdefault(
-                "DSV41_IDX_SWITCH", "131072"
+                "DSV41_IDX_SWITCH", "262144"
             )  # the spec verify needs the matmul indexer backend, which the default switch (65536 entries) drops at max_model_len >= 64k (indexer layers with ratio 1)
         # Sampling is done INSIDE the decode / verify traces (tt/device_sampler.py: temperature, top-k, top-p over the full vocabulary, per-row parameters and uniform draws uploaded with the step):
         # no device top-k candidates, no host draw, no full-row fallback (DSV41_DEV_CAND_K / DSV41_SPEC_CAND_K stay 0).

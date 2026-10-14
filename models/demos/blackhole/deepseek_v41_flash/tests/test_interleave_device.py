@@ -32,6 +32,9 @@ STEPS = int(os.environ.get("DSV41_IL_STEPS", "8"))
 POST = int(os.environ.get("DSV41_IL_POST", "4"))
 NEWLEN = int(os.environ.get("DSV41_IL_NEWLEN", str(ISL)))
 LAYERS = os.environ.get("DSV41_LAYERS", "0-3")
+CHECK_STATE = (
+    os.environ.get("DSV41_IL_NOSTATE", "0") != "1"
+)  # 1: skip the per-chunk decode-state snapshot / diff (timing runs at long NEWLEN: the snapshot costs ~20 s per chunk)
 PCC_MIN = float(
     os.environ.get("DSV41_IL_PCC_MIN", "0.99999")
 )  # (bit-identical logits have PCC 1.0; the host PCC of identical vectors prints as 1.00006)
@@ -203,11 +206,12 @@ def test_interleaved_prefill(mesh_device):
                 first[u], pos[u] = int(out[u]), pos[u] + 1
             if k in at:
                 it = chunks[at[k]]
-                s_before = snap()
+                s_before = snap() if CHECK_STATE else None
                 t0 = time.perf_counter()
                 r = prefill([it])
                 chunk_t.append((time.perf_counter() - t0, dict(m.timing)))
-                state_bad.extend(diff_state(f"chunk {at[k]} (window [{it[2]}, {it[3]}))", s_before, snap()))
+                if CHECK_STATE:
+                    state_bad.extend(diff_state(f"chunk {at[k]} (window [{it[2]}, {it[3]}))", s_before, snap()))
                 done_end = it[3]
                 if done_end == NEWLEN:
                     f_new = r[new]

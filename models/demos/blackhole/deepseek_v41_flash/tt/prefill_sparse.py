@@ -61,6 +61,11 @@ def _rep(md, t, dtype, layout):
     )
 
 
+GATE_ROWS = int(
+    os.environ.get("DSV41_GATE_ROWS", "16384")
+)  # rows per slice of the interleaved-prefill user gate on the latent table (bounds the transient DRAM copies)
+
+
 class PrefillKV:
     """Row-major kv table of one kv-source group (shared by the source layer and the layers that read its latents):
     ``[U, 1, LAT + WIN, 512]`` bf16, rows [0, LAT): compressed latents (entry j at row j), rows [LAT, LAT + WIN): window scratch (WIN = 128 + c_max rows:
@@ -709,12 +714,19 @@ class DSV41PrefillSparse:
             else:
                 body = ttnn.slice(kt, [0, 0, Cc, 0], [U, 1, L, HEAD_DIM])
                 new = ttnn.concat([body, self.kvt.rm(lat)], dim=2)
-                if getattr(ctx, "umask", None) is not None:
-                    gated = gate_user_state(ctx, new, ttnn.slice(kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM]))
-                    ttnn.deallocate(new)
-                    new = gated
-                ttnn.experimental.slice_write(new, kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM], [1, 1, 1, 1])
                 ttnn.deallocate(body)
+                if getattr(ctx, "umask", None) is not None:
+                    # the gate works on row slices of the table (a whole-table where holds the table 4-5 times at once: 5 x 64 MiB/bank at U=4, S_pad 131584 -> DRAM OOM); the slice
+                    # [a, b) of the old table is read before it is overwritten and the new table is complete before the first write: exact
+                    for a in range(0, L, GATE_ROWS):
+                        b = min(L, a + GATE_ROWS)
+                        n_s = ttnn.slice(new, [0, 0, a, 0], [U, 1, b, HEAD_DIM])
+                        g = gate_user_state(ctx, n_s, ttnn.slice(kt, [0, 0, a, 0], [U, 1, b, HEAD_DIM]))
+                        ttnn.deallocate(n_s)
+                        ttnn.experimental.slice_write(g, kt, [0, 0, a, 0], [U, 1, b, HEAD_DIM], [1, 1, 1, 1])
+                        ttnn.deallocate(g)
+                else:
+                    ttnn.experimental.slice_write(new, kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM], [1, 1, 1, 1])
             ttnn.deallocate(new)
         ix = self.indexer
         if ix is not None and ix.key_owner is None:  # key FIFO
