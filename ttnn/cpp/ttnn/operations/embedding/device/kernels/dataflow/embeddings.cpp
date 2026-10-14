@@ -8,6 +8,7 @@
 #include "api/scratchpad.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "ttnn/operations/embedding/device/kernels/dataflow/embeddings_common_metal2.hpp"
 #include "experimental/kernel_args.h"
 
@@ -41,9 +42,16 @@ void kernel_main() {
     prepare_local_cache(noc, scratch::local_cache, weights, weight_stick_size);
 #endif
 
+#ifdef OUTPUT_SHARDED
+    // The output is sharded: this reader writes the weight sticks it gathers straight into its own
+    // output shard, one chunk_size-strided row after another (the host checks they fit).
+    LocalTensorAccessor<uint8_t> out_shard(tensor::out_shard);
+    uint32_t out_offset = 0;  // byte offset of the next row in the shard
+#else
     // dfb_in0 stages the weight sticks this reader gathers; a writer kernel drains it to the output
-    // tensor, except when the output is sharded and the staging buffer is the output shard itself.
+    // tensor.
     DataflowBuffer dfb_in0(dfb::in0);
+#endif
     // The index scratch is this reader's private page for the block of indices it is working through:
     // the NoC reads into it via the scratchpad object and the RISC reads the indices back.
 #ifdef ARCH_QUASAR
@@ -78,13 +86,21 @@ void kernel_main() {
 #endif
 
         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+#ifdef OUTPUT_SHARDED
+            uint32_t l1_write_addr = out_shard.get_bank_base_address() + out_offset;
+#else
             dfb_in0.reserve_back(1);
             uint32_t l1_write_addr = dfb_in0.get_write_ptr();
+#endif
             uint32_t current_chunk_size = (chunk < num_chunks - 1) ? chunk_size : last_chunk_size;
             uint32_t chunk_offset = chunk * chunk_size;
             read_token_async(noc, token, weights, l1_write_addr, current_chunk_size, chunk_offset);
             noc.async_read_barrier();
+#ifdef OUTPUT_SHARDED
+            out_offset += chunk_size;
+#else
             dfb_in0.push_back(1);
+#endif
         }
 
         index++;

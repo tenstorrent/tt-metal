@@ -149,29 +149,34 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     // -----------------------------------------------------------------------
     // Dataflow buffers
     // -----------------------------------------------------------------------
-    // The staging buffer's total size has to divide evenly by its entry size. The two are derived from
-    // different alignments, the entry size from the index buffer's and the sharded total from the
-    // output shard's own, so they can disagree. Nothing downstream would catch a truncated entry
-    // count: when the output is sharded the reader stages one entry per output row and no kernel
-    // drains the buffer, so a short buffer stalls the reader partway through its rows.
+    // The output's total size has to divide evenly by the per-row stride. The two are derived from
+    // different alignments, the stride from the index buffer's and the sharded total from the output
+    // shard's own, so they can disagree.
     TT_FATAL(
         out_dfb_total_size % chunk_size == 0,
         "Embedding output staging buffer size {} B must be divisible by its entry size {} B",
         out_dfb_total_size,
         chunk_size);
 
-    DataflowBufferSpec out_dfb{
-        .unique_id = OUTPUT,
-        .entry_size = chunk_size,
-        .num_entries = out_dfb_total_size / chunk_size,
-        .data_format_metadata = weights_data_format,
-    };
     if (output_sharded) {
-        // The staging buffer *is* the output shard: it is built on the output tensor's own SRAM, so
-        // the rows the reader gathers land in place and no writer kernel is created below.
-        out_dfb.borrowed_from = OUTPUT_PARAM;
+        // The reader gathers its rows straight into the output shard, one chunk_size-strided row per
+        // output row, through a LocalTensorAccessor on the output tensor; there is no staging buffer
+        // and no writer kernel. Nothing on the device bounds those writes, so check here that this
+        // core's rows fit in the shard.
+        TT_FATAL(
+            num_blocks_per_core_group_1 * chunk_size <= out_dfb_total_size,
+            "Embedding sharded output: {} rows of {} B do not fit in the {} B output shard",
+            num_blocks_per_core_group_1,
+            chunk_size,
+            out_dfb_total_size);
+    } else {
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = OUTPUT,
+            .entry_size = chunk_size,
+            .num_entries = out_dfb_total_size / chunk_size,
+            .data_format_metadata = weights_data_format,
+        });
     }
-    spec.dataflow_buffers.push_back(std::move(out_dfb));
 
     uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
     Group<ScratchpadSpec> scratchpads;
@@ -190,8 +195,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     // Tensor parameters
     //
     // The output parameter is declared in every configuration: the writer binds it when the output is
-    // interleaved, and the borrowed staging buffer resolves its address from it when the output is
-    // sharded.
+    // interleaved, and the reader binds it when the output is sharded.
     // -----------------------------------------------------------------------
     spec.tensor_parameters.push_back(
         TensorParameter{.unique_id = INPUT_PARAM, .spec = input_mesh_tensor.tensor_spec()});
@@ -204,18 +208,20 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     // Reader
     // -----------------------------------------------------------------------
     Group<DFBBinding> reader_dfb_bindings;
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = OUTPUT,
-        .accessor_name = "in0",
-        .endpoint_type = DFBEndpointType::PRODUCER,
-    });
+    Group<TensorBinding> reader_tensor_bindings = {
+        TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
+        TensorBinding{.tensor_parameter_name = WEIGHTS_PARAM, .accessor_name = "weights"},
+    };
     if (output_sharded) {
-        // With no writer kernel the reader is the staging buffer's only endpoint, so it holds both
-        // roles.
+        // The reader writes its rows straight into its own output shard.
+        reader_tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "out_shard"});
+    } else {
+        // The reader stages rows for the writer kernel to drain.
         reader_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = OUTPUT,
             .accessor_name = "in0",
-            .endpoint_type = DFBEndpointType::CONSUMER,
+            .endpoint_type = DFBEndpointType::PRODUCER,
         });
     }
     // The index scratch page never leaves the reader: it decodes indices out of it, so it is the
@@ -245,6 +251,10 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         {enchantum::to_string(embeddings_type).data(), "1"},
         {enchantum::to_string(embeddings_index_type).data(), "1"},
     };
+    if (output_sharded) {
+        // Selects the reader's output-shard path; it shares the condition of the out_shard binding.
+        embedding_defines.insert({"OUTPUT_SHARDED", "1"});
+    }
 
     Group<std::string> reader_rta_names = {"batch_offset", "weights_offset", "num_rows", "index_idx"};
     if (embeddings_type == EmbeddingsType::PADDED) {
@@ -257,11 +267,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         .compiler_options = {.defines = embedding_defines},
         .dfb_bindings = std::move(reader_dfb_bindings),
         .scratchpad_bindings = std::move(reader_scratchpad_bindings),
-        .tensor_bindings =
-            {
-                TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
-                TensorBinding{.tensor_parameter_name = WEIGHTS_PARAM, .accessor_name = "weights"},
-            },
+        .tensor_bindings = std::move(reader_tensor_bindings),
         .compile_time_args =
             {
                 {"input_page_size", input_page_size},
