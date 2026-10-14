@@ -242,6 +242,10 @@ bool multi_chunk_rows(uint32_t k, uint32_t input_last_dim) {
     return tt::div_up(input_last_dim, to_uint32(snap_to_llk_target_k(k))) >= 2;
 }
 
+bool split_whole_rows(uint32_t k, uint32_t num_rows, uint32_t input_last_dim, uint32_t num_cores) {
+    return multi_chunk_rows(k, input_last_dim) && (!row_split_possible(num_rows, num_cores) || num_rows >= num_cores);
+}
+
 std::vector<CoreRowAssignment> derive_core_row_assignments(
     const CoreRangeSet& core_grid, uint32_t num_rows, uint32_t num_chunks) {
     TT_FATAL(num_rows > 0, "topk_large_indices requires at least one row of work");
@@ -462,7 +466,16 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
             .dst_full_sync_en = true,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = compute_compile_args,
-            .named_compile_args = {{"tree", tree}}});
+            .named_compile_args = {
+                {"tree", tree},
+                {"split_whole_rows",
+                 split_whole_rows(
+                     k,
+                     flattened_rows_excluding_last_dim(input.logical_shape()),
+                     input.logical_shape()[-1],
+                     static_cast<uint32_t>(cores.size()))
+                     ? 1u
+                     : 0u}}});
 
     std::vector<uint32_t> writer_compile_args = {
         cb_indices,

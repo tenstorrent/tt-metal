@@ -4144,7 +4144,7 @@ template <std::uint32_t K, int distance, bool macros = (K >= 1024)>
 inline void _topk_xl_split_merge_(const std::uint32_t tile_offset)
 {
     constexpr int tiles_per_sequence = K == 2048 ? 2 : 1;
-    static_assert(distance == 64 * tiles_per_sequence || distance == 128 * tiles_per_sequence, "the incoming run sits one or two sequences past the survivor");
+    static_assert(distance > 0 && distance % (64 * tiles_per_sequence) == 0 && distance < 512, "the incoming run sits whole sequences past the survivor");
     constexpr int n_iters = K == 512 ? 2 : K == 1024 ? 4 : 8;
     topk_mop_config<true>();
     _topk_xl_split_begin_(tile_offset);
