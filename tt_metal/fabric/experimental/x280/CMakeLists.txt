@@ -538,4 +538,79 @@ _x280_device_test(x280_transport_bandwidth_x280_to_tensix
     KERNELS shared transport_bandwidth
 )
 
+# ---------------------------------------------------------------------------
+# p2p_latency: X280 hart to hart on one tile, X280 tile to tile, and an X280 against a Tensix,
+# idle-ERISC or DRISC peer launched by Metal. The three Metal peers share one X280 image.
+# ---------------------------------------------------------------------------
+foreach(_image x280-same-tile x280-peer-tile metal-peer-tile)
+    string(REPLACE "-" "_" _source "${_image}")
+    x280_add_image(
+        NAME firmware-p2p-latency-${_image}
+        SOURCES src/p2p_latency_${_source}.cpp
+        INCLUDES
+            kernels/shared
+            kernels/p2p_latency
+            kernels/p2p_latency/backends
+    )
+endforeach()
+set(_x280_p2p_latency_dirs
+    ${_x280_shared_dir}
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/p2p_latency
+)
+foreach(_header p2p_latency_x280_noc_args.h metal_peer_args.h)
+    _x280_check_header(${_header} c ${_x280_p2p_latency_dirs})
+    _x280_check_header(${_header} c++ ${_x280_p2p_latency_dirs})
+endforeach()
+_x280_check_header(x280_noc.hpp c++ ${_x280_p2p_latency_dirs} ${CMAKE_CURRENT_SOURCE_DIR}/kernels/p2p_latency/backends)
+# The Metal peer kernel selects its core type from exactly one P2P_LATENCY_TARGET_* define. Each
+# case passes only on that #error, so a broken compiler invocation does not read as a refusal.
+foreach(
+    _targets
+    IN
+    ITEMS
+        "none"
+        "TENSIX,IDLE_ERISC"
+        "TENSIX,DRISC"
+        "IDLE_ERISC,DRISC"
+        "TENSIX,IDLE_ERISC,DRISC"
+)
+    string(MAKE_C_IDENTIFIER "${_targets}" _id)
+    string(TOLOWER "${_id}" _id)
+    if(_targets STREQUAL "none")
+        set(_defines "")
+    else()
+        string(REPLACE "," ";" _defines "${_targets}")
+        list(TRANSFORM _defines PREPEND "-DP2P_LATENCY_TARGET_")
+        list(TRANSFORM _defines APPEND "=1")
+    endif()
+    add_test(
+        NAME x280_metal_peer_selection_rejects_${_id}
+        COMMAND
+            ${X280_GXX} ${_x280_target_flags} -E -x c++ ${_defines}
+            ${CMAKE_CURRENT_SOURCE_DIR}/kernels/p2p_latency/metal_peer_target.hpp
+    )
+    set_tests_properties(
+        x280_metal_peer_selection_rejects_${_id}
+        PROPERTIES
+            PASS_REGULAR_EXPRESSION
+                "#error \"p2p_latency Metal peer requires exactly one target define\""
+    )
+endforeach()
+target_sources(x280_bench_host_tests PRIVATE tests/host/test_p2p_latency_args.cpp)
+target_include_directories(x280_bench_host_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/kernels/p2p_latency)
+foreach(_member x280_same_tile x280_peer_tile tensix_peer_tile)
+    _x280_device_test(x280_p2p_latency_${_member}
+        tests/device/test_p2p_latency_${_member}_hw.cpp
+        KERNELS shared p2p_latency
+    )
+endforeach()
+# The idle-ERISC and DRISC peers launch only under slow dispatch.
+foreach(_member erisc_peer_tile drisc_peer_tile)
+    _x280_device_test(x280_p2p_latency_${_member}
+        tests/device/test_p2p_latency_${_member}_hw.cpp
+        KERNELS shared p2p_latency
+        SLOW_DISPATCH
+    )
+endforeach()
+
 add_custom_target(x280_abi_headers ALL DEPENDS ${_x280_header_stamps})
