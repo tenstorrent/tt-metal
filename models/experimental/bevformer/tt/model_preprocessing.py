@@ -394,12 +394,7 @@ def _decoder_layer_parameters(layer, device, dtype):
 
 
 def create_decoder_parameters(torch_model, device, dtype=DEFAULT_DTYPE):
-    """Parameters for a single ``TtDetectionTransformerDecoder``.
-
-    Single use: the decoder's constructor folds the BEV size into each layer's
-    ``cross_attn.sampling_offsets`` and frees the original, so every decoder instance (and
-    every BEV size) needs its own call.
-    """
+    """Parameters for ``TtDetectionTransformerDecoder``."""
     return SimpleNamespace(layers=[_decoder_layer_parameters(layer, device, dtype) for layer in torch_model.layers])
 
 
@@ -436,8 +431,8 @@ def _cls_branch_parameters(branch, device, dtype):
 
 @torch.no_grad()
 def create_head_parameters(torch_model, device, dtype=DEFAULT_DTYPE):
-    """Parameters for a single ``TtBEVFormerHead``; single use, as ``create_decoder_parameters`` is.
-    They carry the reference head's BEV shape and ``pc_range``.
+    """Parameters for ``TtBEVFormerHead``. They carry the reference head's BEV shape and
+    ``pc_range``.
 
     The object queries, their positional embeddings and the initial reference points depend
     on the weights only, so they are computed here, the points in float32 as the decoder
