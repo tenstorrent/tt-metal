@@ -61,6 +61,7 @@ inline uint32_t x280_pll_mhz_from_env() {
         case 800u:
         case 1000u:
         case 1750u: return v;
+        default: break;
     }
     throw std::invalid_argument(
         "X280_PLL_MHZ=" + std::to_string(v) + " is not a supported X280 PLL frequency; use 200, 800, 1000 or 1750");
