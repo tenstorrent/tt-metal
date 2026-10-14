@@ -46,7 +46,8 @@ bool is_demoted(
     const ttnn::Shape& logical_output_shape,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
 
-// The plan when routing sends this call to codegen (supported_by_codegen && !is_demoted), else nullopt.
+// The plan when routing sends this call to codegen (supported_by_codegen && !is_demoted, and some plan fits the
+// L1 free once the output is allocated), else nullopt.
 std::optional<LaunchPlan> routed_launch_plan(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
