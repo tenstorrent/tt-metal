@@ -466,7 +466,8 @@ in1 source stays on the legacy MeshWorkload builder.
 - The pipes' receivers are exactly the ring workers, with the bank pairing that sends worker `i`
   weight shard `i`. Hop cores carry the ring's link from its first worker round to its last: each
   runs a forwarder (`reader_bmm_tile_layout_in0_ring_hop_metal2.cpp`) that binds `in2`, so `in2` has
-  the workers' address there, and a no-op compute kernel as `in2`'s consumer. One weight.
+  the workers' address there and pushes each shard once it has passed it on, and a compute kernel as
+  `in2`'s consumer that pops each shard without reading it. One weight.
 
 #### Fit ladder (receiver-contiguous)
 
