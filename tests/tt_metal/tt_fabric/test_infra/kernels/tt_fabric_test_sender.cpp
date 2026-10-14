@@ -101,6 +101,14 @@ void kernel_main() {
     constexpr uint32_t PROGRESS_UPDATE_INTERVAL = 1000;  // Write progress every 1000 loops
 
     if constexpr (NUM_TRAFFIC_CONFIGS == 1 && BENCHMARK_MODE) {
+        {
+            // CRAQ #52 diag: the credit window as seeded at connection open (before any send).
+            auto* conn0 = static_cast<EdmSenderType*>(sender_config->traffic_config_ptrs[0]->connection_ptr_);
+            auto* rb0 = reinterpret_cast<tt_l1_ptr uint32_t*>(sender_config->get_result_buffer_address());
+            invalidate_l1_cache();
+            rb0[TT_FABRIC_MISC_INDEX + 18] = conn0->buffer_slot_write_counter.counter;
+            rb0[TT_FABRIC_MISC_INDEX + 19] = *conn0->edm_buffer_local_free_slots_read_ptr;
+        }
         // Stateful sends optimized for single traffic config tests
         send_packets_stateful();
     } else {
