@@ -22,7 +22,7 @@ if [[ ${1:-} == --target-cxx ]]; then
     target_cxx=$2
     scratch=$(mktemp -d)
     trap 'rm -f "$scratch/WH.s" "$scratch/BH.s" "$scratch/QSR.s" "$scratch/gap.s" "$scratch/mul-int.s" "$scratch/baseline.s" "$scratch/pressure.s" "$scratch/pressure.log" "$scratch/lut-refuse.log"; rmdir "$scratch"' EXIT
-    for arch in WH BH; do
+    for arch in WH BH QSR; do
         case $arch in
             WH) cpu=tt-wh-tensix ;;
             BH) cpu=tt-bh-tensix ;;
@@ -177,7 +177,7 @@ for compiler in "${CXX:-c++}" clang++; do
     if ! command -v "$compiler" >/dev/null 2>&1; then
         continue
     fi
-    for arch in WH BH; do
+    for arch in WH BH QSR; do
         case $arch in
             WH) target_extension=wh ;;
             BH) target_extension=bh ;;
