@@ -94,7 +94,9 @@ target_include_directories(
         "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/tt_metal/api>" # public headers (installed by tt_metal's api file set)
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
     PRIVATE
-        "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>" # llrt/, tt_metal/ relative includes
+        ${PROJECT_SOURCE_DIR} # "tt_metal/..." includes
+        ${PROJECT_SOURCE_DIR}/tt_metal # "llrt/...", "distributed/..." includes
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium # bare "shape_base.hpp" / <mesh_coord.hpp> in the common/ sources (same FIXME as tt_metal)
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scaleout # board/board.hpp
     SYSTEM

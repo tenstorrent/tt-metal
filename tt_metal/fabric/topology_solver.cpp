@@ -9,7 +9,6 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/physical_node_id.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
-#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
 
