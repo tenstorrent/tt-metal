@@ -1,0 +1,2 @@
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/tilize/ (acceptance + knobs), --dev and non-dev","ts":"2026-10-14T13:22:43+00:00"}
+{"event":"test_run","status":"pass","test":"eval/golden_tests/tilize/test_golden.py","details":"8 supported cells pass; 56 fp8_e4m3 cells fail inside from_torch (harness input creation, before op call)","ts":"2026-10-14T13:22:43+00:00"}
