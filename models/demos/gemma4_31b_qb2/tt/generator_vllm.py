@@ -39,6 +39,9 @@ class Gemma4ForCausalLM:
         self.cache = None
         self.prefill_slot_keys = {}
         self.next_prefill_key = 0
+        from models.demos.gemma4_31b_qb2.tt.prefill_span_probe import install
+
+        install(self)
 
     def embed_input_ids(self, input_ids):
         raise RuntimeError("Use the TT prefill_forward/decode_forward interface")
