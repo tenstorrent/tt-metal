@@ -4,6 +4,10 @@
 //
 // harness/regions/tensix_l1.hpp -- per-tile sharded L1 MeshBuffer allocation,
 // zeroing, and address validation for Tensix characterization participants.
+//
+// Peer Tensix L1 that X280 or kernel code addresses must be taken from a Metal
+// allocation, as allocate_tile_l1_buffer does, never a hard-coded L1 address:
+// Metal places its own state in L1 and hands the rest out through its allocator.
 
 #ifndef X280_HARNESS_REGIONS_TENSIX_L1_HPP
 #define X280_HARNESS_REGIONS_TENSIX_L1_HPP
