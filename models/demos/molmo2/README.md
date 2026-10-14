@@ -134,7 +134,8 @@ TT_METAL_HOME=... TT_METAL_PYTHON_VENV_DIR=<venv with vLLM+plugin> HF_TOKEN=any 
 ./scripts/launch_4x_galaxy_t3k.sh
 ```
 The spec's `TT_MESH_GRAPH_DESC_PATH` is relative (`../../tt-metal/...`), i.e. tt-metal must be reachable as `tt-inference-server/tt-metal`.
-Results (2026-10-14): per-slice flow 97/100 on the 105-test suite; **single DP=4 instance: 97/100, 0 errors, 219 s wall with 4 requests in
+Results (2026-10-14): `scripts/launch_4x_galaxy_t3k.sh` (four `run.py` instances, ports 8000-8003): smoke 6/6 on each, suite 97/100 / 0 errors in 96 s, a
+34k-token video on all four at once (47-48 s), 0 device timeouts; per-slice flow 97/100 on the 105-test suite; **single DP=4 instance: 97/100, 0 errors, 219 s wall with 4 requests in
 flight** (four independent servers: 102 s; one engine process serializes prefill), 34,455-token video prefills on ranks 0/2/3 fine.
 The DP path needed three adapter fixes (prefill routed by the runner's slot, `slot_remap` applied as an indirection, per-row multimodal
 kwargs); regression tests in `tests/test_generator_vllm_routing.py`.
