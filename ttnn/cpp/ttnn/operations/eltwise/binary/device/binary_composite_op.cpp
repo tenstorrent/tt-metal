@@ -1109,9 +1109,11 @@ Tensor pow(
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations) {
     // The binary POWER kernel computes in floating point, so it is not an exact integer power.
+    // Keep the shared "not supported for binary operation" wording that dtype validation uses.
     TT_FATAL(
         !is_integer_pow_base(input.dtype()),
-        "pow: {} input requires a scalar integer exponent; tensor exponents are not supported",
+        "Input tensor A dtype {} is not supported for binary operation POWER: tensor exponents are not supported for "
+        "integer inputs, use a scalar integer exponent",
         input.dtype());
     return ttnn::detail::invoke_binary_ng(
         input,

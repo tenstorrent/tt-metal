@@ -1,0 +1,75 @@
+# Regression: a solution generate_rank_bindings (Phase 1, every host seen whole) emits that the tt-run
+# control plane (Phase 2, each rank sees only its TT_VISIBLE_DEVICES) could not map.
+#
+# Two 4x4 meshes (RING, LINE) in a ring, each split into two 4x2 column slices (host_topology [1,2]),
+# with the two all-to-all corner pin profiles on EVERY mesh: corners on ASIC 3 of trays 1-4 plus
+# chip 1 on tray 1 ASIC 7 (middle column), corners on ASIC 2 of trays 1-4 plus chip 2 on tray 4
+# ASIC 6 (edge column). On a two-host mock (d02u08 + d02u02 of the SC16 revC subtorus, aisle D) the
+# single solve seats the edge mesh ACROSS the two hosts (trays 1,2 on one, trays 3,4 on the other,
+# the 4x4_SplitHost_flat_torus_xy_hostedge seat) and the middle mesh whole on one host. Phase 2
+# then has no visible host grid (no 32-chip host embeds in the per-rank view), builds no _hostedge
+# seat, orients the plain seat blind (trays 1,3 | 2,4) and reports
+#   TT_FATAL: Graph specified in MGD could not fit ... (a mesh has no grouping variants)
+# Open: Phase 2 must recover the host geometry (the `_hostedge` seat and the host-aligned orientation)
+# from what it discovers, so that this binding maps the way Phase 1 solved it.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    channels { count: 8 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+
+
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*" chip_id: 0 }
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*" chip_id: 3 }
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*" chip_id: 12 }
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*" chip_id: 15 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+  physical_asic_position { tray_id: 2 asic_location: 3 }
+  physical_asic_position { tray_id: 3 asic_location: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*" chip_id: 1 }
+  physical_asic_position { tray_id: 1 asic_location: 7 }
+}
+
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*" chip_id: 0 }
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*" chip_id: 3 }
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*" chip_id: 12 }
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*" chip_id: 15 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+  physical_asic_position { tray_id: 2 asic_location: 2 }
+  physical_asic_position { tray_id: 3 asic_location: 2 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*" chip_id: 2 }
+  physical_asic_position { tray_id: 4 asic_location: 6 }
+}

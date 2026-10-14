@@ -1198,6 +1198,63 @@ def test_kda_conv_padded_rows_match_reference(mesh_device, T, reset_seeds, ensur
         ttnn.deallocate(t)
 
 
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("B, T", [(2, 12), (4, 8), (8, 4), (4, 1), (8, 1)])
+def test_kda_conv_packed_matches_per_user(mesh_device, B, T, reset_seeds, ensure_gc, request):
+    """``_kda_conv_packed`` packs B users' [K-1 carry ; T tokens] windows into one KDA call (the op is batch-1
+    only) and gathers the token rows. Every kept row must be bit-identical to a per-user kda_conv_prefill call
+    that takes user u's carry as its history."""
+    mesh = mesh_device
+    kd, vd = 512, 1536  # 27B at TP4
+    C = 2 * kd + vd
+    widths = (kd, kd, vd)
+    L = CONV_K - 1 + T
+    torch.manual_seed(226)
+    win = torch.randn(B, L, C).to(torch.bfloat16)  # user u's window: rows [0, K-1) carry, rows [K-1, L) tokens
+    w = (torch.randn(C, CONV_K) * 0.3).to(torch.bfloat16)
+    taps, start = _taps(mesh, w), _actual_start(mesh)
+    rep = ttnn.ReplicateTensorToMesh(mesh)
+
+    def to_dev(x, layout):
+        return ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=layout, device=mesh, mesh_mapper=rep)
+
+    # Reference: one call per user, carry as history, tokens right-padded to a tile multiple.
+    Tp = -(-T // 32) * 32
+    ref = ([], [], [])
+    for u in range(B):
+        tok = torch.zeros(1, Tp, C, dtype=torch.bfloat16)
+        tok[:, :T] = win[u : u + 1, CONV_K - 1 :]
+        qkv, hist = to_dev(tok, ttnn.TILE_LAYOUT), to_dev(win[u : u + 1, : CONV_K - 1], ttnn.ROW_MAJOR_LAYOUT)
+        out = kda_conv_prefill(qkv, Tp, hist, taps, widths, start, emit_state=False)[:3]
+        for acc, t in zip(ref, out):
+            acc.append(_dev0(t)[:, :T])
+        for t in (qkv, hist, *out):
+            ttnn.deallocate(t)
+    ref = [torch.cat(r, dim=1) for r in ref]  # [1, B*T, width], user-major
+
+    # Packed: the layer's own method on a weight-free instance holding only the attributes it reads.
+    gdn = TPGatedDeltaNet.__new__(TPGatedDeltaNet)
+    gdn.mesh, gdn.K = mesh, CONV_K
+    gdn.qkv_dim_tp, gdn.key_dim_tp, gdn.value_dim_tp = C, kd, vd
+    gdn.tw = {"conv_taps": taps}
+    gdn._cfg_onehot = ttnn.init_device_compute_kernel_config(
+        mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
+    gdn._kda_actual_start = gdn._kda_zero_history = None
+    gdn._kda_gather = {}
+    E = to_dev(win, ttnn.TILE_LAYOUT)  # [B, L, C]
+    for label, got, r in zip("qkv", gdn._kda_conv_packed(E, T), ref):
+        got_t = _dev0(got)
+        assert tuple(got_t.shape) == (1, B * T, r.shape[-1]), f"{label}: shape {tuple(got_t.shape)}"
+        diff = (got_t.float() - r.float()).abs().max().item()
+        logger.info(f"B={B} T={T} {label}: packed vs per-user max-abs {diff:.3e}")
+        assert torch.equal(got_t, r), f"B={B} T={T} {label}: packed != per-user (max-abs {diff:.3e})"
+        ttnn.deallocate(got)
+    for t in (E, gdn._kda_zero_history, *gdn._kda_gather.values()):
+        ttnn.deallocate(t)
+
+
 @pytest.mark.parametrize(
     "channels, expected",
     [(2560, 512), (1280, 320), (5120, 512), (96, 96), (64, 64)],
