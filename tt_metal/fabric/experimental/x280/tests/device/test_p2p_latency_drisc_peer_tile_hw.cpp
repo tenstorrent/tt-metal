@@ -114,6 +114,7 @@ TEST_P(X280P2PLatencyDriscPeerTile, SharedX280ImageRejectsInvalidCommonArguments
             case 6: block.common.self = P2P_LATENCY_PARTICIPANT_B; break;
             case 7: block.common.first_direction = 2; break;
             case 8: block.common.run_nonce = UINT32_MAX; break;
+            default: FAIL() << "no invalid-argument case " << invalid;
         }
         hreg::zero_region(*f.tile, regions.result);
         hreg::write_args(*f.tile, regions.args, block);
