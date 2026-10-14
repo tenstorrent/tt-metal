@@ -16,6 +16,7 @@
 #include "gtest/gtest.h"
 #include "ttnn/operations/transformer/sdpa/device/kernels/chunked_q_mapping.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/striped_sliding_halo.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sliding_halo_layout.hpp"
 
 namespace {
@@ -832,6 +833,97 @@ TEST(StripedSlidingWindow, CoversEveryVisibleTileAndBoundedGather) {
                                         ASSERT_TRUE(found) << "Missing key " << key << " for query " << q_tile;
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+}  // namespace
+
+namespace {
+TEST(StripedSlidingWindow, HaloCoversEveryRemoteWorkItemAndGroupsEqualRanges) {
+    constexpr uint32_t ring = 8, cache = 4096;
+    for (uint32_t local : {1u, 3u, 4u, 12u, 24u, 32u}) {
+        for (uint32_t stripe : {1u, 2u, 4u}) {
+            if (local % stripe != 0) {
+                continue;
+            }
+            for (uint32_t window : {33u, 257u, 1024u, 2048u}) {
+                for (uint32_t k : {1u, 2u, 4u, 8u}) {
+                    for (uint32_t prefix : {0u, 1u, 17u, 128u, 8192u}) {
+                        for (uint32_t length : {1u, local * ring}) {
+                            const uint32_t end = prefix + length;
+                            for (uint32_t source = 0; source < ring; ++source) {
+                                uint32_t peers_seen = 0;
+                                for (uint32_t backward : {0u, 1u}) {
+                                    const StripedHaloGeometry geometry{
+                                        prefix * 32,
+                                        end * 32,
+                                        local,
+                                        cache,
+                                        stripe,
+                                        k,
+                                        window,
+                                        ring,
+                                        source,
+                                        backward ? source : ring - source - 1,
+                                        backward,
+                                        2};
+                                    for (uint32_t i = 0; i < geometry.peer_count;) {
+                                        const auto rows = geometry.range(i);
+                                        const auto stop = geometry.run_end(i, rows);
+                                        ASSERT_GT(stop, i);
+                                        ASSERT_LE(stop, geometry.peer_count);
+                                        for (uint32_t peer = i; peer < stop; ++peer) {
+                                            EXPECT_TRUE(rows == geometry.range(peer));
+                                        }
+                                        i = stop;
+                                    }
+                                    for (uint32_t i = 0; i < geometry.peer_count; ++i) {
+                                        ++peers_seen;
+                                        const auto receiver = geometry.peer(i);
+                                        const auto rows = geometry.range(i);
+                                        ASSERT_LE(rows.begin, rows.end);
+                                        ASSERT_LE(rows.end, cache);
+                                        ASSERT_EQ(rows.begin % k, 0u);
+                                        ASSERT_EQ(rows.end % k, 0u);
+                                        const auto mapping =
+                                            build_chunked_q_mapping(prefix, end, local, ring, receiver, stripe);
+                                        for (uint32_t q_rows : {1u, 2u, 4u, 8u}) {
+                                            if (local % q_rows != 0) {
+                                                continue;
+                                            }
+                                            for (uint32_t q = 0; q < local; q += q_rows) {
+                                                const auto plan = build_striped_sliding_q_work_plan<8>(
+                                                    q,
+                                                    q_rows,
+                                                    receiver,
+                                                    ring,
+                                                    stripe,
+                                                    window,
+                                                    32,
+                                                    cache,
+                                                    k,
+                                                    end,
+                                                    mapping,
+                                                    false);
+                                                ASSERT_TRUE(plan.is_valid);
+                                                for (uint32_t j = 0; j < plan.total_k_chunk_count; ++j) {
+                                                    const auto item = plan.k_chunk_at(j);
+                                                    if (item.source_ring_id != source) {
+                                                        continue;
+                                                    }
+                                                    EXPECT_GE(item.source_k_chunk * k, rows.begin);
+                                                    EXPECT_LE((item.source_k_chunk + 1) * k, rows.end);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                EXPECT_EQ(peers_seen, ring - 1);
                             }
                         }
                     }

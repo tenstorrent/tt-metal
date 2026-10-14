@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
+#include <string>
 
 namespace ttnn::experimental::gemma4 {
 
@@ -38,6 +39,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa(
     std::optional<uint32_t> stripe_size = std::nullopt,
     const std::optional<ttnn::Tensor>& input_tensor_v = std::nullopt,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_v = std::nullopt,
-    std::optional<uint32_t> sliding_window_size = std::nullopt);
+    std::optional<uint32_t> sliding_window_size = std::nullopt,
+    const std::string& communication = "all_gather");
 
 }  // namespace ttnn::experimental::gemma4
