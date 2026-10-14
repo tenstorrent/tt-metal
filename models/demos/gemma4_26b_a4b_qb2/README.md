@@ -26,5 +26,4 @@ Set `EXTRA_MODELS_DIR` to `models/demos` and select architecture
 `models.demos.gemma4_26b_a4b_qb2.tt.generator_vllm:Gemma4ForCausalLM`.
 
 The precision policy is fixed by `config/precision.json`. Experiment logs and
-bring-up artifacts remain in the Agentic Research repository. Final bounded
-release evidence is in [doc/tti_release](doc/tti_release/RUN_NOTES.md).
+bring-up artifacts remain in the Agentic Research repository.
