@@ -147,7 +147,9 @@ def test_avg_pool2d_rejected_shard_grid(device, expect_error):
         )
 
 
-def _run_conv2d(device, ranges, *, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, channels=IN_C):
+def _run_conv2d(
+    device, ranges, *, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, channels=IN_C, transpose_shards=False
+):
     torch.manual_seed(0)
     torch_input = torch.randn(IN_N, channels, IN_H, IN_W)
     torch_weight = torch.randn(channels, channels, 3, 3)
@@ -159,6 +161,7 @@ def _run_conv2d(device, ranges, *, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_S
         shard_layout=shard_layout,
         core_grid=_core_range_set(ranges),
         override_sharding_config=True,
+        transpose_shards=transpose_shards,
     )
     tt_output, [out_h, out_w] = ttnn.conv2d(
         input_tensor=tt_input,
@@ -260,3 +263,39 @@ def test_conv2d_width_sharded_rejected_shard_grid(device, expect_error):
             shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             channels=BLOCK_CHANNELS,
         )
+
+
+def test_conv2d_block_sharded_col_major_origin_grid(device):
+    # Column-major block sharding is transpose_mcast on an origin rectangle. The row walk must accept it.
+    ranges = [(0, 0, 1, 1)]
+    if not _fits(device, ranges):
+        pytest.skip("grid does not fit on this device")
+    torch_input, torch_weight, tt_output, out_h, out_w = _run_conv2d(
+        device,
+        ranges,
+        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        channels=BLOCK_CHANNELS,
+        transpose_shards=True,
+    )
+    ref = torch.nn.functional.conv2d(torch_input, torch_weight, padding=1)
+    out = ttnn.to_torch(tt_output).reshape(IN_N, out_h, out_w, -1)[:, :, :, :BLOCK_CHANNELS]
+    out = out.permute(0, 3, 1, 2)
+    assert_with_pcc(ref, out, pcc=0.99)
+
+
+def test_height_sharded_col_major_grid_rejected(device, expect_error):
+    # Shard i is stored column-wise, while halo still addresses it with the row walk.
+    ranges = [(0, 0, 1, 1)]
+    if not _fits(device, ranges):
+        pytest.skip("grid does not fit on this device")
+    torch_input = torch.zeros((1, 4, 4, 8), dtype=torch.bfloat16)
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_core_range_set(ranges), [4, 8], ttnn.ShardOrientation.COL_MAJOR),
+    )
+    tt_input = ttnn.from_torch(
+        torch_input, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+    with expect_error(RuntimeError, "origin-anchored"):
+        ttnn.fold(tt_input, stride_h=1, stride_w=1, padding=[1, 0])

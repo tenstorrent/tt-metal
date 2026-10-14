@@ -788,10 +788,13 @@ uint32_t sliding_window_shard_row_width(const CoreRangeSet& grid, bool is_block_
     return grid.bounding_box().grid_size().x;
 }
 
-void validate_sliding_window_shard_grid(const CoreRangeSet& grid, bool is_block_sharded) {
-    // corerange_to_cores walks each range in order. That matches the origin-anchored
-    // row walk below only for a grid filled row by row from (0, 0), including a short last row.
-    const auto cores = corerange_to_cores(grid, std::nullopt, /*row_wise=*/true);
+void validate_sliding_window_shard_grid(const CoreRangeSet& grid, bool is_block_sharded, ShardOrientation orientation) {
+    // Height/width shards are stored in orientation order (buffer.cpp). Halo and pool still
+    // address shard i with the origin-anchored row walk, so a column-major 2-D grid does not
+    // place shard i on that core. Block sharding keeps row-wise enumeration: an origin
+    // rectangle with column-major orientation is the supported transpose_mcast grid.
+    const bool row_wise = is_block_sharded || orientation == ShardOrientation::ROW_MAJOR;
+    const auto cores = corerange_to_cores(grid, std::nullopt, row_wise);
     if (cores.empty()) {
         return;
     }
@@ -817,11 +820,13 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     bool transpose_mcast,
     bool remote_read,
     const tt::tt_metal::distributed::MeshDevice& device,
-    uint32_t num_cores_x,
     bool is_in_tiled,
     int block_size,
-    const CoreRangeSet& shard_grid) {
-    validate_sliding_window_shard_grid(shard_grid, is_block_sharded);
+    const CoreRangeSet& shard_grid,
+    ShardOrientation shard_orientation) {
+    validate_sliding_window_shard_grid(shard_grid, is_block_sharded, shard_orientation);
+    // Same width the validator uses, so a caller cannot pass a stride that disagrees with the grid.
+    const uint32_t num_cores_x = sliding_window_shard_row_width(shard_grid, is_block_sharded);
 
     auto core_id_to_noc_coords =
         [is_block_sharded, transpose_mcast, &device, num_cores_x](uint32_t core_id) -> CoreCoord {

@@ -545,11 +545,13 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // -----------------------------------------------------------------------
     const bool is_block_sharded = setup.is_block_sharded;
     const bool is_width_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
-    const auto all_cores = input.shard_spec().value().grid;
+    const auto& shard_spec = input.shard_spec().value();
+    const auto all_cores = shard_spec.grid;
     const uint32_t ncores = all_cores.num_cores();
-    const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
+    const uint32_t num_cores_x = shard_spec.grid.bounding_box().grid_size().x;
     // Same origin-anchored walk as the runtime-arg placement below (#60513).
-    ttnn::operations::sliding_window::validate_sliding_window_shard_grid(all_cores, is_block_sharded);
+    ttnn::operations::sliding_window::validate_sliding_window_shard_grid(
+        all_cores, is_block_sharded, shard_spec.orientation);
     const uint32_t rectangular_x =
         ttnn::operations::sliding_window::sliding_window_shard_row_width(all_cores, is_block_sharded);
     const uint32_t max_out_nhw_per_core = output_tensors[0].shard_spec()->shape[0];
