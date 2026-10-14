@@ -561,8 +561,8 @@ static inline noc_window_status_t noc_open_window_2m(
  *
  * No fence: callers batch these and fence once, and fence spacing is itself
  * under measurement. Use noc_write_verify_u64 for a single fenced, confirmed
- * write. Two u32 stores rather than one u64 because memcpy() and wider stores
- * do not work through a NOC window (BUG-4).
+ * write. Two u32 stores rather than one u64 is the measured shape; memcpy()
+ * does not work through a NOC window (BUG-4).
  *
  * @param window_ptr  Pointer returned by noc_configure_tlb_2m().
  * @param value       64-bit value to write (lo half first).
