@@ -46,6 +46,25 @@ def _effective_qkv_channel_chunk_size(channels: int, configured_chunk_size: int)
     )
 
 
+def _dram_width_sharded(device, weight: ttnn.Tensor) -> ttnn.Tensor:
+    """Re-lay a [K, N] TILE weight out width-sharded over every DRAM bank, padding the last shard."""
+    banks = device.dram_grid_size().x
+    k, n = tuple(weight.shape)[-2:]
+    shard_width = -(-n // ttnn.TILE_SIZE // banks) * ttnn.TILE_SIZE
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))}),
+            [k, shard_width],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    sharded = ttnn.to_memory_config(weight, memory_config)
+    ttnn.deallocate(weight)
+    return sharded
+
+
 @dataclass(frozen=True)
 class _ProjectedInputs:
     # The fused input projection. The decay's low-rank activations, the output gate and beta's pre-sigmoid logits
@@ -226,6 +245,13 @@ class ttKDA:
             if program_config.tuned_projection_matmuls
             else (None, None)
         )
+        if self.output_projection_program_config is not None:
+            # The tuned output schedule's weight senders read DRAM width-sharded weights in bank-contiguous bursts
+            # instead of one interleaved page at a time (101 -> 96 us on Galaxy, bit-identical). The input projection
+            # measures slower that way in the layer and stays interleaved.
+            self.weights = replace(
+                self.weights, output_projection=_dram_width_sharded(mesh_device, self.weights.output_projection)
+            )
         # The bounded gate's per-head scale is folded into the decay projection, which then applies the sigmoid.
         decay_width = self.config.num_heads * self.config.head_k_dim
         self.decay_program_config = decay_projection_program_config(
