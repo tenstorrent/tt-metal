@@ -145,6 +145,8 @@ static RowPacker<bits, T> select_row_packer(int isa = 0) {
         return row_scalar<bits, T>;
     }
 #if defined(__x86_64__)
+    // Called during conversion, after compiler CPU-feature initialization.
+    // No early static initializer or IFUNC resolver calls this selector.
     if ((isa == 0 || isa == 3) && __builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512bw") &&
         __builtin_cpu_supports("avx512vl") && __builtin_cpu_supports("avx2")) {
         return row_avx512<bits, T>;

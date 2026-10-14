@@ -11,6 +11,8 @@
 
 namespace tt::tt_metal::experimental {
 
+// Experimental host-conversion API; subject to change.
+
 /**
  * Try to create an owning BFP host tensor directly from matrix rows.
  *
