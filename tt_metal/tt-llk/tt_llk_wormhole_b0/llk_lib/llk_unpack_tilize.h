@@ -78,6 +78,7 @@ inline void _llk_unpack_tilize_init_(
     const bool narrow_tile                = false,
     const std::uint32_t num_faces         = 4)
 {
+    LLK_EXP_NOP_UNPACK_INIT_AT(); // experiment hook (init-opt2), ckernel.h
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
@@ -260,6 +261,7 @@ inline void _llk_unpack_tilize_(
     const std::uint32_t num_faces   = 4,
     const bool narrow_tile          = false)
 {
+    LLK_FID_POINT(); // fidelity experiment hook (ckernel.h), empty unless LLK_FID_T is defined
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // In case of 32-bit numbers, we have to unpack into dest register
     // For integers, always unpack to dest. For Float32, only if unpack_dst_format is Float32 (lossless tilize mode)
@@ -753,6 +755,7 @@ inline void _llk_unpack_fast_tilize_block_(
     const std::uint32_t full_dim,
     const std::uint32_t num_faces = 4)
 {
+    LLK_FID_POINT(); // fidelity experiment hook (ckernel.h), empty unless LLK_FID_T is defined
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4");
     LLK_ASSERT(
         (unit_dim == 2 && num_faces == 2) || num_faces == 4, "16x32 tiny tiles are only supported for tensors with even-sized tile widths for fast_tilize");
