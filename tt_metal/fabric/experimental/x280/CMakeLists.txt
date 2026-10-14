@@ -701,4 +701,111 @@ _x280_device_test(x280_core_sync_characterization EXCLUDE_FROM_ALL
     KERNELS shared core_sync
 )
 
+# ---------------------------------------------------------------------------
+# packet_injection: Tensix (BRISC/NCRISC) or idle-ERISC producers inject fabric packet headers into
+# an X280 consumer. One image per mode and creation-flag variant; the latency variants prepare
+# and tear down the pinned input themselves.
+# ---------------------------------------------------------------------------
+foreach(
+    _variant
+    IN
+    ITEMS
+        "latency-include|1|1"
+        "latency-exclude|1|0"
+        "throughput|2|0"
+        "backpressure-include|3|1"
+        "backpressure-exclude|3|0"
+)
+    string(REPLACE "|" ";" _variant "${_variant}")
+    list(GET _variant 0 _name)
+    list(GET _variant 1 _mode)
+    list(GET _variant 2 _creation)
+    set(_pinned_input "")
+    if(_mode EQUAL 1)
+        set(_pinned_input LINK_PINNED_INPUT)
+    endif()
+    x280_add_image(
+        NAME firmware-packet-injection-${_name}
+        SOURCES src/packet_injection_x280.cpp
+        ${_pinned_input}
+        COMPILE_OPTIONS -fno-zero-initialized-in-bss
+        INCLUDES
+            kernels
+            kernels/shared
+            kernels/packet_injection
+        DEFINES
+            PACKET_INJECTION_MODE=${_mode}
+            PACKET_INJECTION_INCLUDE_CREATION=${_creation}
+        LINK_OPTIONS -Wl,--defsym=X280_PACKET_INJECTION_LAYOUT=1
+    )
+endforeach()
+set(_x280_packet_injection_dirs
+    ${_x280_shared_dir}
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/packet_injection
+)
+_x280_check_header(packet_injection_abi.h c ${_x280_packet_injection_dirs})
+_x280_check_header(packet_injection_abi.h c++ ${_x280_packet_injection_dirs})
+_x280_check_header(packet_injection_slot.hpp c++ ${_x280_packet_injection_dirs})
+# The consumer refuses to compile without one valid mode and creation flag. Each case passes only
+# on its own #error, so a broken compiler invocation does not read as a refusal.
+foreach(
+    _case
+    IN
+    ITEMS
+        "none|PACKET_INJECTION_MODE and PACKET_INJECTION_INCLUDE_CREATION must be explicitly defined"
+        "PACKET_INJECTION_MODE=4,PACKET_INJECTION_INCLUDE_CREATION=0|PACKET_INJECTION_MODE must be 1 \\(LATENCY\\), 2 \\(THROUGHPUT\\), or 3 \\(BACKPRESSURE\\)"
+        "PACKET_INJECTION_MODE=1,PACKET_INJECTION_INCLUDE_CREATION=2|PACKET_INJECTION_INCLUDE_CREATION must be 0 or 1"
+        "PACKET_INJECTION_MODE=2,PACKET_INJECTION_INCLUDE_CREATION=1|Throughput mode requires PACKET_INJECTION_INCLUDE_CREATION=0"
+)
+    string(REPLACE "|" ";" _case "${_case}")
+    list(GET _case 0 _defines)
+    list(GET _case 1 _expected)
+    string(MAKE_C_IDENTIFIER "${_defines}" _id)
+    string(TOLOWER "${_id}" _id)
+    string(REPLACE "packet_injection_" "" _id "${_id}")
+    if(_defines STREQUAL "none")
+        set(_defines "")
+    else()
+        string(REPLACE "," ";" _defines "${_defines}")
+        list(TRANSFORM _defines PREPEND "-D")
+    endif()
+    add_test(
+        NAME x280_packet_injection_rejects_${_id}
+        COMMAND
+            ${X280_GXX} ${X280_CFLAGS} ${_x280_cxxflags} -I${CMAKE_CURRENT_SOURCE_DIR}/kernels -I${_x280_shared_dir}
+            -I${CMAKE_CURRENT_SOURCE_DIR}/kernels/packet_injection -fsyntax-only ${_defines}
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/packet_injection_x280.cpp
+    )
+    set_tests_properties(
+        x280_packet_injection_rejects_${_id}
+        PROPERTIES
+            PASS_REGULAR_EXPRESSION
+                "#error \"${_expected}\""
+    )
+endforeach()
+target_sources(
+    x280_bench_host_tests
+    PRIVATE
+        tests/host/test_packet_injection.cpp
+        tests/host/test_packet_injection_erisc.cpp
+)
+target_include_directories(x280_bench_host_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/kernels/packet_injection)
+_x280_device_test(x280_packet_injection_tensix_to_x280
+    tests/device/test_packet_injection_tensix_to_x280_hw.cpp
+    KERNELS shared packet_injection
+)
+# The idle-ERISC producers launch only under slow dispatch.
+_x280_device_test(x280_packet_injection_erisc_to_x280_header
+    tests/device/test_packet_injection_erisc_to_x280_header_hw.cpp
+    KERNELS shared packet_injection
+    SLOW_DISPATCH
+)
+find_package(Threads REQUIRED)
+# The records name the revision from tt-metal's generated version header.
+foreach(_member tensix_to_x280 erisc_to_x280_header)
+    target_link_libraries(x280_packet_injection_${_member} PRIVATE Threads::Threads)
+    target_include_directories(x280_packet_injection_${_member} PRIVATE ${PROJECT_BINARY_DIR}/generated)
+    add_dependencies(x280_packet_injection_${_member} tt_metal_version_header)
+endforeach()
+
 add_custom_target(x280_abi_headers ALL DEPENDS ${_x280_header_stamps})
