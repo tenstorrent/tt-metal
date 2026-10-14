@@ -51,11 +51,12 @@ inline void calculate_mask_binary(const std::uint32_t /*dst_index_in0*/, const s
     calculate_mask<APPROXIMATION_MODE, ITERATIONS>();
 }
 
-// Bit pattern clobber_sfpu_lregs() writes: as a float about 25.7, a value no SFPU kernel programs as a constant.
+// Bit pattern clobber_sfpu_lregs() writes: the byte 0x42 repeated, easy to spot in a register or Dest dump. As a
+// float it is about 48.56 (bf16 half 0x4242 = 48.5), a value no SFPU kernel programs as a constant.
 // Keep it positive and well above 1. A near-zero or negative value (0xABCDABCD is about -1.46e-12) can slip
 // through guards: sfpu_reciprocal_iter skips its Newton update when Prgm0 is below about 1, so it fell back to
 // the approximate reciprocal and passed the approx-mode contract instead of failing.
-constexpr std::uint32_t SFPU_LREG_CLOBBER_BITS = 0x41CDABCDu;
+constexpr std::uint32_t SFPU_LREG_CLOBBER_BITS = 0x42424242u;
 
 // Writes SFPU_LREG_CLOBBER_BITS to every SFPU register a kernel can write and later read back. Run it just
 // before an op's init, where a fused compute kernel would run another op's init: an init that does not program

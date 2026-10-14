@@ -276,7 +276,7 @@ class SFPU_CLOBBER_LREGS(TemplateParameter):
     """Test hook that checks an SFPU op's init is self-sufficient.
 
     Emits ``#define SFPU_CLOBBER_LREGS``. The kernel then calls ``clobber_sfpu_lregs()``
-    (``sfpu_test_helpers.h``) just before the op's init. That writes 0x41CDABCD to every SFPU
+    (``sfpu_test_helpers.h``) just before the op's init. That writes 0x42424242 to every SFPU
     register a kernel can write, as another op's init would leave its own values there in a
     fused compute kernel. An init that does not program a register its body reads then
     produces wrong results, instead of passing on whatever reset or an earlier kernel happened
