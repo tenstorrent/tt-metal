@@ -51,6 +51,8 @@ jobs:
     with:
       # Scheduled runs have no dispatch inputs, so retain the existing behavior.
       architecture: ${{ inputs.architecture || 'all' }}
+      # L1_CONGESTION is not gated and costs a fifth of the build.
+      perf-run-types: ALL_MODES
       # A scheduled run is the nightly by definition; a manual run says so.
       pipeline: ${{ github.event_name == 'schedule' && 'nightly' || inputs.pipeline }}
       # Nightly runs always use speed-of-light; manual runs use the checkbox.
