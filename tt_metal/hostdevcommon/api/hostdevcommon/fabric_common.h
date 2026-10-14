@@ -299,10 +299,39 @@ struct Routing2DCodec {
 
     // Packed edge fields: two 6-bit row indices, fixed by the Y <= 64 bound, plus a parent_output
     // holding this axis's 2-bit vector code, so it widens through widen(axis, code).
-    static constexpr int mcast_edge_child(std::uint16_t packed) { return packed & 0x3F; }
-    static constexpr int mcast_edge_parent(std::uint16_t packed) { return (packed >> 6) & 0x3F; }
+    // Packed edge layout (16 bits):
+    //
+    //    15  14 | 13  12 | 11  10   9   8   7   6 |  5   4   3   2   1   0
+    //   --------+--------+-------------------------+------------------------
+    //    unused | output |       parent row        |       child row
+    //    (zero) | 2 bits |         6 bits          |         6 bits
+    //
+    // Example, Y axis: "to reach row 3, row 2 sends S" (child 3, parent 2, output Y2_SOUTH = 2):
+    //
+    //      00   |   10   |         000010          |         000011         = 0x2083
+    //
+    // mcast_edge_child(0x2083) == 3, mcast_edge_parent(0x2083) == 2, mcast_edge_output(0x2083) == Y2_SOUTH.
+    static constexpr uint32_t MCAST_EDGE_COORD_BITS = 6;
+    static constexpr uint32_t MCAST_EDGE_COORD_MASK = (1u << MCAST_EDGE_COORD_BITS) - 1;
+    static constexpr uint32_t MCAST_EDGE_PARENT_SHIFT = MCAST_EDGE_COORD_BITS;
+    static constexpr uint32_t MCAST_EDGE_OUTPUT_SHIFT = 2 * MCAST_EDGE_COORD_BITS;
+    static constexpr uint32_t MCAST_EDGE_OUTPUT_MASK = (1u << BITS_PER_ACTION) - 1;
+    static_assert((1u << MCAST_EDGE_COORD_BITS) >= MAX_AXIS_SIZE, "a row field must address every row of an axis");
+    static_assert(
+        MCAST_EDGE_OUTPUT_SHIFT + BITS_PER_ACTION <= 8 * MCAST_TREE_EDGE_BYTES,
+        "the three edge fields must fit in MCAST_TREE_EDGE_BYTES");
+
+    static constexpr std::uint16_t mcast_edge_pack(uint32_t child, uint32_t parent, uint8_t output) {
+        return static_cast<std::uint16_t>(
+            (child & MCAST_EDGE_COORD_MASK) | ((parent & MCAST_EDGE_COORD_MASK) << MCAST_EDGE_PARENT_SHIFT) |
+            ((output & MCAST_EDGE_OUTPUT_MASK) << MCAST_EDGE_OUTPUT_SHIFT));
+    }
+    static constexpr int mcast_edge_child(std::uint16_t packed) { return packed & MCAST_EDGE_COORD_MASK; }
+    static constexpr int mcast_edge_parent(std::uint16_t packed) {
+        return (packed >> MCAST_EDGE_PARENT_SHIFT) & MCAST_EDGE_COORD_MASK;
+    }
     static constexpr std::uint8_t mcast_edge_output(std::uint16_t packed) {
-        return static_cast<std::uint8_t>((packed >> 12) & 0x3);
+        return static_cast<std::uint8_t>((packed >> MCAST_EDGE_OUTPUT_SHIFT) & MCAST_EDGE_OUTPUT_MASK);
     }
 
     // Byte-wise so neither side has to reason about halfword alignment inside a packed union.
