@@ -34,7 +34,7 @@ set(FABRIC_TOPOLOGY_UTILS_SOURCES
     physical_grouping_descriptor_matching.cpp
     physical_descriptor_builder.cpp
     # Runtime-free TUs the library needs for a standalone link: the strong-type formatters/operators and the
-    # MeshShape/MeshCoordinate implementations (owned by common, compiled here instead so libscaleout_topology.a
+    # MeshShape/MeshCoordinate implementations (owned by common, compiled here instead so libtt-fabric-topology-utils.a
     # is self-contained; libtt_metal.so still gets exactly one copy via fabric -> tt_fabric_topology_utils).
     fabric_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../common/mesh_coord.cpp
