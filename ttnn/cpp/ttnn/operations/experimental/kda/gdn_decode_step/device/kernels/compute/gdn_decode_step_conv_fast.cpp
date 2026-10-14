@@ -185,6 +185,63 @@ inline void add_tiles_n_dual(
     out1_dfb.push_back(n);
 }
 
+#ifndef GDN_FP32_STATE
+#define GDN_FP32_STATE 0
+#endif
+
+#if GDN_FP32_STATE  // hd32 DFB is only allocated when the op attribute fp32_state is set
+// FP32_STATE: hd = hd32 = h * decay with an exact fp32 SFPU multiply. state_in and b_s are UnpackToDest DFBs, so
+// copy_tile lands the full fp32 values in DST. The same DST tile is packed into hd (matmul operand, UnpackToSrc) and
+// hd32 (UnpackToDest, for the SFPU state add). Copy init sequence mirrors gate_decay / binary_ng sfpu no_bcast.
+inline void decay_state_sfpu(DataflowBuffer& hd_dfb, DataflowBuffer& hd32_dfb, uint32_t n) {
+    hd_dfb.reserve_back(n);
+    hd32_dfb.reserve_back(n);
+    pack_reconfig_data_format(dfb::hd);
+    reconfig_data_format_srca(dfb::state_in);
+    for (uint32_t i = 0; i < n; ++i) {
+        tile_regs_acquire();
+        copy_init(dfb::state_in);
+        copy_tile(dfb::state_in, i, 0);
+        copy_init(dfb::b_s);  // FPU datacopy re-init after the SFPU ops of the previous iteration
+        copy_tile(dfb::b_s, 0, 1);
+        mul_binary_tile_init();
+        mul_binary_tile(0, 1, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, dfb::hd, i);
+        pack_tile(0, dfb::hd32, i);
+        tile_regs_release();
+    }
+    hd_dfb.push_back(n);
+    hd32_dfb.push_back(n);
+}
+
+// FP32_STATE: hn = hnew = hd32 + outer with an exact fp32 SFPU add (hd32 and outer are UnpackToDest DFBs).
+inline void add_state_sfpu(DataflowBuffer& hn_dfb, DataflowBuffer& hnew_dfb, uint32_t n) {
+    hn_dfb.reserve_back(n);
+    hnew_dfb.reserve_back(n);
+    pack_reconfig_data_format(dfb::hn);
+    reconfig_data_format_srca(dfb::hd32);
+    for (uint32_t i = 0; i < n; ++i) {
+        tile_regs_acquire();
+        copy_init(dfb::hd32);
+        copy_tile(dfb::hd32, i, 0);
+        copy_init(dfb::outer);
+        copy_tile(dfb::outer, i, 1);
+        add_binary_tile_init();
+        add_binary_tile(0, 1, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, dfb::hn, i);
+        pack_tile(0, dfb::hnew, i);
+        tile_regs_release();
+    }
+    hn_dfb.push_back(n);
+    hnew_dfb.push_back(n);
+}
+
+#endif  // GDN_FP32_STATE
+
 }  // namespace
 
 template <uint32_t Kt, uint32_t Vt, uint32_t scale_bits, uint32_t inv_dv_bits>
@@ -222,6 +279,9 @@ TT_KERNEL void compute(uint32_t nu) {
     DataflowBuffer vm(dfb::vm);
     DataflowBuffer dec(dfb::dec);
     DataflowBuffer hd(dfb::hd);
+#if GDN_FP32_STATE
+    DataflowBuffer hd32(dfb::hd32);
+#endif
     DataflowBuffer vread(dfb::vread);
     DataflowBuffer delta(dfb::delta);
     DataflowBuffer kt(dfb::kt);
@@ -294,7 +354,11 @@ TT_KERNEL void compute(uint32_t nu) {
         // hd = h * decay
         state_in.wait_front(KV);
         b_s.wait_front(1);
+#if GDN_FP32_STATE
+        decay_state_sfpu(hd, hd32, KV);
+#else
         multiply_tiles<true>(dfb::state_in, dfb::b_s, dfb::hd, hd, KV);
+#endif
         b_s.pop_front(1);
         state_in.pop_front(KV);
         hd.wait_front(KV);
@@ -322,7 +386,13 @@ TT_KERNEL void compute(uint32_t nu) {
         kt.pop_front(Kt);
         delta.pop_front(Vt);
         outer.wait_front(KV);
+#if GDN_FP32_STATE
+        hd32.wait_front(KV);
+        add_state_sfpu(hn, hnew, KV);
+        hd32.pop_front(KV);
+#else
         add_tiles_n_dual(dfb::hd, dfb::outer, dfb::hn, hn, dfb::hnew, hnew, KV);
+#endif
         hd.pop_front(KV);
         outer.pop_front(KV);
         hn.wait_front(KV);

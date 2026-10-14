@@ -31,6 +31,10 @@ struct GdnDecodeStepParams {
     // (the state is stored as the full fp32 sum instead of a TF32-truncated copy). o is unchanged; the state differs
     // in the last bits. Part of the program hash (default attribute hashing).
     bool fast_mode = false;
+    // fp32_state (fast_mode only): keep the recurrent-state decay multiply and state add in exact fp32 on the SFPU
+    // (UnpackToDest) instead of the FPU (SrcA, which truncates the fp32 state every token). Costs one extra KV-tile
+    // DFB. Part of the program hash (default attribute hashing).
+    bool fp32_state = false;
 };
 
 struct GdnDecodeStepInputs {

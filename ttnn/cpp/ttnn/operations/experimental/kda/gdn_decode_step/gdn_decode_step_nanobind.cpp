@@ -40,6 +40,7 @@ void bind_gdn_decode_step(nb::module_& mod) {
                 ordered by first use, beta/decay gates computed in fp32 on the reader, dual-output state add). Same
                 output; the updated state keeps the full fp32 sum (the default path truncates it to TF32), so it
                 differs in the last bits.
+            fp32_state (bool): default False. fp32_state: keep the recurrent-state decay/add in exact fp32 on the SFPU (fast_mode only); avoids per-token state truncation.
         Returns:
             ttnn.Tensor: ``[1, 1, Nv*Dv]`` normalized output (row 0 valid, padding rows zero).
         )doc",
@@ -63,7 +64,8 @@ void bind_gdn_decode_step(nb::module_& mod) {
         nb::arg("conv_hist") = nb::none(),
         nb::arg("conv_taps") = nb::none(),
         nb::arg("qkvz_dim") = 0,
-        nb::arg("fast_mode") = false);
+        nb::arg("fast_mode") = false,
+        nb::arg("fp32_state") = false);
 }
 
 }  // namespace ttnn::operations::experimental::kda::gdn_decode_step::detail

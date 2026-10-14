@@ -169,8 +169,10 @@ Tensor gdn_decode_step(
     const std::optional<Tensor>& conv_hist,
     const std::optional<Tensor>& conv_taps,
     uint32_t qkvz_dim,
-    bool fast_mode) {
+    bool fast_mode,
+    bool fp32_state) {
     TT_FATAL(!fast_mode || conv_hist.has_value(), "{}: fast_mode needs the fused-conv mode (conv_hist)", kOp);
+    TT_FATAL(!fp32_state || fast_mode, "{}: fp32_state needs fast_mode", kOp);
     return ttnn::device_operation::launch<GdnDecodeStepOperation>(
         GdnDecodeStepParams{
             .num_value_heads = num_value_heads,
@@ -186,6 +188,7 @@ Tensor gdn_decode_step(
             .fuse_conv = conv_hist.has_value(),
             .qkvz_dim = qkvz_dim,
             .fast_mode = fast_mode,
+            .fp32_state = fp32_state,
         },
         GdnDecodeStepInputs{
             .qkv = qkv,

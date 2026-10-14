@@ -111,9 +111,12 @@ def _pack_rows(rows):
     return out
 
 
+@pytest.mark.parametrize("fp32_state", [False, True])
 @pytest.mark.parametrize("fast_mode", [False, True])
 @pytest.mark.parametrize("steps", [3])
-def test_gdn_decode_step_conv(device, steps, fast_mode):
+def test_gdn_decode_step_conv(device, steps, fast_mode, fp32_state):
+    if fp32_state and not fast_mode:
+        pytest.skip("fp32_state needs fast_mode")
     torch.manual_seed(1)
     scale = Dk**-0.5
     C = 2 * KD + VD
@@ -154,6 +157,7 @@ def test_gdn_decode_step_conv(device, steps, fast_mode):
             conv_taps=taps_dev,
             qkvz_dim=az,
             fast_mode=fast_mode,
+            fp32_state=fp32_state,
         )
         out_t = ttnn.to_torch(out).reshape(-1)
         h_t = ttnn.to_torch(state).reshape(Nv, Dk, Dv)
@@ -190,9 +194,12 @@ def _pack_rows_user(rows, b, both=False):
     return out
 
 
+@pytest.mark.parametrize("fp32_state", [False, True])
 @pytest.mark.parametrize("fast_mode", [False, True])
 @pytest.mark.parametrize("B", [1, 2, 4, 8, 16, 32])
-def test_gdn_decode_step_conv_batched(device, B, fast_mode):
+def test_gdn_decode_step_conv_batched(device, B, fast_mode, fp32_state):
+    if fp32_state and not fast_mode:
+        pytest.skip("fp32_state needs fast_mode")
     """Bmax = 32 state/history; B active users in rows/slots 0..B-1; slots >= B must be untouched."""
     torch.manual_seed(10 + B)
     Bmax = 32
@@ -248,6 +255,7 @@ def test_gdn_decode_step_conv_batched(device, B, fast_mode):
         conv_taps=taps_dev,
         qkvz_dim=az,
         fast_mode=fast_mode,
+        fp32_state=fp32_state,
     )
     out_t = ttnn.to_torch(out).reshape(B, -1)
     h_t = ttnn.to_torch(state)

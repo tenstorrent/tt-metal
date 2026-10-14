@@ -42,6 +42,13 @@ def gdn_decode_step_op_enabled():
     return os.environ.get("QWEN36_GDN_DECODE_STEP_OP", "1") == "1"
 
 
+def gdn_decode_step_fp32_state_enabled():
+    """QWEN36_GDN_STEP_FP32_STATE (default on): gdn_decode_step keeps the recurrent-state decay and add in exact fp32
+    (SFPU) instead of FPU SrcA, which truncates the fp32 state every token and biases long free-running decode.
+    0 reverts to the FPU path."""
+    return os.environ.get("QWEN36_GDN_STEP_FP32_STATE", "1") == "1"
+
+
 def pack_head_tiles(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):
     """rows: list of 4 torch [C] vectors ([q | k | v] channels of one device) -> [Nv, 4, 32, 32] bf16 packed head
     tiles for gdn_decode_step: tile (h, s) holds rows[s]'s channels [q_hk | k_hk | v_h] (hk = h // rf) as 32-wide
@@ -517,6 +524,7 @@ class TPGatedDeltaNet:
         # a packed conv history [Bmax, Nv, 4, 32, 32] (_conv_hist_packed, updated in place by the op). The RM
         # history stays the canonical format of every non-decode writer; conversions are on-device embedding gathers.
         self._conv_hist_packed = None
+        self._decode_step_fp32_state = gdn_decode_step_fp32_state_enabled()
         self._decode_op = self._decode_step_op_supported(args, tw)
         # Batched mode keeps TWO conv-state formats, one per decode width class (see prepare_decode_width):
         #   hist   _conv_hist_rm [Bmax, K-1, C] RM: read/written by the fused path (width <= SCAN_MAX)
@@ -549,7 +557,10 @@ class TPGatedDeltaNet:
         if reasons:
             logger.info("[GDN] gdn_decode_step op NOT used: " + "; ".join(reasons))
             return False
-        logger.info("[GDN] decode path: gdn_decode_step op (QWEN36_GDN_DECODE_STEP_OP=0 reverts)")
+        logger.info(
+            "[GDN] decode path: gdn_decode_step op (QWEN36_GDN_DECODE_STEP_OP=0 reverts); "
+            f"fp32_state={'on' if self._decode_step_fp32_state else 'off'} (QWEN36_GDN_STEP_FP32_STATE=0 reverts)"
+        )
         return True
 
     def _fused_scan_max_width(self):
@@ -1538,6 +1549,7 @@ class TPGatedDeltaNet:
             conv_taps=tw["conv_taps_packed"],
             qkvz_dim=self.qkvz_dim_tp,
             fast_mode=True,
+            fp32_state=self._decode_step_fp32_state,
         )  # [1, B, Nv*Dv] bf16
         ttnn.deallocate(qkvzab)
         partial = self._row_proj(gated, tw["out"])

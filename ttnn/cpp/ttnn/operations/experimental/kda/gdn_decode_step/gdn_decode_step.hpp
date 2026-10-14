@@ -36,6 +36,7 @@ ttnn::Tensor gdn_decode_step(
     const std::optional<ttnn::Tensor>& conv_hist = std::nullopt,
     const std::optional<ttnn::Tensor>& conv_taps = std::nullopt,
     uint32_t qkvz_dim = 0,
-    bool fast_mode = false);
+    bool fast_mode = false,
+    bool fp32_state = false);
 
 }  // namespace ttnn::experimental::kda

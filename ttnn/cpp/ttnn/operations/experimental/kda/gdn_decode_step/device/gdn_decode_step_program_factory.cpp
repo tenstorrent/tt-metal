@@ -137,6 +137,8 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
         {"hn", KV, fp32},
         {"o", Vt, fp32},
         {"on", Vt, fp32}};
+    // fp32_state (fused + fast only): exact-fp32 state decay/add on the SFPU (see GdnDecodeStepParams::fp32_state)
+    const bool fp32_state = a.fp32_state && fused && a.fast_mode;
     if (fused) {
         for (const auto& d : std::vector<Dfb>{
                  {"conv_p", 1, fp32},
@@ -148,6 +150,10 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
                  {"beta_t", 1, fp32},
                  {"zs", Vt, fp32}}) {
             compute_local.push_back(d);
+        }
+        if (fp32_state) {
+            // exact-fp32 copy of hd for the SFPU state add (KV tiles = 64 KB)
+            compute_local.push_back({"hd32", KV, fp32});
         }
     }
     const std::vector<Dfb> compute_out = {{"hnew", KV, fp32}, {"out", Vt, out_fmt}};
@@ -248,9 +254,13 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     // ---- compute
     auto compute_hw = ttnn::to_compute_hardware_config(a.compute_kernel_config);
     auto& unpack_modes = compute_hw.unpack_modes;
+    // fp32_state: keep the recurrent-state update (decay multiply, state add) in full fp32 on the SFPU. These DFBs
+    // are only read through copy_tile into DST (UnpackToDest = exact fp32, no SrcA truncation).
     for (const auto& d : all) {
         if (d.fmt == fp32) {
-            unpack_modes[m2::DFBSpecName{d.name}] = UnpackMode::UnpackToSrc;
+            const bool to_dest =
+                fp32_state && (d.name == "state_in" || d.name == "b_s" || d.name == "hd32" || d.name == "outer");
+            unpack_modes[m2::DFBSpecName{d.name}] = to_dest ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc;
         }
     }
     m2::KernelSpec compute{
@@ -268,6 +278,10 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
             {.runtime_arg_names = (fused ? std::vector<std::string>{"nu"} : std::vector<std::string>{"wi_count"})},
         .hw_config = std::move(compute_hw),
     };
+    if (fp32_state) {
+        // the hd32 DFB only exists then; the kernel guards its references with #if GDN_FP32_STATE
+        compute.compiler_options.defines.emplace("GDN_FP32_STATE", "1");
+    }
     for (const auto& d : reader_out) {
         compute.dfb_bindings.push_back(bind(d.name, EP::CONSUMER));
     }
