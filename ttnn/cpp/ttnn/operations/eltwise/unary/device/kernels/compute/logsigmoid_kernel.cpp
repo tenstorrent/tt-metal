@@ -10,9 +10,7 @@
 
 namespace ckl = compute_kernel_lib;
 
-// Formula: logsigmoid(x) = min(x, 0) - log1p(exp(-|x|)). The complete expression
-// runs in one unary SFPU pass and overwrites x in DST 0, so the chain no longer
-// needs the second DEST slot that held exp(-x).
+// logsigmoid(x) = min(x, 0) - log1p(exp(-|x|)), computed in place in DST 0 by one SFPU pass.
 
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);

@@ -64,9 +64,7 @@ struct GeluDerivative : UnaryOp<GeluDerivative<fast, Slot>, Slot> {
     }
 };
 
-/// Logsigmoid: logsigmoid_tile(Slot) evaluates min(x, 0) - log1p(exp(-|x|))
-/// in one SFPU pass and overwrites x in D[Slot]; the caller no longer has to
-/// stage exp(-x) in a second DEST slot.
+/// Logsigmoid: logsigmoid_tile(Slot) computes min(x, 0) - log1p(exp(-|x|)) in place in D[Slot].
 template <Dst Slot>
 struct Logsigmoid : UnaryOp<Logsigmoid<Slot>, Slot> {
     static ALWI void init() { logsigmoid_tile_init(); }

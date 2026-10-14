@@ -206,9 +206,7 @@ def test_atanh(device, h, w):
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("low, high", [(-30.0, 30.0), (-4.0, 4.0)])
 def test_log_sigmoid(device, h, w, low, high):
-    # For x > 0 the output *is* the residual -log1p(exp(-x)), which decays to
-    # 1e-13 by x = 30: the error that matters is relative, and a [0, 1) input
-    # would exercise neither that decay nor the x -> -inf asymptote.
+    # [-30, 30] reaches both the x -> -inf asymptote and the x > 0 residual (~1e-13 at x = 30).
     torch.manual_seed(0)
 
     torch_input_tensor = torch.linspace(low, high, h * w, dtype=torch.float32).reshape(h, w)
@@ -222,14 +220,7 @@ def test_log_sigmoid(device, h, w, low, high):
 
 
 def test_log_sigmoid_float32_special_values(device):
-    # The bfloat16 special-values test in test_activation.py covers the branch that
-    # carries the explicit NaN restore. This one covers the other branch: an fp32
-    # input forces fp32_dest_acc_en, which selects the fp32 residual. On Wormhole and
-    # Blackhole that path skips the restore, so NaN propagation here rests on
-    # _sfpu_exp_fp32_accurate_ alone -- and that function's underflow path is written
-    # differently on the two architectures. (Quasar restores NaN on both paths.)
-    # fp32 in / fp32 DEST is also the one configuration that carries a NaN to L1
-    # unrounded, so this is where the question is decidable at all.
+    # Covers the fp32 DEST path (fp32_dest_acc_en), the only configuration that carries a NaN to L1 unrounded.
     torch_input_tensor = torch.zeros((32, 32), dtype=torch.float32)
     torch_input_tensor.flatten()[:6] = torch.tensor(
         [float("nan"), -float("nan"), float("inf"), -float("inf"), 0.0, -0.0], dtype=torch.float32
@@ -246,9 +237,7 @@ def test_log_sigmoid_float32_special_values(device):
     )
     output_tensor = ttnn.to_torch(ttnn.log_sigmoid(input_tensor))
 
-    # NaN in must stay NaN out. Asserted separately from the ULP comparison because
-    # a lane that came back as a finite 0.0 is the specific regression guarded here,
-    # and a ULP check on a NaN reference would not distinguish it.
+    # Asserted on its own for a clearer failure message; assert_with_ulp also rejects a NaN mismatch.
     assert torch.isnan(output_tensor.flatten()[:2]).all(), "log_sigmoid(NaN) must be NaN"
     assert_with_ulp(
         expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=4, allow_nonfinite=True

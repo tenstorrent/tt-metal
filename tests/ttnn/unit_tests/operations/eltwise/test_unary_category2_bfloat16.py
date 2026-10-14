@@ -274,15 +274,8 @@ def test_softsign(device):
 def test_log_sigmoid(device):
     """Exhaustive normal bfloat16 coverage for log_sigmoid = log(sigmoid(x)).
 
-    The kernel evaluates min(x, 0) - log1p(exp(-|x|)) in a single pass, with no
-    range split, so the whole domain is held to ULP ≤ 2, both signs. That
-    includes x > 170, where an earlier kernel diverged to -inf
-    (tenstorrent/tt-metal#55457).
-
-    For x above about 87.3, exp(-x) falls below the smallest normal float and
-    the kernel returns 0, while torch returns a negative subnormal. That band is
-    asserted non-empty and exactly zero on device before the golden is flushed,
-    so the ULP check cannot absorb a wrong tail.
+    ULP ≤ 2 over the full domain, both signs, including x > 170 (#55457).
+    The subnormal positive tail (x > ~87.3) must be non-empty and exactly zero on device.
     """
     negative_domain = generate_bfloat16_bits_in_range(-torch.finfo(torch.bfloat16).max, 0.0)
     positive_domain = generate_bfloat16_bits_in_range(0.0, torch.finfo(torch.bfloat16).max)

@@ -68,7 +68,7 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 | softsign     | |x| > 1/SNB - 1        | exactly 0                | reciprocal(1 + |x|) FTZ                    |
 |              | |x| == 1/SNB - 1       | 0 or golden ±1           | arch-dependent rounding                    |
 |              | elsewhere              | ULP ≤ 2                  |                                            |
-| log_sigmoid  | golden < SNB (x >= 87.5) | exactly 0              | -log1p(exp(-x)) underflow FTZ              |
+| log_sigmoid  | x >= 87.5 (golden<SNB) | exactly 0                | -log1p(exp(-x)) underflow FTZ              |
 |              | elsewhere              | ULP ≤ 2                  | min(x, 0) - log1p(exp(-|x|)), one pass     |
 | tanhshrink   | |x| < 1, result < SNB  | exactly 0                | x^3/3 underflow FTZ (mpmath reference)     |
 |              | |x| < 1, elsewhere     | ULP ≤ 3 vs mpmath        | torch golden cancels; mpmath doesn't       |
@@ -372,15 +372,8 @@ def test_softsign(device):
 def test_log_sigmoid(device):
     """Float32 sweep over every normal bfloat16 value for log_sigmoid = log(sigmoid(x)).
 
-    The kernel evaluates min(x, 0) - log1p(exp(-|x|)) in a single pass, with no
-    range split, so the whole domain is held to ULP ≤ 2 on both sides of zero,
-    including x > 170, where an earlier kernel diverged to -inf
-    (tenstorrent/tt-metal#55457).
-
-    For x >= 87.5, exp(-x) falls below the smallest normal float and the kernel
-    returns 0, while torch returns a negative subnormal. That band is asserted
-    non-empty and exactly zero on device before the golden is flushed, so the
-    ULP check cannot absorb a wrong tail.
+    ULP ≤ 2 over the full domain, both signs, including x > 170 (#55457).
+    The subnormal positive tail (x >= 87.5) must be non-empty and exactly zero on device.
     """
     negative_domain = generate_float32_bits_in_range(-torch.finfo(torch.float32).max, 0.0)
     positive_domain = generate_float32_bits_in_range(0.0, torch.finfo(torch.float32).max)

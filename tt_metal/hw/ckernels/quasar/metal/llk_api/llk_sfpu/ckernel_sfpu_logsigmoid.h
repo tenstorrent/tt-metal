@@ -14,9 +14,7 @@
 
 namespace ckernel::sfpu {
 
-// logsigmoid(x) = min(x, 0) - log1p(exp(-|x|)). The exponential and the residual
-// stay in one unary SFPU pass: no second DST tile and no copy/abs/neg/exp tile
-// plumbing. Both format paths are selected at compile time.
+// logsigmoid(x) = min(x, 0) - log1p(exp(-|x|)), in one unary SFPU pass.
 
 #ifdef INP_FLOAT32
 inline constexpr bool logsigmoid_input_is_fp32 = true;
@@ -24,44 +22,13 @@ inline constexpr bool logsigmoid_input_is_fp32 = true;
 inline constexpr bool logsigmoid_input_is_fp32 = false;
 #endif
 
-/**
- * @brief Selects the fp32 residual.
- *
- * The residual needs relative precision whenever it can reach the output at fp32
- * resolution. That is the case for an fp32 input, and also for a bf16 input with
- * an fp32 DEST: there the exponential is not rounded on the way out, so a
- * residual tuned for eight mantissa bits would be exposed at full fp32 width.
- * Gating on the input dtype alone costs about 4.9e-4 relative, or roughly 7,700
- * fp32 ULP, in that second configuration.
- *
- * Through ttnn the input term never decides: an fp32 input forces an fp32 DEST
- * (`unary.cpp`), so this reduces to `is_fp32_dest_acc_en`. It is kept as a guard
- * for direct Compute API callers that pair an fp32 input with a bfloat16 DEST,
- * where the bfloat16 residual would otherwise be selected.
- */
+// The fp32 residual is also needed for a bf16 input with an fp32 DEST: the exponential is not rounded
+// to bf16 there, so a bf16-tuned residual would show at fp32 resolution.
 template <bool is_fp32_dest_acc_en>
 inline constexpr bool logsigmoid_wants_fp32_residual = logsigmoid_input_is_fp32 || is_fp32_dest_acc_en;
 
 /**
- * @brief Evaluates log1p(t) for two data, to fp32 relative precision, on t in [0, 1].
- *
- * `t` is always exp(-|x|), so it cannot leave [0, 1] and 1 + t cannot leave [1, 2].
- * The exponent of 1 + t is therefore always zero, which makes the argument reduction
- * that @ref calculate_log1p_fp32 performs for an arbitrary argument dead weight here.
- *
- * Pulling the two leading terms out analytically keeps the form accurate in the
- * relative sense down to t -> 0, and confines the rounding of each Horner step to S,
- * where t^3 damps it:
- *
- *     log1p(t) = t - t^2/2 + t^3 * S(t),   S of degree 8 on [0, 1]
- *
- * Degree 8 is the knee: degree 6 gives 11 ULP and degree 7 reaches 2 ULP on a thinner
- * margin, while degree 8 matches the full log1p to three digits of relative error.
- *
- * Two data are evaluated in lockstep, as Blackhole's `_sfpu_tanh_polynomial_x2_` does. Six of
- * the nine coefficients are not encodable as immediates and cost a pair of SFPLOADI
- * each; lockstep loads them once for both chains and fills the MAD latency slots. The
- * three low coefficients live in the programmable registers @ref logsigmoid_init loads.
+ * @brief log1p(t) for two data on t in [0, 1], to fp32 precision: t - t^2/2 + t^3 * S(t), S of degree 8.
  *
  * @param y0, y1: The residuals, written by this function
  * @param t0, t1: exp(-|x|) for each of the two data
@@ -102,12 +69,7 @@ sfpi_inline void logsigmoid_residual_fp32_x2(sfpi::vFloat& y0, sfpi::vFloat& y1,
 }
 
 /**
- * @brief Evaluates log1p(t) for two data, to bfloat16 precision, on t in [0, 1].
- *
- * Eight mantissa bits do not pay for the fp32 form. `P(0) = 1` is imposed rather than
- * fitted, so that the positive tail — where the residual is the whole answer and is
- * tiny — inherits the relative error of the exponential instead of picking up a fixed
- * polynomial bias.
+ * @brief log1p(t) for two data on t in [0, 1], to bfloat16 precision: t * P(t), with P(0) = 1 imposed.
  *
  * @param y0, y1: The residuals, written by this function
  * @param t0, t1: exp(-|x|) for each of the two data
@@ -126,25 +88,10 @@ sfpi_inline void logsigmoid_residual_bf16_x2(sfpi::vFloat& y0, sfpi::vFloat& y1,
 }
 
 /**
- * @brief Computes logsigmoid for two data.
- *
- * The identity is exact on both halves of the domain: for x >= 0 it reads
- * -log1p(e^-x) = log(1/(1+e^-x)), and for x < 0 it reads x - log1p(e^x) =
- * log(e^x/(1+e^x)). The exponential is fed -|x|, built in one SFPSETSGN, so no
- * intermediate can overflow and there is no range split. On Quasar the fp32 path also
- * bounds that argument at -88, where the exponential has already flushed to 0.
- *
- * On the fp32 path the inputs are read from DEST twice, once to build -|x| and once
- * for min(x, 0), so that neither stays live in an LREG across the exponential and the
- * residual; holding them runs that path out of LREGs. The bfloat16 path has the room
- * and holds them, which saves one SFPLOAD per datum without a spill.
+ * @brief Computes logsigmoid for two data. exp is fed -|x|, so nothing overflows and there is no range split.
  *
  * @tparam is_fp32_dest_acc_en: If true, DEST is fp32 and the result is not rounded to bfloat16
  * @param in: DEST offset of the first datum; the second is at in + 1
- * @note For |x| above about 87.3, exp(-|x|) falls below the smallest normal float and
- *       flushes. A positive input there returns +0 rather than a subnormal; torch returns
- *       a negative subnormal up to about 103.97 and +0 beyond. A negative input returns x,
- *       which is the correctly rounded answer.
  */
 template <bool is_fp32_dest_acc_en>
 sfpi_inline void logsigmoid_x2(const std::uint32_t in, sfpi::vFloat& result0, sfpi::vFloat& result1) {
@@ -155,46 +102,24 @@ sfpi_inline void logsigmoid_x2(const std::uint32_t in, sfpi::vFloat& result0, sf
     sfpi::vFloat residual0;
     sfpi::vFloat residual1;
     if constexpr (logsigmoid_wants_fp32_residual<is_fp32_dest_acc_en>) {
-        // Quasar: bound the argument. Quasar's _sfpu_exp_fp32_accurate_ rounds through a bit-pattern
-        // difference whose int32 wraps for arguments in about [-1.74e7, -8.7e6], where it returns
-        // -inf instead of 0. exp(-88) is already below the smallest normal float and comes out as
-        // 0, so the bound changes nothing for |x| <= 88 and gives the correct t = 0 beyond.
+        // _sfpu_exp_fp32_accurate_ wraps an int32 on about [-1.74e7, -8.7e6] and returns -inf there;
+        // exp(-88) already flushes to 0, so bounding at -88 changes nothing else.
         n0 = sfpi::max(n0, -88.0f);
         n1 = sfpi::max(n1, -88.0f);
         sfpi::vFloat t0 = _sfpu_exp_fp32_accurate_(n0);
         sfpi::vFloat t1 = _sfpu_exp_fp32_accurate_(n1);
         logsigmoid_residual_fp32_x2(residual0, residual1, t0, t1);
     } else {
-        // The <is_fp32_dest_acc_en> here resolves to <false>, so the exponential ends on a
-        // convert<vFloat16b>. That cast is load-bearing and is not the DEST pre-rounding its
-        // own comment describes. Modelling _sfpu_exp_21f_bf16_ from its source puts a
-        // systematic relative bias of 1.65e-3 on it -- 0.30 of a bfloat16 ULP on average,
-        // 0.44 at worst, not the 2^-21 the name suggests -- so it sits under the half-ULP
-        // that round-to-nearest absorbs, and rounding t to bfloat16 quantizes it away
-        // instead of letting it through the residual.
-        // Quasar: carried over from Wormhole/Blackhole, not re-measured on a Quasar target.
-        // Measured on ttsim over every finite bfloat16 input with x <= 87 (49710 points),
-        // passing <true> here trades a max of 1.43 ULP for 0.88 but takes the mean from
-        // 0.29 to 0.35 and the count of not-correctly-rounded results from 1009 to 28584.
-        // Refitting the residual against <true> does not recover it -- a bounded search
-        // found nothing under 0.88 -- and the reason to expect that is structural: on the
-        // positive tail the residual is t itself and P(0) = 1 is imposed, so the
-        // exponential's relative error passes through whatever the polynomial does.
-        // This branch only compiles when DEST is bfloat16, so the output quantum and the
-        // cast's quantum are the same one.
+        // Keep <is_fp32_dest_acc_en> (false here): the final convert<vFloat16b> rounds away exp21's
+        // systematic bias. <true> measured worse on Wormhole/Blackhole.
         sfpi::vFloat t0 = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(n0);
         sfpi::vFloat t1 = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(n1);
         logsigmoid_residual_bf16_x2(residual0, residual1, t0, t1);
     }
-    // Restore the input NaN on both paths. On the bfloat16 path exp21 clamps NaN during its
-    // integer conversion. Quasar: on the fp32 path too, unlike Blackhole -- the exponential is fed
-    // -|x|, and the Quasar _sfpu_exp_fp32_accurate_ maps -NaN to 0, so the residual is 0 and
-    // min(+NaN, 0) is 0 under SFPSWAP's total order: +NaN would come out as 0.
-    // Quasar: sfpi::is_nan spelled out. SFPI lowers its nearby() compare to a CC-only SFPIADD into
-    // read-only LREG8, which leaves the lane mask unchanged on Quasar.
+    // Restore the input NaN on both paths: exp21's clamp loses it, and on the fp32 path max(n, -88) does.
+    // is_nan is spelled out: its CC-only SFPIADD into LREG8 leaves the lane mask unchanged on Quasar.
     if constexpr (logsigmoid_wants_fp32_residual<is_fp32_dest_acc_en>) {
-        // Quasar: one datum at a time, so x0 is dead before x1 is re-read; with both held the
-        // fp32 path runs out of LREGs once the NaN check is added.
+        // Re-read x from DEST: holding x0 and x1 across exp and the residual runs the fp32 path out of LREGs.
         x0 = sfpi::dst_reg[in];
         result0 = sfpi::min(x0, 0.0f) - residual0;
         v_if(sfpi::exexp(x0, sfpi::ExponentMode::Biased) >= 255 && sfpi::exman(x0) != 0) { result0 = x0; }
@@ -225,8 +150,7 @@ sfpi_inline void logsigmoid_x2(const std::uint32_t in, sfpi::vFloat& result0, sf
  * @tparam APPROXIMATION_MODE: Ignored
  * @tparam is_fp32_dest_acc_en: If true, DEST is fp32 and the result is not rounded to bfloat16
  * @tparam ITERATIONS: Number of iterations for given face; must be even
- * @note Call @ref logsigmoid_init first: the residual reads the programmable constants
- *       that init loads, and produces wrong results without it.
+ * @note Requires @ref logsigmoid_init: the residual reads the programmable constants.
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_logsigmoid() {
@@ -243,45 +167,10 @@ inline void calculate_logsigmoid() {
 }
 
 /**
- * @brief Adapter for the legacy binary LLK harness.
- *
- * Its normal placement has in0 == out. Operand B held exp(-x) when the caller computed
- * it; the exponential is computed here now, so it is intentionally ignored.
+ * @brief Loads the three low residual coefficients into the programmable constants.
  *
  * @tparam APPROXIMATION_MODE: Ignored
- * @tparam is_fp32_dest_acc_en: If true, DEST is fp32 and the result is not rounded to bfloat16
- * @tparam ITERATIONS: Number of iterations for given face; must be even
- * @param dst_index_in0: DEST tile index of the input
- * @param dst_index_in1: Ignored
- * @param dst_index_out: DEST tile index of the output
- * @note Call @ref logsigmoid_init first: the residual reads the programmable constants
- *       that init loads, and produces wrong results without it.
- */
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_logsigmoid_binary(
-    const std::uint32_t dst_index_in0, const std::uint32_t /*dst_index_in1*/, const std::uint32_t dst_index_out) {
-    constexpr std::uint32_t dst_tile_size_sfpi = 32;
-    static_assert(ITERATIONS % 2 == 0);
-#pragma GCC unroll 2
-    for (int d = 0; d < ITERATIONS / 2; ++d) {
-        sfpi::vFloat result0;
-        sfpi::vFloat result1;
-        logsigmoid_x2<is_fp32_dest_acc_en>(dst_index_in0 * dst_tile_size_sfpi, result0, result1);
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result0;
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi + 1] = result1;
-        sfpi::dst_reg += 2;
-    }
-}
-
-/**
- * @brief Loads the three low residual coefficients into the programmable registers.
- *
- * @tparam APPROXIMATION_MODE: Ignored
- * @tparam is_fp32_dest_acc_en: Must match the value passed to @ref calculate_logsigmoid,
- *         since it selects which residual, and therefore which coefficients, are used.
- *         An fp32 input (`INP_FLOAT32`) selects the fp32 residual as well; see
- *         @ref logsigmoid_wants_fp32_residual
- * @note Must run before @ref calculate_logsigmoid.
+ * @tparam is_fp32_dest_acc_en: Must match @ref calculate_logsigmoid; it selects the residual
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void logsigmoid_init() {

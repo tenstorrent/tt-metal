@@ -37,13 +37,13 @@ ALWI void logsigmoid_tile(uint32_t idst) {
 }
 
 /**
- * Initialize logsigmoid operation.
+ * Initialize logsigmoid operation: loads the constants that logsigmoid_tile reads.
  * Must be called before logsigmoid_tile.
  *
  * Return value: None
  */
 ALWI void logsigmoid_tile_init() {
-    MATH((SFPU_UNARY_INIT_FN(unused, sfpu::logsigmoid_init, (APPROX, DST_ACCUM_MODE))));
+    MATH((SFPU_UNARY_INIT_FN(logsigmoid, sfpu::logsigmoid_init, (APPROX, DST_ACCUM_MODE))));
 }
 
 }  // namespace ckernel

@@ -54,9 +54,7 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # The lower bound has to stay well below the point where log_sigmoid becomes
-    # its own linear asymptote, and the upper bound well above the point where the
-    # output is a small residual; -4 in particular sampled only one side.
+    # Reach both tails: the x -> -inf linear asymptote and the small x > 0 residual.
     torch_input_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-30, high=30, dtype=torch.float32), input_dtype
     )(input_shape)

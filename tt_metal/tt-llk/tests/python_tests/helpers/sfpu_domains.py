@@ -404,6 +404,11 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Log1p: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.99, high=10.0)
     ),
+    # logsigmoid: all reals; [-30, 30] reaches the linear tail on one side and the
+    # small-residual tail on the other.
+    MathOperation.Logsigmoid: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-30.0, high=30.0)
+    ),
     # neg: all reals
     MathOperation.Neg: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
@@ -1918,6 +1923,7 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.LessThanEqualZero,
         MathOperation.LessThanZero,
         MathOperation.Log1p,
+        MathOperation.Logsigmoid,  # NaN -> NaN, -inf -> -inf, +inf -> 0
         MathOperation.Lrelu,
         MathOperation.Mish,
         MathOperation.Neg,  # -/+inf, -/+0; the only negative NaN here (cast_to_dest_dtype)
@@ -2271,9 +2277,6 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Kernel and golden both claim torch.isclose semantics and disagree at a non-finite
         # operand; needs a per-cell read-back to say which is wrong before either is touched.
         MathOperation.SfpuIsclose,
-        # Effectively unary: the kernel is reached through a binary adapter that ignores operand
-        # B, as does the golden, so a cat-B probe in B asserts nothing.
-        MathOperation.SfpuLogsigmoid,
     }
 )
 
