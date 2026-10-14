@@ -110,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             PARTIAL_FACE_A,
                             CT_DIM,
                             RT_DIM,
-                            KT_DIM);
+                            KT_DIM); LLK_EXP_UNOP_HOOK();
                     }
                 }
             }
@@ -253,7 +253,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
-    LLK_INIT_END;
+    LLK_INIT_END; LLK_NK_LOOPSHIFT_HOOK(); // experiment hook (nikola): same line, so no zone id (__LINE__ hash) moves
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
@@ -268,7 +268,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t tile = 0; tile < CT_DIM * RT_DIM; tile++)
                     {
-                        _llk_pack_<dest_sync, is_fp32_dest_acc_en>(DST_INDEX + tile, PERF_ADDRESS(PERF_OUTPUT, tile));
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en>(DST_INDEX + tile, PERF_ADDRESS(PERF_OUTPUT, tile)); LLK_EXP_PNOP_HOOK();
                     }
                     // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
                     if constexpr (PERF_PACK_SECTION_RELEASE)
@@ -288,7 +288,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                     {
                         const std::uint32_t result_tile = block * NUM_TILES_IN_BLOCK + tile;
-                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[result_tile]));
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[result_tile])); LLK_EXP_PNOP_HOOK();
                     }
                     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
