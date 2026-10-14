@@ -187,6 +187,14 @@ void lut_modifier_issue()
 }
 #endif
 
+#ifdef TEST_EXPRESSION_POSITION
+void expression_position_issue(bool select)
+{
+    select ? TTI_SFPADD(1, 2, 3, 4, 0) : TTI_SFPADD(1, 2, 3, 5, 0);
+    (void)TT_SFPLOADI(4, 0, 0), TT_SFPLOADI(5, 0, 0);
+}
+#endif
+
 #ifdef TEST_RESERVED_LUT
 void reserved_lut_modifier_must_refuse()
 {

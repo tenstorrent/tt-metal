@@ -174,5 +174,7 @@ template <unsigned Mask> struct constant_mask { enum : unsigned { value = Mask }
             (ckernel::raw_lreg_effect::constant_mask<__builtin_constant_p(word)                  \
                 ? ckernel::raw_lreg_effect::write(word) : 0xffu>::value));                       \
     } while (0)
-#define TT_LLK_SFPU_ISSUE_TT(word)  do { TT_INSN(word); TT_LLK_SFPU_EFFECT(word); } while (0)
-#define TT_LLK_SFPU_ISSUE_TTI(word) do { TTI_INSN(word); TT_LLK_SFPU_EFFECT(word); } while (0)
+// Statement expressions keep TT_/TTI_ SFPU macros usable wherever the bare
+// TT_INSN/TTI_INSN expressions were, e.g. as comma or conditional operands.
+#define TT_LLK_SFPU_ISSUE_TT(word)  ({ TT_INSN(word); TT_LLK_SFPU_EFFECT(word); })
+#define TT_LLK_SFPU_ISSUE_TTI(word) ({ TTI_INSN(word); TT_LLK_SFPU_EFFECT(word); })

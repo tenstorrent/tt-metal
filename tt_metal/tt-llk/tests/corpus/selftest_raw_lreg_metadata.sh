@@ -160,7 +160,7 @@ for compiler in "${CXX:-c++}" clang++; do
             QSR) target_extension=qsr ;;
         esac
         for compatibility in marker fallback legacy-target; do
-            flags=(-std=c++17 -Wall -Wextra -Werror -fsyntax-only -DTEST_LUT_MODES "-DTEST_$arch")
+            flags=(-std=c++17 -Wall -Wextra -Werror -fsyntax-only -DTEST_LUT_MODES -DTEST_EXPRESSION_POSITION "-DTEST_$arch")
             if [[ $compatibility == fallback ]]; then
                 flags+=(-DTEST_FALLBACK)
             elif [[ $compatibility == legacy-target ]]; then
