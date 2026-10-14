@@ -58,6 +58,7 @@ async function fetchAllWorkflowRuns(github, context, days, cachedRunIds = null, 
       let skippedOldRuns = 0;
       let skippedCachedRuns = 0;
       let addedNewRuns = 0;
+      let skippedForkRuns = 0;
       let shouldStopWorkflow = false;
 
       core.info(`[FETCH] Fetching runs for workflow: ${workflowId}`);
@@ -108,6 +109,11 @@ async function fetchAllWorkflowRuns(github, context, days, cachedRunIds = null, 
               continue;
             }
 
+            if (!isBaseRepoRun(run)) {
+              skippedForkRuns++;
+              continue;
+            }
+
             // If we have cached run IDs, check if this run is already cached
             if (cachedIds.size > 0 && cachedIds.has(runIdStr)) {
               consecutiveCachedRuns++;
@@ -154,7 +160,7 @@ async function fetchAllWorkflowRuns(github, context, days, cachedRunIds = null, 
         }
       }
 
-      core.info(`[FETCH] ${workflowId} - Summary: added ${addedNewRuns} new runs, skipped ${skippedCachedRuns} cached, ${skippedOldRuns} old`);
+      core.info(`[FETCH] ${workflowId} - Summary: added ${addedNewRuns} new runs, skipped ${skippedCachedRuns} cached, ${skippedOldRuns} old, ${skippedForkRuns} fork`);
 
       // Small delay between workflows to avoid rate limiting
       await delay(200);
