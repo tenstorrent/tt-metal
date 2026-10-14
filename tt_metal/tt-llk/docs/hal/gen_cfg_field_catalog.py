@@ -76,6 +76,7 @@ def parse_header(family: str) -> list[FieldRecord]:
         structural_text = line
         code = code_without_line_comment(line)
 
+        # Descriptors may be declared with either `struct` or `class`.
         # clang-format places a struct's opening brace on the following line.
         # Remember that declaration so fields retain their owning descriptor.
         if pending_struct is not None:
@@ -84,7 +85,7 @@ def parse_header(family: str) -> list[FieldRecord]:
                 stack.append((pending_struct, opening_depth))
             pending_struct = None
 
-        struct_match = re.match(r"\s*struct\s+(\w+)", code)
+        struct_match = re.match(r"\s*(?:struct|class)\s+(\w+)", code)
         if struct_match:
             if "{" in code:
                 opening_depth = depth + code[: code.index("{") + 1].count("{")
@@ -429,7 +430,7 @@ def catalog_group(field: FieldRecord, entry: str) -> tuple[str, str]:
 
 def location_html(field: FieldRecord) -> str:
     register_file, word_bits, base, word, shift, width, count, stride = field.args
-    register_file = register_file.removeprefix("RegisterFile::")
+    register_file = register_file.removeprefix("RegisterFile::").removeprefix("RegisterScope::")
     owner = "::".join(field.owners)
     if owner == "UnpackerContextDescriptor":
         register_file, word_bits = "State", "32"
