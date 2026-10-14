@@ -91,9 +91,6 @@ R invoke_r(F& f, A&&... args) {
 //   - only the unqualified R(Args...) signature is provided, not the const, reference or noexcept
 //     qualified forms.
 //
-// Captures up to 24 bytes whose move cannot throw are stored inline; anything else is heap
-// allocated. A moved-from instance is empty.
-//
 // TODO(#57444): replace with std::move_only_function once every supported standard library ships
 // it; libc++ does not as of LLVM 20. Calling an empty instance then becomes undefined.
 template <typename Signature>
@@ -101,8 +98,6 @@ class move_only_function;
 
 template <typename R, typename... Args>
 class move_only_function<R(Args...)> {
-    // One table per stored type. Only call is used for every target; relocate and destroy are
-    // skipped when the tag bits below say so.
     struct VTable {
         R (*call)(void* storage, Args&&... args);
         void (*relocate)(void* dst, void* src) noexcept;  // move-construct into dst, then destroy src
@@ -249,7 +244,6 @@ private:
     template <typename T>
     static constexpr VTable kInlineTable{&call_inline<T>, &relocate_inline<T>, &destroy_inline<T>};
 
-    // A heap target moves by copying its pointer, so it needs no relocate entry.
     template <typename T>
     static constexpr VTable kHeapTable{&call_heap<T>, nullptr, &destroy_heap<T>};
 
@@ -275,8 +269,6 @@ private:
         }
     }
 
-    // Moves other's target into this, which holds none, and leaves other empty.
-    //
     // A bytewise move copies the whole buffer, including bytes a small target (or the empty state)
     // never wrote. Copying indeterminate bytes as unsigned storage is well-defined, but gcc reports
     // it as -W(maybe-)uninitialized once inlined. Zeroing those bytes instead adds a store to every
