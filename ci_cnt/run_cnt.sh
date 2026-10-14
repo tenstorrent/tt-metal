@@ -11,7 +11,7 @@ export CHIP_ARCH=blackhole LLK_HOME=$R/tt_metal/tt-llk LLK_PERF_L1_MUX_GROUP=0 T
 export LLK_PERF_RUN_TYPES=L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE,PACK_ISOLATE
 cd $R/tt_metal/tt-llk/tests/python_tests
 python -m pytest --collect-only -q -p no:cacheprovider $(cat $S/modules.txt) > /tmp/all.txt 2>&1; echo "== collected $(grep -c '::' /tmp/all.txt)"
-python $S/pick.py /tmp/all.txt $S/patterns.txt > /tmp/nodes.txt; cat /tmp/nodes.txt
+python $S/pick.py /tmp/all.txt $S/patterns.txt | sort -t: -k1,1 -s > /tmp/nodes.txt; cat /tmp/nodes.txt
 mapfile -t NN < /tmp/nodes.txt
 for mode in nc wc; do
   flag=""; [[ $mode == wc ]] && flag=--dump-perf-counters
