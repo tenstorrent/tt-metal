@@ -9,11 +9,13 @@
 #include <algorithm>
 #include <array>
 
+#include <optional>
+
 #include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 #include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 
 #include "all_gather_async_device_operation_types.hpp"
-#include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -35,29 +37,18 @@ struct AllGatherProgramArtifacts {
 };
 
 struct DefaultMeshWorkloadFactory {
-    using shared_variables_t = AllGatherProgramArtifacts;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const AllGatherAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const AllGatherAsyncInputs& tensor_args,
-        Tensor& output_tensor);
+        Tensor& output_tensor,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
     static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+        tt::tt_metal::Program& program,
         const AllGatherAsyncParams& operation_attributes,
         const AllGatherAsyncInputs& tensor_args,
-        Tensor& output_tensor);
-
-private:
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create_at(
-        const AllGatherAsyncParams& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const AllGatherAsyncInputs& tensor_args,
-        Tensor& output_tensor);
+        Tensor& output_tensor,
+        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim
