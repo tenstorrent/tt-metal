@@ -1431,7 +1431,12 @@
       export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
       export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
       export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
-      export TT_HF_DRAFT_MODEL=/mnt/models/blaze/openai/gpt-oss-120b-DFlash
+      # The loader wants <dir>/config.json + <dir>/model.safetensors; the processed drafter names them
+      # drafter_config.json / drafter_model.safetensors.
+      DFLASH_SRC=/mnt/models/blaze/openai/gpt-oss-120b-DFlash-processed
+      export TT_HF_DRAFT_MODEL=$(mktemp -d /tmp/gptoss-dflash-drafter.XXXXXX)
+      ln -s "$DFLASH_SRC/drafter_config.json" "$TT_HF_DRAFT_MODEL/config.json"
+      ln -s "$DFLASH_SRC/drafter_model.safetensors" "$TT_HF_DRAFT_MODEL/model.safetensors"
       export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
       export BLAZE_DFLASH_SEED_REF=/mnt/models/blaze/openai/gpt-oss-120b/cache/dflash/seed_1016.pt
       export PREFILL_DFLASH_HANDOFF_OUT=/tmp/gptoss_dflash_true_prefill_1k.pt
