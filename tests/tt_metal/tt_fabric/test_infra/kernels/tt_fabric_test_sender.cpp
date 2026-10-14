@@ -182,6 +182,14 @@ void kernel_main() {
             rb[TT_FABRIC_MISC_INDEX + 14] = conn->buffer_slot_write_counter.counter;
             rb[TT_FABRIC_MISC_INDEX + 15] = *conn->edm_buffer_local_free_slots_read_ptr;
             rb[TT_FABRIC_MISC_INDEX + 16] = conn->num_buffers_per_channel;
+            // Sample the read counter again after a long settle (~50 us) to separate in-flight from leaked credits.
+            {
+                const uint64_t t0 = get_timestamp();
+                while (get_timestamp() - t0 < 50000) {
+                }
+                invalidate_l1_cache();
+                rb[TT_FABRIC_MISC_INDEX + 17] = *conn->edm_buffer_local_free_slots_read_ptr;
+            }
         }
     }
     // Write test results

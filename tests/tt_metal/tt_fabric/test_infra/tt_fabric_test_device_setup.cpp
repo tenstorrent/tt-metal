@@ -1430,7 +1430,7 @@ void TestDevice::log_worker_diag(const tt::tt_metal::CoreCoord& core, const std:
         const uint64_t sig = (static_cast<uint64_t>(rb[16 + 12]) << 32) | rb[16 + 11];
         log_info(
             tt::LogTest,
-            "WorkerDiag {} core {}: packets={} elapsed_cycles={} wait_cycles={} signal_cycles={} waited={} wr={} rd={} slots={}",
+            "WorkerDiag {} core {}: packets={} elapsed_cycles={} wait_cycles={} signal_cycles={} waited={} wr={} rd={} slots={} rd_settled={}",
             this->fabric_node_id_,
             core.str(),
             packets,
@@ -1440,7 +1440,8 @@ void TestDevice::log_worker_diag(const tt::tt_metal::CoreCoord& core, const std:
             rb[16 + 13],
             rb[16 + 14],
             rb[16 + 15],
-            rb[16 + 16]);
+            rb[16 + 16],
+            rb[16 + 17]);
     }
 }
 
