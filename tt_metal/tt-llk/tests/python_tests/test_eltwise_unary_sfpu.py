@@ -1335,8 +1335,6 @@ def eltwise_unary_sfpu(
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
-    if run_types is None:
-        run_types = ALL_PERF_RUN_TYPES if is_perf else [PerfRunType.L1_TO_L1]
 
     need_stimuli = src_A is not None or not is_perf or collect_result or check_golden
     if src_A is None and need_stimuli:
@@ -1374,10 +1372,6 @@ def eltwise_unary_sfpu(
             input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
         )
 
-    _, _, faces_to_generate = calculate_tile_and_face_counts(
-        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
-    )
-
     golden_tensor = None
     if check_golden:
         generate_golden = get_golden_generator(UnarySFPUGolden)
@@ -1402,66 +1396,32 @@ def eltwise_unary_sfpu(
             **({} if polygamma_order is None else {"polygamma_order": polygamma_order}),
         )
 
-    if unpack_to_dest is None:
-        unpack_to_dest = (
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        )
-
-    test_config_kwargs = {
-        "test_name": test_name,
-        "formats": formats,
-        "templates": [
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(approx_mode),
-            ITERATIONS(iterations),
-            FAST_MODE(fast_mode),
-            STABLE_SORT(stable_sort),
-            FUSED_SORT(fused_sort),
-            CLAMP_NEGATIVE(clamp_negative),
-            DEST_SYNC(dest_sync),
-            *([] if shift_amount is None else [SFPU_SHIFT_AMOUNT(shift_amount)]),
-            *(
-                []
-                if relu_min_int_threshold is None
-                else [SFPU_RELU_MIN_INT_THRESHOLD(relu_min_int_threshold)]
-            ),
-            *(
-                []
-                if relu_max_threshold is None
-                else [SFPU_RELU_MAX_THRESHOLD(relu_max_threshold)]
-            ),
-            *(
-                []
-                if polygamma_order is None
-                else [SFPU_POLYGAMMA_ORDER(polygamma_order)]
-            ),
-        ],
-        "runtimes": [
-            TILE_COUNT(tile_cnt_A),
-            LOOP_FACTOR(loop_factor),
-            NUM_FACES(num_faces=faces_to_generate),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-        ],
-        "variant_stimuli": StimuliConfig(
-            src_A if need_stimuli else None,
-            formats.input_format,
-            src_B if need_stimuli else None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            twos_complement=twos_complement,
-        ),
-        "dest_acc": dest_acc,
-        "unpack_to_dest": unpack_to_dest,
-    }
-
-    configuration = create_test_or_perf_config(
+    configuration = build_eltwise_unary_sfpu_config(
+        formats,
+        dest_acc,
+        approx_mode,
+        mathop,
+        input_dimensions,
+        src_A if need_stimuli else None,
+        src_B if need_stimuli else None,
+        tile_cnt_A,
+        tile_cnt_B,
+        test_name=test_name,
+        fast_mode=fast_mode,
+        dest_sync=dest_sync,
+        shift_amount=shift_amount,
+        relu_min_int_threshold=relu_min_int_threshold,
+        relu_max_threshold=relu_max_threshold,
+        polygamma_order=polygamma_order,
+        twos_complement=twos_complement,
+        clamp_negative=clamp_negative,
+        iterations=iterations,
+        stable_sort=stable_sort,
+        fused_sort=fused_sort,
+        loop_factor=loop_factor,
+        unpack_to_dest=unpack_to_dest,
         is_perf=is_perf,
         run_types=run_types,
-        test_config_kwargs=test_config_kwargs,
     )
 
     if is_perf and not collect_result:
@@ -1522,6 +1482,107 @@ def eltwise_unary_sfpu(
     if return_golden:
         return res_tensor, golden_tensor
     return res_from_L1
+
+
+def build_eltwise_unary_sfpu_config(
+    formats,
+    dest_acc,
+    approx_mode,
+    mathop,
+    input_dimensions,
+    src_A,
+    src_B,
+    tile_cnt_A,
+    tile_cnt_B,
+    *,
+    test_name="sources/eltwise_unary_sfpu_test.cpp",
+    fast_mode=FastMode.No,
+    dest_sync=DestSync.Half,
+    shift_amount=None,
+    relu_min_int_threshold=None,
+    relu_max_threshold=None,
+    polygamma_order=None,
+    twos_complement=False,
+    clamp_negative=True,
+    iterations=32,
+    stable_sort=StableSort.No,
+    fused_sort=FusedSort.No,
+    loop_factor=1,
+    unpack_to_dest=None,
+    is_perf=False,
+    run_types=None,
+):
+    """The templates, runtimes and stimuli the shared unary kernel reads, as one config.
+
+    For callers that need the configuration itself (build-only, or asserting on how it
+    was built); everything else goes through eltwise_unary_sfpu. *src_A* / *src_B* may
+    be None for a perf run that writes no stimuli."""
+    if run_types is None:
+        run_types = ALL_PERF_RUN_TYPES if is_perf else [PerfRunType.L1_TO_L1]
+    _, _, faces_to_generate = calculate_tile_and_face_counts(
+        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
+    )
+    if unpack_to_dest is None:
+        unpack_to_dest = (
+            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        )
+
+    test_config_kwargs = {
+        "test_name": test_name,
+        "formats": formats,
+        "templates": [
+            MATH_OP(mathop=mathop),
+            APPROX_MODE(approx_mode),
+            ITERATIONS(iterations),
+            FAST_MODE(fast_mode),
+            STABLE_SORT(stable_sort),
+            FUSED_SORT(fused_sort),
+            CLAMP_NEGATIVE(clamp_negative),
+            DEST_SYNC(dest_sync),
+            *([] if shift_amount is None else [SFPU_SHIFT_AMOUNT(shift_amount)]),
+            *(
+                []
+                if relu_min_int_threshold is None
+                else [SFPU_RELU_MIN_INT_THRESHOLD(relu_min_int_threshold)]
+            ),
+            *(
+                []
+                if relu_max_threshold is None
+                else [SFPU_RELU_MAX_THRESHOLD(relu_max_threshold)]
+            ),
+            *(
+                []
+                if polygamma_order is None
+                else [SFPU_POLYGAMMA_ORDER(polygamma_order)]
+            ),
+        ],
+        "runtimes": [
+            TILE_COUNT(tile_cnt_A),
+            LOOP_FACTOR(loop_factor),
+            NUM_FACES(num_faces=faces_to_generate),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+        ],
+        "variant_stimuli": StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            twos_complement=twos_complement,
+        ),
+        "dest_acc": dest_acc,
+        "unpack_to_dest": unpack_to_dest,
+    }
+
+    return create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
 
 
 # Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false
