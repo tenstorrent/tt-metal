@@ -15,6 +15,7 @@ option(ENABLE_BUILD_TIME_TRACE "Enable build time trace (Clang only -ftime-trace
 option(BUILD_SHARED_LIBS "Create shared libraries" ON)
 option(BUILD_PROGRAMMING_EXAMPLES "Enables build of tt_metal programming examples" OFF)
 option(TT_METAL_BUILD_TESTS "Enables build of tt_metal tests" OFF)
+option(TT_METAL_BUILD_X280 "Enables build of the X280 runtime (needs TT_METAL_BUILD_TESTS)" OFF)
 option(TTNN_BUILD_TESTS "Enables build of ttnn tests" OFF)
 option(ENABLE_CCACHE "Build with compiler cache" FALSE)
 option(TT_UNITY_BUILDS "Build with Unity builds" ON)

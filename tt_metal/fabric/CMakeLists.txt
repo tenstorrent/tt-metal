@@ -117,3 +117,7 @@ install(
     PATTERN
     "*.proto"
 )
+
+if(TT_METAL_BUILD_X280)
+    add_subdirectory(x280)
+endif()
