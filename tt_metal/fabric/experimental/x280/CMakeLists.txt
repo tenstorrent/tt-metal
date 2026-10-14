@@ -808,4 +808,44 @@ foreach(_member tensix_to_x280 erisc_to_x280_header)
     add_dependencies(x280_packet_injection_${_member} tt_metal_version_header)
 endforeach()
 
+# ---------------------------------------------------------------------------
+# eth_credit: credit flow control across the direct Ethernet link between two chips. X280
+# forwarders on both chips; E0/E1 kernels on the linked active Ethernet core of each.
+# ---------------------------------------------------------------------------
+x280_add_image(
+    NAME firmware-eth-credit-x280-fwd
+    SOURCES src/eth_credit_x280_fwd.cpp
+    COMPILE_OPTIONS -fno-zero-initialized-in-bss
+    INCLUDES
+        kernels
+        kernels/shared
+        kernels/eth_credit
+)
+set(_x280_eth_credit_dirs
+    ${_x280_shared_dir}
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/eth_credit
+)
+_x280_check_header(eth_credit_abi.h c ${_x280_eth_credit_dirs})
+_x280_check_header(eth_credit_abi.h c++ ${_x280_eth_credit_dirs})
+foreach(_header eth_credit_header.hpp x280_fwd.hpp)
+    _x280_check_header(${_header} c++ ${_x280_eth_credit_dirs})
+endforeach()
+# The E0/E1 kernels are built by the Metal JIT at launch; this compiles them offline the same way,
+# for every shape and bring-up mode the suite runs. It also links them when a Metal runtime cache
+# holds firmware built from this tree, and otherwise reports "compile only".
+add_test(
+    NAME x280_eth_credit_jit
+    COMMAND
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/eth_credit_jit_check.sh ${X280_GXX} ${PROJECT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/eth-credit-jit
+)
+target_sources(x280_bench_host_tests PRIVATE tests/host/test_eth_credit.cpp)
+target_include_directories(x280_bench_host_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/kernels/eth_credit)
+# The E0/E1 kernels launch on active Ethernet cores only under slow dispatch.
+_x280_device_test(x280_eth_credit
+    tests/device/test_eth_credit_hw.cpp
+    KERNELS shared eth_credit
+    SLOW_DISPATCH
+)
+
 add_custom_target(x280_abi_headers ALL DEPENDS ${_x280_header_stamps})

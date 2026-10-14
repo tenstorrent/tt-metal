@@ -15,13 +15,13 @@
 # built from this same tt-metal tree, each object is also linked against it;
 # otherwise the link is skipped and the script says so.
 #
-# Usage: eth_credit_jit_check.sh <tt-metal dir> <x280 dir> <scratch dir>
+# Usage: eth_credit_jit_check.sh <SFPI g++> <tt-metal dir> <x280 dir> <scratch dir>
 set -euo pipefail
 
-TTM=$(cd "${1:?tt-metal dir}" && pwd)/
-X280=$(cd "${2:?x280 dir}" && pwd)
-OUT=${3:?scratch dir}
-GXX=${TTM}runtime/sfpi/compiler/bin/riscv-tt-elf-g++
+GXX=${1:?SFPI g++}
+TTM=$(cd "${2:?tt-metal dir}" && pwd)/
+X280=$(cd "${3:?x280 dir}" && pwd)
+OUT=${4:?scratch dir}
 [[ -x "$GXX" ]] || { echo "FAIL: no JIT compiler at $GXX" >&2; exit 1; }
 mkdir -p "$OUT"
 
