@@ -8,7 +8,7 @@
 
 #include "fabric_shadow_header.hpp"
 
-#include <tt_metal/fabric/fabric_edm_packet_header.hpp>
+#include <tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp>
 
 #include <cstddef>
 

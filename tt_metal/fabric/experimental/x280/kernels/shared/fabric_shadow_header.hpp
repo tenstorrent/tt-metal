@@ -97,7 +97,7 @@ inline void fs_seed_unicast_header(
 
 /* Byte offsets of PacketHeaderBase fields inside `base`: payload_size_bytes
  * (uint16), noc_send_type, then src_ch_id, after the 40-byte NocCommandFields
- * (tt_metal/fabric/fabric_edm_packet_header.hpp). */
+ * (tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp). */
 #define FS_PAYLOAD_SIZE_BYTES_OFFSET 40u
 #define FS_SRC_CH_ID_OFFSET 43u
 

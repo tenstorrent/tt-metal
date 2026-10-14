@@ -12,7 +12,7 @@
 #include "ubench_section_load.h"
 
 /* The deployed 2D packet header: HybridMeshPacketHeaderT<35>, 96 bytes
- * (tt_metal/fabric/fabric_edm_packet_header.hpp). */
+ * (tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp). */
 #define FS_PACKET_HEADER_BYTES 96u
 #define FS_ROUTE_BUFFER_CAPACITY 35u
 
