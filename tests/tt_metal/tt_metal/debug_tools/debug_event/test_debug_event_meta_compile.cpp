@@ -5,17 +5,19 @@
 // Debug event metadata, layer 2: what the device compiler says about a site. Each case of
 // test_kernels/misc/debug_event_meta_cases.cpp is built offline (experimental::CompileKernelOffline, mock mode, no
 // device), so this runs the real device compiler with the real kernel flags and opens nothing that a failed build
-// could leave wedged. A bad case must fail to compile with its own rule's message and no other rule's; the valid
-// case must compile in every profiler mode.
+// could leave wedged. A bad case must fail to compile with exactly one error, its own rule's; the valid case must
+// compile in every profiler mode, and a bad metadata type must fail in every mode, not only the streaming one.
 //
 // The offline path has no firmware for a profiler build_key, so a kernel built under a profiler compiles but cannot
-// link. There the valid case passes when the only failure is that link error.
+// link. There the valid case passes when the only failure is that link error. The streaming and DRAM profilers need a
+// Tracy-enabled build; without one only the profiler-off tests run.
 
 #include <gtest/gtest.h>
 
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <iterator>
 #include <optional>
 #include <regex>
 #include <string>
@@ -49,6 +51,7 @@ constexpr std::string_view kRuleMessages[] = {
     "must be named at namespace scope",
     "the first field of a debug event metadata type must be the site's name",
     "name_must_be_a_non_empty_string_literal",
+    "debug_event_site_metadata_too_long_shorten_its_strings",
 };
 
 // Sets or clears an environment variable for one scope; CompileKernelOffline reads the environment on every call.
@@ -114,6 +117,54 @@ bool has_compile_error(const std::string& text) {
     return std::regex_search(text, diagnostic);
 }
 
+// A build that failed only because the offline path has no firmware to link against: no compiler error, and no
+// assembler message either -- the assembler only warns about text it mangles (an unterminated string, say) and
+// carries on.
+void expect_only_the_link_error(const std::string& text) {
+    EXPECT_FALSE(has_compile_error(text)) << text.substr(0, 2000);
+    EXPECT_EQ(text.find("Assembler messages:"), std::string::npos) << text.substr(0, 2000);
+    EXPECT_NE(text.find(kNoFirmwareLinkError), std::string::npos) << text.substr(0, 2000);
+}
+
+// How many compiler errors the build reported.
+size_t error_count(const std::string& text) {
+    static const std::regex error(R"(: error:)");
+    return static_cast<size_t>(
+        std::distance(std::sregex_iterator(text.begin(), text.end(), error), std::sregex_iterator()));
+}
+
+// Whether this build can arm profiler P: the streaming and DRAM profilers reject their variable without Tracy.
+bool profiler_supported(Profiler p) {
+    if (p == Profiler::Off) {
+        return true;
+    }
+    ProfilerMode mode(p);
+    try {
+        tt::llrt::RunTimeOptions options;
+    } catch (const std::exception&) {
+        return false;
+    }
+    return true;
+}
+
+// The cases that break a rule on the metadata TYPE, which every profiler mode checks; the others break a rule on a
+// site's value, which only the streaming profiler (the one that marshals values) can see.
+struct TypeRuleCase {
+    int which;
+    std::string_view message;
+};
+constexpr TypeRuleCase kTypeRuleCases[] = {
+    {1, "cannot have C array members"},
+    {2, "cannot have C array members"},
+    {3, "cannot have const members"},
+    {4, "a metadata field must be a string literal"},
+    {5, "cannot have a base class"},
+    {6, "the first field of a debug event metadata type must be the site's name"},
+    {8, "must be named at namespace scope"},
+    {9, "must be named at namespace scope"},
+    {11, "need 1..kMaxFields fields"},
+};
+
 // The first compiler error line, for failure messages; the whole log is long.
 std::string first_error(const std::string& text) {
     std::smatch m;
@@ -125,32 +176,34 @@ class DebugEventMetaCompile : public ::testing::Test {
 protected:
     void SetUp() override {
         {
-            ProfilerMode streaming(Profiler::Streaming);
-            try {
-                if (tt::llrt::RunTimeOptions{}.is_simulator_or_emulated()) {
-                    GTEST_SKIP() << "the offline compile has no firmware for a simulator build_key";
-                }
-            } catch (const std::exception&) {
-                GTEST_SKIP() << "the streaming profiler needs a Tracy-enabled build";
+            ProfilerMode off(Profiler::Off);
+            if (tt::llrt::RunTimeOptions{}.is_simulator_or_emulated()) {
+                GTEST_SKIP() << "the offline compile has no firmware for a simulator build_key";
             }
         }
         experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1);
+        mock_mode_ = true;
     }
     void TearDown() override {
-        if (!IsSkipped()) {
+        if (mock_mode_) {
             experimental::disable_mock_mode();
         }
     }
 
-    // Case WHICH must fail to compile under the streaming profiler with EXPECTED and no other rule's message.
-    void expect_rejected(int which, std::string_view expected) {
-        ProfilerMode streaming(Profiler::Streaming);
+    // Case WHICH must fail to compile under profiler P with exactly one error, EXPECTED, and no other rule's message.
+    // Skips the test when this build cannot arm P.
+    void expect_rejected(int which, std::string_view expected, Profiler p = Profiler::Streaming) {
+        if (!profiler_supported(p)) {
+            GTEST_SKIP() << "this profiler needs a Tracy-enabled build";
+        }
+        ProfilerMode mode(p);
         const std::optional<std::string> error = compile_case(which);
         ASSERT_TRUE(error.has_value()) << "case " << which << " compiled";
         ASSERT_TRUE(has_compile_error(*error)) << "case " << which << " did not fail in the compiler:\n"
                                                << error->substr(0, 2000);
         EXPECT_NE(error->find(expected), std::string::npos)
             << "case " << which << " lacks \"" << expected << "\"; first error: " << first_error(*error);
+        EXPECT_EQ(error_count(*error), 1u) << "case " << which << ":\n" << error->substr(0, 4000);
         for (std::string_view other : kRuleMessages) {
             if (other != expected) {
                 EXPECT_EQ(error->find(other), std::string::npos)
@@ -158,36 +211,61 @@ protected:
             }
         }
     }
+
+private:
+    bool mock_mode_ = false;
 };
 
 // ---- The valid case, in every profiler mode -------------------------------------------------------------------------
 
 TEST_F(DebugEventMetaCompile, CPU_ValidSitesCompileUnderTheStreamingProfiler) {
+    if (!profiler_supported(Profiler::Streaming)) {
+        GTEST_SKIP() << "the streaming profiler needs a Tracy-enabled build";
+    }
     ProfilerMode streaming(Profiler::Streaming);
     const std::optional<std::string> error = compile_case(0);
     if (error) {
-        EXPECT_FALSE(has_compile_error(*error)) << first_error(*error);
-        EXPECT_NE(error->find(kNoFirmwareLinkError), std::string::npos) << error->substr(0, 2000);
+        expect_only_the_link_error(*error);
     }
 }
 
 TEST_F(DebugEventMetaCompile, CPU_ValidSitesCompileUnderTheDramProfiler) {
+    if (!profiler_supported(Profiler::Dram)) {
+        GTEST_SKIP() << "the DRAM profiler needs a Tracy-enabled build";
+    }
     ProfilerMode dram(Profiler::Dram);
     const std::optional<std::string> error = compile_case(0);
     if (error) {
-        EXPECT_FALSE(has_compile_error(*error)) << first_error(*error);
-        EXPECT_NE(error->find(kNoFirmwareLinkError), std::string::npos) << error->substr(0, 2000);
+        expect_only_the_link_error(*error);
     }
 }
 
 TEST_F(DebugEventMetaCompile, CPU_ValidSitesBuildWithTheProfilerOff) {
     ProfilerMode off(Profiler::Off);
     const std::optional<std::string> error = compile_case(0);
-    EXPECT_FALSE(error.has_value()) << first_error(error.value_or(""));
+    EXPECT_FALSE(error.has_value()) << error.value_or("").substr(0, 2000);
 }
 
-// ---- One rule broken per case
-// -----------------------------------------------------------------------------------------
+// ---- A bad type fails in every profiler mode ------------------------------------------------------------------------
+
+TEST_F(DebugEventMetaCompile, CPU_TypeRulesHoldWithTheProfilerOff) {
+    for (const TypeRuleCase& c : kTypeRuleCases) {
+        SCOPED_TRACE(c.which);
+        expect_rejected(c.which, c.message, Profiler::Off);
+    }
+}
+
+TEST_F(DebugEventMetaCompile, CPU_TypeRulesHoldUnderTheDramProfiler) {
+    if (!profiler_supported(Profiler::Dram)) {
+        GTEST_SKIP() << "the DRAM profiler needs a Tracy-enabled build";
+    }
+    for (const TypeRuleCase& c : kTypeRuleCases) {
+        SCOPED_TRACE(c.which);
+        expect_rejected(c.which, c.message, Profiler::Dram);
+    }
+}
+
+// ---- One rule broken per case, under the streaming profiler ---------------------------------------------------------
 
 TEST_F(DebugEventMetaCompile, CPU_RejectsAnArrayMember) { expect_rejected(1, "cannot have C array members"); }
 
@@ -220,5 +298,9 @@ TEST_F(DebugEventMetaCompile, CPU_RejectsARunTimeValue) {
 }
 
 TEST_F(DebugEventMetaCompile, CPU_RejectsMoreThanMaxFields) { expect_rejected(11, "need 1..kMaxFields fields"); }
+
+TEST_F(DebugEventMetaCompile, CPU_RejectsStringsTooLongForOneSite) {
+    expect_rejected(12, "debug_event_site_metadata_too_long_shorten_its_strings");
+}
 
 }  // namespace debug_event_compile_test

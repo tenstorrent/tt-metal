@@ -580,7 +580,9 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 
 #define DeviceZoneScopedNC(name, color) (void(name), void(sizeof(color)))
 
-#define DeviceZoneScopedWith(...) (void(sizeof(__VA_ARGS__)))
+// No code, but the metadata type is still checked (see kernel_profiler.hpp).
+#include "hostdev/debug_event_meta.h"
+#define DeviceZoneScopedWith(...) static_assert(::tt::debug_event::detail::check_site_type<decltype(__VA_ARGS__)>())
 
 #define DeviceZoneScopedNIf(name, active) (void(name), void(sizeof(active)))
 

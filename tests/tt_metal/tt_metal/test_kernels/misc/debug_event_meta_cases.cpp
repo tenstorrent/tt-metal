@@ -11,7 +11,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/kernel_profiler.hpp"
 
-#if DEBUG_EVENT_META_CASE == 0  // valid: built-in types, a nested user type, an enum field, a template site
+#if DEBUG_EVENT_META_CASE == 0  // valid: built-in and nested types, an enum, a multi-line string, a template site
 
 struct Style {
     uint32_t color;
@@ -26,6 +26,10 @@ enum class Level : uint8_t { Low, High };
 struct LevelMeta {
     const char* name;
     Level level;
+};
+struct NoteMeta {
+    const char* name;
+    const char* note;
 };
 
 template <uint32_t Color>
@@ -45,6 +49,9 @@ void kernel_main() {
     }
     {
         DeviceZoneScopedWith(LevelMeta{"level", Level::High});
+    }
+    {
+        DeviceZoneScopedWith(NoteMeta{"note", "two\nlines, a\ttab, \"quotes\", \\ and \xC3\xA9"});
     }
     colored_zone<0xFF0000>();
     colored_zone<0x00FF00>();
@@ -139,6 +146,13 @@ struct WideMeta {
     uint8_t a, b, c, d, e, f, g, h;
 };
 void kernel_main() { DeviceZoneScopedWith(WideMeta{"x", 1, 2, 3, 4, 5, 6, 7, 8}); }
+
+#elif DEBUG_EVENT_META_CASE == 12  // strings longer than one site's assembler text
+
+#define DEM_S10 "0123456789"
+#define DEM_S100 DEM_S10 DEM_S10 DEM_S10 DEM_S10 DEM_S10 DEM_S10 DEM_S10 DEM_S10 DEM_S10 DEM_S10
+#define DEM_S1000 DEM_S100 DEM_S100 DEM_S100 DEM_S100 DEM_S100 DEM_S100 DEM_S100 DEM_S100 DEM_S100 DEM_S100
+void kernel_main() { DeviceZoneScopedN(DEM_S1000 DEM_S1000 DEM_S100); }
 
 #else
 #error "unknown DEBUG_EVENT_META_CASE"
