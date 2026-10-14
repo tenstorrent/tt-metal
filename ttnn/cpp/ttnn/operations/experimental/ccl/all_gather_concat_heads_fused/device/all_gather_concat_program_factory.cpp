@@ -765,7 +765,7 @@ void AllGatherConcatMeshWorkloadFactory::override_runtime_arguments(
         writer_args[kWorkerWriterSemaphoreArg] = semaphore_address;
     }
 
-    const auto output_shard_spec = tensor_return_value.shard_spec();
+    const auto& output_shard_spec = tensor_return_value.shard_spec();
     TT_FATAL(output_shard_spec.has_value(), "all_gather_concat cache hit requires a sharded output");
     for (const auto& core : concat_output_cores(output_shard_spec->grid)) {
         if (skips_concat_reader_runtime_args(core)) {
