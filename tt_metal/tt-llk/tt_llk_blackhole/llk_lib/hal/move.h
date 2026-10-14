@@ -1290,7 +1290,7 @@ inline __attribute__((always_inline)) void emit_runtime_matrix_transfer(
 {
     if (Fragment < count)
     {
-        ckernel::instrn_buffer[0] = Fragment + 1u == count ? final_instruction : intermediate_instruction;
+        TT_INSN(Fragment + 1u == count ? final_instruction : intermediate_instruction);
 
         if constexpr (Fragment + 1u < MaxMatrixTransferInstructions)
         {
@@ -1338,7 +1338,7 @@ inline __attribute__((always_inline)) void run_runtime_scalar(const Operation tr
 #ifdef ENABLE_LLK_ASSERT
     assert_valid(transfer);
 #endif
-    ckernel::instrn_buffer[0] = encode(transfer);
+    TT_INSN(encode(transfer));
     if (transfer.completion == Completion::Wait)
     {
         hal::sync::wait::stall(hal::sync::StallTarget::All, hal::sync::StallCondition::ScalarIdle);
@@ -1360,7 +1360,7 @@ inline __attribute__((always_inline)) void run_runtime(const Transfer<Gpr, SrcA>
 #ifdef ENABLE_LLK_ASSERT
     assert_valid(transfer);
 #endif
-    ckernel::instrn_buffer[0] = encode(transfer);
+    TT_INSN(encode(transfer));
 }
 
 inline __attribute__((always_inline)) void run_runtime(const Transfer<Gpr, SrcB> transfer)
@@ -1368,7 +1368,7 @@ inline __attribute__((always_inline)) void run_runtime(const Transfer<Gpr, SrcB>
 #ifdef ENABLE_LLK_ASSERT
     assert_valid(transfer);
 #endif
-    ckernel::instrn_buffer[0] = encode(transfer);
+    TT_INSN(encode(transfer));
 }
 
 inline __attribute__((always_inline)) void run_runtime(const Transfer<Gpr, Mmio> transfer)
@@ -1391,7 +1391,7 @@ inline __attribute__((always_inline)) void run_runtime(const Transfer<L1, L1> tr
         hal::cfg::set<hal::cfg::Thcon[hal::cfg::Reg6].Destination_address, hal::cfg::Sec::S0>(transfer.destination.block),
         hal::cfg::set<hal::cfg::Thcon[hal::cfg::Reg6].Buffer_size, hal::cfg::Sec::S0>(transfer.size.value),
         hal::cfg::set<hal::cfg::Thcon[hal::cfg::Reg6].Transfer_direction, hal::cfg::Sec::S0, 3u>());
-    ckernel::instrn_buffer[0] = encode_xmov_launch();
+    TT_INSN(encode_xmov_launch());
 
     if (transfer.completion == Completion::Wait)
     {
