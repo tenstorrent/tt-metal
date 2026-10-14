@@ -1331,12 +1331,17 @@ def eltwise_unary_sfpu(
     collect_result=False,
     check_golden=True,
     return_golden=False,
+    custom_atol=None,
+    custom_rtol=None,
 ):
     """Shared unary SFPU runner for functional, perf, and accuracy.
 
     *gate_on_step_budget* is for a caller whose hand-built stimulus the op's step
     budget was measured on (``MEASURED_ON_SWEEP`` in test_sfpu_accuracy_budget.py): it
     gates on the whole contract rather than only its tolerance arm.
+
+    *custom_atol* / *custom_rtol* replace the contract's gate for a caller whose stimulus
+    needs a tolerance the op's registry row does not describe (the polygamma order sweep).
 
     *return_golden* returns ``(res_tensor, golden_tensor)`` instead of the raw L1 result,
     for callers that want a stricter gate than the op's tolerance."""
@@ -1409,11 +1414,7 @@ def eltwise_unary_sfpu(
                 if relu_max_threshold is None
                 else {"relu_max_threshold": relu_max_threshold}
             ),
-            **(
-                {}
-                if polygamma_order is None
-                else {"polygamma_order": polygamma_order}
-            ),
+            **({} if polygamma_order is None else {"polygamma_order": polygamma_order}),
         )
 
     if unpack_to_dest is None:
@@ -1519,15 +1520,19 @@ def eltwise_unary_sfpu(
         dest_acc=dest_acc,
         arch=TestConfig.CHIP_ARCH,
     )
+    if custom_atol is not None or custom_rtol is not None:
+        gate_kwargs = {"custom_atol": custom_atol, "custom_rtol": custom_rtol}
+    elif gate_on_step_budget:
+        gate_kwargs = contract.passed_test_kwargs(
+            flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS
+        )
+    else:
+        gate_kwargs = contract.tolerance_kwargs()
     assert passed_test(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **(
-            contract.passed_test_kwargs(flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS)
-            if gate_on_step_budget
-            else contract.tolerance_kwargs()
-        ),
+        **gate_kwargs,
     ), "Assert against golden failed"
     if return_golden:
         return res_tensor, golden_tensor
