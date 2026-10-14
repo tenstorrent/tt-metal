@@ -9,7 +9,7 @@
 #include "x280_runtime_impl.hpp"
 #include "x280_tile_impl.hpp"
 
-#include "socket_layout.h"
+#include "x280_hart_protocol.h"
 
 #include "impl/context/metal_context.hpp"
 
@@ -31,7 +31,7 @@ namespace {
 std::mutex g_runtime_mutex;
 std::weak_ptr<detail::RuntimeImpl> g_runtime;
 
-constexpr uint64_t kRequiredLimBytes = X280_SOCKET_HIGHEST_END;
+constexpr uint64_t kRequiredLimBytes = X280_HART_PROTOCOL_END - X280_LIM_BASE;
 
 constexpr std::array<const char*, 4> kRuntimeOpenOutcomeNames = {
     "ready",

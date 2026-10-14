@@ -11,7 +11,7 @@
 // an X280 image, so nothing here may reference them; the host reads a hart's
 // trap block through X280_TRAP_DIAG_ADDR(X280_IDLE_TRAP_DIAG_ADDR, hart).
 #include "x280.h"
-#include "socket_layout.h"
+#include "x280_hart_protocol.h"
 
 #include <array>
 
@@ -168,9 +168,7 @@ uint64_t lim_backed_bytes(uint32_t wayenable) {
     return static_cast<uint64_t>(kMaxLimWays - ways) * kLimWayBytes;
 }
 
-static_assert(
-    X280_LIM_BASE + X280_SOCKET_HIGHEST_END == 0x08154000ULL,
-    "socket highest end matches packet injection exclusion bound");
+static_assert(X280_HART_PROTOCOL_END == 0x08131B00ULL, "hart protocol end is the runtime reservation bound");
 
 LimRange available_lim_for_layout(LimLayout layout, uint64_t backed_bytes) {
     LimRange range;
@@ -179,8 +177,7 @@ LimRange available_lim_for_layout(LimLayout layout, uint64_t backed_bytes) {
     }
     const uint64_t backed_end = X280_LIM_BASE + backed_bytes;
     if (layout == LimLayout::PacketInjection) {
-        const uint64_t min_backed_end = X280_LIM_BASE + X280_SOCKET_HIGHEST_END;
-        if (backed_end < min_backed_end) {
+        if (backed_end < X280_HART_PROTOCOL_END) {
             return range;
         }
         range.begin = X280_LIM_PACKET_INJECTION_ARENA_BASE;
@@ -188,8 +185,7 @@ LimRange available_lim_for_layout(LimLayout layout, uint64_t backed_bytes) {
         return range;
     }
 
-    const uint64_t reserved_end = X280_LIM_BASE + X280_SOCKET_HIGHEST_END;
-    range.begin = reserved_end;
+    range.begin = X280_HART_PROTOCOL_END;
     range.end = backed_end > range.begin ? backed_end : range.begin;
     return range;
 }

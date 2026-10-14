@@ -20,8 +20,9 @@ ENTRY(_start)
 /* X280 L3 LIM: total region [0x08000000, 0x081E0000), 1.875 MiB.
  *   [0x08000000, 0x08001000)   resident idle FW (separate linker)
  *   [0x08001000, 0x08120000)   active FW          (this script)
- *   [0x08130000, 0x081E0000)   mailboxes / staging / fifo pool
- *                              (managed by socket_layout.h)
+ *   [0x08130000, 0x08131B00)   per-hart protocol at 0x08131800
+ *                              (x280_hart_protocol.h)
+ *   [0x08131B00, 0x081E0000)   host runtime available_lim() (Legacy layout)
  * Active-FW capacity ~1.121 MiB; current builds use < 64 KiB. */
 LIM_BASE = 0x08001000;
 LIM_SIZE = 0x0011F000;   /* ~1.121 MiB */

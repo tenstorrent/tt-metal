@@ -12,7 +12,7 @@
 #include "x280_tile_impl.hpp"
 
 #include "x280_address_map.h"
-#include "socket_layout.h"
+#include "x280_hart_protocol.h"
 
 #include <umd/device/types/telemetry.hpp>
 
@@ -132,7 +132,7 @@ LimRange TileImpl::reserved_lim() const {
     // placing a socket config buffer or FIFO anywhere in here corrupts a running
     // image, and nothing detects it afterwards.
     range.begin = X280_IDLE_FW_LOAD_ADDR;
-    range.end = X280_LIM_BASE + X280_SOCKET_HIGHEST_END;
+    range.end = X280_HART_PROTOCOL_END;
     return range;
 }
 

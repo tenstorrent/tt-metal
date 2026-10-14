@@ -30,7 +30,7 @@ work beside its Metal workloads:
 using tt::tt_metal::distributed::MeshDevice;
 
 auto mesh = MeshDevice::create_unit_mesh(chip);
-const x280::RuntimeOpenConfig config{.lim_shape = x280::LimShape{.lim_ways = 15}};  // 11 to 15 LIM ways
+const x280::RuntimeOpenConfig config{.lim_shape = x280::LimShape{.lim_ways = 15}};  // 10 to 15 LIM ways
 auto opened = x280::X280Runtime::open(mesh, config);
 if (opened.requires_reset()) {
     // The PCIe device number (/dev/tenstorrent/<N>); an empty list resets every device.
@@ -204,7 +204,9 @@ The approved reusable C++ path is rooted at `X280Runtime::open(mesh, config)`.
 `RuntimeOpenConfig` defaults to automatic ECC priming and the reset cache/LIM
 partition: fifteen 128 KiB LIM ways (`WayEnable=0`, 1.875 MiB backed). A caller
 can select `LimEccPrimingPolicy::RequirePrepared` and a smaller `LimShape`.
-The current component and socket reservation requires at least eleven LIM ways.
+The component reservation ends at the per-hart protocol block (`0x08131B00`) and
+requires at least ten LIM ways; the socket and migration regions in
+`socket_layout.h` lie inside `available_lim()`.
 
 `open` is Metal's stateful X280 initialization entry point, not a read-only
 factory: it binds the caller-owned Metal mesh and discovers and inspects every

@@ -4,7 +4,6 @@
 
 #include "x280/device/x280_active.hpp"
 
-#include "socket_layout.h"
 #include "x280_address_map.h"
 #include "x280_hart_protocol.h"
 
@@ -52,9 +51,6 @@ static_assert(!std::is_move_assignable_v<X280ActiveSession>);
 static_assert(std::is_trivially_copyable_v<SessionId>);
 static_assert(!std::is_convertible_v<SessionId, bool>);
 
-static_assert(
-    X280_HART_PROTOCOL_BASE == X280_MIGRATION_CONTROL_ADDR + X280_HART_PROTOCOL_BASE_OFFSET,
-    "hart protocol and socket layout must agree on the protocol base");
 static_assert(sizeof(x280_hart_protocol_t) == X280_HART_PROTOCOL_SIZE, "hart protocol type and region size must agree");
 
 TEST(ActiveMailbox, PerHartRecordsHaveTheWireLayout) {

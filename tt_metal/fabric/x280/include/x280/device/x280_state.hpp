@@ -32,7 +32,7 @@ static_assert(
     "X280_PINNED_INPUT_WAYENABLE must leave at least one LIM way: WayEnable N backs 15 - N ways");
 
 // Opt-in component memory profile. Legacy preserves the original reserved prefix
-// and upper stack/socket bounds. PacketInjection establishes a dedicated lower arena
+// through the per-hart protocol block. PacketInjection establishes a dedicated lower arena
 // between image text and active stacks.
 enum class LimLayout : uint32_t {
     Legacy = 0,

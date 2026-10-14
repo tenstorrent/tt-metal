@@ -11,7 +11,7 @@
 #include "x280/device/x280_deadline.hpp"
 #include "x280/device/x280_runtime.hpp"
 
-#include "socket_layout.h"
+#include "x280_hart_protocol.h"
 #include "x280.h"
 #include "x280_hw_addrs.hpp"
 
@@ -120,12 +120,12 @@ TEST(LimShape, DefaultPreservesTheResetPartition) {
 }
 
 TEST(LimShape, ValidatesHardwareAndRequiredCapacity) {
-    constexpr uint64_t required = X280_SOCKET_HIGHEST_END;
-    const auto minimum = validate_lim_shape(LimShape{.lim_ways = 11}, required);
+    constexpr uint64_t required = X280_HART_PROTOCOL_END - X280_LIM_BASE;
+    const auto minimum = validate_lim_shape(LimShape{.lim_ways = 10}, required);
     ASSERT_TRUE(minimum.ok) << minimum.reason;
-    EXPECT_EQ(minimum.target_wayenable, 4u);
+    EXPECT_EQ(minimum.target_wayenable, 5u);
 
-    const auto too_small = validate_lim_shape(LimShape{.lim_ways = 10}, required);
+    const auto too_small = validate_lim_shape(LimShape{.lim_ways = 9}, required);
     EXPECT_FALSE(too_small.ok);
     EXPECT_FALSE(too_small.reason.empty());
 
