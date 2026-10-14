@@ -759,8 +759,35 @@ inline bool topology_sat_encode_at_most_k_groups(
     std::vector<int> occ;
     topology_sat_build_group_occupancy(solver, constraint_data, enc, /*all_or_nothing=*/full_packing, occ, extra_lit);
     const size_t num_present = occ.size();
+    // The cap counts host groups, so while it is asserted every chosen global must belong to one. A global with
+    // no group label (its ASICs span several hosts, e.g. a *_hostedge seat in the master placement) raises no
+    // occupancy literal, so without this rule "at most k groups" is satisfied vacuously by choosing it: two
+    // cross-host seats read as zero occupied hosts and a k=1 solve returned a three-host placement. Forbid the
+    // assign literals of unlabelled globals under the same guard as the cap itself: the HARD cap's drop-cap
+    // re-encode and the SOFT minimize's retracted assumption both re-admit them, so a mesh that only exists as
+    // a cross-host seat still places once the cap is relaxed. This runs BEFORE the not-binding early return
+    // below: the cardinality clause is pointless when at most k labelled groups are reachable, but the
+    // exclusion is not -- with one reachable labelled group and k=1 an unlabelled seat is still a free pass
+    // around the cap (and the DFS engine already refuses it unconditionally while the cap is active).
+    const auto& label_of = constraint_data.global_to_same_rank_group;
+    for (size_t t = 0; t < enc.assign_lit.size(); ++t) {
+        const auto& globs = enc.allowed_global_idx[t];
+        const auto& lits = enc.assign_lit[t];
+        for (size_t i = 0; i < globs.size(); ++i) {
+            const size_t g = globs[i];
+            const bool unlabelled = g >= label_of.size() || label_of[g] < 0;
+            if (!unlabelled) {
+                continue;
+            }
+            if (extra_lit != 0) {
+                solver.add(extra_lit);  // guard: clause is active only while the cap / minimize is asserted
+            }
+            solver.add(-lits[i]);
+            solver.add(0);
+        }
+    }
     if (num_present == 0 || k_hosts >= num_present) {
-        return true;  // not binding
+        return true;  // cardinality not binding (the unlabelled exclusion above still applies)
     }
     // "at most k occupied" == "at least (num_present - k) of the negated occupancy literals".
     std::vector<int> neg;
