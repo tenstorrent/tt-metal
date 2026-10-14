@@ -8,7 +8,6 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/debug/dprint.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -25,15 +24,18 @@ constexpr uint32_t batch_size(uint32_t base) {
     return limit - base < dst_tiles ? limit - base : dst_tiles;
 }
 
-// mul_tiles_bcast_rows that adds onto DST instead of clearing it first (fp32 DST mode accumulates by design).
+// mul_tiles_bcast_rows without the DST clear: in fp32 DST mode ELWMUL adds its product onto the DST tile, and the LLK
+// ignores clear_fp32_dst_acc when no dest-reuse is involved (it is passed as false only because the Blackhole overload
+// has no default). The conv relies on DST tiles being zero when acquired (the packer zeroes every tile it packs), so
+// the first tap writes and the remaining taps accumulate.
 FORCE_INLINE void mul_bcast_rows_accumulate(
-    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, bool clear) {
+    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,
           BroadcastType::ROW,
           DST_ACCUM_MODE,
           MATH_FIDELITY,
-          EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, clear)));
+          EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, /*clear_fp32_dst_acc=*/false)));
     UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1, 0)));
 }
 
@@ -51,7 +53,7 @@ template <uint32_t block_ct>
             const uint32_t w = reversed ? tap_count - 1 - tap : tap;
             for (uint32_t i = 0; i < n; ++i) {
                 mul_bcast_rows_accumulate(
-                    views_cb, dfb::weights, tap * block_ct + base + i, w * block_ct + base + i, i, tap == 0);
+                    views_cb, dfb::weights, tap * block_ct + base + i, w * block_ct + base + i, i);
             }
         }
         tile_regs_commit();
@@ -127,7 +129,9 @@ template <uint32_t block_ct>
     dc_tile.push_back(block_ct);
 }
 
-// acc[tap][ct] += dc * view_tap in fp32; the last own tile writes the sum to grad_tap instead of acc.
+// acc[tap][ct] += dc * view_tap. The running sum is kept in an fp32 DFB and packed as fp32 (grad_tap too), but each
+// add unpacks acc into SrcA, which holds tf32 (10-bit mantissa), so the accumulation is tf32 rather than full fp32.
+// The last own tile writes the sum to grad_tap instead of acc.
 template <uint32_t block_ct, bool first, bool last>
 [[gnu::noinline]] void accumulate_grad_tap(DataflowBuffer& acc, DataflowBuffer& grad_tap) {
     constexpr uint32_t total = tap_count * block_ct;
@@ -228,7 +232,6 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             compute_kernel_lib::untilize<block_ct, dfb::dc_tile, dfb::dc_rm>(1);
             activation.pop_front(tap_count * block_ct);
             grad_out.pop_front(block_ct);
-            DPRINT_PACK("compute: work {} mt {} dc pushed\n", work, m0 + k);
 
             if (k > 0) {
                 grad_input_tile<block_ct>(dc_views, output);
@@ -238,6 +241,5 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             grad_input_tile<block_ct>(dc_views, output);
         }
         weights.pop_front(tap_count * block_ct);
-        DPRINT_PACK("compute: work {} done\n", work);
     }
 }

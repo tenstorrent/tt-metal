@@ -7,7 +7,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
-#include "api/debug/dprint.h"
 #include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
@@ -44,8 +43,6 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const uint32_t self_x = my_x[noc.get_noc_id()];
     const uint32_t self_y = my_y[noc.get_noc_id()];
 
-    DPRINT("reader: wi_start={} wi_count={} block_ct={} Mt={} splits={}\n", wi_start, wi_count, block_ct, Mt, splits);
-
     DataflowBuffer ones(dfb::ones);
     ones.reserve_back(1);
     auto* ones_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ones.get_write_ptr());
@@ -77,13 +74,6 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         }
         noc.async_read_barrier();
         weights.push_back(tap_count * block_ct);
-        DPRINT(
-            "reader: work {} (block {} split {}) weights pushed, dc tiles {}..{}\n",
-            work,
-            block,
-            split,
-            m0,
-            m0 + dc_tiles);
 
         for (uint32_t k = 0; k < dc_tiles; ++k) {
             const uint32_t mt = m0 + k;
@@ -164,7 +154,6 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             noc.async_read_barrier();
             activation.push_back(tap_count * block_ct);
             grad_out.push_back(block_ct);
-            DPRINT("reader: work {} mt {} views + grad_out pushed\n", work, mt);
         }
     }
 }

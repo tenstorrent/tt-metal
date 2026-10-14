@@ -4,6 +4,7 @@
 
 #include "qkv_causal_conv1d_silu_bw_program_factory.hpp"
 
+#include <string>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
@@ -108,23 +109,10 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
         GRAD_TAP_PARTIAL{"grad_tap_partial"};
 
     const auto bf16 = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const auto fp32 = tt::DataFormat::Float32;
-    m2::Group<m2::DataflowBufferSpec> dfbs = {
-        make_dfb(ACT_RM, 8 * block_ct, bf16),
-        make_dfb(ACT_TILE, 4 * block_ct, bf16),
-        make_dfb(WEIGHTS, 4 * block_ct, bf16),
-        make_dfb(GRAD_OUT, 2 * block_ct, bf16),
-        make_dfb(PREACT, block_ct, bf16),
-        make_dfb(SIGMOID, qkv_conv_bw_dst_tiles, bf16),
-        make_dfb(DC_TILE, block_ct, bf16),
-        make_dfb(DC_RM, 2 * block_ct, bf16),
-        make_dfb(ACC, 8 * block_ct, fp32),
-        make_dfb(GRAD_TAP, 4 * block_ct, bf16),
-        make_dfb(DCV_RM, 4 * block_ct, bf16),
-        make_dfb(DCV_TILE, 4 * block_ct, bf16),
-        make_dfb(OUTPUT, 2 * block_ct, bf16),
-        make_dfb(ONES, 1, bf16),
-    };
+    m2::Group<m2::DataflowBufferSpec> dfbs;
+    for (const auto& dfb : qkv_conv_bw_dfbs(block_ct, bf16)) {
+        dfbs.push_back(make_dfb(m2::DFBSpecName{std::string(dfb.name)}, dfb.tiles, dfb.format));
+    }
     const auto window_bytes = static_cast<uint32_t>(qkv_conv_bw_window_bytes(block_ct, input.element_size()));
 
     m2::KernelSpec reader{

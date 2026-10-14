@@ -5,8 +5,8 @@
 // qkv causal conv1d + SiLU benchmark: one layer "model" (Kimi-like widths), forward + backward.
 //   composite - backward built from stock ttnn ops (what you get without the fused kernel)
 //   fused     - ttml::metal::qkv_causal_conv1d_silu_bw
-// Forward is always the fused ttnn kernel. Env: QKV_T, QKV_WIDTH (or QKV_Q/QKV_K/QKV_V), QKV_CHUNKS (csv),
-// QKV_SPLITS (csv, 0 = auto).
+// Forward is always the fused ttnn kernel. Env: QKV_T, QKV_WIDTH (or QKV_Q/QKV_K/QKV_V), QKV_CHUNKS (csv,
+// default 64,128,256; 256 is the op default and the fastest measured, 32 is 2.4x slower), QKV_SPLITS (csv, 0 = auto).
 
 #include <benchmark/benchmark.h>
 #include <fmt/format.h>
@@ -170,7 +170,7 @@ void BM_QkvCausalConv1dSilu(benchmark::State& state) {
     const uint32_t T = env_u32("QKV_T", 4096);
     const uint32_t W = env_u32("QKV_WIDTH", 4096);
     const Widths w{env_u32("QKV_Q", W), env_u32("QKV_K", W), env_u32("QKV_V", W)};
-    const auto chunks = env_list("QKV_CHUNKS", {32, 64, 128, 256});
+    const auto chunks = env_list("QKV_CHUNKS", {64, 128, 256});
     const auto splits = env_list("QKV_SPLITS", {0});
     const uint32_t warmup = 3;
     const uint32_t measure = 10;

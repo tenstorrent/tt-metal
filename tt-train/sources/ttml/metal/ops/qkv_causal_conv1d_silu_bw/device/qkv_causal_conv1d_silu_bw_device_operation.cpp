@@ -93,9 +93,7 @@ void QkvCausalConv1dSiluBackwardOperation::validate_on_program_cache_miss(
     const uint64_t available_l1_bytes =
         mesh->l1_size_per_core() - mesh->allocator()->get_base_allocator_addr(HalMemType::L1);
     const uint64_t required_l1_bytes = qkv_conv_bw_l1_bytes(
-        attrs.channel_chunk_size / tw,
-        tt::tile_size(datatype_to_dataformat_converter(in.input.dtype())),
-        in.input.element_size());
+        attrs.channel_chunk_size / tw, datatype_to_dataformat_converter(in.input.dtype()), in.input.element_size());
     TT_FATAL(
         required_l1_bytes <= available_l1_bytes,
         "{}: channel_chunk_size = {} needs {} bytes of L1 per core, only {} are available",
@@ -114,7 +112,7 @@ QkvCausalConv1dSiluBackwardOperation::spec_return_value_t QkvCausalConv1dSiluBac
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attrs.output_mem_config)),
         TensorSpec(
             Shape({attrs.sequence_splits, qkv_conv_bw_tap_count, tt::constants::TILE_HEIGHT, c}),
-            TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attrs.output_mem_config))};
+            TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config))};
 }
 
 QkvCausalConv1dSiluBackwardOperation::tensor_return_value_t QkvCausalConv1dSiluBackwardOperation::create_output_tensors(

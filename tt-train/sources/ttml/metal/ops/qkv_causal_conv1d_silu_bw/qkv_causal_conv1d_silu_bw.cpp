@@ -5,11 +5,28 @@
 #include "qkv_causal_conv1d_silu_bw.hpp"
 
 #include <algorithm>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
+#include <ttnn/operations/copy/typecast/typecast.hpp>
 
 #include "device/qkv_causal_conv1d_silu_bw_device_operation.hpp"
 
 namespace ttml::metal {
+
+uint32_t qkv_causal_conv1d_silu_chunk_size(uint32_t channels, const ttnn::distributed::MeshDevice& device) {
+    using namespace ops::qkv_causal_conv1d_silu_bw::device;
+    constexpr uint32_t tw = tt::constants::TILE_WIDTH;
+    constexpr uint32_t max_chunk = 256;
+    constexpr auto bf16 = tt::DataFormat::Float16_b;
+    const uint64_t available_l1_bytes =
+        device.l1_size_per_core() - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    for (uint32_t chunk = std::min(channels, max_chunk); chunk >= tw; chunk -= tw) {
+        if (channels % chunk == 0 && qkv_conv_bw_l1_bytes(chunk / tw, bf16, sizeof(uint16_t)) <= available_l1_bytes) {
+            return chunk;
+        }
+    }
+    return tw;
+}
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu_bw(
     const ttnn::Tensor& grad_q,
@@ -31,6 +48,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
         "qkv_causal_conv1d_silu_bw: input must be a [1,T,Q+K+V] device tensor");
     const auto sequence = static_cast<uint32_t>(input.logical_shape()[1]);
     const auto channels = q_width + k_width + v_width;
+    if (channel_chunk_size == 0) {
+        channel_chunk_size = qkv_causal_conv1d_silu_chunk_size(channels, *input.device());
+    }
     if (sequence_splits == 0) {
         const auto grid = input.device()->compute_with_storage_grid_size();
         const uint32_t cores = grid.x * grid.y;
@@ -66,7 +86,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
 
     auto outputs = ttnn::prim::ttml_qkv_causal_conv1d_silu_bw(
         grad_q, grad_k, grad_v, input, history, tap0, tap1, tap2, tap3, params);
-    auto grad_taps = ttnn::sum(outputs[1], ttsl::SmallVector<int>{0, 2}, /*keepdim=*/true);
+    // Partials are fp32; reduce over splits and rows in fp32, then cast the [1,4,1,C] result once.
+    auto grad_taps =
+        ttnn::typecast(ttnn::sum(outputs[1], ttsl::SmallVector<int>{0, 2}, /*keepdim=*/true), ttnn::DataType::BFLOAT16);
     const auto grad_tap = [&](int32_t tap, const ttnn::Tensor& like) {
         auto grad = ttnn::slice(
             grad_taps,

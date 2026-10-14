@@ -150,7 +150,9 @@ INSTANTIATE_TEST_SUITE_P(
         MetalCase{{256, 128, 64, 64}, 256, 8},
         MetalCase{{256, 128, 64, 64}, 32, 5},
         MetalCase{{512, 256, 128, 128}, 256, 0},
-        MetalCase{{512, 256, 128, 128}, 32, 0}));
+        MetalCase{{512, 256, 128, 128}, 32, 0},
+        MetalCase{{256, 128, 64, 64}, 0, 0},  // auto chunk: 256
+        MetalCase{{96, 96, 64, 32}, 0, 2}));  // auto chunk: 192 (C = 192 is not a multiple of 256)
 
 TEST_F(QkvCausalConv1dSiluTest, RepeatedRunsAreStable) {
     for (uint32_t i = 0; i < 10; ++i) {
@@ -227,6 +229,6 @@ TEST_P(QkvCausalConv1dSiluOpTest, MatchesReference) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(ChannelChunk, QkvCausalConv1dSiluOpTest, ::testing::Values(32U, 64U, 192U));
+INSTANTIATE_TEST_SUITE_P(ChannelChunk, QkvCausalConv1dSiluOpTest, ::testing::Values(0U, 32U, 64U, 192U));
 
 }  // namespace

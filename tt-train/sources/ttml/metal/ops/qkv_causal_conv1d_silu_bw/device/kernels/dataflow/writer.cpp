@@ -7,7 +7,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
-#include "api/debug/dprint.h"
 #include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
@@ -32,6 +31,7 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
     constexpr uint32_t row_bytes = block_ct * tt::constants::TILE_WIDTH * sizeof(uint16_t);
     constexpr uint32_t view_bytes = tile_height * row_bytes;
     const uint32_t tile_bytes = output.get_entry_size();
+    const uint32_t grad_tap_tile_bytes = grad_tap.get_entry_size();  // fp32 tiles
     const uint32_t window_base = window.get_base_address();
     UnicastEndpoint self;
     const uint32_t self_x = my_x[noc.get_noc_id()];
@@ -62,7 +62,6 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
         }
         noc.async_write_barrier();
         output.pop_front(block_ct);
-        DPRINT("writer: mt {} grad_input tiles written\n", mt);
     };
 
     for (uint32_t item = 0; item < wi_count; ++item) {
@@ -111,13 +110,12 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
                 noc.async_write(
                     grad_tap,
                     grad_tap_partial,
-                    tile_bytes,
-                    {.offset_bytes = (tap * block_ct + ct) * tile_bytes},
+                    grad_tap_tile_bytes,
+                    {.offset_bytes = (tap * block_ct + ct) * grad_tap_tile_bytes},
                     {.page_id = (split * tap_count + tap) * Ct + ct_start + ct});
             }
         }
         noc.async_write_barrier();
         grad_tap.pop_front(tap_count * block_ct);
-        DPRINT("writer: work {} (block {} split {}) grad_tap_partial written\n", work, block, split);
     }
 }
