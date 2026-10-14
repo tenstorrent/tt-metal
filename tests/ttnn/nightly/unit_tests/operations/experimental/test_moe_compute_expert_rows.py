@@ -443,13 +443,13 @@ def test_moe_compute_expert_rows_top_k_max(mesh_device, mesh_shape):
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_expert_rows_top_k_over_max(mesh_device, mesh_shape):
+def test_moe_compute_expert_rows_top_k_over_max(mesh_device, mesh_shape, expect_error):
     """top_k 33: a forced expert rows call is refused before any kernel compiles, and the automatic choice runs the
     ring (one program), whose outputs match the goldens."""
     _skip_unless_blackhole(mesh_device)
     case = _Case(mesh_device, 64, 1, 33, 512, 2048)
     precision = dict(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
-    with _kernel("expert_rows"), pytest.raises(RuntimeError, match="top_k 33 outside 1..32"):
+    with _kernel("expert_rows"), expect_error(RuntimeError, "top_k 33 outside 1..32"):
         case.call(**precision)
     outs, added = _programs_added(mesh_device, lambda: case.call(**precision))
     assert added == 1, f"top_k 33 compiled {added} programs, expected the ring's 1"
