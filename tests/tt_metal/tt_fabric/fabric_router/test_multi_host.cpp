@@ -1467,9 +1467,10 @@ TEST(MultiHost, BHDualGalaxyFabricConfigMismatchAcrossRanksFatal) {
         control_plane->configure_routing_tables_for_fabric_ethernet_channels();
     });
 }
-// Negative test (STRICT): mesh 2 is a 1x1 exit chip cabled to mesh 0 and mesh 1, both boundaries assign_z.
-// Only one can get mesh 2's single Z lane; a Z-only loser resolves zero routers, which STRICT must reject.
-// Zero-link tolerance (#56762) is RELAXED-only. See t3k_assign_z_conflict_mesh_graph_descriptor.textproto.
+// Negative test: mesh 2 is a single (1x1) exit chip cabled to BOTH mesh 0 and mesh 1, and both boundaries are
+// marked assign_z_direction. They both try to claim mesh 2's one Z lane; the losing boundary is Z-only (never
+// falls back to NESW), so it resolves zero routers -> control-plane initialization must fail under STRICT.
+// This exercises the assign_z conflict path. See t3k_assign_z_conflict_mesh_graph_descriptor.textproto.
 TEST(MultiHost, T3KAssignZConflictStrictFatal) {
     const std::filesystem::path conflict_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
@@ -1483,9 +1484,7 @@ TEST(MultiHost, T3KAssignZConflictStrictFatal) {
     });
 }
 
-// Same conflict with a RELAXED policy: init succeeds and unbound boundaries are logical-only (#56762). On this
-// fixture neither boundary claims the lane, so both resolve zero.
-// See t3k_assign_z_conflict_relaxed_mesh_graph_descriptor.textproto.
+// Same conflict under a RELAXED policy (#56762): init succeeds and both boundaries resolve zero (logical-only).
 TEST(MultiHost, T3KAssignZConflictLosingBoundaryResolvesZero) {
     const std::filesystem::path conflict_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
@@ -1497,9 +1496,7 @@ TEST(MultiHost, T3KAssignZConflictLosingBoundaryResolvesZero) {
         tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
-    // Positive contract (the behavior change from the old FATAL): init SUCCEEDED and every declared
-    // mesh (0..3) came up. Asserting the mesh set makes this non-vacuous -- it verifies init produced
-    // a complete control plane rather than merely not throwing.
+    // Init succeeded and every declared mesh came up.
     EXPECT_EQ(control_plane->get_mesh_graph().get_mesh_ids().size(), 4u)
         << "assign_z conflict must no longer fatal control-plane init; all four meshes should initialize";
 
@@ -1508,10 +1505,7 @@ TEST(MultiHost, T3KAssignZConflictLosingBoundaryResolvesZero) {
     const auto pairs_1_to_2 =
         control_plane->get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(MeshId{1}, MeshId{2});
 
-    // The exit-peer maps are rebuilt from intermesh_connections, which is produced on rank 0 and
-    // broadcast verbatim, so they are IDENTICAL on every rank (see
-    // rebuild_intermesh_exit_maps_from_connections). Mesh 2's single Z lane can never serve both boundaries;
-    // on this mock neither claims it, so both resolve zero (which implies the at-most-one invariant).
+    // Mesh 2's single Z lane cannot serve both boundaries; on this mock neither claims it.
     EXPECT_TRUE(pairs_0_to_2.empty() && pairs_1_to_2.empty())
         << "Under mutual assign_z contention for a single Z lane both connections are expected to "
            "resolve zero (logical-only). Resolved 0->2: "

@@ -88,7 +88,7 @@ No routing planes. Registered is `min(MGD, PSD)`, the live cables pairing binds.
 | 4 | 16 | 0 | 0 | 4 | 12 | 0 |
 | 16 | 16 | 0 | 0 | 16 | 0 | 0 |
 
-A boundary with no live cable at all (the last two rows) still finishes init: the connection is logical-only (issue #56762), pairing registers nothing, and the factory cables are filed by the same split. A boundary the factory never cabled is logical-only in the same way, with nothing to file, since a record is a factory cable the live descriptor lacks. The mesh graph connection has to be `RELAXED`; a `STRICT` one fails. Without a factory descriptor the connection is logical-only as well, and there is nothing to file.
+A `RELAXED` boundary with no live cable (last two rows) still finishes init as a logical-only connection (issue #56762); a boundary the factory never cabled files nothing. `STRICT` fails either way.
 
 Pod cable chip 5 chan 9 ↔ chip 29 chan 9, FSD 16, PSD 15:
 

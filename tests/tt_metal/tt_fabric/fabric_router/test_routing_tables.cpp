@@ -218,12 +218,8 @@ TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
     EXPECT_NE(control_plane.get_mesh_graph().get_mesh_ids().size(), 0u);
 }
 
-// Every inter-mesh connection the MGD requests must resolve to AT LEAST one physical connection after
-// control plane init. RELAXED inter-mesh connections may legally resolve to zero links (zero-link
-// tolerance, issue #56762), but on the mocks the layout suites run against the cabling exists, so a
-// zero-link resolution means the mapper or the gather dropped a connection. Checked on the control plane
-// TestGalaxyLayoutCheck already built rather than as its own test: another ControlPlaneFixture test is
-// another full control-plane init, which on the 64-rank mocks is minutes per command.
+// Every requested inter-mesh connection resolves at least one link: on cabled mocks a zero-link resolution
+// means a dropped connection (#56762). Checked inside TestGalaxyLayoutCheck, since a separate test is another init.
 void expect_every_requested_intermesh_connection_resolved(const ControlPlane& control_plane) {
     const auto& mesh_graph = control_plane.get_mesh_graph();
     const auto expect_at_least_one_connection = [&](uint32_t src_mesh, uint32_t dst_mesh, uint32_t requested) {
@@ -265,17 +261,10 @@ TEST_F(ControlPlaneFixture, TestGalaxyLayoutCheck) {
     expect_every_requested_intermesh_connection_resolved(control_plane);
 }
 
-// RELAXED zero-link tolerance (issue #56762), disconnected-cluster case: run on a mock stitched
-// from two SAME-revision (revC subtorus) quads from DIFFERENT systems with zero ethernet links
-// between them (see disconnected_sc36_quads_mapping.yaml -- SC36 revC aisleD + SC24 revC virtu).
-// Control-plane init must succeed, the MGD-requested RELAXED inter-mesh connection must be present
-// as a request, and it must resolve to exactly ZERO physical connections in both directions
-// (logical-only edge, host-interconnect data path).
+// Zero-link tolerance (#56762) on two quads with no links between them (disconnected_sc36_quads_mapping.yaml):
+// init succeeds and the RELAXED connection resolves zero both ways.
 TEST_F(ControlPlaneFixture, TestDisconnectedQuadsZeroIntermeshResolved) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
-    // Derive the fabric config from the active MGD (torus MGDs imply FABRIC_2D_TORUS_XY), exactly as
-    // TestGalaxyLayoutCheck / TestGalaxyCornerPins do: these tests share one process with them and the
-    // fabric config cannot be overridden once set.
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         fabric_config_for_active_mgd(), tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
@@ -283,15 +272,13 @@ TEST_F(ControlPlaneFixture, TestDisconnectedQuadsZeroIntermeshResolved) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
-    // Both meshes initialized on their (mutually disconnected) quads.
     EXPECT_EQ(mesh_graph.get_mesh_ids().size(), 2u);
 
-    // The MGD really requests the inter-mesh connection...
     const auto& requested = mesh_graph.get_requested_intermesh_connections();
     ASSERT_TRUE(requested.contains(0) && requested.at(0).contains(1))
         << "Fixture error: the MGD must declare a mesh 0 <-> mesh 1 RELAXED connection";
 
-    // ...but zero physical connections resolve, in both directions.
+    // Requested, but zero physical connections resolve in either direction.
     EXPECT_TRUE(control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(MeshId{0}, MeshId{1}).empty())
         << "The quads come from different captures with no shared links; nothing may resolve 0 -> 1";
     EXPECT_TRUE(control_plane.get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(MeshId{1}, MeshId{0}).empty())

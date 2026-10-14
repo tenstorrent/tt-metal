@@ -1,11 +1,5 @@
-# SYNTHETIC disconnected-cluster mock (issue #56762): one revC-subtorus quad from EACH of two
-# DIFFERENT captures/systems -- SC36 revC subtorus aisle D (system 120, bh-glx-120-d03u02..u20)
-# and SC24 revC subtorus virtu (bg-ale22-r01..r04). BOTH are revC subtorus (same revision, so the
-# PGD matches both quads to a mesh -- a revC+revAB mix makes discovery form only ONE mesh), but
-# they are from different systems so they share ZERO ethernet links -> physical discovery yields
-# two disconnected meshes (intermesh degree {0:2}). Used to pin RELAXED inter-mesh zero-link
-# tolerance: a RELAXED connection between meshes placed on the two quads must map with the
-# connection resolving to zero physical links (logical-only / host interconnect).
+# Synthetic disconnected cluster (#56762): one revC subtorus quad each from SC36 aisle D and SC24 virtu, same
+# revision (so both match the PGD) but different systems, so they share no ethernet links.
 rank_to_cluster_mock_cluster_desc:
   0: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC36_32x4_revC_subtorus_aisleD_cluster_desc/SC36_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-120-d03u02_rank_32.yaml"
   1: "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC36_32x4_revC_subtorus_aisleD_cluster_desc/SC36_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-120-d03u08_rank_33.yaml"

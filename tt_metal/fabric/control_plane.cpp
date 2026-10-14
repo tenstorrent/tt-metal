@@ -3609,11 +3609,7 @@ void ControlPlane::generate_intermesh_connectivity() {
     // bidirectionally.
     auto num_assigned_intermesh_connections = intermesh_connections.size() / 2;
 
-    // RELAXED zero-link tolerance (issue #56762): under a relaxed inter-mesh policy a requested
-    // connection may bind to zero physical links (logical-only, host interconnect), so fewer
-    // connections can resolve than were requested -- even zero. Only STRICT requires the full
-    // count. Warn (don't fatal) in relaxed mode; per-pair details are logged in
-    // validate_requested_intermesh_connections.
+    // RELAXED (#56762): a connection may bind to zero links, so a shortfall only warns; STRICT needs the full count.
     const bool inter_mesh_relaxed = this->mesh_graph_->is_inter_mesh_policy_relaxed();
     if (num_assigned_intermesh_connections < get_num_requested_intermesh_connections()) {
         if (inter_mesh_relaxed) {
@@ -3937,8 +3933,7 @@ void ControlPlane::validate_requested_intermesh_connections(
             for (const auto& [dst_mesh, requested_channels] : dst_to_channels) {
                 const std::size_t resolved = num_resolved_between(src_mesh, dst_mesh);
                 if (resolved == 0) {
-                    // RELAXED (#56762): a zero-router connection is logical-only, warn only. STRICT keeps the
-                    // per-pair failure (the aggregate check above cannot see one zero pair masked by others).
+                    // RELAXED (#56762): a zero-router connection is logical-only; STRICT keeps the per-pair failure.
                     if (inter_mesh_relaxed) {
                         log_warning(
                             tt::LogFabric,

@@ -2943,19 +2943,8 @@ AssignedMeshes decode_sat_placement(const MappingResult<GlobalMeshId, const Cand
 
 constexpr std::size_t kGrowBudgetPerVariant = 128;
 constexpr std::size_t kMaxGrowthCycles = 4;
-// Master-solve relaxation ladder (see SatPlacementEnumerationSession::next). The host-count cap and the
-// inter-mesh seam hardness are independent knobs; each rung is tried at the CURRENT candidate pool, in
-// order, and the pool grows only when every rung failed:
-//   1. hard seams, host cap          -- the normal placement
-//   2. hard seams, cap dropped       -- meshes may span more hosts / use cross-host seats
-//   3. soft seams, host cap          -- RELAXED inter-mesh policy only: connections may be zero-link (#56762)
-//   4. soft seams, cap dropped
-// Soft seams = MappingConstraints::allow_unmatched_target_edges on the master session: the SAT backend maximizes
-// the number of realized inter-mesh links and a seating that leaves some connection without physical links is
-// accepted (logical-only / host interconnect). Under a STRICT inter-mesh policy rungs 3-4 are never tried.
-// The per-solve CaDiCaL conflict budget is chosen by seam hardness (MasterSolve::restart): a solve that
-// exceeds it counts as failed for that rung, and on a soft rung it also bounds every realized-link
-// maximization probe.
+// Master-solve ladder, tried in order at the current pool; the pool grows only when every rung failed.
+// Soft seams (RELAXED inter-mesh policy only) let a connection resolve to zero links (#56762).
 struct SolveRung {
     bool drop_host_cap;
     bool soft_seams;
@@ -3244,8 +3233,7 @@ void SatPlacementEnumerationSession::finish_init(
 
 bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, bool drop_cap) {
     reset();
-    // The requested seam softness for this rung is carried on constraints_ (set by next() before the solve);
-    // build_sat_placement_constraints rebuilds constraints_ from scratch, so capture it first and re-apply.
+    // build_sat_placement_constraints rebuilds constraints_, so capture the rung's seam softness and re-apply it.
     const bool soft_seams = owner_->constraints_.allow_unmatched_target_edges();
     AdjacencyGraph<const Candidate*> seat_graph =
         build_sat_placement_seat_graph(*owner_->pools_, owner_->mesh_level_graph_);
@@ -3259,8 +3247,6 @@ bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, boo
     if (drop_cap) {
         owner_->constraints_.set_max_same_rank_groups_used(0);
     }
-    // Zero-link fallback (#56762): the target graph here IS the mesh-level graph, so soft target edges are
-    // exactly "a connection may resolve to zero links"; the SAT backend maximizes realized edges.
     owner_->constraints_.set_allow_unmatched_target_edges(soft_seams);
     const auto encode_start = std::chrono::steady_clock::now();
     session = std::make_unique<TopologyMappingEnumerationSession<MeshId, const Candidate*>>(
@@ -3289,11 +3275,8 @@ bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, boo
 MappingResult<MeshId, const Candidate*> SatPlacementEnumerationSession::MasterSolve::next(bool drop_cap) {
     MappingResult<MeshId, const Candidate*> failure;
     failure.success = false;
-    // Soft seams (constraints_.allow_unmatched_target_edges, set per rung by the session) are only tried
-    // under a RELAXED inter-mesh policy; the OR keeps the validation mode consistent with the encoding.
     const bool relaxed_mode = owner_->relaxed_inter_mesh_policy_ || owner_->constraints_.allow_unmatched_target_edges();
-    // Unchanged mode and host cap (the session resets this object when the seam softness changes): another
-    // model from the session already encoded.
+    // Unchanged mode and host cap: another model from the session already encoded.
     if (!matches(relaxed_mode, drop_cap) && !restart(relaxed_mode, drop_cap)) {
         return failure;
     }
@@ -3490,8 +3473,7 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
     if (solved_) {
         return {};
     }
-    // Walk kSolveLadder at the current pool (see its definition). The seam softness of a rung is carried to
-    // MasterSolve on constraints_; the live encoding is reset when it changes so restart() re-encodes.
+    // Walk kSolveLadder at the current pool; the encoding is reset when the seam softness changes.
     bool solved_with_soft_seams = false;
     auto solve_at_current_pool = [&]() -> MappingResult<MeshId, const Candidate*> {
         MappingResult<MeshId, const Candidate*> r;

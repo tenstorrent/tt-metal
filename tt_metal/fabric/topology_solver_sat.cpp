@@ -33,11 +33,7 @@ namespace tt::tt_fabric::detail {
 // walk at minutes, not tens of minutes.
 static constexpr int kDefaultConflictCap = 300'000;
 
-// The RELAXED zero-link realized-edge maximization (issue #56762) gives every threshold probe the
-// session's per-solve conflict budget (set_conflict_cap); a probe that exceeds it is treated as UNSAT
-// and the loop keeps the best (valid, sub-maximal) mapping found so far.
-// The maximization binary-searches the (monotone) realized-edge thresholds, so a pass takes O(log E) solves,
-// plus at most this many budget-exhausted (undecided) solves before it settles for the best model found.
+// Zero-link maximization (#56762): budget-exhausted probes tolerated before keeping the best model found.
 static constexpr int kZeroLinkMaximizeMaxUndecidedSolves = 2;
 
 struct SatSearchBackend::Impl {
@@ -53,11 +49,9 @@ struct SatSearchBackend::Impl {
     std::vector<std::vector<int>> stages;
     size_t stage = 0;
     bool unique_shapes = false;
-    // Zero-link tolerance (allow_unmatched_target_edges): edge_threshold_lits[j], when assumed,
-    // forces at least j+1 of enc.edge_realized_lits true. Drives realized-edge maximization.
+    // Zero-link tolerance: edge_threshold_lits[j] assumed => at least j+1 of enc.edge_realized_lits true.
     std::vector<int> edge_threshold_lits;
-    // Zero-link maximization: global adjacency (owned by the session's GraphIndexData; the graph VIEW passed
-    // to start() is a temporary and must not be retained) and the validation mode.
+    // Owned by the session's GraphIndexData (the TopologySatGraphView passed to start() is a temporary).
     const std::vector<std::vector<size_t>>* global_adj_idx = nullptr;
     ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED;
 };
@@ -433,14 +427,7 @@ void topology_sat_emit_combinations_indices(size_t n, size_t r, EmitCombination&
     dfs(dfs, 0);
 }
 
-// Sequential counter encoding for at-least-k: O(m*k) clauses + O(m*k) auxiliary variables.
-// c[i][j] represents "at least j+1 of lits[0..i] are true"; assert c[m-1][k-1].
-// If extra_lit != 0 it is added only to the final assertion, so extra_lit => at-least-k without making the
-// cardinality hard (used for the optional preferred objective).
-// Shared sequential-counter matrix builder. c[i][j] is a Tseitin variable meaning "at least j+1 of
-// lits[0..i] are true", encoded via the standard sequential-counter recurrences. Both the
-// at-least-k assertion helper and the threshold-literal builder use this so the recurrence lives in
-// one place. The final row c[m-1] is the counter output: c[m-1][t] <=> at least t+1 of all lits.
+// Sequential counter matrix: c[i][j] <=> "at least j+1 of lits[0..i] are true"; O(m*k) clauses and aux vars.
 inline std::vector<std::vector<int>> topology_sat_build_counter_matrix(
     TopologySatSolver& solver, const std::vector<int>& lits, size_t k) {
     const size_t m = lits.size();
@@ -505,6 +492,8 @@ inline std::vector<std::vector<int>> topology_sat_build_counter_matrix(
     return c;
 }
 
+// At-least-k via the counter: assert c[m-1][k-1]. extra_lit != 0 is added only to that assertion, so
+// extra_lit => at-least-k without making the cardinality hard (used for the optional preferred objective).
 inline void topology_sat_add_at_least_k_counter(
     TopologySatSolver& solver, const std::vector<int>& lits, size_t k, int extra_lit = 0) {
     const size_t m = lits.size();
@@ -516,10 +505,7 @@ inline void topology_sat_add_at_least_k_counter(
     solver.add(0);
 }
 
-// Full-width sequential counter over `lits` (k = lits.size(), no final assertion). thresholds_out[j]
-// is a literal that, when ASSUMED, forces at least j+1 of `lits` to be true -- used by the zero-link
-// tolerance driver to maximize realized soft edges by assuming successively higher thresholds on a
-// warm incremental session.
+// Full-width counter, no final assertion: thresholds_out[j] assumed => at least j+1 of `lits` are true.
 inline void topology_sat_build_at_least_threshold_lits(
     TopologySatSolver& solver, const std::vector<int>& lits, std::vector<int>& thresholds_out) {
     thresholds_out.clear();
@@ -863,8 +849,7 @@ bool topology_sat_build_initial_domains(
             if (!constraint_data.is_valid_mapping(t, g)) {
                 continue;
             }
-            // Zero-link tolerance: target edges are soft, so a low-degree global may still host a
-            // high-degree target (unrealized edges ride the host interconnect).
+            // Soft target edges: a low-degree global may still host a high-degree target.
             if (!constraint_data.allow_unmatched_target_edges && graph_data.global_deg[g] < graph_data.target_deg[t]) {
                 continue;
             }
@@ -895,8 +880,7 @@ bool topology_sat_apply_arc_consistency(
     ConnectionValidationMode validation_mode,
     TopologySatHardEncoding& enc,
     std::vector<std::vector<size_t>>& domain) {
-    // Zero-link tolerance: AC-3 prunes domain values lacking adjacent support, but soft edges do
-    // not require support -- pruning here would make zero-link placements unreachable.
+    // Soft target edges need no adjacent support, so AC-3 pruning would hide zero-link placements.
     if (constraint_data.allow_unmatched_target_edges) {
         return true;
     }
@@ -1139,10 +1123,7 @@ void topology_sat_encode_adjacency_support(
             if (t2 <= t1) {
                 continue;
             }
-            // Zero-link tolerance: guard every support clause of this edge behind a fresh
-            // "realized" literal. realized=true enforces the original adjacency requirement;
-            // realized=false voids it (the edge maps with zero physical links). The realized
-            // literals are collected and maximized by the solve driver (best-effort links).
+            // Soft edge: its support clauses are guarded by a realized literal (false => zero-link edge).
             int realized_lit = 0;
             if (allow_unmatched_target_edges) {
                 realized_lit = solver.declare_one_more_variable();
@@ -1847,9 +1828,7 @@ bool SatSearchBackend::start(
         }
     }
 
-    // Zero-link tolerance: threshold literals over the realized-edge indicators drive the maximization.
-    // Not skipped for unique_shapes (production placement uses it): maximization is the fallback's
-    // contract, not a ranking, and shapes are blocked after the maximized model is chosen.
+    // Threshold literals over the realized-edge indicators drive the maximization (also under unique_shapes).
     if (!s.enc.edge_realized_lits.empty()) {
         topology_sat_build_at_least_threshold_lits(s.solver, s.enc.edge_realized_lits, s.edge_threshold_lits);
     }
@@ -1966,13 +1945,9 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
     if (!solve_and_decode()) {
         return false;
     }
-    // Zero-link tolerance: maximize realized soft edges on the warm session. Starting from the
-    // solution just found, demand one more realized edge under the same objective assumptions;
-    // repeat until UNSAT (proven maximum) or the conflict budget runs out (best effort).
+    // Zero-link tolerance: maximize the realized soft edges on the warm session, best effort.
     if (!s.edge_threshold_lits.empty()) {
-        // Realized count of the decoded mapping. The literal is only forced false without support, never
-        // forced true with it, so it can under-count; under RELAXED (adjacency is the whole requirement)
-        // also credit physically adjacent endpoints. STRICT needs channel counts too, so keep the literal.
+        // The realized literal can under-count; under RELAXED also credit physically adjacent endpoints.
         const auto count_realized = [&]() -> size_t {
             size_t realized = 0;
             for (size_t i = 0; i < s.enc.edge_realized_lits.size(); ++i) {
@@ -2000,9 +1975,7 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
         };
         const size_t n_soft_edges = s.enc.edge_realized_lits.size();
         const auto& optional_lits = s.stages[std::min(s.stage, s.stages.size() - 1)];
-        // Demand threshold `realized+1`. The symmetry hint (target 0 -> global 0) can make a threshold UNSAT
-        // that is achievable without it, so try with the hint, then without; once the hint fails it is
-        // dropped for the rest of the ramp (thresholds only tighten).
+        // The symmetry hint can make an achievable threshold UNSAT: try with it, then without, drop it once it fails.
         bool symmetry_hint_usable = s.symmetry_lit != 0;
         const auto solve_threshold = [&](int threshold_lit) -> int {
             auto attempt = [&](bool with_symmetry_hint) -> int {
@@ -2024,8 +1997,7 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
             }
             return attempt(/*with_symmetry_hint=*/false);
         };
-        // Binary search on the threshold: ">= k realized" is monotone in k, `realized` is known SAT and
-        // `hi` is the highest candidate. An undecided (budget-exhausted) probe is treated as UNSAT.
+        // Binary search on the (monotone) threshold; an undecided probe counts as UNSAT.
         size_t realized = count_realized();
         size_t hi = n_soft_edges;
         int undecided = 0;

@@ -1,17 +1,5 @@
-# RELAXED-POLICY variant of t3k_assign_z_conflict_mesh_graph_descriptor.textproto (issue #56762).
-# Identical engineered assign_z conflict, but every inter-mesh connection carries `policy: RELAXED`,
-# so the boundary that loses mesh 0's single Z lane is tolerated as a ZERO-link (logical-only)
-# connection instead of failing control-plane init. The STRICT sibling stays a negative test.
-#
-# --- Meshes ---------------------------------------------------------------
-# Four 1x2 meshes wired in a 2x2 grid (same layout as t3k_1x2), one per N300 board:
-#     mesh0 - mesh1
-#       |       |
-#     mesh2 - mesh3
-# Mesh 0's right-hand chip borders BOTH mesh 1 (horizontal) and mesh 2 (vertical); both boundaries are
-# assign_z_direction, so that chip's single Z lane is contended. A Z-only boundary that does not get it
-# resolves zero routers; under this RELAXED policy that is tolerated (logical-only) and init succeeds. Driven
-# by a hard rank binding (TT_VISIBLE_DEVICES 0..3). Used by MultiHost.T3KAssignZConflictLosingBoundaryResolvesZero.
+# t3k_assign_z_conflict_mesh_graph_descriptor with every inter-mesh connection RELAXED (#56762): the boundary
+# that loses the contended Z lane resolves zero links and init succeeds. Hard rank binding, TT_VISIBLE_DEVICES 0..3.
 mesh_descriptors {
   name: "M0"
   arch: WORMHOLE_B0

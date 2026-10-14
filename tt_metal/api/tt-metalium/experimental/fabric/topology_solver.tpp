@@ -1350,8 +1350,7 @@ TopologyMappingEnumerationSession<TargetNode, GlobalNode>::TopologyMappingEnumer
     constraint_data_.emplace(snap_constraints_, *graph_data_);
     use_sat_ = detail::topology_mapping_should_use_sat_engine(
         solver_engine, graph_data_->n_target, graph_data_->n_global, snap_constraints_.resource_count());
-    // Zero-link tolerance is implemented on the SAT backend (soft target edges + realized-edge
-    // maximization); route Auto to SAT. An explicit Dfs request keeps edges hard (old behavior).
+    // Zero-link tolerance lives on the SAT backend: route Auto to SAT; an explicit Dfs keeps edges hard.
     if (snap_constraints_.allow_unmatched_target_edges()) {
         if (solver_engine == TopologyMappingSolverEngine::Dfs) {
             log_warning(
@@ -3798,8 +3797,7 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
 
             if (!edge_exists) {
                 if (constraint_data.allow_unmatched_target_edges) {
-                    // RELAXED zero-link tolerance (issue #56762): the edge is logical-only for this
-                    // placement (data path rides the host interconnect). Warn loudly, do not fail.
+                    // Zero-link edge (#56762): logical-only, warn instead of failing.
                     std::string warn_msg = fmt::format(
                         "Relaxed mode: target graph edge from node {} to {} has NO physical link between {} and {} "
                         "(zero-link edge; traffic must use the host interconnect).",

@@ -487,16 +487,8 @@ public:
     }
 
     /**
-     * @brief RELAXED zero-link tolerance (issue #56762): target-graph edges become SOFT.
-     *
-     * When enabled, a mapping where some target edges have no corresponding global (physical)
-     * edge is still valid — the solver instead MAXIMIZES the number of realized target edges
-     * (best effort: strictly below the host-cap / minimize-groups objectives and bounded by a
-     * per-step conflict budget, so a sub-maximal mapping is possible on hard instances), and unrealized
-     * edges are reported as warnings instead of failing validation. Set only for the
-     * inter-mesh (mesh-level) solve when the inter-mesh policy is RELAXED; intra-mesh solves
-     * must keep edges hard. The maximization is implemented on the SAT engine; engine
-     * selection Auto routes to SAT when this flag is set.
+     * @brief Zero-link tolerance (#56762): target edges become soft and the SAT engine maximizes the realized
+     * ones (best effort); unrealized edges validate with a warning. Inter-mesh (mesh-level) solves only.
      */
     void set_allow_unmatched_target_edges(bool enable) { allow_unmatched_target_edges_ = enable; }
     bool allow_unmatched_target_edges() const { return allow_unmatched_target_edges_; }
@@ -564,7 +556,6 @@ private:
     // Opt-in objective: minimize number of distinct same-rank global groups (host partitions) used.
     bool minimize_same_rank_groups_used_ = false;
 
-    // RELAXED zero-link tolerance: target edges are soft; realized-edge count is maximized.
     bool allow_unmatched_target_edges_ = false;
 
     // Opt-in HARD cap: at most this many distinct same-rank global groups may be occupied (0 = no cap).
@@ -916,8 +907,7 @@ struct ConstraintIndexData {
     // Footprint resources, indexed by global_idx. Empty when no add_resource_constraint was set.
     std::vector<std::vector<uint32_t>> global_to_resource_indices;
     uint32_t resource_count = 0;
-    // RELAXED zero-link tolerance (issue #56762): target edges are soft; the SAT engine maximizes
-    // the number of realized edges and unrealized edges validate with a warning.
+    // Zero-link tolerance (#56762): target edges are soft; see MappingConstraints::set_allow_unmatched_target_edges.
     bool allow_unmatched_target_edges = false;
 
     /**
@@ -1006,10 +996,8 @@ struct TopologySatHardEncoding {
     std::string trivial_reason;
     std::vector<std::vector<size_t>> allowed_global_idx;
     std::vector<std::vector<int>> assign_lit;
-    // Zero-link tolerance (allow_unmatched_target_edges): one literal per soft target edge that is
-    // TRUE iff the edge's adjacency support is enforced (edge realized). Empty when edges are hard.
+    // Soft target edges: realized literal per edge (empty when edges are hard) and its (t1, t2) endpoints.
     std::vector<int> edge_realized_lits;
-    // (t1, t2) target-index endpoints of each soft edge, parallel to edge_realized_lits.
     std::vector<std::pair<size_t, size_t>> edge_realized_edges;
 };
 

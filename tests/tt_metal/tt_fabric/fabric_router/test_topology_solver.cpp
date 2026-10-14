@@ -1607,10 +1607,8 @@ TEST_F(TopologySolverTest, RelaxedSolveDoesNotMutatePreferredConstraints) {
     EXPECT_EQ(constraints.get_preferred_mappings(1), (std::set<TestGlobalNode>{10}));
 }
 
-// allow_unmatched_target_edges (RELAXED zero-link tolerance, issue #56762): target edges become SOFT on
-// the SAT engine and the number of realized edges is maximized. Target path a-b-c (2 edges) onto a global
-// graph with one linked pair (10-11) and two isolated nodes (12, 13): hard edges cannot map; soft edges map
-// with exactly one edge realized, which requires b and one of its neighbors on {10, 11}.
+// Zero-link tolerance (#56762): path a-b-c onto one linked pair plus two isolated nodes maps only with soft
+// edges, and the maximization realizes the one possible edge.
 TEST_F(TopologySolverTest, AllowUnmatchedTargetEdges_ZeroLinkMappingMaximizesRealizedEdges) {
     AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
     target_adj_map[0] = {1};
@@ -1633,7 +1631,7 @@ TEST_F(TopologySolverTest, AllowUnmatchedTargetEdges_ZeroLinkMappingMaximizesRea
         EXPECT_FALSE(result.success) << "hard target edges must not map onto a graph with one link";
     }
 
-    // Soft edges on SAT (Auto routes to SAT when the flag is set): maps, and realizes the one possible edge.
+    // Soft edges (Auto routes to SAT): maps, realizing the one possible edge.
     for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Auto}) {
         MappingConstraints<TestTargetNode, TestGlobalNode> soft;
         soft.set_allow_unmatched_target_edges(true);
@@ -1650,7 +1648,7 @@ TEST_F(TopologySolverTest, AllowUnmatchedTargetEdges_ZeroLinkMappingMaximizesRea
         EXPECT_FALSE(result.warnings.empty()) << "the unrealized edge must be reported as a warning";
     }
 
-    // Explicit DFS keeps edges hard even with the flag (warned, not silently relaxed).
+    // Explicit DFS keeps edges hard.
     {
         MappingConstraints<TestTargetNode, TestGlobalNode> soft;
         soft.set_allow_unmatched_target_edges(true);

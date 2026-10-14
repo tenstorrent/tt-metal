@@ -1071,8 +1071,7 @@ std::optional<std::string> add_exit_node_constraints(
             const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_logical_mesh);
             auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
             if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
-                // No physical exit nodes toward this destination: under RELAXED (#56762) the connection is
-                // logical-only, so warn and skip its exit constraint; STRICT still fails.
+                // RELAXED (#56762): a connection with no physical exit nodes is logical-only; skip its constraint.
                 if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
                     log_warning(
                         tt::LogFabric,
@@ -1143,7 +1142,6 @@ std::optional<std::string> add_exit_node_constraints(
 
             if (effective_exit_pair_min_count == 0) {
                 if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
-                    // Zero links toward the destination: logical-only under RELAXED (#56762), skip the constraint.
                     log_warning(
                         tt::LogFabric,
                         "Relaxed mode: requested inter-mesh connection toward logical mesh {} has ZERO physical "
@@ -1373,9 +1371,7 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         }
         const auto& physical_exit_node_graph = *physical_exit_node_graph_ptr;
 
-        // Zero-link tolerance (#56762) is inter-mesh only: intra-mesh edges stay hard (a zero-link interior is
-        // unroutable); the TT_FATAL before the solve guards the shared-type flag.
-        // TODO(fabric-2.0): revisit once host-interconnect intra-mesh routing lands.
+        // Zero-link tolerance (#56762) is inter-mesh only. TODO(fabric-2.0): revisit for intra-mesh.
         ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::experimental::PhysicalNodeId> intra_mesh_constraints;
 
         if (!config.disable_rank_bindings) {

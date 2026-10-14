@@ -469,12 +469,8 @@ TEST_F(FactoryDescriptorControlPlaneFixture, StrictIntermeshAllowsAnUnusedHoleWh
     }
 }
 
-// A RELAXED connection the factory never cabled (issue #56762). The diagonal mesh graph adds mesh 0 to
-// mesh 2 on top of the pod's ring; the four hosts are cabled as a ring, so that boundary has no factory
-// cable and no live cable. Init still finishes, with the connection logical-only: placement goes through
-// the zero-link rung, pairing binds nothing across it, and LinkHealth has nothing to file for it, since a
-// record is a factory cable the live descriptor lacks. Driven on the missing_links captures, whose four
-// missing factory cables are filed exactly as they are without the diagonal.
+// A RELAXED connection the factory never cabled (#56762): the diagonal mesh 0 <-> mesh 2 of the ring-cabled pod
+// is logical-only, nothing is filed for it, and the missing_links captures' four missing cables are filed as before.
 TEST_F(FactoryDescriptorControlPlaneFixture, RelaxedConnectionWithNoFactoryCableIsLogicalOnly) {
     const auto& control_plane =
         open_control_plane(tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
@@ -494,7 +490,7 @@ TEST_F(FactoryDescriptorControlPlaneFixture, RelaxedConnectionWithNoFactoryCable
     const auto& downed = link_health->get_downed_links();
     const auto& unused = link_health->get_unused_downed_links();
 
-    // Nothing is filed for the diagonal: there is no factory cable to be missing.
+    // Nothing is filed for the diagonal.
     for (const auto& link : downed) {
         EXPECT_FALSE(link.is_intermesh() && on_diagonal(link.src_mesh(), link.dst_mesh()))
             << "downed " << link.src_node << " chan " << static_cast<int>(link.src_chan);
@@ -507,7 +503,7 @@ TEST_F(FactoryDescriptorControlPlaneFixture, RelaxedConnectionWithNoFactoryCable
     EXPECT_TRUE(link_health->get_downed_intermesh_links(diagonal_b, diagonal_a).empty());
     EXPECT_TRUE(link_health->get_exit_nodes_with_downed_links(diagonal_a, diagonal_b).empty());
 
-    // The captures' four missing factory cables are still the only records, one per direction each.
+    // The captures' four missing factory cables are the only records, one per direction each.
     EXPECT_EQ(downed.size() + unused.size(), 8u);
     // Subtorus, not routed by the mesh graph.
     EXPECT_TRUE(has_cable(control_plane, unused, 0, 0, 8, 0));
@@ -515,8 +511,7 @@ TEST_F(FactoryDescriptorControlPlaneFixture, RelaxedConnectionWithNoFactoryCable
     EXPECT_TRUE(has_cable(control_plane, unused, 15, 4, 23, 4));
     // Mesh: mesh graph 2, factory 2, live 1.
     EXPECT_TRUE(has_cable(control_plane, downed, 0, 6, 4, 0));
-    // Intermesh: 16 factory, 15 live. Which set it lands in depends on the count the placement put on its
-    // boundary: downed only when the count needs all 16.
+    // Intermesh: 16 factory, 15 live; downed only when the count on its boundary needs all 16.
     const auto* inter = find_cable(control_plane, downed, 5, 9, 29, 9);
     const bool inter_downed = inter != nullptr;
     if (!inter_downed) {
@@ -529,8 +524,7 @@ TEST_F(FactoryDescriptorControlPlaneFixture, RelaxedConnectionWithNoFactoryCable
     EXPECT_TRUE(has_cable(control_plane, inter_downed ? downed : unused, 29, 9, 5, 9));
     EXPECT_EQ(control_plane.fsd_rerouting_active(), !downed.empty());
 
-    // Pairing: nothing across the diagonal, min(request, live) on every ring boundary. A rank sees its
-    // own mesh.
+    // Pairing: nothing across the diagonal, min(request, live) on every ring boundary (a rank sees its own mesh).
     const auto holds_missing_cable = [&](MeshId a, MeshId b) {
         return (a == inter->src_mesh() && b == inter->dst_mesh()) || (a == inter->dst_mesh() && b == inter->src_mesh());
     };

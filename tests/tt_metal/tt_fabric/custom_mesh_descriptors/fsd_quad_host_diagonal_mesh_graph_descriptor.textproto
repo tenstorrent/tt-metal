@@ -1,10 +1,5 @@
-# The fsd_quad_host pod (one 8x4 mesh per host, intra count 2, four RELAXED ring connections with a
-# different count on each) plus one RELAXED connection across the pod's diagonal, mesh 0 to mesh 2.
-# The four hosts are cabled as a ring, so no factory cable and no live cable exists for that diagonal:
-# the connection is logical-only (issue #56762). Placement finishes through the zero-link rung on both
-# the rank-binding pass and the control-plane pass, pairing binds nothing across it, and LinkHealth
-# files nothing for it (there is no factory cable to be missing). Run on the missing_links captures,
-# whose four missing factory cables are still filed exactly as they are without the diagonal.
+# fsd_quad_host_mesh_graph_descriptor plus one RELAXED connection across the pod's diagonal (mesh 0 to mesh 2),
+# which the ring-cabled pod has no factory or live cable for: a logical-only connection (#56762).
 mesh_descriptors {
   name: "M"
   arch: BLACKHOLE
