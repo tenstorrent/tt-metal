@@ -11,7 +11,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
 #include <tt-metalium/constants.hpp>
@@ -82,11 +81,6 @@ void kernel_main() {
     constexpr uint32_t face_bytes = tt::constants::FACE_HW * bf16_datum_size_bytes;
 
     // Generate constant tiles for layernorm compute
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        reduce_scalar_cb,
-        ckernel::PoolType::AVG,
-        ckernel::ReduceDim::REDUCE_ROW,
-        reduce_factor>();
     generate_bcast_col_scalar(CircularBuffer(epsilon_cb), epsilon_value);
 
     if constexpr (fuse_rope) {

@@ -8,7 +8,12 @@
 #include "experimental/kernel_args.h"
 
 template <uint32_t Vt, uint32_t H, uint32_t Mt>
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
 TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+
     const auto out_acc = TensorAccessor(tensor::output);
     Noc noc;
     DataflowBuffer out(dfb::out);

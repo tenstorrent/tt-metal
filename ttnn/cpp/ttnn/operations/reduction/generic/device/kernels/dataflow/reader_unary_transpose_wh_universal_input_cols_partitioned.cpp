@@ -9,7 +9,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 void kernel_main() {
@@ -22,11 +22,9 @@ void kernel_main() {
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto HtWt = get_arg(args::HtWt);
 
-#ifndef WELFORD_TWO_PASS
-    const auto scaler_bits = get_arg(args::scaler_bits);
-#endif
+    // The host fixes the stream order to match the planned compute call.
+    constexpr uint32_t row_chunk = get_arg(args::reduce_output_tiles);
     constexpr bool sfpu_two_pass = get_arg(args::use_welford) != 0;
-    constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
     constexpr uint32_t tiles_per_batch = get_arg(args::tiles_per_batch);
     // H-axis split geometry: the reduction axis is cut into `num_h_slices` slices of `slice_Ht` tiles
     // each, and the work units become (nc, slice, wt) triples over a (N, C, num_h_slices, W) result.
@@ -35,26 +33,11 @@ void kernel_main() {
     constexpr auto slice_Ht = get_arg(args::slice_Ht);
     constexpr bool reduce_selects = REDUCE_OP == ckernel::PoolType::MAX || REDUCE_OP == ckernel::PoolType::MIN;
 
-    // Two-pass statistics must process one column at a time. DEST_AUTO_LIMIT
-    // interleaves multiple columns per chunk, which would feed the statistics
-    // kernel tiles from the wrong columns.
-    // Int32 SFPU max keeps one acc DST per column plus one shared work DST (DEST_AUTO_LIMIT - 1).
-    constexpr DataFormat reduce_format = get_dataformat(dfb::in0);
-    constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format, fp32_mode>();
-    constexpr uint32_t dest_row_chunk =
-        use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1) : compute_kernel_lib::DEST_AUTO_LIMIT;
-    constexpr uint32_t row_chunk = sfpu_two_pass ? 1 : dest_row_chunk;
-
     constexpr uint32_t onetile = 1;
 #ifdef WELFORD_TWO_PASS_STREAMING_CB_TILES
     constexpr std::uint32_t max_read_batch = WELFORD_TWO_PASS_STREAMING_CB_TILES;
 #else
     constexpr std::uint32_t max_read_batch = 1;
-#endif
-
-#ifndef WELFORD_TWO_PASS
-    const float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
 #endif
 
     auto tensor_accessor = TensorAccessor(tensor::src);
@@ -67,7 +50,7 @@ void kernel_main() {
 #ifdef WELFORD_TWO_PASS
     constexpr bool batch_reads = false;
 #else
-    // Batch only when row_chunk matches the host's tiles_per_batch; SFPU shortens the chunk.
+    // Batch only when the planned column group matches the host's reader batch.
     constexpr bool batch_reads = (row_chunk == tiles_per_batch);
 #endif
     if constexpr (num_h_slices > 1) {

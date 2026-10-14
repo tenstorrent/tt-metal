@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Toy reduce with partial scaler — demonstrates tile-padding avoidance for
-non-tile-aligned dimensions using the dual-scaler pattern.
+Toy reduce with host-planned partial-edge handling for non-tile-aligned dimensions.
 
 Supports both REDUCE_ROW (dim=-1, W) and REDUCE_COL (dim=-2, H) via a single
 set of kernels parameterized by compile-time defines.
@@ -21,7 +20,7 @@ def toy_reduce_partial(
     memory_config: ttnn.MemoryConfig = None,
 ) -> ttnn.Tensor:
     """
-    Reduce over dim with partial-scaler tile-padding avoidance.
+    Reduce over dim while excluding implicit tile padding.
 
     Args:
         input_tensor: Input tensor on device (TILE_LAYOUT, bfloat16).

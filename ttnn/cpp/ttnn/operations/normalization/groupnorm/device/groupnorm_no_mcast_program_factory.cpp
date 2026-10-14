@@ -4,6 +4,7 @@
 
 #include "groupnorm_device_operation.hpp"
 #include "groupnorm_program_utils.hpp"
+#include "groupnorm_reduce_plans.hpp"
 #include "kernels/groupnorm_constants.hpp"
 
 #include <bit>
@@ -684,6 +685,46 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         .noc = reader_noc,
     };
 
+    uint32_t cb_ex_external_tiles = 0;
+    if (!use_welford) {
+        uint32_t num_out_blocks_padded = num_out_blocks;
+        uint32_t out_block_h_normal = block_ht_group_1 / num_out_blocks;
+        if (block_ht_group_1 % num_out_blocks != 0) {
+            uint32_t residual = block_ht_group_1 - (num_out_blocks * out_block_h_normal);
+            num_out_blocks_padded += (residual / out_block_h_normal + 1);
+        }
+        cb_ex_external_tiles = (num_out_blocks_padded * num_cores_per_mcast_group * dfb_ex_external_slot_pitch_bytes +
+                                single_tile_size - 1) /
+                               single_tile_size;
+    }
+
+    const ttnn::kernel_lib::host::ReduceHardwareConfig reduce_hardware{
+        device->arch(), fp32_dest_acc_en, dst_full_sync_en, math_fidelity};
+    const auto make_group_plan = [&](uint32_t rows, uint32_t factor, uint32_t input_cb_tiles) {
+        return use_welford ? GroupNormReducePlans{}
+                           : make_interleaved_groupnorm_reduce_plans(
+                                 rows,
+                                 block_wt,
+                                 num_out_blocks,
+                                 num_cores_per_mcast_group,
+                                 single_tile_size,
+                                 factor,
+                                 input_cb_tiles,
+                                 cb_ex_external_tiles,
+                                 pad,
+                                 im_data_format,
+                                 reduce_hardware);
+    };
+    const auto reduce_group_1 = make_group_plan(
+        block_ht_group_1, num_rows_per_batch_per_core_group_1 * num_channels_per_group, interm_block_tiles_group_1);
+    const auto reduce_group_2 = make_group_plan(
+        std::max(num_out_blocks, block_ht_group_2),
+        std::max(1u, num_rows_per_batch_per_core_group_2 * num_channels_per_group),
+        std::max(interm_block_tiles_group_2, block_wt));
+    if (!use_welford) {
+        in2_CB_size = single_tile_size * reduce_group_1.local_auxiliary.tiles.size();
+    }
+
     std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_1 = {};
     std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_2 = {};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_mcast_sender_compile_time_args_group_1);
@@ -693,6 +734,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         .append_to(writer_mcast_sender_compile_time_args_group_1);
     tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().buffer() : nullptr)
         .append_to(writer_mcast_sender_compile_time_args_group_1);
+    if (!use_welford) {
+        reduce_group_1.append_auxiliary_to(writer_mcast_sender_compile_time_args_group_1);
+    }
 
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_mcast_sender_compile_time_args_group_2);
     tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
@@ -701,6 +745,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         .append_to(writer_mcast_sender_compile_time_args_group_2);
     tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().buffer() : nullptr)
         .append_to(writer_mcast_sender_compile_time_args_group_2);
+    if (!use_welford) {
+        reduce_group_2.append_auxiliary_to(writer_mcast_sender_compile_time_args_group_2);
+    }
 
     uint32_t reduce_factor_w_group_1 = num_rows_per_batch_per_core_group_1 * num_channels_per_group;
     uint32_t reduce_factor_c_group_1 = num_cores_per_batch * num_cores_per_group;
@@ -849,8 +896,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         eltwise_binary_defines["UNTILIZE_OUT"] = "1";
     }
 
-    std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_1 = {};
-    std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_2 = {};
+    std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_1 = reduce_group_1.calls;
+    std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_2 = reduce_group_2.calls;
 
     std::unordered_map<std::string, uint32_t> mcast_sender_compute_named_compile_time_args_group_1 = {
         {"is_mcast_sender", 1},
@@ -993,6 +1040,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         fp32_sfpu_normalizer ? cb_ex_global_fp32_index : static_cast<uint32_t>(tt::CBIndex::c_15);
     mcast_sender_compute_named_compile_time_args_group_1["cb_ex2pe_fp32"] =
         fp32_sfpu_normalizer ? cb_ex2pe_fp32_index : static_cast<uint32_t>(tt::CBIndex::c_27);
+    mcast_sender_compute_named_compile_time_args_group_1["reduce_local_auxiliary_tiles"] =
+        static_cast<uint32_t>(reduce_group_1.local_auxiliary.tiles.size());
+    mcast_sender_compute_named_compile_time_args_group_1["reduce_global_auxiliary_tiles"] =
+        static_cast<uint32_t>(reduce_group_1.global_auxiliary.tiles.size());
     mcast_sender_compute_named_compile_time_args_group_2["welford_fp32_alias"] =
         static_cast<uint32_t>(welford_fp32_alias);
     mcast_sender_compute_named_compile_time_args_group_2["welford_unpack_fp32_active"] =
@@ -1007,6 +1058,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         fp32_sfpu_normalizer ? cb_ex_global_fp32_index : static_cast<uint32_t>(tt::CBIndex::c_15);
     mcast_sender_compute_named_compile_time_args_group_2["cb_ex2pe_fp32"] =
         fp32_sfpu_normalizer ? cb_ex2pe_fp32_index : static_cast<uint32_t>(tt::CBIndex::c_27);
+    mcast_sender_compute_named_compile_time_args_group_2["reduce_local_auxiliary_tiles"] =
+        static_cast<uint32_t>(reduce_group_2.local_auxiliary.tiles.size());
+    mcast_sender_compute_named_compile_time_args_group_2["reduce_global_auxiliary_tiles"] =
+        static_cast<uint32_t>(reduce_group_2.global_auxiliary.tiles.size());
 
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = compute_kernel_path;
@@ -1393,16 +1448,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     // reserve ceil(num_out_blocks_padded * num_mcast_cores * slot_pitch / tile_size) tiles.
     if (!use_welford) {
         constexpr uint32_t ex_cb_external_index = tt::CBIndex::c_10;
-        uint32_t num_out_blocks_padded = num_out_blocks;
-        uint32_t out_block_h_normal = block_ht_group_1 / num_out_blocks;
-        if (block_ht_group_1 % num_out_blocks != 0) {
-            uint32_t residual = block_ht_group_1 - (num_out_blocks * out_block_h_normal);
-            num_out_blocks_padded += (residual / out_block_h_normal + 1);
-        }
-        uint32_t cb_ex_external_tiles =
-            (num_out_blocks_padded * num_cores_per_mcast_group * dfb_ex_external_slot_pitch_bytes + single_tile_size -
-             1) /
-            single_tile_size;
         desc.cbs.push_back(CBDescriptor{
             .total_size = cb_ex_external_tiles * single_tile_size,
             .core_ranges = all_cores,
@@ -1488,6 +1533,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         for (size_t j = 0; j < group.size(); ++j) {
             CoreCoord core = group[j];
             CoreCoord virtual_core = virtual_group[j];
+            const bool first_group = equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch);
+            const auto& runtime_args =
+                first_group ? reduce_group_1.local_runtime_args : reduce_group_2.local_runtime_args;
+            if (!runtime_args.empty()) {
+                auto& compute = first_group ? compute_desc_g1 : compute_desc_g2;
+                compute.runtime_args.emplace_back(core, runtime_args);
+            }
             uint32_t in0_start_id = 0;
             uint32_t out_tile_start_id = 0;
             if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {

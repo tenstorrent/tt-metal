@@ -9,6 +9,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ckernel.h"
 
 // Tile geometry constants for bf16 32x32 tiles with 16x16 faces
@@ -462,10 +463,8 @@ void kernel_main() {
     // I see no performance difference generating these internally inside the writer kernel
     generate_index_tiles(cb_expert_index_template, width_tiles, indices_page_size);
     generate_group_indices_tiles(cb_group_index_template, width_tiles, n_groups);
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_reduce_ones_scalar,
-        ckernel::PoolType::SUM,
-        ckernel::ReduceDim::REDUCE_ROW>(n_activated_experts);
+    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<indices_args.next_compile_time_args_offset()>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
     write_single_scalar(cb_epsilon_scalar, packed_epsilon);
     write_single_scalar(cb_route_scale_scalar, packed_route_scale);
 

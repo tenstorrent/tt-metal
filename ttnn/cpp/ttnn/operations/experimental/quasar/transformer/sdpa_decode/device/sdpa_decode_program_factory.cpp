@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "sdpa_decode_device_operation.hpp"
 
 #include <bit>
@@ -1115,6 +1116,9 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         .hw_config = std::move(reader_hw),
         .advanced_options = {.num_runtime_varargs = 2 * num_output_cores},
     };
+    const auto reduction_auxiliary = ttnn::kernel_lib::host::ReduceAuxiliaryArgs(
+                                         {0, {{1.0F, ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRow, 32}}})
+                                         .get_compile_time_args();
     KernelSpec writer{
         .unique_id = WRITER,
         .source = std::filesystem::path(kernel_path + "dataflow/writer_decode_all.cpp"),
@@ -1149,7 +1153,8 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
                   "children_per_round_5"}},
         .hw_config = std::move(writer_hw),
         .advanced_options =
-            {.num_runtime_varargs = 2 * num_cores_per_head + 2 * num_reducer_cores + 2 * num_output_cores},
+            {.num_runtime_varargs = 2 * num_cores_per_head + 2 * num_reducer_cores + 2 * num_output_cores,
+             .compile_time_varargs = reduction_auxiliary},
     };
     KernelSpec compute{
         .unique_id = COMPUTE,

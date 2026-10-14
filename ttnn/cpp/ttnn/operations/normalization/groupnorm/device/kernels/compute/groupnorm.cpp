@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <type_traits>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
@@ -18,6 +19,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
@@ -26,31 +28,33 @@
 
 namespace ckl = compute_kernel_lib;
 
-template <uint32_t input_id, uint32_t scaler_id, uint32_t output_id>
-ALWI void reduce_partial_statistics(uint32_t rows, uint32_t cols) {
+template <uint32_t Input, uint32_t Output, uint32_t RuntimeArgsOffset>
+ALWI void reduce_local_group(uint32_t rows) {
+    using Call =
+        ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0, RuntimeArgsOffset>, Input, 2, Output>;
     if (rows == 0) {
-        // The reader gathers one partial per scheduled block, even for an empty tail.
-        // Publish the sum identity without asking the reduction helper to read zero rows.
-        DataflowBuffer output(output_id);
+        DataflowBuffer output(Output);
         output.reserve_back(1);
-        fill_tile_init();
+        pack_reconfig_data_format(Output);
         tile_regs_acquire();
-        fill_tile(0, 0.0f);
+        fill_tile_init();
+        fill_tile(0, 0.0F);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, output_id);
+        pack_tile(0, Output);
         tile_regs_release();
         output.push_back(1);
     } else {
-        ckl::reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_SCALAR,
-            input_id,
-            scaler_id,
-            output_id,
-            ckl::ReduceInputPolicy::NoWaitNoPop,
-            ckl::ReduceDataFormatReconfigMode::NONE>(ckl::ReduceInputBlockShape::of(rows, cols));
+        compute_kernel_lib::reduce<Call>();
     }
+}
+
+template <uint32_t Output>
+ALWI void reduce_global_group() {
+    using Local = ttnn::kernel_lib::ReduceCallArgs<0>;
+    using Call = ttnn::kernel_lib::
+        BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<Local::next_compile_time_args_offset()>, 10, 4, Output>;
+    compute_kernel_lib::reduce<Call>();
 }
 
 void kernel_main() {
@@ -372,13 +376,6 @@ void kernel_main() {
         out_block_h_last = residual % out_block_h_normal;
         out_block_hw_last = out_block_h_last * block_w;
     }
-    std::uint32_t dfb_ex_external_tiles_required =
-        num_out_blocks_padded * num_cores_per_mcast_group * dfb_ex_external_slot_pitch_bytes / single_tile_size_bytes;
-    if (((num_out_blocks_padded * num_cores_per_mcast_group * dfb_ex_external_slot_pitch_bytes) %
-         single_tile_size_bytes) != 0) {
-        dfb_ex_external_tiles_required++;
-    }
-
     // Start Batch Loop
     for (std::uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;
@@ -393,7 +390,7 @@ void kernel_main() {
             // Start Average Calc
             // Start Local Reduce
             dfb_input_mask.wait_front(mask_tiles_per_group);
-            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+            auto average_block = [&](auto runtime_offset, uint32_t out_block_index) __attribute__((always_inline)) {
                 uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
@@ -475,21 +472,26 @@ void kernel_main() {
 
                 // Partial/E[x]
                 dfb_x.wait_front(static_cast<uint16_t>(out_block_hw_normal));
-                reduce_partial_statistics<dfb_x_id, dfb_scaler_id, dfb_ex_partial_id>(out_block_h_actual, block_w);
+                reduce_local_group<dfb_x_id, dfb_ex_partial_id, decltype(runtime_offset)::value>(out_block_h_actual);
                 dfb_x.pop_front(static_cast<uint16_t>(out_block_hw_normal));
+            };
+            // Each call site supplies its runtime-record offset as a template
+            // argument. reduce<Call>() alone interprets the record's shape.
+            if constexpr (block_h % num_out_blocks == 0) {
+                // Equal reduction shapes share one call site; row padding remains masked above.
+                for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; ++out_block_index) {
+                    average_block(std::integral_constant<uint32_t, 0>{}, out_block_index);
+                }
+            } else {
+                for (uint32_t out_block_index = 0; out_block_index + 1 < num_out_blocks_padded; ++out_block_index) {
+                    average_block(std::integral_constant<uint32_t, 0>{}, out_block_index);
+                }
+                average_block(std::integral_constant<uint32_t, 3>{}, num_out_blocks_padded - 1);
             }
             // End Local Redcue
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                compute_kernel_lib::reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_SCALAR,
-                    dfb_ex_external_id,
-                    dfb_scaler_global_id,
-                    dfb_ex_global_id,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required));
+                reduce_global_group<dfb_ex_global_id>();
                 if constexpr (num_cores_per_mcast_group > 1) {
                     dfb_ex.reserve_back(1);
                     dfb_ex.push_back(1);
@@ -500,7 +502,7 @@ void kernel_main() {
 
             // Start Variance Calc
             // Start Local Reduce
-            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+            auto variance_block = [&](auto runtime_offset, uint32_t out_block_index) __attribute__((always_inline)) {
                 uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
@@ -632,21 +634,24 @@ void kernel_main() {
 
                 // Partial-Var(x)
                 dfb_xmm.wait_front(static_cast<uint16_t>(out_block_hw_normal));
-                reduce_partial_statistics<dfb_xmm_id, dfb_scaler_id, dfb_ex2_partial_id>(out_block_h_actual, block_w);
+                reduce_local_group<dfb_xmm_id, dfb_ex2_partial_id, decltype(runtime_offset)::value>(out_block_h_actual);
                 dfb_xmm.pop_front(static_cast<uint16_t>(out_block_hw_normal));
+            };
+            if constexpr (block_h % num_out_blocks == 0) {
+                // Equal reduction shapes share one call site; row padding remains masked above.
+                for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; ++out_block_index) {
+                    variance_block(std::integral_constant<uint32_t, 0>{}, out_block_index);
+                }
+            } else {
+                for (uint32_t out_block_index = 0; out_block_index + 1 < num_out_blocks_padded; ++out_block_index) {
+                    variance_block(std::integral_constant<uint32_t, 0>{}, out_block_index);
+                }
+                variance_block(std::integral_constant<uint32_t, 3>{}, num_out_blocks_padded - 1);
             }
             // End Local Reduce
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                compute_kernel_lib::reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_SCALAR,
-                    dfb_ex_external_id,
-                    dfb_scaler_global_id,
-                    dfb_ex2_global_id,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required));
+                reduce_global_group<dfb_ex2_global_id>();
                 if constexpr (num_cores_per_mcast_group > 1) {
                     dfb_ex2.reserve_back(1);
                     dfb_ex2.push_back(1);
@@ -1007,14 +1012,14 @@ void kernel_main() {
     // End Batch Loop
 
     // Buffers holding a value reused for the whole core's work are never popped inside the loops
-    // above; pop them here so they are left balanced. The scaler waits are not present in this
-    // file: compute_kernel_lib::reduce waits one page on the buffer it is given as the scaler and
-    // leaves it unpopped so that one pushed tile serves all of this kernel's reduce calls.
-    DataflowBuffer(dfb_scaler_id).pop_front(1);
+    // above; pop them here so they are left balanced. The auxiliary waits are not present in this
+    // file: compute_kernel_lib::reduce waits the auxiliary tiles of the buffer it is given and
+    // leaves them unpopped so that one pushed set serves all of this kernel's reduce calls.
+    DataflowBuffer(dfb_scaler_id).pop_front(get_named_compile_time_arg_val("reduce_local_auxiliary_tiles"));
     if constexpr (is_mcast_sender) {
-        // The global-reduce scaler is waited only by the global reductions on the mcast sender;
-        // pop it under the same guard that gated those reductions.
-        DataflowBuffer(dfb_scaler_global_id).pop_front(1);
+        // The global-reduce auxiliary tiles are waited only by the global reductions on the mcast
+        // sender; pop them under the same guard that gated those reductions.
+        DataflowBuffer(dfb_scaler_global_id).pop_front(get_named_compile_time_arg_val("reduce_global_auxiliary_tiles"));
     }
     // The epsilon tile is pushed once by the reader and re-waited on every group, so it is
     // popped once here to balance the buffer.

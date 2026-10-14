@@ -755,11 +755,8 @@ void kernel_main() {
 
     generate_bcast_unary_scalar(CircularBuffer(cb_scale_in), scale_val);
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_identity_scale_in,
-        ckernel::PoolType::MAX,
-        ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<cb_arg_offset + 24>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     // Lightweight mask: generate all mask tiles once into single CB before the ring loop.
     // Needed when any K/joint dimension has padding, or when causal/chunked masking is active.
@@ -1315,14 +1312,7 @@ void kernel_main() {
     [[maybe_unused]] auto write_output_after_ring = [&]() {
         const auto decoded_q = decompose_global_q_index(global_q_start, num_q_chunks, NH, use_zigzag_balancing);
         const auto qi = get_q_chunk_info<has_joint_q>(
-            decoded_q.q_chunk,
-            decoded_q.nb,
-            decoded_q.nq,
-            num_local_q_chunks,
-            Sq_chunk_t,
-            vDHt,
-            Lt,
-            q_local_padded_Nt);
+            decoded_q.q_chunk, decoded_q.nb, decoded_q.nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
         const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_size - 1, Lt, q_local_padded_Nt);
         write_block_row_grouped_trid<output_has_no_padding>(
             noc, out_generator, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);

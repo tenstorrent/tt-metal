@@ -7,10 +7,16 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
 namespace ckl = compute_kernel_lib;
+
+constexpr uint32_t reduce_call_count = get_compile_time_arg_val(0);
+template <uint32_t I>
+using ReduceCall = ttnn::kernel_lib::
+    BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallAtT<1, I>, dfb::im0, dfb::scaler, dfb::out, dfb::im1>;
 
 void kernel_main() {
     constexpr int onetile = 1;
@@ -21,40 +27,20 @@ void kernel_main() {
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         const bool last_out = block == (per_core_block_cnt - 1);
 
-        ckl::mul<
-            ckl::input(dfb::in0),
-            ckl::input(dfb::in1),
-            ckl::output(
-                dfb::im0, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>(
+        ckl::mul<ckl::input(dfb::in0), ckl::input(dfb::in1), ckl::output(dfb::im0)>(
             ckl::IterationShape::tiles(onetile));
 
-        // reduce-w
-        if (last_out) {
-            ckl::reduce<
-                REDUCE_OP,
-                REDUCE_DIM,
-                dfb::im0,
-                dfb::scaler,
-                dfb::out,
-                ckl::ReduceInputPolicy::WaitAndPopPerTile,
-                ckl::ReduceDataFormatReconfigMode::NONE>(
-                ckl::ReduceInputBlockShape::single(),
-                ckl::ReduceInputMemoryLayout::contiguous(),
-                ckl::Accumulate::at(dfb::im1, block));
+        if (block == 0) {
+            ckl::reduce<ReduceCall<0>>();
         } else {
-            ckl::reduce<
-                REDUCE_OP,
-                REDUCE_DIM,
-                dfb::im0,
-                dfb::scaler,
-                dfb::im1,
-                ckl::ReduceInputPolicy::WaitAndPopPerTile,
-                ckl::ReduceDataFormatReconfigMode::NONE>(
-                ckl::ReduceInputBlockShape::single(),
-                ckl::ReduceInputMemoryLayout::contiguous(),
-                ckl::Accumulate::at(dfb::im1, block));
+            if constexpr (reduce_call_count > 1) {
+                if (last_out) {
+                    ckl::reduce<ReduceCall<reduce_call_count - 1>>();
+                } else {
+                    ckl::reduce<ReduceCall<1>>();
+                }
+            }
         }
     }
-    // The reduce helper reuses the scaler tile for every block.
-    dfb_scaler.pop_front(onetile);
+    dfb_scaler.pop_front(get_arg(args::reduce_auxiliary_tiles));
 }

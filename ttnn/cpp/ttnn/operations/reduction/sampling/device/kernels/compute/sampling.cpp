@@ -22,6 +22,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 #define DEBUG_PRINT 0
 using namespace ckernel;
@@ -185,28 +186,18 @@ static void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     }
 }
 
-template <
-    PoolType pool_type,
-    ReduceDim reduce_dim,
-    uint32_t in0_dfb,
-    uint32_t scale_dfb,
-    uint32_t out_dfb,
-    uint32_t rows,
-    uint32_t cols>
+template <typename Call>
 void reduce_c() {
-    // Postcondition: in0_cb has rows*cols produced (WaitUpfrontNoPop — tiles not consumed)
-    // Postcondition: out_cb has rows produced
-    compute_kernel_lib::reduce<
-        pool_type,
-        reduce_dim,
-        in0_dfb,
-        scale_dfb,
-        out_dfb,
-        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-        compute_kernel_lib::ReduceInputBlockShape::of(rows, cols));
+    compute_kernel_lib::reduce<Call>();
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }
+
+using SamplingMaxArgs = ttnn::kernel_lib::ReduceCallArgs<0>;
+using SamplingSumArgs = ttnn::kernel_lib::ReduceCallArgs<SamplingMaxArgs::next_compile_time_args_offset()>;
+using SamplingMaxCall =
+    ttnn::kernel_lib::BoundReduceCallArgs<SamplingMaxArgs, dfb::values, dfb::scaler_max, dfb::cur_max>;
+using SamplingSumCall =
+    ttnn::kernel_lib::BoundReduceCallArgs<SamplingSumArgs, dfb::values, dfb::scaler_sum, dfb::cur_sum>;
 
 template <
     uint32_t Ht,
@@ -486,10 +477,10 @@ void kernel_main() {
     add_block_inplace(dfb::values, dfb::topk_mask, Ht * Kt);
     mul_block_bcast_scalar_inplace<dfb::values, dfb::temp, Ht * Kt>();
     // softmax
-    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::values, dfb::scaler_max, dfb::cur_max, Ht, Kt>();
+    reduce_c<SamplingMaxCall>();
 
     sub_exp_block_bcast_cols_inplace<dfb::values, dfb::cur_max, Ht, Kt>();
-    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::values, dfb::scaler_sum, dfb::cur_sum, Ht, Kt>();
+    reduce_c<SamplingSumCall>();
     recip_block_inplace(dfb::cur_sum, Ht);
     mul_block_bcast_cols(dfb::values, dfb::cur_sum, dfb::local_vals, Ht, Kt);
 
@@ -502,8 +493,8 @@ void kernel_main() {
     DataflowBuffer(dfb::temp).pop_front(1);
 
     // dfb::scaler_max and dfb::scaler_sum are pushed once by the writer and waited inside
-    // compute_kernel_lib::reduce, which leaves them unpopped so one pushed tile serves every reduce
-    // call. Pop both here so they are left balanced.
-    DataflowBuffer(dfb::scaler_max).pop_front(1);
-    DataflowBuffer(dfb::scaler_sum).pop_front(1);
+    // compute_kernel_lib::reduce, which leaves the auxiliary tiles unpopped. Pop both here so they
+    // are left balanced.
+    DataflowBuffer(dfb::scaler_max).pop_front(SamplingMaxArgs::auxiliary_tile_count);
+    DataflowBuffer(dfb::scaler_sum).pop_front(SamplingSumArgs::auxiliary_tile_count);
 }

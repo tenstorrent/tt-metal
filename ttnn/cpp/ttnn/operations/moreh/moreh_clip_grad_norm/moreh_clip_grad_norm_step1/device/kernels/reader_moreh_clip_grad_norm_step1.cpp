@@ -17,23 +17,16 @@ void kernel_main() {
 
     uint32_t cb_id{0};
     const auto cb_id_input = cb_id++;
-    const auto cb_id_one = cb_id++;
+    cb_id++;  // planned auxiliary CB
     const auto cb_id_decimal = cb_id++;
     const auto cb_id_mask_h_w = cb_id++;
 
     constexpr auto input_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(input_args, input_addr);
 
-    union {
-        float f;
-        uint32_t u;
-    } scaler;
-    scaler.f = 1.0f;
     DataflowBuffer dfb_decimal(cb_id_decimal);
-    DataflowBuffer dfb_one(cb_id_one);
     DataflowBuffer dfb_mask_h_w(cb_id_mask_h_w);
     fill_cb_with_value(dfb_decimal, decimal);
-    fill_cb_with_value(dfb_one, scaler.u);
     generate_mask_h_w_if_needed(dfb_mask_h_w, origin_h, origin_w);
 
     constexpr uint32_t onetile = 1;

@@ -5,6 +5,68 @@
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
+## Current library planner cutoffs (Blackhole, 2026-09-23)
+
+The host reduction planner uses the enclosing kernel's `math_fidelity` to select
+`AccumulateViaAdd` when the reduced tile count is **at least** the cutoff below.
+Row means reducing W, column means reducing H, and scalar means reducing HW.
+For accumulated calls, the count covers the combined reduction sharing one finalization;
+full and runtime-tail scenarios are planned separately. Explicit algorithm overrides
+and additive eligibility restrictions still take precedence.
+
+| Math fidelity | Row / W | Column / H | Scalar / HW |
+|---|---:|---:|---:|
+| LoFi | 64 | 32 | 16 |
+| HiFi2 | 30 | 16 | 8 |
+| HiFi3 | 16 | 8 | 8 |
+| HiFi4 | 10 | 4 | 4 |
+
+These are the current **library additive path** versus forced native `ReduceTile`,
+not the hand-written `fast` variant below. Measurements used commit
+`f0b68b9e278ba6ee5cdaa5ced1a8fc32cfb70378`, Blackhole P150b, one core, BF16 L1 input,
+FP32 output, and both BF16/FP32 DEST accumulation. Each timing is device kernel
+duration divided by 200 repetitions, with the median of five retained trials after
+warmup. A win requires native/additive duration >1.01 at that width and all larger
+tested widths. The power-of-two sweep covered 1–64 tiles; dense sweeps refined
+HiFi4 row to 10 (tested through 20) and HiFi2 row to 30 (tested through 32; 28 wins
+but 29 is within the ±1% band). Both accumulation modes gave the same cutoffs.
+
+The supplemental library control reused the native helper descriptor and changed
+only the forced algorithm to `ACCUMULATE_VIA_ADD`. The recorded measurements are
+in `generated/test_reports/reduce-accumulate-20260923T083557Z/` (`crossovers.json`,
+`library-comparison/`, `dense-hifi4-complete/`, `dense-hifi2-row-complete/`). These
+local artifacts are not required by the planner. This one-output microbenchmark
+does not establish optimal cutoffs for every fused workload or dtype.
+Pass the actual compute kernel fidelity in `ReduceHardwareConfig`;
+its compatibility default is HiFi4, matching Metal's compute config default.
+
+## Current library planner cutoffs (Wormhole B0, 2026-09-24)
+
+| Math fidelity | Row / W | Column / H | Scalar / HW |
+|---|---:|---:|---:|
+| LoFi | 14 | 52 | 14 |
+| HiFi2 | 14 | 52 | 8 |
+| HiFi3 | 14 | 12 | 6 |
+| HiFi4 | 14 | 7 | 5 |
+
+Measured on commit `05ddaab1f25`, Wormhole B0 N300, using the same forced library
+algorithms, BF16 L1 input, FP32 output, both DEST modes, and 200 reductions per
+kernel. Coarse and dense sweeps retained five trials per variant; boundary
+confirmation retained fifteen. These conservative cutoffs require a >1% additive
+win in both DEST modes across every measured run median at the cutoff and all
+larger tested tile counts. The sweep covered 1–64 tiles, with dense sampling
+around each crossover.
+
+The local report, raw measurements, and reproduction script are under
+`reports/reduce-wormhole-cutoffs-20260924T092155Z/` (`report.html`,
+`measurements.csv`, `crossovers.json`, `sweep.py`). These artifacts are not required
+by the planner. As with Blackhole, the cutoffs characterize this one-output
+microbenchmark, not every fused workload. Unmeasured architectures retain the
+previous W=4, H/HW=8 policy.
+
+The historical Wormhole timings and the example's hand-written dispatch below
+describe the original experiment, not the current planner policy.
+
 ## The problem
 A `SUM`/mean reduce of `N` tiles is usually done with the reduce library, whose datapath folds the cross-tile
 sum and the within-tile reduction together in one matmul-with-ones per tile — so it pays that datapath `N`
@@ -98,3 +160,12 @@ scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/t
 `program_descriptor_with_inline_kernels.py` — the `fast` kernel (shared accumulate + per-dim SFPU finalize),
 the `helper` kernel (standard reduce), and the AVG scaler dataflow kernel; `dispatch` routes between them
 per (dim, width).
+
+### Reduce-helper interface note
+
+This performance example intentionally uses the retained low-level explicit `reduce<...>(shape, ...)` overload
+so that it can hold a particular datapath and policy fixed for comparison. Its hand-written scaler setup is
+benchmark scaffolding, not the planner-backed interface recommended for a new operation. See
+[`../reduce_block/README.md`](../reduce_block/README.md#planner-backed-reduce-helper-flow) for the complete flow:
+append `[call_count][calls...]` to the compute arguments, append one aggregate auxiliary descriptor to the
+dataflow arguments, invoke `reduce<Call>()` at kernel-controlled points, and prepare the shared auxiliary CB once.

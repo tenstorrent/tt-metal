@@ -170,4 +170,15 @@ void reduce_rm_writer() {
     }
 }
 
-void kernel_main() { reduce_rm_writer<REDUCE_DIM>(); }
+#ifdef REDUCE_AUXILIARY_CB
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#endif
+
+void kernel_main() {
+#ifdef REDUCE_AUXILIARY_CB
+    using Auxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, REDUCE_AUXILIARY_CB>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+#endif
+    reduce_rm_writer<REDUCE_DIM>();
+}

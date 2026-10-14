@@ -3,9 +3,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+constexpr uint32_t reduce_call_count = get_compile_time_arg_val(0);
+template <uint32_t I, uint32_t INPUT_CB>
+using ReduceCall = ttnn::kernel_lib::
+    BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallAtT<1, I>, INPUT_CB, dfb::scaler, dfb::out, dfb::intermed1>;
+
+template <uint32_t INPUT_CB>
+ALWI void reduce_tile_input(uint32_t tile_index, bool last) {
+    if (tile_index == 0) {
+        compute_kernel_lib::reduce<ReduceCall<0, INPUT_CB>>();
+    } else if constexpr (reduce_call_count > 1) {
+        if (last) {
+            compute_kernel_lib::reduce<ReduceCall<reduce_call_count - 1, INPUT_CB>>();
+        } else {
+            compute_kernel_lib::reduce<ReduceCall<1, INPUT_CB>>();
+        }
+    }
+}
+
 void kernel_main() {
     constexpr int onetile = 1;
     const uint32_t batch_num = get_arg(args::batch_num);
@@ -95,29 +114,15 @@ void kernel_main() {
                     dfb_in0_obj.pop_front(onetile);
                 }
 
-                const auto reduce_block = compute_kernel_lib::ReduceInputBlockShape::single();
-                const auto reduce_layout = compute_kernel_lib::ReduceInputMemoryLayout::contiguous();
-                const auto reduce_accum = compute_kernel_lib::Accumulate::at(dfb::intermed1, num_tile_done);
                 if (do_mask) {
-                    if (last_out) {
-                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::intermed0, dfb::scaler, dfb::out>(
-                            reduce_block, reduce_layout, reduce_accum);
-                    } else {
-                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::intermed0, dfb::scaler, dfb::intermed1>(
-                            reduce_block, reduce_layout, reduce_accum);
-                    }
+                    reduce_tile_input<dfb::intermed0>(num_tile_done, last_out);
                 } else {
-                    if (last_out) {
-                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::in0, dfb::scaler, dfb::out>(
-                            reduce_block, reduce_layout, reduce_accum);
-                    } else {
-                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::in0, dfb::scaler, dfb::intermed1>(
-                            reduce_block, reduce_layout, reduce_accum);
-                    }
+                    reduce_tile_input<dfb::in0>(num_tile_done, last_out);
                 }
 
                 num_tile_done++;
             }
         }
     }
+    dfb_scaler_obj.pop_front(get_arg(args::reduce_auxiliary_tiles));
 }

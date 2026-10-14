@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "tensix_types.h"
+#include "tile_geometry.h"
 
 namespace ckernel
 {

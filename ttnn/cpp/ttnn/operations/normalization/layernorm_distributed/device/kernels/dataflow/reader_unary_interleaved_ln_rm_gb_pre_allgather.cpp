@@ -8,7 +8,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "api/debug/assert.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -28,10 +28,6 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = dfb_inp_buf.get_tile_size();
-
-    // The reduce-scalar tile the compute kernel's row reduction multiplies by.
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb::reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 
     const auto src_a = TensorAccessor(tensor::src);
 

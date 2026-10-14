@@ -31,7 +31,6 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "ttnn/operations/normalization/layernorm/device/kernels/layernorm_scaler_tiles.h"
@@ -107,27 +106,6 @@ void kernel_main() {
 #endif
 
     // Generate constant tiles for layernorm compute
-#ifndef USE_WELFORD
-    {
-        constexpr uint32_t partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
-        // Push count shared with the compute kernel's dfb_scaler pop count (issue #48487).
-        constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tt::constants::TILE_WIDTH);
-
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb::scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW,
-            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
-
-        if constexpr (num_scaler_tiles == 2) {
-            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                dfb::scaler,
-                ckernel::PoolType::SUM,
-                ckernel::ReduceDim::REDUCE_ROW,
-                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(partial_last_tile_cols);
-        }
-    }
-#endif
 
     const uint32_t eps = get_arg(args::eps);
     DataflowBuffer dfb_eps(dfb::eps);

@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "llk_defs.h"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 namespace dataflow_kernel_lib {
 
@@ -16,6 +17,25 @@ using ckernel::ReduceDim;
 // Default reduce factor for SUM and MAX pool types (scaler is always 1.0).
 // Named constant for SUM and MAX where reduce_factor is unused.
 constexpr uint32_t SUM_AND_MAX_REDUCE_FACTOR = 1;
+
+// =============================================================================
+// Host-planned auxiliary tiles (PREFERRED for new code)
+//
+// A reduction planned on the host (kernel_lib/host/reduce_host.hpp) serializes one
+// auxiliary-tile recipe per planning unit. prepare_reduce_auxiliary_tiles() below
+// materializes it; the compute kernel issues compute_kernel_lib::reduce<Call>().
+//
+// By convention the writer kernel produces the auxiliary CB: the reader is on the
+// input-streaming critical path, while the writer is idle at kernel start. A writer
+// shared with non-reduction users guards its call with the REDUCE_AUXILIARY_CB
+// define, which the program factory sets to the auxiliary CB binding:
+//
+//   #ifdef REDUCE_AUXILIARY_CB
+//       using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<
+//           ttnn::kernel_lib::ReduceAuxiliaryArgs<AUXILIARY_ARGS_OFFSET>, REDUCE_AUXILIARY_CB>;
+//       dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+//   #endif
+// =============================================================================
 
 // =============================================================================
 // Reduce scaler helpers API
@@ -60,20 +80,6 @@ FORCE_INLINE void prepare_reduce_scaler(
     float scaler_f, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
 /**
- * @brief Fill a 0/1 MASK tile for the AccumulateViaAdd partial (non-tile-aligned) reduce path.
- *
- * Writes 1.0 in the first `valid_elems` positions along the reduce dimension and 0 elsewhere, in the
- * broadcast layout the compute consumes on the last tile: REDUCE_ROW -> row-0 (mul_tiles_bcast_rows),
- * REDUCE_COL -> col-0 (mul_tiles_bcast_cols). REDUCE_SCALAR is rejected (2-D partial unsupported).
- *
- * @tparam dfb_id DataflowBuffer ID to write the mask to (must be constexpr)
- * @tparam reduce_dim Reduction dimension (REDUCE_ROW or REDUCE_COL)
- * @param valid_elems Valid reduce-dim elements in the last tile, in [1, tile reduce-axis dim - 1].
- */
-template <uint32_t dfb_id, ReduceDim reduce_dim>
-FORCE_INLINE void prepare_reduce_mask(uint32_t valid_elems);
-
-/**
  * @brief Generate a reduce scaler tile with format and tile shape deduced from dfb_id
  *
  * Computes the appropriate scaler value based on pool type, reduce dimension,
@@ -98,59 +104,65 @@ template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t re
 FORCE_INLINE void calculate_and_prepare_reduce_scaler(
     uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
-// =============================================================================
-// Partial-scaler convenience: emit a full + partial scaler tile pair
-//
-// When the reduce dimension is not tile-aligned, the compute kernel needs the
-// full scaler for all but the last reduce-dim iteration, and a partial scaler
-// (only `partial_positions` elements filled, the rest zeroed) for the last.
-//
-// These helpers emit two scaler tiles into the CB in that order:
-//   tile 0 → full scaler
-//   tile 1 → partial scaler
-//
-// Pair with compute_kernel_lib::ReducePartialScaler::with_partial() on the
-// compute side. REDUCE_SCALAR is not supported (scaler is applied twice).
-// =============================================================================
-
 /**
- * @brief Emit two scaler tiles for non-tile-aligned reduce dimensions
+ * @brief Fill and push one auxiliary tile read by compute_kernel_lib::reduce()
  *
- * Writes a full-fill scaler tile followed by a partial-fill scaler tile to
- * `cb_id`. Each tile is computed with the same caller-provided float scaler;
- * only the number of valid positions differs.
+ * Writes one tile of a physical pattern into the next free page of dfb_id. The
+ * pattern carries no reduction semantics; the caller selects the tiles, and their
+ * order, that the compute reduce() configuration expects:
+ * - ReduceTile: [full scaler] or, with ReducePartialMode::Scaler, [full scaler, partial scaler].
+ *   A full scaler is FirstRow with valid_elements equal to the tile width. A partial
+ *   REDUCE_ROW scaler is FirstRow and a partial REDUCE_COL scaler is FirstRowPerFaceRow,
+ *   with valid_elements set to the valid elements of the last reduce-dim tile.
+ * - AccumulateViaAdd: [zero] or, with ReducePartialMode::Mask, [mask, zero]. The mask is
+ *   FirstRow (REDUCE_ROW) or FirstColumn (REDUCE_COL) with value 1.0.
  *
- * @tparam cb_id Circular buffer ID to write the tiles to (must be constexpr)
- * @tparam pool_type Type of pooling operation (SUM, AVG, MAX)
- * @tparam reduce_dim Reduction dimension. REDUCE_SCALAR is rejected at compile time.
- * @tparam partial_positions Number of valid elements along the reduce axis in the
- *         partial tile. Must be in [1, tile_dim - 1]; if you'd pass tile_dim use
- *         prepare_reduce_scaler with the single-tile path instead.
- * @param scaler_f Float scaler value to fill both tiles with
- */
-template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t partial_positions>
-FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f);
-
-/**
- * @brief calculate-and-fill variant of prepare_partial_reduce_scalers
+ * Patterns:
+ * - FirstRow: row 0 of the tile holds the value in its first valid_elements columns.
+ * - FirstColumn: column 0 of the tile holds the value in its first valid_elements rows.
+ * - FirstRowPerFaceRow: row 0 of every face in face row r holds the value in its first
+ *   min(16, valid_elements - 16 * r) columns.
+ * - Zero: every element is zero.
  *
- * Computes the standard reduce scaler from pool type, reduce dimension, and
- * reduce factor (1/N for AVG REDUCE_ROW/REDUCE_COL; 1.0 for SUM/MAX), then
- * emits the full + partial scaler tile pair via prepare_partial_reduce_scalers.
+ * A full FirstRow scaler initializes only the face rows consumed by reduction; its other
+ * lanes are unspecified. Every other pattern clears the tile before filling it.
+ * Data format and tile shape are deduced from the DataflowBuffer (Float16_b or Float32).
  *
- * @tparam cb_id Circular buffer ID
- * @tparam pool_type Pool type
- * @tparam reduce_dim Reduction dimension (REDUCE_SCALAR is rejected)
- * @tparam partial_positions Valid elements in the partial tile, in [1, tile_dim - 1]
- * @tparam reduce_factor Number of elements being reduced (used by AVG only)
+ * @tparam dfb_id DataflowBuffer ID to write the tile to (must be constexpr)
+ * @tparam tile_type Physical pattern of the tile
+ * @tparam valid_elements Number of filled elements along the pattern's axis (ignored for Zero)
+ * @tparam value_bits IEEE-754 float32 bit pattern of the fill value (ignored for Zero)
  */
 template <
-    uint32_t cb_id,
-    PoolType pool_type,
-    ReduceDim reduce_dim,
-    uint32_t partial_positions,
-    uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR>
-FORCE_INLINE void calculate_and_prepare_partial_reduce_scalers();
+    uint32_t dfb_id,
+    ttnn::kernel_lib::ReduceAuxiliaryTileType tile_type,
+    uint32_t valid_elements = tt::constants::TILE_WIDTH,
+    uint32_t value_bits = 0x3F800000>
+FORCE_INLINE void prepare_reduce_auxiliary_tile();
+
+/**
+ * @brief Materialize and push one planning unit's auxiliary-tile recipe.
+ *
+ * The host planner aggregates the physical tiles needed by all calls in one
+ * planning unit and serializes them independently of the compute call list.
+ * Call this exactly once for that unit, before compute needs the tiles; it
+ * fills and pushes every tile once, and all compute calls read slices of those
+ * same tiles. Do not loop over the compute calls or infer a call's partial mode
+ * from the recipe.
+ *
+ * @code{.cpp}
+ * // AUXILIARY_ARGS_OFFSET follows this kernel's own compile-time-argument prefix.
+ * using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<AUXILIARY_ARGS_OFFSET>;
+ * dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+ * @endcode
+ *
+ * For consecutive planning units, the next descriptor begins at
+ * Auxiliary::next_compile_time_args_offset(). An empty recipe pushes nothing.
+ *
+ * @tparam Auxiliary A ReduceAuxiliaryArgs (or BoundReduceAuxiliaryArgs) view of one planning unit.
+ */
+template <typename Auxiliary>
+FORCE_INLINE void prepare_reduce_auxiliary_tiles();
 
 }  // namespace dataflow_kernel_lib
 
