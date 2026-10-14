@@ -26,8 +26,9 @@ void kernel_main() {
     constexpr uint32_t num_weight_tiles = get_arg(args::num_weight_tiles);            // Hi / 32 1x32 tiles
     constexpr uint32_t page_block_size = get_arg(args::page_block_size);
     constexpr uint32_t num_tiles_per_block_of_key = get_arg(args::num_tiles_per_block_of_key);
-    constexpr uint32_t kv_stage_rows = get_arg(args::kv_stage_rows);
-    constexpr uint32_t kSelRowsOffset = 4;  // sel: {num_rows, output_offset, pad, pad, rows...}
+    [[maybe_unused]] constexpr uint32_t kv_stage_rows = get_arg(args::kv_stage_rows);
+    [[maybe_unused]] constexpr uint32_t kSelRowsOffset = 4;  // sel: {num_rows, output_offset, pad, pad, rows...}
+    constexpr uint32_t num_parts = get_arg(args::num_parts);
 
     // ---- Runtime args ----
     const uint32_t core_index = get_arg(args::core_index);
@@ -37,13 +38,19 @@ void kernel_main() {
     // query and head_weights have no accessor: dfb::query and dfb::weights are borrowed from this
     // core's replicated shards.
     const auto key_cache = TensorAccessor(tensor::key_cache);
-    const auto kv_cache = TensorAccessor(tensor::kv_cache);
+    [[maybe_unused]] const auto kv_cache = TensorAccessor(tensor::kv_cache);
     const auto page_table = TensorAccessor(tensor::page_table);
-    const auto cur_pos = TensorAccessor(tensor::cur_pos);
-    const auto output = TensorAccessor(tensor::output);
+    [[maybe_unused]] const auto cur_pos = TensorAccessor(tensor::cur_pos);
+    [[maybe_unused]] const auto output = TensorAccessor(tensor::output);
+#ifdef PARTIAL_OUTPUT
+    const auto part_index = TensorAccessor(tensor::part_index);
+#endif
 #ifdef HAS_VALID_LENGTH
     // tensor::valid_length only exists when the optional tensor is bound.
     [[maybe_unused]] const auto valid_length = TensorAccessor(tensor::valid_length);
+#endif
+#ifdef HAS_NUM_KEYS
+    const auto num_keys_count = TensorAccessor(tensor::num_keys);
 #endif
 
     // ---- Dataflow buffers ----
@@ -53,7 +60,7 @@ void kernel_main() {
     DataflowBuffer ctrl_dfb(dfb::ctrl);          // producer -> compute
     DataflowBuffer indices_dfb(dfb::indices);    // consumer <- compute
     DataflowBuffer kv_dfb(dfb::kv);              // reader-local staging for gathered kv rows
-    DataflowBuffer cur_pos_dfb(dfb::cur_pos);    // producer -> writer
+    DataflowBuffer cur_pos_dfb(dfb::cur_pos);    // producer -> writer ({number of selectable keys, part})
     DataflowBuffer blocks_dfb(dfb::blocks);      // producer -> writer (physical block of each local block)
     DataflowBuffer sel_dfb(dfb::sel);            // consumer <- writer (selected kv_cache rows)
 
@@ -65,24 +72,44 @@ void kernel_main() {
     weights_dfb.push_back(num_weight_tiles);
 
     cur_pos_dfb.reserve_back(1);
-    noc.async_read(cur_pos, cur_pos_dfb, cur_pos_dfb.get_entry_size(), {.page_id = 0}, {.offset_bytes = 0});
+    volatile tt_l1_ptr uint32_t* key_count =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cur_pos_dfb.get_write_ptr());
+#ifdef PARTIAL_OUTPUT
+    noc.async_read(part_index, cur_pos_dfb, 64, {.page_id = 0}, {.offset_bytes = 64});
+#endif
+#ifdef HAS_NUM_KEYS
+    noc.async_read(num_keys_count, cur_pos_dfb, 64, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    const uint32_t cur_pos_value = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cur_pos_dfb.get_write_ptr())[0];
-    cur_pos_dfb.push_back(1);
-
+    const uint32_t num_keys = key_count[0];
+#else
+    noc.async_read(cur_pos, cur_pos_dfb, 64, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
     // cur_pos is inclusive, so cur_pos + 1 tokens have been compressed into this many keys.
-    const uint32_t num_keys = (cur_pos_value + 1) / COMPRESS_RATE;
+    const uint32_t num_keys = (key_count[0] + 1) / COMPRESS_RATE;
+#endif
+#ifdef PARTIAL_OUTPUT
+    const uint32_t part = key_count[16];
+#else
+    const uint32_t part = 0;
+#endif
+    key_count[0] = num_keys;
+    key_count[1] = part;
+    cur_pos_dfb.push_back(1);
+    // This device's part of the blocks, then this core's share of it; the writer splits the same way.
     const uint32_t total_num_blocks = tt::data_movement::common::div_up(num_keys, page_block_size);
-    const uint32_t work_per_core = tt::data_movement::common::div_up(total_num_blocks, num_cores);
-    const uint32_t start_block = std::min(work_per_core * core_index, total_num_blocks);
-    const uint32_t end_block = std::min(start_block + work_per_core, total_num_blocks);
+    const uint32_t blocks_per_part = tt::data_movement::common::div_up(total_num_blocks, num_parts);
+    const uint32_t part_start = std::min(blocks_per_part * part, total_num_blocks);
+    const uint32_t part_blocks = std::min(blocks_per_part, total_num_blocks - part_start);
+    const uint32_t work_per_core = tt::data_movement::common::div_up(part_blocks, num_cores);
+    const uint32_t start_block = part_start + std::min(work_per_core * core_index, part_blocks);
+    const uint32_t end_block = std::min(start_block + work_per_core, part_start + part_blocks);
 
     // Entry 0 tells compute how many blocks to score. Entry 1 stays reserved and never pushed: it is
     // this kernel's scratch for page-table chunks.
     // DPRINT(
-    //     "cur_pos: {}, core_index:{} total_num_blocks: {}, work_per_core: {}, start_block: {}, end_block: {}, "
+    //     "num_keys: {}, core_index:{} total_num_blocks: {}, work_per_core: {}, start_block: {}, end_block: {}, "
     //     "num_blocks_to_process: {}\n",
-    //     cur_pos_value,
+    //     num_keys,
     //     core_index,
     //     total_num_blocks,
     //     work_per_core,
@@ -142,6 +169,7 @@ void kernel_main() {
     indices_dfb.wait_front(1);
     indices_dfb.pop_front(1);
 
+#ifndef PARTIAL_OUTPUT
     // The writer lists this core's selected rows in local key order; this kernel takes the first half.
     sel_dfb.wait_front(1);
     invalidate_l1_cache();
@@ -154,4 +182,5 @@ void kernel_main() {
             noc, kv_cache, output, kv_dfb, sel + kSelRowsOffset, 0, num_rows / 2, output_offset);
     }
     sel_dfb.pop_front(1);
+#endif
 }

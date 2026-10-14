@@ -70,12 +70,41 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
                 before the gather, so this step's closing entry is selectable.
             new_kv_row_index (Optional[ttnn.Tensor]): ``[1]`` INT32 logical row of
                 ``new_kv_row``. Given together with it.
+            num_keys_tensor (Optional[ttnn.Tensor]): ``[1]`` INT32 number of selectable keys,
+                replacing ``(cur_pos + 1) // 4``. A candidate-pool consumer passes the source's
+                ``pool_count``.
+            candidate_topk_blocks (int): candidate source mode when > 0 (with
+                ``candidate_block_size``): besides its own top-k, the op scores each block of
+                ``candidate_block_size`` keys by its best key and keeps the
+                ``candidate_topk_blocks`` best blocks, always including the newest key's block.
+            candidate_block_size (int): keys per candidate block. Divides 32 and the page block size.
+            candidate_blocks_output (Optional[ttnn.Tensor]): preallocated ``[1, candidate_topk_blocks]``
+                INT32 row-major interleaved candidate block output.
+            pool_count_output (Optional[ttnn.Tensor]): preallocated ``[1]`` INT32 row-major
+                interleaved pool count output.
+            num_parts (int): key split across devices when > 1. The page blocks holding the
+                selectable keys split into ``num_parts`` contiguous ranges; this device scores range
+                ``part_index_tensor[0]`` and returns its local top-k candidates instead of gathering
+                rows. ``ttnn.all_gather`` of the candidates followed by ``merge_select_kv`` gives the
+                rows the unsplit op would gather.
+            part_index_tensor (Optional[ttnn.Tensor]): ``[1]`` INT32 part this device scores, e.g.
+                a ``[num_parts]`` tensor sharded over the mesh. Given exactly when ``num_parts`` > 1.
+            row_table (Optional[ttnn.Tensor]): ``[1, max_blocks_per_user * block_size]`` INT32
+                ``kv_cache`` row of each key, replacing the page-table mapping for the gather. A
+                candidate-pool consumer passes ``build_candidate_pool``'s rows and the source's
+                ``kv_cache``. ``new_kv_row_index`` is then a ``kv_cache`` row, since
+                ``page_table_tensor`` maps the pool.
 
         Returns:
-            List[ttnn.Tensor]: ``[kv_rows, scores]``. ``kv_rows`` is ``[1, Hkv, k, Dh]``
-            (or ``output_tensor`` when given);
+            List[ttnn.Tensor]: ``[kv_rows, scores]``, plus ``[candidate_blocks, pool_count]`` in
+            candidate source mode. With ``num_parts`` > 1, ``kv_rows`` is instead the candidates
+            ``[1, 1, 1, 2k + 16]`` INT32: the selected keys' ``kv_cache`` rows in key order, their
+            order keys, then the number selected. Otherwise ``kv_rows`` is ``[1, Hkv, k, Dh]`` (or
+            ``output_tensor`` when given);
             ``scores`` is the fp32 ROW_MAJOR index score ``[1, 1, 1, max_blocks_per_user * block_size]``,
-            valid for the first ``(cur_pos + 1) // 4`` keys.
+            valid for the first ``(cur_pos + 1) // 4`` keys. ``candidate_blocks`` holds the kept blocks
+            in ascending order (the first ``min(candidate_topk_blocks, number of blocks)`` entries, zero
+            after them) and ``pool_count`` the keys they hold.
         )doc",
         &ttnn::experimental::deepseek::fused_lightning_select_kv,
         nb::arg("query"),
@@ -92,7 +121,15 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
         nb::arg("output_tensor") = std::nullopt,
         nb::arg("output_row_offset") = 0,
         nb::arg("new_kv_row") = std::nullopt,
-        nb::arg("new_kv_row_index") = std::nullopt);
+        nb::arg("new_kv_row_index") = std::nullopt,
+        nb::arg("num_keys_tensor") = std::nullopt,
+        nb::arg("candidate_topk_blocks") = 0,
+        nb::arg("candidate_block_size") = 0,
+        nb::arg("candidate_blocks_output") = std::nullopt,
+        nb::arg("pool_count_output") = std::nullopt,
+        nb::arg("num_parts") = 1,
+        nb::arg("part_index_tensor") = std::nullopt,
+        nb::arg("row_table") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::fused_lightning_select_kv::detail

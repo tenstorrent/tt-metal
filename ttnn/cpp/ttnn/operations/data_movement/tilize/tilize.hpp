@@ -15,6 +15,7 @@ ttnn::Tensor tilize(
     bool use_multicore = true,
     bool use_low_perf = false,
     tt::tt_metal::Tile tile = tt::tt_metal::Tile(),
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt);
 
 }  // namespace ttnn

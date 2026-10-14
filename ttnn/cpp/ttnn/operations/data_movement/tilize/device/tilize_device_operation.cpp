@@ -239,6 +239,18 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
             alignment_requirement);  // The shard width must be an aligned size, or we will face alignment issues
                                      // when the reader tries to write to the CB.
     }
+
+    if (tensor_args.optional_output_tensor.has_value()) {
+        const auto& output = tensor_args.optional_output_tensor.value();
+        TT_FATAL(output.storage_type() == StorageType::DEVICE, "tilize output_tensor must be on device");
+        TT_FATAL(output.buffer() != nullptr, "tilize output_tensor must be allocated on device");
+        const auto expected = compute_output_specs(operation_attributes, tensor_args);
+        TT_FATAL(
+            output.tensor_spec() == expected,
+            "tilize output_tensor spec {} does not match the expected output spec {}",
+            output.tensor_spec(),
+            expected);
+    }
 }
 
 TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output_specs(
@@ -364,6 +376,9 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
 TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_output_tensors(
     const TilizeDeviceOperation::operation_attributes_t& args,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
+    if (tensor_args.optional_output_tensor.has_value()) {
+        return tensor_args.optional_output_tensor.value();
+    }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
@@ -375,21 +390,26 @@ ttnn::Tensor tilize(
     bool enough_space_height,
     bool use_low_perf,
     const Tile& tile,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<Tensor>& optional_output_tensor) {
+    const auto default_mem_config =
+        optional_output_tensor.has_value() ? optional_output_tensor->memory_config() : input_tensor.memory_config();
+    // FP8_E4M3 is ROW_MAJOR-only, so it can never be the TILE output dtype. When the caller
+    // doesn't request a specific output dtype, default an FP8 input to FLOAT32 (the format it
+    // unpacks to in DEST) instead of echoing the illegal FP8 dtype.
+    const auto default_dtype = optional_output_tensor.has_value()           ? optional_output_tensor->dtype()
+                               : input_tensor.dtype() == DataType::FP8_E4M3 ? DataType::FLOAT32
+                                                                            : input_tensor.dtype();
     return ttnn::device_operation::launch<TilizeDeviceOperation>(
         TilizeParams{
-            .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
-            // FP8_E4M3 is ROW_MAJOR-only, so it can never be the TILE output dtype. When the caller
-            // doesn't request a specific output dtype, default an FP8 input to FLOAT32 (the format it
-            // unpacks to in DEST) instead of echoing the illegal FP8 dtype.
-            .output_dtype = output_dtype.value_or(
-                input_tensor.dtype() == DataType::FP8_E4M3 ? DataType::FLOAT32 : input_tensor.dtype()),
+            .output_mem_config = output_mem_config.value_or(default_mem_config),
+            .output_dtype = output_dtype.value_or(default_dtype),
             .use_multicore = use_multicore,
             .enough_space_height = enough_space_height,
             .use_low_perf = use_low_perf,
             .tile = tile,
             .sub_core_grids = sub_core_grids,
         },
-        TilizeInputs{input_tensor, std::nullopt});
+        TilizeInputs{input_tensor, optional_output_tensor});
 }
 }  // namespace ttnn::prim
