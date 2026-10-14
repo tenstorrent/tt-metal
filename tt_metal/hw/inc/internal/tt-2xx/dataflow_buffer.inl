@@ -698,7 +698,7 @@ Noc::async_read(
     noc_async_read_set_trid(txn_id, noc_id_);
     while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
     // DPRINT("Issue the read\n");
-    noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
+    noc_async_read_impl<NOC_MAX_BURST_SIZE + 1, true>(
         get_src_ptr<AddressType::NOC>(src, src_args),
         // Use cached addresses for NOC APIs
         dst.get_noc_write_addr(),

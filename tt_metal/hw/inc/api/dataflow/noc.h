@@ -210,7 +210,7 @@ public:
         const uint32_t req_vc = has_flag(opts, NocOptions::CUSTOM_VC)
                                     ? static_cast<uint32_t>(noc_opts.vc)
                                     : NOC_UNICAST_WRITE_VC;
-        noc_async_read<max_page_size, enable_noc_tracing>(
+        noc_async_read_impl<max_page_size, enable_noc_tracing>(
             get_src_ptr<AddressType::NOC>(src, src_args),
             get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
             size_bytes,
@@ -393,7 +393,7 @@ public:
             const uint32_t vc = has_flag(opts, NocOptions::CUSTOM_VC)
                                     ? static_cast<uint32_t>(noc_opts.vc)
                                     : NOC_UNICAST_WRITE_VC;
-            noc_async_write<max_page_size, enable_noc_tracing, posted>(
+            noc_async_write_impl<max_page_size, enable_noc_tracing, posted>(
                 get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
                 get_dst_ptr<AddressType::NOC>(dst, dst_args),
                 size_bytes,
@@ -446,9 +446,10 @@ public:
         auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
         auto dst_noc_addr = get_dst_ptr_mcast<AddressType::NOC>(dst, dst_args);
         if constexpr (has_flag(opts, NocOptions::MCAST_INCL_SRC)) {
-            noc_async_write_multicast_loopback_src(src_addr, dst_noc_addr, size_bytes, num_dsts, linked, noc_id_);
+            noc_async_write_multicast_loopback_src_impl(src_addr, dst_noc_addr, size_bytes, num_dsts, linked, noc_id_);
         } else {
-            noc_async_write_multicast<max_page_size>(src_addr, dst_noc_addr, size_bytes, num_dsts, linked, noc_id_);
+            noc_async_write_multicast_impl<max_page_size>(
+                src_addr, dst_noc_addr, size_bytes, num_dsts, linked, noc_id_);
         }
     }
 
