@@ -206,10 +206,6 @@ void drain_fabric(FabricSender& fabric) {
 }
 
 void kernel_main() {
-#ifdef CMBF2D_IDLE
-    // Measurement mode: the routed expert runs as overlapped, with no combine traffic beside it.
-    return;
-#endif
     std::size_t rt_args_idx = 0;
     uint32_t num_connections = get_arg_val<uint32_t>(rt_args_idx++);
     auto fabric_connections = tt::tt_fabric::RoutingPlaneConnectionManager::build_from_args<
