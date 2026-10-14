@@ -11,6 +11,7 @@ from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
 from .experts import ExpertConfig, Experts
+from .experts.prefill_routed import RoutedPrefillExperts, routed_prefill_supported
 from .experts_throughput import (
     DeepSeekPrefillConfig,
     ThroughputExpertConfig,
@@ -35,6 +36,7 @@ class MLP:
         mesh_config=None,
         use_throughput_experts=True,
         tokens_per_device=32,
+        layer_idx=None,
     ):
         # Split state dict
         router_state_dict = substate(state_dict, "router")
@@ -167,6 +169,25 @@ class MLP:
                 indexed_decode=self.indexed_decode,
             )
 
+        # Routed top-k prefill experts (experts/prefill_routed.py): only the routed (token, expert) pairs are computed,
+        # with local expert parallelism over the mesh row. GPT_OSS_ROUTED_PREFILL=0 keeps the dense prefill path;
+        # prefills shorter than GPT_OSS_ROUTED_PREFILL_MIN_SEQ (or not a multiple of 64, or batch > 1) still run dense.
+        # With the flag on, missing routed weights (no HF expert weights and an incomplete routed cache) raise
+        # RoutedWeightsUnavailable instead of silently falling back to dense.
+        self.routed_prefill = None
+        if mesh_config is not None and routed_prefill_supported(
+            mesh_device, mesh_config, hf_config, use_throughput_experts
+        ):
+            self.routed_prefill = RoutedPrefillExperts(
+                mesh_device,
+                hf_config,
+                experts_state_dict,
+                ccl_manager,
+                mesh_config,
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                layer_idx=layer_idx,
+            )
+
     def __call__(self, hidden_states, is_decode):
         """Forward pass: route -> experts
         Args:
@@ -185,6 +206,12 @@ class MLP:
             return self.experts(
                 x, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=True
             )
+        if not is_decode and self.routed_prefill is not None and self.routed_prefill.supports(hidden_states.shape):
+            expert_indices, expert_weights = self.router(hidden_states, True)
+            expert_output = self.routed_prefill(hidden_states, expert_indices, expert_weights)
+            ttnn.deallocate(expert_indices)
+            ttnn.deallocate(expert_weights)
+            return expert_output
         expert_indices, expert_weights = self.router(hidden_states, self.use_throughput_experts)
         expert_output = self.experts(
             hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=is_decode

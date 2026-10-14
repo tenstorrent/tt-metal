@@ -1,0 +1,512 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Routed (top-k only) prefill MoE experts for a single-row mesh (Blackhole 1xN).
+
+The dense prefill path (experts/prefill.py) runs every token through all experts at TP width. This path computes
+only the routed (token, expert) pairs, with local expert parallelism on the TP axis:
+
+  * each of the N devices holds num_experts / N whole experts (hidden x intermediate at full width);
+  * the replicated input x and the router's top-k ids stay on every device; each device keeps only the pairs whose
+    expert it holds and packs their tokens into tile-aligned per-expert regions (chip-local, no fabric traffic);
+  * unified_routed_expert_moe runs the local experts on their regions (SwiGluOai with biases);
+  * a gather back to [token, slot] and post_combine_reduce apply the router weights and sum the top-k slots, giving
+    this device's partial MoE output (zero for tokens routed elsewhere);
+  * one all-reduce over the mesh row sums the partials, the same collective the dense TP path ends with.
+
+Counts and region offsets come from masked_bincount (masked to this device's experts by the dispatch table) and
+offset_cumsum along cluster_axis 1 (the row; TtMoERoutingSetup's axis 0 has one device here), where the other
+devices contribute zero to this device's experts. The token packing and the gather back use stock ops (fp32 one-hot
+ranks, scatter, embedding) instead of deepseek_prefill.dispatch / combine: those accept only cluster_axis 0 and need
+a neighbour along it, which a 1xN mesh does not have.
+
+Numerics policy: LoFi, bf16 dest accumulation, bf8 activations, bf4 weights except the layers in
+GPT_OSS_ROUTED_PREFILL_BF8_LAYERS (default: layer 0), which hold bf8 weights. unified_routed_expert_moe hardcodes LoFi
+and bf16 dest (kFp32DestAccEn = false in unified_routed_expert_ffn_program_factory.cpp) and ignores
+compute_kernel_config, so this module does not pass one.
+
+Only one sequence per call (batch 1, leading dims all 1); anything else runs the dense prefill path.
+"""
+
+import math
+import os
+from pathlib import Path
+
+import torch
+
+import ttnn
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.gpt_oss.config import Mode
+
+ROUTED_PREFILL_ENV = "GPT_OSS_ROUTED_PREFILL"
+ROUTED_PREFILL_MIN_SEQ_ENV = "GPT_OSS_ROUTED_PREFILL_MIN_SEQ"
+ROUTED_PREFILL_CHUNK_ENV = "GPT_OSS_ROUTED_PREFILL_CHUNK"
+ROUTED_PREFILL_BF8_LAYERS_ENV = "GPT_OSS_ROUTED_PREFILL_BF8_LAYERS"
+# Set GPT_OSS_ROUTED_PREFILL=1 for the routed path, 0 for the dense all-expert prefill path.
+ROUTED_PREFILL_DEFAULT = "0"
+# Shortest prefill (tokens) that takes the routed path; shorter ones run dense.
+ROUTED_PREFILL_MIN_SEQ_DEFAULT = 128
+# Tokens per routed chunk: bounds the dispatch / combine buffers ([4C, H] and [C, 4, H] bf16 per device).
+ROUTED_PREFILL_CHUNK_DEFAULT = 8192
+# masked_bincount splits the token rows over a fixed 64-core grid.
+ROUTED_PREFILL_SEQ_MULTIPLE = 64
+# Version of the cached routed-expert weights; the weight-cache completion marker records it (model_config.py).
+ROUTED_PREFILL_WEIGHTS_VERSION = 1
+ROUTED_CACHE_SUBDIR = "experts_routed_ep"
+ROUTED_WEIGHTS_DTYPE = ttnn.bfloat4_b
+# Layers whose routed expert weights are bfloat8_b instead of bfloat4_b ("all", "" or a comma list of layer ids).
+# bf8 holds the MXFP4 checkpoint values almost exactly (weight rel. error ~1e-4 for gate/up); bf4 shares one exponent
+# per 16 values and loses 12-16% of the weight norm (measured, layer 0).
+ROUTED_PREFILL_BF8_LAYERS_DEFAULT = "0"
+
+
+def routed_prefill_enabled():
+    return os.getenv(ROUTED_PREFILL_ENV, ROUTED_PREFILL_DEFAULT) == "1"
+
+
+def routed_prefill_min_seq():
+    return int(os.getenv(ROUTED_PREFILL_MIN_SEQ_ENV, str(ROUTED_PREFILL_MIN_SEQ_DEFAULT)))
+
+
+def routed_prefill_chunk():
+    chunk = int(os.getenv(ROUTED_PREFILL_CHUNK_ENV, str(ROUTED_PREFILL_CHUNK_DEFAULT)))
+    assert chunk > 0 and chunk % ROUTED_PREFILL_SEQ_MULTIPLE == 0, f"{ROUTED_PREFILL_CHUNK_ENV}={chunk}"
+    return chunk
+
+
+def routed_prefill_bf8_layers():
+    """Raw GPT_OSS_ROUTED_PREFILL_BF8_LAYERS spec (recorded in the weight-cache marker)."""
+    return os.getenv(ROUTED_PREFILL_BF8_LAYERS_ENV, ROUTED_PREFILL_BF8_LAYERS_DEFAULT).strip()
+
+
+def routed_weights_dtype(layer_idx):
+    """Routed expert weight dtype of one layer: bfloat8_b for the layers in the bf8 list, else bfloat4_b."""
+    spec = routed_prefill_bf8_layers()
+    if spec == "all":
+        return ttnn.bfloat8_b
+    layers = {int(v) for v in spec.split(",") if v.strip() != ""}
+    return ttnn.bfloat8_b if layer_idx is not None and int(layer_idx) in layers else ROUTED_WEIGHTS_DTYPE
+
+
+def routed_prefill_mesh_supported(mesh_device, num_experts=32):
+    """Single-row Blackhole mesh with more than one device whose column count divides the experts."""
+    rows, cols = mesh_device.shape
+    return rows == 1 and cols > 1 and num_experts % cols == 0 and ttnn.device.is_blackhole(mesh_device)
+
+
+def routed_prefill_supported(mesh_device, mesh_config, hf_config, use_throughput_experts):
+    """Whether the MLP builds the routed prefill experts (env flag, mesh, prefill parallelism)."""
+    if not routed_prefill_enabled() or use_throughput_experts:
+        return False
+    if not routed_prefill_mesh_supported(mesh_device, hf_config.num_local_experts):
+        return False
+    prefill = mesh_config.get_config(Mode.PREFILL)
+    return prefill.tp == mesh_device.shape[1] and prefill.sp == 1 and prefill.ep == 1 and mesh_config.tp_axis == 1
+
+
+class RoutedWeightsUnavailable(RuntimeError):
+    """Neither HF expert weights nor a complete routed-weight cache: the routed path cannot be built."""
+
+
+def _bias_dims(num_experts, hidden_size, intermediate_size, state_dict):
+    gate_up_bias = state_dict["gate_up_proj_bias"].reshape(num_experts, 2 * intermediate_size)
+    gate = gate_up_bias[..., ::2].reshape(num_experts, intermediate_size)
+    up = gate_up_bias[..., 1::2].reshape(num_experts, intermediate_size)
+    down = state_dict["down_proj_bias"].reshape(num_experts, hidden_size)
+    return {"gate": gate, "up": up, "down": down}
+
+
+class RoutedPrefillExperts:
+    """Top-k routed prefill experts, local expert parallelism over the columns of a 1xN mesh."""
+
+    def __init__(
+        self, mesh_device, hf_config, state_dict, ccl_manager, mesh_config, tensor_cache_path=None, layer_idx=None
+    ):
+        self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self.mesh_config = mesh_config
+        self.num_experts = hf_config.num_local_experts
+        self.top_k = hf_config.num_experts_per_tok
+        self.hidden_size = hf_config.hidden_size
+        self.intermediate_size = hf_config.intermediate_size
+        self.num_devices = mesh_device.shape[1]
+        self.dispatch_group_size = 1
+        self.num_dispatch_groups = self.num_devices
+        self.experts_per_chip = self.num_experts // self.num_devices
+        self.chunk_size = routed_prefill_chunk()
+        self.min_seq = routed_prefill_min_seq()
+        self.num_links = 1
+        self.weights_dtype = routed_weights_dtype(layer_idx)
+
+        # Device g's table row maps its own experts [g*E/N, (g+1)*E/N) to chip g and every other expert to -1: the
+        # histogram mask of masked_bincount and the non-local skip of post_combine_reduce. Each pair is computed
+        # once, on the device holding its expert. Width E + 1 (padding sentinel column). Per device: (1, E + 1).
+        dispatch_table = torch.full((self.num_devices, self.num_experts + 1), -1, dtype=torch.int32)
+        for g in range(self.num_devices):
+            dispatch_table[g, g * self.experts_per_chip : (g + 1) * self.experts_per_chip] = g
+        self._consts = {}
+        replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+        self.expert_ids_f32 = ttnn.from_torch(
+            torch.arange(self.num_experts, dtype=torch.float32).reshape(1, self.num_experts),
+            device=mesh_device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate,
+        )
+        self.local_mask_f32 = ttnn.from_torch(
+            (dispatch_table[:, : self.num_experts] >= 0).to(torch.float32),
+            device=mesh_device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(None, 0)),
+        )
+        self.dispatch_table = ttnn.from_torch(
+            dispatch_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(None, 0)),
+        )
+        global_idx = ttnn.from_torch(
+            ExpertMapping.create_global_expert_idx_table(
+                experts_per_chip=self.experts_per_chip,
+                dispatch_group_size=self.dispatch_group_size,
+                num_dispatch_groups=self.num_dispatch_groups,
+            ),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=get_ep_mesh_mapper(mesh_device),
+        )
+        self.global_expert_idx_table = ttnn.squeeze(ttnn.squeeze(global_idx, 0), 0)
+
+        cache_dir = None
+        if tensor_cache_path is not None:
+            cache_dir = Path(tensor_cache_path) / f"{ROUTED_CACHE_SUBDIR}{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+        self.cache_dir = cache_dir
+        prefix = f"routed_v{ROUTED_PREFILL_WEIGHTS_VERSION}"
+
+        has_weights = bool(state_dict) and "gate_up_proj" in state_dict
+        if has_weights and cache_dir is not None:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+        if not has_weights and not self._cache_complete(prefix):
+            raise RoutedWeightsUnavailable(
+                f"Routed prefill expert weights are not cached in {cache_dir} and no HF expert weights were loaded. "
+                f"Run once with GPT_OSS_FORCE_MODEL_LOAD=1 (or {ROUTED_PREFILL_ENV}=0 for the dense path)."
+            )
+
+        torch_weights = None
+        if has_weights:
+            from models.demos.gpt_oss_d_p.tt.moe.weights import prepare_routed_expert_weights
+
+            torch_weights, _ = prepare_routed_expert_weights(
+                state_dict, self.num_experts, self.hidden_size, self.intermediate_size
+            )
+        # TtRoutedExpert only loads/places the weights here (DRAM ND-sharded on Blackhole); forward calls
+        # unified_routed_expert_moe directly so the per-expert token bound follows the chunk length.
+        self.routed_expert = TtRoutedExpert(
+            mesh_device=mesh_device,
+            experts_per_chip=self.experts_per_chip,
+            global_expert_idx_table=self.global_expert_idx_table,
+            emb_dim=self.hidden_size,
+            hidden_dim=self.intermediate_size,
+            max_tokens=self.chunk_size,
+            torch_weights=torch_weights,
+            torch_biases=None,
+            weights_dtype=self.weights_dtype,
+            weight_cache_path=cache_dir,
+            cache_name_prefix=prefix if cache_dir is not None else None,
+            activation=ttnn.RoutedExpertActivation.SwiGluOai,
+        )
+        del torch_weights
+        self.gate_biases, self.up_biases, self.down_biases = self._load_biases(
+            state_dict if has_weights else None, prefix
+        )
+
+    def _cache_complete(self, prefix):
+        if self.cache_dir is None or not self.cache_dir.is_dir():
+            return False
+        names = {p.name for p in self.cache_dir.iterdir()}
+        dtype = self.weights_dtype.name
+        for e in range(self.experts_per_chip):
+            for proj in ("gate", "up", "down"):
+                stem = f"{prefix}.local_{e}_{proj}_dtype_{dtype}_"
+                if not any(n.startswith(stem) and n.endswith(".tensorbin") for n in names):
+                    return False
+            for proj in ("gate", "up", "down"):
+                stem = f"{prefix}.local_{e}_{proj}_bias_dtype_BFLOAT16_"
+                if not any(n.startswith(stem) and n.endswith(".tensorbin") for n in names):
+                    return False
+        return True
+
+    def _load_biases(self, state_dict, prefix):
+        """One (1, N) bf16 TILE bias per local expert and projection, placed like the routed weights (cached)."""
+        rows, cols = self.mesh_device.shape
+        mapper = ExpertMapping.get_weights_mesh_mapper(self.mesh_device)
+        biases = None
+        if state_dict is not None:
+            biases = _bias_dims(self.num_experts, self.hidden_size, self.intermediate_size, state_dict)
+        out = {"gate": [], "up": [], "down": []}
+        for e in range(self.experts_per_chip):
+            for proj in ("gate", "up", "down"):
+                stacked = None
+                if biases is not None:
+                    per_device = []
+                    for row in range(rows):
+                        for col in range(cols):
+                            g = ExpertMapping.get_global_expert_idx(
+                                group=col,
+                                chip=row,
+                                local_expert=e,
+                                experts_per_chip=self.experts_per_chip,
+                                dispatch_group_size=rows,
+                                num_dispatch_groups=cols,
+                            )
+                            per_device.append(biases[proj][g].reshape(1, -1))
+                    stacked = torch.stack(per_device, dim=0)
+                    stacked = stacked.reshape(rows, cols, 1, stacked.shape[-1]).to(torch.bfloat16)
+                cache_name = None
+                if self.cache_dir is not None:
+                    cache_name = str(self.cache_dir / f"{prefix}.local_{e}_{proj}_bias")
+                tt = ttnn.as_tensor(
+                    stacked,
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mapper,
+                    cache_file_name=cache_name,
+                )
+                out[proj].append(ttnn.squeeze(ttnn.squeeze(tt, 0), 0))
+        return out["gate"], out["up"], out["down"]
+
+    def supports(self, shape):
+        """Whether a prefill input of this shape ([..., S, H]) takes the routed path: one sequence (every leading
+        dim 1, so the S rows are the S tokens of batch 1), S >= min_seq and S % 64 == 0. Otherwise dense."""
+        dims = [shape[i] for i in range(len(shape))]
+        if len(dims) < 2 or math.prod(dims[:-2]) != 1:
+            return False
+        seq_len = dims[-2]
+        return seq_len >= self.min_seq and seq_len % ROUTED_PREFILL_SEQ_MULTIPLE == 0
+
+    def _routing(self, indices):
+        """Per-expert dispatch offsets, token counts and region offsets of this device's experts.
+
+        indices: [C, k] uint16 TILE. masked_bincount counts only this device's experts (dispatch table mask);
+        offset_cumsum gathers the histograms over the mesh row, where the other devices contribute zero to them."""
+        hist = ttnn.experimental.deepseek_prefill.masked_bincount(
+            indices, self.dispatch_table, self.num_experts, self.top_k
+        )
+        offsets, counts, region_offsets, all_offsets = ttnn.experimental.deepseek_prefill.offset_cumsum(
+            hist,
+            cluster_axis=1,
+            num_links=self.num_links,
+            experts_per_chip=self.experts_per_chip,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(hist)
+        ttnn.deallocate(all_offsets)
+        return offsets, counts, region_offsets
+
+    def _chunk_constants(self, C):
+        """Per-chunk-length constant tensors (built once per C)."""
+        consts = self._consts.get(C)
+        if consts is not None:
+            return consts
+        k = self.top_k
+        # Buffer rows: the local experts' tile-aligned regions take at most k*C + 32*(E_local - 1) rows (the
+        # alignment pads of E_local regions sum to a multiple of 32 below 32*E_local); one spare tile follows.
+        spare = k * C + ttnn.TILE_SIZE * (self.experts_per_chip - 1)
+        rows = spare + ttnn.TILE_SIZE
+        pair_token = torch.arange(k * C, dtype=torch.int32).div(k, rounding_mode="floor").reshape(1, k * C)
+        consts = {
+            "rows": rows,
+            "spare": spare,
+            "pair_token": ttnn.from_torch(
+                pair_token,
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            ),
+            "row_init": ttnn.from_torch(
+                torch.zeros(1, rows, dtype=torch.int32),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            ),
+        }
+        self._consts[C] = consts
+        return consts
+
+    def _pair_positions(self, indices, region_offsets, consts):
+        """Dispatch-buffer row of every (token, slot) pair, [1, k*C] uint32 ROW_MAJOR (pair r = k*token + slot).
+
+        Local pair (t, j) of expert e: region_offsets[e] + #pairs of e from tokens < t (a token's k experts are
+        distinct, so this is the pair's rank within e's region). Non-local pairs: the spare tile. All arithmetic is
+        fp32 on integers < 2^24, so it is exact."""
+        C = indices.shape[-2]
+        k = self.top_k
+        idx_f = ttnn.typecast(indices, ttnn.float32)
+        region = ttnn.typecast(ttnn.to_layout(region_offsets, ttnn.TILE_LAYOUT), ttnn.float32)  # [1, E]
+        onehots = []
+        for j in range(k):
+            col = ttnn.slice(idx_f, (0, j), (C, j + 1))
+            eq = ttnn.eq(col, self.expert_ids_f32)  # [C, E]
+            ttnn.deallocate(col)
+            onehots.append(ttnn.mul(eq, self.local_mask_f32, output_tensor=eq))
+        ttnn.deallocate(idx_f)
+        per_token = ttnn.add(onehots[0], onehots[1])  # local pairs of each expert per token (0/1)
+        for oh in onehots[2:]:
+            per_token = ttnn.add(per_token, oh, output_tensor=per_token)
+        before = ttnn.cumsum(per_token, dim=0)
+        before = ttnn.sub(before, per_token, output_tensor=before)  # exclusive: pairs of e from earlier tokens
+        ttnn.deallocate(per_token)
+        base = ttnn.add(before, region, output_tensor=before)
+        ttnn.deallocate(region)
+        cols = []
+        for oh in onehots:
+            hit = ttnn.sum(oh, dim=-1, keepdim=True)  # 1 if the slot's expert is local
+            p = ttnn.sum(ttnn.mul(oh, base, output_tensor=oh), dim=-1, keepdim=True)
+            ttnn.deallocate(oh)
+            # p + (1 - hit) * spare
+            miss = ttnn.rsub(hit, 1.0)
+            ttnn.deallocate(hit)
+            p = ttnn.add(p, ttnn.mul(miss, float(consts["spare"]), output_tensor=miss), output_tensor=p)
+            ttnn.deallocate(miss)
+            cols.append(p)
+        ttnn.deallocate(base)
+        pos = ttnn.concat(cols, dim=-1)  # [C, k]
+        for c in cols:
+            ttnn.deallocate(c)
+        pos = ttnn.typecast(pos, ttnn.uint32)
+        pos = ttnn.to_layout(pos, ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.reshape(pos, (1, k * C))
+
+    def _chunk(self, x, indices, weights):
+        """Partial MoE output of this device's experts for one chunk.
+
+        x: [1, 1, C, H] (any float dtype, TILE); indices: [C, k] uint16 TILE; weights: [C, k] bf16 TILE.
+        Returns [1, 1, C, H] bf16 TILE (zero rows where no top-k expert is local)."""
+        C = x.shape[-2]
+        H = self.hidden_size
+        k = self.top_k
+        # A token picks k distinct experts, so one expert holds at most C pairs.
+        max_tokens_per_expert = C
+
+        offsets, counts, region_offsets = self._routing(indices)
+
+        ttnn.deallocate(offsets)
+        idx_rm = ttnn.reshape(ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT), (1, C, k))
+        w_rm = ttnn.to_layout(weights, ttnn.ROW_MAJOR_LAYOUT)
+        if w_rm.dtype != ttnn.bfloat16:
+            w_rm = ttnn.typecast(w_rm, ttnn.bfloat16)
+        w_5d = ttnn.reshape(w_rm, (1, 1, C, k, 1))
+
+        # Buffer row of every (token, slot) pair: its expert's region start + its rank among that expert's pairs
+        # (token order); pairs whose expert is on another device point at the spare tile past all regions.
+        consts = self._chunk_constants(C)
+        pos = self._pair_positions(indices, region_offsets, consts)  # [1, k*C] uint32 RM, r = k*t + slot
+
+        # Dispatch: buffer row -> source token (scatter of the pair's token index to its row), then gather the rows.
+        # Rows no pair writes (region padding, the spare tile) read token 0: finite and never consumed.
+        tok_of_row = ttnn.scatter(consts["row_init"], -1, pos, consts["pair_token"])
+        tok_of_row = ttnn.to_layout(tok_of_row, ttnn.ROW_MAJOR_LAYOUT)
+        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+        x_rm = ttnn.reshape(x_rm, (C, H))
+        dispatched = ttnn.embedding(tok_of_row, x_rm, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(tok_of_row)
+        ttnn.deallocate(x_rm)
+        dispatched = ttnn.reshape(dispatched, (consts["rows"], H))
+
+        # TILE bf8 buffer: the op computes every local expert on its region in place.
+        expert_out = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+            dispatched,
+            region_offsets,
+            counts,
+            self.global_expert_idx_table,
+            self.routed_expert.gate_projs,
+            self.routed_expert.up_projs,
+            self.routed_expert.down_projs,
+            max_dispatched_tokens_per_expert=max_tokens_per_expert,
+            activation=ttnn.RoutedExpertActivation.SwiGluOai,
+            gate_biases=self.gate_biases,
+            up_biases=self.up_biases,
+            down_biases=self.down_biases,
+        )
+        ttnn.deallocate(counts)
+        ttnn.deallocate(region_offsets)
+
+        # Combine: gather each pair's expert output row back to [C, k, H]; post_combine_reduce weights the slots and
+        # skips the non-local ones (dispatch table -1), so the spare-tile rows they point at never contribute.
+        out_rm = ttnn.to_layout(expert_out, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+        if out_rm is not expert_out:
+            ttnn.deallocate(expert_out)
+        combined = ttnn.embedding(pos, out_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(out_rm)
+        ttnn.deallocate(pos)
+        combined = ttnn.reshape(combined, (1, 1, C, k, H))
+
+        out = ttnn.experimental.deepseek_prefill.post_combine_reduce(
+            combined,
+            w_5d,
+            idx_rm,
+            self.dispatch_table,
+            expert_dim=3,
+            output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(combined)
+        ttnn.deallocate(w_rm)
+        ttnn.deallocate(idx_rm)
+        return out
+
+    def __call__(self, hidden_states, topk_indices, topk_weights):
+        """hidden_states: [1, 1, S, H] replicated; topk_indices / topk_weights: [S, k] (router top-k path).
+
+        Returns the MoE output [1, 1, S, H] (bf8), all-reduced over the mesh row like the dense TP path."""
+        seq_len = hidden_states.shape[-2]
+        assert self.supports(
+            hidden_states.shape
+        ), f"routed prefill needs batch 1, S >= {self.min_seq} and S % 64 == 0, got shape {hidden_states.shape}"
+        x = hidden_states
+        if len(x.shape) != 4:
+            x = ttnn.reshape(x, (1, 1, seq_len, self.hidden_size))
+        C = min(self.chunk_size, seq_len)
+        outputs = []
+        for start in range(0, seq_len, C):
+            end = min(start + C, seq_len)
+            if start == 0 and end == seq_len:
+                x_c, i_c, w_c = x, topk_indices, topk_weights
+            else:
+                x_c = ttnn.slice(x, (0, 0, start, 0), (1, 1, end, self.hidden_size))
+                i_c = ttnn.slice(topk_indices, (start, 0), (end, self.top_k))
+                w_c = ttnn.slice(topk_weights, (start, 0), (end, self.top_k))
+            part = self._chunk(x_c, i_c, w_c)
+            if x_c is not x:
+                ttnn.deallocate(x_c)
+                ttnn.deallocate(i_c)
+                ttnn.deallocate(w_c)
+            part_bf8 = ttnn.typecast(part, ttnn.bfloat8_b)
+            ttnn.deallocate(part)
+            outputs.append(part_bf8)
+        if len(outputs) == 1:
+            out = outputs[0]
+        else:
+            out = ttnn.concat(outputs, dim=2)
+            for t in outputs:
+                ttnn.deallocate(t)
+        reduced = ttnn.all_reduce(
+            out,
+            num_links=self.ccl_manager.num_links,
+            topology=ttnn.Topology.Ring,
+            cluster_axis=self.mesh_config.tp_axis,
+        )
+        ttnn.deallocate(out)
+        return ttnn.reshape(reduced, (1, 1, seq_len, self.hidden_size))

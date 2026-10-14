@@ -356,8 +356,28 @@ class ModelArgs:
             return False
         if fused_decode and meta.get("fused_decode_weights") != self.FUSED_DECODE_WEIGHTS_VERSION:
             return False
+        routed_version = self._routed_prefill_weights_version()
+        if routed_version and meta.get("routed_prefill_weights") != routed_version:
+            # The routed prefill experts (experts/prefill_routed.py) cache their own weight layout; a cache built
+            # without them must cold-load once so they get written.
+            return False
         # Belt-and-suspenders: the cache dir must still actually hold tensor files.
         return any(cache_path.glob("*.tensorbin"))
+
+    def _routed_prefill_weights_version(self):
+        """Routed prefill expert weight-cache version when this model builds them (env flag + mesh), else None."""
+        from models.demos.gpt_oss.tt.experts.prefill_routed import (
+            ROUTED_PREFILL_WEIGHTS_VERSION,
+            routed_prefill_bf8_layers,
+            routed_prefill_enabled,
+            routed_prefill_mesh_supported,
+        )
+
+        if routed_prefill_enabled() and routed_prefill_mesh_supported(self.mesh_device):
+            bf8 = routed_prefill_bf8_layers()
+            # The bf8 layer set changes which routed caches must exist, so it is part of the marker.
+            return f"{ROUTED_PREFILL_WEIGHTS_VERSION}:bf8={bf8}" if bf8 else ROUTED_PREFILL_WEIGHTS_VERSION
+        return None
 
     def mark_weight_cache_complete(self, dtype, fused_decode=False):
         """Record that the ttnn weight cache for this (model, dtype, mesh shape) was fully
@@ -373,6 +393,7 @@ class ModelArgs:
                         "n_layers": self.n_layers,
                         "dtype": str(dtype),
                         "fused_decode_weights": self.FUSED_DECODE_WEIGHTS_VERSION if fused_decode else False,
+                        "routed_prefill_weights": self._routed_prefill_weights_version() or False,
                     }
                 )
             )
