@@ -10,7 +10,7 @@ This directory is test scaffolding for an experiment branch. It is not meant to 
 
 1. **Issue #59504 (OOM at Wan pipeline creation on Bin6) reproduces here, byte for byte.** Chunked VAE decode (`vae_t_chunk_size=7` for the BH 4x8 preset) makes pipeline creation succeed.
 2. **On `main`, Wan output on this machine is garbage** (flat gray / static frames, CLIP ≈ 19.4). **PR #60190 fixes it** (CLIP 37.07 at 480p). Likely cause: CCL kernels compute remote DRAM addresses with the *local* chip's bank-to-core map, and this Galaxy mixes all 8 DRAM harvest masks.
-3. **Open problem: 720p + chunked VAE on the PR branch hung in 3 of 3 runs.** Twice the straggler was **device 9 (T2L2)**, both times on the **same physical core, `4-10` (logical `(3,8)`)**, in two unrelated kernels (ring SDPA, then matmul). That points to a hardware fault on that chip. It is **not yet ruled out** that the PR or chunking is involved.
+3. **Open problem: 720p + chunked VAE on the PR branch hangs every time: 8 of 8 runs.** Every device-side hang (7 of 8) has the straggler on **device 9 (T2L2)**, with the **same physical core, `4-10` (logical `(3,8)`)**, as the single outlier. That holds across two unrelated kernels (ring SDPA ×5, matmul ×2) and at different points (warmup; denoise steps 1, 2, 4, 14). The 8th hang was host-side (all devices idle). This points strongly to a defective Tensix core on device 9. It is **not yet ruled out** that the PR or chunking is needed to trigger it: `main` + chunk at 720p has run only once (it passed).
 
 ## Your task
 
@@ -88,8 +88,13 @@ All runs use `4x8sp1tp0nl2_linear_is_fsdp0` with `TT_MESH_GRAPH_DESC_PATH=single
 | PR #60190 | 720p | 7 | **hang** at denoise step 14/40: device 9 stuck in ring SDPA, core `4-10 (3,8)` compute frozen |
 | PR #60190 | 720p | 7 | **hang** after warmup: all devices idle, host waiting for a completion-queue event that never arrived |
 | PR #60190 | 720p | 7 | **hang** at denoise step 1/40: device 9 stuck in MinimalMatmul, odd core again `4-10 (3,8)` |
+| PR #60190 | 720p | 7 | `hang_loop.sh` ×5 (reset before each run): **5/5 hang**, all on device 9, odd core `4-10 (3,8)` every time: SDPA after step 1, SDPA after step 2, matmul in warmup, SDPA after step 4, matmul after step 2 |
+
+Loop reports: `~jameslee/wan_hang_reports/run_01..05/` (`summary.txt`, `triage.txt`, `triage_callstacks_2.txt`, `host_stacks.txt`, `test.log`, `links.txt`), index in `~jameslee/wan_hang_reports/index.txt`. The state after reset (0–4 chips with down ports) made no difference.
 
 Not yet run: `main` 720p chunked a second time; anything on an 8-bank Galaxy for comparison.
+
+Inside core `4-10` the three compute threads are in phases that don't fit together. In SDPA hangs the packer always sits in pack setup (`configure_single_tile_pack` / `configure_pack_width`, `compute_streaming.hpp:318/325`) while the unpacker waits on a CB that the packer should fill. In matmul hangs the threads sit at `compute_metal2.cpp:403–434`, while 100+ healthy cores sit at `:412/:441`. The "frozen" flag in `summary.txt` (TRISC PCs identical across two snapshots) is unreliable for this core: in some runs its PCs shift slightly between snapshots. The outlier grouping is the reliable signal.
 
 ## Findings in detail
 
@@ -125,5 +130,7 @@ See "Results so far". Device 9 = T2L2 = tray 2, ASIC location 2, logical mesh ro
 - `run_wan.sh`: runs the test with the right environment.
 - `vae_chunk_patch.py`: pytest plugin that sets BH 4x8 `vae_t_chunk_size=7` in memory only (`-p vae_chunk_patch`).
 - `check_links.py`: ethernet link state (`--map`: full neighbour map; `--dram`: harvest masks), via UMD without opening a device.
+- `hang_loop.sh [runs] [res] [chunk|nochunk] [out_dir]`: N × (check no other users → `tt-smi -r` → links → run). On a stall over 3 minutes it captures triage twice, gdb host stacks and an `analyze_triage.py` summary, then kills the run. It writes one line per run to `<out_dir>/index.txt`.
+- `analyze_triage.py triage.txt [triage_callstacks_2.txt]`: running ops per device, straggler device(s), cores grouped by kernel callstack with the outliers listed, and frozen-PC cores.
 
 Full triage dumps and logs from the session above were in a session scratch directory and were **not** committed (about 110k lines each).
