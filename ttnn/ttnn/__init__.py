@@ -137,7 +137,13 @@ from ttnn.tools import trace_allocation_tracker as _trace_allocation_tracker
 if _trace_allocation_tracker.TRACE_ALLOC_TRACKING:
 
     def execute_trace(mesh_device, trace_id, *, cq_id=None, blocking=True):
-        """Execute a captured trace, with automatic allocation-safety verification."""
+        """Execute a captured trace after checking tracked, non-exempt allocations.
+
+        Warning: the check runs before replay submission. It does not check for
+        overlapping temporary memory used by concurrent traces, or overlapping
+        allocations used by work on another subdevice during replay. These cases
+        require separate code analysis of memory ownership and synchronization.
+        """
         _trace_allocation_tracker.TraceAllocationTracker.verify_before_replay(mesh_device, trace_id)
         return _ttnn_execute_trace(mesh_device, trace_id, cq_id=cq_id, blocking=blocking)
 
