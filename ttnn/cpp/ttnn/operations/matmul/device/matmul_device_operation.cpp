@@ -629,10 +629,22 @@ void validate_matmul_compute_grid_and_per_core_dims(
                 if constexpr (std::is_same_v<
                                   ProgramConfigType,
                                   operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                    TT_FATAL(
-                        program_config.num_workers_per_dram_bank >= 1,
-                        "{}: num_workers_per_dram_bank must be at least 1",
-                        config_name);
+                    if (program_config.use_multicore_pipeline) {
+                        // Whether the call qualifies for the pipeline is known only with the tensors;
+                        // validate_matmul_dram_sharded_config finishes the check.
+                        TT_FATAL(
+                            program_config.num_workers_per_dram_bank >= 1,
+                            "{}: num_workers_per_dram_bank must be at least 1",
+                            config_name);
+                    } else {
+                        dram_sharded_helpers::validate_num_workers_per_dram_bank(
+                            program_config.num_workers_per_dram_bank);
+                        TT_FATAL(
+                            program_config.num_workers_per_dram_bank == 1 ||
+                                input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
+                            "{}: num_workers_per_dram_bank > 1 is currently supported only on Blackhole",
+                            config_name);
+                    }
                 }
             }
         },
@@ -1364,12 +1376,9 @@ void validate_matmul_dram_sharded_config(
         config_name,
         per_core_M,
         (shard_shape[0] / in0_tile.get_height()));
-    TT_FATAL(
-        program_config.num_workers_per_dram_bank >= 1,
-        "{}: num_workers_per_dram_bank must be at least 1, got {}",
-        config_name,
-        program_config.num_workers_per_dram_bank);
+    // Without use_multicore_pipeline this is main's single-reader validation, unchanged.
     if (dram_sharded_helpers::use_dram_sharded_multicore(
+            program_config.use_multicore_pipeline,
             program_config.num_workers_per_dram_bank,
             has_bias,
             program_config.fused_activation.has_value(),
@@ -1386,12 +1395,16 @@ void validate_matmul_dram_sharded_config(
             "{}: input B must be in DRAM",
             config_name);
     } else {
-        dram_sharded_helpers::validate_num_workers_per_dram_bank(program_config.num_workers_per_dram_bank);
-        TT_FATAL(
-            program_config.num_workers_per_dram_bank == 1 || input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
-            "{}: num_workers_per_dram_bank > 1 with a bias, a fused activation, untilize_out or 16-row tiles is "
-            "supported only on Blackhole",
-            config_name);
+        if (program_config.use_multicore_pipeline) {
+            // Opted in but not qualifying: the single-reader program, with the reader checks that
+            // validate_matmul_compute_grid_and_per_core_dims skips for an opted-in config.
+            dram_sharded_helpers::validate_num_workers_per_dram_bank(program_config.num_workers_per_dram_bank);
+            TT_FATAL(
+                program_config.num_workers_per_dram_bank == 1 || input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
+                "{}: num_workers_per_dram_bank > 1 with a bias, a fused activation, untilize_out or 16-row tiles "
+                "is supported only on Blackhole",
+                config_name);
+        }
         TT_FATAL(
             K % program_config.in0_block_w == 0,
             "{}: K ({}) must be divisible by in0_block_w ({})",

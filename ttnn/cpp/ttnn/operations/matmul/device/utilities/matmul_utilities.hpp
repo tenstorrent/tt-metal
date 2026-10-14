@@ -378,11 +378,13 @@ struct DramBankReaderAssignment {
 
 void validate_num_workers_per_dram_bank(std::size_t workers_per_bank);
 
-// num_workers_per_dram_bank >= 2 runs the multi-core pipeline (create_program_dram_sharded_multicore_spec)
-// when the call has no bias, no fused activation and no untilize_out, both operands use 32x32 untransposed
-// tiles, K is a whole number of tiles, A is in L1 and the output is L1 width-sharded ROW_MAJOR; any other
-// call keeps the single-reader program with its multi-reader conditions.
+// use_multicore_pipeline with num_workers_per_dram_bank >= 2 runs the multi-core pipeline
+// (create_program_dram_sharded_multicore_spec) when the call has no bias, no fused activation and no untilize_out, both
+// operands use 32x32 untransposed tiles, K is a whole number of tiles, A is in L1 and the output is L1 width-sharded
+// ROW_MAJOR; any other call, and every call without use_multicore_pipeline, keeps the single-reader program with its
+// multi-reader conditions.
 bool use_dram_sharded_multicore(
+    bool use_multicore_pipeline,
     std::size_t workers_per_bank,
     bool has_bias,
     bool has_fused_activation,

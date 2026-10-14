@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """DRAM-sharded decode matmul, multi-core pipeline (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
-with num_workers_per_dram_bank >= 2 on a call without bias, fused activation or untilize_out).
+with use_multicore_pipeline and num_workers_per_dram_bank >= 2 on a call without bias, fused activation or
+untilize_out; without use_multicore_pipeline every call keeps the single-reader program).
 
 The served decode shapes come with the layouts the models give them (activation and output shard grids,
 dtypes, fidelity), recorded from tt_transformers on Blackhole (P150 and the per-chip shapes of P150x4 and
@@ -231,7 +232,18 @@ def _operands(device, k, n, w_dtype, x_dtype, x_layout, x_shard_w, seed=0):
 
 
 def _matmul(
-    x, w, *, out_mc, out_dtype, per_core_n, in0_block_w, cores_per_bank, fidelity, fp32=True, fused_activation=None
+    x,
+    w,
+    *,
+    out_mc,
+    out_dtype,
+    per_core_n,
+    in0_block_w,
+    cores_per_bank,
+    fidelity,
+    fp32=True,
+    fused_activation=None,
+    use_multicore_pipeline=None,
 ):
     program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=in0_block_w,
@@ -240,6 +252,8 @@ def _matmul(
         fused_activation=fused_activation,
         # cores_per_bank 0 is the single-reader program, which is num_workers_per_dram_bank 1
         num_workers_per_dram_bank=max(cores_per_bank, 1),
+        # cores_per_bank >= 2 opts into the multi-core pipeline unless the caller says otherwise
+        use_multicore_pipeline=cores_per_bank >= 2 if use_multicore_pipeline is None else use_multicore_pipeline,
     )
     compute = ttnn.init_device_compute_kernel_config(
         x.device().arch(),
@@ -423,8 +437,8 @@ def test_program_cache_reuses_the_program(device):
 
 
 def test_fused_activation_falls_back(device, expect_error):
-    """A fused activation is outside the multi-core pipeline: with 2 workers per bank the call runs the
-    single-reader program with 2 readers (Blackhole) and matches its 1-reader result; Wormhole has no
+    """A fused activation is outside the multi-core pipeline: opted in with 2 workers per bank, the call runs
+    the single-reader program with 2 readers (Blackhole) and matches its 1-reader result; Wormhole has no
     multi-reader program and rejects it."""
     case = _bank_case(device, 4096, 4096)
     x, w = _operands(device, 4096, 4096, "bfp8", "bf16", case[5], case[6])
@@ -437,3 +451,23 @@ def test_fused_activation_falls_back(device, expect_error):
     two = ttnn.to_torch(_matmul(x, w, in0_block_w=2, cores_per_bank=2, fused_activation=silu, **kw))
     one = ttnn.to_torch(_matmul(x, w, in0_block_w=2, cores_per_bank=0, fused_activation=silu, **kw))
     assert torch.equal(two, one)
+
+
+def test_pipeline_needs_the_opt_in(device, expect_error):
+    """num_workers_per_dram_bank >= 2 alone keeps the single-reader program (main's behaviour): on Blackhole
+    its 2-reader variant splits each bank's columns over two readers with the same compute in the same K
+    order, so its output is bitwise the 1-reader output, while the opted-in call runs the multi-core
+    pipeline, whose output differs; Wormhole has no multi-reader program and rejects the call."""
+    case = _bank_case(device, 4096, 4096)
+    x, w = _operands(device, 4096, 4096, "bfp8", "bf16", case[5], case[6])
+    kw = dict(out_mc=_out(device, case[7], case[8]), out_dtype="bf16", per_core_n=case[8], fidelity="HiFi2")
+    if not is_blackhole():
+        with expect_error(RuntimeError, "supported only on Blackhole"):
+            _matmul(x, w, in0_block_w=2, cores_per_bank=2, use_multicore_pipeline=False, **kw)
+        return
+    one = ttnn.to_torch(_matmul(x, w, in0_block_w=2, cores_per_bank=0, **kw))
+    two = ttnn.to_torch(_matmul(x, w, in0_block_w=2, cores_per_bank=2, use_multicore_pipeline=False, **kw))
+    assert torch.equal(two, one)
+    pipeline = ttnn.to_torch(_matmul(x, w, in0_block_w=2, cores_per_bank=2, use_multicore_pipeline=True, **kw))
+    assert not torch.equal(pipeline, one)
+    _check(pipeline.reshape(32, -1), _reference(x, w, 4096), "bf16")

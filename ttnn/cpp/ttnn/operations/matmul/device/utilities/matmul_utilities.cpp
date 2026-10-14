@@ -470,6 +470,7 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
 }
 
 bool use_dram_sharded_multicore(
+    bool use_multicore_pipeline,
     std::size_t workers_per_bank,
     bool has_bias,
     bool has_fused_activation,
@@ -483,8 +484,8 @@ bool use_dram_sharded_multicore(
         return t.get_height() == tt::constants::TILE_HEIGHT && t.get_width() == tt::constants::TILE_WIDTH &&
                !t.get_transpose_within_face() && !t.get_transpose_of_faces();
     };
-    return workers_per_bank >= 2 && !has_bias && !has_fused_activation && !untilize_out && full_tile(in0_tile) &&
-           full_tile(in1_tile) && k_logical % tt::constants::TILE_WIDTH == 0 &&
+    return use_multicore_pipeline && workers_per_bank >= 2 && !has_bias && !has_fused_activation && !untilize_out &&
+           full_tile(in0_tile) && full_tile(in1_tile) && k_logical % tt::constants::TILE_WIDTH == 0 &&
            a_buffer_type == tt::tt_metal::BufferType::L1 &&
            output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 &&
            output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED &&

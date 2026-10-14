@@ -1177,8 +1177,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     };
 }
 
-// Multi-core decode pipeline (num_workers_per_dram_bank >= 2 on a qualifying call, see
-// dram_sharded_helpers::use_dram_sharded_multicore).
+// Multi-core decode pipeline (use_multicore_pipeline with num_workers_per_dram_bank >= 2 on a qualifying
+// call, see dram_sharded_helpers::use_dram_sharded_multicore).
 //
 // The single-reader program above runs one compute core per DRAM bank, issues its weight reads on one
 // NoC, and accumulates in0_block_w-wide blocks through L1. At M = one tile a core cannot retire tiles as
@@ -1718,6 +1718,7 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
     const auto& output_mesh = output.mesh_tensor();
 
     if (dram_sharded_helpers::use_dram_sharded_multicore(
+            program_config.use_multicore_pipeline,
             workers_per_bank,
             bias.has_value(),
             fused_activation.has_value(),
