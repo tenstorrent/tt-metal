@@ -1,0 +1,7 @@
+intake:
+  by: dnijemcevic
+  at: '2026-10-14T16:15:20'
+  files:
+    models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml: b9aa38b040bb57ee839c2af3b6e85c534d1a537f5363ae0abba17a98ac426501
+  note: approved by Claude (supervisor) on the owner's delegation, 2026-10-14; owner
+    reviews in the morning
