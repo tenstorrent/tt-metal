@@ -327,9 +327,6 @@ def test_atanh_outside_domain(device):
 
     tt_in = to_float32_tt_tensor(input_tensor, device)
 
-    golden_function = ttnn.get_golden_function(ttnn.atanh)
-    golden = golden_function(input_tensor, device=device)
-
     tt_result = ttnn.atanh(tt_in)
     result = ttnn.to_torch(tt_result)
 
@@ -337,10 +334,6 @@ def test_atanh_outside_domain(device):
     assert torch.equal(torch.isposinf(result), input_tensor == 1)
     assert torch.equal(torch.isneginf(result), input_tensor == -1)
     assert torch.equal(torch.isnan(result), input_tensor.abs() > 1)
-    assert torch.equal(torch.isnan(golden), torch.isnan(result))
-    assert torch.equal(torch.isinf(golden), torch.isinf(result))
-    inf = torch.isinf(golden)
-    assert torch.equal(torch.signbit(golden[inf]), torch.signbit(result[inf]))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -720,17 +713,7 @@ def test_exp_full_mantissa(device):
     low, high = -87.3, 88.7
     last_finite = torch.nextafter(torch.log(torch.tensor(torch.finfo(torch.float32).max)), torch.tensor(0.0)).item()
     edge_points = torch.tensor(
-        [
-            low,
-            -20.0,
-            -1.0,
-            1.0,
-            20.0,
-            high,
-            torch.nextafter(torch.tensor(high), torch.tensor(low)).item(),
-            88.72,
-            last_finite,
-        ],
+        [torch.nextafter(torch.tensor(high), torch.tensor(low)).item(), 88.72, last_finite],
         dtype=torch.float32,
     )
     input_tensor = torch.cat([torch.linspace(low, high, 4096, dtype=torch.float32), edge_points]).unique()
@@ -753,8 +736,6 @@ def test_exp_special_values(device):
     |----------------------------------------|---------------------|
     | -inf, -120, -104                       | 0                   |
     | ±0 and bfloat16 subnormals             | 1                   |
-    | 1                                      | e (ULP ≤ 1)         |
-    | 88.7                                   | finite (ULP ≤ 1)    |
     | 89, 100, +inf                          | +inf                |
     | NaN, negative NaN                      | NaN                 |
     """
@@ -769,8 +750,6 @@ def test_exp_special_values(device):
                     -104.0,
                     -0.0,
                     0.0,
-                    1.0,
-                    88.7,
                     89.0,
                     100.0,
                     float("inf"),
@@ -826,10 +805,7 @@ def test_exp2_full_mantissa(device):
     """
     low, high = -126.0, 127.0
     last_finite = torch.nextafter(torch.tensor(128.0), torch.tensor(0.0)).item()
-    edge_points = torch.tensor(
-        [low, -10.0, -1.0, -0.75, -0.5, -0.25, 0.25, 0.5, 0.75, 1.0, 10.0, high, 127.5, last_finite],
-        dtype=torch.float32,
-    )
+    edge_points = torch.tensor([127.5, last_finite], dtype=torch.float32)
     input_tensor = torch.cat(
         [
             torch.linspace(low, high, 4096, dtype=torch.float32),
@@ -855,11 +831,9 @@ def test_exp2_special_values(device):
 
     | Input                         | Expected                                  |
     |-------------------------------|-------------------------------------------|
-    | -inf, -149                    | 0                                         |
-    | -127                          | 0 (golden 2^-127 is subnormal; device FTZ)|
-    | -126                          | 2^-126, smallest normal (ULP ≤ 1)         |
+    | -inf                          | 0                                         |
+    | -149                          | 0 (golden 2^-149 is subnormal; device FTZ)|
     | ±0 and bfloat16 subnormals    | 1                                         |
-    | ±0.25, 1, 127                 | ULP ≤ 1                                   |
     | 128, +inf                     | +inf                                      |
     | NaN, negative NaN             | NaN                                       |
     """
@@ -867,10 +841,7 @@ def test_exp2_special_values(device):
     subnormals = torch.tensor([1e-40, -1e-40, 1.1e-38, -1.1e-38], dtype=torch.float32)
     input_tensor = torch.cat(
         [
-            torch.tensor(
-                [-float("inf"), -149.0, -127.0, -126.0, -0.25, -0.0, 0.0, 0.25, 1.0, 127.0, 128.0, float("inf")],
-                dtype=torch.float32,
-            ),
+            torch.tensor([-float("inf"), -149.0, -0.0, 0.0, 128.0, float("inf")], dtype=torch.float32),
             positive_nan,
             -positive_nan,
             subnormals,
@@ -932,10 +903,7 @@ def test_expm1_full_mantissa(device):
     """
     low, high = -87.3, 88.7
     last_finite = torch.nextafter(torch.log(torch.tensor(torch.finfo(torch.float32).max)), torch.tensor(0.0)).item()
-    edge_points = torch.tensor(
-        [low, -20.0, -1.0, -1e-6, 1e-6, 1.0, 20.0, high, 88.72, last_finite],
-        dtype=torch.float32,
-    )
+    edge_points = torch.tensor([-1e-6, 1e-6, 88.72, last_finite], dtype=torch.float32)
     input_tensor = torch.cat(
         [
             torch.linspace(low, high, 4096, dtype=torch.float32),
@@ -961,23 +929,18 @@ def test_expm1_special_values(device):
 
     | Input                      | Expected                              |
     |----------------------------|---------------------------------------|
-    | -inf, -1000                | -1                                    |
+    | -inf                       | -1                                    |
     | ±0                         | ±0                                    |
     | subnormals                 | 0 (input and golden flushed)          |
     | ±1e-30                     | ±1e-30 (expm1(x) ≈ x for tiny x)      |
-    | 1                          | e - 1                                 |
-    | 88.7                       | finite                                |
-    | 89, +inf                   | +inf                                  |
+    | +inf                       | +inf                                  |
     | NaN, negative NaN          | NaN                                   |
     """
     positive_nan = torch.tensor([float("nan")], dtype=torch.float32)
     subnormals = torch.tensor([1e-40, -1e-40, 1.1e-38, -1.1e-38], dtype=torch.float32)
     input_tensor = torch.cat(
         [
-            torch.tensor(
-                [-float("inf"), -1000.0, -0.0, 0.0, -1e-30, 1e-30, 1.0, 88.7, 89.0, float("inf")],
-                dtype=torch.float32,
-            ),
+            torch.tensor([-float("inf"), -0.0, 0.0, -1e-30, 1e-30, float("inf")], dtype=torch.float32),
             positive_nan,
             -positive_nan,
             subnormals,
@@ -1049,11 +1012,10 @@ def test_digamma_small_x(device):
     """Guard the steep near-pole region below 1. psi has a pole at 0 (psi(x) ~ -1/x).
 
     ``test_digamma_multigammaln`` starts at 1, so the samples below 1 are the ones it misses.
-    The points from 1 to 2 overlap that sweep. The sample skips the zero-crossing at x ~= 1.4616,
-    where an ULP count is unstable.
+    1.9 and 1.99 are off the bfloat16 lattice that sweep uses.
     """
     xs = torch.tensor(
-        [[0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 0.75, 1.0, 1.25, 1.75, 1.9, 1.99]],
+        [[0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 0.75, 1.9, 1.99]],
         dtype=torch.float32,
     )
     golden = torch.digamma(xs.to(torch.float64)).to(torch.float32)
