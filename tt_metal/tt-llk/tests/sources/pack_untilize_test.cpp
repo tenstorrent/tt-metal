@@ -59,6 +59,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         for (std::uint32_t block_num = 0; block_num < num_blocks_per_col; ++block_num) // Loop over blocks in the tile-row.
         {
+#ifdef ARCH_BLACKHOLE
+            // As pack_untilize_block: one context per block row of three or more tiles that are not 32-bit
+            const std::uint32_t src_format = formats.unpack_A_src;
+            const bool src_32bit           = src_format == ckernel::to_underlying(DataFormat::Float32) || src_format == ckernel::to_underlying(DataFormat::Int32) ||
+                                   src_format == ckernel::to_underlying(DataFormat::UInt32);
+            if (BLOCK_CT_DIM > 2 && !src_32bit)
+            {
+                const std::uint32_t first      = rt * FULL_CT_DIM + block_num * BLOCK_CT_DIM;
+                const std::uint32_t address    = L1_ADDRESS(params.buffer_A[first]);
+                const std::uint32_t stride_16B = L1_ADDRESS(params.buffer_A[first + 1]) - address;
+                if (!IS_BFP_FORMAT(formats.unpack_A_src) && stride_16B == params.num_faces * FACE_R_DIM * datum_size_in_bytes(formats.unpack_A_src))
+                {
+                    _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, is_fp32_dest_acc_en, true>(
+                        address, BLOCK_CT_DIM, stride_16B, formats.unpack_A_src, formats.unpack_A_dst, params.num_faces);
+                }
+                else
+                {
+                    _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, is_fp32_dest_acc_en>(
+                        address, BLOCK_CT_DIM, stride_16B, formats.unpack_A_src, formats.unpack_A_dst, params.num_faces);
+                }
+                continue;
+            }
+#endif
             for (std::uint32_t tile_index_within_block = 0; tile_index_within_block < BLOCK_CT_DIM; ++tile_index_within_block) // Loop over tiles in the block
             {
                 std::uint32_t tile_index_in_memory = rt * FULL_CT_DIM + block_num * BLOCK_CT_DIM + tile_index_within_block;

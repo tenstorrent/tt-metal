@@ -71,6 +71,33 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
+#ifdef ARCH_BLACKHOLE
+            // As pack_untilize_block: one context per block row of three or more tiles that are not 32-bit
+            const std::uint32_t src_format = formats.unpack_A_src;
+            const bool src_32bit           = src_format == ckernel::to_underlying(DataFormat::Float32) || src_format == ckernel::to_underlying(DataFormat::Int32) ||
+                                   src_format == ckernel::to_underlying(DataFormat::UInt32);
+            if (BLOCK_CT_DIM > 2 && !src_32bit)
+            {
+                // Production's CB pages lie back to back: a dense block walks them with the Z counter
+                const bool dense = !IS_BFP_FORMAT(formats.unpack_A_src);
+                const std::uint32_t stride_16B =
+                    dense ? 4 * FACE_R_DIM * datum_size_in_bytes(formats.unpack_A_src) : PERF_ADDRESS(PERF_INPUT_A, 1) - PERF_ADDRESS(PERF_INPUT_A, 0);
+                for (std::uint32_t i = 0; i < TILE_CNT; i += BLOCK_CT_DIM)
+                {
+                    if (dense)
+                    {
+                        _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, is_fp32_dest_acc_en, true>(
+                            PERF_ADDRESS(PERF_INPUT_A, i), BLOCK_CT_DIM, stride_16B, formats.unpack_A_src, formats.unpack_A_dst);
+                    }
+                    else
+                    {
+                        _llk_unpack_A_block_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, is_fp32_dest_acc_en>(
+                            PERF_ADDRESS(PERF_INPUT_A, i), BLOCK_CT_DIM, stride_16B, formats.unpack_A_src, formats.unpack_A_dst);
+                    }
+                }
+                continue;
+            }
+#endif
             for (std::uint32_t i = 0; i < TILE_CNT; ++i)
             {
                 _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
