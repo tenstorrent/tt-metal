@@ -1046,7 +1046,10 @@ const BlockBufferSet& buffer_set_for_core(const BlockPlan& plan, const tt::tt_me
 
 bool codegen_supported_on_arch(const ttnn::Tensor& input) {
     const auto* device = input.device();
-    const auto arch = device != nullptr ? device->arch() : tt::tt_metal::hal::get_arch();
+    if (device == nullptr) {
+        return false;
+    }
+    const auto arch = device->arch();
     return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
 }
 

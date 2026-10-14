@@ -198,12 +198,12 @@ ttnn::Tensor untilize(
     // is_demoted / the codegen dispatch itself on the raw, un-squeezed tensor, while the native
     // path's equivalent decisions run on the squeezed 4D tensor.
     //
-    // Three gates, in order: static scope (supported_by_codegen), perf ledger (is_demoted), and
-    // the live-L1 gate (codegen_cb_plan_fits_live_l1) -- the last is the codegen op's own CB
-    // planner run ahead of dispatch, so a case for which no codegen CB plan fits the L1 free right
-    // now takes the native path as a whole (untilize_native -> prim::untilize or
-    // untilize_with_unpadding, deriving fp32_dest_acc_en / enough_space_height / pf_type exactly
-    // as any other native call) instead of the codegen op building a native program itself.
+    // Four gates, in order: architecture (codegen_supported_on_arch), static scope
+    // (supported_by_codegen), perf ledger (is_demoted), and the live-L1 gate (codegen_cb_plan_fits_live_l1) -- the last
+    // is the codegen op's own CB planner run ahead of dispatch, so a case for which no codegen CB plan fits the L1 free
+    // right now takes the native path as a whole (untilize_native -> prim::untilize or untilize_with_unpadding,
+    // deriving fp32_dest_acc_en / enough_space_height / pf_type exactly as any other native call) instead of the
+    // codegen op building a native program itself.
     auto dispatch = [=](const ttnn::Tensor& normalized_input) -> ttnn::Tensor {
         const auto output_mem_config = memory_config.value_or(normalized_input.memory_config());
 
