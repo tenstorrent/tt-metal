@@ -19,6 +19,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     check_accuracy,
     check_attn_mask,
     check_joint,
+    check_large_logits,
     check_op_selected_blocking,
     inputs_for,
     l2_pct,
@@ -33,6 +34,13 @@ pytestmark = blackhole_only
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_sdpa_recipe_accuracy(device, variant):
     check_accuracy(device, variant, SHAPES["subtile_tails"])
+
+
+# Scaled logits up to 2e4: the FP32-state recipes keep FP32 row maxima, so no row of P leaves the exp's range.
+@pytest.mark.parametrize("scale", ["moderate", "large"])
+@pytest.mark.parametrize("variant", ["balanced", "accurate"])
+def test_sdpa_recipe_large_logits(device, variant, scale):
+    check_large_logits(device, variant, scale)
 
 
 @pytest.mark.parametrize("variant, mask_kind", [("standard", "key_padding"), ("fast_bfp8", "random")])
