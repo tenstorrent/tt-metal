@@ -784,15 +784,17 @@ also registers `writers2`, `writers4` and `writers8` at B=1, B=4 and B=8 at
 at the same consumer settings as the one-producer cross-check.
 At S=32 and S=64, `packet.erisc_header.s<S>.c<C>k<K>.<writers>.b<B>` registers
 `writers1` and `writers_all` at B=1 and `writers1` at B=4 for (C, K) in
-{(8, 16), (8, 32), (16, 32), (32, 32)}; no campaign has measured them.
+{(8, 16), (8, 32), (16, 32), (32, 32)}; the 2026-10-14 whole-suite campaign measured them.
 At the Tensix load knee T=4, `packet.throughput.{brisc,paired}.T4.<setting>`
 registers `c4k8` (C=4, K=8), `c8k16` (C=8, K=16), `s4`, `s8` and `s64` (S=4, 8
 and 64) and `b4` (B=4), each changing that one setting from its `T4` point at
-S=16, B=C=K=1; no campaign has measured them.
+S=16, B=C=K=1; the 2026-10-14 whole-suite campaign measured them.
 To isolate the (C, K) gain, `packet.throughput.{brisc,paired}.T4.s64.c<C>k<K>`
 registers C in {1, 2, 4, 8, 16} at K=16 and K in {2, 4, 8} at C=1, each
-changing only C and K from its `T4.s64` point at S=64, B=C=K=1; no campaign has
-measured them.
+changing only C and K from its `T4.s64` point at S=64, B=C=K=1; the 2026-10-14 whole-suite campaign measured them.
+Across the load sweep, `packet.throughput.paired.T1.c8k16` and
+`packet.throughput.{brisc,paired}.T{2,8}.c8k16` set C=8, K=16 on their `T<n>`
+point at S=16, B=1; the 2026-10-14 whole-suite campaign measured them.
 
 **Writers.** `select_ethernet_writers()` in `tests/device/suites/packet_injection/regions.hpp`
 sorts the inactive cores by logical (x, y) and takes a prefix, so the one-writer
