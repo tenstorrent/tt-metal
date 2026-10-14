@@ -925,7 +925,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_eltwise_binary_reuse_dest_quasar": {
-        "version": 5,
+        "version": 6,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
