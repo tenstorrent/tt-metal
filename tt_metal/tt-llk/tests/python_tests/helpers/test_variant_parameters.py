@@ -412,6 +412,23 @@ class SFPU_SHIFT_AMOUNT(TemplateParameter):
 
 
 @dataclass
+class SFPU_ZERO_COMP_LLK(TemplateParameter):
+    """Route the float compares against zero to the tt-llk ``_calculate_zero_comp_``.
+
+    By default sfpu_operations.h sends LessThanZero and the other five zero compares to the metal
+    ``calculate_comp``, the kernel ttnn uses. The tt-llk entry point in
+    ``sfpu/ckernel_sfpu_comp.h`` has no production caller, so this switch is the only way to reach
+    it. Emitted as a macro for the same reason as :class:`SFPU_SHIFT_AMOUNT`: the header selects on
+    ``#ifdef``, so ``False`` emits nothing and the metal kernel stays the default.
+    """
+
+    zero_comp_llk: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return "#define SFPU_ZERO_COMP_LLK" if self.zero_comp_llk else ""
+
+
+@dataclass
 class DISABLE_SRC_ZERO_FLAG(TemplateParameter):
     disable_src_zero_flag: bool
 

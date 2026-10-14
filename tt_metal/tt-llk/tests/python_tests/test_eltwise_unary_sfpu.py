@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
 import os
 import struct
 from itertools import chain, product
 
 import pytest
 import torch
+from conftest import blackhole_only
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -57,6 +59,7 @@ from helpers.test_variant_parameters import (
     SFPU_RELU_MAX_THRESHOLD,
     SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
+    SFPU_ZERO_COMP_LLK,
     TILE_COUNT,
     DestSync,
     generate_input_dim,
@@ -731,6 +734,123 @@ def test_sqrt_family_negative_zero_regression(
     assert torch.allclose(res[3:], torch.tensor(expected), rtol=1e-2, atol=0.0), (
         f"{op}(4.0) is no longer ~{expected} on the lanes around the probes "
         f"(max deviation {(res[3:] - expected).abs().max().item():.6g})."
+    )
+
+
+# -0.0 in the tt-llk float compares against zero, https://github.com/tenstorrent/tt-llk/issues/1701
+# item 4. SFPU_ZERO_COMP_LLK routes these ops to _calculate_zero_comp_ in
+# tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_comp.h instead of the metal calculate_comp that the
+# sweeps above run. ltz and gez decided with `v >= 0.0f`, which lowers to SFPLE, and SFPLE orders -0.0
+# below +0.0: ltz(-0.0) was 1 and gez(-0.0) was 0, where IEEE-754 and torch give 0 and 1. gtz and lez
+# are controls; they were already right for -0.0.
+#
+# NaN is left out: these kernels also rank NaN by its sign bit (gtz(+NaN) = 1, ltz(-NaN) = 1), a
+# separate deviation the fix does not change. Float32 -> Float32 at dest_acc=Yes is the only pipeline
+# that hands the SFPU a real -0.0. Blackhole only: the Wormhole copy of the header is not changed.
+_ZERO_COMP_SIGNED_ZERO_INPUTS = (
+    0.0,
+    -0.0,
+    1.0,
+    -1.0,
+    1.0e-45,  # smallest +denormal (Float32 unpack-to-dest delivers it intact)
+    -1.0e-45,  # smallest -denormal
+    1.1754944e-38,  # smallest +normal
+    -1.1754944e-38,
+    3.0e38,  # large finite, just below FLT_MAX
+    -3.0e38,
+    float("inf"),
+    float("-inf"),
+)
+
+_ZERO_COMP_TORCH = {
+    MathOperation.LessThanZero: torch.lt,
+    MathOperation.GreaterThanEqualZero: torch.ge,
+    MathOperation.GreaterThanZero: torch.gt,
+    MathOperation.LessThanEqualZero: torch.le,
+}
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "mathop",
+    list(_ZERO_COMP_TORCH),
+    ids=[build_param_id(["mathop"], (op,)) for op in _ZERO_COMP_TORCH],
+)
+def test_llk_zero_comp_signed_zero(mathop):
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 32]
+
+    # Without a real -0.0 in Dest the -0.0 lanes would pass on the unfixed kernel too.
+    assert negative_zero_delivered(formats.input_format, dest_acc)
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    inputs = list(_ZERO_COMP_SIGNED_ZERO_INPUTS)
+    src_A = torch.tensor(
+        (inputs * (num_elements // len(inputs) + 1))[:num_elements],
+        dtype=torch.float32,
+    )
+    src_B = torch.zeros(num_elements, dtype=torch.float32)
+    tile_cnt = 1
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(),
+            MATH_OP(mathop=mathop),
+            SFPU_ZERO_COMP_LLK(),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+    )
+
+    res = torch.tensor(configuration.run().result[:num_elements], dtype=torch.float32)
+    golden = _ZERO_COMP_TORCH[mathop](src_A, 0.0).to(torch.float32)
+
+    def fmt(x: float) -> str:
+        if x == 0.0:
+            return "-0.0" if math.copysign(1.0, x) < 0 else "+0.0"
+        return f"{x:g}"
+
+    # Every lane is exactly 0.0 or 1.0, so compare exactly and report each input class once.
+    wrong = sorted(
+        {
+            (fmt(src_A[i].item()), res[i].item(), golden[i].item())
+            for i in range(num_elements)
+            if res[i].item() != golden[i].item()
+        }
+    )
+    assert not wrong, (
+        f"tt-llk {mathop.name} disagrees with torch on {len(wrong)} input classes:\n"
+        + "\n".join(f"  x = {x}: got {got}, expected {want}" for x, got, want in wrong)
     )
 
 

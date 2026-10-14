@@ -1366,8 +1366,15 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         }
         else
         {
+#ifdef SFPU_ZERO_COMP_LLK
+            // The tt-llk float entry point from sfpu/ckernel_sfpu_comp.h instead of the metal kernel.
+            // No production op calls it, so a test opts in through the SFPU_ZERO_COMP_LLK template
+            // parameter to reach it at all. exponent_size_8 is unused by every float compare.
+            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_zero_comp_, (APPROX_MODE, OPERATION, ITERATIONS), dst_index, vector_mode, 0u);
+#else
             // Float (bf16 / fp32 / bfp8) comparison-to-zero: NaN-aware metal calculate_comp.
             SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX_MODE, OPERATION, ITERATIONS), dst_index, vector_mode);
+#endif
         }
     }
     else if constexpr (
