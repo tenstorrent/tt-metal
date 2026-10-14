@@ -19,6 +19,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
 
 #include <exception>
 
@@ -77,7 +78,7 @@ TEST(P2PLatencyDriscPeerTileJit, CompilesDriscKernelWithoutLaunchingIt) {
             .defines = {{"P2P_LATENCY_TARGET_DRISC", "1"}},
             .opt_level = ttm::KernelBuildOptLevel::O2,
         });
-    ttm::detail::CompileProgram(device, program, /*force_slow_dispatch=*/true);
+    program.impl().compile(device, /*force_slow_dispatch=*/true);
 }
 
 TEST_P(X280P2PLatencyDriscPeerTile, PairedPingPongMeasuresRawLocalDeltas) { X280_HARNESS_DISPATCH(suite); }

@@ -16,6 +16,7 @@
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
 #include "llrt/hal.hpp"
 
 #include <cstdint>
@@ -100,7 +101,7 @@ inline void run_axis(
                     .opt_level = ttm::KernelBuildOptLevel::O2,
                 });
             ttm::SetRuntimeArgs(program, kernel, logical_core, runtime_args);
-            ttm::detail::CompileProgram(device, program, /*force_slow_dispatch=*/true);
+            program.impl().compile(device, /*force_slow_dispatch=*/true);
             ttm::detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/true);
             ttm::detail::LaunchProgram(
                 device,
