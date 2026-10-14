@@ -153,8 +153,10 @@ ProgramDescriptor recipe_compute_program(
             add_cb(index, q_tiles, state_bytes, state_format);
         }
     }
+    // CBs 10/11: the row maxima, FP32 for the FP32-state recipes (BF16 maxima of FP32 scores leave the exp's range at
+    // large logits; recipe_streaming.hpp, sdpa_max_word).
     for (uint8_t index : {10, 11}) {
-        add_cb(index, q_tiles, 2048, tt::DataFormat::Float16_b);
+        add_cb(index, q_tiles, state_bytes, state_format);
     }
     add_cb(14, q_tiles, state_bytes, state_format);
     if (fused) {
