@@ -16,6 +16,13 @@ A model's ``hooks.reference(spec, layers=None, dtype=torch.float32)`` returns an
     component(layer, step_name) -> fn(ctx, *inputs) -> tensor the CPU implementation of one step
     chunk_context(layer, start, length, state) -> Ctx        what stateful / positional steps need (rope tables, ...)
 
+Layers that read other layers' state (F65): a layer that attends over another layer's KV cache, or reuses what an
+earlier layer computed for the chunk (top-k indices, a candidate pool), keeps no state of its own (its block type's
+``state.by_block_type`` entry is empty) and reads the source's state from the shared state object. The model's hooks
+module then defines ``state_sources(spec, layer) -> [earlier layers]``; per-chunk results the readers need are state
+tensors of the source (in ``state.fixed``: goldens snapshot them at chunk ends). Tests load the sources' state as of
+the end of the chunk (the sources have already run it); a layer subset must include every selected layer's sources.
+
 Recorder names. ``forward_chunk`` calls ``rec(name, tensor)`` at every boundary: ``embed``, ``final_norm``,
 ``logits``, and per layer ``L{i}.in`` (block input), ``L{i}.<step output>`` for every step, where the last step's
 output is ``out``. Extra names (e.g. ``L{i}.q``) are allowed. The golden step stores these; component, swap and
