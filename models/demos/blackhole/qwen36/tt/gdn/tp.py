@@ -414,7 +414,7 @@ class TPGatedDeltaNet:
         self._zero_conv0 = None
         self._zero_conv_carry = None
         self._zero_rec = None
-        self._zero_rec_f32 = None  # fp32 zero initial state for carry_state=False prefill (trace-safe, no host write)
+        self._zero_rec_f32 = None  # batch-1 zero initial state for carry_state=False prefill (_ensure_zero_rec_f32)
         self._pending = []  # per-user (rec, conv) states collected during batched per-user prefill
 
     def _release_spec_bufs(self):
@@ -453,18 +453,6 @@ class TPGatedDeltaNet:
         self._zero_conv0 = z((1, self.B, self.qkv_dim_tp))
         self._zero_conv_carry = z((1, self.K - 1, self.qkv_dim_tp))
         self._zero_rec = z((self.B, self.Nv, self.Dk, self.Dv))
-        # fp32 zero initial state the delta op reads when forward_prefill(carry_state=False): the op never writes
-        # its initial state, so the buffer stays zero, and it avoids the op building its own zeros (a host write).
-        if os.environ.get("QWEN35_GDN_STATE_BF16") != "1":
-            self._zero_rec_f32 = ttnn.from_torch(
-                torch.zeros(self.B, self.Nv, self.Dk, self.Dv, dtype=torch.float32),
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-            )
-        else:
-            self._zero_rec_f32 = self._zero_rec
         if self._gdn_kda_conv:
             self._ensure_kda_consts()
         # Chunk-outer batched-prefill conv left-context (allocated lazily by forward_prefill_batched).
@@ -480,6 +468,24 @@ class TPGatedDeltaNet:
         # Fresh (zero) taps and no window: neither mirror is behind.
         self._conv_taps_stale = False
         self._conv_win_stale = False
+
+    def _ensure_zero_rec_f32(self):
+        """Batch-1 zero initial state the delta op reads when forward_prefill(carry_state=False), allocated once.
+
+        The op never writes its initial state, so the buffer stays zero, and it spares the op building its own zeros
+        (a host write). It survives reset_state, so a captured trace's address stays valid, and only models that
+        take the no-carry path allocate it.
+        """
+        if self._zero_rec_f32 is not None:
+            return
+        bf16 = os.environ.get("QWEN35_GDN_STATE_BF16") == "1"
+        self._zero_rec_f32 = ttnn.from_torch(
+            torch.zeros(1, self.Nv, self.Dk, self.Dv, dtype=torch.bfloat16 if bf16 else torch.float32),
+            dtype=ttnn.bfloat16 if bf16 else ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
 
     def reset_state_inplace(self):
         """Zero conv + recurrent state in place (preserves trace buffer addresses).
@@ -776,7 +782,10 @@ class TPGatedDeltaNet:
         if carry and self.conv_carry is None:
             self.reset_state()
         if not carry_state and self._zero_rec_f32 is None:
-            self.reset_state()  # allocates the persistent zero initial state; only ever reached eagerly (warm-up)
+            # One-time host writes, so only ever reached eagerly (warm-up).
+            if self.conv_states is None:
+                self.reset_state()
+            self._ensure_zero_rec_f32()
 
         # Prefill qkvzab in L1 (DRAM above S=2048): keeps proj + q/k/v/z/a/b resident for conv+gate prep.
         _L1 = tpc.prefill_act_mem(T, ttnn.L1_MEMORY_CONFIG)
