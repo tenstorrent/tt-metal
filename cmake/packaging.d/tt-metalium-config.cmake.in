@@ -10,6 +10,24 @@ find_dependency(spdlog REQUIRED)
 find_dependency(tt-logger REQUIRED)
 find_dependency(Threads REQUIRED)
 
+# TT::FabricTopologyUtils is a static archive whose link interface names yaml-cpp::yaml-cpp and protobuf::libprotobuf
+# (the archive was built against yaml-cpp 0.8 and protobuf 3.21; it does not bundle either). A consumer that builds its
+# own copies defines the targets before find_package; otherwise look for the installed packages. Not REQUIRED: the
+# runtime targets (TT::Metalium, TT::NN) do not need them, and a consumer that links TT::FabricTopologyUtils without
+# them fails at generate time with "target not found".
+if(NOT TARGET yaml-cpp::yaml-cpp)
+    find_package(yaml-cpp QUIET)
+    if(NOT yaml-cpp_FOUND)
+        message(STATUS "yaml-cpp not found: TT::FabricTopologyUtils needs the yaml-cpp::yaml-cpp target")
+    endif()
+endif()
+if(NOT TARGET protobuf::libprotobuf)
+    find_package(Protobuf QUIET)
+    if(NOT Protobuf_FOUND)
+        message(STATUS "Protobuf not found: TT::FabricTopologyUtils needs the protobuf::libprotobuf target")
+    endif()
+endif()
+
 # Set package as found
 set(TT-@PROJECT_NAME@_FOUND TRUE)
 
