@@ -6,6 +6,7 @@
 #include "context/context_descriptor.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
+#include "fabric/fabric_connection.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hal_types.hpp"
@@ -71,9 +72,7 @@ void RelayMux::GenerateStaticConfigs() {
 
     // FabricMuxConfig only accepts Worker or Idle Eth. Eth is not accepted.
     CoreType mux_config_core = GetCoreType() == CoreType::WORKER ? CoreType::WORKER : CoreType::IDLE_ETH;
-    // Built against this relay mux's own control plane (not the default MetalContext's), through the private
-    // constructor RelayMux is a friend of.
-    mux_kernel_config_ = std::make_shared<tt::tt_fabric::FabricMuxConfig>(tt::tt_fabric::FabricMuxConfig(
+    mux_kernel_config_ = std::make_shared<tt::tt_fabric::FabricMuxConfig>(
         control_plane,
         static_config_.num_full_size_channels.value(),
         static_config_.num_header_only_channels.value(),
@@ -81,8 +80,7 @@ void RelayMux::GenerateStaticConfigs() {
         num_slots,
         static_config_.buffer_size_bytes.value(),
         static_config_.buffer_base_address.value(),
-        mux_config_core,
-        /*usable_l1_end_address=*/0));
+        mux_config_core);
 
     mux_ct_args_ = mux_kernel_config_->get_fabric_mux_compile_time_args_for_relay_mux(control_plane);
 
@@ -121,8 +119,25 @@ void RelayMux::GenerateStaticConfigs() {
         dst_fabric_node_id,
         link_index);
 
-    mux_rt_args_ = mux_kernel_config_->get_fabric_mux_run_time_args_for_relay_mux(
-        control_plane, src_fabric_node_id, dst_fabric_node_id, link_index, *program_, {logical_core_});
+    // Same layout as FabricMuxConfig::get_fabric_mux_run_time_args, but the fabric connection is resolved in this
+    // relay mux's own context rather than the default MetalContext's.
+    const auto regions_to_clear = mux_kernel_config_->get_memory_regions_to_clear();
+    mux_rt_args_.clear();
+    mux_rt_args_.reserve((regions_to_clear.size() * 2) + 1);
+    mux_rt_args_.push_back(static_cast<uint32_t>(regions_to_clear.size()));
+    for (const auto& [address, size] : regions_to_clear) {
+        mux_rt_args_.push_back(static_cast<uint32_t>(address));
+        mux_rt_args_.push_back(static_cast<uint32_t>(size));
+    }
+    tt::tt_fabric::append_fabric_connection_rt_args_in_context(
+        fabric_context,
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        link_index,
+        *program_,
+        {logical_core_},
+        mux_rt_args_,
+        mux_config_core);
 }
 
 void RelayMux::GenerateDependentConfigs() {}

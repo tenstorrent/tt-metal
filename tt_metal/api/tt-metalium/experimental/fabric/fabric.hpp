@@ -23,7 +23,6 @@
 namespace tt::tt_metal {
 class Program;
 struct ProgramDescriptor;
-class RelayMux;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
@@ -211,6 +210,8 @@ class FabricMuxConfig {
     static constexpr size_t default_num_iters_between_teardown_checks = 32;
 
 public:
+    // Builds the config in the default MetalContext's context.
+    // TODO(#52020): replace with a const MeshDevice& form for callers that hold a device (ttnn ops, Python).
     FabricMuxConfig(
         uint8_t num_full_size_channels,
         uint8_t num_header_only_channels,
@@ -222,6 +223,19 @@ public:
         // usable_l1_end_address is highest L1 address the memory map may reach, exclusive.  A caller that wants the
         // mux kept clear of L1_SMALL, to avoid clobbering persistent semaphores, passes
         // the L1_SMALL floor here. 0 means "use the physical end of L1".
+        size_t usable_l1_end_address = 0);
+
+    // Builds the config in `control_plane`'s context. For metal code that has a context but no MeshDevice, such as
+    // the dispatch relay mux, which is configured before any MeshDevice exists.
+    FabricMuxConfig(
+        const ControlPlane& control_plane,
+        uint8_t num_full_size_channels,
+        uint8_t num_header_only_channels,
+        uint8_t num_buffers_full_size_channel,
+        uint8_t num_buffers_header_only_channel,
+        size_t buffer_size_bytes_full_size_channel,
+        size_t base_l1_address,
+        CoreType core_type = CoreType::WORKER,
         size_t usable_l1_end_address = 0);
 
     // Returns the compile time args to be passed for the mux kernel
@@ -259,36 +273,6 @@ public:
     std::vector<std::pair<size_t, size_t>> get_memory_regions_to_clear() const;
 
 private:
-    // The dispatch relay mux serves one specific context and has no MeshDevice, so it builds and wires the config
-    // against its own control plane instead of the default MetalContext's.
-    friend class tt::tt_metal::RelayMux;
-
-    // Same as the public constructor, but reads the HAL and the fabric packet sizes from `control_plane`'s context.
-    // The public constructor delegates here with the default context's control plane.
-    FabricMuxConfig(
-        const ControlPlane& control_plane,
-        uint8_t num_full_size_channels,
-        uint8_t num_header_only_channels,
-        uint8_t num_buffers_full_size_channel,
-        uint8_t num_buffers_header_only_channel,
-        size_t buffer_size_bytes_full_size_channel,
-        size_t base_l1_address,
-        CoreType core_type,
-        size_t usable_l1_end_address);
-
-    // Same as get_fabric_mux_run_time_args, but the fabric connection is resolved in `control_plane`'s context.
-    std::vector<uint32_t> get_fabric_mux_run_time_args_for_relay_mux(
-        const ControlPlane& control_plane,
-        const FabricNodeId& src_fabric_node_id,
-        const FabricNodeId& dst_fabric_node_id,
-        uint32_t link_idx,
-        tt::tt_metal::Program& mux_program,
-        const tt::tt_metal::CoreCoord& mux_logical_core) const;
-
-    // The leading run-time args shared by every connection setup: the count and (address, size) pairs of the
-    // memory regions the mux kernel clears at startup.
-    std::vector<uint32_t> get_regions_to_clear_rt_args() const;
-
     // Returns the base compile time args without stream IDs
     std::vector<uint32_t> get_fabric_mux_compile_time_main_args(
         const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const;

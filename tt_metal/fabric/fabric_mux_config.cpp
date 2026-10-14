@@ -9,7 +9,6 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/fabric/fabric_connection.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -297,37 +296,6 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
     uint32_t link_idx,
     ProgramOrDescriptor& mux_program_or_desc,
     const tt::tt_metal::CoreCoord& mux_logical_core) const {
-    auto args = get_regions_to_clear_rt_args();
-
-    tt::tt_fabric::append_fabric_connection_rt_args<ProgramOrDescriptor>(
-        src_fabric_node_id, dst_fabric_node_id, link_idx, mux_program_or_desc, mux_logical_core, args, core_type_);
-
-    return args;
-}
-
-std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args_for_relay_mux(
-    const ControlPlane& control_plane,
-    const FabricNodeId& src_fabric_node_id,
-    const FabricNodeId& dst_fabric_node_id,
-    uint32_t link_idx,
-    tt::tt_metal::Program& mux_program,
-    const tt::tt_metal::CoreCoord& mux_logical_core) const {
-    auto args = get_regions_to_clear_rt_args();
-
-    tt::tt_fabric::append_fabric_connection_rt_args_in_context<tt::tt_metal::Program>(
-        control_plane.get_fabric_context(),
-        src_fabric_node_id,
-        dst_fabric_node_id,
-        link_idx,
-        mux_program,
-        mux_logical_core,
-        args,
-        core_type_);
-
-    return args;
-}
-
-std::vector<uint32_t> FabricMuxConfig::get_regions_to_clear_rt_args() const {
     std::vector<uint32_t> args;
 
     auto regions_to_clear = get_memory_regions_to_clear();
@@ -338,6 +306,10 @@ std::vector<uint32_t> FabricMuxConfig::get_regions_to_clear_rt_args() const {
         args.push_back(static_cast<uint32_t>(address));
         args.push_back(static_cast<uint32_t>(size));
     }
+
+    tt::tt_fabric::append_fabric_connection_rt_args<ProgramOrDescriptor>(
+        src_fabric_node_id, dst_fabric_node_id, link_idx, mux_program_or_desc, mux_logical_core, args, core_type_);
+
     return args;
 }
 
