@@ -1073,6 +1073,12 @@ struct SenderKernelTrafficConfig {
     bool has_packets_to_send() const { return num_packets_processed < metadata.num_packets; }
 
     FORCE_INLINE void setup_credit_update_noc_state(const EdmSenderT& adapter, uint8_t noc) {
+#ifdef FABRIC2_WORKER
+        // Fabric 2.0: no stream-register credit path; the steady-state send re-pushes the header (below).
+        (void)adapter;
+        (void)noc;
+        return;
+#endif
         auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
         const uint64_t noc_sem_addr =
             get_noc_addr(adapter.edm_noc_x, adapter.edm_noc_y, adapter.edm_buffer_remote_free_slots_update_addr, noc);
@@ -1122,7 +1128,14 @@ struct SenderKernelTrafficConfig {
             if (num_packets_processed < conn->num_buffers_per_channel) {
                 conn->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
             } else {
+#ifdef FABRIC2_WORKER
+                // Fabric 2.0 steady state: the minimal per-packet worker cost is the header push itself
+                // (header -> injection slot, header -> x280 cell ring, barrier, 4 B doorbell); the payload
+                // left in the slot by warmup is re-sent, as with the stock credit-only path.
+                conn->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+#else
                 fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn);
+#endif
             }
         } else {
             const bool has_payload = payload_size_bytes > 0 && payload_buffer_;
