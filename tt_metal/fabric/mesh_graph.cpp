@@ -76,54 +76,6 @@ bool axis_ports_reserved_for_torus(
     return false;
 }
 
-// Map the MGD proto's FabricConfig enum to the runtime tt::tt_fabric::FabricConfig.
-FabricConfig proto_to_fabric_config(proto::FabricConfig c) {
-    switch (c) {
-        case proto::FabricConfig::FABRIC_1D: return FabricConfig::FABRIC_1D;
-        case proto::FabricConfig::FABRIC_1D_RING: return FabricConfig::FABRIC_1D_RING;
-        case proto::FabricConfig::FABRIC_2D: return FabricConfig::FABRIC_2D;
-        case proto::FabricConfig::FABRIC_2D_TORUS_X: return FabricConfig::FABRIC_2D_TORUS_X;
-        case proto::FabricConfig::FABRIC_2D_TORUS_Y: return FabricConfig::FABRIC_2D_TORUS_Y;
-        case proto::FabricConfig::FABRIC_2D_TORUS_XY: return FabricConfig::FABRIC_2D_TORUS_XY;
-        default: TT_THROW("MeshGraph: unexpected proto FabricConfig value {}", static_cast<int>(c));
-    }
-}
-
-// Derive a mesh's default FabricConfig from its declared device_topology dim_types, used when the MGD
-// does not declare an explicit fabric_config. A mesh with at most one axis of extent > 1 is 1D
-// (FABRIC_1D_RING if that axis is RING, else FABRIC_1D); a 2D mesh maps its ring axes to the matching
-// 2D torus variant (dim 0 -> TORUS_Y, dim 1 -> TORUS_X), or plain FABRIC_2D when neither axis rings.
-FabricConfig default_fabric_config_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
-    const auto& dims = mesh_desc->device_topology().dims();
-    const auto& dim_types = mesh_desc->device_topology().dim_types();
-    const auto is_ring = [&](int axis) {
-        return axis < dim_types.size() && dim_types[axis] == proto::TorusTopology::RING;
-    };
-    int non_unit_axes = 0;
-    int sole_axis = -1;
-    for (int i = 0; i < dims.size(); ++i) {
-        if (dims[i] > 1) {
-            ++non_unit_axes;
-            sole_axis = i;
-        }
-    }
-    if (non_unit_axes <= 1) {
-        return (sole_axis >= 0 && is_ring(sole_axis)) ? FabricConfig::FABRIC_1D_RING : FabricConfig::FABRIC_1D;
-    }
-    const bool y_ring = is_ring(0);
-    const bool x_ring = is_ring(1);
-    if (y_ring && x_ring) {
-        return FabricConfig::FABRIC_2D_TORUS_XY;
-    }
-    if (y_ring) {
-        return FabricConfig::FABRIC_2D_TORUS_Y;
-    }
-    if (x_ring) {
-        return FabricConfig::FABRIC_2D_TORUS_X;
-    }
-    return FabricConfig::FABRIC_2D;
-}
-
 }  // namespace
 
 constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
@@ -504,18 +456,15 @@ void MeshGraph::initialize_from_mgd(
             }
         }
 
-        // Resolve this mesh's FabricConfig per-mesh: the MGD's own fabric_config field wins, else the
-        // process-wide override (back-compat), else none (the connectivity then follows the mesh's own
-        // declared dim_types). Different meshes in one MGD may therefore run different configs, and the
-        // config-vs-topology check below is applied against each mesh's own topology.
+        // Resolve this mesh's FabricConfig per-mesh (MeshGraphDescriptor owns the precedence: the MGD's
+        // own fabric_config field > process-wide override > dim_types-derived default). Different meshes
+        // in one MGD may therefore run different configs; the config-vs-topology check below applies the
+        // resolved config against each mesh's own topology. Only an explicitly-requested config drives
+        // connectivity -- a derived default leaves the mesh on its declared dim_types topology.
         FabricType mgd_fabric_type = MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc);
-        std::optional<FabricConfig> mesh_fabric_config;
-        if (mesh_desc->has_fabric_config() &&
-            mesh_desc->fabric_config() != proto::FabricConfig::FABRIC_CONFIG_UNSPECIFIED) {
-            mesh_fabric_config = proto_to_fabric_config(mesh_desc->fabric_config());
-        } else if (fabric_config.has_value()) {
-            mesh_fabric_config = fabric_config;
-        }
+        const auto resolved = MeshGraphDescriptor::resolve_fabric_config(mesh_desc, fabric_config);
+        const std::optional<FabricConfig> mesh_fabric_config =
+            resolved.is_explicit ? std::make_optional(resolved.config) : std::nullopt;
 
         FabricType effective_fabric_type;
         if (mesh_fabric_config.has_value()) {
@@ -537,8 +486,7 @@ void MeshGraph::initialize_from_mgd(
 
         // Record the resolved per-mesh config (explicit override, or the dim_types-derived default) so the
         // control plane and tests can see each mesh's routing config.
-        this->mesh_fabric_config_[mesh_id] =
-            mesh_fabric_config.value_or(default_fabric_config_from_dim_types(mesh_desc));
+        this->mesh_fabric_config_[mesh_id] = resolved.config;
 
         // A 1D fabric config is single-mesh only: 1D routing has no inter-mesh story. Reject an
         // explicitly-requested 1D config (declared per-mesh in the MGD or set process-wide) on an MGD with
