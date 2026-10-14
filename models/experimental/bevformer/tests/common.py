@@ -468,8 +468,9 @@ SCA_LOGIT_STD = 1.8
 # spatially smooth; white noise instead makes every sample position error an O(1) change in the
 # sampled value. The encoder's queries carry that error from layer to layer and frame to frame, and
 # the decoder's refinement feeds it back into its next layer's positions. With white BEV features
-# the decoder's reference on bfloat16-rounded inputs and weights (fp32 compute) falls to PCC 0.65
-# against itself by the last layer on the 200x200 grid, so no bound on the port would mean anything.
+# the decoder's reference on bfloat16-rounded inputs and weights (fp32 compute) loses its
+# correlation with itself by the last layer on the 200x200 grid, so no bound on the port would mean
+# anything.
 FEATURE_CELLS = 4
 
 # Ego translation between the two frames, in BEV fractions (x, y): a few cells on the base grid.
@@ -773,8 +774,7 @@ def assert_boxes_close(expected, actual, pcc=0.99):
 # looser bound on the worst pair: with the BEVFormer-base checkpoint, the second frame's BEV is
 # off most at the grid's edges, where the previous BEV, rotated and shifted by the ego motion,
 # turns to zeros and the self-attention samples across that step; a query there, one in 300, is
-# off by up to 0.11 (0.08 with the earlier grid_sample attention), while the 99th percentile
-# stays at 0.026. Both bounds are about 1.5x those, so a regression in the logits fails here too.
+# off by up to 0.11, while the 99th percentile stays at 0.026. Both bounds are about 1.5x those, so a regression in the logits fails here too.
 SCORE_ERROR_QUANTILE = 0.99
 MAX_SCORE_ERROR = 0.04
 MAX_WORST_SCORE_ERROR = 0.15
