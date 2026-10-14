@@ -518,6 +518,7 @@ class TtPrefillBlock(LightweightModule):
             shared_expert_clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
             # Only DeepSeek-V4 names one; None keeps the gate config's sigmoid default.
             gate_score_func=getattr(model_cfg, "SCORE_FUNC", None),
+            gate_fp32_logits=getattr(model_cfg, "GATE_FP32_LOGITS", False),
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
             # DeepSeek-V4 hash layers route via a frozen tid2eid[input_ids] table; None elsewhere.
             gate_hash_table=state_dict.get("hash_table"),
