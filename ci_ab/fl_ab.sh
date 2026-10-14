@@ -23,6 +23,7 @@ $SF/compiler/bin/riscv-tt-elf-g++ --version | head -1 | grep -q ":$want\[" || { 
 P="tt_metal/tt-llk tt_metal/hw tt_metal/hostdevcommon tt_metal/tools/profiler tt_metal/sfpi-version ttnn/cpp/ttnn/operations/experimental"
 NP=$(( $(nproc) / 2 )); (( NP > 16 )) && NP=16; (( NP < 4 )) && NP=4
 NP=${FL_NP:-$NP}
+while read -r tag A B rts reps; do [[ -z $tag || $tag == \#* ]] && continue; [[ -s $S/ids/$tag.txt ]] || { echo "== missing ids/$tag.txt, stopping"; exit 1; }; done < $S/lines.txt
 labels=$( (awk '!/^#/ && NF {print $2; print $3}' $S/lines.txt; awk '!/^#/ && NF {print $1}' $S/bits.txt) | sort -u)
 for L in $labels; do
   V=${L%_wc}; D=$SL/$L; mkdir -p $D $SL/builds/$L
