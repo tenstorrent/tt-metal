@@ -523,8 +523,12 @@ class MiniMaxH3Pipeline:
         )
         self.coresident = coresident
         self.trace_denoise = self.trace_denoise and self.coresident
-        bucket_denoise = preset.get("bucket_denoise", False) if bucket_denoise is None else bucket_denoise
-        self.bucket_denoise = self.trace_denoise or bucket_denoise
+        # Tracing turns bucketing on unless the caller asked for `bucket_denoise` explicitly. An explicit
+        # `bucket_denoise=False` with `trace_denoise=True` traces the one padded length the request needs
+        # (captured on its first traced generation) instead of every ladder rung.
+        if bucket_denoise is None:
+            bucket_denoise = self.trace_denoise or preset.get("bucket_denoise", False)
+        self.bucket_denoise = bucket_denoise
         self.use_persistent_ccl_buffers = (
             preset.get("use_persistent_ccl_buffers", True)
             if use_persistent_ccl_buffers is None

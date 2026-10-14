@@ -27,7 +27,7 @@ from ....pipelines.minimax_h3.packing_ref2va import (
 )
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....pipelines.minimax_h3.policy import align_num_frames, get_num_frames
-from .common import GALAXY_MESHES, create_fractal_image
+from .common import GALAXY_MESHES, MESH_4X8_RING_TRACED, create_fractal_image
 from .common_av import (
     CALIBRATED_FOX_PROMPT,
     artifact_dir,
@@ -129,6 +129,62 @@ def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
         seed=SEED,
     )
 
+    pipeline.release_traces()
+
+
+# One Galaxy with a traced, unbucketed denoise: the 4x8 preset buckets and does not trace, so this is opt-in.
+# Unbucketed pads the request to its own SP x TILE multiple (15 s: 109101 -> 109312 rows, against the
+# 111616 rung). The trace needs persistent CCL buffers, and `trace_audio` requires bucketing, so it is off.
+TRACED_UNBUCKETED_SWEEP = [pytest.param((16, 9), 15, id="16x9_15s")]
+
+
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize(("aspect_ratio", "duration_s"), TRACED_UNBUCKETED_SWEEP)
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"), [MESH_4X8_RING_TRACED], indirect=["mesh_device", "device_params"]
+)
+def test_t2va_performance_traced_unbucketed(mesh_device, reset_seeds, aspect_ratio, duration_s):
+    weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
+    HEIGHT, WIDTH = resolve_canvas_size(*aspect_ratio)
+    NUM_FRAMES = get_num_frames(duration_s)
+
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device,
+        weights_dir=weights,
+        vae_output_type="yuv420",
+        trace_denoise=True,
+        bucket_denoise=False,
+        use_persistent_ccl_buffers=True,
+        trace_audio=False,
+    )
+    assert pipeline.trace_denoise and not pipeline.bucket_denoise
+
+    gen_kwargs = dict(num_frames=NUM_FRAMES, height=HEIGHT, width=WIDTH, num_inference_steps=NUM_INFERENCE_STEPS)
+    # An unbucketed pipeline warms nothing at construction, and `run_warm_generation`'s short compile pass runs
+    # untraced, so the traced programs would compile and the trace would be captured inside the measured call.
+    # One untimed full generation compiles them and captures the trace; the measured call is then pure replay.
+    with pipeline.quiet():
+        pipeline(PROMPT, seed=SEED, **gen_kwargs)
+
+    benchmark_profiler = BenchmarkProfiler()
+    output = run_warm_generation(pipeline, PROMPT, seed=SEED, profiler=benchmark_profiler, **gen_kwargs)
+
+    expected_frames = align_num_frames(NUM_FRAMES)
+    assert_generation_ok(output, expected_frames)
+    log_pipeline_perf(
+        benchmark_profiler,
+        label="t2va_traced_unbucketed",
+        pipeline=pipeline,
+        num_forwards=NUM_INFERENCE_STEPS - 1,
+        width=WIDTH,
+        height=HEIGHT,
+        num_frames=expected_frames,
+        fps=MINIMAX_H3_FPS,
+        aspect_ratio=aspect_ratio,
+        num_inference_steps=NUM_INFERENCE_STEPS,
+    )
+    if ttnn.using_distributed_env():
+        ttnn.distributed_context_barrier()
     pipeline.release_traces()
 
 
