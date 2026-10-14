@@ -7,6 +7,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -185,7 +186,7 @@ std::optional<TensorTopology> finalise(
         in.mesh_coords());
 }
 
-MeshShape mesh_shape_of(const Tensor& input, const char* op) {
+MeshShape mesh_shape_of(const Tensor& input, std::string_view op) {
     TT_FATAL(input.device() != nullptr, "{} output topology requires a mesh-device tensor", op);
     return input.device()->shape();
 }
@@ -204,7 +205,7 @@ std::optional<TensorTopology> scatter_output_topology(
     uint32_t tensor_rank,
     int32_t scatter_dim,
     ScatterKind kind,
-    const char* op) {
+    std::string_view op) {
     const auto normalized_dim = normalize_tensor_dim(scatter_dim, tensor_rank);
     if (!normalized_dim.has_value()) {
         return fail(
@@ -500,7 +501,7 @@ std::optional<TensorTopology> over_storage_ring_order(
     std::optional<TensorTopology> label,
     const Tensor& ring_tensor,
     std::optional<uint32_t> cluster_axis,
-    const char* op) {
+    std::string_view op) {
     if (!label.has_value() || cluster_axis.has_value() || !ring_tensor.device_storage().is_uniform_storage()) {
         return label;
     }

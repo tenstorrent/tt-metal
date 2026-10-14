@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -180,7 +181,7 @@ std::optional<tt::tt_metal::TensorTopology> over_storage_ring_order(
     std::optional<tt::tt_metal::TensorTopology> label,
     const Tensor& ring_tensor,
     std::optional<uint32_t> cluster_axis,
-    const char* op = "reduce_scatter");
+    std::string_view op = "reduce_scatter");
 
 // mesh_partition and all_to_all scatter `out_dim` along `cluster_axis` like reduce_scatter, but nothing is summed, so
 // a Shard of another dim is not consumed: a whole-mesh scatter of a tensor still sharded on another dim along a
