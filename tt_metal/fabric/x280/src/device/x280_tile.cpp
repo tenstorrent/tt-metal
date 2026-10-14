@@ -60,7 +60,7 @@ bool reset_required(BootOutcome outcome) {
 namespace detail {
 
 TileImpl::TileImpl(RuntimeImpl& runtime, ChipImpl& chip, TileIdentity identity) :
-    runtime_(&runtime), chip_(&chip), identity_(std::move(identity)) {
+    runtime_(&runtime), chip_(&chip), identity_(identity) {
     if (identity_.chip_id != chip_->chip_id()) {
         fail(
             "TileImpl identity chip " + std::to_string(identity_.chip_id) + " does not match chip context " +
@@ -88,7 +88,7 @@ TileState TileImpl::inspect_state() const {
             state.invalid_reason = "L2CPU_RESET read all ones";
             return state;
         }
-        state.reset_released = chip_->tile_reset_released(reset, id().hw_index);
+        state.reset_released = ChipImpl::tile_reset_released(reset, id().hw_index);
 
         const auto ecc = read_lim_ecc_unlocked();
         state.raw_wayenable = ecc.raw_wayenable;
@@ -621,7 +621,7 @@ uint32_t TileTestAccess::read_l2cpu_reset_raw() const {
 }  // namespace detail
 
 X280Tile::X280Tile(detail::RuntimeImpl& runtime, detail::ChipImpl& chip, TileIdentity identity) :
-    impl_(std::make_unique<detail::TileImpl>(runtime, chip, std::move(identity))) {}
+    impl_(std::make_unique<detail::TileImpl>(runtime, chip, identity)) {}
 
 X280Tile::~X280Tile() = default;
 

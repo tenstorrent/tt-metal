@@ -242,19 +242,22 @@ ImageCheck validate_active_image(
     // Bound the size alone rather than load_addr + size, which wraps for a size
     // near SIZE_MAX and lands under the bound.
     if (size > max_active_image_bytes) {
-        check.reason =
-            "active image is " + std::to_string(size) + " bytes and must end at or below " + hex(active_image_end) +
-            " (max " + std::to_string(max_active_image_bytes) + " bytes), which is " +
-            (primed_window_binds
-                 ? "the end of the ECC-primed LIM window" +
-                       (primed_bytes.has_value() ? std::string(" recorded beside the prime marker")
-                                                 : ", assumed at " + std::to_string(kLimEccUnrecordedPrimeBytes) +
-                                                       " bytes because the prime marker records no extent") +
-                       "; a hart cannot fetch instructions past it even though the host can write and read those bytes"
-             : layout == LimLayout::PacketInjection
-                 ? "the PacketInjection layout's image boundary"
-                 : "the trap block at " + hex(X280_ACTIVE_TRAP_DIAG_ADDR) + " less all " +
-                       std::to_string(kHartsPerTile) + " per-hart stacks");
+        std::string bound;
+        if (primed_window_binds) {
+            bound = "the end of the ECC-primed LIM window" +
+                    (primed_bytes.has_value() ? std::string(" recorded beside the prime marker")
+                                              : ", assumed at " + std::to_string(kLimEccUnrecordedPrimeBytes) +
+                                                    " bytes because the prime marker records no extent") +
+                    "; a hart cannot fetch instructions past it even though the host can write and read those bytes";
+        } else if (layout == LimLayout::PacketInjection) {
+            bound = "the PacketInjection layout's image boundary";
+        } else {
+            bound = "the trap block at " + hex(X280_ACTIVE_TRAP_DIAG_ADDR) + " less all " +
+                    std::to_string(kHartsPerTile) + " per-hart stacks";
+        }
+        check.reason = "active image is " + std::to_string(size) + " bytes and must end at or below " +
+                       hex(active_image_end) + " (max " + std::to_string(max_active_image_bytes) +
+                       " bytes), which is " + bound;
         return check;
     }
     check.ok = true;

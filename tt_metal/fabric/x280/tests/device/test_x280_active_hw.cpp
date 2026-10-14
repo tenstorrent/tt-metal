@@ -60,11 +60,15 @@ std::vector<std::string> split_image_list(const std::string& list) {
 std::vector<std::string> images_from_env() {
     const char* many = std::getenv("X280_ACTIVE_FW_IMAGES");
     const char* one = std::getenv("X280_ACTIVE_FW_IMAGE");
-    const std::string list =
-        many != nullptr  ? many
-        : one != nullptr ? one
-                         : x280::test::test_image("X280_ACTIVE_FW_IMAGE", "firmware.bin") + ":" +
-                               x280::test::test_image("X280_ATOMIC_BENCH_FW_IMAGE", "firmware-atomic-bench.bin");
+    std::string list;
+    if (many != nullptr) {
+        list = many;
+    } else if (one != nullptr) {
+        list = one;
+    } else {
+        list = x280::test::test_image("X280_ACTIVE_FW_IMAGE", "firmware.bin") + ":" +
+               x280::test::test_image("X280_ATOMIC_BENCH_FW_IMAGE", "firmware-atomic-bench.bin");
+    }
 
     std::vector<std::string> images;
     for (auto& path : split_image_list(list)) {

@@ -623,7 +623,7 @@ EnqueueResult RuntimeImpl::enqueue(X280Tile& tile, const ActiveRunRequest& reque
     // cleared, latching a healthy tile unhealthy over transient bookkeeping.
     {
         const std::lock_guard<std::mutex> lock(sessions_mutex_);
-        if (sessions_.find(tile_key(target.id())) != sessions_.end()) {
+        if (sessions_.contains(tile_key(target.id()))) {
             result.outcome = EnqueueOutcome::Busy;
             return result;
         }

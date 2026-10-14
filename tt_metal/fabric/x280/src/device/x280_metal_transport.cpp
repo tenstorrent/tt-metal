@@ -103,12 +103,12 @@ void X280MetalTransport::require_mmio_chip(int chip_id) const {
 
 bool X280MetalTransport::has_chip(int chip_id) const {
     const auto chips = cluster_->all_chip_ids();
-    return chips.find(chip_id) != chips.end();
+    return chips.contains(chip_id);
 }
 
 bool X280MetalTransport::is_mmio_local(int chip_id) const {
     const auto chips = cluster_->mmio_chip_ids();
-    return chips.find(chip_id) != chips.end();
+    return chips.contains(chip_id);
 }
 
 std::vector<tt::umd::CoreCoord> X280MetalTransport::l2cpu_cores(int chip_id) const {
