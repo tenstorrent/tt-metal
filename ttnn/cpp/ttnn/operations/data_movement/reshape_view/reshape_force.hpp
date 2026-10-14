@@ -11,15 +11,8 @@
 
 namespace ttnn::operations::data_movement::detail {
 
-// Verification-only entry points that pin which reshape implementation runs.
-//
-// `ttnn.reshape` chooses on its own and takes no argument to override that. These exist because the
-// choice still has to be checkable: bit-exactness against the existing implementation over the
-// supported scope and a device-time win are not observable through an entry point that silently
-// picks one. They are bound only under `ttnn._ttnn.operations.data_movement`, are not registered
-// into `ttnn.*`, and this header is kept out of the installed `api` file set.
-//
-// Prefer `ttnn::reshape` everywhere else: it already declines the cases the second entry rejects.
+// Verification-only entry points that pin which reshape implementation runs, so bit-exactness and device time
+// of each can be checked. Bound only under `ttnn._ttnn.operations.data_movement`; use `ttnn::reshape` elsewhere.
 
 // The existing implementation, unconditionally. Input normalization is identical to `ttnn::reshape`.
 ttnn::Tensor reshape_force_native(
@@ -31,10 +24,8 @@ ttnn::Tensor reshape_force_native(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     bool skip_padding_fill = false);
 
-// The generated implementation, unconditionally. Throws for a case outside its support scope instead
-// of falling back, so a comparison against the native path cannot silently measure native twice.
-// Only shape inference and `shape_corrector` normalization are shared with `ttnn::reshape`; the no-op,
-// view and same-shape shortcuts are not applied.
+// The codegen implementation, unconditionally. Throws outside its scope instead of falling back, so a comparison
+// against native cannot measure native twice. The no-op, view and same-shape shortcuts are not applied.
 ttnn::Tensor reshape_force_codegen(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<int32_t>& shape,
