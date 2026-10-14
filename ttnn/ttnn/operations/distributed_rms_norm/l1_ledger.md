@@ -89,3 +89,16 @@ Totals at the perf-focus shape (640×1792 bf16, G = 2, L = 2, 117 workers, S_w =
 | Fabric | 6.4 KB per link direction, one packet each |
 
 > Cheapest-traffic split considered: rows × W-chunks with x resident and flat records (R1). The delta is 0: DRAM is at the x-once and out-once minimum. Implemented: R1. The implemented split **is** the cheapest-traffic split. The only above-minimum term is gamma (S_r reads of a W_local stick); its broadcast is deferred as R8 because it is ≤ 3 % of DRAM bytes.
+
+## Implementation deltas (ttnn-implementer, Phase 0)
+
+| Item | Planned | Implemented | Why |
+|------|---------|-------------|-----|
+| CB capacity of `cb_x_resident`, `cb_output_tiles`, `cb_gamma_tiles`, `cb_xg` | nominal `core_w_tiles` on every worker | one CBDescriptor per **chunk group** (full chunks / the ragged last chunk, `tensor_w_tiles − (S_w−1)·core_w_tiles`), capacity derived from that group's chunk width | CB pointers wrap only on an exact hit of the ring end, so every batch (one tile row of the chunk) must divide the capacity. With nominal sizing the ragged chunk's 3rd output batch ran past the CB (golden 4096×1024 failure). Footprint per core is ≤ the nominal one. |
+| `min_core_w_tiles` | 4 | 8 | Record pulls per device are `Ht·G·S_w²·128 B` (quadratic in S_w). At 640×1792 on the 11×10 grid, 4 gives S_w = 14 (1 MB of pulls through 4 port cores); 8 gives S_w = 4. Measured (perf lamp "grid synchronization"): 640×1792 28.7 → 21.7 µs, 32×4096 12.3 → 10.1 µs, decode / 2048×1280 unchanged. |
+| Record layout in the scratch slot | record = 128 B contiguous | per (row group, tile row) a block of `S_w·128 B`: `[half 0 of w = 0..S_w−1][half 1 of w = 0..S_w−1]` | Consecutive sources s = q·S_w + w are consecutive combine-tile face rows, so the gather is 2 NoC reads per (q, tile row, 16-row face run) instead of 2 per record (perf lamp "record pull mechanism"; 640×1792 gather 23 → 1.1 µs). Slot sizes and record counts unchanged. |
+| cb_stats_combine zero fill | whole reserved block every round | only the last source tile of each tile row, and only when `G·S_w mod 32 ≠ 0` | All other rows are overwritten by records. |
+| Links | `L` | `L_eff = min(L, S_r)` | A link with no row group would carry no records (and no arrival increment). |
+| Worker rectangle | `(0,1)..(grid_x−1, grid_y−1)` | `(0,1)..(grid_x−1, y_last)` with y_last the last row holding a used worker; idle cores of that rectangle run zero-row kernels | The stats-ready multicast must only land on cores of this program. |
+
+Data-movement budget at 640×1792 bf16 (G = 2, L = 2, 11×10 grid → S_w = 4, S_r = 20, 80 workers): DRAM x 2.29 MB read once, out 2.29 MB written once, gamma 20 × 3.6 KB; NoC record pulls `20·2·16·128 B` = 80 KB; Fabric one packet per link direction.

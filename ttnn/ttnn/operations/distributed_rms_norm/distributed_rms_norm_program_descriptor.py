@@ -38,7 +38,9 @@ SEM_LOCAL_ARRIVALS = 0  # on ports: workers of the link increment once their rec
 SEM_STATS_READY = 1  # on workers: every port multicasts +1 once its slots are complete
 
 # ---- blocking knobs (single source of truth) -------------------------------------------------------------------
-MIN_CORE_W_TILES = 4  # floor of the W chunk per worker (catalog double_buffer / width_split)
+MIN_CORE_W_TILES = (
+    8  # floor of the W chunk per worker; record pulls grow as S_w^2 (perf lamp "grid synchronization": 8 measured best)
+)
 X_BLOCKS_IN_FLIGHT = 1  # cb_x_resident depth in blocks (residency, not pipelining)
 OUT_DEPTH = 2  # cb_output_tiles depth in out batches (double buffer)
 HEADER_RING = 8  # fabric packet headers in flight per port (pool holds 12 per RISC)
