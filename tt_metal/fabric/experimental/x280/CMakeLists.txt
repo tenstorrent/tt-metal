@@ -463,7 +463,7 @@ set_target_properties(
 _x280_uses_images(x280_bench_host_tests)
 add_test(NAME x280_bench_host_tests COMMAND x280_bench_host_tests)
 
-# Harness device tests; need hardware, so no CTest. test_fabric_shadow_layout.cpp is static
+# Harness device tests; most need hardware. test_fabric_shadow_layout.cpp is static
 # assertions only.
 _x280_device_test(x280_bench_device_tests
     tests/device/test_harness_open_config.cpp
@@ -471,6 +471,20 @@ _x280_device_test(x280_bench_device_tests
     tests/device/test_fabric_shadow_layout.cpp
     KERNELS shared
     SLOW_DISPATCH
+)
+# Its two offline suites need no device: the PLL knob and the DRISC endpoint choice against the
+# Blackhole SoC descriptor under Metal's runtime root.
+add_test(
+    NAME x280_bench_device_offline
+    COMMAND
+        ${CMAKE_COMMAND} -E env "TT_METAL_RUNTIME_ROOT=${PROJECT_SOURCE_DIR}" $<TARGET_FILE:x280_bench_device_tests>
+        "--gtest_filter=X280PllMhzFromEnv.*:MetalTargetOffline.*"
+)
+set_tests_properties(
+    x280_bench_device_offline
+    PROPERTIES
+        PASS_REGULAR_EXPRESSION
+            "\\[  PASSED  \\] 2 tests"
 )
 
 # The release selector on the unharvested-L2CPU coordinate overlay, whose chip 0 keeps the

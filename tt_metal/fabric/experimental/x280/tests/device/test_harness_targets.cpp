@@ -9,12 +9,12 @@
 #include <gtest/gtest.h>
 
 #include <tt-metalium/core_coord.hpp>
+#include "llrt/rtoptions.hpp"
 #include <umd/device/soc_arch_descriptor.hpp>
 #include <umd/device/soc_descriptor.hpp>
 
 #include <algorithm>
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
@@ -25,14 +25,11 @@ namespace ttm = tt::tt_metal;
 namespace {
 
 // The Blackhole P150 descriptor tt-metal itself loads, built from the YAML
-// under TT_METAL_DIR so the test needs no device.
+// under Metal's runtime root (RunTimeOptions: TT_METAL_RUNTIME_ROOT, the install
+// root, or a repository working directory) so the test needs no device.
 metal_SocDescriptor load_blackhole_soc_descriptor() {
-    const char* env_metal = std::getenv("TT_METAL_DIR");
-    if (env_metal == nullptr || env_metal[0] == '\0') {
-        throw std::runtime_error("load_blackhole_soc_descriptor requires non-empty TT_METAL_DIR environment variable");
-    }
-    const std::filesystem::path yaml_path =
-        std::filesystem::path(env_metal) / "tt_metal/soc_descriptors/blackhole_140_arch.yaml";
+    const std::filesystem::path yaml_path = std::filesystem::path(tt::llrt::RunTimeOptions().get_root_dir()) /
+                                            "tt_metal/soc_descriptors/blackhole_140_arch.yaml";
     if (!std::filesystem::exists(yaml_path)) {
         throw std::runtime_error(
             "load_blackhole_soc_descriptor: SoC descriptor YAML not found at: " + yaml_path.string());
