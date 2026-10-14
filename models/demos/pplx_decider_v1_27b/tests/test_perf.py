@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Batch-1 decision latency of PplxDecider, eager vs traced prefill."""
+"""Batch-1 decision latency of PplxDecider, eager vs traced prefill (traced only on a 2D mesh)."""
 
 import statistics
 import time
@@ -12,10 +12,11 @@ import torch
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc, run_for_blackhole
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.pplx_decider_v1_27b.tests.common import model_mesh, parametrize_mesh_traced
 from models.demos.pplx_decider_v1_27b.tt.model import PplxDecider
 
-PROMPT_LENGTHS = (512, 1024, 2048, 3072, 4096)
+PROMPT_LENGTHS = (256, 512, 1024, 2048, 3072, 4096)
 QUESTION = {"type": "noul", "instructions": "Is this a software license?"}
 PCC_THRESHOLD = 0.999
 WARMUP_RUNS = 2
@@ -57,19 +58,25 @@ def test_pplx_decider_latency(mesh_device):
     decider = PplxDecider.from_pretrained(model_mesh(mesh_device))
     inputs = {t: _build_input_ids(decider, t) for t in PROMPT_LENGTHS}
 
+    # A 2D mesh has no eager path (the chunk path is 1xN-only), so it times the traced prefill alone.
     eager, eager_logits = {}, {}
-    for t, input_ids in inputs.items():
-        eager[t] = _time_ms(decider, input_ids)
-        eager_logits[t] = decider.readout_logits(input_ids)
+    if not tpc.is_2d_mesh(decider.mesh_device):
+        for t, input_ids in inputs.items():
+            eager[t] = _time_ms(decider, input_ids)
+            eager_logits[t] = decider.readout_logits(input_ids)
 
     decider.capture_prefill_trace()
 
+    nan = float("nan")
     rows, failures = [], []
     for t, input_ids in inputs.items():
         traced_logits = decider.readout_logits(input_ids)
+        traced = _time_ms(decider, input_ids)
+        if t not in eager_logits:
+            rows.append((t, nan, nan, *traced, nan))
+            continue
         _, pcc = comp_pcc(eager_logits[t], traced_logits, PCC_THRESHOLD)
         top1_ok = int(torch.argmax(eager_logits[t])) == int(torch.argmax(traced_logits))
-        traced = _time_ms(decider, input_ids)
         rows.append((t, *eager[t], *traced, pcc))
         if not (top1_ok and pcc >= PCC_THRESHOLD):
             failures.append(f"T={t}: top1_ok={top1_ok} pcc={pcc}")

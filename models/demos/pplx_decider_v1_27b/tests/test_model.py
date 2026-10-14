@@ -4,10 +4,10 @@
 """Device accuracy of PplxDecider against the CPU fp32 reference.
 
 Env vars:
-    PPLX_TEST_PATHS  comma list of the prefill paths to run, default "chunked,oracle,traced,traced_chunk"; the
-                     bit-identity repeat check of a path (chunked, traced, traced_chunk) runs only with its path.
-                     The trace capture runs only when traced or traced_chunk is listed. On a 2D mesh use "traced":
-                     the chunk and oracle paths are 1xN-only.
+    PPLX_TEST_PATHS  comma list of the prefill paths to run, default "chunked,oracle,traced,traced_chunk" ("traced" on
+                     a 2D mesh: the chunk and oracle paths are 1xN-only); the bit-identity repeat check of a path
+                     (chunked, traced, traced_chunk) runs only with its path. The trace capture runs only when traced
+                     or traced_chunk is listed.
 """
 
 import json
@@ -20,6 +20,7 @@ import torch
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc, run_for_blackhole
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.pplx_decider_v1_27b.tests.common import (
     ids_sha256,
     load_example_state,
@@ -67,7 +68,8 @@ def test_pplx_decider_matches_reference(mesh_device):
     references = {e["name"]: e for e in json.loads(REFERENCE_PATH.read_text())["examples"]}
     examples = json.loads(EXAMPLES_PATH.read_text())
 
-    decider = PplxDecider.from_pretrained(model_mesh(mesh_device))
+    mesh = model_mesh(mesh_device)
+    decider = PplxDecider.from_pretrained(mesh)
     temperature = decider.decision_config.temperature
 
     prompts = []
@@ -81,7 +83,8 @@ def test_pplx_decider_matches_reference(mesh_device):
         )
         prompts.append((example["name"], input_ids, ref))
 
-    paths = {p.strip() for p in os.environ.get("PPLX_TEST_PATHS", ",".join(ALL_PATHS)).split(",") if p.strip()}
+    default_paths = ("traced",) if tpc.is_2d_mesh(mesh) else ALL_PATHS
+    paths = {p.strip() for p in os.environ.get("PPLX_TEST_PATHS", ",".join(default_paths)).split(",") if p.strip()}
     unknown = paths - set(ALL_PATHS)
     assert paths and not unknown, f"PPLX_TEST_PATHS is a comma list of {ALL_PATHS}, got unknown {sorted(unknown)}"
     rows, failures = [], []

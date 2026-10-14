@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""pplx-decider-v1-27b demo: choice, noul and score decisions on a Blackhole TP mesh."""
+"""pplx-decider-v1-27b demo: choice, noul and score decisions on a Blackhole mesh, with the prefill traces."""
 
 import json
 import time
@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
-from models.demos.blackhole.qwen36.tests.test_factory import parametrize_mesh_tp
+from models.demos.pplx_decider_v1_27b.tests.common import model_mesh, parametrize_mesh_traced
 from models.demos.pplx_decider_v1_27b.tt.model import PplxDecider
 
 SAMPLE_INPUTS = Path(__file__).parent / "sample_inputs.json"
@@ -27,13 +27,16 @@ def _label(result):
 @torch.no_grad()
 @run_for_blackhole()
 @pytest.mark.timeout(1800)
-@parametrize_mesh_tp()
+@parametrize_mesh_traced()
 def test_pplx_decider_demo(mesh_device):
     samples = json.loads(SAMPLE_INPUTS.read_text())
 
     start = time.perf_counter()
-    decider = PplxDecider.from_pretrained(mesh_device)
+    decider = PplxDecider.from_pretrained(model_mesh(mesh_device))
     logger.info(f"Model load time: {time.perf_counter() - start:.1f} s")
+    start = time.perf_counter()
+    decider.capture_prefill_trace()
+    logger.info(f"Prefill trace capture time: {time.perf_counter() - start:.1f} s")
 
     rows = []
     for sample in samples:
