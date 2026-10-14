@@ -2879,16 +2879,32 @@ bool build_sat_placement_constraints(
         if (!constraints.set_same_rank_groups_constraint({}, host_seat_groups)) {
             return false;
         }
-        // HARD host-count cap: force the placement into the minimum number of hosts. Chip disjointness
-        // (add_resource_constraint above) already caps a host at floor(host_chips / mesh_chips) meshes, so
-        // capping the number of occupied hosts at ceil(meshes / capacity) forces every used host to be
-        // packed full. Unlike per-host fill-all, this is a GLOBAL constraint the solver cannot dodge by
-        // spreading across more locally-"full" hosts. If the cap is infeasible at the current candidate
-        // seats, next() grows pools and only drops the cap after growth is exhausted.
-        std::size_t asics_per_mesh = 0;
-        for (const auto& [seat, asics] : seat_to_asics) {
-            (void)seat;
-            asics_per_mesh = std::max(asics_per_mesh, asics.size());
+        // HARD host-count cap = bin-packing bound on CHIPS (not mesh count): sum the single-host meshes'
+        // chip footprints and divide by the largest host. Using each mesh's own size (not the largest mesh
+        // for all) lets a heterogeneous MGD pack small meshes together and compact to the true minimum.
+        // Infeasible caps are retried via next() (grow pools, then drop the cap).
+        std::size_t total_single_host_asics = 0;
+        for (const auto& [mesh_id, pool] : pools) {
+            (void)mesh_id;
+            if (pool->candidates().empty()) {
+                continue;
+            }
+            // Any candidate gives the mesh's chip count; a mesh is single-host when its chips share a host.
+            const Candidate& rep = pool->candidates().front();
+            std::string host;
+            bool single_host = true;
+            for (const AsicID& asic : rep.asics()) {
+                const std::string name = physical_system_descriptor.get_host_name_for_asic(asic);
+                if (host.empty()) {
+                    host = name;
+                } else if (name != host) {
+                    single_host = false;
+                    break;
+                }
+            }
+            if (single_host && !host.empty()) {
+                total_single_host_asics += rep.asics().size();
+            }
         }
         std::map<std::string, std::size_t> host_asic_counts;
         for (const auto& [asic_id, desc] : physical_system_descriptor.get_asic_descriptors()) {
@@ -2900,9 +2916,8 @@ bool build_sat_placement_constraints(
             (void)host;
             max_host_asics = std::max(max_host_asics, count);
         }
-        const std::size_t capacity = (asics_per_mesh > 0) ? (max_host_asics / asics_per_mesh) : 0;
-        if (capacity > 0) {
-            const std::size_t k = (pools.size() + capacity - 1) / capacity;
+        if (max_host_asics > 0 && total_single_host_asics > 0) {
+            const std::size_t k = (total_single_host_asics + max_host_asics - 1) / max_host_asics;
             // Only cap when it can actually reduce the host count. If the meshes need every available host
             // anyway (k >= host groups -- e.g. a superpod that fully packs all its hosts), the cap constrains
             // nothing but bolts an expensive at-most-k CNF onto an already-large solve, so the grow loop stalls.
@@ -2911,12 +2926,12 @@ bool build_sat_placement_constraints(
                 constraints.set_max_same_rank_groups_used(k);
                 log_info(
                     tt::LogFabric,
-                    "SAT joint placement: HARD host-count cap k={} over {} single-host seat group(s) ({} mesh(es), "
-                    "capacity {}/host); seats spanning hosts are unusable while the cap holds",
+                    "SAT joint placement: HARD host-count cap k={} over {} single-host seat group(s) ({} "
+                    "single-host chip(s), {} chips/host max); seats spanning hosts are unusable while the cap holds",
                     k,
                     host_seat_groups.size(),
-                    pools.size(),
-                    capacity);
+                    total_single_host_asics,
+                    max_host_asics);
             }
         }
     }
