@@ -1987,7 +1987,7 @@ class Qwen36Model:
 
         ``tokens``: B lists of T ids ([pending] + drafts per user). ``positions``: B ints, user u's
         first verify slot this iteration (row u*T+j lands at positions[u]+j). ``mi_prev``: B ints,
-        each user's accepted-prefix index from the previous iteration (0 for the first replay). It
+        each user's accepted-prefix index from the previous iteration (0 right after the seed). It
         is the whole commit: it selects user u's starting recurrent state (ring block) and conv
         window rows, so no state is copied between iterations.
 
@@ -2088,6 +2088,104 @@ class Qwen36Model:
             lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_rm_out)[0])
             lt = lt.reshape(-1, self.vocab_size)[:rows]
         return ids, self._vfy_rows_out, lt
+
+    def _forward_seed_bucket_tp(self, token_buf, kvpos, kvpt, cos, sin, n_users):
+        """``_forward_verify_bucket_tp`` at T = 1: the seed's device body, one row per user.
+
+        The same forward as the verify trace body, layer for layer, with two differences that T = 1
+        forces:
+          * GDN takes ``gdn_seed=True`` -> forward_seed_recurrent, which advances the durable state;
+            the ring and E_prev it would otherwise read do not exist yet (capture_verify_trace
+            allocates them after the seed).
+          * the rows are B different users, one candidate each, so the KV write is the ordinary
+            batched paged_update_cache (``alias_kv_write=False``): the per-row loop exists only
+            because a user's T candidates share a page table and collide on a cache tile.
+            ``spec_verify_mode`` is moot: spec_sdpa_enabled(1) is False, so the verify body would
+            take the legacy per-row SDPA call here too.
+
+        Everything else (decode-config norms, the per-row decode SDPA with per-row cur_pos, the final
+        norm + LM head + spec_feed_rows tail) is the verify body's. Runs eagerly and before any trace
+        capture, so every program it compiles is safe.
+
+        Returns (logits [1,1,B,vocab] replicated, feed [1,1,B,dim/tp] fractured).
+        """
+        x = self.embd(token_buf)
+        x = ttnn.reshape(x, (1, 1, n_users, x.shape[-1]))
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        for layer in self.layers:
+            if layer.is_full_attention:
+                x_new = layer.forward(
+                    x,
+                    cos=cos,
+                    sin=sin,
+                    mode="decode",
+                    position_tensor=kvpos,
+                    page_table=kvpt,
+                    n_users=n_users,
+                )
+            else:
+                x_new = layer.forward(
+                    x,
+                    mode="prefill",
+                    chunk_size=self.args.gdn_chunk_size,
+                    valid_len=n_users,
+                    gdn_recurrent=True,
+                    gdn_seed=True,
+                    decode_cfg=True,
+                    n_users=n_users,
+                )
+            ttnn.deallocate(x)
+            x = x_new
+        return self._spec_tail(x)
+
+    def seed_spec_step(self, tokens, positions, page_tables):
+        """One eager verify-style forward over B users, T = 1: the spec loop's seed, and the only
+        place the base model runs outside the verify trace once a generation starts.
+
+        Consumes each user's first predicted token at its own absolute position and returns
+        (logits: torch [B, vocab] host, feed_rows: ttnn [1,1,B,dim/tp]). The inputs are staged
+        as capture_verify_trace stages the trace's, at one row per user instead of T:
+        tokens [1,B] uint32, cur_pos/KV slot [B] int32, page table [B,nb], per-row decode RoPE from
+        _rope_tp_cos_sin_decode_torch. The feed rows go through spec_feed_rows, so the drafter is
+        handed the tensor the verify's rows would have produced.
+
+        The seed is verify-style rather than a plain decode step because it writes the GDN state the
+        whole generation resumes from, and the decode path builds its conv differently from the
+        verify: a K-tap shift-register MAC versus the packed KDA conv over each user's [K, C] window
+        (gdn _kda_conv_packed). The two are not bit-equal, so a decode-formulated seed hands the loop
+        a state its own formulation would never have produced, and greedy near-ties fork off the
+        trajectory the verify would have taken.
+        """
+        assert self.num_devices > 1, "seed_spec_step is the TP path"
+        assert not self._ondev_argmax, "seed_spec_step reads gathered logits; on-device argmax is off on the spec path"
+        B = len(tokens)
+        assert B == self.args.max_batch_size, f"seed runs the full decode width ({self.args.max_batch_size}), got {B}"
+        assert len(positions) == B, "one position per user"
+        assert B <= ttnn.TILE_SIZE, f"the seed is one decode tile: {B} users"
+        assert self._paged_kv_caches is not None, "allocate_kv_caches first"
+        pt = _page_table_rows(page_tables)
+        assert pt.shape[0] == B, f"page_tables must have one row per user, got {tuple(pt.shape)}"
+
+        dev = self.device
+        rep = ttnn.ReplicateTensorToMesh(dev)
+        toks = torch.tensor([int(t) for t in tokens], dtype=torch.int32).reshape(1, B)
+        pos = torch.tensor([int(p) for p in positions], dtype=torch.int32)
+        token_buf = ttnn.from_torch(toks, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep)
+        # Absolute cache slot per row, doubling as the decode SDPA's cur_pos (the trace's _vfy_kvpos_buf at T = 1).
+        kvpos = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep)
+        kvpt = ttnn.from_torch(pt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep)
+        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos)
+        cos = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep)
+        sin = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep)
+
+        logits, feed = self._forward_seed_bucket_tp(token_buf, kvpos, kvpt, cos, sin, B)
+        # _lm_head all-gathers, so the logits are replicated across the TP mesh: read one replica
+        # instead of concatenating every rank (the idiom process_output_decode uses).
+        lt = ttnn.to_torch(ttnn.get_device_tensors(logits)[0]).reshape(-1, self.vocab_size)[:B].float()
+        ttnn.deallocate(logits)
+        for t in (token_buf, kvpos, kvpt, cos, sin):
+            ttnn.deallocate(t)
+        return lt, feed
 
     def decode_step_paged(self, token_id, pos, page_table):
         """One paged base decode at absolute ``pos`` (B=1), returning host logits + the pre-final-norm

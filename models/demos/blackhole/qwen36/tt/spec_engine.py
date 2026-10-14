@@ -593,6 +593,12 @@ class MTPSpecEngine:
         model, B, T = self.model, self.B, self.T
         assert not self.captured and getattr(model, "_vfy_trace_id", None) is None, "prepare_decode after capture"
         t0 = time.perf_counter()
+        # Compile the seed's programs (T = 1 forward, feed-row scatter and copy) before any capture.
+        _, f = model.seed_spec_step([0] * B, [0] * B, self._prep_pt)
+        r0, r1 = self._seed_rows(f), self._seed_rows(f)
+        ttnn.copy(r0, r1)
+        for t in (f, r0, r1):
+            ttnn.deallocate(t)
         model.prepare_verify_trace(self._prep_pt, T, warm_positions=[0] * B)
 
         # Drafter programs.
@@ -824,7 +830,7 @@ class MTPSpecEngine:
     # --------------------------------------------------------------------- #
     def verify(self, tokens, start_pos, accepted_counts, page_table, read_logits=False):
         """Replay the verify trace over [B, T] tokens at start_pos[u] + j. The first verify after prefill is
-        the seed: row 0 holds the first generated token, other rows are filler, accepted_counts = 1.
+        the seed (see _seed): row 0 holds the first generated token, other rows are filler, accepted_counts = 1.
         Returns (ids int32 [B, T], logits [B, T, vocab] or None)."""
         assert self.captured, "verify before capture"
         B, T = self.B, self.T
@@ -842,14 +848,13 @@ class MTPSpecEngine:
         if self._fresh:
             if set(self._active) != set(self._fresh):
                 raise NotImplementedError("joining a running batch needs per-slot GDN seeding")
-            # Seed ring slot 0 + E_prev from the post-prefill state, then write each fresh user's slot Tp-1 MTP KV.
-            for dn in self._gdn:
-                dn.seed_spec_state()
+            # Each fresh user's slot Tp-1 MTP KV, then the seed (its filler rows are never run).
             self._stage_mtp_tables(pt)
             for u, Tp in sorted(self._fresh.items()):
                 assert int(start_pos[u]) == Tp, f"slot {u}: start_pos {int(start_pos[u])} != prompt length {Tp}"
                 self._warm_mtp_last(self._last_hidden[u], int(tokens[u, 0]), Tp - 1, self._mtp_pt_rows[u])
             self._fresh.clear()
+            return self._seed(tokens, start_pos, pt, read_logits)
 
         args = (tokens.tolist(), start_pos.tolist(), mi_prev.tolist())
         if self._timing:
@@ -859,6 +864,49 @@ class MTPSpecEngine:
         self._vfeed = vfeed
         ids = torch.tensor(ids, dtype=torch.int32).reshape(B, T)
         return ids, (None if lt is None else lt.reshape(B, T, -1))
+
+    def _seed_rows(self, feed):
+        """[1,1,B,dim/tp] seed feed -> [1,1,B*T,dim/tp] with user u's row at u*T (exact one-hot matmul)."""
+        B, T = self.B, self.T
+        sel = torch.zeros(1, 1, B * T, B, dtype=torch.bfloat16)
+        sel[0, 0, torch.arange(B) * T, torch.arange(B)] = 1
+        sel_tt = ttnn.from_torch(
+            sel,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        rows = ttnn.matmul(
+            sel_tt, feed, compute_kernel_config=self._anchor_cc, dtype=feed.dtype, memory_config=feed.memory_config()
+        )
+        ttnn.deallocate(sel_tt)
+        return rows
+
+    def _seed(self, tokens, start_pos, pt, read_logits):
+        """The seed: one eager T = 1 forward per user (model.seed_spec_step) advances the durable GDN state and
+        writes KV at Tp, then the ring and E_prev are seeded from it. Its feed row lands in verify-feed row u*T,
+        the next propose's anchor. (Seeding through row 0 of the verify trace drafts measurably worse.)
+        Returns (ids, logits) like verify(); only column 0 is real."""
+        B, T = self.B, self.T
+        for dn in self._gdn:
+            dn.sync_conv_win()  # a prefill replay writes the taps without flagging the window stale
+        lt, feed = self.model.seed_spec_step(tokens[:, 0].tolist(), start_pos.tolist(), pt)
+        for dn in self._gdn:
+            dn.seed_spec_state()
+        rows = self._seed_rows(feed)
+        ttnn.copy(rows, self.model._vfy_rows_out)
+        ttnn.deallocate(rows)
+        ttnn.deallocate(feed)
+        self._vfeed = self.model._vfy_rows_out
+        lt = lt[:, : self.vocab]
+        ids = torch.zeros(B, T, dtype=torch.int32)
+        ids[:, 0] = lt.argmax(-1).to(torch.int32)
+        logits = None
+        if read_logits:
+            logits = torch.zeros(B, T, self.vocab, dtype=torch.float32)
+            logits[:, 0] = lt
+        return ids, logits
 
     def decode_forward(
         self, tokens, start_pos, *, num_valid_drafts, accepted_counts, page_table, spec_mode="argmax_ids"

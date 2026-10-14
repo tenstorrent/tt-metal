@@ -356,6 +356,7 @@ def test_spec_plan_accept(hf_config):
     assert isinstance(plan, SpecPlan)
     assert plan.effective_k == 3
     assert "argmax_ids" in plan.accept_modes
+    assert "logits" in plan.accept_modes
     assert plan.drafter_state == "internal"
     assert plan.supports_narrow_decode is True
     tc = hf_config.get_text_config()
@@ -512,15 +513,18 @@ def test_decode_forward_narrow(gen_eng, tok_shape):
     assert kw["accepted_counts"].tolist() == [1]
 
 
-def test_decode_forward_narrow_without_counts_and_bad_counts(gen_eng, expect_error):
-    """Counts are optional on a narrow step; drafts or accepted_counts != 1 are rejected."""
-    gen, _ = gen_eng
+def test_decode_forward_narrow_counts(gen_eng, expect_error):
+    """Counts are optional on a narrow step (default 1) and are passed through; drafts are rejected."""
+    gen, eng = gen_eng
     base = dict(tokens=torch.tensor([7]), start_pos=torch.tensor([10]), page_table=torch.ones(1, 8, dtype=torch.int32))
     assert gen.decode_forward(**base).shape[:2] == (1, 1)
+    assert _last(eng, "decode_forward")[3]["accepted_counts"].tolist() == [1]
+    gen.decode_forward(**base, accepted_counts=torch.tensor([2]))
+    kw = _last(eng, "decode_forward")[3]
+    assert kw["accepted_counts"].tolist() == [2] and kw["accepted_counts"].dtype == torch.int32
+    assert kw["num_valid_drafts"].tolist() == [0]
     with expect_error(ValueError, ".*"):
         gen.decode_forward(**base, num_valid_drafts=torch.tensor([1]))
-    with expect_error(ValueError, ".*"):
-        gen.decode_forward(**base, accepted_counts=torch.tensor([2]))
 
 
 def test_warmup_model_decode_enable_trace_routing(monkeypatch):

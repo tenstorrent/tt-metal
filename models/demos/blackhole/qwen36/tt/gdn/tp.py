@@ -1579,6 +1579,82 @@ class TPGatedDeltaNet:
             ttnn.deallocate(x)
         return qkv_all, z_all, a_all, b_all, bucket
 
+    def forward_seed_recurrent(self, x, valid_len, pre_gathered=False, n_users=1):
+        """The spec loop's seed: advance GDN by one row per user with the verify's arithmetic.
+
+        Same shape as a plain decode step (B users x 1 token) but built from the verify's pieces: the
+        packed KDA conv over each user's [K, C] window (``_kda_conv_packed``) instead of the K-tap
+        shift-register MAC. The two are not bit-equal, and the state the seed leaves is what every
+        later verify replay resumes from; seeding with the decode formulation would fork the greedy
+        trajectory at a near tie.
+
+        Non-ring, unlike ``forward_verify_recurrent``: the spec ring and E_prev do not exist yet
+        (``prepare_spec_verify`` runs later, inside ``capture_verify_trace``). It advances the
+        durable state (``rec_state`` in place; ``_conv_win_buf`` and the K taps to the new window),
+        which ``seed_spec_state`` later copies into the ring and E_prev.
+
+        x : [1, 1, B, dim] (full-dim when ``pre_gathered``). Returns [1, 1, B, dim/tp].
+        """
+        assert n_users == self.B, f"the seed runs the whole decode batch: n_users={n_users}, B={self.B}"
+        assert valid_len == n_users, f"the seed is one row per user: valid_len={valid_len}, n_users={n_users}"
+        assert n_users <= tpc.TILE_SIZE, f"{n_users} users exceeds the {tpc.TILE_SIZE}-row decode tile"
+        qkv_all, z_all, a_all, b_all, bucket = self._verify_project(x, valid_len, pre_gathered)
+        return self._seed_fullbatch(qkv_all, z_all, a_all, b_all, n_users, bucket)
+
+    def _seed_fullbatch(self, qkv_all, z_all, a_all, b_all, n_users, bucket):
+        """``_verify_fullbatch`` at T = 1, run against the durable state instead of the ring."""
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        C, K = self.qkv_dim_tp, self.K
+        B = n_users
+
+        # The carry is taps [1, K) of the [B, K, C] mirror; E = [carry(K-1) ; this row(1)] is both the
+        # conv input and the new shift register. _ensure_conv_win() first makes the mirror current
+        # (prefill, reset and plain decode steps move the taps under it).
+        self._ensure_conv_win()
+        qkv_new = self._rows_to_users(qkv_all, B, 1, C)  # [B, 1, C]
+        carry = ttnn.slice(self._conv_win_buf, (0, 1, 0), (B, K, C))  # [B, K-1, C]
+        E = ttnn.concat([carry, qkv_new], dim=1, memory_config=mc)  # [B, K, C]
+        ttnn.deallocate(carry)
+        ttnn.deallocate(qkv_new)
+        q_all, k_all, v_all = self._kda_conv_packed(E, 1)  # each [1, B, width], SiLU applied
+
+        q_all, k_all, v_all, beta_all, g_all = self._heads_and_gates(q_all, k_all, v_all, a_all, b_all, B, 1)
+
+        # Plain mode: the initial state is the durable rec_state and the op returns the final state
+        # only (no per-token ring exists yet, and at T = 1 the two coincide). The call and its
+        # [B,1,Nv,*] shapes match the fused recurrent decode step, so it adds no new program.
+        o_all, states = fused_recurrent_gated_delta_rule_ttnn(
+            q_all,
+            k_all,
+            v_all,
+            beta_all,
+            g_all,
+            scale=self.scale,
+            initial_state=self.rec_state,
+            device=self.mesh,
+            output_per_token_state=False,
+            high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
+        )
+        for t in (q_all, k_all, v_all, beta_all, g_all):
+            ttnn.deallocate(t)
+
+        # rec_state is written in place (decode traces bake its address); the new shift register is E
+        # itself, which already has exactly K rows.
+        ttnn.copy(states, self.rec_state)
+        ttnn.deallocate(states)
+        ttnn.copy(E, self._conv_win_buf)
+        ttnn.deallocate(E)
+        # Push the window back out to the K taps rather than leaving them stale. sync_conv_win()
+        # branches on _conv_taps_stale, and the throwaway seed_spec_state() inside
+        # capture_verify_trace exists only to compile the branch the real post-capture
+        # seed_spec_state() takes, so both calls must see the same flags. A stale-tap window would
+        # also make the next plain decode step (sync_conv_taps) pay K slice+copy per layer while the
+        # verify trace is parked.
+        self._conv_taps_stale, self._conv_win_stale = True, False
+        self.sync_conv_taps()  # clears _conv_taps_stale; both mirrors now hold the seeded window
+
+        return self._out_tail(o_all, z_all, B, bucket)
+
     def _rows_to_users(self, t, B, T, width):
         """[1, B*T, width] -> [B, T, width]. Rows are user-major, so this is a pure regroup.
 

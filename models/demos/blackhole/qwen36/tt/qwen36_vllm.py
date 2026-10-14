@@ -441,7 +441,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     _SPEC_K = int(os.environ.get("QWEN36_SPEC_K", "3"))  # vLLM warmup does not carry K
     _SUPPORTED_K = (3, 7, 11)
 
-    # verify returns ids; the first token after prefill is host-sampled from the returned logits
+    # verify answers argmax_ids (greedy) or logits ([B, 1+K, V] for host acceptance);
+    # the first token after prefill is host-sampled
     model_capabilities = {
         **Qwen36ForCausalLM.model_capabilities,
         "supports_spec_decode": True,
@@ -489,7 +490,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             lanes_per_request=1,
             extra_bytes_per_seq=per_seq,
             extra_bytes_per_token=per_token,
-            accept_modes=("argmax_ids",),
+            accept_modes=("argmax_ids", "logits"),
             drafter_state="internal",
             supports_narrow_decode=True,
         )
@@ -605,15 +606,16 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         return VerifyOutput(spec_mode=res.spec_mode, argmax_ids=res.argmax_ids, hidden=None, logits=logits)
 
     def _decode_narrow(self, tokens, start_pos, page_table, kwargs):
-        """Ordinary [B, 1] decode step (no drafts, no multi-token commit) run as a 1-column verify.
+        """Ordinary [B, 1] decode step (no drafts) run as a 1-column verify; ``accepted_counts`` resolves a
+        previous multi-token commit.
         Returns host float logits [B, 1, V]: the runner host-samples ``tt_out[rows, -1, :]``
         (model_runner.py:3276; async_decode.py:103 accepts a torch tensor as host output)."""
         nv, ac = kwargs.get("num_valid_drafts"), kwargs.get("accepted_counts")
         B = int(tokens.shape[0])
         if nv is not None and bool(torch.as_tensor(nv).any()):
             raise ValueError("narrow decode step carries drafts")
-        if ac is not None and bool((torch.as_tensor(ac) != 1).any()):
-            raise ValueError("narrow decode step with accepted_counts != 1")
+        # Contract 4d: an ordinary step after a multi-token commit carries the count; it picks the state slot.
+        acc = torch.ones(B, dtype=torch.int32) if ac is None else torch.as_tensor(ac).reshape(B).to(torch.int32)
         remap = kwargs.get("slot_remap")
         if remap is not None:
             assert [int(x) for x in remap] == list(range(len(remap))), "slot_remap must be identity (B=1)"
@@ -628,7 +630,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             tok,
             pos,
             num_valid_drafts=torch.zeros(B, dtype=torch.int32),
-            accepted_counts=torch.ones(B, dtype=torch.int32),
+            accepted_counts=acc,
             page_table=self._table(page_table),
             spec_mode="logits",
         )

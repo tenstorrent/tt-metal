@@ -177,6 +177,7 @@ class Qwen36DecoderLayer:
         valid_len=None,
         gdn_collect=False,
         gdn_recurrent=False,
+        gdn_seed=False,
         decode_cfg=False,
         alias_kv_write=False,
         spec_verify_mode=False,
@@ -190,6 +191,9 @@ class Qwen36DecoderLayer:
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
         # paths. Fail fast instead.
         assert mode in ("decode", "prefill"), f"mode must be 'decode' or 'prefill', got {mode!r}"
+        # gdn_seed: the spec loop's seed step (one row per user, T = 1). Outside GDN it is the verify
+        # body at T = 1; GDN takes forward_seed_recurrent because the ring and E_prev do not exist
+        # until capture_verify_trace allocates them.
         # n_users / state_blk_idx / conv_sel: multi-user speculative verify. Bucket rows are n_users
         # users x T = rows // n_users candidates, user-major (row u*T + j). GDN reshapes them to
         # [n_users, T, C] and reads each user's initial state / conv window through the shared device
@@ -267,7 +271,13 @@ class Qwen36DecoderLayer:
                 # GDN carries its recurrent/conv state internally (capture_state on
                 # prefill, read on decode); it has no paged KV, so page_table is N/A.
                 if mode == "prefill":
-                    if gdn_recurrent:
+                    if gdn_recurrent and gdn_seed:
+                        # Spec-decode seed: the verify's conv1d + fused recurrent arithmetic, run
+                        # against the durable state and without the deferred-commit selectors.
+                        attn_output = self.attention.forward_seed_recurrent(
+                            attn_input, valid_len, pre_gathered=decode_cfg, n_users=n_users
+                        )
+                    elif gdn_recurrent:
                         # Hybrid spec-decode verify: advance GDN recurrently (bit-exact to decode)
                         # over valid_len tokens while the rest of the stack runs batched.
                         attn_output = self.attention.forward_verify_recurrent(
