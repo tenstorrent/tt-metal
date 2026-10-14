@@ -10,6 +10,9 @@ jobs:
     timeout-minutes: 12
     container:
       image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-dev-amd64@sha256:01621216c5a6d2cc661550ff007d1d1c51ea1e9ba5808286d0c79ab325a03a61
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
