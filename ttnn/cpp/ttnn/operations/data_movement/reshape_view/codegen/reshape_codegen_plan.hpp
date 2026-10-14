@@ -146,13 +146,15 @@ std::optional<RmArbitraryPlan> rm_arbitrary_geometry(
 std::optional<RmArbitraryPlan> fit_rm_arbitrary(RmArbitraryPlan plan, uint64_t l1_budget);
 
 // The row-major program the factory builds: the stick program at the deepest CB that fits the L1 free below the
-// lowest live allocation, else the slab program at the largest batch that does; nullopt when neither fits. Same
-// contract as live_tile_rows_choice: only the program hash and the factory call it, after the output is allocated.
+// lowest live allocation less `reserved_l1_bytes`, else the slab program at the largest batch that does; nullopt
+// when neither fits. Same contract as live_tile_rows_choice: the program hash and the factory call it after the
+// output is allocated, routing calls it before with the output reserved.
 std::optional<RmChoice> live_rm_choice(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     tt::tt_metal::BufferType output_buffer,
     uint32_t grid_cores,
-    const LaunchPlan& planned);
+    const LaunchPlan& planned,
+    uint64_t reserved_l1_bytes = 0);
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen

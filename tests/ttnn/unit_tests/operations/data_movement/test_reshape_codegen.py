@@ -287,6 +287,21 @@ def test_reshape_codegen_routes_native_when_no_plan_fits_l1(device, expect_error
     ttnn.deallocate(hog)
 
 
+def test_reshape_codegen_rm_routes_native_when_no_program_fits_l1(device, expect_error):
+    # Merging 4 B sticks into 30004 B ones takes two 30 KB CB pages in the stick program and a window region of over
+    # 64 KiB in the slab program, while native's single kernel needs about 30 KB. With 48 KiB free auto must run
+    # native, while the forced entry still refuses.
+    in_shape, out_shape, dtype = [60008, 1], [8, 7501], ttnn.float32
+    source = _make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.ROW_MAJOR_LAYOUT, _DRAM)
+    hog = _l1_hog_leaving(device, 48 * 1024)
+    _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+    with expect_error(RuntimeError, "no row-major program fits"):
+        _force_codegen(x, out_shape, memory_config=_DRAM)
+    ttnn.deallocate(hog)
+
+
 _OUT_OF_SCOPE = [
     ("bfloat8_b", [1, 1, 64, 128], [1, 1, 128, 64], ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
     ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
