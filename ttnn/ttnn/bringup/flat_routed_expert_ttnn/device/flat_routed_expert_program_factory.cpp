@@ -295,7 +295,13 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     for (const auto& [r, tail] : p.rdn) {
         rdn_cores.push_back(p.readers[r]);
     }
-    for (const auto& c : p.readers) {
+    std::vector<CoreCoord> trd;  // the Tensix readers (DRISC mode: the slots it leaves to them)
+    for (uint32_t r = 0; r < n_rd; ++r) {
+        if (p.tensix_reader(r)) {
+            trd.push_back(p.readers[r]);
+        }
+    }
+    for (const auto& c : trd) {
         if (std::find(rdn_cores.begin(), rdn_cores.end(), c) == rdn_cores.end()) {
             plain.push_back(c);
         }
@@ -390,7 +396,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         TT_FATAL(!p.rdown && p.nsg == 1 && p.r_ <= 8, "MIMO_FL_DRISC: no reader down columns, one subgrid");
         auto* mesh = dynamic_cast<distributed::MeshDevice*>(device);
         TT_FATAL(mesh != nullptr, "MIMO_FL_DRISC: a mesh device");
-        flat_drisc_ensure(mesh, n_rd, banks);
+        flat_drisc_ensure(mesh, p.drisc_n, banks);
         // one launcher posts every slot's job (se_drisc_go.cpp RT: base, gate/up, landing, slots, R, per slot the
         // DRISC xy / job / region offset, the slots' receivers, then the dyn args)
         const auto k =
@@ -401,11 +407,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                {p.rg * p.slot * w_tile, p.slot * w_tile, p.rg, G, p.nk_gu, GRANT, DATA, E},
                dyn_def);
         Args a;
-        a.lit(drisc_base).a(AddrSrc::GateUp).a(AddrSrc::Arena).lit(n_rd).lit(p.r_);
-        for (uint32_t r = 0; r < n_rd; ++r) {
+        a.lit(drisc_base).a(AddrSrc::GateUp).a(AddrSrc::Arena).lit(p.drisc_n).lit(p.r_);
+        for (uint32_t r = 0; r < p.drisc_n; ++r) {
             a.lit(drisc_xy(r)).lit(flat_drisc_job(r, banks)).lit((r / banks) * p.region_bytes);
         }
-        for (uint32_t r = 0; r < n_rd; ++r) {
+        for (uint32_t r = 0; r < p.drisc_n; ++r) {
             for (uint32_t j = 0; j < p.r_; ++j) {
                 a.lit(pk(p.gu[r * p.r_ + j]));
             }
@@ -413,7 +419,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         a.cat(dyn);
         add_rt(k, p.launcher, a);
     }
-    if (!plain.empty() && !p.drisc) {
+    if (!plain.empty()) {
         const auto k =
             dm("se_reader.cpp",
                plain,
@@ -430,15 +436,18 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             add_rt(k, p.readers[r], a);
         }
     }
-    if (!p.drisc) {
+    if (!trd.empty()) {
         const auto k =
             dm("se10_fwd.cpp",
-               p.readers,
+               trd,
                DataMovementProcessor::RISCV_1,
                NOC::NOC_1,
                {0, p.r_, w_tile, p.rg * p.slot, p.slot, p.ring_g, 0, DATA, p.nk_gu, p.rd_slots, FWD, E, G},
                dyn_def);
         for (uint32_t r = 0; r < n_rd; ++r) {
+            if (!p.tensix_reader(r)) {
+                continue;
+            }
             Args a;
             a.a(AddrSrc::Arena);  // land_addr: the gate/up cores' in1 ring (arena offset 0)
             for (uint32_t j = 0; j < p.r_; ++j) {
@@ -592,19 +601,27 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         // cores wedge the NoC (a relay stuck in noc_cmd_buf_ready or in its write barrier; ~1 in 1e4..2e5 launches,
         // any chip), a hardware hang the NoC probe test reproduces from the traffic alone
         // (tests/ttnn/unit_tests/operations/noc_hang_probe, op_skeleton); with these writes on NOC1 it never did.
-        Defines recv_def = with(dyn_def, {{"SE_GU_ONLY", "1"}, {"SE_X_RELAY", "1"}, {"SE_NO_PARTNER", "1"}});
-        if (p.drisc) {
-            recv_def["SE_DRISC"] = "1";
+        // DRISC mode: the DRISC slots' receivers count their grants locally (SE_DRISC), the others credit their reader
+        const Defines recv_def = with(dyn_def, {{"SE_GU_ONLY", "1"}, {"SE_X_RELAY", "1"}, {"SE_NO_PARTNER", "1"}});
+        std::vector<CoreCoord> gu_t, gu_d;
+        for (uint32_t ci = 0; ci < ngu; ++ci) {
+            (p.tensix_reader(ci / p.r_) ? gu_t : gu_d).push_back(p.gu[ci]);
         }
-        const auto kr =
-            dm("se5_recv.cpp",
-               p.gu,
-               DataMovementProcessor::RISCV_0,
-               xswap ? NOC::NOC_0 : NOC::NOC_1,
-               {0,         x_blk,   1,    p.slot, E * p.nk_gu, V,        p.ring_g, 16,    1,     3,      2,    MTG,
-                p.h_tile,  ngu_sg,  DATA, HARR,   GO,          DONE,     KBLK,     HARR,  SFREE, p.hbuf, XARR, HFREE,
-                p.x_slots, x_bytes, S,    NP,     HSFREE,      H_PIECES, p.nk_gu,  GATH1, GATH2, 1,      G,    E},
-               recv_def);
+        const std::vector<uint32_t> recv_ct = {
+            0,         x_blk,   1,    p.slot, E * p.nk_gu, V,        p.ring_g, 16,    1,     3,      2,    MTG,
+            p.h_tile,  ngu_sg,  DATA, HARR,   GO,          DONE,     KBLK,     HARR,  SFREE, p.hbuf, XARR, HFREE,
+            p.x_slots, x_bytes, S,    NP,     HSFREE,      H_PIECES, p.nk_gu,  GATH1, GATH2, 1,      G,    E};
+        const NOC recv_noc = xswap ? NOC::NOC_0 : NOC::NOC_1;
+        const KernelHandle kr_t =
+            gu_t.empty() ? 0 : dm("se5_recv.cpp", gu_t, DataMovementProcessor::RISCV_0, recv_noc, recv_ct, recv_def);
+        const KernelHandle kr_d =
+            gu_d.empty() ? 0
+                         : dm("se5_recv.cpp",
+                              gu_d,
+                              DataMovementProcessor::RISCV_0,
+                              recv_noc,
+                              recv_ct,
+                              with(recv_def, {{"SE_DRISC", "1"}}));
         // perf probe (read at program build): MIMO_FL_GU_FULL_SYNC=1 - fp32 gate/up in a full-sync DST (8 tiles: the
         // whole MT x 2 NP sub-block in one K loop, no row passes; pack no longer overlaps math, once per sub-block)
         const bool gu_full_sync = p.gu_fp32 && p.gu_rp && (p.gu_full_sync || std::getenv("MIMO_FL_GU_FULL_SYNC"));
@@ -639,8 +656,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 const CoreCoord gc = p.gu[ci];
                 Args a;
                 // the forwarder and its credit word: the reader's semaphore j, or the DRISC's L1 word j
-                a.lit(p.drisc ? drisc_xy(r) : pk(p.readers[r]))
-                    .lit(p.drisc ? GRANT : j)
+                const bool dr = !p.tensix_reader(r);
+                a.lit(dr ? drisc_xy(r) : pk(p.readers[r]))
+                    .lit(dr ? GRANT : j)
                     .lit((r % p.n_rd_sg) * p.rg + j / G)
                     .lit(head_xy_sg[sg].size())
                     .lit(0)
@@ -656,7 +674,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                     .lits(head_xy_sg[sg])
                     .cat(dyn)
                     .lits(sgx(sg));
-                add_rt(kr, gc, a);
+                add_rt(dr ? kr_d : kr_t, gc, a);
                 SetRuntimeArgs(program, kc, gc, std::vector<uint32_t>{j % G});
             }
         }
@@ -789,8 +807,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         TT_FATAL(yrm_rows(pw) >= 1, "flat_routed_expert: row-major y: no room for one row tile");
         arena_cb(16, p.o_off, yrm_rows(pw) * pw * 2048, cores, tt::DataFormat::Float16_b, 2048);
     };
-    if (!p.drisc) {
-        arena_cb(0, 0, p.rd_slots * p.rg * p.slot * w_tile, p.readers, wf, w_tile);
+    if (!trd.empty()) {
+        arena_cb(0, 0, p.rd_slots * p.rg * p.slot * w_tile, trd, wf, w_tile);
     }
     arena_cb(0, 0, RM_CHUNKS * 32 * p.seg, p.relays, tt::DataFormat::Float16_b, p.seg);
     arena_cb(1, p.sb_off, p.sb_slots * MT * p.sbt * p.x_tile, p.relays, x_fmt, p.x_tile);

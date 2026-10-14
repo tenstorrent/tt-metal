@@ -62,9 +62,16 @@ void kernel_main() {
     gddr_mc_write_mpfe_weight(1, SE_DRISC_MPFE_ORD);
 #endif
 #endif
-    experimental::dma_set_burst_size(255);
+#ifndef SE_DRISC_BURST
+#define SE_DRISC_BURST 255
+#endif
+    if constexpr (SE_DRISC_BURST != 0) {  // (0: leave the DMA transfer attributes alone)
+        experimental::dma_set_burst_size(SE_DRISC_BURST);
+    }
     const uint32_t room = (region - SE_DRISC_SLOTS) / nj;
-    uint32_t seen = 0;
+    uint32_t seen = 0, dma_total[2] = {0, 0};  // (debug: this kernel's DMA reads per stream)
+    const uint32_t hw0[2] = {READ_TX_STREAM_REG(0, TX_REG_STREAM_TOTAL_READS_REG_OFFSET),
+                             READ_TX_STREAM_REG(1, TX_REG_STREAM_TOTAL_READS_REG_OFFSET)};
     Job jobs[2];
     bool stop = false;
     while (!stop) {
@@ -122,13 +129,22 @@ void kernel_main() {
         while (left && !stop) {
             for (uint32_t k = 0; k < nj; ++k) {
                 Job& J = jobs[k];
-                const uint8_t stream = k, noc = J.noc;
+#ifndef SE_DRISC_STREAM0
+#define SE_DRISC_STREAM0 0
+#endif
+                const uint8_t stream = (SE_DRISC_STREAM0 + k) & 1, noc = J.noc;
                 // DMA ahead into free slots (unit rd: chunk rd / RG of load (rd / RG) / PER_E, block rd % RG)
-                while (J.rd < J.units && J.rd - J.fl < J.ns) {
+#ifndef SE_DRISC_DMA_MAX
+#define SE_DRISC_DMA_MAX 255
+#endif
+                while (J.rd < J.units && J.rd - J.fl < J.ns &&
+                       (SE_DRISC_DMA_MAX >= 255 ||
+                        experimental::dma_get_reads_outstanding(stream) < SE_DRISC_DMA_MAX)) {
                     const uint32_t c = J.rd / J.rg, b = J.rd % J.rg;
                     const uint32_t src = J.gddr + (J.loads[c / J.per_e] * J.per_e + c % J.per_e) * J.chunk + b * J.blk;
 #ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
                     experimental::dma_async_read(stream, src, J.slot0 + (J.rd % J.ns) * J.blk, J.blk);
+                    ++dma_total[stream];
 #else
                     (void)src;
 #endif
@@ -194,6 +210,11 @@ void kernel_main() {
             st[3] = jobs[k].wr;
             st[4] = jobs[k].fl;
         }
+        for (uint32_t q = 0; q < 2; ++q) {  // (debug: the stream's hardware read count since start vs ours)
+            volatile uint32_t* st = word(se_drisc_state(q));
+            st[6] = READ_TX_STREAM_REG(q, TX_REG_STREAM_TOTAL_READS_REG_OFFSET) - hw0[q];
+            st[7] = dma_total[q];
+        }
         *word(SE_DRISC_DONE) = seen;
     }
     for (uint32_t k = 0; k < nj; ++k) {
@@ -203,7 +224,9 @@ void kernel_main() {
         noc_async_atomic_barrier(noc);
         noc_async_full_barrier(noc);
     }
-    experimental::dma_restore_default_transfer_attrs();
+    if constexpr (SE_DRISC_BURST != 0) {
+        experimental::dma_restore_default_transfer_attrs();
+    }
 #ifdef SE_DRISC_MPFE
     gddr_mc_write_mpfe_weight(mpfe_port, mpfe_old);
 #ifdef SE_DRISC_MPFE_ORD
