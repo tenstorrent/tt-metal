@@ -126,12 +126,12 @@ jobs:
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      publish-artifact: false
+      publish-artifact: true
       publish-package: false
       skip-tt-train: false
       tracy: false
       runs-on: ${{ inputs['runs-on'] }}
-      ref: ${{ inputs.ref }}
+      ref: 88db301912607fc681d56c5a21e776b52d84c500
       fetch-depth: ${{ github.event_name == 'workflow_dispatch' && 500 || inputs.fetch-depth }}
 
   # build job runs the matrix - either when called from merge-gate with pre-built tags,
