@@ -233,7 +233,8 @@ class ttKDA:
             self.active_seq_len_local,
             self.config.head_k_dim,
             decay_width,
-            ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID) if self._bounded_gate else None,
+            # Vector mode RC, accurate, BF16-accurate path: the gate is stored as BF16.
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, [4.0, 0.0, 1.0]) if self._bounded_gate else None,
         )
         # The prepared chunk terms read the decay gate; L1 spares its DRAM round trip.
         self.decay_memory_config = l1_when_it_fits(

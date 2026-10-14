@@ -440,7 +440,7 @@ def _scan_sp_grouped_chunks(
             actual_end=actual_end,
             sequence_parallel_axis=sequence_parallel_axis,
             memory_config=KDA_OUTPUT_MEMORY_CONFIG,
-            compute_kernel_config=compute_config.preparation,
+            compute_kernel_config=compute_config.scan,
             packed_head=True,
         )
         group_entry_states, prefix_final_state = distributed_prefix(
@@ -535,7 +535,7 @@ class KDARecurrence:
         self._gate_scale = gate_scale
         preparation = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi3,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,

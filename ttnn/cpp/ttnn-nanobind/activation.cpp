@@ -38,6 +38,7 @@ void py_module(nb::module_& mod) {
     unary_with_param.def(nb::init<UnaryOpType>())
         .def(nb::init<UnaryOpType, float>())
         .def(nb::init<UnaryOpType, float, float>())
+        .def(nb::init<UnaryOpType, const std::vector<float>&>())
         .def(
             "__init__",
             [](UnaryWithParam* t, std::pair<UnaryOpType, float> arg) { new (t) UnaryWithParam{arg.first, arg.second}; })

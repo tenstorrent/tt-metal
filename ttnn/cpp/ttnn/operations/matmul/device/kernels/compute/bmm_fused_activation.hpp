@@ -92,7 +92,8 @@ struct ActivationApplyHelper {
             constexpr VectorMode vec_mode = (PARAM0 == 1)   ? VectorMode::R
                                             : (PARAM0 == 2) ? VectorMode::C
                                                             : VectorMode::RC;
-            sigmoid_tile_pack<vec_mode, PARAM1 != 0>(tile_index);
+            // PARAM2 non-zero: BF16-accurate path even with an FP32 destination, for a BF16 output.
+            sigmoid_tile_pack<vec_mode, PARAM1 != 0, PARAM2 == 0 && DST_ACCUM_MODE>(tile_index);
         } else if constexpr (ACT == KernelActivation::HARDSIGMOID) {
             hardsigmoid_tile_pack(tile_index);
         } else if constexpr (ACT == KernelActivation::HARDTANH) {

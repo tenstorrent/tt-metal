@@ -87,7 +87,9 @@ void activate_gate(uint32_t Vt, DataflowBuffer& norm) {
     for (uint32_t i = 0; i < Vt; i++) {
         tile_regs_acquire();
         copy_tile(dfb::gate, i, 0);
-        sigmoid_tile(0);
+        // The BF16 gate's sigmoid only scales a BF16 output: the BF16-accurate path (exp_21f, one reciprocal
+        // iteration) is enough and much cheaper than the FP32 one the FP32 destination would select.
+        sigmoid_tile<VectorMode::RC, false, false>(0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, dfb::norm, i);

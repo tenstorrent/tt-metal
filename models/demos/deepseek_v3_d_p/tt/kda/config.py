@@ -208,7 +208,8 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
-        output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        # LoFi suits the BFP8 output weights (SP8xTP4 acceptance PCC 0.99966); the input projection needs HiFi2.
+        output_projection_math_fidelity=ttnn.MathFidelity.LoFi,
         projection_dtype=KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,

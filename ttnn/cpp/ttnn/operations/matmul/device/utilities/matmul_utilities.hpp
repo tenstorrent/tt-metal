@@ -255,8 +255,13 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
 
     // Activation parameters provided by the ttnn op.
     std::span<const float> params = activation.get_params();
+    // SIGMOID takes an optional third parameter; every other activation takes at most two.
+    const size_t max_params = activation.op_type == UnaryOpType::SIGMOID ? 3 : 2;
     TT_FATAL(
-        params.size() <= 2, "Invalid number of activation parameters: {}. Expected no more than 2.", params.size());
+        params.size() <= max_params,
+        "Invalid number of activation parameters: {}. Expected no more than {}.",
+        params.size(),
+        max_params);
     const bool has_first = !params.empty();
     const bool has_second = params.size() > 1;
 
@@ -299,6 +304,8 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
             result.param0 = param0;
             // param1 is fast_approximate flag
             result.param1 = has_second ? static_cast<uint32_t>(params[1]) : 0;
+            // param2: nonzero takes the BF16-accurate path with an FP32 destination, for a BF16 output
+            result.param2 = params.size() > 2 ? static_cast<uint32_t>(params[2]) : 0;
             break;
         }
 

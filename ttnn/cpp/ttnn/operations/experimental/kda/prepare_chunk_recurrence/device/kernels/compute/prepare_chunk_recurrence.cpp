@@ -164,13 +164,13 @@ inline void exponential_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n)
     o.reserve_back(n);
     reconfig_data_format_srca(in_id);  // unary: in_id->srcA
     copy_init(in_id);
-    exp_tile_init();
+    exp_tile_init<false, 0x3F800000, InputClamping::ClampToNegative, false>();
     for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
         const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
         tile_regs_acquire();
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             copy_tile(in_id, block_start + tile, tile);
-            exp_tile<false, false, InputClamping::ClampToNegative, Iterations>(tile, Mode);
+            exp_tile<false, false, InputClamping::ClampToNegative, Iterations, false>(tile, Mode);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -216,7 +216,7 @@ inline void reciprocal_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) 
     reconfig_data_format_srca(in_id);
     copy_init(in_id);
     // Precise regardless of the op's approx mode: exp(a - G) replaces an exact exponential.
-    constexpr auto recip_dest = DST_ACCUM_MODE ? ReciprocalDestAcc::FP32 : ReciprocalDestAcc::BF16;
+    constexpr auto recip_dest = ReciprocalDestAcc::BF16;
     recip_tile_init<recip_dest, ReciprocalApproxMode::Precise>();
     for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
         const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
@@ -391,7 +391,7 @@ inline void reduce_squared_rows_to_inverse_norms(
         binop_with_scalar_tile_init();
         add_unary_tile(dst, eps_bits);
         rsqrt_tile_init();
-        rsqrt_tile(dst);
+        rsqrt_tile<RsqrtMode::Default, false>(dst);
         if constexpr (Scale) {
             binop_with_scalar_tile_init();
             mul_unary_tile(dst, scale_bits);
@@ -442,7 +442,7 @@ inline void activate_beta(DataflowBuffer& logits, DataflowBuffer& beta) {
     for (uint32_t tile = 0; tile < Ct; ++tile) {
         tile_regs_acquire();
         copy_tile(logits.get_id(), tile, 0);
-        sigmoid_tile<VectorMode::RC, false>(0);
+        sigmoid_tile<VectorMode::RC, false, false>(0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, beta.get_id(), tile);
