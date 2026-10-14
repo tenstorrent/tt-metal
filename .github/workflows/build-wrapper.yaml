@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 0b315cc07f0fe4d99a5bfee256549bfbb7337112
+          ref: 1e11ea08d753c66fff839d93e3de407df5b134de
           submodules: recursive
           path: docker-job
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -41,7 +41,9 @@ jobs:
       - name: Admit exact compiled artifact and interpreter
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 0b315cc07f0fe4d99a5bfee256549bfbb7337112
+          test "$(git rev-parse HEAD)" = 1e11ea08d753c66fff839d93e3de407df5b134de
+          git fetch --depth=1 origin 0b315cc07f0fe4d99a5bfee256549bfbb7337112
+          git diff --exit-code 0b315cc07f0fe4d99a5bfee256549bfbb7337112 HEAD -- tt_metal ttnn tt_stl
           echo "29e69618b7c138a81bd1b5210f3fb107caf15e21d95c51b5d9d2357f90e80e96  ttm_any.tar.zst" | sha256sum -c -
           tar --zstd -xf ttm_any.tar.zst
           /opt/venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3,12), sys.version; print(sys.version)'
@@ -66,17 +68,8 @@ jobs:
         timeout-minutes: 12
         run: |
           set -euo pipefail
-          # Test-only current-main fixture correction; production source/native remain pinned above.
-          git fetch --depth=1 origin f4c19b2bb7118114b41b831cdeba3a52634f6e19
-          git show f4c19b2bb7118114b41b831cdeba3a52634f6e19:models/demos/gpt_oss_120b_qb2/tests/test_serving_host.py > models/demos/gpt_oss_120b_qb2/tests/test_serving_host.py
-          echo "5e6aed63bc42ff8fe0c7f7f7f175e594fc88002a08b07c94e47dc84e495dc275  models/demos/gpt_oss_120b_qb2/tests/test_serving_host.py" | sha256sum -c -
-          # Exact Python review fix; native C++ sources/artifact remain unchanged.
-          git fetch --depth=1 origin 460238dfd5145bd3c415e648fcf27c8fd5c0391a
-          git show 460238dfd5145bd3c415e648fcf27c8fd5c0391a:models/tt_transformers/tt/generator.py > models/tt_transformers/tt/generator.py
-          echo "0f85476ec8a5889fe87c53d4fbdddf0f2e000cf35598e984dd274ea9693440d2  models/tt_transformers/tt/generator.py" | sha256sum -c -
-          git show 460238dfd5145bd3c415e648fcf27c8fd5c0391a:models/tt_transformers/tests/test_batched_prefill_slots.py > models/tt_transformers/tests/test_batched_prefill_slots.py
-          echo "768a1f660fff65896e61f36beffae5d99842069e05ab35f0e50be7c0759e6b78  models/tt_transformers/tests/test_batched_prefill_slots.py" | sha256sum -c -
-          git diff --exit-code -- . ':!models/demos/gpt_oss_120b_qb2/tests/test_serving_host.py' ':!models/tt_transformers/tt/generator.py' ':!models/tt_transformers/tests/test_batched_prefill_slots.py'
+          # Exact current draft source; no overlays or test replacements.
+          git diff --exit-code HEAD
           cat > /tmp/gpt-import-host.py <<'PY'
           """CPU-only admission of the exact built GPT source, followed by original host tests."""
           import hashlib
