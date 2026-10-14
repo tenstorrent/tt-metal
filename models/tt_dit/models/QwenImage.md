@@ -121,6 +121,6 @@ The pipeline picks its configuration from the mesh shape and architecture:
 | BH QuietBox 2 | CFG 2, SP 1, TP 2 | TP 2, FSDP 1 | H 2, W 1 |
 | BH LoudBox    | CFG 2, SP 1, TP 4 | TP 4, FSDP 1 | H 4, W 1 |
 | WH Galaxy     | CFG 2, SP 4, TP 4 | TP 4, FSDP 4 | H 4, W 4 |
-| BH Galaxy     | CFG 2, SP 4, TP 4 | TP 4, FSDP 4 | H 4, W 4 |
+| BH Galaxy     | CFG 2, SP 4, TP 4 | TP 4, FSDP 1 | H 4, W 4 |
 
 H and W are the VAE's height and width splits. All models stay on the device.
