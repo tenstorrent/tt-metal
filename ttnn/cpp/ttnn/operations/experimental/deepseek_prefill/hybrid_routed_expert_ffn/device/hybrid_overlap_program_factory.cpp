@@ -124,13 +124,15 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
             program.range.shape().mesh_size());
         const auto coord = program.range.start_coord();
         const auto& collector = collectors.at(coord);
+        // NOC coordinates, because the writers address the collector with get_noc_addr.
+        const auto collector_noc = combine_args.device->worker_core_from_logical_core(collector.logical);
 
         auto re = re_descriptor;
         append_expert_done_signal(
             re,
             ExpertDoneSignal{
-                .collector_noc_x = static_cast<uint32_t>(collector.worker_virtual.x),
-                .collector_noc_y = static_cast<uint32_t>(collector.worker_virtual.y),
+                .collector_noc_x = static_cast<uint32_t>(collector_noc.x),
+                .collector_noc_y = static_cast<uint32_t>(collector_noc.y),
                 .collector_counts_addr = collector.counts_addr,
                 .go_addr = go_addr});
         {

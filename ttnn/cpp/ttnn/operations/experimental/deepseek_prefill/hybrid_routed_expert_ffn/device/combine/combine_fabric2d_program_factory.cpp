@@ -439,7 +439,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             }
         }
     }
-    combine_cores.insert(CoreRange(placement.at(coord).collector.value().logical));
+    combine_cores.insert(CoreRange(placement.at(coord).collector.value()));
     for (uint32_t id = 0; id < sems.num_program_semaphores(); id++) {
         desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
             .id = id,
@@ -690,8 +690,7 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
                  sems,
                  l1_resources.arena)});
         if (collectors != nullptr) {
-            (*collectors)[coord] =
-                CollectorTarget{placement.at(coord).collector.value().worker_virtual, l1.collector_counts};
+            (*collectors)[coord] = CollectorTarget{placement.at(coord).collector.value(), l1.collector_counts};
         }
     }
     return workload_descriptor;

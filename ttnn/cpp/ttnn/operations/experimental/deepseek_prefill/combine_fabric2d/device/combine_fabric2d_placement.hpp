@@ -49,19 +49,14 @@ struct UntilizerPlacement {
 
 using UntilizerGroups = std::array<std::vector<UntilizerPlacement>, UNTILIZER_GROUPS>;
 
-// The core that folds the routed expert's per-writer reports into one `ready` count. Placed LAST, in any cell of
-// the two combine rows the senders and untilizers left free: decide_untilizers claims whole columns and
-// refuses a cell that is already taken, so reserving one for the collector first could break it.
-struct CollectorPlacement {
-    tt::tt_metal::CoreCoord logical;
-    tt::tt_metal::CoreCoord worker_virtual;  // what a routed-expert writer addresses
-};
-
 struct DevicePlacement {
     StreamPlacements streams;
     UntilizerGroups untilizers;  // indexed by untilizer_group_of(stream)
+    // The logical core that folds the routed expert's per-writer reports into one `ready` count. Placed LAST, in
+    // any cell of the two combine rows the senders and untilizers left free: decide_untilizers claims whole
+    // columns and refuses a cell that is already taken, so reserving one for the collector first could break it.
     // Set only when the caller asked for a collector; the standalone op has nothing to collect.
-    std::optional<CollectorPlacement> collector;
+    std::optional<tt::tt_metal::CoreCoord> collector;
 };
 
 using MeshPlacement = std::map<ttnn::MeshCoordinate, DevicePlacement>;

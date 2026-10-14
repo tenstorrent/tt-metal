@@ -40,7 +40,7 @@ void add_collector(
         "collector_combine_fabric2d.cpp";
     kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     kernel.defines.emplace_back("CMBF2D_PROGRESS_SEM", std::to_string(progress_sem));
-    kernel.core_ranges = CoreRangeSet(CoreRange(placement.collector.value().logical));
+    kernel.core_ranges = CoreRangeSet(CoreRange(placement.collector.value()));
     kernel.compile_time_args = cmbf2d::CollectorCtArgs(args, plan).to_ct_word_arr();
     kernel.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,

@@ -116,10 +116,9 @@ UntilizerGroups decide_untilizers(
 }
 
 // Any cell of the sender row or the row after it that nothing of this op holds yet.
-CollectorPlacement decide_collector(
+tt::tt_metal::CoreCoord decide_collector(
     const StreamPlacements& streams,
     std::set<tt::tt_metal::CoreCoord>& taken,
-    tt::tt_metal::IDevice* dev,
     const tt::tt_metal::CoreCoord& grid,
     const tt::tt_fabric::FabricNodeId& who) {
     const std::size_t sender_row = streams.begin()->second.worker_logical.y;
@@ -127,7 +126,7 @@ CollectorPlacement decide_collector(
         for (std::size_t row : {sender_row + 1, sender_row}) {
             const tt::tt_metal::CoreCoord core{column, row};
             if (row < grid.y && taken.insert(core).second) {
-                return CollectorPlacement{core, dev->virtual_core_from_logical_core(core, tt::CoreType::WORKER)};
+                return core;
             }
         }
     }
@@ -223,8 +222,7 @@ DevicePlacement decide_device_placement(
     // Last, so it can only take a cell the senders and untilizers left: decide_untilizers claims whole
     // columns and refuses one already taken.
     if (with_collector) {
-        placement.collector =
-            decide_collector(placements, taken, dev, mesh->compute_with_storage_grid_size(), self_node);
+        placement.collector = decide_collector(placements, taken, mesh->compute_with_storage_grid_size(), self_node);
     }
     return placement;
 }
