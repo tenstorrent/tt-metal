@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole, run_for_wormhole_b0_or_blackhole
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, merge_gate_subset
 
 pytestmark = pytest.mark.use_module_device
 
@@ -158,11 +158,19 @@ def test_layer_norm_streaming_welford_requires_reciprocal_tensor(device, expect_
         )
 
 
-@pytest.mark.merge_gate
-@pytest.mark.parametrize("h", [32, 42])
-@pytest.mark.parametrize("w", [24, 64])
-@pytest.mark.parametrize("use_welford", [True, False])
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+# fp32 Welford trips the unp_A_dst_format LLK assert on Wormhole, which hangs the device under
+# TT_METAL_LLK_ASSERTS=1, so those cases stay out of the merge gate. Re-gate once #60764 is fixed.
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "dtype": [torch.bfloat16, torch.float32],
+            "use_welford": [True, False],
+            "w": [24, 64],
+            "h": [32, 42],
+        },
+        keep=lambda dtype, use_welford, **_: not (dtype == torch.float32 and use_welford),
+    )
+)
 def test_layer_norm(device, h, w, use_welford, dtype):
     torch.manual_seed(0)
 
