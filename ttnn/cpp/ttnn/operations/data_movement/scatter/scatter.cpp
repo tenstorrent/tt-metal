@@ -270,24 +270,26 @@ Tensor scatter(
 
     check_support(input_tensor, index_tensor, source_tensor, normalized_dim);
     validate_inputs(input_tensor, index_tensor, source_tensor, normalized_dim, opt_reduction_string);
+    // validate_inputs covers ranks and shapes only; dtype, sharding, buffer and device rules live in
+    // the device operation. Run them here, before the pre-scatter transposes launch any device work,
+    // so a bad call fails fast instead of after (or instead of, if one hangs) those transposes. The
+    // transposes keep every property these rules check, so the result is the same as validating later.
+    ttnn::prim::ScatterDeviceOperation::validate_on_program_cache_miss(
+        ttnn::prim::ScatterParams{
+            normalized_dim,
+            output_memory_config.value_or(input_tensor.memory_config()),
+            get_scatter_reduction_type_from_string(opt_reduction_string),
+            sub_core_grid},
+        ttnn::prim::ScatterInputs{input_tensor, index_tensor, source_tensor});
 
     const auto& original_index_tensor_lshape = index_tensor.logical_shape();
     // Empty operand: nothing to scatter, and the factories divide by the scatter extent. That
     // extent is shape[dim], not shape[-1] - the axis is transposed to last first. Deliberately not
     // index volume: an index empty on a non-scatter axis already works. See #56881.
+    // Returned as-is: clone() and to_memory_config() crash on a zero-volume tensor, so a requested
+    // memory_config is not applied here.
     if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{} ||
         input_tensor.logical_volume() == 0 || original_index_tensor_lshape[normalized_dim] == 0) {
-        // validate_inputs covers ranks and shapes only; dtype, sharding, buffer and device rules
-        // live in the device operation, so run them or an empty call accepts what a non-empty one
-        // rejects. Returned as-is afterwards: clone() and to_memory_config() crash on a
-        // zero-volume tensor, so a requested memory_config is not applied here.
-        ttnn::prim::ScatterDeviceOperation::validate_on_program_cache_miss(
-            ttnn::prim::ScatterParams{
-                normalized_dim,
-                output_memory_config.value_or(input_tensor.memory_config()),
-                get_scatter_reduction_type_from_string(opt_reduction_string),
-                sub_core_grid},
-            ttnn::prim::ScatterInputs{input_tensor, index_tensor, source_tensor});
         return input_tensor;
     }
     const auto original_layout = input_tensor.layout();
