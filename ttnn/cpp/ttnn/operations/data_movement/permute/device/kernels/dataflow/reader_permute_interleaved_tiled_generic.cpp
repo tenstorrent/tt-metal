@@ -10,6 +10,9 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#ifdef BOUNCE_IN_SCRATCHPAD
+#include "api/scratchpad.h"
+#endif
 
 void kernel_main() {
     // X = output width
@@ -73,6 +76,11 @@ void kernel_main() {
     constexpr uint32_t w_block_size = TILE_WIDTH;
     constexpr uint32_t FACE_H_STRIDE_BYTES = NUM_FACES_W * FACE_HW_BYTES;
     constexpr uint32_t read_alignment_minus_one = read_alignment - 1;
+#ifdef BOUNCE_IN_SCRATCHPAD
+    // An aligned window of read_alignment bytes plus room for one line past its end.
+    const uint32_t bounce_base = Scratchpad<uint32_t>(scratch::bounce).get_base_address();
+    const uint32_t bounce_window = (bounce_base + read_alignment_minus_one) & ~read_alignment_minus_one;
+#endif
 
     // For x-padding logic:
     constexpr uint32_t final_face_real_w = (W % FACE_WIDTH);
@@ -208,7 +216,14 @@ void kernel_main() {
                         uint64_t final_src_addr = s.get_noc_addr((uint32_t)tile, total_offset);
                         uint32_t l1_base = l1_col_base + cb_w_offset;
                         if ((final_src_addr & read_alignment_minus_one) != (l1_base & read_alignment_minus_one)) {
+#ifdef BOUNCE_IN_SCRATCHPAD
+                            // Land the line at the source's offset within an aligned window of the scratchpad,
+                            // as the DFB entries here hold exactly one tile and have no room for it.
+                            uint32_t misaligned_addr =
+                                bounce_window + static_cast<uint32_t>(final_src_addr & read_alignment_minus_one);
+#else
                             uint32_t misaligned_addr = l1_base + misalignment;
+#endif
                             CoreLocalMem<uint32_t> mis_dst(misaligned_addr);
                             noc.async_read(
                                 s,
