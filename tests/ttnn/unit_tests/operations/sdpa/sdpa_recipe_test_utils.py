@@ -129,11 +129,12 @@ SHAPES = {
 }
 
 
-def fit_q_chunk(variant, q_chunk, wormhole_cap):
-    """Wormhole's smaller L1 (1464 KiB) does not fit some FP32-state (BALANCED, ACCURATE) layouts that Blackhole
-    does; cap their Q chunk there."""
-    if variant in ("balanced", "accurate") and ttnn.get_arch_name() == "wormhole_b0":
-        return min(q_chunk, wormhole_cap)
+def fit_q_chunk(variant, q_chunk, wormhole_cap, blackhole_cap=None):
+    """The FP32-state recipes (BALANCED, ACCURATE) keep O, l and the row maxima in FP32: some of their layouts do not
+    fit the unreserved L1 (1464 KiB on Wormhole, 1427 KiB on Blackhole). Cap their Q chunk there."""
+    cap = wormhole_cap if ttnn.get_arch_name() == "wormhole_b0" else blackhole_cap
+    if variant in ("balanced", "accurate") and cap is not None:
+        return min(q_chunk, cap)
     return q_chunk
 
 
@@ -338,7 +339,7 @@ def check_key_range(device, variant, shape, *, causal, window=None, grid=None):
         *inputs_for(device, variant, q, k, v),
         is_causal=causal,
         sliding_window_size=window,
-        program_config=program_config(device, fit_q_chunk(variant, q_chunk, 256), k_chunk, grid),
+        program_config=program_config(device, fit_q_chunk(variant, q_chunk, 256, 256), k_chunk, grid),
         precision=VARIANTS[variant][0],
     )
     expected = reference(q, k, v, key_mask(s, s, causal=causal, window=window))
