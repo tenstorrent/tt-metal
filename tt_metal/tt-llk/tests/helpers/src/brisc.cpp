@@ -128,8 +128,8 @@ extern "C"
 #endif
 // experiment hook (holdall): LLK_RELEASE_GAP_SCHED nops in the scheduled releases' gap path (the schedule's analog of F)
 #if defined(LLK_RELEASE_GAP_SCHED)
-#define LLK_GAPS_XSTR_(x)  #x
-#define LLK_GAPS_XSTR(x)   LLK_GAPS_XSTR_(x)
+#define LLK_GAPS_XSTR_(x) #x
+#define LLK_GAPS_XSTR(x)  LLK_GAPS_XSTR_(x)
 #define LLK_GAP_SCHED_ASM ".rept " LLK_GAPS_XSTR(LLK_RELEASE_GAP_SCHED) "\n\tnop\n\t.endr\n\t"
 #else
 #define LLK_GAP_SCHED_ASM ""
@@ -142,7 +142,8 @@ extern "C"
 asm(".pushsection .init, \"ax\"\n.rept " LLK_BP_STR(LLK_EXP_BR_PAD_INIT) " / 4\nnop\n.endr\n.popsection");
 #endif
 #if defined(LLK_EXP_BR_PAD_TEXT)
-asm(".pushsection .text.llk_exp_pad, \"ax\"\n.globl llk_exp_text_pad\nllk_exp_text_pad:\n.rept " LLK_BP_STR(LLK_EXP_BR_PAD_TEXT) " / 4\nnop\n.endr\n.popsection");
+asm(".pushsection .text.llk_exp_pad, \"ax\"\n.globl llk_exp_text_pad\nllk_exp_text_pad:\n.rept " LLK_BP_STR(
+    LLK_EXP_BR_PAD_TEXT) " / 4\nnop\n.endr\n.popsection");
 #endif
 #if defined(LLK_EXP_BR_PAD_DATA)
 __attribute__((used)) volatile std::uint8_t llk_exp_data_pad[LLK_EXP_BR_PAD_DATA] = {1};
@@ -249,7 +250,8 @@ __attribute__((always_inline)) inline void serve_loop()
         "srli  a4, s5, 2\n\tli    a3, %[nphases]\n\tbleu  a4, a3, 80f\n"
         "79:\n\t"
         ".endif\n\t"
-        "sw    zero, 0(t1)\n\t" LLK_GAP_ASM "sw    zero, 0(a7)\n\t" LLK_GAP_ASM "sw    zero, 0(a6)\n\t" // release: unpack, math, pack back to back
+        "sw    zero, 0(t1)\n\t" LLK_GAP_ASM "sw    zero, 0(a7)\n\t" LLK_GAP_ASM
+        "sw    zero, 0(a6)\n\t" // release: unpack, math, pack back to back
         "j     1b\n"
         ".if %[phases]\n"
         "80:\n\t" // a4 = k + 1: the three release stores in phase k's order with its spins (s3, s4 are free here)
@@ -293,8 +295,7 @@ __attribute__((always_inline)) inline void serve_loop()
         "lw    a4, 0(a6)\n\tand   a4, a4, a4\n\t"
         "li    a4, 512\n"
         "46:\n\t"
-        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 46b\n\t"
-        LLK_EXP_SCRATCH_ASM // experiment hook (initx): host-shared register reads before the first INIT release
+        "nop\n\taddi  a4, a4, -1\n\tbnez  a4, 46b\n\t" LLK_EXP_SCRATCH_ASM // experiment hook (initx): host-shared register reads before the first INIT release
         "sw    zero, 0(t1)\n\t"
         "li    a4, %[stagger]\n"
         "47:\n\t"
@@ -566,6 +567,9 @@ int main()
                 break;
         }
 
+#if defined(LLK_EXP_BR_ABL_POLL1US) // ablation R6: the 1 us wall clock wait from before 2d6e129bd2a
+        ckernel::wait(ARCH_CYCLE_MICRO_SECOND);
+#else
 #if defined(TT_METAL_TTSIM) // ttsim simulates every NOP and nothing there interferes, so it polls every microsecond
         constexpr std::uint32_t poll_period_us = 1;
 #else
@@ -577,6 +581,7 @@ int main()
         {
             asm volatile("nop");
         }
+#endif
     }
 }
 
