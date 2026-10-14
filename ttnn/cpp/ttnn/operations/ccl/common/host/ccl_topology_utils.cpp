@@ -409,7 +409,7 @@ std::optional<TensorTopology> all_gather_output_topology(
     const MeshShape& mesh_shape,
     uint32_t tensor_rank,
     int32_t gathered_dim,
-    bool require_contiguous_gather) {
+    bool require_contiguous_gather) {  // refuse gathers that would interleave a dim sharded on more than one axis
     const TopologyPlacement replicate = Replicate{};
     if (!cluster_axis.has_value()) {
         // Whole-mesh gather: every device ends up with every piece, whatever the label's rank. The ring order is the
