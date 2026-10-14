@@ -12,7 +12,7 @@
  * LLK PACK FAST TILIZE (BH)
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool w_step = false>
 inline void llk_pack_fast_tilize_init(
     const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
     SAN_HOOK(unsupported());
@@ -24,7 +24,7 @@ inline void llk_pack_fast_tilize_init(
     const bool input_32b = pack_dst_format[get_output_id(input_operand)] == (uint)DataFormat::Float32;
     LLK_ASSERT_BLOCK(pack_fast_tilize_two_tile_row = false);
     // The L1 step leaves the MOP to fast_tilize_block, which programs it at the entry of every block.
-    _llk_pack_fast_tilize_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, false>(
+    _llk_pack_fast_tilize_init_<DST_SYNC_MODE, is_fp32_dest_acc_en, false, w_step>(
         use_32bit_dest, pack_dst_format[output_id], unit_dim, num_faces, pack_src_format[output_id], input_32b);
 }
 
@@ -47,13 +47,13 @@ inline void llk_pack_fast_tilize_init_two_tile_row(const std::uint32_t input_ope
         use_32bit_dest, pack_dst_format[output_id], 2, num_faces, pack_src_format[output_id]);
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool w_step = false>
 inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
     SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    _llk_pack_fast_tilize_uninit_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+    _llk_pack_fast_tilize_uninit_<DST_SYNC_MODE, is_fp32_dest_acc_en, w_step>(
         pack_dst_format[output_id], face_r_dim, num_faces, pack_src_format[output_id]);
 }
 
@@ -63,13 +63,13 @@ inline void llk_pack_fast_tilize_reinit_unit_dim(const std::uint32_t pack_output
     _llk_pack_fast_tilize_reinit_unit_dim_(pack_dst_format[output_id], new_unit_dim);
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool w_step = false>
 inline void llk_pack_fast_tilize_reinit_unit_dim(
     const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t new_unit_dim) {
     SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(pack_output);
     const bool input_32b = pack_dst_format[get_output_id(input_operand)] == (uint)DataFormat::Float32;
-    _llk_pack_fast_tilize_reinit_unit_dim_<is_fp32_dest_acc_en>(pack_dst_format[output_id], new_unit_dim, input_32b);
+    _llk_pack_fast_tilize_reinit_unit_dim_<is_fp32_dest_acc_en, w_step>(pack_dst_format[output_id], new_unit_dim, input_32b);
 }
 
 inline void llk_pack_fast_tilize_block(
@@ -93,12 +93,17 @@ inline void llk_pack_fast_tilize_row_begin(const std::uint32_t output, const std
     _llk_pack_fast_tilize_row_begin_(pack_tile_addr);
 }
 
+template <bool w_step = false>
 inline void llk_pack_fast_tilize_row_chunk(
-    const std::uint32_t tile_index, const std::uint32_t output, const std::uint32_t unit_dim, const bool gap_rows = false) {
+    const std::uint32_t tile_index,
+    const std::uint32_t output,
+    const std::uint32_t unit_dim,
+    const bool gap_rows = false,
+    const bool row_start = false) {
     SAN_HOOK(unsupported());
     const std::uint8_t output_id = get_output_id(output);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    _llk_pack_fast_tilize_row_chunk_(tile_index, unit_dim, num_faces, gap_rows);
+    _llk_pack_fast_tilize_row_chunk_<w_step>(tile_index, unit_dim, num_faces, gap_rows, row_start);
 }
 
 inline void llk_pack_fast_tilize_row_end() {

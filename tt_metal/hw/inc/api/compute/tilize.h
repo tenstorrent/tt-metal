@@ -246,7 +246,7 @@ ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
 #ifndef ARCH_QUASAR
 namespace fast_tilize_detail {
 
-template <bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool w_step = false>
 ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifdef ARCH_BLACKHOLE
     if (full_dim == 1) {
@@ -270,7 +270,7 @@ ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, u
         if (full_dim == 2) {
             PACK((llk_pack_fast_tilize_init_two_tile_row<is_fp32_dest_acc_en>(icb, ocb)));
         } else {
-            PACK((llk_pack_fast_tilize_init<is_fp32_dest_acc_en>(icb, ocb, first_chunk)));
+            PACK((llk_pack_fast_tilize_init<is_fp32_dest_acc_en, w_step>(icb, ocb, first_chunk)));
         }
     } else {
         PACK((llk_pack_fast_tilize_init<is_fp32_dest_acc_en>(icb, ocb, first_chunk)));
@@ -284,15 +284,17 @@ ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, u
 
 }  // namespace fast_tilize_detail
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+// w_step (Blackhole, rows of three or more tiles): a 16-bit input steps L1 by the packer's output W counter; pass the same
+// value to fast_tilize_block and fast_tilize_uninit.
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool w_step = false>
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    fast_tilize_detail::fast_tilize_init_impl<true, is_fp32_dest_acc_en>(icb, full_dim, ocb, call_line);
+    fast_tilize_detail::fast_tilize_init_impl<true, is_fp32_dest_acc_en, w_step>(icb, full_dim, ocb, call_line);
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool w_step = false>
 ALWI void fast_tilize_init_skip_remap(
     uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    fast_tilize_detail::fast_tilize_init_impl<false, is_fp32_dest_acc_en>(icb, full_dim, ocb, call_line);
+    fast_tilize_detail::fast_tilize_init_impl<false, is_fp32_dest_acc_en, w_step>(icb, full_dim, ocb, call_line);
 }
 
 namespace fast_tilize_detail {
@@ -320,7 +322,7 @@ ALWI void fast_tilize_init_with_dt_skip_remap(uint32_t icb, uint32_t full_dim, u
     fast_tilize_detail::fast_tilize_init_with_dt_impl<false, is_fp32_dest_acc_en>(icb, full_dim, ocb);
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool w_step = false>
 ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {
 #ifdef ARCH_BLACKHOLE
     if (full_dim == 1) {
@@ -331,11 +333,19 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {
 
     UNPACK((llk_unpack_fast_tilize_uninit<is_fp32_dest_acc_en>()));
     MATH((llk_math_fast_tilize_uninit<is_fp32_dest_acc_en>(icb)));
+#ifdef ARCH_BLACKHOLE
+    PACK((llk_pack_fast_tilize_uninit<is_fp32_dest_acc_en, w_step>(ocb)));
+#else
     PACK((llk_pack_fast_tilize_uninit<is_fp32_dest_acc_en>(ocb)));
+#endif
 }
 
 // pair_chunks (Blackhole): two chunks share a DEST section and its hand-off, the second in the first one's gap rows.
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool pair_chunks = false, bool math_clears_dest = false>
+template <
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool pair_chunks = false,
+    bool math_clears_dest = false,
+    bool w_step = false>
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
 #ifdef ARCH_BLACKHOLE
@@ -369,12 +379,12 @@ ALWI void fast_tilize_block(
 
                 if (chunk != prev_chunk) {
                     UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
-                    PACK((llk_pack_fast_tilize_reinit_unit_dim<is_fp32_dest_acc_en>(icb, ocb, chunk)));
+                    PACK((llk_pack_fast_tilize_reinit_unit_dim<is_fp32_dest_acc_en, w_step>(icb, ocb, chunk)));
                     prev_chunk = chunk;
                 }
                 UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
                 MATH((llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, icb, 4)));
-                PACK((llk_pack_fast_tilize_row_chunk(0, ocb, chunk)));
+                PACK((llk_pack_fast_tilize_row_chunk<w_step>(0, ocb, chunk, false, tiles_done == 0)));
 
                 MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
                 PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en, math_clears_dest>()));
@@ -399,12 +409,12 @@ ALWI void fast_tilize_block(
                     const uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
                     if (chunk != prev_chunk) {
                         UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
-                        PACK((llk_pack_fast_tilize_reinit_unit_dim<is_fp32_dest_acc_en>(icb, ocb, chunk)));
+                        PACK((llk_pack_fast_tilize_reinit_unit_dim<is_fp32_dest_acc_en, w_step>(icb, ocb, chunk)));
                         prev_chunk = chunk;
                     }
                     UNPACK((llk_unpack_fast_tilize_block(icb, input_tile_index, chunk, tiles_done)));
                     MATH((llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(0, icb, 4, slot != 0)));
-                    PACK((llk_pack_fast_tilize_row_chunk(0, ocb, chunk, slot != 0)));
+                    PACK((llk_pack_fast_tilize_row_chunk<w_step>(0, ocb, chunk, slot != 0, tiles_done == 0)));
                     tiles_done += chunk;
                 }
                 chunks_left -= slots;
@@ -489,12 +499,12 @@ ALWI void fast_tilize_block(
 #else   // ARCH_QUASAR
 // Quasar has no separate fast-tilize LLK path -- its regular unpack_tilize is already fast, so these
 // wrappers just forward to the plain tilize_* implementation defined above.
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool w_step = false>
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     tilize_init<is_fp32_dest_acc_en>(icb, full_dim, ocb, call_line);
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool w_step = false>
 ALWI void fast_tilize_init_skip_remap(
     uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     tilize_init<is_fp32_dest_acc_en>(icb, full_dim, ocb, call_line);
@@ -512,11 +522,16 @@ ALWI void fast_tilize_init_with_dt_skip_remap(uint32_t icb, uint32_t full_dim, u
     tilize_init<is_fp32_dest_acc_en>(icb, full_dim, ocb);
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool w_step = false>
 ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, [[maybe_unused]] uint32_t full_dim) {
     tilize_uninit(icb, ocb);
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool pair_chunks = false, bool math_clears_dest = false>
+template <
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool pair_chunks = false,
+    bool math_clears_dest = false,
+    bool w_step = false>
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
     tilize_block<is_fp32_dest_acc_en>(icb, block, ocb, input_tile_index, output_tile_index);

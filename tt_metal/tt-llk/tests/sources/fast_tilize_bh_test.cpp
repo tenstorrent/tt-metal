@@ -326,6 +326,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "experimental/llk_pack_fast_tilize.h"
 #include "llk_pack_common.h"
 
+// As the `ttnn.tilize` kernels: 16-bit rows of three or more tiles step L1 by the packer's output W counter.
+constexpr bool w_step = FAST_TILIZE_W_STEP && !is_fp32_dest_acc_en && clear_on_acquire;
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #ifndef SPEED_OF_LIGHT
@@ -398,7 +401,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                 formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
-            _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+            _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, true, w_step>(
                 0 /* use_32bit_dest */, formats.pack_dst, unit_dims[0], 4 /* num_faces */, formats.pack_src, input_32b);
         }
         {
@@ -432,7 +435,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                             if (udim != prev_udim)
                             {
-                                _llk_pack_fast_tilize_reinit_unit_dim_<is_fp32_dest_acc_en>(formats.pack_dst, udim, input_32b);
+                                _llk_pack_fast_tilize_reinit_unit_dim_<is_fp32_dest_acc_en, w_step>(formats.pack_dst, udim, input_32b);
                                 prev_udim = udim;
                             }
 
@@ -440,7 +443,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             {
                                 _llk_packer_wait_for_math_done_();
                             }
-                            _llk_pack_fast_tilize_row_chunk_(0 /* tile_index */, udim, 4 /* num_faces */);
+                            _llk_pack_fast_tilize_row_chunk_<w_step>(0 /* tile_index */, udim, 4 /* num_faces */, false, u == 0);
                             if constexpr (!pack_free_runs)
                             {
                                 _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en, !clear_on_acquire>();
@@ -469,10 +472,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                                 if (udim != prev_udim)
                                 {
-                                    _llk_pack_fast_tilize_reinit_unit_dim_<is_fp32_dest_acc_en>(formats.pack_dst, udim, input_32b);
+                                    _llk_pack_fast_tilize_reinit_unit_dim_<is_fp32_dest_acc_en, w_step>(formats.pack_dst, udim, input_32b);
                                     prev_udim = udim;
                                 }
-                                _llk_pack_fast_tilize_row_chunk_(0 /* tile_index */, udim, 4 /* num_faces */, s != 0);
+                                _llk_pack_fast_tilize_row_chunk_<w_step>(0 /* tile_index */, udim, 4 /* num_faces */, s != 0, u == 0);
                             }
                             if constexpr (!pack_free_runs)
                             {
@@ -491,7 +494,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
             }
-            _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, formats.pack_src);
+            _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en, w_step>(formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, formats.pack_src);
         }
 
     } // end else (fast tilize path)

@@ -14,6 +14,7 @@
 //
 // L1 step (16-bit input and DEST): end_ops advance L1_Dest_addr one output tile (SCRATCH_SEC2) by a bare CFGSHIFTMASK;
 // two-tile chunks of a 16-bit output use the replay with that CFGSHIFTMASK, since bare chunks do not step OUTPUT_ADDR.
+// w_step (rows of three or more tiles): bare chunks step L1 by the output channel's W counter instead, no cfg write per tile.
 
 #pragma once
 
@@ -132,6 +133,7 @@ inline __attribute__((noinline)) void _llk_pack_fast_tilize_load_l1_step_replay_
 
 // Multi-tile MOP: outerloop=unit_dim tiles, each with tile replay + addr update.
 // end_ops fire per outer iteration = per tile.
+template <bool w_step = false>
 inline void _llk_pack_fast_tilize_mop_config_(const std::uint32_t unit_dim, const bool paced = true)
 {
     ckernel::ckernel_template tmp(
@@ -146,8 +148,11 @@ inline void _llk_pack_fast_tilize_mop_config_(const std::uint32_t unit_dim, cons
     // With innerloop=1: every inner iter is "last inner".
     // Tiles 0..N-2: last_inner fires (advance W).
     // Tile N-1: last_outer fires (advance W — same op, no PACR_FLUSH).
-    tmp.set_last_inner_loop_instr(TT_OP_ADDRCRZW(p_setadc::PAC, 0, 0, 1, 0, 0b0010));
-    tmp.set_last_outer_loop_instr(TT_OP_ADDRCRZW(p_setadc::PAC, 0, 0, 1, 0, 0b0010));
+    // w_step: a bare chunk steps L1 with the output channel's W counter (stride one output tile) in the same ADDRCRZW.
+    const std::uint32_t w_incr =
+        (w_step && !paced) ? TT_OP_ADDRCRZW(p_setadc::PAC, 1, 0, 1, 0, 0b1010) : TT_OP_ADDRCRZW(p_setadc::PAC, 0, 0, 1, 0, 0b0010);
+    tmp.set_last_inner_loop_instr(w_incr);
+    tmp.set_last_outer_loop_instr(w_incr);
 
     // end_ops: L1 address advance via replay (runs per outer iteration = per tile); the L1 step's bare CFGSHIFTMASK is
     // kept from the next PACR by the next START_OP.
@@ -155,7 +160,7 @@ inline void _llk_pack_fast_tilize_mop_config_(const std::uint32_t unit_dim, cons
     {
         tmp.set_end_ops(lltt::replay_insn(REPLAY_ADDR_UPDATE_OFFSET, REPLAY_ADDR_UPDATE_LEN), TT_OP_NOP);
     }
-    else
+    else if constexpr (!w_step)
     {
         tmp.set_end_op(TT_OP_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG1_L1_Dest_addr_ADDR32));
     }
@@ -163,7 +168,7 @@ inline void _llk_pack_fast_tilize_mop_config_(const std::uint32_t unit_dim, cons
     tmp.program();
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool w_step = false>
 TT_ALWAYS_INLINE void _llk_pack_fast_tilize_configure_(
     const std::uint32_t pack_dst_format, [[maybe_unused]] const std::uint32_t num_faces, const std::uint32_t pack_src_format)
 {
@@ -215,9 +220,18 @@ TT_ALWAYS_INLINE void _llk_pack_fast_tilize_configure_(
     TT_SETDMAREG(0, UPPER_HALFWORD(y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT), 0, HI_16(p_gpr_pack::TMP0));
     TT_SETDMAREG(0, LOWER_HALFWORD(z_stride << PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT), 0, LO_16(p_gpr_pack::TMP1));
     TT_SETDMAREG(0, UPPER_HALFWORD(w_stride << PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT), 0, HI_16(p_gpr_pack::TMP1));
+    if constexpr (w_step)
+    {
+        TT_SETDMAREG(0, tile_l1_size << 4, 0, HI_16(p_gpr_pack::TMP_HI));
+    }
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
     TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32);
+    if constexpr (w_step)
+    {
+        // Output channel W stride: one output tile in bytes (Z stride zero).
+        TTI_WRCFG(p_gpr_pack::TMP_HI, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
+    }
 }
 
 template <DstSync Dst, bool is_fp32_dest_acc_en = false>
@@ -235,22 +249,22 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
 }
 
 // Two-tile chunks of a 16-bit output are paced: back-to-back L1 writes there only slow the unpacker.
-template <bool output_16b>
+template <bool output_16b, bool w_step = false>
 inline void _llk_pack_fast_tilize_l1_step_mop_config_(const std::uint32_t unit_dim)
 {
-    _llk_pack_fast_tilize_mop_config_(unit_dim, output_16b && (unit_dim == 2));
+    _llk_pack_fast_tilize_mop_config_<w_step>(unit_dim, output_16b && (unit_dim == 2));
 }
 
-template <DstSync Dst, bool output_16b, bool program_mop>
+template <DstSync Dst, bool output_16b, bool program_mop, bool w_step = false>
 __attribute__((noinline)) void _llk_pack_fast_tilize_l1_step_init_(
     const std::uint32_t pack_dst_format, const std::uint32_t unit_dim, const std::uint32_t pack_src_format)
 {
-    _llk_pack_fast_tilize_configure_<Dst, false>(pack_dst_format, 4, pack_src_format);
+    _llk_pack_fast_tilize_configure_<Dst, false, w_step>(pack_dst_format, 4, pack_src_format);
     _llk_pack_fast_tilize_configure_addrmod_();
     _llk_pack_fast_tilize_load_l1_step_replay_();
     if constexpr (program_mop)
     {
-        _llk_pack_fast_tilize_l1_step_mop_config_<output_16b>(unit_dim);
+        _llk_pack_fast_tilize_l1_step_mop_config_<output_16b, w_step>(unit_dim);
     }
     // Last, so a MOP program's sync does not wait on it; the register's high half is zero, as the WRCFG address-update
     // replay's ADDDMAREG also requires.
@@ -259,7 +273,7 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_l1_step_init_(
 
 // For callers that know the input's L1 format: a 16-bit input through a 16-bit DEST takes the L1 step, a 32-bit input or
 // DEST the init above. With compile-time formats only one of them is compiled in.
-template <DstSync Dst, bool is_fp32_dest_acc_en, bool program_mop = true>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool program_mop = true, bool w_step = false>
 TT_ALWAYS_INLINE void _llk_pack_fast_tilize_init_(
     const std::uint32_t use_32bit_dest,
     const std::uint32_t pack_dst_format,
@@ -278,11 +292,11 @@ TT_ALWAYS_INLINE void _llk_pack_fast_tilize_init_(
     }
     else if (datum_size_in_bytes(pack_dst_format) == 2)
     {
-        _llk_pack_fast_tilize_l1_step_init_<Dst, true, program_mop>(pack_dst_format, unit_dim, pack_src_format);
+        _llk_pack_fast_tilize_l1_step_init_<Dst, true, program_mop, w_step>(pack_dst_format, unit_dim, pack_src_format);
     }
     else
     {
-        _llk_pack_fast_tilize_l1_step_init_<Dst, false, program_mop>(pack_dst_format, unit_dim, pack_src_format);
+        _llk_pack_fast_tilize_l1_step_init_<Dst, false, program_mop, w_step>(pack_dst_format, unit_dim, pack_src_format);
     }
 }
 
@@ -318,11 +332,14 @@ inline void _llk_pack_fast_tilize_row_begin_(const std::uint32_t address)
 }
 
 // gap_rows: the second chunk of a DEST section; W = 4 starts its tiles 8 rows down, in the first chunk's gap rows.
+// row_start (w_step): the row's first chunk also resets the output channel's W counter.
+template <bool w_step = false>
 inline void _llk_pack_fast_tilize_row_chunk_(
     [[maybe_unused]] const std::uint32_t tile_index,
     [[maybe_unused]] const std::uint32_t unit_dim,
     [[maybe_unused]] const std::uint32_t num_faces = 4,
-    const bool gap_rows                             = false)
+    const bool gap_rows                             = false,
+    [[maybe_unused]] const bool row_start           = false)
 {
     // Only W needs resetting per chunk — it accumulates via W_Cr across tiles
     // (last_inner/last_outer each fire ADDRCRZW W+=1, and start_op restores W=W_Cr).
@@ -331,6 +348,10 @@ inline void _llk_pack_fast_tilize_row_chunk_(
     if (gap_rows)
     {
         TTI_SETADCZW(p_setadc::PAC, 0, 0, 4, 0, 0b0010);
+    }
+    else if (w_step && row_start)
+    {
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1010);
     }
     else
     {
@@ -350,7 +371,7 @@ inline void _llk_pack_fast_tilize_reinit_unit_dim_([[maybe_unused]] const std::u
     _llk_pack_fast_tilize_mop_config_(new_unit_dim);
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool w_step = false>
 inline void _llk_pack_fast_tilize_reinit_unit_dim_(const std::uint32_t pack_dst_format, const std::uint32_t new_unit_dim, const bool input_32b)
 {
     LLK_ASSERT(!pack_fast_tilize_two_tile_row || new_unit_dim == 2, "fast_tilize: a row of two tiles takes two-tile chunks only");
@@ -360,11 +381,11 @@ inline void _llk_pack_fast_tilize_reinit_unit_dim_(const std::uint32_t pack_dst_
     }
     else if (datum_size_in_bytes(pack_dst_format) == 2)
     {
-        _llk_pack_fast_tilize_l1_step_mop_config_<true>(new_unit_dim);
+        _llk_pack_fast_tilize_l1_step_mop_config_<true, w_step>(new_unit_dim);
     }
     else
     {
-        _llk_pack_fast_tilize_l1_step_mop_config_<false>(new_unit_dim);
+        _llk_pack_fast_tilize_l1_step_mop_config_<false, w_step>(new_unit_dim);
     }
 }
 
@@ -384,7 +405,7 @@ inline void _llk_pack_fast_tilize_block_(
     ckernel::ckernel_template::run();
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool w_step = false>
 inline void _llk_pack_fast_tilize_uninit_(
     const std::uint32_t pack_dst_format,
     [[maybe_unused]] const std::uint32_t face_r_dim,
@@ -402,6 +423,11 @@ inline void _llk_pack_fast_tilize_uninit_(
     // BH-specific: restore strides modified by fast-tilize init (WH doesn't modify them).
     // Note: set_packer_strides's first param is semantically pack_src_format.
     set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
+    if constexpr (w_step)
+    {
+        // Other pack programs take the output channel's W counter as zero.
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1000);
+    }
     // Restore X counter, addr_mods, and MOP via _llk_pack_init_ (aligned with WH approach); init owns
     // the X counter and sets it itself. Strides are restored just above, so skip them in init.
     _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(

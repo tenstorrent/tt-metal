@@ -50,6 +50,14 @@ constexpr bool can_use_fast_tilize() {
            has_supported_fast_tilize_format<input_dfb>() && !is_fp32_output_format<output_dfb>();
 }
 
+// BH fast tilize steps L1 by the packer's output W counter for paired 16-bit rows of three or more tiles; a row of two
+// takes the paced init.
+template <uint32_t block_width_tiles, uint32_t input_dfb, tilize_config::ChunkPairing chunk_pairing>
+constexpr bool fast_tilize_w_step() {
+    return chunk_pairing == tilize_config::ChunkPairing::Paired && block_width_tiles >= 3 &&
+           !is_fp32_input_format<input_dfb>() && !DST_ACCUM_MODE;
+}
+
 // =============================================================================
 // Main Function Implementation
 // =============================================================================
@@ -83,6 +91,7 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         (fp32_mode == tilize_config::Fp32Mode::Lossless) && is_fp32_input_format<input_dfb>();
     constexpr bool use_fast =
         can_use_fast_tilize<block_width_tiles, input_dfb, output_dfb>() && !lossless_fp32_override;
+    constexpr bool w_step = use_fast && fast_tilize_w_step<block_width_tiles, input_dfb, chunk_pairing>();
 
     // Determine if we're doing data type reconfiguration
     constexpr bool use_unpack_reconfig =
@@ -130,11 +139,11 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         if constexpr (use_fast) {
 #ifdef ARCH_BLACKHOLE
             if constexpr (remap_mode == tilize_config::RemapMode::AssumeConfigured) {
-                fast_tilize_init_skip_remap(input_dfb, block_width_tiles, output_dfb);
+                fast_tilize_init_skip_remap<DST_ACCUM_MODE, w_step>(input_dfb, block_width_tiles, output_dfb);
             } else
 #endif
             {
-                fast_tilize_init(input_dfb, block_width_tiles, output_dfb);
+                fast_tilize_init<DST_ACCUM_MODE, w_step>(input_dfb, block_width_tiles, output_dfb);
             }
         } else {
             tilize_init(input_dfb, block_width_tiles, output_dfb);
@@ -191,8 +200,11 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         out_dfb.reserve_back(block_width_tiles);
 
         if constexpr (use_fast) {
-            fast_tilize_block<DST_ACCUM_MODE, chunk_pairing == tilize_config::ChunkPairing::Paired, math_clears_dest>(
-                input_dfb, block_width_tiles, output_dfb);
+            fast_tilize_block<
+                DST_ACCUM_MODE,
+                chunk_pairing == tilize_config::ChunkPairing::Paired,
+                math_clears_dest,
+                w_step>(input_dfb, block_width_tiles, output_dfb);
         } else {
             tilize_block<DST_ACCUM_MODE, math_clears_dest>(input_dfb, block_width_tiles, output_dfb);
         }
@@ -215,7 +227,7 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         init_uninit_mode == tilize_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == tilize_config::InitUninitMode::UninitOnly) {
         if constexpr (use_fast) {
-            fast_tilize_uninit(input_dfb, output_dfb, block_width_tiles);
+            fast_tilize_uninit<DST_ACCUM_MODE, w_step>(input_dfb, output_dfb, block_width_tiles);
         } else {
             tilize_uninit(input_dfb, output_dfb);
         }

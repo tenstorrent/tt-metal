@@ -16,6 +16,7 @@ from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    FAST_TILIZE_W_STEP,
     LOOP_FACTOR,
     NUM_FACES,
     TILE_COUNT,
@@ -80,7 +81,7 @@ def _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim):
             PerfRunType.PACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ],
-        templates=[],
+        templates=[FAST_TILIZE_W_STEP(ct_dim)],
         runtimes=[
             generate_input_dim(dimensions, dimensions),
             TILE_COUNT(tile_count),
