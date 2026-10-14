@@ -49,6 +49,7 @@ def run_all_gather_impl(
     packer_l1_acc=True,
     precision_offset=None,
     matmul_1d_mcast_in0=None,
+    program_config=None,
 ):
     if use_legacy_allgather:
         pytest.skip(LEGACY_CCL_SKIP)
@@ -181,7 +182,9 @@ def run_all_gather_impl(
 
     ##### Configs for ttnn.matmul #####
     core_grid = (8, 6)
-    if matmul_1d_mcast_in0 is not None:
+    if program_config is not None:
+        pass  # caller-provided
+    elif matmul_1d_mcast_in0 is not None:
         # Single-core 1D multicast config: the whole per-device matmul runs on one core with K split
         # into many blocks, so the cross-block reload runs on the classic mcast_in0/in1 program path
         # (mcast_in0 selects which). Shapes are kept small so the single core's CBs fit in SRAM.
@@ -663,4 +666,75 @@ def test_all_gather_matmul_async_1d_fp32_reload_precision(mesh_device, all_gathe
         packer_l1_acc=False,
         precision_offset=1000.0,
         matmul_1d_mcast_in0=matmul_1d_mcast_in0,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+def test_all_gather_matmul_async_1d_sharded_decode(mesh_device, all_gather_topology):
+    """The 1D mcast_in0 config that models/common attention_1d and tt_transformers run for the fused all-gather +
+    WO matmul in decode on a T3K ring (Llama-3.1-8B shapes): L1 width-sharded activation and all-gather output on
+    8x1 cores, DRAM weights, L1 width-sharded matmul output. Three iterations with fresh inputs and semaphores check
+    that program-cache hits re-point every tensor and semaphore.
+    """
+    num_devices = mesh_device.get_num_devices()
+    dim, rows, tile = 4096, 32, 32
+    width_sharded = ttnn.ShardStrategy.WIDTH
+    ag_memcfg = ttnn.create_sharded_memory_config(
+        (rows, dim // 8),
+        ttnn.CoreGrid(x=8, y=1),
+        width_sharded,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    mm_grid = ttnn.CoreGrid(x=8, y=2)
+    mm_memcfg = ttnn.create_sharded_memory_config(
+        (rows, dim // mm_grid.num_cores // num_devices),
+        mm_grid,
+        width_sharded,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    per_core_N = dim // num_devices // tile // 8
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 1),
+        in0_block_w=dim // tile // 8,
+        out_subblock_h=1,
+        out_subblock_w=per_core_N,
+        per_core_M=rows // tile,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    run_all_gather_impl(
+        mesh_device,
+        num_devices,
+        ag_output_shape=[1, 1, rows, dim],
+        dim=3,
+        num_links=1,
+        ag_input_dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        matmul_output_dim=dim // num_devices,
+        matmul_weights_dtype=ttnn.bfloat8_b,
+        max_in0_block_w=None,  # unused: program_config is given
+        use_bias=False,
+        mem_config_input=ag_memcfg,
+        mem_config_ag=ag_memcfg,
+        mem_config_mm=mm_memcfg,
+        mem_config_weights=ttnn.DRAM_MEMORY_CONFIG,
+        all_gather_topology=all_gather_topology,
+        use_non_fused=False,
+        use_legacy_allgather=False,
+        num_iters=3,
+        enable_trace=False,
+        use_barrier=True,
+        use_persistent_buffers=False,
+        program_config=program_config,
     )
