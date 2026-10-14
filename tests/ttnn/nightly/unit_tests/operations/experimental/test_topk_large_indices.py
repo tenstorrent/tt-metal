@@ -1013,7 +1013,8 @@ def test_topk_large_indices_restricted_grid_cache_hit_rebinds_shape_and_valid_le
     grid_80 = _rect_core_grid(0, 7, 9)
     manager = device.create_sub_device_manager([ttnn.SubDevice([grid_80])], 0)
     cases = []
-    for num_rows, n, valid_length in ((2, 1024, 512), (163, 4096, 2048), (5, 8192, 4096)):
+    # Rows at or above the 80 cores give every core a whole row to split, a second program; each side must hit.
+    for num_rows, n, valid_length in ((2, 1024, 512), (5, 8192, 4096), (163, 4096, 2048), (90, 2048, 1024)):
         torch_input = torch.zeros((num_rows, n), dtype=torch.bfloat16)
         torch_input[:, :valid_length] = _make_large_index_input(
             num_rows=num_rows,
@@ -1048,7 +1049,7 @@ def test_topk_large_indices_restricted_grid_cache_hit_rebinds_shape_and_valid_le
             _assert_indices(output, expected, [torch_input.shape[0], 512])
 
         assert cache_entries[0] > 0
-        assert max(cache_entries) == min(cache_entries)
+        assert cache_entries == [cache_entries[0]] * 2 + [cache_entries[0] + 1] * 2
     finally:
         ttnn.synchronize_device(device)
         device.clear_loaded_sub_device_manager()
