@@ -1,0 +1,10 @@
+cache/
+__pycache__/
+*.pyc
+.venv/
+*.sqlite
+*.sqlite-journal
+docs/fleet.md
+docs/categories.md
+docs/validation.md
+docs/overview.canvas.tsx
