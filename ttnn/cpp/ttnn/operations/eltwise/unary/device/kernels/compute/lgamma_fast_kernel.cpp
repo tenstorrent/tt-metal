@@ -13,26 +13,25 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/rounding.hpp"  // Floor, Frac
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"      // Abs
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"      // Log
+#include "experimental/kernel_args.h"
 
 namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles = get_arg(args::num_tiles);
 
-    constexpr auto dfb_input_id = tt::CBIndex::c_0;
-    constexpr auto dfb_output_id = tt::CBIndex::c_2;
     constexpr float M_PI = 3.14159265358979323846f;
 
-    compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
+    compute_kernel_hw_startup(dfb::in, dfb::out);
 
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(num_tiles),
         // x -> D0 (owns the wait), x -> D1.
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb::in, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb::in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D1>{},
         // D0 = stirling(x)
         ckl::LgammaStirling<ckl::Dst::D0>{},
@@ -43,10 +42,10 @@ void kernel_main() {
         ckl::Sin<ckl::Dst::D1>{},
         // reload x -> D2, D3 ; D3 = floor(x) ; D2 = (x == floor(x))
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb::in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D2>{},
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb::in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D3>{},
         ckl::Floor<ckl::Dst::D3>{},
         ckl::EqBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
@@ -58,12 +57,9 @@ void kernel_main() {
         ckl::Log<ckl::Approx::Exact, ckl::Dst::D1>{},
         // reload x -> D2 (owns the pop) ; D0 = adjusted(stirling=D0, logsin=D1, x=D2)
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb::in, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D2>{},
         ckl::LgammaAdjusted<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
-            dfb_output_id,
-            ckl::ReservePolicy::PerTile,
-            ckl::PushPolicy::PerTile,
-            ckl::DataFormatReconfig::Disabled)>{});
+            dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }

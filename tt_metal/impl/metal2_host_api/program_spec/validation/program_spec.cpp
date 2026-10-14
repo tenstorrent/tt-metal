@@ -19,39 +19,9 @@ namespace tt::tt_metal::experimental {
 
 void ValidateProgramMisc(const ValidationContext& ctx) {
     const ProgramSpec& spec = ctx.spec;
-    const CollectedSpecData& collected = ctx.collected;
 
     // A Program needs at least one kernel
     TT_FATAL(!spec.kernels.empty(), "A ProgramSpec must have at least one KernelSpec");
-
-    // Every declared cross-node DFB must be bound by some kernel (local DFBs are checked in collection).
-    for (const auto& cross_node_dfb : spec.cross_node_dataflow_buffers) {
-        const DFBSpecName& name = cross_node_dfb.dfb_spec.unique_id;
-        TT_FATAL(
-            collected.dfb_endpoints.contains(name),
-            "CrossNodeDataflowBufferSpec '{}' is defined but not bound by any kernel",
-            name);
-    }
-    for (const auto& cross_node_dfb : spec.cross_node_dataflow_buffers) {
-        TT_FATAL(
-            cross_node_dfb.dfb_spec.advanced_options.prefetcher_pipe_relays.empty(),
-            "CrossNodeDataflowBufferSpec '{}' sets prefetcher_pipe_relays; only a local DFB can relay a "
-            "PrefetcherPipe",
-            cross_node_dfb.dfb_spec.unique_id);
-    }
-
-    // Cross-node DFBs are not yet supported.
-    //
-    // TODO: When cross-node DFB is supported, add a validation checks. Enforce that
-    //       each (producer_node, consumer_node) entry in producer_consumer_map has
-    //       p_node != c_node.
-
-    TT_FATAL(
-        spec.cross_node_dataflow_buffers.empty(),
-        "CrossNodeDataflowBufferSpec is part of the Metal 2.0 API surface but is not yet supported "
-        "by the runtime. (ProgramSpec '{}' has {} cross-node DFB(s).)",
-        spec.name,
-        spec.cross_node_dataflow_buffers.size());
 }
 
 }  // namespace tt::tt_metal::experimental

@@ -95,7 +95,7 @@ ProgramDescriptor GatedDeltaAttnSeqDeviceOperation::create_descriptor(
     make_cb(4, df_f32, in_kv_tiles, 1);  // q_decay [C,Dk]
     make_cb(5, df_f32, kdt_tiles, 1);    // k_decay_t [Dk,C]
     make_cb(6, df_f32, 1, 1);            // dl_exp (fp32 scalar)
-    // CB7: unused (was identity_32)
+    make_cb(7, df_f32, state_tiles, 1);  // S0 — initial state, seeded by reader, consumed on chunk 0
     make_cb(8, df_f32, state_tiles, 1);  // S — persistent state
 
     // Forward-substitution scratch

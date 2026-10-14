@@ -255,7 +255,7 @@ sizes:
     aliases: ["Qwen2.5-VL-72B", "Qwen/Qwen2.5-VL-72B-Instruct"]
     skus:
       wh_llmbox_perf:
-        trace_region_size: 28467200
+        trace_region_size: 48000000  # batch-1 demo captures 37.2 MB of traces (vision + prefill + decode)
       p300x2:
         trace_region_size: 36000000
 

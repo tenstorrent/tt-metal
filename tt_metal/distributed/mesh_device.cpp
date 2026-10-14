@@ -1577,7 +1577,7 @@ SystemMemoryManager& MeshDeviceImpl::sysmem_manager() {
 }
 
 void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
-    TracyTTMetalReleaseMeshTrace(this->get_device_ids(), *trace_id);
+    TracyTTMetalReleaseMeshTrace(*this, this->get_device_ids(), *trace_id);
 
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(trace_id);
@@ -1604,7 +1604,7 @@ MeshTraceId MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id) {
 }
 
 void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
-    TracyTTMetalBeginMeshTrace(this->get_device_ids(), *trace_id);
+    TracyTTMetalBeginMeshTrace(*this, this->get_device_ids(), *trace_id);
     TT_FATAL(
         !this->mesh_command_queues_[cq_id]->trace_id().has_value(),
         "CQ {} is already being used for tracing tid {}",
@@ -1629,7 +1629,7 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
 }
 
 void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
-    TracyTTMetalEndMeshTrace(this->get_device_ids(), *trace_id);
+    TracyTTMetalEndMeshTrace(*this, this->get_device_ids(), *trace_id);
 
     // Register the trace on any exit, including thrown exceptions, so subsequent allocations are treated
     // conservatively until the trace is released.
@@ -1671,7 +1671,7 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
 
 void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
     TTZoneScopedD(DISPATCH);
-    TracyTTMetalReplayMeshTrace(this->get_device_ids(), *trace_id);
+    TracyTTMetalReplayMeshTrace(*this, this->get_device_ids(), *trace_id);
     auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
     const auto& trace_buffer = active_sub_device_manager->get_trace(trace_id);
     TT_FATAL(

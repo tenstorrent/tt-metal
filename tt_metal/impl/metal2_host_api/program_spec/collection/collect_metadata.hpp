@@ -19,18 +19,11 @@ struct CollectedSpecData {
     // ------------------------------------------------------------------------
     // Name -> spec lookups.
     //
-    // dfb_by_name covers BOTH local and cross-node DFBs.
-    // For cross-node DFBs, the pointee is the inner dfb_spec.
-    // To check if a DFB is cross-node, check the cross_node_dfb_by_name map.
-    //
     // Invariant within this section:
     // - No values of *_by_name are nullptr.
     // - Each key of *_by_name is the unique_id (or equivalent) of the spec its value points at.
-    // - Every key k of cross_node_dfb_by_name is also a key of dfb_by_name, and
-    //   dfb_by_name[k] == &cross_node_dfb_by_name[k]->dfb_spec.
     std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
     std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
-    std::unordered_map<DFBSpecName, const CrossNodeDataflowBufferSpec*> cross_node_dfb_by_name;
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
     std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*> scratchpad_by_name;
     std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
@@ -46,8 +39,7 @@ struct CollectedSpecData {
     // - Every key is a key in prefetcher_pipe_by_name.
     // - Every vector is non-empty.
     // - Every pointer is non-nullptr, and the pointers in each vector are unique within the vector.
-    // - Every pointer p is the registered local DFB: dfb_by_name[p->unique_id] == p and
-    //   p->unique_id is not in cross_node_dfb_by_name.
+    // - Every pointer p is the registered DFB: dfb_by_name[p->unique_id] == p.
     // - Every element lists this pipe in its advanced_options.prefetcher_pipe_relays.
     std::unordered_map<PrefetcherPipeParamName, std::vector<const DataflowBufferSpec*>> prefetcher_pipe_relays;
 
@@ -67,7 +59,6 @@ struct CollectedSpecData {
     std::unordered_map<ScratchpadSpecName, std::vector<const KernelSpec*>> scratchpad_binders;
 
     // DFB endpoint info (derived from kernel bindings).
-    // Populated for both local and cross-node DFBs.
     //
     // Multiple PRODUCER KernelSpecs (and multiple CONSUMER KernelSpecs) may bind the same DFB,
     // provided they have non-overlapping node coverage and matching binding-site parameters
@@ -96,8 +87,7 @@ struct CollectedSpecData {
     };
     // Invariants:
     // - Every key is a key in dfb_by_name, and equals the dfb_spec_name of every binding in its entry.
-    // - Every local DFB (a key of dfb_by_name that is not in cross_node_dfb_by_name) has an entry.
-    //   (A cross-node DFB has an entry only if some kernel binds it.)
+    // - Every key of dfb_by_name has an entry.
     std::unordered_map<DFBSpecName, DFBEndpointInfo> dfb_endpoints;
 
     // ------------------------------------------------------------------------
@@ -108,9 +98,9 @@ struct CollectedSpecData {
     //  - Every kernel in kernel_by_name have an entry.
     std::unordered_map<KernelSpecName, NodeRangeSet> kernel_node_set;
 
-    // dfb_node_set: union of binding-kernels' node sets (local DFBs only).
+    // dfb_node_set: union of binding-kernels' node sets.
     //   - For each DFBSpecName, the node set could be empty.
-    //   - Exactly the local DFBs (keys of dfb_by_name that are not in cross_node_dfb_by_name) have an entry.
+    //   - Every key of dfb_by_name has an entry.
     //   - The node set of a DFB d is the union of kernel_node_set[rec.kernel->unique_id] over every
     //     record in dfb_endpoints[d].producers and dfb_endpoints[d].consumers.
     std::unordered_map<DFBSpecName, NodeRangeSet> dfb_node_set;
