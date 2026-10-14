@@ -7,9 +7,9 @@
 
 #include <cstdint>
 
-#include "hal/gpr_ops.h"
+#include "hal/scalar.h"
 
-namespace gpr_ops = hal::gpr_ops;
+namespace scalar = hal::scalar;
 
 // Runtime operands are added to a constant operation word and pushed through the
 // instruction buffer. Out-of-range runtime operands branch to an LLK assertion.
@@ -17,7 +17,7 @@ namespace gpr_ops = hal::gpr_ops;
 // SETDMAREG is 0x45000000 | payload << 8 | half index; GPR 5 owns halves 10 and 11.
 extern "C" __attribute__((noinline, used)) void set_runtime_word(std::uint32_t value)
 {
-    gpr_ops::set(hal::gpr<5>(), value);
+    scalar::set(hal::gpr<5>(), value);
 }
 
 // CHECK-LABEL: <set_runtime_word>:
@@ -35,7 +35,7 @@ extern "C" __attribute__((noinline, used)) void set_runtime_word(std::uint32_t v
 
 extern "C" __attribute__((noinline, used)) void set_runtime_low(std::uint32_t value)
 {
-    gpr_ops::set_low(hal::gpr<5>(), value);
+    scalar::set_low(hal::gpr<5>(), value);
 }
 
 // CHECK-LABEL: <set_runtime_low>:
@@ -54,7 +54,7 @@ extern "C" __attribute__((noinline, used)) void set_runtime_low(std::uint32_t va
 
 extern "C" __attribute__((noinline, used)) void set_runtime_high(std::uint32_t value)
 {
-    gpr_ops::set_high(hal::gpr<5>(), value);
+    scalar::set_high(hal::gpr<5>(), value);
 }
 
 // CHECK-LABEL: <set_runtime_high>:
@@ -74,7 +74,7 @@ extern "C" __attribute__((noinline, used)) void set_runtime_high(std::uint32_t v
 // ADDDMAREG is 0x58000000 | rhs_is_immediate << 23 | dst << 12 | rhs << 6 | lhs.
 extern "C" __attribute__((noinline, used)) void add_runtime_immediate(std::uint32_t value)
 {
-    gpr_ops::add(hal::gpr<1>(), hal::gpr<2>(), gpr_ops::immediate(value));
+    scalar::add(hal::gpr<1>(), hal::gpr<2>(), scalar::immediate(value));
 }
 
 // CHECK-LABEL: <add_runtime_immediate>:
@@ -93,7 +93,7 @@ extern "C" __attribute__((noinline, used)) void add_runtime_immediate(std::uint3
 
 extern "C" __attribute__((noinline, used)) void add_runtime_gpr(std::uint32_t index)
 {
-    gpr_ops::add(hal::gpr<1>(), hal::gpr<2>(), hal::gpr(index));
+    scalar::add(hal::gpr<1>(), hal::gpr<2>(), hal::gpr(index));
 }
 
 // CHECK-LABEL: <add_runtime_gpr>:
@@ -113,7 +113,7 @@ extern "C" __attribute__((noinline, used)) void add_runtime_gpr(std::uint32_t in
 // CMPDMAREG Equal is 0x5d000000 | 1 << 23 | 2 << 18 | dst << 12 | 3 << 6 | 2.
 extern "C" __attribute__((noinline, used)) void compare_runtime_destination(std::uint32_t index)
 {
-    gpr_ops::compare<gpr_ops::Compare::Equal>(hal::gpr(index), hal::gpr<2>(), gpr_ops::immediate<3>());
+    scalar::compare<scalar::Compare::Equal>(hal::gpr(index), hal::gpr<2>(), scalar::immediate<3>());
 }
 
 // CHECK-LABEL: <compare_runtime_destination>:
