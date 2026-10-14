@@ -19,6 +19,9 @@ multi-arch fix.
     represented there; document the technical reason. Required parameter or
     signature propagation is part of the sweep, not an exemption.
 - Prefer existing target-arch patterns over new abstractions.
+- Keep code comments to 1 or 2 lines; go longer only to explain hardware
+  behaviour the code can't show. A docstring has its `@brief` and parameter
+  lines, and no paragraphs that repeat them.
 - Satisfy every actionable issue requirement, not only the first bullet or the
   first hypothesis. Read `ISSUE_BODY` and `ISSUE_COMMENTS` and reconcile them
   with the analysis Requirements table before editing. Restore any omitted

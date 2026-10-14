@@ -472,11 +472,29 @@ for entry in entries:
 missing = sorted(required - set(by_id))
 if missing:
     problems.append("no disposition for actionable thread(s): " + ", ".join(missing))
+
+# Optional: the PR's new title and description, which the dashboard applies.
+desc = doc.get("pr_description")
+categories = ["Feature", "Performance", "Bug fix", "Cleanup", "Test Only"]
+if desc is not None:
+    if not isinstance(desc, dict):
+        problems.append("pr_description must be an object")
+    else:
+        title = str(desc.get("title") or "").strip()
+        if desc.get("category") not in categories:
+            problems.append(f"pr_description.category must be one of {categories}")
+        if not title or title.startswith("[") or len(title) > 100:
+            problems.append("pr_description.title must be a plain title under 100 chars; "
+                            "the dashboard adds the [LLK][<category>] tag")
+        if not str(desc.get("summary") or "").strip():
+            problems.append("pr_description.summary is empty")
 if problems:
     raise SystemExit("INVALID_DISPOSITIONS:\n  " + "\n  ".join(problems))
 
 perf = any(e.get("perf_relevant") for e in by_id.values())
 normalized = {"version": 1, "threads": [by_id[k] for k in sorted(by_id)]}
+if desc is not None:
+    normalized["pr_description"] = desc
 with open(path, "w", encoding="utf-8") as f:
     json.dump(normalized, f, indent=2)
 print(json.dumps({

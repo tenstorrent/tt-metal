@@ -95,6 +95,9 @@ Guidance:
 
 - Make the **smallest** change that resolves the point. A review round is not an
   invitation to refactor.
+- Keep code comments to 1 or 2 lines; go longer only to explain hardware
+  behaviour the code can't show. A docstring has its `@brief` and parameter
+  lines, and no paragraphs that repeat them.
 - Several threads often want the same edit. Make it once and reference it from
   each disposition.
 - A comment marked `outdated: true` may already be resolved by a later commit;
@@ -182,12 +185,34 @@ Bad: *"No code change needed — I could not re-run it here: the host is cardles
 (no /dev/tenstorrent) with no build/ directory. Prior evidence from the solver
 run: metal SUCCESS 1/1 …"*
 
-### 2. `$LOG_DIR/agent_review_addresser.md`
+### 2. A new PR title and description, when needed
+
+Add `pr_description` beside `threads` when a reviewer asks for a new title or
+description and the request makes sense, or when this round changes what the PR
+does. Leave it out otherwise.
+
+```json
+"pr_description": {
+  "category": "Bug fix",
+  "title": "Use FACE_C_DIM for the pack tile size",
+  "summary": "Two to four sentences: the problem, and what the PR now does.",
+  "notes": "One or two sentences for reviewers, or an empty string." }
+```
+
+- `category`: one of Feature, Performance, Bug fix, Cleanup, Test Only.
+- `title`: what the PR changes, in the imperative, under 70 characters. No
+  `[LLK]` or category tag and no issue number: the dashboard writes the title as
+  `[LLK][<category>] <title>`.
+- `summary`: the whole PR as it now stands, not just this round. The dashboard
+  puts it in the PR template, with the issue link.
+- The reply to the thread that asked for it says what changed.
+
+### 3. `$LOG_DIR/agent_review_addresser.md`
 
 Your working notes: per thread, what you concluded and why; the edits you made;
 the pre-commit result; anything the tester should watch for.
 
-### 3. A final marker
+### 4. A final marker
 
 - `FIX_APPLIED` — you changed code (first pass).
 - `FIX_UPDATED` — you changed code on a debug retry.
@@ -203,4 +228,5 @@ when present, plus the raw evidence. Follow issue-worker.md's Debug/Retry
 classification: coverage/backend-plan errors do not prove a hardware or
 numerical failure. Preserve required capabilities and repair only what the
 evidence establishes; do not weaken tests or revert to a rejected state. Re-emit the **complete** dispositions file: the same thread ids,
-with replies updated to describe what the change now does.
+with replies updated to describe what the change now does, and `pr_description`
+if you set one.

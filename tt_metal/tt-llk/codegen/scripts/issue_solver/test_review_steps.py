@@ -818,7 +818,7 @@ def test_audit_finalize_downgrades_agent_requested_success(tmp_path, worktree):
 
 
 # ── execute_step_record_review_dispositions ───────────────────────────────────
-def _disposition_case(tmp_path, worktree, threads, actionable=(101, 202)):
+def _disposition_case(tmp_path, worktree, threads, actionable=(101, 202), **extra):
     """Write a run state + dispositions file and run the validator."""
     log_dir = tmp_path / "log"
     log_dir.mkdir(exist_ok=True)
@@ -838,7 +838,7 @@ def _disposition_case(tmp_path, worktree, threads, actionable=(101, 202)):
         json.dumps({"LOG_DIR": str(log_dir)}), encoding="utf-8"
     )
     (log_dir / "review_dispositions.json").write_text(
-        json.dumps({"version": 1, "threads": threads}), encoding="utf-8"
+        json.dumps({"version": 1, "threads": threads, **extra}), encoding="utf-8"
     )
     # run.json must exist for the `rj metric` patch at the end of the helper.
     (log_dir / "run.json").write_text(json.dumps({"run_id": "r1"}), encoding="utf-8")
@@ -942,6 +942,46 @@ def test_dispositions_reject_duplicate_actionable_ids(tmp_path, worktree):
     )
     assert r.returncode != 0
     assert "duplicate disposition" in r.stdout + r.stderr
+
+
+_ANSWERED = [
+    {"comment_id": 101, "action": "changed", "reply": "Renamed the PR to match."},
+    {"comment_id": 202, "action": "no_change", "reply": "Already covered."},
+]
+_DESCRIPTION = {
+    "category": "Bug fix",
+    "title": "Use FACE_C_DIM for the pack tile size",
+    "summary": "The pack tile size used the tile width. It now uses the face width.",
+    "notes": "",
+}
+
+
+def test_dispositions_keep_a_new_pr_description_for_the_dashboard(tmp_path, worktree):
+    r, log_dir = _disposition_case(
+        tmp_path, worktree, _ANSWERED, pr_description=_DESCRIPTION
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    doc = json.loads((log_dir / "review_dispositions.json").read_text())
+    assert doc["pr_description"] == _DESCRIPTION
+
+
+@pytest.mark.parametrize(
+    "bad,expect",
+    [
+        ({"category": "Bugfix"}, "category"),
+        ({"title": "[LLK][Bug fix] Use FACE_C_DIM"}, "title"),
+        ({"title": "x" * 101}, "title"),
+        ({"summary": " "}, "summary"),
+    ],
+)
+def test_dispositions_reject_an_incomplete_pr_description(
+    tmp_path, worktree, bad, expect
+):
+    r, _ = _disposition_case(
+        tmp_path, worktree, _ANSWERED, pr_description={**_DESCRIPTION, **bad}
+    )
+    assert r.returncode != 0
+    assert f"pr_description.{expect}" in r.stdout + r.stderr
 
 
 def test_combine_uses_architecture_requirements_not_global_route(tmp_path, worktree):

@@ -176,6 +176,10 @@ mis-scoped test covers the changed path.
   worker to fix.
 - `blocking: false` — optional `parity`, `style`, `cleanup`. Required in-scope
   architecture parity is a `completeness` blocker, not optional advice.
+- Comment length is the one blocking `style` finding. Flag each comment the diff
+  adds or changes that runs past 2 lines without explaining hardware behaviour
+  the code can't show, and each docstring with paragraphs that repeat its
+  `@brief` or parameter lines. Give the trimmed text in the comment.
 - Put serious uncertain candidates in `unresolved` with the exact evidence
   needed to decide them. They cannot authorize speculative edits or success;
   the orchestrator resolves them through the existing research/test owners.
