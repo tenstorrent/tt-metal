@@ -60,6 +60,24 @@ SenderWorkerPlacement sender_worker_placement(uint32_t num_links) {
     return SenderWorkerPlacement{std::move(core_range), std::move(cores)};
 }
 
+// Concat reader runtime args are omitted on the three NLP worker cores. Create and the cache-hit override share this.
+bool skips_concat_reader_runtime_args(const CoreCoord& core) {
+    return core.y == 0 && (core.x == 1 || core.x == 2 || core.x == 3);
+}
+
+// First concat_num_cores of the output grid, row-major, matching the cores create emplaces concat reader args on.
+std::vector<CoreCoord> concat_output_cores(const CoreRangeSet& q_cores) {
+    llama_config config;
+    auto cores = corerange_to_cores(q_cores, q_cores.num_cores(), true);
+    TT_FATAL(
+        cores.size() >= config.concat_num_cores,
+        "all_gather_concat output grid has {} cores; concat reader walks {}",
+        cores.size(),
+        config.concat_num_cores);
+    cores.resize(config.concat_num_cores);
+    return cores;
+}
+
 DataMovementConfigDescriptor data_movement_config(DataMovementProcessor processor, NOC noc, bool use_noc1_only) {
     return DataMovementConfigDescriptor{
         .processor = processor,
@@ -299,7 +317,7 @@ ProgramDescriptor build_program_descriptor(
         packet_header_page_size);
 
     uint32_t q_output_cb_index = tt::CBIndex::c_16;
-    // Globally allocated: the framework patches this CB from output.buffer() on cache hits.
+    // Globally allocated output. The override rewrites this CB by CBIndex::c_16 when bindings are empty.
     push_cb(
         desc,
         output_tensor.padded_shape()[-2] * row_size,
@@ -342,8 +360,7 @@ ProgramDescriptor build_program_descriptor(
     }
     const auto& sem_cores_updated = CoreRangeSet(sem_cores_vector);
     // cores to read and write to output
-    const uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
-    const auto& cores = corerange_to_cores(q_cores, num_cores, true);
+    const auto cores = concat_output_cores(q_cores);
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_1;
     tt::tt_metal::NOC writer_noc =
@@ -652,7 +669,7 @@ ProgramDescriptor build_program_descriptor(
     }
 
     /* rt for concat kernels*/
-    for (uint32_t i = 0; i < llama_configuration.concat_num_cores; ++i) {
+    for (uint32_t i = 0; i < cores.size(); ++i) {
         uint32_t second_half_core = 1;
         if (i % 2 == 0) {
             second_half_core = 0;
@@ -674,10 +691,7 @@ ProgramDescriptor build_program_descriptor(
                 this_core.x == kernel_core_noc_x[k] && this_core.y == kernel_core_noc_y[k],
                 "This op should run on a TG machine");
         }
-        bool is_worker_core = core.x == 1 && core.y == 0;
-        is_worker_core = is_worker_core || (core.x == 2 && core.y == 0);
-        is_worker_core = is_worker_core || (core.x == 3 && core.y == 0);
-        if (is_worker_core == 0) {
+        if (!skips_concat_reader_runtime_args(core)) {
             // Slots 0 and 1 are buffer addresses. Slots 2 and 3 are local semaphore ids, stable for the program.
             KernelDescriptor::RTArgList reader_runtime_args;
             reader_runtime_args.reserve(6 + (2 * in_num_cores));
@@ -718,9 +732,17 @@ tt::tt_metal::WorkloadDescriptor AllGatherConcatMeshWorkloadFactory::create_work
 void AllGatherConcatMeshWorkloadFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const AllGatherConcatParams& operation_attributes,
-    const AllGatherConcatInputs& /*tensor_args*/,
-    Tensor& /*tensor_return_value*/,
+    const AllGatherConcatInputs& tensor_args,
+    Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    auto required_address = [](const Tensor& tensor, const char* name) -> uint32_t {
+        auto* buffer = tensor.buffer();
+        TT_FATAL(buffer != nullptr, "all_gather_concat cache hit requires an allocated {} buffer", name);
+        return buffer->address();
+    };
+    // A shared input/workspace Buffer* empties resolve_bindings, and this workload path does not rebuild.
+    const uint32_t input_address = required_address(tensor_args.input_tensor, "input");
+    const uint32_t buffer_address = required_address(tensor_args.buffer_tensor, "workspace");
     const uint32_t semaphore_address = static_cast<uint32_t>(operation_attributes.semaphore.address());
     log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore_address);
 
@@ -729,11 +751,47 @@ void AllGatherConcatMeshWorkloadFactory::override_runtime_arguments(
     const auto workers = sender_worker_placement(operation_attributes.num_links);
     for (const auto& core : workers.cores) {
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, kWorkerReaderKernelIdx, core);
+        TT_FATAL(
+            reader_args.size() > kWorkerReaderSemaphoreArg,
+            "all_gather_concat worker reader runtime args are shorter than the semaphore slot");
+        reader_args[kWorkerReaderBufferArg] = input_address;
         reader_args[kWorkerReaderSemaphoreArg] = semaphore_address;
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, kWorkerWriterKernelIdx, core);
+        TT_FATAL(
+            writer_args.size() > kWorkerWriterSemaphoreArg,
+            "all_gather_concat worker writer runtime args are shorter than the semaphore slot");
+        writer_args[kWorkerWriterBufferArg] = buffer_address;
         writer_args[kWorkerWriterSemaphoreArg] = semaphore_address;
     }
+
+    const auto output_shard_spec = tensor_return_value.shard_spec();
+    TT_FATAL(output_shard_spec.has_value(), "all_gather_concat cache hit requires a sharded output");
+    for (const auto& core : concat_output_cores(output_shard_spec->grid)) {
+        if (skips_concat_reader_runtime_args(core)) {
+            continue;
+        }
+        auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, kConcatReaderKernelIdx, core);
+        TT_FATAL(
+            reader_args.size() > kConcatReaderInputBufferArg,
+            "all_gather_concat concat reader runtime args are shorter than the input slot");
+        reader_args[kConcatReaderBufferArg] = buffer_address;
+        reader_args[kConcatReaderInputBufferArg] = input_address;
+    }
+
+    auto* output_buffer = tensor_return_value.buffer();
+    TT_FATAL(output_buffer != nullptr, "all_gather_concat cache hit requires an allocated output buffer");
+    bool updated_output_cb = false;
+    for (const auto& cb : program.circular_buffers()) {
+        if (!cb->globally_allocated()) {
+            continue;
+        }
+        if (cb->buffer_indices().contains(static_cast<uint8_t>(tt::CBIndex::c_16))) {
+            UpdateDynamicCircularBufferAddress(program, cb->id(), *output_buffer);
+            updated_output_cb = true;
+        }
+    }
+    TT_FATAL(updated_output_cb, "all_gather_concat cache hit did not find the output circular buffer");
 }
 
 }  // namespace ttnn::experimental::prim

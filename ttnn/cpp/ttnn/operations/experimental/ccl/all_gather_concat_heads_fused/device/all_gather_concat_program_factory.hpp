@@ -20,8 +20,8 @@ class Program;
 namespace ttnn::experimental::prim {
 
 // ProgramDescriptor::kernels push order. Runtime-arg slots below are the positions
-// emplace_runtime_args writes; buffer-address slots are Buffer* bindings, and the
-// caller-owned GlobalSemaphore address is re-applied by override_runtime_arguments.
+// emplace_runtime_args writes. override_runtime_arguments rewrites those buffer slots,
+// the output CB, and the caller-owned GlobalSemaphore, including when an alias empties bindings.
 inline constexpr uint32_t kConcatReaderKernelIdx = 0;
 inline constexpr uint32_t kTilizeWriterKernelIdx = 1;
 inline constexpr uint32_t kTilizeComputeKernelIdx = 2;
