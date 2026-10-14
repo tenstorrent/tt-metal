@@ -69,13 +69,18 @@ Resolution is **per mesh**, in precedence order:
 2. the process-wide override (`set_fabric_config`, for back-compat), else
 3. a default derived from `device_topology.dim_types`.
 
-The derived default is `FABRIC_1D` for a 1D mesh (`FABRIC_1D_RING` when that axis
-is `RING`), and for a 2D mesh `FABRIC_2D` or the matching `FABRIC_2D_TORUS_X/Y/XY`
-per its ring axes. A declared config is validated against **that mesh's own**
-topology and may only restrict connectivity (e.g. `torus → mesh`), never request
-more than the topology provides — so forcing one global torus config onto a mesh
-whose dims are all `LINE` is rejected, while declaring it only on the ring meshes
-is accepted.
+The derived default is **always a 2D-family config** — `FABRIC_2D`, or the matching
+`FABRIC_2D_TORUS_X/Y/XY` per the declared ring axes (dim 0 → `TORUS_Y`, dim 1 →
+`TORUS_X`). **1D is never auto-derived**; a `FABRIC_1D` / `FABRIC_1D_RING` config
+can only be requested explicitly (declared in the MGD or set in code), and such a
+1D config may not span more than one mesh.
+
+Any **explicitly-requested** config (declared field or code override) is validated
+against **that mesh's own** topology *after* resolution and may only restrict
+connectivity (e.g. `torus → mesh`), never request more than the topology provides
+— so forcing a torus config (code override or declared field) onto a mesh whose
+real axis is `LINE` is rejected, while declaring it only on the ring meshes is
+accepted. The derived default is always topology-compatible by construction.
 
 Valid `fabric_config` values: `FABRIC_1D`, `FABRIC_1D_RING`, `FABRIC_2D`,
 `FABRIC_2D_TORUS_X`, `FABRIC_2D_TORUS_Y`, `FABRIC_2D_TORUS_XY` (omit for the
