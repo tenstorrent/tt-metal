@@ -768,6 +768,12 @@ class TtPrefillRuntime:
         self._metadata_from_msg(metadata_msg)
 
     @property
+    def trace_output(self) -> Optional[ttnn.Tensor]:
+        """The activation buffer this rank's traced forward writes, for the driver to send downstream.
+        None before the trace is captured, and on the last rank."""
+        return self._trace_output
+
+    @property
     def trace_metadata_msg(self) -> Optional[ttnn.Tensor]:
         """The persistent packed metadata the D2D pipeline must forward downstream on the traced path.
 
