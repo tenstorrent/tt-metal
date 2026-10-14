@@ -19,9 +19,8 @@ The overlap runs untraced here, which TtMoe only does for this kind of measureme
 but the profiler times device work. The mesh opens with the payload a model does, half a token plus the
 forwarding metadata, so both fabric2d ops send every token as two packets.
 
-Kimi-K3 has no fabric2d row: dispatch_fabric2d compiles for top-k <= 8 and K3 routes top-16. DSv4-Pro runs its
-own dims (384 experts / top-6 / 3072) on a host gate, since the device gate's grouped path needs 256 experts;
-the gate is then not device time.
+DSv4-Pro runs its own dims (384 experts / top-6 / 3072) on a host gate, since the device gate's grouped path
+needs 256 experts; the gate is then not device time.
 """
 
 from collections import defaultdict
@@ -115,8 +114,6 @@ def _cases():
     ):
         device_params = torus_y_device_params(fabric_payload_size=moe_fabric_payload(model.config))
         for transport in _TRANSPORTS:
-            if transport == "fabric2d" and model is _K3:
-                continue
             yield pytest.param(
                 variant,
                 model,

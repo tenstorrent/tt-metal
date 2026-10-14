@@ -1533,8 +1533,7 @@ def test_kimi_k3_moe(
     )
 
 
-# The kimi_k3-5k-pcc row with combine on fabric2d. Dispatch stays direct until dispatch_fabric2d
-# supports top-16. The routed side runs at the 3584 latent width, so this also checks the packet size
+# The kimi_k3-5k-pcc row with combine on fabric2d. Dispatch stays direct. The routed side runs at the 3584 latent width, so this also checks the packet size
 # is taken from it. Capacity factor 5 could drop tokens on skewed routing, which combine_fabric2d cannot
 # handle until it clamps overflow; this test's routing is balanced enough that nothing is dropped, and
 # run_model asserts so.

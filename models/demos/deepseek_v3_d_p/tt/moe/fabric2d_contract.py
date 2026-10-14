@@ -14,9 +14,9 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 # Must match FORWARDING_METADATA_SIZE in the kernel interface headers of dispatch_fabric2d and
 # combine_fabric2d: the routing tail each forwarded packet carries on top of its token bytes.
 FABRIC2D_FORWARDING_METADATA_BYTES = 64
-# Largest top-k dispatch_fabric2d compiles for (a static_assert in dispatch_fabric2d_routing_index.hpp).
+# Largest top-k dispatch_fabric2d is validated at (MAX_EXPERTS_PER_TOK in dispatch_fabric2d_device_operation.cpp).
 # combine_fabric2d has no such limit.
-DISPATCH_FABRIC2D_MAX_TOPK = 8
+DISPATCH_FABRIC2D_MAX_TOPK = 16
 BF16_BYTES = 2
 # The largest DRAM alignment (Blackhole). dispatch_fabric2d rounds each token up to a multiple of this;
 # combine_fabric2d requires the token to already be one.
