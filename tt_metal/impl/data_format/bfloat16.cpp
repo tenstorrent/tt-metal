@@ -7,6 +7,7 @@
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <vector>
 
@@ -176,6 +177,44 @@ std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
 
 // Equality functions
 bool equal_within_n_sig_figs(float a, float b, int n) {
+    TT_FATAL(
+        n >= 1 && n <= std::numeric_limits<float>::max_digits10,
+        "n must be between 1 and {}, got {}",
+        std::numeric_limits<float>::max_digits10,
+        n);
+
+    if (std::isnan(a) || std::isnan(b)) {
+        return std::isnan(a) && std::isnan(b);
+    }
+    if (!std::isfinite(a) || !std::isfinite(b)) {
+        return a == b;
+    }
+    if (a == b) {
+        return true;
+    }
+    if (std::signbit(a) != std::signbit(b) || a == 0.0f || b == 0.0f) {
+        return false;
+    }
+
+    const auto leading_digits = [n](float value) {
+        const double magnitude = std::fabs(static_cast<double>(value));
+        const double decade = std::floor(std::log10(magnitude));
+        const double normalized = magnitude / std::pow(10.0, decade);
+        return static_cast<std::uint64_t>(normalized * std::pow(10.0, n - 1));
+    };
+
+    const double decade_a = std::floor(std::log10(std::fabs(static_cast<double>(a))));
+    const double decade_b = std::floor(std::log10(std::fabs(static_cast<double>(b))));
+    return decade_a == decade_b && leading_digits(a) == leading_digits(b);
+}
+
+bool is_within_n_sig_figs(float a, float b, int n) {
+    TT_FATAL(
+        n >= 1 && n <= std::numeric_limits<float>::max_digits10,
+        "n must be between 1 and {}, got {}",
+        std::numeric_limits<float>::max_digits10,
+        n);
+
     // NaN has no significant figures, but two NaN results are the same outcome.
     if (std::isnan(a) && std::isnan(b)) {
         return true;
@@ -206,6 +245,13 @@ bool equal_within_n_sig_figs(float a, float b, int n) {
 
 // this follows the implementation of numpy's is_close
 bool is_close(float a, float b, float rtol, float atol) {
+    if (a == b) {
+        return true;
+    }
+    if (!std::isfinite(a) || !std::isfinite(b)) {
+        return false;
+    }
+
     // the idea is near zero we want absolute tolerance since relative doesn't make sense
     // (consider 1e-6f and 1.1e-6f)
     // elsewhere (not near zero) we want relative tolerance
