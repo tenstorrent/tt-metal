@@ -11,6 +11,13 @@
 
 namespace ttnn::operations::data_movement::scatter {
 
+// The codegen kernels' reduction_mode numbering (kernels/scatter_common.hpp, scatter_reduce_value),
+// restricted to the modes the codegen factories serve. scatter.cpp's scatter_reduction_mode() maps
+// the public reduce string onto these and throws on anything else, so max/min never reach the prim.
+constexpr uint32_t kReductionNone = 0;
+constexpr uint32_t kReductionAdd = 1;
+constexpr uint32_t kReductionMultiply = 2;
+
 // Correctness gate: true iff the codegen prim can produce a result matching native's contract for
 // this input/index/src combination, scatter axis and reduction mode. Consulted by ttnn::scatter()'s
 // routing, by scatter_force_codegen(), and by the codegen prim's own validation step.
@@ -21,8 +28,9 @@ namespace ttnn::operations::data_movement::scatter {
 // out of bounds here. The codegen prim's validate calls this on the already-normalized tensors it
 // actually holds, where the scatter axis is always the last dim; it passes -1 to say so.
 //
-// reduction_mode is 0 (no reduction), 1 (add) or 2 (multiply): ttnn::scatter()'s own validate_inputs
-// rejects any other value before routing is ever consulted, so max/min are never observed here.
+// reduction_mode is kReductionNone, kReductionAdd or kReductionMultiply: scatter.cpp's
+// scatter_reduction_mode() throws on any other reduce string before routing consults this gate, on
+// the native leg too, so max/min are never observed here.
 bool supported_by_codegen(
     const Tensor& input_tensor,
     int32_t dim,

@@ -16,6 +16,7 @@
 
 namespace ttnn::prim {
 using namespace tt::tt_metal;
+namespace scatter_ns = ttnn::operations::data_movement::scatter;
 
 // ROW_MAJOR dispatches on dtype+reduction_mode alone (both already part of the default hash), so no
 // live L1 read is needed to pick between the two RM factories. TILE prefers the row-buffered
@@ -28,7 +29,8 @@ ScatterCodegenDeviceOperation::program_factory_t ScatterCodegenDeviceOperation::
     const auto& input_tensor = tensor_args.input_tensor;
 
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        const bool bf16_reduce = attributes.reduction_mode == 1 || attributes.reduction_mode == 2;
+        const bool bf16_reduce = attributes.reduction_mode == scatter_ns::kReductionAdd ||
+                                 attributes.reduction_mode == scatter_ns::kReductionMultiply;
         if (bf16_reduce) {
             return ScatterCodegenProgramFactoryBf16ReduceRowMajor{};
         }
@@ -73,6 +75,13 @@ ScatterCodegenDeviceOperation::program_factory_t ScatterCodegenDeviceOperation::
 // factory's create_descriptor() will.
 ttsl::hash::hash_t ScatterCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // With the program cache on this runs ahead of validate_on_program_cache_miss(), and
+    // select_program_factory() reads the operands' buffers, so a missing one must fail here rather
+    // than dereference null.
+    TT_FATAL(
+        tensor_args.input_tensor.buffer() != nullptr && tensor_args.index_tensor.buffer() != nullptr &&
+            tensor_args.src_tensor.buffer() != nullptr,
+        "scatter_codegen: operands need to be allocated in buffers on the device.");
     const auto factory = select_program_factory(attributes, tensor_args);
     uint32_t chunk_elems = 0;
     const bool is_row_major = std::holds_alternative<ScatterCodegenProgramFactoryRowMajor>(factory);
@@ -125,25 +134,6 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
             input_tensor, /*dim=*/-1, index_tensor, src_tensor, attributes.reduction_mode),
         "scatter_codegen: input/index/src tensors are not supported by the codegen prim (see "
         "supported_by_codegen())");
-
-    // operation_attributes_t.page_map is a public field any caller of ttnn::prim::scatter_codegen()
-    // can set directly, bypassing build_scatter_codegen_params()'s own construction. Every reader
-    // folds its page ordinal through it (scatter_common.hpp's map_scatter_input_page) with no further
-    // check: a wrong rank overruns the fixed kScatterMaxPageRank-wide runtime-arg block and a wrong or
-    // zero extent misaddresses pages or divides by zero on the device. The only page map in contract
-    // is the one the tensors themselves describe, so rebuild it with the same builder and require an
-    // exact match. supported_by_codegen() above already bounds the page rank, so the builder's own
-    // TT_FATALs cannot fire before this one for an in-scope call.
-    const bool tiled = input_tensor.layout() == Layout::TILE;
-    const auto expected_page_map =
-        compute_scatter_page_map(input_tensor.logical_shape(), index_tensor.logical_shape(), tiled);
-    TT_FATAL(
-        attributes.page_map == expected_page_map,
-        "scatter_codegen: operation_attributes_t.page_map does not describe the input/index tensors (input {}, "
-        "index {}, {}); build it with build_scatter_codegen_params().",
-        input_tensor.logical_shape(),
-        index_tensor.logical_shape(),
-        tiled ? "TILE" : "ROW_MAJOR");
 
     // Structural preconditions copied from ScatterDeviceOperation::validate_on_program_cache_miss
     // (device/scatter_device_operation.cpp): supported_by_codegen() only answers layout/dtype/
@@ -219,14 +209,76 @@ ScatterCodegenDeviceOperation::create_op_performance_model(
         {input_tensor}, {output}, ideal_dev_clock_cycles);
 }
 
-Tensor scatter_codegen(
-    const ScatterCodegenParams& params,
+namespace {
+
+// Fills either the TILE or the ROW_MAJOR geometry fields (the other side's are zero) plus the page
+// map and value_kind every factory shares. The only constructor of a ScatterCodegenParams, so the
+// page map the readers fold ordinals through is always the one the tensors describe.
+ScatterCodegenParams build_scatter_codegen_params(
     const Tensor& input_tensor,
     const Tensor& index_tensor,
     const Tensor& src_tensor,
-    const std::optional<Tensor>& output_tensor) {
+    uint32_t reduction_mode,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const bool tiled = input_tensor.layout() == Layout::TILE;
+    const auto page_map = compute_scatter_page_map(input_tensor.logical_shape(), index_tensor.logical_shape(), tiled);
+    const uint32_t value_kind = reduction_mode != 0 ? scatter_value_kind(input_tensor.dtype()) : 0;
+
+    if (tiled) {
+        const auto geometry = compute_scatter_tile_geometry(input_tensor, index_tensor, src_tensor);
+        return ScatterCodegenParams{
+            geometry.Ht,
+            geometry.Wt_output,
+            geometry.Wt_index,
+            geometry.output_logical_w,
+            geometry.idx_valid_h_last,
+            geometry.idx_valid_w_last,
+            geometry.Ht_per_batch_input,
+            geometry.Ht_per_batch_src,
+            /*num_sticks=*/0,
+            /*input_stick_elems=*/0,
+            /*index_stick_elems=*/0,
+            page_map,
+            reduction_mode,
+            value_kind,
+            output_mem_config,
+            sub_core_grids};
+    }
+    const auto geometry = compute_scatter_rm_geometry(input_tensor, index_tensor);
+    return ScatterCodegenParams{
+        /*Ht=*/0,
+        /*Wt_output=*/0,
+        /*Wt_index=*/0,
+        /*output_logical_w=*/0,
+        /*idx_valid_h_last=*/0,
+        /*idx_valid_w_last=*/0,
+        /*Ht_per_batch_input=*/0,
+        /*Ht_per_batch_src=*/0,
+        geometry.num_sticks,
+        geometry.input_stick_elems,
+        geometry.index_stick_elems,
+        page_map,
+        reduction_mode,
+        value_kind,
+        output_mem_config,
+        sub_core_grids};
+}
+
+}  // namespace
+
+Tensor scatter_codegen(
+    const Tensor& input_tensor,
+    const Tensor& index_tensor,
+    const Tensor& src_tensor,
+    uint32_t reduction_mode,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<Tensor>& output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::device_operation::launch<ScatterCodegenDeviceOperation>(
-        params, ScatterCodegenInputs{input_tensor, index_tensor, src_tensor, output_tensor});
+        build_scatter_codegen_params(
+            input_tensor, index_tensor, src_tensor, reduction_mode, output_mem_config, sub_core_grids),
+        ScatterCodegenInputs{input_tensor, index_tensor, src_tensor, output_tensor});
 }
 
 }  // namespace ttnn::prim

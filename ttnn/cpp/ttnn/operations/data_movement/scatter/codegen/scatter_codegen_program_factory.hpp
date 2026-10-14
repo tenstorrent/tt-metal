@@ -127,18 +127,6 @@ uint32_t scatter_rm_chunk_elems(
     uint32_t index_elem_size,
     uint32_t src_elem_size);
 
-// Assembles the full cache-key/attributes struct for one scatter_codegen() call, branching on
-// input_tensor.layout() to fill either the TILE or the ROW_MAJOR geometry fields (the other side's
-// fields are zero) and computing the shared page map, value_kind and (for ROW_MAJOR) the frontier-
-// derived chunk depth. `reduction_mode` and `sub_core_grids` are threaded straight through.
-ScatterCodegenParams build_scatter_codegen_params(
-    const Tensor& input_tensor,
-    const Tensor& index_tensor,
-    const Tensor& src_tensor,
-    uint32_t reduction_mode,
-    const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<CoreRangeSet>& sub_core_grids);
-
 // TILE, full input/src row resident in L1.
 struct ScatterCodegenProgramFactoryInterleaved {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
