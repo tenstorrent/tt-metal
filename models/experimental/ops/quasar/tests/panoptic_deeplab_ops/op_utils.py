@@ -5,9 +5,10 @@
 Runtime helpers for the Panoptic-DeepLab graph-capture-derived per-op suite
 (``tests/panoptic_deeplab_ops/``).
 
-``graph_case.py`` is model-agnostic except for this module, which supplies the four
-things it needs: the ``ttnn_mesh_device`` parametrization helper, torch<->ttnn
-conversion, random tensor data, and the PCC assertion.
+``graph_case.py`` is model-agnostic except for this module, which supplies the things
+it needs: the ``ttnn_mesh_device`` parametrization helper, torch<->ttnn conversion,
+random tensor data, the PCC and bit-exact assertions, and the compute configs the
+capture cannot record (``default_kwargs``).
 
 As in ``tests/qwen3_vl_ops/op_utils.py``, the conversion and PCC helpers are re-exported
 from the llama suite rather than duplicated. ``with_default_mesh`` is the one thing that
@@ -26,7 +27,7 @@ from __future__ import annotations
 import pytest
 import torch  # noqa: F401
 
-import ttnn  # noqa: F401
+import ttnn
 
 from models.experimental.llama32_1b_quasar.tests.ops.op_utils import (  # noqa: F401
     DEFAULT_MESH,
@@ -38,6 +39,7 @@ from models.experimental.llama32_1b_quasar.tests.ops.op_utils import (  # noqa: 
     torch_rand,
 )
 from models.experimental.ops.quasar.panoptic_deeplab.tt.common import PDL_L1_SMALL_SIZE
+from models.experimental.ops.quasar.tests.yolo_ops.op_utils import assert_lossless  # noqa: F401
 
 
 def with_default_mesh(*shapes):
@@ -54,3 +56,27 @@ NUM_CLASSES = 19
 BACKBONE_CHANNELS = {"res2": 256, "res3": 512, "res4": 1024, "res5": 2048}
 DECODER_CHANNELS = 256
 INS_EMBED_HEAD_CHANNELS = 32
+
+
+# The capture records a compute kernel config only as an object address, so the generator
+# drops it (``DROP_KWARGS``) and the op would run at its default fidelity. Every conv in the
+# model is built from the same defaults — ``panoptic_deeplab/tt/model_configs.py``
+# ``default_overrides`` (LoFi, fp32 dest accumulation, no packer L1 accumulation), turned into
+# a compute config by ``models/tt_cnn/tt/builder.py:to_compute_config`` — so restore those.
+# Not restored: the per-layer ``packer_l1_acc=True`` the model sets on its deep 1x1 bottleneck
+# and ASPP convs (``register_layer_override``), since a case does not say which layer it was.
+def _conv_compute_config(mesh_device):
+    return ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+
+_DEFAULT_KWARGS = {"ttnn.conv2d": {"compute_config": _conv_compute_config}}
+
+
+def default_kwargs(op_name, mesh_device):
+    """Keyword arguments the model passed to ``op_name`` that the capture could not record."""
+    return {name: build(mesh_device) for name, build in _DEFAULT_KWARGS.get(op_name, {}).items()}
