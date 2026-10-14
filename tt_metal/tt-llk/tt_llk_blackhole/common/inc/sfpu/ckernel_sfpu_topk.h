@@ -742,6 +742,45 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir, bool &init_replay, int replay_st
     }
 }
 
+// Main's unstable steps 4 to 1 group, kept for the K 16 rebuild so that no K 16 row reads slower than main.
+template <bool FUSED>
+inline void bitonic_topk_ph3_st4_to_1_bracketed(bool dir, bool &init_replay, int replay_start)
+{
+    if (dir == static_cast<bool>(SortDir::ArgMin))
+    {
+        TTI_SFPCONFIG(FUSED ? 0x100 : 0x104, 0xF, 1);
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+    }
+    constexpr int replay_count = 5;
+    if (init_replay)
+    {
+        load_replay_buf<Exec>(
+            replay_start,
+            replay_count,
+            []
+            {
+                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+                TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+                TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+                TTI_SFPTRANSP(0, 0, 0, 0);
+            });
+        init_replay = false;
+    }
+    else
+    {
+        lltt::replay(replay_start, replay_count);
+    }
+    lltt::replay(replay_start, replay_count);
+    if (dir == static_cast<bool>(SortDir::ArgMin))
+    {
+        TTI_SFPCONFIG(FUSED ? 0x000 : 0x004, 0xF, 1);
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+    }
+}
+
 template <bool STABLE_SORT, TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
 inline void bitonic_topk_ph2_st3_to_1()
 {
@@ -1955,7 +1994,15 @@ inline void bitonic_topk_rebuild_step(const std::uint32_t sorted_seq_length)
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT, bool FUSED, bool RANK_STAMPED, TopkTieOrder TIE_ORDER, bool STRAIGHT_LINE>
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool STABLE_SORT,
+    bool FUSED,
+    bool RANK_STAMPED,
+    TopkTieOrder TIE_ORDER,
+    bool STRAIGHT_LINE,
+    bool REV_BY_MODE9 = false>
 inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const int k, const int logk, const int skip_second)
 {
     // NOTE (stable sort): tie-break polarity comes from TIE_ORDER, NOT from idir. The multi-core topk deliberately
@@ -2159,7 +2206,7 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                             if (init_rebuild)
                             {
                                 load_replay_buf<Exec>(0, ldst_count, [] { bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8); });
-                                bitonic_topk_ph3_st4_to_1<STABLE_SORT, TIE_ORDER>(dir, init_rebuild, 8, TOPK_REBUILD_PH3_REV_REPLAY_START);
+                                bitonic_topk_ph3_st4_to_1_bracketed<FUSED>(dir, init_rebuild, 8);
                                 load_replay_buf<Exec>(
                                     13,
                                     rebuild_win_st12,
@@ -2175,7 +2222,7 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                             else
                             {
                                 lltt::replay(0, ldst_count);
-                                bitonic_topk_ph3_st4_to_1<STABLE_SORT, TIE_ORDER>(dir, init_rebuild, 8, TOPK_REBUILD_PH3_REV_REPLAY_START);
+                                bitonic_topk_ph3_st4_to_1_bracketed<FUSED>(dir, init_rebuild, 8);
                                 lltt::replay(13, rebuild_win_st12);
                             }
                         }
@@ -2262,7 +2309,30 @@ inline void _bitonic_topk_rebuild_impl_(const bool idir, const int m_iter, const
                     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
                     while (datums_compared < total_datums_to_compare)
                     {
-                        if constexpr (STRAIGHT_LINE && TOPK_STEP_LOADMACRO && !STABLE_SORT)
+                        if constexpr (STRAIGHT_LINE && TOPK_STEP_LOADMACRO && !STABLE_SORT && REV_BY_MODE9)
+                        {
+                            // Later calls with this m_iter replay all three windows, so the first records them together.
+                            if (init_rebuild)
+                            {
+                                load_replay_buf<NoExec>(8, 8, [] { bitonic_topk_ph3_after_first_swaps(); });
+                                load_replay_buf<NoExec>(17, ldst_count, [] { bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED, RANK_STAMPED>(4, 8); });
+                                load_replay_buf<NoExec>(TOPK_REBUILD_PH3_REV_REPLAY_START, 5, [] { bitonic_topk_ph3_half_body<true, false>(); });
+                                init_rebuild = false;
+                            }
+                            if (dir == static_cast<bool>(SortDir::ArgMin))
+                            {
+                                bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8);
+                                lltt::replay(TOPK_REBUILD_PH3_REV_REPLAY_START, 5);
+                                lltt::replay(TOPK_REBUILD_PH3_REV_REPLAY_START, 5);
+                            }
+                            else
+                            {
+                                bitonic_topk_load16_first_swaps<is_fp32_dest_acc_en, FUSED, RANK_STAMPED, false>();
+                                lltt::replay(8, 8);
+                            }
+                            lltt::replay(17, ldst_count);
+                        }
+                        else if constexpr (STRAIGHT_LINE && TOPK_STEP_LOADMACRO && !STABLE_SORT)
                         {
                             const bool record_store = init_rebuild;
                             bitonic_topk_ph3_group_first_swaps<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(dir, init_rebuild, 8);
@@ -2311,7 +2381,13 @@ template <
 TT_ALWAYS_INLINE void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k, const int logk, const int skip_second)
 {
     // An unstable unfused rebuild below K 32 never runs the straight-line steps; the looped body without them runs faster there.
-    if (STABLE_SORT || FUSED || logk >= 5)
+    // Reversed steps 4 to 1 groups by mode 9 read faster up to K 32 and slower at K 64, which keeps the bracketed groups.
+    if ((STABLE_SORT || FUSED || logk >= 5) && logk <= 5)
+    {
+        _bitonic_topk_rebuild_impl_<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, true, true>(
+            idir, m_iter, k, logk, skip_second);
+    }
+    else if (STABLE_SORT || FUSED || logk >= 5)
     {
         _bitonic_topk_rebuild_impl_<APPROXIMATION_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER, true>(
             idir, m_iter, k, logk, skip_second);
