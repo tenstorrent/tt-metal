@@ -110,7 +110,6 @@ class move_only_function<R(Args...)> {
 public:
     using result_type = R;
 
-    // [func.wrap.move.ctor] constructors, assignment, and destructor
     move_only_function() noexcept : tag_(empty_tag()) {}
     move_only_function(std::nullptr_t) noexcept : tag_(empty_tag()) {}
 
@@ -164,13 +163,11 @@ public:
 
     ~move_only_function() { destroy_target(); }
 
-    // [func.wrap.move.inv] invocation
     explicit operator bool() const noexcept { return table() != &kEmptyTable; }
 
     // Calling an empty instance throws through the empty table, with no branch here.
     R operator()(Args... args) { return table()->call(buffer_, std::forward<Args>(args)...); }
 
-    // [func.wrap.move.util] utility
     void swap(move_only_function& other) noexcept {
         if (this != &other) {
             move_only_function tmp(std::move(other));
