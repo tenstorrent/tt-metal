@@ -146,14 +146,20 @@ def test_reshape_codegen_edge_shapes(device, case, in_shape, out_shape, dtype):
     _assert_bits(padded, codegen.cpu().to_torch_with_padded_shape(), dtype)
 
 
+def _rm_aligned_pair(piece_bytes, merge, sticks=512):
+    # bf16 sticks of `piece_bytes` and twice that, both alignment multiples: a merge goes short to long, a split back.
+    short, long = [sticks, piece_bytes // 2], [sticks // 2, piece_bytes]
+    return (short, long) if merge else (long, short)
+
+
 # (id, in shape, out shape, dtype, layout, expected route). Row-major demotion is decided by stick sizes
-# (rm_native_faster) and taken only where native runs and the stick program fits (demotion_applies). TILE demotion is
-# decided by the tile plan (is_demoted); shapes the tile-rows program does not take run native.
+# (rm_native_faster) and taken only where native runs and the stick program fits (demotion_applies); the row-major
+# cases sit on either side of its aligned-DRAM rule, which demotes merges from a 256 B piece and never splits. TILE
+# demotion is decided by the tile plan (is_demoted); shapes the tile-rows program does not take run native.
 _ROUTES = [
-    # 512 B -> 256 B split: codegen keeps every short write in flight.
-    ("rm_split", [512, 256], [1024, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
-    # 256 B -> 512 B DRAM merge: from 256 B native's two kernels read faster.
-    ("rm_merge_demoted", [512, 128], [256, 256], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "native"),
+    ("rm_split_piece_256", *_rm_aligned_pair(256, merge=False), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
+    ("rm_merge_piece_128", *_rm_aligned_pair(128, merge=True), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
+    ("rm_merge_piece_256", *_rm_aligned_pair(256, merge=True), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "native"),
     # Head split: batching cuts source reads 32x.
     ("tile_rows", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
     # 4-head merge: the cut is only 4x, but each output tile reads 24 fewer padded source tiles.
