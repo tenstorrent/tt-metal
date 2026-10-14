@@ -507,6 +507,12 @@ def chunked_sdpa_pair(ctx: CPContext, q_nat, keys, values, page_table, scale, ck
     return out
 
 
+# Fused AG+matmul ops are measured and gated only for 32768 <= S <= 40960; longer sequences use the stock pair
+# (qwen_ag_matmul's wave plan raises above 65536 rows, e.g. S=73728 in the 128k warmup sweep).
+FUSED_AG_MIN_SEQ = 32768
+FUSED_AG_MAX_SEQ = 40960
+
+
 def fused_ag_enabled(seq_len) -> bool:
     """Attention-norm row all-gather + QKV matmul as one model-local program per device (custom_ops/qwen_ag_matmul):
     the gather runs on grid column 6 by fabric multicast while the matmul (columns 0-5, W_qkv resident in L1)
@@ -514,7 +520,7 @@ def fused_ag_enabled(seq_len) -> bool:
     pair, stock -> fused: 16k 0.895 -> 1.026, 24k 1.123 -> 1.381, 32k 1.507 -> 1.431, 40k 1.783 -> 1.603); b1 40k
     1739.0 -> 1727.0 ms (job372), gate digit-identical (job373). QWEN_CP_FUSED_AG=0 keeps the stock pair. The MLP
     uses the 7x10 form of the op instead (fused_ag_ff1_enabled): this 6x10 form is slower than the FF1 stock pair."""
-    return os.environ.get("QWEN_CP_FUSED_AG", "1") == "1" and seq_len >= 32768
+    return os.environ.get("QWEN_CP_FUSED_AG", "1") == "1" and FUSED_AG_MIN_SEQ <= seq_len <= FUSED_AG_MAX_SEQ
 
 
 def fused_ag_ff1_enabled(seq_len) -> bool:
@@ -522,7 +528,7 @@ def fused_ag_ff1_enabled(seq_len) -> bool:
     folded into eight in0 receiver cores; copy_local fills the own slot of the gathered buffer for FF3).
     Bit-identical. Used for S >= 32768 (job384, ms per pair, stock -> fused: 32k 2.451 -> 2.268, 40k 2.894 -> 2.678;
     b1 40k 1727.0 -> 1713.1 ms, job385; gate digit-identical, job386). QWEN_CP_FUSED_AG_FF1=0 keeps the stock pair."""
-    return os.environ.get("QWEN_CP_FUSED_AG_FF1", "1") == "1" and seq_len >= 32768
+    return os.environ.get("QWEN_CP_FUSED_AG_FF1", "1") == "1" and FUSED_AG_MIN_SEQ <= seq_len <= FUSED_AG_MAX_SEQ
 
 
 def release_fused_ag(mesh_device):
