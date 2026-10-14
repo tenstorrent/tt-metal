@@ -525,6 +525,12 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         p.drisc_n = std::min<uint32_t>(p.drisc_n, p.readers.size());
         TT_FATAL(!p.rdown || p.readers.size() - p.drisc_n >= 7, "MIMO_FL_DRISC: reader down columns need 7 Tensix readers");
         TT_FATAL(p.drisc_n >= 1, "MIMO_FL_DRISC_SLOTS >= 1");
+        // (probe MIMO_FL_DRISC_RD_SWAP=1: the reader cells' halves swapped, so the Tensix slots 8.. run on the cells
+        // next to the DRAM columns)
+        if (std::getenv("MIMO_FL_DRISC_RD_SWAP") && std::atoi(std::getenv("MIMO_FL_DRISC_RD_SWAP")) != 0 &&
+            p.readers.size() == 16) {
+            std::rotate(p.readers.begin(), p.readers.begin() + 8, p.readers.end());
+        }
         p.launcher = p.readers[0];
         // the freed cells as down cores (MIMO_FL_DRISC_RD_DOWN, default: only with every slot on DRISC; next to the
         // remaining Tensix readers they slow large M: hybrid 2048 290 vs 274 idle)
