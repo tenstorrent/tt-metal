@@ -26,6 +26,7 @@ def test_causal_convolution_split_equivalence() -> None:
         torch.cat((first_output, last_output), dim=1),
         name="split convolution output",
         pcc_threshold=0.999999,
+        nrmse_threshold=1e-06,  # 1.5x measured NRMSE 0.00e+00
     )
     assert_equal(full_state, split_state, name="split convolution state")
 
@@ -69,8 +70,10 @@ def test_vector_decay_reduces_to_scalar_recurrence() -> None:
         state += torch.einsum("bhk,bhv->bhkv", k_norm[:, token], beta[:, token].unsqueeze(-1) * residual)
         scalar_outputs.append(torch.einsum("bhk,bhkv->bhv", q_norm[:, token], state))
     scalar_output = torch.stack(scalar_outputs, dim=1)
-    assert_accurate(scalar_output, vector_output, pcc_threshold=0.999999)
-    assert_accurate(state, vector_state, pcc_threshold=0.999999)
+    assert_accurate(
+        scalar_output, vector_output, pcc_threshold=0.999999, nrmse_threshold=1e-06
+    )  # 1.5x measured NRMSE 1.39e-08
+    assert_accurate(state, vector_state, pcc_threshold=0.999999, nrmse_threshold=1e-06)  # 1.5x measured NRMSE 2.05e-08
 
 
 def test_output_norm_uses_sigmoid_gate() -> None:

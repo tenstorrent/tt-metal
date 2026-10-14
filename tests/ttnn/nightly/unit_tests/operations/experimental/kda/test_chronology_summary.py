@@ -88,6 +88,7 @@ def test_chronology_summaries_single_capture(
                                 actual[part][folded_head],
                                 name=f"summary G={groups} actual_start={actual_start_value} group={group} part={part}",
                                 pcc_threshold=0.999,
+                                nrmse_threshold=0.0067,  # 1.5x measured NRMSE 4.40e-03
                             )
     finally:
         ttnn.release_trace(device, trace)

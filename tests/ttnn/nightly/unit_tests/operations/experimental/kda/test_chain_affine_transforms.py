@@ -207,7 +207,9 @@ def test_chain_affine_transforms_contract_and_trace(zero_actual_start, device: t
 
     for name, golden, actual_tt, traced_tt in zip(("entry", "final"), expected, first, traced, strict=True):
         actual = ttnn.to_torch(actual_tt)
-        assert_accurate(golden, actual, name=f"chained {name}", pcc_threshold=0.999)
+        assert_accurate(
+            golden, actual, name=f"chained {name}", pcc_threshold=0.999, nrmse_threshold=0.0043
+        )  # 1.5x measured NRMSE 2.86e-03
         assert_bit_identical(actual, ttnn.to_torch(traced_tt), name=f"{name} trace replay")
 
     assert_bit_identical(snapshots[0], ttnn.to_torch(transforms_tt), name="transforms immutability")
@@ -235,7 +237,13 @@ def test_chain_affine_transforms_shape_accuracy(
     outputs = _run(*_device_inputs(*host, device), actual_start=zero_actual_start)
 
     for name, golden, output in zip(("entry", "final"), expected, outputs, strict=True):
-        assert_accurate(golden, ttnn.to_torch(output), name=f"shape-sweep chained {name}", pcc_threshold=0.999)
+        assert_accurate(
+            golden,
+            ttnn.to_torch(output),
+            name=f"shape-sweep chained {name}",
+            pcc_threshold=0.999,
+            nrmse_threshold=0.0054,
+        )  # 1.5x measured NRMSE 3.54e-03
 
 
 def test_chain_affine_transforms_is_accurate_and_deterministic(zero_actual_start, device: ttnn.Device) -> None:
@@ -254,7 +262,9 @@ def test_chain_affine_transforms_is_accurate_and_deterministic(zero_actual_start
         name="chained outputs device-side exact-value determinism marker",
     )
     for name, golden, output in zip(("entry", "final"), expected, outputs, strict=True):
-        assert_accurate(golden, output, name=f"chained {name}", pcc_threshold=0.999)
+        assert_accurate(
+            golden, output, name=f"chained {name}", pcc_threshold=0.999, nrmse_threshold=0.0055
+        )  # 1.5x measured NRMSE 3.62e-03
     for output in reference_outputs:
         ttnn.deallocate(output)
 
@@ -282,8 +292,12 @@ def test_chain_affine_transforms_cache_hit_rebinds_fresh_tensors(
     ):
         actual_a = ttnn.to_torch(actual_a_tt)
         actual_b = ttnn.to_torch(actual_b_tt)
-        assert_accurate(golden_a, actual_a, name=f"{name} cache miss tensors", pcc_threshold=0.999)
-        assert_accurate(golden_b, actual_b, name=f"{name} cache hit fresh tensors", pcc_threshold=0.999)
+        assert_accurate(
+            golden_a, actual_a, name=f"{name} cache miss tensors", pcc_threshold=0.999, nrmse_threshold=0.0053
+        )  # 1.5x measured NRMSE 3.50e-03
+        assert_accurate(
+            golden_b, actual_b, name=f"{name} cache hit fresh tensors", pcc_threshold=0.999, nrmse_threshold=0.0054
+        )  # 1.5x measured NRMSE 3.60e-03
         assert not torch.equal(actual_a, actual_b)
 
 
@@ -365,7 +379,13 @@ def test_chain_affine_transforms_production_performance(zero_actual_start, devic
     assert all(tuple(output.shape) == (case.batch_heads, case.key_dim, case.value_dim) for output in outputs)
     assert all(output.dtype == ttnn.float32 for output in outputs)
     for name, golden, output in zip(("entry", "final"), expected, outputs, strict=True):
-        assert_accurate(golden, ttnn.to_torch(output), name=f"production chained {name}", pcc_threshold=0.999)
+        assert_accurate(
+            golden,
+            ttnn.to_torch(output),
+            name=f"production chained {name}",
+            pcc_threshold=0.999,
+            nrmse_threshold=0.0051,
+        )  # 1.5x measured NRMSE 3.40e-03
     performance = _chain_affine_transforms_performance(
         transforms_tt,
         initial_tt,

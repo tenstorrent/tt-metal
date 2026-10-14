@@ -145,12 +145,14 @@ def test_recurrence_matches_reference_and_is_deterministic(
         golden_output,
         actual_output,
         pcc_threshold=0.999,
+        nrmse_threshold=0.026,  # 1.5x measured NRMSE 1.71e-02
     )
     _, state_failures = compare_cpu_device(
         f"{label} state",
         golden_state,
         actual_state,
         pcc_threshold=0.999,
+        nrmse_threshold=0.022,  # 1.5x measured NRMSE 1.41e-02
     )
     failures = output_failures + state_failures
     assert not failures, "\n".join(failures)
@@ -202,20 +204,26 @@ def test_grouped_scan_preserves_weak_decay_across_group_sizes(device: ttnn.Devic
     output_eight = ttnn.to_torch(output_eight_tt).reshape(1, sequence, heads, dim)
     output_two = ttnn.to_torch(output_two_tt).reshape(1, sequence, heads, dim)
     label = "weak-decay production contract"
-    assert_accurate(golden_output, output_eight, name=f"{label} grouped output")
+    assert_accurate(
+        golden_output, output_eight, name=f"{label} grouped output", nrmse_threshold=0.022
+    )  # 1.5x measured NRMSE 1.47e-02
     assert_accurate(
         output_two,
         output_eight,
         name=f"{label} group-size output invariance",
         pcc_threshold=0.9999,
+        nrmse_threshold=0.012,  # 1.5x measured NRMSE 7.79e-03
     )
     assert_accurate(
         ttnn.to_torch(state_two),
         ttnn.to_torch(state_eight),
         name=f"{label} group-size state invariance",
         pcc_threshold=0.9999,
+        nrmse_threshold=0.0075,  # 1.5x measured NRMSE 4.98e-03
     )
-    assert_accurate(golden_state, ttnn.to_torch(state_eight), name=f"{label} grouped state")
+    assert_accurate(
+        golden_state, ttnn.to_torch(state_eight), name=f"{label} grouped state", nrmse_threshold=0.02
+    )  # 1.5x measured NRMSE 1.33e-02
 
 
 def _to_mesh(
@@ -356,8 +364,12 @@ def test_distributed_recurrence_matches_serial_and_is_deterministic(
     actual_output = _reconstruct_recurrence_output(output_tt, mesh_device, sp_axis, tensor_parallel_axis)
     actual_state = reconstruct_state_at_sp_rank(state_tt, mesh_device, sp_axis, tensor_parallel_axis, sp_rank=0)
     label = f"tp_axis={tensor_parallel_axis}"
-    assert_accurate(expected_output, actual_output, name=f"{label} output")
-    assert_accurate(expected_state, actual_state, name=f"{label} state")
+    assert_accurate(
+        expected_output, actual_output, name=f"{label} output", nrmse_threshold=0.02
+    )  # 1.5x measured NRMSE 1.31e-02
+    assert_accurate(
+        expected_state, actual_state, name=f"{label} state", nrmse_threshold=0.011
+    )  # 1.5x measured NRMSE 7.33e-03
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
@@ -435,8 +447,15 @@ def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
         zip(ttnn.get_device_tensors(entry), ttnn.get_device_tensors(final), strict=True)
     ):
         rank, tp = divmod(index, 4)
-        assert_accurate(entries[rank][tp].unsqueeze(0), ttnn.to_torch(local_entry), name=f"entry rank={rank} tp={tp}")
-        assert_accurate(carry[tp].unsqueeze(0), ttnn.to_torch(local_final), name=f"final rank={rank} tp={tp}")
+        assert_accurate(
+            entries[rank][tp].unsqueeze(0),
+            ttnn.to_torch(local_entry),
+            name=f"entry rank={rank} tp={tp}",
+            nrmse_threshold=1e-06,
+        )  # 1.5x measured NRMSE 0.00e+00
+        assert_accurate(
+            carry[tp].unsqueeze(0), ttnn.to_torch(local_final), name=f"final rank={rank} tp={tp}", nrmse_threshold=1e-06
+        )  # 1.5x measured NRMSE 0.00e+00
 
 
 @pytest.mark.use_module_device

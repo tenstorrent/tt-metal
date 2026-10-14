@@ -30,11 +30,14 @@ def test_split_forward_matches_full_forward_without_mutating_input_state(use_ful
         torch.cat((first_output, last_output), dim=1),
         name="split layer output",
         pcc_threshold=0.99999,
+        nrmse_threshold=1e-06,  # 1.5x measured NRMSE 4.52e-08
     )
     for index, (full_tensor, split_tensor) in enumerate(
         zip(full_state.__dict__.values(), split_state.__dict__.values())
     ):
-        assert_accurate(full_tensor, split_tensor, name=f"split layer state {index}", pcc_threshold=0.99999)
+        assert_accurate(
+            full_tensor, split_tensor, name=f"split layer state {index}", pcc_threshold=0.99999, nrmse_threshold=1e-06
+        )  # 1.5x measured NRMSE 1.25e-08
     for input_tensor, snapshot in zip(first_state.__dict__.values(), input_state_snapshot):
         assert_equal(snapshot, input_tensor, name="reference input state unchanged")
 

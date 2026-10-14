@@ -18,6 +18,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    LayerNrmseThresholds,
     assert_matches_reference,
     build_layer,
     collect_mesh_accuracy_and_determinism_results,
@@ -111,6 +112,9 @@ def test_actual_start_matches_natural_order(
                 config=config,
                 label=f"SP{sp_size} T{sequence} start={actual_start}",
                 state_linf_threshold=state_peak,
+                nrmse=LayerNrmseThresholds(
+                    output=0.021, recurrent=0.034, convolution=0.0039
+                ),  # 1.5x measured NRMSE 1.34e-02/2.22e-02/2.58e-03
             )
         finally:
             for tensor in (hidden_tt, actual_start_tt, initial.recurrent, initial.convolution):
@@ -159,6 +163,9 @@ def test_actual_start_is_deterministic_and_matches_reference(
         tp_axis=tensor_parallel_axis,
         config=config,
         label=f"tp_axis={tensor_parallel_axis} start={actual_start}",
+        nrmse=LayerNrmseThresholds(
+            output=0.021, recurrent=0.031, convolution=0.0039
+        ),  # 1.5x measured NRMSE 1.34e-02/2.02e-02/2.58e-03
     )
 
 
@@ -205,6 +212,9 @@ def test_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice) -> No
                 tp_axis=tensor_parallel_axis,
                 config=config,
                 label=f"split trace replay={replay}",
+                nrmse=LayerNrmseThresholds(
+                    output=0.02, recurrent=0.031, convolution=0.0039
+                ),  # 1.5x measured NRMSE 1.30e-02/2.02e-02/2.58e-03
             )
             current = [
                 ttnn.to_torch(shard).clone()
@@ -270,6 +280,9 @@ def test_split_offset_continuation_preserves_nonzero_caller_carries(mesh_device:
                 tp_axis=1,
                 config=config,
                 label=f"split continuation chunk={chunk} start={actual_start}",
+                nrmse=LayerNrmseThresholds(
+                    output=0.02, recurrent=0.032, convolution=0.0039
+                ),  # 1.5x measured NRMSE 1.30e-02/2.10e-02/2.57e-03
             )
             after = [
                 ttnn.to_torch(shard)

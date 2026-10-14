@@ -16,24 +16,28 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 )
 
 
+def _ungated_accurate(expected: torch.Tensor, actual: torch.Tensor) -> float:
+    return assert_accurate(expected, actual, nrmse_threshold=None)  # these tests exercise the checks before the metrics
+
+
 @pytest.mark.parametrize(
     "value,label",
     [(float("nan"), "nan=1"), (float("inf"), r"\+inf=1"), (-float("inf"), "-inf=1")],
 )
-@pytest.mark.parametrize("assertion", [assert_accurate, assert_equal, assert_bit_identical])
+@pytest.mark.parametrize("assertion", [_ungated_accurate, assert_equal, assert_bit_identical])
 def test_assertions_reject_nonfinite_values(assertion, value: float, label: str, expect_error) -> None:
     tensor = torch.tensor([value])
     with expect_error(AssertionError, label):
         assertion(tensor, tensor.clone())
 
 
-@pytest.mark.parametrize("assertion", [assert_accurate, assert_equal, assert_bit_identical])
+@pytest.mark.parametrize("assertion", [_ungated_accurate, assert_equal, assert_bit_identical])
 def test_assertions_reject_shape_metadata_mismatch(assertion, expect_error) -> None:
     with expect_error(AssertionError, "shape"):
         assertion(torch.zeros(2), torch.zeros(1, 2))
 
 
-@pytest.mark.parametrize("assertion", [assert_accurate, assert_equal, assert_bit_identical])
+@pytest.mark.parametrize("assertion", [_ungated_accurate, assert_equal, assert_bit_identical])
 def test_assertions_reject_dtype_metadata_mismatch(assertion, expect_error) -> None:
     with expect_error(AssertionError, "dtype"):
         assertion(torch.zeros(2, dtype=torch.float32), torch.zeros(2, dtype=torch.bfloat16))
@@ -41,7 +45,7 @@ def test_assertions_reject_dtype_metadata_mismatch(assertion, expect_error) -> N
 
 def test_assert_accurate_rejects_pcc_below_threshold(expect_error) -> None:
     with expect_error(AssertionError, "PCC"):
-        assert_accurate(torch.arange(8.0), torch.arange(7, -1, -1.0), pcc_threshold=0.99)
+        assert_accurate(torch.arange(8.0), torch.arange(7, -1, -1.0), pcc_threshold=0.99, nrmse_threshold=None)
 
 
 def test_assert_equal_rejects_value_mismatch(expect_error) -> None:
@@ -64,7 +68,7 @@ def test_assert_bit_identical_rejects_signed_zero_mismatch(expect_error) -> None
 def test_assert_accurate_returns_measured_pcc() -> None:
     expected = torch.arange(8.0)
     actual = expected + torch.linspace(0.0, 1e-4, 8)
-    pcc = assert_accurate(expected, actual, pcc_threshold=0.999999)
+    pcc = assert_accurate(expected, actual, pcc_threshold=0.999999, nrmse_threshold=None)
     assert 0.999999 <= pcc <= 1.0
 
 
@@ -208,7 +212,7 @@ def test_collect_accuracy_and_determinism_reports_any_output_mismatch(fake_devic
 def test_nrmse_gate_fails_a_scale_error_that_passes_pcc(expect_error) -> None:
     expected = torch.arange(1024, dtype=torch.float32)
     actual = expected * 2
-    assert_accurate(expected, actual, pcc_threshold=0.999999)
+    assert_accurate(expected, actual, pcc_threshold=0.999999, nrmse_threshold=None)
     with expect_error(AssertionError, "NRMSE 1.000e\\+00 > 5.000e-02"):
         assert_accurate(expected, actual, nrmse_threshold=0.05)
 
@@ -241,7 +245,9 @@ def test_nrmse_is_error_norm_over_expected_norm() -> None:
 def test_nrmse_sees_a_uniform_scale_error_that_pcc_does_not() -> None:
     expected = torch.linspace(-1.0, 1.0, 64)
     actual = expected * 0.95
-    assert assert_accurate(expected, actual, pcc_threshold=0.999999) == pytest.approx(1.0, abs=1e-12)
+    assert assert_accurate(expected, actual, pcc_threshold=0.999999, nrmse_threshold=None) == pytest.approx(
+        1.0, abs=1e-12
+    )
     assert nrmse(expected, actual).item() == pytest.approx(0.05, rel=1e-6)
 
 
@@ -311,3 +317,8 @@ def test_token_error_accumulator_rejects_mismatched_chunks_and_empty_reads(expec
         accumulator.nrmse()
     with expect_error(ValueError, "matching"):
         accumulator.update(torch.zeros(2, 3), torch.zeros(3, 2))
+
+
+def test_nrmse_threshold_is_required(expect_error) -> None:
+    with expect_error(TypeError, "nrmse_threshold"):
+        assert_accurate(torch.ones(2), torch.ones(2))
