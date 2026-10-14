@@ -8,10 +8,10 @@ convolution histories) after it. A segment boundary is invisible to the token-or
 (``tests/kimi_k3/test_kda_golden.py`` asserts this), so a run resumed from the last complete segment
 reproduces an uninterrupted one. Any later window can be recomputed from the snapshot before it.
 
-The run never opens a device. Example (Kimi-K3 ``layers.0``, Gutenberg pipeline check)::
+The run never opens a device. Example (Kimi-K3 ``layers.0`` on the code tokens of the R1 vLLM trace)::
 
     nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.kda.golden_run \\
-        --checkpoint $KIMI_K3_CKPT --tokens gutenberg --count 102400 --out /path/to/run --threads 16
+        --checkpoint $KIMI_K3_CKPT --tokens /path/to/k3_4_layers_moe_kda_io --count 1044480 --out /path/to/run
 """
 
 from __future__ import annotations
@@ -170,13 +170,17 @@ def main() -> None:
         KIMI_K3_REVISION,
         FirstLayerInput,
         gutenberg_token_ids,
+        trace_token_ids,
+        trace_token_source,
     )
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--checkpoint", type=Path, required=True, help="Kimi-K3 checkpoint with layers.0 and embed_tokens"
     )
-    parser.add_argument("--tokens", required=True, help="'gutenberg' or a JSON file holding a list of token ids")
+    parser.add_argument(
+        "--tokens", required=True, help="'gutenberg' (pipeline check) or a vLLM trace directory holding metadata.json"
+    )
     parser.add_argument(
         "--corpus-cache", type=Path, default=Path.home() / ".cache" / "tt-linear-layers-shared" / "text_corpus"
     )
@@ -190,7 +194,7 @@ def main() -> None:
     if args.tokens == "gutenberg":
         token_ids, source = gutenberg_token_ids(args.corpus_cache), "gutenberg pg1342"
     else:
-        token_ids, source = json.loads(Path(args.tokens).read_text(encoding="utf-8")), str(args.tokens)
+        token_ids, source = trace_token_ids(Path(args.tokens)), trace_token_source(Path(args.tokens))
     if len(token_ids) < args.count:
         raise ValueError(f"{source} has {len(token_ids)} tokens, fewer than --count {args.count}")
     token_ids = token_ids[: args.count]

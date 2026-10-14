@@ -3,8 +3,8 @@
 """Measure the device KDA layer against a prepared FP64 golden of real Kimi-K3 ``layers.0`` inputs.
 
 The golden comes from ``tests/kda/golden_run.py``, prepared on CPU outside the device lock; point
-``KDA_GOLDEN_RUN`` at its directory. This test only loads it, so it never computes a reference while
-holding the device. The device runs consecutive full prefill calls, carrying its own state from token 0,
+``KDA_GOLDEN_RUN`` at its directory, and ``KDA_TRACE_DIR`` at the vLLM trace when its tokens came from one.
+This test only loads the golden, so it never computes a reference while holding the device. The device runs consecutive full prefill calls, carrying its own state from token 0,
 and the result is reported as per-token, per-position and per-head-state NRMSE against the golden
 (``KDA_GOLDEN_ACCURACY=`` line). It fails only on non-finite output; the budget gate belongs to the CI test.
 """
@@ -24,7 +24,13 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_
 from models.demos.deepseek_v3_d_p.tests.kda.accuracy_metric import position_profile, slice_nrmse
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256, load_kda_layer_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.golden_run import MANIFEST, load_window, token_ids_sha256
-from models.demos.deepseek_v3_d_p.tests.kda.real_input import FIRST_LAYER_INPUT, FirstLayerInput, gutenberg_token_ids
+from models.demos.deepseek_v3_d_p.tests.kda.real_input import (
+    FIRST_LAYER_INPUT,
+    FirstLayerInput,
+    gutenberg_token_ids,
+    trace_token_ids,
+    trace_token_source,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
     make_kimi_k3_device_case,
@@ -53,16 +59,21 @@ def test_kimi_k3_layer0_against_fp64_golden(
         pytest.skip("set KDA_GOLDEN_RUN (a prepared golden_run directory) and KIMI_K3_CKPT")
     run_dir, checkpoint = Path(run_dir), Path(checkpoint)
     manifest = json.loads((run_dir / MANIFEST).read_text(encoding="utf-8"))
-    if manifest["identity"]["token_source"] != "gutenberg pg1342":
-        pytest.skip(f"token source {manifest['identity']['token_source']} has no loader here yet")
+    source = manifest["identity"]["token_source"]
+    if source == "gutenberg pg1342":
+        token_ids = gutenberg_token_ids(Path.home() / ".cache" / "tt-linear-layers-shared" / "text_corpus")
+    else:
+        trace = os.environ.get("KDA_TRACE_DIR")
+        if not trace or trace_token_source(Path(trace)) != source:
+            pytest.skip(f"golden tokens come from {source!r}: point KDA_TRACE_DIR at that trace directory")
+        token_ids = trace_token_ids(Path(trace))
+    token_ids = token_ids[: manifest["tokens"]]
+    assert token_ids_sha256(token_ids) == manifest["token_ids_sha256"], "golden used other tokens"
 
     config = kimi_k3_kda_config()
     weights = load_kda_layer_state_dict(checkpoint, 0, config)
     assert kda_state_dict_sha256(weights) == manifest["identity"]["weights_sha256"], "golden used other weights"
     assert manifest["identity"]["input"] == FIRST_LAYER_INPUT, f"golden input is {manifest['identity']['input']!r}"
-    corpus = Path.home() / ".cache" / "tt-linear-layers-shared" / "text_corpus"
-    token_ids = gutenberg_token_ids(corpus)[: manifest["tokens"]]
-    assert token_ids_sha256(token_ids) == manifest["token_ids_sha256"], "golden used other tokens"
     length = calls * _CALL
     golden_output, _ = load_window(run_dir, 0, length)  # raises if the golden is too short
     golden_state = torch.load(run_dir / f"segment_{length // manifest['segment'] - 1:06d}.pt", weights_only=True)

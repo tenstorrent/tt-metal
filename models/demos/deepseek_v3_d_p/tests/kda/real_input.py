@@ -9,7 +9,7 @@ so this module deliberately builds only the first layer's input: applying a late
 embeddings would be a proxy no real run produces.
 
 Token ids are the caller's: the Gutenberg prose here only checks the pipeline; accuracy evidence uses code
-tokens from the vLLM trace's ``metadata.json``. Building inputs needs only local checkpoint shards
+tokens from a vLLM trace's ``metadata.json`` (``trace_token_ids``). Building inputs needs only local checkpoint shards
 (the embedding table and ``layers.0``); fetching the tokenizer and corpus needs network.
 """
 
@@ -65,6 +65,21 @@ def gutenberg_token_ids(cache_dir: Path) -> list[int]:
     ranks = load_tiktoken_bpe(hf_hub_download(KIMI_K3_REPO, "tiktoken.model", revision=KIMI_K3_REVISION))
     encoding = tiktoken.Encoding(name=KIMI_K3_REPO, pat_str=_KIMI_PATTERN, mergeable_ranks=ranks, special_tokens={})
     return encoding.encode_ordinary(body)
+
+
+def trace_token_ids(trace_dir: Path) -> list[int]:
+    """Prompt token ids of a vLLM structured trace (``metadata.json["token_ids"]``).
+
+    All Kimi-K3 code traces share one prompt (``infinitebench_code_debug_1M.txt``); each is a prefix of the same
+    token stream, so any of them gives the code-token input.
+    """
+    metadata = json.loads((Path(trace_dir) / "metadata.json").read_text(encoding="utf-8"))
+    return metadata["token_ids"]
+
+
+def trace_token_source(trace_dir: Path) -> str:
+    """Golden-identity name of a trace's tokens; the trace's directory name identifies it across hosts."""
+    return f"vllm trace {Path(trace_dir).name}"
 
 
 # Names what ``FirstLayerInput`` computes, for golden identities: a golden built another way is a different input.

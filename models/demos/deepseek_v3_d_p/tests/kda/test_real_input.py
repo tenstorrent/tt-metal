@@ -10,7 +10,12 @@ import pytest
 import torch
 from safetensors.torch import load_file, save_file
 
-from models.demos.deepseek_v3_d_p.tests.kda.real_input import FirstLayerInput, chunk_decay_statistics
+from models.demos.deepseek_v3_d_p.tests.kda.real_input import (
+    FirstLayerInput,
+    chunk_decay_statistics,
+    trace_token_ids,
+    trace_token_source,
+)
 
 
 def write_checkpoint(root: Path, embedding: torch.Tensor, norm_weight: torch.Tensor) -> Path:
@@ -62,6 +67,15 @@ def test_first_layer_input_matches_sampled_vllm_trace_rows() -> None:
     ulps = (actual.view(torch.int16).int() - expected.view(torch.int16).int()).abs()
     assert int(ulps.max()) <= 1, f"rebuilt rows differ by up to {int(ulps.max())} BF16 ulp"
     assert int((ulps > 0).sum()) <= 100, f"{int((ulps > 0).sum())} of {ulps.numel()} elements differ by one ulp"
+
+
+def test_trace_token_ids_are_the_metadata_prompt_ids(tmp_path: Path) -> None:
+    trace = tmp_path / "k3_trace"
+    trace.mkdir()
+    (trace / "metadata.json").write_text(json.dumps({"token_ids": [5, 0, 163577], "completion_token_ids": [9]}))
+
+    assert trace_token_ids(trace) == [5, 0, 163577]
+    assert trace_token_source(trace) == "vllm trace k3_trace"
 
 
 def test_chunk_decay_statistics_counts_ceiling_and_weak_chunks() -> None:
