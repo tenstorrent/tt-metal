@@ -846,6 +846,7 @@ inline void _llk_math_matmul_uninit_()
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
 {
+    LLK_FID_POINT(); // fidelity experiment hook (ckernel.h), empty unless LLK_FID_T is defined
     // Zero-flag leak guard. MVMUL reads ALU_ACC_CTRL_Zero_Flag_disabled_src, which for
     // denormal Src operands changes the result (flush vs keep — measured on WH n150 / BH p150b). Matmul is
     // a "runs-in-DEFAULT" op: it never sets the flag itself and relies on hw_configure / a format-changing
