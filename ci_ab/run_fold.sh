@@ -92,8 +92,19 @@ run() {  # run <side> <build> <ids> <tag> <run types|-> <limit>
 }
 R5=L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE,PACK_ISOLATE,L1_CONGESTION
 
-for v in H G M; do mkside $v; done
 MODE=${MODE:-ab}; echo "== mode $MODE"
+if [[ $MODE == layout ]]; then
+# Layout-only control: L is the head plus one RISC-V nop in the A2D MOP setup (no Tensix change), against H and G
+for v in H L G; do mkside $v; done
+for v in H:bH L:bL G:bG G:bG2; do build ${v%%:*} ${v##*:} $S/ids/perf_c.txt $R5; done
+elfid bH bL; elfid bH bG; elfid bG bG2 same
+n=0
+for sb in H:bH L:bL G:bG G:bG2  G:bG2 G:bG L:bL H:bH  L:bL H:bH G:bG2 G:bG  G:bG G:bG2 H:bH L:bL; do
+  n=$((n + 1)); run ${sb%%:*} ${sb##*:} $S/ids/perf_c.txt C_${sb%%:*}_${sb##*:}_$n $R5 2400
+done
+echo "== stk end $(date -u +%T)"; exit 0
+fi
+for v in H G M; do mkside $v; done
 
 if [[ $MODE == ab ]]; then
 # Harness A/B
