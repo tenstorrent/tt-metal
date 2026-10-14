@@ -58,7 +58,7 @@ Multi-run mode (load weights + compile ONCE, then run many specs against the res
   PREFILL_WARMUP_ITERS untimed whole-sequence passes before the timed iterations of each run. Programs are
                       keyed by cache capacity and chunk kind (first / cache-read / ragged), not by ISL, and
                       compile() warms those three; iteration 0 still carries host-side first-call costs
-                      (e.g. the per-actual_isl MoE padding-config upload), so 1 is a good default for perf
+                      (e.g. the MoE padding-config upload per new ragged tail), so 1 is a good default for perf
                                                                                                    [default 0]
   PREFILL_COMPILE     "0" -> skip runtime.compile()'s three-variant warm-up entirely (then iteration 0 pays
                       the program-cache misses)                                                    [default 1]
@@ -67,8 +67,8 @@ Multi-run mode (load weights + compile ONCE, then run many specs against the res
   one-shot run is just a trace whose padded length equals the chunk size. The cache capacity is NOT
   fixed: when a run needs a different capacity the KV cache is re-allocated, the indexed RoPE rebuilt
   and the JIT buckets re-warmed (TtPrefillRuntime.reconfigure_capacity) — seconds to minutes, no
-  weight reload. Fitting matters: the dense layers' ring-joint SDPA gathers the whole cache shard per
-  chunk, so an over-sized cache costs real time (MSA layers are bounded by the valid prefix).
+  weight reload. Fitting matters: on a 1D fabric the MSA index_k gather moves close to the whole slot
+  capacity per chunk, so an over-sized cache costs real time.
 
   # serve: weights load once, then from ANY shell on the node:
   PREFILL_TRACE_DIR=$GOLDEN/longbook_56320 PREFILL_RUNS=fifo:/tmp/m3_pcc.fifo \

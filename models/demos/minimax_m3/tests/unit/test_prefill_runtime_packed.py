@@ -30,10 +30,8 @@ from ..test_factory import parametrize_mesh_with_fabric
 NUM_LAYERS = 5
 C, W, USERS = 1024, 4096, 4
 CAPACITY = 8 * C
-PCC = 0.998
-# vs a runtime built at forward_tokens == chunk_size: the auto matmul configs follow the forward width (M), which
-# alone moves layer-0 K/V to ~0.9999 and layer-1 V to ~0.998.
-PCC_CHUNK_WIDTH = 0.997
+PCC = 0.998  # packing only: same forward width, one entry per forward
+PCC_CHUNK_WIDTH = 0.997  # vs forward_tokens == chunk_size: the auto matmul configs follow the forward width (M)
 EMPTY = PrefillEntry(0, 0, 0)
 SCHEDULE = [
     [PrefillEntry(0, 0, C), PrefillEntry(0, C, 2 * C), PrefillEntry(1, 0, C), PrefillEntry(2, 0, C)],

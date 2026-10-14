@@ -220,9 +220,9 @@ class TtPrefillRuntime:
         MoE dispatch buffers at build time. Call ``compile(new_kv_cache)`` afterwards — the JIT buckets
         for the new cache shapes are not warm.
 
-        Why: the dense layers' ring-joint SDPA gathers the WHOLE cache shard per chunk (independent of
-        the valid prefix), so a run in an over-sized cache pays for capacity it never reads. Fitting the
-        cache to each run keeps a resident-model sweep faithful to a standalone run.
+        Why: on a 1D fabric the MSA index_k gather moves close to the whole slot capacity per chunk
+        (msa._gather_tp_sharded_index_k), so a run in an over-sized cache pays for capacity it never reads.
+        Fitting the cache to each run keeps a resident-model sweep faithful to a standalone run.
         """
         assert self.model_built
         assert (
