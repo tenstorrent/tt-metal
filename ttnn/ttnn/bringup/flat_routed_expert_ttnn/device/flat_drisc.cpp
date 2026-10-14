@@ -88,9 +88,9 @@ uint32_t free_tile(IDevice* device, uint32_t bank) {
 }
 }  // namespace
 
-// MIMO_FL_DRISC_TILES: 1 (default) - per bank the tile that is no endpoint sends both of the bank's slots, one per
-// NoC; 2 - both Metal tiles, a slot each (tile 1, its bank's NOC1 endpoint, on NOC0 only)
-uint32_t flat_drisc_tiles() { return env_or("MIMO_FL_DRISC_TILES", 1); }
+// MIMO_FL_DRISC_TILES: 2 (default) - both Metal tiles of a bank, a slot each (tile 1, its bank's NOC1 endpoint, sends on
+// NOC0); 1 - the bank's tile that is no endpoint sends both slots, one per NoC (capped at ~21 GB/s: small M is slow)
+uint32_t flat_drisc_tiles() { return env_or("MIMO_FL_DRISC_TILES", 2); }
 
 CoreCoord flat_drisc_logical(IDevice* device, uint32_t r, uint32_t banks) {
     return flat_drisc_tiles() == 1 ? CoreCoord(r % banks, free_tile(device, r % banks))
@@ -116,12 +116,12 @@ CoreCoord flat_drisc_physical(IDevice* device, uint32_t r, uint32_t banks) {
 }
 
 uint32_t flat_drisc_noc(IDevice* device, uint32_t r, uint32_t banks) {
-    // one tile per bank: its first slot on NOC0, the second on NOC1 (MIMO_FL_DRISC_NOC1=0: both on NOC0); two tiles:
-    // MIMO_FL_DRISC_NOC1=1 puts the non-endpoint tile's slot on NOC1
+    // one tile per bank: its first slot on NOC0, the second on NOC1; two tiles: the non-endpoint tile's slot on NOC1
+    // (M 256 / 512 55.0 / 81.5 -> 50.6 / 77.2 us / expert); MIMO_FL_DRISC_NOC1=0: all on NOC0
     if (flat_drisc_tiles() == 1) {
         return env_or("MIMO_FL_DRISC_NOC1", 1) ? r / banks : 0;
     }
-    if (!env_or("MIMO_FL_DRISC_NOC1", 0)) {
+    if (!env_or("MIMO_FL_DRISC_NOC1", 1)) {  // (default: tile 2's half of the weights off the x multicast's NOC0)
         return 0;
     }
     device = chip(device);
@@ -174,6 +174,12 @@ void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t
             defs["SE_DRISC_MPFE_ORD"] = ws.substr(comma + 1);
         }
     }
+    if (const char* b = std::getenv("MIMO_FL_DRISC_BURST")) {  // (probe: DMA AXI burst beats; 0 = untouched)
+        defs["SE_DRISC_BURST"] = b;
+    }
+    if (const char* m = std::getenv("MIMO_FL_DRISC_DMA_MAX")) {  // (probe: DMA reads in flight per stream)
+        defs["SE_DRISC_DMA_MAX"] = m;
+    }
     if (std::getenv("MIMO_FL_W_NOREAD")) {  // (perf probe: no weight DMA, garbage)
         defs["SE_W_NOREAD"] = "1";
     }
@@ -189,6 +195,12 @@ void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t
                 d["SE_DRISC_MPFE_PORT"] = std::to_string(1 + c.y);
             }
             const auto& nocs = tile_nocs.at({c.x, c.y});
+            // a bank's two tiles DMA on different streams: both on stream 0 with ~7 reads in flight each, next to heavy
+            // NOC1 DRAM reads through the bank's NOC1 endpoint (MIMO_FL_DN_NOC0=1), wedged those NoC reads (3 of 3
+            // runs; split streams 2 of 2 clean, as is a 2-read cap). MIMO_FL_DRISC_STREAM_SPLIT=0 restores the hang.
+            if (env_or("MIMO_FL_DRISC_STREAM_SPLIT", 1) && flat_drisc_tiles() == 2 && c.y == 2) {
+                d["SE_DRISC_STREAM0"] = "1";
+            }
             const auto k = CreateKernel(
                 *program,
                 "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/kernels/se_drisc_gu.cpp",
@@ -255,8 +267,8 @@ void flat_drisc_dump(distributed::MeshDevice* mesh) {
                     cr += std::to_string(w[(128 + 128 * k) / 4 + 4 * j]) + " ";
                 }
                 jobs += fmt::format(
-                    " | job {}: posted {} grants {}state call {} units {} rd {} wr {} fl {} loads {} desc gddr {:#x} "
-                    "blk {} R {} G {} land {:#x} n_load {} rxy0 {:#x}",
+                    " | job {}: posted {} grants {}state call {} units {} rd {} wr {} fl {} loads {} stream {} hw reads "
+                    "{} ours {} desc gddr {:#x} blk {} R {} G {} land {:#x} n_load {} rxy0 {:#x}",
                     k,
                     w[(k ? 64 : 0) / 4],
                     cr,
@@ -266,6 +278,9 @@ void flat_drisc_dump(distributed::MeshDevice* mesh) {
                     st[3],
                     st[4],
                     st[5],
+                    k,
+                    st[6],
+                    st[7],
                     d[0],
                     d[2],
                     d[4],

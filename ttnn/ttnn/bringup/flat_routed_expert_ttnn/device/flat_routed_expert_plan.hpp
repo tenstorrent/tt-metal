@@ -113,6 +113,10 @@ struct FlatRoutedExpertPlan {
     // DRISC mode: the one Tensix core that posts every slot's job (the readers' cells are free: the down cores take
     // them; MIMO_FL_DRISC_RD_DOWN=0 leaves them idle)
     Core launcher{0, 0};
+    // DRISC mode: reader slots 0 .. drisc_n - 1 stream from the DRAM cores, the rest keep their Tensix reader +
+    // forwarder (MIMO_FL_DRISC_SLOTS; a DRISC tile sends one slot per bank at full rate)
+    uint32_t drisc_n = 0;
+    bool tensix_reader(uint32_t r) const { return !drisc || r >= drisc_n; }
     // down
     bool rdown = false;
     uint32_t d_ch = 7, n_rdn = 0, pcd_r = 0, rem_cols = 0, kd_r = 0, nblk_r = 0, slot_dr = 0, ring_dr = 0;

@@ -180,10 +180,13 @@ std::vector<Core> FlatRoutedExpertPlan::arena_cores() const {
     for (const auto* l : {&down, &relays, &gu_idle}) {
         out.insert(out.end(), l->begin(), l->end());
     }
-    if (drisc) {  // (the reader cells are down cores, relays or idle)
+    if (drisc) {  // (the DRISC slots' reader cells are down cores, relays or idle)
         out.push_back(launcher);
-    } else {
-        out.insert(out.end(), readers.begin(), readers.end());
+    }
+    for (uint32_t r = 0; r < readers.size(); ++r) {
+        if (tensix_reader(r)) {
+            out.push_back(readers[r]);
+        }
     }
     return out;
 }
@@ -512,11 +515,14 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             taken.insert({c.x, c.y});
         }
     }
-    if (p.drisc) {  // the readers' cells but the launcher's go to the relays / down cores
+    if (p.drisc) {  // the DRISC slots' reader cells but the launcher's go to the relays / down cores
+        const char* dn = std::getenv("MIMO_FL_DRISC_SLOTS");
+        p.drisc_n = std::min<uint32_t>(dn ? std::atoi(dn) : p.readers.size(), p.readers.size());
+        TT_FATAL(p.drisc_n >= 1, "MIMO_FL_DRISC_SLOTS >= 1");
         p.launcher = p.readers[0];
         const char* rdd = std::getenv("MIMO_FL_DRISC_RD_DOWN");
         if (rdd == nullptr || std::atoi(rdd) != 0) {
-            for (uint32_t r = 1; r < p.readers.size(); ++r) {
+            for (uint32_t r = 1; r < p.drisc_n; ++r) {
                 taken.erase({p.readers[r].x, p.readers[r].y});
             }
         }
@@ -604,6 +610,13 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
                 p.down.emplace_back(x, y);
             }
         }
+    }
+    if (p.drisc) {  // the freed reader cells last (a down-core cap keeps the usual cells first)
+        std::set<std::pair<uint32_t, uint32_t>> rd;
+        for (const auto& c : p.readers) {
+            rd.insert({c.x, c.y});
+        }
+        std::stable_partition(p.down.begin(), p.down.end(), [&](const Core& c) { return !rd.contains({c.x, c.y}); });
     }
     // MIMO_FL_XDOWN="x,y;x,y;.." (probe, with the rows capped): extra down cores outside the rows, e.g. the grid row 0 cells
     // combine leaves free when it runs on row-major y (flat_combine_overlap)
@@ -751,6 +764,14 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     for (uint32_t d = 0; d < ND; ++d) {
         p.pcds[d] = base_p + (p.dl(d) < extra ? 1 : 0);
     }
+    if (std::getenv("MIMO_FL_DRISC_DBG")) {
+        std::string dl;
+        for (uint32_t d = 0; d < ND; ++d) {
+            dl += " (" + std::to_string(p.down[d].x) + "," + std::to_string(p.down[d].y) + "):" +
+                  std::to_string(p.pcds[d]);
+        }
+        log_info(tt::LogOp, "flat plan: {} down cores (logical x,y):cols{}", ND, dl);
+    }
     for (uint32_t d = 0; d < ND; ++d) {
         uint32_t c0 = 0;
         for (uint32_t e = p.sg_dn(d) * p.nd_sg; e < d; ++e) {
@@ -797,7 +818,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             }
             // the forwarder: the reader (NOC1), or its DRISC (DRAM tile, writes on NOC0)
             // (perf probe MIMO_FL_DRISC_ASSIGN=0: DRISC mode with the readers' assignment)
-            const bool by_drisc = p.drisc && !(std::getenv("MIMO_FL_DRISC_ASSIGN") &&
+            const bool by_drisc = !p.tensix_reader(r) && !(std::getenv("MIMO_FL_DRISC_ASSIGN") &&
                                                std::atoi(std::getenv("MIMO_FL_DRISC_ASSIGN")) == 0);
             // (DRISC: NOC0 coordinates on both ends; a DRAM tile's translated ones are not on the NoC grid)
             const Core rp = by_drisc ? Core(flat_drisc_physical(device, r, p.banks)) : phys(p.readers[r]);
@@ -814,7 +835,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         for (uint32_t ci : per_reader[r]) {
             p.gu.push_back(gu_all[ci]);
         }
-        if (p.drisc && std::getenv("MIMO_FL_DRISC_DBG")) {
+        if (!p.tensix_reader(r) && std::getenv("MIMO_FL_DRISC_DBG")) {
             const Core dp = flat_drisc_physical(device, r, p.banks);
             std::string g;
             for (uint32_t ci : per_reader[r]) {
