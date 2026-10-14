@@ -195,7 +195,6 @@ public:
 
     ~move_only_function() { destroy_target(); }
 
-    // Compares the table pointer, so no RTTI is needed.
     explicit operator bool() const noexcept { return table() != &kEmptyTable; }
 
     // Calling an empty instance throws through the empty table, with no branch here.
