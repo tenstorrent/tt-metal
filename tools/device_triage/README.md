@@ -11,7 +11,7 @@ Stdlib Python 3.10, no installs. Run everything from this directory.
 ```bash
 cd tools/device_triage
 python3 -m device_triage index          # incremental; first run ~10 min (niced, idle I/O), then ~1 min
-python3 -m device_triage jira-sync      # optional: tickets, needs a Jira token (below)
+python3 -m device_triage jira-sync      # optional, after index: tickets + older HC history; needs a Jira token
 python3 -m device_triage triage bh-glx-120-b02u08
 python3 -m device_triage triage bh-glx-110-a10u14 --as-of 2026-10-04T15:00 --days 14 -v
 python3 -m device_triage fleet          # every host with recent machine HC runs -> docs/fleet.md

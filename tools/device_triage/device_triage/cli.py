@@ -35,6 +35,10 @@ def cmd_jira_sync(args: argparse.Namespace) -> None:
                 "SELECT path FROM runs WHERE source = 'machine_hc' AND path NOT LIKE ?", (f"{DCAMP_HC_ROOT}%",)
             )
         }
+        if not on_disk_jobs:
+            # Without the hc_logs index, runs still on disk would be rebuilt again from the tickets.
+            print("no machine HC runs indexed yet: skipping the DCAMP run rebuild (run `index`, then `jira-sync`)")
+            known_hosts = on_disk_jobs = None
     try:
         stats = jira_sync.sync(
             args.project or ["DIIM", "DCAMP"],
@@ -52,6 +56,8 @@ def cmd_jira_sync(args: argparse.Namespace) -> None:
         f"DCAMP: {stats.hc_runs} (diag reports: {stats.diag}); JQL categories: {stats.jql}; "
         f"{stats.requests} GET requests"
     )
+    if stats.hc_runs:
+        index.build(sources=["dcamp_hc"], workers=args.workers)
     cmd_tickets(args)
 
 
@@ -207,6 +213,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument(
         "--skip-hc-runs", action="store_true", help="don't rebuild machine HC runs from DCAMP bot-ticket attachments"
     )
+    p.add_argument("--workers", type=int, default=8, help="workers for indexing the rebuilt runs")
     p.set_defaults(func=cmd_jira_sync)
 
     p = sub.add_parser("tickets", help="(re)load Jira tickets from cache/jira into the index")
