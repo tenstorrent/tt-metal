@@ -204,11 +204,11 @@ TEST(MoveOnlyFunctionTest, CPU_EmptyStdFunctionIsEngaged) {
 
 TEST(MoveOnlyFunctionTest, CPU_EmptyOtherSignatureIsEmpty) {
     move_only_function<int()> empty;
-    move_only_function<void()> constructed{std::move(empty)};
+    move_only_function<long()> constructed{std::move(empty)};
     EXPECT_FALSE(static_cast<bool>(constructed));
 
     move_only_function<int()> also_empty;
-    move_only_function<void()> assigned{[] {}};
+    move_only_function<long()> assigned{[] { return 1L; }};
     assigned = std::move(also_empty);
     EXPECT_FALSE(static_cast<bool>(assigned));
 
