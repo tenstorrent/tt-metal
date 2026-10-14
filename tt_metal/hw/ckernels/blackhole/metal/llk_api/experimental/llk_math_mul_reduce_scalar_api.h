@@ -101,3 +101,24 @@ inline void llk_math_mul_reduce_scalar_move_product(
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
     _llk_math_mul_reduce_scalar_move_product_<share_slots>(i, num_products, tensor_shape);
 }
+
+inline bool llk_math_mul_reduce_scalar_interleaves(const std::uint32_t icb0, const std::uint32_t num_tiles) {
+    const std::uint32_t operand_id = get_operand_id(icb0);
+    return _llk_math_mul_reduce_scalar_interleaves_(get_operand_tensor_shape(operand_id), num_tiles);
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_math_mul_reduce_scalar_interleaved_init() {
+    SAN_HOOK(unsupported());
+    _llk_math_mul_reduce_scalar_interleaved_init_<is_fp32_dest_acc_en>();
+}
+
+inline void llk_math_mul_reduce_scalar_interleaved_tile(const std::uint32_t i, const float scaler) {
+    SAN_HOOK(unsupported());
+    _llk_math_mul_reduce_scalar_interleaved_tile_(i, scaler);
+}
+
+inline void llk_math_mul_reduce_scalar_interleaved_tail(const std::uint32_t num_tiles) {
+    SAN_HOOK(unsupported());
+    _llk_math_mul_reduce_scalar_interleaved_tail_(num_tiles);
+}
