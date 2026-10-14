@@ -293,7 +293,7 @@ void kernel_main() {
 
             const auto final_iter = block.last() == Wt;
             const auto pack_dfb_id = final_iter ? dfb_ex2_id : dfb_accumulate_id;
-            DataflowBuffer pack_dfb_obj(pack_dfb_id);
+            DataflowBuffer& pack_dfb_obj = final_iter ? dfb_ex2 : dfb_accumulate;
             if (final_iter) {
                 // Divide by W
                 binop_with_scalar_tile_init();

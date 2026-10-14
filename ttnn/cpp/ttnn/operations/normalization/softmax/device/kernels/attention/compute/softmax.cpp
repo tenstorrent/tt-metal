@@ -70,12 +70,11 @@ void calc_numeric_stable(
 // CB consumers cannot wrap mid-fifo: pops in one cycle must land exactly on fifo_limit.
 // After a partial row (Wt not a multiple of the CB capacity), rd/wr sit at that offset.
 // Push/pop `pad` tiles to complete the cycle and return pointers to the CB base.
-// Kept identical to the copy in softmax_large_tensor.cpp.
-ALWI void cycle_dfb_pad(std::uint32_t dfb_id, std::uint32_t pad) {
+// Same cycle as the copy in softmax_large_tensor.cpp, run through the kernel's DataflowBuffer object.
+ALWI void cycle_dfb_pad(DataflowBuffer& dfb, std::uint32_t pad) {
     if (pad == 0) {
         return;
     }
-    DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
     dfb.reserve_back(static_cast<uint16_t>(pad));
     dfb.push_back(static_cast<uint16_t>(pad));
     dfb.wait_front(static_cast<uint16_t>(pad));
@@ -83,11 +82,10 @@ ALWI void cycle_dfb_pad(std::uint32_t dfb_id, std::uint32_t pad) {
 }
 
 // Same, for CBs whose padding tiles the reader already pushed: only consume them.
-ALWI void drain_dfb_pad(std::uint32_t dfb_id, std::uint32_t pad) {
+ALWI void drain_dfb_pad(DataflowBuffer& dfb, std::uint32_t pad) {
     if (pad == 0) {
         return;
     }
-    DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
     dfb.wait_front(static_cast<uint16_t>(pad));
     dfb.pop_front(static_cast<uint16_t>(pad));
 }
@@ -263,7 +261,7 @@ void kernel_main() {
 
 #ifdef CAUSAL_MASK
         dfb_fused_attn_obj.pop_front(Wt);
-        drain_dfb_pad(dfb_fused_attn, attn_pad);
+        drain_dfb_pad(dfb_fused_attn_obj, attn_pad);
 #else
         if (wait_mask) {
             wait_mask = false;
@@ -271,7 +269,7 @@ void kernel_main() {
         ht++;
         if (ht == Ht) {
             dfb_fused_attn_obj.pop_front(Wt);
-            drain_dfb_pad(dfb_fused_attn, attn_pad);
+            drain_dfb_pad(dfb_fused_attn_obj, attn_pad);
             ht = 0;
             wait_mask = true;
         }
@@ -378,17 +376,17 @@ void kernel_main() {
             ckl::IterationShape::tiles(Wt).block_size(ndst), dfb_exps_obj, dfb_recipsumexps_obj, dfb_out0_obj);
 
         // Realign CBs before the next row when Wt does not fill them exactly.
-        drain_dfb_pad(dfb_in0, in0_pad);
-        cycle_dfb_pad(dfb_exps, exps_pad);
+        drain_dfb_pad(dfb_in0_obj, in0_pad);
+        cycle_dfb_pad(dfb_exps_obj, exps_pad);
 #ifdef FUSED_SCALE_MASK
-        cycle_dfb_pad(dfb_scale_mask, scale_mask_pad);
+        cycle_dfb_pad(dfb_scale_mask_obj, scale_mask_pad);
 #ifdef NUMERIC_STABLE
         // Without NUMERIC_STABLE, dfb_x aliases dfb_exps; cycling it again would drift it per row.
-        cycle_dfb_pad(dfb_x, exps_pad);
+        cycle_dfb_pad(dfb_x_obj, exps_pad);
 #endif
 #elif defined(NUMERIC_STABLE) && defined(MASK_PADDED_DATA)
         // dfb_x is a distinct buffer only here; without NUMERIC_STABLE it aliases dfb_exps (already cycled).
-        cycle_dfb_pad(dfb_x, exps_pad);
+        cycle_dfb_pad(dfb_x_obj, exps_pad);
 #endif
         if (out0_pad > 0) {
             dfb_out0_obj.reserve_back(static_cast<uint16_t>(out0_pad));
@@ -408,7 +406,7 @@ void kernel_main() {
     // case, so pop it here to leave the buffer balanced.
     if (!wait_mask) {
         dfb_fused_attn_obj.pop_front(Wt);
-        drain_dfb_pad(dfb_fused_attn, attn_pad);
+        drain_dfb_pad(dfb_fused_attn_obj, attn_pad);
     }
 #endif  // !CAUSAL_MASK
 #endif  // FUSED_SCALE_MASK
