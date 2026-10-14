@@ -251,6 +251,20 @@ std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool support_multi_receiver_shards = false);
 
+// The receiver-contiguous weight shard the Tensor prefetcher delivers to one receiver: the shard the
+// weight holds at bank-local index `bank_local_shard` of DRAM bank `bank`.
+struct TensorPrefetcherReceiverShard {
+    CoreCoord receiver;
+    uint32_t bank = 0;
+    uint32_t bank_local_shard = 0;
+};
+
+// One entry per receiver of every pipe, pipes in the caller's list order. Every pipe must come from
+// CreatePrefetcherPipesForTensorPrefetcher. The pipes' receiver set alone does not say which receiver
+// gets which shard, so a consumer that assigns work by receiver checks its assignment against this.
+std::vector<TensorPrefetcherReceiverShard> GetTensorPrefetcherReceiverShards(
+    const std::vector<std::reference_wrapper<const PrefetcherPipe>>& pipes);
+
 // A Program uses a pipe through the Metal 2.0 host API only: declare a PrefetcherPipeParameter
 // with the pipe's geometry in the ProgramSpec, bind it from data-movement kernels via
 // KernelAdvancedOptions::prefetcher_pipe_bindings (optionally aliasing its ring with a relay DFB through

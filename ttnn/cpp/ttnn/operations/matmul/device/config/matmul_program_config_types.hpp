@@ -19,7 +19,7 @@ struct MatmulMultiCoreReuseProgramConfig {
     std::size_t out_subblock_w{};
     std::size_t per_core_M{};
     std::size_t per_core_N{};
-    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+    std::optional<tt::tt_metal::CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 struct MatmulMultiCoreReuseMultiCastProgramConfig {
@@ -34,7 +34,7 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     bool transpose_mcast{};
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
     bool fuse_batch = true;
-    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+    std::optional<tt::tt_metal::CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 // 1D mcast matmul program config.
@@ -62,10 +62,10 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
     bool mcast_in0{};
     bool gather_in0{};
-    CoreRangeSet hop_cores;
+    tt::tt_metal::CoreRangeSet hop_cores;
     std::size_t num_global_cb_receivers{};
     bool untilize_out{};
-    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+    std::optional<tt::tt_metal::CoreRangeSet> allowed_worker_cores = std::nullopt;
     // Select ring-rotated FIFO delivery for gather_in0 with a DRAM-sender GCB. The feeding prefetcher
     // request MUST supply a per-receiver rotation. GCB-backed mcast_in0 instead consumes natural FIFO
     // order and requires this flag to remain false.
@@ -88,7 +88,7 @@ struct MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig {
 };
 
 struct MatmulMultiCoreProgramConfig {
-    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+    std::optional<tt::tt_metal::CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 using MatmulProgramConfig = std::variant<
@@ -106,7 +106,8 @@ using MatmulProgramConfig = std::variant<
 // config.allowed_worker_cores.value() unconditionally.
 inline void normalize_program_config(MatmulProgramConfig& config, const tt::tt_metal::CoreCoord& device_grid) {
     auto make_crs = [](const tt::tt_metal::CoreCoord& grid) {
-        return CoreRangeSet(CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(grid.x - 1, grid.y - 1)));
+        return tt::tt_metal::CoreRangeSet(
+            tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(grid.x - 1, grid.y - 1)));
     };
     std::visit(
         [&](auto& c) {

@@ -488,3 +488,58 @@ def test_convert_to_hwc_dram_program_cache(device):
 
     assert entries >= 1, "convert_to_hwc should cache at least one program"
     device.disable_and_clear_program_cache()
+
+
+def test_convert_to_hwc_program_cache_rebinds_dram_and_l1(device):
+    """A second call with the same spec must read the new allocation.
+
+    DRAM refreshes the writer Buffer* binding. L1 refreshes the sharded circular-buffer base.
+    Prior tensors stay alive so the allocator cannot hand the first address back; a frozen
+    binding would then fail the golden compare.
+    """
+    B, C, HW = 1, 4, 32
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    padded_sharded_dim = 32
+    num_dispatches = 2
+
+    def run_binding(buffer_type, label):
+        input_shard_shape = (B * C, padded_sharded_dim)
+        input_shard_spec = ttnn.ShardSpec(core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type, input_shard_spec)
+
+        output_shard_shape = (B * padded_sharded_dim, round_up(C, 8))
+        output_shard_spec = ttnn.ShardSpec(core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
+        )
+
+        device.cache_entries_counter.reset()
+        kept_alive = []
+        input_addrs = set()
+        for i in range(num_dispatches):
+            torch_input = torch.arange(B * C * HW, dtype=torch.float32).reshape(1, B, C, HW)
+            torch_input = (torch_input + float(i + 1)).to(dtype=torch.bfloat16)
+            expected = torch_input.transpose(2, 3).reshape(1, 1, B * HW, C)
+
+            tt_input = ttnn.Tensor(
+                torch_input, ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, mem_config=input_mem_config
+            )
+            # Count only convert_to_hwc. to_torch on a sharded tensor can dispatch its own programs.
+            with device.cache_entries_counter.measure():
+                tt_output = ttnn.experimental.convert_to_hwc(
+                    tt_input, memory_config=output_mem_config, dtype=ttnn.bfloat16
+                )
+            input_addrs.add(tt_input.buffer_address())
+            actual = ttnn.to_torch(tt_output)
+            passed, message = assert_equal(expected, actual[:, :, :, : expected.shape[-1]])
+            assert passed, f"{label} dispatch {i}: {message}"
+            kept_alive.append((tt_input, tt_output))
+
+        assert len(input_addrs) == num_dispatches, f"{label} inputs reused an address: {sorted(input_addrs)}"
+        assert device.cache_entries_counter.total == 1, (
+            f"{label} expected 1 program-cache entry across {num_dispatches} dispatches, "
+            f"got {device.cache_entries_counter.total}"
+        )
+
+    run_binding(ttnn.BufferType.DRAM, "DRAM")
+    run_binding(ttnn.BufferType.L1, "L1")

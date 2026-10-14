@@ -678,6 +678,9 @@ static FORCE_INLINE void finish(SpoolPump& pump, SocketSenderInterface& sender) 
     while (!(ncrisc_noc_posted_writes_sent(NOC_INDEX) && ncrisc_noc_posted_writes_sent(kReadNoc))) {
     }
     update_socket_config(sender);
+    // write_to_host leaves NOC_RET_ADDR_MID routed to host, and DRISC firmware does not reset it before the next
+    // kernel on this core.
+    noc_async_write_clear_pcie_state(NOC_INDEX, write_cmd_buf);
     // After the socket barrier, so the host only sees `done` once every page is out.
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr) = kernel_profiler::kRelayDoneWord;
 }

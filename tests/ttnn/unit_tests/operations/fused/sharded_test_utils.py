@@ -268,11 +268,7 @@ def rms_norm_golden(input_tensor, weight=None, bias=None, epsilon=1e-5):
         The output tensor as a torch tensor.
     """
     golden_function = ttnn.get_golden_function(ttnn.rms_norm)
-    golden_rms = golden_function(input_tensor, weight)
-    if bias is not None:
-        golden_rms = golden_rms + bias
-
-    return golden_rms
+    return golden_function(input_tensor, weight=weight, bias=bias, epsilon=epsilon)
 
 
 def simple_size_params(two_stage):

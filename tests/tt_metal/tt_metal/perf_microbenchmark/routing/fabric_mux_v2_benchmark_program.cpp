@@ -16,6 +16,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -416,6 +417,8 @@ std::vector<uint32_t> build_mux_downstream_sender_rt_args(
 
     std::vector<uint32_t> downstream_rt_args;
     tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(
+        tt::tt_metal::MetalContext::instance().get_cluster(),
+        tt::tt_metal::MetalContext::instance().hal(),
         sender_worker_adapter_spec,
         device->id(),
         {mux_logical_core},
@@ -623,6 +626,7 @@ StandaloneMuxV2BenchmarkRunResult run_standalone_mux_v2_benchmark_once(
     const auto channel_buffer_size_bytes = packet_header_size_bytes + resolved_payload_size_bytes;
 
     tt::tt_fabric::FabricMuxV2Config mux_config(
+        *mesh_device,
         static_cast<uint8_t>(benchmark_case.num_senders),
         benchmark_case.num_buffers_per_channel,
         channel_buffer_size_bytes,

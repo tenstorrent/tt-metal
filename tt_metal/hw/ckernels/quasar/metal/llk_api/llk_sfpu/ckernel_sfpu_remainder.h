@@ -95,18 +95,18 @@ inline void calculate_remainder() {
 
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat val = sfpi::dst_reg[0];
-        vFloat v = sfpi::abs(val);
+        sfpi::vFloat val = sfpi::dst_reg[0];
+        sfpi::vFloat v = sfpi::abs(val);
 
-        vFloat quotient;
-        vInt exp = sfpi::exexp(v * recip_val);
+        sfpi::vFloat quotient;
+        sfpi::vInt exp = sfpi::exexp(v * recip_val);
         v_if(exp < 0) { quotient = 0.0f; }
         // Since fp32 has 23 mantissa bits, the LSB represents the fractional part when exp < 23.
         // We effectively round off the fractional bits to zero by right shifting using (exp - 23) and then left
         // shifting it back using (0 - (exp - 23)).
         v_elseif(exp < 23) {
             quotient = sfpi::as<sfpi::vFloat>(
-                shft((shft(sfpi::as<sfpi::vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));
+                sfpi::shft((sfpi::shft(sfpi::as<sfpi::vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));
         }
         v_else { quotient = v * recip_val; }
         v_endif
