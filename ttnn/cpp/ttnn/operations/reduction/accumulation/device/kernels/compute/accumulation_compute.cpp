@@ -4,7 +4,6 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/add_int_sfpu.h"
-#include "api/compute/copy_dest_values.h"
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -18,6 +17,57 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "../accumulation_common.hpp"
+
+#if defined(COMPENSATED_SUM) && !defined(ARCH_QUASAR) && defined(TRISC_MATH)
+namespace ckernel::sfpu {
+
+// One SFPU pass for the Kahan step on four Dest tiles: y = in - c, t = acc + y, c = (t - acc) - y.
+// Each op is a genuinely rounded fp32 op, which is what the algorithm depends on: (t - acc) - y must
+// not be simplified to zero.
+// The new c is set to 0 when t - acc is not finite. Once the total reaches +-inf, or t - acc
+// overflows while t is still finite, (t - acc) - y is +-inf or NaN, and y = in - c would turn every
+// later element into NaN (#58986). With c = 0 the next step is the plain fp32 add, so the total stays
+// +-inf or continues as the uncompensated sum. While t - acc is finite the step is unchanged, so a
+// scan whose compensation stays finite is bit-identical to the unguarded one.
+// The test is on t - acc rather than on t as suggested in #58986: t stays finite in the second case
+// above (test_cumsum_fp32_non_finite[finite_with_overflowing_c]). t - acc is not finite exactly when
+// c would not be, and it is ready one op before c, so the test does not wait on the last subtraction.
+// The biased exponent of an fp32 value is at most 255, so ">= 255" selects inf and NaN exactly like
+// "== 255" does; the >= form lets the compare set the lane flags itself, one SFPU instruction fewer.
+template <uint32_t DST_IN, uint32_t DST_ACC, uint32_t DST_COMP, uint32_t DST_T, int ITERATIONS = 8>
+inline void calculate_kahan_step() {
+    constexpr uint32_t dst_tile_size_sfpi = 32;
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in = sfpi::dst_reg[DST_IN * dst_tile_size_sfpi];
+        sfpi::vFloat acc = sfpi::dst_reg[DST_ACC * dst_tile_size_sfpi];
+        sfpi::vFloat c = sfpi::dst_reg[DST_COMP * dst_tile_size_sfpi];
+        sfpi::vFloat y = in - c;
+        sfpi::vFloat t = acc + y;
+        sfpi::vFloat diff = t - acc;
+        sfpi::vFloat c_new = diff - y;
+        v_if(sfpi::exexp(diff, sfpi::ExponentMode::Biased) >= 255) { c_new = 0.0f; }
+        v_endif;
+        sfpi::dst_reg[DST_COMP * dst_tile_size_sfpi] = c_new;
+        sfpi::dst_reg[DST_T * dst_tile_size_sfpi] = t;
+        sfpi::dst_reg++;
+    }
+}
+
+}  // namespace ckernel::sfpu
+
+// The four tiles are addressed from Dest tile 0 by the template arguments, so the call starts at 0.
+template <uint32_t DST_IN, uint32_t DST_ACC, uint32_t DST_COMP, uint32_t DST_T>
+inline void kahan_step_tile() {
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_kahan_step,
+        (DST_IN, DST_ACC, DST_COMP, DST_T, 8 /* ITERATIONS */),
+        0,
+        VectorMode::RC);
+}
+#endif
 
 void kernel_main() {
     constexpr auto default_acc_value = get_arg(args::default_acc_value);
@@ -105,6 +155,14 @@ void kernel_main() {
             tile_regs_acquire();
             dfb_in_obj.wait_front(ONE_TILE);
 
+#ifdef COMPENSATED_SUM
+            // in, acc and comp are all Float32 here: one unpack configuration serves the three copies.
+            reconfig_data_format(dfb::in, dfb::in);
+            copy_init(dfb::in);
+            copy_tile(dfb::in, 0, DST_IN);
+            copy_tile(dfb::acc, 0, DST_ACC);
+            copy_tile(dfb::comp, 0, DST_COMP);
+#else
             reconfig_data_format(dfb::in, dfb::in);
             copy_init(dfb::in);
             copy_tile(dfb::in, 0, DST_IN);
@@ -112,63 +170,22 @@ void kernel_main() {
             reconfig_data_format(dfb::acc, dfb::acc);
             copy_init(dfb::acc);
             copy_tile(dfb::acc, 0, DST_ACC);
-
+#endif
 #ifdef COMPENSATED_SUM
-            reconfig_data_format(dfb::comp, dfb::comp);
-            copy_init(dfb::comp);
-            copy_tile(dfb::comp, 0, DST_COMP);
-
             // Compensated (Kahan) summation on the running total. The plain path computes
             // acc = acc + in and throws away the rounding error of every add, so over a long scan
             // the error grows as ~T^1.5 and there is no length at which it stops (#55542). This
             // keeps the discarded low-order part in COMP and feeds it back on the next add, which
-            // pins the error to O(1) ULP of the result independent of scan length. Four SFPU ops
-            // per tile instead of one. Each op is a genuinely rounded fp32 op on the SFPU, which is
-            // what the algorithm depends on: (t - acc) - y must NOT be simplified to zero.
-            // Kahan step. No re-init between add and sub: the SFPU binary init is op-specific
-            // only for DIV/POW/XLOGY (ckernel_sfpu_binary.h), so BINARY_OP_INIT above covers both.
+            // pins the error to O(1) ULP of the result independent of scan length.
+#ifndef ARCH_QUASAR
+            // One SFPU pass, guarded against a non-finite compensation (calculate_kahan_step above).
+            MATH((kahan_step_tile<DST_IN, DST_ACC, DST_COMP, DST_T>()));
+#else
+            // Quasar keeps the four binary SFPU ops without the guard: a non-finite running total
+            // still turns later elements into NaN there. No re-init between add and sub: the SFPU
+            // binary init is op-specific only for DIV/POW/XLOGY, so BINARY_OP_INIT above covers both.
             sub_binary_tile(DST_IN, DST_COMP, DST_IN);    // y = in - c
             add_binary_tile(DST_ACC, DST_IN, DST_T);      // t = acc + y
-#ifndef ARCH_QUASAR
-            // c = (t - acc) - y, guarded for a non-finite step. Once t is +-inf, the plain expression
-            // gives c = +-inf or NaN, and y = in - c would turn every later element into NaN. The same
-            // happens when t stays finite but t - acc overflows.
-            // Zeroing c when t is not finite, c = where(isfinite(t), c, 0) as suggested in #58986, misses
-            // that second case: t is still finite at the step where t - acc overflows, so the inf c is
-            // kept and the next total is an inf the scan should not reach. Testing c instead of t would
-            // cover it, but the isfinite + where form measured slower than the clamps used here.
-            // So c is computed from a copy of t clamped to the finite range, and the difference is
-            // clamped too: tc = clamp(t), d = clamp(tc - acc), c = d - y. Both clamps are at the largest
-            // fp32, so they do nothing while t and t - acc are finite: a scan whose totals stay finite is
-            // bit-identical to one without the guard.
-            // When t is +-inf, c comes out zero, finite with the opposite sign, or the opposite inf, so
-            // y = in - c cannot overflow against the total and the total stays +-inf for every finite
-            // input. The second clamp covers tc - acc overflowing (an inf input arriving on a large
-            // total of the other sign), where c would otherwise be inf - inf.
-            // The guard leaves the two ops above alone: on finite inputs at the top of the fp32 range,
-            // y = in - c or acc + y can still overflow as before, and the total then stays at that inf.
-            // The clamps work on bit patterns. As an int32, every negative float is below FLT_MAX's
-            // pattern and +inf/+NaN are above it, so the signed min caps the positive side; as a uint32,
-            // every positive float is below -FLT_MAX's pattern and -inf/-NaN are above it, so the
-            // unsigned min caps the negative side.
-            // That is five more SFPU ops per tile: the copy and the four mins. The min ops' inits
-            // reprogram ADDR_MOD_6 and the SFPLOADMACRO configuration, which add and sub do not use, so
-            // the two subs below need no re-init either.
-            // The two min ops are BH/WH-only in compute_kernel_api.h. Quasar takes the plain expression
-            // below, and a non-finite running total still turns later elements into NaN there.
-            copy_dest_values_init();
-            copy_dest_values<DataFormat::Float32>(DST_T, DST_COMP);  // tc starts as a copy of t
-            unary_min_int32_tile_init();
-            unary_min_int32_tile(DST_COMP, 0x7f7fffffu);  // FLT_MAX
-            unary_min_uint32_tile_init();
-            unary_min_uint32_tile(DST_COMP, 0xff7fffffu);  // -FLT_MAX
-            sub_binary_tile(DST_COMP, DST_ACC, DST_COMP);  // tc - acc
-            unary_min_int32_tile_init();
-            unary_min_int32_tile(DST_COMP, 0x7f7fffffu);
-            unary_min_uint32_tile_init();
-            unary_min_uint32_tile(DST_COMP, 0xff7fffffu);
-            sub_binary_tile(DST_COMP, DST_IN, DST_COMP);  // c = d - y
-#else
             sub_binary_tile(DST_T, DST_ACC, DST_COMP);    // (t - acc)
             sub_binary_tile(DST_COMP, DST_IN, DST_COMP);  // c = (t - acc) - y
 #endif
