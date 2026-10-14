@@ -232,11 +232,13 @@ def pin_aiclk(mhz: int, device_id: int, activate: Path, log: Log, dry_run: bool)
     # A reset clears the ARC FORCE_AICLK override, so this runs after every reset. Same check as
     # aiclk/tt-smi-aiclk1000.sh: the value the chip reports back has to be the one requested.
     setter = HERE / "aiclk" / "set_aiclk.py"
-    bash = f"sleep {AICLK_SETTLE_S} && source {shlex.quote(str(activate))} && python {shlex.quote(str(setter))} {mhz} --busy --device-id {device_id}"
-    log(f"[AICLK] pin to {mhz} MHz: bash -c {shlex.quote(bash)}")
+    # Fixed script; the values arrive as positional arguments, so none of them is parsed as shell.
+    script = 'sleep "$1" && source "$2" && exec python "$3" "$4" --busy --device-id "$5"'
+    cmd = ["bash", "-c", script, "bash", str(AICLK_SETTLE_S), str(activate), str(setter), str(mhz), str(device_id)]
+    log(f"[AICLK] pin to {mhz} MHz: {shell_join(cmd)}")
     if dry_run:
         return 0
-    res = subprocess.run(["bash", "-c", bash], capture_output=True, text=True)
+    res = subprocess.run(cmd, capture_output=True, text=True)
     log(res.stdout.rstrip())
     got = None
     for line in res.stdout.splitlines():
