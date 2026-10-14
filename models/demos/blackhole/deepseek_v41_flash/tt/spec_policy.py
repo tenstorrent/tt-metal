@@ -30,8 +30,13 @@ B_PLAIN_FORCE = 128  # B >= 128: plain unless DSV41_SPEC_B128=1
 #   The vLLM server (warm-up at S_pad 131072 holds the prefill chunk trace + decode + spec traces, nothing released) at B=16, k=5, max_model_len 131072, fp8: 391 MiB/bank free after all traces captured.
 # U <= 4 is bounded by that measurement (a smaller U has a smaller pool, index keys and runner state; a bf16 pool adds 83 MiB at U=4: 345 -> 262 free before the runner, still above SPEC_NEED_FREE_MIB).
 # B=32 (U=8) was measured only to max_seq_len 40000 (527 free before the runner, 247 after runner + traces, log pf_spec_int_specdef_isl32k_b32; 70000 ran out of DRAM before the sharing; its pool doubles): kept.
-SPEC_MAX_CTX = {1: 131072, 2: 131072, 4: 131072, 8: 40000}
-SPEC_MAX_CTX_BACKEND = 131072  # beyond this the indexer is not the matmul backend (n_entries = ctx / ratio 2 > 65536, tt/indexer.py default_backend): 'spec verify needs the matmul indexer backend'
+SPEC_MAX_CTX = {
+    1: 131584,
+    2: 131584,
+    4: 131584,
+    8: 40000,
+}  # 131584 = 131072 + 256 rounded up to the 512-token prefill chunk (the 131072 ISL benchmark point needs ISL + OSL <= max_model_len)
+SPEC_MAX_CTX_BACKEND = 131584  # beyond this the indexer is not the matmul backend (n_entries = ctx / ratio 2 > 65536, tt/indexer.py default_backend): 'spec verify needs the matmul indexer backend'
 # Runtime guard (free DRAM / bank right before the runners are built, after the prefills; the second prefill does not change it: measured 526.7 MiB before the build at B=32 ISL 30k,
 # identical to the plain pass). Measured cost of the runners + their trace capture: B=16 at 131072 first runner +113, trace +13 (126; at 70000 before the table sharing: +111 and +31), each further +0.7; B=32 (U=8) with the default set {0,1,3}:
 # +157 first, +34.5 each further runner, trace +19 = 280 MiB (527 -> 247 free). Need = measured cost + ~40 MiB headroom.

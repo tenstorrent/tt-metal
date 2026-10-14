@@ -31,6 +31,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import DIM as IDIM
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import HEADS as IHEADS
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import TOPK, DSV41DecodeIndexer
+from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import gate_user_state
 
 SKIP = 0xFFFFFFFF
 PAD_HEADS = 32
@@ -58,6 +59,11 @@ def _rep(md, t, dtype, layout):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(md),
     )
+
+
+GATE_ROWS = int(
+    os.environ.get("DSV41_GATE_ROWS", "16384")
+)  # rows per slice of the interleaved-prefill user gate on the latent table (bounds the transient DRAM copies)
 
 
 class PrefillKV:
@@ -358,7 +364,7 @@ class DSV41PrefillIndexer:
         ttnn.deallocate(wt)
         return out
 
-    def add_keys_dyn(self, lat_pre, tab, Cc):
+    def add_keys_dyn(self, lat_pre, tab, Cc, ctx=None):
         """FIFO variant of ``add_keys``: the keys of the chunk's entries are appended at the END of the slab (tab: (cos, sin, -sin) of the entry positions)."""
         d, U = self.dec, self.U
         x = ttnn.reshape(lat_pre, [1, 1, U * Cc, HEAD_DIM])
@@ -374,9 +380,13 @@ class DSV41PrefillIndexer:
         if (
             L == Cc
         ):  # single-chunk prompt (S_pad == C): the FIFO is just this chunk (a zero-length slice breaks the concat)
-            ttnn.copy(k, self.keys)
+            ttnn.copy(gate_user_state(ctx, k, self.keys), self.keys)
             return
         new = ttnn.concat([ttnn.slice(self.keys, [0, 0, Cc, 0], [U, 1, L, IDIM]), k], dim=2)
+        if getattr(ctx, "umask", None) is not None:
+            gated = gate_user_state(ctx, new, self.keys)
+            ttnn.deallocate(new)
+            new = gated
         ttnn.copy(new, self.keys)
         ttnn.deallocate(new)
 
@@ -696,17 +706,32 @@ class DSV41PrefillSparse:
                 L == Cc
             ):  # single-chunk prompt (S_pad == C): the FIFO is just this chunk (a zero-length slice breaks the concat)
                 new = self.kvt.rm(lat)
+                if getattr(ctx, "umask", None) is not None:
+                    gated = gate_user_state(ctx, new, ttnn.slice(kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM]))
+                    ttnn.deallocate(new)
+                    new = gated
                 ttnn.experimental.slice_write(new, kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM], [1, 1, 1, 1])
             else:
                 body = ttnn.slice(kt, [0, 0, Cc, 0], [U, 1, L, HEAD_DIM])
                 new = ttnn.concat([body, self.kvt.rm(lat)], dim=2)
-                ttnn.experimental.slice_write(new, kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM], [1, 1, 1, 1])
                 ttnn.deallocate(body)
+                if getattr(ctx, "umask", None) is not None:
+                    # the gate works on row slices of the table (a whole-table where holds the table 4-5 times at once: 5 x 64 MiB/bank at U=4, S_pad 131584 -> DRAM OOM); the slice
+                    # [a, b) of the old table is read before it is overwritten and the new table is complete before the first write: exact
+                    for a in range(0, L, GATE_ROWS):
+                        b = min(L, a + GATE_ROWS)
+                        n_s = ttnn.slice(new, [0, 0, a, 0], [U, 1, b, HEAD_DIM])
+                        g = gate_user_state(ctx, n_s, ttnn.slice(kt, [0, 0, a, 0], [U, 1, b, HEAD_DIM]))
+                        ttnn.deallocate(n_s)
+                        ttnn.experimental.slice_write(g, kt, [0, 0, a, 0], [U, 1, b, HEAD_DIM], [1, 1, 1, 1])
+                        ttnn.deallocate(g)
+                else:
+                    ttnn.experimental.slice_write(new, kt, [0, 0, 0, 0], [U, 1, L, HEAD_DIM], [1, 1, 1, 1])
             ttnn.deallocate(new)
         ix = self.indexer
         if ix is not None and ix.key_owner is None:  # key FIFO
             tab = ctx.lat_tabs[r] if r > 1 else ctx.tabs[True]
-            ix.add_keys_dyn(lat_pre, tab, Cc)
+            ix.add_keys_dyn(lat_pre, tab, Cc, ctx)
         full = self.kvt.rm(ttnn.concat([halo, kv], dim=2))
         ttnn.experimental.slice_write(full, kt, [0, 0, L, 0], [U, 1, L + WINDOW + C, HEAD_DIM], [1, 1, 1, 1])
         ttnn.deallocate(full)

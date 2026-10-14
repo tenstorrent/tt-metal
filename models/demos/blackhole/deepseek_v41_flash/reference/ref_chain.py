@@ -28,6 +28,49 @@ from models.demos.blackhole.deepseek_v41_flash.reference import ref_layer as R
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_weights import _Shards
 
 OUT = "/mnt/tt-data/ssinghal/dsv4-chain"
+CLAMP_STATS = (
+    os.environ.get("DSV41_CLAMP_STATS") == "1"
+)  # print how often the routed experts' swiglu clamp triggers (prefill vs decode)
+DEC_NOCLAMP = (
+    os.environ.get("DSV41_DEC_NOCLAMP") == "1"
+)  # decode steps run the routed experts without the clamp, like the device
+
+
+class _clamp_stats_hooks:
+    def __init__(self, blk):
+        self.n = self.up_hi = self.up_lo = self.gate_hi = 0
+        self.mx_up = self.mx_gate = 0.0
+        self.lim = None
+        for e in blk.ffn.experts:
+            if e is None:
+                continue
+            self.lim = e.swiglu_limit
+            e.w1.register_forward_hook(self._mk("gate"))
+            e.w3.register_forward_hook(self._mk("up"))
+
+    def _mk(self, kind):
+        def f(m, i, o):
+            v = o.float()
+            if kind == "gate":
+                self.n += v.numel()
+                self.gate_hi += int((v > self.lim).sum())
+                self.mx_gate = max(self.mx_gate, float(v.max()))
+            else:
+                self.up_hi += int((v > self.lim).sum())
+                self.up_lo += int((v < -self.lim).sum())
+                self.mx_up = max(self.mx_up, float(v.abs().max()))
+
+        return f
+
+    def report(self, L, phase):
+        if self.n:
+            print(
+                f"CLAMP L{L} {phase}: n={self.n} gate>lim {self.gate_hi / self.n:.2e} up>lim {self.up_hi / self.n:.2e} "
+                f"up<-lim {self.up_lo / self.n:.2e} max gate {self.mx_gate:.1f} max |up| {self.mx_up:.1f}",
+                flush=True,
+            )
+        self.n = self.up_hi = self.up_lo = self.gate_hi = 0
+        self.mx_up = self.mx_gate = 0.0
 
 
 def parse_layers(s):
@@ -106,10 +149,13 @@ def main():
         hook = blk.ffn.register_forward_hook(lambda m, i, o: cap.setdefault("x", i[0].detach()))
         gate_out = {}  # the decode step's routing (set below; the hook is replaced between prefill and decode)
         route_steps = []
+        stats = _clamp_stats_hooks(blk) if CLAMP_STATS else None
         enter("pre")
         h_pre, pm_pre = blk(h_pre, 0, pm_pre, None)  # prefill (fills this layer's caches)
         leave("pre")
         hook.remove()
+        if stats is not None:
+            stats.report(L, "prefill")
         # router calibration from the prefill FFN inputs
         x = cap["x"].reshape(-1, 5120).float()
         w = sh.get(f"layers.{L}.ffn.gate.weight").float()
@@ -133,6 +179,12 @@ def main():
 
         ghook = blk.ffn.gate.register_forward_hook(_gh)
         steps_out = []
+        if (
+            DEC_NOCLAMP
+        ):  # what the device decode path does: routed experts without the swiglu clamp (shared expert keeps it)
+            for e in blk.ffn.experts:
+                if e is not None:
+                    e.swiglu_limit = 0.0
         for i in range(
             a.steps
         ):  # decode tokens at positions S, S+1, ... (the hook keeps the routing of the FIRST step)
@@ -141,6 +193,8 @@ def main():
             leave(("dec", i))
             steps_out.append((h_decs[i].clone(), pm_decs[i].clone()))
         ghook.remove()
+        if stats is not None:
+            stats.report(L, "decode")
         h_dec, pm_dec = h_decs[0], pm_decs[0]
         torch.save(
             {
