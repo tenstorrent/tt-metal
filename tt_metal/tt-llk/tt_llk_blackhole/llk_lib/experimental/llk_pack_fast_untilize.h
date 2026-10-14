@@ -71,8 +71,6 @@
 namespace ckernel
 {
 
-constexpr std::uint32_t FAST_UNTILIZE_MOP_LAST_OUTER_CFG_INDEX = 7;
-
 // Chunk width the pack init was programmed for (0 after the uninit); written and read only under LLK asserts.
 inline std::uint32_t pack_fast_untilize_init_block_ct_dim = 0;
 
@@ -156,11 +154,11 @@ inline void _llk_pack_fast_untilize_wide_mop_config_(
 }
 
 template <std::uint32_t max_unit_dim = FAST_UNTILIZE_MAX_UNIT_DIM>
-inline void _llk_pack_fast_untilize_mop_config_(const std::uint32_t unit_dim, const bool last)
+inline void _llk_pack_fast_untilize_mop_config_(const std::uint32_t unit_dim, const bool last, const std::uint32_t rows = FAST_UNTILIZE_PHASE_ROWS)
 {
     LLK_ASSERT(unit_dim >= 2 && unit_dim <= max_unit_dim, "fast_untilize pack supports unit_dim 2 to max_unit_dim");
 
-    constexpr std::uint32_t MOP_OUTER_LOOP = FAST_UNTILIZE_PHASE_ROWS;
+    const std::uint32_t MOP_OUTER_LOOP = rows;
     constexpr std::uint32_t MOP_INNER_LOOP = 1; // one PACR pair per strip row
 
     if constexpr (max_unit_dim > FAST_UNTILIZE_MAX_UNIT_DIM)
@@ -198,20 +196,16 @@ inline void _llk_pack_fast_untilize_mop_config_(const std::uint32_t unit_dim, co
     }
 }
 
+// The last strip row of a phase, issued after a MOP of the other rows; only its final PACR's Last bit differs between the
+// phases, so the MOP is not reprogrammed between them.
 template <std::uint32_t max_unit_dim = FAST_UNTILIZE_MAX_UNIT_DIM>
-inline void _llk_pack_fast_untilize_mop_patch_last_(const std::uint32_t unit_dim, const bool last)
+inline void _llk_pack_fast_untilize_last_row_(const std::uint32_t unit_dim, const bool last)
 {
-    LLK_ASSERT(unit_dim >= 2 && unit_dim <= max_unit_dim, "fast_untilize pack supports unit_dim 2 to max_unit_dim");
-
-    const std::uint32_t last_outer_pacr = _llk_pack_fast_untilize_last_outer_pacr_<max_unit_dim>(unit_dim, last);
-
-    // MOP config slot 7 is loop0_last_instr: the instruction used for the last
-    // inner iteration of the last outer iteration. The MOP body is otherwise
-    // unchanged between phase 1 and phase 2, so patch only the final PACR's
-    // Last bit instead of rebuilding the whole template.
-    volatile std::uint32_t* mop_cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_MOP_CFG_BASE);
-    ckernel::mop_sync();
-    mop_cfg[FAST_UNTILIZE_MOP_LAST_OUTER_CFG_INDEX] = last_outer_pacr;
+    for (std::uint32_t tile = 2; tile < unit_dim; tile += 2)
+    {
+        TT_INSN(_llk_pack_fast_untilize_row_pacr_(ADDR_MOD_0, p_pacr::ALL_INTF_ACTIVE, 0, 0));
+    }
+    TT_INSN(_llk_pack_fast_untilize_last_outer_pacr_<max_unit_dim>(unit_dim, last));
 }
 
 inline void _llk_pack_fast_untilize_reset_src_counters_()
@@ -369,26 +363,21 @@ inline void _llk_pack_fast_untilize_block_(const std::uint32_t address, const st
 
     program_packer_destination(address);
 
-    // Phase 1 emits top strip rows and keeps the pack stream open.
+    // Phase 1 emits top strip rows and keeps the pack stream open; phase 2 emits the bottom strip rows and closes it.
     if (unit_dim != prev_unit_dim)
     {
-        _llk_pack_fast_untilize_mop_config_<block_ct_dim>(unit_dim, false);
+        _llk_pack_fast_untilize_mop_config_<block_ct_dim>(unit_dim, false, FAST_UNTILIZE_PHASE_ROWS - 1);
         prev_unit_dim = unit_dim;
-    }
-    else
-    {
-        _llk_pack_fast_untilize_mop_patch_last_<block_ct_dim>(unit_dim, false);
     }
     _llk_pack_fast_untilize_select_phase_<fast_untilize_strip_rows(block_ct_dim)>();
     _llk_pack_fast_untilize_reset_src_counters_();
     ckernel_template::run();
+    _llk_pack_fast_untilize_last_row_<block_ct_dim>(unit_dim, false);
 
-    // Phase 2 emits bottom strip rows and closes the stream. Phase 1 already
-    // programmed the MOP body; only the final PACR's Last bit changes.
-    _llk_pack_fast_untilize_mop_patch_last_<block_ct_dim>(unit_dim, true);
     _llk_pack_fast_untilize_select_phase_<FAST_UNTILIZE_PACK_BOTTOM_STRIP_DEST_TARGET_OFFSET>();
     _llk_pack_fast_untilize_reset_src_counters_();
     ckernel_template::run();
+    _llk_pack_fast_untilize_last_row_<block_ct_dim>(unit_dim, true);
     _llk_pack_fast_untilize_restore_pack_counters_<false>();
 }
 
