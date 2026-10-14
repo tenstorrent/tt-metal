@@ -79,7 +79,7 @@ std::optional<UnaryShardSpecs> get_shard_specs(
     // Each shard row is its own page, padded up to the L1 alignment, so the dense tile pages the
     // borrowed DFB walks only line up with the buffer when that padding is zero.
     if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-        auto is_shard_tile_aligned = [](const tt::tt_metal::TensorSpec& spec) {
+        auto fits_borrowed_dfb = [](const tt::tt_metal::TensorSpec& spec) {
             const auto& shard = *get_shard_spec(spec);
             const auto tile_hw = spec.tile().get_tile_hw();
             const uint64_t shard_elements = static_cast<uint64_t>(shard.shape[0]) * shard.shape[1];
@@ -87,8 +87,7 @@ std::optional<UnaryShardSpecs> get_shard_specs(
                    spec.compute_page_size_bytes() % tt::tt_metal::hal::get_l1_alignment() == 0;
         };
 
-        if ((input_sharded && !is_shard_tile_aligned(input_spec)) ||
-            (output_sharded && !is_shard_tile_aligned(output_spec))) {
+        if ((input_sharded && !fits_borrowed_dfb(input_spec)) || (output_sharded && !fits_borrowed_dfb(output_spec))) {
             static std::once_flag warn_flag;
             std::call_once(warn_flag, [] {
                 log_warning(
