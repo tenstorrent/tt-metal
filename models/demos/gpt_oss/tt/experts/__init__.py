@@ -31,9 +31,10 @@ import ttnn
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 
 from .config import ExpertConfig, ProgramConfig
-from .decode import decode_forward, decode_forward_stream
+from .decode import DenseDecodePlan, decode_forward, decode_forward_dense, decode_forward_stream
+from .operations import apply_tensor_parallel_allreduce
 from .prefill import prefill_forward
-from .weights import load_decode_expert_weights, load_expert_weights
+from .weights import load_decode_expert_weights, load_dense_decode_expert_weights, load_expert_weights
 
 __all__ = ["Experts", "ExpertConfig", "ProgramConfig"]
 
@@ -57,6 +58,7 @@ class Experts:
         weight_dtype=ttnn.bfloat4_b,
         tensor_cache_path=None,
         indexed_decode=False,
+        dense_decode_tokens=None,
     ):
         """
         Initialize expert layers.
@@ -72,6 +74,9 @@ class Experts:
             tensor_cache_path: Optional path for weight caching
             indexed_decode: Fused decode: only the routed experts are computed (DRAM-streaming ops, one token per
                 device, TP without expert parallelism); requires the router's decode_indexed outputs.
+            dense_decode_tokens: Batched decode with this many tokens per device (fused_decode.config
+                dense_moe_decode_supported): every expert is computed for every token by two DRAM-sharded matmuls
+                over all experts side by side (decode_forward_dense).
         """
         self.config = config
         self.mesh_config = mesh_config
@@ -112,6 +117,25 @@ class Experts:
                 config.num_experts_per_tok,
                 config.swiglu_limit,
                 config.alpha,
+            )
+
+        self.dense_decode_weights = None
+        if dense_decode_tokens:
+            self.dense_decode_weights = load_dense_decode_expert_weights(
+                mesh_device=mesh_device,
+                config=config,
+                state_dict=state_dict,
+                mesh_config=mesh_config,
+                tokens=dense_decode_tokens,
+                weight_dtype=weight_dtype,
+                tensor_cache_path=tensor_cache_path,
+            )
+            self.dense_decode_plan = DenseDecodePlan(
+                mesh_device,
+                config.hidden_size,
+                self.dense_decode_weights.intermediate_local,
+                config.num_experts,
+                dense_decode_tokens,
             )
 
         # For backward compatibility
@@ -171,6 +195,20 @@ class Experts:
                 weights=self.decode_weights,
                 stream=self.decode_stream,
                 send=self.ccl_manager.decode_boundary_send(self.config.hidden_size, "moe"),
+            )
+        if is_decode and self.dense_decode_weights is not None:
+            partial = decode_forward_dense(
+                hidden_states, topk_expert_weights, self.dense_decode_weights, self.dense_decode_plan, self.config
+            )
+            if getattr(self, "decode_all_reduce", None) is not None:
+                # Batched decode layer (batched_decode.py): one-op all-reduce into the sharded residual layout.
+                return self.decode_all_reduce(partial, "moe")
+            out = apply_tensor_parallel_allreduce(
+                partial, self.mesh_config, self.mesh_device, partial.shape[-2], self.ccl_manager
+            )
+            tokens = out.shape[-2]
+            return ttnn.reshape(
+                out, (1, 1, tokens, self.config.hidden_size), (1, 1, max(32, tokens), self.config.hidden_size)
             )
         # Determine mode based on sequence length. Decode with several tokens per device (batch > 1 without expert
         # parallelism) takes the prefill path: each token's experts are the same computation either way, and the

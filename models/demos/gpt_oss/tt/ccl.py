@@ -90,6 +90,16 @@ class CCLManager:
         self.barrier_idx = (cur_idx + 1) % 2
         return self.barrier_semaphore[cur_idx]
 
+    def get_batched_decode_all_reduce(self, hidden_size, cluster_axis):
+        """Persistent one-op all-reduce shared by every layer of the batched decode path (batched_decode.py)."""
+        from .batched_decode import DecodeAllReduce
+
+        cache = self.__dict__.setdefault("_batched_decode_all_reduce", {})
+        key = (hidden_size, cluster_axis)
+        if key not in cache:
+            cache[key] = DecodeAllReduce(self.mesh_device, hidden_size, cluster_axis, self.topology)
+        return cache[key]
+
     def get_decode_boundary(self, hidden_size, eps=None, cluster_axis=None):
         """Layer boundary op (all-reduce + residual add + RMSNorm, fused_decode/boundary.py) shared by every decoder
         layer's decode path, with its persistent receive buffers and semaphores. Created by the first decoder layer

@@ -58,6 +58,63 @@ def fused_decode_layout_supported(
     )
 
 
+# Batched decode MoE (experts/decode.py decode_forward_dense): with one 32-row tile of tokens per device nearly every
+# expert is routed (an expert is idle with probability (28/32)^32 ~ 1.4%), so decode computes all experts densely with
+# two DRAM-sharded matmuls over every expert's weights, side by side ([gate] and [up]: [hidden, E * I]; [down]:
+# [E * I, hidden]), instead of the per-expert sparse matmuls. DENSE_MOE_CORES worker cores width-shard the [32, E * I]
+# activation (16 tiles each for gpt-oss-20b at TP=4), which is also the down matmul's input sharding.
+DENSE_MOE_TOKENS = 32
+DENSE_MOE_CORES = 45
+DENSE_MOE_WORKERS_PER_BANK = 3
+
+
+def dense_moe_decode_layout_supported(
+    is_blackhole,
+    mesh_shape,
+    tp,
+    ep,
+    num_experts,
+    use_throughput_experts,
+    tokens,
+    grid=(11, 10),
+    dram_banks=8,
+    system_devices=4,
+):
+    """Host-only form of dense_moe_decode_supported: the validated envelope of the batched decode MoE (gpt-oss-20b on
+    Blackhole 1x4, TP=4, one 32-token tile per device, no expert parallelism)."""
+    return (
+        is_blackhole
+        and tuple(mesh_shape) == (1, 4)
+        and tp == 4
+        and ep == 1
+        and num_experts == 32
+        and not use_throughput_experts
+        and tokens == DENSE_MOE_TOKENS
+        and grid[0] * grid[1] >= DENSE_MOE_CORES
+        and dram_banks == FUSED_DECODE_DRAM_BANKS
+        and system_devices == mesh_shape[0] * mesh_shape[1]
+    )
+
+
+def dense_moe_decode_supported(mesh_device, mesh_config, hf_config, use_throughput_experts, tokens_per_device):
+    """Whether this model's decode MoE uses the batched dense path (see dense_moe_decode_layout_supported)."""
+    if mesh_config is None:
+        return False
+    grid = mesh_device.compute_with_storage_grid_size()
+    return dense_moe_decode_layout_supported(
+        ttnn.device.is_blackhole(mesh_device),
+        tuple(mesh_device.shape),
+        mesh_config.decode.tp,
+        mesh_config.decode.ep,
+        hf_config.num_local_experts,
+        use_throughput_experts,
+        tokens_per_device,
+        (grid.x, grid.y),
+        mesh_device.dram_grid_size().x,
+        ttnn.get_num_devices(),
+    )
+
+
 def fused_decode_supported(mesh_device, mesh_config, hf_config, use_throughput_experts, tokens_per_device):
     """Whether the decoder layers of this model use the fused decode path (see fused_decode_layout_supported)."""
     if mesh_config is None:

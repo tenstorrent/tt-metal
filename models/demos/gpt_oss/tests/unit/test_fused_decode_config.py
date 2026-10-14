@@ -13,8 +13,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from models.demos.gpt_oss.tt.fused_decode.config import (
+    DENSE_MOE_TOKENS,
     FUSED_DECODE_DRAM_BANKS,
     FUSED_DECODE_MIN_GRID,
+    dense_moe_decode_layout_supported,
     fused_decode_layout_supported,
     fused_decode_supported,
 )
@@ -89,3 +91,45 @@ def test_no_mesh_config_keeps_original_path():
     mesh_device = MagicMock()
     assert not fused_decode_supported(mesh_device, None, MagicMock(), False, 1)
     mesh_device.compute_with_storage_grid_size.assert_not_called()
+
+
+# Batched decode MoE (experts/decode.py decode_forward_dense): the same system with one 32-token tile per device.
+BATCHED = {**SUPPORTED, "tokens": DENSE_MOE_TOKENS}
+
+
+def test_batched_envelope_takes_dense_moe_not_fused_decode():
+    assert dense_moe_decode_layout_supported(**BATCHED)
+    assert not fused_decode_layout_supported(**BATCHED)
+
+
+def test_one_token_takes_fused_decode_not_dense_moe():
+    assert not dense_moe_decode_layout_supported(**SUPPORTED)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"is_blackhole": False},
+        {"mesh_shape": (1, 8), "tp": 8},
+        {"ep": 4},
+        {"num_experts": 128},
+        {"use_throughput_experts": True},
+        {"tokens": 64},
+        {"tokens": 8},
+        {"dram_banks": FUSED_DECODE_DRAM_BANKS - 1},
+        {"system_devices": 8},
+    ],
+    ids=[
+        "wormhole",
+        "mesh_1x8",
+        "ep_4",
+        "gpt_oss_120b_experts",
+        "throughput_experts",
+        "batch_64",
+        "batch_8",
+        "seven_dram_banks",
+        "slice_of_8_device_system",
+    ],
+)
+def test_outside_batched_envelope_keeps_original_moe(change):
+    assert not dense_moe_decode_layout_supported(**{**BATCHED, **change})

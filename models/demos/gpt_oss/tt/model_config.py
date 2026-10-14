@@ -322,8 +322,10 @@ class ModelArgs:
     WEIGHT_CACHE_FORMAT_VERSION = 1
     # Layout version of the fused decode (DRAM-streaming) weights; a marker from an older fused build is rejected.
     FUSED_DECODE_WEIGHTS_VERSION = 3
+    # Layout version of the batched dense decode MoE weights (experts dense_decode_*).
+    DENSE_MOE_DECODE_WEIGHTS_VERSION = 1
 
-    def weight_cache_is_complete(self, dtype, fused_decode=False):
+    def weight_cache_is_complete(self, dtype, fused_decode=False, dense_moe=False):
         """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape) was
         fully built by a previous run.
 
@@ -356,14 +358,27 @@ class ModelArgs:
             return False
         if fused_decode and meta.get("fused_decode_weights") != self.FUSED_DECODE_WEIGHTS_VERSION:
             return False
+        if dense_moe and meta.get("dense_moe_decode_weights") != self.DENSE_MOE_DECODE_WEIGHTS_VERSION:
+            return False
         # Belt-and-suspenders: the cache dir must still actually hold tensor files.
         return any(cache_path.glob("*.tensorbin"))
 
-    def mark_weight_cache_complete(self, dtype, fused_decode=False):
+    def mark_weight_cache_complete(self, dtype, fused_decode=False, dense_moe=False):
         """Record that the ttnn weight cache for this (model, dtype, mesh shape) was fully
-        built, so subsequent runs can skip the HF state_dict load (see weight_cache_is_complete)."""
+        built, so subsequent runs can skip the HF state_dict load (see weight_cache_is_complete).
+        The optional decode weight sets a previous build of the same cache recorded stay recorded."""
         cache_path = self.weight_cache_path(dtype)
         marker = cache_path / self.WEIGHT_CACHE_MARKER
+        previous = {}
+        try:
+            previous = json.loads(marker.read_text()) if marker.is_file() else {}
+        except (ValueError, OSError):
+            previous = {}
+        if (
+            previous.get("format_version") != self.WEIGHT_CACHE_FORMAT_VERSION
+            or previous.get("model_name") != self.model_name
+        ):
+            previous = {}
         try:
             marker.write_text(
                 json.dumps(
@@ -372,7 +387,16 @@ class ModelArgs:
                         "model_name": self.model_name,
                         "n_layers": self.n_layers,
                         "dtype": str(dtype),
-                        "fused_decode_weights": self.FUSED_DECODE_WEIGHTS_VERSION if fused_decode else False,
+                        "fused_decode_weights": (
+                            self.FUSED_DECODE_WEIGHTS_VERSION
+                            if fused_decode
+                            else previous.get("fused_decode_weights", False)
+                        ),
+                        "dense_moe_decode_weights": (
+                            self.DENSE_MOE_DECODE_WEIGHTS_VERSION
+                            if dense_moe
+                            else previous.get("dense_moe_decode_weights", False)
+                        ),
                     }
                 )
             )

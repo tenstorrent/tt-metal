@@ -489,7 +489,16 @@ class Model:
             return logits
 
         # Final norm and lm_head
-        hidden_states = self.norm(hidden_states)
+        if mode == Mode.DECODE and getattr(self.layers[-1], "batched_decode", False):
+            # Batched decode: the residual is width-sharded (batched_decode.py); norm on its shards. The LM head reads
+            # a BF8 DRAM-interleaved input, as the unsharded path hands it over: the auto-configured LM head matmul
+            # takes ~1.2 ms from an L1 input and ~0.52 ms from DRAM.
+            normed = self.norm.forward_sharded(hidden_states)
+            hidden_states.deallocate(True)
+            hidden_states = ttnn.to_memory_config(normed, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+            normed.deallocate(True)
+        else:
+            hidden_states = self.norm(hidden_states)
         logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         hidden_states.deallocate(True)
         self._prefill_sampling_active = False

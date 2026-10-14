@@ -167,6 +167,8 @@ class Attention:
                 page_table=page_table,
                 ccl_manager=self.ccl_manager,
                 fused=self.fused_decode,
+                return_partial=getattr(self, "decode_returns_partial", False),
+                batched_qkv=getattr(self, "batched_qkv", None),
             )
         else:
             return prefill_forward(

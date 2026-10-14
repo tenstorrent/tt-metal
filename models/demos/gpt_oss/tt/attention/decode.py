@@ -30,6 +30,8 @@ def decode_forward(
     page_table,
     ccl_manager,
     fused=False,
+    return_partial=False,
+    batched_qkv=None,
 ):
     """
     Decode forward pass - optimized for single token (seq_len=1).
@@ -51,6 +53,9 @@ def decode_forward(
         fused: Fused decode path (fused_decode/): hidden_states is the flat normed hidden of the layer boundary
             (fused_decode/boundary.py, one token); returns this device's flat o_proj partial sum, which the next
             boundary all-reduces
+        return_partial: return this device's [1, 1, batch, hidden] o_proj partial sum (batched decode: the layer
+            all-reduces it with batched_decode.DecodeAllReduce)
+        batched_qkv: batched decode (batched_decode.BatchedQKV): the QKV projection as a DRAM-sharded matmul
 
     Returns:
         Attention output [batch, 1, hidden_size]
@@ -108,13 +113,16 @@ def decode_forward(
         )
         tt_v = None  # shared head buffer, not owned here
     else:
-        xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=qkv_memory_config)
+        if batched_qkv is not None:
+            xqkv_fused = batched_qkv(hidden_states)
+        else:
+            xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=qkv_memory_config)
         ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
 
-        # One user per core, row-wise on the 8x8 grid: the grid the decode RoPE rows and transformation matrix
-        # (tt_transformers RotarySetup), the KV update (get_kv_memory_config) and the decode SDPA use. With the
-        # default (the device's whole grid, 11 wide on Blackhole) users 8-10, 19-21, 30-31 and 24-31 read another
-        # core's RoPE rows / Q from batch 9 up.
+        # One user per core, row by row on the 8x8 grid: the grid the decode RoPE rows and transformation matrix
+        # (tt_transformers RotarySetup), the KV update (get_kv_memory_config) and the decode SDPA program use. With the
+        # op's default (the device's whole grid, 11 wide on Blackhole) the users that land in columns 8-10 found no
+        # RoPE data on their core and the SDPA read users 24-31's queries from cores that held none, from batch 9 up.
         tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv_fused,
             num_heads=num_local_heads,
@@ -185,7 +193,7 @@ def decode_forward(
             scale=config.scaling,
             program_config=(
                 sdpa_decode_program_config(config.sliding_window)
-                if fused
+                if fused or batched_qkv is not None
                 else program_config.get_decode_sdpa_config(mesh_device)
             ),
             compute_kernel_config=program_config.get_compute_kernel_config(),
@@ -253,6 +261,13 @@ def decode_forward(
         (1, 1, batch_size, padded_hidden),
         (1, 1, 32, padded_hidden),
     )
+
+    if return_partial:
+        if padded_hidden != hidden_size and mesh_config.tp > 1:
+            sliced = ttnn.slice(tt_out, [0, 0, 0, 0], [1, 1, batch_size, hidden_size])
+            tt_out.deallocate(True)
+            tt_out = sliced
+        return tt_out
 
     # Slice padding AFTER bias: [1,1,B,3072] -> [1,1,B,2880].
     # Bias already applied on padded tensor; padding columns are zeros.

@@ -88,3 +88,16 @@ class RMSNorm(nn.Module):
                 # program_config=program_config,
             )
             return tt_output
+
+    def forward_sharded(self, x):
+        """Batched decode residual stream (batched_decode.py): width-sharded multi-core norm on the activation's own
+        shards."""
+        from .batched_decode import sharded_norm_program_config
+
+        return ttnn.rms_norm(
+            x,
+            weight=self.tt_weight,
+            epsilon=self.eps,
+            program_config=sharded_norm_program_config(x.memory_config()),
+            memory_config=x.memory_config(),
+        )

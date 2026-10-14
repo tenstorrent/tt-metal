@@ -171,6 +171,67 @@ class TopKRouter:
         ttnn.deallocate(router_logits)
         return expert_indices, expert_weights
 
+    def dense_decode(self, hidden_states):
+        """Batched decode routing (one 32-token tile per device, fused_decode.config.dense_moe_decode_supported).
+
+        hidden_states: [1, 1, 32, hidden] L1 interleaved. Returns the dense [32, num_experts] routing weights (each
+        token's softmax over its top-k logits, zeros elsewhere) that experts.decode_forward_dense consumes.
+
+        The logits matmul runs on one core with the whole K in one block (in0_block_w = K tiles): the same tile
+        accumulation order as the auto-configured ttnn.linear, so the logits are bitwise identical, in ~8 us instead of
+        ~62 us, with the bias fused. The routing weights are built from a top-k threshold mask instead of
+        softmax + scatter (whose row-major index round trip is most of the original routing time)."""
+        k_tiles = self.hidden_dim // ttnn.TILE_SIZE
+        tokens = hidden_states.shape[-2]
+        if not hasattr(self, "_dense_logits_program_config"):
+            self._dense_logits_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(1, 1),
+                in0_block_w=k_tiles,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                out_block_h=1,
+                out_block_w=-(-self.num_experts // ttnn.TILE_SIZE),
+                per_core_M=-(-tokens // ttnn.TILE_SIZE),
+                per_core_N=-(-self.num_experts // ttnn.TILE_SIZE),
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+            # The compute config ttnn.linear picks without a program config (BFP8 x BF16: HiFi2, no FP32 accumulation,
+            # packer L1 accumulation); an explicit program config would otherwise default to LoFi.
+            self._dense_logits_compute_config = ttnn.init_device_compute_kernel_config(
+                hidden_states.device().arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        logits = ttnn.linear(
+            hidden_states,
+            self.weight,
+            bias=self.bias,
+            program_config=self._dense_logits_program_config,
+            compute_kernel_config=self._dense_logits_compute_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+        )
+        values, indices = ttnn.topk(logits, k=self.top_k, dim=-1, sorted=True)
+        indices.deallocate(True)
+        kth = ttnn.slice(values, [0, 0, 0, self.top_k - 1], [1, 1, tokens, self.top_k])
+        top = ttnn.slice(values, [0, 0, 0, 0], [1, 1, tokens, 1])
+        values.deallocate(True)
+        selected = ttnn.ge(logits, kth)
+        kth.deallocate(True)
+        e = ttnn.exp(ttnn.subtract(logits, top, output_tensor=logits), output_tensor=logits)
+        top.deallocate(True)
+        e = ttnn.multiply(e, selected, output_tensor=e)
+        selected.deallocate(True)
+        total = ttnn.sum(e, dim=-1, keepdim=True)
+        weights = ttnn.divide(e, total)
+        total.deallocate(True)
+        e.deallocate(True)
+        return ttnn.reshape(weights, (tokens, self.num_experts))
+
     def decode_indexed(self, hidden_states):
         """Fused decode routing for one token.
 
