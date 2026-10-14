@@ -289,6 +289,11 @@ void ring_attention_neighbor_halo_exchange_helper(
     reader_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
         "ring_attention_neighbor_halo_reader.cpp";
+    if (halo.striped) {
+        reader_kernel.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
+            "ring_attention_striped_halo_reader.cpp";
+    }
     reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel.core_ranges = workers;
     reader_kernel.config = WriterConfigDescriptor{};
@@ -321,6 +326,11 @@ void ring_attention_neighbor_halo_exchange_helper(
     writer_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
         "ring_attention_neighbor_halo_writer.cpp";
+    if (halo.striped) {
+        writer_kernel.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
+            "ring_attention_striped_halo_writer.cpp";
+    }
     writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel.core_ranges = workers;
     writer_kernel.config = ReaderConfigDescriptor{};
@@ -438,7 +448,7 @@ void ring_attention_neighbor_halo_exchange_helper(
                 range_start_page + range_page_count,
                 valid_pages);
             TT_FATAL(
-                range_page_count >= num_links,
+                halo.striped.has_value() || range_page_count >= num_links,
                 "Neighbor halo has {} pages for {} links; every worker must send at least one page",
                 range_page_count,
                 num_links);
@@ -490,6 +500,30 @@ void ring_attention_neighbor_halo_exchange_helper(
             }
             for (const uint32_t wt : halo_input_Wt) {
                 reader_args.push_back(wt);
+            }
+        }
+
+        if (halo.striped) {
+            const auto& g = *halo.striped;
+            for (auto* rt : {&reader_args, &writer_args}) {
+                for (const auto value :
+                     {g.prefix_tokens,
+                      g.logical_tokens,
+                      g.q_local_rows,
+                      g.cache_local_rows,
+                      g.stripe_rows,
+                      g.k_chunk_rows,
+                      g.window_tokens,
+                      g.ring_size,
+                      g.source_rank,
+                      g.peer_count,
+                      g.backward,
+                      g.num_links}) {
+                    rt->push_back(value);
+                }
+                for (const auto wt : halo_input_Wt) {
+                    rt->push_back(wt);
+                }
             }
         }
 

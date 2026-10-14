@@ -8,6 +8,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/string.h>
 
 namespace ttnn::experimental::gemma4 {
 namespace nb = nanobind;
@@ -42,7 +43,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa_wrapper(
     std::optional<uint32_t> stripe_size,
     const std::optional<ttnn::Tensor>& input_tensor_v,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_v,
-    std::optional<uint32_t> sliding_window_size) {
+    std::optional<uint32_t> sliding_window_size,
+    const std::string& communication) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
     return ttnn::experimental::gemma4::rjsdpa(
@@ -73,7 +75,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rjsdpa_wrapper(
         stripe_size,
         input_tensor_v,
         persistent_output_buffer_v,
-        sliding_window_size);
+        sliding_window_size,
+        communication);
 }
 }  // namespace
 
@@ -116,6 +119,12 @@ void bind_rjsdpa(nb::module_& mod) {
         rank-major gathered-cache shape (CP * local cache rows); they are not compact halo
         buffers. Communication and compute do not grow with the prefix length.
 
+        With explicit sliding stripes, communication="all_gather" (default) uses the bounded
+        gathered tail. communication="halo" instead sends each destination's needed KV
+        interval directly, multicasting identical intervals along each fabric direction.
+        Halo currently requires a CP axis and Linear 1D fabric; it retains the same full
+        gathered scratch shape, token ownership, math, metadata, and output contract.
+
         At CP=8, stripe_size=32 supports 256-token chunks and every multiple of 256.
         q_chunk_size must divide the local Q length; k_chunk_size must divide the local
         cache length. Both are positive multiples of 32, independently of stripe_size.
@@ -156,7 +165,8 @@ void bind_rjsdpa(nb::module_& mod) {
         nb::arg("stripe_size").noconvert() = nb::none(),
         nb::arg("input_tensor_v").noconvert() = nb::none(),
         nb::arg("persistent_output_buffer_v").noconvert() = nb::none(),
-        nb::arg("sliding_window_size").noconvert() = nb::none());
+        nb::arg("sliding_window_size").noconvert() = nb::none(),
+        nb::arg("communication") = "all_gather");
 }
 
 }  // namespace ttnn::experimental::gemma4

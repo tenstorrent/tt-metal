@@ -6,6 +6,7 @@
 
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
 #include "kernels/ring_attention_rank_mapping.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/striped_sliding_halo.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -113,6 +114,10 @@ struct RingAttentionNeighborHaloConfig {
     uint32_t q_local_tile_rows = 0;
     uint32_t halo_tile_rows = 0;
     uint32_t source_device = 0;
+
+    // Explicit stripes use destination-specific direct halo multicasts. Geometry is
+    // identical in the reader/writer, including empty ranges that still signal readiness.
+    std::optional<ttnn::operations::transformer::sdpa::ring_joint::StripedHaloGeometry> striped;
 
     bool derives_cache_batch_on_device() const { return slot_id != nullptr; }
     bool derives_start_on_device() const { return kv_actual_isl != nullptr; }
