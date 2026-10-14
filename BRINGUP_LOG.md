@@ -6,6 +6,14 @@
 **Branch**: `ssinghal/molmo2_new` — commit `5aca298376d`
 **Docker image**: `molmo2-pr-dev:latest` (overlay on `0.12.0-735b65d-7a07a97`)
 
+## Session 13 — 2026-10-14 (docker flow)
+
+**Status**: tt-inference-server `run.py --docker-server --impl molmo2` verified end to end on the Galaxy (spec `id_molmo2_Molmo2-8B_galaxy`, one container, DP=4).
+Image built from the local rebased branches via `models/demos/molmo2/serve/Dockerfile.local`. Request types pass (text, base64 image, https video, GCS image
+URL, `file://` video inside the container); 105-suite 97/100, 0 errors, 393 s wall; heavy mix 12/12 (34k-token videos and 20-image prompts, 4 concurrent);
+0 device timeouts. First heavy-mix run showed 6 failures: only the host `file://` path (not mounted in the container); rerun with the file copied in: 12/12.
+Wikimedia image URL gives 422 (HTTP 403 to vLLM's User-Agent), not a model bug. Open: decode ~19-20 tok/s vs ~35 on the March T3K reference (optimization not started); branches not pushed.
+
 ## Session 11 — 2026-10-14 (rebase onto main + hang triage)
 
 **Status**: Rebased `ssinghal/molmo2_new_glx` onto origin/main (branch `ssinghal/molmo2_glx_main`). All tests pass on Galaxy

@@ -1,0 +1,292 @@
+# syntax=docker/dockerfile:1
+# SPDX-License-Identifier: Apache-2.0
+#
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+
+# Optimized multi-stage build for significantly smaller runtime images
+ARG TT_METAL_DOCKERFILE_URL
+
+# Native builds resolve this name to an empty stage. Quetzal builds override it
+# with a sanitized, exact-commit named context supplied by the build script.
+FROM scratch AS quetzal_source
+
+# ==============================================================================
+# BUILDER STAGE - Contains all build dependencies and artifacts
+# ==============================================================================
+FROM ${TT_METAL_DOCKERFILE_URL} AS builder
+
+# Build arguments
+ARG TT_METAL_COMMIT_SHA_OR_TAG
+ARG TT_VLLM_COMMIT_SHA_OR_TAG
+ARG TT_QUETZAL_COMMIT_SHA=""
+ARG TT_SMI_COMMIT_SHA_OR_TAG=v3.1.1
+ARG CONTAINER_APP_UID=1000
+ARG DEBIAN_FRONTEND=noninteractive
+ARG CONTAINER_APP_USERNAME=container_app_user
+ARG HOME_DIR=/home/${CONTAINER_APP_USERNAME}
+
+# Environment variables for build
+ENV TT_METAL_COMMIT_SHA_OR_TAG=${TT_METAL_COMMIT_SHA_OR_TAG} \
+    SHELL=/bin/bash \
+    TZ=America/Los_Angeles \
+    CONTAINER_APP_USERNAME=${CONTAINER_APP_USERNAME} \
+    ARCH_NAME=wormhole_b0 \
+    TT_METAL_HOME=${HOME_DIR}/tt-metal \
+    CONFIG=Release \
+    TT_METAL_ENV=dev \
+    VLLM_TARGET_DEVICE="tt" \
+    vllm_tt_plugin_dir=${HOME_DIR}/vllm-tt-plugin \
+    TT_SMI_DIR=${HOME_DIR}/tt-smi \
+    LOGURU_LEVEL=INFO \
+    # Rust build dependencies, for backward compatibility with tt-metal
+    # versions where build Docker image does not have these defined
+    RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo
+# Environment variables defined by other env vars
+ENV PYTHONPATH=${TT_METAL_HOME} \
+    PYTHON_ENV_DIR=${TT_METAL_HOME}/python_env \
+    TT_METAL_DEVICE_BUILD=${TT_METAL_HOME}/build \
+    LD_LIBRARY_PATH=${TT_METAL_HOME}/build/lib \
+    PATH="$CARGO_HOME/bin:$PATH"
+
+# Install only essential build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-venv \
+    python3-dev \
+    git \
+    build-essential \
+    wget \
+    curl \
+    ca-certificates \
+    libgl1 \
+    libsndfile1 \
+    libffi-dev \
+    libssl-dev \
+    # pyluwen build dependencies (Rust package with protobuf)
+    protobuf-compiler \
+    libprotobuf-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# User setup
+RUN useradd -u ${CONTAINER_APP_UID} -s /bin/bash -d ${HOME_DIR} ${CONTAINER_APP_USERNAME} \
+    && mkdir -p ${HOME_DIR} \
+    && chown -R ${CONTAINER_APP_USERNAME}:${CONTAINER_APP_USERNAME} ${HOME_DIR}
+
+# Give user write access to Rust directories (fail if env vars are missing)
+RUN if [ -z "${RUSTUP_HOME}" ] || [ -z "${CARGO_HOME}" ]; then echo "RUSTUP_HOME and CARGO_HOME must be set" >&2; exit 1; fi && \
+    mkdir -p "${RUSTUP_HOME}" "${CARGO_HOME}" && \
+    chown -R ${CONTAINER_APP_UID}:${CONTAINER_APP_UID} "${RUSTUP_HOME}" "${CARGO_HOME}" && \
+    chmod -R 775 "${RUSTUP_HOME}" "${CARGO_HOME}"
+
+RUN /bin/bash -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --no-modify-path \
+    && . ${CARGO_HOME}/env \
+    && rustup update"
+
+# download.pytorch.org intermittently returns 503 during dependency installs;
+# raise uv's HTTP retry count (default 3) for every uv invocation in create_venv.sh.
+ENV UV_HTTP_RETRIES=10
+
+# Build tt-metal - clone with minimal history, build, and clean
+# uv's cache grows to ~3G here and ~11G after the vLLM install; the builder stage is
+# discarded, but its layers still fill the container storage fs during image export.
+# A full-history clone of tt-metal has taken over an hour on CI, connection dropped ("fatal: early
+# EOF"). Only the pinned commit is needed, so fetch just that (matches the shallow
+# clone already used by tt-media-server/Dockerfile).
+COPY tt-metal-src ${TT_METAL_HOME}
+RUN /bin/bash -c "cd ${TT_METAL_HOME} \
+    && bash ./build_metal.sh \
+    && ( for i in 1 2 3 4 5; do CXX=clang++-17 CC=clang-17 bash ./create_venv.sh --force && exit 0; echo 'create_venv.sh failed, retrying in 30s'; sleep 30; done; exit 1 ) \
+    && source ${PYTHON_ENV_DIR}/bin/activate \
+    && if [ -f 'models/demos/qwen25_vl/requirements.txt' ]; then uv pip install -r models/demos/qwen25_vl/requirements.txt; fi \
+    && rm -rf ${TT_METAL_HOME}/.git \
+    && { uv cache clean || echo 'WARN: uv cache clean failed'; true; }"
+
+# Build vllm-tt-plugin - clone with minimal history and clean.
+# The plugin owns the vLLM version pin and its dependency overrides, so the
+# install is delegated to its own docs/install-vllm-tt.sh rather than restated here
+COPY vllm-tt-plugin-src ${vllm_tt_plugin_dir}
+ENV UV_HTTP_TIMEOUT=600 UV_NO_BUILD_ISOLATION=1
+RUN /bin/bash -c "cd ${vllm_tt_plugin_dir} \
+    && source ${PYTHON_ENV_DIR}/bin/activate \
+    && uv pip install --upgrade pip \
+    && uv pip install 'setuptools>=77.0.3,<81' 'setuptools-scm>=8' setuptools-rust semantic_version packaging wheel jinja2 regex cmake ninja \
+    && source docs/install-vllm-tt.sh \
+    && rm -rf ${vllm_tt_plugin_dir}/.git \
+    && { uv cache clean || echo 'WARN: uv cache clean failed'; true; }"
+
+# The optional source is supplied by the authenticated caller as a sanitized
+# exact-commit build context. Its read-only mount is not committed to a layer.
+# Installing without dependencies preserves the image's pinned tt-metal/vLLM stack.
+RUN --mount=type=bind,from=quetzal_source,source=.,target=/tmp/quetzal-source-ro,ro \
+    set -eu; \
+    if [ -n "${TT_QUETZAL_COMMIT_SHA}" ]; then \
+      printf '%s' "${TT_QUETZAL_COMMIT_SHA}" | grep -Eq '^[0-9a-f]{40}$' \
+        || { echo 'TT_QUETZAL_COMMIT_SHA must be a lowercase 40-hex commit' >&2; exit 1; }; \
+      test -s /tmp/quetzal-source-ro/pyproject.toml \
+        || { echo 'Quetzal source context is required for a Quetzal build' >&2; exit 1; }; \
+      mkdir -p /tmp/quetzal-source /tmp/quetzal-wheel; \
+      cp -a /tmp/quetzal-source-ro/. /tmp/quetzal-source/; \
+      cd /tmp/quetzal-source; \
+      . "${PYTHON_ENV_DIR}/bin/activate"; \
+      uv build --wheel --out-dir /tmp/quetzal-wheel; \
+      set -- /tmp/quetzal-wheel/*.whl; \
+      [ "$#" -eq 1 ] && [ -f "$1" ] \
+        || { echo 'Quetzal build must produce exactly one wheel' >&2; exit 1; }; \
+      uv pip install --no-cache-dir --no-deps "$1"; \
+      python -c 'import importlib.metadata as m; import serving.artifact_discovery; import tt_quetzalcoatlus.vllm_plugin; eps = [e for e in m.entry_points(group="vllm.general_plugins") if e.name == "quetzal_model_registry"]; assert len(eps) == 1; assert eps[0].value == "tt_quetzalcoatlus.vllm_plugin:register"'; \
+      cd /; \
+      rm -rf /tmp/quetzal-source /tmp/quetzal-wheel; \
+      { uv cache clean || echo 'WARN: uv cache clean failed'; true; }; \
+    elif [ -e /tmp/quetzal-source-ro/pyproject.toml ]; then \
+      echo 'Quetzal source context requires TT_QUETZAL_COMMIT_SHA' >&2; \
+      exit 1; \
+    else \
+      echo 'Building native-only image (TT_QUETZAL_COMMIT_SHA unset)'; \
+    fi
+
+# Build tt-smi in separate venv to avoid conflicts with tt-metal venv
+RUN /bin/bash -c "git clone https://github.com/tenstorrent/tt-smi.git ${TT_SMI_DIR} \
+    && cd ${TT_SMI_DIR} \
+    && git checkout ${TT_SMI_COMMIT_SHA_OR_TAG} \
+    && python3 -m venv .venv \
+    && source .venv/bin/activate \
+    && pip3 install --upgrade pip \
+    && source ${CARGO_HOME}/env \
+    && pip3 install . \
+    && rm -rf ${TT_SMI_DIR}/.git"
+
+# ==============================================================================
+# RUNTIME STAGE - Minimal dependencies for running the application
+# ==============================================================================
+FROM ${TT_METAL_DOCKERFILE_URL} AS runtime
+
+ARG TT_QUETZAL_COMMIT_SHA=""
+
+LABEL maintainer="Tom Stesco <tstesco@tenstorrent.com>" \
+    org.opencontainers.image.source=https://github.com/tenstorrent/tt-inference-server \
+    org.opencontainers.image.quetzal.revision=${TT_QUETZAL_COMMIT_SHA}
+
+# IDENTICAL arguments and environment as builder stage
+ARG TT_METAL_COMMIT_SHA_OR_TAG
+ARG CONTAINER_APP_UID=15863
+ARG DEBIAN_FRONTEND=noninteractive
+ARG CONTAINER_APP_USERNAME=container_app_user
+ARG HOME_DIR=/home/${CONTAINER_APP_USERNAME}
+ARG APP_DIR="${HOME_DIR}/app"
+
+# IDENTICAL environment variables as builder stage
+ENV TT_METAL_COMMIT_SHA_OR_TAG=${TT_METAL_COMMIT_SHA_OR_TAG} \
+    TT_QUETZAL_COMMIT_SHA=${TT_QUETZAL_COMMIT_SHA} \
+    SHELL=/bin/bash \
+    TZ=America/Los_Angeles \
+    CONTAINER_APP_USERNAME=${CONTAINER_APP_USERNAME} \
+    ARCH_NAME=wormhole_b0 \
+    TT_METAL_HOME=${HOME_DIR}/tt-metal \
+    CONFIG=Release \
+    TT_METAL_ENV=dev \
+    VLLM_TARGET_DEVICE="tt" \
+    vllm_tt_plugin_dir=${HOME_DIR}/vllm-tt-plugin \
+    TT_SMI_DIR=${HOME_DIR}/tt-smi \
+    LOGURU_LEVEL=INFO \
+    TT_METAL_LOGS_PATH=${HOME_DIR}/logs
+# Environment variables defined by other env vars
+ENV PYTHONPATH=${TT_METAL_HOME}:${APP_DIR} \
+    PYTHON_ENV_DIR=${TT_METAL_HOME}/python_env \
+    TT_METAL_DEVICE_BUILD=${TT_METAL_HOME}/build \
+    LD_LIBRARY_PATH=${TT_METAL_HOME}/build/lib
+
+# Install only runtime dependencies + create IDENTICAL user
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-venv \
+    libgl1 \
+    libsndfile1 \
+    ca-certificates \
+    wget \
+    nano \
+    acl \
+    jq \
+    vim \
+    # user convenience deps
+    htop \
+    screen \
+    tmux \
+    unzip \
+    zip \
+    curl \
+    iputils-ping \
+    rsync \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && useradd -u ${CONTAINER_APP_UID} -s /bin/bash -d ${HOME_DIR} ${CONTAINER_APP_USERNAME} \
+    && mkdir -p ${HOME_DIR} ${APP_DIR} ${HOME_DIR}/logs \
+    && chown -R ${CONTAINER_APP_USERNAME}:${CONTAINER_APP_USERNAME} ${HOME_DIR} \
+    && echo "source ${PYTHON_ENV_DIR}/bin/activate" >> ${HOME_DIR}/.bashrc
+
+# Copy complete tt-metal installation including virtual environment
+COPY --from=builder --chown=${CONTAINER_APP_USERNAME}:${CONTAINER_APP_USERNAME} \
+    ${TT_METAL_HOME} ${TT_METAL_HOME}
+
+# Copy the vllm-tt-plugin source tree. This is the editable-install target, so it
+# must land at the same absolute path as in the builder or the .pth link breaks.
+# vLLM itself needs no COPY of its own: it is a regular (non-editable) install
+# inside ${PYTHON_ENV_DIR}/site-packages, already copied with TT_METAL_HOME above.
+COPY --from=builder --chown=${CONTAINER_APP_USERNAME}:${CONTAINER_APP_USERNAME} \
+    ${vllm_tt_plugin_dir} ${vllm_tt_plugin_dir}
+
+# Copy complete tt-smi installation
+COPY --from=builder --chown=${CONTAINER_APP_USERNAME}:${CONTAINER_APP_USERNAME} \
+    ${TT_SMI_DIR} ${TT_SMI_DIR}
+
+# Copy application files
+COPY --chown=${CONTAINER_APP_USERNAME}:${CONTAINER_APP_USERNAME} \
+    "vllm-tt-metal/src" "${APP_DIR}/src"
+COPY --chown=${CONTAINER_APP_USERNAME}:${CONTAINER_APP_USERNAME} \
+    "vllm-tt-metal/requirements.txt" "${APP_DIR}/requirements.txt"
+COPY --chown=${CONTAINER_APP_USERNAME}:${CONTAINER_APP_USERNAME} \
+    "utils" "${APP_DIR}/utils"
+COPY --chown=${CONTAINER_APP_USERNAME}:${CONTAINER_APP_USERNAME} \
+    "VERSION" "${APP_DIR}/VERSION"
+
+# Fix venv symlinks after copy and install additional app requirements
+RUN cd ${PYTHON_ENV_DIR}/bin \
+    && rm -f python python3 \
+    && ln -s /usr/bin/python3 python3 \
+    && ln -s python3 python \
+    && /bin/bash -c "source ${PYTHON_ENV_DIR}/bin/activate \
+    && uv pip install --no-cache-dir -r ${APP_DIR}/requirements.txt \
+    && uv cache clean" \
+    && chown -R ${CONTAINER_APP_USERNAME}:${CONTAINER_APP_USERNAME} ${PYTHON_ENV_DIR}
+
+# Prove the plugin survived the builder-to-runtime copy and final requirements install.
+RUN if [ -n "${TT_QUETZAL_COMMIT_SHA}" ]; then \
+      /bin/bash -c "source '${PYTHON_ENV_DIR}/bin/activate' \
+        && python -c 'import importlib.metadata as m; import serving.artifact_discovery; import tt_quetzalcoatlus.vllm_plugin; eps = [e for e in m.entry_points(group=\"vllm.general_plugins\") if e.name == \"quetzal_model_registry\"]; assert len(eps) == 1; assert eps[0].value == \"tt_quetzalcoatlus.vllm_plugin:register\"'"; \
+    fi
+
+# Fix venv permissions (COPY --chown can break symlink permissions)
+RUN chmod -R +x ${PYTHON_ENV_DIR}/bin
+
+# Switch to non-root user for runtime
+USER ${CONTAINER_APP_USERNAME}
+
+# Environment variable defaults (can be overridden at runtime with -e)
+ENV TT_METAL_LOGS_PATH=/home/container_app_user/logs \
+    CACHE_ROOT=/home/container_app_user/cache_root \
+    MODEL_SPECS_JSON_PATH=/home/container_app_user/model_specs/model_spec.json \
+    VLLM_TARGET_DEVICE=tt \
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+
+# Create cache_root directory as non-root user to seed Docker volume with correct ownership
+RUN mkdir -p ${CACHE_ROOT}
+
+# Copy pre-generated model specs JSON
+RUN mkdir -p /home/container_app_user/model_specs
+COPY --chown=container_app_user:container_app_user \
+    model_spec.json ${MODEL_SPECS_JSON_PATH}
+
+# Set working directory and entrypoint
+WORKDIR "${APP_DIR}/src"
+
+# Usage: docker run <image> --model <hf_repo> --device <device_type>
+ENTRYPOINT ["/bin/bash", "-c", "source ${PYTHON_ENV_DIR}/bin/activate && exec python run_vllm_api_server.py \"$@\"", "--"]

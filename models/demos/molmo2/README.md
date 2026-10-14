@@ -140,6 +140,17 @@ flight** (four independent servers: 102 s; one engine process serializes prefill
 The DP path needed three adapter fixes (prefill routed by the runner's slot, `slot_remap` applied as an indirection, per-row multimodal
 kwargs); regression tests in `tests/test_generator_vllm_routing.py`.
 
+**Docker flow (`run.py --docker-server`, verified 2026-10-14, spec `id_molmo2_Molmo2-8B_galaxy`):** `serve/Dockerfile.local` is the official
+`vllm.tt-metal.src.dev.Dockerfile` with the tt-metal / plugin `git clone`s replaced by `COPY` of the local (rebased) tree, so an image can be built
+from unpushed branches. Steps: `docker buildx bake` the tt-metal base image (`dockerfile/docker-bake.hcl`, target `ci-build`), build the image with
+`serve/Dockerfile.local` (context = tt-metal tree + patched plugin + tt-inference-server app files + dev `model_spec.json`), `mkdir /dev/hugepages-1G`
+(run.py bind-mounts it), then
+`run.py --model allenai/Molmo2-8B --workflow server --docker-server --tt-device galaxy --impl molmo2 --override-docker-image <image> --skip-system-sw-validation --no-auth --host-weights-dir <real-file checkpoint dir>`
+(weights must be real files, symlinks break inside the container; run.py's `docker pull` of a local image fails harmlessly). Ready after ~330 s.
+Results: text / base64 image / https video / GCS image URL / `file://` video (path must exist *inside* the container) pass; 105-suite 97/100, 0 errors
+(393 s wall, 4 in flight); heavy mix (2x 34k-token video + 2x 20-image per wave, 3 waves) 12/12; 0 device timeouts. Not bugs: Wikimedia image URLs
+return HTTP 403 to vLLM's default User-Agent (422 from the server; the same URL works with curl), and host `file://` paths are not mounted.
+
 ## Server (tt-inference-server, legacy docker flow)
 
 Exposes an OpenAI-compatible HTTP API on port 8000.
