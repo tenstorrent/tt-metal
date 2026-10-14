@@ -49,17 +49,15 @@ concept MoveOnlyFunctionTarget =
     std::is_invocable_r_v<R, std::decay_t<F>, Args...> && std::is_invocable_r_v<R, std::decay_t<F>&, Args...>;
 
 // std::move_only_function yields an empty wrapper for a null pointer or an empty std::function.
-// Only those two -- not a general emptiness probe; a new source type needs a case here rather than
-// falling through as engaged.
+// Only those two -- not a general emptiness probe; a new source type needs a case in
+// is_nullable_callable_v and here rather than falling through as engaged.
 template <typename T>
+    requires is_nullable_callable_v<std::decay_t<T>>
 bool is_empty_callable(const T& f) noexcept {
-    using D = std::decay_t<T>;
-    if constexpr (std::is_pointer_v<D> || std::is_member_pointer_v<D>) {
-        return f == nullptr;
-    } else if constexpr (is_std_function<D>::value) {
+    if constexpr (is_std_function<T>::value) {
         return !static_cast<bool>(f);
     } else {
-        return false;
+        return f == nullptr;
     }
 }
 
