@@ -68,12 +68,36 @@ namespace ttnn::experimental::deepseek {
 //                    ``page_table_tensor``) before any row is gathered, so a key closing at
 //                    this step can be selected in the same call.
 //   new_kv_row_index: ``[1]`` INT32 logical row of ``new_kv_row``. Given together with it.
+//   num_keys_tensor: optional ``[1]`` INT32 number of selectable keys, replacing
+//                    ``(cur_pos + 1) / 4``. A candidate-pool consumer passes the source's pool count.
+//   candidate_topk_blocks, candidate_block_size: candidate source mode when both are > 0. Besides
+//                    its own top-k, the op scores each block of ``candidate_block_size`` keys by its
+//                    best key and keeps the ``candidate_topk_blocks`` best blocks, always including
+//                    the block of the newest key.
+//   candidate_blocks_output, pool_count_output: optional preallocated candidate source outputs.
+//   num_parts:       key split across devices when > 1. The page blocks holding the selectable keys
+//                    split into ``num_parts`` contiguous ranges; this device scores range
+//                    ``part_index_tensor[0]`` and returns its local top-k as candidates instead of
+//                    gathering rows. Gathering every device's candidates and passing them to
+//                    ``merge_select_kv`` gives the rows the unsplit op would gather.
+//   part_index_tensor: ``[1]`` INT32 part this device scores. Given exactly when ``num_parts`` > 1.
+//   row_table:       optional ``[1, max_blocks_per_user * block_size]`` INT32 ``kv_cache`` row of each
+//                    key, replacing the page-table mapping for the gather. A candidate-pool consumer
+//                    passes the pool's rows so it gathers straight from the source's ``kv_cache``.
+//                    ``new_kv_row_index`` is then a ``kv_cache`` row, since ``page_table_tensor``
+//                    maps the pool.
 //
-// Returns: ``[kv_rows, scores]``.
+// Returns: ``[kv_rows, scores]``, plus ``[candidate_blocks, pool_count]`` in candidate source mode.
 //   kv_rows: selected KV rows, ``[1, Hkv, k, Dh]``, same dtype and layout as ``kv_cache``,
-//            or ``output_tensor`` when given.
+//            or ``output_tensor`` when given. With ``num_parts`` > 1, the candidates instead:
+//            ``[1, 1, 1, 2k + 16]`` INT32, the selected keys' ``kv_cache`` rows in key order, then
+//            their order keys (fp32 score bits mapped so unsigned order is score order), then the
+//            number selected. Unused entries are zero.
 //   scores:  index scores, ``[1, 1, 1, max_blocks_per_user * block_size]`` fp32 ROW_MAJOR. Only the
 //            first ``div_up((cur_pos + 1) / 4, block_size) * block_size`` entries are written.
+//   candidate_blocks: ``[1, candidate_topk_blocks]`` INT32, the kept blocks in ascending order in
+//            the first ``min(candidate_topk_blocks, number of blocks)`` entries, zero after them.
+//   pool_count: ``[1]`` INT32, the keys the kept blocks hold (the newest block may be partial).
 std::vector<Tensor> fused_lightning_select_kv(
     const Tensor& query,
     const Tensor& key_cache,
@@ -88,6 +112,14 @@ std::vector<Tensor> fused_lightning_select_kv(
     const std::optional<Tensor>& output_tensor = std::nullopt,
     uint32_t output_row_offset = 0,
     const std::optional<Tensor>& new_kv_row = std::nullopt,
-    const std::optional<Tensor>& new_kv_row_index = std::nullopt);
+    const std::optional<Tensor>& new_kv_row_index = std::nullopt,
+    const std::optional<Tensor>& num_keys_tensor = std::nullopt,
+    uint32_t candidate_topk_blocks = 0,
+    uint32_t candidate_block_size = 0,
+    const std::optional<Tensor>& candidate_blocks_output = std::nullopt,
+    const std::optional<Tensor>& pool_count_output = std::nullopt,
+    uint32_t num_parts = 1,
+    const std::optional<Tensor>& part_index_tensor = std::nullopt,
+    const std::optional<Tensor>& row_table = std::nullopt);
 
 }  // namespace ttnn::experimental::deepseek

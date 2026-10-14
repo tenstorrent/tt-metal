@@ -18,6 +18,9 @@ replaces the parts V4.1 changed.
   edge sends ``sel_tile`` of each group the two stages share and, when a stage without the
   group's kv source selects from it, the one compressed-KV row and index key the source wrote
   this step -- not the whole caches, which grow with the context.
+* Past ``candidate_topk_blocks * candidate_block_size`` entries the select is two-level (see
+  :mod:`.decode.attention`), a variant of its own. The candidate source's blocks and pool count
+  cross the edges of its group, and the first consumer on each stage builds that stage's pool.
 
 Prefill (:meth:`DeepSeekV41Model.build_prefill`) builds a
 :class:`~.prefill.model.DeepSeekV41PrefillModel` on the decode stages, sharing the routed experts,
@@ -43,7 +46,12 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     dequantized,
     expert_provider,
 )
-from models.experimental.deepseek_v41_flash.tt.decode.attention import _SELECT_KV_RATE, DeepSeekV41LayerCache
+from models.experimental.deepseek_v41_flash.tt.decode.attention import (
+    _SELECT_KV_RATE,
+    DeepSeekV41LayerCache,
+    candidate_buffers,
+    uses_candidate_pool,
+)
 from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import DeepSeekV41DecoderLayer
 from models.experimental.deepseek_v41_flash.tt.decode.engram import open_rows_sockets, rows_page_bytes
 from models.experimental.deepseek_v41_flash.tt.decode.dspark import DeepSeekV41DSpark, host_to_device
@@ -86,6 +94,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 # Host RAM kept free above the Engram tables, matching the decoder-layer test.
 _ENGRAM_RAM_MARGIN = 1.25
 _ROW_NAMES = ("new_kv_row", "new_key_row")
+_CANDIDATE_NAMES = ("cand_blocks", "pool_count")
 
 
 def _host_mem_available() -> int:
@@ -304,6 +313,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._engram_lookup = None
         self._decode_max_seq = None
         self._context_limit = None
+        self._candidate_group = None
+        self._candidate_layers = set()
+        self._pool_builders = set()
         self._csa_entries_copied = False
         self._paged = None
         self._traced_captured = False
@@ -377,13 +389,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise ValueError(f"max_seq must be at least 2 so RoPE can be recovered from row 1, got {max_seq}")
         cfg = self.config
         ratios = {int(r) for r in cfg.compress_ratios[: self.num_layers] if int(r)}
-        limit = cfg.candidate_topk_blocks * cfg.candidate_block_size if ratios else None
-        self._context_limit = limit
-        if limit is not None and max_seq > limit:
-            logger.warning(
-                f"max_seq {max_seq} exceeds the {limit}-token compressed-KV context; sessions are capped there"
-            )
-            max_seq = limit
+        self._context_limit = None
         for ratio in ratios:
             if max_seq % ratio:
                 raise ValueError(f"max_seq ({max_seq}) must be a multiple of compress ratio {ratio}")
@@ -428,6 +434,27 @@ class DeepSeekV41Model(DeepSeekV4Model):
             if not any((ids[w], self._kv_source_of[w]) == (ids[li], src) for w in self._row_writers):
                 self._row_writers.add(li)
         self._row_groups = {self._kv_source_of[li] for li in self._row_writers}
+        # Past the candidate pool, the candidate source's blocks reach every stage of its group and the
+        # first consumer on each stage builds that stage's pool.
+        source = cfg.candidate_source_layer_id
+        self._candidate_group = None
+        self._candidate_layers = set()
+        self._pool_builders = set()
+        if 0 <= source < self.num_layers and uses_candidate_pool(cfg, max_seq):
+            self._candidate_group = self._kv_source_of[source]
+            self._candidate_layers = {source}
+            for li in range(source + 1, self.num_layers):
+                if li not in cfg.index_source_layer_ids:
+                    continue
+                if self._kv_source_of[li] != self._candidate_group:
+                    raise NotImplementedError(f"candidate consumer {li} reads another group than layer {source}")
+                self._candidate_layers.add(li)
+                if not any(ids[w] == ids[li] for w in self._pool_builders):
+                    self._pool_builders.add(li)
+            logger.info(
+                f"two-level select past {cfg.candidate_topk_blocks * cfg.candidate_block_size} entries: "
+                f"source {source}, pool builders {sorted(self._pool_builders)}"
+            )
         self.submeshes_io = []
         for stage in self.pipeline_submesh_ids:
             device = self.submeshes[stage]
@@ -457,6 +484,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 "has_compressed": bool(stage_ratios),
                 "has_r2_pool": 2 in kv_ratios or 2 in row_ratios,
                 "has_r2_select": 2 in index_ratios,
+                "has_candidates": any(li in self._candidate_layers for li in layers_here),
                 "traces": {},
                 "tids": {},
                 "outputs": {},
@@ -521,7 +549,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ``win_kv`` / ``win_gate`` stay on the stage that owns the kv source. Every stage of the
         group gets ``sel_tile``; a stage with an index source of the group also gets ``sel_kv``,
         ``comp_kv``, ``idx_key_cache`` and its own identity page table. Groups some stage selects
-        from without holding their source carry ``new_kv_row`` / ``new_key_row`` on every stage.
+        from without holding their source carry ``new_kv_row`` / ``new_key_row`` on every stage. With a
+        two-level select, every stage of the candidate source's group carries its ``cand_blocks`` /
+        ``pool_count``, and a stage with a pool builder also gets the pool.
         """
         cfg = self.config
         window, head_dim = self.sliding_window, cfg.head_dim
@@ -569,6 +599,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
                             ),
                             sel_kv=_device_zeros((1, 1, rows, head_dim), device, layout=ttnn.ROW_MAJOR_LAYOUT),
                         )
+                    if src == self._candidate_group:
+                        builds_pool = any(w in self._pool_builders for w in sm["layers"])
+                        group.update(candidate_buffers(device, cfg, with_pool=builds_pool))
                     shared_here[src] = group
                 sm["scaches"][li] = DeepSeekV41LayerCache(kv=ring, **shared_here[src])
             by_stage[stage] = shared_here
@@ -577,47 +610,66 @@ class DeepSeekV41Model(DeepSeekV4Model):
             common = sorted(set(by_stage[src_stage]) & set(by_stage[dst_stage]))
             send, recv = [], []
             for src in common:
-                for name in ("sel_tile",) + (_ROW_NAMES if src in self._row_groups else ()):
+                names = ("sel_tile",) + (_ROW_NAMES if src in self._row_groups else ())
+                names += _CANDIDATE_NAMES if src == self._candidate_group else ()
+                for name in names:
                     send.append(by_stage[src_stage][src][name])
                     recv.append(by_stage[dst_stage][src][name])
             self._cache_handoff[(src_stage, dst_stage)] = (send, recv)
             if common:
                 logger.info(f"shared KV {src_stage} -> {dst_stage}: groups {common}")
 
-    def _variant_key(self, pos: int) -> tuple[bool, int, bool]:
-        """``(causal, r=2 pool phase, r=2 select)`` for absolute ``pos``.
+    def _two_level(self, pos: int) -> bool:
+        """Whether the candidate source's group has outgrown the candidate pool at ``pos``."""
+        if self._candidate_group is None:
+            return False
+        ratio = int(self.config.compress_ratios[self._candidate_group])
+        return (pos + 1) // ratio > self.config.candidate_topk_blocks * self.config.candidate_block_size
+
+    def _variant_key(self, pos: int) -> tuple[bool, int, int]:
+        """``(causal, r=2 pool phase, select mode)`` for absolute ``pos``.
 
         Causal starts at ``sliding_window - 1`` when the profile asks for it. An r=2 group pools on
         odd positions (``(pos + 1) % 2 == 0``) and selects once ``pos >= 1``. Ratio 1 pools and
-        selects on every step, so it is not a variant bit.
+        selects on every step, so it is not a variant bit. The select mode is 0 before the r=2
+        select, 1 after it and 2 once the select is two-level (:meth:`_two_level`), which V4's
+        code reads as the truthy indexer bit.
         """
         causal = self._SDPA_CAUSAL and pos >= self.sliding_window - 1
+        if self._two_level(pos):
+            return (causal, int(bool(self._pool_crs) and (pos + 1) % 2 == 0), 2)
         if not self._pool_crs:
-            return (causal, 0, False)
-        return (causal, int((pos + 1) % 2 == 0), pos >= 1)
+            return (causal, 0, 0)
+        return (causal, int((pos + 1) % 2 == 0), int(pos >= 1))
 
-    def _reachable_variants(self) -> list[tuple[bool, int, bool]]:
-        """The five (or fewer) variants a position can ask for. ``(False, 1, False)`` and
-        ``(True, *, False)`` never occur: the only non-select step is position 0."""
+    def _reachable_variants(self) -> list[tuple[bool, int, int]]:
+        """The variants a position can ask for. ``(False, 1, 0)`` and ``(True, *, 0)`` never occur: the
+        only non-select step is position 0. Two-level steps are past the sliding window, so causal when
+        the profile is."""
         if not self._pool_crs:
             modes = [False, True] if self._SDPA_CAUSAL else [False]
-            return [(causal, 0, False) for causal in modes]
-        variants = [(False, 0, False), (False, 0, True), (False, 1, True)]
-        if self._SDPA_CAUSAL:
-            variants += [(True, 0, True), (True, 1, True)]
+            variants = [(causal, 0, 0) for causal in modes]
+        else:
+            variants = [(False, 0, 0), (False, 0, 1), (False, 1, 1)]
+            if self._SDPA_CAUSAL:
+                variants += [(True, 0, 1), (True, 1, 1)]
+        if self._candidate_group is not None:
+            variants += [(self._SDPA_CAUSAL, phase, 2) for phase in range(len(self._pool_phases))]
         return variants
 
     @staticmethod
-    def _sm_pool_key(sm: dict, pool_flags: dict, causal: bool, index_sparse: bool = False) -> tuple:
+    def _sm_pool_key(sm: dict, pool_flags: dict, causal: bool, index_sparse: int = 0) -> tuple:
         """Drop variant bits this submesh's layers do not branch on.
 
-        ``index_sparse`` is the r=2 select bit. A sliding-only stage collapses to one trace; a
-        ratio-1 stage keeps only the causal bit.
+        ``index_sparse`` is the select mode of :meth:`_variant_key`. A sliding-only stage collapses to
+        one trace; a ratio-1 stage keeps only the causal bit, and the two-level bit if it holds the
+        candidate source or a consumer.
         """
         return (
             causal and sm["has_compressed"],
             bool(pool_flags.get(2, False)) and sm["has_r2_pool"],
-            index_sparse and sm["has_r2_select"],
+            bool(index_sparse) and sm["has_r2_select"],
+            index_sparse == 2 and sm["has_candidates"],
         )
 
     def _capture_packet_pos(self, pos: int, causal: bool, index_sparse: bool) -> int:
@@ -814,7 +866,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         n = self._group_count(pos_f, ratio)
         return self._device_index(ttnn.subtract(ttnn.multiply(n, float(_SELECT_KV_RATE)), 1.0))
 
-    def _attention_inputs(self, attn, ctx: dict, causal: bool, r2_pool: bool, r2_select: bool) -> dict:
+    def _attention_inputs(
+        self, attn, ctx: dict, causal: bool, r2_pool: bool, r2_select: bool, two_level: bool = False
+    ) -> dict:
         ratio = attn.compress_ratio
         cos, sin, neg_sin = ctx["rope"]["main" if ratio == 0 else "compress"]
         inputs = {"cos": cos, "sin": sin, "neg_sin": neg_sin, "sliding_pos": ctx["sliding_pos"]}
@@ -835,6 +889,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
             inputs["index_pos"] = ctx["index_pos"][ratio]
             if attn.layer_idx in self._row_writers and (ratio == 1 or r2_pool):
                 inputs["received_entry"] = ctx["entry"][ratio]
+            if two_level and attn.layer_idx in self._candidate_layers:
+                inputs["candidates"] = True
+                inputs["build_pool"] = attn.layer_idx in self._pool_builders
         if causal:
             inputs["sdpa_cur_pos"] = ctx["curpos"][ratio]
         else:
@@ -860,9 +917,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
         return ttnn.typecast(total, ttnn.bfloat16)
 
     def _decode_submesh_static(
-        self, sm: dict, pool_flags: dict[int, bool], causal: bool, index_sparse: bool = False
+        self, sm: dict, pool_flags: dict[int, bool], causal: bool, index_sparse: int = 0
     ) -> ttnn.Tensor:
-        """One submesh's layers for this variant. ``index_sparse`` is the r=2 select bit.
+        """One submesh's layers for this variant. ``index_sparse`` is the select mode of
+        :meth:`_variant_key`.
 
         Entering a stage receives streams, the packet, ``pre_mix`` and the shared KV groups, in
         that order. Leaving sends the same. The global-last layer collapses, normalises, applies
@@ -870,6 +928,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         """
         r2_pool = bool(pool_flags.get(2, False))
         r2_select = bool(index_sparse)
+        two_level = index_sparse == 2
         stage = sm["index"]
         ids = self.layer_submesh_ids
         streams = None
@@ -934,7 +993,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 streams,
                 pre_mix,
                 sm["scaches"][li],
-                **self._attention_inputs(layer.self_attn, ctx, causal, r2_pool, r2_select),
+                **self._attention_inputs(layer.self_attn, ctx, causal, r2_pool, r2_select, two_level),
             )
             if is_last:
                 hidden = self.norm(self._collapse_streams(streams, pre_mix))

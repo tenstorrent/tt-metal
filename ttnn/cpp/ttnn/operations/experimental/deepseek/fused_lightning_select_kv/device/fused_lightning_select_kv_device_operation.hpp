@@ -22,6 +22,14 @@ struct FusedLightningSelectKvDeviceOperation {
         uint32_t k = 0;
         // Row of the kv output that selected row 0 is written to.
         uint32_t output_row_offset = 0;
+        // Candidate source mode when > 0: also select the ``candidate_topk_blocks`` best blocks of
+        // ``candidate_block_size`` keys (each scored by its best key, the newest block always kept).
+        uint32_t candidate_topk_blocks = 0;
+        uint32_t candidate_block_size = 0;
+        // Key split when > 1: this device scores part ``part_index_tensor[0]`` of ``num_parts``
+        // contiguous ranges of page blocks and outputs its local top-k candidates instead of
+        // gathering rows (see ``merge_select_kv``).
+        uint32_t num_parts = 1;
         MemoryConfig output_mem_config;
         ttnn::DeviceComputeKernelConfig compute_kernel_config;
     };
@@ -40,9 +48,21 @@ struct FusedLightningSelectKvDeviceOperation {
         // Written into ``kv_cache`` at logical row ``new_kv_row_index[0]`` before the gather.
         std::optional<Tensor> new_kv_row;
         std::optional<Tensor> new_kv_row_index;
+        // ``[1]`` INT32 number of selectable keys; replaces ``(cur_pos + 1) / 4`` when given.
+        std::optional<Tensor> num_keys_tensor;
+        // Preallocated candidate source outputs: ``[1, candidate_topk_blocks]`` and ``[1]`` INT32.
+        std::optional<Tensor> candidate_blocks_output;
+        std::optional<Tensor> pool_count_output;
+        // ``[1]`` INT32 part this device scores, with ``num_parts`` > 1.
+        std::optional<Tensor> part_index_tensor;
+        // ``[1, max_blocks_per_user * block_size]`` INT32 ``kv_cache`` row of each key, replacing the
+        // page-table mapping for the gather (a candidate pool's rows in the source's cache).
+        std::optional<Tensor> row_table;
     };
 
-    // [0] selected kv rows, [1] index scores.
+    // [0] selected kv rows (with num_parts > 1: the local candidates, ``[1, 1, 1, 2k + 16]`` INT32:
+    // k kv_cache rows, their k order keys, then the number selected), [1] index scores; in candidate
+    // source mode also [2] candidate blocks, [3] pool count.
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
@@ -79,6 +99,14 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
     const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
     uint32_t output_row_offset = 0,
     const std::optional<ttnn::Tensor>& new_kv_row = std::nullopt,
-    const std::optional<ttnn::Tensor>& new_kv_row_index = std::nullopt);
+    const std::optional<ttnn::Tensor>& new_kv_row_index = std::nullopt,
+    const std::optional<ttnn::Tensor>& num_keys_tensor = std::nullopt,
+    uint32_t candidate_topk_blocks = 0,
+    uint32_t candidate_block_size = 0,
+    const std::optional<ttnn::Tensor>& candidate_blocks_output = std::nullopt,
+    const std::optional<ttnn::Tensor>& pool_count_output = std::nullopt,
+    uint32_t num_parts = 1,
+    const std::optional<ttnn::Tensor>& part_index_tensor = std::nullopt,
+    const std::optional<ttnn::Tensor>& row_table = std::nullopt);
 
 }  // namespace ttnn::prim

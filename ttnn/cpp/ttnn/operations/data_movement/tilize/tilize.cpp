@@ -7,6 +7,7 @@
 #include "device/tilize_device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 #include <tt-metalium/hal.hpp>
@@ -44,16 +45,31 @@ namespace ttnn {
 
 ttnn::Tensor tilize(
     const ttnn::Tensor& input_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<DataType> output_dtype,
+    const std::optional<MemoryConfig>& requested_memory_config,
+    std::optional<DataType> requested_dtype,
     bool use_multicore,
     bool use_low_perf,
     tt::tt_metal::Tile tile,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<ttnn::Tensor>& output_tensor) {
+    std::optional<MemoryConfig> memory_config = requested_memory_config;
+    std::optional<DataType> output_dtype = requested_dtype;
+    if (output_tensor.has_value()) {
+        // The ND massaging reshapes a fresh result, so it cannot write into a caller's buffer.
+        TT_FATAL(
+            input_tensor.logical_shape().rank() <= 4,
+            "tilize output_tensor requires an input of rank <= 4, got rank {}",
+            input_tensor.logical_shape().rank());
+        memory_config = memory_config.value_or(output_tensor->memory_config());
+        output_dtype = output_dtype.value_or(output_tensor->dtype());
+    }
     // A zero-volume input has nothing to tilize. Legacy tolerated the resulting empty program, but the
     // Metal 2.0 spec validator rejects it (no work cores -> the output DFB has no producer), so
     // short-circuit to a correctly-shaped empty output the way the sibling tilize_with_val_padding does.
     if (input_tensor.physical_volume() == 0) {
+        if (output_tensor.has_value()) {
+            return output_tensor.value();
+        }
         TensorSpec spec(
             input_tensor.logical_shape(),
             TensorLayout(
@@ -81,13 +97,16 @@ ttnn::Tensor tilize(
 
     // Reserve the output buffer's per-core L1 up front: it is allocated after this check
     // but before the CBs are placed, so leaving it out overestimates the CB budget and can
-    // pick a factory whose static CBs then clash with it (issue #21358).
-    const uint32_t pending_l1_output_bytes = ttnn::operations::data_movement::get_pending_l1_output_reservation(
-        input_tensor,
-        input_tensor.padded_shape(),
-        memory_config.value_or(input_tensor.memory_config()),
-        output_dtype.value_or(input_tensor.dtype()),
-        Layout::TILE);
+    // pick a factory whose static CBs then clash with it (issue #21358). A caller-provided
+    // output is already allocated, so the free-L1 query has accounted for it.
+    const uint32_t pending_l1_output_bytes = output_tensor.has_value()
+                                                 ? 0
+                                                 : ttnn::operations::data_movement::get_pending_l1_output_reservation(
+                                                       input_tensor,
+                                                       input_tensor.padded_shape(),
+                                                       memory_config.value_or(input_tensor.memory_config()),
+                                                       output_dtype.value_or(input_tensor.dtype()),
+                                                       Layout::TILE);
 
     bool enough_space_height = ttnn::operations::data_movement::is_enough_space(
         input_tensor,
@@ -119,6 +138,9 @@ ttnn::Tensor tilize(
                 use_low_perf,
                 tile,
                 sub_core_grids);
+            if (output_tensor.has_value()) {
+                return ttnn::copy(interleaved_tile, output_tensor.value());
+            }
             return ttnn::to_memory_config(interleaved_tile, target_memory_config);
         }
         return ttnn::prim::tilize(
@@ -129,7 +151,8 @@ ttnn::Tensor tilize(
             enough_space_height,
             use_low_perf,
             tile,
-            sub_core_grids);
+            sub_core_grids,
+            output_tensor);
     };
 
     return ttnn::operations::data_movement::build_ndiml_tilize(base_tilize, sub_core_grids)(input_tensor);

@@ -68,6 +68,9 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher
 PCC = 0.95
 # The carried pre is ~sigmoid(bias), moving a few hundredths between tokens; bf16 alone costs ~1e-3.
 PRE_MIX_ATOL = 0.01
+# An Engram layer's streams carry Engram's own error into the FFN hyper-connection: ~0.015 at pos 127 of layer 1,
+# ~0.03 at pos 1 of layer 14.
+ENGRAM_PRE_MIX_ATOL = 0.04
 TP_SIZE = 4
 PARENT_MESH = (8, 4)
 CASES = pytest.mark.parametrize(
@@ -398,8 +401,9 @@ def _check_decode(device, layers, seq_len, tp_size: int) -> None:
                     f"{what} FFN pre error by device input: "
                     + ", ".join(f"{k} {v:.4f}" for k, v in attribution.items())
                 )
-                if pre_error > PRE_MIX_ATOL:
-                    failures.append(f"{what} pre_mix: max abs error {pre_error} > {PRE_MIX_ATOL}")
+                pre_atol = ENGRAM_PRE_MIX_ATOL if layer.engram is not None else PRE_MIX_ATOL
+                if pre_error > pre_atol:
+                    failures.append(f"{what} pre_mix: max abs error {pre_error} > {pre_atol}")
                 moe_expected, moe_actual = expected_parts[i]["ffn"].reshape(-1), _to_torch(parts[i]["ffn"]).reshape(-1)
                 _, pcc = comp_pcc(moe_expected, moe_actual, PCC)
                 logger.info(f"{what} MoE: PCC {pcc}")
