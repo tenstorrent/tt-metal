@@ -52,3 +52,37 @@ def test_binary_nd_sharded_operands(device, inputs_nd_sharded, preallocated_outp
     else:
         out = ttnn.add(a, b)
     assert torch.equal(ttnn.to_torch(out), expected)
+
+
+@pytest.mark.parametrize("explicit_memory_config", [False, True], ids=["inferred_output", "explicit_memory_config"])
+def test_binary_nd_sharded_on_second_sub_device(device, explicit_memory_config):
+    """The worker grid must come from the sub-device that holds the ND shard grid, not the first sub-device."""
+    sub_device_0 = ttnn.SubDevice([ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 3))})])
+    sub_device_1 = ttnn.SubDevice([ttnn.CoreRangeSet({ttnn.CoreRange((4, 0), (5, 1))})])
+    manager = device.create_sub_device_manager([sub_device_0, sub_device_1], 3200)
+    device.load_sub_device_manager(manager)
+    try:
+        config = ttnn.MemoryConfig(
+            ttnn.BufferType.L1,
+            ttnn.NdShardSpec(
+                shard_shape=ttnn.Shape([1, 1, 64, 64]),
+                grid=ttnn.CoreRangeSet({ttnn.CoreRange((4, 0), (5, 1))}),
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+            ),
+        )
+        torch.manual_seed(0)
+        torch_a = torch.randn(SHAPE).bfloat16()
+        torch_b = torch.randn(SHAPE).bfloat16()
+        expected = ttnn.to_torch(
+            ttnn.add(
+                to_device(device, torch_a, ttnn.L1_MEMORY_CONFIG), to_device(device, torch_b, ttnn.L1_MEMORY_CONFIG)
+            )
+        )
+        a = to_device(device, torch_a, config)
+        b = to_device(device, torch_b, config)
+        out = ttnn.add(a, b, memory_config=config) if explicit_memory_config else ttnn.add(a, b)
+        assert torch.equal(ttnn.to_torch(out), expected)
+    finally:
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)

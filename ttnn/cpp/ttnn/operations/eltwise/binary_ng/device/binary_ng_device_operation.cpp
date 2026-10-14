@@ -139,17 +139,17 @@ CoreRangeSet get_worker_grid(
         return sub_core_grids.value();
     }
 
-    // An ND_SHARDED tensor is_sharded() with an empty shard_spec(); its grid is in nd_shard_spec().
-    auto get_tensor_grid = [](const Tensor& tensor) -> std::optional<CoreRangeSet> {
+    auto* device = input_tensor_a.device();
+    // An ND_SHARDED config is_sharded() with an empty shard_spec(); its grid is in nd_shard_spec().
+    auto get_sub_device_workers = [device](const MemoryConfig& config) -> std::optional<CoreRangeSet> {
         std::optional<CoreRangeSet> grid;
-        if (tensor.shard_spec().has_value()) {
-            grid = tensor.shard_spec()->grid;
-        } else if (tensor.nd_shard_spec().has_value()) {
-            grid = tensor.nd_shard_spec()->grid;
+        if (config.shard_spec().has_value()) {
+            grid = config.shard_spec()->grid;
+        } else if (config.nd_shard_spec().has_value()) {
+            grid = config.nd_shard_spec()->grid;
         } else {
             return std::nullopt;
         }
-        auto* device = tensor.device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
             if (sub_device_workers.intersects(*grid)) {
@@ -160,7 +160,7 @@ CoreRangeSet get_worker_grid(
     };
 
     if (output_tensor.has_value() && output_tensor->is_sharded()) {
-        if (auto workers = get_tensor_grid(*output_tensor)) {
+        if (auto workers = get_sub_device_workers(output_tensor->memory_config())) {
             log_debug(tt::LogOp, "Using output tensor grid for worker grid {}", workers->str());
             return *workers;
         }
@@ -168,19 +168,9 @@ CoreRangeSet get_worker_grid(
 
     if (memory_config.has_value()) {
         if (memory_config->is_sharded()) {
-            // Use the shard spec from memory config if provided
-            const auto& shard_spec_opt = memory_config->shard_spec();
-            if (shard_spec_opt.has_value()) {
-                log_debug(
-                    tt::LogOp, "Using memory config shard spec grid for worker grid {}", shard_spec_opt->grid.str());
-                auto* device = input_tensor_a.device();
-                for (const auto& sub_device_id : device->get_sub_device_ids()) {
-                    const auto& sub_device_workers =
-                        device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-                    if (sub_device_workers.intersects(shard_spec_opt->grid)) {
-                        return sub_device_workers;
-                    }
-                }
+            if (auto workers = get_sub_device_workers(*memory_config)) {
+                log_debug(tt::LogOp, "Using memory config shard grid for worker grid {}", workers->str());
+                return *workers;
             }
         } else {
             log_debug(tt::LogOp, "Memory config not sharded");
@@ -192,8 +182,15 @@ CoreRangeSet get_worker_grid(
         // If output tensor or memory config is provided but not sharded, use all worker cores
         log_debug(
             tt::LogOp, "Using all worker cores of the device for worker grid, output or memory config not sharded");
-        auto* device = input_tensor_a.device();
         return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
+    }
+
+    // An output config inferred from ND-sharded inputs has no 2D shard spec, so the native path below declines it.
+    if (memory_config_actual.is_sharded() && !memory_config_actual.shard_spec().has_value()) {
+        if (auto workers = get_sub_device_workers(memory_config_actual)) {
+            log_debug(tt::LogOp, "Using ND shard grid of the output memory config for worker grid {}", workers->str());
+            return *workers;
+        }
     }
 
     if (is_native_L1_sharding(
@@ -202,7 +199,7 @@ CoreRangeSet get_worker_grid(
             memory_config_actual)) {
         for (const Tensor* input : {&input_tensor_a, input_tensor_b}) {
             if (input && input->is_sharded()) {
-                if (auto workers = get_tensor_grid(*input)) {
+                if (auto workers = get_sub_device_workers(input->memory_config())) {
                     log_debug(
                         tt::LogOp, "Native L1 sharding using input tensor grid for worker grid {}", workers->str());
                     return *workers;
@@ -212,7 +209,6 @@ CoreRangeSet get_worker_grid(
     }
     // use all worker cores of the device
     log_debug(tt::LogOp, "Using all worker cores of the device for worker grid");
-    auto* device = input_tensor_a.device();
     return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
 }
 
