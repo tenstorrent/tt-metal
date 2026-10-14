@@ -1,0 +1,83 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#include "ckernel_globals.h"
+#include "ckernel_ops.h"
+#include "ckernel_template.h"
+#include "cunpack_common.h"
+#include "experimental/llk_unpack_AB_custom_mm.h"
+#include "llk_assert.h"
+
+using namespace ckernel;
+using namespace ckernel::unpacker;
+
+// Posts of 8 or more tiles, or per tile at 4 or more columns and 8 or more K tiles, reach the consumer in bursts that the
+// next call's early start slows, so those calls drain first
+constexpr bool sdpa_custom_mm_unpack_waits_at_end(const std::uint32_t signal_granularity, const std::uint32_t ct_dim = 1, const std::uint32_t kt_dim = 2)
+{
+    return signal_granularity >= 8 || (signal_granularity == 1 && ct_dim >= 4 && kt_dim >= 8);
+}
+
+template <bool read_transposed = false, bool configure_mask_extent = false, bool wait_at_end = false>
+inline void _llk_unpack_AB_sdpa_custom_mm_(
+    const std::uint32_t base_address_a,
+    const std::uint32_t base_address_b,
+    const std::uint32_t base_address_mask,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t tile_index_b,
+    const std::uint32_t tile_size_a,
+    const std::uint32_t tile_size_b,
+    const std::uint32_t kt_dim,
+    const std::uint32_t ct_dim              = 1,
+    const bool mask_chunk                   = false,
+    const std::uint32_t operandB_face_r_dim = 8,
+    const std::uint32_t row_stride          = 0)
+{
+    const std::uint32_t in1_row = row_stride ? row_stride : kt_dim;
+    if constexpr (read_transposed)
+    {
+        LLK_ASSERT(in1_row >= kt_dim, "row_stride must contain the contraction tiles");
+    }
+    volatile std::uint32_t* cfg         = get_cfg_pointer();
+    const std::uint32_t block_increment = read_transposed ? in1_row * tile_size_a : tile_size_a;
+    const std::uint32_t inner_increment = read_transposed ? -(((ct_dim - 1) * in1_row) - 1) * tile_size_a : tile_size_a;
+
+    const std::uint32_t address_a = base_address_a + tile_size_a * tile_index_a;
+    const std::uint32_t address_b = base_address_b + tile_size_b * tile_index_b;
+
+    // Wait for all contexts to be free
+    wait_for_next_context(1);
+    reset_config_context();
+
+    if (mask_chunk)
+    {
+        cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = base_address_mask;
+        if constexpr (configure_mask_extent)
+        {
+            LLK_ASSERT(ct_dim * 2 <= 64, "mask_chunk requires ct_dim*2 <= 64 SrcB rows");
+            TT_SETADCXX(p_setadc::UNP_B, ct_dim * 2 * FACE_C_DIM - 1, 0x0);
+        }
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcB, 0b00000000, 1, 1);
+        if constexpr (configure_mask_extent)
+        {
+            TT_SETADCXX(p_setadc::UNP_B, operandB_face_r_dim * FACE_C_DIM - 1, 0x0);
+        }
+    }
+
+    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim, wait_at_end);
+
+    if (mask_chunk)
+    {
+        // The mask unpack read unpacker 1's context-1 base: end on context 0 so a two-context follower cannot rewrite it.
+        wait_for_next_context(1);
+        reset_config_context();
+    }
+}

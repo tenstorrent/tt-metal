@@ -751,7 +751,7 @@ struct MatmulExpertCompressedDRAM {
                         tile_regs_acquire();
 
                         for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
-                            { DeviceZoneScopedSumN1("T-WAIT"); cb_wait_front(CTArgs::cb_in1, tiles_per_block); }
+                            cb_wait_front(CTArgs::cb_in1, tiles_per_block);
 
                             uint32_t meta_addr = reinterpret_cast<uint32_t>(fmt_base_ptr + fmt_meta_offset);
 
@@ -892,7 +892,7 @@ struct MatmulExpertCompressedDRAM {
                     uint32_t fmt_meta_offset = 0;
 
                     for (uint32_t sb_k = 0; sb_k < num_subblocks_k_local; sb_k++) {
-                        { DeviceZoneScopedSumN1("T-WAIT"); cb_wait_front(CTArgs::cb_in1, tiles_per_block); }
+                        cb_wait_front(CTArgs::cb_in1, tiles_per_block);
                         UNPACK(({
                             unified_kernels::override_cb_rd_ptr(
                                 CTArgs::cb_in0, in0_base + sb_k * CTArgs::subblock_k * in0_page_size);
@@ -1052,7 +1052,7 @@ struct MatmulExpertCompressedDRAM {
                         tile_regs_acquire();
 
                         for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
-                            { DeviceZoneScopedSumN1("T-WAIT"); cb_wait_front(CTArgs::cb_in1, tiles_per_block); }
+                            cb_wait_front(CTArgs::cb_in1, tiles_per_block);
 
                             UNPACK(({
                                 unified_kernels::override_cb_rd_ptr(

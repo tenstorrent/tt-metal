@@ -734,7 +734,7 @@ struct MatmulExpertCompressedDRAM {
                         PACK((llk_pack_reconfig_l1_acc(1)));
                     }
 
-                    { DeviceZoneScopedSumN1("T-FMT"); UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0))); }
+                    UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0)));
                     { DeviceZoneScopedSumN1("T-FMT"); MATH((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_1))); }
                     const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(
                         CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size);
@@ -881,7 +881,7 @@ struct MatmulExpertCompressedDRAM {
                         continue;
                     }
 
-                    { DeviceZoneScopedSumN1("T-FMT"); UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0))); }
+                    UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0)));
                     { DeviceZoneScopedSumN1("T-FMT"); MATH((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_1))); }
                     const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(
                         CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size);
@@ -1035,7 +1035,7 @@ struct MatmulExpertCompressedDRAM {
                         continue;
                     }
 
-                    { DeviceZoneScopedSumN1("T-FMT"); UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0))); }
+                    UNPACK((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_0)));
                     { DeviceZoneScopedSumN1("T-FMT"); MATH((fmt_sync::consumer_wait(CTArgs::fmt_sem_addr_1))); }
                     const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(
                         CTArgs::fmt_cb_l1_addr + fmt_slot * CTArgs::fmt_cb_page_size);
