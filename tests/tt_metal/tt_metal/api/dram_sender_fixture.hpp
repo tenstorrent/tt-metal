@@ -41,6 +41,13 @@ protected:
         }
     }
 
+    // Whether a bank has a second DRAM sender on its NOC1 endpoint. A DRAM-harvested Blackhole runs
+    // no DRISC firmware there (see MeshDeviceImpl::dram_sender_logical_cores), so tests of the
+    // two-sender split skip on it.
+    bool has_two_senders_per_bank() const {
+        return mesh_device_->impl().dram_sender_logical_cores(mesh_device_->get_devices().front(), 0).size() == 2;
+    }
+
     distributed::MeshDevice* mesh_device_{};
 };
 

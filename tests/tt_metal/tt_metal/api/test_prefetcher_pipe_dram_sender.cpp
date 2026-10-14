@@ -388,6 +388,9 @@ TEST_F(PrefetcherPipeDramSenderFixture, CursorPersistsAcrossPrograms) {
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, DualSendersSplitBankReceivers) {
+    if (!has_two_senders_per_bank()) {
+        GTEST_SKIP() << "DRAM banks have one sender on this device";
+    }
     // Receiver-contiguous mode lets one bank be driven by two DRISC cores, each owning a disjoint
     // half of the bank's receivers -- which is what makes them two independent one-sender pipes.
     constexpr uint32_t kNumReceivers = 4;
@@ -431,6 +434,9 @@ TEST_F(PrefetcherPipeDramSenderFixture, DualSendersSplitBankReceivers) {
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, PipesOnDistinctSendersShareOneDriscOffset) {
+    if (!has_two_senders_per_bank()) {
+        GTEST_SKIP() << "DRAM banks have one sender on this device";
+    }
     // A pipe reserves its config page on its own sender core, so a whole set of one-sender pipes
     // costs the small DRISC zone one page rather than one page per pipe. Anything a given sender
     // core would also see -- a second range on that core, or a uniform GCB-style range every bank
@@ -532,6 +538,9 @@ TEST_F(PrefetcherPipeDramSenderFixture, DroppedPipesRecarveSameSpaceWithoutAlloc
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, RecarveSwitchesBetweenOneAndTwoSendersPerBank) {
+    if (!has_two_senders_per_bank()) {
+        GTEST_SKIP() << "DRAM banks have one sender on this device";
+    }
     const CoreRangeSet receivers(CoreRange({0, 0}, {1, 0}));
     auto set = make_pipe_set(*mesh_device_, {{0, receivers}}, /*dual_senders_per_bank=*/false);
     ASSERT_EQ(set.pipes.size(), 1u);
@@ -556,6 +565,9 @@ TEST_F(PrefetcherPipeDramSenderFixture, RecarveSwitchesBetweenOneAndTwoSendersPe
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, ReceiverShardsFollowEachSendersBankLocalBase) {
+    if (!has_two_senders_per_bank()) {
+        GTEST_SKIP() << "DRAM banks have one sender on this device";
+    }
     // Two senders split bank 0's three receivers two and one, so the second sender's receiver is
     // sent the bank's third shard, not its first. Bank 1's one receiver is sent that bank's first.
     const CoreRangeSet bank0_receivers(CoreRange({0, 0}, {2, 0}));

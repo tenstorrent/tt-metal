@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -80,19 +81,19 @@ protected:
         return (static_cast<uint64_t>(t[1]) << 32) | t[0];
     }
 
-    // Logical subchannel indices of `bank` that run a DRISC kernel: every DRAM endpoint except the
-    // NOC0 worker endpoint (logical subchannel 0), which is owned by the syseng firmware and left in
-    // reset, so no DRISC kernel can be launched there. DRISC tests must only target these.
+    // Logical subchannel indices of `bank` that run a DRISC kernel, ascending: the bank's cores in
+    // get_metal_dram_cores, which leaves out the endpoints the syseng firmware may own (the NOC0
+    // worker endpoint, or on a DRAM-harvested chip both worker endpoints). No DRISC kernel can be
+    // launched on the others, so DRISC tests must only target these.
     std::vector<uint32_t> usable_dram_endpoints(uint32_t bank) const {
         const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
-        const uint32_t noc0_sub = logical_dram_endpoint_for_noc(soc_desc, bank, NOC::NOC_0).y;
-        const uint32_t num_endpoints = soc_desc.get_dram_compute_grid_size().y;
         std::vector<uint32_t> usable;
-        for (uint32_t sub = 0; sub < num_endpoints; ++sub) {
-            if (sub != noc0_sub) {
-                usable.push_back(sub);
+        for (const CoreCoord& core : soc_desc.get_metal_dram_cores(CoordSystem::LOGICAL)) {
+            if (core.x == bank) {
+                usable.push_back(core.y);
             }
         }
+        std::sort(usable.begin(), usable.end());
         return usable;
     }
 
@@ -838,10 +839,12 @@ TEST_F(DramKernelFixture, DramKernelDRISCNocModeStress) {
     // Place the DRISC kernel on the endpoint that tensix_noc reads route to, so one DRISC owns both NIUs
     // (stream on drisc_noc, NOC2AXI on tensix_noc).
     CoreCoord drisc_logical = logical_dram_endpoint_for_noc(soc_desc, bank, tensix_noc);
-    // The NOC0 worker endpoint is owned by the syseng firmware and runs no DRISC kernel, so the
-    // tensix-on-NOC0 configuration (which would place the DRISC kernel there) can't be exercised.
-    if (drisc_logical.y == logical_dram_endpoint_for_noc(soc_desc, bank, NOC::NOC_0).y) {
-        GTEST_SKIP() << "DRISC kernel cannot run on the syseng-owned NOC0 DRAM endpoint";
+    // The NOC0 worker endpoint (and on a DRAM-harvested chip the NOC1 one too) may be owned by the
+    // syseng firmware and runs no DRISC kernel, so a configuration that would place the DRISC kernel
+    // there can't be exercised.
+    const std::vector<uint32_t> usable = usable_dram_endpoints(bank);
+    if (std::find(usable.begin(), usable.end(), drisc_logical.y) == usable.end()) {
+        GTEST_SKIP() << "DRISC kernel cannot run on the syseng-owned DRAM endpoint " << drisc_logical.y;
     }
     const uint32_t dram_channel = mesh_device_->dram_channel_from_logical_core(drisc_logical);
 

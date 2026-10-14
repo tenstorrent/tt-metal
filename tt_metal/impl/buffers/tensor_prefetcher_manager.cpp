@@ -551,7 +551,7 @@ void TensorPrefetcherManager::enumerate_dram_senders() {
     // dram_grid_size() already TT_FATALs unless every device in the mesh reports the same bank count.
     num_banks_ = mesh_device_->dram_grid_size().x;
 
-    // Logical DRAM coords name an endpoint role, so a bank's two senders have the same logical
+    // Logical DRAM coords name an endpoint role, so a bank's senders have the same logical
     // coords on every device even when their DRAM harvest masks differ; only the physical
     // subchannel each one resolves to changes. Build the list from the reference device and check
     // the rest agree, because everything downstream (socket placement, kernel placement, GCB sender
@@ -559,13 +559,16 @@ void TensorPrefetcherManager::enumerate_dram_senders() {
     // DRISC core.
     const auto senders_on = [this](const IDevice* device) {
         std::vector<CoreCoord> senders;
-        senders.reserve(2 * num_banks_);
+        senders.reserve(senders_per_bank_ * num_banks_);
         for (uint32_t b = 0; b < num_banks_; ++b) {
-            // Two roles per bank: the free subchannel then the NOC1-endpoint subchannel.
+            // The free subchannel, then the NOC1-endpoint subchannel where Metal runs DRISC firmware
+            // on it (not on a DRAM-harvested Blackhole).
             const std::vector<CoreCoord> bank_senders = mesh_device_->impl().dram_sender_logical_cores(device, b);
             TT_FATAL(
-                bank_senders.size() == 2,
-                "Tensor prefetcher expected two DRAM sender roles for bank {} on device {}, found {}",
+                bank_senders.size() == senders_per_bank_,
+                "Tensor prefetcher expected {} DRAM sender roles for bank {} on device {}, found {}; every bank "
+                "must have the same number",
+                senders_per_bank_,
                 b,
                 device->id(),
                 bank_senders.size());
@@ -575,6 +578,8 @@ void TensorPrefetcherManager::enumerate_dram_senders() {
     };
 
     const IDevice* reference_device = devices_.front();
+    senders_per_bank_ =
+        static_cast<uint32_t>(mesh_device_->impl().dram_sender_logical_cores(reference_device, 0).size());
     sender_logical_cores_ = senders_on(reference_device);
     for (size_t d = 1; d < devices_.size(); ++d) {
         TT_FATAL(
@@ -778,7 +783,7 @@ void TensorPrefetcherManager::build_and_launch_programs(
         for (uint32_t s = 0; s < num_senders_; ++s) {
             const CoreCoord sender_logical = sender_logical_cores_[s];
             const uint32_t bank_id = static_cast<uint32_t>(sender_logical.x);
-            const uint32_t bank_sender_base = 2 * bank_id;
+            const uint32_t bank_sender_base = senders_per_bank_ * bank_id;
             const bool controls_ordinary_mpfe = mpfe_policy.has_value() && s == bank_sender_base;
             uint32_t own_mpfe_port = 0;
             uint32_t ordinary_mpfe_port = 0;
@@ -786,9 +791,7 @@ void TensorPrefetcherManager::build_and_launch_programs(
             uint32_t ordinary_mpfe_weight = 0;
             bool dynamic_mpfe_weighting = false;
             if (mpfe_policy.has_value()) {
-                const uint32_t free_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base]);
-                const uint32_t noc1_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base + 1]);
-                own_mpfe_port = controls_ordinary_mpfe ? free_sender_port : noc1_sender_port;
+                own_mpfe_port = get_mpfe_port(soc_desc, sender_logical);
                 own_active_mpfe_weight =
                     controls_ordinary_mpfe ? mpfe_policy->active.free_sender : mpfe_policy->active.noc1_sender;
                 ordinary_mpfe_weight = mpfe_policy->active.ordinary;
@@ -1010,7 +1013,8 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     if (krow_compatible_mapping) {
         for (const auto& [sender, _receivers] : mapping) {
             const uint32_t bank = static_cast<uint32_t>(sender.x);
-            if (bank >= num_banks_ || primary_bank_seen[bank] || sender != sender_logical_cores_[2 * bank]) {
+            if (bank >= num_banks_ || primary_bank_seen[bank] ||
+                sender != sender_logical_cores_[senders_per_bank_ * bank]) {
                 krow_compatible_mapping = false;
                 break;
             }
@@ -1728,6 +1732,7 @@ void TensorPrefetcherManager::stop() {
     drain_targets_per_sender_.clear();
     drain_holds_.clear();
     num_senders_ = 0;
+    senders_per_bank_ = 0;
     num_banks_ = 0;
     active_ = false;
 }
