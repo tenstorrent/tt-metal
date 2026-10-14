@@ -119,8 +119,8 @@ This admission policy does not itself allocate or pin cached Zero Device storage
 
 ### Prepared pipeline inputs (X280 only)
 
-The X280 pipeline benchmarks share a fixed 4160-byte cached Zero Device region at
-`[0x0A000000, 0x0A001040)` on each participating L2CPU tile. Way 1 holds the
+The X280 pipeline benchmarks share a fixed 4288-byte cached Zero Device region at
+`[0x0A000000, 0x0A0010C0)` on each participating L2CPU tile. Way 1 holds the
 reserved lines; way 0 remains general-purpose. The required partition is
 `WAYENABLE=1` (14 LIM ways). Preparation does not create this partition, prime
 ECC, boot resident idle, reset the ASIC, or flush caches.
@@ -162,7 +162,7 @@ build/test/tt_metal/x280/x280_runtime_cli --tile 0 \
   --teardown-pinned-input-image build/x280/firmware-pinned-input-teardown.bin
 ```
 
-ID 7 uses the first 96-byte header in this region at `0x0A000A40`. Its
+ID 7 uses the first 96-byte header in this region at `0x0A000AC0`. Its
 `decide_plain` configuration reseeds that complete header before warmup; it
 does not allocate a source region or change the prepared policy.
 
@@ -176,7 +176,7 @@ path remains an operator responsibility; the operation-specific hart result is
 the final mismatch check.
 
 Preparation requires active mask bits `11` for every master, temporarily limits
-Hart 0's population to way 1, touches all 65 lines, and leaves active bits `01`
+Hart 0's population to way 1, touches all 67 lines, and leaves active bits `01`
 for all 38 masters. Inputs can then be updated coherently through the pinned
 hierarchy. Individual configurations do not allocate cache leases, invalidate
 the region, change masks, or restore cache state when their fixtures close.
