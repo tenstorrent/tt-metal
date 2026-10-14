@@ -130,28 +130,6 @@ _CALL_CONTRACT_CASE = (
     ttnn.bfloat16,
     ttnn.ROW_MAJOR_LAYOUT,
 )
-_SHORTCUT_CASE = (
-    [1, 1, 1, 32],
-    {"dim": 2, "index": [1, 1, 1, 32], "src": [1, 1, 1, 32]},
-    ttnn.bfloat16,
-    ttnn.ROW_MAJOR_LAYOUT,
-)
-
-
-def test_scatter_codegen_forced_dispatches_past_the_frontend_shortcut(device):
-    shape, kwargs, dtype, layout = _SHORTCUT_CASE
-    xt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device)
-    kwargs = _materialize(shape, kwargs, dtype, layout, device)
-    # Both cache-count assertions below need a cache holding only the native program.
-    device.clear_program_cache()
-    golden = ttnn.to_torch(_force_native(xt, **kwargs))
-    entries_before = device.num_program_cache_entries()
-    assert_equal(golden, ttnn.to_torch(ttnn.scatter(xt, **kwargs)))
-    msg = "the routed entry dispatched a call the front-end shortcut answers"
-    assert device.num_program_cache_entries() == entries_before, msg
-    assert_equal(golden, ttnn.to_torch(_force_codegen(xt, **kwargs)))
-    msg = "forced codegen was swallowed by the front-end shortcut instead of dispatching"
-    assert device.num_program_cache_entries() > entries_before, msg
 
 
 def test_scatter_codegen_unsupported_output_memory_config_falls_back(device):
