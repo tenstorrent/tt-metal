@@ -5,16 +5,11 @@ name: Blaze Merge Gate
 # caught while the release is being cut rather than by the next uplift.
 #
 # Scope is tt-blaze's whole gate -- unit + P150 + craq-sim + every gate-tier BH
-# Loudbox bucket -- because nothing downstream waits on this job: it hangs off
-# release-build-test-publish.yaml's `build-artifact` and runs alongside the
-# release demo tests. tt-blaze's ci.yaml defaults every bucket selector to "run
-# all", so the dispatch below passes only the plumbing inputs and gets the full
-# gate. (Earlier revisions of this workflow ran one Loudbox bucket because they
-# sat in tt-metal's merge queue and could not hold it for hours.)
+# Loudbox bucket
 #
 # tt-blaze cannot build tt-metal itself -- its CI consumes prebuilt tarball+wheel
 # artifacts. So this workflow does NOT hand tt-blaze a branch to go resolve: it
-# hands over `metal-run-id`, the id of the top-level run whose `build-artifact`
+# hands over `metal-run-id`, the id of the top-level run whose `build-artifact-profiler`
 # job has already published the tarball and wheel for this exact commit. tt-blaze's
 # download-build-artifact.yaml takes that run id verbatim and skips pin
 # resolution entirely. `metal-ref` then moves tt-blaze's tt-metal submodule to the
@@ -25,12 +20,6 @@ name: Blaze Merge Gate
 # JIT-compiles kernels with the SFPI in the container it runs in (not the tarball
 # or wheel), so the gate must run in this commit's image, not vars.DEV_IMAGE.
 #
-# The release build is tracy=false, so tt-blaze runs against the plain variant
-# (its pin-driven runs are profiler-only). The gate-tier tests that touch tracy at
-# all today do so defensively (an `import tracy` in a try/except, a
-# TT_METAL_DEVICE_PROFILER env probe), so widening the scope to the whole gate is
-# safe -- but a blaze test that comes to REQUIRE tracy at runtime cannot run here,
-# and would show up as a failure of this job rather than of anything in tt-metal.
 #
 # Auth: dispatching and polling a workflow in another repo needs a PAT with
 # `actions: write` (dispatch, cancel) and `actions: read` (poll) on
