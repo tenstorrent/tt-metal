@@ -1,0 +1,9 @@
+# The versions the goldens were made with (every trace's metadata.json records its own).
+torch==2.11.0
+transformers==5.12.1
+safetensors==0.8.0
+huggingface_hub==1.16.1
+tokenizers==0.22.2
+sentencepiece==0.2.1
+tiktoken==0.7.0
+tqdm==4.66.3  # generate_golden_whole_model.py only
