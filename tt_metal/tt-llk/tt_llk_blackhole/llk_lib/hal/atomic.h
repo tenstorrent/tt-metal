@@ -610,7 +610,7 @@ inline __attribute__((always_inline)) void run()
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
 inline __attribute__((always_inline)) void run(const FetchIncrement<AddressIndex, DataIndex> operation)
 {
-    ckernel::instrn_buffer[0] = operation.get_operation();
+    TT_INSN(operation.get_operation());
 }
 
 /**
@@ -625,7 +625,7 @@ inline __attribute__((always_inline)) void run(const FetchIncrement<AddressIndex
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
 inline __attribute__((always_inline)) void run(const FifoAcquire<AddressIndex, DataIndex> operation)
 {
-    ckernel::instrn_buffer[0] = operation.get_operation();
+    TT_INSN(operation.get_operation());
 }
 
 /**
@@ -639,7 +639,7 @@ inline __attribute__((always_inline)) void run(const FifoAcquire<AddressIndex, D
 template <std::uint32_t AddressIndex>
 inline __attribute__((always_inline)) void run(const CompareSet<AddressIndex> operation)
 {
-    ckernel::instrn_buffer[0] = operation.get_operation();
+    TT_INSN(operation.get_operation());
 }
 
 /**
@@ -654,7 +654,7 @@ inline __attribute__((always_inline)) void run(const CompareSet<AddressIndex> op
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
 inline __attribute__((always_inline)) void run(const MaskedWrite<AddressIndex, DataIndex> operation)
 {
-    ckernel::instrn_buffer[0] = operation.get_operation();
+    TT_INSN(operation.get_operation());
 }
 
 /**
