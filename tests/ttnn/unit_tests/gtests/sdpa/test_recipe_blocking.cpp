@@ -303,6 +303,23 @@ TEST(SDPARecipeBlocking, ProgramsFitTheKernelConfigBuffer) {
     ASSERT_TRUE(choose_recipe_blocking(joint).has_value());
 }
 
+TEST(SDPARecipeBlocking, MlaRingProgramsFitTheKernelConfigBuffer) {
+    // Measured (2x2 P150b mesh, causal balanced ACCURATE, BFP8 K/V, D576 Q/K, V128): Q160 overflows at K192, K256,
+    // K384 and K448 by 16-64 B and Q320 by 0.5-1 KB; Q32 and Q64 fit at every K. The chooser stays below Q160.
+    auto ring = problem(RecipeOp::Ring, RecipeSelection{Recipe::D, KVStorage::BFP8}, 29, 3200, 3200, 18);
+    ring.ring_size = 2;
+    ring.vd_tiles = 4;
+    EXPECT_FALSE(recipe_program_fits(ring, 5, 8));
+    EXPECT_FALSE(recipe_program_fits(ring, 10, 4));
+    EXPECT_TRUE(recipe_program_fits(ring, 2, 8));
+    const auto choice = choose_recipe_blocking(ring);
+    ASSERT_TRUE(choice.has_value());
+    EXPECT_LT(choice->q_chunk_size, 160u);
+    // Without a narrower V (or at ordinary head dims) the ring rule does not apply.
+    ring.vd_tiles = 0;
+    EXPECT_TRUE(recipe_program_fits(ring, 5, 8));
+}
+
 TEST(SDPARecipeBlocking, FeatureCombinationsFitTheKernelConfigBuffer) {
     // Measured (one P150b) over feature combinations the single-feature exclusions admitted.
     const auto bfp8 = RecipeSelection{Recipe::B, KVStorage::BFP8};
