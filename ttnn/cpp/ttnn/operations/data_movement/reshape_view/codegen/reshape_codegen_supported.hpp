@@ -24,7 +24,7 @@ const char* call_contract_violation(
 
 // Why the codegen program cannot run this call, or nullptr. Budgets the smallest plan against static_l1_budget only,
 // never live free L1: the op allocates its output between routing and validation, so a live read could disagree with
-// itself. Live L1 picks the plan at program creation (live_tile_rows_choice, live_rm_choice).
+// itself. Live L1 picks the plan at program creation (live_tile_choice, live_rm_choice).
 const char* unsupported_reason(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
@@ -40,11 +40,12 @@ bool supported_by_codegen(
 bool supported_by_codegen(const Tensor& input, const ttnn::Shape& logical_output_shape);
 
 // Perf routing only, for a call supported_by_codegen: native measures faster than the program the gate admits.
-// TILE: native's tiled reshape beats tile rows unless the full plan cuts reads 8x, saves 16+ reads per output tile,
-// or copies whole face halves over more than one native round. ROW_MAJOR: rm_native_faster's stick-size rule, taken
-// only while the stick program fits the static L1 window and native's scratch fits both that window and the L1 free
-// once the output is allocated. Never true for uint16: native rejects it, so demoting would fail the call. TILE
-// depends on shapes and static device geometry only.
+// TILE: the program taken against the static window does not beat native's tiled reshape. Tile rows wins when the
+// full plan cuts reads 8x, saves 16+ reads per output tile, or copies whole face halves over more than one native
+// round; LCM when its tiles cost under 6x native's per round; the segment map on widths that are not multiples of 32.
+// TILE depends on shapes and static device geometry only. ROW_MAJOR: rm_native_faster's stick-size rule, taken only
+// while the stick program fits the static L1 window and native's scratch fits both that window and the L1 free once
+// the output is allocated. Never true for uint16: native rejects it, so demoting would fail the call.
 bool is_demoted(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,

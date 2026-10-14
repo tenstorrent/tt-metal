@@ -79,6 +79,11 @@ _PATHS = [
     ("tile_rows_int32", [1, 64, 1024], [1, 64, 8, 128], ttnn.int32, ttnn.TILE_LAYOUT),
     ("tile_rows_uint32", [1, 64, 1024], [1, 64, 8, 128], ttnn.uint32, ttnn.TILE_LAYOUT),
     ("tile_rows_uint16", [1, 64, 1024], [1, 64, 8, 128], ttnn.uint16, ttnn.TILE_LAYOUT),
+    # Segment map: a width that is not a multiple of 32.
+    ("tile_mapped_bf16", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ("tile_mapped_fp32", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.float32, ttnn.TILE_LAYOUT),
+    # LCM: a width change tile rows does not win, through the compute engine, which round-trips 32-bit data unchanged.
+    ("lcm_fp32", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.float32, ttnn.TILE_LAYOUT),
     # Row-major stick program: dividing widths.
     ("rm_split", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
     # Row-major slab program: widths that do not divide, and dividing widths whose stick program does not fit L1.
@@ -155,8 +160,9 @@ def _rm_aligned_pair(piece_bytes, merge, sticks=512):
 # (id, in shape, out shape, dtype, layout, expected route). Row-major demotion is decided by stick sizes
 # (rm_native_faster) and taken only where native runs and the stick program fits (demotion_applies); the row-major
 # cases sit on either side of its aligned-DRAM rule, which demotes merges from a 256 B piece on Blackhole and a 2 KB
-# piece on Wormhole and never splits; "native_bh" is native on Blackhole only. TILE demotion is decided by the tile
-# plan (is_demoted); shapes the tile-rows program does not take run native.
+# piece on Wormhole and never splits; "native_bh" is native on Blackhole only. TILE demotion is decided by the TILE
+# program routing takes: tile rows or LCM where they beat native, the segment map on widths that are not multiples
+# of 32.
 _ROUTES = [
     ("rm_split_piece_256", *_rm_aligned_pair(256, merge=False), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
     ("rm_merge_piece_128", *_rm_aligned_pair(128, merge=True), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
@@ -166,11 +172,13 @@ _ROUTES = [
     ("tile_rows", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
     # 4-head merge: the cut is only 4x, but each output tile reads 24 fewer padded source tiles.
     ("tile_head_merge", [1, 512, 4, 256], [1, 512, 1024], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
-    # Width change: tile rows saves only 2x the reads on far fewer cores.
+    # Width change: tile rows saves only 2x the reads on far fewer cores, and bf16 cannot take the LCM kernel.
     ("tile_width_native", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.bfloat16, ttnn.TILE_LAYOUT, "native"),
     ("tile_width_uint16", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.uint16, ttnn.TILE_LAYOUT, "codegen"),
-    # A width that is not a multiple of 32 is not a tile-row permutation.
-    ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "native"),
+    # The same width change in fp32: one LCM chunk of six tiles against six native rounds.
+    ("tile_width_lcm", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.float32, ttnn.TILE_LAYOUT, "codegen"),
+    # A width that is not a multiple of 32 takes the segment map.
+    ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
 ]
 
 
@@ -317,6 +325,36 @@ def test_reshape_codegen_routes_native_when_no_plan_fits_l1(device, expect_error
     ttnn.deallocate(hog)
 
 
+def test_reshape_codegen_bf16_never_takes_lcm(device):
+    # The LCM kernel turns bf16 NaN into Inf. This width change takes it in fp32; in bf16 both the forced and the
+    # routed call must keep every NaN payload.
+    in_shape, out_shape, dtype = [1, 1, 64, 96], [1, 1, 32, 192], ttnn.bfloat16
+    source = _make(in_shape, dtype)
+    assert torch.isnan(source).any()
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+
+
+def test_reshape_codegen_lcm_routes_native_when_no_plan_fits_l1(device, expect_error):
+    # A 96 -> 128 width change chunks lcm = 384 datums: 12 input and 12 output tiles, so the smallest LCM plan takes
+    # 36 fp32 tiles (144 KiB) per core. 140 chunks give every core more than one round of native's tiles, so LCM wins
+    # with L1 free; with 96 KiB free auto must run native, while the forced entry still refuses.
+    in_shape, out_shape, dtype = [1, 1, 140 * 128, 96], [1, 1, 140 * 96, 128], ttnn.float32
+    source = _make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
+    _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+    entries = device.num_program_cache_entries()
+    _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+    assert device.num_program_cache_entries() == entries, "auto did not take the LCM program"
+    hog = _l1_hog_leaving(device, 96 * 1024)
+    _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+    with expect_error(RuntimeError, "no LCM tile plan fits"):
+        _force_codegen(x, out_shape, memory_config=_DRAM)
+    ttnn.deallocate(hog)
+
+
 def test_reshape_codegen_rm_routes_native_when_no_program_fits_l1(device, expect_error):
     # Merging 4 B sticks into 30004 B ones takes two 30 KB CB pages in the stick program and a window region of over
     # 64 KiB in the slab program, while native's single kernel needs about 30 KB. With 48 KiB free auto must run
@@ -345,7 +383,6 @@ def test_reshape_codegen_rm_ring_within_cb_page_limit(device):
 
 _OUT_OF_SCOPE = [
     ("bfloat8_b", [1, 1, 64, 128], [1, 1, 128, 64], ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
-    ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
 ]
 
 
