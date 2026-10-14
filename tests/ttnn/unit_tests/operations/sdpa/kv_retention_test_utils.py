@@ -53,10 +53,15 @@ def check_kv_retention(device, b, nh, nkv, s, d, grid, q_chunk, concat, torch_re
         for i in range(b):
             row = run_sdpa(device, q[i : i + 1], k[i : i + 1], v[i : i + 1], grid, q_chunk, s, concat)
             assert torch.equal(row, got[i : i + 1]), f"batch row {i} differs from the same row run alone"
-    if torch_reference:
-        assert not concat, "the torch reference is for the head-major layout"
+    # The batch-row check above only covers q chunks that divide S. Where it does not run, fall back to the torch
+    # reference whatever the caller asked for, so no case is left asserting nothing -- those are exactly the
+    # non-dividing ones, where Q-head crossing is live (gqa_crossing_factor returns 1 when q_chunk divides S).
+    if torch_reference or s % q_chunk != 0:
         g = nh // nkv
         torch_out = torch.nn.functional.scaled_dot_product_attention(
             q, k.repeat_interleave(g, dim=1), v.repeat_interleave(g, dim=1), is_causal=False
         )
+        if concat:
+            # [b, nh, s, d] -> the op's concatenated layout [b, 1, s, nh * d]
+            torch_out = torch_out.permute(0, 2, 1, 3).reshape(b, 1, s, nh * d)
         assert_with_pcc(torch_out, got[:, :, :s].float(), 0.99)

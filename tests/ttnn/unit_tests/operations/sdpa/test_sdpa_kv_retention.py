@@ -105,7 +105,10 @@ def test_sdpa_kv_retention_windowed(device, is_causal, q_chunk):
     """Windowed (block-diagonal) attention with one K chunk retains K/V across a core's Q chunks of a head."""
     grid = (8, 4)
     _skip_if_too_big(device, grid)
-    nh, nkv, s, d = 8, 8, 256, 64
+    # 32 heads, not 8: on this 32-core grid 8 heads give at most one Q chunk per core (32 chunks at q_chunk=64,
+    # 16 at 128), so no core ever sees two consecutive chunks of a head and keep_kv stays false -- the retention
+    # this test is named for never runs. 32 heads give 4 or 2 chunks per core, exercising it and its final release.
+    nh, nkv, s, d = 32, 32, 256, 64
     cu = [0, 96, 160, 256]
     torch.manual_seed(0)
     q, k, v = (torch.randn(1, n, s, d) for n in (nh, nkv, nkv))

@@ -260,6 +260,10 @@ uint32_t gqa_crossing_factor(
     if (sq % q_chunk_size == 0) {
         return 1;
     }
+    // create_descriptor rejects an empty grid, but only further down; this runs first and divides by it.
+    if (num_cores == 0) {
+        return 1;
+    }
     const auto per_core = [&](uint64_t chunks) { return (chunks + num_cores - 1) / num_cores; };
     const uint64_t padded_chunks = uint64_t{B} * nqh * ((sq + q_chunk_size - 1) / q_chunk_size);
     const uint64_t crossing_chunks = uint64_t{B} * nkh * ((uint64_t{gqa} * sq + q_chunk_size - 1) / q_chunk_size);
