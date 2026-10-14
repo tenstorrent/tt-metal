@@ -7,7 +7,6 @@ import itertools
 import json
 import time
 
-import pytest
 from loguru import logger
 from tt_py_test_utils_common.utility_functions import comp_pcc, comp_allclose, comp_ulp, comp_equal, divup, roundup
 from tt_py_test_utils_common.utility_functions import ulp as compute_ulp
@@ -72,6 +71,8 @@ def merge_gate_subset(axes, keep):
 
     Usage: @pytest.mark.parametrize(*merge_gate_subset({...}, keep=lambda **case: ...))
     """
+    import pytest
+
     argnames = []
     ids_and_values_per_axis = []
     for axis, values in axes.items():

@@ -4,6 +4,8 @@
 
 import torch
 
+from tests.ttnn.utils_for_testing import merge_gate_subset
+
 
 def _plain_function(x):
     return x
@@ -32,3 +34,21 @@ def test_parametrize_id_for_python_function_has_no_memory_address(request):
         config=request.config, val=_plain_function, argname="torch_op"
     )
     assert made_id == "torch_op=_plain_function", made_id
+
+
+def test_merge_gate_subset_ids_match_stacked_parametrize(request):
+    """merge_gate_subset IDs must match stacked parametrize, and only keep() cases are marked."""
+    hook = request.config.hook.pytest_make_parametrize_id
+    axes = {"dim": [-2, 0], "w": [64, 22], "h": [15]}
+    _, params = merge_gate_subset(axes, keep=lambda dim, **_: dim < 0)
+
+    expected = [
+        "-".join(
+            hook(config=request.config, val=value, argname=name) for name, value in [("dim", dim), ("w", w), ("h", h)]
+        )
+        for dim in axes["dim"]
+        for w in axes["w"]
+        for h in axes["h"]
+    ]
+    assert [param.id for param in params] == expected
+    assert [param.id for param in params if param.marks] == ["dim=-2-w=64-h=15", "dim=-2-w=22-h=15"]
