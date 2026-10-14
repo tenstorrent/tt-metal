@@ -17,13 +17,12 @@ guidance.
 
 | System              | Encoding | Denoising (50 steps) | VAE   | Total |
 | ------------------- | -------- | -------------------- | ----- | ----- |
-| T3K (2x4)           | 0.55s    | 67.2s                | 0.14s | 68.0s |
-| BH QuietBox 2 (2x2) | 0.10s    | 27.2s                | 0.11s | 27.5s |
-| BH LoudBox (2x4)    | –        | –                    | –     | 19.0s |
-| BH Galaxy (4x8)     | –        | –                    | –     | 7.7s  |
+| T3K (2x4)           | 0.38s    | 63.2s                | 0.12s | 63.8s |
+| BH QuietBox 2 (2x2) | 0.10s    | 26.8s                | 0.11s | 27.1s |
+| BH LoudBox (2x4)    | 0.09s    | 18.7s                | 0.08s | 19.0s |
+| BH Galaxy (4x8)     | 0.06s    | 7.5s                 | 0.05s | 7.6s  |
 
-The parallelism of each system is listed under [Scalability](#scalability). WH Galaxy (4x8) does not
-currently run.
+The parallelism of each system is listed under [Scalability](#scalability).
 
 ## Resolutions
 
@@ -35,7 +34,28 @@ there with the text encoder on the device. Pass `width` and `height` to the pipe
 one.
 
 The transformer pads the image's sequence to one of a few lengths, so sizes of similar area share a
-trace. At 50 steps, BH QuietBox 2 takes 42–48s for the larger sizes and BH LoudBox 27.7–31.8s.
+trace. Total time per image at 50 steps for the sizes other than 1024x1024:
+
+| Size      | BH QuietBox 2 (2x2) | BH LoudBox (2x4) | BH Galaxy (4x8) |
+| --------- | ------------------- | ---------------- | --------------- |
+| 1344x1344 | 48.4s               | 31.8s            | 10.6s           |
+| 1664x928  | 42.7s               | 27.5s            | 9.8s            |
+| 928x1664  | 42.8s               | 27.7s            | 9.8s            |
+| 1472x1120 | 45.5s               | 29.7s            | 10.3s           |
+| 1120x1472 | 45.6s               | 29.8s            | 10.1s           |
+| 1600x1056 | 46.2s               | 30.1s            | 10.4s           |
+| 1056x1600 | 46.5s               | 30.2s            | 10.2s           |
+
+## Inpainting
+
+Pass `image=` and `mask_image=` to regenerate the white part of the mask and keep the rest.
+`strength` sets how much the white part may change: 1 ignores what was there, lower values stay
+closer to it. Without `width` and `height`, the output takes the supported resolution closest in
+aspect ratio to the image.
+
+```bash
+pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py::test_qwenimage_inpaint -k 2x4
+```
 
 ## Prerequisites
 
@@ -68,6 +88,9 @@ pytest models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k 2x4
 
 # Run the performance test on Galaxy (4x8 mesh)
 pytest models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k 4x8
+
+# Measure every resolution, here on BH QuietBox 2 (2x2 mesh)
+QWENIMAGE_PERF_ALL_RESOLUTIONS=1 pytest models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k "all_resolutions and 2x2"
 ```
 
 ## Image Editing
@@ -81,8 +104,8 @@ to three for Edit-2509 and 2511; the output takes the supported resolution close
 to the last one. With `mask_image=` and a single input image, all three inpaint: only the white part
 of the mask is edited.
 
-The edit tests pass on BH LoudBox (2x4). On BH QuietBox 2, Qwen-Image-Edit passes; the other
-checkpoints have not been run there yet. On Wormhole, edits run out of DRAM: the transformer's
+The edit tests pass on BH LoudBox (2x4). On BH QuietBox 2 they all pass except Edit-2511, which has
+not been run there with the current code. On Wormhole, edits run out of DRAM: the transformer's
 weights take about 10 GB of each chip's 12 GB, which leaves too little for the text encoder and the
 longer image sequences. With the text encoder on the CPU (`use_torch_text_encoder=True`) and
 `max_images=1`, inpainting with Edit-2509 and 2511 passes on WH 2x4.
@@ -97,9 +120,9 @@ pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py::test_qwe
 
 Qwen-Image has been implemented to support execution on 4-chip (BH QuietBox 2 with 2x2 mesh topology), 8-chip (QuietBox and LoudBox with 2x4 mesh topology) as well as 32-chip (Galaxy with 4x8 mesh topology) systems.
 The 2x4 configuration runs on Wormhole (QuietBox / T3K) and Blackhole (LoudBox). The 2x2
-configuration targets Blackhole (BH QuietBox 2) and is the configuration exercised in CI; it runs
-1024x1024 at 50 steps in ~27.5s end to end. The 4x8 configuration does not currently run on Wormhole
-Galaxy: the first generation after the warm-up hangs.
+configuration targets Blackhole (BH QuietBox 2) and is the configuration exercised in CI. The 4x8
+configuration does not currently run on Wormhole Galaxy: the first generation after the warm-up
+hangs.
 
 The DiT model can be parallelized on 3 axes:
 
@@ -125,4 +148,5 @@ The pipeline picks its configuration from the mesh shape and architecture:
 | WH Galaxy     | CFG 2, SP 4, TP 4 | TP 4, FSDP 4 | H 4, W 4 |
 | BH Galaxy     | CFG 2, SP 4, TP 4 | TP 4, FSDP 1 | H 4, W 4 |
 
-H and W are the VAE's height and width splits. All models stay on the device.
+H and W are the VAE's height and width splits. All models stay on the device, except the text
+encoder's vision tower on WH T3K, which is loaded for each edit call.
