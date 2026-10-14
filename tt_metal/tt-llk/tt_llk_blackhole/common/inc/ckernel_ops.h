@@ -416,8 +416,8 @@
     TT_OP(0x04, (((start_idx) << 14) + ((len) << 4) + ((execute_while_loading) << 1) + ((load_mode) << 0)))
 #define TT_REPLAY_VALID(start_idx, len, execute_while_loading, load_mode) \
     (ckernel::is_valid(start_idx, 10) && ckernel::is_valid(len, 10) && ckernel::is_valid(execute_while_loading, 3) && ckernel::is_valid(load_mode, 1))
-#define TT_REPLAY(start_idx, len, execute_while_loading, load_mode)  TT_INSN(TT_OP_REPLAY(start_idx, len, execute_while_loading, load_mode))
-#define TTI_REPLAY(start_idx, len, execute_while_loading, load_mode) TTI_INSN(TT_OP_REPLAY(start_idx, len, execute_while_loading, load_mode))
+#define TT_REPLAY(start_idx, len, execute_while_loading, load_mode)  TT_LLK_REPLAY_ISSUE_TT(TT_OP_REPLAY(start_idx, len, execute_while_loading, load_mode), TT_OP_REPLAY(0, 0, 0, load_mode))
+#define TTI_REPLAY(start_idx, len, execute_while_loading, load_mode) TT_LLK_REPLAY_ISSUE_TTI(TT_OP_REPLAY(start_idx, len, execute_while_loading, load_mode), TT_OP_REPLAY(0, 0, 0, load_mode))
 
 #define TT_OP_RESOURCEDECL(linger_time, resources, op_class) TT_OP(0x05, (((linger_time) << 13) + ((resources) << 4) + ((op_class) << 0)))
 #define TT_RESOURCEDECL_VALID(linger_time, resources, op_class) \

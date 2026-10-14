@@ -168,6 +168,15 @@ constexpr unsigned all_lregs = 0xff;
 // every LREG for it rather than trusting a partial decode.
 TT_LLK_RAW_LREG_FN unsigned checked_inputs(unsigned x) { return supported(x) ? inputs(x) : all_lregs; }
 TT_LLK_RAW_LREG_FN unsigned checked_write(unsigned x) { return supported(x) ? write(x) : all_lregs; }
+// REPLAY with load_mode 0 plays back recorded words whose own effects were
+// marked, if at all, where they were recorded; model playback as reading and
+// writing every LREG. A load_mode 1 recording executes nothing here, or with
+// execute_while_loading executes each word at its own marked site.
+// Markers of words recorded without executing are only conservative: every
+// claimed write is also an input, so it never ends an earlier value's
+// reservation. lltt::replay is a compiler builtin outside these wrappers;
+// neither it nor the compiler marks its playback effects.
+TT_LLK_RAW_LREG_FN unsigned replay_effect(unsigned x) { return (x & 1) ? 0u : all_lregs; }
 // A template argument requires constant evaluation without introducing local
 // constexpr objects (whose initialization can emit stack stores at -O0).
 template <unsigned Mask> struct constant_mask { enum : unsigned { value = Mask }; };
@@ -203,3 +212,8 @@ template <unsigned Mask> struct constant_mask { enum : unsigned { value = Mask }
 #define TT_LLK_SFPU_ISSUE_TTI_LREGS(word, lreg_word) ({ TTI_INSN(word); TT_LLK_SFPU_EFFECT(lreg_word); })
 #define TT_LLK_SFPU_ISSUE_TT(word)                   TT_LLK_SFPU_ISSUE_TT_LREGS(word, word)
 #define TT_LLK_SFPU_ISSUE_TTI(word)                  TT_LLK_SFPU_ISSUE_TTI_LREGS(word, word)
+// MODE_WORD is the REPLAY word with only its load_mode operand kept.
+#define TT_LLK_REPLAY_EFFECT(mode_word) \
+    TT_LLK_SFPRAWLREG_EFFECT(TT_LLK_SFPU_MASK(replay_effect, mode_word), TT_LLK_SFPU_MASK(replay_effect, mode_word))
+#define TT_LLK_REPLAY_ISSUE_TT(word, mode_word)  ({ TT_INSN(word); TT_LLK_REPLAY_EFFECT(mode_word); })
+#define TT_LLK_REPLAY_ISSUE_TTI(word, mode_word) ({ TTI_INSN(word); TT_LLK_REPLAY_EFFECT(mode_word); })

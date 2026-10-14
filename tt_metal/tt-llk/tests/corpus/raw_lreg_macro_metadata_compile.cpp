@@ -173,6 +173,10 @@ constexpr bool lut_modifier_masks()
 }
 static_assert(lut_modifier_masks());
 
+// REPLAY playback (load_mode 0) touches every LREG; recording touches none.
+static_assert(ckernel::raw_lreg_effect::replay_effect(TT_OP(0x04, 0)) == 0xffu);
+static_assert(ckernel::raw_lreg_effect::replay_effect(TT_OP(0x04, 1)) == 0x00u);
+
 // Wrappers decode effects from a word with address and immediate operands
 // zeroed; those operands must never change the decoded masks.
 constexpr bool same_effect(unsigned issued, unsigned lreg_word)
