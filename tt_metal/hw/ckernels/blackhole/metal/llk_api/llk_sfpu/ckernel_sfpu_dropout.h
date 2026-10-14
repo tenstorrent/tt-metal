@@ -58,7 +58,8 @@ inline void calculate_dropout(uint probability, uint scale) {
 template <bool APPROXIMATION_MODE>
 inline void dropout_init(const uint seed) {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    init_prng_seed(seed);
+    // The all-ones state is the lock-up state of the hardware XNOR LFSR.
+    init_prng_seed(seed == 0xFFFFFFFFU ? 0xFFFFFFFEU : seed);
 }
 
 }  // namespace sfpu

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <bit>
+#include <cstdint>
 #include <string_view>
 
 #include "dropout_device_operation.hpp"
@@ -14,6 +15,11 @@
 
 namespace ttnn::experimental::prim {
 namespace {
+constexpr uint64_t kValidPrngStateCount = uint64_t{UINT32_MAX};
+constexpr uint64_t kStreamSeedMultiplier = 0x9E3779B9U;
+constexpr uint32_t kDeviceStreamShift = 16U;
+constexpr uint32_t kMaxDeviceCount = 1U << 14U;
+
 constexpr auto kWriterKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/writer_dropout_interleaved_start_id.cpp";
 constexpr auto kReaderKernelPath =
@@ -27,16 +33,26 @@ constexpr auto kOutputCbIndex = tt::CBIndex::c_2;
 constexpr uint32_t kNumInputTiles = 2;
 constexpr uint32_t kNumOutputTiles = 2;
 
-// Offsets the seed by the device ID so each device of a mesh draws a different mask.
-// Single-sourced: used by DropoutMeshWorkloadFactory::create_descriptor (cache miss) and by
-// override_runtime_arguments (cache hit), which must reproduce the same seed bit-for-bit.
+// Domain-separate independently initialized PRNGs while excluding the all-ones XNOR-LFSR lock state. The multiplier's
+// collision period modulo 2^32-1 is (2^32-1)/3, larger than the packed stream-ID domain constrained below.
+uint32_t seed_for_stream(uint32_t seed, uint32_t stream_id) {
+    const uint32_t valid_seed = seed == UINT32_MAX ? UINT32_MAX - 1U : seed;
+    return static_cast<uint32_t>(
+        (static_cast<uint64_t>(valid_seed) + static_cast<uint64_t>(stream_id) * kStreamSeedMultiplier) %
+        kValidPrngStateCount);
+}
+
+// Reserve the high half of a stream ID for the physical device. This keeps device and core streams disjoint while
+// preserving corresponding core streams when per-device seeding is disabled.
 uint32_t per_device_seed(
     const DropoutParams& args,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
     const ttnn::Tensor& input_tensor) {
     auto* device = input_tensor.device();
-    return args.seed +
-           (mesh_dispatch_coordinate.has_value() ? device->get_device(*mesh_dispatch_coordinate)->id() : device->id());
+    const uint32_t device_id =
+        mesh_dispatch_coordinate.has_value() ? device->get_device(*mesh_dispatch_coordinate)->id() : device->id();
+    TT_FATAL(device_id < kMaxDeviceCount, "Dropout device ID {} is too large", device_id);
+    return seed_for_stream(args.seed, device_id << kDeviceStreamShift);
 }
 
 }  // namespace
@@ -166,6 +182,7 @@ DropoutCoreSplit dropout_core_split(const Tensor& input) {
 // Per-core slice of the work split.
 struct DropoutCoreWork {
     tt::tt_metal::CoreCoord core;
+    uint32_t stream_id = 0;
     uint32_t num_tiles = 0;
     uint32_t tile_offset = 0;
     bool in_group_1 = false;  // otherwise in core_group_2
@@ -176,6 +193,7 @@ struct DropoutCoreWork {
 // one the cache-miss build baked.
 template <typename Fn>
 void for_each_dropout_core(const DropoutCoreSplit& split, const Fn& fn) {
+    TT_FATAL(split.num_cores <= (1U << kDeviceStreamShift), "Dropout uses too many cores: {}", split.num_cores);
     for (uint32_t i = 0, num_tiles_written = 0; i < split.num_cores; i++) {
         const tt::tt_metal::CoreCoord core = {i / split.num_cores_y, i % split.num_cores_y};
         const bool in_group_1 = split.core_group_1.contains(core);
@@ -186,7 +204,7 @@ void for_each_dropout_core(const DropoutCoreSplit& split, const Fn& fn) {
             core.y);
         const uint32_t num_tiles = in_group_1 ? split.num_tiles_per_core_group_1 : split.num_tiles_per_core_group_2;
 
-        fn(DropoutCoreWork{core, num_tiles, num_tiles_written, in_group_1});
+        fn(DropoutCoreWork{core, i, num_tiles, num_tiles_written, in_group_1});
 
         num_tiles_written += num_tiles;
     }
@@ -213,11 +231,14 @@ inline void assign_per_core_runtime_args(
 
     for_each_dropout_core(split, [&](const DropoutCoreWork& work) {
         // Compute kernel: (seed)
+        const uint32_t seed_for_core = seed_for_stream(seed, work.stream_id);
         if (work.in_group_1) {
-            kernels.compute_group_1.runtime_args.emplace_back(work.core, KernelDescriptor::CoreRuntimeArgs{seed});
+            kernels.compute_group_1.runtime_args.emplace_back(
+                work.core, KernelDescriptor::CoreRuntimeArgs{seed_for_core});
         } else {
             TT_FATAL(kernels.compute_group_2.has_value(), "Core group 2 descriptor should be present");
-            kernels.compute_group_2->runtime_args.emplace_back(work.core, KernelDescriptor::CoreRuntimeArgs{seed});
+            kernels.compute_group_2->runtime_args.emplace_back(
+                work.core, KernelDescriptor::CoreRuntimeArgs{seed_for_core});
         }
 
         // Reader kernel: (src_addr, number_of_tiles, offset_in_tiles).  src/dst go in as Buffer*
@@ -400,7 +421,7 @@ void DropoutProgramFactory::override_runtime_arguments(
 
         TT_FATAL(work.in_group_1 || compute_group_2_grid != nullptr, "Core group 2 kernel should be present");
         auto& compute_grid = work.in_group_1 ? compute_group_1_grid : *compute_group_2_grid;
-        compute_grid[work.core.x][work.core.y][0] = seed;
+        compute_grid[work.core.x][work.core.y][0] = seed_for_stream(seed, work.stream_id);
     });
 }
 
