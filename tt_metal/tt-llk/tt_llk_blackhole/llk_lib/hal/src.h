@@ -252,7 +252,7 @@ public:
     template <src_ops::ShiftFill Feed = src_ops::ShiftFill::Zero, std::uint8_t AddressMode = 0>
     static inline __attribute__((always_inline)) void shift_row(const std::uint32_t row)
     {
-        ckernel::instrn_buffer[0] = shift_row_operation<Feed, AddressMode>(row);
+        TT_INSN((shift_row_operation<Feed, AddressMode>(row)));
     }
 
     /**

@@ -153,7 +153,7 @@ inline __attribute__((always_inline)) void run()
 /** @brief Issue a runtime-selected Dst zeroing operation. */
 inline __attribute__((always_inline)) void run(const Zero operation)
 {
-    ckernel::instrn_buffer[0] = operation.get_operation();
+    TT_INSN(operation.get_operation());
 }
 
 } // namespace hal::dst
