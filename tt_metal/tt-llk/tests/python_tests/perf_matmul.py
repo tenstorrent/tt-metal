@@ -138,7 +138,6 @@ def test_perf_matmul(
         PerfRunType.UNPACK_ISOLATE,
         PerfRunType.MATH_ISOLATE,
         PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
     ]
 
     # Calculate all matmul dimensions using helper function

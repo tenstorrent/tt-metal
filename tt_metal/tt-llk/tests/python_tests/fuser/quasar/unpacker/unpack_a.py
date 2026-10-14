@@ -25,7 +25,6 @@ def _uses_upk_to_dest_semaphores(config: GlobalConfig) -> bool:
         None,
         PerfRunType.L1_TO_L1,
         PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
     )
 
 

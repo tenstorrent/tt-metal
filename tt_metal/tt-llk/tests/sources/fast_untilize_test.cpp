@@ -36,7 +36,6 @@ constexpr auto FAST_UNTILIZE_INTERNAL_DEST_SYNC = ckernel::FAST_UNTILIZE_INTERNA
 static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
 #endif
 
-static_assert(PERF_RUN_TYPE != PerfRunType::L1_CONGESTION, "L1 congestion mode is not supported for fast_untilize");
 static_assert(BLOCK_CT_DIM == FULL_CT_DIM, "fast_untilize_test expects one full tile row per kernel instance");
 static_assert(FULL_CT_DIM >= 2, "fast_untilize_test supports ct>=2; ct=1 uses the standard fallback path");
 

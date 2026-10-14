@@ -82,7 +82,6 @@ def test_perf_pack_untilize(
         run_types=[
             PerfRunType.L1_TO_L1,
             PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
         ],
         templates=[generate_input_dim(dimensions, dimensions, block_ct_dim)],
         runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(32)],

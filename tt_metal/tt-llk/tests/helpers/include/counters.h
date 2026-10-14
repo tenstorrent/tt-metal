@@ -632,7 +632,7 @@ struct perf_counter_scoped
             []
             {
                 // Span run types read at their exit rendezvous, so this read would be dead for them, and not
-                // harmless: an L1 read here hung every Wormhole L1_CONGESTION kernel in the math thread.
+                // harmless: an L1 read here hung Wormhole kernels in the math thread.
                 if constexpr (is_single_thread_runtype(RUN_TYPE))
                 {
                     read_pending_zone();

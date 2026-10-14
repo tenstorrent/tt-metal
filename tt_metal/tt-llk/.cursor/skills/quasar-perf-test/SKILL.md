@@ -1,6 +1,6 @@
 ---
 name: quasar-perf-test
-description: Create, extend, debug, and validate Quasar LLK performance tests, their PerfRunType kernel paths, and tile/dimension sweep coverage. Use when adding perf_[op]_quasar.py, wiring PerfConfig, implementing UNPACK_ISOLATE / MATH_ISOLATE / PACK_ISOLATE / L1_CONGESTION, choosing PERF_TILE_SIZES or dest-fill matrices, or investigating implausible Quasar perf metrics and dvalid handshakes.
+description: Create, extend, debug, and validate Quasar LLK performance tests, their PerfRunType kernel paths, and tile/dimension sweep coverage. Use when adding perf_[op]_quasar.py, wiring PerfConfig, implementing UNPACK_ISOLATE / MATH_ISOLATE / PACK_ISOLATE, choosing PERF_TILE_SIZES or dest-fill matrices, or investigating implausible Quasar perf metrics and dvalid handshakes.
 ---
 
 # Quasar Perf Test
@@ -10,7 +10,7 @@ description: Create, extend, debug, and validate Quasar LLK performance tests, t
 Create or repair a Quasar performance test while preserving its functional
 `L1_TO_L1` behavior. Reuse the correctness harness, report through
 `PerfConfig`, and give every applicable `PerfRunType` a balanced single-stage
-or congestion path.
+path.
 
 This skill covers three related workflows:
 
@@ -152,7 +152,6 @@ Implement behavior independently in unpack, math, and pack:
 | `UNPACK_ISOLATE` | Real | Clear exactly the source dvalids unpack produces | No-op |
 | `MATH_ISOLATE` | Produce exactly the source dvalids math consumes | Real; do not signal inactive pack | No-op |
 | `PACK_ISOLATE` | No-op | No-op | Real without waiting for math |
-| `L1_CONGESTION` | Real | Clear source dvalids only | Real independently |
 
 Adapt this table to the real pipeline. For example, an unpack-to-dest kernel
 may bypass math entirely.
@@ -187,7 +186,7 @@ total source handshakes =
 - Use `_perf_unpack_loop_set_valid<set_a, set_b>(count)` only when unpack is
   mocked for `MATH_ISOLATE`.
 - Use `_perf_math_loop_clear_valid<clear_a, clear_b>(count)` only when math
-  mocks consumption for `UNPACK_ISOLATE` or `L1_CONGESTION`.
+  mocks consumption for `UNPACK_ISOLATE`.
 - Count tiles and blocks actually consumed.
 - Determine whether the MOP pulses per tile or per face.
 - Determine whether math consumes SrcA, SrcB, or both.
@@ -221,8 +220,6 @@ Only signal completion when the consumer is active:
 - `MATH_ISOLATE`: run math without `_llk_math_set_dvalid_`.
 - `PACK_ISOLATE`: pack without waiting for math and without destination
   section-done.
-- `L1_CONGESTION`: unpack and pack run independently; math does not pulse
-  destination dvalid.
 - `UNPACK_ISOLATE`: do not signal inactive pack.
 
 Quasar CFG state can persist between run types. For independent pack
@@ -241,7 +238,6 @@ consumer are active.
 - A missing math-isolate metric is expected when math is compiled out.
 - `L1_TO_L1` performs real unpack and signals active pack.
 - `UNPACK_ISOLATE` performs real unpack without signaling inactive pack.
-- `L1_CONGESTION` runs unpack and pack independently.
 - `MATH_ISOLATE` must not emit dummy source dvalid without a math consumer.
 
 ## Diagnose metrics
@@ -250,8 +246,6 @@ Analyze `marker == TILE_LOOP` first.
 
 Healthy relationships:
 
-- `L1_CONGESTION[UNPACK]` is close to `UNPACK_ISOLATE`.
-- `L1_CONGESTION[PACK]` is close to `PACK_ISOLATE`.
 - Format and destination-mode changes have bounded, explainable effects.
 
 Failure signals:
@@ -259,7 +253,6 @@ Failure signals:
 - Values near large powers of two such as 2048, 4096, or 8192
 - Healthy first variant followed by very slow variants
 - Isolate cost orders of magnitude above the corresponding real stage
-- Congestion cost orders of magnitude above isolate
 - A passing run that leaves the next run slow
 
 Treat these as likely handshake, mock-count, section-done, or wait-mask bugs;
