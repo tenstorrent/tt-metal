@@ -180,6 +180,8 @@ class TPAttention:
         # Per-instance override for the decode SDPA's max_cores_per_head_batch (None = the ttnn
         # default of 16). Only the MTP drafter sets it — see Qwen36MTP.__init__.
         self.decode_sdpa_max_cores = None
+        # False: forward_decode keeps the legacy path even where the lean one is eligible (see _decode_lean_eligible).
+        self.lean_decode = True
         self.k_caches = None
         self.v_caches = None
         # External paged KV cache (vLLM/contract path); internal caches kept for demo fallback
@@ -601,6 +603,8 @@ class TPAttention:
         =1 to keep B > 1 on the legacy path. No persistent state differs between the paths (same caches, same
         weights), so dispatching per call from x.shape is safe."""
         if os.environ.get("QWEN36_ATTN_DECODE_LEAN", "1") != "1":
+            return False
+        if not self.lean_decode:
             return False
         if not (use_paged and self._fused_qkv and self._use_nlp_decode_heads):
             return False

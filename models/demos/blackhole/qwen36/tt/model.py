@@ -2492,6 +2492,21 @@ class Qwen36Model:
         x = self.embd(token_buf)
         x = ttnn.reshape(x, (1, 1, n_users, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        # The seed must be the verify body's arithmetic (the drafter is handed its feed rows), and the verify
+        # never takes the lean attention decode path, so neither does the seed: on the lean path B=1 draft
+        # acceptance drops from 8.5 to 3.25 of 11. Eager, before any capture, so toggling the flag is safe.
+        attns = [layer.attention for layer in self.layers if layer.is_full_attention]
+        for attn in attns:
+            attn.lean_decode = False
+        try:
+            x = self._seed_bucket_layers(x, kvpos, kvpt, cos, sin, n_users)
+        finally:
+            for attn in attns:
+                attn.lean_decode = True
+        return self._spec_tail(x)
+
+    def _seed_bucket_layers(self, x, kvpos, kvpt, cos, sin, n_users):
+        """The layer loop of _forward_seed_bucket_tp (consumes x, returns the residual after the last layer)."""
         for layer in self.layers:
             if layer.is_full_attention:
                 x_new = layer.forward(
@@ -2516,7 +2531,7 @@ class Qwen36Model:
                 )
             ttnn.deallocate(x)
             x = x_new
-        return self._spec_tail(x)
+        return x
 
     def seed_spec_step(self, tokens, positions, page_tables):
         """One eager verify-style forward over B users, T = 1: the spec loop's seed, and the only
