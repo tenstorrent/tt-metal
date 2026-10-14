@@ -11,8 +11,9 @@ dtypes, fidelity), recorded from tt_transformers on Blackhole (P150 and the per-
 P300 meshes) and on Wormhole (N150, N300, N150x4, T3K). Each case is checked against a float64 matmul of
 the on-device operands (the quantized weight as stored), so the only error left is the op's own
 accumulation and output rounding. The variant keeps each column pass's whole K in Dest, in the precision
-the compute config asks for; every served shape runs with fp32_dest_acc_en on and off, against the
-single-reader path on the same call and config.
+the compute config asks for; every served shape runs with fp32_dest_acc_en on and off, against main's
+program as the model calls it (the single-reader path, or its 2-reader variant where the model passes two
+readers per bank) on the same operands and config.
 """
 
 import math
@@ -28,9 +29,13 @@ pytestmark = pytest.mark.use_module_device
 DTYPES = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 
 # Blackhole: (K, N, weight, activation, output dtype, activation shard grid, activation shard width (tiles),
-#             output shard grid, output shard width (tiles), fidelity, fp32 Dest, stock in0_block_w, cores_per_bank)
+#             output shard grid, output shard width (tiles), fidelity, fp32 Dest, stock in0_block_w, cores_per_bank
+#             [, stock readers])
 # The fidelity and in0_block_w are what the model passes (the stock path runs with the recorded
 # in0_block_w); the recorded fp32 Dest flag is kept for reference, the tests run both settings on both paths.
+# The optional last field is the num_workers_per_dram_bank the model hands main's program (without
+# use_multicore_pipeline): left out it is 1, the single-reader program; 2 is main's 2-reader variant, which
+# splits each bank's columns over two readers (the stock arm of a model that passes 2 readers runs that).
 # A grid is ("rect", x, y) from (0, 0) or ("rm", n): n cores row-major over the worker grid.
 # fmt: off
 BH_SHAPES = [
@@ -53,11 +58,13 @@ BH_SHAPES = [
     (4096, 704, 'bfp8', 'bf16', 'bfp8', ('rect', 8, 8), 2, ('rect', 11, 2), 1, 'HiFi2', False, 16, 2),  # Mistral-7B-Instruct-v0.3
     (4096, 4096, 'bfp8', 'bf16', 'bf16', ('rm', 32), 4, ('rm', 32), 4, 'HiFi2', True, 4, 2),  # Llama-3.1-8B-Instruct, Mistral-7B-Instruct-v0.3, Qwen3-8B
     (4096, 6144, 'bfp8', 'bf16', 'bf16', ('rect', 8, 4), 4, ('rm', 32), 6, 'HiFi2', True, 4, 3),  # Llama-3.1-8B-Instruct, Mistral-7B-Instruct-v0.3, Qwen3-8B
+    (4096, 7168, 'bfp4', 'bf16', 'bf16', ('rm', 8), 16, ('rm', 8), 28, 'LoFi', False, 8, 2, 2),  # Llama-3.1-8B QB2 decode gate_up, per chip P300_X2 (1x4)
     (4096, 7648, 'bfp8', 'bf16', 'bfp8', ('rect', 8, 8), 2, ('rm', 60), 4, 'HiFi2', False, 2, 2),  # Qwen3-8B
     (4096, 12288, 'bfp4', 'bf16', 'bf16', ('rect', 8, 8), 2, ('rm', 64), 6, 'LoFi', False, 2, 4),  # Qwen3-8B
     (4096, 14336, 'bfp4', 'bf16', 'bf16', ('rect', 8, 8), 2, ('rm', 64), 7, 'LoFi', False, 2, 4),  # Llama-3.1-8B-Instruct, Mistral-7B-Instruct-v0.3
     (4096, 14336, 'bfp8', 'bf16', 'bf16', ('rect', 8, 8), 2, ('rm', 64), 7, 'HiFi2', False, 2, 4),  # Llama-3.1-8B-Instruct
     (4096, 16032, 'bfp8', 'bf16', 'bfp8', ('rect', 8, 8), 2, ('rm', 63), 8, 'HiFi2', False, 2, 4),  # Llama-3.1-8B-Instruct, Mistral-7B-Instruct-v0.3, Qwen3-8B
+    (4096, 32768, 'bfp8', 'bf16', 'bf16', ('rm', 8), 16, ('rm', 16), 64, 'HiFi2', False, 4, 2, 2),  # Llama-3.1-8B QB2 LM head, per chip P300_X2 (1x4)
     (5120, 1792, 'bfp8', 'bf16', 'bf16', ('rect', 8, 4), 5, ('rm', 28), 2, 'HiFi2', True, 10, 2),  # Qwen2.5-32B, per chip P150x4
     (5120, 1912, 'bfp8', 'bf16', 'bfp8', ('rect', 8, 5), 4, ('rm', 30), 2, 'HiFi2', False, 8, 2),  # Qwen3-32B, per chip P150x4
     (5120, 1944, 'bfp8', 'bf16', 'bfp8', ('rect', 8, 5), 4, ('rm', 31), 2, 'HiFi2', False, 8, 2),  # Qwen2.5-32B, per chip P150x4
@@ -307,7 +314,7 @@ def _out(device, case_out_layout, out_shard_w):
 
 
 def _bh_case(device, case, cores_per_bank, in0_block_w=2, fp32=None):
-    k, n, wd, xd, od, x_layout, x_sw, out_layout, out_sw, fid, recorded_fp32, stock_bw, _ = case
+    k, n, wd, xd, od, x_layout, x_sw, out_layout, out_sw, fid, recorded_fp32, stock_bw, *_ = case
     fp32 = recorded_fp32 if fp32 is None else fp32
     x, w = _operands(device, k, n, wd, xd, x_layout, x_sw)
     out_mc = _out(device, out_layout, out_sw)
@@ -315,6 +322,20 @@ def _bh_case(device, case, cores_per_bank, in0_block_w=2, fp32=None):
     out = _matmul(x, w, in0_block_w=in0_block_w, cores_per_bank=cores_per_bank, **kw)
     ref = _reference(x, w, n)
     return x, w, kw, ttnn.to_torch(out).reshape(32, -1)[:, :n], ref
+
+
+def _stock(x, w, case, kw):
+    """main's program as the model calls it: the recorded stock in0_block_w and stock readers, no pipeline."""
+    readers = case[13] if len(case) > 13 else 1
+    out = _matmul(
+        x,
+        w,
+        in0_block_w=case[11],
+        cores_per_bank=readers,
+        use_multicore_pipeline=False,
+        **kw,
+    )
+    return ttnn.to_torch(out).reshape(32, -1)[:, : case[1]]
 
 
 def _id(case):
@@ -352,11 +373,28 @@ DEST = pytest.mark.parametrize("fp32", [True, False], ids=["fp32_dest", "bf16_de
 @pytest.mark.parametrize("case", _cases(BH_SHAPES))
 @DEST
 def test_served_shapes_blackhole(device, case, fp32):
-    x, w, kw, out, ref = _bh_case(device, case, case[-1], fp32=fp32)
+    x, w, kw, out, ref = _bh_case(device, case, case[12], fp32=fp32)
     err = _check(out, ref, case[4], fp32)
-    stock = _matmul(x, w, in0_block_w=case[11], cores_per_bank=0, **kw)
-    stock_err = _rel_err(ttnn.to_torch(stock).reshape(32, -1)[:, : case[1]], ref)
+    stock_err = _rel_err(_stock(x, w, case, kw), ref)
+    print(f"{_id(case)} fp32={fp32}: pipeline {err:.6f} stock {stock_err:.6f}")
     _no_worse_than_stock(err, stock_err, fp32)
+
+
+# The Llama-3.1-8B QB2 demo records (models/demos/llama31_8b_qb2): main's 2-reader program on the stock arm.
+_QB2 = [c for c in BH_SHAPES if len(c) > 13 and c[13] == 2]
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole shapes (8 DRAM banks)")
+@pytest.mark.parametrize("case", [pytest.param(c, id=_id(c)) for c in _QB2])
+def test_qb2_demo_block_width(device, case):
+    """The QB2 Llama-3.1-8B demo passes the same in0_block_w (8 for gate_up, 4 for the LM head) to the multi-core
+    pipeline that the record lists for the stock path; check the pipeline at that width, recorded fp32 Dest (off),
+    against main's 2-reader program at the same width."""
+    x, w, kw, out, ref = _bh_case(device, case, case[12], in0_block_w=case[11])
+    err = _check(out, ref, case[4], case[10])
+    stock_err = _rel_err(_stock(x, w, case, kw), ref)
+    print(f"{_id(case)} demo in0_block_w {case[11]}: pipeline {err:.6f} stock {stock_err:.6f}")
+    _no_worse_than_stock(err, stock_err, case[10])
 
 
 @pytest.mark.skipif(not is_wormhole_b0(), reason="Wormhole shapes (12 DRAM banks)")
