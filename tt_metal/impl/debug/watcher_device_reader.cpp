@@ -8,8 +8,10 @@
 #include <cstdio>
 #include <cctype>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -20,6 +22,7 @@
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
+#include "llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -154,6 +157,67 @@ CoreCoord virtual_noc_coordinate(
     return cluster.get_virtual_coordinate_from_physical_coordinates(device_id, physical_coord);
 }
 
+// Under ATT a unicast operand carries no coordinates. Decode it through the active map: the window
+// and endpoint row it reaches and the offset inside that target. Tiles are reported in the
+// kernel-visible frame, which is the frame the XY uses, so the messages keep the same shape.
+string get_att_unicast_target_str(std::string_view map_name, uint64_t operand) {
+    const quasar_att::MapInfo* info = quasar_att::find_map(map_name);
+    if (info == nullptr) {
+        return fmt::format("Unknown core (ATT map '{}' is not known) [operand=0x{:016x}]", map_name, operand);
+    }
+    const noc_att::MapData& map = info->map;
+    const noc_att::OperandTarget target = noc_att::classify_operand(map, operand);
+    // An endpoint word is (y << 6) | x in the NOC_NODE_ID frame; the map's offset takes it back to the
+    // frame the host publishes.
+    const auto descriptor_coord = [&map](uint32_t word) -> std::optional<CoreCoord> {
+        const int64_t x = static_cast<int64_t>(word & 0x3f) - map.node_id_offset_x;
+        const int64_t y = static_cast<int64_t>((word >> 6) & 0x3f) - map.node_id_offset_y;
+        if (x < 0 || y < 0) {
+            return std::nullopt;
+        }
+        return CoreCoord{static_cast<std::size_t>(x), static_cast<std::size_t>(y)};
+    };
+    const auto coord_str = [&](uint32_t word) {
+        const auto coord = descriptor_coord(word);
+        return coord.has_value() ? coord->str() : fmt::format("node word 0x{:03x}", word);
+    };
+    using Kind = noc_att::OperandTarget::Kind;
+    switch (target.kind) {
+        case Kind::Self: return fmt::format("its own core (ATT self window) L1[addr=0x{:08x}]", target.local_address);
+        case Kind::Worker:
+        case Kind::FullTile: {
+            const auto coord = descriptor_coord(target.endpoint_word);
+            const bool dispatch_tile = target.kind == Kind::FullTile && coord.has_value() &&
+                                       noc_att::resolve(map, noc_att::Address::dispatch(coord->x, coord->y, 0)).valid;
+            return fmt::format(
+                "{} core w/ virtual coords {} L1[addr=0x{:08x}]",
+                dispatch_tile ? "Dispatch" : "Tensix",
+                coord_str(target.endpoint_word),
+                target.local_address);
+        }
+        case Kind::Dram: {
+            string where = target.endpoint_known ? fmt::format("w/ virtual coords {}", coord_str(target.endpoint_word))
+                                                 : fmt::format("at ATT selector {}", target.selector);
+            if (target.bank != noc_att::DRAM_BANK_UNKNOWN) {
+                where += fmt::format(" (bank {})", target.bank);
+            }
+            return fmt::format("DRAM core {} DRAM[addr=0x{:08x}]", where, target.local_address);
+        }
+        case Kind::Invalid:
+        default:
+            if (target.window == noc_att::WindowClass::Invalid) {
+                return fmt::format(
+                    "Unknown core (ATT operand 0x{:016x} matches no window of map '{}')", operand, map_name);
+            }
+            return fmt::format(
+                "Unknown core (ATT operand 0x{:016x} names selector {} of a window of map '{}', which lists no "
+                "tile for it)",
+                operand,
+                target.selector,
+                map_name);
+    }
+}
+
 // Helper function to get string rep of noc target.
 string get_noc_target_str(
     MetalEnvImpl& env,
@@ -163,6 +227,8 @@ string get_noc_target_str(
     dev_msgs::debug_sanitize_addr_msg_t::ConstView san) {
     const auto& hal = env.get_hal();
     auto& cluster = env.get_cluster();
+    const std::optional<std::string_view> att_map =
+        hal.get_arch() == tt::ARCH::QUASAR ? env.get_rtoptions().get_noc_att_map() : std::nullopt;
     auto get_core_and_mem_type = [&hal, &cluster](
                                      tt::ChipId device_id, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
         // Get the virtual coord from the noc coord
@@ -206,6 +272,9 @@ string get_noc_target_str(
             target_virtual_noc_core_start.str(),
             target_virtual_noc_core_end.str(),
             type_and_mem.second);
+    } else if (att_map.has_value()) {
+        out += get_att_unicast_target_str(*att_map, san.noc_addr());
+        return out;
     } else {
         CoreCoord target_virtual_noc_core = {
             hal.get_noc_ucast_addr_x(san.noc_addr()), hal.get_noc_ucast_addr_y(san.noc_addr())};
@@ -311,7 +380,7 @@ private:
     void DumpTileCountersBypass(const std::unordered_set<uint32_t>& skip_tc_keys = {}) const;
     void DumpStackUsage() const;
     void LogRunningKernels() const;
-    const std::string& GetKernelName(uint32_t processor_index) const;
+    std::string GetKernelName(uint32_t processor_index) const;
     void ValidateKernelIDs() const;
     void SetEnableFlags(uint32_t enables) const;
 
@@ -348,9 +417,15 @@ WatcherDeviceReader::WatcherDeviceReader(
     FILE* f,
     ChipId device_id,
     const std::vector<string>& kernel_names,
+    std::mutex& kernel_names_mutex,
     tt::tt_metal::MetalEnvImpl& env,
     WatcherServer& watcher_server) :
-    f(f), device_id(device_id), env(env), watcher_server(watcher_server), kernel_names(kernel_names) {
+    f(f),
+    device_id(device_id),
+    env(env),
+    watcher_server(watcher_server),
+    kernel_names(kernel_names),
+    kernel_names_mutex(kernel_names_mutex) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
     if (env.get_cluster().arch() == ARCH::WORMHOLE_B0 && env.get_rtoptions().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
@@ -458,15 +533,15 @@ void WatcherDeviceReader::Dump(FILE* file) {
         const auto& hal = env.get_hal();
         if (hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
             const auto& soc_d = env.get_cluster().get_soc_desc(device_id);
-            for (const auto& logical_dispatch_core : tt::tt_metal::detail::get_quasar_soc_dispatch_engine_logical_cores(
-                     soc_d)) {
+            for (const auto& logical_dispatch_core :
+                 tt::tt_metal::detail::get_quasar_soc_dispatch_engine_logical_cores(soc_d)) {
                 Core::Create(logical_dispatch_core, HalProgrammableCoreType::DISPATCH, *this, dump_data).Dump();
             }
         }
     }
 
     for (auto k_id : dump_data.used_kernel_names) {
-        fprintf(f, "k_id[%3d]: %s\n", k_id.first, kernel_names[k_id.first].c_str());
+        fprintf(f, "k_id[%3d]: %s\n", k_id.first, kernel_name(k_id.first).c_str());
     }
 
     const auto& hal = env.get_hal();
@@ -486,7 +561,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
                 processor_name,
                 info.stack_free,
                 info.virtual_coord.str().c_str(),
-                kernel_names[info.kernel_id].c_str());
+                kernel_name(info.kernel_id).c_str());
             if (info.stack_free == 0) {
                 // We had no free stack, this probably means we
                 // overflowed, but it could be a remarkable coincidence.
@@ -498,7 +573,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
                     device_id,
                     info.virtual_coord.str(),
                     processor_name,
-                    kernel_names[info.kernel_id].c_str());
+                    kernel_name(info.kernel_id).c_str());
             } else if (info.stack_free < min_threshold) {
                 fprintf(f, " (Close to overflow)");
                 log_warning(
@@ -509,7 +584,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
                     device_id,
                     info.virtual_coord.str(),
                     processor_name,
-                    kernel_names[info.kernel_id].c_str(),
+                    kernel_name(info.kernel_id).c_str(),
                     info.stack_free);
             }
         }
@@ -1469,14 +1544,14 @@ void WatcherDeviceReader::Core::ValidateKernelIDs() const {
     auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
     for (size_t i = 0; i < num_processors; i++) {
         uint16_t watcher_kernel_id = launch_msg_.kernel_config().watcher_kernel_ids()[i];
-        if (watcher_kernel_id >= reader_.kernel_names.size()) {
+        if (watcher_kernel_id >= reader_.num_kernel_names()) {
             TT_THROW(
                 "Watcher data corruption, unexpected {} kernel id on Device {} core {}: {} (last valid {})",
                 get_riscv_name(hal, programmable_core_type_, i),
                 reader_.device_id,
                 virtual_coord_.str(),
                 watcher_kernel_id,
-                reader_.kernel_names.size());
+                reader_.num_kernel_names());
         }
         dump_data_.used_kernel_names[watcher_kernel_id] = true;
     }
@@ -1491,9 +1566,22 @@ void WatcherDeviceReader::Core::LogRunningKernels() const {
     }
 }
 
-const std::string& WatcherDeviceReader::Core::GetKernelName(uint32_t processor_index) const {
+std::string WatcherDeviceReader::Core::GetKernelName(uint32_t processor_index) const {
     TT_FATAL(processor_index < launch_msg_.kernel_config().watcher_kernel_ids().size(), "processor_index out of range");
-    return reader_.kernel_names[launch_msg_.kernel_config().watcher_kernel_ids()[processor_index]];
+    return reader_.kernel_name(launch_msg_.kernel_config().watcher_kernel_ids()[processor_index]);
+}
+
+std::string WatcherDeviceReader::kernel_name(size_t kernel_id) const {
+    const std::lock_guard<std::mutex> lock(kernel_names_mutex);
+    if (kernel_id >= kernel_names.size()) {
+        return fmt::format("<unregistered kernel id {}>", kernel_id);
+    }
+    return kernel_names[kernel_id];
+}
+
+size_t WatcherDeviceReader::num_kernel_names() const {
+    const std::lock_guard<std::mutex> lock(kernel_names_mutex);
+    return kernel_names.size();
 }
 
 }  // namespace tt::tt_metal
