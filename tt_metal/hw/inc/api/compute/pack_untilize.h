@@ -276,7 +276,13 @@ ALWI void pack_untilize_unpack_block_row(uint32_t icb) {
  * is computed as block_c_index * block_ct_dim.
  */
 // clang-format on
-template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+// math_clears_dest (Blackhole): the math thread clears each section and the pack release does not
+// (llk_pack_common_api.h).
+template <
+    uint32_t block_ct_dim = 8,
+    uint32_t full_ct_dim = block_ct_dim,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool math_clears_dest = false>
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
     LLK_SAN_FUNCTION();
 #ifdef ARCH_BLACKHOLE
@@ -285,7 +291,11 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
     constexpr bool unpack_block = false;
 #endif
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
+#ifdef ARCH_BLACKHOLE
+        MATH((llk_math_wait_for_dest_available<math_clears_dest>()));
+#else
         MATH((llk_math_wait_for_dest_available()));
+#endif
 #ifdef ARCH_BLACKHOLE
         if constexpr (unpack_block) {
             UNPACK((pack_untilize_unpack_block_row<block_ct_dim>(icb)));
@@ -315,7 +325,11 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
         MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
         PACK((llk_packer_wait_for_math_done()));
         PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, block_c_index)));
+#ifdef ARCH_BLACKHOLE
+        PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en, math_clears_dest>()));
+#else
         PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
+#endif
     }
 }
 

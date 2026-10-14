@@ -224,7 +224,8 @@ template <
     untilize_config::WaitMode wait_mode,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
     untilize_config::RemapMode remap_mode,
-    untilize_config::FastChunk fast_chunk>
+    untilize_config::FastChunk fast_chunk,
+    untilize_config::DestClear dest_clear>
 ALWI void untilize(uint32_t num_blocks) {
     // Compile-time validation
     static_assert(
@@ -299,6 +300,13 @@ ALWI void untilize(uint32_t num_blocks) {
         in_dfb.wait_front(total_tiles);
     }
 
+#if defined(ARCH_BLACKHOLE) && (defined(TRISC_MATH) || defined(TRISC_PACK))
+    constexpr bool math_clears_dest =
+        dest_clear == untilize_config::DestClear::OnMathAcquire && !llk_unpack_may_write_dest();
+#else
+    constexpr bool math_clears_dest = false;
+#endif
+
     // =================================================================
     // MAIN PROCESSING LOOP
     // =================================================================
@@ -335,7 +343,8 @@ ALWI void untilize(uint32_t num_blocks) {
             } else {
                 for (uint32_t b = 0; b < dispatch::num_sub_blocks; ++b) {
                     untilize_wait_for_block<wait_mode>(in_dfb, dispatch::sub_block_width);
-                    pack_untilize_block<dispatch::sub_block_width, block_width_tiles>(input_dfb, 1, output_dfb, b);
+                    pack_untilize_block<dispatch::sub_block_width, block_width_tiles, DST_ACCUM_MODE, math_clears_dest>(
+                        input_dfb, 1, output_dfb, b);
                     in_dfb.pop_front(dispatch::sub_block_width);
                 }
             }
@@ -351,7 +360,8 @@ ALWI void untilize(uint32_t num_blocks) {
         for (uint32_t r = 0; r < num_blocks; ++r) {
             untilize_wait_for_block<wait_mode>(in_dfb, block_width_tiles);
             out_dfb.reserve_back(block_width_tiles);
-            pack_untilize_block<block_width_tiles, block_width_tiles>(input_dfb, 1, output_dfb, 0);
+            pack_untilize_block<block_width_tiles, block_width_tiles, DST_ACCUM_MODE, math_clears_dest>(
+                input_dfb, 1, output_dfb, 0);
             in_dfb.pop_front(block_width_tiles);
             out_dfb.push_back(block_width_tiles);
         }
@@ -360,6 +370,12 @@ ALWI void untilize(uint32_t num_blocks) {
     // =================================================================
     // CLEANUP
     // =================================================================
+
+#ifdef ARCH_BLACKHOLE
+    if constexpr (math_clears_dest && !dispatch::use_fast && !dispatch::fp8_row_split) {
+        MATH((llk_math_dest_clear_region_end()));
+    }
+#endif
 
     if constexpr (
         init_uninit_mode == untilize_config::InitUninitMode::InitAndUninit ||
