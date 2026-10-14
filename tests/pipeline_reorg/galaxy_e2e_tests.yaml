@@ -67,6 +67,22 @@
   team: scaleout
   budget_type: e2e
 
+# Per-mesh fabric config repro (#60499): a 4-stage ring on one galaxy where alternating stages declare a
+# different 2D torus axis in the MGD -- TORUS_Y (2x2 RING,LINE) and TORUS_X (2x2 LINE,RING). Reuses the
+# generic multi-mesh sanity config (topology-agnostic; the MGD fixes the per-mesh configs). Checks that
+# two meshes running DIFFERENT torus configs coexist and route inter-mesh without hanging/starving.
+- id: galaxy-fabric-per-mesh-torus-yx
+  name: Galaxy Fabric per-mesh TORUS_Y + TORUS_X multi-mesh sanity
+  cmd: |
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor {mgd} --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
+  skus:
+    bh_galaxy:
+      timeout: 15
+      mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_per_mesh_torus_yx_mesh_graph_descriptor.textproto
+  owner_id: U08RRAU5E15 # Ridvan Song
+  team: scaleout
+  budget_type: e2e
+
 - id: galaxy-fabric-multi-mesh-4x4-2x4s
   name: Galaxy Fabric Multi-Mesh 4x4 and 2x4s stability tests
   cmd: |
