@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -41,6 +42,18 @@ ttnn::Tensor make_bf16_4d(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, ui
     const auto host = ttml::test_utils::make_uniform_vector<float>(count, -1.0F, 1.0F, seed);
     return ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
         host, ttnn::Shape{d0, d1, d2, d3}, device, ttnn::Layout::TILE);
+}
+
+ttnn::Tensor make_custom_tile_bf16(const ttnn::Shape& shape, const std::array<uint32_t, 2>& tile_shape) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    return ttnn::create_device_tensor(
+        tt::tt_metal::TensorSpec(
+            shape,
+            tt::tt_metal::TensorLayout(
+                ttnn::DataType::BFLOAT16,
+                tt::tt_metal::PageConfig(ttnn::Layout::TILE, tt::tt_metal::Tile(tile_shape)),
+                ttnn::DRAM_MEMORY_CONFIG)),
+        device);
 }
 
 ttml::ops::RotaryEmbeddingParams build_params(uint32_t seq_len, uint32_t qk_rope_dim) {
@@ -363,4 +376,72 @@ TEST_F(MLA_QRopeCacheTest, PackedInputRejectsMalformedShapes) {
         qk_rope_dim,
         /*packed_input=*/true))
         << "packed input with dim 1 != 1 must be rejected";
+
+    // Both caches have logical S=17 but pad to 32, so this reaches the cache-vs-q
+    // sequence check instead of failing the cos/sin equality check first.
+    auto short_cos = make_bf16_4d(1U, 1U, 17U, qk_rope_dim, /*seed=*/7U);
+    auto short_sin = make_bf16_4d(1U, 1U, 17U, qk_rope_dim, /*seed=*/8U);
+    auto q_pre = make_bf16_4d(1U, 1U, 32U, 2U * qk_head, /*seed=*/8U);
+    EXPECT_ANY_THROW(ttml::metal::mla_q_rope(
+        q_pre,
+        short_cos,
+        short_sin,
+        params.trans_mat,
+        qk_nope_dim,
+        qk_rope_dim,
+        /*packed_input=*/true))
+        << "short logical cache sequence must not pass through tile padding";
+
+    auto narrow_cos = make_bf16_4d(1U, 1U, 32U, 20U, /*seed=*/9U);
+    auto narrow_sin = make_bf16_4d(1U, 1U, 32U, 20U, /*seed=*/10U);
+    EXPECT_ANY_THROW(ttml::metal::mla_q_rope(
+        q_pre,
+        narrow_cos,
+        narrow_sin,
+        params.trans_mat,
+        qk_nope_dim,
+        qk_rope_dim,
+        /*packed_input=*/true))
+        << "short logical cache width must not pass through tile padding";
+
+    auto short_trans = make_bf16_4d(1U, 1U, 17U, 17U, /*seed=*/11U);
+    EXPECT_ANY_THROW(ttml::metal::mla_q_rope(
+        q_pre,
+        params.cos_cache,
+        params.sin_cache,
+        short_trans,
+        qk_nope_dim,
+        qk_rope_dim,
+        /*packed_input=*/true))
+        << "short logical trans_mat must not pass through tile padding";
+}
+
+TEST_F(MLA_QRopeCacheTest, RejectsUnsupportedPhysicalGeometry) {
+    constexpr uint32_t qk_nope_dim = 64U;
+    constexpr uint32_t qk_rope_dim = 32U;
+    constexpr uint32_t qk_head = qk_nope_dim + qk_rope_dim;
+    auto params = build_params(/*seq_len=*/32U, qk_rope_dim);
+
+    auto tiny_tile_q = make_custom_tile_bf16(ttnn::Shape{1U, 1U, 32U, 2U * qk_head}, std::array<uint32_t, 2>{16U, 32U});
+    EXPECT_ANY_THROW(ttml::metal::mla_q_rope(
+        tiny_tile_q,
+        params.cos_cache,
+        params.sin_cache,
+        params.trans_mat,
+        qk_nope_dim,
+        qk_rope_dim,
+        /*packed_input=*/true));
+
+    auto oversized_storage = make_bf16_4d(1U, 1U, 64U, 64U, /*seed=*/12U);
+    auto overpadded_cos =
+        ttnn::reshape(oversized_storage, ttnn::Shape{1U, 1U, 32U, 32U}, ttnn::Shape{1U, 1U, 64U, 64U});
+    auto q_pre = make_bf16_4d(1U, 1U, 32U, 2U * qk_head, /*seed=*/13U);
+    EXPECT_ANY_THROW(ttml::metal::mla_q_rope(
+        q_pre,
+        overpadded_cos,
+        params.sin_cache,
+        params.trans_mat,
+        qk_nope_dim,
+        qk_rope_dim,
+        /*packed_input=*/true));
 }
