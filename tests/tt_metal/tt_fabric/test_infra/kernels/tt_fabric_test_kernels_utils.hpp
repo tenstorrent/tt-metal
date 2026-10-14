@@ -16,6 +16,15 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 
+// Fabric 2.0: every kernel config in this header defaults to the fabric2 worker adapter when the
+// harness compiles kernels with FABRIC2_WORKER (TT_FABRIC2=1); otherwise the stock EDM adapter.
+#ifdef FABRIC2_WORKER
+#include "tt_metal/fabric/hw/inc/fabric2/fabric2_worker_adapter.hpp"
+using DefaultEdmSenderT = tt::tt_fabric::fabric2::Fabric2WorkerSender;
+#else
+using DefaultEdmSenderT = WorkerToFabricEdmSender;
+#endif
+
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
@@ -464,13 +473,13 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, true> {
     }
 };
 
-template <typename EdmSenderT = WorkerToFabricEdmSender>
+template <typename EdmSenderT = DefaultEdmSenderT>
 struct SenderKernelTrafficConfig;
 
 // NOC op structs and function pointer types are all templated on EdmSenderT.
 // VC_ID is a compile-time arg so each binary contains exactly one EdmSenderT
 // instantiation — function pointer types match call sites exactly, no casting needed.
-template <typename EdmSenderT = WorkerToFabricEdmSender>
+template <typename EdmSenderT = DefaultEdmSenderT>
 struct NocOperationTypes {
     using ParseSetupFunc = void (*)(SenderKernelTrafficConfig<EdmSenderT>*, size_t&);
     using UpdateHeaderFunc = void (*)(SenderKernelTrafficConfig<EdmSenderT>*);
@@ -482,25 +491,25 @@ struct NocOperationTypes {
 };
 
 // NOC Operation Class Declarations (implementations after SenderKernelTrafficConfig)
-template <typename EdmSenderT = WorkerToFabricEdmSender>
+template <typename EdmSenderT = DefaultEdmSenderT>
 struct NocWriteSenderOperations {
     static void parse_and_setup_impl(SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx);
     static void update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config);
 };
 
-template <typename EdmSenderT = WorkerToFabricEdmSender>
+template <typename EdmSenderT = DefaultEdmSenderT>
 struct NocAtomicSenderOperations {
     static void parse_and_setup_impl(SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx);
     static void update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config);
 };
 
-template <typename EdmSenderT = WorkerToFabricEdmSender>
+template <typename EdmSenderT = DefaultEdmSenderT>
 struct NocFusedSenderOperations {
     static void parse_and_setup_impl(SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx);
     static void update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config);
 };
 
-template <typename EdmSenderT = WorkerToFabricEdmSender>
+template <typename EdmSenderT = DefaultEdmSenderT>
 struct NocScatterWriteSenderOperations {
     static void parse_and_setup_impl(SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx);
     static void update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config);
@@ -522,7 +531,7 @@ struct MuxCachedInfo {
  * Provides type-erased storage for both WorkerToFabricEdmSender and
  * WorkerToFabricMuxSender connections with runtime dispatch.
  * *****************************************************************************/
-template <typename EdmSenderT = WorkerToFabricEdmSender>
+template <typename EdmSenderT = DefaultEdmSenderT>
 struct FabricConnectionArray {
     // TODO: get the num buffers more systematically
     static constexpr uint8_t NUM_BUFFERS = 8;
@@ -724,7 +733,7 @@ struct FabricConnectionArray {
 // Maximum root outputs a 2D multicast config can inject into.
 constexpr uint8_t MAX_MCAST_INJECTIONS = MAX_NUM_FABRIC_CONNECTIONS;
 
-template <typename EdmSenderT = WorkerToFabricEdmSender>
+template <typename EdmSenderT = DefaultEdmSenderT>
 struct LineSyncConfig {
     LineSyncConfig(
         FabricConnectionArray<EdmSenderT>* connection_array,
@@ -1601,7 +1610,7 @@ template <
     bool IS_2D_FABRIC,
     bool LINE_SYNC,
     uint8_t NUM_LOCAL_SYNC_CORES,
-    typename EdmSenderT = WorkerToFabricEdmSender>
+    typename EdmSenderT = DefaultEdmSenderT>
 struct SenderKernelConfig {
     static constexpr bool MASTER_SYNC_CORE = false;
 
