@@ -493,6 +493,7 @@ class TtPrefillRuntime:
                     ttnn.from_device(shards[shard_index(tp_coordinate)], blocking=False)
                     for tp_coordinate in range(self.config.tp_factor)
                 ]
+                ttnn.synchronize_device(self.mesh_device)
                 logits = torch.cat([ttnn.to_torch(shard) for shard in host_shards], dim=-1)
                 logits = logits[..., 0, : self.model.vocab_size].reshape(-1).float()
                 y0 = int(torch.argmax(logits).item())
