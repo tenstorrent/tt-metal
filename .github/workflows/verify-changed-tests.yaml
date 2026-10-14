@@ -220,6 +220,60 @@ jobs:
       tracy: true
       skip-tt-train: ${{ !contains(needs.scope.outputs.matrix, 'tt-train') }}
 
+  # Bakes each build's output and a matching source checkout into one image, the
+  # same way all-model-tests.yaml's bake-env-dev-full does for models-unit-tests-impl.
+  # Non-packages, non-sim legs pull from this image instead of installing a wheel
+  # into a checkout: installing the wheel alongside /work gives the kernel JIT two
+  # copies of every kernel header (one in the checkout, one bundled in the wheel),
+  # and headers reached through both get compiled twice -- see the redefinition
+  # failures this was written to fix. Baking one image per build flavour keeps the
+  # image and TT_METAL_HOME=/work pointing at the same, single source tree.
+  #
+  # A failed or skipped bake is not fatal: run-tests does not gate on these jobs'
+  # result (see its `if:` below), so the container image resolution just falls
+  # back to installing from the build artifact, same as before this change.
+  bake-env-dev:
+    name: Bake env (default)
+    needs: [scope, build-default]
+    if: >-
+      ${{ !cancelled() && needs.build-default.result == 'success'
+          && needs.scope.outputs.needs-default == 'true' }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-default.outputs.build-artifact-name }}
+      base-image: ${{ needs.build-default.outputs.dev-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=full
+      # No source-ref: this caller takes no ref, so the producer's default (its
+      # own commit) is already the commit build-default built.
+
+  bake-env-dev-profiler:
+    name: Bake env (profiler)
+    needs: [scope, build-profiler]
+    if: >-
+      ${{ !cancelled() && needs.build-profiler.result == 'success'
+          && needs.scope.outputs.needs-profiler == 'true' }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-profiler.outputs.build-artifact-name }}
+      base-image: ${{ needs.build-profiler.outputs.dev-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=full
+
   fetch-ttsim:
     name: Fetch ttsim (${{ matrix.lib }})
     needs: scope
@@ -255,15 +309,25 @@ jobs:
   run-tests:
     name: ${{ matrix.leg.name }}
     # fetch-ttsim is a prerequisite even for hardware legs: every fetch the run needs
-    # completes before any test starts.
-    needs: [scope, build-default, build-profiler, fetch-ttsim]
+    # completes before any test starts. bake-env-dev(-profiler) are deliberately not
+    # here: a failed or skipped bake must not block every leg, only lose the baked
+    # image for the legs that would have used it (see the `if:` below instead of a
+    # blanket `needs.*.result` check, and the container image fallback chain).
+    needs: [scope, build-default, build-profiler, fetch-ttsim, bake-env-dev, bake-env-dev-profiler]
     # An empty matrix vector is a workflow-level error in Actions, not a skipped
     # job: the run is marked failed with nothing red inside it. scope returns an
     # empty matrix on every no_op PR -- i.e. most of them -- so guard it here the
     # same way fetch-ttsim guards sim-libs above.
+    #
+    # Named checks rather than needs.*.result: that wildcard would also cover
+    # bake-env-dev(-profiler), and a bake failure (e.g. a registry hiccup) must
+    # fall back to the artifact path, not take down every leg in the matrix.
     if: >-
       ${{ !cancelled()
-          && !contains(needs.*.result, 'failure')
+          && needs.scope.result != 'failure'
+          && needs.build-default.result != 'failure'
+          && needs.build-profiler.result != 'failure'
+          && needs.fetch-ttsim.result != 'failure'
           && github.event_name == 'pull_request'
           && needs.scope.outputs.matrix != '[]'
           && needs.scope.outputs.matrix != ''}}
@@ -273,9 +337,17 @@ jobs:
         leg: ${{ fromJson(needs.scope.outputs.matrix) }}
     runs-on: ${{ matrix.leg.runs_on }}
     container:
+      # Baked-image legs (non-packages, non-sim) take priority over the plain
+      # dev-docker-image: that image already has this build's output AND a
+      # matching source checkout at /work, so it is the only tree the kernel JIT
+      # ever sees for those legs (see bake-env-dev(-profiler) above). sim_ legs
+      # are excluded here on purpose: setup-ttsim's wormhole workaround patch
+      # still expects the installed-wheel layout under /opt/venv.
       image: >-
         ${{ (matrix.leg.gate_packages && matrix.leg.gate_profile == 'profiler' && needs.build-profiler.outputs.basic-dev-docker-image)
          || (matrix.leg.gate_packages && needs.build-default.outputs.basic-dev-docker-image)
+         || (!matrix.leg.gate_packages && !startsWith(matrix.leg.sku, 'sim_') && matrix.leg.gate_profile == 'profiler' && needs.bake-env-dev-profiler.outputs.image)
+         || (!matrix.leg.gate_packages && !startsWith(matrix.leg.sku, 'sim_') && needs.bake-env-dev.outputs.image)
          || (matrix.leg.gate_profile == 'profiler' && needs.build-profiler.outputs.dev-docker-image)
          || needs.build-default.outputs.dev-docker-image
          || 'docker-image-unresolved!' }}
@@ -297,7 +369,14 @@ jobs:
         TT_METAL_HOME: ${{ matrix.leg.gate_packages && '/usr/libexec/tt-metalium' || '/work' }}
         # Set by 57 of the owning impls and assumed by anything importing from the
         # tree; tracks TT_METAL_HOME so a packages leg resolves to the same root.
-        PYTHONPATH: ${{ matrix.leg.gate_packages && '/usr/libexec/tt-metalium' || '/work' }}
+        # On a baked image no wheel is installed, so /work/ttnn (a namespace dir
+        # whose package is /work/ttnn/ttnn) and /work/tools (the tracy module a
+        # tracy-enabled _ttnn imports) must be added explicitly -- same reasoning
+        # as models-unit-tests-impl.yaml's PYTHONPATH for its image path.
+        PYTHONPATH: >-
+          ${{ matrix.leg.gate_packages && '/usr/libexec/tt-metalium'
+           || ((!startsWith(matrix.leg.sku, 'sim_') && ((matrix.leg.gate_profile == 'profiler' && needs.bake-env-dev-profiler.outputs.image) || needs.bake-env-dev.outputs.image)) && '/work:/work/ttnn:/work/tools')
+           || '/work' }}
         GTEST_TOTAL_SHARDS: ${{ matrix.leg.gtest_shard_total || 1 }}
         GTEST_SHARD_INDEX: ${{ matrix.leg.gtest_shard_index || 0 }}
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
@@ -311,7 +390,15 @@ jobs:
         PROFILER_OUTPUT_DIR: ${{ matrix.leg.gate_profile == 'profiler' && '/work/generated/profiler/reports' || '' }}
         DONT_USE_VIRTUAL_ENVIRONMENT: ${{ matrix.leg.gate_profile == 'profiler' && '1' || '' }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        # A baked image already owns /work (build output + matching source), so it
+        # gets no bind mount -- one would mask that payload with an empty host dir.
+        # A single-path entry is an anonymous volume on an unused path, same as
+        # models-unit-tests-impl.yaml's /no_work_mount.
+        - >-
+          ${{ (!matrix.leg.gate_packages && !startsWith(matrix.leg.sku, 'sim_') && ((matrix.leg.gate_profile == 'profiler' && needs.bake-env-dev-profiler.outputs.image) || needs.bake-env-dev.outputs.image))
+           && '/no_work_mount'
+           || format('{0}/docker-job:/work', github.workspace) }}
+        # Subdir to workaround https://github.com/actions/runner/issues/691
         # GitHub-hosted runners have no hugepages or weights cache; derived from runs_on
         # so a new hosted SKU is covered automatically. Same exclusion as smoke.yaml.
         - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_hugepages' || '/dev/hugepages-1G:/dev/hugepages-1G' }}
@@ -341,7 +428,17 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          submodules: recursive
+          # With a baked image the source is already at /work; this checkout only
+          # has to satisfy `uses: ./docker-job/.github/actions/...`, which resolves
+          # against it -- same reasoning as models-unit-tests-impl.yaml.
+          submodules: >-
+            ${{ (!matrix.leg.gate_packages && !startsWith(matrix.leg.sku, 'sim_') && ((matrix.leg.gate_profile == 'profiler' && needs.bake-env-dev-profiler.outputs.image) || needs.bake-env-dev.outputs.image))
+             && 'false'
+             || 'recursive' }}
+          sparse-checkout: >-
+            ${{ (!matrix.leg.gate_packages && !startsWith(matrix.leg.sku, 'sim_') && ((matrix.leg.gate_profile == 'profiler' && needs.bake-env-dev-profiler.outputs.image) || needs.bake-env-dev.outputs.image))
+             && '.github'
+             || '' }}
           path: docker-job
 
       - name: ⬇️ Setup Job
@@ -357,6 +454,15 @@ jobs:
             ${{ (matrix.leg.gate_profile == 'profiler' && needs.build-profiler.outputs.wheel-artifact-name)
              || needs.build-default.outputs.wheel-artifact-name
              || '' }}
+          # True only for non-sim legs with a successfully baked image: setup-job
+          # then skips installing the wheel entirely, so /work (the image, not a
+          # checkout) stays the only kernel source tree. Sim legs keep installing
+          # the wheel -- setup-ttsim's wormhole workaround patch still expects it
+          # under /opt/venv.
+          env-from-image: >-
+            ${{ !startsWith(matrix.leg.sku, 'sim_')
+             && ((matrix.leg.gate_profile == 'profiler' && needs.bake-env-dev-profiler.outputs.image != '')
+                 || needs.bake-env-dev.outputs.image != '') }}
           enable-watcher: ${{ contains(env.WATCHER_YAMLS, format('{0}.yaml', matrix.leg.source_yaml)) && 'true' || 'false' }}
           auto-triage: false
 
