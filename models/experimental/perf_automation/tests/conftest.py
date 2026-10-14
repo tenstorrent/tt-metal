@@ -91,6 +91,10 @@ def _private_temp_state(tmp_path_factory, monkeypatch):
         from agent import probes as _probes
 
         monkeypatch.setattr(_probes, "board_telemetry", lambda: ([], []), raising=False)
+        # Nor may a test OPEN the device: the work probe runs a real op on every visible chip. None is
+        # its "no evidence" answer, which leaves every caller deciding exactly as it did without it.
+        # The tests of the probe itself drive it with a fake interpreter.
+        monkeypatch.setattr(_probes, "device_runs_work", lambda *a, **k: None, raising=False)
     except Exception:  # noqa: BLE001 -- import-time failure here must not break collection
         pass
     # Belt and braces: anything still reaching gettempdir() directly (the containment check in

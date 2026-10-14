@@ -534,6 +534,17 @@ def _live_temps() -> list:
         return []
 
 
+def _device_runs_work():
+    """probes.device_runs_work, read at CALL time like _live_temps (so the suite's stub holds). None --
+    no evidence -- when it cannot be asked."""
+    try:
+        from .probes import device_runs_work
+
+        return device_runs_work()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _board_needs_reset() -> bool:
     """True when at least one chip cannot report a die temperature -- the evidence a reset is for.
 
@@ -793,14 +804,26 @@ def recover(
     # not the output. Without this the two halves disagreed -- measured 2026-09-25, the caller
     # correctly decided "reset mandatory" and this still answered "no reset issued", because every
     # ARC was warm and error_text was empty.
+    # A WARM ARC IS NOT A WORKING CHIP. The veto above reads the ARC, and so does tt-smi; neither can
+    # see hung Tensix cores, which is what a killed device run usually leaves behind on a single chip.
+    # So before the veto gets the last word, the device is asked to run one op (probes.device_runs_work).
+    # Only an answer of False -- the op failed or hung -- overrides it: a passing probe or no probe at
+    # all leaves the veto exactly as it was, so a healthy board is still never reset.
     if not fault_is_certain and not is_dead_board(error_text) and not _board_needs_reset():
-        if log:
-            log(
-                "reset SKIPPED at %s: every chip reports a die temperature (%s), so nothing is "
-                "wedged -- resetting a live board is what took two chips down on 2026-08-17"
-                % (where, ", ".join("%.1fC" % t for t in _live_temps()[:4]) or "n/a")
-            )
-        return True
+        if _device_runs_work() is False:
+            if log:
+                log(
+                    "reset NOT skipped at %s: every chip reports a die temperature, but the device could "
+                    "not run a single op -- a hung chip with a live ARC" % where
+                )
+        else:
+            if log:
+                log(
+                    "reset SKIPPED at %s: every chip reports a die temperature (%s), so nothing is "
+                    "wedged -- resetting a live board is what took two chips down on 2026-08-17"
+                    % (where, ", ".join("%.1fC" % t for t in _live_temps()[:4]) or "n/a")
+                )
+            return True
     targets = targets_for(error_text, config_target, expand=expand)
     for tgt in targets:
         try:
