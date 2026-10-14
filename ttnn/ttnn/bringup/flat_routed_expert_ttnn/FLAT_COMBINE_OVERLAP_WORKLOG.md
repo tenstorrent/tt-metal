@@ -1077,6 +1077,17 @@ The full op, not a bench: `MIMO_FL_DRISC=1` (read at program build) replaces the
   Parity within ~1% except K2.7 M 256 / 384 (+2 / +4%). The dual default stays better (GLM-Flash M 64 34.0, K2.7 M 512
   119.6) and keeps all reader cells busy; pure frees the plain reader cells (9 on K2.7, 15 on GLM-Flash: idle).
 
+- **Pure mode hang, isolated and fixed**: K2.7 pure with the MPFE weights untouched hung 3 of 3 (at M 256, two-tile
+  calls; triage: gate/up and down cores' NOC1 writes / atomics unacknowledged, the DRISCs flushed and waiting for
+  grants). Clean: never using the second tile (alternate threshold 0) or a 2-read DMA cap; the default x-favoring
+  weights had masked it. Same class as the stream-0 hang: two DRISC tiles of a bank with deep DMA queues. Fix: on calls
+  where both of a bank's tiles send (switch-mode small calls, MIMO_FL_DRISC_TILES=2 always: se_drisc.hpp SD_PAIRED) each
+  keeps at most 2 DMA reads in flight; the former hang config passes 2 of 2. It also speeds GLM-Flash pure mode up:
+  M 32 / 64 / 96 / 128 / 160 / 192 / 256 / 384 / 512 = 33.4 / 33.8 / 36.2 / 38.3 / 40.8 / 43.2 / 49.6 / 55.8 / 70.8
+  (Tensix 32.9 / 35.4 / 37.6 / 40.1 / 43.6 / 45.2 / 49.6 / 57.4 / 70.6; dual 31.5 / 34.0 / 36.6 / 39.2 / 42.4 /
+  44.6 / 49.5 / 57.5 / 70.6); K2.7 pure M 32 / 64 / 128 / 256 / 384 / 512 / 2048 = 60.7 / 63.9 / 69.6 / 84.6 / 102.4 /
+  124.6 / 442.9 (Tensix 58.1 / 62.3 / 68.6 / 83.6 / 99.1 / 123.5 / 443.1). Dual with a 2-read cap: +-0.3 (not used).
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
