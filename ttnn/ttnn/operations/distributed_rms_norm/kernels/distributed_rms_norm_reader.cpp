@@ -3,6 +3,8 @@
 
 // distributed_rms_norm — worker reader (NCRISC, NoC0).
 //   load_block           : x block (block_rows x core_w_tiles) -> cb_x_resident, one tile row per barrier;
+//                          W_local % 32 != 0: the padding columns of the tensor's last W tile are zeroed in the CB
+//                          page before the push (sharded: in the resident shard), so sum(x^2) never sees them;
 //                          gamma (row 0 of each tile, no tilize) and the reduce scaler once per call.
 //                          Sharded x (R9/R10): the block IS the resident shard; cb_x_resident is backed on it, so
 //                          load_block only publishes the shard's tiles (no NoC read).
@@ -36,7 +38,8 @@ void kernel_main() {
     constexpr bool x_sharded = get_compile_time_arg_val(10) != 0;       // cb_x_resident is backed on the x shard
     constexpr uint32_t cb_lc = get_compile_time_arg_val(11);
     constexpr uint32_t sem_local_combine = get_compile_time_arg_val(12);
-    constexpr auto x_args = TensorAccessorArgs<13>();
+    constexpr uint32_t w_tail = get_compile_time_arg_val(13);  // valid columns of the last W tile (0: aligned)
+    constexpr auto x_args = TensorAccessorArgs<14>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t half_record = record_bytes / 2;  // 16 fp32 = one face row
@@ -90,6 +93,52 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* stats_ready =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_stats_ready));
     Noc noc;
+    CircularBuffer x_cb(cb_x_resident);
+
+    // ---- w_tail mask: zero columns w_tail..31 of the last W tile of each tile row ----
+    // Whole padding faces (1 and 3 when w_tail <= 16) are zeroed by the DM engine; the partial face rows (16 rows
+    // x (16 - c0) elements in each of two faces) are the only RISC stores. Only the core holding the tensor's last
+    // W tile does this, once per tile row.
+    const bool owns_w_tail = (w_tail != 0) && (w_start + cw == wt_total);
+    auto mask_w_tail = [&](uint32_t base_offset, uint32_t rows_n, uint32_t row_stride_tiles) {
+        if constexpr (w_tail != 0) {
+            const uint32_t face_bytes = x_tile_bytes / 4;
+            const uint32_t elem_bytes = face_bytes / 256;
+            constexpr uint32_t c0 = w_tail & 15;                    // first padding column inside the partial face
+            constexpr uint32_t partial_face = w_tail < 16 ? 0 : 1;  // faces {0,2} or {1,3} hold the partial rows
+            for (uint32_t j = 0; j < rows_n; ++j) {
+                const uint32_t off = base_offset + (j * row_stride_tiles + cw - 1) * x_tile_bytes;
+                if constexpr (w_tail <= 16) {
+                    noc.async_write_zeros(x_cb, face_bytes, {.offset_bytes = off + face_bytes});
+                    noc.async_write_zeros(x_cb, face_bytes, {.offset_bytes = off + 3 * face_bytes});
+                }
+                if constexpr (c0 != 0) {
+                    const uint32_t tile_addr = get_write_ptr(cb_x_resident) + off;
+                    for (uint32_t f = partial_face; f < 4; f += 2) {
+                        const uint32_t face_addr = tile_addr + f * face_bytes;
+                        if (elem_bytes == 4) {
+                            volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(face_addr);
+                            for (uint32_t r = 0; r < 16; ++r) {
+                                for (uint32_t c = c0; c < 16; ++c) {
+                                    p[r * 16 + c] = 0;
+                                }
+                            }
+                        } else {
+                            volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(face_addr);
+                            for (uint32_t r = 0; r < 16; ++r) {
+                                for (uint32_t c = c0; c < 16; ++c) {
+                                    p[r * 16 + c] = 0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if constexpr (w_tail <= 16) {
+                noc.write_zeros_l1_barrier();
+            }
+        }
+    };
 
     // gamma (once per call, after the first x block so the hot single-page read does not delay x):
     // one contiguous read of the chunk's cw*32 elements into the front of each group of <= 32 tiles, then
@@ -108,7 +157,12 @@ void kernel_main() {
             for (uint32_t g0 = 0; g0 < chunk; g0 += group_tiles) {
                 const uint32_t n = (chunk - g0) < group_tiles ? (chunk - g0) : group_tiles;
                 const uint32_t gbase = base + g0 * gamma_tile_bytes;
-                noc_async_read(gamma.get_noc_addr(0, (w_start + c0 + g0) * seg_bytes), gbase, n * seg_bytes);
+                // read no further than the stick's aligned page: with W_local % 32 != 0 the last segment is short
+                // (its padding columns only ever scale padding columns of x)
+                const uint32_t src_off = (w_start + c0 + g0) * seg_bytes;
+                const uint32_t want = n * seg_bytes;
+                const uint32_t avail = gamma_page_bytes - src_off;
+                noc_async_read(gamma.get_noc_addr(0, src_off), gbase, want < avail ? want : avail);
                 noc_async_read_barrier();
                 invalidate_l1_cache();
                 for (uint32_t t = n; t-- > 0;) {
@@ -215,6 +269,9 @@ void kernel_main() {
         if constexpr (x_sharded) {
             // the shard is already resident in cb_x_resident's L1: publish its valid tile rows, no NoC traffic
             cb_reserve_back(cb_x_resident, rows * cw_phys);
+            if (owns_w_tail) {
+                mask_w_tail(0, rows, cw_phys);  // padding of the resident shard's last tile column
+            }
             cb_push_back(cb_x_resident, rows * cw_phys);
         } else {
             // one tile row (cw tiles) per barrier
@@ -227,6 +284,9 @@ void kernel_main() {
                     wp += x_tile_bytes;
                 }
                 noc_async_read_barrier();
+                if (owns_w_tail) {
+                    mask_w_tail(0, 1, cw);
+                }
                 cb_push_back(cb_x_resident, cw);
             }
         }

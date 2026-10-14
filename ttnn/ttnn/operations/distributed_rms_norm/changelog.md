@@ -75,3 +75,24 @@
   - Fixed by budgeting against the allocator's block table.
   - Tracy capture crashed on a multi-case profile of the sharded test file; single-case profiles were used instead.
 - **Tests added**: `tests/ttnn/unit_tests/operations/distributed_rms_norm/test_distributed_rms_norm_sharded.py` (12 cases: HEIGHT prescale / h_non_aligned / gamma-chunked, WIDTH one-combiner / many-combiner / stats-batched / ragged last shard, axis 0 with 2 links).
+
+## Refinement 2 — W_local non-tile-aligned (`w_non_aligned`)
+- Date: 2026-10-14
+- What was done:
+  - `"w_non_aligned"` added to `SUPPORTED["alignment"]` on every placement (interleaved, HEIGHT_SHARDED, WIDTH_SHARDED).
+  - Verifier option (a): the reader zeroes columns `W_local % 32 .. 31` of the tensor's last W tile in each tile row before `cb_push_back`. On the interleaved path this happens in the CB page after the read barrier; on the sharded paths it happens in the resident shard, on the core whose chunk ends at `tensor_w_tiles`.
+    - Whole padding faces (1 and 3 when `w_tail <= 16`) are zeroed with `noc.async_write_zeros`.
+    - The partial face rows (16 rows × (16 − c0) elements in 2 faces) are the only RISC stores.
+  - The new CT arg `w_tail` is 0 on aligned shapes, which compiles the mask out, so aligned paths are byte-identical in behaviour.
+  - Nothing else changes: sumsq, the record layout and count, the exchange, and normalize. The mean already divides by the true `G·W_local`.
+  - Gamma: each segment read is clamped to the stick's `buffer_aligned_page_size()`, so it never reads past the page. The offsets stay multiples of the 64/128 B segment, which keeps the DRAM-source alignment. The padding columns of the gamma tile only ever multiply padding columns of x.
+  - Reused: the reader `load_block`, the existing `_choose_split` / ragged-chunk sizing, and every compute phase. Added: one reader CT arg, the `mask_w_tail` lambda, and the gamma read clamp.
+- Accuracy achieved: within the golden tolerances (fp32: PCC ≥ 0.9999, rel-RMS ≤ 0.005; bf16: PCC ≥ 0.999, rel-RMS ≤ 0.01) on (32,17), (1,1,32,50), (1,1,17,50), (1,1,64,1000), (2,1,128,100), (4,128,47) across all three placements.
+- Golden test progress:
+  - w_non_aligned slices: 18/18 (axis 1, bf16/bf16, 1 link, all placements) and 111 passed / 108 skipped / 0 failed (axis 0, 2 links, fp32 + bf16, every gamma mode, plus tile-aligned representatives).
+  - The full suite is left to the harness.
+- Issues encountered:
+  - Golden inputs come from `ttnn.from_torch`, which zero-pads the last tile. So the golden suite passed with SUPPORTED widened alone and cannot detect a missing mask.
+  - The new unit test injects garbage into the padding. Without the mask it fails (rel-RMS ≈ 0.98 on every placement); with the mask it passes.
+  - The sharded mask writes zeros into the padding of the input's resident shard. That region is tile padding (not logical data), so the input's logical value is unchanged.
+- Tests added: `tests/ttnn/unit_tests/operations/distributed_rms_norm/test_distributed_rms_norm_w_non_aligned.py`, 7 cases with garbage in the tile padding: interleaved / HEIGHT / WIDTH, fp32 + bf16, w_tail 4/8/15/17/18 (both the faces-{0,2} and faces-{1,3} branches).

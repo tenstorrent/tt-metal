@@ -69,7 +69,9 @@ SUPPORTED = {
     "fp32_dest_acc_en": [True],
     "layout": [ttnn.TILE_LAYOUT],
     # h_non_aligned: rows are independent, so tile-padding rows only ever reach padding rows of the output.
-    "alignment": ["tile_aligned", "h_non_aligned"],
+    # w_non_aligned: the reader zeroes columns W_local%32..31 of the last W tile (CB page / resident shard) before
+    # the push, so sum(x^2) is unchanged; the mean divides by the true G*W_local; gamma's read stops at its page.
+    "alignment": ["tile_aligned", "h_non_aligned", "w_non_aligned"],
     "rank": [2, 3, 4],
     "gamma_mode": ["gamma", "no_gamma"],
     "gamma_dtype": [ttnn.float32, ttnn.bfloat16, "none"],

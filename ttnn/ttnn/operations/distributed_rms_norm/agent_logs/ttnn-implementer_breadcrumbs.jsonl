@@ -13,3 +13,5 @@
 {"event":"test_run","refinement":1,"result":"pass","detail":"sharded golden slice 1404 pass/0 fail/36 infeasible; interleaved 720/720; translated 231 pass 47 xfail; ring mock 16/16","ts":"2026-10-14T13:11:10+00:00"}
 {"event":"fix_applied","refinement":1,"text":"CB clash vs tensors left alive by earlier OOM-skipped cells: budget now from GetMemoryView block table (lowest allocated L1 block) instead of a fixed L1 base","ts":"2026-10-14T13:11:10+00:00"}
 {"event":"perf","refinement":1,"text":"interleaved 640x1792 regressed to 26-36us from extra RT args (cross-device launch skew -> exchange wait on devices 1/2); sharded-only args compile-time gated -> 24.3-27.1us vs base 24.3-24.5. HEIGHT 640x1792 19.8us; WIDTH ~2.6us/tile row compute-bound","ts":"2026-10-14T13:11:10+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-10-14T13:21:45+00:00"}
+{"event":"test_run","result":"pass","detail":"R2 w_non_aligned: garbage-padding unit test 7/7, unit dir 39/39, golden slices 18/18 + 111 pass/108 skip","ts":"2026-10-14T13:27:34+00:00"}

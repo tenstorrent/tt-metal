@@ -93,7 +93,7 @@
   - WIDTH is compute-bound per tile row (~2.6 µs/row: 640×1792 ~81 µs, 2048×2048 ~171 µs), because every W chunk runs the per-row reduce/transpose/finalize for all Ht rows.
   - Levers for a later perf pass: finalize on the combiners plus an rstd multicast, and combiners on both links.
 
-### [ ] Refinement 2 — W_local non-tile-aligned (`w_non_aligned`)
+### [x] Refinement 2 — W_local non-tile-aligned (`w_non_aligned`)
 
 **Goal**: add `"w_non_aligned"` to `SUPPORTED["alignment"]` natively, with no host-side pad or slice, on every placement Refinement 1 landed (interleaved, HEIGHT_SHARDED, WIDTH_SHARDED):
 - The tile padding of the last W tile must not enter Σx².

@@ -635,6 +635,7 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
             int(sharded),
             CB_LC,
             SEM_LOCAL_COMBINE,
+            plan["W"] % TILE,  # w_tail: valid columns of the last W tile (0 = tile-aligned, no mask)
         ]
         + x_acc
         + g_acc
