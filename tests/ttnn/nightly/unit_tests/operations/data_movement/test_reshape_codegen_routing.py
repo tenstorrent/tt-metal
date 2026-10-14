@@ -252,3 +252,35 @@ def test_reshape_codegen_rm_cache_hit_changed_free_l1(device, path, in_shape, ou
     out = _force_codegen(x, out_shape, memory_config=mem)
     gate._assert_bits(expected, ttnn.to_torch(out), dtype)
     assert device.num_program_cache_entries() == grown
+
+
+# (id, shapes for a grid of N cores, L1 left free per bank in KiB at each step down). Each step must build a smaller
+# program than the one before.
+_RM_SHRINK = [
+    # Coalesced 2 KB -> 16 KB merge, four new sticks per core: the full ring takes 64 KiB, the reduced ring of one
+    # pushed stick 32 KiB, and the slab program at batch 1 under 13 KiB.
+    ("coalesced_merge", lambda n: ([n * 32, 1024], [n * 4, 8192]), [48, 20]),
+    # Non-aligned 80 B -> 40 B split, 64 source sticks per core: the full ring takes 12 KiB beside up to 1.5 KiB of
+    # scratch, so 5 KiB free holds a 16-push ring.
+    ("nonaligned_split", lambda n: ([n * 64, 40], [n * 64, 2, 20]), [5]),
+]
+
+
+@pytest.mark.parametrize("case,shapes,free_kib", _RM_SHRINK, ids=[c[0] for c in _RM_SHRINK])
+def test_reshape_codegen_rm_shrinks_plan_under_l1_pressure(device, case, shapes, free_kib):
+    grid = device.compute_with_storage_grid_size()
+    in_shape, out_shape = shapes(grid.x * grid.y)
+    dtype = ttnn.bfloat16
+    source = gate._make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.ROW_MAJOR_LAYOUT, _DRAM)
+    gate._assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+    full = device.num_program_cache_entries()
+    for step, free in enumerate(free_kib, start=1):
+        hog = gate._l1_hog_leaving(device, free * 1024)
+        gate._assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+        ttnn.deallocate(hog)
+        assert device.num_program_cache_entries() == full + step, f"{free} KiB free did not build a smaller program"
+    # With the hog freed the full plan comes back and hits its program.
+    gate._assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+    assert device.num_program_cache_entries() == full + len(free_kib)
