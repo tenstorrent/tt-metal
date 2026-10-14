@@ -156,6 +156,10 @@ TEST_F(DriscFlatBenchFixture, GateUpDelivery) {
     const uint32_t ep = env_u32("DRISC_FLAT_EP", 2), slots = env_u32("DRISC_FLAT_SLOTS", 4);
     const uint32_t iters = env_u32("DRISC_FLAT_ITERS", 5), land_slots = 4;
     const NOC drisc_noc = env_u32("DRISC_FLAT_NOC", 0) ? NOC::NOC_1 : NOC::NOC_0;
+    // DRISC_FLAT_ASSIGN=1: each sender feeds gate/up cores on its own bank's side of the grid (west banks -> the west
+    //   rectangle, east banks -> the east one, overflow to the rest) instead of the plan's reader -> core mapping;
+    // DRISC_FLAT_NOC_MIX=1: a bank's tile that is not its NOC1 endpoint sends on NOC1 (the only tile allowed to)
+    const uint32_t assign = env_u32("DRISC_FLAT_ASSIGN", 0), noc_mix = env_u32("DRISC_FLAT_NOC_MIX", 0);
     ASSERT_TRUE(ep == 1 || ep == 2);
     ASSERT_LE(slots * blk + 2048, drisc_l1_size_) << "DRISC slots + timing / barrier scratch do not fit its L1";
     ASSERT_EQ((p.E * nk) % wmult, 0u);
@@ -203,6 +207,69 @@ TEST_F(DriscFlatBenchFixture, GateUpDelivery) {
     const uint32_t bar_addr = tensix_l1_ + 512 * 1024;
     ASSERT_GT(bar_addr, dn_timing + 2048);
 
+    // a bank's side: its DRAM column (physical x of its endpoints), west for the smaller x
+    std::vector<bool> bank_west(banks);
+    {
+        std::vector<uint32_t> bx(banks);
+        for (uint32_t b = 0; b < banks; ++b) {
+            bx[b] = soc.dram_bank_endpoint_coords.at(b)[0].x;
+        }
+        const uint32_t xmin = *std::min_element(bx.begin(), bx.end());
+        for (uint32_t b = 0; b < banks; ++b) {
+            bank_west[b] = bx[b] == xmin;
+        }
+    }
+    const uint32_t gu_mid = (std::min_element(p.gu.begin(), p.gu.end(), [](auto& a, auto& b) { return a.x < b.x; })->x +
+                             std::max_element(p.gu.begin(), p.gu.end(), [](auto& a, auto& b) { return a.x < b.x; })->x) /
+                            2;
+    // receivers of sender (b, e) in block order: the plan's (reader b + banks * e, or both readers with one sender)
+    // or same-side
+    std::vector<std::vector<CoreCoord>> recv(banks * ep);
+    if (assign == 0) {
+        for (uint32_t b = 0; b < banks; ++b) {
+            for (uint32_t e = 0; e < ep; ++e) {
+                for (uint32_t r : ep == 2 ? std::vector<uint32_t>{b + banks * e} : std::vector<uint32_t>{b, b + banks}) {
+                    for (uint32_t j = 0; j < p.R; ++j) {
+                        recv[b * ep + e].push_back(p.gu[r * p.R + j]);
+                    }
+                }
+            }
+        }
+    } else {
+        std::vector<CoreCoord> west, east;
+        for (const auto& c : p.gu) {
+            (c.x <= gu_mid ? west : east).push_back(c);
+        }
+        const uint32_t per = p.R * 2 / ep;
+        for (uint32_t pass = 0; pass < 2; ++pass) {  // own side first, then the leftovers
+            for (uint32_t b = 0; b < banks; ++b) {
+                for (uint32_t e = 0; e < ep; ++e) {
+                    auto& pool = (bank_west[b] == (pass == 0)) ? west : east;
+                    auto& mine = recv[b * ep + e];
+                    while (mine.size() < per && !pool.empty()) {
+                        mine.push_back(pool.front());
+                        pool.erase(pool.begin());
+                    }
+                }
+            }
+        }
+    }
+    uint32_t cross = 0, total_r = 0;
+    for (uint32_t b = 0; b < banks; ++b) {
+        for (uint32_t e = 0; e < ep; ++e) {
+            for (const auto& c : recv[b * ep + e]) {
+                cross += (c.x <= gu_mid) != bank_west[b];
+                ++total_r;
+            }
+        }
+    }
+    log_info(
+        LogTest,
+        "DRISC flat bench: receivers on the far side of their sender's DRAM column: {} of {} (assign {}, NOC mix {})",
+        cross,
+        total_r,
+        assign,
+        noc_mix);
     log_info(
         LogTest,
         "DRISC flat bench: H {} I {} E {}, {} gate/up cores ({} per reader), {} down cores; gate/up {:.1f} MB in {} B "
@@ -256,21 +323,19 @@ TEST_F(DriscFlatBenchFixture, GateUpDelivery) {
                             b * ep + e,
                             n_all,
                             sender_mode};
-                        // receivers in block order: block i -> receiver i % R'; with one sender per bank its blocks
-                        // alternate between the two readers' cores (R' = 2R)
-                        for (uint32_t r : rds) {
-                            for (uint32_t j = 0; j < p.R; ++j) {
-                                const CoreCoord v =
-                                    dev_->virtual_core_from_logical_core(p.gu[r * p.R + j], CoreType::WORKER);
-                                rt.push_back(v.x);
-                                rt.push_back(v.y);
-                            }
+                        // receivers in block order: block i -> receiver i % R'
+                        for (const auto& c : recv[b * ep + e]) {
+                            const CoreCoord v = dev_->virtual_core_from_logical_core(c, CoreType::WORKER);
+                            rt.push_back(v.x);
+                            rt.push_back(v.y);
                         }
+                        const bool on_noc1 =
+                            drisc_noc == NOC::NOC_1 || (noc_mix && subs[e] != endpoint_for_noc(soc, b, NOC::NOC_1).y);
                         auto k = CreateKernel(
                             program,
                             "tests/tt_metal/tt_metal/test_kernels/misc/drisc_flat_gu_sender.cpp",
                             lc,
-                            DramConfig{.noc = drisc_noc});
+                            DramConfig{.noc = on_noc1 ? NOC::NOC_1 : NOC::NOC_0});
                         SetRuntimeArgs(program, k, lc, rt);
                         drisc_v.push_back(dev_->virtual_core_from_logical_core(lc, CoreType::DRAM));
                     }

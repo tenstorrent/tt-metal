@@ -828,7 +828,15 @@ not synchronized: per-group spans only. us per call:
 - Prefetcher reference (test_prefetcher_BH_bw_bench.py on this box): DRISC best 318 GB/s (recv-contig / pipe), Tensix
   worker prefetcher best 390. DRISC kernels may use NOC1 only on tiles that are no bank's NOC1 endpoint (firmware NIU
   modes, 010c7e15f2a): the hang above.
-- Open: the x / h / y traffic on top; then a flat prototype (DRISC reader on the on-device schedule, reader cells freed).
+- **It was placement, not the DRISC** (user's call): flat's reader -> gate/up mapping, reused for the DRISCs, sends
+  56 of 64 receivers' blocks to the far side of the sender's DRAM column (across the grid / around the torus).
+  DRISC_FLAT_ASSIGN=1 (each tile feeds gate/up cores on its own side; 8 of 64 cross): gate/up alone 222.6 us
+  (509 GB/s, 99.4%: the Tensix readers' number), NoC writes alone 596 GB/s, with the down cores gate/up 335 / down
+  337 us (the DRAM ceiling, ~505 GB/s of 170 MB) vs Tensix readers 371 (-10%), with no Tensix reader cores. Mixed
+  NoCs (the non-NOC1-endpoint tile on NOC1) only helps the far-side mapping (378 -> 421 GB/s) and hurts the same-side
+  one. In flat the host picks which bank holds which gate/up core's weights, so the same-side layout costs nothing.
+- Open: the x / h / y traffic on top; then a flat prototype (DRISC reader on the on-device schedule, same-side layout,
+  reader cells freed).
 
 ## 9. How to run (PR tree)
 ```
