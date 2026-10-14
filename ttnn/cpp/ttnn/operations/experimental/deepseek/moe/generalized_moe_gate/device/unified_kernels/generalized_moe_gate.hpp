@@ -243,7 +243,8 @@ struct GeneralizedMoeGate {
                     copy_tile(CTArgs::input_indices_cb, 0, 1);  // indices (arange 0-255) -> idx region
                     reconfig_data_format_srca(CTArgs::input_cb);
                 }
-                generalized_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
+                generalized_moe_gate_init<CTArgs::enable_sigmoid, false, DST_ACCUM_MODE, true, CTArgs::sfpu_sort>(
+                    CTArgs::input_cb, CTArgs::bias_cb);
                 input_cb.wait_front(1);
                 generalized_moe_gate<
                     CTArgs::ungrouped_top8,

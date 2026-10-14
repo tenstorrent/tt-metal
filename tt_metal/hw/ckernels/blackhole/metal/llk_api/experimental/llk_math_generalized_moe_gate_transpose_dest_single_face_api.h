@@ -95,6 +95,12 @@ inline void llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init(
 }
 
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>
+inline void llk_math_generalized_moe_gate_transpose_dest_single_face_step2_direct() {
+    SAN_HOOK(unsupported());
+    _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_direct_<is_fp32_dest_acc_en, is_32bit>();
+}
+
+template <bool is_fp32_dest_acc_en, bool is_32bit = false>
 inline void llk_math_generalized_moe_gate_transpose_dest_single_face_step2() {
     SAN_HOOK(unsupported());
     _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, is_32bit>();
