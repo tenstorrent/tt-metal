@@ -436,7 +436,7 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const Elementwise operation)
 {
-    ckernel::instrn_buffer[0] = get_operation(operation);
+    TT_INSN(get_operation(operation));
 }
 
 /**
@@ -491,7 +491,7 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const DotProduct operation)
 {
-    ckernel::instrn_buffer[0] = get_operation(operation);
+    TT_INSN(get_operation(operation));
 }
 
 /**
@@ -547,7 +547,7 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const MatrixMultiply operation)
 {
-    ckernel::instrn_buffer[0] = get_operation(operation);
+    TT_INSN(get_operation(operation));
 }
 
 /**
@@ -603,7 +603,7 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const Pool operation)
 {
-    ckernel::instrn_buffer[0] = get_operation(operation);
+    TT_INSN(get_operation(operation));
 }
 
 } // namespace hal::fpu
