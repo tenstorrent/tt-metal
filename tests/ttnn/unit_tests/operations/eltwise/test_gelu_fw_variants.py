@@ -368,36 +368,46 @@ _GENERATED_GELU_TANH_SPECIAL_RESULTS = {
     "-inf": "nan",
     "nan": "nan",
 }
+_GENERATED_GELU_TANH_TINY = torch.finfo(torch.float32).tiny  # 2^-126, the smallest normal
+_GENERATED_GELU_TANH_BF16_MAX = torch.finfo(torch.bfloat16).max
+# Results the kernel may store as 0 although the exact one is normal: one within this relative distance above the
+# smallest normal, which the last multiply can round below it.
+_GENERATED_GELU_TANH_BOUNDARY_BAND = 2.0**-12
+# And every input at or below this one: the exp leaf builds e^-|z| from its biased exponent 127 - |z| log2(e),
+# which drops below 1 (e^-|z| is then 0) once |z| log2(e) > 126; for this leaf's argument z(x) that is this BF16
+# input and every one below it.
+_GENERATED_GELU_TANH_LOGISTIC_FLUSH_INPUT = -10.0625
 
 
 def _generated_gelu_tanh_run(device, values):
-    """ttnn.gelu(x, variant=ttnn.GeluVariant.Tanh) of a 1-D BF16 tensor x, padded with ones to whole tiles."""
+    """ttnn.gelu(x, variant=ttnn.GeluVariant.Tanh) of a 1-D BF16 tensor x, padded with ones to whole 32x32 tiles."""
     n = values.numel()
-    padded = torch.cat([values, torch.ones((-n) % 1024, dtype=values.dtype)])
+    padded = torch.cat([values, torch.ones((-n) % (32 * 32), dtype=values.dtype)])
     tensor = ttnn.from_torch(padded.reshape(1, 1, -1, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     return ttnn.to_torch(ttnn.gelu(tensor, variant=ttnn.GeluVariant.Tanh)).reshape(-1)[:n]
 
 
 def _generated_gelu_tanh_assert(inputs, actual):
-    """The generated kernel's BF16 outputs ``actual`` for BF16 ``inputs``, scored as its certificate is: below 1 pure
-    ULP of the exact result of the input as the SFPU reads it (a subnormal as 0, as stock does), in float64 with no
-    cancellation (C-NUM-3). A lane flushed to 0 where the logistic factor's e^-|z| is below the smallest normal, as
-    calculate_gelu_tanh's is, or whose exact result is within 0.000244140625 relative above
-    it (CHARTER C-SEL-8), is not scored; a result below the smallest normal is 0 or the smallest normal it rounds to."""
+    """The generated kernel's BF16 outputs ``actual`` for BF16 ``inputs``: below 1 pure ULP of the exact result of the
+    input as the SFPU reads it (a subnormal as 0, as stock does). The exact result is the formula in float64, which
+    has no cancellation here. A lane the kernel stores as 0 where the logistic factor underflows, or whose exact
+    result lies in the band just above the smallest normal, is not scored; a result below the smallest normal is
+    0 or the smallest normal it rounds to."""
+    tiny = _GENERATED_GELU_TANH_TINY
     x = inputs.to(torch.float64)
     actual = actual.to(torch.float64)
-    x = torch.where(x.abs() < 2.0**-126, torch.zeros_like(x), x)
+    x = torch.where(x.abs() < tiny, torch.zeros_like(x), x)
     exact = x / (1 + torch.exp(-(1.5957691216057308 * x + 0.07135481627260025 * x**3)))
-    normal = (exact.abs() >= 2.0**-126) & (exact.abs() <= 3.3895313892515355e38)
-    ulp = torch.exp2(torch.floor(torch.log2(exact.abs().clamp(min=2.0**-126))) - 7)
-    edge = exact.abs() < 2.0**-126 * (1 + 0.000244140625)
-    flushed = normal & (actual == 0) & ((x <= -10.0625) | edge)
+    normal = (exact.abs() >= tiny) & (exact.abs() <= _GENERATED_GELU_TANH_BF16_MAX)
+    ulp = torch.exp2(torch.floor(torch.log2(exact.abs().clamp(min=tiny))) - 7)  # a BF16 step: 7 stored mantissa bits
+    edge = exact.abs() < tiny * (1 + _GENERATED_GELU_TANH_BOUNDARY_BAND)
+    flushed = normal & (actual == 0) & ((x <= _GENERATED_GELU_TANH_LOGISTIC_FLUSH_INPUT) | edge)
     scored = ((actual - exact).abs() / ulp)[normal & ~flushed]
     worst, over = scored.max().item(), int((scored >= 1.0).sum())
     assert worst < 1.0, f"max {worst:.4f} pure ULP; {over} of {scored.numel()} scored lanes at or above 1"
-    tiny = ~normal & (exact.abs() < 2.0**-126)
-    raised = int((actual[tiny].abs() > 2.0**-126).sum())
-    assert raised == 0, f"{raised} of {int(tiny.sum())} results below the smallest normal are stored above it"
+    below = ~normal & (exact.abs() < tiny)
+    raised = int((actual[below].abs() > tiny).sum())
+    assert raised == 0, f"{raised} of {int(below.sum())} results below the smallest normal are stored above it"
 
 
 @pytest.mark.skipif(
@@ -410,6 +420,23 @@ def test_gelu_tanh_sfpu_generated_bf16_sweep(device):
     every = (bits << 16).view(torch.float32)
     every = every[torch.isfinite(every)].to(torch.bfloat16)
     _generated_gelu_tanh_assert(every, _generated_gelu_tanh_run(device, every))
+
+
+@pytest.mark.skipif(
+    not is_blackhole(),
+    reason="gelu_tanh's generated SFPU kernel is certified on Blackhole only; Wormhole keeps the stock body",
+)
+def test_gelu_tanh_sfpu_generated_bfloat8_b(device):
+    """BFLOAT8_B data runs the generated kernel too (16-bit DEST holds it as BF16): the result tracks the exact one
+    of the inputs as BFLOAT8_B holds them, to BFLOAT8_B's block precision."""
+    generator = torch.Generator().manual_seed(0)
+    values = (8 * torch.randn((1, 1, 64, 64), generator=generator)).to(torch.bfloat16)
+    tensor = ttnn.from_torch(values, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    x = ttnn.to_torch(tensor).to(torch.float64).flatten()
+    actual = ttnn.to_torch(ttnn.gelu(tensor, variant=ttnn.GeluVariant.Tanh)).to(torch.float64).flatten()
+    exact = x / (1 + torch.exp(-(1.5957691216057308 * x + 0.07135481627260025 * x**3)))
+    pcc = torch.corrcoef(torch.stack([actual, exact]))[0, 1].item()
+    assert pcc >= 0.999, f"PCC {pcc:.6f} against the exact result"
 
 
 @pytest.mark.skipif(
