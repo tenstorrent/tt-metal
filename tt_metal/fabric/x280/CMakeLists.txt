@@ -18,6 +18,10 @@ x280_add_image(NAME firmware SOURCES src/main.c)
 # exactly one operation define.
 x280_add_image(NAME firmware-pinned-input-prepare SOURCES src/x280_pinned_input.c DEFINES X280_PINNED_INPUT_BUILD_PREPARE=1)
 x280_add_image(NAME firmware-pinned-input-teardown SOURCES src/x280_pinned_input.c DEFINES X280_PINNED_INPUT_BUILD_TEARDOWN=1)
+# Test-only images: the atomics micro-benchmark, which the active-image contract also runs, and
+# the deliberate non-conformer that traps and CEASEs hart 2.
+x280_add_image(NAME firmware-atomic-bench SOURCES src/atomic_bench.c)
+x280_add_image(NAME firmware-active-session-fault SOURCES src/active_session_fault.c DEFINES X280_ACTIVE_FAULT_HART=2)
 
 add_test(
     NAME x280_image_layout
@@ -131,5 +135,189 @@ foreach(
         PROPERTIES
             PASS_REGULAR_EXPRESSION
                 "#error \"${_expected}\""
+    )
+endforeach()
+
+# ---------------------------------------------------------------------------
+# The runtime. x280_state holds the pure classification and validation rules and needs no Metal;
+# x280_device is the Metal-backed transport and boot state machine. The runtime reaches
+# MetalContext and tt::Cluster the way in-tree tests do.
+# ---------------------------------------------------------------------------
+add_library(
+    x280_state
+    STATIC
+    src/device/x280_active_state.cpp
+    src/device/x280_state.cpp
+    src/device/x280_tile_state.cpp
+    src/device/x280_noc_window.cpp
+)
+target_include_directories(x280_state PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_library(
+    x280_device
+    STATIC
+    src/device/x280_runtime.cpp
+    src/device/x280_chip.cpp
+    src/device/x280_tile.cpp
+    src/device/x280_active.cpp
+    src/device/x280_metal_transport.cpp
+    src/device/x280_pll.cpp
+    src/device/x280_lim_ecc.cpp
+    src/device/x280_boot.cpp
+)
+target_link_libraries(x280_device PUBLIC x280_state PRIVATE TT::Metalium)
+target_include_directories(
+    x280_device
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/device
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+)
+
+set(X280_TEST_OUTPUT_DIR "${PROJECT_BINARY_DIR}/test/tt_metal/x280")
+
+# Host-only tests: x280_state and gtest, no Metal and no device.
+add_executable(
+    x280_runtime_host_tests
+    tests/host/test_x280_format.cpp
+    tests/host/test_x280_state.cpp
+    tests/host/test_x280_active.cpp
+    tests/host/test_x280_tile_state.cpp
+    tests/host/test_x280_noc_window.cpp
+    tests/host/test_x280_noc_coord.cpp
+    tests/host/test_x280_pinned_input.cpp
+)
+target_include_directories(
+    x280_runtime_host_tests
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/device
+)
+target_link_libraries(
+    x280_runtime_host_tests
+    PRIVATE
+        x280_state
+        gtest_main
+)
+set_target_properties(
+    x280_runtime_host_tests
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${X280_TEST_OUTPUT_DIR}
+)
+add_test(NAME x280_runtime_host_tests COMMAND x280_runtime_host_tests)
+
+# _x280_device_test(<name> <source>...): a gtest executable over x280_device and Metal. Executables
+# stay separate where a test must not share a process: prime is destructive, active_failure
+# retains a fault, and shape and pll change chip state behind an opt-in.
+function(_x280_device_test name)
+    add_executable(${name} ${ARGN})
+    target_include_directories(
+        ${name}
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/device
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/device
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+    )
+    target_link_libraries(
+        ${name}
+        PRIVATE
+            x280_device
+            test_metal_common_libs
+    )
+    set_target_properties(
+        ${name}
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${X280_TEST_OUTPUT_DIR}
+    )
+endfunction()
+
+_x280_device_test(x280_runtime_device_tests
+    tests/device/test_x280_active_hw.cpp
+    tests/device/test_x280_active_workloads_hw.cpp
+    tests/device/test_x280_device_hw.cpp
+)
+_x280_device_test(x280_runtime_coordinate_tests tests/device/test_x280_coordinates.cpp)
+_x280_device_test(x280_active_failure_test tests/device/test_x280_active_failure_hw.cpp)
+_x280_device_test(x280_prime_test tests/device/test_x280_prime_hw.cpp)
+_x280_device_test(x280_shape_test tests/device/test_x280_shape_hw.cpp)
+_x280_device_test(x280_arc_test tests/device/test_x280_arc_hw.cpp)
+_x280_device_test(x280_pll_test tests/device/test_x280_pll_hw.cpp)
+
+# Mock-cluster runtime root for the coordinate tests. Mock mode reads the SoC descriptor YAML, and
+# blackhole_140_arch.yaml lists the L2CPU tiles under router_only, so the tests run on an overlay
+# of this tree whose descriptor names them; the source tree is untouched.
+set(X280_COORDINATE_RUNTIME_ROOT "${CMAKE_CURRENT_BINARY_DIR}/coordinate-test-runtime")
+set(_coord_root "${X280_COORDINATE_RUNTIME_ROOT}")
+file(MAKE_DIRECTORY "${_coord_root}/tt_metal/soc_descriptors")
+foreach(_item runtime tt_stl .cpmcache)
+    file(
+        CREATE_LINK
+            "${PROJECT_SOURCE_DIR}/${_item}"
+            "${_coord_root}/${_item}"
+        SYMBOLIC
+    )
+endforeach()
+file(GLOB _metal_entries "${PROJECT_SOURCE_DIR}/tt_metal/*")
+foreach(_entry IN LISTS _metal_entries)
+    get_filename_component(_name "${_entry}" NAME)
+    if(NOT _name STREQUAL "soc_descriptors")
+        file(
+            CREATE_LINK
+                "${_entry}"
+                "${_coord_root}/tt_metal/${_name}"
+            SYMBOLIC
+        )
+    endif()
+endforeach()
+file(GLOB _soc_entries "${PROJECT_SOURCE_DIR}/tt_metal/soc_descriptors/*")
+foreach(_entry IN LISTS _soc_entries)
+    get_filename_component(_name "${_entry}" NAME)
+    configure_file("${_entry}" "${_coord_root}/tt_metal/soc_descriptors/${_name}" COPYONLY)
+endforeach()
+file(READ "${PROJECT_SOURCE_DIR}/tt_metal/soc_descriptors/blackhole_140_arch.yaml" _soc)
+if(_soc MATCHES "\nl2cpu:")
+    message(FATAL_ERROR "Coordinate tests require the unchanged Metal descriptor without an l2cpu section")
+endif()
+foreach(_y 3 5 7 9)
+    string(REPLACE "8-${_y}, " "" _soc "${_soc}")
+endforeach()
+string(APPEND _soc "\nl2cpu: [8-3, 8-5, 8-7, 8-9]\n")
+file(WRITE "${_coord_root}/tt_metal/soc_descriptors/blackhole_140_arch.yaml" "${_soc}")
+
+file(
+    READ
+    "${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/tests/cluster_descriptor_examples/blackhole_P300_both_mmio.yaml"
+    _cluster
+)
+set(_disagree "${_cluster}")
+string(FIND "${_disagree}" "l2cpu_harvesting_mask: 0" _first)
+if(_first LESS 0)
+    message(FATAL_ERROR "Coordinate test fixture has no unharvested L2CPU mask")
+endif()
+string(LENGTH "l2cpu_harvesting_mask: 0" _mask_length)
+math(EXPR _after_first "${_first} + ${_mask_length}")
+string(SUBSTRING "${_disagree}" 0 ${_after_first} _prefix)
+string(SUBSTRING "${_disagree}" ${_after_first} -1 _suffix)
+string(REPLACE "l2cpu_harvesting_mask: 0" "l2cpu_harvesting_mask: 2" _suffix "${_suffix}")
+file(WRITE "${_coord_root}/disagreement.yaml" "${_prefix}${_suffix}")
+file(WRITE "${_coord_root}/unharvested.yaml" "${_cluster}")
+string(REPLACE "l2cpu_harvesting_mask: 0" "l2cpu_harvesting_mask: 2" _cluster "${_cluster}")
+file(WRITE "${_coord_root}/harvested.yaml" "${_cluster}")
+
+foreach(_case Unharvested Harvested Disagreement)
+    string(TOLOWER "${_case}" _fixture)
+    if(_case STREQUAL "Unharvested")
+        set(_filter "X280Coordinates.*-X280Coordinates.Harvested*:X280Coordinates.Disagreement*")
+    else()
+        set(_filter "X280Coordinates.${_case}*")
+    endif()
+    add_test(
+        NAME x280_coordinates_${_fixture}
+        COMMAND
+            ${CMAKE_COMMAND} -E env --unset=TT_VISIBLE_DEVICES "TT_METAL_RUNTIME_ROOT=${_coord_root}"
+            "TT_METAL_MOCK_CLUSTER_DESC_PATH=${_coord_root}/${_fixture}.yaml"
+            $<TARGET_FILE:x280_runtime_coordinate_tests> "--gtest_filter=${_filter}"
     )
 endforeach()
