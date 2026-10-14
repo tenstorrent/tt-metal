@@ -17,14 +17,14 @@ def test_padding_preparation_and_scan(device):
     sequence, heads, width = 256, 2, 32
     q, k, v = [torch.randn(1, sequence, heads * width, generator=generator).bfloat16() for _ in range(3)]
     gate = (-0.02 * torch.rand(q.shape, generator=generator)).bfloat16()
-    beta = torch.sigmoid(torch.randn(heads, sequence // 32, 32, 1, generator=generator))
+    beta = torch.randn(1, sequence, heads, generator=generator).bfloat16()  # pre-sigmoid logits
     initial = 0.02 * torch.randn(heads, width, width, generator=generator)
 
     def upload(value, dtype):
         return ttnn.from_torch(value, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
     inputs = [upload(t, ttnn.bfloat16) for t in (q, k, v, gate)]
-    beta_tt, initial_tt = upload(beta, ttnn.float32), upload(initial, ttnn.float32)
+    beta_tt, initial_tt = upload(beta, ttnn.bfloat16), upload(initial, ttnn.float32)
 
     def scalar(value):
         return ttnn.from_torch(
@@ -58,7 +58,7 @@ def test_padding_preparation_and_scan(device):
             ttnn.deallocate(source)
             ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
             trimmed = [upload(t[:, :length], ttnn.bfloat16) for t in (q, k, v, gate)]
-            trimmed_beta = upload(beta[:, : length // 32], ttnn.float32)
+            trimmed_beta = upload(beta[:, :length], ttnn.bfloat16)
             expected_terms = ttnn.experimental.kda.prepare_chunk_recurrence(
                 *trimmed, trimmed_beta, heads, actual_start=start
             )
@@ -186,7 +186,7 @@ def test_padding_unaligned_end_ignores_padding_values(device):
     sequence, heads, width = 256, 2, 32
     q, k, v = [torch.randn(1, sequence, heads * width, generator=generator).bfloat16() for _ in range(3)]
     gate = (-0.02 * torch.rand(q.shape, generator=generator)).bfloat16()
-    beta = torch.sigmoid(torch.randn(heads, sequence // 32, 32, 1, generator=generator))
+    beta = torch.randn(1, sequence, heads, generator=generator).bfloat16()  # pre-sigmoid logits
     initial = 0.02 * torch.randn(heads, width, width, generator=generator)
     fills = {"zero": 0.0, "nan": float("nan"), "inf": float("inf"), "large": 1e30, "random": None}
 
@@ -206,12 +206,12 @@ def test_padding_unaligned_end_ignores_padding_values(device):
         padded = [t.clone() for t in (q, k, v, gate)]
         for tensor in padded if query else padded[1:]:
             fill_rows(tensor, length, fill)
-        padded_beta = beta.clone().reshape(heads, sequence, 1)
+        padded_beta = beta.clone()
         fill_rows(padded_beta, length, fill)
-        return padded, padded_beta.reshape(beta.shape)
+        return padded, padded_beta
 
     inputs = [upload(t, ttnn.bfloat16) for t in (q, k, v, gate)]
-    beta_tt, initial_tt = upload(beta, ttnn.float32), upload(initial, ttnn.float32)
+    beta_tt, initial_tt = upload(beta, ttnn.bfloat16), upload(initial, ttnn.float32)
     start, end = scalar(0), scalar(sequence)
 
     def run(flat, beta_input, end_bound):
@@ -261,7 +261,7 @@ def test_padding_unaligned_end_ignores_padding_values(device):
         for length in (1, 2, 31, 33, 97, 255, 256, 64):
             reference_inputs, reference_beta = with_padding(length, 0.0, query=False)
             reference_tt = [upload(t, ttnn.bfloat16) for t in reference_inputs]
-            reference_beta_tt = upload(reference_beta, ttnn.float32)
+            reference_beta_tt = upload(reference_beta, ttnn.bfloat16)
             ceiling = scalar(-(-length // 32) * 32)
             reference = run(reference_tt, reference_beta_tt, ceiling)
             expected = {name: comparable(name, tensor, length) for name, tensor in reference.items()}

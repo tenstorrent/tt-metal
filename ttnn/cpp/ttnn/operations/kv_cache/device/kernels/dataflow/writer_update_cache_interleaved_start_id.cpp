@@ -11,6 +11,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/update_cache_tile_work.hpp"
 // #include "dprint.h"
 
 void kernel_main() {
@@ -27,7 +28,6 @@ void kernel_main() {
     const std::uint32_t batch_read_offset = get_arg(args::batch_read_offset);
 
     constexpr auto granularity = get_arg(args::granularity);
-    constexpr auto u_count = get_arg(args::u_count);
 
     Noc noc;
     // cache holds tilized data destined for the cache tensor (the output DFB); untilized_cache /
@@ -46,6 +46,7 @@ void kernel_main() {
     std::uint32_t b = batch_start_id;
 
     for (std::uint32_t h = 0; h < num_batched_heads; ++h) {
+        const std::uint32_t u_count = ttnn::kv_cache::user_groups_in_batch_tile(B, batch_start_id, h, granularity);
         dfb_untilized_input.wait_front(Wt);
         std::uint32_t input_l1_read_addr = dfb_untilized_input.get_read_ptr() + batch_read_offset;
 
