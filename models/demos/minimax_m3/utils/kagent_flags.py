@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Opt-in prefill optimization switches (kagent/m3-prefill). Every flag defaults OFF = the deployed behaviour, so
-one tree runs both arms of an A/B. Read once at import (set them before the model modules are imported).
+"""Prefill optimization switches (kagent/m3-prefill). M3_KA_ROPE_FUSED and M3_KA_SKIP_IDX_SPLIT are bit-exact and
+default ON; the rest default OFF. Set a flag to 0 or 1 to override. Read once at import (set them before the model
+modules are imported).
 
   M3_KA_ROPE_FUSED      1 -> partial RoPE in ONE rotary_embedding_indexed(rotary_dim=64) call instead of
                            slice + slice + rope + concat (bit-exact: the op copies the pass-through channels)
@@ -27,12 +28,12 @@ one tree runs both arms of an A/B. Read once at import (set them before the mode
 import os
 
 
-def _on(name):
-    return os.getenv(name, "0").strip().lower() in ("1", "true", "yes", "on")
+def _on(name, default="0"):
+    return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "on")
 
 
-ROPE_FUSED = _on("M3_KA_ROPE_FUSED")
-SKIP_IDX_SPLIT = _on("M3_KA_SKIP_IDX_SPLIT")
+ROPE_FUSED = _on("M3_KA_ROPE_FUSED", "1")
+SKIP_IDX_SPLIT = _on("M3_KA_SKIP_IDX_SPLIT", "1")
 MOE_SINGLE_RS = _on("M3_KA_MOE_SINGLE_RS")
 MM_FIDELITY = {g.strip() for g in os.getenv("M3_KA_MM_FIDELITY", "").split(",") if g.strip()}
 EXPERT_PLACEMENT = os.getenv("M3_KA_EXPERT_PLACEMENT", "").strip() or None

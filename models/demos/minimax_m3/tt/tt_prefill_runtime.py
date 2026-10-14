@@ -163,8 +163,8 @@ class TtPrefillRuntime:
         self.model_built = False
         self.compiled = False
         self._on_layer_complete = None
-        # M3_LAYER_ACK_FENCE=event: publish per-layer acks after a device event instead of a host sync.
-        self.layer_ack_fence = EventLayerAckFence() if os.getenv("M3_LAYER_ACK_FENCE", "sync") == "event" else None
+        # M3_LAYER_ACK_FENCE: event (default) publishes per-layer acks after a device event; sync does a host sync.
+        self.layer_ack_fence = EventLayerAckFence() if os.getenv("M3_LAYER_ACK_FENCE", "event") == "event" else None
         # Per-layer completion sink for pipelined prefill, registered via set_layer_completion_sink().
         self._layer_completion_sink = None
 
