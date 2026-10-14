@@ -100,19 +100,37 @@ _x280_compile(
     "${CMAKE_CURRENT_LIST_DIR}/src/x280_active_start.c"
     ${X280_CFLAGS}
 )
+# The pinned-input prepare and teardown operations as a library, for images that run them
+# themselves (LINK_PINNED_INPUT).
+set(_x280_pinned_input_library "${_x280_obj_dir}/x280_pinned_input_library.o")
+_x280_compile(
+    "${_x280_pinned_input_library}"
+    "${CMAKE_CURRENT_LIST_DIR}/src/x280_pinned_input.c"
+    ${X280_CFLAGS}
+    -DX280_PINNED_INPUT_BUILD_LIBRARY=1
+)
 
 #[[
-x280_add_image(NAME <stem> SOURCES <source>... [LIM_IDLE] [DEFINES <macro>...] [INCLUDES <dir>...]
-               [COMPILE_OPTIONS <flag>...])
+x280_add_image(NAME <stem> SOURCES <source>... [LIM_IDLE] [LINK_PINNED_INPUT] [DEFINES <macro>...]
+               [INCLUDES <dir>...] [COMPILE_OPTIONS <flag>...] [LINK_OPTIONS <flag>...])
 
 Builds ${X280_IMAGE_DIR}/<stem>.elf and <stem>.bin from C and C++ (.cpp) sources, and adds them
 to x280_images. An image links the active lifecycle harness and ld/x280.ld (.text at
 0x08001000), or with LIM_IDLE the per-hart entry and ld/x280-lim-idle.ld (.text at 0x08000000).
 DEFINES, INCLUDES (directories relative to this tree's root) and COMPILE_OPTIONS apply to this
-image's sources only; C++ sources also get -std=c++17 -fno-exceptions -fno-rtti.
+image's sources only; C++ sources also get -std=c++17 -fno-exceptions -fno-rtti. LINK_OPTIONS
+apply to this image's link; LINK_PINNED_INPUT also links the pinned-input operations
+(src/x280_pinned_input.c as a library), compiled once with the plain image flags.
 #]]
 function(x280_add_image)
-    cmake_parse_arguments(PARSE_ARGV 0 ARG "LIM_IDLE" "NAME" "SOURCES;DEFINES;INCLUDES;COMPILE_OPTIONS")
+    cmake_parse_arguments(
+        PARSE_ARGV
+        0
+        ARG
+        "LIM_IDLE;LINK_PINNED_INPUT"
+        "NAME"
+        "SOURCES;DEFINES;INCLUDES;COMPILE_OPTIONS;LINK_OPTIONS"
+    )
     if(NOT ARG_NAME OR NOT ARG_SOURCES OR ARG_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "x280_add_image: needs NAME and SOURCES; unparsed: '${ARG_UNPARSED_ARGUMENTS}'")
     endif()
@@ -141,6 +159,9 @@ function(x280_add_image)
         _x280_compile("${object}" "${source}" ${flags} ${ARG_COMPILE_OPTIONS} ${ARG_INCLUDES} ${ARG_DEFINES})
         list(APPEND objects "${object}")
     endforeach()
+    if(ARG_LINK_PINNED_INPUT)
+        list(APPEND objects "${_x280_pinned_input_library}")
+    endif()
 
     set(elf "${X280_IMAGE_DIR}/${ARG_NAME}.elf")
     set(bin "${X280_IMAGE_DIR}/${ARG_NAME}.bin")
@@ -148,7 +169,7 @@ function(x280_add_image)
         OUTPUT
             "${elf}"
         COMMAND
-            "${X280_GCC}" ${_x280_ldflags} -T "${script}" -o "${elf}" ${entry} ${objects}
+            "${X280_GCC}" ${_x280_ldflags} ${ARG_LINK_OPTIONS} -T "${script}" -o "${elf}" ${entry} ${objects}
         DEPENDS
             ${entry}
             ${objects}
