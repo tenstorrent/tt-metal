@@ -151,9 +151,12 @@ SPECIAL_RESULTS = {
     ("nan", "-inf"): "nan",
     ("nan", "nan"): "nan",
 }
-# (input, bound): at or below it the logistic factor's e^-|x| is below the smallest normal, so the result is 0.
+# (input index, bound): at or below the bound the exp leaf's biased exponent 127 - |z| log2(e) drops below 1, so
+# e^-|z|, and with it the result, is 0.
 LOGISTIC_FLUSH = (0, -10.0625)
-BOUNDARY_FLUSH = 0.000244140625  # relative distance above the smallest normal a result may flush from
+# An exact result this close (relative) above the smallest normal may be stored as 0: the last multiply can round
+# it below 2^-126.
+BOUNDARY_FLUSH = 2.0**-12
 
 
 def _skip_unless_routed(device):
