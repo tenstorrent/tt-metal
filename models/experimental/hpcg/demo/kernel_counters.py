@@ -31,8 +31,8 @@ def main(nx, which, per_core):
         elif which.startswith("gs"):
             key = ("gs", int(which[2:]))
         else:
-            key = ("spmv", int(which[4:]))
-        op = h.ops[key]
+            key = None
+        op = h.spmv(int(which[4:])) if key is None else h.ops[key]
         op()
         op()
         ttnn.synchronize_device(device)

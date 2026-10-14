@@ -19,6 +19,7 @@ From `$TT_METAL_HOME`:
 | Command | What it does |
 | --- | --- |
 | `pytest models/experimental/hpcg/tests/test_hpcg.py` | every device op against numpy, then 3 CG iterations against fp64 (64³ and 160³) |
+| `pytest models/experimental/hpcg/tests/test_host_setup.py` | the compiled host setup builds exactly what the numpy code builds (host only) |
 | `python models/experimental/hpcg/demo/demo.py 192` | 50 traced CG iterations: ms per iteration, raw GFLOP/s, share of speed of light, residual history; HPCG-style rating where a CPU reference residual is known |
 | `python models/experimental/hpcg/demo/op_perf.py 192` | device time of each op against its speed of light |
 | `python models/experimental/hpcg/demo/kernel_counters.py 192 gs0 [--per-core]` | per-core cycle counters of one launch |
@@ -38,15 +39,16 @@ Two numbers per grid:
   - **extra iterations**: the 8-colour ordering needs 51-53 iterations to reach
     the residual HPCG's reference code reaches in 50, and only 50 are credited;
   - **setup time**: HPCG adds (setup + optimization time) / 10 to every set of
-    CG iterations. Here, setup is the host-side Python that builds the matrix
-    and every core's index tables: 1.6 s at 104³, 10.7 s at 192³. Slow host
-    setup, not device speed, causes most of the drop.
+    CG iterations. Here, setup is building the matrix, every core's index
+    tables and the launch programs on the host, and uploading them: 0.2 s at
+    104³, 0.6 s at 192³, 1.9 s at 288³ (`host/native_setup.cpp`, compiled on
+    first use; it was 1.6 s, 10.7 s and 34 s in numpy).
 
 | Grid | ms / iteration | Raw GFLOP/s | Speed of light | Share | Iterations to the reference residual | HPCG-style rating |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 104³ | 4.94 | 83.5 | 3.21 ms | 65% | 51 | 49.9 GFLOP/s |
-| 128³ | 7.76 | 99.5 | 6.01 ms | 77.5% | 53 | 54.1 GFLOP/s |
-| 192³ | 23.74 | 110.3 | 21.13 ms | 89.0% | 53 | 56.1 GFLOP/s |
+| 104³ | 4.94 | 83.4 | 3.21 ms | 65% | 51 | 77.1 GFLOP/s |
+| 128³ | 7.76 | 99.4 | 6.01 ms | 77.5% | 53 | 88.6 GFLOP/s |
+| 192³ | 23.74 | 110.3 | 21.13 ms | 89.0% | 53 | 99.5 GFLOP/s |
 | 240³ | 45.54 | 112.5 | 41.35 ms | 90.8% | not measured | - |
 | 288³ | 77.90 | 113.9 | 71.56 ms | 91.9% | not measured | - |
 | 304³ | 91.60 | 113.9 | 84.19 ms | 91.9% | not measured | - |
@@ -55,15 +57,13 @@ The iteration count needs the CPU reference residual for that grid size, which
 was only run up to 192³.
 
 Without the setup charge (iteration penalty only), the rating would be 81.8,
-93.8 and 104.1 GFLOP/s at 104³, 128³ and 192³.
+93.8 and 104.0 GFLOP/s at 104³, 128³ and 192³.
 
 **Comparison with a CPU.** HPCG's fp64 reference code on a 24-thread Ryzen 9
 7900X rates 3.83, 4.02 and 4.40 GFLOP/s at 104³, 128³ and 192³. That is
 HPCG's final rating, so it already includes the setup charge (the reference
 code needs no extra iterations). Compared like for like, the P150's
-HPCG-style rating is 13.0x, 13.5x and 12.8x the CPU's. The raw device rate is
-21.8x to 25.1x the CPU's rating, but that comparison favours the P150, because
-only the CPU number carries HPCG's deductions.
+HPCG-style rating is 20.1x, 22.0x and 22.6x the CPU's.
 
 **Speed of light.** `reference/speed_of_light.py` is each operation's minimum
 DRAM traffic under the HPCG rules at 512 GB/s; every operation is
@@ -107,6 +107,9 @@ Not followed:
 
 ## Layout
 
+    host/
+        native_setup.cpp     compiled host setup: level matrices, per-core plans (same output as the numpy code)
+        native.py            builds it with the system C++ compiler on first use and loads it
     reference/
         problem.py           HPCG problem in device storage order + numpy reference solver
         speed_of_light.py    per-op roofline of one CG iteration
@@ -116,7 +119,8 @@ Not followed:
         custom_ops/          ttnn.generic_op kernels (see custom_ops/README.md)
             sparse_rows/     smoothers, SpMV, restriction, prolongation
             cg_vector/       fused dot products and vector updates
-    tests/test_hpcg.py
+    tests/test_hpcg.py       device ops vs numpy, CG vs fp64
+    tests/test_host_setup.py compiled host setup vs the numpy definitions
     demo/                    demo.py, op_perf.py, kernel_counters.py
 
 ## How it works

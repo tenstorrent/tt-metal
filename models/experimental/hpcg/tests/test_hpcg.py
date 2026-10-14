@@ -37,7 +37,7 @@ def test_hpcg_ops_and_cg(device, nx, bands):
         L = d.L
         xs = np.where(L.real, rng.uniform(0.5, 1.5, L.P), 0.0).astype(np.float32)
         ttnn.copy(to_device(device, xs), d.z)
-        h.ops[("spmv", l)]()
+        h.spmv(l)()
         want = ref.spmv(L, xs, np.float32).astype(np.float64)
         assert np.array_equal(from_device(d.Az), want), f"level {l} SpMV is not bit-exact"
 

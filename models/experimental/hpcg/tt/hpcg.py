@@ -12,14 +12,13 @@ Every matrix and vector pass is a custom op (tt/custom_ops); TT-NN reduces the p
 the square root. The whole iteration is trace-capturable.
 """
 
-import numpy as np
 import ttnn
 
 from models.experimental.hpcg.reference.problem import COLOUR_ORDER, build
 from models.experimental.hpcg.tt.custom_ops.cg_vector import CgVectorOp
 from models.experimental.hpcg.tt.custom_ops.sparse_rows import SparseRowOp, SparseRowPlan, slot_pages
 from models.experimental.hpcg.tt.custom_ops.sparse_rows.op import debug_buffer, noc_coords
-from models.experimental.hpcg.tt.layout import TILE, to_device, u32_rows
+from models.experimental.hpcg.tt.layout import TILE, rows_to_device, to_device, zeros_device
 
 
 def default_bands(nx_level):
@@ -29,12 +28,9 @@ def default_bands(nx_level):
     return 10 if nx_level >= 160 else 5 if nx_level >= 112 else 1
 
 
-def pad_slots(a, P):
-    """[nslot, P] -> [nslot, slot_pages(P / 1024) * 1024], zero pages appended per slot."""
-    pp = slot_pages(P // TILE) * TILE
-    out = np.zeros((a.shape[0], pp), a.dtype)
-    out[:, :P] = a
-    return out
+def slot_stride(P):
+    """Row length of the 27-slot matrix storage: whole pages, an odd number of them (see slot_pages)."""
+    return slot_pages(P // TILE) * TILE
 
 
 class DeviceLevel:
@@ -44,17 +40,25 @@ class DeviceLevel:
         self.L, self.P = L, L.P
         blocks = [(L.starts[c], L.starts[c + 1]) for c in range(8)]
         self.plan = SparseRowPlan(
-            L.COL, blocks, blocks, ncores, noc_xy, exchange=True, bands=L.bstarts if L.bands > 1 else None
+            L.COL_rows,
+            blocks,
+            blocks,
+            ncores,
+            noc_xy,
+            exchange=True,
+            bands=L.bstarts if L.bands > 1 else None,
+            pout=L.P,
         )
-        self.values = to_device(device, pad_slots(L.V, L.P).reshape(-1))
-        self.offsets = u32_rows(device, pad_slots(self.plan.off, L.P).reshape(-1, TILE))  # 32-bit window offsets
-        self.z, self.Az, self.r = (to_device(device, np.zeros(L.P)) for _ in range(3))
+        # the storage rows are already padded to slot_stride, so both tables upload as they are
+        self.values = rows_to_device(device, L.V_rows)
+        self.offsets = rows_to_device(device, self.plan.off)  # 32-bit window offsets
+        self.z, self.Az, self.r = (zeros_device(device, L.P) for _ in range(3))
 
 
 class HPCG:
     """Device state and ops of the HPCG solve on an nx^3 grid (nx a multiple of 8, as in HPCG).
 
-    ops: ("gs_pre", l), ("gs", l): pre- and post-smoother of level l; ("spmv", l): z -> Az of level l (tests);
+    ops: ("gs_pre", l), ("gs", l): pre- and post-smoother of level l;
     ("restrict", l), ("prolong", l): level l -> l + 1 and back; "spmv_cg": Ap = A p.
     vops: "rz", "pAp" dot partials; "p": p update; "xr": x and r update with the partial r.r.
     """
@@ -66,26 +70,27 @@ class HPCG:
         g = device.compute_with_storage_grid_size()
         nc = g.x * g.y
         bands = list(bands) if bands is not None else [default_bands(nx >> l) for l in range(4)]
-        self.levels = build(nx, bands)
+        self.levels = build(nx, bands, slot_stride)
         self.order = list(order)
         noc_xy = noc_coords(device)
         self.lv = [DeviceLevel(device, L, nc, noc_xy) for L in self.levels]
         L0 = self.levels[0]
         self.b = to_device(device, L0.B)
-        self.x, self.r, self.p, self.Ap, self.zero = (to_device(device, np.zeros(L0.P)) for _ in range(5))
+        self.x, self.r, self.p, self.Ap, self.zero = (zeros_device(device, L0.P) for _ in range(5))
         self.lv[0].r = self.r
         self.acc = ttnn.init_device_compute_kernel_config(
             device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False
         )
         self.debug = debug_buffer(device)  # per-core cycle counters, written by kernel_debug builds
         dbg = dict(kernel_debug=kernel_debug, debug=self.debug)
+        self._dbg = dbg
         phases = self.order + list(reversed(self.order))  # forward then backward sweep
         self.ops = {}
         for l, d in enumerate(self.lv):
             L = d.L
             # L1 page: one 16x16 face when each core owns <= 256 rows of a colour (the unpacker and packer then
             # move one face instead of four; slower on the finer levels)
-            tpw = 256 if (L.starts[1] - L.starts[0]) / d.plan.nc <= 256 else TILE
+            tpw = d.tpw = 256 if (L.starts[1] - L.starts[0]) / d.plan.nc <= 256 else TILE
             # post-smoother; on the fine grid the writer loads half the window (6.86 -> 6.73 ms at 192^3; slower on
             # the coarser levels)
             self.ops[("gs", l)] = SparseRowOp(
@@ -108,9 +113,6 @@ class HPCG:
                 tpw=tpw,
                 **dbg,
             )
-            self.ops[("spmv", l)] = SparseRowOp(
-                device, d.plan, d.values, d.offsets, "spmv", list(range(8)), d.z, d.Az, tpw=tpw, **dbg
-            )
             if l + 1 < len(self.lv):
                 C, dc = self.levels[l + 1], self.lv[l + 1]
                 nb0 = L.starts[1]
@@ -125,8 +127,8 @@ class HPCG:
                     exchange=False,
                     bands=C.bstarts if C.bands > 1 else None,
                 )
-                d.Rt = to_device(device, L.Rw)
-                d.Roff = u32_rows(device, rp.off.reshape(-1, TILE))
+                d.Rt = rows_to_device(device, L.Rw)
+                d.Roff = rows_to_device(device, rp.off)
                 self.ops[("restrict", l)] = SparseRowOp(
                     device, rp, d.Rt, d.Roff, "spmv", list(range(8)), d.Az, dc.r, **dbg
                 )
@@ -140,8 +142,8 @@ class HPCG:
                     exchange=False,
                     bands=[L.bstarts[0]] if L.bands > 1 else None,
                 )
-                d.Pt = to_device(device, L.Pw)
-                d.Poff = u32_rows(device, pp.off.reshape(-1, TILE))
+                d.Pt = rows_to_device(device, L.Pw)
+                d.Poff = rows_to_device(device, pp.off)
                 self.ops[("prolong", l)] = SparseRowOp(
                     device, pp, d.Pt, d.Poff, "spmv", [0], dc.z, d.z, b=d.z, addb=True, **dbg
                 )
@@ -161,8 +163,18 @@ class HPCG:
             **dbg,
         )
         ncv = min(nc, L0.P // TILE)
-        self.part = to_device(device, np.zeros(ncv * TILE))  # per-core dot partials, one tile each
+        self.part = zeros_device(device, ncv * TILE)  # per-core dot partials, one tile each
         self.vops = None
+
+    def spmv(self, l):
+        """A plain z -> Az launch of level l (used by tests and diagnostics, built on first use)."""
+        key = ("spmv", l)
+        if key not in self.ops:
+            d = self.lv[l]
+            self.ops[key] = SparseRowOp(
+                self.device, d.plan, d.values, d.offsets, "spmv", list(range(8)), d.z, d.Az, tpw=d.tpw, **self._dbg
+            )
+        return self.ops[key]
 
     def mg(self, l):
         """z = M^-1 r on level l (HPCG's ComputeMG): one pre- and one post-smoothing SYMGS per level."""

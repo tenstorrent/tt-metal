@@ -6,6 +6,7 @@
 
 import numpy as np
 
+from models.experimental.hpcg.host import native
 from models.experimental.hpcg.tt.layout import TILE
 
 ALIGN = 32  # rows per ownership unit (128 B of fp32 values)
@@ -22,15 +23,17 @@ class SparseRowPlan:
     ghost lines from the neighbouring bands. A GS launch whose cores would have more than MAX_NB neighbours is
     planned on fewer cores."""
 
-    def __new__(cls, COL, out_blocks, src_regions, ncores, noc_xy, exchange, bands=None):
+    def __new__(cls, COL, out_blocks, src_regions, ncores, noc_xy, exchange, bands=None, pout=None):
         """COL: [nslot, P] column indices (q order). out_blocks: (start, end) q ranges of the output rows, one per
         phase block (GS: one colour each). src_regions: q ranges of the input vector the columns fall in.
         exchange: True for Gauss-Seidel launches (cores push updated rows into each other's windows).
-        bands: per out block, the q cuts of its y-bands (reference.problem.Level.bstarts), or None."""
+        bands: per out block, the q cuts of its y-bands (reference.problem.Level.bstarts), or None.
+        pout: columns of COL in use (default all); COL's rows may be longer (row padding), and off then has
+        COL's row length too, so it can be uploaded as is."""
         nc = ncores
         while True:
             p = object.__new__(cls)
-            p._init(COL, out_blocks, src_regions, nc, noc_xy, exchange, bands=bands)
+            p._init(COL, out_blocks, src_regions, nc, noc_xy, exchange, bands=bands, pout=pout)
             if not exchange or max((len(x) for x in p.nbr), default=0) <= MAX_NB or nc == 1:
                 return p
             nc = max(1, int(nc * 0.75))
@@ -38,8 +41,9 @@ class SparseRowPlan:
     def __init__(self, *a, **k):
         pass
 
-    def _init(self, COL, out_blocks, src_regions, ncores, noc_xy, exchange, bands=None):
-        nslot, pout = COL.shape
+    def _init(self, COL, out_blocks, src_regions, ncores, noc_xy, exchange, bands=None, pout=None):
+        nslot, stride = COL.shape
+        pout = stride if pout is None else pout
         self.nslot, self.pout = nslot, pout
         NB = len(out_blocks)
         lens = [e - s for s, e in out_blocks]
@@ -65,8 +69,71 @@ class SparseRowPlan:
                 for k in range(nc):
                     a = min(e, s + k * per)
                     own[k, b] = (a, min(e, a + per))
-        # window pieces per core
-        ng = (int(COL.max()) + 1) // GRAN + 2
+        ng = max(e for _, e in src_regions) // GRAN + 2  # granules of the input vector
+        lib = native.lib()
+        if lib is not None:
+            pieces, off, own_l1, ents = self._plan_native(lib, COL, own, exchange, ng, src_regions[0][0])
+        else:
+            pieces, off, own_l1, ents = self._plan_numpy(COL, pout, own, exchange, ng, src_regions[0][0])
+        # window CB bytes: a multiple of 512 (ZEROX clears it in 512-B pieces from the hardware zero region)
+        self.win_b = -(-int(max(int(p[1].sum()) for p in pieces)) * 4 // 512) * 512
+        self.win_words = [int(p[1].sum()) for p in pieces]
+        self.R = max(len(p[0]) for p in pieces)
+        self.off = off
+        # exchange lists (GS): rows [s, f) of block b owned by k that sit in a window piece of m -> (m's NoC x, y,
+        # s, f, L1 byte offset of s in m's window)
+        exch = [[[] for _ in out_blocks] for _ in range(nc)]
+        nbr = [set() for _ in range(nc)]
+        for k, b, m, s, f, dst in ents:
+            exch[k][b].append((noc_xy[m][0], noc_xy[m][1], s, f, dst))
+            nbr[k].add(m)
+            nbr[m].add(k)
+        self.nc, self.own, self.own_l1, self.pieces, self.exch, self.nbr = nc, own, own_l1, pieces, exch, nbr
+        self.out_blocks = out_blocks
+
+    @staticmethod
+    def _plan_native(lib, COL, own, exchange, ng, empty_lo):
+        """Window pieces, offsets and exchange entries from host/native_setup.cpp (same results as _plan_numpy)."""
+        nslot, stride = COL.shape
+        nc, NB = own.shape[:2]
+        COL = np.ascontiguousarray(COL, np.int32)
+        own_f = np.ascontiguousarray(own.reshape(-1), np.int64)
+        maxp = 4096
+        plo, pln, pl1 = (np.zeros(nc * maxp, np.int64) for _ in range(3))
+        npc = np.zeros(nc, np.int64)
+        if (
+            lib.hpcg_plan_windows(
+                nslot, stride, COL, nc, NB, own_f, int(exchange), GRAN, WGAP, ng, empty_lo, maxp, plo, pln, pl1, npc
+            )
+            < 0
+        ):
+            raise ValueError(f"a core needs more than {maxp} window pieces")
+        off = np.zeros((nslot, stride), np.int32)
+        own_l1 = np.zeros(nc * NB, np.int64)
+        bad = lib.hpcg_plan_offsets(
+            nslot, stride, COL, nc, NB, own_f, int(exchange), GRAN, ng, maxp, plo, pln, pl1, npc, stride, off, own_l1
+        )
+        assert bad == 0, "column outside its window piece, or own rows split over pieces"
+        pieces = [
+            (
+                plo[k * maxp : k * maxp + npc[k]].copy(),
+                pln[k * maxp : k * maxp + npc[k]].copy(),
+                pl1[k * maxp : k * maxp + npc[k]].copy(),
+            )
+            for k in range(nc)
+        ]
+        ents = np.zeros((0, 6), np.int64)
+        if exchange:
+            n = lib.hpcg_plan_exchange(nc, NB, own_f, maxp, plo, pln, pl1, npc, None)
+            ents = np.zeros((n, 6), np.int64)
+            lib.hpcg_plan_exchange(nc, NB, own_f, maxp, plo, pln, pl1, npc, ents.ctypes.data)
+        return pieces, off, own_l1.reshape(nc, NB), [tuple(int(v) for v in e) for e in ents]
+
+    @staticmethod
+    def _plan_numpy(COL, pout, own, exchange, ng, empty_lo):
+        """The same plan with numpy: the readable definition, and the fallback without a C++ compiler."""
+        nslot, stride = COL.shape
+        nc, NB = own.shape[:2]
         mask = np.zeros(ng, bool)
         pieces = []
         for k in range(nc):
@@ -79,18 +146,14 @@ class SparseRowPlan:
                         mask[a // GRAN : (e - 1) // GRAN + 1] = True
                     used = True
             if not used:  # cores without rows still get one (unused) piece
-                mask[src_regions[0][0] // GRAN] = True
+                mask[empty_lo // GRAN] = True
             g = np.flatnonzero(mask)
             brk = np.flatnonzero(np.diff(g) > WGAP)
             st, en = g[np.r_[0, brk + 1]], g[np.r_[brk, g.size - 1]] + 1
             lo, ln = st * GRAN, (en - st) * GRAN
             l1 = np.concatenate([[0], np.cumsum(ln)[:-1]]) * 4
             pieces.append((lo, ln, l1))
-        # window CB bytes: a multiple of 512 (ZEROX clears it in 512-B pieces from the hardware zero region)
-        self.win_b = -(-int(max(int(p[1].sum()) for p in pieces)) * 4 // 512) * 512
-        self.win_words = [int(p[1].sum()) for p in pieces]
-        self.R = max(len(p[0]) for p in pieces)
-        off = np.zeros((nslot, pout), np.int32)
+        off = np.zeros((nslot, stride), np.int32)
         own_l1 = np.zeros((nc, NB), np.int64)
         for k in range(nc):
             lo, ln, l1 = pieces[k]
@@ -105,11 +168,7 @@ class SparseRowPlan:
                     p0 = int(np.searchsorted(lo, a, side="right") - 1)
                     assert e <= lo[p0] + ln[p0], "own rows split over window pieces"
                     own_l1[k, b] = l1[p0] + (a - lo[p0]) * 4
-        self.off = off
-        # exchange lists (GS): rows of block b owned by k that sit in a window piece of m -> (m's NoC x, y, qs, qe,
-        # L1 byte offset of qs in m's window)
-        exch = [[[] for _ in out_blocks] for _ in range(nc)]
-        nbr = [set() for _ in range(nc)]
+        ents = []
         if exchange:
             for b in range(NB):
                 A, E = own[:, b, 0], own[:, b, 1]
@@ -123,11 +182,8 @@ class SparseRowPlan:
                             if k == m:
                                 continue
                             s, f = max(int(A[k]), plo), min(int(E[k]), phi)
-                            exch[k][b].append((noc_xy[m][0], noc_xy[m][1], s, f, int(l1[p]) + (s - plo) * 4))
-                            nbr[k].add(m)
-                            nbr[m].add(int(k))
-        self.nc, self.own, self.own_l1, self.pieces, self.exch, self.nbr = nc, own, own_l1, pieces, exch, nbr
-        self.out_blocks = out_blocks
+                            ents.append((int(k), b, m, s, f, int(l1[p]) + (s - plo) * 4))
+        return pieces, off, own_l1, ents
 
     def meta(self, phases, noc_xy, tpw=TILE):
         """Per-core metadata rows (layout in kernels/common.h) and segment counts for the compute kernel.

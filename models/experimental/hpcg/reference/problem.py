@@ -36,12 +36,91 @@ def _ceil(a, b):
 
 
 class Level:
-    def __init__(self, nx, bands=1):
+    def __init__(self, nx, bands=1, slot_stride=None):
         """bands: y-bands per colour block. Inside a colour block rows are stored band by band (natural order inside
-        a band), so a core that owns part of one band touches one band-plane above / below, not a whole plane."""
+        a band), so a core that owns part of one band touches one band-plane above / below, not a whole plane.
+        slot_stride(P): row length of the V / COL storage (default P); the device pads each slot row so that the 27
+        rows of one segment start in different DRAM banks. V and COL are [27, P] views of that storage."""
         self.nx, self.bands = nx, bands
         n = nx**3
         self.n = n
+        from models.experimental.hpcg.host import native
+
+        lib = native.lib()
+        if lib is not None:
+            self._build_native(lib, slot_stride)
+        else:
+            self._build_numpy(slot_stride)
+        self.real = self.nat_at >= 0
+        self.coarse = None
+
+    def _layout(self):
+        """Colour-block and band starts (q), from the per-colour counts alone (no per-point work)."""
+        nx, bands = self.nx, self.bands
+        h = max(1, nx // 2)
+        starts, bstarts, p = [], [], 0
+        for c in range(8):
+            px, py, pz = c & 1, (c >> 1) & 1, c >> 2
+            cx, cy, cz = (nx - px + 1) // 2, (nx - py + 1) // 2, (nx - pz + 1) // 2
+            cnt = np.bincount(np.arange(cy) * bands // h, minlength=bands) * cx * cz
+            starts.append(p)
+            bstarts.append([int(v) for v in p + np.concatenate([[0], np.cumsum(cnt)])])
+            p = _ceil(p + cx * cy * cz, TILE)
+        starts.append(p)
+        return p, starts, bstarts
+
+    def _build_native(self, lib, slot_stride):
+        nx, bands = self.nx, self.bands
+        P, starts, bstarts = self._layout()
+        h = max(1, nx // 2)
+        nl = (nx + 1) // 2
+        nb = max(len(b) - 1 for b in bstarts)
+        line_band = np.zeros(2 * nl, np.int32)
+        band_y0 = np.zeros(8 * nb, np.int32)
+        band_ny = np.zeros(8 * nb, np.int32)
+        band_start = np.zeros(8 * nb, np.int64)
+        for py in (0, 1):
+            cy = (nx - py + 1) // 2
+            line_band[py * nl : py * nl + cy] = np.arange(cy) * bands // h
+        for c in range(8):
+            py = (c >> 1) & 1
+            cy = (nx - py + 1) // 2
+            lb = np.arange(cy) * bands // h
+            for j in range(len(bstarts[c]) - 1):
+                sel = np.flatnonzero(lb == j)
+                band_y0[c * nb + j] = sel[0] if sel.size else 0
+                band_ny[c * nb + j] = sel.size
+                band_start[c * nb + j] = bstarts[c][j]
+        stride = slot_stride(P) if slot_stride else P
+        self.pos = np.empty(self.n, np.int64)
+        self.nat_at = np.empty(P, np.int64)
+        self.V_rows = np.zeros((27, stride), np.float32)
+        self.COL_rows = np.zeros((27, stride), np.int32)
+        self.B = np.empty(P)
+        self.nnz = int(
+            lib.hpcg_build_level(
+                nx,
+                nb,
+                nl,
+                line_band,
+                band_y0,
+                band_ny,
+                band_start,
+                P,
+                stride,
+                self.pos,
+                self.nat_at,
+                self.V_rows,
+                self.COL_rows,
+                self.B,
+            )
+        )
+        self.P, self.starts, self.bstarts = P, starts, bstarts
+        self.V, self.COL = self.V_rows[:, :P], self.COL_rows[:, :P]
+
+    def _build_numpy(self, slot_stride):
+        """The same matrix with numpy array operations: the readable definition, and the fallback."""
+        nx, bands, n = self.nx, self.bands, self.n
         nat = np.arange(n)
         ix, iy, iz = nat % nx, (nat // nx) % nx, nat // (nx * nx)
         col = (ix & 1) + 2 * (iy & 1) + 4 * (iz & 1)
@@ -61,9 +140,11 @@ class Level:
         self.P, self.starts, self.pos, self.bstarts = p, starts, pos, bstarts
         self.nat_at = np.full(p, -1, np.int64)
         self.nat_at[pos] = nat
-        self.real = self.nat_at >= 0
-        V = np.zeros((27, p), np.float32)  # values are exact in fp32 (26, -1, 0, 1); 32-bit keeps 304^3 in host RAM
-        COL = np.tile(np.arange(p, dtype=np.int32), (27, 1))
+        stride = slot_stride(p) if slot_stride else p
+        self.V_rows = np.zeros((27, stride), np.float32)  # values are exact in fp32 (26, -1, 0, 1)
+        self.COL_rows = np.zeros((27, stride), np.int32)
+        V, COL = self.V_rows[:, :p], self.COL_rows[:, :p]
+        COL[:] = np.arange(p, dtype=np.int32)
         cnt = np.zeros(n, np.int64)
         for sz in (-1, 0, 1):
             for sy in (-1, 0, 1):
@@ -82,12 +163,11 @@ class Level:
                     COL[j, rows] = pos[(nat + sz * nx * nx + sy * nx + sx)[ok]]
                     cnt += ok
         # padding rows: diagonal 1 so the GS update (b - s + d*x)/d keeps them at 0
-        V[13, ~self.real] = 1.0
+        V[13, self.nat_at < 0] = 1.0
         self.V, self.COL = V, COL
         self.nnz = int(cnt.sum())
         self.B = np.zeros(p)
         self.B[pos] = 26.0 - (cnt - 1)
-        self.coarse = None
 
     def link(self, C):
         """C = next coarser level. R[qc]: block-0 position (relative) of coarse point qc's fine point.
@@ -114,10 +194,11 @@ class Level:
         self.Pm, self.Pw = Pm, Pw
 
 
-def build(nx, bands=None):
-    """The 4 multigrid levels nx, nx/2, nx/4, nx/8 (bands: y-bands per level, default 1), linked fine to coarse."""
+def build(nx, bands=None, slot_stride=None):
+    """The 4 multigrid levels nx, nx/2, nx/4, nx/8 (bands: y-bands per level, default 1), linked fine to coarse.
+    slot_stride: see Level."""
     bands = list(bands or []) + [1] * NLEV
-    levels = [Level(nx >> l, bands[l]) for l in range(NLEV)]
+    levels = [Level(nx >> l, bands[l], slot_stride) for l in range(NLEV)]
     for l in range(NLEV - 1):
         levels[l].link(levels[l + 1])
     return levels

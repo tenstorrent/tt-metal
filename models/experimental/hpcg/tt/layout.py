@@ -52,3 +52,20 @@ def u32_rows(device, a):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
+
+
+def rows_to_device(device, a):
+    """Data read only by the custom kernels (matrix values, transfer weights, column offsets) as ROW_MAJOR
+    [N / 1024, 1024] with 4-byte words: each 4 KB DRAM page then holds words q in plain order, which is what the
+    kernels read, so the host permutes nothing. int32 tables go up bit for bit under an fp32 label: the kernels only
+    read their bytes, and an fp32 upload is a plain copy while TT-NN's uint32 upload converts element by element."""
+    a = np.ascontiguousarray(a)
+    if a.dtype == np.int32:
+        a = a.view(np.float32)
+    a = np.ascontiguousarray(a, np.float32).reshape(-1, TILE)
+    return ttnn.from_torch(torch.from_numpy(a), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+
+def zeros_device(device, P):
+    """A zero vector of length P, created on the device (nothing is sent from the host)."""
+    return ttnn.zeros(ttnn.Shape([P // 32, 32]), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)

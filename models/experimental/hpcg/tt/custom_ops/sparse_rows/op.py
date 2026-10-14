@@ -101,9 +101,9 @@ def _compute_config():
 class SparseRowOp:
     """Builds the program once; each call launches it (trace-capturable).
 
-    values, offsets: [nslot, pages] fp32 matrix values and uint32 window byte offsets (27-slot plans: slot_pages
-    pages per slot). x: the input vector (gs: updated in place). out: spmv output. b: gs right-hand side, or addb's
-    addend. out2: RESID output. zerox: x = 0 on entry (the windows are cleared on chip, x is not read).
+    values, offsets: fp32 matrix values and uint32 window byte offsets, slot by slot in 4 KB pages (27-slot plans:
+    slot_pages pages per slot); the kernels read raw pages, so values may be TILE or ROW_MAJOR rows of 1024.
+    x: the input vector (gs: updated in place). out: spmv output. b: gs right-hand side, or addb's addend. out2: RESID output. zerox: x = 0 on entry (the windows are cleared on chip, x is not read).
     tpw: words per L1 page (1024, or 256 = one face on coarse grids). wsplit: the writer loads half the window.
     debug: a debug_buffer(device) for the cycle counters (one is allocated if None).
     """
@@ -133,9 +133,13 @@ class SparseRowOp:
             raise ValueError(f"mode must be 'gs' or 'spmv', got {mode!r}")
         if tpw not in (256, TILE):
             raise ValueError(f"tpw must be 256 or {TILE}, got {tpw}")
-        for t in (x, out, values):
+        for t in (x, out):
             if t.dtype != ttnn.float32 or t.layout != ttnn.TILE_LAYOUT:
-                raise ValueError("x, out and values must be fp32 TILE tensors")
+                raise ValueError("x and out must be fp32 TILE tensors")
+        if values.dtype != ttnn.float32 or not (
+            values.layout == ttnn.TILE_LAYOUT or (values.layout == ttnn.ROW_MAJOR_LAYOUT and values.shape[-1] == TILE)
+        ):
+            raise ValueError("values must be fp32, TILE or ROW_MAJOR rows of 1024 (4 KB pages)")
         g = device.compute_with_storage_grid_size()
         noc_xy = noc_coords(device)
         meta, nseg, nseg_gs, nseg_r = plan.meta(phases, noc_xy, tpw)
