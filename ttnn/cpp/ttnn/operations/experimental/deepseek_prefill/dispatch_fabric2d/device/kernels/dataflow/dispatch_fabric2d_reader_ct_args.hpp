@@ -56,6 +56,7 @@ struct ReaderCtArgs {
         kFilledAddr,
         kFreedAddr,
         kFwdSemAddr,
+        kFinalSemAddr,
         kFwdPagesPerStream,
         kNumOwn,
         kNumForward,
@@ -99,6 +100,8 @@ struct ReaderCtArgs {
     uint32_t filled_addr;
     uint32_t freed_addr;
     uint32_t fwd_sem_addr;
+    // Counts the upstream sender's last-hop writes into this chip's output; see wait_for_final_writes.
+    uint32_t final_sem_addr;
     uint32_t fwd_pages_per_stream;
     uint32_t num_own;
     uint32_t num_forward;
@@ -145,6 +148,7 @@ struct ReaderCtArgs {
         filled_addr(plan.queue_filled_addr),
         freed_addr(plan.queue_freed_addr),
         fwd_sem_addr(plan.fwd_arrived_addr),
+        final_sem_addr(plan.final_arrived_addr),
         fwd_pages_per_stream(plan.fwd_pages_per_stream),
         num_own(own_count),
         num_forward(forward_count),
@@ -185,6 +189,7 @@ struct ReaderCtArgs {
         w[kFilledAddr] = filled_addr;
         w[kFreedAddr] = freed_addr;
         w[kFwdSemAddr] = fwd_sem_addr;
+        w[kFinalSemAddr] = final_sem_addr;
         w[kFwdPagesPerStream] = fwd_pages_per_stream;
         w[kNumOwn] = num_own;
         w[kNumForward] = num_forward;
@@ -241,6 +246,7 @@ struct ReaderCtArgs {
         filled_addr(get_compile_time_arg_val(kFilledAddr)),
         freed_addr(get_compile_time_arg_val(kFreedAddr)),
         fwd_sem_addr(get_compile_time_arg_val(kFwdSemAddr)),
+        final_sem_addr(get_compile_time_arg_val(kFinalSemAddr)),
         fwd_pages_per_stream(get_compile_time_arg_val(kFwdPagesPerStream)),
         num_own(get_compile_time_arg_val(kNumOwn)),
         num_forward(get_compile_time_arg_val(kNumForward)),

@@ -450,6 +450,54 @@ void local_phase(
     queue.release_unready();
 }
 
+// Tokens the upstream sender on this stream writes straight into OUR output over the whole launch. Each is a
+// last hop, so it comes from an origin 1 .. extent/2 hops upstream: its own share for us at one hop, and the
+// chunks it forwards for us from further out. Every share is sized by the same chunk_len over the same
+// replicated tables the writers used, and split the way generate_assignments and forwarding_descriptors split
+// it: across every stream for the diametrically opposite origin, across this direction's links otherwise.
+// So this equals what the upstream sender counts.
+uint32_t expected_final_writes(const Scratch& c) {
+    const uint32_t m = ct.extent / 2;
+    const uint32_t link = ct.stream / 2;
+    const bool is_cw = (ct.stream % 2) == 0;
+    uint32_t total = 0;
+    for (uint32_t hops = 1; hops <= m; hops++) {
+        // Upstream is against the direction of travel.
+        const uint32_t origin = is_cw ? (ct.my_pos + ct.extent - hops) % ct.extent : (ct.my_pos + hops) % ct.extent;
+        const uint32_t idx = hops == m ? ct.stream : link;
+        const uint32_t cnt = hops == m ? 2 * ct.num_links : ct.num_links;
+        for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
+            total += chunk_len(c, origin, c.chip_experts[ct.my_pos * ct.experts_per_chip + j], idx, cnt);
+        }
+    }
+    return total;
+}
+
+// Block until every token the upstream sender wrote into our output has been counted. Without this the
+// program on this chip can finish while a neighbour is still delivering, and the next op on this chip would
+// read an output whose last tokens have not landed: the upstream drain_fabric only proves its packets reached
+// this chip, not that their DRAM writes finished.
+//
+// The bump is a flushing atomic, so the far router has pushed the writes ahead of it -- both packets of a
+// split token -- before counting them.
+//
+// The counter is NOT meant to end at zero. It outlives the launch; the launch credit keeps the upstream chip's
+// next launch from bumping it before this chip has started that launch, but subtracting exactly this launch's
+// count rather than a set(0) stays right without relying on that. Hence `>=` in the wait.
+void wait_for_final_writes(const Scratch& c) {
+    DeviceZoneScopedN("dspf2d_wait_final");
+    const uint32_t expected = expected_final_writes(c);
+    volatile tt_l1_ptr uint32_t* final_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.final_sem_addr);
+    while (true) {
+        // The upstream chip increments this counter, so drop any cached copy before each read.
+        invalidate_l1_cache();
+        if (*final_arrived >= expected) {
+            break;
+        }
+    }
+    noc_semaphore_inc(get_noc_addr(ct.final_sem_addr), 0u - expected);
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -525,6 +573,9 @@ void kernel_main() {
         entry_meta(end_entry)->cmd = dspf2d::CMD_END;
         queue.mark_ready();
         queue.flush_publish();
+        // After the CMD_END publish, so our own sender is already free to finish: the upstream sender we wait
+        // on needs only its own reader to have ended, never ours, so this cannot close a cycle around the ring.
+        wait_for_final_writes(c);
 
         noc_async_atomic_barrier();
         // Subtract what this launch consumed rather than zeroing. The upstream sender's launch credit

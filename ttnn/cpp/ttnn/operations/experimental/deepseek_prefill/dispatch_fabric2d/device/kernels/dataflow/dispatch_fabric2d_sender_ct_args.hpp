@@ -30,6 +30,7 @@ struct SenderCtArgs {
         kDownstreamNocX,
         kDownstreamNocY,
         kFwdSemAddr,
+        kFinalSemAddr,
         kFirstPacketBytes,
         kCreditNocX,
         kCreditNocY,
@@ -52,6 +53,7 @@ struct SenderCtArgs {
     uint32_t downstream_noc_x;  // the downstream stream core
     uint32_t downstream_noc_y;
     uint32_t fwd_sem_addr;
+    uint32_t final_sem_addr;  // the downstream reader's receive count for last-hop writes
     // Bytes of a token its first fabric packet carries: all of it, or the first half when a whole token and
     // its fwd_meta do not fit one packet. The rest of the token and the fwd_meta then follow as a second.
     uint32_t first_packet_bytes;
@@ -86,6 +88,7 @@ struct SenderCtArgs {
         downstream_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
         downstream_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
         fwd_sem_addr(plan.fwd_arrived_addr),
+        final_sem_addr(plan.final_arrived_addr),
         first_packet_bytes(first_packet),
         credit_noc_x(static_cast<uint32_t>(returning.worker_virtual.x)),
         credit_noc_y(static_cast<uint32_t>(returning.worker_virtual.y)),
@@ -109,6 +112,7 @@ struct SenderCtArgs {
         w[kDownstreamNocX] = downstream_noc_x;
         w[kDownstreamNocY] = downstream_noc_y;
         w[kFwdSemAddr] = fwd_sem_addr;
+        w[kFinalSemAddr] = final_sem_addr;
         w[kFirstPacketBytes] = first_packet_bytes;
         w[kCreditNocX] = credit_noc_x;
         w[kCreditNocY] = credit_noc_y;
@@ -135,6 +139,7 @@ struct SenderCtArgs {
         downstream_noc_x(get_compile_time_arg_val(kDownstreamNocX)),
         downstream_noc_y(get_compile_time_arg_val(kDownstreamNocY)),
         fwd_sem_addr(get_compile_time_arg_val(kFwdSemAddr)),
+        final_sem_addr(get_compile_time_arg_val(kFinalSemAddr)),
         first_packet_bytes(get_compile_time_arg_val(kFirstPacketBytes)),
         credit_noc_x(get_compile_time_arg_val(kCreditNocX)),
         credit_noc_y(get_compile_time_arg_val(kCreditNocY)),
