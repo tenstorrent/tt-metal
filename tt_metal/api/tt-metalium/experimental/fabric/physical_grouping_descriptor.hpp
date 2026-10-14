@@ -190,7 +190,6 @@ struct PlacementSolveStats {
     std::size_t master_growth_rounds = 0;          ///< Column-generation rounds after the initial batch
     std::size_t master_sat_attempts = 0;           ///< Master SAT encode+solve attempts (tiers x rounds)
     bool candidate_lists_complete = false;
-    bool zero_link_fallback_engaged = false;  ///< Master solve re-run with inter-mesh seams SOFT (#56762)
     std::size_t master_sat_vars = 0;     ///< Variables in the last master encoding
     std::size_t master_sat_clauses = 0;  ///< Clauses in the last master encoding
     std::chrono::microseconds master_enumeration_elapsed{};
@@ -479,16 +478,6 @@ public:
     bool add_required_constraint(const PlacedMesh& placed);
     bool exclude_mapping(const AssignedMeshes& assigned);
 
-    /**
-     * @brief Zero-link fallback (issue #56762): allow the SOFT-seam rungs of the solve ladder.
-     *
-     * The master solve normally requires physical links for every mesh-level edge. When allowed (effective
-     * RELAXED inter-mesh policy), next() may also try soft seams at the current candidate pool before growing
-     * it: realized edges are maximized best-effort and a seating with zero-link (logical-only) connections is
-     * accepted. Everything else stays hard. See the ladder in next().
-     */
-    void set_zero_link_fallback_allowed(bool allowed) { zero_link_allowed_ = allowed; }
-
 private:
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor_ = nullptr;
     PlacementSolveStats* stats_ = nullptr;
@@ -499,8 +488,6 @@ private:
     std::map<MeshId, ConnectionValidationMode> sat_intra_mesh_mode_by_mesh_;
     bool relaxed_inter_mesh_policy_ = false;
     bool unique_shapes_ = false;
-    bool zero_link_allowed_ = false;  // see set_zero_link_fallback_allowed()
-    bool soft_seams_used_ = false;    // a soft-seam rung produced a seating (stats / diagnostics)
 
     std::unique_ptr<std::map<MeshId, std::shared_ptr<CandidatePool>>> pools_;
     MappingConstraints<MeshId, const Candidate*> constraints_;

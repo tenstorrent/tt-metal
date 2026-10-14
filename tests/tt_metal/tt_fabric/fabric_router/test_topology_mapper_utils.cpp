@@ -582,8 +582,8 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_SingleBHGalaxy_2x4Pipelin
 
 namespace {
 
-// `num_meshes` 1x2 meshes chained by RELAXED mesh-level connections 0-1, 1-2, ...
-::tt::tt_fabric::MeshGraphDescriptor chained_1x2_meshes_relaxed_mgd(uint32_t num_meshes) {
+// `num_meshes` 1x2 meshes chained by mesh-level connections 0-1, 1-2, ... with the given inter-mesh policy.
+::tt::tt_fabric::MeshGraphDescriptor chained_1x2_meshes_mgd(uint32_t num_meshes, const char* policy = "RELAXED") {
     std::string text = R"(
 mesh_descriptors {
   name: "M0"
@@ -605,10 +605,11 @@ graph_descriptors {
             "  connections {{\n"
             "    nodes {{ mesh {{ mesh_descriptor: \"M0\" mesh_id: {} }} }}\n"
             "    nodes {{ mesh {{ mesh_descriptor: \"M0\" mesh_id: {} }} }}\n"
-            "    channels {{ count: 2 policy: RELAXED }}\n"
+            "    channels {{ count: 2 policy: {} }}\n"
             "  }}\n",
             m,
-            m + 1);
+            m + 1,
+            policy);
     }
     text += R"(}
 
@@ -636,33 +637,29 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_RelaxedZeroLink_Succeeds)
     using namespace ::tt::tt_fabric;
 
     auto psd = build_mock_psd(std::vector<std::string>(4, "host0"), std::vector<std::pair<int, int>>{{0, 1}, {2, 3}});
-    auto mgd = chained_1x2_meshes_relaxed_mgd(2);
 
-    // RELAXED inter-mesh: zero-link mapping succeeds via the zero-link fallback.
+    // RELAXED inter-mesh policy: zero-link mapping succeeds (soft-seam rung of the placement ladder).
     {
+        auto mgd = chained_1x2_meshes_mgd(2, "RELAXED");
         TopologyMappingConfig config;
         config.disable_rank_bindings = true;
-        config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
         const auto result = map_multi_mesh_to_physical(psd, mgd, config);
         ASSERT_TRUE(result.success) << "RELAXED inter-mesh connection must map with zero physical links: "
                                     << result.error_message;
         EXPECT_EQ(result.fabric_node_to_physical.size(), 4u);
         verify_bidirectional_consistency(result);
-        EXPECT_TRUE(result.stats.placement_zero_link_fallback)
-            << "the seating is only reachable with inter-mesh seams soft";
         EXPECT_THAT(
             mapped_asic_footprints(result, psd),
             ::testing::UnorderedElementsAre(std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103}));
     }
 
-    // STRICT inter-mesh regression: still requires the physical links, no fallback.
+    // STRICT inter-mesh policy: still requires the physical links, no soft rungs.
     {
+        auto mgd = chained_1x2_meshes_mgd(2, "STRICT");
         TopologyMappingConfig config;
         config.disable_rank_bindings = true;
-        config.inter_mesh_validation_mode = ConnectionValidationMode::STRICT;
         const auto result = map_multi_mesh_to_physical(psd, mgd, config);
         EXPECT_FALSE(result.success) << "STRICT inter-mesh connection with zero physical links must still fail";
-        EXPECT_FALSE(result.stats.placement_zero_link_fallback);
     }
 }
 
@@ -675,17 +672,14 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_RelaxedZeroLink_HardPathF
 
     auto psd = build_mock_psd(
         std::vector<std::string>(6, "host0"), std::vector<std::pair<int, int>>{{0, 1}, {1, 2}, {2, 3}, {4, 5}});
-    auto mgd = chained_1x2_meshes_relaxed_mgd(2);
+    auto mgd = chained_1x2_meshes_mgd(2);
 
     TopologyMappingConfig config;
     config.disable_rank_bindings = true;
-    config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
 
     const auto result = map_multi_mesh_to_physical(psd, mgd, config);
     ASSERT_TRUE(result.success) << result.error_message;
     ASSERT_EQ(result.fabric_node_to_physical.size(), 4u);
-    EXPECT_FALSE(result.stats.placement_zero_link_fallback)
-        << "a fully linked seating exists, so the hard-seam solve must find it without relaxing";
     EXPECT_THAT(
         mapped_asic_footprints(result, psd),
         ::testing::UnorderedElementsAre(std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103}))
@@ -702,18 +696,15 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_RelaxedZeroLink_Maximizes
 
     auto psd = build_mock_psd(
         std::vector<std::string>(6, "host0"), std::vector<std::pair<int, int>>{{0, 1}, {1, 2}, {2, 3}, {4, 5}});
-    auto mgd = chained_1x2_meshes_relaxed_mgd(3);
-
     {
+        auto mgd = chained_1x2_meshes_mgd(3, "RELAXED");
         TopologyMappingConfig config;
         config.disable_rank_bindings = true;
-        config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
 
         const auto result = map_multi_mesh_to_physical(psd, mgd, config);
         ASSERT_TRUE(result.success) << result.error_message;
         ASSERT_EQ(result.fabric_node_to_physical.size(), 6u);
         verify_bidirectional_consistency(result);
-        EXPECT_TRUE(result.stats.placement_zero_link_fallback);
 
         const std::set<uint64_t> pair_a{100, 101};
         const std::set<uint64_t> pair_b{102, 103};
@@ -732,11 +723,11 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_RelaxedZeroLink_Maximizes
         EXPECT_TRUE(edge01 || edge12) << "neither RELAXED edge was realized with physical links";
     }
 
-    // STRICT: no fallback, the chain cannot be realized -> failure.
+    // STRICT policy: no soft rungs, the chain cannot be realized -> failure.
     {
+        auto mgd = chained_1x2_meshes_mgd(3, "STRICT");
         TopologyMappingConfig config;
         config.disable_rank_bindings = true;
-        config.inter_mesh_validation_mode = ConnectionValidationMode::STRICT;
         const auto result = map_multi_mesh_to_physical(psd, mgd, config);
         EXPECT_FALSE(result.success);
     }

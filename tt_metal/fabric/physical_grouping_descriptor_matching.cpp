@@ -1228,7 +1228,7 @@ std::string PlacementSolveStats::to_string() const {
         "  candidates generated: {}  inner solutions: {}\n"
         "  slowest inner: {} {}x{} in {} us\n"
         "  master (SAT joint placement): attempted {}  success {}  candidates {}  growth rounds {}  attempts {}  "
-        "lists complete {}  zero-link fallback {}\n"
+        "lists complete {}\n"
         "  master SAT: {} vars  {} clauses  enumerate {} us  encode {} us  solve {} us\n"
         "  total: {} us ({:.3f} ms)",
         success,
@@ -1253,7 +1253,6 @@ std::string PlacementSolveStats::to_string() const {
         master_growth_rounds,
         master_sat_attempts,
         candidate_lists_complete,
-        zero_link_fallback_engaged,
         master_sat_vars,
         master_sat_clauses,
         master_enumeration_elapsed.count(),
@@ -3472,7 +3471,7 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
     // each rung is tried at the CURRENT pool, in this order, and the pool grows only when every rung failed:
     //   1. hard seams, host cap          -- the normal placement
     //   2. hard seams, cap dropped       -- meshes may span more hosts / use cross-host seats
-    //   3. soft seams, host cap          -- RELAXED policy only: inter-mesh connections may be zero-link (#56762)
+    //   3. soft seams, host cap          -- RELAXED inter-mesh policy only: connections may be zero-link (#56762)
     //   4. soft seams, cap dropped
     //   5. grow the candidate pool (last resort) and repeat 1-4
     // Trying the relaxations at every pool size (rather than once after all growth) lets a solvable smaller pool
@@ -3489,7 +3488,7 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
         MappingResult<MeshId, const Candidate*> r;
         r.success = false;
         for (const SolveRung& rung : kLadder) {
-            if (rung.soft_seams && !zero_link_allowed_) {
+            if (rung.soft_seams && !relaxed_inter_mesh_policy_) {
                 break;  // STRICT inter-mesh policy: soft rungs are not allowed
             }
             r = master_solve_->next(rung);
@@ -3563,17 +3562,13 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
             candidates,
             complete ? "COMPLETE" : "TRUNCATED",
             complete ? "trustworthy" : "NOT trustworthy",
-            zero_link_allowed_ ? " (soft inter-mesh seams were tried too)" : "");
+            relaxed_inter_mesh_policy_ ? " (soft inter-mesh seams were tried too)" : "");
         return {};
     }
 
     AssignedMeshes assigned = decode_sat_placement(result);
     remember_yielded(assigned);
     if (solved_with_soft_seams) {
-        soft_seams_used_ = true;
-        if (stats_ != nullptr) {
-            stats_->zero_link_fallback_engaged = true;
-        }
         log_warning(
             tt::LogFabric,
             "SAT joint placement: seated {} mesh(es) under RELAXED zero-link tolerance (#56762); unrealized "

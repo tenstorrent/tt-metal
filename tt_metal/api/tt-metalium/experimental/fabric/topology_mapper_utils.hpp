@@ -190,7 +190,6 @@ struct TopologyMappingStats {
     bool placement_attempted = false;
     bool placement_success = false;
     bool candidate_lists_complete = false;
-    bool placement_zero_link_fallback = false;  ///< Seated with inter-mesh seams SOFT (#56762)
     std::size_t meshes_total = 0;
     std::size_t meshes_placed = 0;
     std::size_t placement_candidates = 0;

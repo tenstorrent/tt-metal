@@ -1204,7 +1204,6 @@ void apply_placement_stats(TopologyMappingStats& stats, const ::tt::tt_fabric::P
     stats.placement_attempted = placement.master_solve_attempted;
     stats.placement_success = placement.master_solve_success;
     stats.candidate_lists_complete = placement.candidate_lists_complete;
-    stats.placement_zero_link_fallback = placement.zero_link_fallback_engaged;
     stats.meshes_total = placement.meshes_total;
     stats.meshes_placed = placement.meshes_placed;
     stats.placement_candidates = placement.master_candidates_enumerated;
@@ -1227,13 +1226,12 @@ std::string format_sat_placement_failure(const ::tt::tt_fabric::PlacementSolveSt
     }
     return fmt::format(
         "SAT joint placement: no placement found after {} attempt(s) and {} growth cycle(s) over {} "
-        "candidate(s); candidate lists {} -- the UNSAT verdict is {}{}",
+        "candidate(s); candidate lists {} -- the UNSAT verdict is {}",
         stats.master_sat_attempts,
         stats.master_growth_rounds,
         stats.master_candidates_enumerated,
         stats.candidate_lists_complete ? "COMPLETE" : "TRUNCATED",
-        stats.candidate_lists_complete ? "trustworthy" : "NOT trustworthy",
-        stats.zero_link_fallback_engaged ? " (even with RELAXED zero-link tolerance: inter-mesh seams SOFT)" : "");
+        stats.candidate_lists_complete ? "trustworthy" : "NOT trustworthy");
 }
 
 void set_mapping_failure(TopologyMappingResult& result, std::string failure_stage, std::string error_message) {
@@ -1252,7 +1250,7 @@ std::string TopologyMappingStats::to_string() const {
         "  failure_stage: {}  failing meshes: logical={} physical={}\n"
         "  seated grouping: '{}' type '{}'\n"
         "  intra: {} n_target={} n_global={} required={} preferred={}/{} dfs_calls={} sat_solves={}\n"
-        "  placement: attempted={} success={} lists_complete={} zero_link_fallback={} meshes={}/{} candidates={} "
+        "  placement: attempted={} success={} lists_complete={} meshes={}/{} candidates={} "
         "growth={} sat_attempts={} vars={} clauses={}\n"
         "  inner_solver_calls={} candidates_generated={} warnings={}",
         failure_stage.empty() ? "-" : failure_stage,
@@ -1271,7 +1269,6 @@ std::string TopologyMappingStats::to_string() const {
         placement_attempted,
         placement_success,
         candidate_lists_complete,
-        placement_zero_link_fallback,
         meshes_placed,
         meshes_total,
         placement_candidates,
@@ -1666,8 +1663,6 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
         unique_shapes,
         fabric_node_id_to_mesh_rank_,
         config_.placement_asic_allowlist);
-    placement_session_->set_zero_link_fallback_allowed(
-        inter_mesh_validation_mode_ == ::tt::tt_fabric::ConnectionValidationMode::RELAXED);
 }
 
 MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
@@ -1693,8 +1688,6 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
         physical_node_id_to_mesh_rank_,
         unique_shapes,
         config_.placement_asic_allowlist);
-    placement_session_->set_zero_link_fallback_allowed(
-        inter_mesh_validation_mode_ == ::tt::tt_fabric::ConnectionValidationMode::RELAXED);
 }
 
 MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
@@ -1715,8 +1708,6 @@ MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(
         physical_node_id_to_mesh_rank_,
         unique_shapes,
         config_.placement_asic_allowlist);
-    placement_session_->set_zero_link_fallback_allowed(
-        inter_mesh_validation_mode_ == ::tt::tt_fabric::ConnectionValidationMode::RELAXED);
 }
 
 MultiMeshSolutionEnumerator::MultiMeshSolutionEnumerator(MultiMeshSolutionEnumerator&&) noexcept = default;
