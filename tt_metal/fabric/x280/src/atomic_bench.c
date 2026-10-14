@@ -91,7 +91,7 @@
  * contention window overlaps.
  *
  * Linker: ld/x280.ld (active-FW LIM region at 0x08001000).
- * Build:  make -C x280 atomic-bench  ->  build/firmware-atomic-bench.bin
+ * Build:  ninja x280_images  ->  build/x280/firmware-atomic-bench.bin
  *
  * NOTE ON RECOVERY: if AMOs against LIM are unsupported, the amo_probe
  * step detects it *without* faulting the core (it arms entry.S probe

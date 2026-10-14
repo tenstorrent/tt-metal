@@ -8,7 +8,7 @@
 // union, which is what firmware programs. Getting this wrong produces a window
 // that resolves to a plausible wrong address rather than failing.
 //
-//   x280/build_x280.sh --host-only && x280/build_Release/x280_host_tests
+//   ninja -C build x280_runtime_host_tests && build/test/tt_metal/x280/x280_runtime_host_tests
 
 #include "x280/device/x280_noc_window.hpp"
 #include "x280/device/x280_tile.hpp"

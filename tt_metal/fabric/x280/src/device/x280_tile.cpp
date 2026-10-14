@@ -232,7 +232,7 @@ bool TileImpl::classify_cold_boot_unlocked(BootResult& result) const {
 }
 
 size_t TileImpl::prepare_cold_boot_unlocked(const std::string& idle_image_path) {
-    const auto image = read_image_file(idle_image_path, "resident-idle image", "make -C x280 lim-idle");
+    const auto image = read_image_file(idle_image_path, "resident-idle image", "ninja x280_images");
     load_idle_image_unlocked(image);
     set_reset_vectors_unlocked(X280_IDLE_FW_LOAD_ADDR);
     zero_hart_protocol_unlocked();
@@ -369,7 +369,7 @@ BootResult TileImpl::boot(const BootRequest& request) {
             }
         }
 
-        const auto image = read_image_file(request.idle_image_path, "resident-idle image", "make -C x280 lim-idle");
+        const auto image = read_image_file(request.idle_image_path, "resident-idle image", "ninja x280_images");
         load_idle_image_unlocked(image);
         set_reset_vectors_unlocked(X280_IDLE_FW_LOAD_ADDR);
         zero_hart_protocol_unlocked();

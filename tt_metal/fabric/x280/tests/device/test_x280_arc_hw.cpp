@@ -5,7 +5,7 @@
 // wrapper exposes neither get_clocks() nor arc_msg().
 //
 //   TT_METAL_RUNTIME_ROOT=<tt-metal> [TT_VISIBLE_DEVICES=N]
-//   x280/build_Release/x280_arc_test
+//   build/test/tt_metal/x280/x280_arc_test
 
 #include "x280_device_test_support.hpp"
 

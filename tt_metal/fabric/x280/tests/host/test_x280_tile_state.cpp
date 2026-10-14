@@ -5,7 +5,7 @@
 // Host-only tests for the tile snapshot and the active-image bound. No
 // hardware, no UMD, no Metal.
 //
-//   x280/build_x280.sh --host-only && x280/build_Release/x280_host_tests
+//   ninja -C build x280_runtime_host_tests && build/test/tt_metal/x280/x280_runtime_host_tests
 
 #include "x280/device/x280_tile.hpp"
 #include "x280/device/x280_tile_state.hpp"

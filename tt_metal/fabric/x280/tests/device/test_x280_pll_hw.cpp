@@ -28,7 +28,7 @@
 //
 // Run with:
 //   X280_ALLOW_PLL_SLEW=1 TT_METAL_RUNTIME_ROOT=<tt-metal> TT_VISIBLE_DEVICES=N
-//   x280/build_Release/x280_pll_test
+//   build/test/tt_metal/x280/x280_pll_test
 // Omit TT_VISIBLE_DEVICES to sweep the whole mesh. Prefer a host where nothing
 // else holds /dev/tenstorrent/*; a fleet telemetry agent counts.
 

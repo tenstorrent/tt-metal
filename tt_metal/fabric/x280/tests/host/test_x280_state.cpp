@@ -5,7 +5,7 @@
 // Host-only tests for the X280 component's pure rules. No hardware, no UMD, no
 // Metal — these must pass on a machine with no Tenstorrent device.
 //
-//   x280/build_x280.sh --host-only && x280/build_Release/x280_host_tests
+//   ninja -C build x280_runtime_host_tests && build/test/tt_metal/x280/x280_runtime_host_tests
 
 #include "x280/device/x280_state.hpp"
 #include "x280/device/x280_deadline.hpp"

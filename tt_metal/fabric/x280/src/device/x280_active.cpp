@@ -685,7 +685,7 @@ EnqueueResult RuntimeImpl::enqueue(X280Tile& tile, const ActiveRunRequest& reque
         bool image_ready = false;
         try {
             const auto image =
-                detail::TileImpl::read_image_file(request.image_path, "active image", "make -C x280 all");
+                detail::TileImpl::read_image_file(request.image_path, "active image", "ninja x280_images");
             const size_t padded_size = (image.size() + 3) & ~static_cast<size_t>(3);
             const auto image_check =
                 validate_active_image(X280_ACTIVE_FW_LOAD_ADDR, padded_size, state.ecc_primed_bytes, lim_layout());
