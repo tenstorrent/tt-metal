@@ -13,8 +13,9 @@
  * not the worker's harts are running application code.
  *
  * Every issue moves `transfer_size` bytes as `transfer_size / 4` back-to-
- * back u32 stores. BUG-4 forbids memcpy and wider stores through a NOC
- * window, so the burst is a straight sequence of `sw` instructions. Every
+ * back u32 stores. BUG-4 forbids memcpy through a NOC window; the burst is
+ * a straight sequence of `sw` instructions, the shape this member
+ * measures. Every
  * store against the uncached window becomes its own NoC request
  * (TLBWindows.md), so `transfer_size` is a burst of 4-byte requests, not
  * one packet.

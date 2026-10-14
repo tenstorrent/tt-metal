@@ -9,9 +9,9 @@
  * X280 is the initiator. It programs one paired-range NOC TLB slot at the
  * Tensix worker's L1 destination in posted mode, then issues bursts of
  * `transfer_size / 4` back-to-back u32 stores through the window. BUG-4
- * forbids memcpy and wider stores through the window, so the burst is a
- * straight sequence of `sw` instructions the compiler unrolls at
- * `issue<TransferSize>`.
+ * forbids memcpy through the window; the burst is a straight sequence of
+ * `sw` instructions the compiler unrolls at `issue<TransferSize>`, the shape
+ * this member measures.
  *
  * The source of every store is a stack-resident vector loaded from LIM
  * once at INIT; subsequent iterations hit the X280's cache path to the
