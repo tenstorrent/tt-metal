@@ -4,12 +4,12 @@
 
 // Reader of the modulated deformable im2col.
 //
-// Per block of 32 output rows (pixels) it stages the rows' offsets and masks and
-// hands compute one tile each of the y and x offsets, the mask and the rows'
-// window origins, laid out [row, kernel position]; the kernel offsets of the
-// positions it hands over once. Compute returns every sample's top-left corner
-// page within its image and its four weights, zero for a corner outside the
-// input, in the same layout. For each kernel position the reader then hands
+// Per block of 32 output rows (pixels) it stages the rows' offsets and mask
+// logits, one stick per row, and hands compute one tile each of the y and x
+// offsets, the mask logits and the rows' window origins, laid out [row, kernel
+// position]; the kernel offsets of the positions it hands over once. Compute
+// returns every sample's top-left corner page within its image and its four
+// weights, zero for a corner outside the input, in the same layout. For each kernel position the reader then hands
 // compute the four corners as one row-major block, 32 rows of
 // [corner 0 | corner 1 | corner 2 | corner 3] C-wide input sticks, landed by the
 // NoC reads themselves, plus one scalar tile per corner whose column 0 holds the
@@ -19,7 +19,9 @@
 // The geometry runs on compute because the data-movement RISC-Vs have no FPU;
 // the reader only moves bits. Offsets saturate at +-OFFSET_CLAMP pixels, which
 // keeps every coordinate exact in fp32 and puts a non-finite offset outside the
-// input. The next block's geometry is handed over before this block's corners
+// input. Mask logits saturate the same way: a NaN one would give its row NaN
+// weights, nonzero even for corners outside the input, whose pages the reader
+// would then read. The next block's geometry is handed over before this block's corners
 // are read, so compute works on it while the reader waits on the NoC.
 //
 // Two copies of this kernel run per core, one on each data-movement RISC-V and
@@ -40,45 +42,42 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
-constexpr uint32_t offset_arena_cb_index = get_compile_time_arg_val(0);
-constexpr uint32_t mask_arena_cb_index = get_compile_time_arg_val(1);
-constexpr uint32_t corner_block_cb_index = get_compile_time_arg_val(2);
-constexpr uint32_t scalar_tile_cb_index = get_compile_time_arg_val(3);
-constexpr uint32_t C = get_compile_time_arg_val(4);
-constexpr int32_t IN_H = get_compile_time_arg_val(5);
-constexpr int32_t IN_W = get_compile_time_arg_val(6);
-constexpr uint32_t OUT_H = get_compile_time_arg_val(7);
-constexpr uint32_t OUT_W = get_compile_time_arg_val(8);
-constexpr uint32_t KERNEL_W = get_compile_time_arg_val(9);
-constexpr uint32_t kernel_positions = get_compile_time_arg_val(10);
-constexpr int32_t STRIDE_H = get_compile_time_arg_val(11);
-constexpr int32_t STRIDE_W = get_compile_time_arg_val(12);
-constexpr int32_t PAD_H = get_compile_time_arg_val(13);
-constexpr int32_t PAD_W = get_compile_time_arg_val(14);
-constexpr int32_t DILATION_H = get_compile_time_arg_val(15);
-constexpr int32_t DILATION_W = get_compile_time_arg_val(16);
-// Page strides of the three row-major tensors, as their buffers lay them out.
-constexpr uint32_t input_page_nbytes = get_compile_time_arg_val(17);
-constexpr uint32_t offset_page_nbytes = get_compile_time_arg_val(18);
-constexpr uint32_t mask_page_nbytes = get_compile_time_arg_val(19);
+constexpr uint32_t offset_mask_arena_cb_index = get_compile_time_arg_val(0);
+constexpr uint32_t corner_block_cb_index = get_compile_time_arg_val(1);
+constexpr uint32_t scalar_tile_cb_index = get_compile_time_arg_val(2);
+constexpr uint32_t C = get_compile_time_arg_val(3);
+constexpr int32_t IN_H = get_compile_time_arg_val(4);
+constexpr int32_t IN_W = get_compile_time_arg_val(5);
+constexpr uint32_t OUT_H = get_compile_time_arg_val(6);
+constexpr uint32_t OUT_W = get_compile_time_arg_val(7);
+constexpr uint32_t KERNEL_W = get_compile_time_arg_val(8);
+constexpr uint32_t kernel_positions = get_compile_time_arg_val(9);
+constexpr int32_t STRIDE_H = get_compile_time_arg_val(10);
+constexpr int32_t STRIDE_W = get_compile_time_arg_val(11);
+constexpr int32_t PAD_H = get_compile_time_arg_val(12);
+constexpr int32_t PAD_W = get_compile_time_arg_val(13);
+constexpr int32_t DILATION_H = get_compile_time_arg_val(14);
+constexpr int32_t DILATION_W = get_compile_time_arg_val(15);
+// Page strides of the two row-major tensors, as their buffers lay them out.
+constexpr uint32_t input_page_nbytes = get_compile_time_arg_val(16);
+constexpr uint32_t offset_mask_page_nbytes = get_compile_time_arg_val(17);
 // The host validates that the input size, padding and kernel span stay below this.
-constexpr uint32_t OFFSET_CLAMP = get_compile_time_arg_val(20);
-constexpr uint32_t geom_in_cb_index = get_compile_time_arg_val(21);
-constexpr uint32_t geom_index_cb_index = get_compile_time_arg_val(22);
-constexpr uint32_t geom_weight_cb_index = get_compile_time_arg_val(23);
-constexpr uint32_t geom_kernel_cb_index = get_compile_time_arg_val(24);
+constexpr uint32_t OFFSET_CLAMP = get_compile_time_arg_val(18);
+constexpr uint32_t geom_in_cb_index = get_compile_time_arg_val(19);
+constexpr uint32_t geom_index_cb_index = get_compile_time_arg_val(20);
+constexpr uint32_t geom_weight_cb_index = get_compile_time_arg_val(21);
+constexpr uint32_t geom_kernel_cb_index = get_compile_time_arg_val(22);
 // This copy's role: whether it stages the geometry, its first kernel position (it takes every
 // other one), and whether it writes the output.
-constexpr bool STAGES_GEOMETRY = get_compile_time_arg_val(25);
-constexpr uint32_t FIRST_POSITION = get_compile_time_arg_val(26);
-constexpr bool WRITES_OUTPUT = get_compile_time_arg_val(27);
-constexpr uint32_t output_cb_index = get_compile_time_arg_val(28);
-constexpr uint32_t output_tile_nbytes = get_compile_time_arg_val(29);
+constexpr bool STAGES_GEOMETRY = get_compile_time_arg_val(23);
+constexpr uint32_t FIRST_POSITION = get_compile_time_arg_val(24);
+constexpr bool WRITES_OUTPUT = get_compile_time_arg_val(25);
+constexpr uint32_t output_cb_index = get_compile_time_arg_val(26);
+constexpr uint32_t output_tile_nbytes = get_compile_time_arg_val(27);
 
-constexpr auto input_args = TensorAccessorArgs<30>();
-constexpr auto offset_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-constexpr auto mask_args = TensorAccessorArgs<offset_args.next_compile_time_args_offset()>();
-constexpr auto output_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
+constexpr auto input_args = TensorAccessorArgs<28>();
+constexpr auto offset_mask_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+constexpr auto output_args = TensorAccessorArgs<offset_mask_args.next_compile_time_args_offset()>();
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t CHANNEL_TILES = C / 32;
@@ -91,7 +90,7 @@ constexpr uint32_t OUTPUT_TILES_PER_BLOCK = kernel_positions * CHANNEL_TILES;
 // [row, kernel position].
 constexpr uint32_t IN_DY = 0;
 constexpr uint32_t IN_DX = 1;
-constexpr uint32_t IN_MASK = 2;
+constexpr uint32_t IN_MASK = 2;  // the logits; compute applies the sigmoid
 constexpr uint32_t IN_ORIGIN_Y = 3;
 constexpr uint32_t IN_ORIGIN_X = 4;
 constexpr uint32_t GEOM_IN_TILES = 5;
@@ -109,8 +108,8 @@ namespace {
 constexpr uint32_t CLAMP_EXPONENT = 127 + (31 - __builtin_clz(OFFSET_CLAMP));
 constexpr uint16_t CLAMP_BF16 = static_cast<uint16_t>(CLAMP_EXPONENT << 7);
 
-// An offset of magnitude OFFSET_CLAMP or more, inf and NaN, become +-OFFSET_CLAMP.
-inline uint32_t offset_to_fp32(uint16_t bf16) {
+// A value of magnitude OFFSET_CLAMP or more, inf and NaN, become +-OFFSET_CLAMP.
+inline uint32_t saturate_to_fp32(uint16_t bf16) {
     if (((bf16 >> 7) & 0xFFu) >= CLAMP_EXPONENT) {
         const bool negative = (bf16 & 0x8000u) && (bf16 & 0x7FFFu) <= 0x7F80u;  // NaN goes positive
         return static_cast<uint32_t>(negative ? (0x8000u | CLAMP_BF16) : CLAMP_BF16) << 16;
@@ -150,16 +149,14 @@ inline uint32_t valid_rows_of(uint32_t block, uint32_t num_rows) {
 
 void kernel_main() {
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
-    const uint32_t offset_addr = get_arg_val<uint32_t>(1);
-    const uint32_t mask_addr = get_arg_val<uint32_t>(2);
-    const uint32_t start_block = get_arg_val<uint32_t>(3);
-    const uint32_t num_blocks = get_arg_val<uint32_t>(4);
-    const uint32_t num_rows = get_arg_val<uint32_t>(5);
-    const uint32_t output_addr = get_arg_val<uint32_t>(6);
+    const uint32_t offset_mask_addr = get_arg_val<uint32_t>(1);
+    const uint32_t start_block = get_arg_val<uint32_t>(2);
+    const uint32_t num_blocks = get_arg_val<uint32_t>(3);
+    const uint32_t num_rows = get_arg_val<uint32_t>(4);
+    const uint32_t output_addr = get_arg_val<uint32_t>(5);
 
     const auto input_acc = TensorAccessor(input_args, input_addr, input_page_nbytes);
-    const auto offset_acc = TensorAccessor(offset_args, offset_addr, offset_page_nbytes);
-    const auto mask_acc = TensorAccessor(mask_args, mask_addr, mask_page_nbytes);
+    const auto offset_mask_acc = TensorAccessor(offset_mask_args, offset_mask_addr, offset_mask_page_nbytes);
     const auto output_acc = TensorAccessor(output_args, output_addr, output_tile_nbytes);
 
     Noc noc;
@@ -170,16 +167,12 @@ void kernel_main() {
     CircularBuffer weight_cb(geom_weight_cb_index);
     CircularBuffer output_cb(output_cb_index);
 
-    uint32_t offset_l1 = 0;
-    uint32_t mask_l1 = 0;
+    uint32_t offset_mask_l1 = 0;
     if constexpr (STAGES_GEOMETRY) {
-        // The arenas are reserved once and used as flat L1; nothing waits on them.
-        CircularBuffer offset_arena_cb(offset_arena_cb_index);
-        CircularBuffer mask_arena_cb(mask_arena_cb_index);
-        offset_arena_cb.reserve_back(TILE_ROWS);
-        offset_l1 = offset_arena_cb.get_write_ptr();
-        mask_arena_cb.reserve_back(TILE_ROWS);
-        mask_l1 = mask_arena_cb.get_write_ptr();
+        // The arena is reserved once and used as flat L1; nothing waits on it.
+        CircularBuffer offset_mask_arena_cb(offset_mask_arena_cb_index);
+        offset_mask_arena_cb.reserve_back(TILE_ROWS);
+        offset_mask_l1 = offset_mask_arena_cb.get_write_ptr();
 
         CircularBuffer geom_kernel_cb(geom_kernel_cb_index);
         geom_kernel_cb.reserve_back(2);
@@ -196,15 +189,13 @@ void kernel_main() {
         geom_kernel_cb.push_back(2);
     }
 
-    // Stages a block's offsets and masks and hands compute its geometry tiles.
+    // Stages a block's offsets and mask logits and hands compute its geometry tiles.
     auto stage_geometry = [&](uint32_t block) {
         const uint32_t row0 = block * TILE_ROWS;
         const uint32_t valid_rows = valid_rows_of(block, num_rows);
         for (uint32_t r = 0; r < valid_rows; ++r) {
-            CoreLocalMem<uint32_t> off_dst(offset_l1 + r * offset_page_nbytes);
-            noc.async_read(offset_acc, off_dst, offset_page_nbytes, {.page_id = row0 + r}, {.offset_bytes = 0});
-            CoreLocalMem<uint32_t> mask_dst(mask_l1 + r * mask_page_nbytes);
-            noc.async_read(mask_acc, mask_dst, mask_page_nbytes, {.page_id = row0 + r}, {.offset_bytes = 0});
+            CoreLocalMem<uint32_t> dst(offset_mask_l1 + r * offset_mask_page_nbytes);
+            noc.async_read(offset_mask_acc, dst, offset_mask_page_nbytes, {.page_id = row0 + r}, {.offset_bytes = 0});
         }
         geom_in_cb.reserve_back(GEOM_IN_TILES);
         const uint32_t geom_l1 = geom_in_cb.get_write_ptr();
@@ -216,14 +207,16 @@ void kernel_main() {
         for (uint32_t r = 0; r < valid_rows; ++r) {
             const uint32_t origin_y = int_to_fp32(static_cast<int32_t>(h_o) * STRIDE_H - PAD_H);
             const uint32_t origin_x = int_to_fp32(static_cast<int32_t>(w_o) * STRIDE_W - PAD_W);
-            CoreLocalMem<volatile uint16_t> off(offset_l1 + r * offset_page_nbytes);
-            CoreLocalMem<volatile uint16_t> msk(mask_l1 + r * mask_page_nbytes);
+            CoreLocalMem<volatile uint16_t> off(offset_mask_l1 + r * offset_mask_page_nbytes);
+            // The mask logits follow the row's 2*K*K offsets.
+            CoreLocalMem<volatile uint16_t> msk(
+                offset_mask_l1 + r * offset_mask_page_nbytes + 2 * kernel_positions * sizeof(uint16_t));
             for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
                 const uint32_t element = tile_element(r, kk) * sizeof(uint32_t);
                 CoreLocalMem<volatile uint32_t> dst(geom_l1 + element);
-                dst[IN_DY * FP32_TILE_NBYTES / sizeof(uint32_t)] = offset_to_fp32(off[2 * kk]);
-                dst[IN_DX * FP32_TILE_NBYTES / sizeof(uint32_t)] = offset_to_fp32(off[2 * kk + 1]);
-                dst[IN_MASK * FP32_TILE_NBYTES / sizeof(uint32_t)] = static_cast<uint32_t>(msk[kk]) << 16;
+                dst[IN_DY * FP32_TILE_NBYTES / sizeof(uint32_t)] = saturate_to_fp32(off[2 * kk]);
+                dst[IN_DX * FP32_TILE_NBYTES / sizeof(uint32_t)] = saturate_to_fp32(off[2 * kk + 1]);
+                dst[IN_MASK * FP32_TILE_NBYTES / sizeof(uint32_t)] = saturate_to_fp32(msk[kk]);
                 dst[IN_ORIGIN_Y * FP32_TILE_NBYTES / sizeof(uint32_t)] = origin_y;
                 dst[IN_ORIGIN_X * FP32_TILE_NBYTES / sizeof(uint32_t)] = origin_x;
             }

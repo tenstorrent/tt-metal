@@ -45,8 +45,7 @@ struct ModulatedDeformIm2colOperation {
 
     struct tensor_args_t {
         const Tensor& input;
-        const Tensor& offset;
-        const Tensor& mask;
+        const Tensor& offset_mask;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -74,8 +73,7 @@ namespace ttnn::prim {
 
 ttnn::Tensor modulated_deform_im2col(
     const Tensor& input,
-    const Tensor& offset,
-    const Tensor& mask,
+    const Tensor& offset_mask,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> padding,

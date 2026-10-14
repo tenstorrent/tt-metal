@@ -28,7 +28,7 @@ constexpr std::string_view kKernelDir = "ttnn/cpp/ttnn/operations/experimental/m
 }  // namespace
 
 // Work unit: a block of 32 consecutive output rows (pixels), all K*K kernel
-// positions of it on one core, so its offsets and mask are staged once. Blocks
+// positions of it on one core, so its offsets and mask logits are staged once. Blocks
 // are independent, so there is no cross-core traffic.
 ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args, Tensor& output) {
@@ -36,8 +36,7 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     const auto s = derive_shapes(attrs, tensor_args);
 
     const auto& input = tensor_args.input;
-    const auto& offset = tensor_args.offset;
-    const auto& mask = tensor_args.mask;
+    const auto& offset_mask = tensor_args.offset_mask;
 
     constexpr uint32_t TILE_ROWS = tt::constants::TILE_HEIGHT;
     const uint32_t channel_tiles = s.channels / tt::constants::TILE_WIDTH;
@@ -48,15 +47,13 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
 
     // Page strides as the buffers lay the pages out; validation guarantees no row padding.
     const uint32_t input_page_nbytes = input.buffer()->aligned_page_size();
-    const uint32_t offset_page_nbytes = offset.buffer()->aligned_page_size();
-    const uint32_t mask_page_nbytes = mask.buffer()->aligned_page_size();
+    const uint32_t offset_mask_page_nbytes = offset_mask.buffer()->aligned_page_size();
 
     const auto compute_grid = input.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, blocks_per_core_1, blocks_per_core_2] =
         split_work_to_cores(compute_grid, num_blocks);
 
-    constexpr uint8_t offset_arena_cb = tt::CBIndex::c_0;
-    constexpr uint8_t mask_arena_cb = tt::CBIndex::c_1;
+    constexpr uint8_t offset_mask_arena_cb = tt::CBIndex::c_0;
     constexpr uint8_t corner_block_cb = tt::CBIndex::c_2;
     constexpr uint8_t scalar_tile_cb = tt::CBIndex::c_3;
     constexpr uint8_t tiled_block_cb = tt::CBIndex::c_4;
@@ -85,8 +82,7 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
             });
         };
     // Reader-only arenas, one stick per row of a block.
-    push_cb(offset_arena_cb, TILE_ROWS, offset_page_nbytes);
-    push_cb(mask_arena_cb, TILE_ROWS, mask_page_nbytes);
+    push_cb(offset_mask_arena_cb, TILE_ROWS, offset_mask_page_nbytes);
     // The four corners of a kernel position, row-major in tile-sized pages, and one scalar tile
     // per corner, for each reader. Each reader lands its next position while compute tilizes the
     // other's.
@@ -98,7 +94,7 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     }
     push_cb(tiled_block_cb, CORNERS * channel_tiles, tile_nbytes);
     push_cb(output_tile_cb, 2 * channel_tiles, tile_nbytes);
-    // A block's geometry, [row, kernel position] tiles: the first reader's offsets, mask and window
+    // A block's geometry, [row, kernel position] tiles: the first reader's offsets, mask logits and window
     // origins in fp32, and compute's corner pages (int32) and weights, one copy per reader and two
     // blocks deep so compute hands over the next block's while the readers work on this one. The
     // kernel offsets are one pair of fp32 tiles for the whole run.
@@ -118,8 +114,7 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
     // the odd ones and writes the output.
     auto reader_ct = [&](bool first) {
         KernelDescriptor::CompileTimeArgs ct{
-            offset_arena_cb,
-            mask_arena_cb,
+            offset_mask_arena_cb,
             first ? corner_block_cb : odd_corner_block_cb,
             first ? scalar_tile_cb : odd_scalar_tile_cb,
             s.channels,
@@ -136,8 +131,7 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
             attrs.dilation[0],
             attrs.dilation[1],
             input_page_nbytes,
-            offset_page_nbytes,
-            mask_page_nbytes,
+            offset_mask_page_nbytes,
             kOffsetClampPixels,
             geom_in_cb,
             first ? geom_index_cb : odd_geom_index_cb,
@@ -150,8 +144,7 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
             tile_nbytes,
         };
         TensorAccessorArgs(*input.buffer()).append_to(ct);
-        TensorAccessorArgs(*offset.buffer()).append_to(ct);
-        TensorAccessorArgs(*mask.buffer()).append_to(ct);
+        TensorAccessorArgs(*offset_mask.buffer()).append_to(ct);
         TensorAccessorArgs(*output.buffer()).append_to(ct);
         return ct;
     };
@@ -217,8 +210,7 @@ ProgramDescriptor ModulatedDeformIm2colOperation::create_descriptor(
         }
         KernelDescriptor::RTArgList reader_args;
         reader_args.push_back(input.buffer());
-        reader_args.push_back(offset.buffer());
-        reader_args.push_back(mask.buffer());
+        reader_args.push_back(offset_mask.buffer());
         reader_args.push_back(block_cursor);
         reader_args.push_back(blocks_here);
         reader_args.push_back(s.rows);

@@ -66,13 +66,19 @@ class TTConv2D:
     input, so they are prepared here against it and a forward does no host work, and a
     call with a different input fails instead of running on mismatched weights.
     With ``dram_activation``, a 1x1 stride-1 conv runs as ``ttnn.linear`` instead, which
-    takes any layout, sharding or dtype and ignores ``input_dtype`` and ``input_layout``; its
-    ``conv_pth`` is then a Linear's ``(in, out)`` weight and ``(1, out)`` bias, which
-    ``model_preprocessing`` emits for such convs. A spatial conv keeps conv2d and runs in
-    ``dram_conv_slices`` width slices.
+    takes any layout, sharding or dtype and ignores ``input_dtype``, ``input_layout`` and
+    ``output_layout``; its ``conv_pth`` is then a Linear's ``(in, out)`` weight and ``(1, out)``
+    bias, which ``model_preprocessing`` emits for such convs. A spatial conv keeps conv2d and runs
+    in ``dram_conv_slices`` width slices.
 
     ``dealloc_act`` lets conv2d free the L1-sharded copy it makes of a DRAM input once the
     halo has read it; the DRAM input itself is never freed.
+
+    ``output_layout`` is the layout conv2d emits, None for its TILE default. conv2d's DRAM path
+    runs every slice through its L1 conv with a TILE output and, with a single slice, returns
+    that tensor as it is, whatever layout was asked for. A ROW_MAJOR conv therefore runs
+    unsliced on the L1 path, so its activation and output must fit in L1, and cannot take
+    ``dram_activation``.
 
     ``output_dtype`` is the dtype the conv emits, None for its input's. A spatial conv, on
     conv2d's own path with packer_l1_acc off, keeps its partial sums between reduction blocks
@@ -97,7 +103,11 @@ class TTConv2D:
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
         output_dtype=None,
+        output_layout=None,
     ):
+        assert not (
+            dram_activation and output_layout == ttnn.ROW_MAJOR_LAYOUT
+        ), "a ROW_MAJOR output needs conv2d's unsliced L1 path, which dram_activation leaves"
         self.dram_activation = dram_activation
         self.input_dtype = input_dtype
         self.input_layout = input_layout
@@ -132,6 +142,8 @@ class TTConv2D:
         )
         if act_block_h is not None:
             self.conv_config.act_block_h_override = act_block_h
+        if output_layout is not None:
+            self.conv_config.output_layout = output_layout
 
         self.bias = conv_pth.bias
 
@@ -152,6 +164,8 @@ class TTConv2D:
             output_width = (self.input_width + 2 * self.padding[1] - self.kernel_size[1]) // self.stride[1] + 1
             num_slices = min(dram_conv_slices, math.ceil(output_width / ttnn.TILE_SIZE))
             self.slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=num_slices)
+        elif output_layout == ttnn.ROW_MAJOR_LAYOUT:
+            self.slice_config = ttnn.Conv2dL1FullSliceConfig
 
         self.linear_weight = None
         self.linear_bias = None

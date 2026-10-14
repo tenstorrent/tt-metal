@@ -43,13 +43,13 @@ class TTModulatedDeformConv2dPack:
             relu=relu,
         )
 
-        # conv_offset emits DCNv2's offsets, in pixels and (y, x) order, then the mask logits.
-        # Its output is bfloat16 whatever the input dtype, since the offsets set the sampling
-        # positions. Trained offsets reach tens of pixels, and accumulating in a bfloat16
-        # destination register errs by up to a few of them, so the register is fp32. The partial
-        # sums conv2d writes back between reduction blocks stay bfloat16 (packer_l1_acc is off):
-        # fp32 partial sums gain no accuracy here.
-        self.num_offset_channels = 2 * kernel_size * kernel_size
+        # conv_offset emits DCNv2's offsets, in pixels and (y, x) order, then the mask logits, the
+        # order the im2col takes, and in ROW_MAJOR, the layout it reads. Its output is bfloat16
+        # whatever the input dtype, since the offsets set the sampling positions. Trained offsets
+        # reach tens of pixels, and accumulating in a bfloat16 destination register errs by up to
+        # a few of them, so the register is fp32. The partial sums conv2d writes back between
+        # reduction blocks stay bfloat16 (packer_l1_acc is off): fp32 partial sums gain no
+        # accuracy here.
         self.conv_offset = TTConv2D(
             offset_args,
             conv_pth.conv_offset,
@@ -59,6 +59,7 @@ class TTModulatedDeformConv2dPack:
             input_dtype=input_dtype,
             input_layout=ttnn.ROW_MAJOR_LAYOUT,
             output_dtype=ttnn.bfloat16,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
     def __call__(self, x):
@@ -67,21 +68,19 @@ class TTModulatedDeformConv2dPack:
         # One ROW_MAJOR copy feeds both conv_offset and the DCN: conv2d reshapes its input
         # between flat and NHWC, which in TILE copies whenever the width is not a tile multiple.
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        out, out_h, out_w = self.conv_offset(x)
-        out = ttnn.reshape(out, (self.batch_size, out_h, out_w, out.shape[-1]))
-        offset = out[:, :, :, : self.num_offset_channels]
-        mask = ttnn.sigmoid(out[:, :, :, self.num_offset_channels :])
-        ttnn.deallocate(out)
+        offset_mask, out_h, out_w = self.conv_offset(x)
+        # The im2col reads one interleaved stick per row; L1 serves those small reads faster.
+        offset_mask = ttnn.sharded_to_interleaved(offset_mask, ttnn.L1_MEMORY_CONFIG)
+        offset_mask = ttnn.reshape(offset_mask, (self.batch_size, out_h, out_w, offset_mask.shape[-1]))
 
         # At stride 1 the input has the output's height and width. The DCN's reads are many
         # small scattered sticks, which L1 serves far faster than DRAM; conv_offset's weights
         # are prepared for a DRAM input, so only the DCN gets the L1 copy.
         x_nhwc = ttnn.reshape(x, (self.batch_size, out_h, out_w, x.shape[-1]))
         x_nhwc = ttnn.to_memory_config(x_nhwc, ttnn.L1_MEMORY_CONFIG)
-        out = self.device_dcn(x_nhwc, offset, mask)
+        out = self.device_dcn(x_nhwc, offset_mask)
         ttnn.deallocate(x_nhwc)
-        ttnn.deallocate(offset)
-        ttnn.deallocate(mask)
+        ttnn.deallocate(offset_mask)
         return out, out_h, out_w
 
 

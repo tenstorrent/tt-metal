@@ -22,7 +22,8 @@ input is sampled bilinearly at the offset position and scaled by the mask (DCNv2
 
 The im2col op emits the masked samples as a (B*H_out*W_out, K*K*C_in) column matrix in
 (kk, c_in) order, and a matmul with the weight laid out the same way finishes the conv.
-Offsets are DCNv2's own: pixels, (y, x) per kernel position.
+It takes DCNv2's offset conv output as it is: the offsets, in pixels and (y, x) per kernel
+position, then the mask logits, whose sigmoid it applies itself.
 """
 
 import ttnn
@@ -73,22 +74,20 @@ class TTModulatedDeformConv2dDevice:
         self.io_shape = (batch, H_in, W_in, H_out, W_out)
         self.relu = relu
 
-    def __call__(self, x_nhwc, offset_nhwc, mask_nhwc):
-        """``x_nhwc`` (B, H_in, W_in, C_in), ``offset_nhwc`` (B, H_out, W_out, 2*K*K) in pixels,
-        (y, x) per kernel position, and ``mask_nhwc`` (B, H_out, W_out, K*K) after its sigmoid,
-        all bfloat16. Returns the (1, 1, B*H_out*W_out, C_out) bfloat16 TILE output, conv2d's
-        layout."""
+    def __call__(self, x_nhwc, offset_mask_nhwc):
+        """``x_nhwc`` (B, H_in, W_in, C_in) and ``offset_mask_nhwc`` (B, H_out, W_out, 3*K*K), the
+        offset conv's output: the offsets in pixels, (y, x) per kernel position, then the mask
+        logits. Both inputs bfloat16, ROW_MAJOR, interleaved. Returns the
+        (1, 1, B*H_out*W_out, C_out) bfloat16 TILE output, conv2d's layout."""
         B, H_in, W_in, _ = x_nhwc.shape
-        _, H_out, W_out, _ = mask_nhwc.shape
+        _, H_out, W_out, _ = offset_mask_nhwc.shape
         assert (B, H_in, W_in, H_out, W_out) == self.io_shape, (
             f"DCN built for (B, H_in, W_in, H_out, W_out) = {self.io_shape}, "
             f"called with {(B, H_in, W_in, H_out, W_out)}"
         )
-        # The im2col reads every input as ROW_MAJOR sticks.
         columns = ttnn.experimental.modulated_deform_im2col(
-            ttnn.to_layout(x_nhwc, ttnn.ROW_MAJOR_LAYOUT),
-            ttnn.to_layout(offset_nhwc, ttnn.ROW_MAJOR_LAYOUT),
-            ttnn.to_layout(mask_nhwc, ttnn.ROW_MAJOR_LAYOUT),
+            x_nhwc,
+            offset_mask_nhwc,
             kernel_size=(self.K, self.K),
             stride=self.stride,
             padding=self.padding,

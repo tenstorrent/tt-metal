@@ -43,8 +43,7 @@ Im2colShapes derive_shapes(
     const ModulatedDeformIm2colOperation::operation_attributes_t& attrs,
     const ModulatedDeformIm2colOperation::tensor_args_t& args) {
     check_input_tensor(args.input, "input", args.input);
-    check_input_tensor(args.offset, "offset", args.input);
-    check_input_tensor(args.mask, "mask", args.input);
+    check_input_tensor(args.offset_mask, "offset_mask", args.input);
 
     const auto [k_h, k_w] = attrs.kernel_size;
     TT_FATAL(k_h > 0 && k_w > 0, "modulated_deform_im2col: kernel_size must be positive");
@@ -90,26 +89,16 @@ Im2colShapes derive_shapes(
     s.kernel_positions = k_h * k_w;
     s.rows = s.batch * s.out_h * s.out_w;
 
-    const auto& off = args.offset.logical_shape();
+    const auto& off = args.offset_mask.logical_shape();
     TT_FATAL(
         static_cast<uint32_t>(off[0]) == s.batch && static_cast<uint32_t>(off[1]) == s.out_h &&
-            static_cast<uint32_t>(off[2]) == s.out_w && static_cast<uint32_t>(off[3]) == 2 * s.kernel_positions,
-        "modulated_deform_im2col: offset must be (B, H_out, W_out, 2*K*K) = ({}, {}, {}, {}), got {}",
+            static_cast<uint32_t>(off[2]) == s.out_w && static_cast<uint32_t>(off[3]) == 3 * s.kernel_positions,
+        "modulated_deform_im2col: offset_mask must be (B, H_out, W_out, 3*K*K) = ({}, {}, {}, {}), got {}",
         s.batch,
         s.out_h,
         s.out_w,
-        2 * s.kernel_positions,
+        3 * s.kernel_positions,
         off);
-    const auto& m = args.mask.logical_shape();
-    TT_FATAL(
-        static_cast<uint32_t>(m[0]) == s.batch && static_cast<uint32_t>(m[1]) == s.out_h &&
-            static_cast<uint32_t>(m[2]) == s.out_w && static_cast<uint32_t>(m[3]) == s.kernel_positions,
-        "modulated_deform_im2col: mask must be (B, H_out, W_out, K*K) = ({}, {}, {}, {}), got {}",
-        s.batch,
-        s.out_h,
-        s.out_w,
-        s.kernel_positions,
-        m);
     return s;
 }
 
@@ -148,8 +137,7 @@ namespace ttnn::prim {
 
 ttnn::Tensor modulated_deform_im2col(
     const Tensor& input,
-    const Tensor& offset,
-    const Tensor& mask,
+    const Tensor& offset_mask,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> padding,
@@ -163,7 +151,7 @@ ttnn::Tensor modulated_deform_im2col(
         .padding = padding,
         .dilation = dilation,
     };
-    auto args = OperationType::tensor_args_t{.input = input, .offset = offset, .mask = mask};
+    auto args = OperationType::tensor_args_t{.input = input, .offset_mask = offset_mask};
     return ttnn::device_operation::launch<OperationType>(attrs, args);
 }
 

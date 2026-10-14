@@ -50,15 +50,16 @@ def run_im2col(device, batch, in_h, in_w, channels, kernel_size, stride, padding
     # Rounded to bfloat16 first, so the reference sees the device's inputs.
     x = torch.randn(batch, in_h, in_w, channels).bfloat16().double()
     offset = (offset_scale * torch.randn(batch, out_h, out_w, 2 * k_h * k_w)).bfloat16().double()
-    mask = torch.rand(batch, out_h, out_w, k_h * k_w).bfloat16().double()
+    # The op takes the mask's logits, as DCNv2's offset conv emits them, and applies the sigmoid.
+    mask_logits = (2.0 * torch.randn(batch, out_h, out_w, k_h * k_w)).bfloat16().double()
+    mask = mask_logits.sigmoid()
 
     def to_device(t):
         return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     tt_columns = ttnn.experimental.modulated_deform_im2col(
         to_device(x),
-        to_device(offset),
-        to_device(mask),
+        to_device(torch.cat([offset, mask_logits], dim=-1)),
         kernel_size=kernel_size,
         stride=stride,
         padding=padding,

@@ -6,7 +6,8 @@
 //
 // Per block of 32 output rows it first computes the block's sampling geometry on
 // the SFPU, in fp32, for all kernel positions at once, in [row, kernel position]
-// tiles: from the y and x offsets, the mask, each row's window origin and each
+// tiles: from the y and x offsets, the mask logits, whose sigmoid it takes, each
+// row's window origin and each
 // position's kernel offset it returns the top-left corner's page within its
 // image, y0 * W_in + x0, as int32, and the four corners' weights as bfloat16:
 // the bilinear weights times the mask, and zero for a corner outside the input,
@@ -29,6 +30,7 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -70,7 +72,7 @@ constexpr uint32_t BLOCK_TILES = CORNERS * channel_tiles;
 // Tiles of geom_in_cb, per block, and of geom_kernel_cb, once, in the reader's order.
 constexpr uint32_t IN_DY = 0;
 constexpr uint32_t IN_DX = 1;
-constexpr uint32_t IN_MASK = 2;
+constexpr uint32_t IN_MASK = 2;  // the logits
 constexpr uint32_t IN_ORIGIN_Y = 3;
 constexpr uint32_t IN_ORIGIN_X = 4;
 constexpr uint32_t GEOM_IN_TILES = 5;
@@ -122,6 +124,9 @@ void compute_geometry(
     copy_tile(geom_in_cb_index, IN_MASK, 6);
     copy_tile(geom_kernel_cb_index, KERNEL_Y, 2);
     copy_tile(geom_kernel_cb_index, KERNEL_X, 5);
+
+    sigmoid_tile_init();
+    sigmoid_tile(6);  // the mask, from its logits
 
     add_binary_tile_init();
     add_binary_tile(0, 1, 0);
