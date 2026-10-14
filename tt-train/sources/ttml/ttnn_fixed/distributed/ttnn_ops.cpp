@@ -4,6 +4,7 @@
 
 #include "ttnn_ops.hpp"
 
+#include <algorithm>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -21,6 +22,7 @@
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
+#include "ttnn/operations/experimental/high_bw_all_gather/high_bw_all_gather.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -82,6 +84,77 @@ ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
     return is_cluster_axis_ring(cluster_axis.value()) ? ttnn::ccl::Topology::Ring : ttnn::ccl::Topology::Linear;
 }
 
+// high_bw_all_gather is faster than all_gather_async only when each device's shard is one contiguous run of pages
+// in the gathered output: then every worker owns one DRAM bank and sends full fabric packets.
+// That needs every dim before `gather_dim` to be 1, whole tiles, and interleaved DRAM.
+// Other shapes take its scatter path, which is no faster than all_gather_async on Blackhole and slower on a line.
+bool can_use_high_bw_all_gather(
+    const ttnn::Tensor& tensor,
+    const int gather_dim,
+    const std::optional<uint32_t>& cluster_axis,
+    const uint32_t num_links) {
+    if (!cluster_axis.has_value()) {
+        return false;
+    }
+
+    const bool blackhole = tensor.device()->arch() == tt::ARCH::BLACKHOLE;
+    const auto& tensor_topology = tensor.tensor_topology();
+    const bool distributed_over_axis = cluster_axis.value() < tensor_topology.placements().size() &&
+                                       cluster_axis.value() < tensor_topology.distribution_shape().dims();
+    const bool tiled_interleaved_dram = tensor.layout() == ttnn::Layout::TILE && tensor.buffer()->is_dram() &&
+                                        tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED;
+
+    const auto& shape = tensor.padded_shape();
+    const bool whole_tiles = shape == tensor.logical_shape();
+    const bool valid_gather_dim = gather_dim >= 0 && gather_dim < static_cast<int>(shape.rank());
+    if (!blackhole || !distributed_over_axis || !tiled_interleaved_dram || !whole_tiles || !valid_gather_dim) {
+        return false;
+    }
+
+    const bool leading_dims_are_one =
+        std::all_of(shape.cbegin(), shape.cbegin() + gather_dim, [](uint32_t d) { return d == 1U; });
+
+    auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
+    return leading_dims_are_one && ccl_resources.has_direct_neighbor_route(tensor, cluster_axis.value(), num_links);
+}
+
+ttnn::Tensor high_bw_all_gather(
+    const ttnn::Tensor& tensor,
+    const int gather_dim,
+    const std::optional<uint32_t>& cluster_axis,
+    const uint32_t num_links) {
+    if (!cluster_axis.has_value()) {
+        throw std::logic_error("high_bw_all_gather requires a cluster axis");
+    }
+    auto* mesh_device = tensor.device();
+    auto gathered_shape = tensor.padded_shape();
+    gathered_shape[gather_dim] *= mesh_device->shape()[cluster_axis.value()];
+    const auto output = ttnn::create_device_tensor(
+        tt::tt_metal::TensorSpec(
+            gathered_shape,
+            tt::tt_metal::TensorLayout(
+                tensor.dtype(), tt::tt_metal::PageConfig(ttnn::Layout::TILE), tensor.memory_config())),
+        mesh_device);
+    const auto [ready, data_valid] = ttml::autograd::ctx().get_ccl_resources().get_high_bw_all_gather_semaphores();
+    return ttnn::experimental::high_bw_all_gather(
+        tensor,
+        gather_dim,
+        output,
+        cluster_axis,
+        /* subdevice_id */ std::nullopt,
+        /* sub_core_grid */ std::nullopt,
+        num_links,
+        /* input_batch_index */ std::nullopt,
+        /* gathered_dim_size */ std::nullopt,
+        /* input_batch_index_tensor */ std::nullopt,
+        /* batch_slot_num_layers */ 1U,
+        /* batch_slot_layer_idx */ 0U,
+        /* gathered_prefix_tensor */ std::nullopt,
+        /* gathered_slab_global */ 0U,
+        ready,
+        data_valid);
+}
+
 }  // namespace
 
 ttnn::Tensor all_gather(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
@@ -92,6 +165,12 @@ ttnn::Tensor all_gather(const ttnn::Tensor& tensor, const int dim, const std::op
     }
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(*mesh_device, /* cluster_axis */ cluster_axis);
+
+    const int rank = static_cast<int>(tensor.logical_shape().rank());
+    const int gather_dim = dim < 0 ? dim + rank : dim;
+    if (can_use_high_bw_all_gather(tensor, gather_dim, cluster_axis, num_links)) {
+        return high_bw_all_gather(tensor, gather_dim, cluster_axis, num_links);
+    }
 
     // Determine topology based on cluster axis configuration (Ring if torus, Linear otherwise)
     auto topology = get_topology(cluster_axis);

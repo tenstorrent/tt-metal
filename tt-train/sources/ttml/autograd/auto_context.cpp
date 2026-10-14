@@ -78,6 +78,7 @@ void AutoContext::close_profiler() {
 }
 
 void AutoContext::close_device() {
+    m_ccl_resources = nullptr;
     m_device = nullptr;
     // Drop the process-global fabric config that open_device_mesh may have
     // installed via enable_fabric(). Without this, fabric stays armed for

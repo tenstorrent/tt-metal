@@ -4,6 +4,8 @@
 #pragma once
 
 #include <core/ttnn_all_includes.hpp>
+#include <map>
+#include <utility>
 
 namespace ttml::core::distributed {
 
@@ -18,6 +20,12 @@ public:
     std::vector<tt::tt_metal::GlobalSemaphore> get_reduce_scatter_semaphores();
 
     std::vector<tt::tt_metal::GlobalSemaphore> get_all_reduce_barrier_semaphores();
+
+    // high_bw_all_gather's {ready, data_valid} pair. One pair serves every call.
+    std::pair<tt::tt_metal::GlobalSemaphore, tt::tt_metal::GlobalSemaphore> get_high_bw_all_gather_semaphores();
+
+    // Whether each device on `cluster_axis` is a direct physical neighbor of the next over `num_links` links.
+    bool has_direct_neighbor_route(const ttnn::Tensor& tensor, uint32_t cluster_axis, uint32_t num_links);
 
 private:
     static constexpr uint32_t kNumSemaphoresPairs = 2U;
@@ -34,6 +42,8 @@ private:
     std::vector<tt::tt_metal::GlobalSemaphore> all_gather_semaphores;
     std::vector<tt::tt_metal::GlobalSemaphore> reduce_scatter_semaphores;
     std::vector<tt::tt_metal::GlobalSemaphore> all_reduce_barrier_semaphores;
+    std::pair<tt::tt_metal::GlobalSemaphore, tt::tt_metal::GlobalSemaphore> high_bw_all_gather_semaphores;
+    std::map<std::pair<uint32_t, uint32_t>, bool> direct_neighbor_routes;
 };
 
 }  // namespace ttml::core::distributed
