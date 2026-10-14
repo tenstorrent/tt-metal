@@ -12,6 +12,15 @@ K, G = "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"
 op0, op1 = raw["op0"], raw["op1"]
 n = op1 - op0
 T0 = op0 - n
+NAN = float("nan")
+
+
+def F(
+    x,
+):  # some digest rows have an empty duration cell (device zone not captured): keep the row for the completeness count, drop it from the statistics
+    return float(x) if x not in ("", None) else NAN
+
+
 ek = defaultdict(list)  # prog -> [ns per device]
 tk = defaultdict(lambda: defaultdict(list))
 tg = defaultdict(lambda: defaultdict(list))  # prog -> session -> [..]
@@ -21,13 +30,13 @@ for r in csv.DictReader(open(csvp)):
     oid = int(float(r["GLOBAL CALL COUNT"])) >> 10
     if not r["METAL TRACE ID"]:
         if op0 <= oid < op1:
-            ek[oid - op0].append(float(r[K]))
+            ek[oid - op0].append(F(r[K]))
             cores[oid - op0] = max(cores.get(oid - op0, 0), int(float(r["CORE COUNT"] or 0)))
     else:
         if T0 <= oid < T0 + n:
             s = r["METAL TRACE REPLAY SESSION ID"]
-            tk[oid - T0][s].append(float(r[K]))
-            tg[oid - T0][s].append(float(r[G]))
+            tk[oid - T0][s].append(F(r[K]))
+            tg[oid - T0][s].append(F(r[G]))
 # keep sessions complete on all 32 devices (>=n*32 rows)
 cnt = defaultdict(int)
 for p in tk:
@@ -45,9 +54,9 @@ rows = []
 for c in raw["eager_rows"]:
     for j, pid in enumerate(range(c["id0"], c["id1"])):
         p = pid - op0
-        e = ek.get(p, [])
-        tkv = [x for s in good for x in tk[p][s]]
-        tgv = [x for s in good for x in tg[p][s]]
+        e = [x for x in ek.get(p, []) if x == x]
+        tkv = [x for s in good for x in tk[p][s] if x == x]
+        tgv = [x for s in good for x in tg[p][s] if x == x]
         rows.append(
             dict(
                 p=p,
