@@ -110,6 +110,95 @@ std::optional<TensorTopology> fail(const std::string& what, Family family) {
     return std::nullopt;
 }
 
+MeshShape mesh_shape_of(const Tensor& input, std::string_view op) {
+    TT_FATAL(input.device() != nullptr, "{} output topology requires a mesh-device tensor", op);
+    return input.device()->shape();
+}
+
+uint32_t rank_of(const Tensor& input) { return static_cast<uint32_t>(input.logical_shape().rank()); }
+
+}  // namespace
+
+CallerRelabelsScope::CallerRelabelsScope() { ++caller_relabels_depth; }
+
+CallerRelabelsScope::~CallerRelabelsScope() { --caller_relabels_depth; }
+
+std::optional<TensorTopology> refuse(const std::string& what, RefusalFamily family) { return fail(what, family); }
+
+std::optional<TopologyPlacements> uncollapse_placements(
+    const TensorTopology& in, const MeshShape& mesh_shape, std::string* reason) {
+    const auto& distribution_shape = in.distribution_shape();
+    const auto& placements = in.placements();
+    const size_t mesh_dims = mesh_shape.dims();
+    const auto set_reason = [reason](std::string text) {
+        if (reason != nullptr) {
+            *reason = std::move(text);
+        }
+    };
+
+    if (distribution_shape.dims() == mesh_dims && placements.size() == mesh_dims) {
+        // One placement per mesh axis only means something when axis i of the label is axis i of the mesh: the
+        // distribution shape fits the mesh per axis and the coordinates walk a distribution-shaped block of it in
+        // row-major order. A mapper whose mesh_shape_override does not fit distributes in row-major order over all
+        // devices instead (DistributionMode::ROW_MAJOR), and per physical axis that layout has no placement.
+        //
+        // The coordinates can only be consulted when they are the distribution's. A device tensor's label carries
+        // its storage's coordinates -- every device of the mesh, since an op output's buffer spans the mesh whatever
+        // block its input occupied (update_output_tensor_topologies keeps each output's own coordinates) -- so for a
+        // sub-range distribution such as the (1, C) row that from_torch(ShardTensor2dMesh(mesh_shape=(1, C))) builds
+        // on a 2-D mesh the coordinate list says nothing about where the block lies. The shape alone decides then:
+        // a shape that fits the mesh per axis was mapped as a block (DistributionMode::SUBMESH, with or without an
+        // offset), so its axes are the mesh's; one that does not fit was laid out row-major over the mesh.
+        bool fits = true;
+        for (size_t axis = 0; axis < mesh_dims; ++axis) {
+            fits &= distribution_shape[static_cast<int32_t>(axis)] <= mesh_shape[static_cast<int32_t>(axis)];
+        }
+        const bool coordinates_are_the_distributions = in.mesh_coords().size() == distribution_shape.mesh_size();
+        if (!fits || (coordinates_are_the_distributions &&
+                      !has_row_major_mesh_coordinates(in.mesh_coords(), distribution_shape))) {
+            set_reason(fmt::format(
+                "tensor topology {} does not align with the axes of mesh {}: its coordinates are not a {}-shaped "
+                "block of the mesh in row-major order (a mapper whose mesh_shape_override does not fit the mesh "
+                "distributes in row-major order over all devices); create the tensor with a mapper whose shape fits "
+                "the mesh",
+                describe(in),
+                mesh_shape,
+                distribution_shape));
+            return std::nullopt;
+        }
+        return placements;
+    }
+    if (!is_collapsed(in, mesh_shape)) {
+        set_reason(fmt::format(
+            "tensor topology {} is neither a collapsed 1-D label nor one placement per axis of mesh {}",
+            describe(in),
+            mesh_shape));
+        return std::nullopt;
+    }
+    if (distribution_shape.mesh_size() != mesh_shape.mesh_size() ||
+        !has_row_major_mesh_coordinates(in.mesh_coords(), mesh_shape)) {
+        set_reason(fmt::format(
+            "collapsed tensor topology {} does not cover mesh {} in row-major order (fewer shards than devices, or a "
+            "sub-mesh); create the tensor with an N-D mesh mapper",
+            describe(in),
+            mesh_shape));
+        return std::nullopt;
+    }
+
+    TopologyPlacements out(mesh_dims, TopologyPlacement{Replicate{}});
+    if (const auto* shard = std::get_if<Shard>(&placements.front())) {
+        for (size_t axis = 0; axis < mesh_dims; ++axis) {
+            if (mesh_shape[static_cast<int32_t>(axis)] > 1) {
+                out[axis] = *shard;
+            }
+        }
+    }
+    return out;
+}
+
+// Shared by both families: all_gather_output_topology below is its first caller.
+namespace {
+
 // Decides whether `out` (one placement per axis of `axis_shape`) is expressible. A size-1 axis that shards a dim
 // another axis also shards holds the whole extent of that dim, so it reads Replicate. After that, no tensor dim
 // sharded on more than one axis: it is the N-D label as is. A dim sharded on more than one axis is only expressible
@@ -186,12 +275,110 @@ std::optional<TensorTopology> finalise(
         in.mesh_coords());
 }
 
-MeshShape mesh_shape_of(const Tensor& input, std::string_view op) {
-    TT_FATAL(input.device() != nullptr, "{} output topology requires a mesh-device tensor", op);
-    return input.device()->shape();
+}  // namespace
+
+std::optional<TensorTopology> all_gather_output_topology(
+    const TensorTopology& in,
+    std::optional<uint32_t> cluster_axis,
+    const MeshShape& mesh_shape,
+    uint32_t tensor_rank,
+    int32_t gathered_dim,
+    bool require_contiguous_gather) {  // refuse gathers that would interleave a dim sharded on more than one axis
+    const TopologyPlacement replicate = Replicate{};
+    if (!cluster_axis.has_value()) {
+        // Whole-mesh gather: every device ends up with every piece, whatever the label's rank. The ring order is the
+        // label's own coordinate order, so the distribution shape and coordinates are kept.
+        TopologyPlacements out(in.placements().size(), replicate);
+        return TensorTopology(in.distribution_shape(), std::move(out), in.mesh_coords());
+    }
+
+    const uint32_t axis = *cluster_axis;
+    if (axis >= mesh_shape.dims()) {
+        return std::nullopt;  // the op's validation rejects this cluster_axis right after the hook
+    }
+    std::string reason;
+    auto expanded = uncollapse_placements(in, mesh_shape, &reason);
+    if (!expanded.has_value()) {
+        return fail(reason, Family::Gather);
+    }
+
+    const bool collapsed = is_collapsed(in, mesh_shape);
+    if (collapsed && single_non_trivial_axis(mesh_shape) == axis) {
+        // The collapsed axis is the gathered axis (cluster_axis 1 on a 1xN line): keep the collapsed spelling.
+        return TensorTopology(in.distribution_shape(), TopologyPlacements{replicate}, in.mesh_coords());
+    }
+
+    // A dim sharded on more than one mesh axis is read as row-major hierarchical sharding (what a 1-D mapper
+    // produces, and the only reading `finalise` gives an N-D label that spells the same dim twice), so gathering it
+    // along an outer axis would interleave pieces that an inner axis still keeps apart. Only the sharded dim can
+    // interleave; gathering some other dim leaves the shards where they are, so either axis is honest then.
+    const MeshShape& axis_shape = collapsed ? mesh_shape : in.distribution_shape();
+    const auto gathered = normalize_tensor_dim(gathered_dim, tensor_rank);
+    if (require_contiguous_gather && gathered.has_value() &&
+        placement_shards_tensor_dim((*expanded)[axis], *gathered, tensor_rank)) {
+        for (size_t inner = axis + 1; inner < expanded->size(); ++inner) {
+            if (axis_shape[static_cast<int32_t>(inner)] > 1 &&
+                placement_shards_tensor_dim((*expanded)[inner], *gathered, tensor_rank)) {
+                return fail(
+                    fmt::format(
+                        "all_gather of tensor dim {} along mesh axis {} would interleave the shards of a tensor that "
+                        "shards dim {} on more than one axis of mesh {} (label {}): the ring order is the row-major "
+                        "device order, so gather along the innermost mesh axis sharding that dim, or create the tensor "
+                        "with an N-D mesh mapper that shards each dim once",
+                        *gathered,
+                        axis,
+                        *gathered,
+                        mesh_shape,
+                        describe(in)),
+                    Family::Gather);
+            }
+        }
+    }
+
+    auto out = std::move(*expanded);
+    out[axis] = replicate;
+    auto result = finalise(in, axis_shape, std::move(out), tensor_rank, std::nullopt, &reason);
+    if (!result.has_value()) {
+        return fail(reason, Family::Gather);
+    }
+    return result;
 }
 
-uint32_t rank_of(const Tensor& input) { return static_cast<uint32_t>(input.logical_shape().rank()); }
+std::optional<TensorTopology> all_gather_output_topology(
+    const Tensor& input, std::optional<uint32_t> cluster_axis, int32_t gathered_dim, bool require_contiguous_gather) {
+    return all_gather_output_topology(
+        input.tensor_topology(),
+        cluster_axis,
+        mesh_shape_of(input, "all_gather"),
+        rank_of(input),
+        gathered_dim,
+        require_contiguous_gather);
+}
+
+std::optional<TensorTopology> all_reduce_output_topology(
+    const TensorTopology& in, std::optional<uint32_t> cluster_axis, const MeshShape& mesh_shape, uint32_t tensor_rank) {
+    return all_gather_output_topology(
+        in, cluster_axis, mesh_shape, tensor_rank, /*gathered_dim=*/0, /*require_contiguous_gather=*/false);
+}
+
+std::optional<TensorTopology> all_reduce_output_topology(const Tensor& input, std::optional<uint32_t> cluster_axis) {
+    return all_reduce_output_topology(
+        input.tensor_topology(), cluster_axis, mesh_shape_of(input, "all_reduce"), rank_of(input));
+}
+
+std::optional<TensorTopology> all_broadcast_output_topology(
+    const TensorTopology& in, std::optional<uint32_t> cluster_axis, const MeshShape& mesh_shape, uint32_t tensor_rank) {
+    return all_gather_output_topology(
+        in, cluster_axis, mesh_shape, tensor_rank, /*gathered_dim=*/0, /*require_contiguous_gather=*/false);
+}
+
+std::optional<TensorTopology> all_broadcast_output_topology(const Tensor& input, std::optional<uint32_t> cluster_axis) {
+    return all_broadcast_output_topology(
+        input.tensor_topology(), cluster_axis, mesh_shape_of(input, "all_broadcast"), rank_of(input));
+}
+
+// The scatter family's shared rule, next to its first caller.
+namespace {
 
 // Whether a scatter sums over the devices it spans (reduce_scatter: everything those devices held is consumed) or
 // leaves each device its own piece (mesh_partition, all_to_all: a Shard of another dim stays next to the new piece).
@@ -325,183 +512,6 @@ std::optional<TensorTopology> scatter_output_topology(
 }
 
 }  // namespace
-
-CallerRelabelsScope::CallerRelabelsScope() { ++caller_relabels_depth; }
-
-CallerRelabelsScope::~CallerRelabelsScope() { --caller_relabels_depth; }
-
-std::optional<TensorTopology> refuse(const std::string& what, RefusalFamily family) { return fail(what, family); }
-
-std::optional<TopologyPlacements> uncollapse_placements(
-    const TensorTopology& in, const MeshShape& mesh_shape, std::string* reason) {
-    const auto& distribution_shape = in.distribution_shape();
-    const auto& placements = in.placements();
-    const size_t mesh_dims = mesh_shape.dims();
-    const auto set_reason = [reason](std::string text) {
-        if (reason != nullptr) {
-            *reason = std::move(text);
-        }
-    };
-
-    if (distribution_shape.dims() == mesh_dims && placements.size() == mesh_dims) {
-        // One placement per mesh axis only means something when axis i of the label is axis i of the mesh: the
-        // distribution shape fits the mesh per axis and the coordinates walk a distribution-shaped block of it in
-        // row-major order. A mapper whose mesh_shape_override does not fit distributes in row-major order over all
-        // devices instead (DistributionMode::ROW_MAJOR), and per physical axis that layout has no placement.
-        //
-        // The coordinates can only be consulted when they are the distribution's. A device tensor's label carries
-        // its storage's coordinates -- every device of the mesh, since an op output's buffer spans the mesh whatever
-        // block its input occupied (update_output_tensor_topologies keeps each output's own coordinates) -- so for a
-        // sub-range distribution such as the (1, C) row that from_torch(ShardTensor2dMesh(mesh_shape=(1, C))) builds
-        // on a 2-D mesh the coordinate list says nothing about where the block lies. The shape alone decides then:
-        // a shape that fits the mesh per axis was mapped as a block (DistributionMode::SUBMESH, with or without an
-        // offset), so its axes are the mesh's; one that does not fit was laid out row-major over the mesh.
-        bool fits = true;
-        for (size_t axis = 0; axis < mesh_dims; ++axis) {
-            fits &= distribution_shape[static_cast<int32_t>(axis)] <= mesh_shape[static_cast<int32_t>(axis)];
-        }
-        const bool coordinates_are_the_distributions = in.mesh_coords().size() == distribution_shape.mesh_size();
-        if (!fits || (coordinates_are_the_distributions &&
-                      !has_row_major_mesh_coordinates(in.mesh_coords(), distribution_shape))) {
-            set_reason(fmt::format(
-                "tensor topology {} does not align with the axes of mesh {}: its coordinates are not a {}-shaped "
-                "block of the mesh in row-major order (a mapper whose mesh_shape_override does not fit the mesh "
-                "distributes in row-major order over all devices); create the tensor with a mapper whose shape fits "
-                "the mesh",
-                describe(in),
-                mesh_shape,
-                distribution_shape));
-            return std::nullopt;
-        }
-        return placements;
-    }
-    if (!is_collapsed(in, mesh_shape)) {
-        set_reason(fmt::format(
-            "tensor topology {} is neither a collapsed 1-D label nor one placement per axis of mesh {}",
-            describe(in),
-            mesh_shape));
-        return std::nullopt;
-    }
-    if (distribution_shape.mesh_size() != mesh_shape.mesh_size() ||
-        !has_row_major_mesh_coordinates(in.mesh_coords(), mesh_shape)) {
-        set_reason(fmt::format(
-            "collapsed tensor topology {} does not cover mesh {} in row-major order (fewer shards than devices, or a "
-            "sub-mesh); create the tensor with an N-D mesh mapper",
-            describe(in),
-            mesh_shape));
-        return std::nullopt;
-    }
-
-    TopologyPlacements out(mesh_dims, TopologyPlacement{Replicate{}});
-    if (const auto* shard = std::get_if<Shard>(&placements.front())) {
-        for (size_t axis = 0; axis < mesh_dims; ++axis) {
-            if (mesh_shape[static_cast<int32_t>(axis)] > 1) {
-                out[axis] = *shard;
-            }
-        }
-    }
-    return out;
-}
-
-std::optional<TensorTopology> all_gather_output_topology(
-    const TensorTopology& in,
-    std::optional<uint32_t> cluster_axis,
-    const MeshShape& mesh_shape,
-    uint32_t tensor_rank,
-    int32_t gathered_dim,
-    bool require_contiguous_gather) {  // refuse gathers that would interleave a dim sharded on more than one axis
-    const TopologyPlacement replicate = Replicate{};
-    if (!cluster_axis.has_value()) {
-        // Whole-mesh gather: every device ends up with every piece, whatever the label's rank. The ring order is the
-        // label's own coordinate order, so the distribution shape and coordinates are kept.
-        TopologyPlacements out(in.placements().size(), replicate);
-        return TensorTopology(in.distribution_shape(), std::move(out), in.mesh_coords());
-    }
-
-    const uint32_t axis = *cluster_axis;
-    if (axis >= mesh_shape.dims()) {
-        return std::nullopt;  // the op's validation rejects this cluster_axis right after the hook
-    }
-    std::string reason;
-    auto expanded = uncollapse_placements(in, mesh_shape, &reason);
-    if (!expanded.has_value()) {
-        return fail(reason, Family::Gather);
-    }
-
-    const bool collapsed = is_collapsed(in, mesh_shape);
-    if (collapsed && single_non_trivial_axis(mesh_shape) == axis) {
-        // The collapsed axis is the gathered axis (cluster_axis 1 on a 1xN line): keep the collapsed spelling.
-        return TensorTopology(in.distribution_shape(), TopologyPlacements{replicate}, in.mesh_coords());
-    }
-
-    // A dim sharded on more than one mesh axis is read as row-major hierarchical sharding (what a 1-D mapper
-    // produces, and the only reading `finalise` gives an N-D label that spells the same dim twice), so gathering it
-    // along an outer axis would interleave pieces that an inner axis still keeps apart. Only the sharded dim can
-    // interleave; gathering some other dim leaves the shards where they are, so either axis is honest then.
-    const MeshShape& axis_shape = collapsed ? mesh_shape : in.distribution_shape();
-    const auto gathered = normalize_tensor_dim(gathered_dim, tensor_rank);
-    if (require_contiguous_gather && gathered.has_value() &&
-        placement_shards_tensor_dim((*expanded)[axis], *gathered, tensor_rank)) {
-        for (size_t inner = axis + 1; inner < expanded->size(); ++inner) {
-            if (axis_shape[static_cast<int32_t>(inner)] > 1 &&
-                placement_shards_tensor_dim((*expanded)[inner], *gathered, tensor_rank)) {
-                return fail(
-                    fmt::format(
-                        "all_gather of tensor dim {} along mesh axis {} would interleave the shards of a tensor that "
-                        "shards dim {} on more than one axis of mesh {} (label {}): the ring order is the row-major "
-                        "device order, so gather along the innermost mesh axis sharding that dim, or create the tensor "
-                        "with an N-D mesh mapper that shards each dim once",
-                        *gathered,
-                        axis,
-                        *gathered,
-                        mesh_shape,
-                        describe(in)),
-                    Family::Gather);
-            }
-        }
-    }
-
-    auto out = std::move(*expanded);
-    out[axis] = replicate;
-    auto result = finalise(in, axis_shape, std::move(out), tensor_rank, std::nullopt, &reason);
-    if (!result.has_value()) {
-        return fail(reason, Family::Gather);
-    }
-    return result;
-}
-
-std::optional<TensorTopology> all_gather_output_topology(
-    const Tensor& input, std::optional<uint32_t> cluster_axis, int32_t gathered_dim, bool require_contiguous_gather) {
-    return all_gather_output_topology(
-        input.tensor_topology(),
-        cluster_axis,
-        mesh_shape_of(input, "all_gather"),
-        rank_of(input),
-        gathered_dim,
-        require_contiguous_gather);
-}
-
-std::optional<TensorTopology> all_reduce_output_topology(
-    const TensorTopology& in, std::optional<uint32_t> cluster_axis, const MeshShape& mesh_shape, uint32_t tensor_rank) {
-    return all_gather_output_topology(
-        in, cluster_axis, mesh_shape, tensor_rank, /*gathered_dim=*/0, /*require_contiguous_gather=*/false);
-}
-
-std::optional<TensorTopology> all_reduce_output_topology(const Tensor& input, std::optional<uint32_t> cluster_axis) {
-    return all_reduce_output_topology(
-        input.tensor_topology(), cluster_axis, mesh_shape_of(input, "all_reduce"), rank_of(input));
-}
-
-std::optional<TensorTopology> all_broadcast_output_topology(
-    const TensorTopology& in, std::optional<uint32_t> cluster_axis, const MeshShape& mesh_shape, uint32_t tensor_rank) {
-    return all_gather_output_topology(
-        in, cluster_axis, mesh_shape, tensor_rank, /*gathered_dim=*/0, /*require_contiguous_gather=*/false);
-}
-
-std::optional<TensorTopology> all_broadcast_output_topology(const Tensor& input, std::optional<uint32_t> cluster_axis) {
-    return all_broadcast_output_topology(
-        input.tensor_topology(), cluster_axis, mesh_shape_of(input, "all_broadcast"), rank_of(input));
-}
 
 std::optional<TensorTopology> reduce_scatter_output_topology(
     const TensorTopology& in,
