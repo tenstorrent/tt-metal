@@ -19,6 +19,9 @@ class StartupWarmupTests(unittest.TestCase):
         adapter.prefill_startup_warmup = True
         adapter.cache = SimpleNamespace(num_pages=64, capacity=128)
         adapter.prefill_warmup_buckets = [32, 64, 96, 128]
+        # Grouped prefill falls back to the per-row loop rather than compiling, so the width
+        # ladder is throughput tuning and ships empty.
+        adapter.prefill_warmup_widths = []
         adapter.generator = MagicMock()
         adapter.generator.cache = adapter.cache
         adapter.generator.batched_prefill = True
@@ -47,8 +50,8 @@ class StartupWarmupTests(unittest.TestCase):
         adapter = self.make_adapter()
         table = adapter.generator.page_host.clone()
         adapter.warmup_model_prefill(kv_cache=adapter.cache)
-        self.assertEqual(adapter.generator.prefill_forward.call_count, 4)
-        for batch, call in enumerate(adapter.generator.prefill_forward.call_args_list, 1):
+        occupancies = adapter.generator.prefill_forward.call_args_list[:4]
+        for batch, call in enumerate(occupancies, 1):
             self.assertEqual(tuple(call.args[0].shape), (batch, 128))
             self.assertEqual(call.kwargs["slots"], list(range(batch)))
             self.assertIs(call.kwargs["kv_cache"], adapter.cache)
@@ -59,13 +62,43 @@ class StartupWarmupTests(unittest.TestCase):
         for call in adapter.generator.serving_prefill_tokens.call_args_list:
             self.assertEqual(call.kwargs["slots"], [0])
             self.assertEqual(call.kwargs["start_pos"], [0])
-        # One reset ends the occupancy sweep, the other ends the bucket warmup.
+        # One reset ends the occupancy sweep, the other ends the bucket warmup. The width
+        # sweep is off by default and resets nothing.
         self.assertEqual(adapter.generator.reset.call_count, 2)
         self.assertTrue(torch.equal(adapter.generator._refresh_table.call_args.args[0], table))
         self.assertFalse(adapter._decode_bound)
         self.assertTrue(adapter._prefill_startup_warmed)
+        before = adapter.generator.prefill_forward.call_count
         adapter.warmup_model_prefill(kv_cache=adapter.cache)
-        self.assertEqual(adapter.generator.prefill_forward.call_count, 4)
+        self.assertEqual(adapter.generator.prefill_forward.call_count, before)
+
+    @patch("models.demos.qwen38_27b_t3k.tt.generator_vllm.ttnn.synchronize_device")
+    def test_every_requested_width_is_compiled_at_the_full_occupancy(self, synchronize):
+        # A grouped prefill is built around its row count, so this ladder is what lets a full
+        # wave group at all; anything it misses is served row by row instead.
+        adapter = self.make_adapter()
+        adapter.prefill_warmup_widths = [32, 64, 96, 128]
+        adapter.warmup_model_prefill(kv_cache=adapter.cache)
+        widths = adapter.generator.prefill_forward.call_args_list[4:]
+        self.assertEqual([call.kwargs["prompt_lens"][0] for call in widths], [32, 64, 96, 128])
+        for call in widths:
+            self.assertEqual(call.kwargs["slots"], [0, 1, 2, 3])
+            self.assertEqual(tuple(call.args[0].shape)[0], 4)
+            self.assertEqual(len(call.kwargs["prompt_lens"]), 4)
+        # Rows must own disjoint pages, or a warm prompt writes over a page another row is using.
+        table = widths[0].kwargs["page_table"]
+        self.assertEqual(tuple(table.shape), tuple(adapter.generator.page_host.shape))
+        owned = table[table > 0]
+        self.assertEqual(owned.numel(), len(set(owned.tolist())))
+
+    @patch("models.demos.qwen38_27b_t3k.tt.generator_vllm.ttnn.synchronize_device")
+    def test_a_bucket_larger_than_the_rows_pages_is_left_out(self, synchronize):
+        # Warming past a row's own pages would compile against a table the server cannot hand out.
+        adapter = self.make_adapter()
+        adapter.prefill_warmup_widths = [32, 64, 96, 128]
+        adapter.cache = SimpleNamespace(num_pages=16, capacity=128)
+        adapter.generator.cache = adapter.cache
+        self.assertEqual(adapter._warm_bucket_widths(adapter.cache), [32, 64, 96])
 
     def test_failure_restores_state_without_marking_ready(self):
         adapter = self.make_adapter()

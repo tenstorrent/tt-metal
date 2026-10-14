@@ -56,6 +56,24 @@ def configure_fabric(*, payload_bytes=None):
 MAX_PREFIX_SNAPSHOTS = MAX_SERVING_BATCH
 
 
+def batched_prefill_shape(slots, starts, prompt_lens, all_logits):
+    """What a grouped prefill compiles against, or None when the group cannot be grouped.
+
+    The occupancy belongs in the key beside the length: prefill_batch builds its programs around
+    the row count, so the same prompt length at a different concurrency is a different stack.
+    """
+    if (
+        len(slots) <= 1
+        or all_logits
+        or len(set(starts)) != 1
+        or len(set(prompt_lens)) != 1
+        or starts[0] % 32
+        or slots != list(range(slots[0], slots[0] + len(slots)))
+    ):
+        return None
+    return (len(slots), starts[0], prompt_lens[0])
+
+
 def prefill_bucket(valid, capacity, start=0):
     """Round a prompt up to the pages the scheduler has already given it.
 
@@ -146,6 +164,7 @@ class Qwen38Generator:
         self._state_snapshots = {}
         self._next_snapshot_handle = 0
         self.prefill_signatures = set()
+        self.batched_prefill_shapes = set()
         self._prefill_selectors = {}
         self.page_host = None
         self.counters = Counter()
@@ -521,7 +540,19 @@ class Qwen38Generator:
             )
             for slot, start, length in zip(slots, starts, prompt_lens)
         }
-        if getattr(self, "batched_prefill", False) and len(slots) > 1:
+        batched_shape = (
+            batched_prefill_shape(slots, starts, prompt_lens, return_all_logits)
+            if getattr(self, "batched_prefill", False)
+            else None
+        )
+        # A batched prefill is built around its occupancy as well as its length, so an unseen pair
+        # compiles the stack mid-request: 8 s to 15 s, measured. The per-row loop below reaches the
+        # same state through programs that carry only the length, which startup has already built,
+        # so an uncompiled batch is served rather than compiled.
+        batched = batched_shape is not None and (
+            batched_shape in self.batched_prefill_shapes or getattr(self, "_batched_prefill_compiling", False)
+        )
+        if batched:
             signatures.add(("batched", tuple(slots), tuple(starts), tuple(prompt_lens), return_all_logits))
         # New prefill programs own persistent buffers. Compile them before a
         # decode trace reserves scratch addresses; known shapes reuse the trace.
@@ -529,15 +560,7 @@ class Qwen38Generator:
             self._release_traces()
         self._refresh_table(page_table)
         table = self.page_table
-        if (
-            getattr(self, "batched_prefill", False)
-            and len(slots) > 1
-            and not return_all_logits
-            and len(set(starts)) == 1
-            and len(set(prompt_lens)) == 1
-            and starts[0] % 32 == 0
-            and slots == list(range(slots[0], slots[0] + len(slots)))
-        ):
+        if batched:
             length, start = prompt_lens[0], starts[0]
             if not 1 <= length <= tokens.shape[-1] or start < 0 or start + length > kv_cache.capacity:
                 raise ValueError("Invalid batched prompt length or prefix")
@@ -560,6 +583,7 @@ class Qwen38Generator:
                     ),
                 )
             self.prefill_signatures.update(signatures)
+            self.batched_prefill_shapes.add(batched_shape)
             self.counters["batched_prefill_calls"] += 1
             return results
         results = []

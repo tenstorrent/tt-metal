@@ -115,6 +115,9 @@ class Qwen38ForCausalLM:
         self._last_device_sampling = None
         self.prefill_startup_warmup = os.getenv("QWEN_PREFILL_STARTUP_WARMUP", "0") == "1"
         self.prefill_warmup_buckets = parse_warmup_buckets(os.getenv("QWEN_PREFILL_WARMUP_BUCKETS"), context)
+        # Grouped prefill at a width nobody warmed is served row by row rather than compiled, so
+        # this ladder buys throughput at a startup cost instead of preventing a stall.
+        self.prefill_warmup_widths = parse_warmup_buckets(os.getenv("QWEN_PREFILL_WARMUP_WIDTHS", ""), context)
         # A served step costs more than this entry point does. Timing decode_forward from the
         # inside is the only way to split that: the difference against the harness's reported
         # TPOT is the work the plugin and vLLM do around the call.
@@ -467,8 +470,11 @@ class Qwen38ForCausalLM:
         self._cache(cache)
         begin = time.perf_counter()
         chunk = self._warm_occupancies(cache)
+        # Widths before the slot-zero sweep: that sweep ends holding the prefill trace a lone
+        # request replays, and prefill_forward releases it.
+        widths = self._warm_bucket_widths(cache)
         buckets = self._warm_serving_buckets(cache)
-        if chunk is None and not buckets:
+        if chunk is None and not buckets and not widths:
             return
         self._prefill_startup_warmed = True
         logger.info(
@@ -478,11 +484,62 @@ class Qwen38ForCausalLM:
                     chunk=chunk,
                     occupancies=list(range(1, self.batch_size + 1)),
                     buckets=buckets,
+                    widths=widths,
                     seconds=time.perf_counter() - begin,
                     cache_reset=True,
                 )
             ),
         )
+
+    def _warm_table(self, cache, tokens):
+        """A table whose rows own disjoint pages, shaped exactly like the server's own.
+
+        The table shape is part of every prefill signature, so a warmup that changed it would
+        compile programs no real request can reuse.
+        """
+        original = self.generator.page_host
+        pages = min(tokens // 32 + 1, original.shape[1], cache.num_pages // self.batch_size)
+        table = torch.zeros_like(original)
+        table[:, :pages] = torch.arange(self.batch_size * pages, dtype=torch.int32).reshape(self.batch_size, pages)
+        return table
+
+    def _warm_bucket_widths(self, cache):
+        """Compile each bucket on every slot rather than only on slot zero.
+
+        model.prefill slices the page table and the recurrent rows by slot, so the slot is built
+        into the program just as the prompt length was. A bucket warmed on slot zero leaves the
+        rest to compile under load, which is the first concurrent wave paying seconds of TTFT.
+        """
+        if self.batch_size == 1:
+            return []
+        ceiling = min(cache.capacity, (cache.num_pages // self.batch_size - 1) * 32)
+        buckets = [bucket for bucket in self.prefill_warmup_widths if bucket <= ceiling]
+        if not buckets:
+            return []
+        slots = list(range(self.batch_size))
+        original_table = self.generator.page_host.clone()
+        table = self._warm_table(cache, max(buckets))
+        self.generator._release_traces()
+        self.generator._batched_prefill_compiling = True
+        try:
+            for bucket in buckets:
+                self.generator.reset_recurrent_slots(slots)
+                outputs = self.generator.prefill_forward(
+                    torch.zeros(self.batch_size, bucket, dtype=torch.int64),
+                    page_table=table,
+                    kv_cache=cache,
+                    prompt_lens=[bucket] * self.batch_size,
+                    slots=slots,
+                )
+                del outputs
+            ttnn.synchronize_device(self.generator.mesh)
+        finally:
+            self.generator._batched_prefill_compiling = False
+            self.generator._release_traces()
+            self.generator.reset()
+            self.generator._refresh_table(original_table)
+            self._decode_bound = False
+        return buckets
 
     def _warm_occupancies(self, cache):
         """Compile the batched prefill chunk at every occupancy the server can schedule."""
@@ -492,10 +549,9 @@ class Qwen38ForCausalLM:
         if chunk < 32:
             return None
         original_table = self.generator.page_host.clone()
-        pages = min(chunk // 32 + 1, original_table.shape[1])
-        table = torch.zeros_like(original_table)
-        table[:, :pages] = torch.arange(self.batch_size * pages, dtype=torch.int32).reshape(self.batch_size, pages)
+        table = self._warm_table(cache, chunk)
         self.generator._release_traces()
+        self.generator._batched_prefill_compiling = True
         try:
             for batch in range(1, self.batch_size + 1):
                 slots = list(range(batch))
@@ -510,6 +566,7 @@ class Qwen38ForCausalLM:
                 del outputs
             ttnn.synchronize_device(self.generator.mesh)
         finally:
+            self.generator._batched_prefill_compiling = False
             self.generator._release_traces()
             self.generator.reset()
             self.generator._refresh_table(original_table)

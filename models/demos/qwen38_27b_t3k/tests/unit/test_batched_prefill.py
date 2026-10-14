@@ -22,6 +22,10 @@ class BatchedPrefillDispatchTests(unittest.TestCase):
             prefill_prepared=None,
             cache=self.cache,
             prefill_signatures=set(),
+            batched_prefill_shapes=set(),
+            # Grouping only happens for a shape warmup already compiled, so these dispatch tests
+            # stand in for a warmed server. The fallback has its own test below.
+            _batched_prefill_compiling=True,
             page_table=self.table,
             counters=Counter(),
             model=SimpleNamespace(
@@ -54,6 +58,24 @@ class BatchedPrefillDispatchTests(unittest.TestCase):
         return self.forward(
             tokens, page_table=self.table, kv_cache=self.cache, prompt_lens=lengths, slots=slots, start_pos=starts
         )
+
+    def test_an_uncompiled_group_is_served_row_by_row(self):
+        # Compiling a grouped prefill mid-request costs 8-15 s of TTFT. The per-row loop reaches
+        # the same state through programs keyed on the length alone, which startup has built.
+        self.gen._batched_prefill_compiling = False
+        self.run_prefill([128, 128], [1, 2])
+        self.assertEqual([call[0] for call in self.calls], ["single", "single"])
+        self.assertEqual(self.gen.counters["batched_prefill_calls"], 0)
+
+    def test_a_group_whose_shape_is_already_compiled_is_grouped(self):
+        self.gen._batched_prefill_compiling = False
+        self.gen.batched_prefill_shapes.add((2, 0, 128))
+        self.run_prefill([128, 128], [1, 2])
+        self.assertEqual([call[0] for call in self.calls], ["batch"])
+
+    def test_compiling_a_group_records_its_shape_for_later(self):
+        self.run_prefill([128, 128], [1, 2])
+        self.assertIn((2, 0, 128), self.gen.batched_prefill_shapes)
 
     def test_equal_lengths_group_without_mixing_rows(self):
         self.assertEqual(self.run_prefill([128, 128], [1, 2]), ["first", "second"])
