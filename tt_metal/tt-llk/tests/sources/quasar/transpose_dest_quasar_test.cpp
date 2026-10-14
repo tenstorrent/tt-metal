@@ -167,7 +167,7 @@ inline void run_datacopy_transpose_loop(
             {
                 // Datacopy and transpose both use bank0's instruction buffer, so
                 // each operation must program its MOP immediately before execution.
-                _configure_default_alu_data_format_state_<false, is_fp32_dest_acc_en>(math_format, math_format);
+                _configure_default_alu_data_format_state_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format);
                 _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_faces * face_r_dim /*num_rows_per_matrix*/, 1 /*num_matrices*/);
 
                 for (std::uint32_t i = 0; i < tiles_in_block; ++i)

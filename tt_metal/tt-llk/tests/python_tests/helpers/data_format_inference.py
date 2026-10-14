@@ -397,12 +397,12 @@ def infer_downstream_unpack_out(unpack_out: DataFormat) -> DataFormat:
 
 def infer_math_format(a: DataFormat, b: DataFormat = None) -> DataFormat:
     # Design rationale:
-    # - The only constraint enforced here is that both inputs belong to the same exponent "family"
-    #   (e.g. exponent-B vs. non-exponent-B). Mixing families is not supported and is rejected above.
-    # - Once formats are in the same family, the math pipeline can operate in either format; any
+    # - Both inputs must belong to the same exponent "family" (e.g. exponent-B vs. non-exponent-B),
+    #   and integer inputs must be the same format. Mixing is not supported and is rejected below.
+    # - Once formats pass those checks, the math pipeline can operate in either format; any
     #   required conversions from L1 to the math format and back are already handled by unpack/pack.
-    # - Therefore, choosing `a` as the math format is always correct when the compatibility check
-    #   passes, and keeps the behavior deterministic and simple compared to the previous heuristic.
+    # - Therefore, choosing `a` as the math format is always correct when the compatibility checks
+    #   pass, and keeps the behavior deterministic and simple compared to the previous heuristic.
 
     if b is None:
         return a
@@ -507,7 +507,7 @@ def infer_data_formats(
     downstream_unpack_out_B = infer_downstream_unpack_out(unpack_out_B)
     downstream_unpack_out_S = infer_downstream_unpack_out(unpack_out_S)
 
-    # The data format used for mathematical computations, desired format in dest register (typically matches unpack_out if both regs have same format)
+    # The format family the dest register, SFPU and packer work in (typically matches unpack_out if both regs have same format)
     dest_family = infer_math_format(downstream_unpack_out_A, downstream_unpack_out_B)
 
     # FP8 is a compressed L1 format; hardware unpacks it to Float16 (float16_a) in
@@ -515,9 +515,10 @@ def infer_data_formats(
     if dest_family == DataFormat.Fp8_e4m3:
         dest_family = DataFormat.Float16
 
+    # The ALU SrcA/SrcB format: a 2x register format stays 2x, everything else uses the dest family
     math = unpack_out_A if unpack_out_A.is_2x_format() else dest_family
 
-    # SFPU source format: same as math unless the SFPU operates in a format with no Tensix HW
+    # SFPU source format: same as the dest family unless the SFPU operates in a format with no Tensix HW
     # encoding (UInt16 on Quasar), in which case the unpack/math/pack datapath was defaulted to Int16
     # above and only sfpu_src retains the UInt16 intent (via the sfpmem::UINT16 SFPU access mode).
     sfpu_src = sfpu_src_override if sfpu_src_override is not None else dest_family
@@ -533,7 +534,7 @@ def infer_data_formats(
     # potentially different from unpack_out and pack_out depending on FP32 accumulation
 
     # FP8 output: gasket must produce Float16 for packer's Pac_LF8_4b_exp encode path.
-    # When math is a B-format (Float16_b), use Float16_b so the packer can distinguish
+    # When the dest family is a B-format (Float16_b), use Float16_b so the packer can distinguish
     # A-format vs B-format pipelines and enable 10-bit mantissa rounding accordingly.
     if output_format == DataFormat.Fp8_e4m3:
         pack_in = (

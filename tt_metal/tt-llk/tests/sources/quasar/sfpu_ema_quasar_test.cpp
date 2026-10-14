@@ -109,7 +109,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_rows  = params.num_faces * params.TEST_FACE_R_DIM;
     constexpr bool interleave_fpu = MATH_TRANSPOSE_FACES;
 
-    _llk_math_srcAB_hw_configure_<false, is_fp32_dest_acc_en>(src_format, src_format);
+    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(src_format, src_format);
     _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_rows, 1 /*num_matrices*/);
 
     llk_math_ema_sfpu_init();

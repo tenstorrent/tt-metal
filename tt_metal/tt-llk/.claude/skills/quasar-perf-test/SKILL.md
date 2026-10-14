@@ -277,7 +277,7 @@ From the `tt-llk` root:
 6. If tile sizes or dimensions changed, run
    `compare_test_and_perf.py --dir quasar --arch quasar` and confirm the
    composite `tuple` (tile) and `list` (matrix) axes match **Perf sweep
-   coverage**. `implied_math_format` is ignored by that comparer.
+   coverage**.
 7. Check edited files for lint errors and run `git diff --check`.
 
 Do not:
