@@ -703,17 +703,6 @@ class TestTriage:
     # Running dump_callstacks with --full-callstack or --gdb-callstack breaks brisc so that it cannot be halted
     # and it affects other tests in the same test class, so we move it to be run last.
     def test_dump_callstacks(self):
-        # Disabled on n150 (cause_hang_with_app0): this config's manual 10s hang-detection window
-        # intermittently loses the race against the hang settling, so the core isn't reliably halted
-        # yet when we dump its callstack ("Core is not halted (not stuck on ebreak)"). That flakiness
-        # was clogging the merge gate. BH does not reproduce this, so it keeps running there.
-        if (
-            not self.app_configuration.get("auto_timeout")
-            and not self.app_configuration.get("expect_running")
-            and any(device.is_wormhole() for device in self.exalens_context.devices.values())
-        ):
-            pytest.skip("Flaky on n150: hang-detection race in dump_callstacks for cause_hang_with_app0")
-
         result = self.run_triage_script("dump_callstacks.py", argv=["--full-callstack"])
 
         assert result is not None, "Expected non-None result from dump_callstacks.py"
