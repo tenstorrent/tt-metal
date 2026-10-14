@@ -88,21 +88,21 @@ run() {  # run <side> <build> <ids> <tag> <run types|-> <limit>
 }
 R5=L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE,PACK_ISOLATE,L1_CONGESTION
 
-for v in H G M; do mkside $v; done
 MODE=${MODE:-ab}; echo "== mode $MODE"
 for v in G E M; do mkside $v; done
 
 if [[ $MODE == ab ]]; then
-for v in G:bG E:bE E:bE2 M:bM; do build ${v%%:*} ${v##*:} $S/ids/perf_c.txt $R5; done
-for v in G:hG E:hE E:hE2; do build ${v%%:*} ${v##*:} $S/ids/perf_h.txt $R5; done
+PC=$S/ids/${IDS_C:-perf_c.txt}; PH=$S/ids/${IDS_H:-perf_h.txt}; echo "== rows $(wc -l < $PC) + $(wc -l < $PH)"
+for v in G:bG E:bE E:bE2 M:bM; do build ${v%%:*} ${v##*:} $PC $R5; done
+for v in G:hG E:hE E:hE2; do build ${v%%:*} ${v##*:} $PH $R5; done
 elfid bG bE; elfid bE bE2 same; elfid bG bM same; elfid hG hE
 [[ -n ${STK_DRY:-} ]] && { echo "== dry: builds only"; exit 0; }
 n=0
 for sb in G:bG:hG E:bE:hE M:bM:- E:bE2:hE2  E:bE2:hE2 M:bM:- E:bE:hE G:bG:hG \
           E:bE:hE G:bG:hG E:bE2:hE2 M:bM:-  M:bM:- E:bE2:hE2 G:bG:hG E:bE:hE; do
   IFS=: read -r v b h <<< "$sb"; n=$((n + 1))
-  run $v $b $S/ids/perf_c.txt C_${v}_${b}_$n $R5 2400
-  [[ $h != - ]] && run $v $h $S/ids/perf_h.txt D_${v}_${h}_$n $R5 900
+  run $v $b $PC C_${v}_${b}_$n $R5 2400
+  [[ $h != - ]] && run $v $h $PH D_${v}_${h}_$n $R5 900
 done
 echo "== harness end $(date -u +%T)"
 [[ -n ${NO_OL:-} ]] || bash $S/run_e2_ol.sh
