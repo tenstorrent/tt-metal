@@ -84,6 +84,7 @@ Time from `docker run` until `GET /health` returns 200:
 | Weight cache and kernel cache both populated for this configuration (a later start on the same host) | ~13 min (13.4 min, measured twice on one host) |
 | Weight cache populated, this configuration not yet run on the host (kernel cache still to fill) | ~30-33 min (29.5 and 32.6 min measured on one host: about 13 min building the 40 layers, then about 16-19 min compiling kernels and capturing the prefill and spec traces) |
 | This image, both caches populated (16-user speculative server, 40,000-token context) | 14.0 min (`docker run` to `/health`) |
+| This image with the runtime spec of this guide (131,072-token context), weight cache populated, kernel cache from earlier runs on the host | 20.1 min (`docker run` 18:47:55, `/health` 19:07:59) |
 | First start with nothing cached | not re-measured on this image; earlier first starts of the same weights took 60-90 min |
 
 Two caches make later starts fast; both are mounted in the `docker run` below:
@@ -304,7 +305,9 @@ curl -s http://localhost:8000/v1/chat/completions -H "Content-Type: application/
 }'
 ```
 
-Streaming (`"stream": true`) works the same way. The commands in this guide were run end to end on one
+Streaming (`"stream": true`) works the same way. On 2026-10-14 the steps of this guide were run again with the image tag above and
+`assets/runtime_spec_b16_k5_131072.json`: the server was ready after 20.1 min, a chat request was answered correctly,
+`/v1/models` reported `max_model_len` 131072, and `docker stop` ended the container cleanly. The commands in this guide were run end to end on one
 Galaxy (a server started with the command in step 4, then the request above, a streaming request, the model
 list, a seeded request twice, and the field checks in the table).
 
