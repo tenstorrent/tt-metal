@@ -1085,6 +1085,11 @@ all_gather_minimal_matmul_async_factory_helper(
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            // Forward dst_full_sync_en so the compute kernel runs the sync mode that validation sized the
+            // subblock for. Validation admits out_subblock_h*out_subblock_w up to get_dest_reg_count(), which
+            // doubles under dst_full_sync_en; without forwarding it the kernel ran half-sync and an admitted
+            // subblock above the half-sync limit overflowed DEST (silent corruption). Same class as #60170.
+            .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_time_args,
             .defines = compute_defines});
