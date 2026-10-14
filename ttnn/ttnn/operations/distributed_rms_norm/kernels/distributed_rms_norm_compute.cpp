@@ -5,10 +5,13 @@
 //   sumsq_block            : eltwise_chain x*x accumulated in DEST per tile row -> cb_sq_acc (1 tile per row);
 //                            reduce<SUM, REDUCE_ROW, Accurate> -> post-op transpose_dest -> cb_partial
 //                            (row 0 = the 32 per-row partial sums: the wire record layout).
-//   gamma_prescale_block   : (HAS_GAMMA) x * gamma (Row bcast) -> cb_xg; runs while the exchange is in flight.
+//   gamma_prescale_block   : (HAS_GAMMA && GAMMA_PRESCALE) x * gamma (Row bcast) -> cb_xg; runs while the exchange
+//                            is in flight.
 //   combine_finalize_block : reduce<SUM, REDUCE_COL, Accurate> over the G*S_w source rows -> post-op
 //                            transpose_dest, x 1/(G*W_local), + eps, rsqrt -> cb_rstd (col 0 = rstd per row).
-//   normalize_block        : (xg | x) * rstd (Col bcast) -> cb_output_tiles.
+//   normalize_block        : (xg | x) * rstd (Col bcast) -> cb_output_tiles; with gamma but no prescale (the host
+//                            drops cb_xg when it does not fit L1) the gamma multiply is fused after the rstd multiply
+//                            as a DEST-reuse Mul against row-replicated gamma tiles.
 //
 // Post-op bodies are raw SFPU / transpose calls on a DEST tile inside reduce (no chain element can act on the
 // reduce's DEST tile; transpose_dest has no chain element). The reduce helper programs the packer's reduce edge
@@ -38,6 +41,7 @@ void kernel_main() {
     constexpr uint32_t cb_rstd = get_compile_time_arg_val(7);
     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(8);
     constexpr bool has_gamma = get_compile_time_arg_val(9) != 0;
+    constexpr bool gamma_prescale = has_gamma && get_compile_time_arg_val(10) != 0;
 
     uint32_t a = 0;
     const uint32_t core_rows = get_arg_val<uint32_t>(a++);
@@ -72,7 +76,7 @@ void kernel_main() {
         copy_init(cb_stats_combine);
     };
 
-    constexpr uint32_t cb_norm_src = has_gamma ? cb_xg : cb_x_resident;
+    constexpr uint32_t cb_norm_src = gamma_prescale ? cb_xg : cb_x_resident;
 
     for (uint32_t r0 = 0; r0 < core_rows; r0 += block_rows) {
         const uint32_t rows = (core_rows - r0) < block_rows ? (core_rows - r0) : block_rows;
@@ -107,7 +111,7 @@ void kernel_main() {
             ReduceInputBlockShape::of(rows, 1), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, sumsq_post);
 
         // ---- gamma_prescale_block: in the exchange stall (x*rstd*gamma == (x*gamma)*rstd) ----
-        if constexpr (has_gamma) {
+        if constexpr (gamma_prescale) {
             eltwise_chain(
                 IterationShape::grid(rows, cw),
                 BinaryFpu<
@@ -138,13 +142,31 @@ void kernel_main() {
         cb_pop_front(cb_stats_combine, n_src_tiles * rows);
 
         // ---- normalize_block: (xg | x) * rstd, rstd broadcast along each tile row ----
-        eltwise_chain(
-            IterationShape::grid(rows, cw),
-            BinaryFpu<
-                BinaryFpuOp::Mul,
-                input(cb_norm_src),
-                input(
-                    input(cb_rstd, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col), BroadcastDim::Col)>{},
-            PackTile<output(cb_output_tiles)>{});
+        if constexpr (has_gamma && !gamma_prescale) {
+            // fused: (x * rstd) in DEST, then * gamma (tiles hold gamma in every row: DEST reuse has no broadcast)
+            eltwise_chain(
+                IterationShape::grid(rows, cw),
+                BinaryFpu<
+                    BinaryFpuOp::Mul,
+                    input(cb_x_resident),
+                    input(
+                        input(cb_rstd, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
+                        BroadcastDim::Col)>{},
+                DestReuseBinary<
+                    BinaryFpuOp::Mul,
+                    input(cb_gamma_tiles, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Row),
+                    DestReuseType::DEST_TO_SRCA>{},
+                PackTile<output(cb_output_tiles)>{});
+        } else {
+            eltwise_chain(
+                IterationShape::grid(rows, cw),
+                BinaryFpu<
+                    BinaryFpuOp::Mul,
+                    input(cb_norm_src),
+                    input(
+                        input(cb_rstd, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col),
+                        BroadcastDim::Col)>{},
+                PackTile<output(cb_output_tiles)>{});
+        }
     }
 }

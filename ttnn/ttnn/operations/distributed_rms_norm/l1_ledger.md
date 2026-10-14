@@ -16,23 +16,24 @@ Phase 0 runs with `fp32_dest_acc_en = True`, so every DEST-produced intermediate
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | cb_x_resident | `block_rows · core_w_tiles` | `block_rows · core_w_tiles`. The whole block is resident from load until it is popped by prescale (gamma) or normalize (no gamma). | `{rows: spans → block_rows, w_local: spans → core_w_tiles, sources: streams → 0}` | x dtype (Float32 / Float16_b) | reader | compute | load → prescale / normalize | **No share.** Its residency across the exchange is the whole reason x crosses DRAM once. It cannot alias cb_xg: prescale reads x tile i while packing xg tile i, both live, and an in-place transform would make compute a second producer of a reader-produced CB. |
-| cb_gamma_tiles | `core_w_tiles` (allocated only when `HAS_GAMMA`) | `core_w_tiles`, held for the whole prescale | `{rows: streams → reused for every row, w_local: spans → core_w_tiles, sources: streams → 0}` | gamma dtype (Float32 / Float16_b). This is input data, not DEST output, so it keeps its own format. | reader | compute | whole call | **No share.** It is reuse-shared across rows (read once per call). Every lifetime it could share overlaps it. |
+| cb_gamma_tiles | `core_w_tiles` (allocated only when `HAS_GAMMA`) | `core_w_tiles`, held for the whole prescale (or, on the fused path, the whole normalize). Row 0 valid on the prescale path (Row bcast); all 32 rows = row 0 on the fused path (DEST-reuse Mul has no broadcast). | `{rows: streams → reused for every row, w_local: spans → core_w_tiles, sources: streams → 0}` | gamma dtype (Float32 / Float16_b). This is input data, not DEST output, so it keeps its own format. | reader | compute | whole call | **No share.** It is reuse-shared across rows (read once per call). Every lifetime it could share overlaps it. |
 | cb_scaler | 1 (constant) | 1 | `{rows: streams, w_local: streams, sources: streams}` (constant) | Float16_b (scaler convention; 1.0 is exact) | reader | compute | whole call | **No share.** It is read by two reduces (sumsq and combine), so it must persist across both. |
 | cb_sq_acc | `block_rows` | `block_rows`. One DEST-accumulated Σ_w x² tile per tile row. | `{rows: spans → block_rows, w_local: streams → collapsed in DEST, sources: streams → 0}` | Float32 | compute | compute | sumsq | **Disjoint lifetime with cb_rstd** (same size and format), but kept separate on purpose. Deferred regime R2 (multi-round) runs round b+1's sumsq while round b's rstd is live, and aliasing would foreclose that. It totals ≤ `block_rows · 4 KiB`. Folding into DEST is already done: W is collapsed in DEST, and only one tile per row is packed. |
 | cb_partial | `block_rows` | `block_rows` | `{rows: spans → block_rows, w_local: streams → 0, sources: streams → 0}` | Float32 (stats stay fp32 on the wire) | compute | writer | sumsq → publish | **No share with cb_sq_acc:** the reduce reads cb_sq_acc while it packs cb_partial (concurrent), and the consumers differ (compute vs writer). **No share with cb_rstd:** different consumer kernel, and R2 overlap. |
-| cb_xg | `block_rows · core_w_tiles` (allocated only when `HAS_GAMMA`) | `block_rows · core_w_tiles` from prescale until normalize | `{rows: spans → block_rows, w_local: spans → core_w_tiles, sources: streams → 0}` | Float32 (DEST width; the precision gate for the stall-shadow reorder) | compute | compute | prescale → normalize | It exists only because of the **explicit stall-shadow decision**: x·gamma is computed during the exchange wait. Its lifetime overlaps cb_x_resident (prescale) and cb_output_tiles (normalize). The perf lamp "gamma prescale" measures the version without it. |
+| cb_xg | `block_rows · core_w_tiles` (allocated only when `GAMMA_PRESCALE` = `HAS_GAMMA ∧ F_worker(prescale) ≤ L1_BUDGET`) | `block_rows · core_w_tiles` from prescale until normalize | `{rows: spans → block_rows, w_local: spans → core_w_tiles, sources: streams → 0}` | Float32 (DEST width; the precision gate for the stall-shadow reorder) | compute | compute | prescale → normalize | It exists only because of the **explicit stall-shadow decision**: x·gamma is computed during the exchange wait. Its lifetime overlaps cb_x_resident (prescale) and cb_output_tiles (normalize). The perf lamp "gamma prescale" measures the version without it. |
 | cb_stats_combine | `n_src_tiles · block_rows` | `n_src_tiles · block_rows`. The reduce waits for the whole block (BulkWait). | `{rows: spans → block_rows, w_local: streams → 0, sources: spans → n_src_tiles}` | Float32 | reader | compute | gather → finalize | **No share.** It could alias cb_sq_acc only when `n_src_tiles = 1`, and that also forecloses R2. It totals ≤ 4 KiB · `n_src_tiles · block_rows`. |
 | cb_rstd | `block_rows` | `block_rows`. The Col-mapped Upfront window is held across normalize. | `{rows: spans → block_rows, w_local: streams → broadcast along it, sources: streams → 0}` | Float32 | compute | compute | finalize → normalize | See cb_sq_acc (R2 overlap). |
-| cb_output_tiles | `2 · out_batch_tiles` (`out_batch_tiles = core_w_tiles`) | `out_batch_tiles` per stage | `{rows: streams → 1 tile row at a time, w_local: spans → core_w_tiles per batch, sources: streams → 0}` | x dtype | compute | writer | normalize → store | Capacity exceeds the live set by 2×. That is **double buffering**: the pack of tile-row j+1 overlaps the write of j (catalog `double_buffer`). It cannot pack into the destination because the destination is interleaved DRAM. It cannot alias cb_x_resident: compute would become a second producer. |
+| cb_output_tiles | `OUT_DEPTH · out_batch_tiles` (`OUT_DEPTH = 2`; `out_batch_tiles = out_batch_tiles_knob(core_w_tiles)`, Phase 0 `= core_w_tiles`, must divide it; passed to the writer as an RT arg) | `out_batch_tiles` per stage | `{rows: streams → 1 tile row at a time, w_local: spans → core_w_tiles per batch, sources: streams → 0}` | x dtype | compute | writer | normalize → store | Capacity exceeds the live set by 2×. That is **double buffering**: the pack of tile-row j+1 overlaps the write of j (catalog `double_buffer`). It cannot pack into the destination because the destination is interleaved DRAM. It cannot alias cb_x_resident: compute would become a second producer. |
 
 ### Symbol table (worker)
 
 | Symbol | Bound | Predicate establishing it |
 |--------|-------|---------------------------|
 | `block_rows` | ≤ `core_rows = ceil(tensor_row_tiles / S_r)` | `_plan_blocks()`; Phase 0 sets `block_rows = core_rows` under `P_resident` |
-| `core_w_tiles` | ≤ `ceil(tensor_w_tiles / S_w)`; ≥ `min(tensor_w_tiles, min_core_w_tiles = 4)` | `_choose_split()` |
-| `n_src_tiles` | `ceil(G · S_w / 32)`; G ≤ 8 (Galaxy axis 0), `S_w ≤ ceil(tensor_w_tiles/4)` | `_choose_split()` plus mesh shape |
-| `out_batch_tiles` | `= core_w_tiles` | host constant derived from `core_w_tiles` |
+| `core_w_tiles` | ≤ `ceil(tensor_w_tiles / S_w)`; ≥ `min(tensor_w_tiles, MIN_CORE_W_TILES = 8)` | `_choose_split()` |
+| `n_src_tiles` | `ceil(G · S_w / 32)`; G ≤ 8 (Galaxy axis 0), `S_w ≤ ceil(tensor_w_tiles/8)` | `_choose_split()` plus mesh shape |
+| `out_batch_tiles` | divides `core_w_tiles`; Phase 0 `= core_w_tiles` | `out_batch_tiles_knob()` (single source; host asserts divisibility per chunk group) |
+| `GAMMA_PRESCALE` | 0 / 1 | `HAS_GAMMA ∧ F_worker(GAMMA_PRESCALE = 1) ≤ L1_BUDGET` (host, per call) |
 | `T_x` | x tile bytes: 4096 (fp32) / 2048 (bf16) / 1088 (bfp8, TARGET) | dtype |
 | `T_g` | gamma tile bytes: 4096 / 2048 | gamma dtype |
 | `T_f` | 4096 (Float32 tile) | — |
@@ -42,19 +43,23 @@ Phase 0 runs with `fp32_dest_acc_en = True`, so every DEST-produced intermediate
 ### Footprint (per worker, bytes)
 
 ```
-F_worker = block_rows · core_w_tiles · (T_x + HAS_GAMMA · T_f)        # cb_x_resident + cb_xg       -> scales with block_rows x core_w_tiles
+F_worker = block_rows · core_w_tiles · (T_x + GAMMA_PRESCALE · T_f)   # cb_x_resident + cb_xg       -> scales with block_rows x core_w_tiles
          + HAS_GAMMA · core_w_tiles · T_g                              # cb_gamma_tiles              -> scales with core_w_tiles
          + 2048                                                       # cb_scaler                   -> constant
          + block_rows · T_f · (3 + n_src_tiles)                        # sq_acc, partial, rstd, combine -> scales with block_rows (x n_src_tiles)
-         + 2 · core_w_tiles · T_x                                      # cb_output_tiles             -> scales with core_w_tiles
-P_resident :=  F_worker(block_rows = core_rows) <= L1_BUDGET
+         + OUT_DEPTH · out_batch_tiles · T_x                           # cb_output_tiles             -> scales with out_batch_tiles
+GAMMA_PRESCALE := HAS_GAMMA ∧ F_worker(GAMMA_PRESCALE = 1) <= L1_BUDGET     # stall-shadow prescale only when it fits
+P_resident     := F_worker(block_rows = core_rows, GAMMA_PRESCALE) <= L1_BUDGET   # else RuntimeError (R2 deferred)
 ```
 
-The largest TARGET INPUTS case is 2048×2048 fp32 with fp32 gamma: `S_w = 5`, `core_rows = 3`, `core_w_tiles = 13`, `n_src_tiles = 1` (G = 2):
+Worst cases on the measured 11×10 Blackhole grid (N = 99 workers, G = 2):
 
-```
-F = 39·8192 + 13·4096 + 2048 + 3·4096·4 + 26·4096 ≈ 0.53 MiB  ≤ 1 MiB
-```
+| Case | Split | F (prescale) | F (fused) | Path |
+|------|-------|--------------|-----------|------|
+| 2048×2048 fp32, fp32 gamma (largest INPUTS) | S_r 33, S_w 3, cw 22, rows 2 | 665 600 B | 485 376 B | prescale |
+| (2, 2048, 4096) bf16, bf16 gamma (translated `8192-2048-2`) | S_r 33, S_w 3, cw 43, rows 4 | 1 388 544 B | 684 032 B | **fused** (prescale > 1 MiB) |
+
+The fused path was added by the verifier: before it, the second case raised the P_resident RuntimeError.
 
 ## Port cores
 
@@ -102,3 +107,11 @@ Totals at the perf-focus shape (640×1792 bf16, G = 2, L = 2, 117 workers, S_w =
 | Worker rectangle | `(0,1)..(grid_x−1, grid_y−1)` | `(0,1)..(grid_x−1, y_last)` with y_last the last row holding a used worker; idle cores of that rectangle run zero-row kernels | The stats-ready multicast must only land on cores of this program. |
 
 Data-movement budget at 640×1792 bf16 (G = 2, L = 2, 11×10 grid → S_w = 4, S_r = 20, 80 workers): DRAM x 2.29 MB read once, out 2.29 MB written once, gamma 20 × 3.6 KB; NoC record pulls `20·2·16·128 B` = 80 KB; Fabric one packet per link direction.
+
+## Verifier deltas (Phase 0 verification)
+
+| Item | Before | After | Why |
+|------|--------|-------|-----|
+| `cb_xg` | always allocated with gamma | allocated only when `GAMMA_PRESCALE` (prescale footprint fits `L1_BUDGET`); otherwise gamma is fused into normalize as a DEST-reuse Mul (`cb_gamma_tiles` row-replicated by the reader) | (2, 2048, 4096) bf16 + gamma needed 1.39 MB with the fp32 `cb_xg` block. The fused path needs 0.68 MB. No more RuntimeError on any golden / translated shape. The perf-focus shapes keep the prescale path (unchanged). |
+| `out_batch_tiles` | host knob for the CB size only; the writer hard-coded `cw` as its batch | writer RT arg `out_batch`, walks each tile row in `out_batch` batches; host asserts it divides the chunk | DRY: one source for the batch. Verified live by running the acceptance suite at `out_batch = 1`. |
+| `RECORD_BYTES` | host constant + literal `128` in reader and writer | host constant passed as a CT arg | DRY. |

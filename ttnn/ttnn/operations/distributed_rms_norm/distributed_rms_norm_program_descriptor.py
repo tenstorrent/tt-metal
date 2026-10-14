@@ -56,7 +56,8 @@ def block_rows_knob(core_rows_max):
 
 
 def out_batch_tiles_knob(core_w_tiles):
-    """Tiles per writer barrier (= one tile row of the core's W chunk)."""
+    """Tiles per writer barrier (Phase 0: one tile row of the core's W chunk). Must divide core_w_tiles: the writer
+    walks each tile row in batches, and cb_output_tiles (OUT_DEPTH batches) must wrap on a batch boundary."""
     return core_w_tiles
 
 
@@ -132,6 +133,11 @@ def caller_link_checks(mesh_device, cluster_axis, topology, num_links):
     min_links = min(len(v) for v in hops.values())
     if min_links == 0:
         raise ValueError("distributed_rms_norm: a hop of the group has no usable fabric link")
+    gx = mesh_device.compute_with_storage_grid_size().x
+    if num_links is not None and 2 * num_links > gx:
+        raise ValueError(
+            f"distributed_rms_norm: num_links={num_links} needs {2 * num_links} port columns, grid has {gx}"
+        )
     if num_links is not None and num_links > min_links:
         raise ValueError(
             f"distributed_rms_norm: num_links={num_links} exceeds the {min_links} usable link(s) per hop "
@@ -174,7 +180,7 @@ def build_plan(input_tensor, *, cluster_axis, topology, num_links):
     grid = mesh_device.compute_with_storage_grid_size()
     gx, gy = grid.x, grid.y
     L = num_links if num_links is not None else min(len(v) for v in hops.values())
-    L = min(L, gx // 2)  # ports live in logical row 0, columns 0..2L-1
+    L = min(L, gx // 2)  # ports live in logical row 0, columns 0..2L-1 (auto only; explicit L is checked by the caller)
 
     shape = tuple(input_tensor.shape)
     H, W = shape[-2], shape[-1]
@@ -229,14 +235,17 @@ def build_plan(input_tensor, *, cluster_axis, topology, num_links):
     )
 
 
-def _worker_footprint(plan, x_dtype, gamma_dtype):
+def _worker_footprint(plan, x_dtype, gamma_dtype, gamma_prescale):
+    """Per-worker CB bytes (l1_ledger.md F_worker). cb_xg exists only on the gamma-prescale path."""
     T_x = _tile_bytes(x_dtype)
     T_f = _tile_bytes(ttnn.float32)
     br, cw = plan["block_rows"], plan["core_w_tiles"]
     has_gamma = gamma_dtype is not None
     f = X_BLOCKS_IN_FLIGHT * br * cw * T_x
     if has_gamma:
-        f += br * cw * T_f + cw * _tile_bytes(gamma_dtype)
+        f += cw * _tile_bytes(gamma_dtype)
+    if has_gamma and gamma_prescale:
+        f += br * cw * T_f
     f += _tile_bytes(ttnn.bfloat16)
     f += br * T_f * (3 + plan["n_src_tiles"])
     f += OUT_DEPTH * out_batch_tiles_knob(cw) * T_x
@@ -282,7 +291,10 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
     Wt = plan["tensor_w_tiles"]
     has_gamma = gamma is not None
 
-    footprint = _worker_footprint(plan, input_tensor.dtype, gamma.dtype if has_gamma else None)
+    g_dtype = gamma.dtype if has_gamma else None
+    # Stall-shadow gamma prescale (cb_xg, a full fp32 block) when it fits; otherwise gamma is fused into normalize.
+    gamma_prescale = has_gamma and _worker_footprint(plan, input_tensor.dtype, g_dtype, True) <= WORKER_L1_BUDGET
+    footprint = _worker_footprint(plan, input_tensor.dtype, g_dtype, gamma_prescale)
     if footprint > WORKER_L1_BUDGET:
         raise RuntimeError(
             f"distributed_rms_norm: per-worker working set {footprint} B exceeds {WORKER_L1_BUDGET} B "
@@ -361,15 +373,15 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
     for cw_group, cores in chunk_groups:
         cores_set = _crs(cores)
         out_batch = out_batch_tiles_knob(cw_group)
+        assert cw_group % out_batch == 0, "out_batch_tiles must divide the core's W chunk"
         cbs += [
             cb(CB_X_RESIDENT, x_dtype, X_BLOCKS_IN_FLIGHT * block_rows * cw_group, cores_set),
             cb(CB_OUTPUT_TILES, x_dtype, OUT_DEPTH * out_batch, cores_set),
         ]
         if has_gamma:
-            cbs += [
-                cb(CB_GAMMA_TILES, gamma.dtype, cw_group, cores_set),
-                cb(CB_XG, ttnn.float32, block_rows * cw_group, cores_set),
-            ]
+            cbs.append(cb(CB_GAMMA_TILES, gamma.dtype, cw_group, cores_set))
+        if gamma_prescale:
+            cbs.append(cb(CB_XG, ttnn.float32, block_rows * cw_group, cores_set))
 
     # ---- compile-time args ----
     x_acc = list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
@@ -390,11 +402,13 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
             SEM_STATS_READY,
             gamma_elem,
             int(gamma.buffer_aligned_page_size()) if has_gamma else 0,
+            RECORD_BYTES,
+            int(has_gamma and not gamma_prescale),
         ]
         + x_acc
         + g_acc
     )
-    writer_ct = [CB_PARTIAL, CB_OUTPUT_TILES, SEM_LOCAL_ARRIVALS] + o_acc
+    writer_ct = [CB_PARTIAL, CB_OUTPUT_TILES, SEM_LOCAL_ARRIVALS, RECORD_BYTES] + o_acc
     compute_ct = [
         CB_X_RESIDENT,
         CB_GAMMA_TILES,
@@ -406,6 +420,7 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
         CB_RSTD,
         CB_OUTPUT_TILES,
         int(has_gamma),
+        int(gamma_prescale),
     ]
     port_ct = [SEM_LOCAL_ARRIVALS, SEM_STATS_READY, HEADER_RING]
 
@@ -493,6 +508,7 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
                     plan["link_rec_base"][g],
                     S_w,
                     w,
+                    out_batch_tiles_knob(cw_here),
                     len(pub),
                 ] + pub_args
                 compute_rt[core.x][core.y] = [rows, block_rows, cw_here, n_src_tiles, inv_w_bits, eps_bits]
@@ -515,7 +531,7 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
                         G,
                         2 * L,
                     ] + [0, 0] * G
-                    writer_rt[core.x][core.y] = [o_addr, 0, 0, block_rows, 0, 0, Wt, scratch_addr, 0, S_w, 0, 0]
+                    writer_rt[core.x][core.y] = [o_addr, 0, 0, block_rows, 0, 0, Wt, scratch_addr, 0, S_w, 0, 1, 0]
                     compute_rt[core.x][core.y] = [0, block_rows, 0, n_src_tiles, inv_w_bits, eps_bits]
 
             # ---- port runtime args ----

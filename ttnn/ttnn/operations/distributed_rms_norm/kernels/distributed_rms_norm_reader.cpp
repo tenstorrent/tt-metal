@@ -26,10 +26,11 @@ void kernel_main() {
     constexpr uint32_t sem_stats_ready = get_compile_time_arg_val(5);
     constexpr uint32_t gamma_elem_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t gamma_page_bytes = get_compile_time_arg_val(7);  // one stick = the whole W_local slice
-    constexpr auto x_args = TensorAccessorArgs<8>();
+    constexpr uint32_t record_bytes = get_compile_time_arg_val(8);      // host RECORD_BYTES: 32 fp32 partial sums
+    constexpr bool gamma_full_rows = get_compile_time_arg_val(9) != 0;  // replicate row 0 (fused, no-prescale path)
+    constexpr auto x_args = TensorAccessorArgs<10>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t record_bytes = 128;
     constexpr uint32_t half_record = record_bytes / 2;  // 16 fp32 = one face row
     constexpr uint32_t f32_tile_bytes = 4096;
     constexpr uint32_t f32_face_bytes = 1024;
@@ -101,6 +102,25 @@ void kernel_main() {
                     if (t > 0) {
                         for (uint32_t i = 0; i < half_words; ++i) {
                             row0[i] = src[i];
+                        }
+                    }
+                }
+                if constexpr (gamma_full_rows) {
+                    // DEST-reuse multiply has no broadcast: copy row 0 of faces 0/1 into every row of all 4 faces
+                    for (uint32_t t = 0; t < n; ++t) {
+                        const uint32_t tb = gbase + t * gamma_tile_bytes;
+                        volatile tt_l1_ptr uint32_t* f0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tb);
+                        volatile tt_l1_ptr uint32_t* f1 =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tb + face_bytes);
+                        for (uint32_t face = 0; face < 4; ++face) {
+                            volatile tt_l1_ptr uint32_t* src_row = (face & 1) ? f1 : f0;
+                            volatile tt_l1_ptr uint32_t* dst =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tb + face * face_bytes);
+                            for (uint32_t r = (face < 2) ? 1 : 0; r < 16; ++r) {
+                                for (uint32_t i = 0; i < half_words; ++i) {
+                                    dst[r * half_words + i] = src_row[i];
+                                }
+                            }
                         }
                     }
                 }

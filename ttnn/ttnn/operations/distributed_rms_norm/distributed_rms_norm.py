@@ -66,14 +66,17 @@ SUPPORTED = {
     "dtype": [ttnn.float32, ttnn.bfloat16],
     "fp32_dest_acc_en": [True],
     "layout": [ttnn.TILE_LAYOUT],
-    "alignment": ["tile_aligned"],
+    # h_non_aligned: rows are independent, so tile-padding rows only ever reach padding rows of the output.
+    "alignment": ["tile_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
     "gamma_mode": ["gamma", "no_gamma"],
     "gamma_dtype": [ttnn.float32, ttnn.bfloat16, "none"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
     "cluster_axis": [0, 1],
-    "topology": [Topology.Linear],
-    "num_links": [1, 2],
+    # Ring: generic in G via _schedule; verified on the snake-ring mock (1xN / Nx1), G = 4, 1 and 2 links.
+    "topology": [Topology.Linear, Topology.Ring],
+    # None = auto (all usable links on every hop): always legal, listed so the registry matches the op.
+    "num_links": [1, 2, None],
 }
 
 # ---------------------------------------------------------------------------
@@ -103,6 +106,10 @@ def _caller_errors(input_tensor, cluster_axis, gamma, topology, num_links):
     if mesh_shape[cluster_axis] < 2:
         raise ValueError(f"distributed_rms_norm: mesh {mesh_shape} has size 1 along cluster_axis {cluster_axis}")
     if gamma is not None:
+        if gamma.layout != ttnn.ROW_MAJOR_LAYOUT:
+            raise ValueError(
+                f"distributed_rms_norm: gamma must be ROW_MAJOR (one stick per device), got {gamma.layout}"
+            )
         gshape = tuple(gamma.shape)
         if gshape[-1] != shape[-1]:
             raise ValueError(
@@ -152,10 +159,6 @@ def validate(
     )
     for axis, allowed in SUPPORTED.items():
         value = axes[axis]
-        if axis == "num_links" and value is None:
-            continue  # None = auto (all usable links): always legal
-        if axis == "gamma_dtype" and value == "none":
-            continue  # "no weight tensor": always legal
         if value not in allowed:
             raise UnsupportedAxisValue(f"distributed_rms_norm: {axis}={value!r} not in SUPPORTED {allowed}")
     for exc in EXCLUSIONS:
