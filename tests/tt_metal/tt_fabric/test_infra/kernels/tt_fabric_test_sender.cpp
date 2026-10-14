@@ -159,6 +159,23 @@ void kernel_main() {
         }
     }
 
+    // Worker diagnostics (CRAQ #52): MISC+9/+10 wait cycles, +11/+12 signal cycles, +13 packets that waited.
+    {
+        uint64_t wait_cycles = 0;
+        uint64_t signal_cycles = 0;
+        uint32_t waited = 0;
+        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+            wait_cycles += sender_config->traffic_config_ptrs[i]->diag_wait_cycles;
+            signal_cycles += sender_config->traffic_config_ptrs[i]->diag_signal_cycles;
+            waited += sender_config->traffic_config_ptrs[i]->diag_waited;
+        }
+        auto* rb = reinterpret_cast<tt_l1_ptr uint32_t*>(sender_config->get_result_buffer_address());
+        rb[TT_FABRIC_MISC_INDEX + 9] = static_cast<uint32_t>(wait_cycles);
+        rb[TT_FABRIC_MISC_INDEX + 10] = static_cast<uint32_t>(wait_cycles >> 32);
+        rb[TT_FABRIC_MISC_INDEX + 11] = static_cast<uint32_t>(signal_cycles);
+        rb[TT_FABRIC_MISC_INDEX + 12] = static_cast<uint32_t>(signal_cycles >> 32);
+        rb[TT_FABRIC_MISC_INDEX + 13] = waited;
+    }
     // Write test results
     write_test_cycles(sender_config->get_result_buffer_address(), total_elapsed_cycles_outer_loop);
     write_test_packets(sender_config->get_result_buffer_address(), total_packets_sent);

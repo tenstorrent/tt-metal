@@ -1062,6 +1062,10 @@ struct SenderKernelTrafficConfig {
     }
 
     bool has_packets_to_send() const { return num_packets_processed < metadata.num_packets; }
+    // Benchmark-mode worker diagnostics (CRAQ #52), reported via the result buffer MISC words.
+    uint64_t diag_wait_cycles = 0;
+    uint64_t diag_signal_cycles = 0;
+    uint32_t diag_waited = 0;
 
     FORCE_INLINE void setup_credit_update_noc_state(const EdmSenderT& adapter, uint8_t noc) {
         auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
@@ -1107,7 +1111,10 @@ struct SenderKernelTrafficConfig {
 
         // STEP 2: Wait for space
         if constexpr (BENCHMARK_MODE) {
+            // Worker-side diagnostics (CRAQ #52): cycles spent waiting for a slot vs. signalling the router.
+            const uint64_t diag_t0 = get_timestamp();
             connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
+            const uint64_t diag_t1 = get_timestamp();
             // STEP 3: Send packet
             auto* conn = static_cast<EdmSenderT*>(connection_ptr_);
             if (num_packets_processed < conn->num_buffers_per_channel) {
@@ -1115,6 +1122,10 @@ struct SenderKernelTrafficConfig {
             } else {
                 fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn);
             }
+            const uint64_t diag_t2 = get_timestamp();
+            diag_wait_cycles += diag_t1 - diag_t0;
+            diag_signal_cycles += diag_t2 - diag_t1;
+            diag_waited += (diag_t1 - diag_t0) > 64 ? 1u : 0u;
         } else {
             const bool has_payload = payload_size_bytes > 0 && payload_buffer_;
             if (has_payload) {
