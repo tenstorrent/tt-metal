@@ -1482,32 +1482,6 @@ def test_pad_forced_codegen_refuses_out_of_scope_case(device, expect_error):
         _force_codegen(xt, **kwargs)
 
 
-@pytest.mark.parametrize("shape,kwargs,dtype,layout,placement", _CACHE_HIT, ids=_CACHE_HIT_IDS)
-def test_pad_codegen_program_key_is_frontier_invariant(device, shape, kwargs, dtype, layout, placement):
-    xt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device, memory_config=placement)
-    golden = ttnn.to_torch(_force_native(xt, **kwargs))
-    assert_equal(golden, ttnn.to_torch(_force_codegen(xt, **kwargs)))
-    entries_before = device.num_program_cache_entries()
-    # Trace capture compiles nothing it has not already cached, and what warm-up cached
-    # depends on where the frontier stood at warm-up -- so a CB plan that reads live L1
-    # occupancy is uncapturable, and the same call re-keys the cache once anything else is
-    # resident. This tensor moves the frontier by many pages per bank, so a plan reading it
-    # at all lands on a different key here.
-    resident = ttnn.from_torch(
-        torch.zeros([1, 1, 256, 4096], dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    try:
-        assert_equal(golden, ttnn.to_torch(_force_codegen(xt, **kwargs)))
-        msg = "the program key moved with the L1 frontier, so the op cannot be traced"
-        assert device.num_program_cache_entries() == entries_before, msg
-    finally:
-        ttnn.deallocate(resident)
-
-
 # --- END GENERATED ---
 
 

@@ -1940,18 +1940,58 @@ def test_pad_codegen_program_cache(device):
         )
 
 
+def test_pad_codegen_program_rekeys_when_l1_frontier_drops(device):
+    # The CB batching is planned against the L1 free at dispatch and is part of the program key, so a tensor landing
+    # inside the full plan's CB region must build a shallower program rather than replay one that overlaps it. The
+    # cost is that a plan cached at warm-up is not the one a trace capture under less L1 needs.
+    shape = [1, 1, 64, 64]
+    padding = [[0, 0], [0, 0], [0, 32], [0, 32]]
+    value = 2.0
+    tile_bytes = 32 * 32 * 2
+    full_plan_bytes = (2 * 8 + 1) * tile_bytes
+    min_plan_bytes = (2 * 1 + 1) * tile_bytes
+    x = _codegen_input(shape, ttnn.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    expected = _torch_pad(x, padding, value)
+    _assert_pad_matches(expected, ttnn.to_torch(_pad_force_codegen(xt, padding, value)))
+    entries = device.num_program_cache_entries()
+
+    info = ttnn._ttnn.reports.get_device_info(device)
+    tiles_per_bank = (info.cb_limit - full_plan_bytes // 2) // tile_bytes
+    resident = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+    try:
+        headroom = resident.buffer_address() - info.address_at_first_l1_cb_buffer
+        assert min_plan_bytes <= headroom < full_plan_bytes, f"pinned tensor left {headroom} B of CB headroom"
+        _assert_pad_matches(expected, ttnn.to_torch(_pad_force_codegen(xt, padding, value)))
+        msg = "the dispatch under less L1 hit the program planned for a clear L1"
+        assert device.num_program_cache_entries() == entries + 1, msg
+    finally:
+        ttnn.deallocate(resident)
+
+
 @pytest.mark.parametrize(
     "dtype, value",
-    [pytest.param(ttnn.int32, 3.0e9, id="int32_above_range"), pytest.param(ttnn.uint32, -1.0, id="uint32_negative")],
+    [
+        pytest.param(ttnn.int32, 3.0e9, id="int32_above_range"),
+        pytest.param(ttnn.uint32, -1.0, id="uint32_negative"),
+        pytest.param(ttnn.int32, float("nan"), id="int32_nan"),
+    ],
 )
 def test_pad_codegen_out_of_range_integer_value(device, dtype, value):
-    # The partial-tile lanes and the new tiles must hold one word: the value truncated and wrapped to 32 bits.
+    # The partial-tile lanes and the new tiles must hold one word: the value truncated and wrapped to 32 bits, and
+    # zero for NaN.
     shape = [1, 1, 45, 70]
     padding = [[0, 0], [0, 0], [0, 30], [0, 30]]
     x = torch.randint(0, 100, shape, dtype=torch.int32)
     xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn.to_torch(_pad_force_codegen(xt, padding, value)).view(torch.int32)
-    word = (int(value) & 0xFFFFFFFF) - (1 << 32 if int(value) & 0x80000000 else 0)
+    word = 0 if math.isnan(value) else (int(value) & 0xFFFFFFFF) - (1 << 32 if int(value) & 0x80000000 else 0)
     expected = torch.full(list(output.shape), word, dtype=torch.int32)
     expected[..., : shape[-2], : shape[-1]] = x
     assert_tensors_equal(expected, output)

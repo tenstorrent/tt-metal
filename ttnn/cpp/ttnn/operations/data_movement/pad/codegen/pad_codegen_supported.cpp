@@ -123,6 +123,11 @@ bool structurally_supported(const Tensor& input, const tt::tt_metal::MemoryConfi
     if (input.storage_type() != ttnn::StorageType::DEVICE || input.buffer() == nullptr) {
         return false;
     }
+    // The reader publishes its pad tile with a store-ordering idiom that does not cover Quasar's L2, so the forced
+    // entry has to refuse there too, not just routing.
+    if (!codegen_supported_on_arch(input)) {
+        return false;
+    }
     if (input.logical_shape().rank() != 4) {
         return false;
     }
@@ -185,6 +190,10 @@ uint32_t pack_pad_value(DataType dtype, float value) {
         case DataType::FLOAT32: return std::bit_cast<uint32_t>(value);
         case DataType::INT32:
         case DataType::UINT32: {
+            // NaN survives the clamp and has no integer value; zero is what native's conversion yields on the host.
+            if (std::isnan(value)) {
+                return 0;
+            }
             constexpr double kLimit = 4611686018427387904.0;  // keeps the int64 cast defined
             const double clamped = std::clamp(std::trunc(static_cast<double>(value)), -kLimit, kLimit);
             return static_cast<uint32_t>(static_cast<uint64_t>(static_cast<int64_t>(clamped)) & 0xFFFFFFFFull);

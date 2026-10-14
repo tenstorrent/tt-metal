@@ -494,8 +494,7 @@ std::optional<ttnn::Tensor> pad_tile_codegen(
     const ttnn::Tensor input_4d = to_4d(input_tensor);
     const auto [front, after] = trailing_4d_padding(padding_vec, rank);
 
-    if (route != PadRoute::Codegen && (!ttnn::operations::data_movement::codegen_supported_on_arch(input_4d) ||
-                                       !pc::supported_execution_controls(use_multicore, sub_core_grids))) {
+    if (route != PadRoute::Codegen && !pc::supported_execution_controls(use_multicore, sub_core_grids)) {
         return std::nullopt;
     }
     const auto planned =
