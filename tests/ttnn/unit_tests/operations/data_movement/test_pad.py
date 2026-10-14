@@ -2038,7 +2038,7 @@ def test_pad_codegen_declines_zero_volume_input(device, expect_error):
         _pad_force_codegen(xt, padding, 0.0)
 
 
-def test_pad_partial_tile_input_with_thousands_of_border_tiles_per_core(device):
+def test_pad_codegen_partial_tile_input_with_thousands_of_border_tiles_per_core(device):
     """Every plane has a partial border tile, at least 1365 per core: all must be filled before the pad copies them."""
     grid = device.compute_with_storage_grid_size()
     c = 1024
