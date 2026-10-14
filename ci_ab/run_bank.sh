@@ -7,7 +7,8 @@ T=models/demos/deepseek_v3_b1/tests/unit_tests
 cp ci_ab/test_cdram_ab.py $T/test_cdram_ab.py
 python3 -c "import tracy" 2>/dev/null || export PYTHONPATH=/work:/work/tools
 echo "== $(date -u +%FT%TZ) $(git log -1 --format='%h %s' 2>/dev/null)"
-python3 -m pytest --collect-only -q $T/test_dram_streaming_matmul.py 2>/dev/null | grep -E "test_dram_streaming_matmul\[" | grep -E "up_proj|down_proj" | grep -E "m1" | grep -F "not_fp32" > ci_ab/ids.txt
+: > ci_ab/ids.txt
+for f in up_proj down_proj; do echo "$T/test_dram_streaming_matmul.py::test_dram_streaming_matmul[not_fp32-m1-$f]" >> ci_ab/ids.txt; done
 ls $T/test_cdram_ab.py | sed 's/$//' >> /dev/null
 for f in test_cd_mix_n2048 test_cd_mix_n4096 test_cd_bfp4_n2048 test_cd_bfp4_n4096 test_cd_mix024_n2048; do echo "$T/test_cdram_ab.py::$f" >> ci_ab/ids.txt; done
 cat ci_ab/ids.txt
