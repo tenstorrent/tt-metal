@@ -37,6 +37,7 @@
 #include "ttnn/operations/normalization/batch_norm/device/running_statistics_device_operation.hpp"
 #include "ttnn/operations/normalization/groupnorm/groupnorm.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_device_operation.hpp"
 #include "ttnn/operations/normalization/layernorm_distributed/layernorm_post_all_gather.hpp"
 #include "ttnn/operations/normalization/layernorm_distributed/layernorm_pre_all_gather.hpp"
 #include "ttnn/operations/normalization/rmsnorm/rmsnorm.hpp"
@@ -864,6 +865,62 @@ TEST_F(NormalizationSmoke, DistributedLayerNormPostWelford) {
         ttnn::layer_norm_pre_all_gather(x, DataType::BFLOAT16, std::nullopt, std::nullopt, cfg, std::nullopt, recip);
     auto out =
         ttnn::layer_norm_post_all_gather(x, stats, 1e-6f, std::nullopt, std::nullopt, std::nullopt, std::nullopt, cfg);
+    detail::expect_close(detail::to_float_vector(out), x_data, 0.0f, 0.03f);
+}
+
+// #56908: multi-row post-all-gather coverage for the WELFORD 2D-core-grid path.
+//
+// On the 2D path a core owns tiles_per_core_x row-tiles. The Welford post factory offset each core
+// by a single row (x * Wt), derived its block size from the global width, and handed the writer a
+// flat tile count, so once tiles_per_core_x > 1 every core read and wrote the wrong tiles. The
+// sibling non-Welford factory was corrected in 5717c69b; the Welford one kept the old arithmetic.
+//
+// DistributedLayerNormPostWelford above uses a single tile row, which keeps tiles_per_core_x == 1
+// and leaves the defect inert - the single-row test alone cannot exercise the reported bug.
+// 16 tile rows (512 rows) on an 8-wide grid gives tiles_per_core_x = 2, which does.
+//
+// use_2d_core_grid is not exposed on the public layer_norm wrapper, so the post stage is invoked
+// through ttnn::prim. The pre stage stays on the 1D path: the defect under test is in the post
+// factory, and a 1D pre produces the same stats tensor.
+TEST_F(NormalizationSmoke, DistributedLayerNormPostWelford2DGridMultiRow) {
+    auto& device = *device_;
+    constexpr uint32_t kRows = 512;   // 16 tile rows
+    constexpr uint32_t kWidth = 256;  // Wt = 8, so cores_y = 8 and the row is split across cores
+    const ttnn::Shape shape({1, 1, kRows, kWidth});
+
+    // Alternating +-1 has mean 0 and variance 1 on every row, so layer_norm returns its input.
+    // A core that reads another core's tiles still sees +-1 and would pass a mean/variance check;
+    // comparing element-wise against the input is what catches the wrong-tile read.
+    const auto x_data = detail::norm_alternating(kRows * kWidth, 1.0f, -1.0f);
+    auto x = detail::make_device_tensor(device, shape, x_data, DataType::BFLOAT16, Layout::TILE);
+
+    const auto grid = device.compute_with_storage_grid_size();
+    const CoreRangeSet full_grid(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
+    const auto recip = detail::norm_welford_recip_lut(device, full_grid, kWidth);
+    const ttnn::prim::LayerNormProgramConfig cfg = ttnn::prim::LayerNormDefaultProgramConfig{.use_welford = true};
+    const DeviceComputeKernelConfig kWelfordCfg{
+        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+        .math_approx_mode = false,
+        .fp32_dest_acc_en = false,
+        .packer_l1_acc = false,
+        .dst_full_sync_en = false};
+
+    auto stats =
+        ttnn::layer_norm_pre_all_gather(x, DataType::BFLOAT16, std::nullopt, std::nullopt, cfg, std::nullopt, recip);
+
+    auto out = ttnn::prim::layer_norm_post_all_gather(
+        x,
+        stats,
+        ttnn::prim::LayerNormDistributedType::LAYERNORM,
+        1e-6f,
+        /*gamma=*/std::nullopt,
+        /*beta=*/std::nullopt,
+        x.memory_config(),
+        kWelfordCfg,
+        /*dtype=*/std::nullopt,
+        /*use_2d_core_grid=*/true,
+        cfg);
+
     detail::expect_close(detail::to_float_vector(out), x_data, 0.0f, 0.03f);
 }
 
