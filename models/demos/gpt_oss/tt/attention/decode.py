@@ -7,9 +7,11 @@ from ..fused_decode.config import (
     OPROJ_DECODE_WEIGHT_DTYPE,
     OPROJ_STREAM_READERS,
     QKV_DECODE_WEIGHT_DTYPE,
+    QKV_FUSED_ROPE_KV,
     QKV_STREAM_READERS,
     sdpa_decode_program_config,
 )
+from ..fused_decode.stream import QKVRopeCache, rope_rotation_tiles
 from .config import AttentionConfig, ProgramConfig
 from .operations import apply_rope
 from .weights import AttentionWeights
@@ -101,18 +103,29 @@ def decode_forward(
             out_mode=3,
             heads=(num_local_heads * head_dim // ttnn.TILE_SIZE, num_local_kv_heads * head_dim // ttnn.TILE_SIZE),
         )
+        rope_kv = None
+        if QKV_FUSED_ROPE_KV:
+            # RoPE and the K / V cache write inside the QKV op: tt_q is the (shared) rotated Q head buffer, the K / V
+            # head buffers are not written.
+            rope_kv = QKVRopeCache(
+                rope_rotation_tiles(mesh_device), *rope_mats, position_idx, page_table, k_cache, v_cache
+            )
         tt_q, tt_k, tt_v = qkv_stream(
             hidden_states,
             weights.wqkv_stream,
             ccl_manager.get_decode_qkv_heads(num_local_heads, num_local_kv_heads, head_dim),
+            rope_kv=rope_kv,
         )
-        tt_q, tt_k = ttnn.experimental.rotary_embedding_llama_fused_qk(
-            tt_q, tt_k, rope_mats[0], rope_mats[1], transformation_mat
-        )
-        ttnn.experimental.paged_fused_update_cache(
-            k_cache, tt_k, v_cache, tt_v, update_idxs_tensor=position_idx, page_table=page_table
-        )
-        tt_v = None  # shared head buffer, not owned here
+        if rope_kv is None:
+            tt_q, tt_k = ttnn.experimental.rotary_embedding_llama_fused_qk(
+                tt_q, tt_k, rope_mats[0], rope_mats[1], transformation_mat
+            )
+            ttnn.experimental.paged_fused_update_cache(
+                k_cache, tt_k, v_cache, tt_v, update_idxs_tensor=position_idx, page_table=page_table
+            )
+        else:
+            tt_k = None  # shared head buffers, not owned here
+        tt_v = None
     else:
         if batched_qkv is not None:
             xqkv_fused = batched_qkv(hidden_states)
@@ -164,7 +177,8 @@ def decode_forward(
             page_table=page_table,
         )
 
-    tt_k.deallocate(True)
+    if tt_k is not None:
+        tt_k.deallocate(True)
     if tt_v is not None:
         tt_v.deallocate(True)
     grid_size = ttnn.CoreCoord(8, 8)
@@ -217,7 +231,8 @@ def decode_forward(
             compute_kernel_config=program_config.get_compute_kernel_config(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-    tt_q.deallocate(True)
+    if not (fused and rope_kv is not None):
+        tt_q.deallocate(True)
 
     if fused:
         # Streamed o_proj + bias (on the first TP device only) reading the heads straight out of the DRAM SDPA output

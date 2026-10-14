@@ -10,6 +10,8 @@ projections are the DRAM-streaming ops of fused_decode/stream.py, which read the
 their results straight into the next op's layout (Q/K/V heads, the flat partial sum, the routed ids / scores).
 """
 
+import os
+
 import ttnn
 
 # Smallest compute grid the fused decode layout was validated on (residual / all-reduce 10x3, SDPA 8x8, the stream ops'
@@ -151,6 +153,11 @@ QKV_STREAM_READERS = 1
 OPROJ_STREAM_READERS = 1
 GATE_UP_STREAM_READERS = 3
 DOWN_STREAM_READERS = 2
+
+# The streamed QKV op also rotates Q / K and writes K / V into the paged cache (fused_decode/stream.py QKVRopeCache),
+# replacing the fused-QK RoPE op and the fused K/V cache update (2 ops per layer); its weights are then stored in the
+# K / V-first slot order (stream.py qkv_column_order). GPT_OSS_QKV_FUSED_ROPE_KV=0: the separate ops.
+QKV_FUSED_ROPE_KV = os.environ.get("GPT_OSS_QKV_FUSED_ROPE_KV", "1") == "1"
 
 # Decode LM head (fused_decode/terminal.py): a DRAM-streaming copy of the LM-head weight, vocab split evenly over the TP
 # devices, BFP8 x BF16 LoFi like the other dense projections. Readers per DRAM bank (measured standalone: 1 and 2

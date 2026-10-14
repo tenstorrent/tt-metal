@@ -321,7 +321,7 @@ class ModelArgs:
     # (Mirrors DeepSeek's WEIGHT_CACHE_FORMAT_VERSION in deepseek_v3/utils/weight_config.py.)
     WEIGHT_CACHE_FORMAT_VERSION = 1
     # Layout version of the fused decode (DRAM-streaming) weights; a marker from an older fused build is rejected.
-    FUSED_DECODE_WEIGHTS_VERSION = 3
+    FUSED_DECODE_WEIGHTS_VERSION = 4  # 4: QKV stream in K/V-first slot order (wqkv_kvfirst)
     # Layout version of the batched dense decode MoE weights (experts dense_decode_*).
     DENSE_MOE_DECODE_WEIGHTS_VERSION = 1
 
