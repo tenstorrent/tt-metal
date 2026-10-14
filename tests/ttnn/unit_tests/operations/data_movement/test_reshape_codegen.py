@@ -146,6 +146,8 @@ def test_reshape_codegen_edge_shapes(device, case, in_shape, out_shape, dtype):
 _ROUTES = [
     # Head split: batching cuts source reads 32x.
     ("tile_rows", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
+    # 4-head merge: the cut is only 4x, but each output tile reads 24 fewer padded source tiles.
+    ("tile_head_merge", [1, 512, 4, 256], [1, 512, 1024], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
     # Width change: tile rows saves only 2x the reads on far fewer cores.
     ("tile_width_native", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.bfloat16, ttnn.TILE_LAYOUT, "native"),
     ("tile_width_uint16", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.uint16, ttnn.TILE_LAYOUT, "codegen"),

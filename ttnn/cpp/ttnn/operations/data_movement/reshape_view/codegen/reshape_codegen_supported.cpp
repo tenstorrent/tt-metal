@@ -101,6 +101,10 @@ constexpr const char* kPlanCapsViolation = "tile-row plan exceeds its size caps"
 // Native reshapes one output tile per core per round and reads every source tile it touches; tile rows puts a
 // batch of at least 8 output tiles on one core, so it needs 8x fewer reads to win. Fitted on Blackhole.
 constexpr uint64_t kTileRowsMinReadCut = 8;
+// Source reads tile rows saves per output tile that pay for copying its rows one run at a time, whatever the ratio.
+// Width changes below the read cut save at most 6 and lose; a merge of a few heads gathers each output tile from 32
+// padded source tiles and saves 24. Fitted on Blackhole, holds on Wormhole.
+constexpr uint64_t kTileRowsMinReadsSavedPerTile = 16;
 // Two runs per output tile means every output tile is whole face halves of its sources.
 constexpr uint64_t kWholeHalfRunsPerTile = 2;
 
@@ -108,12 +112,13 @@ bool native_faster(const Tensor& input, const TileRowsChoice& choice, uint32_t n
     if (input.dtype() == DataType::UINT16) {
         return false;
     }
-    // A width change copies one row per run and loses below the read cut; a refold of whole face halves wins once
-    // native needs more than one round.
+    // A width change copies one row per run and loses below the read cut unless the reads it saves outweigh the runs;
+    // a refold of whole face halves wins once native needs more than one round.
+    const uint64_t out_pages = choice.layout.num_output_pages;
     const bool read_cut = choice.native_reads >= kTileRowsMinReadCut * choice.batch_reads;
-    const bool whole_halves = choice.runs <= kWholeHalfRunsPerTile * choice.layout.num_output_pages &&
-                              choice.layout.num_output_pages > num_cores;
-    return !read_cut && !whole_halves;
+    const bool reads_saved = choice.native_reads >= choice.batch_reads + kTileRowsMinReadsSavedPerTile * out_pages;
+    const bool whole_halves = choice.runs <= kWholeHalfRunsPerTile * out_pages && out_pages > num_cores;
+    return !read_cut && !reads_saved && !whole_halves;
 }
 
 }  // namespace
