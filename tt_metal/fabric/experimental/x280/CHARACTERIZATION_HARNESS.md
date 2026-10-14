@@ -242,8 +242,8 @@ without launching active firmware; it does not encode that behavior as an
 empty hart set or implicitly boot the tile.
 
 Tensix remains a range-wise target over a `CoreRangeSet` unless a concrete
-restoration obligation appears. A DRISC claim that needs outbound NOC switches
-one selected NIU to Stream mode and restores that NIU to its NOC2AXI default.
+restoration obligation appears. A DRISC claim that needs outbound NOC uses NOC0,
+which DRISC firmware keeps in Stream mode; it switches no NIU.
 Raw ERISC use is not a per-link claim: production fabric occupies Ethernet
 cores through session/cluster `FabricConfig` and a compiled Metal `Program`.
 A raw ERISC case therefore requires a separately configured session or an
@@ -1467,9 +1467,8 @@ result.
   the tile needs `tt-smi -r`.
 - **D-035:** `p2p_latency` `drisc_peer_tile` is a mechanical same-chip smoke
   member for bank 0's free non-endpoint DRISC. It uses NOC0 only and forces
-  slow dispatch with the tensor prefetcher inactive. The kernel changes only
-  NOC0 to stream mode, leaves NOC1 in NOC2AXI, and restores NOC0 on successful
-  completion. X280 uses the DRISC-local mailbox offset; host access uses the
+  slow dispatch with the tensor prefetcher inactive. The kernel requires NOC0
+  in the stream mode DRISC firmware sets, and switches no NIU. X280 uses the DRISC-local mailbox offset; host access uses the
   corresponding tagged L1 address. DRISC deltas remain raw wall-clock ticks and
   carry host-bracketed AICLK evidence for external conversion. The executable,
   libraries, runtime assets, JIT headers, and kernel sources use the exact

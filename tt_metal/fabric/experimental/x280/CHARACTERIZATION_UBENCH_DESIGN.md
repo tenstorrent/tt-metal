@@ -555,8 +555,8 @@ following admissibility rules are durable:
 - A cached X280 Memory Port path is inadmissible until its peer-visibility
   operation is established.
 - The `drisc_peer_tile` smoke member selects bank 0's free non-endpoint DRISC,
-  switches only NOC0 to Stream mode, leaves NOC1 in NOC2AXI, and accepts samples
-  only after successful restoration. The tensor prefetcher is inactive.
+  requires NOC0 in the Stream mode DRISC firmware sets, and switches no NIU. The
+  tensor prefetcher is inactive.
 - A raw-link or active-ERISC member is inadmissible until a session-level transition from
   production `FabricConfig` to raw characterization and back is established.
 - The idle `erisc_peer_tile` smoke member may select only a core returned by
@@ -602,15 +602,14 @@ Rows follow the accepted implementation sequence:
 | 1 | X280 hart ↔ X280 hart, same tile | one chip | session-owned tile selection, two-hart image launch, coherent/LIM self-views |
 | 2 | X280 tile ↔ X280 tile | one chip | cross-instance resolution and firmware-programmed X280 window binding |
 | 3 | X280 ↔ Tensix | one chip | two programmable classes, two address-view forms, two counter domains |
-| 4 | X280 ↔ DRISC | one chip | selected-NIU Stream mode claim and NOC2AXI restoration |
+| 4 | X280 ↔ DRISC | one chip | firmware-owned NOC0 Stream mode |
 | 5 | X280 ↔ inactive idle ERISC | one chip | same-chip NOC mechanical smoke path; no Ethernet-link traffic |
 | 6 | ERISC ↔ ERISC | two chips | link-pair selection, raw ERISC session, and independent clock state |
 
 Participant entries 1–3 define the initial implementation sequence.
 Entry 4 has the separately named `drisc_peer_tile` mechanical smoke member.
-It uses forced slow dispatch and the free non-endpoint DRISC, keeps NOC1 in
-NOC2AXI while NOC0 is in stream mode, restores NOC0 before successful return,
-and separates the peer's untagged local address from the host's tagged L1 view.
+It uses forced slow dispatch and the free non-endpoint DRISC, requires NOC0 in
+the stream mode DRISC firmware sets, switches no NIU, and separates the peer's untagged local address from the host's tagged L1 view.
 Its `get_timestamp()` deltas are raw ticks with per-run AICLK evidence and a
 validated conversion rate.
 Entry 5 now has the separately named `erisc_peer_tile` mechanical smoke member:

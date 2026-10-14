@@ -95,23 +95,13 @@ struct MetalPeerTarget {
     using Backend = backend_metal_noc_peer_tile::Backend<TargetPolicy>;
     static constexpr uint64_t HANG_GUARD_TICKS = P2P_LATENCY_DRISC_HANG_GUARD_TICKS;
 
-    static bool enter_transport_mode() {
-        if (noc_index != 0u || !experimental::drisc_is_noc2axi_mode(0) || !experimental::drisc_is_noc2axi_mode(1)) {
-            return false;
-        }
-        experimental::drisc_set_stream_mode(0);
-        const bool entered = !experimental::drisc_is_noc2axi_mode(0) && experimental::drisc_is_noc2axi_mode(1);
-        if (!entered) {
-            experimental::drisc_set_noc2axi_mode(0);
-        }
-        return entered;
-    }
+    // DRISC firmware owns the NIU modes and leaves NIU 0 in stream mode on every DRISC Metal
+    // owns (experimental/drisc_mode.h), so a NOC0 kernel can initiate without switching.
+    static bool enter_transport_mode() { return noc_index == 0u && !experimental::drisc_is_noc2axi_mode(0); }
 
     static bool leave_transport_mode() {
         noc_async_write_barrier();
-        const bool noc1_unchanged = experimental::drisc_is_noc2axi_mode(1);
-        experimental::drisc_set_noc2axi_mode(0);
-        return noc1_unchanged && experimental::drisc_is_noc2axi_mode(0) && experimental::drisc_is_noc2axi_mode(1);
+        return true;
     }
 };
 
