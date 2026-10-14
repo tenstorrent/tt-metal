@@ -2,9 +2,43 @@
 
 ## Current Status
 
-**Status**: COMPLETE — 97/105 accuracy, S=36864 (384 frames + 4992 text) works
+**Status**: COMPLETE — 97/105 accuracy, S=36864 (384 frames + 4992 text) works. Rebased on main 2026-10-14: see Session 11.
 **Branch**: `ssinghal/molmo2_new` — commit `5aca298376d`
 **Docker image**: `molmo2-pr-dev:latest` (overlay on `0.12.0-735b65d-7a07a97`)
+
+## Session 11 — 2026-10-14 (rebase onto main + hang triage)
+
+**Status**: Rebased `ssinghal/molmo2_new_glx` onto origin/main (branch `ssinghal/molmo2_glx_main`). All tests pass on Galaxy
+slices 1, 2, 3; **slice 0 (tray 3 chip 4) hangs under the full model workload — hardware suspect.**
+**PCC**: 8 sub-block tests >= 0.998 (ViT 0.998176), TP MLP 0.999955, chunked pooling 0.999973, ViT DP 0.998637.
+**Block Hash**: 55fa79e7042
+
+### Work Done
+- transformers 5.12 (pinned on main) cannot run the Molmo2 HF remote code (model card: transformers==4.57.1). Weights are
+  now read straight from safetensors and the processor loads through a shim (`tt/hf_loading.py`, bit-exact vs 4.57.1).
+  HF reference/golden scripts need a separate transformers==4.57.1 CPU env.
+- Multi-image bug (also on the old branch): processor pooling indices are per-image-relative; HF adds per-image patch
+  offsets (`build_batched_images`), TT did not -> images 2..N pooled image 1's patches. Fixed in `tt/vision_inputs.py`,
+  used by demo + `generator_vllm`.
+- Demo fixes: pytest options never registered (`demo/conftest.py`); batch>1 decoded all users from KV slot 0.
+- Server adapter (`tests/test_generator_vllm_adapter.py`): prefill_forward/decode_forward over 5 back-to-back requests
+  (decode trace reused) vs HF 4.57.1 greedy tokens: teacher-forced top-1 agreement 97-100%.
+- Model-card lengths (`tests/test_long_context.py`): 384-frame video S=34455 + free generation, 97% teacher-forced vs HF;
+  36848-token text prompt + 16 tokens OK (max_position_embeddings=36864).
+- Full suite (4 PCC modules + 6 demo cases, 19 tests): 19/19 on slices 1, 2, 3.
+
+### Prefill hang (slice 0 only)
+- Symptom: host blocks in `to_torch` at end of `forward_prefill` (S~25k, 20-image prompt). 8 chips: 7 sit in an
+  `AllGatherDeviceOperation`, ONE chip never finishes a compute op on a single/few column-0 cores.
+- `tools/tt-triage.py` (5 clean captures): always mesh node N5 = physical Device 4 (tray 3, PCI 0000:05:00.0), whether
+  the stuck op was `LayerNormDeviceOperation [1,4,25344,128]` (core (0,4), identical PCs across runs) or
+  `MatmulDeviceOperation` (column (0,0)-(0,8)). Telemetry (1000 MHz, ~33 C, DRAM/ETH/ARC) all healthy.
+- Not the cause: async CCL race (sync before q_norm: still hangs), the op itself (`tests/rmsnorm_loop.py`: 400k
+  isolated q_norm ops pass on slice 0 and slice 1), thermal, links. Reordering `TT_VISIBLE_DEVICES` keeps the stall on Device 4.
+- Counts: slice 0 hung in 7/9 full-model runs; slices 1/2/3: 0 hangs in ~60 prefills + 3 full suites (one concurrent
+  4-process run also stalled slice 2 once, triage failed; solo reruns clean).
+- Action: treat slice 0 as unavailable for Molmo2 until tray 3 chip 4 is checked by hardware; run 3 instances (slices 1-3).
+  Repro: `python models/demos/molmo2/tests/stress_prefill_hang.py 12` on slice 0 (`TT_VISIBLE_DEVICES=0..7`, t3k mesh descriptor).
 
 ## Session 1 — 2026-04-29
 
