@@ -25,8 +25,8 @@ namespace ttsl {
 
 namespace detail {
 
-inline constexpr std::size_t kMoveOnlyFunctionInlinePointers = 3;  // sizeof 32, as std::function on libstdc++
-inline constexpr std::size_t kMoveOnlyFunctionInlineSize = kMoveOnlyFunctionInlinePointers * sizeof(void*);
+// With the table pointer, sizeof 32, as std::function on libstdc++.
+inline constexpr std::size_t kMoveOnlyFunctionInlineSize = 3 * sizeof(void*);
 inline constexpr std::size_t kMoveOnlyFunctionInlineAlign = alignof(void*);
 
 template <typename T>

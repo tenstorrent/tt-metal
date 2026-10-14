@@ -104,7 +104,7 @@ TEST(MoveOnlyFunctionTest, CPU_HoldsCaptureLargerThanInlineBuffer) {
     struct Big {
         std::uint64_t data[8] = {1, 2, 3, 4, 5, 6, 7, 8};
     };
-    static_assert(sizeof(Big) > detail::kMoveOnlyFunctionInlinePointers * sizeof(void*));
+    static_assert(sizeof(Big) > detail::kMoveOnlyFunctionInlineSize);
     Big big{};
     move_only_function<std::uint64_t()> f{[big]() { return big.data[7]; }};
     EXPECT_EQ(f(), 8u);
@@ -289,7 +289,7 @@ TEST(MoveOnlyFunctionTest, CPU_HeapTargetMovesWithoutCopying) {
         InstanceCounter counter;
         std::uint64_t data[8] = {1, 2, 3, 4, 5, 6, 7, 8};
     };
-    static_assert(sizeof(Big) > detail::kMoveOnlyFunctionInlinePointers * sizeof(void*));
+    static_assert(sizeof(Big) > detail::kMoveOnlyFunctionInlineSize);
     InstanceCounter::live = 0;
     {
         move_only_function<std::uint64_t()> a{[big = Big{}]() { return big.data[7]; }};
