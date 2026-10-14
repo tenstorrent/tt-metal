@@ -22,6 +22,7 @@
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/third_party/umd/device/api/umd/device/types/core_coordinates.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "tt_metal.hpp"
@@ -556,6 +557,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     std::optional<FabricTensixDatamoverBuilder> tensix_builder_opt;
     if (will_create_tensix_builder) {
         tensix_builder_opt = FabricTensixDatamoverBuilder::build(
+            fabric_context,
             device,
             program,
             local_node,
