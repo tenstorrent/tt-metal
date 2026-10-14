@@ -799,7 +799,8 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
         "connection_link_indices must be empty or have size 1 or the same size as dst_nodes");
 
     // TODO(#52020): resolves the default context, because this tt-blaze API has no device or env
-    // parameter to resolve from. Take the HAL from this control plane too rather than adding a lookup.
+    // parameter to resolve from. Read the HAL and routing from this control plane below, not through
+    // the public queries, which each do their own lookup.
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
 
@@ -863,25 +864,26 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
         const auto& dst_node = dst_nodes[i];
 
         // Direction tag
-        auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node);
+        const auto forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_node);
         TT_FATAL(
-            dir_opt.has_value(),
+            forwarding_direction.has_value(),
             "Could not determine forwarding direction from src {} to first hop {}",
             src_fabric_node_id,
             dst_node);
-        worker_args.push_back(static_cast<uint32_t>(dir_opt.value()));
+        worker_args.push_back(
+            static_cast<uint32_t>(control_plane.routing_direction_to_eth_direction(forwarding_direction.value())));
 
         // ETH channel
         uint32_t link_idx = 0;
         if (!connection_link_indices.empty()) {
             link_idx = (connection_link_indices.size() == 1) ? connection_link_indices[0] : connection_link_indices[i];
         } else {
-            const auto links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_node);
+            const auto links = tt::tt_fabric::get_forwarding_link_indices_in_direction(
+                control_plane, src_fabric_node_id, dst_node, forwarding_direction.value());
             TT_FATAL(!links.empty(), "No forwarding links available from {} to {}", src_fabric_node_id, dst_node);
             link_idx = links[0];
         }
 
-        auto forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_node);
         const auto candidate_eth_chans =
             control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
         TT_FATAL(link_idx < candidate_eth_chans.size(), "Link index {} out of bounds", link_idx);
