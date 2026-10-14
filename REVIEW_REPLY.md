@@ -1,49 +1,43 @@
-# Reply to @pavlejosipovic's review on #59695 (carried over)
+@pavlejosipovic — carrying your `math_thread_row_sums` question over from
+[#59695](https://github.com/tenstorrent/tt-metal/pull/59695#issuecomment-6080868618), since that work is now
+split and this flag lives here:
 
-> Which exact workload and configuration make the MATH-thread row sums faster: Q/K/V shape, chunk sizes,
-> `reuse_kv`, math fidelity, `math_approx_mode`, `fp32_dest_acc_en`? The PR gives Blackhole latencies but not
-> the fidelity. Could you also share matched PACK-vs-MATH profiles at the same settings, ideally MATH/PACK busy
-> or stall cycles? And why Blackhole only — Blackhole has roughly 2x Wormhole's packer bandwidth, so why does
-> moving work *off* PACK help there? SDPA originally moved the row reduction onto PACK because MATH was the
-> bottleneck.
+> Could you clarify the performance case for `math_thread_row_sums`? My understanding is that SDPA originally moved the softmax row reduction onto the PACK thread for performance because MATH was the limiting thread. This change moves the reduction back to MATH for the single-K-chunk path. Which exact workload/configuration makes that faster (Q/K/V shape, chunk sizes, `reuse_kv`, math fidelity, `math_approx_mode`, and `fp32_dest_acc_en`)? The PR gives Blackhole latencies but does not state the fidelity used for those timings. Could you share matched PACK-vs-MATH profiles, ideally showing MATH/PACK busy or stall cycles, at the same settings?
+>
+> Is this optimization specifically targeted at Blackhole rather than Wormhole? The code gates it to Blackhole. My understanding is that Blackhole has roughly twice the packer bandwidth of Wormhole; if so, why does moving work *off* PACK and onto MATH help on Blackhole? A Blackhole-versus-Wormhole comparison, or an explanation of the relevant per-thread bottleneck, would help reconcile this with the earlier decision to use PACK. I realize the current implementation is not enabled on Wormhole; I am asking about the architectural reason for the Blackhole-only path.
 
-(Paraphrased from the thread on #59695 — please correct me if I have flattened anything.)
-
-Thanks — fair question, and the answer is "it depends on fidelity", which the original PR should have said. I
-re-ran the whole thing; numbers below are **device cycles**, not wall-clock. (Wall-clock µs is not trustworthy
-here: AICLK moves with load and the bs16 shape sits between two clock states, so the same config re-measured a
-few minutes later moved 9%. Device cycles reproduce to 0.2–0.6%, and the same arm measured twice under two names
-agrees to 0.03 pp.)
-
-**One note on the split.** The speed table below was taken on the original stack, where `reuse_kv` kept K/V
-resident on each core. This flag is now its own PR off main carrying no K/V retention, so at d=128 those batched
-shapes are bandwidth-bound and the flag is a wash there (within 0.5% either way). It still shows −8.9% at d=64
-and −6.7% at one Q chunk per core, and the HiFi2/HiFi4 penalty is unchanged at +6% / +9%. The mechanism below is
-what matters and is identical either way.
+Fair question, and the answer is "it depends on fidelity", which the original PR should have said. I re-ran
+everything; numbers below are **device cycles**, not wall-clock. (Wall-clock µs is not trustworthy here: AICLK
+moves with load and the batch-16 shape sits between two clock states, so the same config re-measured minutes
+later moved 9%. Cycles reproduce to 0.1–0.9%, and the same arm measured twice under two names agreed to
+0.03 pp.)
 
 ### 1. Workload and configuration
 
 pplx-embed-4b batched prefill on Blackhole P150b. Q `[B, 32, 512, 128]`, K/V `[B, 8, 512, 128]`, bfp8,
-non-causal, `output_concat_heads`, `reuse_kv` with q128/k512 (one K chunk), 12×8 at bs8 and 12×10 at bs16/32,
-K/V in L1. **LoFi**, `math_approx_mode=False`, `exp_approx_mode=True`, `fp32_dest_acc_en=False` (so the
-streaming kernel), `packer_l1_acc=True`.
+non-causal, `output_concat_heads`, q128/k512 (one K chunk), 12×8 at bs8 and 12×10 at bs16/32, K/V in L1 and
+retained across a core's chunks. `math_approx_mode=False`, `exp_approx_mode=True`, `fp32_dest_acc_en=False`
+(so the streaming kernel), `packer_l1_acc=True`. Measured on this branch merged with the K/V retention work,
+since that lands first and is the configuration the flag is for:
 
 | fidelity | bs8 | bs16 | bs32 |
 |---|---|---|---|
-| **LoFi** | **−5.3%** | **−6.6%** | **−6.4%** |
-| HiFi2 | +7.1% | +7.3% | +7.4% |
-| HiFi4 | +8.7% | +8.8% | +8.6% |
+| **LoFi** | **−5.6%** | **−6.3%** | **−6.5%** |
+| HiFi2 | +7.2% | +7.2% | +7.4% |
+| HiFi4 | +8.6% | +8.6% | +8.8% |
 
-Two other axes move it as much as fidelity does, at LoFi / bs16:
+So: **LoFi is where it pays, and it is a loss from HiFi2 up.** Two other axes move it as much as fidelity, at
+LoFi / bs16:
 
 | | |
 |---|---|
-| d = 64 / 128 / 256 | −8.8% / −6.6% / **+4.2%** |
-| `exp_approx_mode` True / False | −6.6% / −6.1% |
-| K/V in L1 vs. all DRAM | −6.6% / −1.6% |
+| d = 64 / 128 / 256 | **−8.9%** / −6.3% / −2.0% |
+| `exp_approx_mode` True / False | −6.3% / −6.1% |
+| K/V in L1 vs. all DRAM | −6.3% / −2.3% |
 
-The last row matters for how the PR described this: the original bs32 figure was taken all-DRAM, where the op
-is bandwidth-bound and the compute saving is hidden. It is a compute gain, so quote it with the placement.
+That last row is also the answer to a question the original PR got wrong: its bs32 figure was taken all-DRAM,
+where the op is bandwidth-bound and the compute saving is hidden. What this saves is compute, so the placement
+has to be quoted with the number.
 
 ### 2. Matched PACK-vs-MATH profiles
 
@@ -125,8 +119,8 @@ and crosses its 0.993 bar (it passes by only 1.5e-5 with the flag off, so it is 
 a big regression, but my "a few K tiles make no measurable difference" was too strong and the docstring no
 longer says that).
 
-Given all of that, plus +7%/+9% at HiFi2/HiFi4 and +4% at d=256, it stays **opt-in**. The docstring now spells
-out the regime, the config behind the speed numbers, and what the accuracy costs.
+Given all of that, plus the +7% / +9% at HiFi2 / HiFi4, it stays **opt-in**. The docstring now spells out the
+regime, the full config behind the speed numbers, and what the accuracy costs.
 
 One correction to something I had assumed: SDXL *does* have a HiFi2 single-K-chunk self-attention —
 `up_blocks.0` is HiFi2 and gets `1024_K` at 1024 tokens. Measured there the flag is about +2%, i.e. mildly
