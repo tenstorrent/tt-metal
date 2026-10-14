@@ -170,7 +170,9 @@ using namespace ckernel;
 #include "experimental/llk_sfpu/ckernel_sfpu_generalized_moe_gate_topk_single_face.h"
 #include "llk_sfpu/ckernel_sfpu_sigmoid.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#ifdef ARCH_BLACKHOLE
 #include "sfpu/experimental/ckernel_sfpu_generic_moe_gate_topk.h"
+#endif
 
 // step2 ends on a SETRWC CLR_AB and is the only op here that does. The paths that skip it have to
 // hand the Src banks back themselves, or the next kernel launched on this core stalls on its first
@@ -329,15 +331,26 @@ static inline void gmg_copy4rows()
 static inline void run_gate()
 {
     static_assert(!GMG_SFPU_SORT || !(GMG_GROUPED || GMG_PRODUCE_RUN), "the SFPU-only sort is the ungrouped one-block gate");
+#ifdef ARCH_BLACKHOLE
     if constexpr (GMG_SFPU_SORT)
     {
         // The op's Blackhole route (generalized_moe_gate<..., sfpu_sort>): generic sort, the shared finalize tail, step2.
-        GMG_SFPU_CALL(_generic_moe_gate_topk_, (false, 8, 256, false, true, GMG_IDENTITY_INDICES), 0u, 0u, 0u);
+        if constexpr (GMG_IDENTITY_INDICES)
+        {
+            GMG_SFPU_CALL(_generalized_moe_gate_identity_sort_, (APPROX_MODE));
+        }
+        else
+        {
+            GMG_SFPU_CALL(_generic_moe_gate_topk_, (false, 8, 256, false, true, false), 0u, 0u, 0u);
+        }
         GMG_SFPU_CALL(generalized_moe_gate_finalize_sorted, (APPROX_MODE, is_fp32_dest_acc_en, GMG_TOPK, GMG_SOFTMAX), GMG_EPS, GMG_SCALE);
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_<false /* is_32bit */, 2, true>();
         _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_<is_fp32_dest_acc_en, false /* is_32bit */>();
         return;
     }
+#else
+    static_assert(!GMG_SFPU_SORT, "the SFPU-only sort is Blackhole's");
+#endif
 
     GMG_SFPU_PASS(generalized_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
 

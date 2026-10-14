@@ -107,7 +107,14 @@ static inline void run_gate()
 {
     if constexpr (GMG_SFPU_SORT)
     {
-        GMG_SFPU_CALL(_generic_moe_gate_topk_, (false, 8, 256, false, true, GMG_IDENTITY_INDICES), 0u, 0u, 0u);
+        if constexpr (GMG_IDENTITY_INDICES)
+        {
+            GMG_SFPU_CALL(_generalized_moe_gate_identity_sort_, (APPROX_MODE));
+        }
+        else
+        {
+            GMG_SFPU_CALL(_generic_moe_gate_topk_, (false, 8, 256, false, true, false), 0u, 0u, 0u);
+        }
         if constexpr (PERF_STAGE == 1)
         {
             return;
