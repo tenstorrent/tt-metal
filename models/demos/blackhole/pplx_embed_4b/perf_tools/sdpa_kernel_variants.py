@@ -18,9 +18,13 @@ from the repo root every variant silently compiles the repo's kernels. Give each
            rowgroup", "P1 reduce max", "P2 exp rg1 + PV rg0", "P2 PV rg1", "P2 normalize"); ~9 zones per unit, so
            keep to ~13 units per core (the profiler holds 250 markers per RISC); bs8 on 12x8 is ~11
   zconly   zones + conly
-  sumpack  the row sums on the pack thread (SDPA_SUM_ON_PACK, the path before §65)
-  nosum    sumpack without the row-sum packs (wrong output; times their cost)
+  nosum    the pack-thread row-sum packs removed (wrong output; times their cost). There is no `sumpack`
+           variant any more: the row sums are on the pack thread unless math_thread_row_sums is passed, so
+           that flag is the same-binary control.
   noexp    sub_exp without the exp (wrong output; times its cost)
+  zfine    the kernel's own per-phase zones (profiling_enabled), which time SUB / EXP / PACK SUB_EXP per
+           sub_exp call on each TRISC; ~100 markers per unit, so keep to ~2 units per core
+  zfconly  zfine + conly
 """
 
 import re
@@ -31,15 +35,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[5]
 K = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels"
 
-DM_STUB = r"""
+DM_STUB_TEMPLATE = r"""
 #ifdef SDPA_ABL_DM_ONLY
         {
-#ifdef REUSE_KV
-            constexpr uint32_t grp = NQH / NKH;
-#else
-            constexpr uint32_t grp = 0;
-#endif
-            CircularBuffer cq(cb_q_in), ck(cb_k_in), cv(cb_v_in), co(cb_out);
+@@GRP@@            CircularBuffer cq(cb_q_in), ck(cb_k_in), cv(cb_v_in), co(cb_out);
             for (uint32_t q = 0; q < global_q_count; ++q) {
                 const uint32_t ql = global_q_start + q;
                 const bool keep = grp != 0 && q + 1 < global_q_count &&
@@ -79,6 +78,25 @@ ZZ = """#define ZZ_CAT2(a, b) a##b
 """
 
 
+GRP_NEW = "            constexpr uint32_t grp = kv_reuse_group;\n"
+GRP_OLD = """#ifdef REUSE_KV
+            constexpr uint32_t grp = NQH / NKH;
+#else
+            constexpr uint32_t grp = 0;
+#endif
+"""
+
+
+def generation(d):
+    """Which SDPA kernel generation this tree is: 'arg' once reuse_kv/row sums became compile-time args
+    (main and later), 'define' while they were still #defines (amorrison/high-batch-optim)."""
+    return "arg" if "kv_reuse_group" in (d / "compute/sdpa.cpp").read_text() else "define"
+
+
+def dm_stub(d):
+    return DM_STUB_TEMPLATE.replace("@@GRP@@", GRP_NEW if generation(d) == "arg" else GRP_OLD)
+
+
 def rep(s, old, new, count=1):
     assert s.count(old) == count, (old[:80], s.count(old))
     return s.replace(old, new)
@@ -98,7 +116,7 @@ def stub_compute(d):
     p = d / "compute/sdpa.cpp"
     s = p.read_text()
     anchor = "        cb_identity_scale_in_obj.wait_front(1);\n"
-    s = rep(s, anchor, anchor + DM_STUB)
+    s = rep(s, anchor, anchor + dm_stub(d))
     s = s.replace("#include <cstdint>", "#include <cstdint>\n#define SDPA_ABL_DM_ONLY", 1)
     p.write_text(s)
 
@@ -134,8 +152,14 @@ def add_zones(s):
     return s[:j] + a + '\n        ZZ("unit")' + s[j + len(a) :]
 
 
-def sum_on_pack(s):
-    return s.replace("#pragma once", "#pragma once\n#define SDPA_SUM_ON_PACK", 1)
+def enable_kernel_zones(s):
+    """Turn on the kernel's own MaybeDeviceZoneScopedN zones (profiling_enabled), which are compiled out by the
+    std::false_type tag sdpa_standard_v2 passes to call_step."""
+    return rep(
+        s,
+        "            call_step(\n                std::false_type{},",
+        "            call_step(\n                std::true_type{},",
+    )
 
 
 def sub_exp_body(s, fn):
@@ -148,6 +172,10 @@ def drop_sum(body):
     m = re.search(r"        if \(!skip_row_sum\) \{\n.*?\n(    tile_regs_release\(\);)", body, re.S)
     assert m and "reduce_cb, max_row_base + i" in m.group(0)
     return body[: m.start()] + "    }\n" + body[m.start(1) :]
+
+
+def sum_on_pack(s):
+    return s.replace("#pragma once", "#pragma once\n#define SDPA_SUM_ON_PACK", 1)
 
 
 def drop_exp(body):
@@ -163,17 +191,29 @@ VARIANTS = {
     "dmwrite": lambda d: (stub_compute(d), patch_dm(d, 0, 1)),
     "zones": lambda d: streaming(d, add_zones),
     "zconly": lambda d: (streaming(d, add_zones), patch_dm(d, 0, 0)),
-    "sumpack": lambda d: streaming(d, sum_on_pack),
-    "nosum": lambda d: streaming(d, lambda s: sub_exp_body(sum_on_pack(s), drop_sum)),
+    "nosum": lambda d: streaming(d, lambda s: sub_exp_body(s if generation(d) == "arg" else sum_on_pack(s), drop_sum)),
     "noexp": lambda d: streaming(d, lambda s: sub_exp_body(s, drop_exp)),
+    "zfine": lambda d: streaming(d, enable_kernel_zones),
+    "zfconly": lambda d: (streaming(d, enable_kernel_zones), patch_dm(d, 0, 0)),
+    # Only on the pre-compile-time-arg tree; afterwards math_thread_row_sums=False is the same-binary control.
+    "sumpack": lambda d: streaming(d, sum_on_pack),
 }
+
+# Variants that only apply to one kernel generation.
+ONLY = {"sumpack": "define", "zfine": "arg", "zfconly": "arg"}
 
 if __name__ == "__main__":
     out = Path(sys.argv[1]).resolve()
-    for v in sys.argv[2:] or VARIANTS:
+    requested = sys.argv[2:]
+    gen = generation(REPO / K)
+    for v in requested or [n for n in VARIANTS if ONLY.get(n, gen) == gen]:
         d = out / v / K
         if d.exists():
             shutil.rmtree(d)
         shutil.copytree(REPO / K, d)
+        if ONLY.get(v, gen) != gen:
+            print(f"{v}: skipped, needs the '{ONLY[v]}' kernel generation (this tree is '{gen}')")
+            shutil.rmtree(out / v)
+            continue
         VARIANTS[v](d)
         print(f"{v}: {out / v}")
