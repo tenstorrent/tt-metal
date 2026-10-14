@@ -377,9 +377,14 @@ def test_spec_plan_small_k_rejected(hf_config):
     assert isinstance(r, SpecReject) and 3 in r.supported_k
 
 
-def test_spec_plan_multi_seq_rejected(hf_config):
-    """max_num_seqs != 1 is rejected."""
-    assert isinstance(CLS.spec_plan(_vcfg(hf_config), 2, 3), SpecReject)
+def test_spec_plan_multi_seq(hf_config):
+    """K=3 fits the 32-row verify tile up to 8 sequences; 9 is rejected with the supported K list."""
+    plan = CLS.spec_plan(_vcfg(hf_config), 8, 3)
+    assert isinstance(plan, SpecPlan) and plan.effective_k == 3
+    c = spec_memory_costs(hf_config.get_text_config(), 4, 8, 3, max_seq_len=MAX_LEN)
+    assert plan.extra_bytes_per_seq == math.ceil((c["per_seq"]["total"] + c["fixed"]["total"]) / 8)
+    r = CLS.spec_plan(_vcfg(hf_config), 9, 3)
+    assert isinstance(r, SpecReject) and "32-row" in r.reason and 3 not in r.supported_k
 
 
 def test_spec_plan_no_mtp_rejected(hf_config):
@@ -444,6 +449,9 @@ class FakeEngine:
     def release(self, slot):
         self.calls.append(("release", slot))
 
+    def remap_slots(self, remap):
+        self.calls.append(("remap_slots", [int(x) for x in remap]))
+
 
 @pytest.fixture
 def gen_eng(monkeypatch):
@@ -494,6 +502,34 @@ def test_decode_forward_logits_mode_carries_logits(gen_eng):
     out = gen.decode_forward(**kw, spec_mode="logits")
     assert tuple(out.logits.shape) == (1, 4, eng.V)
     assert gen.decode_forward(**kw, spec_mode="argmax_ids").logits is None
+
+
+def test_decode_forward_slot_remap_verify(gen_eng):
+    """A verify step applies slot_remap on the engine once, before engine.decode_forward; None skips it."""
+    gen, eng = gen_eng
+    kw = dict(
+        tokens=torch.tensor([[1, 2, 3, 4]], dtype=torch.int32), start_pos=torch.tensor([10], dtype=torch.int32),
+        page_table=torch.arange(1, 9, dtype=torch.int32).reshape(1, 8),
+        num_valid_drafts=torch.tensor([3], dtype=torch.int32), accepted_counts=torch.tensor([1], dtype=torch.int32),
+        spec_mode="argmax_ids",
+    )  # fmt: skip
+    gen.decode_forward(**kw)
+    assert [c[0] for c in eng.calls] == ["decode_forward"]
+    eng.calls.clear()
+    gen.decode_forward(**kw, slot_remap=torch.tensor([1, 0]))
+    assert [c[0] for c in eng.calls] == ["remap_slots", "decode_forward"]
+    assert eng.calls[0][1] == [1, 0]
+
+
+def test_decode_forward_slot_remap_narrow(gen_eng):
+    """A narrow step applies slot_remap on the engine once, before engine.decode_forward."""
+    gen, eng = gen_eng
+    gen.decode_forward(
+        tokens=torch.tensor([7]), start_pos=torch.tensor([10]), page_table=torch.ones(1, 8, dtype=torch.int32),
+        slot_remap=torch.tensor([1, 0]),
+    )  # fmt: skip
+    assert [c[0] for c in eng.calls] == ["remap_slots", "decode_forward"]
+    assert eng.calls[0][1] == [1, 0]
 
 
 @pytest.mark.parametrize("tok_shape", [(1,), (1, 1)])
@@ -570,11 +606,29 @@ def test_prefill_forward(gen_eng):
     assert table.shape == (1, spec_table_width(4096, 3, 64))
 
 
-def test_release_and_slot_moves(gen_eng, expect_error):
-    """release_request forwards to engine.release; identity slot moves are no-ops, others raise."""
+def test_prefill_forward_multi_row(gen_eng):
+    """N rows prefill into empty_slots in order, each with its own tokens, length and table row."""
+    gen, eng = gen_eng
+    tokens = torch.arange(40, dtype=torch.long).reshape(2, 20)
+    pt = torch.arange(1, 11, dtype=torch.int32).reshape(2, 5)
+    logits, rope = gen.prefill_forward(
+        tokens, pt, None, prompt_lens=np.array([7, 12]), empty_slots=[3, 1], start_pos=np.array([0, 0])
+    )
+    assert logits.dtype == torch.float32 and tuple(logits.shape) == (2, 1, eng.V) and rope.shape == (2,)
+    calls = [c for c in eng.calls if c[0] == "prefill"]
+    assert [c[1] for c in calls] == [3, 1]
+    assert calls[0][2].tolist() == list(range(7)) and calls[1][2].tolist() == list(range(20, 32))
+    for i, c in enumerate(calls):
+        assert c[3].shape == (1, spec_table_width(4096, 3, 64))
+        assert torch.equal(c[3][0, :5], pt[i])
+
+
+def test_release_and_slot_moves(gen_eng):
+    """release_request forwards to engine.release; note_state_slots_moved needs no engine work."""
     gen, eng = gen_eng
     gen.release_request(0)
     assert _last(eng, "release") == ("release", 0)
+    n = len(eng.calls)
     assert gen.note_state_slots_moved({0: 0}) is None
-    with expect_error(NotImplementedError, ".*"):
-        gen.note_state_slots_moved({0: 1})
+    assert gen.note_state_slots_moved({0: 1, 1: 0}) is None
+    assert len(eng.calls) == n

@@ -1090,6 +1090,28 @@ class TPGatedDeltaNet:
             self._gather_indices(self.conv_states[m], idx, dim=1)
         self._conv_win_stale = True
 
+    def remap_spec_slots(self, remap):
+        """remap_slots plus the spec state: each user's ring blocks (every token slot) and E_prev row move too."""
+        idx = [int(remap[i]) for i in range(self.B)]
+        if all(idx[i] == i for i in range(self.B)):
+            return
+        self.remap_slots(idx)
+        if self._spec_ring is None:
+            return
+        B, Nv, Dk, Dv = self.B, self.Nv, self.Dk, self.Dv
+        T = self._spec_shape[1]
+        r4 = ttnn.reshape(self._spec_ring, (T, B * Nv, Dk, Dv))
+        assert (
+            r4.buffer_address() == self._spec_ring.buffer_address()
+        ), "the rank-4 ring view copied instead of aliasing; the copy would land in a temporary"
+        parts = [ttnn.slice(r4, (0, j * Nv, 0, 0), (T, (j + 1) * Nv, Dk, Dv)) for j in idx]
+        new = ttnn.concat(parts, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for p in parts:
+            ttnn.deallocate(p)
+        ttnn.copy(new, r4)
+        ttnn.deallocate(new)
+        self._gather_indices(self._verify_win_buf, idx, dim=0)
+
     def _gather_indices(self, buf, idx, dim):
         """Rebuild `buf` so slice i along `dim` becomes old slice idx[i], then copy back in place.
         `new` is fully materialized before the copy, so gathering from `buf` into itself is safe."""
@@ -1496,6 +1518,53 @@ class TPGatedDeltaNet:
         ttnn.copy(full, self._verify_win_buf)  # full-shape copy: _verify_win_buf keeps its address
         if full is not self._conv_win_buf:
             ttnn.deallocate(full)
+        self._conv_taps_stale, self._conv_win_stale = False, False
+
+    def seed_spec_rows(self, rows):
+        """seed_spec_state for the users in ``rows`` only; every other user's ring blocks and E_prev row are kept.
+        One fixed program per user offset: warm every user before trace capture."""
+        assert self._spec_ring is not None, "seed_spec_rows before prepare_spec_verify"
+        B, Nv, Dk, Dv, K, C = self.B, self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
+        T = self._spec_shape[1]
+        rows = {int(u) for u in rows}
+        self.sync_conv_win()
+        ring4 = ttnn.reshape(self._spec_ring, (1, T * B * Nv, Dk, Dv))
+        assert (
+            ring4.buffer_address() == self._spec_ring.buffer_address()
+        ), "the rank-4 ring view copied instead of aliasing; slice_write would write to a temporary"
+        parts = []
+        for u in range(B):
+            if u in rows:
+                s = ttnn.slice(self.rec_state, (u, 0, 0, 0), (u + 1, Nv, Dk, Dv))
+                if s.dtype != ttnn.float32:
+                    c = ttnn.typecast(s, ttnn.float32)
+                    ttnn.deallocate(s)
+                    s = c
+            else:
+                s = ttnn.slice(ring4, (0, u * Nv, 0, 0), (1, (u + 1) * Nv, Dk, Dv))
+            parts.append(s)
+        blk0 = ttnn.concat(parts, dim=1)
+        for s in parts:
+            ttnn.deallocate(s)
+        sharded = ttnn.to_memory_config(blk0, self._row_shard_memcfg(B * Nv * Dk, Dv))
+        ttnn.deallocate(blk0)
+        ttnn.experimental.slice_write(sharded, ring4, [0, 0, 0, 0], [1, B * Nv, Dk, Dv], [1, 1, 1, 1])
+        ttnn.deallocate(sharded)
+        full = (
+            self._conv_win_buf
+            if self._spec_win_pad is None
+            else ttnn.concat([self._conv_win_buf, self._spec_win_pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        )
+        eparts = [
+            ttnn.slice(full if u in rows else self._verify_win_buf, (u, 0, 0), (u + 1, K - 1 + T, C)) for u in range(B)
+        ]
+        new = ttnn.concat(eparts, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for e in eparts:
+            ttnn.deallocate(e)
+        if full is not self._conv_win_buf:
+            ttnn.deallocate(full)
+        ttnn.copy(new, self._verify_win_buf)
+        ttnn.deallocate(new)
         self._conv_taps_stale, self._conv_win_stale = False, False
 
     def forward_verify_recurrent(self, x, valid_len, pre_gathered=False, n_users=1, state_blk_idx=None, conv_sel=None):

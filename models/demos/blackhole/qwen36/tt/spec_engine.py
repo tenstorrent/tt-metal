@@ -341,6 +341,7 @@ def spec_memory_costs(
         + _tile_bytes([1, 1, B, dim_frac], bf)  # _hp_buf
         + _tile_bytes([1, 1, B, rows], bf)  # _anchor_sel
         + _tile_bytes([1, 1, 1, rows], bf)  # _eager_sel
+        + (_tile_bytes([1, 1, rows, B], bf) + _tile_bytes([1, 1, rows, rows], bf) if B > 1 else 0)  # _join_take/keep
     )
     fixed = {"verify_io": verify_io, "mtp_scratch_block": block_bytes, "engine_buffers": engine}
     per_token = {"mtp_kv": 2 * n_local_kv * head_dim * int(kv_dtype_bytes)}
@@ -427,6 +428,8 @@ class MTPSpecEngine:
         self._hp_buf = None  # persistent anchor hidden [1,1,B,dim/tp]
         self._anchor_sel = None  # persistent one-hot [1,1,B,B*T]
         self._eager_sel = None  # persistent one-hot [1,1,1,B*T]: eager reseed row gather
+        self._join_take = None  # persistent one-hot [1,1,B*T,B]: seed feed row u -> verify-feed row u*T
+        self._join_keep = None  # persistent one-hot [1,1,B*T,B*T]: verify-feed rows kept by a join
         self.eager_reseed_len = EAGER_RESEED_PROMPT_LEN  # B == 1 anchors past this reseed eagerly
         self._vfeed = None  # the verify trace's own output rows; valid until the next replay
         # A/B + safety switch: 1 = run the drafter eagerly even when its trace is recorded
@@ -442,6 +445,7 @@ class MTPSpecEngine:
         self._last_pt = None  # fitted host page table of the most recent verify
         self._fresh = {}  # slot -> prompt length, prefilled and awaiting the seed verify
         self._active = set()  # slots holding a live request
+        self._row_active = None  # [B] bool: rows that held a request in the last verify (None = all)
         self._offered = set()  # slots the last propose gave drafts (num_valid > 0)
         self._no_draft = set()  # slots whose drafts the runner withholds: propose skips them
         self._speculated = set()  # slots that verified with n > 0 since prefill (never marked)
@@ -597,9 +601,34 @@ class MTPSpecEngine:
         _, f = model.seed_spec_step([0] * B, [0] * B, self._prep_pt)
         r0, r1 = self._seed_rows(f), self._seed_rows(f)
         ttnn.copy(r0, r1)
-        for t in (f, r0, r1):
+        for t in (r0, r1):
             ttnn.deallocate(t)
         model.prepare_verify_trace(self._prep_pt, T, warm_positions=[0] * B)
+        if B > 1:  # compile the join programs (per-user seed, feed merge)
+            self._join_take = self._alloc_host_replicated(
+                torch.zeros(1, 1, B * T, B, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
+            )
+            self._join_keep = self._alloc_host_replicated(
+                torch.zeros(1, 1, B * T, B * T, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
+            )
+            for dn in self._gdn:
+                dn.seed_spec_rows(range(0, B, 2))
+                dn.seed_spec_rows(range(1, B, 2))
+                dn.remap_spec_slots(list(range(B))[::-1])  # a full reversal slices every row offset once
+            z = ttnn.zeros(
+                [1, 1, B * T, self._dim_frac],
+                device=self.mesh,
+                dtype=self._feed_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            rows_w = model.spec_feed_rows(z)
+            if rows_w is not z:
+                ttnn.deallocate(z)
+            self._merge_seed_rows(f, [0], rows_w)
+            ttnn.deallocate(rows_w)
+            ttnn.synchronize_device(self.mesh)
+        ttnn.deallocate(f)
 
         # Drafter programs.
         zrow = ttnn.zeros(
@@ -688,6 +717,8 @@ class MTPSpecEngine:
             self._hp_buf,
             self._anchor_sel,
             self._eager_sel,
+            self._join_take,
+            self._join_keep,
         ]
         for t in bufs:
             if t is not None:
@@ -701,6 +732,7 @@ class MTPSpecEngine:
             None,
             None,
         )
+        self._join_take = self._join_keep = None
         self._prep_pt = None
         self._fresh.clear()
         self._active.clear()
@@ -750,6 +782,8 @@ class MTPSpecEngine:
                     self._hp_buf,
                     self._anchor_sel,
                     self._eager_sel,
+                    self._join_take,
+                    self._join_keep,
                 )
             ),
         }
@@ -763,6 +797,25 @@ class MTPSpecEngine:
         self._active.discard(slot)
         self._fresh.pop(slot, None)
         reset_draft_skip(self, slot)
+
+    def remap_slots(self, remap):
+        """Apply a runner slot_remap (row i takes slot remap[i]'s state) to every GDN layer and the per-slot host
+        state; paged KV follows the page tables. Identity is a no-op."""
+        idx = [int(x) for x in remap]
+        if sorted(idx) != list(range(self.B)):
+            raise ValueError(f"slot_remap {idx} is not a permutation of range({self.B})")
+        if idx == list(range(self.B)):
+            return
+        for dn in self._gdn:
+            dn.remap_spec_slots(idx)
+        new_of = {old: new for new, old in enumerate(idx)}
+        self._last_hidden = [self._last_hidden[j] for j in idx]
+        self._fresh = {new_of[u]: n for u, n in self._fresh.items()}
+        self._withheld_streak = {new_of[u]: n for u, n in self._withheld_streak.items()}
+        self._active = {new_of[u] for u in self._active}
+        self._offered = {new_of[u] for u in self._offered}
+        self._no_draft = {new_of[u] for u in self._no_draft}
+        self._speculated = {new_of[u] for u in self._speculated}
 
     # --------------------------------------------------------------------- #
     # Prefill
@@ -828,9 +881,11 @@ class MTPSpecEngine:
     # --------------------------------------------------------------------- #
     # Verify
     # --------------------------------------------------------------------- #
-    def verify(self, tokens, start_pos, accepted_counts, page_table, read_logits=False):
+    def verify(self, tokens, start_pos, accepted_counts, page_table, read_logits=False, active=None):
         """Replay the verify trace over [B, T] tokens at start_pos[u] + j. The first verify after prefill is
         the seed (see _seed): row 0 holds the first generated token, other rows are filler, accepted_counts = 1.
+        Fresh rows may join running ones (see _join).
+        ``active`` (bool [B], None = all): False rows are padding and run over the null block.
         Returns (ids int32 [B, T], logits [B, T, vocab] or None)."""
         assert self.captured, "verify before capture"
         B, T = self.B, self.T
@@ -840,27 +895,49 @@ class MTPSpecEngine:
         assert bool(((mi_prev >= 0) & (mi_prev < T)).all()), f"accepted_counts must be in [1, {T}]"
         self._last_cap_blocks = int(torch.as_tensor(page_table).shape[-1])
         pt = self._fit(page_table)
+        active = (
+            torch.ones(B, dtype=torch.bool) if active is None else torch.as_tensor(active, dtype=torch.bool).reshape(B)
+        )
+        rows = [u for u in range(B) if active[u]]
+        unknown = [u for u in rows if u not in self._active]
+        if unknown:
+            raise ValueError(f"rows {unknown} carry a request that was never prefilled into that slot")
+        live_pad = [u for u in range(B) if not active[u] and u in self._active]
+        if live_pad:
+            raise NotImplementedError(
+                f"padding rows {live_pad} hold a live request's state; the verify would overwrite it"
+            )
+        if not bool(active.all()):
+            pt = pt.clone()
+            pt[~active] = 0  # vLLM null block
+            mi_prev = mi_prev.clone()
+            mi_prev[~active] = 0
+        self._row_active = active.clone()
         self._last_pt = pt
         assert int(start_pos.max()) + T <= table_capacity(
             self._last_cap_blocks, self.block_size
         ), "verify window past the paged KV capacity"
 
         if self._fresh:
-            if set(self._active) != set(self._fresh):
-                raise NotImplementedError("joining a running batch needs per-slot GDN seeding")
+            if not set(self._fresh) <= set(rows):
+                raise ValueError(f"fresh rows {sorted(set(self._fresh) - set(rows))} are not active")
             # Each fresh user's slot Tp-1 MTP KV, then the seed (its filler rows are never run).
             self._stage_mtp_tables(pt)
             for u, Tp in sorted(self._fresh.items()):
                 assert int(start_pos[u]) == Tp, f"slot {u}: start_pos {int(start_pos[u])} != prompt length {Tp}"
                 self._warm_mtp_last(self._last_hidden[u], int(tokens[u, 0]), Tp - 1, self._mtp_pt_rows[u])
+            fresh = sorted(self._fresh)
             self._fresh.clear()
-            return self._seed(tokens, start_pos, pt, read_logits)
+            if set(fresh) == set(rows):
+                return self._seed(tokens, start_pos, pt, read_logits)
+            return self._join(tokens, start_pos, mi_prev, pt, active, fresh, read_logits)
 
         args = (tokens.tolist(), start_pos.tolist(), mi_prev.tolist())
+        kw = dict(read_logits=read_logits, page_tables=pt, inactive=(~active).tolist())
         if self._timing:
-            ids, vfeed, lt = self._verify_split(*args, read_logits=read_logits, page_tables=pt)
+            ids, vfeed, lt = self._verify_split(*args, **kw)
         else:
-            ids, vfeed, lt = self.model.verify_traced(*args, read_logits=read_logits, page_tables=pt)
+            ids, vfeed, lt = self.model.verify_traced(*args, **kw)
         self._vfeed = vfeed
         ids = torch.tensor(ids, dtype=torch.int32).reshape(B, T)
         return ids, (None if lt is None else lt.reshape(B, T, -1))
@@ -908,6 +985,65 @@ class MTPSpecEngine:
             logits[:, 0] = lt
         return ids, logits
 
+    def _merge_seed_rows(self, feed, fresh, rows_out):
+        """rows_out row u*T (u in fresh) <- feed row u; other rows kept.
+        Exact one-hot matmuls (one program for any ``fresh``)."""
+        B, T = self.B, self.T
+        take = torch.zeros(1, 1, B * T, B, dtype=torch.bfloat16)
+        keep = torch.zeros(1, 1, B * T, B * T, dtype=torch.bfloat16)
+        for u in fresh:
+            take[0, 0, u * T, u] = 1
+        taken = {u * T for u in fresh}
+        for r in range(B * T):
+            if r not in taken:
+                keep[0, 0, r, r] = 1
+        self._stage(take, self._join_take, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+        self._stage(keep, self._join_keep, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+        kw = dict(compute_kernel_config=self._anchor_cc, dtype=rows_out.dtype, memory_config=rows_out.memory_config())
+        a = ttnn.matmul(self._join_take, feed, **kw)
+        b = ttnn.matmul(self._join_keep, rows_out, **kw)
+        s = ttnn.add(a, b, memory_config=rows_out.memory_config())
+        ttnn.copy(s, rows_out)
+        for t in (a, b, s):
+            ttnn.deallocate(t)
+
+    def _join(self, tokens, start_pos, mi_prev, pt, active, fresh, read_logits):
+        """Mixed step: verify the running rows, seed the fresh ones (see _seed), merge their feed rows.
+        Returns (ids, logits) like verify()."""
+        B, T = self.B, self.T
+        fmask = torch.zeros(B, dtype=torch.bool)
+        fmask[fresh] = True
+        run = active & ~fmask
+        vt, vs, vm, vpt = tokens.clone(), start_pos.clone(), mi_prev.clone(), pt.clone()
+        vt[~run], vs[~run], vm[~run], vpt[~run] = 0, 0, 0, 0  # fresh rows run as padding
+        args = (vt.tolist(), vs.tolist(), vm.tolist())
+        kw = dict(read_logits=read_logits, page_tables=vpt, inactive=(~run).tolist())
+        if self._timing:
+            ids_v, _, lt_v = self._verify_split(*args, **kw)
+        else:
+            ids_v, _, lt_v = self.model.verify_traced(*args, **kw)
+        ids = torch.tensor(ids_v, dtype=torch.int32).reshape(B, T)
+        logits = None
+        if read_logits:
+            logits = lt_v.reshape(B, T, -1)[..., : self.vocab].to(torch.float32)
+        for dn in self._gdn:
+            dn.sync_conv_win()
+        st, sp, spt = tokens[:, 0].clone(), start_pos.clone(), pt.clone()
+        st[~fmask], sp[~fmask], spt[~fmask] = 0, 0, 0
+        lt, feed = self.model.seed_spec_step(st.tolist(), sp.tolist(), spt)
+        for dn in self._gdn:
+            dn.seed_spec_rows(fresh)
+        self._merge_seed_rows(feed, fresh, self.model._vfy_rows_out)
+        ttnn.deallocate(feed)
+        self._vfeed = self.model._vfy_rows_out
+        lt = lt[:, : self.vocab]
+        ids[fresh] = 0
+        ids[fresh, 0] = lt[fresh].argmax(-1).to(torch.int32)
+        if read_logits:
+            logits[fresh] = 0
+            logits[fresh, 0] = lt[fresh].to(torch.float32)
+        return ids, logits
+
     def decode_forward(
         self, tokens, start_pos, *, num_valid_drafts, accepted_counts, page_table, spec_mode="argmax_ids"
     ):
@@ -927,9 +1063,9 @@ class MTPSpecEngine:
             raise ValueError(f"block has {clean.shape[0]} rows, engine has B={self.B}")
         if not bool(active.any()):
             raise ValueError("no active row in the verify block")
-        if self.B > 1 and not bool(active.all()):
-            raise NotImplementedError("inactive rows at B>1 need scratch-redirected KV writes")
-        ids, logits = self.verify(clean, start0, accepted_counts, page_table, read_logits=spec_mode == "logits")
+        ids, logits = self.verify(
+            clean, start0, accepted_counts, page_table, read_logits=spec_mode == "logits", active=active
+        )
         return VerifyResult(spec_mode, mask_unused_columns(ids, num_valid_drafts), logits)
 
     def _verify_split(self, tokens, positions, mi_prev, **kw):
@@ -981,9 +1117,18 @@ class MTPSpecEngine:
         pt = self._fit(page_table)
         self._check_scratch(pt)
         eager = B == 1 and p[0] > self.eager_reseed_len
-        if self.recorded_drafter and self.captured and self._dr_trace is not None and not any(decline) and not eager:
-            self._stage(pt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-            return self._propose_recorded(ctok, cpos, m, pending, p, pt)
+        if self.recorded_drafter and self.captured and self._dr_trace is not None and not all(decline) and not eager:
+            dpt = pt
+            if any(decline):  # declined rows draft at position 0 over an all-scratch table; their ids are discarded
+                dpt = pt.clone()
+                dpt[torch.tensor(decline)] = self._scratch_block
+                p = [0 if d else pu for d, pu in zip(decline, p)]
+                pending = [0 if d else t for d, t in zip(decline, pending)]
+            self._stage(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            drafts = self._propose_recorded(ctok, cpos, m, pending, p, pt)
+            if any(decline):
+                drafts[torch.tensor(decline)] = 0
+            return drafts
         self._stage_mtp_tables(pt)
 
         self._set_anchor(self._vfeed, m)
@@ -1025,14 +1170,20 @@ class MTPSpecEngine:
         acc = _int_vec(accepted_counts, B, "accepted_counts")
         if bool(((acc < 1) | (acc > T)).any()):
             raise ValueError(f"accepted_counts must be in [1, {T}], got {acc.tolist()}")
+        pad = [False] * B if self._row_active is None else [not bool(a) for a in self._row_active]
+        acc = acc.clone()
+        acc[torch.tensor(pad)] = 1  # a padding row's count is 1
         for u in range(B):
+            if pad[u]:
+                continue
             c = int(acc[u])
             if bool((ctok[u, :c] < 0).any()):
                 raise ValueError(f"row {u}: negative committed token in columns 0..{c - 1}")
             if not torch.equal(cpos[u, :c], cpos[u, 0] + torch.arange(c)) or int(cpos[u, 0]) < 1:
                 raise ValueError(f"row {u}: committed positions {cpos[u, :c].tolist()} are not consecutive from >= 1")
         _, _, _, p = accepted_plan(ctok, cpos, acc, B, T)
-        decline = [not f for f in draft_rows_fit(p, K, table_capacity(cap_blocks, self.block_size))]
+        fit = draft_rows_fit(p, K, table_capacity(cap_blocks, self.block_size))
+        decline = [(not f) or pd for f, pd in zip(fit, pad)]
         skip, skip_all = propose_skip_plan(self._no_draft, B)
         if skip_all:  # the runner withholds every row's drafts: no anchor/reseed/drafter work
             self.skipped_propose_calls += 1

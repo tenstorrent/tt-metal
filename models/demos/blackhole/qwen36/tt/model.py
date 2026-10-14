@@ -1982,7 +1982,7 @@ class Qwen36Model:
         self._drf_ids_concat = False
         self._drf_warmed = False
 
-    def verify_traced(self, tokens, positions, mi_prev, read_logits=False, page_tables=None):
+    def verify_traced(self, tokens, positions, mi_prev, read_logits=False, page_tables=None, inactive=None):
         """Replay the captured verify trace for B users x T candidates.
 
         ``tokens``: B lists of T ids ([pending] + drafts per user). ``positions``: B ints, user u's
@@ -2003,7 +2003,8 @@ class Qwen36Model:
         None keeps the tables staged last. A grouped KV write that would put two users on the same
         (block, 32-row tile) in the same call raises AssertionError before anything is staged. The MTP
         drafter's own table (``SpeculativeDecoder.mtp_pt``) is a separate buffer this argument does
-        not touch.
+        not touch. ``inactive``: length-B bools; those users are skipped by the KV-write collision check only
+        (their rows write the null block).
 
         ``feed_rows`` is the trace's own output buffer: do not deallocate it, and finish with it
         before the next replay (the spec loop reads its anchor rows and reseeds the drafter within
@@ -2034,7 +2035,8 @@ class Qwen36Model:
                 pt = torch.cat([pt, torch.zeros(B, W - pt.shape[1], dtype=torch.int32)], dim=1)
             pt = pt.contiguous()
         if self._vfy_kv_grouped:
-            self._vfy_check_kv_writes(pt, positions)
+            chk = positions if inactive is None else [-1 if x else int(p) for p, x in zip(positions, inactive)]
+            self._vfy_check_kv_writes(pt, chk)
         if page_tables is not None:
             bufs = (self._vfy_kvpt_buf, self._vfy_kvpt_users, self._vfy_kvpt1_buf)
             for host, buf in zip(self._vfy_page_table_host(pt), bufs):
