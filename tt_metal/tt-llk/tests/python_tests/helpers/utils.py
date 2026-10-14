@@ -156,6 +156,20 @@ def matmul_acc_atol(
     )
 
 
+def classify_special(value) -> str:
+    """One float result as a short label for special-value tests: "NaN", "+inf" / "-inf",
+    "+0.0" / "-0.0" (the sign of a zero kept), or the value to nine significant digits.
+    Turns a dict of per-probe results into something an expected-results dict can compare
+    with ==, and a failure message can print readably."""
+    if np.isnan(value):
+        return "NaN"
+    if np.isinf(value):
+        return "+inf" if value > 0 else "-inf"
+    if value == 0.0:
+        return "-0.0" if np.signbit(value) else "+0.0"
+    return "%.9g" % value
+
+
 def print_faces(operand1, tile_shape=None):
     if tile_shape is None:
         tile_shape = construct_tile_shape((DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM))

@@ -21,6 +21,9 @@ survive for fp32; the bfloat16 rows (0x7F81 / 0xFFFF) are packed through float32
 and ml_dtypes, which keep the sign but canonicalise the payload, so there they
 repeat the plain +-NaN rows.
 
+The probes and controls repeat across the whole tile, so every SFPU iteration --
+every copy of the unrolled loop -- sees all of them, and every lane is checked.
+
 Reference: GELU'(+inf) = 1, GELU'(-inf) = 0, GELU'(+-0) = 0.5, GELU'(NaN) = NaN.
 """
 
@@ -31,7 +34,11 @@ import pytest
 import torch
 from conftest import skip_for_quasar
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generators import TILE_DIMENSIONS
+from helpers.golden_generators import (
+    TILE_DIMENSIONS,
+    UnarySFPUGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import (
     ApproximationMode,
     BlocksCalculationAlgorithm,
@@ -55,6 +62,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
+from helpers.utils import classify_special
 
 # key -> (fp32 bits, bfloat16 bits)
 SPECIALS = {
@@ -68,13 +76,19 @@ SPECIALS = {
     "-0.0": (0x80000000, 0x8000),
 }
 
-# Finite controls on either side of each region boundary; their outputs are only
-# checked for being finite, which pins that the NaN case did not leak into them.
+# Finite controls on either side of each region boundary. The NaN case returns x, so a
+# misfire on a control would return the control itself, which is still finite: check
+# the values. Saturated controls must be exact; the rest must match the golden within
+# CONTROL_ATOL, which covers the approx tail and the bf16 output but sits far below the
+# |x| >= 3 that a leaked NaN case would return.
 CONTROLS = [3.1719, 3.0, 5.0, 1.0e30, -3.0, -3.25, -13.0, -13.375, -20.0, -1.0e30]
+SATURATED = {5.0: "1", 1.0e30: "1", -20.0: "+0.0", -1.0e30: "+0.0"}
+CONTROL_ATOL = 0.02
+
+PERIOD = len(SPECIALS) + len(CONTROLS)
 
 
-def _run(out_fmt, dest_acc, approx):
-    in_fmt = out_fmt
+def _run(in_fmt, out_fmt, dest_acc, approx):
     formats = InputOutputFormat(in_fmt, out_fmt)
     dims = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1]]
     src_A, tc_A, src_B, tc_B = generate_stimuli(
@@ -85,18 +99,22 @@ def _run(out_fmt, dest_acc, approx):
         input_dimensions_B=dims,
     )
     flat = src_A.view(-1)
+    lane = torch.arange(flat.numel()) % PERIOD
+
+    is_control = lane >= len(SPECIALS)
+    controls = torch.tensor(CONTROLS, dtype=torch.float32).to(flat.dtype)
+    flat[is_control] = controls[lane[is_control] - len(SPECIALS)]
+
+    is_special = ~is_control
     if in_fmt == DataFormat.Float32:
         bits = flat.view(torch.int32)
-        patterns = [
-            np.int32(np.uint32(fp32).view(np.int32)) for fp32, _ in SPECIALS.values()
-        ]
-        bits[: len(patterns)] = torch.tensor(patterns, dtype=torch.int32)
+        patterns = np.array([fp32 for fp32, _ in SPECIALS.values()], dtype=np.uint32)
+        patterns = torch.from_numpy(patterns.view(np.int32))
     else:
-        bits = flat.view(torch.uint16)
-        patterns = [bf16 for _, bf16 in SPECIALS.values()]
-        bits[: len(patterns)] = torch.tensor(patterns, dtype=torch.uint16)
-    base = len(SPECIALS)
-    flat[base : base + len(CONTROLS)] = torch.tensor(CONTROLS, dtype=flat.dtype)
+        bits = flat.view(torch.int16)
+        patterns = np.array([bf16 for _, bf16 in SPECIALS.values()], dtype=np.uint16)
+        patterns = torch.from_numpy(patterns.view(np.int16))
+    bits[is_special] = patterns[lane[is_special]]
 
     nb, ntb = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
@@ -131,17 +149,42 @@ def _run(out_fmt, dest_acc, approx):
         unpack_to_dest=in_fmt.is_32_bit() and dest_acc == DestAccumulation.Yes,
     )
     hw = torch.tensor(cfg.run().result, dtype=format_dict[formats.output_format])
-    return hw.to(torch.float32).numpy()
+    return (
+        flat.to(torch.float32).numpy(),
+        hw.to(torch.float32).numpy(),
+        lane.numpy(),
+    )
 
 
-def _classify(v):
-    if np.isnan(v):
-        return "NaN"
-    if np.isinf(v):
-        return "+inf" if v > 0 else "-inf"
-    if v == 0.0:
-        return "-0.0" if np.signbit(v) else "+0.0"
-    return "%.9g" % v
+NON_FINITE = frozenset({"NaN", "+inf", "-inf"})
+
+
+def _expected_specials(in_fmt, out_fmt, dest_acc):
+    """key -> the set of acceptable classify_special() labels."""
+    # The NaN case lives in the fp32-destination arm, and a 32-bit input is unpacked
+    # straight to Dest there, so every NaN reaches it. The bf16 arm keeps 1 / 0 by sign.
+    if dest_acc == DestAccumulation.Yes and in_fmt == DataFormat.Float32:
+        if out_fmt == DataFormat.Float32:
+            nan_pos = nan_neg = {"NaN"}
+        else:
+            # The kernel leaves a NaN in Dest; what reaches L1 is the fp32 -> bfloat16
+            # pack's rendering of it. Wormhole packs every NaN as an infinity of its
+            # sign (measured: +NaN -> +inf, -NaN -> -inf, both payloads too). Only the
+            # kernel is under test here, so accept any non-finite result: the bug this
+            # pins returned a finite 1 / 0.
+            nan_pos = nan_neg = NON_FINITE
+    else:
+        nan_pos, nan_neg = {"1"}, {"+0.0"}
+    return {
+        "+inf": {"1"},
+        "-inf": {"+0.0"},
+        "+NaN": nan_pos,
+        "-NaN": nan_neg,
+        "+NaN(min payload)": nan_pos,
+        "-NaN(max payload)": nan_neg,
+        "+0.0": {"0.5"},
+        "-0.0": {"0.5"},
+    }
 
 
 # Quasar's unary SFPU dispatch has no gelu_derivative arm (static_assert at compile time).
@@ -150,38 +193,42 @@ def _classify(v):
     "approx", [ApproximationMode.No, ApproximationMode.Yes], ids=["exact", "approx"]
 )
 @pytest.mark.parametrize(
-    "out_fmt,dest_acc",
+    "in_fmt,out_fmt,dest_acc",
     [
-        (DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float32, DestAccumulation.Yes),
+        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
+        # fp32 Dest packed to bfloat16: the NaN case runs, then the pack has to carry it.
+        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
     ],
-    ids=["bf16", "fp32"],
+    ids=["bf16", "fp32", "fp32-to-bf16"],
 )
-def test_gelu_derivative_specials(out_fmt, dest_acc, approx):
-    hw = _run(out_fmt, dest_acc, approx)
-    got = {key: _classify(hw[i]) for i, key in enumerate(SPECIALS)}
+def test_gelu_derivative_specials(in_fmt, out_fmt, dest_acc, approx):
+    x, hw, lane = _run(in_fmt, out_fmt, dest_acc, approx)
+    keys = list(SPECIALS)
+    expected = _expected_specials(in_fmt, out_fmt, dest_acc)
+    golden = get_golden_generator(UnarySFPUGolden)._gelu_derivative
 
-    controls = hw[len(SPECIALS) : len(SPECIALS) + len(CONTROLS)]
-    assert np.isfinite(controls).all(), "finite controls %s gave %s" % (
-        CONTROLS,
-        controls,
-    )
-    # The probes must have arrived. The background is 0.0, whose GELU' is 0.5, so a
-    # stimuli path that lost the probes would leave every lane at 0.5; the +inf lane
-    # saturates to 1 and can tell the two apart.
-    assert got["+inf"] == "1", "the +inf probe did not reach the kernel: %s" % got
+    wrong = {}
+    for i, (xv, hv, li) in enumerate(zip(x, hw, lane)):
+        if li < len(SPECIALS):
+            key = keys[li]
+            got = classify_special(hv)
+            ok = got in expected[key]
+            want = sorted(expected[key])
+        else:
+            control = CONTROLS[li - len(SPECIALS)]
+            key = "control %g" % control
+            got = classify_special(hv)
+            if control in SATURATED:
+                want = SATURATED[control]
+                ok = got == want
+            else:
+                ref = golden(float(xv))
+                want = "%.9g +- %g" % (ref, CONTROL_ATOL)
+                ok = bool(np.isfinite(hv)) and abs(float(hv) - ref) <= CONTROL_ATOL
+        if not ok:
+            entry = wrong.setdefault(key, {"want": want, "got": set(), "lanes": 0})
+            entry["got"].add(got)
+            entry["lanes"] += 1
 
-    nan = "NaN" if out_fmt == DataFormat.Float32 else None
-    expected = {
-        "+inf": "1",
-        "-inf": "+0.0",
-        "+NaN": nan or "1",
-        "-NaN": nan or "+0.0",
-        "+NaN(min payload)": nan or "1",
-        "-NaN(max payload)": nan or "+0.0",
-        "+0.0": "0.5",
-        "-0.0": "0.5",
-    }
-
-    wrong = {k: (got[k], v) for k, v in expected.items() if got[k] != v}
-    assert not wrong, "GELU' on special inputs (got, expected): %s" % wrong
+    assert not wrong, "GELU' on special inputs and controls, by probe: %s" % wrong

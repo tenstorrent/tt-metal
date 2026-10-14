@@ -488,11 +488,12 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -13.375
 
-    // fp32 destination: x*x is hoisted out of the polynomial and tail regions, which each
-    // computed it before, because the NaN case after the region chain needs it on every lane.
-    sfpi::vFloat x2;
+    // fp32 destination: x*x is computed once, on every lane, because the NaN case after the
+    // region chain needs it; the polynomial and tail regions reuse it. A bfloat16 destination
+    // never reads x2_all and keeps computing x*x inside each region, as before.
+    sfpi::vFloat x2_all;
     if constexpr (is_fp32_dest_acc_en) {
-        x2 = x * x;
+        x2_all = x * x;
     }
 
     // For x >= 3.1719, output saturates to 1 (verified saturation threshold)
@@ -501,7 +502,12 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     // Odd-function decomposition: GELU'(x) + GELU'(-x) = 1, so GELU'(x) - 0.5
     // is odd and can be written as x * h(x²). Degree-8 in u=x² (~12 ops vs ~32).
     v_elseif(x >= -3.0f) {
-        sfpi::vFloat u = is_fp32_dest_acc_en ? x2 : x * x;
+        sfpi::vFloat u;
+        if constexpr (is_fp32_dest_acc_en) {
+            u = x2_all;
+        } else {
+            u = x * x;
+        }
         sfpi::vFloat h = PolynomialEvaluator::eval(
             u,
             GELU_DERIV_H0,
@@ -529,7 +535,10 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     v_elseif(x > -13.375f) {
         constexpr float INV_SQRT_2PI = 0.3989422804014327f;  // 1/sqrt(2*pi)
 
-        if constexpr (!is_fp32_dest_acc_en) {
+        sfpi::vFloat x2;
+        if constexpr (is_fp32_dest_acc_en) {
+            x2 = x2_all;
+        } else {
             x2 = x * x;
         }
         sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
@@ -559,7 +568,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     // turns any NaN into an infinity, so that arm could not return NaN anyway.
     if constexpr (is_fp32_dest_acc_en) {
         constexpr std::int32_t kInfBits = 0x7F800000;
-        v_if(sfpi::as<sfpi::vInt>(x2) > kInfBits) { result = x; }
+        v_if(sfpi::as<sfpi::vInt>(x2_all) > kInfBits) { result = x; }
         v_endif;
     }
 
