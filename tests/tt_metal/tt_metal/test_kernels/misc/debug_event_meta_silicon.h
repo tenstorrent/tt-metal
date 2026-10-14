@@ -70,7 +70,8 @@ inline constexpr DeepMeta kDeep{"meta_deep", {{0x7F, 0x1234}, 0xDEADBEEF}, 0x012
 inline constexpr AllWidthsMeta kAllWidths{
     "meta_all_widths", true, -128, 0xFFFF, -123456, -0x7FFFFFFFFFFFFFFFll - 1, kWideMax, Level::Low};
 inline constexpr DefaultedMeta kDefaulted{"meta_defaulted"};
-inline constexpr TwoStringsMeta kTwoStrings{"meta_two_strings", "a second string, with \"quotes\" and \\"};
+// Every byte the assembler text has to escape: quotes, a backslash, a newline, a tab, UTF-8 and DEL.
+inline constexpr TwoStringsMeta kTwoStrings{"meta_two_strings", "line one\nline two\t\"quotes\" \\ \xC3\xA9 \x7F end"};
 inline constexpr uint32_t kColor = 0x42D4F4;
 
 // The template site is instantiated with these values: equal values share one site, so two distinct sites.

@@ -4,7 +4,8 @@
 //
 // Debug event metadata, layer 1a: the rules a metadata type must follow and the host's unmarshalling
 // (hostdev/debug_event_meta.h), checked on the host with no device and no device compiler. The rules are
-// static_asserts on the header's predicates, so breaking one fails this file's build; the round trips are gtests.
+// static_asserts on the header's predicates, so breaking one fails this file's build. Round trips of every shape
+// through the loader are in test_debug_event_meta_loader.cpp.
 // Not covered here: the device compiler's view (its spelling of type names, the asm it emits, the error text a
 // user sees) -- that is the offline-compile layer, test_debug_event_meta_compile.cpp.
 
@@ -163,6 +164,19 @@ static_assert(!has_portable_name<InAnonymousNamespace>() && rules_broken<InAnony
 // "<unsigned int>" starts with '<' like "<unnamed struct>"; only the latter is unportable.
 static_assert(has_portable_name<Templated<unsigned int>>());
 
+// Strings reach the assembler on one line: quotes and backslashes escaped, every other byte outside printable ASCII
+// as a three-digit octal escape (which the assembler never extends into a following digit).
+constexpr bool quotes_as(const char* in, std::string_view want) {
+    AsmText a;
+    a.put_quoted(in);
+    return std::string_view(a.data(), a.size()) == want;
+}
+static_assert(quotes_as("plain", R"("plain")"));
+static_assert(quotes_as(R"(a"b\c)", R"("a\"b\\c")"));
+static_assert(quotes_as("line\nbreak\ttab", R"("line\012break\011tab")"));
+static_assert(quotes_as("\n1", R"("\0121")"));
+static_assert(quotes_as("\xC3\xA9\x7F\x01", R"("\303\251\177\001")"));
+
 static_assert(site_name_ok(ZoneMeta{"x"}));
 static_assert(!site_name_ok(ZoneMeta{""}) && !site_name_ok(ZoneMeta{nullptr}));
 
@@ -202,44 +216,7 @@ TEST(DebugEventMeta, CPU_SignatureSpellsTypeNameAndFieldCodes) {
     EXPECT_EQ(site_meta_of(ZoneColorMeta{"x", 0}).type_name(), "tt::debug_event::ZoneColorMeta");
 }
 
-// ---- Round trips through SiteMeta::as<T>() -----------------------------------------------------------------------
-
-TEST(DebugEventMeta, CPU_RoundTripsEveryFieldWidthAndSign) {
-    const AllWidths in{
-        "all",
-        true,
-        std::numeric_limits<int8_t>::min(),
-        std::numeric_limits<uint16_t>::max(),
-        -123456,
-        std::numeric_limits<int64_t>::min(),
-        kWideMax,
-        Level::Low};
-    const auto out = site_meta_of(in).as<AllWidths>();
-    ASSERT_TRUE(out.has_value());
-    EXPECT_STREQ(out->name, "all");
-    EXPECT_EQ(out->on, in.on);
-    EXPECT_EQ(out->i8, in.i8);
-    EXPECT_EQ(out->u16, in.u16);
-    EXPECT_EQ(out->i32, in.i32);
-    EXPECT_EQ(out->i64, in.i64);
-    EXPECT_EQ(out->wide, in.wide);
-    EXPECT_EQ(out->level, in.level);
-}
-
-TEST(DebugEventMeta, CPU_RoundTripsNestedStructs) {
-    const auto out = site_meta_of(Nested{"nested", {0xA9A9A9, 2}, 0xBEEF}).as<Nested>();
-    ASSERT_TRUE(out.has_value());
-    EXPECT_STREQ(out->name, "nested");
-    EXPECT_EQ(out->style.color, 0xA9A9A9u);
-    EXPECT_EQ(out->style.verbosity, 2u);
-    EXPECT_EQ(out->flags, 0xBEEFu);
-}
-
-TEST(DebugEventMeta, CPU_RoundTripsDefaultedFields) {
-    const auto out = site_meta_of(Defaulted{"defaulted"}).as<Defaulted>();
-    ASSERT_TRUE(out.has_value());
-    EXPECT_EQ(out->color, 0x123456u);
-}
+// ---- Decoding through SiteMeta::as<T>() -----------------------------------------------------------------------------
 
 TEST(DebugEventMeta, CPU_AsReturnsNothingForAnotherType) {
     const SiteMeta color = site_meta_of(ZoneColorMeta{"c", 0xFF0000});

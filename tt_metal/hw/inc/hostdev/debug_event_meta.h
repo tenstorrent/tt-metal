@@ -11,7 +11,8 @@
 //   const char*        set from a string literal
 //   integer or enum    of 1, 2, 4 or 8 bytes (bool included)
 //   a nested struct    itself a simple aggregate
-// and every value must be a compile-time constant. Its FIRST field is the site's name, a const char* that every
+// and every value must be a compile-time constant; a site's strings, quoted, must fit its kMaxSiteAsmBytes of
+// assembler text. Its FIRST field is the site's name, a const char* that every
 // site sets to a non-empty string. The type must be named at namespace scope (not in an anonymous namespace, not
 // local to a function, not unnamed), because the host matches it by the name the compiler spells. check_site_type<T>()
 // enforces all of this with readable errors.
@@ -58,6 +59,8 @@ struct ZoneColorMeta {
 // ---- Field walk, shared by the device marshaller and the host unmarshaller -----------------------------------------
 
 inline constexpr size_t kMaxFields = 8;
+// The assembler text one site may generate (its strings, quoted, plus a few hundred bytes of directives).
+inline constexpr size_t kMaxSiteAsmBytes = 2048;
 inline constexpr size_t kRecordHeaderBytes = 16;
 
 namespace detail {
@@ -425,11 +428,21 @@ constexpr void write_signature(Sink& out) {
     write_codes<T>(out);
 }
 
-// Assembler text, built in a constant expression and handed to asm((...)).
+// Never defined: a site whose assembler text would pass kMaxSiteAsmBytes calls it during constant evaluation, and
+// the compiler's error ("call to non-constexpr function") quotes this name.
+void debug_event_site_metadata_too_long_shorten_its_strings();
+
+// Assembler text, built in a constant expression and handed to asm((...)). Always NUL-terminated.
 struct AsmText {
-    char buf[2048] = {};
+    char buf[kMaxSiteAsmBytes] = {};
     size_t n = 0;
-    constexpr void put(char c) { buf[n++] = c; }
+    constexpr void put(char c) {
+        if (n + 1 >= kMaxSiteAsmBytes) {
+            debug_event_site_metadata_too_long_shorten_its_strings();
+            return;
+        }
+        buf[n++] = c;
+    }
     constexpr void put(const char* s) {
         while (*s != 0) {
             put(*s++);
@@ -446,14 +459,23 @@ struct AsmText {
             put(t[--i]);
         }
     }
-    // A quoted .asciz operand.
+    // A quoted .asciz operand. Every byte outside printable ASCII -- a newline, a tab, UTF-8 -- becomes a three-digit
+    // octal escape, so the assembler stores it unchanged and the text stays on one line.
     constexpr void put_quoted(const char* s) {
         put('"');
         for (; *s != 0; s++) {
+            const auto u = static_cast<unsigned char>(*s);
             if (*s == '"' || *s == '\\') {
                 put('\\');
+                put(*s);
+            } else if (u < 0x20 || u >= 0x7F) {
+                put('\\');
+                put(static_cast<char>('0' + (u >> 6)));
+                put(static_cast<char>('0' + ((u >> 3) & 7)));
+                put(static_cast<char>('0' + (u & 7)));
+            } else {
+                put(*s);
             }
-            put(*s);
         }
         put('"');
     }
