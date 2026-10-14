@@ -19,6 +19,7 @@ T3K parallelization:
 """
 
 import math
+import os
 
 import torch
 
@@ -1067,6 +1068,12 @@ class TtMolmo2Model(LightweightModule):
     def forward_decode_step(self, new_token_id: int, current_pos: int) -> torch.Tensor:
         """Single-token decode using the filled KV cache.
 
+        Runs through the decode trace (captured lazily at the first call; the trace reads the position
+        from device tensors, so it serves any position). The eager implementation below is measurably
+        less accurate than the traced one on long generations — teacher-forced agreement with HF
+        transformers decays 76% -> 49% over 400 tokens at S=34455 eagerly, vs 92-95% throughout when
+        traced — so it is kept only for debugging (MOLMO2_UNTRACED_DECODE=1).
+
         Args:
             new_token_id: integer token id of the newly generated token
             current_pos: position in the sequence to write K/V cache to
@@ -1074,6 +1081,13 @@ class TtMolmo2Model(LightweightModule):
         Returns:
             logits [1, vocab_size] CPU tensor for sampling the next token
         """
+        if not os.environ.get("MOLMO2_UNTRACED_DECODE"):
+            if self._decode_trace_id is None:
+                self._decode_trace_tensors = self._allocate_decode_trace_tensors()
+                self._decode_trace_id, self._decode_trace_output = self._capture_decode_trace(
+                    self._decode_trace_tensors, current_pos
+                )
+            return self._execute_decode_trace(new_token_id, current_pos).unsqueeze(0)
         # ---- Embedding for the single new token ----
         tok = torch.tensor([[new_token_id]], dtype=torch.int32)
         tok_ttnn = ttnn.from_torch(

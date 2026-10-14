@@ -169,6 +169,13 @@ def tt_model(mesh_device):
         configuration=cfg,
     )
     del state_dict
+    # Same warm-up as the vLLM server (generator_vllm.initialize_vllm_model): compile every prefill bucket and the
+    # vision kernels BEFORE the decode trace is captured. New compilations/allocations after trace capture can
+    # corrupt or hang the traced decode (first-occurrence video shapes hang in vision pooling otherwise).
+    from models.demos.molmo2.tt.model import PREFILL_BUCKETS
+
+    model.warmup_all_buckets(bucket_sizes=PREFILL_BUCKETS, use_trace=False)
+    model.warmup_vision_compile()
     logger.info("Model ready")
     return model, cfg
 
@@ -218,6 +225,11 @@ def run_demo(
         pixel_values, pool_idx = vision_inputs_from_processor(proc_out)
         S = input_ids.shape[1]
         logger.info(f"User {u}: seq_len={S}  preprocess={time.time()-t0:.2f}s")
+        # The KV cache / RoPE tables hold cfg.max_seq_len (36864 = model max_position_embeddings) positions.
+        assert S < cfg.max_seq_len, f"prompt of {S} tokens does not fit the {cfg.max_seq_len}-token context"
+        user_max_new = min(max_new_tokens, cfg.max_seq_len - S)
+        if user_max_new < max_new_tokens:
+            logger.warning(f"Clamping max_new_tokens {max_new_tokens} -> {user_max_new} (context {cfg.max_seq_len})")
 
         # ---- Warm-up (compile) pass — not timed ----
         # Run a minimal text-only prefill to trigger TTNN JIT compilation before measuring.
@@ -248,11 +260,11 @@ def run_demo(
         output_ids = []
         current_pos = S
         t_decode_start = time.time()
-        for iteration in range(max_new_tokens):
+        for iteration in range(user_max_new):
             if stop_at_eos and next_token == eos:
                 break
             output_ids.append(next_token)
-            if iteration == max_new_tokens - 1:
+            if iteration == user_max_new - 1:
                 break
             t_iter = time.time()
             lg = model.forward_decode_step(next_token, current_pos)
