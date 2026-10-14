@@ -835,8 +835,24 @@ not synchronized: per-group spans only. us per call:
   337 us (the DRAM ceiling, ~505 GB/s of 170 MB) vs Tensix readers 371 (-10%), with no Tensix reader cores. Mixed
   NoCs (the non-NOC1-endpoint tile on NOC1) only helps the far-side mapping (378 -> 421 GB/s) and hurts the same-side
   one. In flat the host picks which bank holds which gate/up core's weights, so the same-side layout costs nothing.
-- Open: the x / h / y traffic on top; then a flat prototype (DRISC reader on the on-device schedule, same-side layout,
-  reader cells freed).
+- **With the call's other traffic** (WithTraffic test, same harness for both: Tensix readers = flat's reader cells /
+  mapping / NOC0 reads + NOC1 forwards; DRISC = same-side; both with the down cores' rotating reads; synthetic x / h /
+  y at M 128: relays read x (NOC0 here; flat's relays read on NOC1) and multicast it, down cores pass h on NOC1 and
+  write y). Whole-call span, us (no x/h/y: Tensix 370.8, DRISC 337.3):
+
+  | MPFE weights (ordinary port; DRISC tiles) | Tensix readers | DRISC |
+  |---|---|---|
+  | default | 579.8 | 634.8 |
+  | 7; 7, 7 | 585.2 | 634.6 |
+  | 5; 0, 1 (the prefetcher's policy) | 630.4 | 602.2 |
+  | 0; 5, 5 | 574.2 | 676.6 |
+
+  With equal arbitration DRISC delivers the weights much earlier (gate/up 377 vs 522 us) but its local DMA starves the
+  x relays (634 vs 580) - x gates gate/up compute in a real call. Lowering the DRISC tiles' MPFE weight recovers part
+  (602), still ~5% behind the best Tensix setup. So under traffic DRISC is roughly time-neutral to slightly worse;
+  its value is the 16 freed Tensix cores, not speed. (Synthetic traffic is heavier than a real call's.)
+- Next if pursued: flat's real relay NoCs (x reads on NOC1) in the bench, then the flat prototype with the DRISC
+  tiles at low MPFE priority, judged on the LoudBox overlap layout it would enable.
 
 ## 9. How to run (PR tree)
 ```

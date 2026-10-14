@@ -24,6 +24,8 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <array>
+#include <map>
+#include <numeric>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
@@ -55,7 +57,7 @@ uint32_t env_u32(const char* name, uint32_t dflt) {
 
 struct FlatPlan {
     uint32_t H = 0, I = 0, E = 0, tile = 0, kblk = 0, np = 0, R = 0;
-    std::vector<CoreCoord> gu, down;
+    std::vector<CoreCoord> gu, down, readers, relays;
 };
 
 bool load_plan(const char* path, FlatPlan& p) {
@@ -70,7 +72,7 @@ bool load_plan(const char* path, FlatPlan& p) {
         std::istringstream s(line);
         std::string tag;
         s >> tag;
-        auto& v = tag == "gu" ? p.gu : p.down;
+        auto& v = tag == "gu" ? p.gu : (tag == "down" ? p.down : (tag == "readers" ? p.readers : p.relays));
         uint32_t x = 0, y = 0;
         while (s >> x >> y) {
             v.emplace_back(x, y);
@@ -604,6 +606,402 @@ TEST_F(DriscFlatBenchFixture, TwoDriscOneBank) {
                 blk,
                 t,
                 double(2 * per_tile) / t / 1e3);
+        }
+    }
+}
+
+// The weight delivery under a call's other traffic: Tensix readers (flat's path: reader cells, plan mapping,
+// flat_tx_reader / flat_tx_fwd) vs DRISC senders (same-side mapping), both with the down cores' rotating weight reads,
+// without and with the synthetic x / h / y traffic of DRISC_FLAT_M rows per expert (default 128; flat_bg.cpp: the
+// relays read x and multicast it into the gate/up rectangles, the down cores pass h along a chain and write y).
+// Tensix kernels share one clock: "Tensix span" covers every Tensix group; the DRISC span is on its own clock.
+TEST_F(DriscFlatBenchFixture, WithTraffic) {
+    const auto& soc = MetalContext::instance().get_cluster().get_soc_desc(dev_->build_id());
+    const uint32_t banks = soc.get_dram_compute_grid_size().x;
+    const uint32_t clk_mhz = MetalContext::instance().get_cluster().get_device_aiclk(dev_->get_device_ids()[0]);
+    const FlatPlan& p = plan_;
+    ASSERT_EQ(p.readers.size(), 2u * banks);
+    ASSERT_EQ(p.relays.size(), 4u);
+    const uint32_t Ht = p.H / 32, It = p.I / 32, nk = Ht / p.kblk, R = p.R;
+    const uint32_t blk = p.kblk * 2 * p.np * p.tile, chunk = R * blk, n_chunks = p.E * nk;
+    const uint32_t M = env_u32("DRISC_FLAT_M", 128), iters = env_u32("DRISC_FLAT_ITERS", 5);
+    const uint32_t nd = static_cast<uint32_t>(p.down.size()), land_slots = 4;
+    // DRAM: gate/up (2 readers' regions per bank: reader r in bank r % banks at (r / banks) * region), down (rotated)
+    const uint32_t rd_region = n_chunks * chunk;
+    auto gu_buf = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = uint64_t(2 * rd_region) * banks},
+        {.page_size = 2 * rd_region, .buffer_type = BufferType::DRAM},
+        dev_);
+    std::vector<uint32_t> pcd(nd), dblk(nd);
+    const uint32_t dn_blocks = p.E * It / p.kblk;
+    uint32_t sub_max = 0;
+    for (uint32_t d = 0; d < nd; ++d) {
+        pcd[d] = Ht / nd + (d < Ht % nd ? 1 : 0);
+        dblk[d] = p.kblk * pcd[d] * p.tile;
+        sub_max = std::max(sub_max, (dn_blocks + banks - 1) / banks * dblk[d]);
+    }
+    auto dn_buf = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = uint64_t(nd * sub_max) * banks},
+        {.page_size = nd * sub_max, .buffer_type = BufferType::DRAM},
+        dev_);
+    // background: x (relays, 2 rows per step, each rectangle's 2 relays read all rows), h / y (down cores, per row tile)
+    const uint32_t rows = p.E * M, x_steps = rows / 2 / 2, x_read = 2 * p.H * 2, x_mcast = 2 * p.H * 17 / 16;
+    const uint32_t h_steps = rows / 32, h_step = 32 * p.I * 17 / 16;
+    uint32_t y_max = 0;
+    for (uint32_t d = 0; d < nd; ++d) {
+        y_max = std::max(y_max, 32 * pcd[d] * 32 * 2);
+    }
+    const uint32_t x_region = (x_steps + banks - 1) / banks * x_read, y_region = (h_steps + banks - 1) / banks * y_max;
+    auto x_buf = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = uint64_t(4 * x_region) * banks},
+        {.page_size = 4 * x_region, .buffer_type = BufferType::DRAM},
+        dev_);
+    auto y_buf = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = uint64_t(nd * y_region) * banks},
+        {.page_size = nd * y_region, .buffer_type = BufferType::DRAM},
+        dev_);
+    // gate/up rectangles: bounding boxes of the west / east gate/up cells
+    const uint32_t gu_mid = (std::min_element(p.gu.begin(), p.gu.end(), [](auto& a, auto& b) { return a.x < b.x; })->x +
+                             std::max_element(p.gu.begin(), p.gu.end(), [](auto& a, auto& b) { return a.x < b.x; })->x) /
+                            2;
+    std::array<CoreCoord, 2> lo{CoreCoord{99, 99}, CoreCoord{99, 99}}, hi{CoreCoord{0, 0}, CoreCoord{0, 0}};
+    std::array<uint32_t, 2> cnt{0, 0};
+    for (const auto& c : p.gu) {
+        const uint32_t k = c.x <= gu_mid ? 0 : 1;
+        lo[k] = {std::min(lo[k].x, c.x), std::min(lo[k].y, c.y)};
+        hi[k] = {std::max(hi[k].x, c.x), std::max(hi[k].y, c.y)};
+        ++cnt[k];
+    }
+    for (uint32_t k = 0; k < 2; ++k) {
+        ASSERT_EQ(cnt[k], (hi[k].x - lo[k].x + 1) * (hi[k].y - lo[k].y + 1)) << "gate/up cells are not a rectangle";
+    }
+    // same-side DRISC assignment (as GateUpDelivery's DRISC_FLAT_ASSIGN=1)
+    const uint32_t noc0_sub = endpoint_for_noc(soc, 0, NOC::NOC_0).y;
+    std::vector<uint32_t> subs;
+    for (uint32_t s2 = 0; s2 < soc.get_dram_compute_grid_size().y; ++s2) {
+        if (s2 != noc0_sub) {
+            subs.push_back(s2);
+        }
+    }
+    std::vector<bool> bank_west(banks);
+    {
+        std::vector<uint32_t> bx(banks);
+        for (uint32_t b = 0; b < banks; ++b) {
+            bx[b] = soc.dram_bank_endpoint_coords.at(b)[0].x;
+        }
+        const uint32_t xmin = *std::min_element(bx.begin(), bx.end());
+        for (uint32_t b = 0; b < banks; ++b) {
+            bank_west[b] = bx[b] == xmin;
+        }
+    }
+    std::vector<std::vector<CoreCoord>> drecv(banks * 2);
+    {
+        std::vector<CoreCoord> west, east;
+        for (const auto& c : p.gu) {
+            (c.x <= gu_mid ? west : east).push_back(c);
+        }
+        for (uint32_t pass = 0; pass < 2; ++pass) {
+            for (uint32_t b = 0; b < banks; ++b) {
+                for (uint32_t e = 0; e < 2; ++e) {
+                    auto& pool = (bank_west[b] == (pass == 0)) ? west : east;
+                    while (drecv[b * 2 + e].size() < R && !pool.empty()) {
+                        drecv[b * 2 + e].push_back(pool.front());
+                        pool.erase(pool.begin());
+                    }
+                }
+            }
+        }
+    }
+    // L1 map (Tensix): weight landing at base, x landing +128 KB (gate/up); down ring at base, bg scratch +200 KB,
+    // h landing +300 KB, bg timing +400 KB; reader CB at the CB base, reader timing +256 KB; relay scratch at base,
+    // relay timing +64 KB; barrier array +512 KB on the first down core
+    const uint32_t B = tensix_l1_, dmax = *std::max_element(dblk.begin(), dblk.end());
+    const uint32_t dn_timing = B + (4 * dmax + 31) / 32 * 32;
+    ASSERT_LT(dn_timing + 2048, B + 200 * 1024);
+    const uint32_t drisc_timing_off = (4 * blk + 31) / 32 * 32;
+    const CoreCoord bar_v = dev_->virtual_core_from_logical_core(p.down[0], CoreType::WORKER);
+    const uint32_t bar_addr = B + 512 * 1024;
+    auto vxy = [&](CoreCoord c) { return dev_->virtual_core_from_logical_core(c, CoreType::WORKER); };
+
+    // DRISC_FLAT_MPFE="o,a,b": GDDR memory-controller MPFE round-robin weights (0-7) for the NOC0-endpoint tile (o: the
+    // Tensix cores' ordinary traffic) and the two DRISC tiles (a, b), on every bank; port p = subchannel p - 1
+    if (const char* mw = std::getenv("DRISC_FLAT_MPFE")) {
+        uint32_t o = 0, wa = 0, wb = 0;
+        ASSERT_EQ(std::sscanf(mw, "%u,%u,%u", &o, &wa, &wb), 3);
+        for (uint32_t b = 0; b < banks; ++b) {
+            std::array<uint32_t, 3> w{};
+            w[noc0_sub] = o;
+            w[subs[0]] = wa;
+            w[subs[1]] = wb;
+            const CoreCoord lc{b, subs[0]};
+            Program program = CreateProgram();
+            auto k = CreateKernel(
+                program, "tests/tt_metal/tt_metal/test_kernels/misc/drisc_gddr_mc_priority.cpp", lc, DramConfig{.noc = NOC::NOC_0});
+            SetRuntimeArgs(program, k, lc, {w[0], w[1], w[2], drisc_l1_});
+            run(program);
+            std::array<uint32_t, 3> rb{};
+            MetalContext::instance().get_cluster().read_core(
+                rb.data(), sizeof(rb), tt_cxy_pair(dev_->build_id(), dev_->virtual_core_from_logical_core(lc, CoreType::DRAM)), drisc_l1_noc_);
+            if (b == 0) {
+                log_info(LogTest, "MPFE weights by port P1-P3 (subchannel 0-2; NOC0 endpoint = subchannel {}): {} {} {}", noc0_sub, rb[0], rb[1], rb[2]);
+            }
+        }
+    }
+    log_info(
+        LogTest,
+        "with traffic: H {} I {} E {} M {}: gate/up {:.1f} MB, down {:.1f} MB, x {:.1f} MB read ({:.1f} MB mcast x 2 "
+        "rects), h {:.1f} MB x {} hops, y {:.1f} MB",
+        p.H,
+        p.I,
+        p.E,
+        M,
+        double(n_chunks) * chunk * 16 / 1e6,
+        double(dn_blocks) * std::accumulate(dblk.begin(), dblk.end(), 0.0) / 1e6,
+        4.0 * x_steps * x_read / 1e6,
+        2.0 * x_steps * x_mcast / 1e6,
+        double(h_steps) * h_step / 1e6,
+        nd,
+        double(h_steps) * std::accumulate(pcd.begin(), pcd.end(), 0u) * 32 * 32 * 2 / 1e6);
+
+    for (const bool drisc : {false, true}) {
+        for (const bool bg : {false, true}) {
+            std::vector<std::pair<std::string, std::vector<std::pair<CoreCoord, uint64_t>>>> groups;
+            auto build = [&]() {
+                Program program = CreateProgram();
+                groups.clear();
+                uint32_t idx = 0;
+                const uint32_t n_all =
+                    (drisc ? 2 * banks : 2 * banks) + nd + (bg ? static_cast<uint32_t>(p.relays.size()) + nd : 0);
+                std::vector<std::pair<CoreCoord, uint64_t>> g_gu, g_dn, g_rl, g_hy;
+                if (drisc) {
+                    for (uint32_t b = 0; b < banks; ++b) {
+                        for (uint32_t e = 0; e < 2; ++e) {
+                            const CoreCoord lc{b, subs[e]};
+                            std::vector<uint32_t> rt{
+                                gu_buf->address() + e * rd_region,
+                                drisc_l1_,
+                                blk,
+                                n_chunks * R,
+                                4u,
+                                R,
+                                B,
+                                land_slots,
+                                drisc_l1_ + drisc_timing_off,
+                                bar_v.x,
+                                bar_v.y,
+                                bar_addr,
+                                idx++,
+                                n_all,
+                                0u};
+                            for (const auto& c : drecv[b * 2 + e]) {
+                                rt.push_back(vxy(c).x);
+                                rt.push_back(vxy(c).y);
+                            }
+                            auto k = CreateKernel(
+                                program,
+                                "tests/tt_metal/tt_metal/test_kernels/misc/drisc_flat_gu_sender.cpp",
+                                lc,
+                                DramConfig{.noc = NOC::NOC_0});
+                            SetRuntimeArgs(program, k, lc, rt);
+                            g_gu.emplace_back(
+                                dev_->virtual_core_from_logical_core(lc, CoreType::DRAM),
+                                drisc_l1_noc_ + drisc_timing_off);
+                        }
+                    }
+                    groups.emplace_back("gate/up DRISC", g_gu);
+                } else {
+                    std::vector<CoreRange> rr;
+                    for (const auto& c : p.readers) {
+                        rr.emplace_back(c, c);
+                    }
+                    const CoreRangeSet rset(rr);
+                    CreateCircularBuffer(
+                        program,
+                        rset,
+                        CircularBufferConfig(2 * chunk, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, chunk));
+                    auto kr = CreateKernel(
+                        program,
+                        "tests/tt_metal/tt_metal/test_kernels/misc/flat_tx_reader.cpp",
+                        rset,
+                        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
+                    auto kf = CreateKernel(
+                        program,
+                        "tests/tt_metal/tt_metal/test_kernels/misc/flat_tx_fwd.cpp",
+                        rset,
+                        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1});
+                    const uint32_t rd_timing = B + 256 * 1024;
+                    for (uint32_t r = 0; r < p.readers.size(); ++r) {
+                        const CoreCoord c = p.readers[r];
+                        SetRuntimeArgs(
+                            program,
+                            kr,
+                            c,
+                            {r % banks,
+                             gu_buf->address() + (r / banks) * rd_region,
+                             chunk,
+                             n_chunks,
+                             rd_timing,
+                             bar_v.x,
+                             bar_v.y,
+                             bar_addr,
+                             idx++,
+                             n_all});
+                        std::vector<uint32_t> fr{blk, n_chunks, R, B, land_slots, rd_timing};
+                        for (uint32_t j = 0; j < R; ++j) {
+                            fr.push_back(vxy(p.gu[r * R + j]).x);
+                            fr.push_back(vxy(p.gu[r * R + j]).y);
+                        }
+                        SetRuntimeArgs(program, kf, c, fr);
+                        g_gu.emplace_back(vxy(c), rd_timing);
+                    }
+                    groups.emplace_back("gate/up Tensix", g_gu);
+                }
+                {
+                    std::vector<CoreRange> rs;
+                    for (const auto& c : p.down) {
+                        rs.emplace_back(c, c);
+                    }
+                    auto k = CreateKernel(
+                        program,
+                        "tests/tt_metal/tt_metal/test_kernels/misc/flat_dn_rot_reader.cpp",
+                        CoreRangeSet(rs),
+                        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_0});
+                    for (uint32_t d = 0; d < nd; ++d) {
+                        SetRuntimeArgs(
+                            program,
+                            k,
+                            p.down[d],
+                            {dn_buf->address() + d * sub_max,
+                             d % banks,
+                             dblk[d],
+                             dn_blocks,
+                             2u,
+                             4u,
+                             B,
+                             dn_timing,
+                             banks,
+                             bar_v.x,
+                             bar_v.y,
+                             bar_addr,
+                             idx++,
+                             n_all});
+                        g_dn.emplace_back(vxy(p.down[d]), dn_timing);
+                    }
+                    groups.emplace_back("down weights", g_dn);
+                }
+                if (bg) {
+                    std::vector<CoreRange> rl;
+                    for (const auto& c : p.relays) {
+                        rl.emplace_back(c, c);
+                    }
+                    auto kx = CreateKernel(
+                        program,
+                        "tests/tt_metal/tt_metal/test_kernels/misc/flat_bg.cpp",
+                        CoreRangeSet(rl),
+                        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
+                    for (uint32_t k = 0; k < p.relays.size(); ++k) {
+                        const uint32_t rect = k % 2;
+                        SetRuntimeArgs(
+                            program,
+                            kx,
+                            p.relays[k],
+                            {0u,
+                             x_steps,
+                             x_read,
+                             x_mcast,
+                             x_buf->address() + k * x_region,
+                             banks,
+                             B,
+                             B + 128 * 1024,
+                             B + 64 * 1024,
+                             bar_v.x,
+                             bar_v.y,
+                             bar_addr,
+                             idx++,
+                             n_all,
+                             vxy(lo[rect]).x,
+                             vxy(lo[rect]).y,
+                             vxy(hi[rect]).x,
+                             vxy(hi[rect]).y,
+                             cnt[rect]});
+                        g_rl.emplace_back(vxy(p.relays[k]), B + 64 * 1024);
+                    }
+                    groups.emplace_back("relays (x)", g_rl);
+                    std::vector<CoreRange> rs;
+                    for (const auto& c : p.down) {
+                        rs.emplace_back(c, c);
+                    }
+                    auto kh = CreateKernel(
+                        program,
+                        "tests/tt_metal/tt_metal/test_kernels/misc/flat_bg.cpp",
+                        CoreRangeSet(rs),
+                        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_1});
+                    for (uint32_t d = 0; d < nd; ++d) {
+                        const CoreCoord succ = vxy(p.down[(d + 1) % nd]);
+                        SetRuntimeArgs(
+                            program,
+                            kh,
+                            p.down[d],
+                            {1u,
+                             h_steps,
+                             h_step,
+                             32 * pcd[d] * 32 * 2,
+                             y_buf->address() + d * y_region,
+                             banks,
+                             B + 200 * 1024,
+                             B + 300 * 1024,
+                             B + 400 * 1024,
+                             bar_v.x,
+                             bar_v.y,
+                             bar_addr,
+                             idx++,
+                             n_all,
+                             succ.x,
+                             succ.y});
+                        g_hy.emplace_back(vxy(p.down[d]), B + 400 * 1024);
+                    }
+                    groups.emplace_back("down h / y", g_hy);
+                }
+                return program;
+            };
+            std::map<std::string, std::vector<double>> spans;
+            for (uint32_t it = 0; it < iters + 1; ++it) {
+                Program program = build();
+                const std::vector<uint32_t> zeros(8 * 128, 0);
+                MetalContext::instance().get_cluster().write_core(
+                    zeros.data(), zeros.size() * sizeof(uint32_t), tt_cxy_pair(dev_->build_id(), bar_v), bar_addr);
+                MetalContext::instance().get_cluster().l1_barrier(dev_->build_id());
+                run(program);
+                if (it == 0) {
+                    continue;
+                }
+                uint64_t ts0 = UINT64_MAX, ts1 = 0;
+                for (const auto& [name, cores] : groups) {
+                    uint64_t s0 = UINT64_MAX, e1 = 0;
+                    for (const auto& [v, addr] : cores) {
+                        auto [a, b] = read_t(v, addr);
+                        s0 = std::min(s0, a);
+                        e1 = std::max(e1, b);
+                    }
+                    spans[name].push_back(double(e1 - s0) / clk_mhz);
+                    if (name != "gate/up DRISC") {
+                        ts0 = std::min(ts0, s0);
+                        ts1 = std::max(ts1, e1);
+                    }
+                }
+                spans["Tensix span"].push_back(double(ts1 - ts0) / clk_mhz);
+            }
+            std::string line;
+            for (auto& [name, v] : spans) {
+                std::sort(v.begin(), v.end());
+                line += fmt::format("{} {:.1f}  ", name, v[v.size() / 2]);
+            }
+            log_info(
+                LogTest,
+                "with traffic [{} readers, {}]: {}",
+                drisc ? "DRISC" : "Tensix",
+                bg ? "with x/h/y" : "no x/h/y",
+                line);
         }
     }
 }
