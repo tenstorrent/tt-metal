@@ -1,7 +1,6 @@
 intake:
   by: dnijemcevic
-  at: '2026-10-14T16:15:20'
+  at: '2026-10-14T20:28:35'
   files:
-    models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml: b9aa38b040bb57ee839c2af3b6e85c534d1a537f5363ae0abba17a98ac426501
-  note: approved by Claude (supervisor) on the owner's delegation, 2026-10-14; owner
-    reviews in the morning
+    models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml: 7d34b45353bb42df2022cb9fabe872057acebb60bc0bf4fb181e240213f7a29f
+  note: ''
