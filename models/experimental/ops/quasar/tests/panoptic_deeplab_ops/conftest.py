@@ -10,22 +10,25 @@ data* instead of parameter names, because every test here takes a single ``case`
 dict:
 
   * non-(1, 1) mesh                                     -> not emulator
-  * primary input (arg 0) taller than ``_EMU_MAX_ROWS``
-    rows, i.e. a prefill-sized activation                -> not emulator
+  * primary input (arg 0) with more than
+    ``_EMU_MAX_ELEMS`` elements                          -> not emulator
   * total footprint of all inputs over
     ``_EMU_MAX_INPUT_BYTES``                             -> not emulator
   * any L1-sharded input whose captured grid needs more
     than ``_EMU_MAX_CORES`` cores                        -> not emulator
 
-Note the row cap deliberately applies to the *activation* only: a matmul weight or a
-paged KV cache is legitimately tall, and judging it by row count would drop every
+Note the element cap deliberately applies to the *activation* only: a matmul weight or a
+paged KV cache is legitimately tall, and judging it by size would drop every
 ``linear`` and cache case. That is arg 0 for most ops, but arg 1 for the paged-cache
 ops, whose arg 0 is the cache (see ``_PRIMARY_ARG``), the ``input_tensor``
 keyword for the sliding-window ops (conv2d, the pools, upsample), which this model
 calls entirely by keyword, and the first operand of a tensor list (``concat``). Bulk is handled by the footprint rule instead.
 
-Panoptic-DeepLab runs at 512x1024, so nearly every activation it captured is far
-over the row cap; the emulator subset is correspondingly small (see README.md).
+The cap is the VAD-variant suite's (``tests/vad_variant_ops/op_utils.py``: a 48x48x256
+feature map), not the LLM suites' 128-row cap. A row cap suits a [tokens, hidden]
+activation; a CNN's NHWC activation has H*W rows, so 128 rows is smaller than a 12x12
+feature map. Panoptic-DeepLab runs at 512x1024, so most activations are still far over
+the cap (see README.md).
 
 These are collection-time estimates, and every case remains runnable without
 ``-m emulator``. The authoritative check happens at run time in
@@ -37,7 +40,7 @@ does not fit the device actually under test.
 
 import pytest
 
-_EMU_MAX_ROWS = 128
+_EMU_MAX_ELEMS = 48 * 48 * 256
 # 2 nodes x (1x2 worth of usable compute cores) — deliberately conservative; the
 # run-time gate in graph_case is the real one.
 _EMU_MAX_CORES = 8
@@ -56,18 +59,15 @@ _ELEM_BYTES = {
 }
 
 
-def _rows_of(shape) -> int:
-    rows = 1
-    for d in shape[:-1]:
-        rows *= d
-    return rows
+def _elems_of(shape) -> int:
+    n = 1
+    for d in shape:
+        n *= d
+    return n
 
 
 def _bytes_of(spec) -> float:
-    numel = 1
-    for d in spec["shape"]:
-        numel *= d
-    return numel * _ELEM_BYTES.get(spec["dtype"], 2)
+    return _elems_of(spec["shape"]) * _ELEM_BYTES.get(spec["dtype"], 2)
 
 
 def _cores_of(shard) -> int:
@@ -122,7 +122,7 @@ def _fits_emulator(item) -> bool:
         return True
 
     primary = _primary_input(case)
-    if primary is not None and _rows_of(primary["shape"]) > _EMU_MAX_ROWS:
+    if primary is not None and _elems_of(primary["shape"]) > _EMU_MAX_ELEMS:
         return False
 
     total_bytes = 0.0
