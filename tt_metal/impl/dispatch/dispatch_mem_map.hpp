@@ -52,7 +52,7 @@ public:
     // Only enabled on the RTL simulator so far, so ttsim and silicon poll uncached.
     bool prefetch_q_cached() const;
 
-    // DM core cache line size. The cached fetch queue must cover whole lines.
+    // DM core cache line size. No line of the cached fetch queue may hold other data.
     static constexpr uint32_t PREFETCH_Q_CACHE_LINE_BYTES = 64;
 
     uint32_t prefetch_q_size() const;

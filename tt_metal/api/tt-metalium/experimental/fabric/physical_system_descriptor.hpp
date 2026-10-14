@@ -17,6 +17,7 @@
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/physical_node_id.hpp>
 #include <umd/device/utils/semver.hpp>
 
 namespace YAML {
@@ -55,7 +56,12 @@ struct ASICDescriptor {
     BoardType board_type = BoardType::UNKNOWN;
     AsicID unique_id;
     ChipId umd_unique_id;
+    // Machine name, with no rank suffix. Ranks that share a machine have the same host_name.
     std::string host_name;
+    experimental::PhysicalNodeId physical_node_id;
+    // MPI rank that discovered this chip. This, not the hostname, separates ranks on one machine.
+    // No default: a caller has to pass the rank. 0 is a real rank.
+    uint32_t mpi_rank;
 };
 
 // Specify an ethernet connection between two ASICs
@@ -142,7 +148,7 @@ using HostTopology = std::unordered_map<std::string, std::vector<HostConnectionE
 // Graph representing connectivity of ASICs (detailed representation) and
 // Compute Nodes/Hosts (low resolution representation).
 struct PhysicalConnectivityGraph {
-    // Track the ASIC Topology per host.
+    // ASIC topology per hostname. Ranks that share a machine share this name.
     std::unordered_map<std::string, AsicTopology> asic_connectivity_graph;
     // Track the Host Topology across the distributed system.
     HostTopology host_connectivity_graph;
@@ -176,9 +182,13 @@ public:
     void clear();
     void merge(PhysicalSystemDescriptor&& other);
 
+    // Records one ASIC under its address. Recording the same AsicID again replaces that chip.
+    // Fatal when a different ASIC already occupies the address: the two would be one solver node.
+    void add_asic_descriptor(AsicID asic_id, ASICDescriptor descriptor);
+
     // Discovery setter interface - allows discovery functions to set internal state
     // without requiring friend declarations with MPI types in public header
-    void set_discovery_data(const std::string& local_hostname, uint32_t local_rank, bool all_hostnames_unique);
+    void set_discovery_data(const std::string& local_hostname, uint32_t local_rank, bool all_hostnames_unique = false);
 
     // ASIC Topology Query APIs
     std::vector<AsicID> get_asic_neighbors(AsicID asic_id) const;
@@ -191,8 +201,16 @@ public:
     ASICLocation get_asic_location(AsicID asic_id) const;
     ChipId get_umd_unique_id(AsicID asic_id) const;
     std::vector<AsicID> get_asics_connected_to_host(const std::string& hostname) const;
+    // Chips whose recorded MPI rank is mpi_rank. Several ranks may share one hostname.
+    std::vector<AsicID> get_asics_for_mpi_rank(uint32_t mpi_rank) const;
     std::pair<AsicID, uint8_t> get_connected_asic_and_channel(AsicID asic_id, uint8_t chan_id) const;
     AsicID get_asic_id(const std::string& hostname, TrayID tray_id, ASICLocation asic_location) const;
+    // The descriptor's own label for an address, and the reverse. find_* is empty when this
+    // descriptor does not have that chip; get_* is fatal in that case.
+    std::optional<AsicID> find_asic_id(const experimental::PhysicalNodeId& node_id) const;
+    AsicID get_asic_id(const experimental::PhysicalNodeId& node_id) const;
+    std::optional<experimental::PhysicalNodeId> find_physical_node_id(AsicID asic_id) const;
+    const std::unordered_map<experimental::PhysicalNodeId, AsicID>& physical_node_to_asic_id() const { return node_id_to_asic_id_; }
 
     // Host Topology Query APIs
     std::vector<std::string> get_host_neighbors(const std::string& hostname) const;
@@ -200,12 +218,16 @@ public:
         const std::string& src_host, const std::string& dst_host) const;
     const HostTopology& get_host_topology() const;
     std::string get_host_name_for_asic(AsicID asic_id) const;
+    uint32_t get_mpi_rank_for_asic(AsicID asic_id) const;
+    experimental::PhysicalNodeId get_physical_node_id(AsicID asic_id) const;
     UID get_u_id(const std::string& hostname);
     RackID get_rack_id(const std::string& hostname);
     AisleID get_aisle_id(const std::string& hostname);
     HallID get_hall_id(const std::string& hostname);
     std::vector<std::string> get_all_hostnames() const;
     std::string my_host_name() const;
+    // MPI rank of the process that built this descriptor.
+    uint32_t get_local_mpi_rank() const { return local_rank_; }
     uint32_t get_rank_for_hostname(const std::string& host_name) const;
     std::string get_hostname_for_rank(uint32_t rank) const;
     bool is_cross_host_eth_link(AsicID asic_id, uint8_t chan_id) const;
@@ -258,10 +280,12 @@ private:
     tt::TargetDevice target_device_type_;
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;
+    // Address -> this descriptor's ASIC label. Filled by add_asic_descriptor.
+    std::unordered_map<experimental::PhysicalNodeId, AsicID> node_id_to_asic_id_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;
     std::unordered_map<std::string, uint32_t> host_to_rank_;
     ExitNodeConnectionTable exit_node_connection_table_;
-    bool all_hostnames_unique_ = true;
+    bool all_hostnames_unique_ = false;
     tt::umd::SemVer ethernet_firmware_version_;
     std::optional<tt::umd::FirmwareBundleVersion> firmware_bundle_version_;
     std::unordered_map<std::string, std::unordered_map<uint32_t, std::unordered_set<uint32_t>>> pcie_devices_per_tray_;
@@ -269,9 +293,60 @@ private:
 
     bool is_bh_galaxy_rev_c_ = false;
 
-    // Local hostname and rank set by discovery (for my_host_name())
+    // Cluster id and MPI rank recorded at discovery. The cluster id is the UMD one.
     std::string local_hostname_;
     uint32_t local_rank_ = 0;
 };
 
 }  // namespace tt::tt_metal
+
+// Experimental: the delta API below is subject to change without notice; it graduates to the stable
+// tt::tt_metal namespace only when the downed-links / factory-descriptor work settles.
+namespace tt::tt_metal::experimental {
+
+// How a candidate descriptor departs from a golden one.
+//
+// The link maps are shaped like the descriptor's own AsicTopology so a caller can walk a delta the
+// same way it walks a descriptor, but they are flat across hosts: a cable is not a property of one
+// host, and a cross-host cable would otherwise have to be filed under an arbitrary one of its two
+// ends. Each cable appears as both of its directed representations, because callers key on the
+// source end and need to see the link from either side.
+//
+// AsicIDs here are labels for reporting, never the join -- see diff_physical_system_descriptors.
+// They come from golden where the ASIC exists there, and from candidate otherwise.
+struct PhysicalSystemDelta {
+    // Addresses golden has and candidate does not, and vice versa.
+    std::vector<AsicID> missing_asics;
+    std::vector<AsicID> extra_asics;
+    // An ASIC at the same address in both, described differently (board type).
+    std::vector<AsicID> mismatched_asics;
+
+    AsicTopology missing_links;
+    AsicTopology extra_links;
+    // The same cable between the same two channels, but disagreeing on port type or locality.
+    // Reported here rather than as a missing/extra pair, so a re-typed cable is not read as a
+    // pulled one.
+    AsicTopology mismatched_links;
+
+    bool matches() const {
+        return missing_asics.empty() && extra_asics.empty() && mismatched_asics.empty() && missing_links.empty() &&
+               extra_links.empty() && mismatched_links.empty();
+    }
+};
+
+// Compare two descriptors by physical position, not by ASIC label.
+//
+// An ASIC is identified by its address (cluster_id, tray, loc) and a cable endpoint by that address
+// plus a channel, so two descriptors whose AsicID spaces are entirely disjoint still match when
+// they describe the same hardware. That is the point: a descriptor built from a factory system
+// descriptor labels its ASICs 1..N in file order, while a discovered one labels them with UMD chip
+// unique ids, and neither label means anything to the other.
+//
+// Cables are joined undirected, so the two directed halves of one cable are one comparison.
+// Only the ASIC graph is compared; the host graph is a lower-resolution view of the same cables.
+//
+// Fatal if either descriptor has two ASICs at one address, since then the join is ambiguous.
+PhysicalSystemDelta diff_physical_system_descriptors(
+    const PhysicalSystemDescriptor& golden, const PhysicalSystemDescriptor& candidate);
+
+}  // namespace tt::tt_metal::experimental
