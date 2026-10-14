@@ -38,7 +38,7 @@ import struct
 
 import pytest
 import torch
-from conftest import skip_for_quasar
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
@@ -722,6 +722,7 @@ def test_generalized_moe_gate_ties():
 # The ttnn op's Blackhole route for one ungrouped block (generalized_moe_gate<..., sfpu_sort>): the SFPU-only generic
 # sort replaces the merge tree, and the finalize tail and step2 are shared. On distinct keys both sorts return the same
 # descending top-8, so the answer is the same bit for bit, through either front end.
+@skip_for_wormhole
 @parametrize(topk=[4, 6, 8], softmax=[False, True], sigmoid=[False, True])
 def test_generalized_moe_gate_sfpu_sort(topk, softmax, sigmoid):
     ids = _ids_face()
@@ -759,6 +760,7 @@ def test_generalized_moe_gate_sfpu_sort(topk, softmax, sigmoid):
 
 # Ties: which tied expert wins is not in the contract (the two sorts break ties differently), the eight largest keys,
 # distinct ids and weights that normalize the selected payload are.
+@skip_for_wormhole
 def test_generalized_moe_gate_sfpu_sort_ties():
     generator = torch.Generator().manual_seed(5)
     key = torch.randint(0, 22, (256,), generator=generator).to(torch.float32) / 4.0
