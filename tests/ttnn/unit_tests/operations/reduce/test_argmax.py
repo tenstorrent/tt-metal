@@ -575,6 +575,7 @@ def _from_bits(patterns, dtype):
     return torch.tensor(signed, dtype=torch.int32).view(torch.float32)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize(
     "layout, dim",
@@ -612,6 +613,7 @@ def test_argmax_nan_and_signed_zero_matches_torch(device, values, dtype, layout,
     assert_equal(torch.argmax(t, dim=dim), got.to(torch.int32))
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("early, late", [(16, 64), (32, 64)])
 @pytest.mark.parametrize("base, lo, hi", [("1.0", "-nan", "+nan"), ("-1.0", "-0", "+0")])
