@@ -18,12 +18,14 @@ for mode in nc wc; do
   flag=""; [[ $mode == wc ]] && flag=--dump-perf-counters
   RUNNER_TEMP=$HOME/b_$mode TMPDIR=$HOME/b_$mode timeout -s INT -k 60 1500 python -m pytest --compile-producer -n 8 -p no:cacheprovider -q $flag "${NN[@]}" > /tmp/b_$mode.txt 2>&1
   echo "== build $mode rc=$? $(grep -aE '[0-9]+ (passed|failed|error|skipped)' /tmp/b_$mode.txt | tail -1)"
+  tail -15 /tmp/b_$mode.txt | cut -c1-300
   reps="1 2"; [[ $mode == wc ]] && reps="1"
   for rep in $reps; do
     tag=${mode}_$rep
     RUNNER_TEMP=$HOME/b_$mode TMPDIR=$HOME/b_$mode PERF_RUN_TAG=$tag timeout -s INT -k 60 1500 python -m pytest --compile-consumer -p no:cacheprovider -q -rfE $flag "${NN[@]}" > /tmp/r_$tag.txt 2>&1
     echo "== run $tag rc=$? $(grep -aE '[0-9]+ (passed|failed)' /tmp/r_$tag.txt | tail -1)"
     grep -a -m5 -E "^FAILED|^ERROR" /tmp/r_$tag.txt | cut -c1-240
+    grep -aq passed /tmp/r_$tag.txt || tail -60 /tmp/r_$tag.txt | cut -c1-300
     for f in $(find $LLK_HOME/perf_data/runs/$tag -name "*.csv" 2>/dev/null | grep -v -e post -e counters); do echo "== csv $tag $(basename $f)"; cat "$f"; echo "== end csv"; done
     for f in $(find $LLK_HOME/perf_data/runs/$tag -name "*.counters.csv" 2>/dev/null); do echo "== ccsv $tag $(basename $f)"; python $S/cfilter.py "$f"; echo "== end ccsv"; done
   done
