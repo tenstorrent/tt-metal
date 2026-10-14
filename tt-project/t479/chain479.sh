@@ -18,10 +18,12 @@ log "collect: $(echo "$col" | tr '\n' '|')"
 echo "$col" | grep -q '1/[0-9]* tests\? collected\|^1 test collected' || exit 15
 run() {
   local spec=$1 out id t
+  # ADOPT=<job id>: wait on a job a killed chain already submitted instead of submitting again
+  if [ -n "${ADOPT:-}" ]; then out="job=$ADOPT"; ADOPT=; else
   for t in $(seq 40); do
     if out=$($SUB $spec 2>&1); then break; fi
     log "submit $spec refused (try $t): $(echo "$out" | tail -2 | tr '\n' ' ')"; out=; sleep 300
-  done
+  done; fi
   id=$(echo "$out" | sed -n 's/^job=//p'); [ -n "$id" ] || return 11
   log "$spec -> blx01 job $id"
   while :; do
