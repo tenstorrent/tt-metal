@@ -38,20 +38,105 @@ def _pcc(expected: torch.Tensor, actual: torch.Tensor) -> float:
     return float(torch.dot(expected_centered, actual_centered) / denominator)
 
 
-def _relative_rmse(expected: torch.Tensor, actual: torch.Tensor) -> float:
-    """RMS error as a fraction of the signal's own RMS.
+NRMSE_FLOOR_FRACTION = 0.01
 
-    PCC is a correlation, so it is dominated by the bulk of a tensor and can stay
-    above 0.999 while a small region is badly wrong -- eleven wrong rows in 1280
-    passed a PCC gate here. Relative RMSE grows with the error's total energy, so
-    it registers a localised fault that PCC averages away, and being normalised it
-    needs no per-tensor threshold.
-    """
-    if not expected.numel():
+
+def _as_float64(name: str, tensor: torch.Tensor) -> torch.Tensor:
+    tensor = tensor.detach().to(torch.float64)
+    if not torch.isfinite(tensor).all():
+        raise ValueError(f"{name} has {int((~torch.isfinite(tensor)).sum())} non-finite values")
+    return tensor
+
+
+def golden_floor(slice_norms: torch.Tensor) -> float:
+    """NRMSE denominator floor for a golden whose slices have these norms: 1% of their median."""
+    if slice_norms.numel() <= 1:
         return 0.0
-    difference = (expected.float() - actual.float()).pow(2).mean().sqrt()
-    scale = expected.float().pow(2).mean().sqrt()
-    return float(difference / scale) if float(scale) > 0 else float(difference)
+    return NRMSE_FLOOR_FRACTION * float(slice_norms.to(torch.float64).median())
+
+
+def nrmse(
+    expected: torch.Tensor,
+    actual: torch.Tensor,
+    keep_dims: Sequence[int] = (),
+    floor: float | None = None,
+) -> torch.Tensor:
+    """Normalized RMS error ``‖actual − expected‖₂ / ‖expected‖₂`` in FP64, one value per kept slice.
+
+    PCC is a correlation: it stays near 1 when a tensor is uniformly scaled and averages a small
+    wrong region away, while NRMSE grows with the error's energy and sees both. It reduces over every
+    dimension except ``keep_dims`` (``()`` gives one whole-tensor value), so one bad head or token is
+    not averaged away. A slice whose expected norm is near zero would report its own magnitude, so each
+    denominator is floored at ``floor``; by default ``golden_floor`` of this tensor's slices, which is
+    right when ``expected`` is the whole golden. Score a window of a longer golden with the whole
+    golden's floor, so a slice scores the same in any window. A slice with zero expected norm and no
+    floor is 0 when it matches exactly and inf otherwise.
+    """
+    if expected.shape != actual.shape:
+        raise ValueError(f"actual shape {tuple(actual.shape)} != expected shape {tuple(expected.shape)}")
+    expected = _as_float64("expected", expected)
+    actual = _as_float64("actual", actual)
+    keep = sorted(dim % expected.ndim for dim in keep_dims) if expected.ndim else []
+    reduce = tuple(dim for dim in range(expected.ndim) if dim not in keep)
+    error = (actual - expected).square().sum(dim=reduce).sqrt()
+    norm = expected.square().sum(dim=reduce).sqrt()
+    floor = golden_floor(norm) if floor is None else floor
+    denominator = norm.clamp_min(floor)
+    return torch.where(error == 0, torch.zeros_like(error), error / denominator)
+
+
+class TokenErrorAccumulator:
+    """NRMSE of a long ``[tokens, hidden]`` sequence streamed in consecutive chunks.
+
+    Keeps each token's squared error and squared expected norm (16 bytes per token), from which the
+    whole-run, window and per-token NRMSE equal ``nrmse`` on the concatenated rows.
+    """
+
+    def __init__(self) -> None:
+        self._error_squared: list[torch.Tensor] = []
+        self._expected_squared: list[torch.Tensor] = []
+
+    def update(self, expected: torch.Tensor, actual: torch.Tensor) -> None:
+        if expected.shape != actual.shape or expected.ndim != 2:
+            raise ValueError(
+                f"expected matching [tokens, hidden] chunks, got {tuple(expected.shape)} and {tuple(actual.shape)}"
+            )
+        expected = _as_float64("expected", expected)
+        actual = _as_float64("actual", actual)
+        self._error_squared.append((actual - expected).square().sum(-1))
+        self._expected_squared.append(expected.square().sum(-1))
+
+    def _sums(self) -> tuple[torch.Tensor, torch.Tensor]:
+        if not self._error_squared:
+            raise ValueError("no tokens accumulated")
+        return torch.cat(self._error_squared), torch.cat(self._expected_squared)
+
+    @property
+    def tokens(self) -> int:
+        return sum(chunk.numel() for chunk in self._error_squared)
+
+    def expected_norms(self) -> torch.Tensor:
+        return self._sums()[1].sqrt()
+
+    def nrmse(self) -> float:
+        error, expected = self._sums()
+        return float((error.sum() / expected.sum()).sqrt())
+
+    def window_nrmse(self, window: int) -> torch.Tensor:
+        """NRMSE of consecutive ``window``-token windows; the last may be partial."""
+        error, expected = self._sums()
+        return torch.stack(
+            [
+                (error[start : start + window].sum() / expected[start : start + window].sum()).sqrt()
+                for start in range(0, error.numel(), window)
+            ]
+        )
+
+    def token_nrmse(self, floor: float) -> torch.Tensor:
+        """Per-token NRMSE with the whole golden's ``floor``."""
+        error, expected = self._sums()
+        error = error.sqrt()
+        return torch.where(error == 0, torch.zeros_like(error), error / expected.sqrt().clamp_min(floor))
 
 
 def assert_accurate(
@@ -92,7 +177,7 @@ def assert_accurate(
         raise AssertionError("\n".join(failures))
 
     pcc = _pcc(expected, actual)
-    rmse = _relative_rmse(expected, actual)
+    rmse = float(nrmse(expected, actual)) if expected.numel() else 0.0
     max_abs = float((expected.float() - actual.float()).abs().max()) if expected.numel() else 0.0
     scale = float(expected.float().pow(2).mean().sqrt()) if expected.numel() else 0.0
     linf = max_abs / scale if scale > 0 else max_abs

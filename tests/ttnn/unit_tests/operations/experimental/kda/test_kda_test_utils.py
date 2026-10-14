@@ -6,6 +6,9 @@ import torch
 import ttnn
 
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    TokenErrorAccumulator,
+    golden_floor,
+    nrmse,
     assert_accurate,
     assert_bit_identical,
     assert_equal,
@@ -217,3 +220,84 @@ def test_offset_peak_gate_detects_local_carry_fault(expect_error) -> None:
     assert_accurate(expected, actual, pcc_threshold=0.999, rmse_threshold=0.05)
     with expect_error(AssertionError, "relative L-inf"):
         assert_accurate(expected, actual, pcc_threshold=0.999, rmse_threshold=0.05, linf_threshold=0.25)
+
+
+def test_nrmse_is_error_norm_over_expected_norm() -> None:
+    expected = torch.tensor([3.0, 4.0])  # norm 5
+    actual = torch.tensor([3.0, 5.0])  # error norm 1
+    assert nrmse(expected, actual).item() == pytest.approx(0.2, rel=1e-15)
+
+
+def test_nrmse_sees_a_uniform_scale_error_that_pcc_does_not() -> None:
+    expected = torch.linspace(-1.0, 1.0, 64)
+    actual = expected * 0.95
+    assert assert_accurate(expected, actual, pcc_threshold=0.999999) == pytest.approx(1.0, abs=1e-12)
+    assert nrmse(expected, actual).item() == pytest.approx(0.05, rel=1e-6)
+
+
+def test_nrmse_is_reported_per_kept_slice() -> None:
+    expected = torch.tensor([[3.0, 4.0], [6.0, 8.0]])  # row norms 5, 10
+    actual = expected + torch.tensor([[0.0, 1.0], [0.0, 1.0]])
+    torch.testing.assert_close(
+        nrmse(expected, actual, keep_dims=(0,)), torch.tensor([0.2, 0.1], dtype=torch.float64), rtol=1e-15, atol=0
+    )
+
+
+def test_nrmse_floor_belongs_to_the_whole_golden() -> None:
+    expected = torch.tensor([[3.0, 4.0], [0.0, 0.0], [6.0, 8.0], [30.0, 40.0]], dtype=torch.float64)  # 5, 0, 10, 50
+    actual = expected + torch.tensor([[0.0, 0.0], [0.0, 0.01], [0.0, 0.0], [0.0, 0.0]], dtype=torch.float64)
+    floor = golden_floor(expected.norm(dim=1))
+    assert floor == pytest.approx(0.05, rel=1e-15)  # 1% of the lower median, 5
+
+    whole = nrmse(expected, actual, keep_dims=(0,))
+    window = nrmse(expected[1:], actual[1:], keep_dims=(0,), floor=floor)
+
+    assert whole[1].item() == window[0].item() == pytest.approx(0.2, rel=1e-12)
+    assert whole[0].item() == whole[2].item() == whole[3].item() == 0.0
+    # The window's own floor (1% of median(0, 10, 50) = 0.1) would have scored the same token 0.1.
+    assert nrmse(expected[1:], actual[1:], keep_dims=(0,))[0].item() == pytest.approx(0.1, rel=1e-12)
+
+
+def test_nrmse_of_an_all_zero_golden_is_zero_only_when_exact() -> None:
+    assert nrmse(torch.zeros(4), torch.zeros(4)).item() == 0.0
+    assert nrmse(torch.zeros(4), torch.full((4,), 1e-6)).item() == float("inf")
+
+
+def test_nrmse_arithmetic_is_float64() -> None:
+    expected = torch.tensor([1.0], dtype=torch.float32)
+    actual = torch.tensor([1.0 + 2**-23], dtype=torch.float32)  # one FP32 ulp above 1
+    assert nrmse(expected, actual).item() == 2**-23
+
+
+def test_nrmse_rejects_non_finite_and_mismatched_shapes(expect_error) -> None:
+    with expect_error(ValueError, "1 non-finite"):
+        nrmse(torch.tensor([1.0, 1.0]), torch.tensor([1.0, float("nan")]))
+    with expect_error(ValueError, "shape"):
+        nrmse(torch.zeros(2, 3), torch.zeros(3, 2))
+
+
+def test_streamed_token_errors_equal_the_batch_nrmse() -> None:
+    generator = torch.Generator().manual_seed(0)
+    expected = torch.randn(23, 6, generator=generator, dtype=torch.float64)
+    expected[7] *= 1e-4  # one near-silent token, so the floor matters
+    actual = expected + 1e-3 * torch.randn(23, 6, generator=generator, dtype=torch.float64)
+    accumulator = TokenErrorAccumulator()
+    for start, end in ((0, 5), (5, 6), (6, 17), (17, 23)):  # chunk edges off the 4-token window grid
+        accumulator.update(expected[start:end], actual[start:end])
+    floor = golden_floor(accumulator.expected_norms())
+
+    assert accumulator.tokens == 23
+    assert accumulator.nrmse() == pytest.approx(nrmse(expected, actual).item(), rel=1e-14)
+    windows = [nrmse(expected[i : i + 4], actual[i : i + 4]).item() for i in range(0, 23, 4)]
+    assert accumulator.window_nrmse(4).tolist() == pytest.approx(windows, rel=1e-14)
+    torch.testing.assert_close(
+        accumulator.token_nrmse(floor), nrmse(expected, actual, keep_dims=(0,)), rtol=1e-14, atol=0
+    )
+
+
+def test_token_error_accumulator_rejects_mismatched_chunks_and_empty_reads(expect_error) -> None:
+    accumulator = TokenErrorAccumulator()
+    with expect_error(ValueError, "no tokens"):
+        accumulator.nrmse()
+    with expect_error(ValueError, "matching"):
+        accumulator.update(torch.zeros(2, 3), torch.zeros(3, 2))
