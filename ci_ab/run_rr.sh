@@ -34,6 +34,11 @@ run() { # variant round cases [extra tracy args]
   echo "   run $k $v rc=$? $(grep -c 'CASE .* ok' $O.log) ok, elfset $(elfs) $(date -u +%T)"; grep -a "FAILED\|Error\|error:" $O.log | head -3
   python3 $S/tools/parse_rr.py $O "r$k $v"
 }
+for v in P H3 H4; do use $v; mkdir -p $OUT/bits_$v
+  python3 $S/tools/exh_rr.py $OUT/bits_$v/all.json > $OUT/bits_$v.log 2>&1
+  echo "== bits $v rc=$? $(tail -1 $OUT/bits_$v.log) elfset $(elfs) $(date -u +%T)"; grep -a "Error\|error:" $OUT/bits_$v.log | head -3
+done
+for v in H3 H4; do echo "== compare P against $v"; python3 $S/tools/cmp_json.py $OUT/bits_P $OUT/bits_$v; done
 k=0
 for pr in "P L" "P H3" "P H4" "P P_aa"; do
   set -- $pr

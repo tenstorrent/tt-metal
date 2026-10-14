@@ -5,7 +5,10 @@
 import gc, os, sys
 import torch
 import ttnn
-from tracy import signpost
+try:
+    from tracy import signpost
+except ImportError:
+    signpost = None
 
 N_WARM, N_MEAS = 2, int(os.environ.get("R3_NMEAS", "6"))
 
