@@ -135,8 +135,8 @@ void ProfilerRegistry::attach(ProfilerStateManager& profiler_state_manager) {
     std::lock_guard<std::mutex> lock(mutex_);
     TT_FATAL(
         attached_.empty(),
-        "The device profiler supports only one profiled MetalContext per process; context {} is already profiled",
-        attached_.front()->ctx_.get_context_id());
+        "The device profiler supports only one profiled MetalContext per process; another context is already "
+        "attached");
     attached_.push_back(&profiler_state_manager);
 }
 
