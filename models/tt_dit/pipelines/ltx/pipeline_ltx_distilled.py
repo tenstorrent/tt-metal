@@ -19,6 +19,7 @@ import ttnn
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
 from ...models.vae.vae_ltx import upsample_latent
+from ...parallel.config import VaeHWParallelConfig
 from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
@@ -36,6 +37,25 @@ STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
 # corrupted latent. These are log warnings, not request rejections -- a false positive is
 # cheap, a missed corruption costs us the next occurrence.
 WHITENESS_WARN_THRESHOLD = 0.85
+
+
+def yuv_layout_supported(vae_parallel_config: VaeHWParallelConfig) -> bool:
+    """fast_device_to_host_yuv assembles H from mesh axis 0 and W from mesh axis 1."""
+    h, w = vae_parallel_config.height_parallel, vae_parallel_config.width_parallel
+    return (h.factor == 1 or h.mesh_axis == 0) and (w.factor == 1 or w.mesh_axis == 1)
+
+
+def yuv_export_enabled(
+    output_path: str | None, env_value: str | None, vae_parallel_config: VaeHWParallelConfig, distributed: bool
+) -> bool:
+    """Whether the mp4 export converts to YUV 4:2:0 on device; ``env_value`` is LTX_YUV_EXPORT.
+
+    On by default; '0' opts out. Multi-host runs take it only when asked for ('1'), as no LTX run
+    has validated its inter-host gather. Unsupported VAE layouts always read back float.
+    """
+    if output_path is None or env_value == "0" or not yuv_layout_supported(vae_parallel_config):
+        return False
+    return env_value is not None or not distributed
 
 
 @dataclass
@@ -792,8 +812,15 @@ class LTXDistilledPipeline(LTXPipeline):
             logger.info(f"VAE prepare: {time.time() - t0:.1f}s")
 
         latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
-        # LTX_YUV_EXPORT routes the mp4 path through the on-device YUV 4:2:0 fast gather
-        yuv_export = output_path is not None and os.environ.get("LTX_YUV_EXPORT", "0") != "0"
+        yuv_env = os.environ.get("LTX_YUV_EXPORT")
+        yuv_export = yuv_export_enabled(output_path, yuv_env, self.vae_parallel_config, ttnn.using_distributed_env())
+        yuv_asked = output_path is not None and yuv_env not in (None, "0")
+        if yuv_asked and not yuv_export and not getattr(self, "_yuv_fallback_logged", False):
+            self._yuv_fallback_logged = True
+            logger.warning(
+                f"LTX_YUV_EXPORT={yuv_env} ignored, reading back float: the YUV readback needs VAE H on mesh "
+                f"axis 0 and W on axis 1, got {self.vae_parallel_config}"
+            )
         # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
         decode_type = ("yuv" if yuv_export else "float") if output_path is not None else output_type
         t0 = time.time()

@@ -14,10 +14,45 @@ from loguru import logger
 
 import ttnn
 
+from ....parallel.config import ParallelFactor, VaeHWParallelConfig
+from ....pipelines.ltx.pipeline_ltx_distilled import yuv_export_enabled
 from ....utils.yuv_d2h import fast_device_to_host_yuv
 
 MESH_4X8 = [pytest.param((4, 8), {}, id="4x8")]
 WIDE_ROWS_MAX_T = 32
+
+
+def _vae_config(mesh_shape, sp_axis, tp_axis):
+    """The VAE layout LTXPipeline.create_pipeline builds: H on the tp axis, W on the sp axis."""
+    return VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=mesh_shape[tp_axis], mesh_axis=tp_axis),
+        width_parallel=ParallelFactor(factor=mesh_shape[sp_axis], mesh_axis=sp_axis),
+    )
+
+
+SP1TP0_4X8 = _vae_config((4, 8), sp_axis=1, tp_axis=0)
+
+
+@pytest.mark.parametrize(
+    ("output_path", "env_value", "vae_config", "distributed", "expected"),
+    [
+        pytest.param("out.mp4", None, SP1TP0_4X8, False, True, id="default_on"),
+        pytest.param("out.mp4", "1", SP1TP0_4X8, False, True, id="env_1_on"),
+        pytest.param("out.mp4", "0", SP1TP0_4X8, False, False, id="env_0_off"),
+        pytest.param(None, None, SP1TP0_4X8, False, False, id="no_output_path_off"),
+        pytest.param(None, "1", SP1TP0_4X8, False, False, id="no_output_path_env_1_off"),
+        pytest.param("out.mp4", None, _vae_config((2, 2), 0, 1), False, False, id="2x2sp0tp1_off"),
+        pytest.param("out.mp4", None, _vae_config((2, 4), 0, 1), False, False, id="2x4sp0tp1_off"),
+        pytest.param("out.mp4", "1", _vae_config((2, 4), 0, 1), False, False, id="2x4sp0tp1_env_1_off"),
+        pytest.param("out.mp4", None, _vae_config((2, 4), 1, 0), False, True, id="2x4sp1tp0_on"),
+        pytest.param("out.mp4", None, _vae_config((1, 1), 0, 1), False, True, id="1x1sp0tp1_on"),
+        pytest.param("out.mp4", None, _vae_config((1, 4), 0, 1), False, False, id="1x4sp0tp1_off"),
+        pytest.param("out.mp4", None, _vae_config((4, 32), 1, 0), True, False, id="multi_host_default_off"),
+        pytest.param("out.mp4", "1", _vae_config((4, 32), 1, 0), True, True, id="multi_host_env_1_on"),
+    ],
+)
+def test_yuv_export_gate(output_path, env_value, vae_config, distributed, expected):
+    assert yuv_export_enabled(output_path, env_value, vae_config, distributed) is expected
 
 
 def _timed(mesh_device, fn, n=3):
