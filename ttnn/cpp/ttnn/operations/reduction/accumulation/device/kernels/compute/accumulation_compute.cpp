@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: Â© 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,8 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/isinf_isnan.h"
+#include "api/compute/eltwise_unary/where.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
@@ -130,6 +132,25 @@ void kernel_main() {
             add_binary_tile(DST_ACC, DST_IN, DST_T);      // t = acc + y
             sub_binary_tile(DST_T, DST_ACC, DST_COMP);    // (t - acc)
             sub_binary_tile(DST_COMP, DST_IN, DST_COMP);  // c = (t - acc) - y
+            // Non-finite guard (#58986). The compensation term is only valid while the new
+            // running total t is finite: once t becomes +inf/-inf (an inf input, or a
+            // finite-input overflow) the term degrades to inf - inf = NaN (or +/-inf), and that
+            // NaN then poisons every later scan element through y = in - c. IEEE/PyTorch
+            // semantics keep t pinned at +/-inf through subsequent finite adds, i.e. the
+            // compensation term must be 0.0f from then on. Select it branchlessly:
+            // c = isfinite(t) ? c : 0.0f. For finite t the mask is exactly 1.0f, so the
+            // compensated path is bit-identical to before. Register use: DST_IN (y) and DST_ACC
+            // (acc) are dead after the Kahan step; DST_T (t) and DST_COMP (c) must survive for
+            // packing below, so t is copied through +0.0f into the dead y register first.
+            // Cost: eight SFPU ops per tile instead of four (Kahan's sub/add/sub/sub, plus
+            // fill/add/isfinite/where for the guard).
+            fill_tile_init();
+            FILL_TILE(DST_ACC, 0u);                   // scratch zero (acc dead past this point)
+            add_binary_tile(DST_T, DST_ACC, DST_IN);  // DST_IN = t + 0.0f (copy; y dead)
+            isfinite_tile_init();
+            isfinite_tile(DST_IN);                    // DST_IN = 1.0f iff t finite, else 0.0f
+            where_tile_init();
+            where_tile<DataFormat::Float32>(DST_IN, DST_COMP, DST_ACC, DST_COMP);  // c = mask ? c : 0.0f
             constexpr uint32_t DST_RESULT = DST_T;
             dfb_comp_obj.pop_front(ONE_TILE);
 #else
