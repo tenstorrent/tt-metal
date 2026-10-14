@@ -3,6 +3,7 @@
 
 import pytest
 import test_eltwise_binary_sfpu as _func
+from conftest import skip_for_quasar
 from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
 from helpers.param_config import parametrize
@@ -99,16 +100,9 @@ def test_perf_eltwise_binary_sfpu_float(
 
 
 @pytest.mark.perf
+@skip_for_quasar
 @parametrize(
-    formats=[
-        _func.InputOutputFormat(
-            _func.DataFormat.Float16_b,
-            _func.DataFormat.Float16_b,
-            _func.DataFormat.Bfp8_b,
-        )
-    ],
-    mathop=[MathOperation.SfpuElwadd],
-    dest_acc=[DestAccumulation.No],
+    **_func.MIXED_FORMAT_SWEEP,
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_mixed_format(
