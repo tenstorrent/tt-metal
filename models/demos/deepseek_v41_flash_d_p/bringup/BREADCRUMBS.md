@@ -53,3 +53,30 @@ its own state); now hidden pcc 1.0, state min pcc 1.0, graph replay max abs 0 fo
 path (R.2 parity) is unaffected by that fix; the gate was re-run after it.
 Next steps should know: the reference holds 25 layers' dense weights in fp32 (~18 GB) and reads experts per chunk
 (8 prefetch threads); 4096 tokens through layers 0-24 take ~7 min on this host.
+
+## SC.1 serving contract (attempt 1)
+
+What: `bringup/serving_contract.md` (tt-d-gen @ a286b622 main; disagg_lb @ e001a53c, which pins tt-d-gen ba4c33e3
+with chunk_aligned_start), `bringup/contract_tests.yaml`, tests in `tests/bringup/contract/`.
+Decisions:
+- Served caches (DS41-5): 0_window_kv every layer (per position, 32 x 512 per record), 1_compress_kv_r2 / 2_index_k_r2
+  (layers 2, 8, 14; 16 rows per 32-token record), 3_compress_kv_r1 / 4_index_k_r1 (layer 20). bf16 ROW_MAJOR (owner:
+  bf16 KV; a 16-row record cannot be a tile; bf16 is exact for the fp8 / fp4 values). ND shard [1, 1, 32/r, w]
+  ROUND_ROBIN_1D (the KVM's one-bank record rule, noc_addr.cpp:12-18). Names sort in table order (DS41-6).
+- Not served: topk / candidates (per chunk), compress_partial (never pending at a 32-aligned start or the 64-aligned
+  decode boundary), engram tail (per-slot token history on the prefill host: a prefill node never copies a prefix;
+  d2p off by default, owner question 5).
+- Every layer acks (all own window_kv): layers_per_chunk = served layers. Host sink and D2H both required.
+- Tests at chunk 2048 / max 4096 on the s4096 golden (every position dumped). Part test test_cache_starts gates
+  `attention`; at C.<bt>.attention it runs that block type's representative + its sources (BRINGUP_TASK), by hand all
+  spec layers. Runner tests serve the spec's contiguous prefix 0-3 (layers 14+ need golden inputs the runner cannot
+  give). Runner smoke skips in this partial run (DS41-8, owner question 7).
+- tt-d-gen has no engine build here (require_engine false): producer fallback. The framework's lookup does not expand
+  $USER in serving.server_repo (DS41-7); the runner tests set BRINGUP_SERVER_REPO.
+Ran (run_safe_pytest --no-precompile, 2x2 FABRIC_2D): test_cache_starts 4 x "not built: hooks.device_model";
+test_kv_layout, test_adapter_acks, test_runner_contract "not built: adapter not registered" (12 s, no hang);
+test_runner_smoke skipped (partial run). CPU checks: server_rules.self_check (reshuffle vs the server's ownership
+rule), table_rules on synthetic good / misaligned / overlapping / wrong-size tables, record decode == kv_dump_compare.
+Gate: `python -m models.demos.common.bringup.testing.serving` -> 5 tests, 0 problems.
+Next steps should know: the device model needs the serving keywords (`embed/from_host(start=)`, `layer(end=)`,
+`state.served/load_served/load_tokens`) from its first version; the adapter must be added to ADAPTER_PATHS at K.1.
