@@ -16,6 +16,6 @@
 // to K, at most one shard wide.
 FORCE_INLINE uint32_t in0_shard_k_tiles(uint32_t ring_pos, uint32_t shard_width_in_tiles, uint32_t k_tiles) {
     const uint32_t shard_k_start = ring_pos * shard_width_in_tiles;
-    const uint32_t k_tiles_left = shard_k_start < k_tiles ? k_tiles - shard_k_start : 0;
-    return k_tiles_left < shard_width_in_tiles ? k_tiles_left : shard_width_in_tiles;
+    const uint32_t k_tiles_left = (shard_k_start < k_tiles) ? (k_tiles - shard_k_start) : 0;
+    return (k_tiles_left < shard_width_in_tiles) ? k_tiles_left : shard_width_in_tiles;
 }

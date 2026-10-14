@@ -4802,7 +4802,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     // In K order the pipe ring holds the layer (validation checked) and then K-blocks of none of it,
     // which compute steps over to come back round to the layer's first.
     const uint32_t rest_of_ring_blocks =
-        stream_in1 ? 0 : in1_pipe_relay.relay_dfb.num_entries / in1_block_num_tiles - num_blocks;
+        stream_in1 ? 0 : ((in1_pipe_relay.relay_dfb.num_entries / in1_block_num_tiles) - num_blocks);
 
     // The output stays in the sharded output tensor. When the partials take the output's format they
     // share its region: the two are aliases of each other and both borrow the output. (An untilized
@@ -4846,7 +4846,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     // The ring workers' in0 reader and the hop cores' forwarder share in0_ring_forward.hpp, so they take
-    // the same ring geometry and move in0 on the same RISC and NOC.
+    // the same ring geometry and move in0 on the same RISC and NOC. The hop sink takes it too, to pop
+    // what the forwarder pushes.
     const KernelSpec::CompileTimeArgs in0_forward_cta = {
         {"shard_width_in_tiles", in0_block_w},
         {"shard_height_in_tiles", per_core_M},
@@ -4925,7 +4926,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
             return;
         }
         hw.unpack_modes.emplace(
-            name, name == INTERM0_DFB ? tt::tt_metal::UnpackMode::UnpackToDest : tt::tt_metal::UnpackMode::UnpackToSrc);
+            name,
+            (name == INTERM0_DFB) ? tt::tt_metal::UnpackMode::UnpackToDest : tt::tt_metal::UnpackMode::UnpackToSrc);
     };
 
     {
@@ -5039,6 +5041,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
             .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/gather_in0_hop_sink_metal2.cpp",
             .dfb_bindings = {DFBBinding{
                 .dfb_spec_name = IN2_DFB, .accessor_name = "in2", .endpoint_type = DFBEndpointType::CONSUMER}},
+            .compile_time_args = in0_forward_cta,
             .hw_config = std::move(hop_sink_hw),
         });
     }
@@ -5064,7 +5067,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     KernelRunArgs in1_reader_run_args{.kernel = IN1_READER};
     KernelRunArgs compute_run_args{.kernel = COMPUTE};
     for (uint32_t i = 0; i < ring_size; ++i) {
-        const CoreCoord next_core = i > 0 ? ring[i - 1] : (hops.empty() ? ring[ring_size - 1] : hops.front());
+        const CoreCoord next_core = (i > 0) ? ring[i - 1] : (hops.empty() ? ring[ring_size - 1] : hops.front());
         const CoreCoord next_core_noc = device.worker_core_from_logical_core(next_core);
         AddRuntimeArgsForNode(
             in0_ring_run_args.runtime_arg_values,
@@ -5083,7 +5086,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     if (!hops.empty()) {
         KernelRunArgs in0_hop_run_args{.kernel = IN0_HOP};
         for (size_t j = 0; j < hops.size(); ++j) {
-            const CoreCoord next_core = j + 1 < hops.size() ? hops[j + 1] : ring[ring_size - 1];
+            const CoreCoord next_core = (j + 1 < hops.size()) ? hops[j + 1] : ring[ring_size - 1];
             const CoreCoord next_core_noc = device.worker_core_from_logical_core(next_core);
             AddRuntimeArgsForNode(
                 in0_hop_run_args.runtime_arg_values,

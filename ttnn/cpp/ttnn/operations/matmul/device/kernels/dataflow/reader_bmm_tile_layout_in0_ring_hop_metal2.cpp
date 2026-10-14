@@ -32,7 +32,7 @@ void kernel_main() {
     Semaphore signal_sem(sem::in0_ring_signal);
     // in2 is bound here for its address. The core before this one writes slot s of in2, the shard of
     // ring position s, at the address its own slot s has, and this core passes it on from there to the
-    // same slot of the next core. Nothing on a hop core reads the shards, so they are never pushed.
+    // same slot of the next core. Each shard is pushed once it is passed on, for the hop sink to pop.
     DataflowBuffer dfb_in2(dfb::in2);
 
     constexpr uint32_t shard_size_in_tiles = shard_width_in_tiles * shard_height_in_tiles;
@@ -53,6 +53,7 @@ void kernel_main() {
             next_core_noc_x,
             next_core_noc_y,
             in0_shard_k_tiles(slot, shard_width_in_tiles, k_tiles) == 0);
+        dfb_in2.push_back(shard_size_in_tiles);
     }
 
     noc.async_atomic_barrier();

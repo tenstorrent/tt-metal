@@ -259,7 +259,7 @@ uint32_t validate_recv_contig_weight_for_matmul_1d(
     const auto weight_K = static_cast<uint32_t>(wp[-2]);
     const bool slab_may_pad = slab_depth == SlabDepth::PaddedForPipeGather;
     TT_FATAL(
-        slab_may_pad ? shard_K >= weight_K : shard_K == weight_K,
+        slab_may_pad ? (shard_K >= weight_K) : (shard_K == weight_K),
         "receiver-contiguous shard K ({}) must {} the weight's K ({}); each shard spans the full K dimension",
         shard_K,
         slab_may_pad ? "cover" : "equal",
