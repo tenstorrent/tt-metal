@@ -21,6 +21,20 @@ void validate_overlap(const HybridRoutedExpertFfnParams& op, const HybridRoutedE
         op.fwd_arrived.has_value() && op.final_arrived.has_value() && op.expert_go.has_value(),
         "hybrid routed expert overlapped with combine needs the caller's fwd_arrived, final_arrived and expert_go "
         "global semaphores, created once and passed on every call");
+    TT_FATAL(
+        op.fwd_arrived->device() == t.x.device() && op.final_arrived->device() == t.x.device() &&
+            op.expert_go->device() == t.x.device(),
+        "hybrid routed expert overlapped with combine: fwd_arrived, final_arrived and expert_go must belong to the "
+        "same mesh device as dispatched_buffer");
+    TT_FATAL(
+        op.fwd_arrived->address() != op.final_arrived->address() &&
+            op.fwd_arrived->address() != op.expert_go->address() &&
+            op.final_arrived->address() != op.expert_go->address(),
+        "hybrid routed expert overlapped with combine: fwd_arrived (0x{:x}), final_arrived (0x{:x}) and expert_go "
+        "(0x{:x}) count independently, so they must be three distinct semaphores",
+        op.fwd_arrived->address(),
+        op.final_arrived->address(),
+        op.expert_go->address());
     // Combine bakes these addresses into its compile-time arguments, so the hashed copies must be the live ones.
     TT_FATAL(
         op.fwd_arrived_addr == op.fwd_arrived->address() && op.final_arrived_addr == op.final_arrived->address() &&
