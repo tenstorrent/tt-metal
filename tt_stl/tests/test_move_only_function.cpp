@@ -43,6 +43,17 @@ static_assert(
 static_assert(
     !std::is_constructible_v<move_only_function<int()>, std::in_place_type_t<LvalueOnlyCallable>>,
     "a target must be rvalue-callable too");
+struct ReturnsInt {
+    int operator()() const { return 42; }
+};
+#if __has_builtin(__reference_converts_from_temporary)
+static_assert(
+    !std::is_constructible_v<move_only_function<const int&()>, ReturnsInt>,
+    "a reference result must not bind to a temporary");
+static_assert(
+    !std::is_constructible_v<move_only_function<const int&()>, std::in_place_type_t<ReturnsInt>>,
+    "a reference result must not bind to a temporary");
+#endif
 
 TEST(MoveOnlyFunctionTest, CPU_InvokesLambda) {
     int calls = 0;
@@ -139,6 +150,19 @@ TEST(MoveOnlyFunctionTest, CPU_NonNullFunctionPointerIsEngaged) {
     move_only_function<int()> f{+[]() { return 5; }};
     EXPECT_TRUE(static_cast<bool>(f));
     EXPECT_EQ(f(), 5);
+}
+
+struct IntHolder {
+    int value = 7;
+    operator const int&() const { return value; }
+};
+
+TEST(MoveOnlyFunctionTest, CPU_ReturnsReferenceWithoutTemporary) {
+    IntHolder holder;
+    move_only_function<const int&()> direct{[&holder]() -> const int& { return holder.value; }};
+    EXPECT_EQ(&direct(), &holder.value);
+    move_only_function<const int&()> converted{[&holder]() -> IntHolder& { return holder; }};
+    EXPECT_EQ(&converted(), &holder.value);
 }
 
 int answer() { return 42; }

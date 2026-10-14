@@ -47,10 +47,26 @@ template <typename T>
 inline constexpr bool is_nullable_callable_v =
     std::is_pointer_v<T> || std::is_member_pointer_v<T> || is_move_only_function<T>::value;
 
+// Whether returning a V as R binds R to a temporary, which C++23's is_invocable_r rejects. Checked where
+// the compiler provides the trait: clang-20 does; gcc-12 does not, nor does its own std::move_only_function.
+template <typename R, typename V>
+inline constexpr bool binds_to_temporary_v =
+#if __has_builtin(__reference_converts_from_temporary)
+    __reference_converts_from_temporary(R, V);
+#else
+    false;
+#endif
+
+// The standard's is-callable-from<VT>.
+template <typename VT, typename R, typename... Args>
+concept CallableFrom = std::is_invocable_r_v<R, VT, Args...> && std::is_invocable_r_v<R, VT&, Args...> &&
+                       !binds_to_temporary_v<R, std::invoke_result_t<VT, Args...>> &&
+                       !binds_to_temporary_v<R, std::invoke_result_t<VT&, Args...>>;
+
 template <typename F, typename Self, typename R, typename... Args>
 concept MoveOnlyFunctionTarget =
     !std::is_same_v<std::remove_cvref_t<F>, Self> && !is_in_place_type<std::remove_cvref_t<F>>::value &&
-    std::is_invocable_r_v<R, std::decay_t<F>, Args...> && std::is_invocable_r_v<R, std::decay_t<F>&, Args...>;
+    CallableFrom<std::decay_t<F>, R, Args...>;
 
 // A target whose move can throw goes to the heap, since this type's move is noexcept.
 template <typename T>
@@ -122,17 +138,13 @@ public:
     }
 
     template <typename T, typename... CArgs>
-        requires(
-            std::is_constructible_v<T, CArgs...> && std::is_invocable_r_v<R, T, Args...> &&
-            std::is_invocable_r_v<R, T&, Args...>)
+        requires(std::is_constructible_v<T, CArgs...> && detail::CallableFrom<T, R, Args...>)
     explicit move_only_function(std::in_place_type_t<T>, CArgs&&... args) {
         emplace<T>(std::forward<CArgs>(args)...);
     }
 
     template <typename T, typename U, typename... CArgs>
-        requires(
-            std::is_constructible_v<T, std::initializer_list<U>&, CArgs...> && std::is_invocable_r_v<R, T, Args...> &&
-            std::is_invocable_r_v<R, T&, Args...>)
+        requires(std::is_constructible_v<T, std::initializer_list<U>&, CArgs...> && detail::CallableFrom<T, R, Args...>)
     explicit move_only_function(std::in_place_type_t<T>, std::initializer_list<U> il, CArgs&&... args) {
         emplace<T>(il, std::forward<CArgs>(args)...);
     }
