@@ -388,7 +388,8 @@ inline void _llk_pack_fast_untilize_emit_phase_(
  *
  * @tparam block_ct_dim: Largest chunk width in tiles (2, 3 or 4).
  * @tparam full_ct_dim: Width of the whole output row in tiles; must exceed block_ct_dim.
- * @param address: L1 address, in 16B units, of this chunk's row-0 column in the row-major output.
+ * @param address: L1 address of this chunk's row-0 column in the row-major output, in the 16-byte-word
+ *        encoding of L1_ADDRESS() (byte address / 16 - 1); it is written to the packer destination as is.
  * @param unit_dim: Width of this chunk in tiles, in [2, block_ct_dim].
  * @param prev_unit_dim: In/out. Chunk width the strided MOP was last built for; the MOP is rebuilt and this updated
  *        when unit_dim differs. Pass 0 on the first call after init, which does not build the strided MOP.
