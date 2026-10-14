@@ -43,6 +43,12 @@ std::uint32_t auxiliary_tile_count(const ReducePlan& plan) {
     return static_cast<std::uint32_t>(plan.auxiliary_tiles.size());
 }
 
+ReduceAuxiliaryCb sized_auxiliary_cb(ReduceAuxiliaryCb cb, std::size_t page_count) {
+    cb.page_count = static_cast<std::uint32_t>(page_count);
+    cb.total_size_bytes = page_count * cb.page_size;
+    return cb;
+}
+
 std::uint32_t div_up_u32(std::uint32_t value, std::uint32_t divisor) {
     TT_FATAL(divisor != 0, "Reduce planner: divisor must be non-zero");
     return value / divisor + (value % divisor != 0);
@@ -402,14 +408,11 @@ ReducePlan make_tiled_plan(
         block.allow_empty_auxiliary);
 
     const auto input_format = tt::tt_metal::datatype_to_dataformat_converter(block.input_dtype);
-    const auto output_format = tt::tt_metal::datatype_to_dataformat_converter(block.output_dtype);
     const auto aux_format =
         input_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     for (auto& tile : plan.auxiliary_tiles) {
         tile.value = round_reduce_auxiliary_value(tile.value, aux_format);
     }
-    const std::uint32_t input_tile_bytes = block.input_tile.get_tile_size(input_format);
-    const std::uint32_t output_tile_bytes = block.output_tile.get_tile_size(output_format);
     const std::uint32_t aux_tile_bytes = tt::tile_size(aux_format);
 
     // Policy is a caller contract. Memory availability never changes it.
@@ -429,30 +432,15 @@ ReducePlan make_tiled_plan(
         const bool additive = plan.algorithm == ReduceAlgorithm::AccumulateViaAdd;
         plan.chunk = {.output_tiles = additive ? 1U : output_group, .buffers = additive ? 2U : 1U};
     }
-    plan.cb_requirements.push_back(
-        {.role = ReduceCbRole::Input,
-         .data_format = input_format,
-         .page_size = input_tile_bytes,
-         .page_count = block.input_cb_tiles,
-         .total_size_bytes = static_cast<std::size_t>(block.input_cb_tiles) * input_tile_bytes});
-    const std::uint32_t output_pages = 2;
-    const auto output_bytes = static_cast<std::size_t>(output_pages) * output_tile_bytes;
-    const auto aux_bytes = static_cast<std::size_t>(auxiliary_tile_count(plan)) * aux_tile_bytes;
-
+    plan.input_cb_tiles = block.input_cb_tiles;
+    plan.input_format = input_format;
     if (!plan.auxiliary_tiles.empty()) {
-        plan.cb_requirements.push_back(
-            {.role = ReduceCbRole::Auxiliary,
-             .data_format = aux_format,
-             .page_size = aux_tile_bytes,
-             .page_count = auxiliary_tile_count(plan),
-             .total_size_bytes = aux_bytes});
+        plan.auxiliary_cb = ReduceAuxiliaryCb{
+            .data_format = aux_format,
+            .page_size = aux_tile_bytes,
+            .page_count = auxiliary_tile_count(plan),
+            .total_size_bytes = static_cast<std::size_t>(auxiliary_tile_count(plan)) * aux_tile_bytes};
     }
-    plan.cb_requirements.push_back(
-        {.role = ReduceCbRole::Output,
-         .data_format = output_format,
-         .page_size = output_tile_bytes,
-         .page_count = output_pages,
-         .total_size_bytes = output_bytes});
 
     return plan;
 }
@@ -470,13 +458,6 @@ std::uint32_t ReducePlan::append_runtime_args(std::vector<std::uint32_t>& runtim
     const auto shape = get_runtime_shape_args(use_tail);
     runtime_args.insert(runtime_args.end(), shape.begin(), shape.end());
     return offset;
-}
-
-const ReduceCbRequirement* ReducePlan::find_cb(ReduceCbRole role) const {
-    const auto it = std::find_if(cb_requirements.begin(), cb_requirements.end(), [role](const auto& requirement) {
-        return requirement.role == role;
-    });
-    return it == cb_requirements.end() ? nullptr : &*it;
 }
 
 ReduceBlockSpec ReduceBlockSpec::tiled(
@@ -511,7 +492,7 @@ std::uint32_t bulk_axis_tiles(const ReducePlan& plan) {
 }
 
 void check_bulk_capacity(const ReducePlan& plan, std::uint32_t packet_tiles) {
-    const auto capacity = plan.find_cb(ReduceCbRole::Input)->page_count;
+    const auto capacity = plan.input_cb_tiles;
     TT_FATAL(
         capacity % packet_tiles == 0,
         "Reduce planner: input CB capacity {} is not a whole number of {}-tile bulk packets",
@@ -767,21 +748,20 @@ static ReduceSequencePlan make_fixed_reduce_sequence_plan(
                 plan.reduce_factor = 1;
                 plan.post_scale = 1.0F;
                 for (auto& tile : plan.auxiliary_tiles) {
-                    tile.value =
-                        round_reduce_auxiliary_value(reader_scaler, plan.find_cb(ReduceCbRole::Auxiliary)->data_format);
+                    tile.value = round_reduce_auxiliary_value(reader_scaler, plan.auxiliary_cb->data_format);
                 }
             }
         }
     }
 
-    const ReduceCbRequirement* expected_aux = nullptr;
+    const ReduceAuxiliaryCb* expected_aux = nullptr;
     for (const auto& plan : plans) {
-        if (const auto* auxiliary = plan.find_cb(ReduceCbRole::Auxiliary)) {
+        if (const auto& auxiliary = plan.auxiliary_cb) {
             TT_FATAL(
                 expected_aux == nullptr || (auxiliary->data_format == expected_aux->data_format &&
                                             auxiliary->page_size == expected_aux->page_size),
                 "Reduce sequence planner: one shared auxiliary CB cannot represent the planned call formats");
-            expected_aux = auxiliary;
+            expected_aux = &*auxiliary;
         }
     }
 
@@ -800,6 +780,9 @@ static ReduceSequencePlan make_fixed_reduce_sequence_plan(
         "Reduce sequence planner: aggregate auxiliary recipe has {} tiles, but at most {} are encodable",
         sequence.auxiliary.tiles.size(),
         reduce_plan_args::auxiliary_header::tile_count_mask);
+    if (expected_aux) {
+        sequence.auxiliary.cb = sized_auxiliary_cb(*expected_aux, sequence.auxiliary.tiles.size());
+    }
 
     sequence.calls.reserve(reductions.size());
     for (std::size_t i = 0; i < reductions.size(); ++i) {
@@ -844,27 +827,54 @@ void share_tail_input_packets(ReducePlan& full, ReducePlan& tail) {
     }
 }
 
-void merge_tail_requirements(ReducePlan& full, const ReducePlan& tail, std::size_t auxiliary_count) {
-    for (const auto& requirement : tail.cb_requirements) {
-        auto it = std::find_if(full.cb_requirements.begin(), full.cb_requirements.end(), [&](const auto& candidate) {
-            return candidate.role == requirement.role;
-        });
-        if (it == full.cb_requirements.end()) {
-            full.cb_requirements.push_back(requirement);
-        } else {
-            TT_FATAL(
-                it->data_format == requirement.data_format && it->page_size == requirement.page_size,
-                "Reduce planner: full and tail paths must share compatible circular buffers");
-            it->page_count = std::max(it->page_count, requirement.page_count);
-            it->total_size_bytes = static_cast<std::size_t>(it->page_count) * it->page_size;
+void merge_tail_auxiliary(ReducePlan& full, const ReducePlan& tail, std::size_t auxiliary_count) {
+    if (tail.auxiliary_cb) {
+        TT_FATAL(
+            !full.auxiliary_cb || (full.auxiliary_cb->data_format == tail.auxiliary_cb->data_format &&
+                                   full.auxiliary_cb->page_size == tail.auxiliary_cb->page_size),
+            "Reduce planner: full and tail paths must share a compatible auxiliary CB");
+        if (!full.auxiliary_cb) {
+            full.auxiliary_cb = tail.auxiliary_cb;
         }
     }
-    for (auto& requirement : full.cb_requirements) {
-        if (requirement.role == ReduceCbRole::Auxiliary) {
-            requirement.page_count = static_cast<std::uint32_t>(auxiliary_count);
-            requirement.total_size_bytes = auxiliary_count * requirement.page_size;
-        }
+    if (full.auxiliary_cb) {
+        full.auxiliary_cb = sized_auxiliary_cb(*full.auxiliary_cb, auxiliary_count);
     }
+}
+
+std::uint32_t produced_output_tiles(const ReducePlan& plan) {
+    const auto count = [&](std::uint32_t ht, std::uint32_t wt, std::uint32_t batches) {
+        if (plan.reduce_dim == ReduceOpDim::W) {
+            return ht * batches;
+        }
+        if (plan.reduce_dim == ReduceOpDim::H) {
+            return wt * batches;
+        }
+        return batches;
+    };
+    auto tiles = count(plan.Ht, plan.Wt, plan.batches);
+    if (plan.tail_plan) {
+        const auto& tail = *plan.tail_plan;
+        tiles = std::max(tiles, count(div_up_u32(tail.logical_h, 32), div_up_u32(tail.logical_w, 32), tail.batches));
+    }
+    return tiles;
+}
+
+void check_accumulator_capacity(const ReduceSequencePlan& sequence, const ReduceSequenceCbIds& cb_ids) {
+    if (sequence.calls.size() < 2) {
+        return;
+    }
+    std::uint32_t outputs = 0;
+    for (const auto& call : sequence.calls) {
+        outputs = std::max(outputs, produced_output_tiles(call.plan));
+    }
+    TT_FATAL(
+        cb_ids.accumulator_cb_tiles >= outputs,
+        "Reduce sequence planner: accumulator CB {} holds {} tiles, but each call writes {} partial tiles before the "
+        "next call reloads them",
+        cb_ids.accumulator_cb_id,
+        cb_ids.accumulator_cb_tiles,
+        outputs);
 }
 
 }  // namespace
@@ -882,6 +892,7 @@ ReduceSequencePlan make_reduce_sequence_plan(
         for (const auto& call : sequence.calls) {
             check_bulk_capacity(call.plan);
         }
+        check_accumulator_capacity(sequence, cb_ids);
         return sequence;
     }
     const auto selector = *first_tail->second.block.tail;
@@ -930,9 +941,14 @@ ReduceSequencePlan make_reduce_sequence_plan(
         full.auxiliary.tiles.size() <= reduce_plan_args::auxiliary_header::tile_count_mask,
         "Reduce planner: combined full/tail auxiliary recipe exceeds the encodable tile count");
     full.auxiliary.cb_id = full.auxiliary.tiles.empty() ? no_cb_id : cb_ids.auxiliary_cb_id;
+    full.auxiliary.cb.reset();
     for (auto& call : full.calls) {
-        merge_tail_requirements(call.plan, *call.plan.tail_plan, full.auxiliary.tiles.size());
+        merge_tail_auxiliary(call.plan, *call.plan.tail_plan, full.auxiliary.tiles.size());
+        if (call.plan.auxiliary_cb && !full.auxiliary.cb) {
+            full.auxiliary.cb = call.plan.auxiliary_cb;
+        }
     }
+    check_accumulator_capacity(full, cb_ids);
     return full;
 }
 
@@ -1115,11 +1131,10 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
         plan.Ht > 0 && plan.Wt > 0 && plan.batches > 0 && plan.reduce_factor > 0 && plan.chunk.output_tiles > 0,
         "Reduce plan args: call contains zero-sized kernel geometry");
     if (plan.auxiliary_tiles.empty()) {
-        const auto* input = plan.find_cb(ReduceCbRole::Input);
-        const bool sfpu =
-            input && (input->data_format == tt::DataFormat::Int32 ||
-                      (input->data_format == tt::DataFormat::Float32 && plan.fp32_mode == ReduceFp32Mode::Accurate) ||
-                      (input->data_format == tt::DataFormat::Float16_b && plan.reduce_math == ReduceOpMath::MIN));
+        const auto input = plan.input_format;
+        const bool sfpu = input == tt::DataFormat::Int32 ||
+                          (input == tt::DataFormat::Float32 && plan.fp32_mode == ReduceFp32Mode::Accurate) ||
+                          (input == tt::DataFormat::Float16_b && plan.reduce_math == ReduceOpMath::MIN);
         TT_FATAL(
             sfpu && plan.partial_mode == compute_kernel_lib::ReducePartialMode::None &&
                 plan.reload_mode != compute_kernel_lib::AccumulateReloadMode::CopySeedZeroPair,

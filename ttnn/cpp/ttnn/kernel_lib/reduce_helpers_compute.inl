@@ -1467,6 +1467,14 @@ ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
             layout = ReduceInputMemoryLayout::with_strides(row_pitch, Call::rows * row_pitch);
         }
     }
+    if constexpr (Call::accumulation_mode != ttnn::kernel_lib::ReduceAccumulationMode::None) {
+        // Each call packs every partial before the next call reloads any, on this same thread.
+        [[maybe_unused]] const uint32_t outputs =
+            Call::reduce_dim == ReduceDim::REDUCE_ROW   ? shape.rows * shape.batches
+            : Call::reduce_dim == ReduceDim::REDUCE_COL ? shape.cols * shape.batches
+                                                        : shape.batches;
+        UNPACK(ASSERT(get_dfb_num_pages(Call::accumulator_cb_id) >= outputs));
+    }
     auto post_scale = [&](uint32_t dst_index) {
         if constexpr (Call::post_scale_bits != ttnn::kernel_lib::reduce_plan_args::float_one_bits) {
             constexpr DataFormat input_format = static_cast<DataFormat>(unpack_src_format[Call::input_cb_id]);
