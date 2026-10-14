@@ -17,7 +17,7 @@ from types import MethodType, SimpleNamespace
 
 import torch
 
-from models.demos.qwen38_27b_t3k.tests.unit.test_serving_prefill_trace import load_methods
+from models.demos.qwen38_27b_t3k.tests.unit.test_serving_prefill_trace import FakeGenerator, load_methods
 from models.demos.qwen38_27b_t3k.tt.generator import prefill_bucket
 
 CAPACITY = 8192
@@ -46,7 +46,7 @@ class BucketArithmeticTests(unittest.TestCase):
         self.assertEqual(prefill_bucket(100, CAPACITY, start=CAPACITY - 128), 128)
 
 
-class OwnedPrefillBucketTests(unittest.TestCase):
+class OwnedPrefillFixture(unittest.TestCase):
     """The slot-zero serving path, which is what a single short request takes."""
 
     def setUp(self):
@@ -78,7 +78,7 @@ class OwnedPrefillBucketTests(unittest.TestCase):
             self.calls.append(dict(tokens=tokens, **kwargs))
             return object()
 
-        self.gen = SimpleNamespace(
+        self.gen = FakeGenerator(
             mesh=object(),
             cache=SimpleNamespace(batch_size=4, capacity=CAPACITY, num_pages=1024, layers=[]),
             model=SimpleNamespace(
@@ -91,11 +91,11 @@ class OwnedPrefillBucketTests(unittest.TestCase):
             ),
             page_table=SimpleNamespace(shape=(4, 256)),
             prefill_prepared=None,
+            prefill_resident={},
             prefill_signatures=set(),
-            prefill_trace=None,
             trace=None,
             sample_trace=None,
-            prefill_sample_trace=None,
+            _prefill_sample_only_trace=None,
             trace_records_history=None,
             counters=Counter(),
         )
@@ -110,10 +110,13 @@ class OwnedPrefillBucketTests(unittest.TestCase):
 
     def run_prompt(self, valid):
         self.gen.prefill_prepared = None
+        self.gen.prefill_resident.clear()
         self.calls.clear()
         self.owned(torch.arange(valid, dtype=torch.int64).reshape(1, valid))
         return self.calls[0]
 
+
+class OwnedPrefillBucketTests(OwnedPrefillFixture):
     def test_a_short_prompt_is_padded_to_its_page_and_declares_what_is_real(self):
         call = self.run_prompt(100)
         self.assertEqual(call["length"], 128)
@@ -151,6 +154,77 @@ class OwnedPrefillBucketTests(unittest.TestCase):
         self.assertIs(self.gen.prefill_prepared["tokens"], buffers)
         self.assertEqual(self.gen.counters["prefill_token_refreshes"], 1)
         self.assertEqual(self.gen.counters["prefill_selector_refreshes"], 2)
+
+
+class ResidentBucketTests(OwnedPrefillFixture):
+    """Each bucket keeps its own buffers and traces, so changing bucket replays.
+
+    One prepared slot meant alternating buckets paid an eager prefill and a decode recapture every
+    time, about 2.1 s measured, which is every growing chat session.
+    """
+
+    def test_each_bucket_keeps_its_own_buffers(self):
+        self.run_prompt(100)
+        small = self.gen.prefill_prepared
+        self.owned(torch.arange(300, dtype=torch.int64).reshape(1, 300))
+        large = self.gen.prefill_prepared
+        self.assertEqual([prepared["length"] for prepared in self.gen.prefill_resident.values()], [128, 320])
+        self.assertIsNot(small["tokens"], large["tokens"])
+
+    def test_returning_to_a_resident_bucket_reuses_its_buffers(self):
+        self.run_prompt(100)
+        small = self.gen.prefill_prepared
+        self.owned(torch.arange(300, dtype=torch.int64).reshape(1, 300))
+        self.owned(torch.arange(110, dtype=torch.int64).reshape(1, 110))
+        self.assertIs(self.gen.prefill_prepared, small)
+        self.assertEqual(self.gen.counters["prefill_bucket_allocations"], 2)
+
+    def test_a_resident_trace_survives_a_detour_through_another_bucket(self):
+        self.run_prompt(100)
+        self.gen.prefill_prepared["trace"] = "small-trace"
+        self.owned(torch.arange(300, dtype=torch.int64).reshape(1, 300))
+        # Allocating the second bucket releases every trace, because its buffers must not land on
+        # an address a live trace still reads.
+        self.assertIsNone(self.gen.prefill_resident[self.gen.prefill_prepared["key"]]["trace"])
+        self.assertEqual([prepared["trace"] for prepared in self.gen.prefill_resident.values()], [None, None])
+
+    def test_the_coldest_bucket_is_evicted_once_the_set_is_full(self):
+        from models.demos.qwen38_27b_t3k.tt.generator import MAX_RESIDENT_PREFILL
+
+        lengths = [32 * (i + 1) for i in range(MAX_RESIDENT_PREFILL)]
+        self.run_prompt(lengths[0])
+        for length in lengths[1:]:
+            self.owned(torch.arange(length, dtype=torch.int64).reshape(1, length))
+        # Touching the oldest again makes it the newest, so the next allocation evicts the second.
+        self.owned(torch.arange(lengths[0], dtype=torch.int64).reshape(1, lengths[0]))
+        self.owned(torch.arange(4096, dtype=torch.int64).reshape(1, 4096))
+        resident = [prepared["length"] for prepared in self.gen.prefill_resident.values()]
+        self.assertEqual(len(resident), MAX_RESIDENT_PREFILL)
+        self.assertIn(lengths[0], resident)
+        self.assertNotIn(lengths[1], resident)
+        self.assertEqual(self.gen.counters["prefill_bucket_evictions"], 1)
+
+
+class ReadOnlyTraceViewTests(unittest.TestCase):
+    """The trace views read the active bucket, so nothing may assign to them.
+
+    Every unit test here drives a stand-in namespace rather than the generator, so an assignment
+    that the property refuses would otherwise only surface on device.
+    """
+
+    def test_nothing_assigns_to_the_trace_views(self):
+        import ast
+        from pathlib import Path
+
+        source = (Path(__file__).parents[2] / "tt" / "generator.py").read_text()
+        writes = [
+            node.lineno
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.ctx, ast.Store)
+            and node.attr in ("prefill_trace", "prefill_sample_trace")
+        ]
+        self.assertEqual(writes, [], f"generator.py assigns a read-only trace view at {writes}")
 
 
 class ValidLengthRefusalTests(unittest.TestCase):

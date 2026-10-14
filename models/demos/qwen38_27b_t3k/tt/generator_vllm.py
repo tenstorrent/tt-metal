@@ -581,9 +581,11 @@ class Qwen38ForCausalLM:
         """
         generator = self.generator
         warmed = []
-        for bucket in self.prefill_warmup_buckets:
+        # Largest first, because only the last few buckets keep their trace and a chat turn
+        # alternates among the small ones.
+        for bucket in sorted(self.prefill_warmup_buckets, reverse=True):
             if bucket > cache.capacity:
-                break
+                continue
             generator.reset_recurrent_slots([0])
             generator.serving_prefill_tokens(
                 torch.zeros(1, bucket, dtype=torch.int64),
@@ -594,6 +596,7 @@ class Qwen38ForCausalLM:
                 slots=[0],
             )
             warmed.append(bucket)
+        warmed.reverse()
         if warmed:
             # Warmup must leave no request behind it: the sampler, the positions and both caches
             # are what the first real request reads.

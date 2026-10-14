@@ -41,6 +41,31 @@ class FakeLogits:
     layout = "TILE"
 
 
+class FakeGenerator(SimpleNamespace):
+    """Traces hang off the active bucket, as they do on the generator, not off the namespace."""
+
+    @property
+    def prefill_trace(self):
+        return None if self.prefill_prepared is None else self.prefill_prepared.get("trace")
+
+    @prefill_trace.setter
+    def prefill_trace(self, value):
+        self.prefill_prepared["trace"] = value
+
+    @property
+    def prefill_sample_trace(self):
+        if self.prefill_prepared is not None:
+            return self.prefill_prepared.get("sample_trace")
+        return self._prefill_sample_only_trace
+
+    @prefill_sample_trace.setter
+    def prefill_sample_trace(self, value):
+        if self.prefill_prepared is None:
+            self._prefill_sample_only_trace = value
+        else:
+            self.prefill_prepared["sample_trace"] = value
+
+
 class ServingPrefillTraceTests(unittest.TestCase):
     def setUp(self):
         self.events = []
@@ -79,7 +104,7 @@ class ServingPrefillTraceTests(unittest.TestCase):
             ],
             self.ops,
         )
-        self.gen = SimpleNamespace(
+        self.gen = FakeGenerator(
             mesh=object(),
             cache=SimpleNamespace(batch_size=4, capacity=8192, num_pages=1024, layers=[]),
             model=SimpleNamespace(
@@ -96,11 +121,11 @@ class ServingPrefillTraceTests(unittest.TestCase):
             rope_indices=object(),
             sampler=SimpleNamespace(seeds_tt_tensor=object()),
             prefill_prepared=None,
+            prefill_resident={},
             prefill_signatures=set(),
             trace=None,
             sample_trace=None,
-            prefill_trace=None,
-            prefill_sample_trace=None,
+            _prefill_sample_only_trace=None,
             prefill_sample_input=None,
             trace_records_history=None,
             counters=Counter(),
@@ -118,9 +143,15 @@ class ServingPrefillTraceTests(unittest.TestCase):
             self.methods["_prepare_serving_prefill_sampling"], self.gen
         )
 
+        # One resident bucket, as the real path keeps: the entry outlives the request and carries
+        # the traces built around its buffers.
+        self.prepared = {"output": self.owned, "trace_sampling": False, "trace": None, "sample_trace": None}
+
         def owned(tokens, *, trace_sampling=False):
             self.events.append(("owned", tokens.clone(), trace_sampling))
-            self.gen.prefill_prepared = {"output": self.owned, "trace_sampling": trace_sampling}
+            self.prepared["trace_sampling"] = trace_sampling
+            self.gen.prefill_resident["bucket"] = self.prepared
+            self.gen.prefill_prepared = self.prepared
             return self.owned
 
         def public(tokens, **kwargs):
@@ -175,7 +206,7 @@ class ServingPrefillTraceTests(unittest.TestCase):
         self.assertEqual(sum(event[0] == "sample" for event in self.events), 1)
 
     def test_warm_sampling_replays_the_prefill_sampler_nonblocking(self):
-        self.gen.prefill_sample_trace = "prefill-sampler"
+        self.prepared["sample_trace"] = "prefill-sampler"
         self.gen.sample_trace = "decode-sampler"
         result = self.request()
         self.assertIs(result, self.gen.tokens)
@@ -231,20 +262,31 @@ class ServingPrefillTraceTests(unittest.TestCase):
                     self.request(**kwargs)
                 self.assertEqual(self.events, [])
 
-    def test_release_drops_four_handles_but_can_keep_preparation(self):
+    def test_release_drops_every_resident_bucket_but_can_keep_its_buffers(self):
+        # Buffers outlive a release so a later capture can rebind them; only entries dropped
+        # wholesale free their memory, and that happens with no trace left holding an address.
         self.gen.trace, self.gen.sample_trace = "decode", "decode-sample"
-        self.gen.prefill_trace, self.gen.prefill_sample_trace = "prefill", "prefill-sample"
-        prepared = self.gen.prefill_prepared = {"output": self.owned, "trace_sampling": True}
+        buckets = {}
+        for name in ("small", "large"):
+            buckets[name] = dict(output=self.owned, trace_sampling=True, trace=name, sample_trace=name + "-sample")
+            self.gen.prefill_resident[name] = buckets[name]
+        self.gen.prefill_prepared = buckets["large"]
         staging = self.gen.prefill_sample_input = object()
         self.gen._release_traces(keep_prefill=True)
         self.assertEqual(
-            self.events, [("release", name) for name in ("decode", "decode-sample", "prefill", "prefill-sample")]
+            self.events,
+            [
+                ("release", name)
+                for name in ("decode", "decode-sample", "small", "small-sample", "large", "large-sample")
+            ],
         )
-        self.assertIs(self.gen.prefill_prepared, prepared)
+        self.assertEqual(set(self.gen.prefill_resident), {"small", "large"})
+        self.assertIs(self.gen.prefill_prepared, buckets["large"])
         self.assertIs(self.gen.prefill_sample_input, staging)
         for name in ("trace", "sample_trace", "prefill_trace", "prefill_sample_trace"):
             self.assertIsNone(getattr(self.gen, name))
         self.gen._release_traces()
+        self.assertEqual(self.gen.prefill_resident, {})
         self.assertIsNone(self.gen.prefill_prepared)
         self.assertIs(self.gen.prefill_sample_input, staging)
 
@@ -254,8 +296,8 @@ class ServingPrefillTraceTests(unittest.TestCase):
             return SimpleNamespace(shape=tuple(tensor.shape))
 
         self.gen.model.upload = upload
-        self.gen._prefill_trace_logits = lambda: self.owned
-        self.gen._prefill_trace_step = lambda: None
+        self.gen._prefill_trace_logits = lambda prepared=None: self.owned
+        self.gen._prefill_trace_step = lambda prepared=None: None
         self.gen._copy = lambda *args: None
         prepare = MethodType(self.methods["_prefill_for_generate"], self.gen)
         tokens = torch.tensor([[11, 12, 13]])
@@ -292,13 +334,16 @@ class ServingPrefillTraceTests(unittest.TestCase):
 
         self.ops.begin_trace_capture = begin
         self.ops.end_trace_capture = lambda mesh, trace, **kw: self.events.append(("end", trace))
-        self.gen.prefill_prepared = {"output": self.owned, "trace_sampling": serving}
+        self.prepared["trace_sampling"] = serving
+        self.gen.prefill_resident["bucket"] = self.prepared
+        self.gen.prefill_prepared = self.prepared
         if fallback:
+            self.gen.prefill_resident.clear()
             self.gen.prefill_prepared = None
             self.gen.prefill_sample_input = self.owned
         self.gen._model_step = lambda: "decode-logits"
         self.gen._sampling_step = sample
-        self.gen._prefill_trace_step = lambda: self.events.append(("prefill-copy",))
+        self.gen._prefill_trace_step = lambda prepared=None: self.events.append(("prefill-copy",))
         return self.methods["_capture"](self.gen)
 
     def test_serving_captures_fourth_sampler_over_owned_output(self):
