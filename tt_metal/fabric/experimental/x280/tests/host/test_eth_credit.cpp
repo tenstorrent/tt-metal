@@ -108,7 +108,7 @@ uint32_t InferredBank(uint32_t addr) { return (addr >> 4) & 31u; }
 
 // ---------------------------------------------------------------------------
 // Header (plan §ABI and layout / Header; production PacketHeaderBase in
-// tt_metal/fabric/fabric_edm_packet_header.hpp: NocCommandFields is 40 bytes,
+// tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp: NocCommandFields is 40 bytes,
 // then payload_size_bytes (uint16), noc_send_type (uint8), src_ch_id (uint8)).
 // ---------------------------------------------------------------------------
 
