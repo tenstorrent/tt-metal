@@ -68,14 +68,18 @@ __attribute__((noinline)) void calculate_sqrt_rsqrt_fresh_cpp()
             y = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;
-        // The SFPU arithmetic path flushes subnormals to signed zero.  Make
-        // the pole explicit so -0 and negative subnormals produce -inf.  Test
-        // the raw exponent so negative NaNs cannot enter the pole arm.
-        v_if (sfpi::exexp(x, sfpi::ExponentMode::Biased) == 0)
+        if constexpr (RECIPROCAL)
         {
-            y = sfpi::copysgn(infinity, x);
+            // The SFPU arithmetic path flushes subnormals to signed zero.  Make
+            // the pole explicit so -0 and negative subnormals produce -inf.  Test
+            // the raw exponent so negative NaNs cannot enter the pole arm.
+            // sqrt has no pole: at a flushed zero x * y is already zero.
+            v_if (sfpi::exexp(x, sfpi::ExponentMode::Biased) == 0)
+            {
+                y = sfpi::copysgn(infinity, x);
+            }
+            v_endif;
         }
-        v_endif;
         sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
         sfpi::dst_reg++;
     }
