@@ -1,0 +1,2 @@
+test_eltwise_binary_sfpu.py::test_eltwise_binary_sfpu_int_uniform[mathop:SfpuDivInt32-dest_acc:Yes]
+test_eltwise_binary_sfpu.py::test_eltwise_binary_sfpu_int_uniform[mathop:SfpuDivInt32Floor-dest_acc:Yes]
