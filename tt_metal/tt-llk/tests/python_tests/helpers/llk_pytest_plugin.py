@@ -41,6 +41,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import NoReturn, Optional
 
+from ttsim_error import parse_ttsim_error
+
 # ttsim runs in-process (no SimulationServer). Its init must complete before the
 # skip_for_* markers in this plugin call get_chip_architecture() (which reaches
 # check_context()) at module-load time.
@@ -859,11 +861,6 @@ def _stringify_params(params):
     return f"[{' | '.join(parts)}]"
 
 
-# Match the ttsim error preamble printed by ttsim_error() before _Exit(1):
-#   [<clk>] ERROR: <Category>: <function>: <details>
-_TTSIM_ERR_RE = re.compile(r"^\[\d+\] ERROR: (\w+): (\w+): (.*)$", re.MULTILINE)
-
-
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_logreport(report):
     # pytest-forked appends a crashed child's captured streams to report.sections
@@ -905,10 +902,12 @@ def pytest_runtest_logreport(report):
         report.longrepr or ""
     ):
         report.when = "call"
-        m = _TTSIM_ERR_RE.search(report.capstdout or "")
-        if m:
-            cat, func, msg = m.group(1), m.group(2), m.group(3).strip()
-            report.longrepr = f"[ttsim:{cat}] {func}: {msg}"
+        parsed = parse_ttsim_error(report.capstdout or "")
+        if parsed:
+            cat, func, msg = parsed
+            report.longrepr = (
+                f"[ttsim:{cat}] {func}: {msg}" if msg else f"[ttsim:{cat}] {func}"
+            )
             props = list(getattr(report, "user_properties", []))
             props.append(("ttsim_category", cat))
             props.append(("ttsim_func", func))
