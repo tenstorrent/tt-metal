@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "experimental/llk_custom_mm_common_api.h"
 #include "experimental/llk_unpack_AB_custom_mm.h"
 #include "llk_unpack_common_api.h"
 #include "sanitizer/api.h"
@@ -21,18 +22,6 @@
  *
  * Uses llk_unpack_AB_custom_mm.h as the low-level implementation.
  *************************************************************************/
-
-// in1 must be [32, 32], or [32, 16] without transpose. Reads the CB's 2D face grid, since a flat face count of 2
-// cannot tell [32, 16] (2x1 faces) from [16, 32] (1x2 faces).
-template <bool transpose>
-inline std::uint32_t llk_unpack_AB_custom_mm_in1_num_faces(const std::uint32_t operand_id) {
-    const ckernel::TensorShape in1_shape = get_operand_tensor_shape(operand_id);
-    LLK_ASSERT(
-        in1_shape.face_r_dim == FACE_R_DIM && in1_shape.num_faces_r_dim == 2 &&
-            (in1_shape.num_faces_c_dim == 2 || (in1_shape.num_faces_c_dim == 1 && !transpose)),
-        "custom_mm: in1 tile shape must be [32, 32], or [32, 16] without transpose");
-    return in1_shape.num_faces_c_dim == 1 ? 2 : TILE_NUM_FACES;
-}
 
 /**
  * @brief Configure the unpack thread for a custom_mm block matmul.
@@ -57,10 +46,7 @@ inline void llk_unpack_AB_custom_mm_init(
     const std::uint32_t operandA_unpack_dst_format = unpack_dst_format[operandA_id];
 
     _llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
-        operandB_face_r_dim,
-        operandA_unpack_dst_format,
-        ct_dim,
-        llk_unpack_AB_custom_mm_in1_num_faces<transpose>(operandA_id));
+        operandB_face_r_dim, operandA_unpack_dst_format, ct_dim, llk_custom_mm_in1_num_faces<transpose>(operandA_id));
 }
 
 /**

@@ -324,6 +324,10 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t ct_dim,
     const std::uint32_t in1_stride = 0)
 {
+    LLK_ASSERT(
+        in1_stride == 0 || in1_stride >= (read_transposed ? kt_dim : ct_dim),
+        "custom_mm: in1_stride must be 0, or at least ct_dim (kt_dim when read_transposed)");
+
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
     // The k-row's last tile steps with inner_increment, the others with block_increment. With ct_dim == 1 the
