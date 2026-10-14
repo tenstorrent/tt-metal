@@ -6,8 +6,6 @@
 
 #include <tt-metalium/hal.hpp>
 
-#include "ttnn/operations/data_movement/common/common.hpp"
-
 namespace ttnn::operations::data_movement::reshape_codegen {
 
 tt::tt_metal::TensorSpec output_spec(
@@ -25,14 +23,6 @@ tt::tt_metal::CoreRangeSet reshape_core_grid(
     }
     const auto grid = input.device()->compute_with_storage_grid_size();
     return tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
-}
-
-uint32_t reshape_core_count(const Tensor& input, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
-    if (sub_core_grids.has_value()) {
-        return static_cast<uint32_t>(sub_core_grids->num_cores());
-    }
-    const auto grid = input.device()->compute_with_storage_grid_size();
-    return static_cast<uint32_t>(grid.x * grid.y);
 }
 
 uint64_t static_l1_budget(const Tensor& input, const tt::tt_metal::TensorSpec& output_spec) {
@@ -55,7 +45,5 @@ uint64_t static_l1_budget(const Tensor& input, const tt::tt_metal::TensorSpec& o
     }
     return budget;
 }
-
-uint64_t live_l1_budget(const Tensor& input) { return get_max_l1_space(input); }
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen

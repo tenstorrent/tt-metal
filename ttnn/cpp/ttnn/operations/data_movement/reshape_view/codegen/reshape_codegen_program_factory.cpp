@@ -117,9 +117,8 @@ ProgramDescriptor build_tile_rows(
     return desc;
 }
 
-// ~Tensor force-frees its device buffer, so a table the program reads is held through a shared Tensor the workload
-// owns; the table then lives exactly as long as the cached workload. The spec's memory config (interleaved DRAM)
-// places it; a page is one table row.
+// ~Tensor force-frees its device buffer, so the table is held through a shared Tensor the workload owns. It lives
+// in interleaved DRAM, one table row per page.
 std::shared_ptr<Tensor> upload_table(
     std::vector<uint32_t> table, uint32_t rows, uint32_t row_words, const Tensor& input) {
     const TensorSpec spec(
@@ -155,16 +154,11 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileRowsProgramFactory::create_wo
     const auto& in_shape = input.logical_shape();
     const auto& out_shape = operation_attributes.logical_output_shape;
     const auto grid = rcg::reshape_core_grid(input, operation_attributes.sub_core_grids);
-    const uint64_t l1_budget = operation_attributes.plan.l1_budget;
     const uint32_t tile_bytes =
         input.tensor_spec().tile().get_tile_size(datatype_to_dataformat_converter(input.dtype()));
 
-    auto plan = rcg::build_tile_rows_plan(in_shape, out_shape);
+    auto plan = rcg::build_tile_rows_plan(in_shape, out_shape, operation_attributes.plan.tile_rows);
     const rcg::TileRowsLayout layout = plan.layout;
-    TT_FATAL(
-        rcg::tile_rows_l1_bytes(layout, tile_bytes) <= l1_budget,
-        "Reshape tile-row buffers do not fit the L1 free at launch ({} bytes)",
-        l1_budget);
     TT_FATAL(
         tensor_return_value.buffer()->num_pages() == layout.num_output_pages,
         "Reshape output has {} tiles, the tile-row plan expects {}",

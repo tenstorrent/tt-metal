@@ -19,7 +19,8 @@
 
 namespace ttnn::operations::data_movement::reshape_codegen {
 
-namespace {
+// Named rather than anonymous: TileRowsSchedule, declared in the header, holds these types.
+namespace tile_rows_planner {
 
 constexpr uint64_t kTileDim = 32;
 constexpr uint64_t kFaceRows = 16;
@@ -34,11 +35,8 @@ constexpr uint64_t kMaxOutTiles = 128 * 1024;
 constexpr uint64_t kMaxTableBytes = 32 * 1024 * 1024;
 // Every output tile has at least one run in each 16-row half.
 constexpr uint64_t kMinRunsPerTile = 2;
-// Native reshapes one output tile per core per round and reads every source tile it touches. Tile rows puts a batch
-// of at least 8 output tiles on one core, so it needs at least 8x fewer reads to win (measured on Blackhole).
-constexpr uint64_t kTileRowsMinReadCut = 8;
-constexpr size_t kLayoutCacheEntries = 64;
-constexpr int64_t kNoSource = -1;
+constexpr size_t kChoiceMemoEntries = 64;
+constexpr uint32_t kNoSource = std::numeric_limits<uint32_t>::max();
 
 // Physical (C, H, W) model of a TILE shape: leading dims fold into C.
 struct Shape3 {
@@ -71,7 +69,7 @@ uint64_t tile_pages(const Shape3& s) { return s.c * tt::div_up(s.h, kTileDim) * 
 
 // Source (input tile, row) of every row of one output tile; padding rows have tile kNoSource and keep their own row.
 struct TileRowSources {
-    std::array<int64_t, kTileDim> tile{};
+    std::array<uint32_t, kTileDim> tile{};
     std::array<uint32_t, kTileDim> row{};
 };
 
@@ -98,42 +96,29 @@ TileRowSources row_sources(const Shape3& in, const Shape3& out, uint64_t out_til
         const uint64_t col_in = flat % in.w;
         const uint64_t channel_in = row_in / in.h;
         const uint64_t h_in = row_in % in.h;
-        s.tile[r] = static_cast<int64_t>(channel_in * ht_i * wt_i + (h_in / kTileDim) * wt_i + col_in / kTileDim);
+        s.tile[r] = static_cast<uint32_t>(channel_in * ht_i * wt_i + (h_in / kTileDim) * wt_i + col_in / kTileDim);
         s.row[r] = static_cast<uint32_t>(h_in % kTileDim);
     }
     return s;
 }
 
-// A run is a maximal block of rows copied as one face-row span: same source tile, consecutive source rows, and
-// neither side crossing the face boundary at row 16. Returns the first row of each run.
-std::vector<uint32_t> run_starts(const TileRowSources& s) {
-    std::vector<uint32_t> starts;
-    for (uint32_t r = 0; r < kTileDim; ++r) {
-        const bool start = r == 0 || s.tile[r] != s.tile[r - 1] || s.row[r] != s.row[r - 1] + 1 || r % kFaceRows == 0 ||
-                           s.row[r] % kFaceRows == 0;
-        if (start) {
-            starts.push_back(r);
-        }
-    }
-    return starts;
-}
-
-// Distinct real source tiles of one output tile, ascending.
-std::vector<int64_t> distinct_sources(const TileRowSources& s) {
-    std::vector<int64_t> sources;
-    for (const int64_t tile : s.tile) {
-        if (tile != kNoSource) {
-            sources.push_back(tile);
-        }
-    }
-    std::sort(sources.begin(), sources.end());
-    sources.erase(std::unique(sources.begin(), sources.end()), sources.end());
-    return sources;
-}
+// What the planner needs of every output tile, from one row_sources walk per tile. Both lists are flattened: tile
+// t owns [begin[t], begin[t + 1]).
+struct TileFacts {
+    // Distinct real source tiles, ascending.
+    std::vector<uint32_t> source_begin{0};
+    std::vector<uint32_t> sources;
+    // A run is a maximal block of rows copied as one face-row span: same source tile, consecutive source rows, and
+    // neither side crossing the face boundary at row 16. Its source tile (kNoSource for padding) and its run word
+    // without the slot, which depends on the batch.
+    std::vector<uint32_t> run_begin{0};
+    std::vector<uint32_t> run_source;
+    std::vector<uint32_t> run_word;
+};
 
 struct Batch {
-    std::vector<uint64_t> outs;
-    std::vector<int64_t> ins;  // ascending
+    std::vector<uint32_t> outs;
+    std::vector<uint32_t> ins;  // ascending
 };
 
 struct PlanInputs {
@@ -141,52 +126,72 @@ struct PlanInputs {
     Shape3 out;
     uint64_t out_pages = 0;
     uint32_t max_runs = 0;
-    // Runs over real rows, and source tiles native reads: each output tile reads its distinct sources once.
     uint64_t runs = 0;
     uint64_t native_reads = 0;
+    TileFacts tiles;
     // Output tiles ordered by their smallest source tile, ties by index.
-    std::vector<uint64_t> order;
+    std::vector<uint32_t> order;
 };
+
+void add_tile(PlanInputs& p, const TileRowSources& s) {
+    TileFacts& f = p.tiles;
+    const size_t first_source = f.sources.size();
+    for (const uint32_t tile : s.tile) {
+        if (tile != kNoSource) {
+            f.sources.push_back(tile);
+        }
+    }
+    std::sort(f.sources.begin() + first_source, f.sources.end());
+    f.sources.erase(std::unique(f.sources.begin() + first_source, f.sources.end()), f.sources.end());
+    f.source_begin.push_back(static_cast<uint32_t>(f.sources.size()));
+    p.native_reads += f.sources.size() - first_source;
+
+    const size_t first_run = f.run_word.size();
+    for (uint32_t r = 0; r < kTileDim; ++r) {
+        const bool start = r == 0 || s.tile[r] != s.tile[r - 1] || s.row[r] != s.row[r - 1] + 1 || r % kFaceRows == 0 ||
+                           s.row[r] % kFaceRows == 0;
+        if (start) {
+            f.run_source.push_back(s.tile[r]);
+            f.run_word.push_back((s.row[r] << kRunSrcRowShift) | (r << kRunDstRowShift));
+            p.runs += s.tile[r] != kNoSource ? 1 : 0;
+        }
+        ++f.run_word.back();  // one more row in the current run
+    }
+    f.run_begin.push_back(static_cast<uint32_t>(f.run_word.size()));
+    p.max_runs = std::max<uint32_t>(p.max_runs, static_cast<uint32_t>(f.run_word.size() - first_run));
+}
 
 PlanInputs prepare(const Shape3& in, const Shape3& out) {
     PlanInputs p{.in = in, .out = out, .out_pages = tile_pages(out)};
-    std::vector<int64_t> min_source(p.out_pages);
     for (uint64_t t = 0; t < p.out_pages; ++t) {
-        const auto s = row_sources(in, out, t);
-        const auto starts = run_starts(s);
-        p.max_runs = std::max<uint32_t>(p.max_runs, static_cast<uint32_t>(starts.size()));
-        p.runs += std::count_if(starts.begin(), starts.end(), [&](uint32_t r) { return s.tile[r] != kNoSource; });
-        p.native_reads += distinct_sources(s).size();
-        int64_t lowest = std::numeric_limits<int64_t>::max();
-        for (const int64_t tile : s.tile) {
-            if (tile != kNoSource) {
-                lowest = std::min(lowest, tile);
-            }
-        }
-        min_source[t] = lowest;
+        add_tile(p, row_sources(in, out, t));
     }
     // Ordering by smallest source puts output tiles that share sources next to each other. It is a heuristic:
     // sharing tiles can still split across batches, which costs re-reads but not correctness.
+    const auto& begin = p.tiles.source_begin;
+    const auto& sources = p.tiles.sources;
     p.order.resize(p.out_pages);
     std::iota(p.order.begin(), p.order.end(), 0);
     std::stable_sort(
-        p.order.begin(), p.order.end(), [&](uint64_t a, uint64_t b) { return min_source[a] < min_source[b]; });
+        p.order.begin(), p.order.end(), [&](uint32_t a, uint32_t b) { return sources[begin[a]] < sources[begin[b]]; });
     return p;
 }
 
-// Greedy batches of output tiles in source order; each holds at most max_out tiles and max_in distinct sources.
+// Greedy batches of output tiles in source order; each holds at most max_out tiles and kMaxIn distinct sources.
 std::vector<Batch> make_batches(const PlanInputs& p, uint32_t max_out) {
+    const auto& begin = p.tiles.source_begin;
+    const auto& all_sources = p.tiles.sources;
     std::vector<Batch> batches;
     Batch current;
-    for (const uint64_t out_page : p.order) {
-        const auto sources = distinct_sources(row_sources(p.in, p.out, out_page));
-        std::vector<int64_t> merged;
-        std::set_union(
-            current.ins.begin(), current.ins.end(), sources.begin(), sources.end(), std::back_inserter(merged));
+    for (const uint32_t out_page : p.order) {
+        const auto first = all_sources.begin() + begin[out_page];
+        const auto last = all_sources.begin() + begin[out_page + 1];
+        std::vector<uint32_t> merged;
+        std::set_union(current.ins.begin(), current.ins.end(), first, last, std::back_inserter(merged));
         if (!current.outs.empty() && (current.outs.size() == max_out || merged.size() > kMaxIn)) {
             batches.push_back(std::move(current));
             current = Batch{};
-            merged = sources;
+            merged.assign(first, last);
         }
         current.outs.push_back(out_page);
         current.ins = std::move(merged);
@@ -214,30 +219,45 @@ TileRowsLayout layout_of(const PlanInputs& p, const std::vector<Batch>& batches)
     return layout;
 }
 
-struct Choice {
-    TileRowsLayout layout;
-    uint32_t max_out = 0;
-    uint64_t runs = 0;
-    uint64_t native_reads = 0;
-    uint64_t batch_reads = 0;
-};
-
-std::optional<Choice> choose(const Shape3& in, const Shape3& out) {
+// Caps checked from the shapes alone, so an oversized reshape never reaches the planner.
+bool exceeds_caps(const Shape3& out) {
     const uint64_t out_pages = tile_pages(out);
     const uint64_t lower_bound_bytes = out_pages * (kTileRowsEntryHeaderWords + kMinRunsPerTile) * sizeof(uint32_t);
-    if (out_pages == 0 || out_pages > kMaxOutTiles || lower_bound_bytes > kMaxTableBytes) {
+    return out_pages == 0 || out_pages > kMaxOutTiles || lower_bound_bytes > kMaxTableBytes;
+}
+
+std::optional<std::pair<Shape3, Shape3>> permutation_shapes(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape) {
+    const auto in = normalize(in_shape);
+    const auto out = normalize(out_shape);
+    if (!in || !out || in->w % kTileDim != 0 || out->w % kTileDim != 0 ||
+        in->c * in->h * in->w != out->c * out->h * out->w) {
         return std::nullopt;
     }
-    const PlanInputs p = prepare(in, out);
-    Choice choice;
+    return std::make_pair(*in, *out);
+}
+
+}  // namespace tile_rows_planner
+
+struct TileRowsSchedule {
+    tile_rows_planner::PlanInputs inputs;
+    std::vector<tile_rows_planner::Batch> batches;
+};
+
+namespace tile_rows_planner {
+
+std::optional<TileRowsChoice> choose(const Shape3& in, const Shape3& out) {
+    auto schedule = std::make_shared<TileRowsSchedule>();
+    schedule->inputs = prepare(in, out);
+    const PlanInputs& p = schedule->inputs;
+    TileRowsChoice choice;
     for (const uint32_t max_out : kMaxOutSteps) {
-        const auto batches = make_batches(p, max_out);
+        schedule->batches = make_batches(p, max_out);
         uint64_t batch_reads = 0;
-        for (const auto& b : batches) {
+        for (const auto& b : schedule->batches) {
             batch_reads += b.ins.size();
         }
-        choice = Choice{
-            .layout = layout_of(p, batches),
+        choice = TileRowsChoice{
+            .layout = layout_of(p, schedule->batches),
             .max_out = max_out,
             .runs = p.runs,
             .native_reads = p.native_reads,
@@ -251,70 +271,72 @@ std::optional<Choice> choose(const Shape3& in, const Shape3& out) {
     if (table_bytes > kMaxTableBytes) {
         return std::nullopt;
     }
+    choice.schedule = std::move(schedule);
     return choice;
 }
 
-std::optional<std::pair<Shape3, Shape3>> permutation_shapes(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape) {
-    const auto in = normalize(in_shape);
-    const auto out = normalize(out_shape);
-    if (!in || !out || in->w % kTileDim != 0 || out->w % kTileDim != 0 ||
-        in->c * in->h * in->w != out->c * out->h * out->w) {
-        return std::nullopt;
-    }
-    return std::make_pair(*in, *out);
-}
-
-std::optional<Choice> cached_choice(const Shape3& in, const Shape3& out) {
+// Process-wide: routing asks on every call, before any device or program cache is involved, and the answer
+// depends only on the shapes and the DRAM alignment. Entries drop their schedule to stay small.
+std::optional<TileRowsChoice> memoized_choice(const Shape3& in, const Shape3& out) {
     using Key = std::array<uint64_t, 7>;
     static std::mutex mutex;
-    static std::map<Key, std::optional<Choice>> cache;
+    static std::map<Key, std::optional<TileRowsChoice>> memo;
     static std::deque<Key> insertion_order;
 
     const Key key{in.c, in.h, in.w, out.c, out.h, out.w, page_align_words()};
     {
         std::lock_guard lock(mutex);
-        if (auto it = cache.find(key); it != cache.end()) {
+        if (auto it = memo.find(key); it != memo.end()) {
             return it->second;
         }
     }
     auto choice = choose(in, out);
+    auto entry = choice;
+    if (entry) {
+        entry->schedule.reset();
+    }
     std::lock_guard lock(mutex);
-    if (cache.emplace(key, choice).second) {
+    if (memo.emplace(key, std::move(entry)).second) {
         insertion_order.push_back(key);
-        if (insertion_order.size() > kLayoutCacheEntries) {
-            cache.erase(insertion_order.front());
+        if (insertion_order.size() > kChoiceMemoEntries) {
+            memo.erase(insertion_order.front());
             insertion_order.pop_front();
         }
     }
     return choice;
 }
 
-}  // namespace
+}  // namespace tile_rows_planner
 
 bool is_tile_row_permutation(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape) {
-    return permutation_shapes(in_shape, out_shape).has_value();
+    return tile_rows_planner::permutation_shapes(in_shape, out_shape).has_value();
 }
 
-std::optional<TileRowsLayout> tile_rows_layout(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape) {
+std::optional<TileRowsChoice> plan_tile_rows(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape) {
+    using namespace tile_rows_planner;
     const auto shapes = permutation_shapes(in_shape, out_shape);
-    if (!shapes) {
+    if (!shapes || exceeds_caps(shapes->second)) {
         return std::nullopt;
     }
-    const auto choice = cached_choice(shapes->first, shapes->second);
-    if (!choice) {
-        return std::nullopt;
-    }
-    return choice->layout;
+    return memoized_choice(shapes->first, shapes->second);
 }
 
-TileRowsPlan build_tile_rows_plan(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape) {
-    const auto shapes = permutation_shapes(in_shape, out_shape);
-    TT_FATAL(shapes.has_value(), "Reshape is not a tile-row permutation");
-    const auto choice = cached_choice(shapes->first, shapes->second);
-    TT_FATAL(choice.has_value(), "Reshape tile-row plan exceeds its size caps");
+TileRowsPlan build_tile_rows_plan(
+    const ttnn::Shape& in_shape, const ttnn::Shape& out_shape, const TileRowsChoice& choice) {
+    using namespace tile_rows_planner;
+    std::shared_ptr<const TileRowsSchedule> schedule = choice.schedule;
+    if (!schedule) {
+        const auto shapes = permutation_shapes(in_shape, out_shape);
+        TT_FATAL(shapes.has_value(), "Reshape is not a tile-row permutation");
+        auto planned = std::make_shared<TileRowsSchedule>();
+        planned->inputs = prepare(shapes->first, shapes->second);
+        planned->batches = make_batches(planned->inputs, choice.max_out);
+        schedule = std::move(planned);
+    }
+    const PlanInputs& p = schedule->inputs;
+    const auto& batches = schedule->batches;
+    const TileFacts& tiles = p.tiles;
 
-    const PlanInputs p = prepare(shapes->first, shapes->second);
-    const auto batches = make_batches(p, choice->max_out);
     TileRowsPlan plan{.layout = layout_of(p, batches)};
     const TileRowsLayout& layout = plan.layout;
     plan.table.assign(static_cast<size_t>(layout.num_batches) * layout.page_words, 0);
@@ -327,22 +349,20 @@ TileRowsPlan build_tile_rows_plan(const ttnn::Shape& in_shape, const ttnn::Shape
         row[1] = static_cast<uint32_t>(batch.outs.size());
         std::copy(batch.ins.begin(), batch.ins.end(), row + kTileRowsHeaderWords);
         for (size_t j = 0; j < batch.outs.size(); ++j) {
-            const uint64_t out_page = batch.outs[j];
-            const auto s = row_sources(p.in, p.out, out_page);
-            const auto starts = run_starts(s);
+            const uint32_t out_page = batch.outs[j];
+            const uint32_t first_run = tiles.run_begin[out_page];
+            const uint32_t n_runs = tiles.run_begin[out_page + 1] - first_run;
             uint32_t* entry = row + entries_base + j * layout.entry_words();
-            entry[0] = static_cast<uint32_t>(out_page);
-            entry[1] = static_cast<uint32_t>(starts.size());
-            for (size_t r = 0; r < starts.size(); ++r) {
-                const uint32_t first = starts[r];
-                const uint32_t rows = (r + 1 < starts.size() ? starts[r + 1] : kTileDim) - first;
+            entry[0] = out_page;
+            entry[1] = n_runs;
+            for (uint32_t r = 0; r < n_runs; ++r) {
+                const uint32_t source = tiles.run_source[first_run + r];
                 uint32_t slot = kZeroSlot;
-                if (s.tile[first] != kNoSource) {
+                if (source != kNoSource) {
                     slot = static_cast<uint32_t>(
-                        std::lower_bound(batch.ins.begin(), batch.ins.end(), s.tile[first]) - batch.ins.begin());
+                        std::lower_bound(batch.ins.begin(), batch.ins.end(), source) - batch.ins.begin());
                 }
-                entry[kTileRowsEntryHeaderWords + r] =
-                    (slot << kRunSlotShift) | (s.row[first] << kRunSrcRowShift) | (first << kRunDstRowShift) | rows;
+                entry[kTileRowsEntryHeaderWords + r] = (slot << kRunSlotShift) | tiles.run_word[first_run + r];
             }
         }
     }
@@ -353,26 +373,6 @@ uint64_t tile_rows_l1_bytes(const TileRowsLayout& layout, uint32_t tile_bytes) {
     // Plan CB double-buffers one page, the input CB two batches of slots, plus the write ring and a zero tile.
     return 2ull * layout.page_bytes() +
            (2ull * layout.in_slots + kTileRowsWriteGroup + 1) * static_cast<uint64_t>(tile_bytes);
-}
-
-bool tile_rows_beats_native(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape, uint32_t num_cores) {
-    const auto shapes = permutation_shapes(in_shape, out_shape);
-    const auto choice = shapes ? cached_choice(shapes->first, shapes->second) : std::nullopt;
-    if (!choice) {
-        return false;
-    }
-    // A width change copies one row per run and loses below the read cut; a refold of whole face halves wins once
-    // native needs more than one round.
-    return choice->native_reads >= kTileRowsMinReadCut * choice->batch_reads ||
-           (choice->runs <= kMinRunsPerTile * choice->layout.num_output_pages &&
-            choice->layout.num_output_pages > num_cores);
-}
-
-bool tile_rows_fits(const Tensor& input, const ttnn::Shape& logical_output_shape, uint64_t l1_budget) {
-    const uint32_t tile_bytes =
-        input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
-    const auto rows_layout = tile_rows_layout(input.logical_shape(), logical_output_shape);
-    return rows_layout.has_value() && tile_rows_l1_bytes(*rows_layout, tile_bytes) <= l1_budget;
 }
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen

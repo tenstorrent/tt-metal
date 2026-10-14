@@ -10,52 +10,56 @@
 
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_plan.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::data_movement::reshape_codegen {
 
-// The program one call runs, planned once against the L1 free at launch: the live free L1 less the output the launch
-// allocates. The device operation hashes, selects and builds from it and reads no allocator state itself.
-struct LaunchPlan {
-    uint64_t l1_budget = 0;
-    std::optional<tt::tt_metal::TensorSpec> output_spec;
-};
+// Why the codegen program cannot reproduce native's output for the caller's request (explicit padded shape, volume
+// change, explicit pad_value on a padded tile output), or nullptr. Shared by routing and the forced entry.
+const char* call_contract_violation(
+    const Tensor& input,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
+    const std::optional<ttnn::PadValue>& pad_value);
 
-struct CodegenDecision {
-    // supported_by_codegen's verdict. Not evaluated, so false, for a routing call native_faster settles.
-    bool supported = false;
-    // Routing only: native's kernel measures faster than the program the gate would admit. Forced codegen still runs
-    // these.
-    bool native_faster = false;
-    // The live plan, or nullopt when no program fits the L1 free now. Not planned for unsupported or native-faster
-    // routing calls.
-    std::optional<LaunchPlan> plan;
-};
-
-// Correctness and device-resource gate shared by ttnn::reshape routing, the forced entry and the codegen prim's
-// validation. Plans against static_l1_budget only: the gate runs more than once per call with the op's own output
-// allocated in between, so a live read could admit a call in routing and refuse it in validation.
-bool supported_by_codegen(
+// Why the codegen program cannot run this call, or nullptr. Budgets against static_l1_budget only, never live free
+// L1: the op allocates its output between routing and validation, so a live read could disagree with itself.
+const char* unsupported_reason(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
 
-// Output keeps the input's memory config and the whole compute grid is used.
-bool supported_by_codegen(const Tensor& input, const ttnn::Shape& logical_output_shape);
-
-// For `routing` whether native is faster, then the gate, then the live plan, sharing one geometry per program and one
-// live L1 read. Routing takes codegen when supported && !native_faster && plan; the forced entry needs supported and
-// fails without a plan. Without `plan_launch` it stops after the gate and reads no live L1.
-CodegenDecision decide_codegen(
+// unsupported_reason(...) == nullptr. Output keeps the input's memory config when none is given.
+bool supported_by_codegen(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
-    bool routing,
-    bool plan_launch = true);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
+bool supported_by_codegen(const Tensor& input, const ttnn::Shape& logical_output_shape);
 
-// Execution controls the codegen path can honour: `sub_core_grids`, when given, must be a non-empty subset of the
-// device's compute grid.
+// Perf routing only: native's tiled reshape measures faster than the tile-rows program, so routing sends the call
+// to native. The read-cut threshold was fitted on Blackhole. Never true for uint16, which native rejects.
+bool is_demoted(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
+
+// The plan when routing sends this call to codegen (supported_by_codegen && !is_demoted), else nullopt.
+std::optional<LaunchPlan> routed_launch_plan(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+
+// The plan for the forced entry, which ignores is_demoted; raises with unsupported_reason's text otherwise.
+LaunchPlan forced_launch_plan(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+
+// `sub_core_grids`, when given, must be a non-empty subset of the device's compute grid.
 bool supported_execution_controls(const Tensor& input, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen

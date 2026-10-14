@@ -6,10 +6,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
-
-#include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_plan.hpp"
-#include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_tile_rows_plan.hpp"
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::data_movement::reshape_codegen {
 
@@ -42,118 +39,117 @@ bool standard_tile_with_tight_padding(const Tensor& input) {
            padded[-2] == tt::round_up(logical[-2], tile.get_height());
 }
 
-// Whether native's tiled reshape measures faster than the tile-rows program (thresholds fitted on Blackhole). Native
-// rejects uint16.
-bool tile_native_faster(const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t num_cores) {
-    return input.dtype() != DataType::UINT16 &&
-           !tile_rows_beats_native(input.logical_shape(), logical_output_shape, num_cores);
-}
-
-// Every check of the gate that needs no plan. None builds a spec or reads the allocator, so they run before
-// anything that does, and the core grid is only built for a call that passes the rest.
-bool in_scope(
+// Checks that need neither a plan nor a spec, cheapest first.
+const char* scope_violation(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     if (input.storage_type() != ttnn::StorageType::DEVICE || input.buffer() == nullptr) {
-        return false;
+        return "input is not an allocated device tensor";
     }
-    // Every program moves bytes, so any 2 or 4 B type the kernels copy in halfwords or words works alike.
+    // The program moves bytes, so any 2 or 4 B type the kernels copy in halfwords or words works alike.
     switch (input.dtype()) {
         case DataType::BFLOAT16:
         case DataType::FLOAT32:
         case DataType::INT32:
         case DataType::UINT32:
         case DataType::UINT16: break;
-        default: return false;
+        default: return "dtype is not bfloat16, float32, int32, uint32 or uint16";
     }
     if (!is_plain_interleaved(input.memory_config()) || !is_plain_interleaved(output_mem_config)) {
-        return false;
+        return "input or output is not interleaved in DRAM or L1";
     }
     const auto& in_shape = input.logical_shape();
-    if (in_shape == logical_output_shape || in_shape.volume() == 0 ||
-        in_shape.volume() != logical_output_shape.volume()) {
-        return false;
+    if (in_shape == logical_output_shape) {
+        return "output shape equals the input shape";
     }
-    if (input.layout() != Layout::TILE || !standard_tile_with_tight_padding(input) ||
-        !is_tile_row_permutation(in_shape, logical_output_shape)) {
-        return false;
+    if (in_shape.volume() == 0 || in_shape.volume() != logical_output_shape.volume()) {
+        return "input is empty or the volume changes";
     }
-    return supported_execution_controls(input, sub_core_grids);
+    if (input.layout() != Layout::TILE || !standard_tile_with_tight_padding(input)) {
+        return "input is not TILE with 32x32 tiles padded only in the last two dims";
+    }
+    if (!is_tile_row_permutation(in_shape, logical_output_shape)) {
+        return "input or output last dim is not a multiple of 32";
+    }
+    if (!supported_execution_controls(input, sub_core_grids)) {
+        return "sub_core_grids is not a non-empty subset of the compute grid";
+    }
+    return nullptr;
 }
 
-// The budget-independent half of the program, built once per call and fitted to both the static and the live budget.
-class Geometry {
-public:
-    Geometry(
-        const Tensor& input,
-        const ttnn::Shape& logical_output_shape,
-        const tt::tt_metal::MemoryConfig& output_mem_config) :
-        input_(input),
-        logical_output_shape_(logical_output_shape),
-        output_spec_(reshape_codegen::output_spec(input, logical_output_shape, output_mem_config)) {}
-
-    const tt::tt_metal::TensorSpec& output_spec() const { return output_spec_; }
-
-    bool tile_rows_fit(uint64_t l1_budget) const { return tile_rows_fits(input_, logical_output_shape_, l1_budget); }
-
-private:
-    const Tensor& input_;
-    const ttnn::Shape& logical_output_shape_;
-    tt::tt_metal::TensorSpec output_spec_;
-};
-
-}  // namespace
-
-bool supported_execution_controls(
-    const Tensor& input, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
-    if (!sub_core_grids.has_value()) {
-        return true;
-    }
-    const auto grid = input.device()->compute_with_storage_grid_size();
-    const tt::tt_metal::CoreRangeSet compute_grid(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
-    return sub_core_grids->num_cores() > 0 && compute_grid.contains(*sub_core_grids);
-}
-
-CodegenDecision decide_codegen(
+const char* static_fit_violation(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
-    bool routing,
-    bool plan_launch) {
-    CodegenDecision decision;
-    if (!in_scope(input, logical_output_shape, output_mem_config, sub_core_grids)) {
-        return decision;
+    const TileRowsChoice& choice) {
+    const uint32_t tile_bytes =
+        input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
+    const uint64_t budget = static_l1_budget(input, output_spec(input, logical_output_shape, output_mem_config));
+    if (tile_rows_l1_bytes(choice.layout, tile_bytes) > budget) {
+        return "tile-row buffers do not fit the static L1 budget";
     }
-    // Routing runs native whenever native is faster, admitted or not, so that is settled first: it needs only the
-    // memoized plan layout and the core count, and a native-routed call builds no spec and reads no allocator state.
-    if (routing && tile_native_faster(input, logical_output_shape, reshape_core_count(input, sub_core_grids))) {
-        decision.native_faster = true;
-        return decision;
-    }
-    Geometry geometry(input, logical_output_shape, output_mem_config);
-    const uint64_t static_budget = static_l1_budget(input, geometry.output_spec());
-    if (!geometry.tile_rows_fit(static_budget)) {
-        return decision;
-    }
-    decision.supported = true;
-    if (!plan_launch) {
-        return decision;
-    }
+    return nullptr;
+}
 
-    // The launch allocates the output before the program runs, so hold its reservation back now.
-    const auto& spec = geometry.output_spec();
-    const uint64_t reservation =
-        get_pending_l1_output_reservation(input, spec.padded_shape(), output_mem_config, input.dtype(), input.layout());
-    const uint64_t live = live_l1_budget(input);
-    LaunchPlan plan{.l1_budget = live > reservation ? live - reservation : 0, .output_spec = spec};
-    if (!geometry.tile_rows_fit(plan.l1_budget)) {
-        return decision;
+constexpr const char* kPlanCapsViolation = "tile-row plan exceeds its size caps";
+
+// Native reshapes one output tile per core per round and reads every source tile it touches; tile rows puts a
+// batch of at least 8 output tiles on one core, so it needs 8x fewer reads to win. Fitted on Blackhole.
+constexpr uint64_t kTileRowsMinReadCut = 8;
+// Two runs per output tile means every output tile is whole face halves of its sources.
+constexpr uint64_t kWholeHalfRunsPerTile = 2;
+
+bool native_faster(const Tensor& input, const TileRowsChoice& choice, uint32_t num_cores) {
+    if (input.dtype() == DataType::UINT16) {
+        return false;
     }
-    decision.plan = std::move(plan);
-    return decision;
+    // A width change copies one row per run and loses below the read cut; a refold of whole face halves wins once
+    // native needs more than one round.
+    const bool read_cut = choice.native_reads >= kTileRowsMinReadCut * choice.batch_reads;
+    const bool whole_halves = choice.runs <= kWholeHalfRunsPerTile * choice.layout.num_output_pages &&
+                              choice.layout.num_output_pages > num_cores;
+    return !read_cut && !whole_halves;
+}
+
+}  // namespace
+
+const char* call_contract_violation(
+    const Tensor& input,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
+    const std::optional<ttnn::PadValue>& pad_value) {
+    if (padded_shape != logical_shape || logical_shape.volume() != input.logical_volume()) {
+        return "explicit padded shape or volume change";
+    }
+    const bool padded_tile_output = logical_shape.rank() >= 2 && (logical_shape[-1] % tt::constants::TILE_WIDTH != 0 ||
+                                                                  logical_shape[-2] % tt::constants::TILE_HEIGHT != 0);
+    if (input.layout() == Layout::TILE && pad_value.has_value() && padded_tile_output) {
+        return "explicit pad_value on a padded tile output";
+    }
+    return nullptr;
+}
+
+bool supported_execution_controls(
+    const Tensor& input, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    return !sub_core_grids.has_value() ||
+           (sub_core_grids->num_cores() > 0 && reshape_core_grid(input).contains(*sub_core_grids));
+}
+
+const char* unsupported_reason(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    if (const char* violation = scope_violation(input, logical_output_shape, output_mem_config, sub_core_grids)) {
+        return violation;
+    }
+    const auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
+    if (!choice) {
+        return kPlanCapsViolation;
+    }
+    return static_fit_violation(input, logical_output_shape, output_mem_config, *choice);
 }
 
 bool supported_by_codegen(
@@ -161,13 +157,53 @@ bool supported_by_codegen(
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
-    return decide_codegen(
-               input, logical_output_shape, output_mem_config, sub_core_grids, /*routing=*/false, /*plan_launch=*/false)
-        .supported;
+    return unsupported_reason(input, logical_output_shape, output_mem_config, sub_core_grids) == nullptr;
 }
 
 bool supported_by_codegen(const Tensor& input, const ttnn::Shape& logical_output_shape) {
     return supported_by_codegen(input, logical_output_shape, input.memory_config());
+}
+
+bool is_demoted(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    if (input.storage_type() != ttnn::StorageType::DEVICE || input.layout() != Layout::TILE) {
+        return false;
+    }
+    const auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
+    return choice.has_value() && native_faster(input, *choice, reshape_core_grid(input, sub_core_grids).num_cores());
+}
+
+std::optional<LaunchPlan> routed_launch_plan(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    if (scope_violation(input, logical_output_shape, output_mem_config, sub_core_grids) != nullptr) {
+        return std::nullopt;
+    }
+    auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
+    // Demotion is settled before the static fit, so a native-routed call builds no output spec.
+    if (!choice || native_faster(input, *choice, reshape_core_grid(input, sub_core_grids).num_cores()) ||
+        static_fit_violation(input, logical_output_shape, output_mem_config, *choice) != nullptr) {
+        return std::nullopt;
+    }
+    return LaunchPlan{.tile_rows = std::move(*choice)};
+}
+
+LaunchPlan forced_launch_plan(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const char* violation = scope_violation(input, logical_output_shape, output_mem_config, sub_core_grids);
+    TT_FATAL(violation == nullptr, "reshape_force_codegen: outside the codegen scope: {}", violation);
+    auto choice = plan_tile_rows(input.logical_shape(), logical_output_shape);
+    TT_FATAL(choice.has_value(), "reshape_force_codegen: outside the codegen scope: {}", kPlanCapsViolation);
+    violation = static_fit_violation(input, logical_output_shape, output_mem_config, *choice);
+    TT_FATAL(violation == nullptr, "reshape_force_codegen: outside the codegen scope: {}", violation);
+    return LaunchPlan{.tile_rows = std::move(*choice)};
 }
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen

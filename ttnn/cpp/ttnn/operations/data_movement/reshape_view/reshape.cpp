@@ -566,22 +566,6 @@ namespace {
 
 enum class ReshapeImpl { ROUTED, NATIVE, CODEGEN };
 
-// Why the codegen implementation cannot reproduce native's output for this call, or nullptr when it can.
-const char* codegen_scope_violation(
-    const ttnn::Tensor& tensor,
-    const ttnn::Shape& logical_shape,
-    const ttnn::Shape& padded_shape,
-    const std::optional<PadValue>& pad_value) {
-    if (padded_shape != logical_shape || logical_shape.volume() != tensor.logical_volume()) {
-        return "explicit padded shape or volume change is outside the codegen scope";
-    }
-    if (tensor.layout() == ttnn::TILE_LAYOUT && pad_value.has_value() && logical_shape.rank() >= 2 &&
-        has_inner_2d_tile_padding(logical_shape)) {
-        return "explicit pad_value on a padded tile output is outside the codegen scope";
-    }
-    return nullptr;
-}
-
 ttnn::Tensor reshape_dispatch(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_input_shape,
@@ -601,21 +585,15 @@ ttnn::Tensor reshape_dispatch(
         operations::data_movement::shape_corrector(tensor, logical_input_shape, padded_input_shape);
 
     if (impl == ReshapeImpl::CODEGEN) {
-        TT_FATAL(is_device_tensor(tensor), "reshape_force_codegen requires a device tensor");
-        TT_FATAL(
-            !operations::data_movement::is_nd_sharded_memory_config(mem_config) &&
-                !operations::data_movement::is_nd_sharded_memory_config(tensor.memory_config()),
-            "reshape_force_codegen does not support ND-sharded input or output");
-        TT_FATAL(
-            reshape_codegen::supported_execution_controls(tensor, sub_core_grid),
-            "reshape_force_codegen: sub_core_grids must be a non-empty subset of the compute grid");
-        const char* out_of_scope = codegen_scope_violation(tensor, logical_shape, padded_shape, pad_value);
-        TT_FATAL(out_of_scope == nullptr, "reshape_force_codegen: {}", out_of_scope);
-        auto decision =
-            reshape_codegen::decide_codegen(tensor, logical_shape, mem_config, sub_core_grid, /*routing=*/false);
-        TT_FATAL(decision.supported, "reshape_force_codegen: input is outside the codegen scope");
-        TT_FATAL(decision.plan.has_value(), "reshape_force_codegen: no codegen program fits the L1 currently free");
-        return ttnn::prim::reshape_codegen(tensor, logical_shape, mem_config, sub_core_grid, std::move(*decision.plan));
+        const char* violation =
+            reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value);
+        TT_FATAL(violation == nullptr, "reshape_force_codegen: outside the codegen scope: {}", violation);
+        return ttnn::prim::reshape_codegen(
+            tensor,
+            logical_shape,
+            mem_config,
+            sub_core_grid,
+            reshape_codegen::forced_launch_plan(tensor, logical_shape, mem_config, sub_core_grid));
     }
 
     // No reshape required only when the shape AND the memory config are unchanged. A same-shape
@@ -766,12 +744,9 @@ ttnn::Tensor reshape_dispatch(
             tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
     }
     if (impl == ReshapeImpl::ROUTED &&
-        codegen_scope_violation(tensor, logical_shape, padded_shape, pad_value) == nullptr) {
-        auto decision =
-            reshape_codegen::decide_codegen(tensor, logical_shape, mem_config, sub_core_grid, /*routing=*/true);
-        if (decision.supported && !decision.native_faster && decision.plan.has_value()) {
-            return ttnn::prim::reshape_codegen(
-                tensor, logical_shape, mem_config, sub_core_grid, std::move(*decision.plan));
+        reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value) == nullptr) {
+        if (auto plan = reshape_codegen::routed_launch_plan(tensor, logical_shape, mem_config, sub_core_grid)) {
+            return ttnn::prim::reshape_codegen(tensor, logical_shape, mem_config, sub_core_grid, std::move(*plan));
         }
     }
     if (logical_shape.volume() != tensor.logical_volume()) {
