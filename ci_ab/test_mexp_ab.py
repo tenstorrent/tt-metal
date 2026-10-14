@@ -12,6 +12,15 @@ MIX = {
     "p": (["bfp4", "bfp2", "bfp0"], {"bfp4": 55, "bfp2": 41, "bfp0": 4}),
     "b": (["bfp4", "bfp2", "bfp0"], {"bfp4": 74.4, "bfp2": 7.3, "bfp0": 18.3}),
 }
+SPLIT = int(os.environ.get("MEXP_SPLIT", "1"))
+if SPLIT > 1:
+    import functools
+
+    import models.demos.deepseek_v3_b1.tests.unit_tests.per_core_allocation.test_matmul_expert as tme
+
+    tme.create_dram_expert_tensors_multi_device = functools.partial(
+        tme.create_dram_expert_tensors_multi_device, num_in1_buffers=3 * SPLIT
+    )
 CASES = [c for c in os.environ.get("MEXP_CASES", "g_p_1,g_p_100,g_b_1,g_b_100,d_p_1,d_p_100,d_b_1,d_b_100").split(",") if c]
 
 
@@ -31,8 +40,8 @@ def test_mexp(device, case):
         num_loop_iters=int(loops),
     )
     if shape == "g":
-        run(device, K=7168, N=256, dram_fuse_silu=True, num_subblocks_k=4, num_subblocks_n=1,
+        run(device, K=7168, N=256, dram_fuse_silu=True, num_subblocks_k=4 * SPLIT, num_subblocks_n=1,
             n_parallel_per_bank=1, k_parallel_per_bank=2, **common)
     else:
-        run(device, K=256, N=7168, accum_experts=True, num_subblocks_k=1, num_subblocks_n=2,
+        run(device, K=256, N=7168, accum_experts=True, num_subblocks_k=1 * SPLIT, num_subblocks_n=2,
             n_parallel_per_bank=2, k_parallel_per_bank=1, **common)
