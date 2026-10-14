@@ -4,6 +4,7 @@
 
 #include "ternary.hpp"
 
+#include <cmath>
 #include <utility>
 #include <variant>
 #include <cstdint>
@@ -95,6 +96,27 @@ inline bool is_integer_dtype(DataType dtype) {
            dtype == DataType::UINT8;
 }
 
+// The scalar is packed with a static_cast to the tensor's int32/uint32 dtype, which is faithful only for a
+// finite integer inside that range. The bounds are powers of two so the float comparison cannot round them.
+void validate_where_scalar_for_integer_tensor(float scalar, DataType tensor_dtype) {
+    if (tensor_dtype != DataType::INT32 && tensor_dtype != DataType::UINT32) {
+        return;
+    }
+    bool exact = std::isfinite(scalar) && std::trunc(scalar) == scalar;
+    if (exact) {
+        exact = tensor_dtype == DataType::INT32 ? (scalar >= -2147483648.0f && scalar < 2147483648.0f)
+                                                : (scalar >= 0.0f && scalar < 4294967296.0f);
+    }
+    TT_FATAL(
+        exact,
+        "ttnn.where with a {} tensor cannot represent the scalar {}: only a finite integer within the range of {} "
+        "survives being packed as one, and this value would be changed silently. Typecast the tensor to a "
+        "floating-point dtype first.",
+        tensor_dtype,
+        scalar,
+        tensor_dtype);
+}
+
 // TTT: tensor, tensor, tensor
 Tensor invoke_impl(
     const Tensor& predicate,
@@ -136,6 +158,7 @@ Tensor invoke_impl(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    validate_where_scalar_for_integer_tensor(scalar_false, t_true.dtype());
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true);
     if (typecast_needed) {
@@ -159,6 +182,7 @@ Tensor invoke_impl(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    validate_where_scalar_for_integer_tensor(scalar_true, t_false.dtype());
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_false);
     if (typecast_needed) {
