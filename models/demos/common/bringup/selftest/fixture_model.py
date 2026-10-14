@@ -14,6 +14,8 @@ state.fixed).
 Spec ``fixture.shared: {consumer: source}`` makes a layer read another layer's state instead of keeping its own
 (F65, hooks ``state_sources``): from a KV source, causal attention of its own queries over the source's keys and values
 (which the source wrote for this chunk); from a recurrent source, its queries times the source's state after the chunk.
+Spec ``fixture.token_layers: [i, ...]`` adds a term keyed on the chunk's token ids to those layers' attention residual
+(like an n-gram lookup): it reads ``ctx.extra["tokens"]``, which the harness and the device model's begin_chunk give.
 """
 
 from __future__ import annotations
@@ -47,6 +49,14 @@ def recurrent_layers(spec) -> set[int]:
     return set(spec.get("fixture.recurrent_layers") or []) if spec is not None else set()
 
 
+def token_layers(spec) -> set[int]:
+    return set(spec.get("fixture.token_layers") or []) if spec is not None else set()
+
+
+def token_term(w, tokens):
+    return 0.1 * w["embed"][tokens].flip(-1)
+
+
 def shared_layers(spec) -> dict[int, int]:
     return {int(k): int(v) for k, v in (spec.get("fixture.shared") or {}).items()} if spec is not None else {}
 
@@ -76,6 +86,7 @@ class Reference:
         self.broken_graph = broken_graph
         self.recurrent = recurrent_layers(spec)
         self.shared = shared_layers(spec)
+        self.token_layers = token_layers(spec)
 
     def new_state(self, max_seq):
         return State(self.layer_ids, max_seq, self.recurrent, self.shared)
@@ -136,7 +147,9 @@ class Reference:
         table = {
             "attn_norm": lambda ctx, x: norm(x),
             "attention": attention,
-            "attn_residual": lambda ctx, a, b: a + b,
+            "attn_residual": lambda ctx, a, b: a
+            + b
+            + (token_term(self.w, ctx.extra["tokens"]) if layer in self.token_layers else 0.0),
             "ffn_norm": lambda ctx, x: norm(x),
             "mlp": lambda ctx, x: F.silu(x @ w["w1"].T) @ w["w2"].T,
             "mlp_residual": lambda ctx, a, b: a + b + (1e-3 if self.broken_graph else 0.0),
@@ -149,6 +162,7 @@ class Reference:
         rec("embed", h)
         for i in self.layer_ids:
             ctx = self.chunk_context(i, start, tokens.shape[0], state)
+            ctx.extra["tokens"] = tokens
             comp = (lambda i: lambda name: self.component(i, name))(i)
             steps = self.block_graph(i)
             if self.broken_graph:  # the forward differs from what the graph claims (mlp_residual adds 1e-3)
@@ -182,9 +196,9 @@ class _HFLayer(torch.nn.Module):
     """Independent one-shot implementation (causal attention over the whole sequence, no state). A shared layer reads
     the keys and values its source layer left in ``kv``."""
 
-    def __init__(self, w, recurrent=False, idx=0, source=None, kv=None):
+    def __init__(self, w, recurrent=False, idx=0, source=None, kv=None, tok=None):
         super().__init__()
-        self.w = w
+        self.w, self.tok = w, tok
         self.recurrent = recurrent
         self.idx, self.source, self.kv = idx, source, kv
 
@@ -201,7 +215,7 @@ class _HFLayer(torch.nn.Module):
             k, v = self.kv[self.source]
         s = (x @ w["wq"].T) @ k.T / H**0.5
         s = s.masked_fill(torch.triu(torch.ones(s.shape, dtype=torch.bool), 1), float("-inf"))
-        h = h + torch.softmax(s, -1) @ v
+        h = h + torch.softmax(s, -1) @ v + (self.tok() if self.tok else 0.0)
         return (h + F.silu(norm(h) @ w["w1"].T) @ w["w2"].T,)
 
 
@@ -211,17 +225,20 @@ class _HFOut:
 
 
 class HFTwin(torch.nn.Module):
-    def __init__(self, num_layers=None, recurrent=(), shared=None):
+    def __init__(self, num_layers=None, recurrent=(), shared=None, tok_layers=()):
         super().__init__()
         self.w = weights()
         n = num_layers or LAYERS
         self.model = torch.nn.Module()
-        kv, shared = {}, shared or {}
+        kv, shared, self.tokens = {}, shared or {}, None
+        tok = lambda: token_term(self.w, self.tokens)  # noqa: E731
         self.model.layers = torch.nn.ModuleList(
-            _HFLayer(self.w["layers"][i], i in recurrent, i, shared.get(i), kv) for i in range(n)
+            _HFLayer(self.w["layers"][i], i in recurrent, i, shared.get(i), kv, tok if i in tok_layers else None)
+            for i in range(n)
         )
 
     def forward(self, tokens, use_cache=False):
+        self.tokens = tokens[0]
         h = self.w["embed"][tokens[0]]
         for layer in self.model.layers:
             h = layer(h)[0]
@@ -243,7 +260,7 @@ def reference(spec, layers=None, dtype=torch.float32):
 
 
 def hf_model(spec, num_layers):
-    return HFTwin(num_layers, recurrent_layers(spec), shared_layers(spec))
+    return HFTwin(num_layers, recurrent_layers(spec), shared_layers(spec), token_layers(spec))
 
 
 def state_sources(spec, layer):
@@ -277,7 +294,7 @@ def device_component(mesh, spec, layer, name):
             ref.load_state(state, layer, ctx.extra["state_prefix"], ctx.extra["prefix_len"])
         for j, t in ctx.extra.get("source_state", {}).items():  # F65: the source layers' state after this chunk
             ref.load_state(state, j, t, ctx.extra["source_len"])
-        return _noisy(cpu(Ctx(layer, ctx.start, ctx.length, state), *x), layer)
+        return _noisy(cpu(Ctx(layer, ctx.start, ctx.length, state, {"tokens": ctx.extra.get("tokens")}), *x), layer)
 
     return fn
 
@@ -302,6 +319,9 @@ class FakeDeviceModel:
     def new_state(self, max_seq):
         return _FakeState(self.ref, max_seq)
 
+    def begin_chunk(self, tokens, start):
+        self.tokens = tokens
+
     def embed(self, tokens):
         return self.ref.w["embed"][tokens]
 
@@ -313,6 +333,7 @@ class FakeDeviceModel:
 
     def layer(self, i, h, start, state):
         ctx = self.ref.chunk_context(i, start, h.shape[0], state.s)
+        ctx.extra["tokens"] = self.tokens
         out = run_block(self.ref.block_graph(i), lambda n: self.ref.component(i, n), ctx, h)
         return _noisy(out, 100 + i)
 

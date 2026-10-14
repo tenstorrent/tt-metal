@@ -22,6 +22,8 @@ earlier layer computed for the chunk (top-k indices, a candidate pool), keeps no
 module then defines ``state_sources(spec, layer) -> [earlier layers]``; per-chunk results the readers need are state
 tensors of the source (in ``state.fixed``: goldens snapshot them at chunk ends). Tests load the sources' state as of
 the end of the chunk (the sources have already run it); a layer subset must include every selected layer's sources.
+A step keyed on the chunk's token ids (e.g. an n-gram table lookup) reads ``ctx.extra["tokens"]``: forward_chunk sets
+it, and so do the test harness and the reference check; the device model gets them through ``begin_chunk``.
 
 Recorder names. ``forward_chunk`` calls ``rec(name, tensor)`` at every boundary: ``embed``, ``final_norm``,
 ``logits``, and per layer ``L{i}.in`` (block input), ``L{i}.<step output>`` for every step, where the last step's

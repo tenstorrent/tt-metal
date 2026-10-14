@@ -935,3 +935,8 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   sources and snapshots fixed state at the end of every dumped chunk too; the memory check needs state entries only for
   layers that have state.
 - Selftests: test_shared_state.py on the fixture (`fixture.shared`: a KV source and a recurrent source).
+- Token ids for steps keyed on them (DeepSeek-V4.1's engram: an n-gram hash of the token ids selects table rows):
+  `ctx.extra["tokens"]` in every test context (harness reference_ctx / device_ctx, the reference check's replay;
+  forward_chunk sets it itself), and an optional device-model hook `begin_chunk(tokens, start)` that the ladder,
+  profile, positions, smoke and op-report loops call before a chunk's first layer (a stack that starts from a golden
+  block input never calls `embed`). Fixture `token_layers`; 2 more selftests.

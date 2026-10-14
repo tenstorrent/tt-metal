@@ -16,11 +16,13 @@ Device hooks a model provides (the implement role writes them):
     device_params(spec) -> dict                     mesh fixture params (fabric config, l1_small_size, ...)
     device_component(mesh, spec, layer, step) -> fn(ctx, *host inputs) -> host tensor
         ctx.extra: state_prefix ({name: tensor} from the golden, positions [0, prefix_len) valid; a fixed-size tensor
-        (spec state.fixed) is the state as of prefix_len), prefix_len, max_seq; for a layer that reads other layers'
+        (spec state.fixed) is the state as of prefix_len), prefix_len, max_seq, tokens (the chunk's token ids); for a layer that reads other layers'
         state (hooks state_sources, F65) also source_state ({source layer: {name: tensor}} as of source_len, the end
         of this chunk: the sources have already run it) and source_len
     device_model(mesh, spec, layers, lm_head=True) -> object with
         load_seconds, new_state(max_seq), embed(tokens), from_host(h [S, H]), layer(i, h, start, state),
+        begin_chunk(tokens, start) (optional, F65: called with the chunk's token ids before its first layer, also when
+        the stack starts from a golden block input; e.g. host-side lookups keyed on token ids),
         final_norm(h), to_host(h) -> [S, H], logits(hidden, rows) -> [len(rows), V], free(h), sync()
         state.load_prefix(layer, tensors, length), state.to_torch(layer, length) -> {name: tensor}
         (layer(i, h, 0, state) starts a new sequence: a fixed-size state resets there)
@@ -86,6 +88,12 @@ def sources(layer: int, s=None) -> list[int]:
     return (s or spec()).state_sources(layer)
 
 
+def begin_chunk(model, tokens, start: int) -> None:
+    """F65: hand the device model the chunk's token ids before its first layer runs (optional hook)."""
+    if hasattr(model, "begin_chunk"):
+        model.begin_chunk(tokens, start)
+
+
 def reference_ctx(ref, layer: int, g: Golden, c: int, s=None):
     """The reference's context for chunk c: the layer's own state before the chunk, and its source layers' state
     after it (they run the chunk before this layer does)."""
@@ -95,12 +103,15 @@ def reference_ctx(ref, layer: int, g: Golden, c: int, s=None):
         ref.load_state(state, layer, g.state(layer, at=start), start)
     for j in sources(layer, s):
         ref.load_state(state, j, g.state(j, at=end), end)
-    return ref.chunk_context(layer, start, g.chunk, state)
+    ctx = ref.chunk_context(layer, start, g.chunk, state)
+    ctx.extra.setdefault("tokens", g.tokens()[start:end])  # F65: steps keyed on token ids (e.g. an n-gram lookup)
+    return ctx
 
 
 def device_ctx(layer: int, g: Golden, c: int, s=None) -> Ctx:
     start, end = c * g.chunk, (c + 1) * g.chunk
     extra = {"state_prefix": g.state(layer, at=start), "prefix_len": start, "max_seq": g.seq}
+    extra["tokens"] = g.tokens()[start:end]  # F65: the chunk's token ids
     src = sources(layer, s)
     if src:
         extra.update(source_state={j: g.state(j, at=end) for j in src}, source_len=end)
