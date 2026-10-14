@@ -21,7 +21,12 @@ constexpr uint8_t VC_ID = get_compile_time_arg_val(9);
 
 // Select the EDM sender adapter type based on VC_ID:
 // VC0/VC1 use WorkerToFabricEdmSender (stream ID 22), VC2 uses WorkerToFabricEdmSenderVC2 (stream ID 30)
+#ifdef FABRIC2_WORKER
+#include "tt_metal/fabric/hw/inc/fabric2/fabric2_worker_adapter.hpp"
+using EdmSenderType = tt::tt_fabric::fabric2::Fabric2WorkerSender;  // Fabric 2.0: DRISC injection ring + x280 doorbell
+#else
 using EdmSenderType = std::conditional_t<VC_ID == 2, WorkerToFabricEdmSenderVC2, WorkerToFabricEdmSender>;
+#endif
 
 using SenderKernelConfigType =
     SenderKernelConfig<NUM_TRAFFIC_CONFIGS, IS_2D_FABRIC, LINE_SYNC, NUM_LOCAL_SYNC_CORES, EdmSenderType>;
