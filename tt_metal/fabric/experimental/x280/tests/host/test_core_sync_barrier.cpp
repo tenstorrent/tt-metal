@@ -35,8 +35,8 @@ struct CounterWorkerConfig : WordWorkerConfig {
 };
 
 constexpr core_sync::X280Endpoint kEndpoints[] = {
-    {1u, 1u, 0x3000u, false},
-    {1u, 2u, 0x3008u, false},
+    {{1u, 1u}, 0x3000u, false},
+    {{1u, 2u}, 0x3008u, false},
 };
 
 constexpr core_sync::WordArrival kWordArrivals[] = {
@@ -48,17 +48,17 @@ constexpr core_sync::WordArrival kMixedWordArrivals[] = {
     {core_sync_slot_addr(kReadyBase, 3u), 3u},
 };
 
-constexpr core_sync::HostGroup kReleaseGroup{10u, 10u, 11u, 10u, 0x4000u, 2u};
-constexpr core_sync::HostGroup kSingletonGroup{10u, 10u, 10u, 10u, 0x4000u, 1u};
+constexpr core_sync::HostGroup kReleaseGroup{{{10u, 10u}, {11u, 10u}}, 0x4000u, 2u};
+constexpr core_sync::HostGroup kSingletonGroup{{{10u, 10u}, {10u, 10u}}, 0x4000u, 1u};
 constexpr core_sync::HostGroup kThreeGroups[] = {
-    {10u, 10u, 10u, 10u, 0x4000u, 1u},
-    {12u, 10u, 13u, 10u, 0x4100u, 2u},
-    {15u, 10u, 17u, 10u, 0x4200u, 3u},
+    {{{10u, 10u}, {10u, 10u}}, 0x4000u, 1u},
+    {{{12u, 10u}, {13u, 10u}}, 0x4100u, 2u},
+    {{{15u, 10u}, {17u, 10u}}, 0x4200u, 3u},
 };
 
 constexpr core_sync::HostGroup kMalformedGroups[] = {
-    {10u, 10u, 10u, 10u, 0x4000u, 1u},
-    {12u, 10u, 11u, 10u, 0x4100u, 1u},
+    {{{10u, 10u}, {10u, 10u}}, 0x4000u, 1u},
+    {{{12u, 10u}, {11u, 10u}}, 0x4100u, 1u},
 };
 
 /* Compares every field of the production group value used by the host fake. */
@@ -352,10 +352,10 @@ TEST(CoreSyncX280Roster, MalformedLaterGroupFailsBeforeWaitingOrReleasing) {
 TEST(CoreSyncX280Roster, ProductionPreflightRejectsMalformedTargets) {
     constexpr core_sync::WordArrival arrivals[] = {{0x1000u, 0u}};
     constexpr core_sync::X280Endpoint endpoints[] = {
-        {1u, 1u, 0x2000u, false},
+        {{1u, 1u}, 0x2000u, false},
     };
     constexpr core_sync::X280Group groups[] = {
-        {10u, 10u, 10u, 10u, 0x3000u, 1u},
+        {{{10u, 10u}, {10u, 10u}}, 0x3000u, 1u},
     };
     core_sync::X280Roster roster{
         .endpoints = endpoints,
@@ -420,8 +420,8 @@ TEST(CoreSyncMetalRoster, PreflightRejectsOutOfRangeTargets) {
 TEST(CoreSyncHostTransport, RecordedRosterOwnsBorrowedArrays) {
     MulticastTransport::reset();
     core_sync::WordArrival arrivals[] = {{0x1000u, 0u}};
-    core_sync::X280Endpoint endpoints[] = {{1u, 1u, 0x2000u, false}};
-    core_sync::HostGroup groups[] = {{10u, 10u, 10u, 10u, 0x3000u, 1u}};
+    core_sync::X280Endpoint endpoints[] = {{{1u, 1u}, 0x2000u, false}};
+    core_sync::HostGroup groups[] = {{{{10u, 10u}, {10u, 10u}}, 0x3000u, 1u}};
     const core_sync::HostRoster roster{
         .endpoints = endpoints,
         .endpoint_count = 1u,
@@ -434,8 +434,8 @@ TEST(CoreSyncHostTransport, RecordedRosterOwnsBorrowedArrays) {
     ASSERT_TRUE(MulticastTransport::wait_for_arrivals(roster, 6u, context));
     ASSERT_TRUE(MulticastTransport::notify_group(roster, 7u));
     arrivals[0] = {0x4000u, 3u};
-    endpoints[0] = {2u, 2u, 0x5000u, false};
-    groups[0] = {20u, 20u, 20u, 20u, 0x6000u, 1u};
+    endpoints[0] = {{2u, 2u}, 0x5000u, false};
+    groups[0] = {{{20u, 20u}, {20u, 20u}}, 0x6000u, 1u};
 
     ASSERT_EQ(MulticastTransport::calls.size(), 2u);
     for (const auto& call : MulticastTransport::calls) {
