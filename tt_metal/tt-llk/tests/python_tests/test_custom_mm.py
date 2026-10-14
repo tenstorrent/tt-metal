@@ -119,7 +119,7 @@ class CustomMMStimuliConfig(StimuliConfig):
         out_format,
         packed_a,
         packed_b,
-        in1_row_tiles=None,
+        in1_tiles=None,
     ):
         super().__init__(
             buffer_A=torch.zeros(
@@ -129,7 +129,7 @@ class CustomMMStimuliConfig(StimuliConfig):
             tile_count_A=kt,
             buffer_B=torch.zeros(1, dtype=torch.float32),  # placeholder
             stimuli_B_format=in1_format,
-            tile_count_B=kt * (in1_row_tiles or ct),
+            tile_count_B=in1_tiles or kt * ct,
             stimuli_res_format=out_format,
             tile_count_res=ct,
         )
@@ -159,12 +159,16 @@ def _run_custom_mm(
 
     ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
     ``in1_window`` lays B out ``stride`` tiles wide and computes the ct-tile column window at ``col_start``.
+    With ``read_transposed`` B is column-major instead, ``stride`` (default kt) tiles per column, the slots past
+    kt holding filler tiles, and one extra column after the window so a read past it lands on live data.
     ``in1_tile_w`` 16 uses [32, 16] B tiles, giving [M, 16] output tiles.
     """
     K = kt * DEFAULT_TILE_R_DIM
     N = ct * in1_tile_w
-    in1_row_tiles = in1_window.stride or ct
     col_start = in1_window.col_start
+    read_transposed = in1_window.read_transposed
+    in1_row_tiles = col_start + ct + 1 if read_transposed else in1_window.stride or ct
+    in1_col_tiles = in1_window.stride or kt if read_transposed else kt
     in1_tile_dims = [DEFAULT_TILE_R_DIM, in1_tile_w]
     in1_faces = 2 * in1_tile_w // FACE_C_DIM
     in0_format = formats.input_format
@@ -176,7 +180,10 @@ def _run_custom_mm(
     if operands is None:
         torch.manual_seed(0)
         torch_a = torch.randn((M, K), dtype=torch.float32)
-        torch_b = torch.randn((K, in1_row_tiles * in1_tile_w), dtype=torch.float32)
+        torch_b = torch.randn(
+            (in1_col_tiles * DEFAULT_TILE_R_DIM, in1_row_tiles * in1_tile_w),
+            dtype=torch.float32,
+        )
     else:
         torch_a, torch_b = operands
 
@@ -185,11 +192,12 @@ def _run_custom_mm(
     for i in range(kt * 2):
         packed_a += in0_packer(torch_a[:, i * FACE_C_DIM : (i + 1) * FACE_C_DIM])
 
-    # in1 (B -> SrcA): kt*in1_row_tiles full [32,32] tiles, k-major / c-minor -- the order the SrcA
-    # CFGSHIFTMASK walk reads them (read_transposed=false). The kernel reads a ct-wide window of each row.
-    packed_b = b""
+    # in1 (B -> SrcA): in1_col_tiles x in1_row_tiles full [32,32] tiles, k-major / c-minor -- the order the SrcA
+    # CFGSHIFTMASK walk reads them (read_transposed=false) -- or c-major / k-minor with read_transposed. The kernel
+    # reads a ct-wide window of each row. Rows past kt are filler that only a misaddressed read reaches.
+    packed_tiles = {}
     golden_b = torch_b.clone()
-    for r in range(kt):
+    for r in range(in1_col_tiles):
         for c in range(in1_row_tiles):
             blk = torch_b[
                 r * DEFAULT_TILE_R_DIM : (r + 1) * DEFAULT_TILE_R_DIM,
@@ -208,7 +216,7 @@ def _run_custom_mm(
                 if in1_format in _BFP_UNPACKERS
                 else in1_packer(tiled_blk)
             )
-            packed_b += packed_tile
+            packed_tiles[r, c] = packed_tile
             if in1_format in _BFP_UNPACKERS:
                 golden_b[
                     r * DEFAULT_TILE_R_DIM : (r + 1) * DEFAULT_TILE_R_DIM,
@@ -219,6 +227,13 @@ def _run_custom_mm(
                 ).reshape(
                     DEFAULT_TILE_R_DIM, in1_tile_w
                 )
+    tile_order = (
+        [(r, c) for c in range(in1_row_tiles) for r in range(in1_col_tiles)]
+        if read_transposed
+        else [(r, c) for r in range(in1_col_tiles) for c in range(in1_row_tiles)]
+    )
+    packed_b = b"".join(packed_tiles[rc] for rc in tile_order)
+    golden_b = golden_b[:K]
 
     # Golden: plain A @ B (LoFi), row-major, NOT tilized -- the device-side layout is
     # undone in the result reorder below. Instantiate MatmulGolden directly (not via
@@ -264,7 +279,7 @@ def _run_custom_mm(
             out_format,
             packed_a,
             packed_b,
-            in1_row_tiles,
+            in1_col_tiles * in1_row_tiles,
         ),
         dest_acc=dest_acc,
     )
@@ -447,6 +462,40 @@ def test_custom_mm_in1_window(M, kt, ct, stride, col_start, num_calls, in1_forma
         DestAccumulation.No,
         CUSTOM_MM_CALLS(num_calls=num_calls),
         in1_window=CUSTOM_MM_IN1_WINDOW(stride=stride, col_start=col_start),
+    )
+
+
+# Column-major in1 read with read_transposed: K steps one tile within an output column, and in1_stride is the
+# tile step between columns. ct == 1 takes its K step on the full-unpack tile, which must stay one tile
+# whatever the column stride is.
+READ_TRANSPOSED_CASES = [
+    # (id, M, kt, ct, stride, col_start, in1 format)
+    ("ct1-odd-k", 1, 3, 1, 0, 0, DataFormat.Float16_b),
+    ("ct1-stride", 4, 3, 1, 5, 2, DataFormat.Float16_b),
+    ("ct1-bfp4", 1, 4, 1, 0, 1, DataFormat.Bfp4_b),
+    ("ct3", 8, 4, 3, 0, 0, DataFormat.Float16_b),
+    ("ct2-stride-odd-k-bfp8", 2, 3, 2, 5, 1, DataFormat.Bfp8_b),
+    ("ct16", 1, 2, 16, 0, 0, DataFormat.Float16_b),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "M,kt,ct,stride,col_start,in1_format",
+    [pytest.param(*case[1:], id=case[0]) for case in READ_TRANSPOSED_CASES],
+)
+def test_custom_mm_read_transposed(M, kt, ct, stride, col_start, in1_format):
+    """A ct-wide window of a column-major in1, read with read_transposed, against that window's golden."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        in1_window=CUSTOM_MM_IN1_WINDOW(
+            stride=stride, col_start=col_start, read_transposed=True
+        ),
     )
 
 

@@ -71,7 +71,18 @@ constexpr std::uint32_t kt_per_call = KT_DIM / num_calls;
 static_assert(kt_per_call * num_calls == KT_DIM, "K tiles must split evenly across the calls");
 // in1 tiles per K row: CT_DIM for a packed in1, wider when the kernel reads a column window of it.
 constexpr std::uint32_t in1_row_tiles = CUSTOM_MM_IN1_STRIDE ? CUSTOM_MM_IN1_STRIDE : CT_DIM;
-static_assert(CUSTOM_MM_IN1_COL_START + CT_DIM <= in1_row_tiles, "the in1 window must fit in an in1 row");
+static_assert(CUSTOM_MM_READ_TRANSPOSED || CUSTOM_MM_IN1_COL_START + CT_DIM <= in1_row_tiles, "the in1 window must fit in an in1 row");
+// With CUSTOM_MM_READ_TRANSPOSED, in1 is column-major instead: in1_col_tiles tiles per output column, K tiles first.
+constexpr std::uint32_t in1_col_tiles = CUSTOM_MM_IN1_STRIDE ? CUSTOM_MM_IN1_STRIDE : KT_DIM;
+static_assert(!CUSTOM_MM_READ_TRANSPOSED || num_calls == 1 || CUSTOM_MM_IN1_STRIDE, "a split K needs the full column stride");
+static_assert(!CUSTOM_MM_READ_TRANSPOSED || KT_DIM <= in1_col_tiles, "the K tiles must fit in an in1 column");
+
+// First in1 tile of call c: its K row of the window, or its K offset into the window's first column.
+constexpr std::uint32_t in1_tile_index(const std::uint32_t call)
+{
+    return CUSTOM_MM_READ_TRANSPOSED ? CUSTOM_MM_IN1_COL_START * in1_col_tiles + call * kt_per_call
+                                     : call * kt_per_call * in1_row_tiles + CUSTOM_MM_IN1_COL_START;
+}
 
 #ifdef LLK_TRISC_UNPACK
 // TILE_SIZE_UNPACK_B is a full [32, 32] tile; a [32, 16] in1 (2 faces) is half of it in every format.
@@ -122,15 +133,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_AB_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM, params.num_faces_B);
 
     // SrcA=buffer_B (B matrix, full tiles), SrcB=buffer_A (A matrix). Call c takes K tiles
-    // [c * kt_per_call, (c + 1) * kt_per_call): B is k-major, so its tiles start at c * kt_per_call * in1_row_tiles,
+    // [c * kt_per_call, (c + 1) * kt_per_call), starting at in1_tile_index(c) in B,
     // and an in0 tile is 4 * in0_face_r_dim 16-byte words (TILE_SIZE_UNPACK_A is a full tile here).
     // Within a call the SrcA walk covers its kt*ct grid via CFGSHIFTMASK, the SrcB walk covers kt via counters.
     for (std::uint32_t call = 0; call < num_calls; call++)
     {
-        _llk_unpack_AB_custom_mm_<false /* read_transposed */>(
+        _llk_unpack_AB_custom_mm_<CUSTOM_MM_READ_TRANSPOSED>(
             L1_ADDRESS(params.buffer_B[0]),
             L1_ADDRESS(params.buffer_A[0]) + call * kt_per_call * 4 * params.in0_face_r_dim,
-            call * kt_per_call * in1_row_tiles + CUSTOM_MM_IN1_COL_START /* tile_index_a */,
+            in1_tile_index(call) /* tile_index_a */,
             0 /* tile_index_b */,
             in1_tile_size(params),
             params.TILE_SIZE_UNPACK_A,

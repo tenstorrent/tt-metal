@@ -333,7 +333,7 @@ inline void _llk_unpack_AB_custom_mm_(
     if constexpr (read_transposed)
     {
         const std::uint32_t column_stride = in1_stride ? in1_stride : kt_dim;
-        block_increment                   = column_stride * tile_size_a;
+        block_increment                   = (ct_dim == 1 ? 1 : column_stride) * tile_size_a;
         inner_increment                   = -(((ct_dim - 1) * column_stride) - 1) * tile_size_a;
     }
     else
