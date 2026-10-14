@@ -43,8 +43,8 @@ REG_Z_WEIGHT_STD = 0.062
 # Correlation length of the random BEV features, in cells. The encoder's BEV features are
 # spatially smooth; white noise instead makes every sample position error an O(1) change in
 # the sampled value, which the refinement feeds back into the next layer's positions. With
-# white noise the reference run on bfloat16-rounded inputs and weights (fp32 compute) falls
-# to PCC 0.65 against itself by the last layer on the 200x200 grid, so no bound on the TT
+# white noise the reference run on bfloat16-rounded inputs and weights (fp32 compute) loses
+# its correlation with itself by the last layer on the 200x200 grid, so no bound on the TT
 # port would mean anything.
 BEV_FEATURE_CELLS = 4
 
@@ -137,8 +137,8 @@ def build_reg_branches(seed=1):
 def random_reference_points(batch_size, generator=None):
     """Uniform in [0, 1], with a slice of points on and just inside the grid edges.
 
-    Edge points exercise out-of-bounds zero padding in grid_sample and the eps clamp of
-    inverse_sigmoid, which trained queries near the BEV border reach.
+    Edge points send samples off the BEV map, where out-of-bounds bilinear corners read zero,
+    and hit the eps clamp of inverse_sigmoid; trained queries near the BEV border reach both.
     """
     points = torch.rand(batch_size, NUM_QUERY, 3, generator=generator)
     edges = torch.tensor([0.0, 1e-3, 1.0 - 1e-3, 1.0])

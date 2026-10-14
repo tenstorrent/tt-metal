@@ -2,8 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTNN port of BEVFormer's detection decoder, from UniAD's ``TtDetectionTransformerDecoder``
-(``models/experimental/uniad/tt/ttnn_decoder.py``).
+"""TTNN port of BEVFormer's detection decoder (``reference/decoder.py``).
 
 The layers run batch-first, the layout the cross-attention and reg branches need. By
 default the decoder takes and returns the reference's sequence-first

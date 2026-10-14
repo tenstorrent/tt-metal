@@ -216,7 +216,7 @@ pair per `(level, point, corner)`, `4 * L * P` pairs per output tile.
 | `c_3` `input_tile` | reader → compute, the `V_corner` values | `2 * n_d_tiles` | 2048 |
 | `c_4` `scalar_tile` | reader → compute, `attn * bilinear_coeff` per row | 2 | 2048 |
 | `c_5` `output_scratch` | writer-only assembly of one head's `D`-stick | 1 | `align(D*2)` |
-| `c_6` `ref_scratch` | **V2 only** — reference points arena, in their dtype (`REF_FP32` selects the reader's fp32 path) | 32*R | `align(2*sizeof(ref))`: 4 B bf16, 8 B fp32 |
+| `c_6` `ref_scratch` | **V2 only** — reference points arena, in their dtype (`REF_FP32` selects the reader's fp32 path) | 32*R | `align(2*sizeof(ref))` (raw stick 4 B bf16, 8 B fp32) |
 | `c_16` `output_tile` | compute → writer, the accumulator | `2 * n_d_tiles` | 2048 |
 
 `n_d_tiles = ceil(D / 32)`.

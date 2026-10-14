@@ -110,7 +110,8 @@ The backbone and FPN tests use seeded random weights (`tests/backbone_weights.py
 Tests the six-layer detection decoder.
 
 **What it tests:**
-- The tiny (50x50) and base (200x200) BEV grids, a non-square 50x100 grid and batch size 2
+- The tiny (50x50) and base (200x200) BEV grids, a non-square 50x100 grid, batch size 2, and
+  batch size 2 with `batch_first=True`
 - PCC 0.99 on every layer's output and refined reference points; per-layer PCC of the refinement
   steps and the refined points' error in BEV pixels are logged
 - Traced runs: capture proves the forward has no host reads or writes, and the replay runs on new

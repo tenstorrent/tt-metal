@@ -69,7 +69,6 @@ def test_decoder_perf(device, reset_seeds):
     def run():
         return tt_model(**tt_inputs, reg_branches=tt_reg_branches)
 
-    # Doubles as the warmup: this call compiles the kernels and fills the program cache.
     _check(torch_outputs, run())
 
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)

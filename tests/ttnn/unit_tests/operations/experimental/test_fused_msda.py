@@ -858,7 +858,8 @@ def test_fused_msda_from_offsets_rejects_pillar_mode_indivisible_points(device, 
 
 @pytest.mark.parametrize("tensor", ["value", "sampling_offsets", "attention_weights"])
 def test_fused_msda_from_offsets_rejects_float32_inputs(device, expect_error, tensor):
-    """Only reference_points may be float32; the other inputs feed the bf16 tile path."""
+    """Only reference_points may be float32; the readers read value, sampling_offsets and
+    attention_weights as bf16."""
     value_t, off_t, attn_t, shapes = _valid_inputs(device)
     ref_t = _to_device(torch.rand(1, 8, 2, 2), device)
     inputs = {"value": value_t, "sampling_offsets": off_t, "attention_weights": attn_t}

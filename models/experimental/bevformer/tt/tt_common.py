@@ -2,9 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Conv shared by the ResNet101-DCN backbone and the FPN.
+"""Blocks shared across the port: the LayerNorm helper that passes the module's eps, used by the
+encoder and the decoder, and the conv the ResNet101-DCN backbone and the FPN share.
 
-Weights are prepared once, in the constructor, for one interleaved DRAM input dtype
+The conv's weights are prepared once, in the constructor, for one interleaved DRAM input dtype
 and layout. A later call with a different input fails. A 1x1 stride-1 conv whose
 activation lives in DRAM runs as a matmul; a spatial conv there runs in a fixed
 number of width slices.
