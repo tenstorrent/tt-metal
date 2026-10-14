@@ -4,7 +4,6 @@
 
 #include "ttnn/operations/transformer/sdpa/sparse_sdpa_msa.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_msa_device_operation.hpp"
-#include <tt-metalium/hal.hpp>
 #include <cmath>
 
 namespace ttnn::transformer {
@@ -62,7 +61,7 @@ ttnn::Tensor sparse_sdpa_msa(
     // fp8 Q needs 32-bit DEST for tilize; bf16 Q uses the default DEST width.
     const bool q_is_fp8 = (q.dtype() == ttnn::DataType::FP8_E4M3);
     auto kernel_config = init_device_compute_kernel_config(
-        tt::tt_metal::hal::get_arch(),
+        q.device()->arch(),
         compute_kernel_config,
         /*default_fidelity=*/tt::tt_metal::MathFidelity::HiFi2,
         /*default_approx_mode=*/true,
