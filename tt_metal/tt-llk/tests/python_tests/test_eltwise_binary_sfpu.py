@@ -858,6 +858,31 @@ def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop, **run_kwa
     )
 
 
+# Signed zeros as the remainder dividend, over divisors of both signs. The extended sweep draws from
+# the positive-only format default, so it never hands remainder a -0.0 dividend: the case where the
+# sign-correction guard compared a negative zero (SFPSETCC leaves that unspecified) and added the
+# divisor to an answer that was already zero. Ordinary pairs of every sign combination ride along.
+_REMAINDER_SIGNED_ZERO_PAIRS = [
+    (a, b) for a in (-0.0, 0.0) for b in (2.0, 3.0, 0.5, 7.25, -2.0, -3.0, -0.5)
+] + [(a, b) for a in (5.5, -5.5) for b in (2.0, -2.0)]
+
+
+# Float32 with a 32-bit Dest is the pipeline that delivers -0.0 to the SFPU intact.
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32]),
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_remainder_signed_zero(formats, dest_acc):
+    sfpu_binary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuBinaryRemainder,
+        src_A_override=_build_paired_tile_override(
+            _REMAINDER_SIGNED_ZERO_PAIRS, torch.float32
+        ),
+    )
+
+
 @parametrize(**MASK_SWEEP)
 def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop, **run_kwargs):
     # float mask: data at tile0, mask at tile1. Output is data where mask != 0, else 0.
