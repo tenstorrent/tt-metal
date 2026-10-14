@@ -455,7 +455,7 @@ TEST(PipelineStageLocalSpans, RejectsEmptyOutOfBoundsAndOverflowingRanges) {
         {PIPELINE_STAGE_PREPARED_LIM_END - 63u, 64u},
         {PIPELINE_STAGE_PREPARED_LIM_END, 1u},
         {PIPELINE_STAGE_PREPARED_LIM_END + 1u, 1u},
-        {UINT64_C(0x0A000000), 2576u},
+        {UINT64_C(0x0A000000), 2704u},
         {std::numeric_limits<uint64_t>::max() - 63u, 64u},
     }};
 
@@ -465,7 +465,7 @@ TEST(PipelineStageLocalSpans, RejectsEmptyOutOfBoundsAndOverflowingRanges) {
 }
 
 TEST(PipelineStageLocalSpans, RejectsCanonicalInputOrResultAsALocalSpan) {
-    EXPECT_FALSE(is_span_contained(UINT64_C(0x0A000000), 4160u, kLimLayout));
+    EXPECT_FALSE(is_span_contained(UINT64_C(0x0A000000), 4288u, kLimLayout));
     EXPECT_FALSE(is_span_contained(UINT64_C(0x0A000000), 64u, kLimLayout));
 }
 
@@ -485,7 +485,7 @@ TEST(PipelineStageLayout, PackedTablesAndRoutingImageRetainFixedOffsets) {
     EXPECT_EQ(FS_MAX_NUM_MESHES, 1024u);
     EXPECT_EQ(sizeof(fs_intra_mesh_direction_table_t), 96u);
     EXPECT_EQ(sizeof(fs_inter_mesh_direction_table_t), 384u);
-    EXPECT_EQ(sizeof(fs_routing_l1_info_t), 2576u);
+    EXPECT_EQ(sizeof(fs_routing_l1_info_t), 2704u);
     EXPECT_EQ(alignof(fs_routing_l1_info_t), 16u);
     EXPECT_EQ(offsetof(fs_routing_l1_info_t, my_mesh_id), 32u);
     EXPECT_EQ(offsetof(fs_routing_l1_info_t, intra_mesh_direction_table), 36u);

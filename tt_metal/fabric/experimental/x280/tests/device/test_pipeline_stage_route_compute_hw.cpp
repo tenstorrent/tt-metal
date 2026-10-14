@@ -122,10 +122,10 @@ TEST(PipelineStageRouteComputeOffline, SectionPacking16WordsAndPadding) {
 TEST(PipelineStageRouteComputeOffline, BuildInputImageSpanAndHeaderPlacement) {
     const std::vector<uint8_t> image = suite::build_input_image();
 
-    // Verify complete image is exactly X280_PINNED_INPUT_SPAN (4160 bytes).
+    // Verify complete image is exactly X280_PINNED_INPUT_SPAN (4288 bytes).
     ASSERT_EQ(image.size(), static_cast<size_t>(X280_PINNED_INPUT_SPAN));
 
-    // Headers begin at X280_PINNED_INPUT_HEADERS_OFFSET = 2624 (0xA40), leaving 48 padding bytes.
+    // Headers begin at X280_PINNED_INPUT_HEADERS_OFFSET = 2752 (0xAC0), leaving 48 padding bytes.
     for (size_t offset = suite::kRoutingImageBytes; offset < X280_PINNED_INPUT_HEADERS_OFFSET; ++offset) {
         EXPECT_EQ(image[offset], 0u) << "padding byte non-zero at offset " << offset;
     }
