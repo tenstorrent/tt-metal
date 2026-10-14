@@ -15,11 +15,12 @@ two-cycle reopen qualification remain unfinished. The source package's accuracy
 and throughput numbers are not validation of this code.
 
 The model's decode wrapper and vLLM adapter use current main's explicit input,
-page-table and sampling-state commands. Source-method host regressions cover
+page-table and sampling-state commands. The original 87 model host tests and 20 compact-prefill host tests pass with
+actual compiled TTNN/model imports on the combined current-main tree. They cover
 async token feedback, page-only refresh, teacher forcing, trace recapture and
-sampling-state reuse. These checks use CPU tensors and mock device operations;
-they do not qualify execution on this tree. Integrate the separately reviewed
-prerequisites and validate the combined tree before running the recipes below.
+sampling-state reuse, using CPU tensors and mocked device operations. They do
+not qualify device execution. Include the separately reviewed prerequisites
+when validating the combined tree with the recipes below.
 
 ## Configuration
 
@@ -55,8 +56,9 @@ The shared-generator changes are reviewed separately:
 - [Decode output rows across changing buckets, #58542](https://github.com/tenstorrent/tt-metal/pull/58542).
 
 The three native prerequisites and decode output-row change are merged on main.
-Compact prefill #58504 remains independently reviewed and must land before
-integrated model validation. This model-only import does not duplicate that change.
+Compact prefill #58504 remains independently reviewed and is included in the
+combined validation tree; it must land before this dependent model PR. This
+model-only import does not duplicate that change.
 
 Serving uses the current official [vLLM TT plugin installation procedure](https://github.com/tenstorrent/vllm-tt-plugin#installation)
 with merged [input/slot integration #152](https://github.com/tenstorrent/vllm-tt-plugin/pull/152)
@@ -134,7 +136,7 @@ python -m pytest --noconftest \
 
 Run from the tt-metal checkout in the supported plugin environment. Use a cache
 owned by this server and an exclusive four-chip allocation. These commands are
-prepared for device validation. CLI parsing has been checked against vLLM 0.26.0;
+prepared for device validation. CLI parsing has been checked against vLLM 0.30.0 with plugin loading disabled;
 successful server startup alone is not serving qualification.
 
 ```bash
