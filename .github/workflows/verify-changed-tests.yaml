@@ -64,6 +64,13 @@ env:
   #                                  workflow, which supplies TTNOP setup and recovery.
   #   llk_perf_merge_gate_tests.yaml runs only through llk-perf-impl, which runs cmd
   #                                  from tt_metal/tt-llk in the LLK CI image.
+  #   llk_pr_gate_tests.yaml         cmds start with `cd tests/python_tests` (or
+  #   llk_e2e_tests.yaml             `./tests/run_llk_perf_*.sh`) and read env the
+  #   llk_bit_exact_tests.yaml       owning impl injects (PYTEST_MARKERS,
+  #   llk_perf_tests.yaml            BIT_EXACT_RUNS). Those impls run from
+  #                                  tt_metal/tt-llk in the LLK CI image after
+  #                                  setup_testing_env.sh. From /work the cd fails
+  #                                  before pytest starts.
   #
   # This is not an exemption: the legs still block the PR until an owner approves.
   UNSUPPORTED_YAMLS: >-
@@ -73,6 +80,10 @@ env:
     llk_ttsim_weekly.yaml
     llk_ttnop_tests.yaml
     llk_perf_merge_gate_tests.yaml
+    llk_pr_gate_tests.yaml
+    llk_e2e_tests.yaml
+    llk_bit_exact_tests.yaml
+    llk_perf_tests.yaml
 
   # Yamls under tests/pipeline_reorg/ that legitimately hold no test matrix, so the
   # gate has nothing to prove for them. ttsim-skip-list.yaml is a per-arch mapping of
