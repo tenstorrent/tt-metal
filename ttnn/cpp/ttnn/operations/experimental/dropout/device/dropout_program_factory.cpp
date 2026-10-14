@@ -167,8 +167,6 @@ inline tt::tt_metal::experimental::KernelSpec create_compute_kernel(
     return KernelSpec{
         .unique_id = unique_id,
         .source = std::filesystem::path(kernel_path),
-        // Compute kernels have always compiled at O3 (the compute-kernel default before this op
-        // moved to KernelSpec, whose default is O2), so the level is set explicitly.
         .compiler_options = {.opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
@@ -433,8 +431,7 @@ ttnn::device_operation::MeshWorkloadArtifacts DropoutMeshWorkloadFactory::create
     Tensor& output,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
-    // One program per coordinate, as the descriptor path built them: each device's program carries its
-    // own seed, so no two devices can share one.
+    // One program per coordinate: each device's program has its own seed.
     ttnn::device_operation::MeshWorkloadArtifacts artifacts;
     for (const auto& coord : tensor_coords.coords()) {
         DropoutParams effective_args = args;
