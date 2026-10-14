@@ -180,7 +180,7 @@
 - The precision baseline is re-run and recorded in the changelog.
 - **Outcome**: landed bf8b + fp32_dest_acc_en=False with no EXCLUSIONS beyond {float32, False}; 1221 golden target cells run (incl. bf8b x w_non_aligned / HEIGHT / WIDTH), all pass. UnpackToDestFp32 on the copy_tile-only stats CBs is implemented but parked off (measured worse end-to-end: fp32 mean ULP 15k -> 19k), see changelog.
 
-### [ ] Refinement 5 — Speed up the perf-flagged profile (synchronization and block knobs)
+### [x] Refinement 5 — Speed up the perf-flagged profile (synchronization and block knobs)
 
 **Type**: perf
 
@@ -198,3 +198,4 @@
 - Measured device-ns (max over devices) improves on 640×1792 in the flagged config relative to the post-Refinement-3 number.
 - The golden suite stays green.
 - No regression across the Refinement 3 guard set.
+- **Outcome**: 640×1792 flagged config **22.98 → 19.32 µs** (median over 60 calls of the max over 4 devices, same-session A/B; min device 19.15 → 16.16 µs). Guard set: 32×1792 10.40 → 8.06, 2048×1280 41.3 → 39.0, fp32 no-gamma 34–35 → 30.1, (2,2048,4096) ~200 → 192.7, HEIGHT 19.8 → 19.1, WIDTH 71 → 48.8. Levers kept: per-link stats-ready multicast rectangles (contiguous link runs), port kernels on NoC0, port header setup off the fence path (route once, copy after the ready packet, only as many headers as packets), early gamma read, per-port gather phases, finalize SFPU on row 0 only, common runtime args. Measured and left at default: `MIN_CORE_W_TILES` (8; 4 is +5 µs, 16 is the same split at 640×1792 and +0.9 µs at decode), `out_batch_tiles` (whole row; 1 tile no better), `OUT_DEPTH` (2; 7 no better), port column offset (0/4/7 within noise: the skew is not placement-driven). **What binds now**: (a) cross-device launch skew from host dispatch. The bench loop is host-bound (op-to-op ~14 ms), and the mesh enqueue writes the 4 per-device programs one after another from an unordered map. Calls are bimodal: a ~2.7 µs or a ~7 µs late start of the p=0 devices. The early device's port waits in the ready fence for it. (b) On the late device, the DRAM write tail: compute ends ~10.7 µs, but the writes of the far grid corner (NoC1 congestion) run to ~16.4 µs, ~295 GB/s aggregate. Next: split the post-exchange writes over both NoCs (a second output CB drained by the idle reader on NoC0, with the port multicast kept off that NoC's write load), or push the round's records from the ports by multicast instead of 80 pulls. Not done here: the first is a dataflow restructure across all three worker kernels plus a CB, and the second a new landing buffer and handshake.

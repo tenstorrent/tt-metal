@@ -82,3 +82,16 @@ def test_rounds_lift_p_resident(mesh_device):
     if mesh[1] < 2:
         pytest.skip("cluster_axis 1 has size 1")
     _run(mesh_device, (2, 2048, 4096), BF16, BF16)
+
+
+@pytest.mark.parametrize("start,count,gx", [(11, 40, 11), (51, 40, 11), (11, 88, 11), (14, 5, 11), (8, 1, 8)])
+def test_linear_rects_cover_exactly(start, count, gx):
+    """R5 per-link multicast: the rectangles of a row-major run cover exactly its cores (host only)."""
+    from ttnn.operations.distributed_rms_norm.distributed_rms_norm_program_descriptor import _linear_rects
+
+    cores = [ttnn.CoreCoord(i % gx, i // gx) for i in range(start, start + count)]
+    covered = []
+    for a, b in _linear_rects(cores, gx):
+        covered += [(x, y) for y in range(a.y, b.y + 1) for x in range(a.x, b.x + 1)]
+    assert sorted(covered) == sorted((c.x, c.y) for c in cores)
+    assert len(_linear_rects(cores, gx)) <= 3

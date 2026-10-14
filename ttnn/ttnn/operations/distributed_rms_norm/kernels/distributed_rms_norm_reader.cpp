@@ -45,7 +45,8 @@ void kernel_main() {
     constexpr uint32_t round_lookahead = get_compile_time_arg_val(14);  // rounds whose loads run ahead (host knob)
     // x tile layout: Bfp8_b = 64 B of shared exponents (one per face row), then 1 B (sign + mantissa) per element
     constexpr uint32_t x_exp_bytes = get_compile_time_arg_val(15);  // 0: plain float (Float32 / Float16_b)
-    constexpr auto x_args = TensorAccessorArgs<16>();
+    constexpr bool gamma_early_knob = get_compile_time_arg_val(16) != 0;  // host GAMMA_EARLY
+    constexpr auto x_args = TensorAccessorArgs<17>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t half_record = record_bytes / 2;  // 16 fp32 = one face row
@@ -53,25 +54,32 @@ void kernel_main() {
     constexpr uint32_t f32_face_bytes = 1024;
     constexpr uint32_t f32_face_row_bytes = 64;
 
+    // common args (one copy per device, multicast by dispatch): what every worker of the device shares, plus one
+    // table entry per link. Per-core args: only what differs between cores (every per-core word is dispatched to
+    // every core of every device, one device after the other: the dispatch time is cross-device launch skew).
+    const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t gamma_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t block_rows = get_common_arg_val<uint32_t>(2);  // rows per block (knob)
+    const uint32_t wt_total = get_common_arg_val<uint32_t>(3);    // tensor_w_tiles
+    const uint32_t scratch_addr = get_common_arg_val<uint32_t>(4);
+    const uint32_t slot_bytes = get_common_arg_val<uint32_t>(5);
+    const uint32_t s_w = get_common_arg_val<uint32_t>(6);
+    const uint32_t n_src_tiles = get_common_arg_val<uint32_t>(7);
+    const uint32_t group_size = get_common_arg_val<uint32_t>(8);
+    constexpr uint32_t link_table = 9;  // per link l: [round_recs, G x (noc x, noc y) of the port holding slot q,
+                                        //   bwd_mask]
     size_t a = 0;
-    const uint32_t x_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t gamma_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t row_start = get_arg_val<uint32_t>(a++);   // first global tile row of this core
-    const uint32_t core_rows = get_arg_val<uint32_t>(a++);   // tile rows assigned to this core
-    const uint32_t block_rows = get_arg_val<uint32_t>(a++);  // rows per block (knob)
-    const uint32_t w_start = get_arg_val<uint32_t>(a++);     // first W tile of this core's chunk
-    const uint32_t cw = get_arg_val<uint32_t>(a++);          // W tiles of this core's chunk
-    const uint32_t wt_total = get_arg_val<uint32_t>(a++);    // tensor_w_tiles
-    const uint32_t scratch_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t slot_bytes = get_arg_val<uint32_t>(a++);
-    const uint32_t rec_base = get_arg_val<uint32_t>(a++);  // link_rec_base of my row group
-    const uint32_t s_w = get_arg_val<uint32_t>(a++);
-    const uint32_t n_src_tiles = get_arg_val<uint32_t>(a++);
-    const uint32_t group_size = get_arg_val<uint32_t>(a++);
+    const uint32_t row_start = get_arg_val<uint32_t>(a++);  // first global tile row of this core
+    const uint32_t core_rows = get_arg_val<uint32_t>(a++);  // tile rows assigned to this core
+    const uint32_t w_start = get_arg_val<uint32_t>(a++);    // first W tile of this core's chunk
+    const uint32_t cw = get_arg_val<uint32_t>(a++);         // W tiles of this core's chunk
+    const uint32_t rec_base = get_arg_val<uint32_t>(a++);   // link_rec_base of my row group
     const uint32_t my_link = get_arg_val<uint32_t>(a++);
-    const uint32_t round_recs = get_arg_val<uint32_t>(a++);       // records per round in my link's slot region
-    const uint32_t ports_idx = a;                                 // G x (noc x, noc y): port holding slot q
-    a += 2 * group_size;
+    const uint32_t link_idx = link_table + my_link * (2 + 2 * group_size);
+    const uint32_t round_recs = get_common_arg_val<uint32_t>(link_idx);  // records per round in my link's region
+    const uint32_t ports_idx = link_idx + 1;                             // common: port holding slot q
+    const uint32_t bwd_mask = get_common_arg_val<uint32_t>(ports_idx + 2 * group_size);  // bit q: slot q on port d=1
+    const uint32_t all_slots = group_size >= 32 ? 0xFFFFFFFFu : ((1u << group_size) - 1u);
     // sharded-path args (R9/R10); the interleaved path keeps its Phase 0 arg list and these defaults
     uint32_t cw_phys = cw, stat_rows = block_rows, gamma_chunk = cw, lc_rows = 0, n_lc_tiles = 0, lc_sources = 0,
              inbox_addr = 0, my_noc_x = 0, my_noc_y = 0;
@@ -158,31 +166,45 @@ void kernel_main() {
         }
     };
 
-    // gamma (once per call, after the x blocks loaded ahead so the hot single-page read does not delay x):
+    // gamma (once per call; interleaved: issued with round 0's first x tile row, see front()):
     // one contiguous read of the chunk's cw*32 elements into the front of each group of <= 32 tiles, then
     // tile t's segment is placed in its row 0 (elements 0..15 -> face 0 row 0, 16..31 -> face 1 row 0).
     // Placement runs from the last tile down: tile t >= 1 lands beyond the staging bytes, tile 0 last.
-    auto load_gamma = [&](uint32_t c0, uint32_t chunk, uint32_t reserve_tiles) {
+    // Split in two so the read can be issued ahead and its (hot single-bank) latency hidden under the x reads:
+    // gamma_issue reserves the chunk and issues one read per group of <= 32 tiles (no barrier); gamma_place runs
+    // after a barrier that covered them, places row 0 of every tile and pushes.
+    constexpr uint32_t gamma_seg_bytes = 32 * gamma_elem_bytes;
+    constexpr uint32_t gamma_group_tiles = 32;  // staging (n * seg_bytes) stays inside the group's first tile
+    auto gamma_issue = [&](uint32_t c0, uint32_t chunk, uint32_t reserve_tiles) {
         if constexpr (has_gamma) {
             const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiles);
             const auto gamma = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);
-            constexpr uint32_t seg_bytes = 32 * gamma_elem_bytes;
-            constexpr uint32_t half_words = 16 * gamma_elem_bytes / 4;
-            constexpr uint32_t face_bytes = 256 * gamma_elem_bytes;
-            constexpr uint32_t group_tiles = 32;  // staging (n * seg_bytes) stays inside the group's first tile
             cb_reserve_back(cb_gamma_tiles, reserve_tiles);
             const uint32_t base = get_write_ptr(cb_gamma_tiles);
+            for (uint32_t g0 = 0; g0 < chunk; g0 += gamma_group_tiles) {
+                const uint32_t n = (chunk - g0) < gamma_group_tiles ? (chunk - g0) : gamma_group_tiles;
+                // read no further than the stick's aligned page: with W_local % 32 != 0 the last segment is short
+                // (its padding columns only ever scale padding columns of x)
+                const uint32_t src_off = (w_start + c0 + g0) * gamma_seg_bytes;
+                const uint32_t want = n * gamma_seg_bytes;
+                const uint32_t avail = gamma_page_bytes - src_off;
+                noc_async_read(
+                    gamma.get_noc_addr(0, src_off), base + g0 * gamma_tile_bytes, want < avail ? want : avail);
+            }
+        }
+    };
+    auto gamma_place = [&](uint32_t chunk, uint32_t reserve_tiles) {
+        if constexpr (has_gamma) {
+            const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiles);
+            constexpr uint32_t seg_bytes = gamma_seg_bytes;
+            constexpr uint32_t half_words = 16 * gamma_elem_bytes / 4;
+            constexpr uint32_t face_bytes = 256 * gamma_elem_bytes;
+            constexpr uint32_t group_tiles = gamma_group_tiles;
+            const uint32_t base = get_write_ptr(cb_gamma_tiles);
+            invalidate_l1_cache();
             for (uint32_t g0 = 0; g0 < chunk; g0 += group_tiles) {
                 const uint32_t n = (chunk - g0) < group_tiles ? (chunk - g0) : group_tiles;
                 const uint32_t gbase = base + g0 * gamma_tile_bytes;
-                // read no further than the stick's aligned page: with W_local % 32 != 0 the last segment is short
-                // (its padding columns only ever scale padding columns of x)
-                const uint32_t src_off = (w_start + c0 + g0) * seg_bytes;
-                const uint32_t want = n * seg_bytes;
-                const uint32_t avail = gamma_page_bytes - src_off;
-                noc_async_read(gamma.get_noc_addr(0, src_off), gbase, want < avail ? want : avail);
-                noc_async_read_barrier();
-                invalidate_l1_cache();
                 for (uint32_t t = n; t-- > 0;) {
                     volatile tt_l1_ptr uint32_t* src =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gbase + t * seg_bytes);
@@ -222,6 +244,11 @@ void kernel_main() {
             cb_push_back(cb_gamma_tiles, reserve_tiles);
         }
     };
+    auto load_gamma = [&](uint32_t c0, uint32_t chunk, uint32_t reserve_tiles) {
+        gamma_issue(c0, chunk, reserve_tiles);
+        noc_async_read_barrier();
+        gamma_place(chunk, reserve_tiles);
+    };
     // one chunk (== cw): pushed once, held for the call. Several: double-buffered gamma_chunk-page chunks, every
     // chunk occupying gamma_chunk pages (the ragged last one too) so the ring always wraps on a chunk boundary.
     const bool gamma_chunked = gamma_chunk < cw;
@@ -235,6 +262,51 @@ void kernel_main() {
     // k * rows + j; source s -> row s % 32). Records of (source q, tile row j) sit in one block of rw * 128 B:
     // [half 0 of w = 0..rw-1][half 1 of w = 0..rw-1], so a run of sources inside one 16-row face pair moves as
     // two reads (one per half). block_of(q, j) gives that block's L1 address on the core at (x_of(q), y_of(q)).
+    // gather_open reserves the batch's tiles and zeroes the unused source rows; gather_issue issues the reads of the
+    // sources q with in_phase(q) (no barrier); gather_close waits for every read issued and pushes. One phase per
+    // port lets the slots of an early port (my own device's records) be pulled while a later port's are in flight.
+    auto gather_open = [&](uint32_t cb, uint32_t n_tiles_per_row, uint32_t rows, uint32_t n_src) {
+        CircularBuffer gather_cb(cb);
+        cb_reserve_back(cb, n_tiles_per_row * rows);
+        if ((n_src & 31) != 0) {
+            // rows beyond the last source of the last source tile must not enter the sum
+            noc.async_write_zeros(
+                gather_cb, rows * f32_tile_bytes, {.offset_bytes = (n_tiles_per_row - 1) * rows * f32_tile_bytes});
+            noc.write_zeros_l1_barrier();
+        }
+    };
+    auto gather_issue =
+        [&](uint32_t cb, uint32_t rows, uint32_t n_q, uint32_t rw, auto in_phase, auto x_of, auto y_of, auto block_of) {
+            const uint32_t wbase = get_write_ptr(cb);
+            const uint32_t half_block = rw * half_record;
+            for (uint32_t q = 0; q < n_q; ++q) {
+                if (!in_phase(q)) {
+                    continue;
+                }
+                const uint32_t px = x_of(q);
+                const uint32_t py = y_of(q);
+                const uint32_t s_first = q * rw;
+                for (uint32_t j = 0; j < rows; ++j) {
+                    const uint32_t block = block_of(q, j);
+                    for (uint32_t sa = s_first; sa < s_first + rw;) {
+                        const uint32_t seg_end = (sa | 15) + 1;  // next 16-row face boundary
+                        const uint32_t sb = seg_end < s_first + rw ? seg_end : s_first + rw;
+                        const uint32_t r = sa & 31;
+                        const uint32_t dst = wbase + ((sa >> 5) * rows + j) * f32_tile_bytes +
+                                             (r >> 4) * 2 * f32_face_bytes + (r & 15) * f32_face_row_bytes;
+                        const uint32_t src = block + (sa - s_first) * half_record;
+                        const uint32_t bytes = (sb - sa) * half_record;
+                        noc_async_read(get_noc_addr(px, py, src), dst, bytes);
+                        noc_async_read(get_noc_addr(px, py, src + half_block), dst + f32_face_bytes, bytes);
+                        sa = sb;
+                    }
+                }
+            }
+        };
+    auto gather_close = [&](uint32_t cb, uint32_t n_tiles) {
+        noc_async_read_barrier();
+        cb_push_back(cb, n_tiles);
+    };
     auto gather = [&](uint32_t cb,
                       uint32_t n_tiles_per_row,
                       uint32_t rows,
@@ -243,40 +315,9 @@ void kernel_main() {
                       auto x_of,
                       auto y_of,
                       auto block_of) {
-        CircularBuffer gather_cb(cb);
-        const uint32_t n_tiles = n_tiles_per_row * rows;
-        const uint32_t n_src = n_q * rw;
-        cb_reserve_back(cb, n_tiles);
-        if ((n_src & 31) != 0) {
-            // rows beyond the last source of the last source tile must not enter the sum
-            noc.async_write_zeros(
-                gather_cb, rows * f32_tile_bytes, {.offset_bytes = (n_tiles_per_row - 1) * rows * f32_tile_bytes});
-            noc.write_zeros_l1_barrier();
-        }
-        const uint32_t wbase = get_write_ptr(cb);
-        const uint32_t half_block = rw * half_record;
-        for (uint32_t q = 0; q < n_q; ++q) {
-            const uint32_t px = x_of(q);
-            const uint32_t py = y_of(q);
-            const uint32_t s_first = q * rw;
-            for (uint32_t j = 0; j < rows; ++j) {
-                const uint32_t block = block_of(q, j);
-                for (uint32_t sa = s_first; sa < s_first + rw;) {
-                    const uint32_t seg_end = (sa | 15) + 1;  // next 16-row face boundary
-                    const uint32_t sb = seg_end < s_first + rw ? seg_end : s_first + rw;
-                    const uint32_t r = sa & 31;
-                    const uint32_t dst = wbase + ((sa >> 5) * rows + j) * f32_tile_bytes +
-                                         (r >> 4) * 2 * f32_face_bytes + (r & 15) * f32_face_row_bytes;
-                    const uint32_t src = block + (sa - s_first) * half_record;
-                    const uint32_t bytes = (sb - sa) * half_record;
-                    noc_async_read(get_noc_addr(px, py, src), dst, bytes);
-                    noc_async_read(get_noc_addr(px, py, src + half_block), dst + f32_face_bytes, bytes);
-                    sa = sb;
-                }
-            }
-        }
-        noc_async_read_barrier();
-        cb_push_back(cb, n_tiles);
+        gather_open(cb, n_tiles_per_row, rows, n_q * rw);
+        gather_issue(cb, rows, n_q, rw, [](uint32_t) { return true; }, x_of, y_of, block_of);
+        gather_close(cb, n_tiles_per_row * rows);
     };
 
     const uint32_t num_blocks = (core_rows + block_rows - 1) / block_rows;
@@ -286,6 +327,8 @@ void kernel_main() {
     };
 
     const uint32_t gamma_round = (round_lookahead < num_blocks - 1) ? round_lookahead : num_blocks - 1;
+    const bool gamma_early =
+        gamma_early_knob && !x_sharded && !gamma_chunked;  // interleaved: gamma read rides round 0's first barrier
 
     // ---- front half of round b: load_block (+ gamma, R5 local gather and prescale gamma in round 0) ----
     auto front = [&](uint32_t round) {
@@ -299,8 +342,13 @@ void kernel_main() {
             }
             cb_push_back(cb_x_resident, rows * cw_phys);
         } else {
-            // one tile row (cw tiles) per barrier
+            // one tile row (cw tiles) per barrier. gamma (once per call) is issued ahead of round 0's first tile row
+            // and placed after its barrier: its single-bank read overlaps the x reads instead of following them
             for (uint32_t j = 0; j < rows; ++j) {
+                const bool gamma_here = gamma_early && round == 0 && j == 0;
+                if (gamma_here) {
+                    gamma_issue(0, cw, cw);
+                }
                 cb_reserve_back(cb_x_resident, cw);
                 uint32_t wp = get_write_ptr(cb_x_resident);
                 const uint32_t tile0 = (row_start + r0 + j) * wt_total + w_start;
@@ -313,11 +361,13 @@ void kernel_main() {
                     mask_w_tail(0, 1, cw);
                 }
                 cb_push_back(cb_x_resident, cw);
+                if (gamma_here) {
+                    gamma_place(cw, cw);
+                }
             }
         }
-        // gamma once per call, after the x blocks the schedule loads ahead (round 0 alone with one round), so its
-        // single-page read and row placement never sit between two x blocks the exchange is waiting on
-        if (round == gamma_round && !gamma_chunked) {
+        // sharded: gamma once per call after the shard publish (one round)
+        if (!gamma_early && round == gamma_round && !gamma_chunked) {
             load_gamma(0, cw, cw);
         }
 
@@ -344,22 +394,47 @@ void kernel_main() {
     // ---- back half of round b: gather_sources_block, one stats batch at a time ----
     auto back = [&](uint32_t round) {
         const uint32_t rows = rows_of(round);
-        noc_semaphore_wait_min(stats_ready_fwd, round + 1);
-        noc_semaphore_wait_min(stats_ready_bwd, round + 1);
         const uint32_t round_base = rec_base + round * round_recs;
         for (uint32_t b0 = 0; b0 < rows; b0 += stat_rows) {
             const uint32_t nb = (rows - b0) < stat_rows ? (rows - b0) : stat_rows;
-            gather(
-                cb_stats_combine,
-                n_src_tiles,
-                nb,
-                group_size,
-                s_w,
-                [&](uint32_t q) { return get_arg_val<uint32_t>(ports_idx + 2 * q); },
-                [&](uint32_t q) { return get_arg_val<uint32_t>(ports_idx + 2 * q + 1); },
-                [&](uint32_t q, uint32_t j) {
-                    return scratch_addr + q * slot_bytes + (round_base + (b0 + j) * s_w) * record_bytes;
-                });
+            auto x_of = [&](uint32_t q) { return get_common_arg_val<uint32_t>(ports_idx + 2 * q); };
+            auto y_of = [&](uint32_t q) { return get_common_arg_val<uint32_t>(ports_idx + 2 * q + 1); };
+            auto block_of = [&](uint32_t q, uint32_t j) {
+                return scratch_addr + q * slot_bytes + (round_base + (b0 + j) * s_w) * record_bytes;
+            };
+            gather_open(cb_stats_combine, n_src_tiles, nb, group_size * s_w);
+            // gather_sources_block, one phase per port of my link, in the order the ports complete the round (their
+            // stats-ready counters): a direction holding none of the slots is not waited for
+            bool fwd_done = (bwd_mask & all_slots) == all_slots;
+            bool bwd_done = (bwd_mask & all_slots) == 0;
+            while (!(fwd_done && bwd_done)) {
+                invalidate_l1_cache();
+                if (!fwd_done && *stats_ready_fwd >= round + 1) {
+                    gather_issue(
+                        cb_stats_combine,
+                        nb,
+                        group_size,
+                        s_w,
+                        [&](uint32_t q) { return ((bwd_mask >> q) & 1) == 0; },
+                        x_of,
+                        y_of,
+                        block_of);
+                    fwd_done = true;
+                }
+                if (!bwd_done && *stats_ready_bwd >= round + 1) {
+                    gather_issue(
+                        cb_stats_combine,
+                        nb,
+                        group_size,
+                        s_w,
+                        [&](uint32_t q) { return ((bwd_mask >> q) & 1) != 0; },
+                        x_of,
+                        y_of,
+                        block_of);
+                    bwd_done = true;
+                }
+            }
+            gather_close(cb_stats_combine, n_src_tiles * nb);
             if (gamma_chunked && gamma_full_rows) {
                 stream_gamma_chunks();  // the fused normalize of this batch walks every chunk
             }

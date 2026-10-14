@@ -58,13 +58,15 @@ void kernel_main() {
     constexpr uint32_t cb_lc_out = get_compile_time_arg_val(15);
     constexpr uint32_t round_lookahead = get_compile_time_arg_val(16);  // rounds whose front half runs ahead
 
+    // common args (one copy per device, multicast by dispatch) + per-core args (only what differs between cores:
+    // every per-core word is dispatched to every core of every device, and the dispatch time is launch skew)
+    const uint32_t block_rows = get_common_arg_val<uint32_t>(0);
+    const uint32_t n_src_tiles = get_common_arg_val<uint32_t>(1);
+    const uint32_t inv_w_bits = get_common_arg_val<uint32_t>(2);  // fp32 bits of 1 / (G * W_local)
+    const uint32_t eps_bits = get_common_arg_val<uint32_t>(3);    // fp32 bits of epsilon
     uint32_t a = 0;
     const uint32_t core_rows = get_arg_val<uint32_t>(a++);
-    const uint32_t block_rows = get_arg_val<uint32_t>(a++);
     const uint32_t cw = get_arg_val<uint32_t>(a++);
-    const uint32_t n_src_tiles = get_arg_val<uint32_t>(a++);
-    const uint32_t inv_w_bits = get_arg_val<uint32_t>(a++);  // fp32 bits of 1 / (G * W_local)
-    const uint32_t eps_bits = get_arg_val<uint32_t>(a++);    // fp32 bits of epsilon
     // sharded-path args (R9/R10); the interleaved path keeps its Phase 0 arg list and these defaults
     uint32_t cw_phys = cw, stat_rows = block_rows, gamma_chunk = cw, lc_rows = 0, n_lc_tiles = 0;
     if constexpr (x_sharded) {
@@ -104,14 +106,40 @@ void kernel_main() {
         transpose_dest<DST_ACCUM_MODE, true>(dst);
         rearm(RowTag{}, cb_sq_acc, cb_partial);
     };
+    // finalize on the 32 valid values only: after REDUCE_COL they sit in row 0 (faces 0 and 1), so x 1/(G*W) + eps
+    // and rsqrt run as a row vector (VectorMode::R) over the first two SFPU iterations of faces 0 and 1 (one iteration
+    // covers 4 face rows x the even or the odd columns, so two cover row 0; one alone measured wrong), before the
+    // transpose moves row 0 to col 0 for the Col broadcast. A full-tile (RC, 8 iterations) pass costs ~1.1 us per tile
+    // row on the post-exchange critical path; the other 31 rows are never read.
     auto finalize_post = [inv_w_bits, eps_bits, rearm](uint32_t dst) {
+        constexpr uint32_t row0_iters = 2;
+        binop_with_scalar_tile_init();
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binop_with_scalar,
+            (APPROX, MUL_UNARY, row0_iters, DST_ACCUM_MODE),
+            dst,
+            VectorMode::R,
+            inv_w_bits));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binop_with_scalar,
+            (APPROX, ADD_UNARY, row0_iters, DST_ACCUM_MODE),
+            dst,
+            VectorMode::R,
+            eps_bits));
+        rsqrt_tile_init();
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_rsqrt,
+            (APPROX, row0_iters, DST_ACCUM_MODE, false),
+            dst,
+            VectorMode::R));
         transpose_dest_init<DST_ACCUM_MODE, true>();
         transpose_dest<DST_ACCUM_MODE, true>(dst);
-        binop_with_scalar_tile_init();
-        mul_unary_tile(dst, inv_w_bits);
-        add_unary_tile(dst, eps_bits);
-        rsqrt_tile_init();
-        rsqrt_tile(dst);
         rearm(ColTag{}, cb_stats_combine, cb_rstd);
     };
 

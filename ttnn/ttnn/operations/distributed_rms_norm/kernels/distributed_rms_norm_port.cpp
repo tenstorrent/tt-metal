@@ -98,11 +98,19 @@ void kernel_main() {
 
     if (has_conn) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);  // appended last
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[num_headers];
-        for (uint32_t h = 0; h < num_headers; ++h) {
-            hdrs[h] = PacketHeaderPool::allocate_header();
-            route_one_hop(hdrs[h], dst_chip_id, dst_mesh_id);
+        // Headers: only header 0 (routed once, ~0.4 us for a 2D route decode) is prepared before conn.open() and the
+        // ready packet, so the neighbour's fence opens as early as possible. The others are copies of it (a copy is
+        // cheaper than a decode, but still ~0.2 us per header of volatile L1 words), made after the ready packet, in
+        // the wait for the first round's local arrivals; and only as many as this call has packets to send.
+        uint32_t packets = 0;
+        for (uint32_t off = 0; off < entry_bytes; off += packet_bytes) {
+            ++packets;
         }
+        packets *= num_entries * num_rounds;
+        const uint32_t ring = packets < 1 ? 1 : (packets < num_headers ? packets : num_headers);
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[num_headers];
+        hdrs[0] = PacketHeaderPool::allocate_header();
+        route_one_hop(hdrs[0], dst_chip_id, dst_mesh_id);
         conn.open();
         // Fence: this program running means everything earlier on this device is done, so the neighbour may
         // now write into my scratch.
@@ -112,6 +120,18 @@ void kernel_main() {
             conn.wait_for_empty_write_slot();
             conn.send_payload_flush_blocking_from_address(
                 reinterpret_cast<uint32_t>(hdrs[0]), sizeof(PACKET_HEADER_TYPE));
+        }
+        {
+            constexpr uint32_t hdr_words = sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t);
+            static_assert(sizeof(PACKET_HEADER_TYPE) % sizeof(uint32_t) == 0, "header copy is word-wise");
+            const volatile tt_l1_ptr uint32_t* src = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(hdrs[0]);
+            for (uint32_t h = 1; h < ring; ++h) {
+                hdrs[h] = PacketHeaderPool::allocate_header();
+                volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hdrs[h]);
+                for (uint32_t i = 0; i < hdr_words; ++i) {
+                    dst[i] = src[i];  // the route (the only field kept: every send rewrites the command fields)
+                }
+            }
         }
         if (num_entries > 0) {
             volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
@@ -144,7 +164,7 @@ void kernel_main() {
                         }
                         conn.wait_for_empty_write_slot();
                         conn.send_current_slot_non_blocking(base + off, bytes, reinterpret_cast<uint32_t>(hdr));
-                        if (++h == num_headers) {
+                        if (++h == ring) {
                             noc_async_writes_flushed();  // headers of the in-flight packets have left L1
                             h = 0;
                         }

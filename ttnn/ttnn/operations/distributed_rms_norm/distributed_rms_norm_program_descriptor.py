@@ -13,7 +13,7 @@ pinned S_w of up to ~86 makes flat records quadratic. Ports sit on grid cores th
 
 Per device:
   ports   : interleaved: logical (2*l + d, 0); sharded: free cores. l < L_eff, d = 0 (fwd, toward p+1) /
-            1 (bwd, toward p-1). BRISC, NoC1.
+            1 (bwd, toward p-1). BRISC, NoC0 (PORT_NOC).
   workers : interleaved: logical rows 1.., row-major index k = r_g * S_w + w; sharded: the shard cores.
             reader NCRISC/NoC0, writer BRISC/NoC1, compute.
 """
@@ -64,8 +64,17 @@ MIN_CORE_W_TILES = (
 )
 X_BLOCKS_IN_FLIGHT = 1  # cb_x_resident depth in blocks per round in flight (residency, not pipelining)
 EXCHANGE_ROUNDS = 2  # R2: target exchange rounds per call (interleaved); 1 = the single-round R1 schedule
+# R5: interleaved gamma read issued with round 0's first x tile row (its single-bank read hides under the x reads);
+# False: after the lookahead x blocks (the R3 placement). Measured: True, min device 18.2 -> 17.4 us at 640x1792.
+GAMMA_EARLY = True
 GAMMA_PRESCALE = True  # x*gamma in the exchange stall (cb_xg) when it fits; False: fused gamma in normalize
 OUT_DEPTH = 2  # cb_output_tiles depth in out batches (double buffer)
+# R5: port kernels on NoC0. On NoC1 their stats-ready multicasts queue behind every worker's DRAM writes (measured
+# 1-3 us from issue to landing in round 1); NoC0 carries only the (finished) x reads and the record pulls then.
+PORT_NOC = ttnn.NOC.RISCV_0_default
+# R5: interleaved row groups assigned to links in contiguous runs, each port multicasting stats-ready only to its own
+# link's workers (False: round-robin links, every port multicasts the whole worker rectangle).
+PER_LINK_MCAST = True
 HEADER_RING = 8  # fabric packet headers in flight per port (pool holds 12 per RISC)
 # R4 knob: tag the Float32 stats CBs read only by copy_tile (the Accurate SFPU reduces' inputs) UnpackToDestFp32, so
 # the fp32 partial sums are not truncated to tf32 on the way in (needs a 32-bit DEST). Correct, but PARKED (False):
@@ -284,6 +293,28 @@ def _interleaved_layout(tensor_row_tiles, Wt, gx, gy):
     )
 
 
+def _linear_rects(cores, gx):
+    """Rectangles (start, end) covering exactly `cores`, a row-major run of the worker grid (full width gx): a
+    partial first row, the full rows, a partial last row."""
+    if not cores:
+        return []
+    idx = sorted(c.y * gx + c.x for c in cores)
+    assert idx == list(range(idx[0], idx[-1] + 1)), "a link's workers are one row-major run"
+    a, b = idx[0], idx[-1] + 1
+    rects = []
+    while a < b:
+        y, x0 = divmod(a, gx)
+        if x0 == 0 and b - a >= gx:
+            rows = (b - a) // gx
+            rects.append((ttnn.CoreCoord(0, y), ttnn.CoreCoord(gx - 1, y + rows - 1)))
+            a += rows * gx
+        else:
+            x1 = min(gx, x0 + (b - a))
+            rects.append((ttnn.CoreCoord(x0, y), ttnn.CoreCoord(x1 - 1, y)))
+            a += x1 - x0
+    return rects
+
+
 def _sharded_layout(mem_config, tensor_row_tiles, Wt, gx, gy):
     """R9 / R10: the shard grid is the worker set and the shard is the block (op_design.md)."""
     spec = mem_config.shard_spec
@@ -414,7 +445,17 @@ def build_plan(input_tensor, *, cluster_axis, topology, num_links, gamma_dtype=N
         if L_eff == 0:
             raise RuntimeError("distributed_rms_norm: the shard grid leaves fewer than 2 free cores for the ports")
         port_cores = lay["free_cores"][: 2 * L_eff]
-    link_of = [g % L_eff for g in range(S_r)]
+    if lay["free_cores"] is None:
+        # interleaved: contiguous runs of row groups per link, so each link's workers form a few rectangles and a
+        # port's stats-ready multicast reaches only its own link's workers (PER_LINK_MCAST)
+        link_of = [g * L_eff // S_r for g in range(S_r)] if PER_LINK_MCAST else [g % L_eff for g in range(S_r)]
+    else:
+        link_of = [g % L_eff for g in range(S_r)]
+    link_mcast_rects = [lay["mcast_rects"]] * L_eff
+    if lay["free_cores"] is None and PER_LINK_MCAST:
+        link_mcast_rects = [
+            _linear_rects([wk["core"] for wk in lay["workers"] if link_of[wk["g"]] == l], gx) for l in range(L_eff)
+        ]
 
     # R5 device-local pre-combine (sharded WIDTH): W chunk w of a row group publishes its records into the inbox
     # of the combiner owning that tile row (rows split in lc_per runs over the chunks); combiners reduce the S_w
@@ -433,6 +474,8 @@ def build_plan(input_tensor, *, cluster_axis, topology, num_links, gamma_dtype=N
     block_rows = block_rows_knob(core_rows_max, rounds)
     num_blocks = max(math.ceil(r / block_rows) for r in core_rows)
     assert num_blocks == 1 or not local_combine, "R5 pre-combine runs one round"
+    if G > 32:
+        raise RuntimeError("distributed_rms_norm: the reader's per-port slot mask holds at most 32 group members")
     if SEM_STATS_READY_BASE + 2 * L_eff > NUM_SEMAPHORES:
         raise RuntimeError(f"distributed_rms_norm: {L_eff} links need more than {NUM_SEMAPHORES} semaphores")
 
@@ -477,7 +520,7 @@ def build_plan(input_tensor, *, cluster_axis, topology, num_links, gamma_dtype=N
         workers=lay["workers"],
         worker_cores=lay["worker_cores"],
         worker_set=lay["worker_set"],
-        mcast_rects=lay["mcast_rects"],
+        link_mcast_rects=link_mcast_rects,
         port_cores=port_cores,
         link_of=link_of,
         round_recs=round_recs,
@@ -636,10 +679,12 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
     port_set = _crs(port_cores)
     all_set = worker_set.merge(port_set)
     virt = lambda c: mesh_device.worker_core_from_logical_core(c)
-    mcast = []  # stats-ready multicast rectangles (NoC coords), only cores of this program
-    for r0c, r1c in plan["mcast_rects"]:
-        v0, v1 = virt(r0c), virt(r1c)
-        mcast.append((v0.x, v0.y, v1.x, v1.y, (r1c.x - r0c.x + 1) * (r1c.y - r0c.y + 1)))
+    mcast = []  # per link: stats-ready multicast rectangles (NoC coords), only cores of this program
+    for rects in plan["link_mcast_rects"]:
+        mcast.append([])
+        for r0c, r1c in rects:
+            v0, v1 = virt(r0c), virt(r1c)
+            mcast[-1].append((v0.x, v0.y, v1.x, v1.y, (r1c.x - r0c.x + 1) * (r1c.y - r0c.y + 1)))
 
     # ---- exchange scratch: G slots per port core, L1 height-sharded, same address on every chip ----
     slot_bytes = plan["slot_bytes"]
@@ -769,6 +814,7 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
             plan["W"] % TILE,  # w_tail: valid columns of the last W tile (0 = tile-aligned, no mask)
             ROUND_LOOKAHEAD,
             BFP8_EXP_BYTES if x_dtype == ttnn.bfloat8_b else 0,  # x_exp_bytes
+            int(GAMMA_EARLY),
         ]
         + x_acc
         + g_acc
@@ -853,6 +899,30 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
             ]
 
             # ---- worker runtime args ----
+            # Common args: one copy per device (dispatch multicasts them); the per-link tables hold what differs by
+            # link only. Per-core args: only what differs between cores. Every per-core word is dispatched to every
+            # worker of every device, one device after the other, so per-core bytes are cross-device launch skew.
+            pub_dirs = [d for d in (0, 1) if sends[d]]
+            reader_common = [x_addr, g_addr, block_rows, Wt, scratch_addr, slot_bytes, plan["rec_w"], n_src_tiles, G]
+            writer_common = [
+                o_addr,
+                block_rows,
+                Wt,
+                scratch_addr + p * slot_bytes,
+                S_w if local_combine else plan["rec_w"],
+                len(pub_dirs),
+            ]
+            for l in range(L):
+                reader_common.append(plan["round_recs"][l])
+                for q in range(G):
+                    v = virt(port_of[(l, src_dir[q])])
+                    reader_common += [v.x, v.y]
+                reader_common.append(sum(1 << q for q in range(G) if src_dir[q] == 1))  # bwd_mask
+                writer_common.append(plan["round_recs"][l])
+                for d in pub_dirs:
+                    v = virt(port_of[(l, d)])
+                    writer_common += [v.x, v.y]
+            compute_common = [block_rows, n_src_tiles, inv_w_bits, eps_bits]
             reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             used = set()
             for wk in workers:
@@ -865,48 +935,26 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
                 lc_start = w * lc_per
                 lc_rows = max(0, min(lc_per, rows - lc_start)) if local_combine else 0
                 combiners = by_group[g][: math.ceil(rows / lc_per)] if local_combine else []
-                src_ports = []
-                for q in range(G):
-                    v = virt(port_of[(l, src_dir[q])])
-                    src_ports += [v.x, v.y]
-                reader_rt[core.x][core.y] = (
+                reader_rt[core.x][core.y] = [
+                    wk["row_start"],
+                    rows,
+                    wk["w_start"],
+                    cw_here,
+                    plan["link_rec_base"][g],
+                    l,
+                ] + sharded_args(
                     [
-                        x_addr,
-                        g_addr,
-                        wk["row_start"],
-                        rows,
-                        block_rows,
-                        wk["w_start"],
-                        cw_here,
-                        Wt,
-                        scratch_addr,
-                        slot_bytes,
-                        plan["link_rec_base"][g],
-                        plan["rec_w"],
-                        n_src_tiles,
-                        G,
-                        l,
-                        plan["round_recs"][l],
+                        cw_phys,
+                        stat_rows,
+                        min(gamma_chunk, cw_here),
+                        lc_rows,
+                        n_lc_tiles,
+                        len(by_group[g]),
+                        inbox_addr,
+                        me.x,
+                        me.y,
                     ]
-                    + src_ports
-                    + sharded_args(
-                        [
-                            cw_phys,
-                            stat_rows,
-                            min(gamma_chunk, cw_here),
-                            lc_rows,
-                            n_lc_tiles,
-                            len(by_group[g]),
-                            inbox_addr,
-                            me.x,
-                            me.y,
-                        ]
-                    )
                 )
-                pub = [virt(port_of[(l, d)]) for d in (0, 1) if sends[d]]
-                pub_args = []
-                for v in pub:
-                    pub_args += [v.x, v.y]
                 comb_args = []
                 for cwk in combiners:
                     v = virt(cwk["core"])
@@ -914,55 +962,26 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
                 norm_chunk = cw_here if (gamma_prescale or not has_gamma) else min(gamma_chunk, cw_here)
                 writer_rt[core.x][core.y] = (
                     [
-                        o_addr,
                         wk["row_start"],
                         rows,
-                        block_rows,
                         wk["w_start"],
                         cw_here,
-                        Wt,
-                        scratch_addr + p * slot_bytes,
                         plan["link_rec_base"][g],
-                        S_w if local_combine else plan["rec_w"],
                         w,
                         out_batch_of[cw_here],
-                        plan["round_recs"][l],
-                        len(pub),
+                        l,
                     ]
-                    + pub_args
                     + sharded_args([stat_rows, norm_chunk, lc_rows, lc_start, inbox_addr, lc_per, len(combiners)])
                     + comb_args
                 )
-                compute_rt[core.x][core.y] = [
-                    rows,
-                    block_rows,
-                    cw_here,
-                    n_src_tiles,
-                    inv_w_bits,
-                    eps_bits,
-                ] + sharded_args([cw_phys, stat_rows, min(gamma_chunk, cw_here), lc_rows, n_lc_tiles])
+                compute_rt[core.x][core.y] = [rows, cw_here] + sharded_args(
+                    [cw_phys, stat_rows, min(gamma_chunk, cw_here), lc_rows, n_lc_tiles]
+                )
             for core in worker_cores:  # idle cores of the worker set: zero rows (they still receive stats-ready)
                 if (core.x, core.y) not in used:
-                    reader_rt[core.x][core.y] = [
-                        x_addr,
-                        g_addr,
-                        0,
-                        0,
-                        block_rows,
-                        0,
-                        0,
-                        Wt,
-                        scratch_addr,
-                        slot_bytes,
-                        0,
-                        plan["rec_w"],
-                        n_src_tiles,
-                        G,
-                        0,
-                        0,
-                    ] + [0, 0] * G
-                    writer_rt[core.x][core.y] = [o_addr, 0, 0, block_rows, 0, 0, Wt, scratch_addr, 0, 1, 0, 1, 0, 0]
-                    compute_rt[core.x][core.y] = [0, block_rows, 0, n_src_tiles, inv_w_bits, eps_bits]
+                    reader_rt[core.x][core.y] = [0, 0, 0, 0, 0, 0]
+                    writer_rt[core.x][core.y] = [0, 0, 0, 0, 0, 0, 1, 0]
+                    compute_rt[core.x][core.y] = [0, 0]
 
             # ---- port runtime args ----
             port_rt = ttnn.RuntimeArgs()
@@ -1001,8 +1020,8 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
                     args += [len(my_sends)] + list(my_sends)
                     # cumulative local arrivals per round (0: I send nothing, no local wait)
                     args += list(plan["publishers_round"][l]) if my_sends else [0] * num_blocks
-                    args += [len(mcast)]
-                    for rect in mcast:
+                    args += [len(mcast[l])]
+                    for rect in mcast[l]:
                         args += list(rect)
                     if has_conn:
                         link = plan["hops"][(coord, peer)][l]
@@ -1015,6 +1034,7 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
                     core_ranges=worker_set,
                     compile_time_args=reader_ct,
                     runtime_args=reader_rt,
+                    common_runtime_args=reader_common,
                     config=ttnn.ReaderConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
@@ -1022,6 +1042,7 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
                     core_ranges=worker_set,
                     compile_time_args=writer_ct,
                     runtime_args=writer_rt,
+                    common_runtime_args=writer_common,
                     config=ttnn.WriterConfigDescriptor(),
                 ),
                 ttnn.KernelDescriptor(
@@ -1029,6 +1050,7 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
                     core_ranges=worker_set,
                     compile_time_args=compute_ct,
                     runtime_args=compute_rt,
+                    common_runtime_args=compute_common,
                     config=compute_config,
                 ),
                 ttnn.KernelDescriptor(
@@ -1037,7 +1059,7 @@ def run_distributed_rms_norm(input_tensor, gamma, plan, *, epsilon, compute_kern
                     compile_time_args=port_ct,
                     runtime_args=port_rt,
                     config=ttnn.DataMovementConfigDescriptor(
-                        processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_1_default
+                        processor=ttnn.DataMovementProcessor.RISCV_0, noc=PORT_NOC
                     ),
                 ),
             ]

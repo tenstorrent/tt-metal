@@ -38,25 +38,29 @@ void kernel_main() {
     constexpr uint32_t f32_face_bytes = 1024;
     constexpr uint32_t max_ports = 2;
 
+    // common args (one copy per device; see the reader) + per-core args (only what differs between cores)
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t block_rows = get_common_arg_val<uint32_t>(1);
+    const uint32_t wt_total = get_common_arg_val<uint32_t>(2);
+    const uint32_t my_slot_addr = get_common_arg_val<uint32_t>(3);  // scratch + p * slot_bytes (same on every port)
+    const uint32_t s_w = get_common_arg_val<uint32_t>(4);           // records per tile row of the block I publish into
+    const uint32_t num_ports = get_common_arg_val<uint32_t>(5);     // sending ports of a link (1 or 2)
+    constexpr uint32_t link_table = 6;  // per link l: [round_recs, num_ports x (noc x, noc y)]
     size_t a = 0;
-    const uint32_t out_addr = get_arg_val<uint32_t>(a++);
     const uint32_t row_start = get_arg_val<uint32_t>(a++);
     const uint32_t core_rows = get_arg_val<uint32_t>(a++);
-    const uint32_t block_rows = get_arg_val<uint32_t>(a++);
     const uint32_t w_start = get_arg_val<uint32_t>(a++);
     const uint32_t cw = get_arg_val<uint32_t>(a++);
-    const uint32_t wt_total = get_arg_val<uint32_t>(a++);
-    const uint32_t my_slot_addr = get_arg_val<uint32_t>(a++);  // scratch + p * slot_bytes (same on every port)
     const uint32_t rec_base = get_arg_val<uint32_t>(a++);
-    const uint32_t s_w = get_arg_val<uint32_t>(a++);        // records per tile row of the block I publish into
     const uint32_t w_idx = get_arg_val<uint32_t>(a++);      // my W chunk
     const uint32_t out_batch = get_arg_val<uint32_t>(a++);  // tiles per writer barrier (divides cw)
-    const uint32_t round_recs = get_arg_val<uint32_t>(a++);  // records per round in my link's slot region
-    const uint32_t num_ports = get_arg_val<uint32_t>(a++);  // sending ports of my link (1 or 2)
+    const uint32_t my_link = get_arg_val<uint32_t>(a++);
+    const uint32_t link_idx = link_table + my_link * (1 + 2 * num_ports);
+    const uint32_t round_recs = get_common_arg_val<uint32_t>(link_idx);  // records per round in my link's region
     uint32_t port_x[max_ports], port_y[max_ports];
     for (uint32_t i = 0; i < num_ports; ++i) {
-        port_x[i] = get_arg_val<uint32_t>(a++);
-        port_y[i] = get_arg_val<uint32_t>(a++);
+        port_x[i] = get_common_arg_val<uint32_t>(link_idx + 1 + 2 * i);
+        port_y[i] = get_common_arg_val<uint32_t>(link_idx + 2 + 2 * i);
     }
     // sharded-path args (R9/R10); the interleaved path keeps its Phase 0 arg list and these defaults
     uint32_t stat_rows = block_rows, norm_chunk = cw, lc_rows = 0, lc_start = 0, inbox_addr = 0, lc_per = 1, n_comb = 0;

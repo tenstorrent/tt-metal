@@ -169,3 +169,46 @@
   - Accurate SFPU reduce on a 16-bit DEST → inf (fixed as above).
   - **Pre-existing, independent of dtype or acc (finding):** `test_ds_distributed_norm[*-prefill-8192]` hits "static CBs clash with L1 buffers". The interleaved path budgets CBs at a fixed `WORKER_L1_BUDGET` (1 MiB) and never subtracts the per-call exchange scratch (lockstep L1 allocation lowers every core's CB ceiling). It also fails with fp32_dest_acc_en=True for (1,1,8192,3584). `prefill-131072` OOMs allocating the exchange scratch: `G·slot_bytes` grows with all rows, about 3.7 MB per port. Both were failing before this refinement (UnsupportedAxisValue), so they are not a regression. The fix belongs to the interleaved L1-fit / exchange-slot reuse work, not to numerics.
 - Tests added: `tests/ttnn/unit_tests/operations/distributed_rms_norm/test_distributed_rms_norm_numerics.py` (12 cases: bf8b and bf16+False across interleaved prescale / fused gamma / w_tail ≤16 and >16 / HEIGHT / WIDTH).
+
+## Refinement 5 — Speed up the perf-flagged profile (synchronization and block knobs)
+- Date: 2026-10-14
+- What was done (each lever measured on device with zone profiles, `--profile` bench at 61 calls; the kernels were zoned temporarily, zones removed):
+  - **Per-link stats-ready multicast** (`PER_LINK_MCAST`): interleaved row groups go to links in contiguous runs (`g * L // S_r`). Each port multicasts stats-ready only to its own link's workers (≤ 3 rectangles from `_linear_rects`), not the whole worker rectangle. 61-call A/B: 21.65 → 20.02 µs median-max.
+  - **Ports on NoC0** (`PORT_NOC`): on NoC1 the stats-ready multicast queued behind every worker's DRAM writes. Measured issue → landing was 1–3 µs in round 1; now ~0.5 µs.
+  - **Port header setup** (port kernel): the 2D route decode costs ~0.35 µs per header, and 8 headers took 2.8 µs before `conn.open()`, delaying the ready fence the neighbour waits on. Now header 0 is routed once, then the ready packet is sent. The other headers are copied from header 0 afterwards, during the local-arrival wait, and only as many as the call has packets (`ring`). Ready leaves at ~2.6 µs instead of ~3.5 µs.
+  - **Early gamma read** (`GAMMA_EARLY`, reader `gamma_issue` / `gamma_place`): the hot single-bank gamma read (2.3 µs when all 80 workers hit it after the x blocks) is issued with round 0's first tile row. It is placed after that barrier, so the round-0 prescale no longer stalls the round-1 sumsq / publish. Measured: min device 18.2 → 17.4 µs.
+  - **Per-port gather phases** (reader `gather_open` / `gather_issue` / `gather_close`): records are pulled from each port as soon as that port's stats-ready counter shows the round, so my own device's slots are pulled while the remote ones are still on the fabric. A new common word `bwd_mask` gives the direction of each slot (G ≤ 32 is checked on the host).
+  - **Finalize on row 0 only** (compute `finalize_post`): ×1/(G·W), +eps and rsqrt run as `VectorMode::R` over 2 SFPU iterations (face rows 0–3, all columns) before the transpose, instead of full-tile passes after it. Measured: 1.2 µs → ~0.1 µs per tile row on the post-exchange path. One iteration covers only the even or the odd columns and measured wrong (PCC 0.69), so 2 is the minimum. Numerics are unchanged (the same ops on the valid lanes). This also removed most of WIDTH's per-row compute cost: 71 → 49 µs.
+  - **Common runtime args** (all three worker kernels): device-wide values plus per-link tables (round_recs, port coords, bwd_mask) moved to `common_runtime_args`. Per-core args went from ~42 to 16 words; the sharded-path extras stay per core.
+  - **Block knobs, measured and left at default:**
+    - `MIN_CORE_W_TILES` = 8. At 4 it costs +5 µs; at 16 the 640×1792 split is the same, and decode is +0.9 µs.
+    - `out_batch_tiles` = whole row. A batch of 1 is no better.
+    - `OUT_DEPTH` = 2. A depth of 7 is no better.
+    - Port column offset 0 / 4 / 7: within noise. The device skew is not placement-driven.
+  - Reused: every helper call, the CB inventory, record layout, port send loop, round schedule. Added: `_linear_rects`, the knobs `GAMMA_EARLY` / `PORT_NOC` / `PER_LINK_MCAST`, the gather split and the gamma split. No CB was added or resized, so `l1_ledger.md` and its DRAM budget are unchanged.
+- Perf (median over calls of the max over 4 devices; same-session A/B, bf16 + gamma, axis 1, Linear, 2 links):
+
+  | Shape | Before | After | min device before → after |
+  |---|---|---|---|
+  | **640×1792 (flagged)** | **22.98** | **19.32** | 19.15 → 16.16 |
+  | 32×1792 | 10.40 | 8.06 | 9.60 → 6.00 |
+  | 2048×1280 | 41.34 | 38.97 | 35.65 → 32.11 |
+  | fp32 no-gamma 640×1792 (guard) | 34.3–35.4 (R3) | 30.1 | |
+  | (2, 2048, 4096) fused/prescale (guard) | 196–204 (R3) | 192.7 | |
+  | HEIGHT 640×1792 (guard) | 19.8 | 19.1 | |
+  | WIDTH 640×1792 (guard) | 70.9–71.7 | 48.8 | |
+
+- **Findings:**
+  - **Device skew:** it is host-dispatch-driven. The bench is host-bound (op-to-op ~14 ms), and the mesh enqueue writes the per-device programs one after another. Calls are bimodal: the p=0 devices start ~2.7 µs or ~7 µs after their peers, and the early device's port waits in the ready fence. Port placement does not move it.
+  - **Fabric:** one-hop latency is ~1.2 µs for a 5 KB round entry. This was measured as the round trip, which cancels the clock offsets.
+  - **Late device:** the tail is the DRAM writes. Compute is done at ~10.7 µs, but cores in the far grid corner write until ~16.4 µs (NoC1 congestion, ~295 GB/s aggregate).
+  - **Writer on NoC0:** measured +6 µs, because it collides with the port multicasts. Not kept.
+  - **Next lever:** a second output CB drained by the idle reader on NoC0, or ports pushing the round's records by multicast.
+- Accuracy achieved: golden tolerances unchanged (fp32 PCC ≥ 0.9999 / rel-RMS ≤ 0.005; bf16 PCC ≥ 0.999 / rel-RMS ≤ 0.01; bf8b 0.995 / 0.04–0.05). The precision baseline test passes.
+- Golden test progress:
+  - Slice (axis 1 / 2 links / bf16 + bf16 gamma or no gamma, all shapes / alignments / placements; fp32 axis 0 640×1792; bf8b + 16-bit DEST): 545 passed, 552 skipped, 3 xfailed, 0 failed.
+  - Ring mock + regression: 28/28.
+  - Translated: 276 passed. The 2 failures are the pre-existing prefill-8192 / 131072 L1 cases (Refinement 4 finding).
+  - Unit directory: 81/81, + 5 new.
+- Issues encountered: finalize with 1 SFPU iteration was wrong (half the columns), fixed with 2. Run-to-run noise in max-over-devices is ±1–2 µs, and one run hit 28.9 µs, all from the skew mode. A/B decisions used 60-call medians plus the min-device median.
+- Tests added: `test_distributed_rms_norm_rounds.py::test_linear_rects_cover_exactly` (5 cases). The perf bench takes a `DRMS_BENCH_CALLS` override.

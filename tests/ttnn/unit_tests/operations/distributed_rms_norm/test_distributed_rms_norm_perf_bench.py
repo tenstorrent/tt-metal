@@ -8,6 +8,8 @@ The op is called CALLS times per shape (first call compiles); take the later cal
 per call, then the median over calls: cross-device launch skew makes single calls noisy).
 """
 
+import os
+
 import pytest
 import torch
 import ttnn
@@ -26,7 +28,7 @@ def _router_config():
     return cfg
 
 
-CALLS = 21
+CALLS = int(os.environ.get("DRMS_BENCH_CALLS", "21"))  # override for tighter medians
 
 FABRIC_PARAMS = {
     "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
