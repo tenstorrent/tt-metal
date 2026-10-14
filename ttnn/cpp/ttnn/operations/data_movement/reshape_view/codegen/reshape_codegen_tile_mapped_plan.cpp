@@ -359,13 +359,14 @@ std::optional<TileMappedLayout> tile_mapped_layout(
         return std::nullopt;
     }
     const auto candidates = cached_candidates(shapes->first, shapes->second, element_bytes, tile_bytes, num_cores);
-    if (!candidates.unsliced || tile_mapped_input_depth(*candidates.unsliced, tile_bytes, l1_budget) == 0) {
-        return std::nullopt;
-    }
+    // The sliced map page can be smaller than the per-tile one, so it may fit where the per-tile map does not.
     if (candidates.sliced && tile_mapped_input_depth(*candidates.sliced, tile_bytes, l1_budget) > 0) {
         return candidates.sliced;
     }
-    return candidates.unsliced;
+    if (candidates.unsliced && tile_mapped_input_depth(*candidates.unsliced, tile_bytes, l1_budget) > 0) {
+        return candidates.unsliced;
+    }
+    return std::nullopt;
 }
 
 TileMappedPlan build_tile_mapped_plan(
