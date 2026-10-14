@@ -19,6 +19,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill import step_message
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
 from models.demos.common.prefill.runners.migration import (
@@ -473,7 +474,22 @@ def _config_from_env() -> ProducerConfig:
         pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.93")),
         interleave=interleave,
         multi_turn_prob=float(os.environ.get("PREFILL_PRODUCER_MULTI_TURN_PROB", "0.0")),
+        slot_lengths=_slot_lengths_from_env(int(os.environ.get("PREFILL_NUM_USERS", "1"))),
     )
+
+
+def _slot_lengths_from_env(num_users: int):
+    """PREFILL_PRODUCER_SLOT_LENGTHS=n0,n1,...: slot s's prompts are n_s tokens (one shared trace), else None.
+    Slots past the list keep random lengths."""
+    spec = os.environ.get("PREFILL_PRODUCER_SLOT_LENGTHS", "").strip()
+    if not spec:
+        return None
+    entries = spec.split(",")
+    if len(entries) > num_users or not all(e.strip().isdigit() and int(e) > 0 for e in entries):
+        raise ValueError(
+            f"PREFILL_PRODUCER_SLOT_LENGTHS={spec!r}: want at most {num_users} positive token counts, comma-separated"
+        )
+    return {slot: int(n) for slot, n in enumerate(entries)}
 
 
 class _Slot:
@@ -524,8 +540,8 @@ def _new_request(
 @dataclass
 class RunStats:
     resident: dict
-    total_pushes: int
-    push_ms: list
+    total_pushes: int  # chunks sent, counting each lane of a batched step
+    push_ms: list  # one per H2D message
     completed: int
     wall_s: float
 
@@ -599,6 +615,102 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
     return RunStats(
         resident=resident, total_pushes=total_pushes, push_ms=push_ms, completed=completed, wall_s=now_fn() - start
     )
+
+
+def run_batched_schedule(
+    cfg: ProducerConfig, max_lanes: int, *, push_fn, now_fn=time.perf_counter, sleep_fn=time.sleep, rng=None
+):
+    """run_schedule's workload as multi-lane steps: each active slot gets a lane per step (plan_step), and the slot
+    order rotates by one per step so spare lanes are shared fairly. push_fn(lanes) gets
+    [(slot_id, chunk_idx, actual_start, actual_end, actual_isl)], a slot's lanes adjacent and in order, and returns
+    the push time in ms. A finished slot takes its next request in the following step. p_gap applies per step;
+    p_burst and interleave do not, since a step already sends several chunks."""
+    if cfg.multi_turn_prob > 0:
+        raise ValueError("batched steps need chunk-aligned starts; multi-turn resume is not supported")
+    rng = rng if rng is not None else random.Random(cfg.seed)
+    # One step can finish a request in every slot, so start no more requests than max_requests allows.
+    slots = [_Slot(i) for i in range(min(cfg.num_users, cfg.max_requests))]
+    for req_id, slot in enumerate(slots):
+        _new_request(slot, req_id, cfg, rng)
+    next_req_id = len(slots)
+    resident: dict = {}
+    push_ms: list = []
+    total_pushes = completed = 0
+    order = list(slots)
+    start = now_fn()
+
+    while (now_fn() - start) < cfg.duration_s and completed < cfg.max_requests:
+        active = [slot for slot in order if not slot.done]
+        if not active:
+            break
+        if rng.random() < cfg.p_gap:
+            sleep_fn(rng.uniform(*cfg.gap_ms) / 1000.0)
+            continue
+        lanes = []
+        for slot, count in step_message.plan_step(active, max_lanes, lambda s: s.target_chunks - s.next_chunk):
+            for chunk_idx in range(slot.next_chunk, slot.next_chunk + count):
+                actual_start = slot.prefix_len + chunk_idx * CHUNK_SIZE
+                lanes.append((slot, chunk_idx, actual_start, min(actual_start + CHUNK_SIZE, slot.actual_isl)))
+        push_ms.append(push_fn([(s.slot_id, idx, a, b, s.actual_isl) for s, idx, a, b in lanes]))
+        total_pushes += len(lanes)
+        for slot, _, _, actual_end in lanes:
+            slot.next_chunk += 1
+            resident[slot.slot_id] = _SlotFill(real_len=actual_end)
+        for slot in {id(s): s for s, _, _, _ in lanes}.values():
+            if slot.done:
+                completed += 1
+                if next_req_id < cfg.max_requests:
+                    _new_request(slot, next_req_id, cfg, rng)
+                    next_req_id += 1
+        order.append(order.pop(0))
+
+    return RunStats(
+        resident=resident, total_pushes=total_pushes, push_ms=push_ms, completed=completed, wall_s=now_fn() - start
+    )
+
+
+def step_payload(lane_tokens: list, lanes: list, max_lanes: int):
+    """(H2D rows, metadata bytes) of one step message from each lane's padded chunk and its (slot, start, end)."""
+    rows = step_message.stacked_rows(lane_tokens, CHUNK_SIZE, GLOBAL_MESH_SHAPE[0], max_lanes)
+    words = step_message.pack_words([step_message.Lane(*lane) for lane in lanes], max_lanes)
+    return _to_host_array(rows), struct.pack(f"<{len(words)}I", *words)
+
+
+def make_step_push(service, payload_bytes: int, pools_by_trace: dict, slot_traces: dict, max_lanes: int, tag: str):
+    """push_fn for run_batched_schedule: sends one step message per call, returns its push time in ms."""
+
+    def push_step(lanes: list) -> float:
+        tokens = [_chunk_slice(pools_by_trace[slot_traces[slot]], a, isl) for slot, _, a, _, isl in lanes]
+        rows, metadata = step_payload(tokens, [(slot, a, b) for slot, _, a, b, _ in lanes], max_lanes)
+        logger.info(f"{tag} push step lanes={[(slot, a, b) for slot, _, a, b, _ in lanes]}")
+        push_start = time.perf_counter()
+        _push(service, payload_bytes, rows, None, metadata)
+        return (time.perf_counter() - push_start) * 1000.0
+
+    return push_step
+
+
+def run_service_schedule(cfg, service, payload_bytes, pools_by_trace, slot_traces, push_chunk, tag: str):
+    """run_schedule for a one-chunk service, else run_batched_schedule; the service's metadata size says which."""
+    max_lanes = step_message.max_lanes_for_metadata(service.metadata_size_bytes())
+    if max_lanes == 1:
+        return run_schedule(cfg, push_fn=push_chunk)
+    logger.info(f"{tag} batched steps: up to {max_lanes} lanes of {CHUNK_SIZE} tokens per message")
+    push_step = make_step_push(service, payload_bytes, pools_by_trace, slot_traces, max_lanes, tag)
+    return run_batched_schedule(cfg, max_lanes, push_fn=push_step)
+
+
+def push_shutdown(service, payload_bytes: int, tag: str) -> None:
+    """Send the shutdown sentinel (every metadata word -1) in the service's own message format."""
+    max_lanes = step_message.max_lanes_for_metadata(service.metadata_size_bytes())
+    words = step_message.shutdown_words(max_lanes)
+    logger.info(f"{tag} sending SHUTDOWN sentinel (metadata={words})")
+    if max_lanes == 1:
+        rows, mtp_rows = _h2d_rows(_chunk_slice([], 0)), _mtp_rows([], 0)
+    else:
+        rows, mtp_rows = step_payload([[1] * CHUNK_SIZE], [(0, 0, 1)], max_lanes)[0], None
+    _push(service, payload_bytes, rows, mtp_rows, struct.pack(f"<{len(words)}i", *words))
+    service.barrier()
 
 
 def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
@@ -1445,6 +1557,8 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
         trace = resolve_trace_dir(default)
         slot_traces = {s: trace for s in range(cfg.num_users)}
         pool_tokens = MAX_SEQ_LEN if cfg.multi_turn_prob > 0 else cfg.chunks_max * CHUNK_SIZE
+        if cfg.slot_lengths:
+            pool_tokens = max(pool_tokens, max(cfg.slot_lengths.values()))
         return slot_traces, None, {trace: _load_token_pool(trace, pool_tokens)}
 
     entries = [e.strip() for e in spec.split(",") if e.strip()]
@@ -1602,7 +1716,7 @@ def main() -> None:
 
     ack_layers = _ack_layers_per_chunk(kv_table)
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
-    cfg.slot_lengths = slot_lengths
+    cfg.slot_lengths = slot_lengths or cfg.slot_lengths
 
     def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int, actual_isl: int) -> float:
         pool = pools_by_trace[slot_traces[slot_id]]
@@ -1622,6 +1736,8 @@ def main() -> None:
     warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))
     if warmup_chunks > 0:
         logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
+        if step_message.max_lanes_for_metadata(service.metadata_size_bytes()) > 1:
+            raise ValueError("PREFILL_PRODUCER_WARMUP_CHUNKS is not supported with batched steps")
         for cidx in range(warmup_chunks):
             push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
         service.barrier()
@@ -1629,7 +1745,7 @@ def main() -> None:
             _drain_layer_acks(ack_channel, ack_layers * warmup_chunks)
         logger.info("[producer] warmup complete; starting the measured request")
 
-    stats = run_schedule(cfg, push_fn=push_chunk)
+    stats = run_service_schedule(cfg, service, payload_bytes, pools_by_trace, slot_traces, push_chunk, "[producer]")
     service.barrier()
 
     sorted_ms = sorted(stats.push_ms)
@@ -1666,12 +1782,7 @@ def main() -> None:
         verify_ok = all(verdicts)
 
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
-        nwords = CHUNK_METADATA_SIZE_BYTES // 4
-        sentinel = struct.pack(f"<{nwords}i", *([-1] * nwords))
-        assert len(sentinel) == CHUNK_METADATA_SIZE_BYTES
-        logger.info("[producer] sending SHUTDOWN sentinel (metadata=-1,-1,-1)")
-        _push(service, payload_bytes, _h2d_rows(_chunk_slice([], 0)), _mtp_rows([], 0), sentinel)
-        service.barrier()
+        push_shutdown(service, payload_bytes, "[producer]")
         logger.info("[producer] exiting; SHUTDOWN sentinel sent — runner will drain and shut down.")
     else:
         logger.info("[producer] exiting (the runner keeps its sync-op loop running).")
