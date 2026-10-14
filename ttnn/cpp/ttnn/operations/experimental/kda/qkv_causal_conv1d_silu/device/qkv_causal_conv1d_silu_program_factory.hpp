@@ -5,34 +5,47 @@
 
 #include <cstdint>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 #include "qkv_causal_conv1d_silu_device_operation_types.hpp"
+#include "qkv_causal_conv1d_silu_layout.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::experimental::prim {
 
-// Kimi-K3 supplies four learned causal-convolution taps; one channel block of weights is queued per tap.
-inline constexpr uint32_t qkv_causal_conv1d_silu_tap_count = 4;
+// The fabric history exchange runs on the compute grid's last core, which the convolution leaves free.
+inline CoreCoord qkv_causal_conv1d_silu_exchange_core(const CoreCoord& grid) { return {grid.x - 1, grid.y - 1}; }
 
-// Per-core DFB depths in channel blocks. Row-major activation, partial and output are double-buffered; partial
-// must hold the previous tap's block, still being read, while compute writes the next tap's block.
-inline constexpr uint32_t qkv_causal_conv1d_silu_act_rm_blocks = 2;
-inline constexpr uint32_t qkv_causal_conv1d_silu_act_tile_blocks = 1;
-inline constexpr uint32_t qkv_causal_conv1d_silu_partial_blocks = 2;
-inline constexpr uint32_t qkv_causal_conv1d_silu_output_blocks = 2;
-
-// The reader stages one channel block's tile rows plus the three history rows in a private window.
-inline uint64_t qkv_causal_conv1d_silu_window_bytes(uint64_t block_ct, uint64_t element_bytes) {
-    return (tt::constants::TILE_HEIGHT + qkv_causal_conv1d_silu_tap_count - 1) * block_ct * tt::constants::TILE_WIDTH *
-           element_bytes;
+// Every convolution core stages an equal share of the channel tiles of the rows the exchange core sends.
+inline uint32_t qkv_causal_conv1d_silu_staged_ct(uint32_t channel_tiles, uint32_t convolution_cores) {
+    return (channel_tiles + convolution_cores - 1) / convolution_cores;
 }
 
-inline uint64_t qkv_causal_conv1d_silu_l1_bytes(uint64_t block_ct, uint64_t tile_bytes, uint64_t element_bytes) {
-    constexpr uint64_t dfb_blocks = qkv_causal_conv1d_silu_act_rm_blocks + qkv_causal_conv1d_silu_act_tile_blocks +
-                                    qkv_causal_conv1d_silu_tap_count + qkv_causal_conv1d_silu_partial_blocks +
-                                    qkv_causal_conv1d_silu_output_blocks;
-    return (dfb_blocks * block_ct * tile_bytes) + qkv_causal_conv1d_silu_window_bytes(block_ct, element_bytes);
+// Dataflow buffer depths in tiles: double-buffered shifted taps and output groups, and per channel block the tap
+// tiles, the identity and the diagonal weights.
+struct QkvCausalConv1dSiluDfbTiles {
+    uint32_t act_tile;
+    uint32_t taps;
+    uint32_t eye;
+    uint32_t weights;
+    uint32_t output;
+    uint32_t total() const { return act_tile + taps + eye + weights + output; }
+};
+
+inline QkvCausalConv1dSiluDfbTiles qkv_causal_conv1d_silu_dfb_tiles(uint32_t block_ct) {
+    using qkv_conv::tap_count;
+    const uint32_t group = qkv_conv::dest_group(block_ct);
+    return {
+        .act_tile = 2 * tap_count * group,
+        .taps = tap_count * block_ct,
+        .eye = 1,
+        .weights = tap_count * block_ct,
+        .output = 2 * group};
+}
+
+inline uint64_t qkv_causal_conv1d_silu_l1_bytes(uint32_t block_ct, uint64_t tile_bytes, uint32_t max_staged_ct) {
+    return (qkv_causal_conv1d_silu_dfb_tiles(block_ct).total() * tile_bytes) +
+           qkv_conv::ReaderScratch{block_ct}.bytes() + qkv_conv::StagingScratch{max_staged_ct}.bytes();
 }
 
 struct QkvCausalConv1dSiluProgramFactory {
