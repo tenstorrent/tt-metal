@@ -22,22 +22,23 @@
  *
  * DM builds expose local operations plus the NoC operations (remote up, set/relay/inc multicast).
  *
- * Blackhole UNPACK/PACK builds expose the local operations only, on the Tensix hardware (Sync Unit)
+ * Blackhole and Quasar UNPACK/PACK builds expose the local operations only, on the Tensix hardware (Sync Unit)
  * semaphore, and require SemScope::COMPUTE_ATOMIC, the only mechanism the host resolves for a compute
  * binding; the constructor asserts it. Compute rules a kernel author must know:
- *  - The value is 0..15. More than 15 outstanding credits lose posts silently; a producer that gates
- *    each up() with wait_not_full() can never get there.
+ *  - The value is 0..15. Blackhole drops posts at 15; Quasar posts stall at the programmed capacity
+ *    (and gets stall at 0), holding back the thread's later engine instructions until a peer clears them.
+ *    Call wait_not_full(n) before writing shared data, then up(n) to publish it on either architecture.
  *  - Its capacity (hardware Max) is SemaphoreAdvancedOptions::max_value, the ring depth in credits;
  *    wait_not_full() blocks while the value is at capacity. Default capacity is 15.
- *  - It starts every kernel at 0 and the kernel must leave it balanced at 0. The 2.0
+ *  - It starts every kernel at 0 and the kernel must leave it balanced at 0. The Blackhole 2.0
  *    compute_kernel_hw_startup (LLKOperand overloads) seeds it on PACK; a kernel that does not call that
- *    startup must call set(0) on its producing thread before the first up(). The host rejects a nonzero
- *    initial_value and a second compute semaphore.
+ *    startup, and every Quasar kernel, must call set(0) on its producing thread before the first up().
+ *    The host rejects a nonzero initial_value and a second compute semaphore.
  *  - up()/down() are ordered after this thread's engine work (packer/unpacker), and wait()/wait_min()
  *    order this thread's *subsequent engine instructions* after the condition, not RISC loads. A
  *    kernel that reads the buffer with the RISC must poll value() instead.
  *  - The local-op signatures are present on every compute build for a uniform API, but only Blackhole
- *    UNPACK/PACK implements them; on MATH, isolate-SFPU, and non-Blackhole compute every method rejects
+ *    and Quasar UNPACK/PACK implement them; on MATH, isolate-SFPU, and other archs every method rejects
  *    at compile time if instantiated (a kernel cannot reach them -- construction already fails there).
  * Details and instruction sequences: semaphore_compute_impl.h.
  */
@@ -80,7 +81,12 @@ public:
      * LOCAL_NONATOMIC: L1 read-modify-write (not atomic; the host picks it only for a single binder).
      * COMPUTE_ATOMIC:  `value` SEMPOSTs, each ordered after this thread's packer/unpacker work, so a
      *                  consumer that sees the credit also sees the data (publish-after-data). Value +
-     *                  outstanding credits must stay <= 15; a bounded producer pairs up(n) with wait_not_full(n).
+     *                  outstanding credits must stay <= 15 on Blackhole (posts saturate at 15, not at
+     *                  max_value). On Quasar, a post at max_value stalls until a consumer calls down();
+     *                  up() or a later operation that waits for those posts to retire then blocks.
+     *                  A bounded producer on either architecture must call wait_not_full(n) BEFORE writing
+     *                  the shared buffer, then up(n) after writing it. Post back-pressure alone cannot
+     *                  prevent overwriting an occupied slot. up(n) posts individual credits, not an atomic batch.
      *
      * @param value The value to increment the semaphore by.
      */
@@ -96,7 +102,8 @@ public:
      * EXTERNAL:        multi-consumer-safe via a NoC-CAS lock; consumers must run on the semaphore's node.
      * LOCAL_NONATOMIC: single-owner (non-atomic) decrement.
      * COMPUTE_ATOMIC:  `value` SEMGETs ordered after this thread's engine work (release-after-read). Does
-     *                  NOT wait for sufficiency (SEMGET floors at 0): the wait belongs before the engine
+     *                  NOT wait for sufficiency (SEMGET floors at 0 on Blackhole; on Quasar it stalls at 0,
+     *                  which is still after the read): the wait belongs before the engine
      *                  reads the slot and the decrement after, so pair it with wait_min() --
      *                  `wait_min(n); <engine reads slot>; down(n)`.
      *
@@ -164,7 +171,8 @@ public:
      * @brief The settled current value.
      *
      * DM: a fresh (cache-invalidated) read; a RISC-side write has already retired. COMPUTE_ATOMIC: first
-     * retires this thread's own posted SEMPOST/SEMGET (tensix_sync), then reads the Sync Unit.
+     * retires this thread's own posted SEMPOST/SEMGET (tensix_sync on Blackhole, a CSR poll of the Sync
+     * busy bit on Quasar), then reads the Sync Unit.
      *
      * @return Current semaphore value.
      */

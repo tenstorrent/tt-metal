@@ -937,6 +937,32 @@ def test_softmax_4096x4096_fp32(device):
 
 
 @pytest.mark.parametrize(
+    "n",
+    [32, 1024, 4096],
+)
+def test_softmax_float32_default_uses_accurate_exp(device, n):
+    """Regression test for issue #57633: a float32 input must default to the accurate exp
+    (fast_and_approximate_mode=False), matching ttnn.exp's own default. Previously the default
+    compute kernel config hard-coded math_approx_mode=True for every dtype, so an all-ones row
+    (every softmax output is exactly 1/n) came back ~2.9% low and rows summed to ~0.97."""
+    torch_input_tensor = torch.ones((1, 1, 32, n), dtype=torch.float32)
+    torch_output_tensor = F.softmax(torch_input_tensor, dim=-1, dtype=torch.float32)
+
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output_tensor = ttnn.softmax(ttnn_input_tensor, dim=-1)
+    output_torch = ttnn.to_torch(ttnn_output_tensor)
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_torch,
+        pcc_threshold=0.999,
+        rtol=0.01,
+        atol=1e-5,
+        frobenius_threshold=0.01,
+    )
+
+
+@pytest.mark.parametrize(
     "shape, dim",
     [
         ((1, 100, 6800), -1),
@@ -1009,3 +1035,43 @@ def test_softmax_dim_out_of_range_reports_caller_dim(device, expect_error, op):
     tt_input = ttnn.from_torch(torch.randn((1, 1, 32, 32)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, r"expected to be in range of \[-4, 3\], but got -7"):
         op(tt_input, dim=-7)
+
+
+def test_softmax_explicit_fp32_acc_keeps_fp32_intermediates(device):
+    """An explicit fp32_dest_acc_en keeps the attention-optimized factory's bulk buffers in Float32,
+    so exp(x - max) is not rounded to bfloat16 before the sum and the final multiply. The defaulted
+    config (fp32 accumulation with 16-bit bulk buffers since #53643) is a different program and
+    must not share its cache entry with an explicit config, even one that matches the default."""
+    torch.manual_seed(0)
+    # Attention-score shape from Qwen3-TTS's talker (16 heads, T = 26), a short causal row.
+    torch_input = torch.randn((1, 16, 26, 26), dtype=torch.bfloat16) * 4
+    golden = F.softmax(torch_input.float(), dim=-1).to(torch.bfloat16)
+
+    explicit_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    explicit_out = ttnn.to_torch(ttnn.softmax(tt_input, dim=-1, compute_kernel_config=explicit_config))
+
+    # An explicit config with the same values as the softmax default still gets its own program.
+    is_wormhole = device.arch() == ttnn.device.Arch.WORMHOLE_B0
+    default_equal_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi3 if is_wormhole else ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    ttnn.softmax(tt_input, dim=-1, compute_kernel_config=default_equal_config)
+    entries_explicit = device.num_program_cache_entries()
+    ttnn.softmax(tt_input, dim=-1)
+    assert device.num_program_cache_entries() == entries_explicit + 1, "defaulted call reused the explicit program"
+
+    # Measured: 0.810 of outputs match the correctly rounded result with Float32 bulk buffers (WH N150 and
+    # BH P150), 0.728 when exp(x - max) is rounded to bfloat16 first (main after #53643, WH N150).
+    correctly_rounded = (explicit_out == golden).float().mean().item()
+    assert correctly_rounded >= 0.77, f"only {correctly_rounded:.3f} of outputs are correctly rounded"
