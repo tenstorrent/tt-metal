@@ -21,3 +21,11 @@ levers are outside the PR: moe_compute (361 us on the slowest chip, 1.3-1.6x imb
 and for long context KV sequence-sharding (capacity, not short-context latency).
 Baseline B=32 plain demo (gsm8k_b32, ctx 512) at 682cba8558d: TTFT 574 ms, decode 57.3 ms/token = 17.44 tok/s/user (log dsv4-logs/base/perfbase_b32.log).
 Tooling: dsv4-logs/base/perf_optable.sh <tag> <layer> [env] runs tests/test_layer_op_table.py + tests/op_table_build_v2.py (now tolerates empty duration cells).
+
+## KV sequence-sharding over the 8 mesh columns: communication cost (tests/test_kvshard_comm_microbench.py, .44, T=16 users = 32 tile rows, 2 links)
+Replicated KV today (attention is column-local, no cross-column traffic). With the cache split by position every column needs q for all 64 heads and the partial
+attention outputs must be merged: q all_gather [32,4096]->[32,32768] 47.0 us + partial-output reduce_scatter [32,32768]->[32,4096] 39.8 us + max/sum all_gather
+[32,128] fp32 20.0 us = **~107 us per attention layer, ~8.5 ms/token over 40 layers** (communication only; the extra partial-softmax math and the indexer top-k merge come on top).
+Verdict: a capacity feature, not a latency one - gate it to long contexts (it frees KV DRAM 8x and divides the indexer work by 8), keep the replicated layout at <= 131072.
+Design must shrink the traffic first (send only the T real rows instead of 32 padded rows, bf16 -> keep q for 8 heads and exchange partial (o, m, l) instead of gathering q,
+or shard the heads of the 64 across columns differently).
