@@ -141,6 +141,11 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         self.submesh_devices: List = list(submesh_devices)
         self.dp = len(models)
         self.batch_per_dp = cfgs[0].max_batch_size
+        # vllm-tt-plugin slot contract: device state follows the request, and the runner sends a full-width
+        # ``slot_remap`` permutation with decode (row i reads the state currently in slot remap[i]; applied once).
+        # KV caches stay where they were written (they live on different submeshes); only this indirection
+        # logical slot -> physical (replica, local cache slot) is permuted.
+        self._phys = [(r, l) for r in range(self.dp) for l in range(self.batch_per_dp)]
         # Single-replica back-compat aliases (helpers that still reach for
         # self.model / self.cfg / self.mesh_device pick up replica 0).
         self.model = models[0]
@@ -268,23 +273,37 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         """Map a user/batch index to a DP replica index."""
         return min(user_id // self.batch_per_dp, self.dp - 1)
 
+    def _apply_slot_remap(self, slot_remap) -> None:
+        """Apply the runner's slot permutation once: logical slot i now owns the state that slot remap[i] held."""
+        if slot_remap is None:
+            return
+        remap = [int(j) for j in slot_remap]
+        assert sorted(remap) == list(range(len(self._phys))), f"slot_remap is not a permutation: {remap}"
+        self._phys = [self._phys[j] for j in remap]
+
     @staticmethod
-    def _flatten(val, idx=0) -> list:
-        """List of tensors for user ``idx``, using the same nesting rules as ``_unwrap``."""
-        # vLLM passes text-only requests as lists of None (e.g. pixel_values=[None]); drop those.
+    def _flatten(val, idx=0, n_rows=1) -> list:
+        """Tensors for batch row ``idx`` out of one multimodal kwarg.
+
+        vllm-tt-plugin passes one entry per batch row (None, or the list of that request's per-feature tensors);
+        text-only rows are None / [None]. Older runners passed a flat list of per-image tensors for a single
+        request; that shape is kept when the list length does not match the number of rows.
+        """
         if val is None:
             return []
         if not isinstance(val, list):
             return [val]
-        if idx != 0 and idx < len(val):
-            val = val[idx]
-            return [v for v in val if v is not None] if isinstance(val, list) else [val]
+        if len(val) == n_rows:
+            row = val[idx]
+            if row is None:
+                return []
+            return [v for v in (row if isinstance(row, list) else [row]) if v is not None]
         flat = []
         for item in val:
             flat.extend(item if isinstance(item, list) else [item])
         return [v for v in flat if v is not None]
 
-    def _image_inputs(self, kwargs, idx):
+    def _image_inputs(self, kwargs, idx, n_rows=1):
         """(pixel_values [n_crops, 729, 588], image_token_pooling) for user ``idx``.
 
         Pooling indices from the processor are relative to each image's crops; shift them so
@@ -292,15 +311,15 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         """
         pvs = [
             _raw_frames_to_patches(t.float()) if t.dim() == 4 and t.shape[1] == 3 else t.float()
-            for t in self._flatten(kwargs.get("pixel_values"), idx)
+            for t in self._flatten(kwargs.get("pixel_values"), idx, n_rows)
         ]
-        pools = self._flatten(kwargs.get("image_token_pooling"), idx)
+        pools = self._flatten(kwargs.get("image_token_pooling"), idx, n_rows)
         if not pvs:
             return None, None
         if not pools:
             return torch.cat(pvs, dim=0), None
-        num_crops = self._flatten(kwargs.get("image_num_crops"), idx)
-        grids = self._flatten(kwargs.get("image_grids"), idx)
+        num_crops = self._flatten(kwargs.get("image_num_crops"), idx, n_rows)
+        grids = self._flatten(kwargs.get("image_grids"), idx, n_rows)
         if num_crops and grids:
             # Per-image metadata available: offsets follow HF build_batched_images exactly.
             pv, pool = torch.cat(pvs, dim=0), torch.cat(pools, dim=0)
@@ -313,47 +332,17 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         logger.warning(f"Cannot align {len(pvs)} pixel_values with {len(pools)} poolings; using indices as-is")
         return torch.cat(pvs, dim=0), torch.cat(pools, dim=0)
 
-    def _unwrap(self, val, idx=0):
-        """Unwrap list nesting, concatenating tensors for multi-image requests.
-
-        For DP=1 / batch=1 (galaxy_t3k path): outer list is per-image — concat
-        all tensors along dim=0 so multi-image pixel_values/pooling are combined.
-        For DP>1 / batched: outer list is per-user; pick val[idx] then concat
-        sub-list (idx's user with multiple images).
-        """
-        import torch
-
-        if val is None:
+    def _unwrap(self, val, idx=0, n_rows=1):
+        """Row ``idx``'s tensor(s) from a multimodal kwarg, concatenated along dim 0 (None if the row has none)."""
+        flat = self._flatten(val, idx, n_rows)
+        if not flat:
             return None
-        if isinstance(val, list):
-            if not val:
-                return None
-            # If batch routing is requested (idx != 0 explicitly used), pick that user
-            # and let the next-level concat handle multi-image for that user.
-            if idx != 0 and idx < len(val):
-                val = val[idx]
-                if isinstance(val, list):
-                    flat = val
-                else:
-                    return val
-            else:
-                # Flatten one extra level of nesting and concatenate all
-                flat = []
-                for item in val:
-                    if isinstance(item, list):
-                        flat.extend(item)
-                    else:
-                        flat.append(item)
-            flat = [v for v in flat if v is not None]
-            if not flat:
-                return None
-            if len(flat) == 1:
-                return flat[0]
-            try:
-                return torch.cat(flat, dim=0)
-            except Exception:
-                return flat[0]
-        return val
+        if len(flat) == 1:
+            return flat[0]
+        try:
+            return torch.cat(flat, dim=0)
+        except Exception:
+            return flat[0]
 
     def warmup_model_prefill(self, kv_cache=None, enable_trace=False, can_sample_on_device=False, **kwargs):
         """vllm-tt-plugin contract hook (called once with and once without ``enable_trace``).
@@ -380,16 +369,21 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         video_token_pooling_all = kwargs.get("video_token_pooling")
 
         batch_size = tokens.shape[0]
+        # The runner assigns every request a persistent decode slot (``empty_slots``); decode_forward routes by that
+        # slot, so prefill must put the KV cache in the same replica/slot. Routing by position in the prefill batch
+        # (always 0 for a single request) mixes replicas as soon as two requests overlap (DP>1).
+        empty_slots = kwargs.get("empty_slots")
         out_logits = []
         for u in range(batch_size):
-            rank = self._route(u)
+            slot = int(empty_slots[u]) if empty_slots is not None else u
+            assert 0 <= slot < self.dp * self.batch_per_dp, f"slot {slot} outside {self.dp}x{self.batch_per_dp}"
+            rank, local_uid = self._phys[slot]
             model = self.models[rank]
-            local_uid = u % self.batch_per_dp
 
-            token_type_ids = self._unwrap(token_type_ids_all, idx=u)
-            pixel_values_videos = self._unwrap(pixel_values_videos_all, idx=u)
-            video_token_pooling = self._unwrap(video_token_pooling_all, idx=u)
-            pixel_values, image_token_pooling = self._image_inputs(kwargs, idx=u)
+            token_type_ids = self._unwrap(token_type_ids_all, idx=u, n_rows=batch_size)
+            pixel_values_videos = self._unwrap(pixel_values_videos_all, idx=u, n_rows=batch_size)
+            video_token_pooling = self._unwrap(video_token_pooling_all, idx=u, n_rows=batch_size)
+            pixel_values, image_token_pooling = self._image_inputs(kwargs, idx=u, n_rows=batch_size)
 
             pv = None
             pool_idx = None
@@ -417,7 +411,9 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
 
             model.reset_kv_cache(user_id=local_uid)
             vision_str = "video" if pixel_values_videos is not None else "image" if pixel_values is not None else "none"
-            logger.info(f"Prefill rank={rank} user={u} local_uid={local_uid}: S={seq_len}, vision={vision_str}")
+            logger.info(
+                f"Prefill rank={rank} user={u} slot={slot} local_uid={local_uid}: S={seq_len}, vision={vision_str}"
+            )
 
             t0 = time.perf_counter()
             logits = model.forward_prefill(
@@ -469,14 +465,15 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
 
         batch_size = tokens.shape[0]
         out_logits = [None] * batch_size
+        self._apply_slot_remap(kwargs.get("slot_remap"))
 
-        # Collect active (non-padding) users routed to their DP rank.
+        # Collect active (non-padding) users routed to the replica that holds their state.
         active = []
         for u in range(batch_size):
             position = int(start_pos[u].item()) if hasattr(start_pos[u], "item") else int(start_pos[u])
             if position < 0:
                 continue  # padding slot
-            rank = self._route(u)
+            rank = self._phys[u][0]
             token_id = int(tokens[u, 0].item())
             active.append((u, rank, token_id, position))
 
