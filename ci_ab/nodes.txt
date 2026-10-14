@@ -1,0 +1,2 @@
+models/demos/deepseek_v3_b1/tests/unit_tests/test_rmsnorm.py
+models/demos/deepseek_v3_b1/tests/unit_tests/test_broadcast_rms_single_device.py
