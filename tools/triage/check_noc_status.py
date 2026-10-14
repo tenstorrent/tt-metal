@@ -44,7 +44,6 @@ def check_noc_status(
     """
     risc_name = risc_debug.risc_location.risc_name
     location = risc_debug.risc_location.location
-    available_noc_ids = [noc.value for noc in location.device.available_nocs]
 
     dispatcher_core_data = dispatcher_data.get_cached_core_data(risc_debug.risc_location)
 
@@ -81,12 +80,15 @@ def check_noc_status(
 
     # Validate the runtime-selected NOC and that it matches the NOC being checked.
     if noc_index is not None:
-        if noc_index not in available_noc_ids:
+        try:
+            read_noc_id = to_noc_id(noc_index)
+        except:
             log_check_location(
-                location, False, f"{message}Read invalid noc_index {noc_index} from core, expected {available_noc_ids}"
+                location, False, f"{message}Read invalid noc_index {noc_index} from core, expected 0 or 1. Value likely corrupted."
             )
             return
-        if to_noc_id(noc_index) != noc_id:
+
+        if read_noc_id != noc_id:
             return
 
     # Check if variables match with corresponding register
