@@ -462,6 +462,7 @@ FORCE_INLINE void reduce_split_segmented_row(
 void kernel_main() {
     const uint32_t num_rows = get_arg_val<uint32_t>(topk_core_args::compute_num_rows);
     constexpr bool tree = get_named_compile_time_arg_val("tree") != 0;
+    constexpr bool split_whole_rows = get_named_compile_time_arg_val("split_whole_rows") != 0;
     const uint32_t seg_first_chunk = tree ? get_arg_val<uint32_t>(topk_core_args::compute_seg_first_chunk) : 0;
     const uint32_t seg_end_chunk = tree ? get_arg_val<uint32_t>(topk_core_args::compute_seg_end_chunk) : 0;
     const uint32_t num_recv_rounds = tree ? get_arg_val<uint32_t>(topk_core_args::compute_num_recv_rounds) : 0;
@@ -538,15 +539,20 @@ void kernel_main() {
     CircularBuffer landing(landing_cb);
     CircularBuffer send(send_cb);
 
+    const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
+    uint32_t first_row = 0;
 #ifdef ARCH_BLACKHOLE
-    // Whole rows of two to 32 chunks, and K = 2048 rows longer than 32 with the accumulator buffer; a core with a
-    // split row keeps the single-thread body.
-    if constexpr (multi_chunk_rows && !columns) {
+    // Whole rows of 2 to 32 chunks (3 at K 1024, and at K 512 without a split row in the program), and K = 2048 rows
+    // longer than 32 with the accumulator buffer, split across MATH and PACK; a core's split row then runs on one
+    // thread.
+    if constexpr (split_whole_rows && !columns) {
         constexpr bool split_segments = K == 2048 && body_mode == ComputeBodyMode::FusedSegmented && acc_cb != 0;
-        if (num_chunks >= 2 && !has_split && (num_chunks <= max_fused_chunks || split_segments)) {
+        constexpr uint32_t min_split_chunks = (K == 1024 || (K == 512 && !tree)) ? 3 : 2;
+        if (num_whole_rows > 0 && num_chunks >= min_split_chunks &&
+            (num_chunks <= max_fused_chunks || split_segments)) {
             MATH((topk_large_indices_split::start()));
             PACK((topk_large_indices_split::wait_start()));
-            for (uint32_t row = 0; row < num_rows; ++row) {
+            for (uint32_t row = 0; row < num_whole_rows; ++row) {
                 tile_regs_acquire();
                 if constexpr (split_segments) {
                     if (num_chunks > max_fused_chunks) {
@@ -569,13 +575,15 @@ void kernel_main() {
 
                 tile_regs_release();
             }
-            return;
+            if (!has_split) {
+                return;
+            }
+            first_row = num_whole_rows;
         }
     }
 #endif
 
-    const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
-    for (uint32_t row = 0; row < num_rows; ++row) {
+    for (uint32_t row = first_row; row < num_rows; ++row) {
         const bool split_row = has_split && row == num_whole_rows;
         const uint32_t first_chunk = split_row ? seg_first_chunk : whole_first_chunk;
         const uint32_t row_chunks = split_row ? split_num_chunks : num_chunks;
