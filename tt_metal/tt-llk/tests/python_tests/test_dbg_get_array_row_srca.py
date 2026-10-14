@@ -51,6 +51,14 @@ FP32_AT_RISK_BITS = [
 BF16_AT_RISK_BITS = [0x0001, 0x007F, 0x8001, 0x8000, 0x0080, 0x7F7F]
 
 
+def as_float_bits(bits, width):
+    """A float tensor whose raw bits are the given patterns (sign-bit patterns overflow a signed literal)."""
+    signed = [b - (1 << width) if b >= 1 << (width - 1) else b for b in bits]
+    if width == 32:
+        return torch.tensor(signed, dtype=torch.int32).view(torch.float32)
+    return torch.tensor(signed, dtype=torch.int16).view(torch.bfloat16)
+
+
 def bit_view(tensor):
     """The tensor's raw bits as a same-width integer tensor, so negative zero and NaN compare exactly."""
     return tensor.view(torch.int16 if tensor.dtype == torch.bfloat16 else torch.int32)
@@ -79,13 +87,9 @@ def test_srca_row_dump_restores_dest_row_0(formats, dest_acc):
     if formats.input_format == DataFormat.Int32:
         src_A[: len(INT32_AT_RISK)] = torch.tensor(INT32_AT_RISK, dtype=src_A.dtype)
     elif formats.input_format == DataFormat.Float32:
-        src_A[: len(FP32_AT_RISK_BITS)] = torch.tensor(
-            FP32_AT_RISK_BITS, dtype=torch.int32
-        ).view(torch.float32)
+        src_A[: len(FP32_AT_RISK_BITS)] = as_float_bits(FP32_AT_RISK_BITS, 32)
     elif formats.input_format == DataFormat.Float16_b:
-        src_A[: len(BF16_AT_RISK_BITS)] = torch.tensor(
-            BF16_AT_RISK_BITS, dtype=torch.int16
-        ).view(torch.bfloat16)
+        src_A[: len(BF16_AT_RISK_BITS)] = as_float_bits(BF16_AT_RISK_BITS, 16)
 
     configuration = TestConfig(
         "sources/dbg_get_array_row_srca_test.cpp",
