@@ -8,22 +8,14 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
-#if !defined(ARCH_QUASAR)
-#include "ckernel.h"
-#endif
+#include "ttnn/operations/data_movement/reshape_view/codegen/kernels/riscv_copy.h"
 
-// Re-stores a copy's final halfword after a compiler barrier, so it is the last RISC store in program order, then
-// reads it back. Wormhole orders a load only behind a store with the same start address, so this read-back is what
-// makes the copy visible to the NOC and the CB consumer before the push; a fence does not order a later push.
+// Re-stores a copy's final halfword after a compiler barrier, so it is the last RISC store in program order and the
+// drain reads back exactly that address whatever width the copy stored with.
 FORCE_INLINE void drain_halfword_stores(uint32_t last_addr, uint16_t value) {
     asm volatile("" ::: "memory");
-    volatile tt_l1_ptr uint16_t* last = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(last_addr);
-    *last = value;
-#if defined(ARCH_QUASAR)
-    (void)*last;
-#else
-    (void)ckernel::load_blocking(last);
-#endif
+    *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(last_addr) = value;
+    codegen_kernels::drain_stores(last_addr);
 }
 
 struct ArgsCoalesced {
@@ -43,7 +35,6 @@ struct ArgsNonaligned {
     uint32_t new_stick_size;
     uint32_t ratio;
     uint32_t split;
-    uint32_t cb_scratch_id;
 };
 
 void kernel_main() {
@@ -53,7 +44,12 @@ void kernel_main() {
     constexpr bool NONALIGNED = get_compile_time_arg_val(3) != 0;
     // Sticks the non-aligned path gathers per NOC barrier.
     constexpr uint32_t NABATCH = get_compile_time_arg_val(4);
-    constexpr auto src_args = TensorAccessorArgs<5>();
+    constexpr uint32_t cb_scratch_id = get_compile_time_arg_val(5);
+    // Pitch of the repacked new-stick pages in the output CB.
+    constexpr uint32_t cb_page_bytes = get_compile_time_arg_val(6);
+    // Slack each scratch slot carries beyond the aligned page: one NOC read-alignment unit, a power of two.
+    constexpr uint32_t READ_ALIGNMENT = get_compile_time_arg_val(7);
+    constexpr auto src_args = TensorAccessorArgs<8>();
 
     // Reads num_reads work units of sticks_per_read sticks each; the CB push count can differ from the read count.
     if constexpr (!NONALIGNED) {
@@ -80,17 +76,17 @@ void kernel_main() {
 
         Noc noc;
         CircularBuffer cb(cb_id);
-        CircularBuffer cb_scratch(a->cb_scratch_id);
+        CircularBuffer cb_scratch(cb_scratch_id);
 
         cb_scratch.reserve_back(1);
         uint32_t scratch_addr = cb_scratch.get_write_ptr();
         uint32_t i_stick = a->start_stick;
         // A NOC read requires source and local-L1 destination addresses to have
         // equal residues modulo the architecture's read alignment (64B on BH,
-        // 32B on WH). Keep one 64B alignment margin per slot and shift only the
+        // 32B on WH). Keep one alignment margin per slot and shift only the
         // L1 destination, so the source transaction stays exactly one physical
         // page and never crosses a page or allocation boundary.
-        constexpr uint32_t READ_ALIGNMENT = 64;
+        static_assert((READ_ALIGNMENT & (READ_ALIGNMENT - 1)) == 0);
         constexpr uint32_t READ_ALIGNMENT_MASK = READ_ALIGNMENT - 1;
         const uint32_t read_size = aligned_page_size;
         const uint32_t scratch_slot_size = aligned_page_size + READ_ALIGNMENT;
@@ -99,7 +95,6 @@ void kernel_main() {
             // old > new: each old stick produces ratio new sticks.
             uint32_t remaining = a->num_reads;
             const uint32_t new_half = a->new_stick_size / 2;
-            const uint32_t cb_page_bytes = (a->new_stick_size + 15) & ~15u;  // L1-aligned
             while (remaining > 0) {
                 uint32_t batch = (remaining < NABATCH) ? remaining : NABATCH;
                 uint32_t byte_offsets[NABATCH];
