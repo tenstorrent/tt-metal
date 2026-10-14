@@ -887,6 +887,113 @@ def test_exp2_special_values(device):
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
 
+def test_expm1_saturation(device):
+    """expm1 outside the test_exp_ops sweep, sampled per binade.
+
+    | Inputs                                         | Expected | Check   |
+    |------------------------------------------------|----------|---------|
+    | [-MAX_BF16, -87]: first, middle and last       | -1       | ULP ≤ 1 |
+    | bfloat16 mantissa of every binade, plus -87    |          |         |
+    | [88.5, MAX_BF16]: same sampling, plus 89 (the  | +inf     | exact   |
+    | first bfloat16 above log(FLT_MAX))             |          |         |
+
+    Every input here saturates, so a few values per binade (power-of-two
+    interval) are enough to catch a magnitude where range reduction breaks.
+    """
+    exponent_fields = torch.arange(127 + 6, 255, dtype=torch.int32)
+    mantissas = torch.tensor([0x00, 0x40, 0x7F], dtype=torch.int32)
+    bits = ((exponent_fields[:, None] << 7) | mantissas).flatten().to(torch.int16)
+    magnitudes = torch.cat([bits.view(torch.bfloat16).float(), torch.tensor([87.0, 89.0, MAX_BF16])]).unique()
+    input_tensor = torch.cat([-magnitudes[magnitudes >= 87.0], magnitudes[magnitudes >= 88.5]])
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.expm1)
+    golden = golden_function(input_tensor, device=device)
+
+    result = ttnn.to_torch(ttnn.expm1(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
+
+
+def test_expm1_full_mantissa(device):
+    """expm1 on float32 inputs off the bfloat16 lattice, up to the overflow edge.
+
+    | Inputs                                       | Check   |
+    |----------------------------------------------|---------|
+    | 4096 evenly spaced values in each of         | ULP ≤ 1 |
+    | [-87.3, 88.7], [-1, 1] and [-1e-3, 1e-3]     |         |
+    | edge points up to the last finite input      | ULP ≤ 1 |
+    | (log(FLT_MAX) ≈ 88.7228)                     |         |
+
+    test_exp_ops only sees bfloat16 values (lower 16 mantissa bits zero), so it
+    never checks full-mantissa rounding, the cancellation-prone region near 0,
+    or (88.5, 88.7228].
+    """
+    low, high = -87.3, 88.7
+    last_finite = torch.nextafter(torch.log(torch.tensor(torch.finfo(torch.float32).max)), torch.tensor(0.0)).item()
+    edge_points = torch.tensor(
+        [low, -20.0, -1.0, -1e-6, 1e-6, 1.0, 20.0, high, 88.72, last_finite],
+        dtype=torch.float32,
+    )
+    input_tensor = torch.cat(
+        [
+            torch.linspace(low, high, 4096, dtype=torch.float32),
+            torch.linspace(-1.0, 1.0, 4096, dtype=torch.float32),
+            torch.linspace(-1e-3, 1e-3, 4096, dtype=torch.float32),
+            edge_points,
+        ]
+    ).unique()
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.expm1)
+    golden = golden_function(input_tensor, device=device)
+
+    result = ttnn.to_torch(ttnn.expm1(tt_in))
+
+    assert torch.isfinite(golden).all(), "edge points must stay below expm1 overflow"
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+def test_expm1_special_values(device):
+    """expm1 on the inputs the bfloat16 sweeps replace with 0, plus both saturation ends.
+
+    | Input                      | Expected                              |
+    |----------------------------|---------------------------------------|
+    | -inf, -1000                | -1                                    |
+    | ±0                         | ±0                                    |
+    | subnormals                 | 0 (input and golden flushed)          |
+    | ±1e-30                     | ±1e-30 (expm1(x) ≈ x for tiny x)      |
+    | 1                          | e - 1                                 |
+    | 88.7                       | finite                                |
+    | 89, +inf                   | +inf                                  |
+    | NaN, negative NaN          | NaN                                   |
+    """
+    positive_nan = torch.tensor([float("nan")], dtype=torch.float32)
+    subnormals = torch.tensor([1e-40, -1e-40, 1.1e-38, -1.1e-38], dtype=torch.float32)
+    input_tensor = torch.cat(
+        [
+            torch.tensor(
+                [-float("inf"), -1000.0, -0.0, 0.0, -1e-30, 1e-30, 1.0, 88.7, 89.0, float("inf")],
+                dtype=torch.float32,
+            ),
+            positive_nan,
+            -positive_nan,
+            subnormals,
+        ]
+    )
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.expm1)
+    golden = flush_subnormal_values_to_zero(golden_function(input_tensor, device=device))
+
+    result = ttnn.to_torch(ttnn.expm1(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # digamma and multigammaln
 # digamma: defined for x > 0, LUT kernel fitted on [0.01, 102], asymptotic for x > 102
