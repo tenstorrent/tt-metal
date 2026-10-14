@@ -162,7 +162,7 @@ repos:
   hooks:
     # Acts only in CI on a fork PR; always_run so a deletion-only .github change is seen too.
     - id: check-fork-github-changes
-      name: Fork PRs do not change .github/
+      name: "Fork PRs cannot change .github/ (CI runs on Tenstorrent machines)"
       entry: python3 .github/scripts/utils/check_fork_github_changes.py
       language: system
       pass_filenames: false

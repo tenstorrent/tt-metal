@@ -80,17 +80,19 @@ def failure_message(files: list[str], event: dict) -> str:
     repo = (base.get("repo") or {}).get("full_name") or "tenstorrent/tt-metal"
     branch = base.get("ref") or "main"
     return (
-        f"This pull request comes from a fork and changes {len(files)} file(s) under {GITHUB_DIR}/:\n"
+        f"This check fails on purpose: this pull request comes from a fork and changes {GITHUB_DIR}/.\n\n"
+        "Why: the tt-metal hardware tests run on Tenstorrent's own CI machines. For security,\n"
+        "those machines do not run CI or workflow changes (.github/) from a fork. While this PR\n"
+        "changes .github/, its hardware jobs fail at runner setup and its tests do not run.\n\n"
+        f"Changed files under {GITHUB_DIR}/:\n"
         f"{listing}\n\n"
-        "The tt-metal CI runners do not run jobs for a fork PR that changes .github/, so the\n"
-        "hardware jobs of this PR will fail at runner setup.\n\n"
         "To fix:\n"
         "  1. Remove the .github/ changes from this PR:\n"
         f"       git fetch https://github.com/{repo}.git {branch}\n"
         '       git restore --staged --worktree --source="$(git merge-base FETCH_HEAD HEAD)" -- .github\n'
         '       git commit -m "Remove .github changes"\n'
         "  2. Push the branch again.\n"
-        f"  3. Ask a maintainer to land the .github/ changes from a branch in {repo}.\n"
+        f"  3. If you need the .github/ changes, say so in the PR. A maintainer can land them from a branch in {repo}.\n"
     )
 
 
@@ -116,7 +118,11 @@ def main(argv: list[str] | None = None, env: dict | None = None) -> int:
 
     print(failure_message(files, event))
     if env.get("GITHUB_ACTIONS") == "true":
-        print(f"::error::Fork PR changes {len(files)} file(s) under {GITHUB_DIR}/. See the pre-commit log for the fix.")
+        print(
+            f"::error::Fork PRs cannot change {GITHUB_DIR}/: Tenstorrent CI machines do not run workflow changes "
+            f"from forks, so the hardware tests of this PR cannot run. Remove the {len(files)} {GITHUB_DIR}/ "
+            "change(s); the steps are in the Run Pre-commit log."
+        )
     return 1
 
 

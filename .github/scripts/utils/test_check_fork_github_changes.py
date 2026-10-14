@@ -204,3 +204,12 @@ def test_unreadable_event_is_empty(tmp_path: Path) -> None:
     bad = tmp_path / "bad.json"
     bad.write_text("{not json")
     assert check.load_event(str(bad)) == {}
+
+
+def test_message_gives_the_reason_before_the_files(repo: Path, tmp_path: Path) -> None:
+    _commit(repo, {".github/workflows/ci.yaml": "on: pull_request\n"}, "change .github")
+    out = _run(repo, _event(tmp_path, fork=True), {**_refs(), "GITHUB_ACTIONS": "true"}).stdout
+    assert out.startswith("This check fails on purpose")
+    assert out.index("Why:") < out.index("  .github/workflows/ci.yaml")
+    annotation = next(line for line in out.splitlines() if line.startswith("::error::"))
+    assert "Tenstorrent CI machines do not run workflow changes from forks" in annotation
