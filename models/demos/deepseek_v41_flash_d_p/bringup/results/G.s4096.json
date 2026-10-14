@@ -1,0 +1,21 @@
+{
+ "metrics": {
+  "cpu_seconds": {
+   "t": "2026-10-14T20:56:22",
+   "value": 1102.2
+  },
+  "golden_chunks": {
+   "t": "2026-10-14T20:56:16",
+   "value": 2
+  },
+  "golden_hash_ok": {
+   "t": "2026-10-14T20:56:22",
+   "value": 1
+  },
+  "golden_layers": {
+   "t": "2026-10-14T20:56:16",
+   "value": 8
+  }
+ },
+ "task": "G.s4096"
+}
