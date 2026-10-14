@@ -70,9 +70,9 @@ void kernel_main() {
         ckl::MulBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},  // tile[2] = 3*kKappa * x²
         ckl::FillScalar<ckl::Dst::D3>{1.0f},
         ckl::AddBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2, BF16_ROUNDING_MODE>{},  // tile[2] = 1 + 3*kKappa*x²
-        // tile[2] = sech² * (1 + 3*kKappa*x²)
+        // tile[2] = sech²/4 * (1 + 3*kKappa*x²)
         ckl::MulBinary<ckl::Dst::D2, ckl::Dst::D4, ckl::Dst::D2>{},
-        // tile[2] = kBeta/2 * sech² * (1 + 3*kKappa*x²)
+        // tile[2] = 2*kBeta * sech²/4 * (1 + 3*kKappa*x²) = kBeta/2 * sech² * (1 + 3*kKappa*x²)
         ckl::FillScalar<ckl::Dst::D3>{2.0f * kBeta},
         ckl::MulBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
         // tile[2] = x * kBeta/2 * sech² * (1 + 3*kKappa*x²) = PDF term
