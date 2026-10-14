@@ -1,0 +1,30 @@
+global C= 2048 chunk0   span   1088.0 us  matmul   489.0 (44.9%)  sdpa   145.8  ccl  199.0  | qkv 94.8 o 84.8 gate 114.1 up 92.3 down 101.9
+global C= 2048 chunk1   span   1098.4 us  matmul   490.2 (44.6%)  sdpa   154.8  ccl  198.5  | qkv 94.8 o 84.8 gate 113.3 up 92.8 down 101.8
+global C= 2048 chunk63  span   3587.5 us  matmul   488.9 (13.6%)  sdpa  2631.4  ccl  220.1  | qkv 94.7 o 84.8 gate 114.1 up 92.9 down 101.6
+global C= 2048 chunk127 span   6164.3 us  matmul   490.1 ( 8.0%)  sdpa  5203.5  ccl  216.4  | qkv 94.9 o 85.0 gate 114.5 up 92.7 down 101.9
+global C= 4096 chunk0   span   1484.4 us  matmul   649.8 (43.8%)  sdpa   239.3  ccl  306.1  | qkv 120.1 o 110.3 gate 157.4 up 122.4 down 138.0
+global C= 4096 chunk1   span   1585.4 us  matmul   651.0 (41.1%)  sdpa   339.9  ccl  310.1  | qkv 120.0 o 110.5 gate 157.8 up 122.4 down 137.8
+global C= 4096 chunk31  span   4846.7 us  matmul   650.9 (13.4%)  sdpa  3596.2  ccl  314.9  | qkv 119.6 o 110.4 gate 157.3 up 122.7 down 138.4
+global C= 4096 chunk63  span   8274.5 us  matmul   649.9 ( 7.9%)  sdpa  7012.8  ccl  324.5  | qkv 119.7 o 110.5 gate 157.3 up 122.7 down 137.6
+global C= 8192 chunk0   span   2286.2 us  matmul   856.6 (37.5%)  sdpa   512.7  ccl  507.3  | qkv 158.5 o 149.2 gate 221.7 up 154.4 down 173.1
+global C= 8192 chunk1   span   2714.2 us  matmul   856.6 (31.6%)  sdpa   953.5  ccl  504.6  | qkv 158.8 o 149.3 gate 221.3 up 153.9 down 173.5
+global C= 8192 chunk15  span   9859.4 us  matmul   855.0 ( 8.7%)  sdpa  8054.0  ccl  526.8  | qkv 158.6 o 148.1 gate 221.2 up 153.7 down 173.7
+global C= 8192 chunk31  span  17978.5 us  matmul   852.8 ( 4.7%)  sdpa 16175.0  ccl  547.2  | qkv 158.1 o 147.4 gate 220.7 up 153.2 down 173.2
+global C=16384 chunk0   span   5710.7 us  matmul  1857.6 (32.5%)  sdpa  2309.5  ccl  944.2  | qkv 435.6 o 468.6 gate 380.1 up 258.5 down 314.6
+global C=16384 chunk1   span   7274.2 us  matmul  1856.3 (25.5%)  sdpa  3827.3  ccl  961.6  | qkv 435.2 o 468.5 gate 379.9 up 258.2 down 314.1
+global C=16384 chunk7   span  17125.1 us  matmul  1855.0 (10.8%)  sdpa 13715.6  ccl  947.3  | qkv 435.3 o 467.7 gate 379.9 up 258.1 down 314.2
+global C=16384 chunk15  span  30598.3 us  matmul  1852.4 ( 6.1%)  sdpa 27141.9  ccl  980.5  | qkv 434.1 o 466.7 gate 379.7 up 257.7 down 313.8
+local  C= 2048 chunk0   span   1003.4 us  matmul   452.6 (45.1%)  sdpa   154.4  ccl  167.8  | qkv 92.1 o 51.1 gate 114.2 up 92.8 down 101.7
+local  C= 2048 chunk1   span   1015.1 us  matmul   451.4 (44.5%)  sdpa   164.1  ccl  167.5  | qkv 92.2 o 50.9 gate 113.5 up 92.6 down 101.7
+local  C= 4096 chunk0   span   1289.5 us  matmul   599.9 (46.5%)  sdpa   167.3  ccl  273.8  | qkv 110.9 o 69.2 gate 157.6 up 123.1 down 137.8
+local  C= 4096 chunk1   span   1292.1 us  matmul   598.6 (46.3%)  sdpa   167.9  ccl  274.1  | qkv 110.6 o 68.8 gate 156.7 up 122.1 down 137.7
+local  C= 8192 chunk0   span   1867.0 us  matmul   806.0 (43.2%)  sdpa   285.0  ccl  444.9  | qkv 156.1 o 99.9 gate 222.1 up 154.7 down 173.6
+local  C= 8192 chunk1   span   1868.5 us  matmul   806.0 (43.1%)  sdpa   286.9  ccl  448.1  | qkv 156.1 o 100.0 gate 222.0 up 154.4 down 173.5
+local  C=16384 chunk0   span   3478.0 us  matmul  1628.8 (46.8%)  sdpa   485.0  ccl  847.1  | qkv 392.3 o 282.8 gate 380.2 up 258.8 down 314.6
+local  C=16384 chunk1   span   3453.3 us  matmul  1628.1 (47.1%)  sdpa   485.6  ccl  830.4  | qkv 392.8 o 282.4 gate 380.1 up 258.6 down 314.2
+
+Whole prefill of 262144 tokens (50 sliding + 10 global layers):
+C= 2048  total  11.14 s  matmul  3.52 s (31.6%)  sdpa  4.47 s (40.2%)  ccl 1.34 s
+C= 4096  total   7.26 s  matmul  2.33 s (32.1%)  sdpa  2.86 s (39.4%)  ccl 1.08 s
+C= 8192  total   6.23 s  matmul  1.56 s (25.1%)  sdpa  3.13 s (50.2%)  ccl 0.89 s
+C=16384  total   5.67 s  matmul  1.60 s (28.2%)  sdpa  2.74 s (48.4%)  ccl 0.82 s

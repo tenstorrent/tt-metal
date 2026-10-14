@@ -1,0 +1,35 @@
+global_o     lofi  C= 10240 rows= 1280 LoFi  120c    159.4 us   124.55 ns/tok  util  53.3%  W  146.8 GB/s  iqr  1.6%  pcc 0.99990  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     lofi  C= 12288 rows= 1536 LoFi  120c    520.8 us   339.08 ns/tok  util  19.6%  W   44.9 GB/s  iqr  0.6%  pcc 0.99982  ttnn default
+global_o     lofi  C= 16384 rows= 2048 LoFi  120c    736.4 us   359.56 ns/tok  util  18.5%  W   31.8 GB/s  iqr  0.1%  pcc 0.99984  ttnn default
+global_o     lofi  C= 24576 rows= 3072 LoFi  120c    896.6 us   291.85 ns/tok  util  22.7%  W   26.1 GB/s  iqr  0.3%  pcc 0.99970  ttnn default
+global_o     lofi  C= 32768 rows= 4096 LoFi  120c   1385.7 us   338.30 ns/tok  util  19.6%  W   16.9 GB/s  iqr  0.3%  pcc 0.99971  ttnn default
+global_qk    lofi  C= 10240 rows= 1280 LoFi  120c    168.3 us   131.45 ns/tok  util  56.8%  W  156.4 GB/s  iqr  2.0%  pcc 0.99987  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    lofi  C= 12288 rows= 1536 LoFi  120c    192.0 us   125.01 ns/tok  util  59.7%  W  137.1 GB/s  iqr  0.5%  pcc 0.99984  ttnn default
+global_qk    lofi  C= 16384 rows= 2048 LoFi  120c    259.7 us   126.83 ns/tok  util  58.9%  W  101.3 GB/s  iqr  0.5%  pcc 0.99973  ttnn default
+global_qk    lofi  C= 24576 rows= 3072 LoFi  120c    402.9 us   131.15 ns/tok  util  56.9%  W   65.3 GB/s  iqr  0.3%  pcc 0.99974  ttnn default
+global_qk    lofi  C= 32768 rows= 4096 LoFi  120c    734.2 us   179.25 ns/tok  util  41.7%  W   35.8 GB/s  iqr  0.1%  pcc 0.99978  ttnn default
+mlp_down     prod  C= 10240 rows= 1280 LoFi  120c    182.0 us   142.17 ns/tok  util  61.3%  W  168.7 GB/s  iqr  0.7%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_down     prod  C= 12288 rows= 1536 LoFi  120c    258.1 us   168.00 ns/tok  util  51.9%  W  119.0 GB/s  iqr  0.3%  pcc 0.99989  ttnn default
+mlp_down     prod  C= 16384 rows= 2048 LoFi  120c    354.9 us   173.31 ns/tok  util  50.3%  W   86.5 GB/s  iqr  0.3%  pcc 0.99979  ttnn default
+mlp_down     prod  C= 24576 rows= 3072 LoFi  120c    508.0 us   165.38 ns/tok  util  52.7%  W   60.4 GB/s  iqr  0.2%  pcc 0.99963  ttnn default
+mlp_down     prod  C= 32768 rows= 4096 LoFi  120c   1014.2 us   247.60 ns/tok  util  35.2%  W   30.3 GB/s  iqr  0.2%  pcc 0.99976  ttnn default
+mlp_gate     prod  C= 10240 rows= 1280 LoFi  120c    224.8 us   175.59 ns/tok  util  49.6%  W  136.6 GB/s  iqr  1.1%  pcc 0.99987  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_gate     prod  C= 12288 rows= 1536 LoFi  120c    301.9 us   196.52 ns/tok  util  44.3%  W  101.7 GB/s  iqr  0.5%  pcc 0.99951  ttnn default
+mlp_gate     prod  C= 16384 rows= 2048 LoFi  120c    416.4 us   203.34 ns/tok  util  42.8%  W   73.7 GB/s  iqr  0.0%  pcc 0.99903  ttnn default
+mlp_gate     prod  C= 24576 rows= 3072 LoFi  120c    593.6 us   193.24 ns/tok  util  45.1%  W   51.7 GB/s  iqr  0.1%  pcc 0.99921  ttnn default
+mlp_gate     prod  C= 32768 error: TT_THROW @ /home/mmanzoor/compiler/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:2704: tt::exception
+mlp_up       prod  C= 10240 rows= 1280 LoFi  120c    159.0 us   124.22 ns/tok  util  70.1%  W  193.1 GB/s  iqr  0.9%  pcc 0.99990  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_up       prod  C= 12288 rows= 1536 LoFi  120c    216.2 us   140.75 ns/tok  util  61.9%  W  142.0 GB/s  iqr  1.2%  pcc 0.99990  ttnn default
+mlp_up       prod  C= 16384 rows= 2048 LoFi  120c    294.8 us   143.96 ns/tok  util  60.5%  W  104.2 GB/s  iqr  0.4%  pcc 0.99971  ttnn default
+mlp_up       prod  C= 24576 rows= 3072 LoFi  120c    420.7 us   136.96 ns/tok  util  63.6%  W   73.0 GB/s  iqr  0.2%  pcc 0.99963  ttnn default
+mlp_up       prod  C= 32768 error: TT_THROW @ /home/mmanzoor/compiler/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:2704: tt::exception
+sliding_o    lofi  C= 10240 rows= 1280 LoFi  120c    108.4 us    84.71 ns/tok  util  39.2%  W  107.9 GB/s  iqr  0.5%  pcc 0.99990  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    lofi  C= 12288 rows= 1536 LoFi  120c    293.1 us   190.83 ns/tok  util  17.4%  W   39.9 GB/s  iqr  0.3%  pcc 0.99976  ttnn default
+sliding_o    lofi  C= 16384 rows= 2048 LoFi  120c    411.8 us   201.10 ns/tok  util  16.5%  W   28.4 GB/s  iqr  0.8%  pcc 0.99977  ttnn default
+sliding_o    lofi  C= 24576 rows= 3072 LoFi  120c    512.6 us   166.87 ns/tok  util  19.9%  W   22.8 GB/s  iqr  0.3%  pcc 0.99985  ttnn default
+sliding_o    lofi  C= 32768 rows= 4096 LoFi  120c    782.1 us   190.93 ns/tok  util  17.4%  W   15.0 GB/s  iqr  0.2%  pcc 0.99979  ttnn default
+sliding_qkv  lofi  C= 10240 rows= 1280 LoFi  120c    163.4 us   127.69 ns/tok  util  52.0%  W  143.1 GB/s  iqr  1.1%  pcc 0.99979  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  lofi  C= 12288 rows= 1536 LoFi  120c    249.7 us   162.56 ns/tok  util  40.8%  W   93.7 GB/s  iqr  0.3%  pcc 0.99981  ttnn default
+sliding_qkv  lofi  C= 16384 rows= 2048 LoFi  120c    367.7 us   179.52 ns/tok  util  37.0%  W   63.6 GB/s  iqr  0.5%  pcc 0.99985  ttnn default
+sliding_qkv  lofi  C= 24576 rows= 3072 LoFi  120c    423.5 us   137.87 ns/tok  util  48.1%  W   55.2 GB/s  iqr  0.2%  pcc 0.99977  ttnn default
+sliding_qkv  lofi  C= 32768 rows= 4096 LoFi  120c    714.9 us   174.55 ns/tok  util  38.0%  W   32.7 GB/s  iqr  0.3%  pcc 0.99975  ttnn default

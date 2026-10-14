@@ -1,0 +1,375 @@
+global_o     hifi2 C=   256 rows=   32 HiFi2  84c     69.1 us  2158.02 ns/tok  util   6.2%  W  338.8 GB/s  iqr  0.9%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     hifi2 C=   512 rows=   64 HiFi2  84c     72.2 us  1128.01 ns/tok  util  11.8%  W  324.1 GB/s  iqr  1.8%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     hifi2 C=   768 rows=   96 HiFi2  84c     75.4 us   785.18 ns/tok  util  16.9%  W  310.4 GB/s  iqr  1.1%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     hifi2 C=  1024 rows=  128 HiFi2  84c     81.4 us   636.18 ns/tok  util  20.9%  W  287.3 GB/s  iqr  1.4%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     hifi2 C=  1280 rows=  160 HiFi2  84c     83.2 us   519.98 ns/tok  util  25.5%  W  281.2 GB/s  iqr  4.0%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     hifi2 C=  1536 rows=  192 HiFi2  84c     84.7 us   441.38 ns/tok  util  30.1%  W  276.1 GB/s  iqr  1.6%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     hifi2 C=  1792 rows=  224 HiFi2  84c     88.2 us   393.69 ns/tok  util  33.7%  W  265.3 GB/s  iqr  1.4%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     hifi2 C=  2048 rows=  256 HiFi2  84c     86.6 us   338.38 ns/tok  util  39.2%  W  270.1 GB/s  iqr  1.7%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     hifi2 C=  2304 rows=  288 HiFi2 108c     99.6 us   345.72 ns/tok  util  38.4%  W  235.0 GB/s  iqr  1.6%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     hifi2 C=  2560 rows=  320 HiFi2 120c    102.0 us   318.84 ns/tok  util  41.6%  W  229.3 GB/s  iqr  2.1%  pcc 0.99999  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     hifi2 C=  2816 rows=  352 HiFi2  72c    115.0 us   326.58 ns/tok  util  40.6%  W  203.5 GB/s  iqr  0.7%  pcc 0.99994  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     hifi2 C=  3072 rows=  384 HiFi2  72c    116.0 us   302.18 ns/tok  util  43.9%  W  201.6 GB/s  iqr  0.7%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     hifi2 C=  3328 rows=  416 HiFi2  84c    117.0 us   281.35 ns/tok  util  47.2%  W  199.9 GB/s  iqr  0.9%  pcc 0.99999  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     hifi2 C=  3584 rows=  448 HiFi2  84c    119.6 us   267.02 ns/tok  util  49.7%  W  195.6 GB/s  iqr  1.1%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     hifi2 C=  3840 rows=  480 HiFi2  96c    120.4 us   250.78 ns/tok  util  52.9%  W  194.4 GB/s  iqr  0.5%  pcc 0.99997  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     hifi2 C=  4096 rows=  512 HiFi2  96c    121.0 us   236.32 ns/tok  util  56.2%  W  193.4 GB/s  iqr  0.5%  pcc 0.99999  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     hifi2 C=  5120 rows=  640 HiFi2 120c    125.6 us   196.22 ns/tok  util  67.6%  W  186.3 GB/s  iqr  0.5%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     hifi2 C=  6144 rows=  768 HiFi2  96c    172.7 us   224.92 ns/tok  util  59.0%  W  135.4 GB/s  iqr  0.7%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     hifi2 C=  7168 rows=  896 HiFi2 120c    178.0 us   198.71 ns/tok  util  66.8%  W  131.4 GB/s  iqr  0.4%  pcc 0.99996  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     hifi2 C=  8192 rows= 1024 HiFi2  96c    226.2 us   220.86 ns/tok  util  60.1%  W  103.5 GB/s  iqr  0.4%  pcc 0.99984  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     hifi2 C= 10240 rows= 1280 HiFi2 120c    234.6 us   183.28 ns/tok  util  72.4%  W   99.7 GB/s  iqr  0.6%  pcc 0.99989  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     hifi2 C= 12288 rows= 1536 HiFi2 120c    346.9 us   225.82 ns/tok  util  58.8%  W   67.5 GB/s  iqr  0.4%  pcc 0.99992  ttnn default
+global_o     hifi2 C= 16384 rows= 2048 HiFi2 120c    468.6 us   228.81 ns/tok  util  58.0%  W   49.9 GB/s  iqr  0.3%  pcc 0.99994  ttnn default
+global_o     hifi2 C= 24576 rows= 3072 HiFi2 120c    645.9 us   210.26 ns/tok  util  63.1%  W   36.2 GB/s  iqr  0.1%  pcc 0.99993  ttnn default
+global_o     hifi2 C= 32768 rows= 4096 HiFi2 120c    832.1 us   203.15 ns/tok  util  65.3%  W   28.1 GB/s  iqr  0.2%  pcc 0.99989  ttnn default
+global_o     lofi  C=   256 rows=   32 LoFi   84c     68.9 us  2153.77 ns/tok  util   3.1%  W  339.5 GB/s  iqr  0.6%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     lofi  C=   512 rows=   64 LoFi   84c     70.9 us  1107.62 ns/tok  util   6.0%  W  330.0 GB/s  iqr  1.9%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     lofi  C=   768 rows=   96 LoFi   84c     73.1 us   761.80 ns/tok  util   8.7%  W  319.9 GB/s  iqr  1.5%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     lofi  C=  1024 rows=  128 LoFi   84c     76.9 us   601.02 ns/tok  util  11.0%  W  304.1 GB/s  iqr  2.4%  pcc 0.99991  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     lofi  C=  1280 rows=  160 LoFi   84c     80.0 us   499.96 ns/tok  util  13.3%  W  292.5 GB/s  iqr  1.4%  pcc 0.99993  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     lofi  C=  1536 rows=  192 LoFi   84c     81.8 us   425.81 ns/tok  util  15.6%  W  286.2 GB/s  iqr  1.1%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     lofi  C=  1792 rows=  224 LoFi   84c     84.5 us   377.11 ns/tok  util  17.6%  W  277.0 GB/s  iqr  2.3%  pcc 0.99985  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     lofi  C=  2048 rows=  256 LoFi   84c     85.1 us   332.24 ns/tok  util  20.0%  W  275.1 GB/s  iqr  0.7%  pcc 0.99992  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     lofi  C=  2304 rows=  288 LoFi  108c    101.6 us   352.78 ns/tok  util  18.8%  W  230.3 GB/s  iqr  1.0%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     lofi  C=  2560 rows=  320 LoFi  120c    102.8 us   321.29 ns/tok  util  20.7%  W  227.6 GB/s  iqr  0.5%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     lofi  C=  2816 rows=  352 LoFi   72c    104.7 us   297.53 ns/tok  util  22.3%  W  223.4 GB/s  iqr  1.3%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     lofi  C=  3072 rows=  384 LoFi   72c    106.1 us   276.26 ns/tok  util  24.0%  W  220.5 GB/s  iqr  1.1%  pcc 0.99986  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     lofi  C=  3328 rows=  416 LoFi   84c    106.7 us   256.55 ns/tok  util  25.9%  W  219.2 GB/s  iqr  1.1%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     lofi  C=  3584 rows=  448 LoFi   84c    109.0 us   243.41 ns/tok  util  27.3%  W  214.6 GB/s  iqr  1.6%  pcc 0.99989  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     lofi  C=  3840 rows=  480 LoFi   96c    109.2 us   227.45 ns/tok  util  29.2%  W  214.3 GB/s  iqr  1.0%  pcc 0.99983  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     lofi  C=  4096 rows=  512 LoFi   96c    111.2 us   217.16 ns/tok  util  30.6%  W  210.4 GB/s  iqr  1.3%  pcc 0.99994  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     lofi  C=  5120 rows=  640 LoFi  120c    117.7 us   183.91 ns/tok  util  36.1%  W  198.8 GB/s  iqr  1.4%  pcc 0.99987  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     lofi  C=  6144 rows=  768 LoFi   96c    125.9 us   163.91 ns/tok  util  40.5%  W  185.9 GB/s  iqr  0.8%  pcc 0.99995  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     lofi  C=  7168 rows=  896 LoFi  120c    131.9 us   147.18 ns/tok  util  45.1%  W  177.4 GB/s  iqr  0.9%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     lofi  C=  8192 rows= 1024 LoFi   96c    148.9 us   145.42 ns/tok  util  45.6%  W  157.1 GB/s  iqr  0.9%  pcc 0.99989  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     lofi  C= 10240 rows= 1280 LoFi  120c    161.1 us   125.89 ns/tok  util  52.7%  W  145.2 GB/s  iqr  1.0%  pcc 0.99983  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     lofi  C= 12288 rows= 1536 HiFi2 120c    347.2 us   226.05 ns/tok  util  58.7%  W   67.4 GB/s  iqr  0.4%  pcc 0.99992  ttnn default
+global_o     lofi  C= 16384 rows= 2048 HiFi2 120c    467.5 us   228.28 ns/tok  util  58.1%  W   50.0 GB/s  iqr  0.2%  pcc 0.99992  ttnn default
+global_o     lofi  C= 24576 rows= 3072 HiFi2 120c    645.4 us   210.07 ns/tok  util  63.2%  W   36.3 GB/s  iqr  0.1%  pcc 0.99993  ttnn default
+global_o     lofi  C= 32768 rows= 4096 HiFi2 120c    832.6 us   203.28 ns/tok  util  65.3%  W   28.1 GB/s  iqr  0.2%  pcc 0.99986  ttnn default
+global_o     prod  C=   256 rows=   32 HiFi2  84c     68.9 us  2154.64 ns/tok  util   6.2%  W  339.3 GB/s  iqr  0.9%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     prod  C=   512 rows=   64 HiFi2  84c     72.2 us  1127.79 ns/tok  util  11.8%  W  324.1 GB/s  iqr  1.4%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     prod  C=   768 rows=   96 HiFi2  84c     74.6 us   777.06 ns/tok  util  17.1%  W  313.6 GB/s  iqr  1.5%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     prod  C=  1024 rows=  128 HiFi2  84c     80.2 us   626.31 ns/tok  util  21.2%  W  291.8 GB/s  iqr  0.8%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     prod  C=  1280 rows=  160 HiFi2  84c     79.3 us   495.85 ns/tok  util  26.8%  W  294.9 GB/s  iqr  4.7%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     prod  C=  1536 rows=  192 HiFi2  84c     85.0 us   442.83 ns/tok  util  30.0%  W  275.2 GB/s  iqr  1.2%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     prod  C=  1792 rows=  224 HiFi2  84c     90.0 us   401.92 ns/tok  util  33.0%  W  259.9 GB/s  iqr  1.6%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     prod  C=  2048 rows=  256 HiFi2  84c     85.9 us   335.49 ns/tok  util  39.6%  W  272.4 GB/s  iqr  1.4%  pcc 0.99993  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_o     prod  C=  2304 rows=  288 HiFi2 108c    100.1 us   347.56 ns/tok  util  38.2%  W  233.7 GB/s  iqr  2.2%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     prod  C=  2560 rows=  320 HiFi2 120c    102.1 us   319.03 ns/tok  util  41.6%  W  229.2 GB/s  iqr  0.7%  pcc 0.99999  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     prod  C=  2816 rows=  352 HiFi2  72c    114.8 us   326.23 ns/tok  util  40.7%  W  203.7 GB/s  iqr  0.7%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     prod  C=  3072 rows=  384 HiFi2  72c    116.0 us   302.10 ns/tok  util  43.9%  W  201.7 GB/s  iqr  0.2%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     prod  C=  3328 rows=  416 HiFi2  84c    117.5 us   282.36 ns/tok  util  47.0%  W  199.2 GB/s  iqr  1.0%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     prod  C=  3584 rows=  448 HiFi2  84c    119.5 us   266.71 ns/tok  util  49.8%  W  195.8 GB/s  iqr  0.7%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     prod  C=  3840 rows=  480 HiFi2  96c    120.3 us   250.56 ns/tok  util  53.0%  W  194.5 GB/s  iqr  0.7%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     prod  C=  4096 rows=  512 LoFi   96c    110.9 us   216.55 ns/tok  util  30.6%  W  211.0 GB/s  iqr  1.4%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     prod  C=  5120 rows=  640 LoFi  120c    116.5 us   182.09 ns/tok  util  36.4%  W  200.8 GB/s  iqr  1.1%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     prod  C=  6144 rows=  768 LoFi   96c    126.0 us   164.01 ns/tok  util  40.5%  W  185.7 GB/s  iqr  0.3%  pcc 0.99979  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     prod  C=  7168 rows=  896 LoFi  120c    131.7 us   147.00 ns/tok  util  45.1%  W  177.6 GB/s  iqr  1.6%  pcc 0.99979  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     prod  C=  8192 rows= 1024 LoFi   96c    149.4 us   145.93 ns/tok  util  45.5%  W  156.6 GB/s  iqr  1.1%  pcc 0.99989  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     prod  C= 10240 rows= 1280 LoFi  120c    159.3 us   124.46 ns/tok  util  53.3%  W  146.9 GB/s  iqr  0.6%  pcc 0.99984  MatmulMultiCoreReuseMultiCastProgramConfig
+global_o     prod  C= 12288 rows= 1536 HiFi2 120c    347.9 us   226.47 ns/tok  util  58.6%  W   67.3 GB/s  iqr  0.4%  pcc 0.99991  ttnn default
+global_o     prod  C= 16384 rows= 2048 HiFi2 120c    468.7 us   228.84 ns/tok  util  58.0%  W   49.9 GB/s  iqr  0.3%  pcc 0.99992  ttnn default
+global_o     prod  C= 24576 rows= 3072 HiFi2 120c    645.3 us   210.07 ns/tok  util  63.2%  W   36.3 GB/s  iqr  0.2%  pcc 0.99993  ttnn default
+global_o     prod  C= 32768 rows= 4096 HiFi2 120c    832.4 us   203.22 ns/tok  util  65.3%  W   28.1 GB/s  iqr  0.3%  pcc 0.99987  ttnn default
+global_qk    hifi2 C=   256 rows=   32 HiFi2  72c     77.0 us  2407.22 ns/tok  util   6.2%  W  341.7 GB/s  iqr  1.5%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    hifi2 C=   512 rows=   64 HiFi2  72c     80.0 us  1250.76 ns/tok  util  11.9%  W  328.8 GB/s  iqr  0.8%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    hifi2 C=   768 rows=   96 HiFi2  72c     83.1 us   866.07 ns/tok  util  17.2%  W  316.6 GB/s  iqr  2.0%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    hifi2 C=  1024 rows=  128 HiFi2  72c     85.9 us   671.39 ns/tok  util  22.2%  W  306.3 GB/s  iqr  1.6%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    hifi2 C=  1280 rows=  160 HiFi2  72c     87.4 us   546.37 ns/tok  util  27.3%  W  301.1 GB/s  iqr  2.1%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    hifi2 C=  1536 rows=  192 HiFi2  72c     91.1 us   474.42 ns/tok  util  31.5%  W  289.0 GB/s  iqr  1.4%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    hifi2 C=  1792 rows=  224 HiFi2  72c     89.7 us   400.66 ns/tok  util  37.3%  W  293.3 GB/s  iqr  0.7%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    hifi2 C=  2048 rows=  256 HiFi2  72c     95.3 us   372.21 ns/tok  util  40.1%  W  276.2 GB/s  iqr  0.4%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    hifi2 C=  2304 rows=  288 HiFi2 108c    111.1 us   385.83 ns/tok  util  38.7%  W  236.9 GB/s  iqr  0.2%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    hifi2 C=  2560 rows=  320 HiFi2 120c    113.0 us   353.04 ns/tok  util  42.3%  W  233.0 GB/s  iqr  0.7%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    hifi2 C=  2816 rows=  352 HiFi2  72c    125.5 us   356.53 ns/tok  util  41.9%  W  209.7 GB/s  iqr  0.5%  pcc 0.99998  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    hifi2 C=  3072 rows=  384 HiFi2  72c    126.9 us   330.42 ns/tok  util  45.2%  W  207.4 GB/s  iqr  0.3%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    hifi2 C=  3328 rows=  416 HiFi2  84c    127.9 us   307.56 ns/tok  util  48.6%  W  205.7 GB/s  iqr  0.2%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    hifi2 C=  3584 rows=  448 HiFi2  84c    129.4 us   288.81 ns/tok  util  51.7%  W  203.4 GB/s  iqr  0.4%  pcc 0.99999  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    hifi2 C=  3840 rows=  480 HiFi2  96c    130.0 us   270.90 ns/tok  util  55.1%  W  202.4 GB/s  iqr  0.3%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    hifi2 C=  4096 rows=  512 HiFi2  96c    131.8 us   257.49 ns/tok  util  58.0%  W  199.6 GB/s  iqr  0.7%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    hifi2 C=  5120 rows=  640 HiFi2 120c    135.9 us   212.32 ns/tok  util  70.3%  W  193.7 GB/s  iqr  1.4%  pcc 0.99999  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    hifi2 C=  6144 rows=  768 HiFi2  96c    187.8 us   244.49 ns/tok  util  61.1%  W  140.2 GB/s  iqr  0.2%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    hifi2 C=  7168 rows=  896 HiFi2 120c    192.2 us   214.48 ns/tok  util  69.6%  W  137.0 GB/s  iqr  0.2%  pcc 0.99997  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    hifi2 C=  8192 rows= 1024 HiFi2  96c    245.7 us   239.95 ns/tok  util  62.2%  W  107.1 GB/s  iqr  0.5%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    hifi2 C= 10240 rows= 1280 HiFi2 120c    253.8 us   198.31 ns/tok  util  75.3%  W  103.7 GB/s  iqr  0.6%  pcc 0.99988  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    hifi2 C= 12288 rows= 1536 HiFi2 120c    306.1 us   199.31 ns/tok  util  74.9%  W   86.0 GB/s  iqr  0.4%  pcc 0.99995  ttnn default
+global_qk    hifi2 C= 16384 rows= 2048 HiFi2 120c    433.9 us   211.87 ns/tok  util  70.5%  W   60.7 GB/s  iqr  0.3%  pcc 0.99997  ttnn default
+global_qk    hifi2 C= 24576 rows= 3072 HiFi2 120c    602.8 us   196.23 ns/tok  util  76.1%  W   43.7 GB/s  iqr  0.2%  pcc 0.99997  ttnn default
+global_qk    hifi2 C= 32768 rows= 4096 HiFi2 120c    805.4 us   196.63 ns/tok  util  75.9%  W   32.7 GB/s  iqr  0.1%  pcc 0.99997  ttnn default
+global_qk    lofi  C=   256 rows=   32 LoFi   72c     76.4 us  2388.08 ns/tok  util   3.1%  W  344.4 GB/s  iqr  0.5%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    lofi  C=   512 rows=   64 LoFi   72c     78.8 us  1231.41 ns/tok  util   6.1%  W  334.0 GB/s  iqr  1.2%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    lofi  C=   768 rows=   96 LoFi   72c     81.2 us   846.01 ns/tok  util   8.8%  W  324.1 GB/s  iqr  0.8%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    lofi  C=  1024 rows=  128 LoFi   72c     84.0 us   656.22 ns/tok  util  11.4%  W  313.4 GB/s  iqr  1.1%  pcc 0.99991  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    lofi  C=  1280 rows=  160 LoFi   72c     85.9 us   536.81 ns/tok  util  13.9%  W  306.5 GB/s  iqr  0.7%  pcc 0.99989  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    lofi  C=  1536 rows=  192 LoFi   72c     88.0 us   458.45 ns/tok  util  16.3%  W  299.0 GB/s  iqr  0.9%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    lofi  C=  1792 rows=  224 LoFi   72c     88.3 us   394.05 ns/tok  util  18.9%  W  298.2 GB/s  iqr  3.3%  pcc 0.99991  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    lofi  C=  2048 rows=  256 LoFi   72c     91.6 us   357.70 ns/tok  util  20.9%  W  287.4 GB/s  iqr  1.1%  pcc 0.99991  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    lofi  C=  2304 rows=  288 LoFi  108c    112.4 us   390.20 ns/tok  util  19.1%  W  234.2 GB/s  iqr  0.8%  pcc 0.99990  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    lofi  C=  2560 rows=  320 LoFi  120c    114.5 us   357.81 ns/tok  util  20.9%  W  229.9 GB/s  iqr  0.3%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    lofi  C=  2816 rows=  352 LoFi   72c    114.6 us   325.59 ns/tok  util  22.9%  W  229.7 GB/s  iqr  0.4%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    lofi  C=  3072 rows=  384 LoFi   72c    115.7 us   301.36 ns/tok  util  24.8%  W  227.4 GB/s  iqr  0.4%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    lofi  C=  3328 rows=  416 LoFi   84c    117.3 us   282.02 ns/tok  util  26.5%  W  224.4 GB/s  iqr  0.5%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    lofi  C=  3584 rows=  448 LoFi   84c    118.4 us   264.20 ns/tok  util  28.3%  W  222.4 GB/s  iqr  0.2%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    lofi  C=  3840 rows=  480 LoFi   96c    119.2 us   248.29 ns/tok  util  30.1%  W  220.8 GB/s  iqr  0.4%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    lofi  C=  4096 rows=  512 LoFi   96c    120.4 us   235.12 ns/tok  util  31.8%  W  218.7 GB/s  iqr  0.3%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    lofi  C=  5120 rows=  640 LoFi  120c    125.6 us   196.18 ns/tok  util  38.1%  W  209.6 GB/s  iqr  0.6%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    lofi  C=  6144 rows=  768 LoFi   96c    136.0 us   177.07 ns/tok  util  42.2%  W  193.5 GB/s  iqr  1.0%  pcc 0.99995  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    lofi  C=  7168 rows=  896 LoFi  120c    140.6 us   156.92 ns/tok  util  47.6%  W  187.2 GB/s  iqr  1.5%  pcc 0.99996  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    lofi  C=  8192 rows= 1024 LoFi   96c    157.9 us   154.20 ns/tok  util  48.4%  W  166.7 GB/s  iqr  0.4%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    lofi  C= 10240 rows= 1280 LoFi  120c    167.7 us   131.01 ns/tok  util  57.0%  W  157.0 GB/s  iqr  1.3%  pcc 0.99986  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    lofi  C= 12288 rows= 1536 HiFi2 120c    306.9 us   199.83 ns/tok  util  74.7%  W   85.8 GB/s  iqr  0.3%  pcc 0.99994  ttnn default
+global_qk    lofi  C= 16384 rows= 2048 HiFi2 120c    434.2 us   212.01 ns/tok  util  70.4%  W   60.6 GB/s  iqr  0.5%  pcc 0.99996  ttnn default
+global_qk    lofi  C= 24576 rows= 3072 HiFi2 120c    602.5 us   196.12 ns/tok  util  76.1%  W   43.7 GB/s  iqr  0.1%  pcc 0.99995  ttnn default
+global_qk    lofi  C= 32768 rows= 4096 HiFi2 120c    805.3 us   196.60 ns/tok  util  76.0%  W   32.7 GB/s  iqr  0.0%  pcc 0.99995  ttnn default
+global_qk    prod  C=   256 rows=   32 HiFi2  72c     76.1 us  2377.91 ns/tok  util   6.3%  W  345.9 GB/s  iqr  1.7%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    prod  C=   512 rows=   64 HiFi2  72c     80.0 us  1249.33 ns/tok  util  12.0%  W  329.2 GB/s  iqr  0.4%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    prod  C=   768 rows=   96 HiFi2  72c     82.8 us   862.54 ns/tok  util  17.3%  W  317.9 GB/s  iqr  1.9%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    prod  C=  1024 rows=  128 HiFi2  72c     84.9 us   663.46 ns/tok  util  22.5%  W  309.9 GB/s  iqr  1.4%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    prod  C=  1280 rows=  160 HiFi2  72c     88.2 us   551.29 ns/tok  util  27.1%  W  298.4 GB/s  iqr  2.5%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    prod  C=  1536 rows=  192 HiFi2  72c     90.6 us   472.07 ns/tok  util  31.6%  W  290.4 GB/s  iqr  2.2%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    prod  C=  1792 rows=  224 HiFi2  72c     89.4 us   398.92 ns/tok  util  37.4%  W  294.6 GB/s  iqr  0.8%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    prod  C=  2048 rows=  256 HiFi2  72c     95.3 us   372.22 ns/tok  util  40.1%  W  276.2 GB/s  iqr  0.2%  pcc 0.99998  MatmulMultiCoreReuseMultiCast1DProgramConfig
+global_qk    prod  C=  2304 rows=  288 HiFi2 108c    111.3 us   386.35 ns/tok  util  38.7%  W  236.6 GB/s  iqr  0.2%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    prod  C=  2560 rows=  320 HiFi2 120c    112.5 us   351.48 ns/tok  util  42.5%  W  234.0 GB/s  iqr  0.3%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    prod  C=  2816 rows=  352 HiFi2  72c    125.8 us   357.25 ns/tok  util  41.8%  W  209.3 GB/s  iqr  0.2%  pcc 0.99999  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    prod  C=  3072 rows=  384 HiFi2  72c    126.6 us   329.81 ns/tok  util  45.3%  W  207.8 GB/s  iqr  0.4%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    prod  C=  3328 rows=  416 HiFi2  84c    128.4 us   308.53 ns/tok  util  48.4%  W  205.1 GB/s  iqr  0.5%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    prod  C=  3584 rows=  448 HiFi2  84c    129.4 us   288.82 ns/tok  util  51.7%  W  203.4 GB/s  iqr  0.3%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    prod  C=  3840 rows=  480 HiFi2  96c    130.2 us   271.19 ns/tok  util  55.1%  W  202.2 GB/s  iqr  0.4%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    prod  C=  4096 rows=  512 LoFi   96c    120.7 us   235.76 ns/tok  util  31.7%  W  218.0 GB/s  iqr  0.4%  pcc 0.99990  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    prod  C=  5120 rows=  640 LoFi  120c    125.6 us   196.32 ns/tok  util  38.0%  W  209.5 GB/s  iqr  0.2%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    prod  C=  6144 rows=  768 LoFi   96c    136.3 us   177.50 ns/tok  util  42.1%  W  193.1 GB/s  iqr  1.2%  pcc 0.99994  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    prod  C=  7168 rows=  896 LoFi  120c    141.5 us   157.96 ns/tok  util  47.3%  W  186.0 GB/s  iqr  0.9%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    prod  C=  8192 rows= 1024 LoFi   96c    157.7 us   153.98 ns/tok  util  48.5%  W  166.9 GB/s  iqr  1.0%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    prod  C= 10240 rows= 1280 LoFi  120c    169.2 us   132.16 ns/tok  util  56.5%  W  155.6 GB/s  iqr  0.9%  pcc 0.99981  MatmulMultiCoreReuseMultiCastProgramConfig
+global_qk    prod  C= 12288 rows= 1536 HiFi2 120c    307.0 us   199.87 ns/tok  util  74.7%  W   85.7 GB/s  iqr  0.3%  pcc 0.99996  ttnn default
+global_qk    prod  C= 16384 rows= 2048 HiFi2 120c    434.1 us   211.97 ns/tok  util  70.4%  W   60.6 GB/s  iqr  0.8%  pcc 0.99994  ttnn default
+global_qk    prod  C= 24576 rows= 3072 HiFi2 120c    601.3 us   195.72 ns/tok  util  76.3%  W   43.8 GB/s  iqr  0.3%  pcc 0.99995  ttnn default
+global_qk    prod  C= 32768 rows= 4096 HiFi2 120c    804.7 us   196.45 ns/tok  util  76.0%  W   32.7 GB/s  iqr  0.2%  pcc 1.00000  ttnn default
+mlp_down     prod  C=   256 rows=   32 LoFi   42c     85.2 us  2661.47 ns/tok  util   3.3%  W  360.6 GB/s  iqr  0.7%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_down     prod  C=   512 rows=   64 LoFi   42c     86.8 us  1356.43 ns/tok  util   6.4%  W  353.7 GB/s  iqr  0.5%  pcc 0.99991  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_down     prod  C=   768 rows=   96 LoFi   42c     91.9 us   957.17 ns/tok  util   9.1%  W  334.2 GB/s  iqr  2.7%  pcc 0.99991  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_down     prod  C=  1024 rows=  128 LoFi   42c     92.2 us   720.17 ns/tok  util  12.1%  W  333.1 GB/s  iqr  2.5%  pcc 0.99991  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_down     prod  C=  1280 rows=  160 LoFi   42c     94.4 us   590.14 ns/tok  util  14.8%  W  325.2 GB/s  iqr  2.0%  pcc 0.99992  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_down     prod  C=  1536 rows=  192 LoFi   42c     97.1 us   505.86 ns/tok  util  17.2%  W  316.2 GB/s  iqr  1.7%  pcc 0.99988  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_down     prod  C=  1792 rows=  224 LoFi   42c    100.0 us   446.50 ns/tok  util  19.5%  W  307.0 GB/s  iqr  0.9%  pcc 0.99991  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_down     prod  C=  2048 rows=  256 LoFi   42c    101.9 us   398.10 ns/tok  util  21.9%  W  301.3 GB/s  iqr  0.1%  pcc 0.99991  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_down     prod  C=  2304 rows=  288 LoFi  108c    127.2 us   441.68 ns/tok  util  19.7%  W  241.4 GB/s  iqr  0.3%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_down     prod  C=  2560 rows=  320 LoFi  120c    128.5 us   401.56 ns/tok  util  21.7%  W  239.0 GB/s  iqr  0.2%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_down     prod  C=  2816 rows=  352 LoFi   72c    132.4 us   376.06 ns/tok  util  23.2%  W  232.0 GB/s  iqr  0.5%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_down     prod  C=  3072 rows=  384 LoFi   72c    134.0 us   349.01 ns/tok  util  25.0%  W  229.1 GB/s  iqr  0.5%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_down     prod  C=  3328 rows=  416 LoFi   84c    135.6 us   325.85 ns/tok  util  26.7%  W  226.5 GB/s  iqr  0.6%  pcc 0.99988  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_down     prod  C=  3584 rows=  448 LoFi   84c    136.8 us   305.41 ns/tok  util  28.5%  W  224.4 GB/s  iqr  0.3%  pcc 0.99987  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_down     prod  C=  3840 rows=  480 LoFi   96c    137.9 us   287.29 ns/tok  util  30.3%  W  222.7 GB/s  iqr  0.3%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_down     prod  C=  4096 rows=  512 LoFi   96c    138.6 us   270.68 ns/tok  util  32.2%  W  221.6 GB/s  iqr  0.8%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_down     prod  C=  5120 rows=  640 LoFi  120c    143.7 us   224.48 ns/tok  util  38.8%  W  213.7 GB/s  iqr  0.7%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_down     prod  C=  6144 rows=  768 LoFi   96c    151.7 us   197.54 ns/tok  util  44.1%  W  202.4 GB/s  iqr  0.8%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_down     prod  C=  7168 rows=  896 LoFi  120c    157.1 us   175.36 ns/tok  util  49.7%  W  195.4 GB/s  iqr  0.2%  pcc 0.99983  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_down     prod  C=  8192 rows= 1024 LoFi   96c    173.4 us   169.38 ns/tok  util  51.4%  W  177.0 GB/s  iqr  0.3%  pcc 0.99983  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_down     prod  C= 10240 rows= 1280 LoFi  120c    182.1 us   142.29 ns/tok  util  61.2%  W  168.6 GB/s  iqr  0.5%  pcc 0.99988  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_down     prod  C= 12288 rows= 1536 LoFi  120c    231.3 us   150.59 ns/tok  util  57.8%  W  132.8 GB/s  iqr  0.4%  pcc 0.99994  ttnn default
+mlp_down     prod  C= 16384 rows= 2048 LoFi  120c    313.9 us   153.28 ns/tok  util  56.8%  W   97.8 GB/s  iqr  0.4%  pcc 0.99996  ttnn default
+mlp_down     prod  C= 24576 rows= 3072 LoFi  120c    444.4 us   144.65 ns/tok  util  60.2%  W   69.1 GB/s  iqr  0.2%  pcc 0.99993  ttnn default
+mlp_down     prod  C= 32768 rows= 4096 LoFi  120c    577.1 us   140.90 ns/tok  util  61.8%  W   53.2 GB/s  iqr  0.2%  pcc 0.99985  ttnn default
+mlp_gate     prod  C=   256 rows=   32 LoFi   84c     90.3 us  2821.73 ns/tok  util   3.1%  W  340.1 GB/s  iqr  0.5%  pcc 0.99986  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_gate     prod  C=   512 rows=   64 LoFi   84c     93.4 us  1459.88 ns/tok  util   6.0%  W  328.7 GB/s  iqr  0.7%  pcc 0.99986  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_gate     prod  C=   768 rows=   96 LoFi   84c     96.1 us  1001.20 ns/tok  util   8.7%  W  319.5 GB/s  iqr  0.6%  pcc 0.99988  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_gate     prod  C=  1024 rows=  128 LoFi   84c    100.7 us   786.80 ns/tok  util  11.1%  W  304.9 GB/s  iqr  0.9%  pcc 0.99988  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_gate     prod  C=  1280 rows=  160 LoFi   84c    103.6 us   647.58 ns/tok  util  13.5%  W  296.4 GB/s  iqr  1.3%  pcc 0.99986  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_gate     prod  C=  1536 rows=  192 LoFi   84c    108.6 us   565.44 ns/tok  util  15.4%  W  282.9 GB/s  iqr  1.6%  pcc 0.99986  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_gate     prod  C=  1792 rows=  224 LoFi   84c    111.3 us   497.06 ns/tok  util  17.5%  W  275.8 GB/s  iqr  1.0%  pcc 0.99987  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_gate     prod  C=  2048 rows=  256 LoFi   84c    114.8 us   448.39 ns/tok  util  19.4%  W  267.5 GB/s  iqr  0.9%  pcc 0.99982  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_gate     prod  C=  2304 rows=  288 LoFi  108c    139.8 us   485.50 ns/tok  util  17.9%  W  219.6 GB/s  iqr  0.2%  pcc 0.99979  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_gate     prod  C=  2560 rows=  320 LoFi  120c    140.8 us   440.12 ns/tok  util  19.8%  W  218.0 GB/s  iqr  0.4%  pcc 0.99985  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_gate     prod  C=  2816 rows=  352 LoFi   72c    158.4 us   450.03 ns/tok  util  19.4%  W  193.8 GB/s  iqr  2.2%  pcc 0.99999  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_gate     prod  C=  3072 rows=  384 LoFi   72c    156.4 us   407.19 ns/tok  util  21.4%  W  196.4 GB/s  iqr  0.6%  pcc 0.99987  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_gate     prod  C=  3328 rows=  416 LoFi   84c    156.8 us   377.04 ns/tok  util  23.1%  W  195.8 GB/s  iqr  0.8%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_gate     prod  C=  3584 rows=  448 LoFi   84c    156.9 us   350.19 ns/tok  util  24.9%  W  195.7 GB/s  iqr  0.6%  pcc 0.99997  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_gate     prod  C=  3840 rows=  480 LoFi   96c    157.3 us   327.73 ns/tok  util  26.6%  W  195.2 GB/s  iqr  0.5%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_gate     prod  C=  4096 rows=  512 LoFi   96c    157.4 us   307.40 ns/tok  util  28.3%  W  195.1 GB/s  iqr  0.6%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_gate     prod  C=  5120 rows=  640 LoFi  120c    159.0 us   248.39 ns/tok  util  35.1%  W  193.2 GB/s  iqr  0.4%  pcc 0.99997  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_gate     prod  C=  6144 rows=  768 LoFi   96c    185.6 us   241.67 ns/tok  util  36.0%  W  165.4 GB/s  iqr  0.5%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_gate     prod  C=  7168 rows=  896 LoFi  120c    187.8 us   209.58 ns/tok  util  41.6%  W  163.5 GB/s  iqr  0.8%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_gate     prod  C=  8192 rows= 1024 LoFi   96c    221.5 us   216.33 ns/tok  util  40.3%  W  138.6 GB/s  iqr  0.5%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_gate     prod  C= 10240 rows= 1280 LoFi  120c    225.5 us   176.17 ns/tok  util  49.4%  W  136.2 GB/s  iqr  0.7%  pcc 0.99984  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_gate     prod  C= 12288 rows= 1536 LoFi  120c    288.7 us   187.95 ns/tok  util  46.3%  W  106.4 GB/s  iqr  1.6%  pcc 0.99937  ttnn default
+mlp_gate     prod  C= 16384 rows= 2048 LoFi  120c    380.4 us   185.74 ns/tok  util  46.9%  W   80.7 GB/s  iqr  0.2%  pcc 0.99874  ttnn default
+mlp_gate     prod  C= 24576 rows= 3072 LoFi  120c    535.5 us   174.32 ns/tok  util  50.0%  W   57.3 GB/s  iqr  0.1%  pcc 0.99898  ttnn default
+mlp_gate     prod  C= 32768 rows= 4096 LoFi  120c    692.8 us   169.15 ns/tok  util  51.5%  W   44.3 GB/s  iqr  0.0%  pcc 0.99931  ttnn default
+mlp_up       prod  C=   256 rows=   32 LoFi   84c     87.1 us  2722.31 ns/tok  util   3.2%  W  352.5 GB/s  iqr  1.0%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_up       prod  C=   512 rows=   64 LoFi   84c     87.5 us  1366.66 ns/tok  util   6.4%  W  351.1 GB/s  iqr  0.9%  pcc 0.99991  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_up       prod  C=   768 rows=   96 LoFi   84c     88.3 us   920.09 ns/tok  util   9.5%  W  347.7 GB/s  iqr  1.2%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_up       prod  C=  1024 rows=  128 LoFi   84c     89.5 us   699.52 ns/tok  util  12.5%  W  343.0 GB/s  iqr  0.8%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_up       prod  C=  1280 rows=  160 LoFi   84c     91.2 us   569.70 ns/tok  util  15.3%  W  336.9 GB/s  iqr  1.6%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_up       prod  C=  1536 rows=  192 LoFi   84c     92.4 us   481.46 ns/tok  util  18.1%  W  332.2 GB/s  iqr  2.8%  pcc 0.99989  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_up       prod  C=  1792 rows=  224 LoFi   84c     93.7 us   418.31 ns/tok  util  20.8%  W  327.7 GB/s  iqr  1.9%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_up       prod  C=  2048 rows=  256 LoFi   84c     94.2 us   368.12 ns/tok  util  23.7%  W  325.8 GB/s  iqr  0.5%  pcc 0.99992  MatmulMultiCoreReuseMultiCast1DProgramConfig
+mlp_up       prod  C=  2304 rows=  288 LoFi  108c    123.1 us   427.51 ns/tok  util  20.4%  W  249.4 GB/s  iqr  0.5%  pcc 0.99985  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_up       prod  C=  2560 rows=  320 LoFi  120c    123.7 us   386.69 ns/tok  util  22.5%  W  248.2 GB/s  iqr  0.6%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_up       prod  C=  2816 rows=  352 LoFi   72c    124.3 us   353.04 ns/tok  util  24.7%  W  247.1 GB/s  iqr  1.5%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_up       prod  C=  3072 rows=  384 LoFi   72c    122.1 us   318.01 ns/tok  util  27.4%  W  251.5 GB/s  iqr  0.3%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_up       prod  C=  3328 rows=  416 LoFi   84c    123.0 us   295.60 ns/tok  util  29.5%  W  249.7 GB/s  iqr  0.4%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_up       prod  C=  3584 rows=  448 LoFi   84c    122.8 us   274.01 ns/tok  util  31.8%  W  250.2 GB/s  iqr  0.4%  pcc 0.99989  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_up       prod  C=  3840 rows=  480 LoFi   96c    123.8 us   257.91 ns/tok  util  33.8%  W  248.0 GB/s  iqr  0.6%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_up       prod  C=  4096 rows=  512 LoFi   96c    123.9 us   241.99 ns/tok  util  36.0%  W  247.8 GB/s  iqr  0.6%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_up       prod  C=  5120 rows=  640 LoFi  120c    124.9 us   195.23 ns/tok  util  44.6%  W  245.8 GB/s  iqr  0.5%  pcc 0.99986  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_up       prod  C=  6144 rows=  768 LoFi   96c    136.8 us   178.19 ns/tok  util  48.9%  W  224.4 GB/s  iqr  1.0%  pcc 0.99995  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_up       prod  C=  7168 rows=  896 LoFi  120c    139.1 us   155.26 ns/tok  util  56.1%  W  220.7 GB/s  iqr  0.7%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_up       prod  C=  8192 rows= 1024 LoFi   96c    154.9 us   151.23 ns/tok  util  57.6%  W  198.3 GB/s  iqr  0.5%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_up       prod  C= 10240 rows= 1280 LoFi  120c    159.6 us   124.70 ns/tok  util  69.9%  W  192.4 GB/s  iqr  0.9%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+mlp_up       prod  C= 12288 rows= 1536 LoFi  120c    199.5 us   129.86 ns/tok  util  67.1%  W  153.9 GB/s  iqr  1.5%  pcc 0.99995  ttnn default
+mlp_up       prod  C= 16384 rows= 2048 LoFi  120c    258.3 us   126.13 ns/tok  util  69.1%  W  118.9 GB/s  iqr  0.5%  pcc 0.99987  ttnn default
+mlp_up       prod  C= 24576 rows= 3072 LoFi  120c    362.9 us   118.12 ns/tok  util  73.7%  W   84.6 GB/s  iqr  0.3%  pcc 0.99997  ttnn default
+mlp_up       prod  C= 32768 rows= 4096 LoFi  120c    468.1 us   114.28 ns/tok  util  76.2%  W   65.6 GB/s  iqr  0.1%  pcc 0.99987  ttnn default
+sliding_o    hifi2 C=   256 rows=   32 HiFi2  84c     36.0 us  1126.31 ns/tok  util   5.9%  W  324.6 GB/s  iqr  1.3%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    hifi2 C=   512 rows=   64 HiFi2  84c     37.2 us   581.67 ns/tok  util  11.4%  W  314.2 GB/s  iqr  1.6%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    hifi2 C=   768 rows=   96 HiFi2  84c     41.5 us   432.27 ns/tok  util  15.4%  W  281.9 GB/s  iqr  1.1%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    hifi2 C=  1024 rows=  128 HiFi2  84c     46.2 us   360.84 ns/tok  util  18.4%  W  253.3 GB/s  iqr  2.3%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    hifi2 C=  1280 rows=  160 HiFi2  84c     47.6 us   297.25 ns/tok  util  22.3%  W  246.0 GB/s  iqr  2.5%  pcc 0.99998  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    hifi2 C=  1536 rows=  192 HiFi2  84c     48.3 us   251.53 ns/tok  util  26.4%  W  242.2 GB/s  iqr  1.8%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    hifi2 C=  1792 rows=  224 HiFi2  84c     50.0 us   223.17 ns/tok  util  29.7%  W  234.0 GB/s  iqr  4.6%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    hifi2 C=  2048 rows=  256 HiFi2  84c     51.5 us   201.32 ns/tok  util  33.0%  W  227.0 GB/s  iqr  1.1%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    hifi2 C=  2304 rows=  288 HiFi2 108c     58.1 us   201.58 ns/tok  util  32.9%  W  201.5 GB/s  iqr  1.6%  pcc 0.99998  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    hifi2 C=  2560 rows=  320 HiFi2 120c     59.4 us   185.66 ns/tok  util  35.7%  W  196.9 GB/s  iqr  2.0%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    hifi2 C=  2816 rows=  352 HiFi2  72c     67.7 us   192.23 ns/tok  util  34.5%  W  172.9 GB/s  iqr  1.1%  pcc 0.99999  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    hifi2 C=  3072 rows=  384 HiFi2  72c     68.8 us   179.07 ns/tok  util  37.1%  W  170.1 GB/s  iqr  0.9%  pcc 0.99999  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    hifi2 C=  3328 rows=  416 HiFi2  84c     69.8 us   167.70 ns/tok  util  39.6%  W  167.7 GB/s  iqr  1.8%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    hifi2 C=  3584 rows=  448 HiFi2  84c     71.5 us   159.63 ns/tok  util  41.6%  W  163.6 GB/s  iqr  1.7%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    hifi2 C=  3840 rows=  480 HiFi2  96c     73.3 us   152.75 ns/tok  util  43.4%  W  159.5 GB/s  iqr  0.5%  pcc 0.99999  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    hifi2 C=  4096 rows=  512 HiFi2  96c     74.2 us   144.94 ns/tok  util  45.8%  W  157.6 GB/s  iqr  0.8%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    hifi2 C=  5120 rows=  640 HiFi2 120c     78.3 us   122.34 ns/tok  util  54.3%  W  149.4 GB/s  iqr  0.6%  pcc 0.99997  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    hifi2 C=  6144 rows=  768 HiFi2  96c    102.9 us   133.95 ns/tok  util  49.6%  W  113.7 GB/s  iqr  0.7%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    hifi2 C=  7168 rows=  896 HiFi2 120c    107.7 us   120.16 ns/tok  util  55.2%  W  108.7 GB/s  iqr  0.6%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    hifi2 C=  8192 rows= 1024 HiFi2  96c    132.5 us   129.43 ns/tok  util  51.3%  W   88.3 GB/s  iqr  1.4%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    hifi2 C= 10240 rows= 1280 HiFi2 120c    141.5 us   110.56 ns/tok  util  60.0%  W   82.7 GB/s  iqr  1.0%  pcc 0.99990  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    hifi2 C= 12288 rows= 1536 HiFi2 120c    207.3 us   134.99 ns/tok  util  49.2%  W   56.4 GB/s  iqr  1.0%  pcc 0.99994  ttnn default
+sliding_o    hifi2 C= 16384 rows= 2048 HiFi2 120c    281.5 us   137.44 ns/tok  util  48.3%  W   41.6 GB/s  iqr  1.0%  pcc 0.99994  ttnn default
+sliding_o    hifi2 C= 24576 rows= 3072 HiFi2 120c    387.8 us   126.24 ns/tok  util  52.6%  W   30.2 GB/s  iqr  0.5%  pcc 0.99994  ttnn default
+sliding_o    hifi2 C= 32768 rows= 4096 HiFi2 120c    519.8 us   126.92 ns/tok  util  52.3%  W   22.5 GB/s  iqr  0.3%  pcc 0.99990  ttnn default
+sliding_o    lofi  C=   256 rows=   32 LoFi   84c     36.0 us  1124.69 ns/tok  util   3.0%  W  325.0 GB/s  iqr  0.8%  pcc 0.99991  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    lofi  C=   512 rows=   64 LoFi   84c     38.4 us   600.77 ns/tok  util   5.5%  W  304.2 GB/s  iqr  1.7%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    lofi  C=   768 rows=   96 LoFi   84c     40.5 us   421.90 ns/tok  util   7.9%  W  288.8 GB/s  iqr  0.8%  pcc 0.99992  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    lofi  C=  1024 rows=  128 LoFi   84c     42.6 us   332.91 ns/tok  util  10.0%  W  274.5 GB/s  iqr  1.1%  pcc 0.99992  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    lofi  C=  1280 rows=  160 LoFi   84c     46.2 us   288.98 ns/tok  util  11.5%  W  253.0 GB/s  iqr  1.5%  pcc 0.99993  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    lofi  C=  1536 rows=  192 LoFi   84c     49.6 us   258.59 ns/tok  util  12.8%  W  235.6 GB/s  iqr  0.6%  pcc 0.99991  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    lofi  C=  1792 rows=  224 LoFi   84c     50.5 us   225.41 ns/tok  util  14.7%  W  231.7 GB/s  iqr  4.9%  pcc 0.99992  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    lofi  C=  2048 rows=  256 LoFi   84c     52.0 us   202.98 ns/tok  util  16.3%  W  225.1 GB/s  iqr  0.6%  pcc 0.99992  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    lofi  C=  2304 rows=  288 LoFi  108c     58.2 us   201.91 ns/tok  util  16.4%  W  201.2 GB/s  iqr  0.7%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    lofi  C=  2560 rows=  320 LoFi  120c     58.9 us   184.10 ns/tok  util  18.0%  W  198.6 GB/s  iqr  0.6%  pcc 0.99990  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    lofi  C=  2816 rows=  352 LoFi   72c     63.3 us   179.77 ns/tok  util  18.5%  W  184.9 GB/s  iqr  1.3%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    lofi  C=  3072 rows=  384 LoFi   72c     64.3 us   167.46 ns/tok  util  19.8%  W  181.9 GB/s  iqr  1.1%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    lofi  C=  3328 rows=  416 LoFi   84c     65.0 us   156.26 ns/tok  util  21.2%  W  180.0 GB/s  iqr  2.8%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    lofi  C=  3584 rows=  448 LoFi   84c     67.3 us   150.27 ns/tok  util  22.1%  W  173.8 GB/s  iqr  2.9%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    lofi  C=  3840 rows=  480 LoFi   96c     67.9 us   141.55 ns/tok  util  23.4%  W  172.2 GB/s  iqr  2.2%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    lofi  C=  4096 rows=  512 LoFi   96c     68.2 us   133.20 ns/tok  util  24.9%  W  171.5 GB/s  iqr  1.0%  pcc 0.99987  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    lofi  C=  5120 rows=  640 LoFi  120c     73.6 us   114.96 ns/tok  util  28.9%  W  159.0 GB/s  iqr  0.9%  pcc 0.99990  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    lofi  C=  6144 rows=  768 LoFi   96c     82.5 us   107.44 ns/tok  util  30.9%  W  141.8 GB/s  iqr  1.4%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    lofi  C=  7168 rows=  896 LoFi  120c     87.8 us    97.95 ns/tok  util  33.9%  W  133.3 GB/s  iqr  0.8%  pcc 0.99983  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    lofi  C=  8192 rows= 1024 LoFi   96c     98.9 us    96.63 ns/tok  util  34.3%  W  118.2 GB/s  iqr  0.8%  pcc 0.99988  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    lofi  C= 10240 rows= 1280 LoFi  120c    108.6 us    84.88 ns/tok  util  39.1%  W  107.7 GB/s  iqr  0.6%  pcc 0.99990  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    lofi  C= 12288 rows= 1536 HiFi2 120c    207.5 us   135.09 ns/tok  util  49.1%  W   56.4 GB/s  iqr  1.2%  pcc 0.99993  ttnn default
+sliding_o    lofi  C= 16384 rows= 2048 HiFi2 120c    282.4 us   137.90 ns/tok  util  48.1%  W   41.4 GB/s  iqr  0.4%  pcc 0.99994  ttnn default
+sliding_o    lofi  C= 24576 rows= 3072 HiFi2 120c    387.6 us   126.16 ns/tok  util  52.6%  W   30.2 GB/s  iqr  0.3%  pcc 0.99991  ttnn default
+sliding_o    lofi  C= 32768 rows= 4096 HiFi2 120c    519.9 us   126.92 ns/tok  util  52.3%  W   22.5 GB/s  iqr  0.4%  pcc 0.99991  ttnn default
+sliding_o    prod  C=   256 rows=   32 HiFi2  84c     35.5 us  1109.55 ns/tok  util   6.0%  W  329.5 GB/s  iqr  1.7%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    prod  C=   512 rows=   64 HiFi2  84c     37.4 us   584.76 ns/tok  util  11.4%  W  312.6 GB/s  iqr  2.3%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    prod  C=   768 rows=   96 HiFi2  84c     41.2 us   429.15 ns/tok  util  15.5%  W  283.9 GB/s  iqr  2.3%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    prod  C=  1024 rows=  128 HiFi2  84c     45.8 us   357.92 ns/tok  util  18.5%  W  255.3 GB/s  iqr  1.7%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    prod  C=  1280 rows=  160 HiFi2  84c     47.5 us   296.68 ns/tok  util  22.4%  W  246.4 GB/s  iqr  1.4%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    prod  C=  1536 rows=  192 HiFi2  84c     48.6 us   253.04 ns/tok  util  26.2%  W  240.8 GB/s  iqr  0.7%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    prod  C=  1792 rows=  224 HiFi2  84c     50.0 us   223.05 ns/tok  util  29.8%  W  234.1 GB/s  iqr  4.0%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    prod  C=  2048 rows=  256 HiFi2  84c     51.2 us   200.11 ns/tok  util  33.2%  W  228.4 GB/s  iqr  0.7%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_o    prod  C=  2304 rows=  288 HiFi2 108c     58.3 us   202.31 ns/tok  util  32.8%  W  200.8 GB/s  iqr  0.5%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    prod  C=  2560 rows=  320 HiFi2 120c     59.7 us   186.44 ns/tok  util  35.6%  W  196.1 GB/s  iqr  0.6%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    prod  C=  2816 rows=  352 HiFi2  72c     67.7 us   192.35 ns/tok  util  34.5%  W  172.8 GB/s  iqr  0.6%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    prod  C=  3072 rows=  384 HiFi2  72c     68.5 us   178.51 ns/tok  util  37.2%  W  170.7 GB/s  iqr  1.6%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    prod  C=  3328 rows=  416 HiFi2  84c     70.3 us   168.97 ns/tok  util  39.3%  W  166.4 GB/s  iqr  2.9%  pcc 0.99999  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    prod  C=  3584 rows=  448 HiFi2  84c     72.2 us   161.25 ns/tok  util  41.2%  W  161.9 GB/s  iqr  0.4%  pcc 0.99997  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    prod  C=  3840 rows=  480 HiFi2  96c     72.8 us   151.57 ns/tok  util  43.8%  W  160.8 GB/s  iqr  1.2%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    prod  C=  4096 rows=  512 LoFi   96c     68.6 us   134.02 ns/tok  util  24.8%  W  170.5 GB/s  iqr  1.4%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    prod  C=  5120 rows=  640 LoFi  120c     74.5 us   116.38 ns/tok  util  28.5%  W  157.1 GB/s  iqr  1.8%  pcc 0.99989  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    prod  C=  6144 rows=  768 LoFi   96c     82.4 us   107.24 ns/tok  util  30.9%  W  142.0 GB/s  iqr  0.6%  pcc 0.99995  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    prod  C=  7168 rows=  896 LoFi  120c     87.2 us    97.32 ns/tok  util  34.1%  W  134.2 GB/s  iqr  1.0%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    prod  C=  8192 rows= 1024 LoFi   96c     98.8 us    96.45 ns/tok  util  34.4%  W  118.5 GB/s  iqr  0.8%  pcc 0.99983  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    prod  C= 10240 rows= 1280 LoFi  120c    109.3 us    85.37 ns/tok  util  38.9%  W  107.1 GB/s  iqr  0.9%  pcc 0.99990  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_o    prod  C= 12288 rows= 1536 HiFi2 120c    206.6 us   134.47 ns/tok  util  49.4%  W   56.6 GB/s  iqr  0.7%  pcc 0.99996  ttnn default
+sliding_o    prod  C= 16384 rows= 2048 HiFi2 120c    281.5 us   137.46 ns/tok  util  48.3%  W   41.6 GB/s  iqr  0.3%  pcc 0.99996  ttnn default
+sliding_o    prod  C= 24576 rows= 3072 HiFi2 120c    387.4 us   126.09 ns/tok  util  52.6%  W   30.2 GB/s  iqr  0.3%  pcc 0.99995  ttnn default
+sliding_o    prod  C= 32768 rows= 4096 HiFi2 120c    519.3 us   126.79 ns/tok  util  52.3%  W   22.5 GB/s  iqr  0.4%  pcc 0.99991  ttnn default
+sliding_qkv  hifi2 C=   256 rows=   32 HiFi2  64c     68.6 us  2144.62 ns/tok  util   6.2%  W  340.9 GB/s  iqr  0.9%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  hifi2 C=   512 rows=   64 HiFi2  64c     73.5 us  1149.12 ns/tok  util  11.6%  W  318.1 GB/s  iqr  0.7%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  hifi2 C=   768 rows=   96 HiFi2  64c     74.2 us   773.24 ns/tok  util  17.2%  W  315.2 GB/s  iqr  2.5%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  hifi2 C=  1024 rows=  128 HiFi2  64c     76.2 us   595.68 ns/tok  util  22.3%  W  306.9 GB/s  iqr  0.5%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  hifi2 C=  1280 rows=  160 HiFi2  64c     78.9 us   493.43 ns/tok  util  26.9%  W  296.4 GB/s  iqr  1.2%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  hifi2 C=  1536 rows=  192 HiFi2  64c     78.8 us   410.34 ns/tok  util  32.3%  W  297.0 GB/s  iqr  0.6%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  hifi2 C=  1792 rows=  224 HiFi2  64c     81.8 us   365.10 ns/tok  util  36.4%  W  286.1 GB/s  iqr  0.5%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  hifi2 C=  2048 rows=  256 HiFi2  64c     92.4 us   361.10 ns/tok  util  36.8%  W  253.1 GB/s  iqr  0.1%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  hifi2 C=  2304 rows=  288 HiFi2 108c    101.6 us   352.79 ns/tok  util  37.6%  W  230.3 GB/s  iqr  1.5%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  hifi2 C=  2560 rows=  320 HiFi2 120c    102.9 us   321.69 ns/tok  util  41.3%  W  227.3 GB/s  iqr  0.8%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  hifi2 C=  2816 rows=  352 HiFi2  72c    115.3 us   327.61 ns/tok  util  40.5%  W  202.9 GB/s  iqr  0.3%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  hifi2 C=  3072 rows=  384 HiFi2  72c    116.3 us   302.94 ns/tok  util  43.8%  W  201.1 GB/s  iqr  0.3%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  hifi2 C=  3328 rows=  416 HiFi2  84c    117.6 us   282.68 ns/tok  util  47.0%  W  199.0 GB/s  iqr  0.4%  pcc 0.99998  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  hifi2 C=  3584 rows=  448 HiFi2  84c    118.7 us   264.90 ns/tok  util  50.1%  W  197.1 GB/s  iqr  0.3%  pcc 0.99999  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  hifi2 C=  3840 rows=  480 HiFi2  96c    119.7 us   249.39 ns/tok  util  53.2%  W  195.4 GB/s  iqr  0.4%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  hifi2 C=  4096 rows=  512 HiFi2  96c    121.1 us   236.44 ns/tok  util  56.1%  W  193.3 GB/s  iqr  0.6%  pcc 0.99998  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  hifi2 C=  5120 rows=  640 HiFi2 120c    125.7 us   196.38 ns/tok  util  67.6%  W  186.2 GB/s  iqr  0.7%  pcc 0.99998  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  hifi2 C=  6144 rows=  768 HiFi2  96c    173.0 us   225.24 ns/tok  util  58.9%  W  135.3 GB/s  iqr  0.4%  pcc 0.99998  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  hifi2 C=  7168 rows=  896 HiFi2 120c    177.1 us   197.62 ns/tok  util  67.2%  W  132.1 GB/s  iqr  0.5%  pcc 0.99999  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  hifi2 C=  8192 rows= 1024 HiFi2  96c    224.7 us   219.43 ns/tok  util  60.5%  W  104.1 GB/s  iqr  0.5%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  hifi2 C= 10240 rows= 1280 HiFi2 120c    233.1 us   182.12 ns/tok  util  72.9%  W  100.4 GB/s  iqr  0.6%  pcc 0.99999  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  hifi2 C= 12288 rows= 1536 HiFi2 120c    284.3 us   185.11 ns/tok  util  71.7%  W   82.3 GB/s  iqr  0.6%  pcc 0.99995  ttnn default
+sliding_qkv  hifi2 C= 16384 rows= 2048 HiFi2 120c    391.9 us   191.38 ns/tok  util  69.4%  W   59.7 GB/s  iqr  0.4%  pcc 0.99997  ttnn default
+sliding_qkv  hifi2 C= 24576 rows= 3072 HiFi2 120c    555.8 us   180.92 ns/tok  util  73.4%  W   42.1 GB/s  iqr  0.3%  pcc 0.99997  ttnn default
+sliding_qkv  hifi2 C= 32768 rows= 4096 HiFi2 120c    821.6 us   200.58 ns/tok  util  66.2%  W   28.5 GB/s  iqr  0.2%  pcc 0.99994  ttnn default
+sliding_qkv  lofi  C=   256 rows=   32 LoFi   64c     68.8 us  2151.19 ns/tok  util   3.1%  W  339.9 GB/s  iqr  1.2%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  lofi  C=   512 rows=   64 LoFi   64c     70.5 us  1101.22 ns/tok  util   6.0%  W  332.0 GB/s  iqr  0.7%  pcc 0.99992  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  lofi  C=   768 rows=   96 LoFi   64c     73.9 us   769.70 ns/tok  util   8.6%  W  316.6 GB/s  iqr  0.5%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  lofi  C=  1024 rows=  128 LoFi   64c     75.8 us   592.42 ns/tok  util  11.2%  W  308.5 GB/s  iqr  2.0%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  lofi  C=  1280 rows=  160 LoFi   64c     77.2 us   482.76 ns/tok  util  13.7%  W  302.9 GB/s  iqr  1.2%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  lofi  C=  1536 rows=  192 LoFi   64c     76.8 us   400.20 ns/tok  util  16.6%  W  304.5 GB/s  iqr  3.7%  pcc 0.99992  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  lofi  C=  1792 rows=  224 LoFi   64c     80.1 us   357.40 ns/tok  util  18.6%  W  292.2 GB/s  iqr  1.2%  pcc 0.99993  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  lofi  C=  2048 rows=  256 LoFi   64c     85.6 us   334.37 ns/tok  util  19.8%  W  273.3 GB/s  iqr  0.5%  pcc 0.99990  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  lofi  C=  2304 rows=  288 LoFi  108c    106.3 us   369.01 ns/tok  util  18.0%  W  220.2 GB/s  iqr  0.7%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  lofi  C=  2560 rows=  320 LoFi  120c    106.9 us   334.16 ns/tok  util  19.9%  W  218.8 GB/s  iqr  1.1%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  lofi  C=  2816 rows=  352 LoFi   72c    105.1 us   298.60 ns/tok  util  22.2%  W  222.6 GB/s  iqr  0.7%  pcc 0.99990  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  lofi  C=  3072 rows=  384 LoFi   72c    106.2 us   276.62 ns/tok  util  24.0%  W  220.3 GB/s  iqr  0.5%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  lofi  C=  3328 rows=  416 LoFi   84c    107.6 us   258.58 ns/tok  util  25.7%  W  217.5 GB/s  iqr  0.4%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  lofi  C=  3584 rows=  448 LoFi   84c    109.2 us   243.81 ns/tok  util  27.2%  W  214.2 GB/s  iqr  0.5%  pcc 0.99989  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  lofi  C=  3840 rows=  480 LoFi   96c    110.4 us   230.03 ns/tok  util  28.9%  W  211.9 GB/s  iqr  0.5%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  lofi  C=  4096 rows=  512 LoFi   96c    111.6 us   218.02 ns/tok  util  30.4%  W  209.6 GB/s  iqr  0.6%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  lofi  C=  5120 rows=  640 LoFi  120c    116.9 us   182.62 ns/tok  util  36.3%  W  200.2 GB/s  iqr  0.9%  pcc 0.99993  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  lofi  C=  6144 rows=  768 LoFi   96c    130.2 us   169.56 ns/tok  util  39.1%  W  179.7 GB/s  iqr  0.5%  pcc 0.99994  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  lofi  C=  7168 rows=  896 LoFi  120c    135.0 us   150.65 ns/tok  util  44.1%  W  173.3 GB/s  iqr  0.7%  pcc 0.99984  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  lofi  C=  8192 rows= 1024 LoFi   96c    154.5 us   150.85 ns/tok  util  44.0%  W  151.5 GB/s  iqr  0.5%  pcc 0.99979  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  lofi  C= 10240 rows= 1280 LoFi  120c    163.1 us   127.39 ns/tok  util  52.1%  W  143.5 GB/s  iqr  1.1%  pcc 0.99985  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  lofi  C= 12288 rows= 1536 HiFi2 120c    283.3 us   184.46 ns/tok  util  72.0%  W   82.6 GB/s  iqr  0.6%  pcc 0.99993  ttnn default
+sliding_qkv  lofi  C= 16384 rows= 2048 HiFi2 120c    392.3 us   191.54 ns/tok  util  69.3%  W   59.6 GB/s  iqr  0.3%  pcc 0.99997  ttnn default
+sliding_qkv  lofi  C= 24576 rows= 3072 HiFi2 120c    555.8 us   180.94 ns/tok  util  73.4%  W   42.1 GB/s  iqr  0.4%  pcc 0.99996  ttnn default
+sliding_qkv  lofi  C= 32768 rows= 4096 HiFi2 120c    821.6 us   200.60 ns/tok  util  66.2%  W   28.5 GB/s  iqr  0.2%  pcc 0.99994  ttnn default
+sliding_qkv  prod  C=   256 rows=   32 HiFi2  64c     67.8 us  2118.92 ns/tok  util   6.3%  W  345.1 GB/s  iqr  1.6%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  prod  C=   512 rows=   64 HiFi2  64c     73.7 us  1151.64 ns/tok  util  11.5%  W  317.4 GB/s  iqr  1.4%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  prod  C=   768 rows=   96 HiFi2  64c     74.0 us   770.33 ns/tok  util  17.2%  W  316.4 GB/s  iqr  2.4%  pcc 0.99999  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  prod  C=  1024 rows=  128 HiFi2  64c     76.4 us   596.74 ns/tok  util  22.2%  W  306.3 GB/s  iqr  2.9%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  prod  C=  1280 rows=  160 HiFi2  64c     77.7 us   485.41 ns/tok  util  27.3%  W  301.2 GB/s  iqr  2.3%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  prod  C=  1536 rows=  192 HiFi2  64c     77.1 us   401.50 ns/tok  util  33.1%  W  303.5 GB/s  iqr  1.9%  pcc 0.99998  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  prod  C=  1792 rows=  224 HiFi2  64c     82.0 us   366.01 ns/tok  util  36.3%  W  285.4 GB/s  iqr  0.7%  pcc 1.00000  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  prod  C=  2048 rows=  256 HiFi2  64c     92.4 us   361.10 ns/tok  util  36.8%  W  253.1 GB/s  iqr  0.3%  pcc 0.99998  MatmulMultiCoreReuseMultiCast1DProgramConfig
+sliding_qkv  prod  C=  2304 rows=  288 HiFi2 108c    101.9 us   353.70 ns/tok  util  37.5%  W  229.7 GB/s  iqr  0.6%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  prod  C=  2560 rows=  320 HiFi2 120c    102.8 us   321.21 ns/tok  util  41.3%  W  227.6 GB/s  iqr  0.4%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  prod  C=  2816 rows=  352 HiFi2  72c    115.1 us   326.96 ns/tok  util  40.6%  W  203.3 GB/s  iqr  0.2%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  prod  C=  3072 rows=  384 HiFi2  72c    116.2 us   302.58 ns/tok  util  43.9%  W  201.4 GB/s  iqr  0.4%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  prod  C=  3328 rows=  416 HiFi2  84c    117.6 us   282.60 ns/tok  util  47.0%  W  199.0 GB/s  iqr  0.4%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  prod  C=  3584 rows=  448 HiFi2  84c    118.5 us   264.58 ns/tok  util  50.2%  W  197.4 GB/s  iqr  0.4%  pcc 0.99999  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  prod  C=  3840 rows=  480 HiFi2  96c    119.9 us   249.82 ns/tok  util  53.1%  W  195.1 GB/s  iqr  0.4%  pcc 1.00000  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  prod  C=  4096 rows=  512 LoFi   96c    111.2 us   217.16 ns/tok  util  30.6%  W  210.4 GB/s  iqr  0.5%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  prod  C=  5120 rows=  640 LoFi  120c    116.5 us   182.04 ns/tok  util  36.5%  W  200.8 GB/s  iqr  1.2%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  prod  C=  6144 rows=  768 LoFi   96c    129.3 us   168.34 ns/tok  util  39.4%  W  181.0 GB/s  iqr  0.4%  pcc 0.99986  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  prod  C=  7168 rows=  896 LoFi  120c    134.3 us   149.92 ns/tok  util  44.3%  W  174.2 GB/s  iqr  1.0%  pcc 0.99991  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  prod  C=  8192 rows= 1024 LoFi   96c    154.7 us   151.05 ns/tok  util  43.9%  W  151.3 GB/s  iqr  0.4%  pcc 0.99992  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  prod  C= 10240 rows= 1280 LoFi  120c    163.6 us   127.79 ns/tok  util  51.9%  W  143.0 GB/s  iqr  0.9%  pcc 0.99982  MatmulMultiCoreReuseMultiCastProgramConfig
+sliding_qkv  prod  C= 12288 rows= 1536 HiFi2 120c    284.1 us   184.96 ns/tok  util  71.8%  W   82.4 GB/s  iqr  0.8%  pcc 0.99991  ttnn default
+sliding_qkv  prod  C= 16384 rows= 2048 HiFi2 120c    391.2 us   191.03 ns/tok  util  69.5%  W   59.8 GB/s  iqr  0.5%  pcc 0.99998  ttnn default
+sliding_qkv  prod  C= 24576 rows= 3072 HiFi2 120c    555.6 us   180.85 ns/tok  util  73.4%  W   42.1 GB/s  iqr  0.5%  pcc 0.99996  ttnn default
+sliding_qkv  prod  C= 32768 rows= 4096 HiFi2 120c    821.6 us   200.58 ns/tok  util  66.2%  W   28.5 GB/s  iqr  0.2%  pcc 1.00000  ttnn default

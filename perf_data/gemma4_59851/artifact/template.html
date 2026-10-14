@@ -1,0 +1,558 @@
+<title>Gemma 4 Prefill Matmul Sweep</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;650;750&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one 1120px reading column; headline numbers, two charts, findings, then reference tables top to bottom. */
+:root {
+  --bg: #f7f8f9;
+  --surface: #ffffff;
+  --sunk: #eef1f4;
+  --line: #dde2e7;
+  --grid: #e8ecf0;
+  --fg: #12171d;
+  --fg-2: #4a5560;
+  --fg-3: #6d7782;
+  --accent: #1d5fb8;
+  --c1: #2a78d6; --c2: #eb6834; --c3: #1baf7a; --c4: #eda100; --c5: #e87ba4; --c6: #008300; --c7: #4a3aa7;
+  --other: #a3acb5;
+  --band: #eef1f4;
+  --crit: #d03b3b;
+  --good: #0ca30c;
+  --warn-bg: #fdf0e6; --warn-fg: #8a3d10;
+  --best-bg: #e5f0fc;
+  --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111418; --surface: #181c21; --sunk: #1f242a; --line: #2c333b; --grid: #242a31;
+    --fg: #eef1f4; --fg-2: #b4bdc6; --fg-3: #8d97a2; --accent: #6aa8f0;
+    --c1: #3987e5; --c2: #d95926; --c3: #199e70; --c4: #c98500; --c5: #d55181; --c6: #2f9e2f; --c7: #9085e9;
+    --other: #5d6670; --band: #1c2126;
+    --crit: #e66767; --good: #3cc23c; --warn-bg: #3a2616; --warn-fg: #f3b48a; --best-bg: #17304f;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111418; --surface: #181c21; --sunk: #1f242a; --line: #2c333b; --grid: #242a31;
+  --fg: #eef1f4; --fg-2: #b4bdc6; --fg-3: #8d97a2; --accent: #6aa8f0;
+  --c1: #3987e5; --c2: #d95926; --c3: #199e70; --c4: #c98500; --c5: #d55181; --c6: #2f9e2f; --c7: #9085e9;
+  --other: #5d6670; --band: #1c2126;
+  --crit: #e66767; --good: #3cc23c; --warn-bg: #3a2616; --warn-fg: #f3b48a; --best-bg: #17304f;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--f-body); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 1120px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 64px; display: flex; flex-direction: column; gap: 44px; }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; margin: 0; letter-spacing: -0.01em; }
+h1 { font-size: clamp(28px, 4.2vw, 40px); font-weight: 750; line-height: 1.1; }
+h2 { font-size: 22px; font-weight: 650; }
+h3 { font-size: 16px; font-weight: 650; }
+p { margin: 0; max-width: 72ch; }
+ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; max-width: 78ch; }
+.eyebrow { font-family: var(--f-mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3); }
+code { font-family: var(--f-mono); font-size: 0.88em; background: var(--sunk); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.num { font-variant-numeric: tabular-nums; }
+header { display: flex; flex-direction: column; gap: 14px; }
+.lede { color: var(--fg-2); font-size: 16px; }
+.setup { display: flex; flex-wrap: wrap; gap: 6px 8px; }
+.setup span { font-family: var(--f-mono); font-size: 12px; color: var(--fg-2); background: var(--sunk); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
+section { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.sec-head { display: flex; flex-direction: column; gap: 6px; }
+.sec-head p { color: var(--fg-2); }
+
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.tile .k { font-size: 12px; color: var(--fg-3); text-transform: uppercase; letter-spacing: 0.06em; font-family: var(--f-mono); }
+.tile .v { font-family: var(--f-display); font-size: 30px; font-weight: 750; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.tile .d { font-size: 13px; color: var(--fg-2); }
+@media (max-width: 820px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 440px) { .tiles { grid-template-columns: 1fr; } }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+.ctl { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-3); font-family: var(--f-mono); text-transform: uppercase; letter-spacing: 0.06em; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { font: inherit; font-family: var(--f-body); text-transform: none; letter-spacing: 0; font-size: 13px; background: var(--surface); color: var(--fg-2); border: 0; padding: 6px 12px; cursor: pointer; border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+.seg button:disabled { opacity: 0.45; cursor: default; }
+button:focus-visible, select:focus-visible, th button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--fg-2); }
+.legend button { font: inherit; background: none; border: 0; color: inherit; padding: 2px 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.legend button[aria-pressed="false"] { opacity: 0.4; }
+.legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; }
+.legend i.sq { width: 12px; height: 12px; border-radius: 3px; }
+.chart { position: relative; width: 100%; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart text { font-family: var(--f-mono); font-size: 11px; fill: var(--fg-3); }
+.chart .lab { fill: var(--fg-2); font-family: var(--f-body); font-size: 12px; }
+.chart .strong { fill: var(--fg); font-weight: 500; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; box-shadow: 0 6px 20px rgb(0 0 0 / 0.12); min-width: 230px; max-width: 320px; z-index: 3; }
+.tip .t { font-weight: 600; margin-bottom: 4px; }
+.tip .r { display: grid; grid-template-columns: 12px 1fr auto; gap: 2px 8px; align-items: baseline; }
+.tip .r b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.tip .r i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.tip .sub { color: var(--fg-3); font-family: var(--f-mono); font-size: 11px; grid-column: 2 / 4; margin-top: -2px; }
+.note { font-size: 13px; color: var(--fg-3); }
+
+.findings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.finding { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.finding p { color: var(--fg-2); font-size: 14px; }
+@media (max-width: 760px) { .findings { grid-template-columns: 1fr; } }
+
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { font-family: var(--f-mono); font-size: 11px; font-weight: 500; color: var(--fg-3); text-transform: uppercase; letter-spacing: 0.05em; background: var(--sunk); position: sticky; top: 0; }
+th button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-transform: inherit; letter-spacing: inherit; }
+th[aria-sort="ascending"] button::after { content: " ▲"; }
+th[aria-sort="descending"] button::after { content: " ▼"; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+tr.valid td { background: var(--best-bg); }
+td.bad { color: var(--crit); font-weight: 500; }
+td.good { color: var(--good); font-weight: 500; }
+tbody tr:last-child td { border-bottom: 0; }
+.pill { font-family: var(--f-mono); font-size: 11px; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--line); color: var(--fg-2); background: var(--sunk); }
+.pill.warn { background: var(--warn-bg); color: var(--warn-fg); border-color: transparent; }
+.filters { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; font-size: 13px; color: var(--fg-2); }
+.filters label { display: inline-flex; align-items: center; gap: 6px; }
+select { font: inherit; font-size: 13px; color: var(--fg); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+.cols2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.cols2 > div { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+@media (max-width: 760px) { .cols2 { grid-template-columns: 1fr; } }
+dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 14px; }
+dt { color: var(--fg-3); font-family: var(--f-mono); font-size: 12px; padding-top: 2px; }
+dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--fg-2); }
+@media (max-width: 520px) { dl { grid-template-columns: 1fr; } dd { margin-bottom: 6px; } }
+@media (prefers-reduced-motion: no-preference) { .chart path.series { transition: opacity 0.15s; } }
+</style>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">tt-metal #59851 · Gemma 4 31B prefill · Blackhole galaxy · Oct 10–14, 2026</div>
+  <h1>Gemma 4 Prefill Matmul Sweep</h1>
+  <p class="lede">How the cost per token of each prefill projection changes with chunk size <b>C</b>, measured on one Blackhole device with a CP8/TP4 device's shapes and the model's own matmul configs. The goal: the smallest chunk at which the matmuls stay efficient.</p>
+  <div class="setup">
+    <span>bh-glx-120-c04u02</span><span>main 6ba9d172b63</span><span>bf16 × bfp8</span><span>C/8 rows per device</span><span>25 chunk sizes, 256 → 32768</span><span>10 warm calls per point</span><span>device kernel time</span>
+  </div>
+</header>
+
+<section aria-label="Headline numbers">
+  <div class="tiles">
+    <div class="tile"><div class="k">Recommended chunk</div><div class="v num">8192</div><div class="d">Smallest valid chunk in the low region of every curve on main.</div></div>
+    <div class="tile"><div class="k">Matmuls at 8K</div><div class="v num">1.56 s</div><div class="d">25% of layer time over a 256K prefill (est.).</div></div>
+    <div class="tile"><div class="k">Cost of 4K instead</div><div class="v num">+0.77 s</div><div class="d">More matmul time, about 12% of the 8K layer total.</div></div>
+    <div class="tile"><div class="k">Headroom at 8K</div><div class="v num">~15%</div><div class="d">C = 10240 runs every op faster per token; 8K uses 96 of 120 cores.</div></div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <h2>Cost per token by chunk size</h2>
+    <p>Each line is one projection run alone, with the program and compute config the model picks at that C. Dashed lines mark where the config changes. Shaded: C below 1024, which the model can't use. Hover for exact values.</p>
+  </div>
+  <div class="panel">
+    <div class="controls">
+      <div class="ctl">Ops <div class="seg" id="seg-group" role="group" aria-label="Ops"><button type="button" data-v="all" aria-pressed="true">All</button><button type="button" data-v="attn" aria-pressed="false">Attention</button><button type="button" data-v="mlp" aria-pressed="false">MLP</button></div></div>
+      <div class="ctl">Attention fidelity <div class="seg" id="seg-mode" role="group" aria-label="Attention fidelity"><button type="button" data-v="prod" aria-pressed="true">Production</button><button type="button" data-v="lofi" aria-pressed="false">LoFi</button><button type="button" data-v="hifi2" aria-pressed="false">HiFi2</button></div></div>
+      <div class="ctl">Metric <div class="seg" id="seg-metric" role="group" aria-label="Metric"><button type="button" data-v="nspt" aria-pressed="true">ns / token</button><button type="button" data-v="util" aria-pressed="false">FPU util</button><button type="button" data-v="gbps" aria-pressed="false">Weight GB/s</button></div></div>
+    </div>
+    <div class="legend" id="legend1"></div>
+    <div class="chart" id="chart1"></div>
+    <p class="note" id="note1"></p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <h2>Where layer time goes over a 256K prefill</h2>
+    <p>From the per-layer profile on the 8×4 galaxy (medians over 32 devices): 50 sliding layers at their second chunk plus 10 global layers at the mean of their first and last chunk, times 256K/C chunks. Device time from the layer traces, not end-to-end.</p>
+  </div>
+  <div class="panel">
+    <div class="legend" id="legend2"></div>
+    <div class="chart" id="chart2"></div>
+    <p class="note">In the model, the matmul times match the single-chip sweep within about 3%.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><h2>Findings</h2></div>
+  <div class="findings">
+    <div class="finding"><h3>Up to 2K, weight reads set the pace</h3><p>At C ≤ 2048 each projection reads its whole weight shard from DRAM at 300–380 GB/s while doing little math, so the time per call is almost flat and the cost per token falls as 1/C. Fidelity barely matters here: LoFi and HiFi2 differ by 0–10%.</p></div>
+    <div class="finding"><h3>The 1D → 2D switch at 2304 is a step back</h3><p>Every op gets slower per token when the config changes from the 1D sharded layout to the 2D layout (up: 94 → 123 µs per call). The curves only recover by 3K–4K.</p></div>
+    <div class="finding"><h3>8K wastes a sixth of the grid</h3><p>At C = 8192 the 2D config has 32 rows of output tiles. Four per core fills 8 of the 10 core rows, so it runs on 96 of 120 cores and costs about the same per token as 7168. C = 10240 uses all 120 and is about 15% cheaper per token for every op.</p></div>
+    <div class="finding"><h3>Past 10K, the fallback config is the limit</h3><p>From C = 12288 the explicit config no longer fits L1 and ttnn's default takes over: HiFi2 with bf16 accumulation for attention. Attention gets 1.3–1.6× slower per token than at 8K. Forcing LoFi with fp32 accumulation helps only global QK, and the o_proj ops get much worse.</p></div>
+    <div class="finding"><h3>MLP still gains from larger chunks</h3><p>Gate, up and down are 15–19% cheaper per token at 10K than at 8K, and up and down keep improving on the default config up to 32K. At 8K the MLP is about 68% of matmul time and about 17% of layer time.</p></div>
+    <div class="finding"><h3>At 8K, SDPA is the bigger lever</h3><p>Matmuls are 25% of layer time at 8K, against 50% for SDPA, which grows with the prefix in the global layers. At 2K and 4K matmuls are about 32%.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <h2>Configuration regimes on main</h2>
+    <p>Data formats are fixed (bf16 activations, bfp8 weights). The program config and the attention fidelity change at these chunk sizes, which is what puts the steps in the curves.</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Chunk C</th><th>Program config</th><th>Cores</th><th>Attention compute</th><th>MLP compute</th></tr></thead>
+    <tbody>
+      <tr><td class="num">≤ 2048</td><td>1D in0-mcast, activations width-sharded in L1</td><td class="num">64–84 (down 42)</td><td>HiFi2, fp32 acc, packer L1 acc</td><td>LoFi, fp32 acc, packer L1 acc</td></tr>
+      <tr><td class="num">2304–3840</td><td>Explicit 2D mcast</td><td class="num">72–120</td><td>HiFi2, fp32 acc</td><td>LoFi, fp32 acc</td></tr>
+      <tr><td class="num">4096–10240</td><td>Explicit 2D mcast</td><td class="num">72–120 (8192: 96)</td><td>LoFi, fp32 acc</td><td>LoFi, fp32 acc</td></tr>
+      <tr><td class="num">≥ 12288</td><td>ttnn default (explicit block doesn't fit L1)</td><td class="num">120</td><td><span class="pill warn">HiFi2, bf16 acc</span></td><td>LoFi, bf16 acc</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Valid model chunks are multiples of 1024 that divide the context: 1K, 2K, 4K, 8K, 16K at 256K.</p>
+</section>
+
+<section>
+  <div class="sec-head">
+    <h2>Can LoFi rescue the large chunks?</h2>
+    <p>An experiment, not production: the default config at C ≥ 12288 run with LoFi and fp32 accumulation, like the explicit configs. Cells are ns per token, production first, then the experiment. Green is better than production, red is worse.</p>
+  </div>
+  <div class="tablewrap"><table id="fbtable"></table></div>
+  <p class="note">Gate and up at C = 32768 can't run this way: with fp32 accumulation their buffers no longer fit beside the L1 output.</p>
+</section>
+
+<section>
+  <div class="sec-head">
+    <h2>All measurements</h2>
+    <p>One row per op, chunk size and attention fidelity. Shaded rows are valid model chunks. The last two columns compare against a second galaxy (bh-glx-120-b09u08, 3 runs).</p>
+  </div>
+  <div class="filters">
+    <label for="f-op">Op <select id="f-op"></select></label>
+    <label for="f-mode">Attention fidelity <select id="f-mode"><option value="prod">Production</option><option value="lofi">LoFi</option><option value="hifi2">HiFi2</option><option value="any">All</option></select></label>
+    <label for="f-valid"><input type="checkbox" id="f-valid"> Valid chunks only</label>
+    <span id="f-count" class="note"></span>
+  </div>
+  <div class="tablewrap" style="max-height: 560px;"><table id="alltable"></table></div>
+</section>
+
+<section>
+  <div class="sec-head"><h2>Correctness and variability</h2></div>
+  <div class="cols2">
+    <div>
+      <h3>Correctness</h3>
+      <ul>
+        <li>PCC against a torch reference with the dequantized weights is ≥ 0.9987 at every point. All explicit configs are ≥ 0.9997.</li>
+        <li>The lowest values are gate on the bf16-accumulation fallback at C ≥ 12288 (0.9987–0.9994).</li>
+        <li>Real TP-rank-0 weights (layer 0 sliding, layer 5 global) at C = 1K–16K time within 1.3% of random weights, with PCC ≥ 0.9997.</li>
+        <li>This is op-level correctness, not a model accuracy check.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Variability</h3>
+      <ul>
+        <li>Spread (interquartile range) across the 10 timed calls: 0.7% median, 4.9% worst.</li>
+        <li>Across 3 independent runs on the second galaxy: 0.4% median, 3.7% worst.</li>
+        <li>The two galaxies agree within 5% above C = 2048. At C ≤ 2048 the second one is 5–18% faster, consistently. That region is bound by DRAM reads, so absolute small-chunk numbers depend on the machine; this one's GDDR runs at 14 Gbps.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><h2>Method</h2></div>
+  <ul>
+    <li>Each projection runs on one chip with one CP8/TP4 device's shapes: C/8 token rows (no padding; C is a multiple of 256) and the TP4 weight shard.</li>
+    <li>The matmul goes through the model's own code (<code>apply_attn_projection</code>, <code>MLP._project</code>), so the program config, compute config, fused GELU and layouts are the model's at every C. Inputs arrive in the layout the model hands each projection: L1 width-sharded from the all-gather at short chunks, DRAM from <code>nlp_concat_heads</code> for o_proj, L1 from <code>gate × up</code> for down.</li>
+    <li>Time is the device kernel duration from the profiler: 2 warm-up calls, then 10 timed calls; the median is reported. Cost per token = median / (C/8). Collectives and host time are not included.</li>
+    <li>FPU utilization = ideal cycles (M·K·N / 32³ tiles × 16 cycles for LoFi, 32 for HiFi2) over measured cycles at 1.35 GHz, across the full 120-core grid. It is relative to each point's fidelity, so HiFi2 points look more utilized than they are fast.</li>
+  </ul>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Op (per device)</th><th class="n">K</th><th class="n">N</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>sliding QKV</td><td class="n">5376</td><td class="n">4096</td><td>50 layers</td></tr>
+      <tr><td>global tied QK</td><td class="n">5376</td><td class="n">4608</td><td>10 layers, K = V</td></tr>
+      <tr><td>sliding o_proj</td><td class="n">2048</td><td class="n">5376</td><td>row-parallel</td></tr>
+      <tr><td>global o_proj</td><td class="n">4096</td><td class="n">5376</td><td>row-parallel</td></tr>
+      <tr><td>MLP gate / up / down</td><td class="n">5376</td><td class="n">5376</td><td>GELU fused into gate</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <h2>Reproduce it</h2>
+    <p>Everything runs from the branch. From the tt-metal root with the python env active, each step writes under one output directory and can be rerun on its own.</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Step</th><th>Command</th><th>Hardware</th><th>Time</th></tr></thead>
+    <tbody>
+      <tr><td>Sweep</td><td><code>run_matmul_chunk_sweep.sh &lt;out&gt; sweep 3</code></td><td>1 chip</td><td>~8 min per run</td></tr>
+      <tr><td>Real weights</td><td><code>run_matmul_chunk_sweep.sh &lt;out&gt; real</code></td><td>1 chip</td><td>~2 min</td></tr>
+      <tr><td>LoFi fallback</td><td><code>run_matmul_chunk_sweep.sh &lt;out&gt; fallback</code></td><td>1 chip</td><td>~8 min</td></tr>
+      <tr><td>Layer profile</td><td><code>run_matmul_chunk_sweep.sh &lt;out&gt; layers 4096 8192 16384 2048</code></td><td>8×4 galaxy</td><td>~50 min</td></tr>
+      <tr><td>Summaries only</td><td><code>run_matmul_chunk_sweep.sh &lt;out&gt; report</code></td><td>none</td><td>seconds</td></tr>
+    </tbody>
+  </table></div>
+  <dl>
+    <dt>Branch</dt><dd><code>mmanzoor/gemma4-matmul-chunk-sweep</code>, scripts in <code>models/demos/gemma4_d_p/scripts/</code></dd>
+    <dt>Scripts</dt><dd><code>run_matmul_chunk_sweep.sh</code> runs the steps. <code>matmul_chunk_sweep.py</code> measures, <code>matmul_chunk_sweep_report.py</code> summarizes, <code>matmul_chunk_sweep_plot.py</code> draws the compact figure, <code>matmul_chunk_sweep_weights.py</code> extracts real TP-shard weights, <code>layer_perf_shares.py</code> splits layer time.</dd>
+    <dt>Results</dt><dd><code>perf_data/gemma4_59851/</code> on the branch: summaries for both galaxies, layer shares, figures, this page's source (<code>artifact/build.py</code>). Raw profiler data: <code>/data/mmanzoor/matmul_chunk_sweep_c04u02/</code> and <code>/data/mmanzoor/matmul_chunk_sweep/</code></dd>
+    <dt>Open items</dt><dd>Utilization from device perf counters; a full-grid config at 8192; an explicit config for C ≥ 12288 that fits L1.</dd>
+  </dl>
+</section>
+</div>
+
+<script>
+const DATA = __DATA__;
+const C = DATA.cols.reduce((m, k, i) => (m[k] = i, m), {});
+const OPS = [
+  { id: "sliding_qkv", name: "sliding QKV", group: "attn", v: "--c1" },
+  { id: "global_qk", name: "global QK", group: "attn", v: "--c2" },
+  { id: "sliding_o", name: "sliding o_proj", group: "attn", v: "--c3" },
+  { id: "global_o", name: "global o_proj", group: "attn", v: "--c4" },
+  { id: "mlp_gate", name: "gate (+GELU)", group: "mlp", v: "--c5" },
+  { id: "mlp_up", name: "up", group: "mlp", v: "--c6" },
+  { id: "mlp_down", name: "down", group: "mlp", v: "--c7" },
+];
+const OPNAME = Object.fromEntries(OPS.map(o => [o.id, o.name]));
+const VALID = [1024, 2048, 4096, 8192, 16384];
+const NS = "http://www.w3.org/2000/svg";
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const fmt = (x, d = 0) => x.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const cLabel = c => c >= 1024 && c % 1024 === 0 ? `${c / 1024}K` : String(c);
+function el(tag, attrs = {}, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function seg(id, onChange) {
+  const box = document.getElementById(id);
+  box.addEventListener("click", e => {
+    const b = e.target.closest("button");
+    if (!b || b.disabled) return;
+    box.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+    onChange(b.dataset.v);
+  });
+}
+function rowsFor(op, mode) {
+  const m = op.startsWith("mlp") ? "prod" : mode;
+  return DATA.sweep.filter(r => r[C.op] === op && r[C.mode] === m).sort((a, b) => a[C.C] - b[C.C]);
+}
+
+/* ---------- chart 1: per-op curves ---------- */
+const st = { group: "all", mode: "prod", metric: "nspt", hidden: new Set() };
+const METRIC = {
+  nspt: { label: "ns per computed token", log: true, fmt: v => `${fmt(v)} ns`, ticks: [100, 200, 500, 1000, 2000] },
+  util: { label: "FPU utilization, 120 cores (%)", log: false, fmt: v => `${fmt(v, 1)}%`, ticks: [0, 20, 40, 60, 80] },
+  gbps: { label: "weight read bandwidth (GB/s)", log: false, fmt: v => `${fmt(v)} GB/s`, ticks: [0, 100, 200, 300, 400] },
+};
+function renderLegend1() {
+  const box = document.getElementById("legend1");
+  box.innerHTML = "";
+  for (const o of OPS) {
+    if (st.group !== "all" && o.group !== st.group) continue;
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(!st.hidden.has(o.id)));
+    b.innerHTML = `<i style="background:${css(o.v)}"></i>${o.name}`;
+    b.addEventListener("click", () => { st.hidden.has(o.id) ? st.hidden.delete(o.id) : st.hidden.add(o.id); renderChart1(); });
+    box.appendChild(b);
+  }
+}
+function renderChart1() {
+  renderLegend1();
+  const box = document.getElementById("chart1");
+  box.innerHTML = "";
+  const W = 1000, H = 440, m = { l: 62, r: 24, t: 26, b: 46 };
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Cost per token versus chunk size for each projection" }, box);
+  const M = METRIC[st.metric];
+  const ops = OPS.filter(o => (st.group === "all" || o.group === st.group) && !st.hidden.has(o.id));
+  const series = ops.map(o => ({ o, rows: rowsFor(o.id, st.mode) }));
+  const xs = Math.log2(256), xe = Math.log2(32768);
+  const x = c => m.l + (Math.log2(c) - xs) / (xe - xs) * (W - m.l - m.r);
+  let lo, hi;
+  if (M.log) { lo = 70; hi = 3200; } else {
+    lo = 0; hi = Math.max(10, ...series.flatMap(s => s.rows.map(r => r[C[st.metric]]))) * 1.08;
+  }
+  const y = v => M.log
+    ? H - m.b - (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)) * (H - m.t - m.b)
+    : H - m.b - (v - lo) / (hi - lo) * (H - m.t - m.b);
+  el("rect", { x: x(256) - 6, y: m.t, width: x(1024) - x(256) - 6, height: H - m.t - m.b, fill: css("--band") }, svg);
+  const ticks = M.log ? M.ticks : niceTicks(hi);
+  for (const t of ticks) {
+    if (t < lo || t > hi) continue;
+    el("line", { x1: m.l, x2: W - m.r, y1: y(t), y2: y(t), stroke: css("--grid"), "stroke-width": 1 }, svg);
+    el("text", { x: m.l - 8, y: y(t) + 4, "text-anchor": "end" }, svg).textContent = fmt(t);
+  }
+  for (const c of [256, 512, 1024, 2048, 4096, 8192, 16384, 32768]) {
+    const t = el("text", { x: x(c), y: H - m.b + 18, "text-anchor": "middle", class: VALID.includes(c) ? "strong" : "" }, svg);
+    t.textContent = cLabel(c);
+  }
+  el("text", { x: (m.l + W - m.r) / 2, y: H - 6, "text-anchor": "middle", class: "lab" }, svg).textContent = "chunk size C (bold: valid model chunks)";
+  el("text", { x: 14, y: (m.t + H - m.b) / 2, "text-anchor": "middle", class: "lab", transform: `rotate(-90 14 ${(m.t + H - m.b) / 2})` }, svg).textContent = M.label;
+  const marks = [[2304, "1D → 2D"], [12288, "ttnn default"]];
+  if (st.group !== "mlp" && st.mode === "prod") marks.splice(1, 0, [4096, "attention LoFi"]);
+  for (const [c, lab] of marks) {
+    el("line", { x1: x(c), x2: x(c), y1: m.t, y2: H - m.b, stroke: css("--fg-3"), "stroke-dasharray": "3 4", "stroke-width": 1 }, svg);
+    el("text", { x: x(c) + 5, y: m.t + 10 }, svg).textContent = lab;
+  }
+  el("text", { x: x(256), y: m.t + 10 }, svg).textContent = "not a valid chunk";
+  for (const s of series) {
+    const col = css(s.o.v);
+    const d = s.rows.map((r, i) => `${i ? "L" : "M"}${x(r[C.C]).toFixed(1)},${y(r[C[st.metric]]).toFixed(1)}`).join("");
+    el("path", { d, fill: "none", stroke: col, "stroke-width": 2, "stroke-linejoin": "round", class: "series" }, svg);
+    for (const r of s.rows) if (VALID.includes(r[C.C])) el("circle", { cx: x(r[C.C]), cy: y(r[C[st.metric]]), r: 4, fill: col, stroke: css("--surface"), "stroke-width": 2 }, svg);
+  }
+  const allC = [...new Set(DATA.sweep.map(r => r[C.C]))].sort((a, b) => a - b);
+  const cursor = el("line", { y1: m.t, y2: H - m.b, stroke: css("--fg-2"), "stroke-width": 1, opacity: 0 }, svg);
+  const hit = el("rect", { x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "transparent" }, svg);
+  const tip = document.createElement("div");
+  tip.className = "tip"; tip.hidden = true; box.appendChild(tip);
+  const move = ev => {
+    const pt = svg.getBoundingClientRect();
+    const sx = (ev.clientX - pt.left) / pt.width * W;
+    const c = allC.reduce((a, b) => Math.abs(x(b) - sx) < Math.abs(x(a) - sx) ? b : a);
+    cursor.setAttribute("x1", x(c)); cursor.setAttribute("x2", x(c)); cursor.setAttribute("opacity", 0.5);
+    const lines = series.map(s => {
+      const r = s.rows.find(r => r[C.C] === c);
+      if (!r) return "";
+      return `<div class="r"><i style="background:${css(s.o.v)}"></i><span>${s.o.name}</span><b>${M.fmt(r[C[st.metric]])}</b><span class="sub">${fmt(r[C.us], 1)} µs · ${r[C.cfg]} · ${r[C.cores]} cores · ${r[C.mf]}</span></div>`;
+    }).join("");
+    tip.innerHTML = `<div class="t">C = ${fmt(c)} · ${fmt(c / 8)} rows per device${VALID.includes(c) ? " · valid" : ""}</div>${lines}`;
+    tip.hidden = false;
+    const bw = box.clientWidth, px = (x(c) / W) * bw;
+    tip.style.left = `${px + 14 + 300 > bw ? Math.max(0, px - 314) : px + 14}px`;
+    tip.style.top = `${Math.max(0, (ev.clientY - box.getBoundingClientRect().top) - 40)}px`;
+  };
+  hit.addEventListener("pointermove", move);
+  hit.addEventListener("pointerleave", () => { tip.hidden = true; cursor.setAttribute("opacity", 0); });
+  const note = document.getElementById("note1");
+  note.textContent = st.mode === "prod"
+    ? "Production: attention uses HiFi2 below C = 4096, LoFi from 4096 to 10240, and the ttnn default (HiFi2) from 12288. The MLP is LoFi throughout."
+    : `Attention fidelity pinned to ${st.mode === "lofi" ? "LoFi" : "HiFi2"} wherever the model has an explicit config (C ≤ 10240). From 12288 the ttnn default still applies. MLP lines are always production.`;
+}
+function niceTicks(hi) {
+  const step = [1, 2, 5, 10, 20, 25, 50, 100].map(s => s * Math.pow(10, Math.floor(Math.log10(hi)) - 1)).find(s => hi / s <= 6);
+  const t = []; for (let v = 0; v <= hi; v += step) t.push(v); return t;
+}
+seg("seg-group", v => { st.group = v; document.querySelectorAll("#seg-mode button").forEach(b => b.disabled = v === "mlp"); renderChart1(); });
+seg("seg-mode", v => { st.mode = v; renderChart1(); });
+seg("seg-metric", v => { st.metric = v; renderChart1(); });
+
+/* ---------- chart 2: layer time at 256K ---------- */
+function layerTotals() {
+  const out = [];
+  for (const c of [2048, 4096, 8192, 16384]) {
+    const g = DATA.layers.filter(r => r.layer === "global" && r.chunk === c).sort((a, b) => a.chunk_idx - b.chunk_idx);
+    const l = DATA.layers.find(r => r.layer === "local" && r.chunk === c && r.chunk_idx === 1);
+    const n = 262144 / c;
+    const tot = k => n * (50 * l[k] + 10 * (g[0][k] + g[g.length - 1][k]) / 2) / 1e6;
+    const span = tot("span_us"), mm = tot("matmul_us"), sdpa = tot("sdpa_us"), ccl = tot("ccl_us");
+    out.push({ c, span, mm, sdpa, ccl, other: span - mm - sdpa - ccl,
+      ops: { "QKV / QK": tot("qkv_us"), "o_proj": tot("o_us"), "gate": tot("gate_us"), "up": tot("up_us"), "down": tot("down_us") } });
+  }
+  return out;
+}
+function renderChart2() {
+  const parts = [["mm", "Matmuls", "--c1"], ["sdpa", "SDPA", "--c2"], ["ccl", "All-gather + reduce-scatter", "--c3"], ["other", "Other ops and gaps", "--other"]];
+  document.getElementById("legend2").innerHTML = parts.map(p => `<span><i class="sq" style="background:${css(p[2])};display:inline-block;vertical-align:middle;margin-right:6px"></i>${p[1]}</span>`).join("");
+  const box = document.getElementById("chart2");
+  box.innerHTML = "";
+  const data = layerTotals();
+  const W = 1000, rowH = 54, m = { l: 70, r: 70, t: 10, b: 36 }, H = m.t + m.b + rowH * data.length;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Layer time over a 256K prefill by chunk size" }, box);
+  const max = 12;
+  const x = v => m.l + v / max * (W - m.l - m.r);
+  for (let t = 0; t <= max; t += 2) {
+    el("line", { x1: x(t), x2: x(t), y1: m.t, y2: H - m.b, stroke: css("--grid") }, svg);
+    el("text", { x: x(t), y: H - m.b + 18, "text-anchor": "middle" }, svg).textContent = `${t} s`;
+  }
+  const tip = document.createElement("div");
+  tip.className = "tip"; tip.hidden = true; box.appendChild(tip);
+  data.forEach((d, i) => {
+    const yy = m.t + i * rowH + 10, h = rowH - 20;
+    el("text", { x: m.l - 10, y: yy + h / 2 + 4, "text-anchor": "end", class: d.c === 8192 ? "strong" : "" }, svg).textContent = `C = ${cLabel(d.c)}`;
+    let acc = 0;
+    const g = el("g", {}, svg);
+    for (const [k, , v] of parts) {
+      const w = x(acc + d[k]) - x(acc);
+      el("rect", { x: x(acc) + (acc ? 1 : 0), y: yy, width: Math.max(0, w - (acc ? 1 : 0)), height: h, fill: css(v), rx: acc ? 0 : 3 }, g);
+      acc += d[k];
+    }
+    el("text", { x: x(d.span) + 8, y: yy + h / 2 + 4, class: "lab" }, svg).textContent = `${fmt(d.span, 1)} s`;
+    if (x(d.mm) - x(0) > 70) el("text", { x: x(0) + 8, y: yy + h / 2 + 4, fill: "#ffffff", style: "fill:#ffffff" }, svg).textContent = `${fmt(100 * d.mm / d.span)}% matmul`;
+    const hit = el("rect", { x: 0, y: yy - 6, width: W, height: h + 12, fill: "transparent" }, svg);
+    hit.addEventListener("pointermove", ev => {
+      tip.innerHTML = `<div class="t">C = ${fmt(d.c)} · ${fmt(d.span, 2)} s of layer time</div>` +
+        parts.map(([k, n, v]) => `<div class="r"><i style="background:${css(v)}"></i><span>${n}</span><b>${fmt(d[k], 2)} s · ${fmt(100 * d[k] / d.span)}%</b></div>`).join("") +
+        `<div class="r" style="margin-top:6px"><i></i><span class="sub" style="grid-column:2/4;margin:0">Matmuls: ${Object.entries(d.ops).map(([n, v]) => `${n} ${fmt(v, 2)} s`).join(" · ")}</span></div>`;
+      tip.hidden = false;
+      const r = box.getBoundingClientRect();
+      const px = ev.clientX - r.left;
+      tip.style.left = `${px + 330 > r.width ? Math.max(0, px - 334) : px + 14}px`;
+      tip.style.top = `${(yy + h) / H * box.clientHeight + 6}px`;
+    });
+    hit.addEventListener("pointerleave", () => { tip.hidden = true; });
+  });
+}
+
+/* ---------- fallback table ---------- */
+function renderFallback() {
+  const t = document.getElementById("fbtable");
+  const cs = [12288, 16384, 24576, 32768];
+  let h = `<thead><tr><th>Op</th><th class="n">C = 10240 (explicit)</th>${cs.map(c => `<th class="n">C = ${fmt(c)}</th>`).join("")}</tr></thead><tbody>`;
+  for (const o of OPS) {
+    const prod = c => DATA.sweep.find(r => r[C.op] === o.id && r[C.C] === c && r[C.mode] === "prod");
+    const fb = c => DATA.fallback.find(r => r[C.op] === o.id && r[C.C] === c);
+    h += `<tr><td>${o.name}</td><td class="n">${fmt(prod(10240)[C.nspt])}</td>`;
+    for (const c of cs) {
+      const p = prod(c), f = fb(c);
+      if (!f) { h += `<td class="n">${fmt(p[C.nspt])} → <span class="pill">doesn't fit</span></td>`; continue; }
+      const d = f[C.nspt] / p[C.nspt] - 1;
+      h += `<td class="n ${d < -0.05 ? "good" : d > 0.05 ? "bad" : ""}">${fmt(p[C.nspt])} → ${fmt(f[C.nspt])}</td>`;
+    }
+    h += "</tr>";
+  }
+  t.innerHTML = h + "</tbody>";
+}
+
+/* ---------- all-measurements table ---------- */
+const COLS = [
+  ["Op", r => OPNAME[r[C.op]], r => OPS.findIndex(o => o.id === r[C.op])],
+  ["C", r => fmt(r[C.C]), r => r[C.C], "n"],
+  ["Rows", r => fmt(r[C.C] / 8), r => r[C.C], "n"],
+  ["Fidelity", r => r[C.mf]],
+  ["Config", r => r[C.cfg]],
+  ["Cores", r => r[C.cores], r => r[C.cores], "n"],
+  ["Median µs", r => fmt(r[C.us], 1), r => r[C.us], "n"],
+  ["IQR µs", r => `${fmt(r[C.p25], 1)}–${fmt(r[C.p75], 1)}`, r => r[C.p75] - r[C.p25], "n"],
+  ["ns / token", r => fmt(r[C.nspt]), r => r[C.nspt], "n"],
+  ["FPU util", r => `${fmt(r[C.util], 1)}%`, r => r[C.util], "n"],
+  ["Weight GB/s", r => fmt(r[C.gbps]), r => r[C.gbps], "n"],
+  ["PCC", r => r[C.pcc].toFixed(5), r => r[C.pcc], "n"],
+  ["b09u08 µs", r => { const o = oldOf(r); return o == null ? "–" : fmt(o, 1); }, r => oldOf(r) ?? -1, "n"],
+  ["Δ vs b09u08", r => { const o = oldOf(r); return o == null ? "–" : `${r[C.us] / o - 1 >= 0 ? "+" : ""}${fmt(100 * (r[C.us] / o - 1), 1)}%`; }, r => { const o = oldOf(r); return o == null ? -99 : r[C.us] / o - 1; }, "n"],
+];
+function oldOf(r) { return r[C.mode] === "prod" ? DATA.old[`${r[C.op]}|${r[C.C]}`] : null; }
+const tst = { sort: 1, dir: 1 };
+function renderAll() {
+  const op = document.getElementById("f-op").value, mode = document.getElementById("f-mode").value, valid = document.getElementById("f-valid").checked;
+  let rows = DATA.sweep.filter(r => (op === "any" || r[C.op] === op) && (mode === "any" || r[C.mode] === mode || (mode !== "any" && r[C.op].startsWith("mlp") && r[C.mode] === "prod")) && (!valid || VALID.includes(r[C.C])));
+  const key = COLS[tst.sort][2] || COLS[tst.sort][1];
+  rows.sort((a, b) => { const ka = key(a), kb = key(b); return (ka > kb ? 1 : ka < kb ? -1 : 0) * tst.dir || a[C.C] - b[C.C]; });
+  const t = document.getElementById("alltable");
+  t.innerHTML = `<thead><tr>${COLS.map((c, i) => `<th class="${c[3] || ""}" ${i === tst.sort ? `aria-sort="${tst.dir > 0 ? "ascending" : "descending"}"` : ""}><button type="button" data-i="${i}">${c[0]}</button></th>`).join("")}</tr></thead><tbody>` +
+    rows.map(r => `<tr class="${VALID.includes(r[C.C]) ? "valid" : ""}">${COLS.map(c => `<td class="${c[3] || ""}">${c[1](r)}</td>`).join("")}</tr>`).join("") + "</tbody>";
+  document.getElementById("f-count").textContent = `${rows.length} rows`;
+}
+document.getElementById("alltable").addEventListener("click", e => {
+  const b = e.target.closest("th button"); if (!b) return;
+  const i = +b.dataset.i; tst.dir = tst.sort === i ? -tst.dir : 1; tst.sort = i; renderAll();
+});
+const fop = document.getElementById("f-op");
+fop.innerHTML = `<option value="any">All ops</option>` + OPS.map(o => `<option value="${o.id}">${o.name}</option>`).join("");
+fop.value = "any";
+["f-op", "f-mode", "f-valid"].forEach(id => document.getElementById(id).addEventListener("change", renderAll));
+
+function renderThemed() { renderChart1(); renderChart2(); }
+renderThemed(); renderFallback(); renderAll();
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", renderThemed);
+new MutationObserver(renderThemed).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+let rz; addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(renderThemed, 150); });
+</script>
