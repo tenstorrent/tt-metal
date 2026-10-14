@@ -15,6 +15,7 @@ from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim
         (1024, 4),
         (4096, 4),
         (2880, 4),
+        (2560, 4),  # Flash-Next: 16 combine cores, including harvested WH 7x8 grids.
     ],
 )
 def test_get_moe_combine_cores_count(device, hidden_size, token_parallel):

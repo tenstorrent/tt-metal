@@ -317,13 +317,14 @@ std::vector<tt::tt_metal::CoreCoord> build_matmul_ring_cores(
 // leftmost (x=0) cell is mux-free (skipping a whole row otherwise); mux cells in non-leftmost columns
 // are left as gaps inside the bbox (mux inside the matmul bbox is benign, verified).
 std::vector<tt::tt_metal::CoreCoord> build_compact_matmul_cores(
-    const tt::tt_metal::CoreCoord& worker_grid, uint32_t ring_size, const CoreCoordPairSet& mux_pairs, uint32_t y_start) {
+    const tt::tt_metal::CoreCoord& worker_grid,
+    uint32_t ring_size,
+    const CoreCoordPairSet& mux_pairs,
+    uint32_t y_start,
+    uint32_t x_limit) {
     std::vector<tt::tt_metal::CoreCoord> cores;
     cores.reserve(ring_size);
 
-    const uint32_t x_limit = worker_grid.x > kMoEComputeCombineStripWidth
-                                 ? static_cast<uint32_t>(worker_grid.x) - kMoEComputeCombineStripWidth
-                                 : static_cast<uint32_t>(worker_grid.x);
     const uint32_t y_limit =
         worker_grid.y > 2 ? static_cast<uint32_t>(worker_grid.y) - 2 : static_cast<uint32_t>(worker_grid.y);
 
@@ -547,23 +548,31 @@ MoEComputeCoreSelection select_moe_compute_cores(
         // which is the only way to get a combine bbox disjoint from the matmul bbox there. Keep the
         // first y_start that yields a fully-disjoint combine/tilize layout.
         std::vector<tt::tt_metal::CoreCoord> compact_ring;
-        for (uint32_t y_start = 0; y_start < static_cast<uint32_t>(worker_grid.y); ++y_start) {
-            std::vector<tt::tt_metal::CoreCoord> candidate = build_compact_matmul_cores(worker_grid, ring_size, mux_pairs, y_start);
-            if (candidate.size() != ring_size) {
-                // Higher y_start can only fit fewer cores, so no point continuing.
-                break;
-            }
-            std::optional<PlacedWorkers> candidate_placed = place_combine_and_tilize(
-                worker_grid,
-                tt::tt_metal::CoreRangeSet(candidate).bounding_box(),
-                mux_pairs,
-                num_combine_cores,
-                target_tilize_num_cores,
-                hidden_tiles);
-            if (candidate_placed.has_value()) {
-                compact_ring = std::move(candidate);
-                placed = std::move(candidate_placed);
-                break;
+        const uint32_t preferred_width = worker_grid.x > kMoEComputeCombineStripWidth
+                                             ? static_cast<uint32_t>(worker_grid.x) - kMoEComputeCombineStripWidth
+                                             : static_cast<uint32_t>(worker_grid.x);
+        // Keep every existing successful layout. Only after all vertical offsets fail, narrow
+        // the column-0 block: WH 7x8 needs a 3x4 matmul block beside a dense 4x4 combine group.
+        for (uint32_t compact_width = preferred_width; compact_width > 0 && !placed.has_value(); --compact_width) {
+            for (uint32_t y_start = 0; y_start < static_cast<uint32_t>(worker_grid.y); ++y_start) {
+                std::vector<tt::tt_metal::CoreCoord> candidate =
+                    build_compact_matmul_cores(worker_grid, ring_size, mux_pairs, y_start, compact_width);
+                if (candidate.size() != ring_size) {
+                    // Higher y_start can only fit fewer cores, so no point continuing.
+                    break;
+                }
+                std::optional<PlacedWorkers> candidate_placed = place_combine_and_tilize(
+                    worker_grid,
+                    tt::tt_metal::CoreRangeSet(candidate).bounding_box(),
+                    mux_pairs,
+                    num_combine_cores,
+                    target_tilize_num_cores,
+                    hidden_tiles);
+                if (candidate_placed.has_value()) {
+                    compact_ring = std::move(candidate);
+                    placed = std::move(candidate_placed);
+                    break;
+                }
             }
         }
         TT_FATAL(
