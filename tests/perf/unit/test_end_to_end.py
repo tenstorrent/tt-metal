@@ -255,3 +255,14 @@ def test_update_from_run_writes_nothing_when_any_record_is_refused(monkeypatch, 
     monkeypatch.setattr(session, "OUTPUT_ROOT", tmp_path / "generated")
     assert cli.main(["update", "--from-run", "1"]) == 1
     assert {name: suites[name].golden.read_text() for name in suites} == before
+
+
+def test_a_case_that_errors_in_the_rerun_keeps_its_first_run_status(setup):
+    make, _ = setup
+    golden = {"BM/a/k:1/manual_time": {"IterationTime": 1e-6}}
+    # The re-run's first repetition looks fine but its second one errors, so it cannot clear the regression.
+    suite = make([{"BM/a/k:1/manual_time": 1.2e-6}, {"BM/a/k:1/manual_time": [1e-6, "error_last"]}], golden)
+    record = session.execute(suite, ENV)
+    assert record.retry == {} and list(record.retry_case_errors) == ["BM/a/k:1/manual_time"]
+    golden_doc, comparison = session.evaluate(record, suite)
+    assert session.failures(record, suite, golden_doc, comparison) == ["1 REGRESSION"]
