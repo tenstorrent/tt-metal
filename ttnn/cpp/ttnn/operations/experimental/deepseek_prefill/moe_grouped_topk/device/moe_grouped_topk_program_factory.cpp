@@ -123,11 +123,8 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     add_cb(cb_in_scores, scores_page_size, 2 * width_tiles, scores_data_format);
     add_cb(cb_in_bias, bias_page_size, 2 * width_tiles, bias_data_format);
 
-    // fp32 upcast targets for the raw inputs (identity copy when the input is already fp32).
-    auto cb_scores_fp32 = tt::CBIndex::c_24;
-    auto cb_bias_fp32 = tt::CBIndex::c_25;
-    add_cb(cb_scores_fp32, compute_page_size, 2 * width_tiles, compute_data_format);
-    add_cb(cb_bias_fp32, compute_page_size, 2 * width_tiles, compute_data_format);
+    // The compute kernel reads the raw inputs straight into DEST (bf16 is exact through SrcA, fp32 inputs
+    // unpack to DEST), so there are no fp32 upcast CBs.
     add_cb(cb_out_weights, tt::tile_size(weights_data_format), 2 * n_activated_expert_tiles, weights_data_format);
     add_cb(cb_out_indices, indices_page_size, 2 * n_activated_expert_tiles, indices_data_format);
 
@@ -222,8 +219,6 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     KernelDescriptor::NamedCompileTimeArgs compute_named_compile_time_args = {
         {"cb_in_scores", cb_in_scores},
         {"cb_in_bias", cb_in_bias},
-        {"cb_scores_fp32", cb_scores_fp32},
-        {"cb_bias_fp32", cb_bias_fp32},
         {"cb_sigmoid_scores", cb_sigmoid_scores},
         {"cb_biased_scores", cb_biased_scores},
         {"cb_biased_dump", cb_biased_dump},
@@ -272,9 +267,29 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     // Default-unpacked fp32 tiles reach DEST through SrcA as TF32, i.e. with zero low 13 mantissa bits;
     // the kernel's rank-tag stable engine keeps its tag inside those bits and is lossless only then.
     // sort_keys_tf32 certifies it from the modes actually passed for the two CBs the rank-tag sorts
-    // read (an UnpackToDestFp32 mode there turns it off and the kernel keeps the comparator engine).
+    // read. It is the single-group path's flag; the grouped path's keys are full fp32 by design (below).
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    // Raw fp32 inputs unpack straight to DEST, so the activation and the SFPU bias add see exact values.
+    if (scores_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(cb_in_scores)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    if (bias_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(cb_in_bias)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    // Grouped path: full-fp32 keys. Every CB that carries routing scores into a grouped sort or into the
+    // group sum unpacks straight to DEST (transpose_tile then takes the 32-bit transpose_dest path), and the
+    // group sum runs on the SFPU. The single-group sigmoid path keeps TF32 keys: its sort contract (ties at
+    // the 10 compared mantissa bits ordered by index, the rank-tag engine) is defined on them. The
+    // single-group sqrt(softplus) key stays full fp32 too (its rank-tag top-k then compares 23 - GATE_TAG_BITS
+    // = 17 mantissa bits; exact ties still go lowest index first).
+    if (operation_attributes.n_groups > 1) {
+        for (auto cb : {cb_biased_scores, cb_top_experts_per_group, cb_group_summed_scores, cb_winning_group_scores}) {
+            unpack_to_dest_mode[static_cast<uint32_t>(cb)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
+    } else if (operation_attributes.score_func == ScoreFunc::SqrtSoftplus) {
+        unpack_to_dest_mode[static_cast<uint32_t>(cb_biased_scores)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     const auto default_unpack = [&](tt::CBIndex cb) {
         return unpack_to_dest_mode[static_cast<uint32_t>(cb)] == tt::tt_metal::UnpackToDestMode::Default;
     };
