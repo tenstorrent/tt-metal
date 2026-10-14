@@ -17,8 +17,10 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         TT_FROM_PRECOMPILED_DIR: /work
         PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        TT_MODEL_CLASS_OVERRIDES: "TTGptOssForCausalLM=models.demos.gpt_oss_120b_qb2.tt.generator_vllm:TTGptOssForCausalLM"
       volumes:
         - ${{ github.workspace }}/docker-job:/work
+        - ${{ github.workspace }}/plugin:/plugin
     defaults:
       run:
         shell: bash
@@ -46,6 +48,20 @@ jobs:
           uv pip install --python /opt/venv/bin/python --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match -r tt_metal/python_env/requirements-dev.txt
           uv pip install --python /opt/venv/bin/python -e .
           uv pip freeze --python /opt/venv/bin/python > /work/host-environment.txt
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: tenstorrent/vllm-tt-plugin
+          ref: d84049edcece77c64772a39e92f920f5679efce4
+          path: plugin
+      - name: Install exact merged plugin and its supported empty vLLM target
+        timeout-minutes: 15
+        working-directory: /plugin
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = d84049edcece77c64772a39e92f920f5679efce4
+          source /opt/venv/bin/activate
+          source docs/install-vllm-tt.sh
+          uv pip freeze > /work/host-environment.txt
       - name: Real imports and original CPU host tests
         timeout-minutes: 12
         run: |
@@ -95,6 +111,24 @@ jobs:
 
           import models.demos.gpt_oss_120b_qb2.tt.generator_vllm
           import pytest
+          import vllm
+          from vllm_tt_plugin.entrypoints import register
+          register()
+          from vllm.model_executor.models.registry import ModelRegistry
+          registered = ModelRegistry.models['TTGptOssForCausalLM'].load_model_cls()
+          from models.demos.gpt_oss_120b_qb2.tt.generator_vllm import TTGptOssForCausalLM
+          assert registered is TTGptOssForCausalLM
+          import re
+          import shlex
+          from vllm.utils.argparse_utils import FlexibleArgumentParser
+          from vllm.entrypoints.launchers.cli_args import make_arg_parser
+          readme = (root/'models/demos/gpt_oss_120b_qb2/README.md').read_text()
+          command = re.search(r'python -m vllm.entrypoints.openai.api_server (.*?)\n```',readme,re.S).group(1).replace('\\\n',' ')
+          parsed = make_arg_parser(FlexibleArgumentParser()).parse_args(shlex.split(command))
+          assert parsed.max_num_seqs == 32 and parsed.max_model_len == 131072
+          assert parsed.additional_config['tt']['sample_on_device_mode'] == 'all'
+          assert not tt_fds()
+          (out/'plugin-proof.json').write_text(json.dumps({'vllm':vllm.__version__,'plugin_head':'d84049edcece77c64772a39e92f920f5679efce4','registered_class':registered.__module__+'.'+registered.__name__,'cli_max_model_len':parsed.max_model_len,'tt_fds':tt_fds()},indent=2)+'\n')
           origins = {}
           for name, module in tuple(sys.modules.items()):
               if not (name == 'ttnn' or name.startswith(('ttnn.', 'models.'))):
