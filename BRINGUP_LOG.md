@@ -14,6 +14,14 @@ URL, `file://` video inside the container); 105-suite 97/100, 0 errors, 393 s wa
 0 device timeouts. First heavy-mix run showed 6 failures: only the host `file://` path (not mounted in the container); rerun with the file copied in: 12/12.
 Wikimedia image URL gives 422 (HTTP 403 to vLLM's User-Agent), not a model bug. Open: decode ~19-20 tok/s vs ~35 on the March T3K reference (optimization not started); branches not pushed.
 
+## Session 14 — 2026-10-14 (context limits over HTTP)
+
+vllm-tt-plugin server on one 1x8 slice (max-model-len 36864, TT_MM_THROTTLE_PERF=3), raw token-id prompts via /v1/completions
+(`tests/limits_http.py`, `limits_http2.py`): 36,848-token prompt + 16 new = 36,864: OK (9 s, answer " Marit"); one token more: clean HTTP 400
+(context length 36864); chat request, 2048 new tokens (ignore_eos): OK, 105 s, distinct-4gram 0.98; 34,000-token prompt + 2048 new
+(36,048 total): OK, 119 s, 1,604 words, tail distinct-4gram 0.45 (raw completion, no chat template; opens with a short repeated phrase, ends coherent);
+server healthy, 0 device timeouts. (A first S=34k run with ignore_eos was invalid: the model had already emitted EOS.)
+
 ## Session 11 — 2026-10-14 (rebase onto main + hang triage)
 
 **Status**: Rebased `ssinghal/molmo2_new_glx` onto origin/main (branch `ssinghal/molmo2_glx_main`). All tests pass on Galaxy
