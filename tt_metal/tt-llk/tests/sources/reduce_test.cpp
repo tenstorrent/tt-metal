@@ -99,6 +99,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    if constexpr (IS_SWAPPED_REDUCE_ROW)
+    {
+        // Production reconfigures to scaler->SrcA, data->SrcB before every Row Sum/Avg block.
+        START_PERF_MEASURE("RECONFIG")
+        _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE>(
+            formats.unpack_B_src, formats.unpack_B_dst, TILE_SIZE_UNPACK_B, tensor_shape.face_r_dim, tensor_shape.total_num_faces());
+        _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE>(
+            formats.unpack_A_src, formats.unpack_A_dst, TILE_SIZE_UNPACK_A, tensor_shape.face_r_dim, tensor_shape.total_num_faces());
+        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(tensor_shape);
+        PROFILER_SYNC();
+    }
 }
 
 #endif
@@ -171,6 +182,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
+        PROFILER_SYNC();
+    }
+    if constexpr (IS_SWAPPED_REDUCE_ROW)
+    {
+        START_PERF_MEASURE("RECONFIG")
+        _llk_math_reconfig_data_format_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(tensor_shape);
+        _llk_math_reduce_uninit_();
         PROFILER_SYNC();
     }
 }
@@ -253,6 +272,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 pack_tiles<sync_with_math>(static_cast<std::uint32_t>(OUTPUT_TILE_CNT), NUM_TILES_IN_BLOCK, buffer_Res);
             }
         }
+        PROFILER_SYNC();
+    }
+    if constexpr (IS_SWAPPED_REDUCE_ROW)
+    {
+        START_PERF_MEASURE("RECONFIG")
+        _llk_pack_reduce_mask_clear_();
+        _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape.face_r_dim);
         PROFILER_SYNC();
     }
     _llk_pack_reduce_mask_clear_();

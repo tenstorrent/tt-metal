@@ -13,10 +13,13 @@ from helpers.llk_params import (
 )
 from helpers.param_config import parametrize, quasar_mx_smoke
 from helpers.reduce_perf_matrix import (
+    BLOCK_LENGTH_REPRESENTATIVE,
+    BLOCK_LENGTH_TILE_COUNTS,
     CORE_FORMATS,
     CORE_REDUCE_DIMS,
     CORE_TILE_DIMENSIONS,
     PERF_POOL_TYPES,
+    PERF_TILE_COUNT,
     SCALAR_REPRESENTATIVE,
     SHARED_EXTENSION_FORMATS,
     perf_input_dimensions,
@@ -26,6 +29,7 @@ from quasar.test_reduce_quasar import (
     reduce_dest_acc_modes,
     reduce_dest_sync_modes,
     reduce_implied_math_formats,
+    reduce_is_reduce_to_one_modes,
     reduce_tile_dimensions,
 )
 from quasar.test_reduce_quasar import test_reduce_quasar as run_reduce_quasar
@@ -59,11 +63,13 @@ def _run_reduce_quasar_perf(
     reduce_dim,
     pool_type,
     math_fidelity,
+    is_reduce_to_one,
     dest_sync_mode,
     implied_math_format,
     run_types,
     loop_factor,
     is_perf,
+    tile_count=PERF_TILE_COUNT,
 ):
     run_reduce_quasar(
         formats,
@@ -72,13 +78,14 @@ def _run_reduce_quasar_perf(
         reduce_dim,
         pool_type,
         math_fidelity,
+        is_reduce_to_one,
         dest_sync_mode,
         implied_math_format,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
-        input_dimensions=perf_input_dimensions(tile_dimensions),
+        input_dimensions=perf_input_dimensions(tile_dimensions, tile_count),
     )
 
 
@@ -94,6 +101,7 @@ def _run_reduce_quasar_perf(
     math_fidelity=lambda formats, pool_type: perf_math_fidelities(
         pool_type, get_valid_math_fidelities(formats)
     ),
+    is_reduce_to_one=reduce_is_reduce_to_one_modes,
     **PERF_MEASUREMENT,
 )
 def test_perf_reduce_quasar(
@@ -104,6 +112,7 @@ def test_perf_reduce_quasar(
     reduce_dim,
     pool_type,
     math_fidelity,
+    is_reduce_to_one,
     dest_sync_mode,
     implied_math_format,
     run_types,
@@ -118,6 +127,7 @@ def test_perf_reduce_quasar(
         reduce_dim,
         pool_type,
         math_fidelity,
+        is_reduce_to_one,
         dest_sync_mode,
         implied_math_format,
         run_types,
@@ -132,6 +142,7 @@ def test_perf_reduce_quasar(
 @parametrize(
     **SCALAR_REPRESENTATIVE,
     tile_dimensions=CORE_TILE_DIMENSIONS,
+    is_reduce_to_one=[False],
     **PERF_MEASUREMENT,
 )
 def test_perf_reduce_scalar_quasar(
@@ -142,6 +153,7 @@ def test_perf_reduce_scalar_quasar(
     pool_type,
     math_fidelity,
     tile_dimensions,
+    is_reduce_to_one,
     dest_sync_mode,
     implied_math_format,
     run_types,
@@ -156,11 +168,59 @@ def test_perf_reduce_scalar_quasar(
         reduce_dim,
         pool_type,
         math_fidelity,
+        is_reduce_to_one,
         dest_sync_mode,
         implied_math_format,
         run_types,
         loop_factor,
         is_perf,
+    )
+
+
+# Float16_b is already full precision at LoFi on Quasar, so the representative config
+# takes the highest valid fidelity rather than HiFi4.
+@pytest.mark.perf
+@pytest.mark.quasar
+@pytest.mark.nightly
+@parametrize(
+    **BLOCK_LENGTH_REPRESENTATIVE,
+    math_fidelity=lambda formats: get_valid_math_fidelities(formats)[-1:],
+    tile_dimensions=CORE_TILE_DIMENSIONS,
+    is_reduce_to_one=[False],
+    tile_count=BLOCK_LENGTH_TILE_COUNTS,
+    **PERF_MEASUREMENT,
+)
+def test_perf_reduce_block_length_quasar(
+    perf_report,
+    formats,
+    dest_acc,
+    reduce_dim,
+    pool_type,
+    math_fidelity,
+    tile_dimensions,
+    is_reduce_to_one,
+    tile_count,
+    dest_sync_mode,
+    implied_math_format,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    _run_reduce_quasar_perf(
+        perf_report,
+        formats,
+        tile_dimensions,
+        dest_acc,
+        reduce_dim,
+        pool_type,
+        math_fidelity,
+        is_reduce_to_one,
+        dest_sync_mode,
+        implied_math_format,
+        run_types,
+        loop_factor,
+        is_perf,
+        tile_count=tile_count,
     )
 
 

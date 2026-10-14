@@ -99,6 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const std::uint32_t num_faces   = params.num_faces;
+    const bool IS_REDUCE_TO_ONE     = params.IS_REDUCE_TO_ONE;
 #endif
     // formats.math holds a 2x-packed register format's non-2x family member, since the 2x formats exist only in the
     // Src registers; the ALU is configured with the register format itself, the one the unpacker implies
@@ -109,6 +110,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool is_int_fpu_en                  = use_int32_dest_alu && (REDUCE_DIM == ReduceDim::REDUCE_ROW || REDUCE_DIM == ReduceDim::REDUCE_SCALAR);
     const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
     constexpr std::uint32_t max_tiles_dest    = is_fp32_dest_acc_en ? 4 : 8;
+    // Reduce-to-one folds every tile into DEST index 0 inside one section, the production REDUCE_ROW shape.
+    const std::uint32_t tiles_per_section = IS_REDUCE_TO_ONE ? TILE_CNT : max_tiles_dest;
 
     {
         START_PERF_MEASURE("INIT")
@@ -157,12 +160,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                     {
-                        for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += max_tiles_dest)
+                        for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += tiles_per_section)
                         {
-                            const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, max_tiles_dest);
+                            const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, tiles_per_section);
                             for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                             {
-                                _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, true /* is_int_fpu_en */>(block_tile, tensor_shape_A);
+                                _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, true /* is_int_fpu_en */>(IS_REDUCE_TO_ONE ? 0 : block_tile, tensor_shape_A);
                             }
                             if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
                             {
@@ -176,12 +179,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
-                    for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += max_tiles_dest)
+                    for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += tiles_per_section)
                     {
-                        const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, max_tiles_dest);
+                        const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, tiles_per_section);
                         for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                         {
-                            _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, false /* is_int_fpu_en */>(block_tile, tensor_shape_A);
+                            _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, false /* is_int_fpu_en */>(IS_REDUCE_TO_ONE ? 0 : block_tile, tensor_shape_A);
                         }
                         if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
                         {
@@ -212,10 +215,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const bool IS_REDUCE_TO_ONE     = params.IS_REDUCE_TO_ONE;
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
     const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
     constexpr std::uint32_t max_tiles_dest    = is_fp32_dest_acc_en ? 4 : 8;
+    const std::uint32_t output_tile_cnt       = IS_REDUCE_TO_ONE ? 1 : TILE_CNT;
 
     {
         START_PERF_MEASURE("INIT")
@@ -246,9 +251,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += max_tiles_dest)
+                for (std::uint32_t block_start = 0; block_start < output_tile_cnt; block_start += max_tiles_dest)
                 {
-                    const std::uint32_t block_tiles = std::min(TILE_CNT - block_start, max_tiles_dest);
+                    const std::uint32_t block_tiles = std::min(output_tile_cnt - block_start, max_tiles_dest);
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
                         _llk_pack_(block_tile, block_start + block_tile, tensor_shape_A);
