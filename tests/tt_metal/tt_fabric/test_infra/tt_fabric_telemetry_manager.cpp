@@ -69,14 +69,16 @@ void TelemetryManager::read_telemetry() {
         log_info(
             tt::LogTest,
             "Telemetry from {} core {}: BW (GB/s)={:.6f}, pps={:.6f}, cycles={:d}, eth_words_sent={:d}, "
-            "packets_sent={:d}",
+            "packets_sent={:d}, aux_count={:d}, aux_sum_cycles={:d}",
             result.coord,
             result.eth_core.str(),
             bw_GB_s,
             pps,
             cycles,
             tel.num_words_sent,
-            tel.num_packets_sent);
+            tel.num_packets_sent,
+            static_cast<uint32_t>(tel.reserved >> 40),
+            tel.reserved & ((1ull << 40) - 1));
         auto [connected_physical_id, connected_eth_core] =
             cluster.get_connected_ethernet_core({physical_chip_id, result.eth_core});
         auto connected_device_id = control_plane.get_fabric_node_id_from_physical_chip_id(connected_physical_id);
