@@ -373,10 +373,10 @@ class TestCollapsedInputs:
         return np.split(data, self.ROWS * self.COLS, axis=dim)
 
     def test_all_gather_same_dim_inner_axis_keeps_outer_shard(self):
-        """Same-dim case of rule (e): {4}, [Shard(3)] expands to Shard(3) on both axes; gathering dim 3 along axis 1
-        rebuilds each row's chunk, so axis 0 keeps Shard(3) -- it must not be cleared to Replicate (the rows differ).
-        Negative control: before this change the label stayed {4}, [Shard(3)] (cluster_axis=1 was out of range of
-        the one placement), composing to four copies of the row chunks."""
+        """all_gather_output_topology replicates only the gathered axis: {4}, [Shard(3)] expands to Shard(3) on both
+        axes; gathering dim 3 along axis 1 rebuilds each row's chunk, so axis 0 keeps Shard(3) -- it must not be
+        cleared to Replicate (the rows differ). Negative control: before this change the label stayed {4}, [Shard(3)]
+        (cluster_axis=1 was out of range of the one placement), composing to four copies of the row chunks."""
         tensor, data = _collapsed_tensor((1, 1, 64, 128), lambda d: ttnn.shard_tensor_to_mesh_mapper(d, 3), seed=30)
         _assert_collapsed(tensor, 3, "input sanity check")
 
@@ -388,17 +388,19 @@ class TestCollapsedInputs:
         assert np.array_equal(_compose_by_label(result), data)
 
     def test_all_gather_same_dim_outer_axis_is_refused(self, expect_error):
-        """Rule (d), negative control: {4}, [Shard(3)] puts piece 2r+c on device (r, c); gathering dim 3 along axis 0
-        gives device (r, c) pieces c and 2+c side by side, which is no slice of any tensor. Strict mode makes that
-        an error; before this change the label silently became {4}, [Replicate], claiming all four devices equal."""
+        """Negative control for all_gather_output_topology's interleave refusal (require_contiguous_gather): {4},
+        [Shard(3)] puts piece 2r+c on device (r, c); gathering dim 3 along axis 0 gives device (r, c) pieces c and 2+c
+        side by side, which is no slice of any tensor. Strict mode makes that an error; before this change the label
+        silently became {4}, [Replicate], claiming all four devices equal."""
         tensor, _ = _collapsed_tensor((1, 1, 64, 128), lambda d: ttnn.shard_tensor_to_mesh_mapper(d, 3), seed=31)
 
         with expect_error(RuntimeError, "would interleave"):
             ttml.core.distributed.all_gather(tensor, 3, cluster_axis=0)
 
     def test_all_gather_other_dim_outer_axis(self):
-        """Rule (d) relaxation: gathering dim 2 (not the sharded dim) along axis 0 leaves the dim-3 pieces in place:
-        [Replicate, Shard(3)], and column c composes to concat_2(piece c, piece 2+c)."""
+        """The interleave refusal applies only to the dim the input shards: gathering dim 2 (not the sharded dim) along
+        axis 0 leaves the dim-3 pieces in place: [Replicate, Shard(3)], and column c composes to concat_2(piece c,
+        piece 2+c)."""
         tensor, data = _collapsed_tensor((1, 1, 64, 128), lambda d: ttnn.shard_tensor_to_mesh_mapper(d, 3), seed=32)
 
         result = ttml.core.distributed.all_gather(tensor, 2, cluster_axis=0)
@@ -425,8 +427,9 @@ class TestCollapsedInputs:
         assert np.array_equal(_compose_by_label(result), data * self.COLS)
 
     def test_reduce_scatter_collapsed_shard_same_dim_collapses(self):
-        """Rule (c): {4}, [Shard(3)] reduce-scattered on dim 3 along the inner axis: row r sums its two pieces and
-        splits the sum back across the row -- row-major hierarchical sharding, the collapsed label again."""
+        """reduce_scatter_output_topology collapses a same-dim scatter along the inner axis: {4}, [Shard(3)]
+        reduce-scattered on dim 3 along the inner axis: row r sums its two pieces and splits the sum back across the
+        row -- row-major hierarchical sharding, the collapsed label again."""
         tensor, data = _collapsed_tensor((1, 1, 64, 256), lambda d: ttnn.shard_tensor_to_mesh_mapper(d, 3), seed=34)
 
         result = ttml.core.distributed.reduce_scatter(tensor, 3, cluster_axis=CLUSTER_AXIS)
