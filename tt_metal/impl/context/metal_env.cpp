@@ -450,8 +450,18 @@ void MetalEnvImpl::teardown_fabric_config() {
     this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     this->get_cluster().configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
+    // When no control plane exists and no factory descriptor is configured, rebuild one eagerly here
+    // (the pre-FSD behavior): leaving it null means the next consumer is the atexit firmware teardown,
+    // which would lazily construct a control plane during static destruction — after function-local
+    // statics it depends on (e.g. MeshGraph's proto-arch table) have been destroyed, aborting the
+    // process. With a factory descriptor configured, skip instead: a STRICT build here rejects a
+    // mismatched factory descriptor before the caller has chosen a mode.
     if (!devices_still_open) {
-        this->get_control_plane().clear_fabric_context();
+        if (this->control_plane_) {
+            this->control_plane_->clear_fabric_context();
+        } else if (!rtoptions_->has_factory_system_descriptor_path()) {
+            this->get_control_plane().clear_fabric_context();
+        }
     }
 }
 

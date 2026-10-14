@@ -82,18 +82,17 @@ const CachedBinary& get_cached_binary(
         ll_api::ElfFile elf;
         elf.ReadImage(path);
         ll_api::BinaryMetadata metadata = ll_api::parse_binary_metadata(elf);
+        // Every device-executed image, kernel or firmware, passes through here before it can run, so
+        // harvesting .tt_zone_meta registers a zone's name strictly before that zone can reach the host.
+        // Not gated on the streaming profiler: only ELFs built with PROFILE_STREAMING (part of the JIT build key)
+        // carry .tt_zone_meta, and ingest_elf returns immediately for the rest. Must run before from_elf, which may
+        // XIP-transform the ELF in place.
+        ZoneMetaRegistry::instance().ingest_elf(elf, path);
         ll_api::memory image = ll_api::memory::from_elf(elf, path, loading);
         if (update_callback) {
             update_callback(image);
         }
         auto* mutable_ptr = new CachedBinary{.image = std::move(image), .metadata = std::move(metadata)};
-        // Every device-executed image, kernel or firmware, passes through here before it can run, so
-        // harvesting .tt_zone_meta registers a zone's name strictly before that zone can reach the host.
-        // Streaming only: the DRAM profiler's ELFs carry no .tt_zone_meta and resolve names its own way.
-        // TODO(op2op): fold this harvest into parse_binary_metadata above so it shares the single open.
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_streaming_profiler_enabled()) {
-            ZoneMetaRegistry::instance().ingest_elf(path);
-        }
 
         lock.lock();
         // maps have iterator stability, so SLOT is still valid.

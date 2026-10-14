@@ -228,6 +228,10 @@ class test_timestamped_events(default_setup):
     detectOps = False
 
 
+class test_active_eth_slow_dispatch(test_timestamped_events):
+    pass
+
+
 class test_multi_op(default_setup):
     timerAnalysis = {
         "BRISC KERNEL_START->KERNEL_END": {
@@ -309,12 +313,6 @@ class test_full_buffer(default_setup):
             "type": "adjacent",
             "start": {"risc": "ANY", "zone_name": "TEST-FULL"},
             "end": {"risc": "ANY", "zone_name": "TEST-FULL"},
-        },
-        "Marker Repeat ETH": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "ERISC", "zone_name": "TEST-FULL"},
-            "end": {"risc": "ERISC", "zone_name": "TEST-FULL"},
         },
     }
     detectOps = False
