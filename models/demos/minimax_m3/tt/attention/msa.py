@@ -31,6 +31,11 @@ from models.demos.minimax_m3.utils.profiler_utils import zone
 
 from .operations import apply_qk_norm_per_head, apply_rope
 
+# sparse_sdpa_msa's per-core L1 block cache for the gathered K/V (as many slots as fit in free L1). On: at small SP
+# consecutive queries on a core re-select mostly the same blocks, so a resident block saves a DRAM re-read. Output
+# is identical either way. Not the model's DRAM KV cache.
+MSA_KV_BLOCK_CACHE = True
+
 
 def _ensure_dram(t):
     """high_bw_all_gather streams its source from DRAM; move an L1-resident activation there first."""
@@ -204,6 +209,7 @@ def msa_indexer_sparse(
             cluster_axis=cluster_axis,
             block_cyclic_sp_axis=block_cyclic_sp_axis,
             block_cyclic_chunk_local=block_cyclic_chunk_local,
+            enable_kv_block_cache=MSA_KV_BLOCK_CACHE,
         )
 
         # sparse_sdpa_msa returns ROW_MAJOR; the model's concat_heads (prefill.py) needs TILE — match the
