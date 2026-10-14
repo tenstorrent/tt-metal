@@ -677,8 +677,7 @@ void kernel_main() {
     // bumps on a chunk's last one, so this launch's bumps sum to exactly `consumed`. The upstream sender's launch
     // credit (sender_combine_fabric2d.cpp) keeps its next launch's bumps, and its writes into our forwarding
     // region, out until this chip has started that launch; subtracting stays right without relying on it. The
-    // overlapped op has no launch credit, so there a chip far enough ahead can still overwrite pages we have
-    // not read. The NoC only has an atomic add, so this adds the two's complement.
+    // NoC only has an atomic add, so this adds the two's complement.
     noc_semaphore_inc(get_noc_addr(ct.fwd_sem_addr), 0u - reader.consumed);
     // Do not exit with this or any `filled` increment still in flight.
     noc_async_atomic_barrier();

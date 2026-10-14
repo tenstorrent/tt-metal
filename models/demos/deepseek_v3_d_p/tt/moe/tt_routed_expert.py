@@ -854,8 +854,8 @@ class TtRoutedExpert(LightweightModule):
     ) -> ttnn.Tensor:
         """The routed expert overlapped with combine_fabric2d in one program; returns combine's output.
 
-        `combine_semaphores` is the (fwd_arrived, final_arrived, expert_go) triple the caller keeps for the
-        mesh's lifetime; see TT_CCL.get_combine_overlap_semaphores. The op frees the rest of its L1 on return.
+        `combine_semaphores` is the (fwd_arrived, final_arrived, expert_go, launch_credit) set the caller keeps for
+        the mesh's lifetime; see TT_CCL.get_combine_overlap_semaphores. The op frees the rest of its L1 on return.
 
         Blackhole only, on the ROW_MAJOR bf16 dispatch buffer: the routed expert writes bf8 tiles, as it does
         for the separate combine, and combine's untilizers dequantise them to bf16 rows. The threshold splits the experts as in forward(), except that the
@@ -900,5 +900,6 @@ class TtRoutedExpert(LightweightModule):
             fwd_arrived_semaphore=combine_semaphores[0],
             final_arrived_semaphore=combine_semaphores[1],
             expert_go_semaphore=combine_semaphores[2],
+            launch_credit_semaphore=combine_semaphores[3],
             forwarding_buffer=forwarding_buffer,
         )

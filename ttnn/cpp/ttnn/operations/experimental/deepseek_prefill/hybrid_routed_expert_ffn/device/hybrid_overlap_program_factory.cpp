@@ -113,6 +113,7 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
         combine::CombineL1{
             .fwd_arrived = &*op.fwd_arrived,
             .final_arrived = &*op.final_arrived,
+            .launch_credit = &*op.launch_credit,
             .arena = arena,
             .forwarding = t.forwarding_buffer.has_value() ? t.forwarding_buffer->buffer() : nullptr},
         &collectors);
@@ -144,8 +145,8 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
         program.descriptor = tt::tt_metal::merge_program_descriptors({program.descriptor, re});
     }
 
-    // The caller owns all three semaphores; holding them here as well only keeps them alive with the program.
-    // combine_fabric2d already holds fwd_arrived and final_arrived through its semaphore list.
+    // The caller owns all four semaphores; holding them here as well only keeps them alive with the program.
+    // combine_fabric2d already holds fwd_arrived, final_arrived and launch_credit through its semaphore list.
     workload.semaphores.push_back(*op.expert_go);
     return workload;
 }

@@ -31,13 +31,6 @@
 // Guard genuinely different BEHAVIOUR with CMBF2D_OVERLAPPED; anything that differs only in where a value
 // lives belongs behind an accessor on the compile-time arguments instead.
 
-// The overlapped op does not allocate a launch credit, so its sender neither grants nor takes one.
-#ifdef CMBF2D_OVERLAPPED
-constexpr bool LAUNCH_CREDIT = false;
-#else
-constexpr bool LAUNCH_CREDIT = true;
-#endif
-
 // Forwarded tokens between semaphore bumps to the downstream reader. A chunk's last page forces a bump
 // regardless, so this only sets how finely that reader can pipeline within a chunk.
 constexpr uint32_t FWD_BUMP_EVERY = 32;
@@ -178,9 +171,9 @@ uint64_t send_slot(
     return cmd;
 }
 
-// Drain the ring until the reader ends the stream. Returns the number of tokens actually sent.
+// Drain the ring until the reader ends the stream.
 template <typename FabricSender>
-uint32_t pump_stream(FabricSender& fabric) {
+void pump_stream(FabricSender& fabric) {
     const uint64_t my_freed_noc = get_noc_addr(reinterpret_cast<uint32_t>(ct.freed_ptr()));
     uint32_t sent = 0;
     // The stream's length is not known here: it is this sender's own tokens plus everything the reader
@@ -211,7 +204,6 @@ uint32_t pump_stream(FabricSender& fabric) {
     if (final_since_bump > 0) {
         bump_downstream(fabric, ct.final_sem_addr, final_since_bump);
     }
-    return sent - 1;  // the CMD_END slot carried no payload
 }
 
 // Delivery barrier. Program completion says nothing about whether our packets reached the DESTINATION chip,
@@ -252,19 +244,15 @@ void kernel_main() {
     auto& fabric = fabric_connections.get(0).sender;
 
     prebuild_routes();
-    if constexpr (LAUNCH_CREDIT) {
-        grant_launch_credit(fabric);
-        // Once per launch, so the credits stay in step with the launches: every stream has at least its CMD_END
-        // slot. The reader publishes its first slot only after building its tables, so the credit has usually
-        // arrived by the time this wait starts.
-        wait_for_filled(0);
-        take_launch_credit();
-    }
-    const uint32_t sent = pump_stream(fabric);
+    grant_launch_credit(fabric);
+    // Once per launch, so the credits stay in step with the launches: every stream has at least its CMD_END
+    // slot. The reader publishes its first slot only after building its tables, so the credit has usually
+    // arrived by the time this wait starts.
+    wait_for_filled(0);
+    take_launch_credit();
+    pump_stream(fabric);
     // Even on a stream that sent no token, the launch credit is on the cable.
-    if (LAUNCH_CREDIT || sent > 0) {
-        drain_fabric(fabric);
-    }
+    drain_fabric(fabric);
 
     noc_async_writes_flushed();
     fabric_connections.close();

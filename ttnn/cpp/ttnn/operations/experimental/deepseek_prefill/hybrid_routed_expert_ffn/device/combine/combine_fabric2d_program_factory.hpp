@@ -33,13 +33,14 @@ struct CombineFabric2dProgramFactory {
 };
 
 // What a program sharing the chip with combine hands it instead of letting it allocate. The overlapped routed
-// expert passes its caller's fwd_arrived and final_arrived, which outlive every launch, and its per-call L1 arena,
-// which covers every worker core: combine places its rings and control region inside that arena rather than at the
-// allocator base, where the arena would clash with combine's static circular buffers.
+// expert passes its caller's fwd_arrived, final_arrived and launch_credit, which outlive every launch, and its
+// per-call L1 arena, which covers every worker core: combine places its rings and control region inside that
+// arena rather than at the allocator base, where the arena would clash with combine's static circular buffers.
 struct CombineL1 {
-    // Both or neither; null: combine allocates its own.
+    // All three or none; null: combine allocates its own.
     const tt::tt_metal::GlobalSemaphore* fwd_arrived = nullptr;
     const tt::tt_metal::GlobalSemaphore* final_arrived = nullptr;
+    const tt::tt_metal::GlobalSemaphore* launch_credit = nullptr;
     tt::tt_metal::Buffer* arena = nullptr;  // null: circular buffers are static, at the allocator base
     // DRAM, of forwarding_buffer_spec. Null: combine allocates its own at cache miss and the cached workload keeps
     // it, which pins it wherever DRAM was free in the middle of that first forward.

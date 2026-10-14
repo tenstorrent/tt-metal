@@ -154,8 +154,8 @@ struct KernelPlan {
     uint32_t final_arrived_addr = 0;
     // Overlapped only: this ring's first row of global_expert_idx_table.
     uint32_t expert_table_page_base = 0;
-    // Standalone only: the launch credit's address, and the downstream chip's stream core that sends back to
-    // this chip, which this chip's sender grants it to.
+    // The launch credit's address, and the downstream chip's stream core that sends back to this chip, which
+    // this chip's sender grants it to. The overlapped op's caller owns the credit, as it does fwd_arrived.
     uint32_t launch_credit_addr = 0;
     tt::tt_metal::CoreCoord launch_credit_core;
 };
