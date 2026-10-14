@@ -167,8 +167,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else
         {
             // CFG wait masks persist across run types. MATH_ISOLATE runs without
-            // a pack consumer; UNPACK_ISOLATE / L1_CONGESTION only mock Src
-            // handshakes. None of them may inherit the FPU→SFPU→PACK chain.
+            // a pack consumer; UNPACK_ISOLATE only mocks Src
+            // handshakes. Neither may inherit the FPU→SFPU→PACK chain.
             set_up_zero_dest_dvalid_handshake_for_math();
             set_up_zero_dest_dvalid_handshake_for_sfpu();
         }
@@ -176,7 +176,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             if constexpr (!unpack_to_dest)
             {
@@ -271,7 +271,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            // PACK_ISOLATE / L1_CONGESTION pack independently. UNPACK_ISOLATE /
+            // PACK_ISOLATE packs independently. UNPACK_ISOLATE /
             // MATH_ISOLATE do not pack. None may inherit the L1_TO_L1 wait mask.
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
@@ -279,7 +279,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {

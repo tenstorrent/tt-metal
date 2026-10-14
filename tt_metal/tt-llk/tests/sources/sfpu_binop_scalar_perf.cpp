@@ -63,7 +63,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     /* iterations*/ num_faces * TILE_CNT * LOOP_FACTOR);
             }
         }
-        else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE) // UNPACK_ISOLATE, L1_TO_L1, L1_CONGESTION
+        else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE) // UNPACK_ISOLATE, L1_TO_L1
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -120,32 +120,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             /* src A */ true,
                             /* src B */ true>(
                             /* iterations*/ num_faces);
-                    }
-                }
-            }
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
-        {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
-            {
-                for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
-                {
-                    int block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
-
-                    for (int block_tile = 0; block_tile < block_tiles; ++block_tile)
-                    {
-                        if constexpr (unpack_to_dest)
-                        {
-                            _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
-                                block_tile, formats.math, formats.math);
-                        }
-                        else
-                        {
-                            _perf_math_loop_clear_valid<
-                                /* src A */ true,
-                                /* src B */ true>(
-                                /* iterations*/ num_faces);
-                        }
                     }
                 }
             }
@@ -242,7 +216,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {

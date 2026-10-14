@@ -136,19 +136,17 @@ finish, or every selected test was skipped.
    sharing a (sweep, marker) key. Differing metrics on a collapsed key are
    either run-to-run noise or a parameter that changes the kernel without
    being recorded as a column. Resolve which before shipping the report.
-4. **Plausibility.** Inspect `marker == TILE_LOOP`. Each `L1_CONGESTION` stage
-   should sit near its isolate. Values near 2048, 4096, or 8192, an isolate
-   orders of magnitude above the real stage, or a healthy first variant
-   followed by slow ones all indicate handshake or wait-mask bugs — switch to
-   `quasar-perf-test`.
+4. **Plausibility.** Inspect `marker == TILE_LOOP`. Values near 2048, 4096,
+   or 8192, an isolate orders of magnitude above the real stage, or a healthy
+   first variant followed by slow ones all indicate handshake or wait-mask
+   bugs — switch to `quasar-perf-test`.
 5. **Freshness.** Compare CSV columns with the current test axes. Missing axes
    mean the report predates the test; regenerate instead of analyzing.
 6. **Completeness, by report kind.** A timing report carries a
    `mean(<run type>)` column for every requested run type, and a
    `TEXT_SIZE(<run type>)` column only for `L1_TO_L1`, `UNPACK_ISOLATE`,
-   `MATH_ISOLATE`, and `PACK_ISOLATE`. `L1_CONGESTION` is deliberately absent
-   from the code-size map, so a missing `TEXT_SIZE(L1_CONGESTION)` is correct
-   rather than a defect. A counter report has no wall-clock means at all:
+   `MATH_ISOLATE`, and `PACK_ISOLATE`. A counter report has no wall-clock
+   means at all:
    check its `<RUN_TYPE>_..._pct` columns, expect only the `INIT` and
    `TILE_LOOP` markers, and note that its `.post.csv` is identical to the raw
    file because normalization only rescales columns named `mean(...)` and

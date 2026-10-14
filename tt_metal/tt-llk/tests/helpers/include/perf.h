@@ -43,7 +43,6 @@ enum class PerfRunType
     UNPACK_ISOLATE,
     MATH_ISOLATE,
     PACK_ISOLATE,
-    L1_CONGESTION,
     SFPU_ISOLATE
 };
 

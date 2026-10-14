@@ -78,7 +78,6 @@ def _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim):
             PerfRunType.UNPACK_ISOLATE,
             PerfRunType.MATH_ISOLATE,
             PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
         ],
         templates=[],
         runtimes=[

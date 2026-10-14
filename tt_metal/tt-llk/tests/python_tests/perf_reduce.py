@@ -61,7 +61,6 @@ def test_perf_reduce(
             PerfRunType.UNPACK_ISOLATE,
             PerfRunType.MATH_ISOLATE,
             PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
         ],
         templates=[
             MATH_OP(mathop=REDUCE_MATHOP[reduce_dim]),
