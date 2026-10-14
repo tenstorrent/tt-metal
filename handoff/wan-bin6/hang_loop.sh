@@ -17,7 +17,8 @@ runs="${1:-5}"
 res="${2:-720p}"
 mode="${3:-chunk}"
 out="${4:-$HOME/wan_hang_reports}"
-stall_s=180
+stall_s=180        # max silent seconds once the pipeline is running on device
+setup_stall_s=900  # before "Pipeline allocation" (mesh open, weight load)
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
@@ -39,7 +40,7 @@ test_id="models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py::test_pipeline_i
 build="$(git rev-parse --short HEAD) $(git branch --show-current) pr60190_build=$(strings build/lib/libtt_metal.so | grep -c harvested_dram_views)"
 
 note() { echo "$*" | tee -a "$out/index.txt"; }
-note "=== $(date '+%F %T') start: $runs x $res $mode, build: $build"
+note "=== $(date '+%F %T') start: $runs x $res $mode, build: $build, TT_MM_THROTTLE_PERF=${TT_MM_THROTTLE_PERF:-unset}"
 
 first=$(( $(ls -d "$out"/run_* 2>/dev/null | wc -l) + 1 ))
 for (( i = first; i < first + runs; i++ )); do
@@ -67,9 +68,12 @@ for (( i = first; i < first + runs; i++ )); do
     result=""
     while kill -0 "$tpid" 2>/dev/null; do
         sleep 15
-        grep -q "Pipeline allocation" "$d/test.log" || continue
+        # After CLIP the device work is done; VBench scores on CPU and can be silent for minutes.
+        grep -q "CLIP scores" "$d/test.log" && continue
+        limit=$setup_stall_s
+        grep -q "Pipeline allocation" "$d/test.log" && limit=$stall_s
         age=$(( $(date +%s) - $(stat -c %Y "$d/test.log") ))
-        (( age > stall_s )) || continue
+        (( age > limit )) || continue
 
         step="$(tail -c 2000 "$d/test.log" | tr '\r' '\n' | grep -oE 'Denoise step [0-9]+/[0-9]+|Pipeline allocation run' | tail -1)"
         timeout 900 python tools/tt-triage.py --llm-output --disable-progress --skip-version-check > "$d/triage.txt" 2>&1

@@ -96,7 +96,14 @@ All runs use `4x8sp1tp0nl2_linear_is_fsdp0` with `TT_MESH_GRAPH_DESC_PATH=single
 | PR #60190 | 480p | none (preset) | after **`tt-smi -glx_reset`**: **no hang**. Video written; frames show the prompt (two cats boxing on a spotlit stage, moving). CLIP 36.81 PASS. VBench PASS (scored offline): subject 0.9535, background 0.9727, motion smoothness 0.9789, dynamic degree 1.0, imaging 0.5678. The in-test VBench failed only on the read-only cache |
 | PR #60190 | 720p | 7 | `hang_loop.sh` ×5 (`tt-smi -r` before each run): **5/5 hang**, all on device 9, odd core `4-10 (3,8)` every time: SDPA after step 1, SDPA after step 2, matmul in warmup, SDPA after step 4, matmul after step 2 |
 
-Loop reports: `~jameslee/wan_hang_reports/run_01..05/` (`summary.txt`, `triage.txt`, `triage_callstacks_2.txt`, `host_stacks.txt`, `test.log`, `links.txt`), index in `~jameslee/wan_hang_reports/index.txt`. The state after reset (0–4 chips with down ports) made no difference.
+| PR #60190 | 720p | 7 | `hang_loop.sh` ×3 with **`tt-smi -glx_reset`**: **3/3 hang**: device 9 matmul in warmup (odd core `4-10`); 2× host-side (all devices idle, host waits on a completion event; in one, triage could not open chip 0: "No such device") |
+| PR #60190 | 720p | 7 | `hang_loop.sh` ×3 with `-glx_reset` + **`TT_MM_THROTTLE_PERF=5`** (verified: 19 kernel builds with `MM_THROTTLE 5`; warmup steps 10.6 s vs 4.5 s): **3/3 hang**, all on device 9 in RingJointSDPA, odd core `4-10 (3,8)` every time |
+
+Totals: 15 runs at 720p chunked, 15 hangs. 13 device-side, all on device 9 / core `4-10 (3,8)`; 2 host-side.
+
+**Power / di/dt mitigations.** `TT_MM_THROTTLE_PERF=N` (1–5; level 5 caps matmul math at 33%) inserts NOPs between MVMULs. Via `throttle_mm_perf()` it reaches Wan's `MinimalMatmul` but **not** `RingJointSDPA`, whose Q·Kᵀ/PV math (`sdpa_matmul_block_no_mop`) is unthrottled, and that is where most hangs are. `TT_MM_STAGGER_TYPE`/`TT_MM_STAGGER_VALUE` have no effect on Blackhole: `apply_mm_stagger()` exists only in the Wormhole `llk_io_unpack.h`. Neither Wan op calls `add_stagger_defines_if_needed()` either. Testing the "weak Galaxy power delivery" theory properly would need throttling or staggering added to the SDPA compute kernel (a code change).
+
+Loop reports: `~jameslee/wan_720p_glx/`, `~jameslee/wan_720p_throttle5/`, `~jameslee/wan_hang_reports/run_01..05/` (`summary.txt`, `triage.txt`, `triage_callstacks_2.txt`, `host_stacks.txt`, `test.log`, `links.txt`), index in `~jameslee/wan_hang_reports/index.txt`. The state after reset (0–4 chips with down ports) made no difference.
 
 Not yet run: `main` 720p chunked a second time; anything on an 8-bank Galaxy for comparison.
 
