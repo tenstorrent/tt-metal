@@ -12,15 +12,18 @@ path that both re-commits the canonical SrcA Y-stride AND retargets the geometry
 (Tile_x_dim_cntx0 from G1.face_r_dim, descriptor Z-dim from G1.num_faces).
 
 The kernel reads the four canonical SrcA registers back and LLK_ASSERTs them
-against the expected G1 baseline on-device. Because a SrcA datacopy victim's
-correctness is *entirely* a function of these registers, and the single-geometry
-tilize tests already show "correct registers => correct data", checking them directly
-verifies the transition for BOTH directions without needing a second operand /
-golden (a single-geometry stimuli harness can't lay out two tile shapes cleanly).
+against the expected G1 baseline on-device, and asserts the unpack-config
+tileize_mode bit is clear (the reconfig leaves that bit alone, so it is the
+uninit's). Because a SrcA datacopy victim's correctness is *entirely* a function
+of these registers, and the single-geometry tilize tests already show "correct
+registers => correct data", checking them directly verifies the transition for
+BOTH directions without needing a second operand / golden (a single-geometry
+stimuli harness can't lay out two tile shapes cleanly).
 
 `do_restore=False` is the negative control: with no transition the registers stay
 in the G0 tilize state, so the kernel asserts the G1 baseline is NOT reproduced
-(Tile_x_dim / Z-dim differ), proving the transition is load-bearing.
+(Tile_x_dim / Z-dim differ) and tileize_mode is still set, proving the transition is
+load-bearing.
 
 Exercises tiny `face_r_dim < 16` geometry. The end state is set by the reconfig, which rewrites every
 register read back here, so this checks the retarget, not the face_r_dim the uninit restores (the
