@@ -256,7 +256,7 @@ inline __attribute__((always_inline)) void emit_binary(const hal::Gpr<Destinatio
     }
     else
     {
-        ckernel::instrn_buffer[0] = binary_operation<Operation>(destination, lhs, rhs);
+        TT_INSN(binary_operation<Operation>(destination, lhs, rhs));
     }
 }
 
@@ -356,7 +356,7 @@ inline __attribute__((always_inline)) void set_low(const hal::Gpr<Index>)
 template <std::uint32_t Index>
 inline __attribute__((always_inline)) void set_low(const hal::Gpr<Index> destination, const std::uint32_t value)
 {
-    ckernel::instrn_buffer[0] = detail::set_half_operation<false>(destination, immediate(value));
+    TT_INSN(detail::set_half_operation<false>(destination, immediate(value)));
 }
 
 /** @brief Set the high half of a GPR to a compile-time 16-bit value. */
@@ -371,7 +371,7 @@ inline __attribute__((always_inline)) void set_high(const hal::Gpr<Index>)
 template <std::uint32_t Index>
 inline __attribute__((always_inline)) void set_high(const hal::Gpr<Index> destination, const std::uint32_t value)
 {
-    ckernel::instrn_buffer[0] = detail::set_half_operation<true>(destination, immediate(value));
+    TT_INSN(detail::set_half_operation<true>(destination, immediate(value)));
 }
 
 /** @brief Add two operands with unsigned 32-bit wraparound. */
