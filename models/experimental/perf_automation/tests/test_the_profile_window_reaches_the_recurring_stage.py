@@ -29,6 +29,17 @@ _HORIZON = 50  # the pipeline's own horizon, far past any window below
 _SRC_DIR = Path(tempfile.mkdtemp(prefix="window_pipes_"))
 
 
+def _load_pipe(src):
+    """Write `src` as a module and return its Pipe: the marks read hooks' calls from real source."""
+    path = _SRC_DIR / ("pipe_%d.py" % len(list(_SRC_DIR.glob("pipe_*.py"))))
+    path.write_text(src)
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[path.stem] = mod
+    spec.loader.exec_module(mod)
+    return mod.Pipe
+
+
 def _pipe_class(stages, recurring, repeats=_HORIZON, extra_own=None):
     """A pipeline declaring `stages`; `recurring` loops its own horizon and states it via REPEATS.
 
@@ -52,13 +63,7 @@ def _pipe_class(stages, recurring, repeats=_HORIZON, extra_own=None):
             s,
         )
     src += "        return self.calls\n"
-    path = _SRC_DIR / ("pipe_%d.py" % len(list(_SRC_DIR.glob("pipe_*.py"))))
-    path.write_text(src)
-    spec = importlib.util.spec_from_file_location(path.stem, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[path.stem] = mod
-    spec.loader.exec_module(mod)
-    return mod.Pipe
+    return _load_pipe(src)
 
 
 @pytest.fixture(autouse=True)
@@ -158,6 +163,55 @@ def test_each_pipeline_counts_its_own_passes(monkeypatch, no_signposts):
     cls = _pipe_class(("alpha", "beta"), "beta")
     assert _profiled_generate(cls())["beta"] == 2
     assert _profiled_generate(cls())["beta"] == 2
+
+
+def _horizon_pipe_class(stages, recurring, draws):
+    """A pipeline that takes its horizon at construction, states it from that attribute, and -- as a
+    sampling loop does -- reads one per-pass input BEFORE each pass of `recurring`. `draws` is sized
+    the way the generated test sizes them: to the window, not to the horizon."""
+    src = "class Pipe:\n    PIPELINE_STAGES = %r\n\n    def __init__(self, horizon):\n" % list(stages)
+    src += "        self.horizon = horizon\n        self.draws = list(range(%d))\n" % draws
+    src += "        self.calls = {s: 0 for s in self.PIPELINE_STAGES}\n"
+    for s in stages:
+        src += "\n    def run_%s(self):\n        self.calls[%r] += 1\n" % (s, s)
+        src += "\n    def %s(self):\n        return self.run_%s()\n" % (_seams.hook(s, _seams.STEP), s)
+    src += '\n    def %s(self):\n        """stated."""\n        return self.horizon\n' % _seams.hook(
+        recurring, _seams.REPEATS
+    )
+    src += "\n    def generate(self):\n"
+    for s in stages:
+        if s == recurring:
+            src += "        for t in range(self.horizon):\n            self.draws[t]\n            self.run_%s()\n" % s
+        else:
+            src += "        self.run_%s()\n" % s
+    src += "        return self.calls\n"
+    return _load_pipe(src)
+
+
+def test_a_horizon_taken_at_construction_is_lowered_before_the_loop_outruns_its_inputs(monkeypatch, no_signposts):
+    """Counting passes alone let the loop read draw #3 of 2 before the third pass was refused."""
+    monkeypatch.setenv(TOKENS_ENV, "2")
+    pipe = _horizon_pipe_class(("alpha", "beta"), "beta", draws=2)(_HORIZON)
+    assert _profiled_generate(pipe) == {"alpha": 1, "beta": 2}
+    assert pipe.horizon == 2
+
+
+def test_a_horizon_is_never_raised_or_touched_without_a_window(monkeypatch, no_signposts):
+    monkeypatch.delenv(TOKENS_ENV, raising=False)
+    pipe = _horizon_pipe_class(("alpha", "beta"), "beta", draws=_HORIZON)(_HORIZON)
+    assert _profiled_generate(pipe)["beta"] == _HORIZON and pipe.horizon == _HORIZON
+    monkeypatch.setenv(TOKENS_ENV, "3")
+    small = _horizon_pipe_class(("alpha", "beta"), "beta", draws=2)(2)
+    assert sm.bound_profile_window(small) == 0 and small.horizon == 2
+
+
+def test_only_a_bare_attribute_read_names_the_horizon():
+    """A computed count is not an attribute the window may write; the pass count still holds it."""
+    cls = _pipe_class(("alpha", "beta"), "beta")
+    assert sm._attr_a_hook_returns(getattr(cls, _seams.hook("beta", _seams.REPEATS))) is None
+    hcls = _horizon_pipe_class(("alpha", "beta"), "beta", draws=1)
+    assert sm._attr_a_hook_returns(getattr(hcls, _seams.hook("beta", _seams.REPEATS))) == "horizon"
+    assert sm._attr_a_hook_returns(len) is None
 
 
 # --- the bracket the injector writes around the eager call ---------------------------------------

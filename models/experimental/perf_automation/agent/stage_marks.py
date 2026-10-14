@@ -195,13 +195,22 @@ def looks_like_a_pipeline(obj) -> bool:
     return bool(names) and any(callable(getattr(obj, _seams.hook(n, _seams.STEP), None)) for n in names)
 
 
+def _parsed_method(fn):
+    """(its def node, the name it calls its own instance), read from fn's source; None when there is
+    no source or fn is not a method."""
+    try:
+        f = ast.parse(textwrap.dedent(inspect.getsource(fn))).body[0]
+        return f, f.args.args[0].arg
+    except Exception:  # noqa: BLE001 -- no source, or not a method: nothing to read
+        return None
+
+
 def _methods_a_hook_calls(hook) -> set:
     """Names of the methods `hook` calls on its own instance, read from its source."""
-    try:
-        fn = ast.parse(textwrap.dedent(inspect.getsource(hook))).body[0]
-        me = fn.args.args[0].arg
-    except Exception:  # noqa: BLE001 -- no source, or not a method: nothing to read
+    parsed = _parsed_method(hook)
+    if parsed is None:
         return set()
+    fn, me = parsed
     return {
         n.func.attr
         for n in ast.walk(fn)
@@ -247,11 +256,10 @@ def stage_methods(pipe) -> dict:
 def _self_calls(fn) -> list:
     """[(attr, sub)] for every call rooted at the function's own instance: `self.a(...)` gives
     (a, None), `self.a.b(...)` and deeper give (a, b)."""
-    try:
-        f = ast.parse(textwrap.dedent(inspect.getsource(fn))).body[0]
-        me = f.args.args[0].arg
-    except Exception:  # noqa: BLE001
+    parsed = _parsed_method(fn)
+    if parsed is None:
         return []
+    f, me = parsed
     out = []
     for n in ast.walk(f):
         if not isinstance(n, ast.Call):
@@ -352,6 +360,45 @@ def _profile_window() -> int:
         return 0
 
 
+def _attr_a_hook_returns(hook):
+    """The instance attribute `hook` states its count from -- the name in a body that is nothing but
+    `return self.<name>` (a docstring aside) -- or None for any other shape."""
+    parsed = _parsed_method(hook)
+    if parsed is None:
+        return None
+    fn, me = parsed
+    body = [st for st in fn.body if not (isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant))]
+    if len(body) != 1 or not isinstance(body[0], ast.Return):
+        return None
+    v = body[0].value
+    if isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name) and v.value.id == me:
+        return v.attr
+    return None
+
+
+def _align_horizon(pipe, stage: str, window: int) -> str:
+    """Lower the pipeline's own horizon to the window when its REPEATS hook reads it straight off the
+    instance, so the forward simply runs `window` passes. Returns the attribute set, "" when none.
+
+    A count of passes on the stage's methods (bound_profile_window) stops the forward only when the
+    stage is next asked for a pass -- and the loop around it can index per-pass inputs before that:
+    the test sized its sampling draws to the window, Mistral-Small-4-119B-2603's generate() asked for
+    draw #3 on its way to the third decode and raised IndexError mid-baseline (2026-10-14). The
+    attribute is read from the model's own hook, never typed here; only an int is touched, and only
+    lowered."""
+    name = _attr_a_hook_returns(getattr(type(pipe), _seams.hook(stage, _seams.REPEATS), None))
+    cur = getattr(pipe, name, None) if name else None
+    if not isinstance(cur, int) or isinstance(cur, bool) or cur <= window:
+        return ""
+    setattr(pipe, name, window)
+    print(
+        "  [stage-marks] %r horizon %s %d -> %d (profile window, %s)" % (stage, name, cur, window, TOKENS_ENV),
+        file=sys.stderr,
+        flush=True,
+    )
+    return name
+
+
 def bound_profile_window(pipe) -> int:
     """Hold the profiled forward to the token window on the stage that recurs. Returns the window
     applied, 0 when none is.
@@ -370,7 +417,10 @@ def bound_profile_window(pipe) -> int:
     past the window raises ProfileWindowReached instead of dispatching it. Bound methods only: a
     callable attribute may be an object the model also reads fields from (a marks wrapper is looked
     through to the method it wraps). On the instance, so nothing else sees it; installed after any
-    separate marked pass, which must not spend the window."""
+    separate marked pass, which must not spend the window.
+
+    Where the stage states its count straight from an instance attribute, that horizon is lowered to
+    the window first (_align_horizon), so the loop ends on its own and the count is only a backstop."""
     window = _profile_window()
     stages, _ = _declared_stages(pipe)
     if not window or not stages:
@@ -380,6 +430,7 @@ def bound_profile_window(pipe) -> int:
     last = stages[-1]
     if _stated_count(pipe, last, _seams.REPEATS) <= window:
         return 0
+    _align_horizon(pipe, last, window)
     names = [n for n in _own_methods(pipe).get(last, []) if inspect.ismethod(inspect.unwrap(getattr(pipe, n, None)))]
     for name in names:
         fn = getattr(pipe, name)
