@@ -152,7 +152,8 @@ def test_spec_contract_fake_runner(mesh_device):
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_spec_recorded_drafter_matches_eager(mesh_device, monkeypatch):
-    """Recorded (traced) drafter vs eager drafter: identical tokens and (n, m, num_valid) per step, on different block pools."""
+    """Recorded (traced) drafter vs eager drafter: identical tokens and (n, m, num_valid) per step,
+    on different block pools."""
     if not _MULTI:
         pytest.skip("spec decode is the TP path; run with MESH_DEVICE=P150x4")
     from models.demos.blackhole.qwen36.tt.spec_engine import get_spec_engine

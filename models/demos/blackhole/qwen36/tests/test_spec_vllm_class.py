@@ -24,6 +24,9 @@ from loguru import logger
 pytest.importorskip("vllm")
 pytest.importorskip("vllm_tt_plugin")
 
+pytest.importorskip("vllm_tt_plugin.spec_admission")
+pytest.importorskip("vllm_tt_plugin.spec_decode")
+
 from vllm_tt_plugin.spec_admission import resolve_speculative_plan  # noqa: E402
 from vllm_tt_plugin.spec_decode import DraftOutput, SpecPlan, SpecReject, VerifyOutput  # noqa: E402
 
@@ -319,20 +322,29 @@ def test_spec_vllm_class_runner(mesh_device, monkeypatch):
 
 # --- host tests (CPU) ---
 
-CKPT = (
-    "/local/ttuser/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
-)
+
+def _cached_ckpt(repo="Qwen/Qwen3.8-27B"):
+    """Local snapshot dir of ``repo`` from the HF cache, or None when it is not cached."""
+    try:
+        from huggingface_hub import snapshot_download
+
+        return snapshot_download(os.environ.get("HF_MODEL", repo), local_files_only=True)
+    except Exception:
+        return None
+
+
 CLS = Qwen36MTPContractForCausalLM
 MAX_LEN = 16384
 
 
 @pytest.fixture(scope="module")
 def hf_config():
-    if not os.path.isdir(CKPT):
+    ckpt = _cached_ckpt()
+    if ckpt is None:
         pytest.skip("Qwen3.8-27B config not available")
     from transformers import AutoConfig
 
-    return AutoConfig.from_pretrained(CKPT)
+    return AutoConfig.from_pretrained(ckpt)
 
 
 @pytest.fixture(autouse=True)

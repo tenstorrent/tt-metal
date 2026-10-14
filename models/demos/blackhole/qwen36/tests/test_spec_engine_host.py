@@ -330,18 +330,25 @@ def test_draft_rows_fit_boundary(K, cap):
 # --------------------------------------------------------------------------- #
 # spec_memory_costs (pure formula; device equality is checked in test_spec_engine)
 # --------------------------------------------------------------------------- #
-_QWEN38_CFG = (
-    "/local/ttuser/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/"
-    "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/config.json"
-)
+def _cached_ckpt(repo="Qwen/Qwen3.8-27B"):
+    """Local snapshot dir of ``repo`` from the HF cache, or None when it is not cached."""
+    try:
+        from huggingface_hub import snapshot_download
+
+        return snapshot_download(os.environ.get("HF_MODEL", repo), local_files_only=True)
+    except Exception:
+        return None
+
+
 _MIB = 1 << 20
 
 
 @pytest.fixture(scope="module")
 def qwen38_text_config():
-    if not os.path.exists(_QWEN38_CFG):
+    ckpt = _cached_ckpt()
+    if ckpt is None or not os.path.exists(os.path.join(ckpt, "config.json")):
         pytest.skip("Qwen3.8-27B config not in the local HF cache")
-    with open(_QWEN38_CFG) as f:
+    with open(os.path.join(ckpt, "config.json")) as f:
         return json.load(f)["text_config"]
 
 

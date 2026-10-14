@@ -35,7 +35,8 @@ class SpeculativeDecoder:
     Env knobs: QWEN36_SPEC_DRAFT_LEN (K), QWEN36_SPEC_TIMING.
     """
 
-    # Field order of the QWEN36_SPEC_TIMING lines; engine.propose is timed as one phase ("draft"), so anchor/reseed are 0.
+    # Field order of the QWEN36_SPEC_TIMING lines; engine.propose is timed as one phase ("draft"),
+    # so anchor/reseed are 0.
     _TPHASES = ("draft", "verify", "readback", "accept", "anchor", "reseed", "other", "total")
     # Tags timing lines so a warmup generate() and the timed one differ.
     _gen_calls = 0

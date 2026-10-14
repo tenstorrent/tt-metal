@@ -228,7 +228,8 @@ def table_capacity(width_blocks, block_size):
 
 
 def draft_rows_fit(anchor_pos, K, capacity):
-    """Per row: may it draft? Its K drafter writes (p..p+K-1) and next verify window (p+1..p+1+K) must stay in capacity."""
+    """Per row: may it draft? Its K drafter writes (p..p+K-1) and next verify window (p+1..p+1+K)
+    must stay in capacity."""
     return [int(p) + 1 + K < capacity for p in anchor_pos]
 
 
@@ -1069,7 +1070,8 @@ class MTPSpecEngine:
         return VerifyResult(spec_mode, mask_unused_columns(ids, num_valid_drafts), logits)
 
     def _verify_split(self, tokens, positions, mi_prev, **kw):
-        """verify_traced with the readback timed separately (hooks ttnn.get_device_tensors); sets ``last_verify_timing``."""
+        """verify_traced with the readback timed separately (hooks ttnn.get_device_tensors);
+        sets ``last_verify_timing``."""
         orig = ttnn.get_device_tensors
         mark = []
 
