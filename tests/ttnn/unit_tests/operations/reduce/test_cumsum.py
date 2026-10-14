@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: Â© 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -418,3 +418,116 @@ def test_cumsum_bf16_accuracy(size, dim, sequence_type, reverse_order, device):
 
     assert output.dtype == torch.bfloat16
     assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=1)
+
+
+
+
+def _nonfinite_row(scan_len, kind):
+    finfo = torch.finfo(torch.float32)
+    if kind == "posinf":
+        row = [1.0] * scan_len
+        row[1] = float("inf")
+    elif kind == "neginf":
+        row = [1.0] * scan_len
+        row[1] = float("-inf")
+    elif kind == "overflow":
+        # finite inputs whose running total overflows fp32 at element 1
+        row = [1.0] * scan_len
+        row[0] = finfo.max
+        row[1] = finfo.max
+    elif kind == "nan":
+        row = [1.0] * scan_len
+        row[1] = float("nan")
+    elif kind == "inf_at_end":
+        row = [1.0] * scan_len
+        row[-1] = float("inf")
+    elif kind == "posinf_then_neginf":
+        row = [1.0] * scan_len
+        row[1] = float("inf")
+        row[2] = float("-inf")
+    elif kind == "finite":
+        torch.manual_seed(7)
+        row = torch.randn(scan_len, dtype=torch.float32).tolist()
+    else:
+        raise ValueError(kind)
+    return row
+
+
+@pytest.mark.parametrize("scan_len", [4, 8, 33])
+@pytest.mark.parametrize("dim", [0, -2])
+@pytest.mark.parametrize("disable_compensated_sum", [False, True])
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "posinf",  # the reported bug: [1.0, inf, 1.0, ...] produced a NaN tail
+        "neginf",
+        "overflow",  # finite inputs, running total overflows fp32
+        "nan",  # behavior must be unchanged (NaN poisons, like torch)
+        "inf_at_end",  # behavior must be unchanged
+        "posinf_then_neginf",  # behavior must be unchanged: inf + -inf = NaN
+        "finite",  # behavior must be unchanged
+    ],
+)
+def test_cumsum_fp32_nonfinite_regression(scan_len, dim, disable_compensated_sum, kind, device):
+    """FP32 cumsum must follow IEEE/PyTorch semantics after +/-inf and on overflow (#58986).
+
+    Before the fix, the compensated (Kahan) path computed ``c = (t - acc) - y`` with no check
+    that the running total ``t`` is finite, so ``inf - inf`` produced NaN and poisoned every
+    later scan element. The fix zeroes the compensation term whenever ``t`` is non-finite,
+    which is bit-identical to the old path for finite ``t``.
+    """
+    row = _nonfinite_row(scan_len, kind)
+    # dim=0 scans a [scan_len, 2] tensor; dim=-2 on a rank-3 tensor scans the middle axis
+    shape = [scan_len, 2] if dim == 0 else [2, scan_len, 2]
+    torch_input = torch.tensor(row, dtype=torch.float32).reshape([scan_len] + [1] * (len(shape) - 1)).expand(shape)
+    torch_input = torch_input.contiguous()
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.cumsum(input_tensor, dim=dim, disable_compensated_sum=disable_compensated_sum)
+    torch_output = ttnn.to_torch(output, dtype=torch.float32)
+
+    expected = torch.cumsum(torch_input, dim=dim, dtype=torch.float32)
+    torch.testing.assert_close(torch_output, expected, equal_nan=True)
+
+
+@pytest.mark.parametrize("scan_len", [4, 8, 33])
+@pytest.mark.parametrize("dim", [0, -2])
+def test_cumsum_nonfp32_unaffected_by_nonfinite_guard(scan_len, dim, device):
+    """BF16 and INT32 cumsum never take the compensated path; their results must be unchanged."""
+    shape = [scan_len, 2] if dim == 0 else [2, scan_len, 2]
+
+    torch_input = torch.randint(-2, 3, shape, dtype=torch.int32)
+    int_out = ttnn.to_torch(
+        ttnn.cumsum(
+            ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE),
+            dim=dim,
+            dtype=ttnn.int32,
+        ),
+        dtype=torch.int32,
+    )
+    torch.testing.assert_close(int_out, torch.cumsum(torch_input, dim=dim))
+
+    torch_input_bf16 = torch.randint(-2, 3, shape, dtype=torch.bfloat16)
+    bf16_out = ttnn.to_torch(
+        ttnn.cumsum(
+            ttnn.from_torch(torch_input_bf16, device=device, layout=ttnn.Layout.TILE),
+            dim=dim,
+            dtype=ttnn.bfloat16,
+        ),
+        dtype=torch.bfloat16,
+    )
+    assert_with_ulp(
+        expected_result=bf16_out, actual_result=torch.cumsum(torch_input_bf16, dim=dim), ulp_threshold=1
+    )
+
+
+@pytest.mark.parametrize("scan_len", [4, 8, 33])
+def test_cumprod_fp32_nonfinite_matches_torch(scan_len, device):
+    """FP32 cumprod shares the accumulation kernels but not the compensated path; inf/NaN
+    behavior must match torch."""
+    row = _nonfinite_row(scan_len, "posinf")
+    torch_input = torch.tensor(row, dtype=torch.float32).reshape(scan_len, 1).expand(scan_len, 2).contiguous()
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    torch_output = ttnn.to_torch(ttnn.cumprod(input_tensor, dim=0), dtype=torch.float32)
+    expected = torch.cumprod(torch_input, dim=0, dtype=torch.float32)
+    torch.testing.assert_close(torch_output, expected, equal_nan=True)
