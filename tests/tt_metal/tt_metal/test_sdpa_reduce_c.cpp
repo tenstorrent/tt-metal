@@ -15,6 +15,7 @@
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/tilize_utils.hpp>
+#include <cstdint>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using std::vector;
@@ -22,7 +23,7 @@ using namespace tt;
 using std::string;
 using namespace tt::tt_metal;
 
-static std::vector<bfloat16> make_identity_scale_tile(uint32_t tile_height = tt::constants::TILE_HEIGHT) {
+static std::vector<bfloat16> make_identity_scale_tile(std::uint32_t tile_height = tt::constants::TILE_HEIGHT) {
     std::vector<bfloat16> tile(tile_height * tt::constants::TILE_WIDTH, static_cast<bfloat16>(1.0f));
     return tile;
 }
@@ -31,16 +32,16 @@ static std::vector<bfloat16> make_identity_scale_tile(uint32_t tile_height = tt:
 // F0 (cols 0-15) then F1 (cols 16-31), both spanning rows 0-15 of the tile; tiles in row-major order.
 // tilize_nfaces() only produces 32x32 tiles, so a 16x32 (num_faces=2) tile needs this explicit layout —
 // this is exactly the layout the SDPA matmul packs into cb_qkt_im, and is what exposes the tiny reduce bug.
-static std::vector<bfloat16> tilize_16x32(const std::vector<bfloat16>& rm, uint32_t rows, uint32_t cols) {
-    constexpr uint32_t TH = 16, TW = 32, FH = 16, FW = 16;
+static std::vector<bfloat16> tilize_16x32(const std::vector<bfloat16>& rm, std::uint32_t rows, std::uint32_t cols) {
+    constexpr std::uint32_t TH = 16, TW = 32, FH = 16, FW = 16;
     std::vector<bfloat16> out(rows * cols);
-    uint32_t idx = 0;
-    for (uint32_t ti = 0; ti < rows / TH; ++ti) {
-        for (uint32_t tj = 0; tj < cols / TW; ++tj) {
-            for (uint32_t face = 0; face < 2; ++face) {
-                const uint32_t c0 = tj * TW + face * FW;
-                for (uint32_t r = 0; r < FH; ++r) {
-                    for (uint32_t c = 0; c < FW; ++c) {
+    std::uint32_t idx = 0;
+    for (std::uint32_t ti = 0; ti < rows / TH; ++ti) {
+        for (std::uint32_t tj = 0; tj < cols / TW; ++tj) {
+            for (std::uint32_t face = 0; face < 2; ++face) {
+                const std::uint32_t c0 = tj * TW + face * FW;
+                for (std::uint32_t r = 0; r < FH; ++r) {
+                    for (std::uint32_t c = 0; c < FW; ++c) {
                         out[idx++] = rm[(ti * TH + r) * cols + (c0 + c)];
                     }
                 }
@@ -51,16 +52,16 @@ static std::vector<bfloat16> tilize_16x32(const std::vector<bfloat16>& rm, uint3
 }
 
 // Inverse of tilize_16x32.
-static std::vector<bfloat16> untilize_16x32(const std::vector<bfloat16>& til, uint32_t rows, uint32_t cols) {
-    constexpr uint32_t TH = 16, TW = 32, FH = 16, FW = 16;
+static std::vector<bfloat16> untilize_16x32(const std::vector<bfloat16>& til, std::uint32_t rows, std::uint32_t cols) {
+    constexpr std::uint32_t TH = 16, TW = 32, FH = 16, FW = 16;
     std::vector<bfloat16> out(rows * cols);
-    uint32_t idx = 0;
-    for (uint32_t ti = 0; ti < rows / TH; ++ti) {
-        for (uint32_t tj = 0; tj < cols / TW; ++tj) {
-            for (uint32_t face = 0; face < 2; ++face) {
-                const uint32_t c0 = tj * TW + face * FW;
-                for (uint32_t r = 0; r < FH; ++r) {
-                    for (uint32_t c = 0; c < FW; ++c) {
+    std::uint32_t idx = 0;
+    for (std::uint32_t ti = 0; ti < rows / TH; ++ti) {
+        for (std::uint32_t tj = 0; tj < cols / TW; ++tj) {
+            for (std::uint32_t face = 0; face < 2; ++face) {
+                const std::uint32_t c0 = tj * TW + face * FW;
+                for (std::uint32_t r = 0; r < FH; ++r) {
+                    for (std::uint32_t c = 0; c < FW; ++c) {
                         out[(ti * TH + r) * cols + (c0 + c)] = til[idx++];
                     }
                 }
@@ -71,23 +72,23 @@ static std::vector<bfloat16> untilize_16x32(const std::vector<bfloat16>& til, ui
 }
 
 static std::vector<bfloat16> make_prev_max_matrix(
-    uint32_t q_chunk_size,
+    std::uint32_t q_chunk_size,
     float min_val,
     float max_val,
     std::vector<bfloat16>& prev_max_first_col_out,
-    uint32_t tile_height = tt::constants::TILE_HEIGHT) {
+    std::uint32_t tile_height = tt::constants::TILE_HEIGHT) {
     std::mt19937 rng(0);
     std::uniform_real_distribution<float> dist(min_val, max_val);
 
-    const uint32_t rows = q_chunk_size * tile_height;
-    const uint32_t cols = tt::constants::TILE_WIDTH;
+    const std::uint32_t rows = q_chunk_size * tile_height;
+    const std::uint32_t cols = tt::constants::TILE_WIDTH;
     std::vector<bfloat16> mat(rows * cols);
     prev_max_first_col_out.resize(rows);
 
-    for (uint32_t r = 0; r < rows; ++r) {
+    for (std::uint32_t r = 0; r < rows; ++r) {
         float v = dist(rng);
         prev_max_first_col_out[r] = static_cast<bfloat16>(v);
-        for (uint32_t c = 0; c < cols; ++c) {
+        for (std::uint32_t c = 0; c < cols; ++c) {
             mat[(r * cols) + c] = static_cast<bfloat16>(v);
         }
     }
@@ -97,23 +98,23 @@ static std::vector<bfloat16> make_prev_max_matrix(
 static std::vector<bfloat16> golden_reduce_c(
     const std::vector<bfloat16>& qk_im_rm,
     const std::vector<bfloat16>& prev_max_first_col,
-    uint32_t q_chunk_size,
-    uint32_t k_chunk_size,
+    std::uint32_t q_chunk_size,
+    std::uint32_t k_chunk_size,
     bool do_eltwise_max,
-    uint32_t num_faces = 4) {
+    std::uint32_t num_faces = 4) {
     // Genuine 16x32 tiny tile (num_faces=2) has tile height 16; full 32x32 (num_faces=4) has height 32.
     // Every row is a real q-row now (no phantom second-face-row to skip).
-    const uint32_t tile_height = (num_faces == 2) ? tt::constants::FACE_HEIGHT : tt::constants::TILE_HEIGHT;
-    const uint32_t rows = q_chunk_size * tile_height;
-    const uint32_t cols = k_chunk_size * tt::constants::TILE_WIDTH;
-    const uint32_t stats_cols = tt::constants::TILE_WIDTH;
+    const std::uint32_t tile_height = (num_faces == 2) ? tt::constants::FACE_HEIGHT : tt::constants::TILE_HEIGHT;
+    const std::uint32_t rows = q_chunk_size * tile_height;
+    const std::uint32_t cols = k_chunk_size * tt::constants::TILE_WIDTH;
+    const std::uint32_t stats_cols = tt::constants::TILE_WIDTH;
 
     bool prev_max_larger = false;
 
     // Produce tiles: rows tiles. We'll set first column to the row max (replicated down the column).
     std::vector<bfloat16> out(rows * stats_cols, static_cast<bfloat16>(0.0f));
 
-    for (uint32_t r = 0; r < rows; ++r) {
+    for (std::uint32_t r = 0; r < rows; ++r) {
         auto row_begin = qk_im_rm.begin() + r * cols;
         auto row_end = row_begin + cols;
         float row_max = -std::numeric_limits<float>::infinity();
@@ -141,14 +142,16 @@ static std::vector<bfloat16> golden_reduce_c(
 }
 
 static float compare_first_col_mse(
-    const std::vector<bfloat16>& result_rm, const std::vector<bfloat16>& golden_first_col_rm, uint32_t num_faces = 4) {
+    const std::vector<bfloat16>& result_rm,
+    const std::vector<bfloat16>& golden_first_col_rm,
+    std::uint32_t num_faces = 4) {
     // result_rm is rows x 32 row-major (from untilize); compare only column 0 vs golden_first_col_rm.
     // With genuine 16x32 tiny tiles every row carries valid output, so no rows are excluded.
     (void)num_faces;
-    const uint32_t rows = golden_first_col_rm.size() / tt::constants::TILE_WIDTH;
+    const std::uint32_t rows = golden_first_col_rm.size() / tt::constants::TILE_WIDTH;
     float mse = 0.0f;
-    uint32_t counted = 0;
-    for (uint32_t r = 0; r < rows; ++r) {
+    std::uint32_t counted = 0;
+    for (std::uint32_t r = 0; r < rows; ++r) {
         float a = static_cast<float>(result_rm[(r * tt::constants::TILE_WIDTH) + 0]);
         float b = static_cast<float>(golden_first_col_rm[(r * tt::constants::TILE_WIDTH) + 0]);
         float d = a - b;
@@ -161,13 +164,13 @@ static float compare_first_col_mse(
 
 static bool test_sdpa_reduce_c(
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
-    uint32_t q_chunk_size,
-    uint32_t k_chunk_size,
+    std::uint32_t q_chunk_size,
+    std::uint32_t k_chunk_size,
     bool fp32_dest_acc_en,
     bool do_eltwise_max,
     const std::string& kernel_path,
     const std::string& kernel_name,
-    uint32_t num_faces = 4) {
+    std::uint32_t num_faces = 4) {
     bool pass = true;
 
     log_info(
@@ -189,12 +192,12 @@ static bool test_sdpa_reduce_c(
 
     auto cb_df = tt::DataFormat::Float16_b;
     // Genuine 16x32 tile (num_faces=2) => tile height 16; full 32x32 (num_faces=4) => height 32.
-    const uint32_t tile_height = (num_faces == 2) ? tt::constants::FACE_HEIGHT : tt::constants::TILE_HEIGHT;
+    const std::uint32_t tile_height = (num_faces == 2) ? tt::constants::FACE_HEIGHT : tt::constants::TILE_HEIGHT;
     const bool tiny = (tile_height == tt::constants::FACE_HEIGHT);
     auto cb_tile_size = tile_height * tt::constants::TILE_WIDTH * sizeof(bfloat16);
 
-    uint32_t qk_im_num_tiles = q_chunk_size * k_chunk_size;
-    uint32_t stats_num_tiles = q_chunk_size;
+    std::uint32_t qk_im_num_tiles = q_chunk_size * k_chunk_size;
+    std::uint32_t stats_num_tiles = q_chunk_size;
 
     auto qk_im_shard_spec = tt::tt_metal::ShardSpecBuffer(
         CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
@@ -215,7 +218,7 @@ static bool test_sdpa_reduce_c(
         {tile_height, tt::constants::TILE_WIDTH},
         {1, 1});
 
-    auto make_sharded_l1_buffer = [&](uint32_t size, const ShardSpecBuffer& shard_spec) {
+    auto make_sharded_l1_buffer = [&](std::uint32_t size, const ShardSpecBuffer& shard_spec) {
         return tt_metal::distributed::MeshBuffer::create(
             tt_metal::distributed::ReplicatedBufferConfig{.size = size},
             {
@@ -259,14 +262,14 @@ static bool test_sdpa_reduce_c(
             .set_globally_allocated_address(*identity_scale_buffer->get_reference_buffer());
     tt_metal::CreateCircularBuffer(program, core, cb_identity_scale_config);
 
-    std::vector<uint32_t> compute_kernel_args = {
+    std::vector<std::uint32_t> compute_kernel_args = {
         cb_qk_im_id,
         cb_prev_max_id,
         cb_out_max_id,
         cb_identity_scale_id,
         q_chunk_size,
         k_chunk_size,
-        static_cast<uint32_t>(do_eltwise_max ? 1 : 0),
+        static_cast<std::uint32_t>(do_eltwise_max ? 1 : 0),
         num_faces};
     std::map<std::string, std::string> compute_defines;
     compute_defines["EXP_APPROX_MODE"] = "0";
@@ -289,7 +292,7 @@ static bool test_sdpa_reduce_c(
     tt::deprecated::Tensor<bfloat16> qk_im_tensor = tt::deprecated::initialize_tensor<bfloat16>(
         qk_im_shape, tt::deprecated::Initialize::RANDOM, -50, 50, 0 /* seed */);
 
-    vector<uint32_t> qk_im;
+    vector<std::uint32_t> qk_im;
     auto qk_im_tilized = tiny ? tilize_16x32(qk_im_tensor.get_values(), q_chunk_size * tile_height, k_chunk_size * 32)
                               : tilize_nfaces(qk_im_tensor.get_values(), q_chunk_size * 32, k_chunk_size * 32);
     qk_im = pack_bfloat16_vec_into_uint32_vec(qk_im_tilized);
@@ -317,7 +320,7 @@ static bool test_sdpa_reduce_c(
     tt_metal::distributed::Finish(cq);
 
     // Read outputs
-    std::vector<uint32_t> out_max_vec;
+    std::vector<std::uint32_t> out_max_vec;
     slow_dispatch::ReadFromBuffer(*out_max_buffer, out_max_vec);
     auto out_max_bfp16 = unpack_uint32_vec_into_bfloat16_vec(out_max_vec);
     auto out_max_rm = tiny ? untilize_16x32(out_max_bfp16, q_chunk_size * tile_height, 32)
@@ -349,13 +352,13 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, NIGHTLY_SdpaReduceC) {
     // std::vector<uint32_t> k_chunk_sizes = {1};
     // std::vector<bool> fp32_dest_acc_ens = {true};
     // std::vector<bool> do_eltwise = {true};
-    std::vector<uint32_t> q_chunk_sizes = {1, 2, 4, 8};
-    std::vector<uint32_t> k_chunk_sizes = {1, 2, 4, 8, 16};
+    std::vector<std::uint32_t> q_chunk_sizes = {1, 2, 4, 8};
+    std::vector<std::uint32_t> k_chunk_sizes = {1, 2, 4, 8, 16};
     std::vector<bool> fp32_dest_acc_ens = {false, true};
     std::vector<bool> do_eltwise = {false, true};
 
     /**
-     * These parameters are the same as the SDPA sprint-2 perfomance test parameters.
+     * These parameters are the same as the SDPA sprint-2 performance test parameters.
      * Uncomment to measure perf of the test we care most about.
      */
     // std::vector<uint32_t> q_chunk_sizes = {8};
@@ -371,8 +374,8 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, NIGHTLY_SdpaReduceC) {
 
     for (const auto& [kernel_path, kernel_name] : kernel_variants) {
         log_info(LogTest, "Testing kernel variant: {}", kernel_name);
-        for (uint32_t q_chunk_size : q_chunk_sizes) {
-            for (uint32_t k_chunk_size : k_chunk_sizes) {
+        for (std::uint32_t q_chunk_size : q_chunk_sizes) {
+            for (std::uint32_t k_chunk_size : k_chunk_sizes) {
                 for (bool fp32_dest_acc_en : fp32_dest_acc_ens) {
                     for (bool do_elt : do_eltwise) {
                         bool this_passed = test_sdpa_reduce_c(
@@ -410,12 +413,14 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, NIGHTLY_SdpaReduceC) {
         const std::string tiny_kernel_path =
             "tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_block_max_row/compute.cpp";
         const std::string tiny_kernel_name = "reduce_block_max_row_tiny_16x32";
-        constexpr uint32_t tiny_num_faces = 2;
-        for (uint32_t q_chunk_size : q_chunk_sizes) {
-            for (uint32_t k_chunk_size : k_chunk_sizes) {
+        constexpr std::uint32_t tiny_num_faces = 2;
+        for (std::uint32_t q_chunk_size : q_chunk_sizes) {
+            for (std::uint32_t k_chunk_size : k_chunk_sizes) {
                 for (bool fp32_dest_acc_en : fp32_dest_acc_ens) {
                     // fp32 16x32 is not enabled here: it has not been validated through this metal path
-                    // (the tt-llk fuser cases fpu_reduce_block_max_tiny_* exercise the LLK directly).
+                    // (the tt-llk fuser cases fpu_reduce_block_max_tiny_* exercise the LLK directly). The
+                    // test kernel passes num_faces as face_r_dim, which blocks that validation; tracked in
+                    // https://github.com/tenstorrent/tt-llk/issues/1716
                     if (fp32_dest_acc_en) {
                         continue;
                     }
@@ -455,11 +460,11 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, NIGHTLY_SdpaReduceC) {
     {
         const std::string rt_kernel_path =
             "tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_block_max_row_runtime/compute.cpp";
-        for (uint32_t nf : {4u, 2u}) {
+        for (std::uint32_t nf : {4u, 2u}) {
             const std::string rt_kernel_name =
                 (nf == 2) ? "reduce_block_max_row_runtime_tiny_16x32" : "reduce_block_max_row_runtime_32x32";
-            for (uint32_t q_chunk_size : {1u, 2u}) {
-                for (uint32_t k_chunk_size : {1u, 2u, 4u}) {
+            for (std::uint32_t q_chunk_size : {1u, 2u}) {
+                for (std::uint32_t k_chunk_size : {1u, 2u, 4u}) {
                     bool this_passed = test_sdpa_reduce_c(
                         devices_[0],
                         q_chunk_size,

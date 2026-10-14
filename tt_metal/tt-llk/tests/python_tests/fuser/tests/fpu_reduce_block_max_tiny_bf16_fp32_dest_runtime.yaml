@@ -5,8 +5,9 @@
 # Runtime-configured (unpack and math) variant of fpu_reduce_block_max_tiny_bf16_fp32_dest.
 # Source B is all ones as the identity scale; source A spans a wide range so the row maxima differ.
 
-# Blackhole only: on Wormhole, 16x32 reduce_block_max_row places some rows' maxima in the wrong tile with
-# spread input, in 16-bit DEST mode too (not specific to this 32-bit DEST path); not yet root-caused.
+# Blackhole only: the Wormhole unpack sizes the SrcA y_dim for four faces, so a 16x32 block reads every other
+# tile and some rows' maxima land in the wrong tile (in 16-bit DEST mode too). Enable wormhole once the Wormhole
+# y_dim fix lands.
 supported_archs: ["blackhole"]
 
 dest_acc: true
@@ -26,6 +27,9 @@ operands:
     dims: [256, 256]
     tile_dims: [16, 32]
     format: "Float32"
+    # Row maxima of U(-1000, 1000) samples cluster near 985, so the default 5 percent band lets a maximum
+    # from the wrong row or tile pass; 0.1 percent still covers the Tf32 truncation of Float32 inputs.
+    rtol: 0.001
 
 operations:
   - math:

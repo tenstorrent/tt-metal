@@ -208,8 +208,9 @@ inline void _llk_math_reduce_block_max_row_mop_config_(const ckernel::TensorShap
  * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
  * - The scaler doesn't change for the duration of the whole block operation
  * - Operand and scaler data format is bfloat16_b
- * - Operand tile size is 32x32
- * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
+ * - Operand tile size is 32x32 (num_faces=4) or 16x32 (num_faces=2, a single face-row)
+ * - Forwards is_fp32_dest_acc_en to the MOP config, which records the same sequence for both DEST modes;
+ *   the execute applies the 32-bit SrcA override
  * - Does only MAX pool on ROW dimension
  *
  * This function should NOT be used as a substitute for the native _llk_math_reduce_init_ LLK.
@@ -245,7 +246,7 @@ inline void _llk_math_reduce_block_max_row_uninit_()
  * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
  * - The scaler doesn't change for the duration of the whole block operation
  * - Operand and scaler data format is bfloat16_b
- * - Operand tile size is 32x32
+ * - Operand tile size is 32x32 (num_faces=4) or 16x32 (num_faces=2, a single face-row)
  * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
  * - Does only MAX pool on ROW dimension
  *
