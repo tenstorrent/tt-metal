@@ -673,7 +673,7 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
     for (uint32_t i = 0; i < ec::kChips; ++i) {
         const ec::ChipLayout& l = out.admission.layout.chips[i];
         launches[i] = hexec::X280Launch{
-            .image_path = hart_::image_path(spec.open.image_env_var),
+            .image_path = hart_::image_path(spec.open.image_env_var, spec.open.image_file),
             .run_value = (static_cast<uint64_t>(0xEC00u + i) << 32) | cfg.run_nonce,
             .args_addr = l.lim_base + l.x280.args_offset,
             .args_bytes = l.x280.args_bytes,

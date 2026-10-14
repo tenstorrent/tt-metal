@@ -7,8 +7,9 @@
 // alone, the Ethernet hop alone, the admission test, the full path, P
 // forwarders, and both directions. Each step carries a run that must fail.
 //
-// Requires X280_ETH_CREDIT_FW_IMAGE and live resident idle on L2CPU 0 of
-// both chips. Slow dispatch comes from the x280_slow_dispatch link.
+// Runs X280_ETH_CREDIT_FW_IMAGE when set, else the build's forwarder image, and
+// requires live resident idle on L2CPU 0 of both chips. Slow dispatch comes
+// from the x280_slow_dispatch link.
 
 #include "harness/artifacts/artifacts.hpp"
 #include "harness/runner.hpp"
@@ -45,6 +46,7 @@ protected:
             .open =
                 {
                     .image_env_var = "X280_ETH_CREDIT_FW_IMAGE",
+                    .image_file = "firmware-eth-credit-x280-fwd.bin",
                     .kernel_dir = x280::harness::artifacts::kernel_dir_of(__FILE__),
                     .mesh_device_ids = suite::kChipPair,
                 },
