@@ -23,7 +23,13 @@ from .test_pipeline_qwenimage import DOG_IMAGE_PATH
 NUM_INFERENCE_STEPS = 50
 # The Qwen-Image-Edit-2511 model card's step count.
 EDIT_NUM_INFERENCE_STEPS = 40
-RUNS_PER_CASE = 2
+# Runs per case in CI's 1024² test, and in the opt-in benchmarks.
+CI_RUNS_PER_CASE = 2
+BENCHMARK_RUNS_PER_CASE = 3
+
+# The opt-in benchmark's sizes: the ones of our NVIDIA benchmark (1344² for its 1328²). A transposed
+# size takes the same time, and the 4:3 and 3:2 sizes take about as long as 16:9.
+BENCHMARK_RESOLUTIONS = [(1024, 1024), (1344, 1344), (1664, 928)]
 
 # Upper limits at 1024², in seconds, per (is Blackhole, mesh shape). Only the listed metrics are
 # checked.
@@ -74,7 +80,7 @@ EDIT_PROMPT = (
 )
 
 # Input aspect ratios for editing, (width, height); the edit output takes the last input's.
-EDIT_ASPECT_RATIOS = {"1:1": (1, 1), "16:9": (16, 9), "9:16": (9, 16)}
+EDIT_ASPECT_RATIOS = {"1:1": (1, 1), "16:9": (16, 9)}
 
 
 @dataclass
@@ -101,15 +107,15 @@ def inpaint_inputs() -> dict[str, Any]:
 
 
 def run_cases(
-    pipeline: QwenImagePipeline, cases: list[Case], *, prompt: str, file_prefix: str
+    pipeline: QwenImagePipeline, cases: list[Case], *, prompt: str, file_prefix: str, runs_per_case: int
 ) -> tuple[BenchmarkProfiler, dict[str, list[int]]]:
-    """Runs each case RUNS_PER_CASE times and returns the profiler and each case's iterations."""
+    """Runs each case ``runs_per_case`` times and returns the profiler and each case's iterations."""
     benchmark_profiler = BenchmarkProfiler()
     iterations = {}
     for c, case in enumerate(cases):
         iterations[case.label] = []
-        for i in range(RUNS_PER_CASE):
-            iteration = c * RUNS_PER_CASE + i
+        for i in range(runs_per_case):
+            iteration = c * runs_per_case + i
             iterations[case.label].append(iteration)
 
             with benchmark_profiler("run", iteration=iteration):
@@ -165,7 +171,7 @@ def print_report(
     print("\n" + "=" * 100)
     print(title)
     print("=" * 100)
-    print(f"Checkpoint: {config.checkpoint_name}, runs per case: {RUNS_PER_CASE}")
+    print(f"Checkpoint: {config.checkpoint_name}, runs per case: {len(next(iter(iterations.values())))}")
     print(
         f"Configuration: cfg={dit.cfg_parallel.factor}, sp={dit.sequence_parallel.factor}, "
         f"tp={dit.tensor_parallel.factor}, encoder_tp={config.encoder_parallel_config.tensor_parallel.factor}"
@@ -234,7 +240,7 @@ def test_qwenimage_pipeline_performance(
     # The configuration create_pipeline uses, for the report.
     config = QwenImagePipelineConfig.default(mesh_shape=mesh_device.shape)
 
-    resolutions = list(config.resolutions) if all_resolutions else [(1024, 1024)]
+    resolutions = [r for r in BENCHMARK_RESOLUTIONS if r in config.resolutions] if all_resolutions else [(1024, 1024)]
     cases = [
         Case(f"{width}x{height}", NUM_INFERENCE_STEPS, {"width": width, "height": height})
         for width, height in resolutions
@@ -243,7 +249,13 @@ def test_qwenimage_pipeline_performance(
         # The dog image is square, so this inpaints at 1024².
         cases.append(Case("inpaint 1024x1024", NUM_INFERENCE_STEPS, inpaint_inputs()))
 
-    benchmark_profiler, iterations = run_cases(pipeline, cases, prompt=PROMPT, file_prefix="qwenimage")
+    benchmark_profiler, iterations = run_cases(
+        pipeline,
+        cases,
+        prompt=PROMPT,
+        file_prefix="qwenimage",
+        runs_per_case=BENCHMARK_RUNS_PER_CASE if all_resolutions else CI_RUNS_PER_CASE,
+    )
     print_report(
         title="QWEN IMAGE PIPELINE PERFORMANCE RESULTS",
         profiler=benchmark_profiler,
@@ -322,7 +334,7 @@ def test_qwenimage_edit_pipeline_performance(
     is_ci_env: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Times Qwen-Image-Edit-2511 with 1 to 3 input images at three aspect ratios, and edit inpainting.
+    """Times Qwen-Image-Edit-2511 with one square and one 16:9 input image, and edit inpainting.
 
     Edit and Edit-2509 run the same transformer and text encoder, so they take the same time.
     """
@@ -335,17 +347,18 @@ def test_qwenimage_edit_pipeline_performance(
 
     dog = Image.open(DOG_IMAGE_PATH).convert("RGB")
     cases = [
-        Case(
-            f"{count} input {name}",
-            EDIT_NUM_INFERENCE_STEPS,
-            {"image": [crop_to_aspect_ratio(dog, aspect)] * count},
-        )
-        for count in range(1, config.max_images + 1)
+        Case(f"edit {name}", EDIT_NUM_INFERENCE_STEPS, {"image": crop_to_aspect_ratio(dog, aspect)})
         for name, aspect in EDIT_ASPECT_RATIOS.items()
     ]
-    cases.append(Case("inpaint 1 input 1:1", EDIT_NUM_INFERENCE_STEPS, inpaint_inputs()))
+    cases.append(Case("edit inpaint 1:1", EDIT_NUM_INFERENCE_STEPS, inpaint_inputs()))
 
-    benchmark_profiler, iterations = run_cases(pipeline, cases, prompt=EDIT_PROMPT, file_prefix="qwenimage_edit_2511")
+    benchmark_profiler, iterations = run_cases(
+        pipeline,
+        cases,
+        prompt=EDIT_PROMPT,
+        file_prefix="qwenimage_edit_2511",
+        runs_per_case=BENCHMARK_RUNS_PER_CASE,
+    )
     print_report(
         title="QWEN IMAGE EDIT PIPELINE PERFORMANCE RESULTS",
         profiler=benchmark_profiler,
