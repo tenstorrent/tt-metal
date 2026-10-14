@@ -7,12 +7,14 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <numeric>
 #include <optional>
 #include <set>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -49,6 +51,47 @@ protected:
 };
 
 namespace {
+
+// Temporary triage: preserve the original transfer sequence unless phase reads are requested.
+std::string dram_mismatch_details(
+    const MeshBuffer& buffer,
+    const MeshCoordinate& coord,
+    const std::vector<uint32_t>& actual,
+    const std::vector<uint32_t>& expected) {
+    std::ostringstream details;
+    details << "mesh=" << coord << " chip=" << buffer.device()->get_device(coord)->id() << " buffer_address=0x"
+            << std::hex << buffer.address() << std::dec << " actual_words=" << actual.size()
+            << " expected_words=" << expected.size();
+    size_t count = 0;
+    for (size_t i = 0; i < std::min(actual.size(), expected.size()); ++i) {
+        if (actual[i] == expected[i]) {
+            continue;
+        }
+        if (count < 8) {
+            details << "\nword=" << i << " byte_offset=" << i * sizeof(uint32_t) << " actual=" << actual[i]
+                    << " expected=" << expected[i] << " xor=0x" << std::hex << (actual[i] ^ expected[i]) << std::dec;
+        }
+        ++count;
+    }
+    details << "\nmismatched_words=" << count;
+    return details.str();
+}
+
+void triage_dram_phase(
+    const std::shared_ptr<MeshDevice>& mesh,
+    const std::shared_ptr<MeshBuffer>& buffer,
+    const std::vector<uint32_t>& expected,
+    const char* phase) {
+    if (std::getenv("TT_GALAXY_TRIAGE_PHASE_READS") == nullptr) {
+        return;
+    }
+    for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
+        std::vector<uint32_t> actual;
+        ReadShard(mesh->mesh_command_queue(), actual, buffer, coord);
+        EXPECT_EQ(actual, expected) << phase << ": " << dram_mismatch_details(*buffer, coord, actual, expected);
+    }
+    std::cout << "[DRAM_TRIAGE] completed phase=" << phase << std::endl;
+}
 
 // Why a guard test cannot run here, or nullopt if it can: the guard tests need Slow Dispatch, real
 // hardware, and Blackhole. They target Blackhole's dispatch cores and its unit-mesh (ServiceCore) path,
@@ -1245,7 +1288,9 @@ TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {
     Finish(mesh_device_->mesh_command_queue());
 
     // Turn off FD for running a workload and issuing reads.
+    triage_dram_phase(mesh_device_, mesh_buffer, src_vec, "before FD->SD");
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+    triage_dram_phase(mesh_device_, mesh_buffer, src_vec, "after FD->SD, before workloads");
 
     auto seed = 0;
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
@@ -1265,7 +1310,8 @@ TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {
         for (std::size_t logical_y = 0; logical_y < mesh_buffer->device()->num_rows(); logical_y++) {
             std::vector<uint32_t> dst_vec = {};
             ReadShard(mesh_device_->mesh_command_queue(), dst_vec, mesh_buffer, MeshCoordinate(logical_y, logical_x));
-            EXPECT_EQ(dst_vec, src_vec);
+            EXPECT_EQ(dst_vec, src_vec) << dram_mismatch_details(
+                *mesh_buffer, MeshCoordinate(logical_y, logical_x), dst_vec, src_vec);
         }
     }
 }
@@ -1453,7 +1499,8 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
                 std::vector<uint32_t> dst;
                 ReadShard(mesh_device_->mesh_command_queue(), dst, fd2_buf, MeshCoordinate(y, x));
                 EXPECT_EQ(dst, fd2_src_vec)
-                    << "Cycle " << cycle << ": DRAM readback failed in FD mode at (" << y << "," << x << ")";
+                    << "Cycle " << cycle << ": DRAM readback failed in FD mode at (" << y << "," << x << ") "
+                    << dram_mismatch_details(*fd2_buf, MeshCoordinate(y, x), dst, fd2_src_vec);
             }
         }
 
