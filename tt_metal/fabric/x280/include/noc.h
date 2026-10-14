@@ -40,12 +40,13 @@
  *   TLB cfg block starts (right after the 224 x 16 B 2 MiB block).
  *   Per-entry stride is 0xC bytes (3 x u32), NOT 0x10. See the
  *   noc_configure_tlb_128g helper below.
+ * NOC_128G_WINDOW_BASE: X280 system-port address of window 0, per
+ *   BlackholeA0/L2CPUTile/MemoryMap.md, "x280 physical address space".
  * NOC_128G_WINDOW_STRIDE: width of one 128 GiB window in X280 phys
- *   address space (= 1 << 37 = NOC_BIT). The X280 system-port window
- *   base for slot i is computed in noc_configure_tlb_128g per the
- *   reference (BIG_BIT | NOC_BIT*(1+i) | SYSTEM_PORT).
+ *   address space (= 1 << 37).
  * NOC_128G_WINDOW_COUNT: hardware-defined number of 128 GiB slots. */
 #define NOC_128G_CONFIG_BASE (NOC_TLB_2M_CONFIG_BASE + 0x10 * 224) /* 0x2FF00E00 */
+#define NOC_128G_WINDOW_BASE 0x80430000000ULL /* = System Port + 0x80400000000 */
 #define NOC_128G_WINDOW_STRIDE (1ULL << 37)
 #define NOC_128G_WINDOW_COUNT 32
 
@@ -153,8 +154,8 @@ typedef union {
 } noc_tlb_128g_t;
 
 /**
- * Configure a 128 GiB NOC TLB window and return the 128 GiB-aligned
- * X280 system-port window base for that slot.
+ * Configure a 128 GiB NOC TLB window and return the X280 system-port
+ * window base for that slot.
  *
  * Writes the 96-bit bitfield as 3 x u32 stores at
  * peripheral-port offset 0xE00 + tlb_index * 0xC, with full
@@ -177,8 +178,8 @@ typedef union {
  *                              phys[27:0] by the outbound DMA TLB)
  *
  * The DMA-side base of the slot is `(window - SYSTEM_PORT) >> 28`
- * (e.g. 0x8200 for index 0, 0x8400 for index 1, before the phys
- * [36:28] addend is OR'd in). See dma_engine_noc_to_noc for the
+ * (e.g. 0x8040 for index 0, 0x8240 for index 1, before the phys
+ * [36:28] addend is added). See dma_engine_noc_to_noc for the
  * complete recipe.
  *
  * Per-kick byte ceiling for a transfer that uses this TLB is
@@ -194,8 +195,9 @@ typedef union {
  *                     responsibility" above.
  * @param posted       1 = posted, 0 = non-posted.
  * @param strict_order 1 = enforce in-order delivery.
- * @return  128 GiB-aligned X280 system-port window base
- *          (= BIG_BIT | NOC_BIT*(1+index) | SYSTEM_PORT, no offset).
+ * @return  X280 system-port window base
+ *          (= NOC_128G_WINDOW_BASE + index * NOC_128G_WINDOW_STRIDE,
+ *          no offset).
  *          The firmware does NOT dereference this directly -- the
  *          DMA engine is the consumer.
  */
@@ -224,22 +226,10 @@ static inline uint64_t noc_configure_tlb_128g(
     cfg[2] = tlb.data[2];
     x280_fence_iorw();
 
-    /* X280 system-port window for 128 GiB slot `index`:
-     *   BIG_BIT | (NOC_BIT * (1 + index)) | SYSTEM_PORT
-     * with BIG_BIT = 1<<43, NOC_BIT = 1<<37, SYSTEM_PORT = 0x30000000.
-     *
-     * Index 0 -> 0x82030000000, index 1 -> 0x84030000000. The DMA-side
-     * value for the outbound DMA TLB is then
-     * `(window - SYSTEM_PORT) >> 28`, i.e. 0x8200 / 0x8400 / ...
-     *
-     * The low 37 bits of `addr` are NOT added here; see the doc
+    /* The low 37 bits of `addr` are NOT added here; see the doc
      * comment above for the caller's responsibility. The firmware
      * does not dereference this pointer (the DMA does). */
-    (void)addr;
-    const uint64_t k_big_bit = 1ULL << 43;
-    const uint64_t k_noc_bit = 1ULL << 37;
-    const uint64_t k_system_port = 0x30000000ULL;
-    return k_big_bit | (k_noc_bit * (1ULL + index)) | k_system_port;
+    return NOC_128G_WINDOW_BASE + (uint64_t)index * NOC_128G_WINDOW_STRIDE;
 }
 
 /**
