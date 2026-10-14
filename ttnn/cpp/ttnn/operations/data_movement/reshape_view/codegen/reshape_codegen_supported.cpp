@@ -49,7 +49,8 @@ bool tile_native_faster(const Tensor& input, const ttnn::Shape& logical_output_s
            !tile_rows_beats_native(input.logical_shape(), logical_output_shape, num_cores);
 }
 
-// Every check of the gate that needs no plan.
+// Every check of the gate that needs no plan. None builds a spec or reads the allocator, so they run before
+// anything that does, and the core grid is only built for a call that passes the rest.
 bool in_scope(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
@@ -70,15 +71,16 @@ bool in_scope(
     if (!is_plain_interleaved(input.memory_config()) || !is_plain_interleaved(output_mem_config)) {
         return false;
     }
-    if (!supported_execution_controls(input, sub_core_grids)) {
-        return false;
-    }
     const auto& in_shape = input.logical_shape();
     if (in_shape == logical_output_shape || in_shape.volume() == 0 ||
         in_shape.volume() != logical_output_shape.volume()) {
         return false;
     }
-    return input.layout() == Layout::TILE && standard_tile_with_tight_padding(input);
+    if (input.layout() != Layout::TILE || !standard_tile_with_tight_padding(input) ||
+        !is_tile_row_permutation(in_shape, logical_output_shape)) {
+        return false;
+    }
+    return supported_execution_controls(input, sub_core_grids);
 }
 
 // The budget-independent half of the program, built once per call and fitted to both the static and the live budget.
@@ -87,22 +89,18 @@ public:
     Geometry(
         const Tensor& input,
         const ttnn::Shape& logical_output_shape,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) :
+        const tt::tt_metal::MemoryConfig& output_mem_config) :
         input_(input),
         logical_output_shape_(logical_output_shape),
-        num_cores_(reshape_core_count(input, sub_core_grids)),
         output_spec_(reshape_codegen::output_spec(input, logical_output_shape, output_mem_config)) {}
 
     const tt::tt_metal::TensorSpec& output_spec() const { return output_spec_; }
-    uint32_t num_cores() const { return num_cores_; }
 
     bool tile_rows_fit(uint64_t l1_budget) const { return tile_rows_fits(input_, logical_output_shape_, l1_budget); }
 
 private:
     const Tensor& input_;
     const ttnn::Shape& logical_output_shape_;
-    uint32_t num_cores_;
     tt::tt_metal::TensorSpec output_spec_;
 };
 
@@ -129,14 +127,19 @@ CodegenDecision decide_codegen(
     if (!in_scope(input, logical_output_shape, output_mem_config, sub_core_grids)) {
         return decision;
     }
-    Geometry geometry(input, logical_output_shape, output_mem_config, sub_core_grids);
+    // Routing runs native whenever native is faster, admitted or not, so that is settled first: it needs only the
+    // memoized plan layout and the core count, and a native-routed call builds no spec and reads no allocator state.
+    if (routing && tile_native_faster(input, logical_output_shape, reshape_core_count(input, sub_core_grids))) {
+        decision.native_faster = true;
+        return decision;
+    }
+    Geometry geometry(input, logical_output_shape, output_mem_config);
     const uint64_t static_budget = static_l1_budget(input, geometry.output_spec());
     if (!geometry.tile_rows_fit(static_budget)) {
         return decision;
     }
     decision.supported = true;
-    decision.native_faster = routing && tile_native_faster(input, logical_output_shape, geometry.num_cores());
-    if (decision.native_faster || !plan_launch) {
+    if (!plan_launch) {
         return decision;
     }
 
