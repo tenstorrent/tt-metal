@@ -21,6 +21,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     check_attn_mask,
     check_cache_hit_rebinds,
     check_chunked,
+    check_routing,
     check_chunked_trace,
     check_concat_heads,
     check_joint,
@@ -400,6 +401,33 @@ def test_sdpa_recipe_odd_q_masked_first_chunk(device, variant, q_chunk, k_chunk)
 
 
 # Program-cache hits on new inputs (check_cache_hit_rebinds), the layouts the unit file does not cover.
-@pytest.mark.parametrize("case", ["joint", "windowed_offset_tensor"])
+@pytest.mark.parametrize("case", ["chunked_paged_sink", "joint", "windowed_offset_tensor"])
 def test_sdpa_recipe_cache_hit_rebinds(device, case):
     check_cache_hit_rebinds(device, case)
+
+
+# The unit file's legacy-arguments case on STANDARD (BFP8 Q/K/V, custom scale with an attn_mask, L1 inputs and
+# output, FP32-dest HiFi4 compute_kernel_config, six batch/heads on a 2x2 grid).
+def test_sdpa_recipe_legacy_arguments_standard(device):
+    check_legacy_arguments(
+        device,
+        "standard",
+        q_dtype=ttnn.bfloat8_b,
+        kv_dtype=ttnn.bfloat8_b,
+        scale=0.3,
+        mask=True,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=True,
+        shape=(2, 3, 1, 288, 640, 64, 96, 160),
+        grid=(2, 2),
+    )
+
+
+# Precision routing cases beyond the unit file's: an attn_mask call passing Q2048, joint with FP32 dest (ACCURATE),
+# head dim 512, mixed K/V dtypes (K BF16, V BFP8) and an empty joint segment.
+SDPA_ROUTING_NIGHTLY_CASES = ["dense_mask_q2048", "joint_fp32_dest", "dense_d512", "dense_mixed_kv", "joint_empty"]
+
+
+@pytest.mark.parametrize("case", SDPA_ROUTING_NIGHTLY_CASES)
+def test_sdpa_precision_routing(device, case):
+    check_routing(device, case)
