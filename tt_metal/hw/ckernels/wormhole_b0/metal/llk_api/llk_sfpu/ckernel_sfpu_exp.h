@@ -720,12 +720,9 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
-template <
-    bool APPROXIMATION_MODE,
-    std::uint32_t scale,
-    bool CLAMP_NEGATIVE,
-    bool is_fp32_dest_acc_en>
-void exp_init() {
+// Inlined into the init: a call there leaves the icache prefetch stream (trisck.cc) behind at this cold callee.
+template <bool APPROXIMATION_MODE, std::uint32_t scale, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en>
+inline __attribute__((always_inline)) void exp_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
     // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).
