@@ -34,6 +34,7 @@ It is inevitable that these invariants exist but we should keep them to a minimu
 | `semaphore_spec/` | `semaphore_spec.hpp` |
 | `tensor_parameter/` | `tensor_parameter.hpp` |
 | `prefetcher_pipe_parameter/` | `prefetcher_pipe_parameter.hpp` |
+| `global_semaphore_parameter/` | `global_semaphore_parameter.hpp` |
 | `advanced_options/` | `advanced_options.hpp` |
 | `program_spec/` | `program_spec.hpp` |
 

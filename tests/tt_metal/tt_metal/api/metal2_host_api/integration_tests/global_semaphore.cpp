@@ -61,8 +61,8 @@ m2::KernelSpec::SemaphoreBinding BindParam(const char* accessor) {
     return m2::KernelSpec::SemaphoreBinding{.semaphore_spec_name = kParam, .accessor_name = accessor};
 }
 
-m2::KernelSpec::CompilerOptions::Defines Defines(std::map<std::string, std::string> defines) {
-    return m2::KernelSpec::CompilerOptions::Defines(std::move(defines));
+m2::KernelSpec::CompilerOptions::Defines Defines(const std::map<std::string, std::string>& defines) {
+    return m2::KernelSpec::CompilerOptions::Defines(defines);
 }
 
 uint32_t ReadWord(distributed::MeshDevice& mesh_device, const CoreCoord& core, uint32_t addr) {

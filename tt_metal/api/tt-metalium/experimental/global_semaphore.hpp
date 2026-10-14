@@ -9,6 +9,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 
+// Experimental and subject to change: this header carries no API-stability guarantee.
+
 namespace tt::tt_metal::experimental {
 
 // clang-format off

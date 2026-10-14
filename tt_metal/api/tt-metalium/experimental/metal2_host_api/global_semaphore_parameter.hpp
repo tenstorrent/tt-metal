@@ -8,6 +8,8 @@
 
 #include <tt_stl/strong_type.hpp>
 
+// Experimental and subject to change: this header carries no API-stability guarantee.
+
 namespace tt::tt_metal::experimental {
 
 // ============================================================================

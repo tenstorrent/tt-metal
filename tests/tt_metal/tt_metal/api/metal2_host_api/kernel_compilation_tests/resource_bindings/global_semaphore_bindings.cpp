@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <filesystem>
 #include <map>
 #include <string>
 
@@ -15,6 +16,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
+#include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers/global_semaphore_test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -29,12 +31,12 @@ using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::ProgramSpecTestGen1;
 
 void CompileGlobalSemaphoreKernel(
-    distributed::MeshDevice& mesh_device, const char* source, std::map<std::string, std::string> defines = {}) {
+    distributed::MeshDevice& mesh_device, const char* source, const std::map<std::string, std::string>& defines = {}) {
     ProgramSpec spec;
     spec.name = "global_sem_smoke";
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{source};
-    dm_kernel.compiler_options.defines = KernelSpec::CompilerOptions::Defines(std::move(defines));
+    dm_kernel.compiler_options.defines = KernelSpec::CompilerOptions::Defines(defines);
     BindGlobalSemaphoreToKernel(dm_kernel, "gsem", "gsem");
     spec.kernels = {dm_kernel};
     spec.global_semaphore_parameters = {GlobalSemaphoreParameter{.unique_id = GlobalSemaphoreParamName{"gsem"}}};
@@ -114,6 +116,13 @@ TEST_F(ProgramSpecTestGen1, CPU_GlobalSemaphoreFabric1DApiJITSmoke) {
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_GlobalSemaphoreFabric2DApiJITSmoke) {
+    // fabric/hw/inc/mesh/api.h includes a ttnn kernel header, which a tt-metalium-only install does not ship.
+    const std::filesystem::path ttnn_header =
+        std::filesystem::path(MetalContext::instance().rtoptions().get_root_dir()) /
+        "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp";
+    if (!std::filesystem::exists(ttnn_header)) {
+        GTEST_SKIP() << "2D fabric kernel headers need ttnn sources (" << ttnn_header << " not found)";
+    }
     // ROUTING_MODE_2D | ROUTING_MODE_MESH | ROUTING_MODE_LOW_LATENCY
     CompileGlobalSemaphoreKernel(*mesh_device_, kFabricSmokeSource, {{"FABRIC_2D", "1"}, {"ROUTING_MODE", "162"}});
 }

@@ -21,6 +21,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "llrt.hpp"
+#include "impl/buffers/global_semaphore_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
@@ -159,7 +160,7 @@ TEST_F(MeshDispatchFixture, PersistentGlobalSemaphoreInitAndResetReachEveryCore)
         const CoreRangeSet cores(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
 
         auto sem = experimental::CreatePersistentGlobalSemaphore(*mesh_device, cores, 0x1234);
-        EXPECT_TRUE(std::get<2>(sem.attribute_values()));
+        EXPECT_TRUE(sem.impl().is_persistent());
         distributed::Synchronize(*mesh_device, std::nullopt);
         ExpectPersistentValueOnEveryCore(*mesh_device, sem, cores, 0x1234);
 

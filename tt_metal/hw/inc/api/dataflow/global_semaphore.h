@@ -72,8 +72,9 @@ namespace fabric_api = tt::tt_fabric::linear::experimental;
  * address: the constructor reads it from the launch's kernel-config table. The semaphore has the same address
  * on every core and device it is allocated on, so the class fills it in for NoC and fabric targets alike.
  *
- * Every access goes through the NoC-atomic path, so a word incremented by other cores, or other chips, is
- * never updated with a plain read-modify-write.
+ * up() and down() go through the NoC-atomic path, so a word incremented by other cores, or other chips, is
+ * never updated with a plain read-modify-write. value() and wait() are plain loads and set() is a plain store;
+ * none of them is atomic with respect to in-flight increments.
  *
  * Rules:
  *  - down() is single-consumer: the consumer runs on the core that owns the semaphore, and remote cores only up().

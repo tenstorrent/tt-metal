@@ -255,8 +255,8 @@ DeviceAddr GlobalSemaphore::address() const { return impl().address(); }
 
 void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const { impl().reset_semaphore_value(reset_value); }
 
-std::tuple<CoreRangeSet, BufferType, bool> GlobalSemaphore::attribute_values() const {
-    return std::make_tuple(impl().cores(), impl().buffer_type(), impl().is_persistent());
+std::tuple<CoreRangeSet, BufferType> GlobalSemaphore::attribute_values() const {
+    return std::make_tuple(impl().cores(), impl().buffer_type());
 }
 
 }  // namespace tt::tt_metal
@@ -270,7 +270,8 @@ namespace std {
 
 std::size_t hash<tt::tt_metal::GlobalSemaphore>::operator()(
     const tt::tt_metal::GlobalSemaphore& global_semaphore) const {
-    return ttsl::hash::hash_objects_with_default_seed(global_semaphore.attribute_values());
+    return ttsl::hash::hash_objects_with_default_seed(
+        global_semaphore.attribute_values(), global_semaphore.impl().is_persistent());
 }
 
 }  // namespace std

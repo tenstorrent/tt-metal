@@ -71,7 +71,7 @@ struct KernelSpec {
     Group<DFBBinding> dfb_bindings;
 
     struct SemaphoreBinding {
-        SemaphoreSpecName semaphore_spec_name;
+        std::variant<SemaphoreSpecName, GlobalSemaphoreParamName> semaphore_spec_name;
 
         // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
         std::string accessor_name;
@@ -80,6 +80,9 @@ struct KernelSpec {
     // - semaphore_spec_name must be unique across all semaphore_bindings.
     // - accessor_name must be unique across all semaphore_bindings.
     // - Wormhole: Must be empty if is_compute_kernel().
+    // - No GlobalSemaphoreParamName binding if is_compute_kernel().
+    // - For a GlobalSemaphoreParamName binding with accessor_name A, no binding uses accessor_name A + "_t"
+    //   (the generated token type).
     Group<SemaphoreBinding> semaphore_bindings;
 
     struct ScratchpadBinding {

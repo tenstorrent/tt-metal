@@ -58,8 +58,8 @@ public:
 
     void reset_semaphore_value(uint32_t reset_value) const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("cores", "buffer_type", "persistent");
-    std::tuple<CoreRangeSet, BufferType, bool> attribute_values() const;
+    static constexpr auto attribute_names = std::forward_as_tuple("cores", "buffer_type");
+    std::tuple<CoreRangeSet, BufferType> attribute_values() const;
 
     GlobalSemaphoreImpl& impl();
     const GlobalSemaphoreImpl& impl() const;
