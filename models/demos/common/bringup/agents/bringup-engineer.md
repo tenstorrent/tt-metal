@@ -120,7 +120,9 @@ You start with no memory of earlier steps. Everything you need is in the brief a
 - **implement**: write the TTNN module for the component in `<model_dir>/tt/` and register it in the model's
   `device_component` (and, for integration, `device_model`) hooks. Start from the code the components entry names under
   `reuse`. Keep every other component on the CPU reference. A step tagged OPGEN in `components.yaml` is deferred from
-  the start (rule 11).
+  the start (rule 11). A layer that reads other layers' state (hooks `state_sources`) gets their state as of the end of
+  the chunk in `ctx.extra["source_state"]` (testing/harness.py); in the device model it reads the source modules' own
+  device state, never a copy from the host.
 - **assemble**: after the swap tests, build the all-device model (hidden state resident on the device, every block
   through `run_block`) from the validated modules and make it the `device_model` hook; the hybrid stays selectable.
   A step deferred to op-gen runs through `CpuBridge` (`testing/cpu_bridge.py`), the only host work allowed.

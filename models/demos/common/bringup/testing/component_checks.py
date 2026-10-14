@@ -56,9 +56,8 @@ import torch
 from torch.overrides import TorchFunctionMode
 
 from models.demos.common.bringup.core import defaults, metrics
-from models.demos.common.bringup.reference.interface import Ctx
 from models.demos.common.bringup.testing import mutate as MU
-from models.demos.common.bringup.testing.harness import compare, default_mode, reference_ctx
+from models.demos.common.bringup.testing.harness import compare, default_mode, device_ctx, reference_ctx
 
 COMPONENT_DEFAULTS = {
     "component_rel": 0.015,  # rel L2 cap (Hy4 device components vs golden: <= 0.0084)
@@ -399,19 +398,11 @@ def cases(s, ref, layer: int, st, g, c: int, kind: str) -> list[Case]:
     hooks = s.hooks()
 
     def ctxs(c_):
-        start = c_ * g.chunk
-
         def d0():
-            return Ctx(
-                layer,
-                start,
-                g.chunk,
-                None,
-                {"state_prefix": g.state(layer, at=start), "prefix_len": start, "max_seq": g.seq},
-            )
+            return device_ctx(layer, g, c_, s)
 
         def r():
-            ctx = reference_ctx(ref, layer, g, c_)
+            ctx = reference_ctx(ref, layer, g, c_, s)
             if hasattr(hooks, "swap_context"):
                 hooks.swap_context(s, ref, layer, g, c_, ctx, d0())
             return ctx
@@ -419,7 +410,7 @@ def cases(s, ref, layer: int, st, g, c: int, kind: str) -> list[Case]:
         def d():
             ctx = d0()
             if hasattr(hooks, "swap_context"):
-                hooks.swap_context(s, ref, layer, g, c_, reference_ctx(ref, layer, g, c_), ctx)
+                hooks.swap_context(s, ref, layer, g, c_, reference_ctx(ref, layer, g, c_, s), ctx)
             return ctx
 
         return r, d

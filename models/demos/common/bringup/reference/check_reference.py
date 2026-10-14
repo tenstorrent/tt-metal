@@ -119,6 +119,8 @@ def main(argv=None):
         # Fresh state holding only the prefix [0, start) of this layer, then replay the last chunk's block.
         state = ref.new_state(a.seq)
         ref.load_state(state, li, prefixes[li], start)
+        for j in spec.state_sources(li):  # F65: the layers it reads, as they are after the last chunk
+            ref.load_state(state, j, ref.state_tensors(ch_state, j, a.seq), a.seq)
         ctx = ref.chunk_context(li, start, a.chunk, state)
         replayed = {}
         run_block(

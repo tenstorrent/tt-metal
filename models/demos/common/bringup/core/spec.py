@@ -288,6 +288,13 @@ class Spec:
             return list(by_bt.get(self.block_type_of(layer), []))
         return list(self.get("state.tensors") or [])
 
+    def state_sources(self, layer: int) -> list[int]:
+        """F65: the earlier layers whose state this layer reads (hooks ``state_sources(spec, layer)``; e.g. a layer
+        attending over another layer's KV cache, or reusing its top-k indices). Their state as of the end of the
+        current chunk is part of this layer's context in every test."""
+        fn = getattr(self.hooks(), "state_sources", None)
+        return [int(j) for j in fn(self, layer)] if fn else []
+
     @property
     def state_fixed(self) -> list[str]:
         """State tensors that do not grow along the sequence (recurrent state, conv tail): the state at position p

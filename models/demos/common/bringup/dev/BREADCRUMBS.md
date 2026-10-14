@@ -921,3 +921,17 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - Not done: results per box. One ledger per model, so running the same model on a second box re-runs its tasks in
   the same results folder; separating them means a ledger per box, worth doing when a model first moves boxes.
   Perf picks (P tasks) still A/B on the real-size profile; only the opportunity list uses the scaled one.
+
+## F65 (2026-10-14): layers that read other layers' state
+
+- DeepSeek-V4.1-Flash's attention shares state across layers: KV sources (2, 8, 14, 20) own the compressed KV and
+  indexer keys, reuse layers attend over a source's cache with its top-k indices, re-index layers (24, ...) use the
+  candidate pool of layer 20. The framework assumed every layer owns its state.
+- hooks `state_sources(spec, layer) -> [earlier layers]` (spec.state_sources). A reader keeps no state (empty
+  `state.by_block_type` entry); per-chunk results it reuses are fixed-size state tensors of its source. Tests load the
+  sources' state as of the END of the chunk (they have run it): harness reference_ctx / device_ctx
+  (`ctx.extra["source_state"]`, `source_len`), component / swap / mutation tests build the reference with the sources;
+  check_reference's replay loads them after the last chunk; generate_golden refuses a subset without a reader's
+  sources and snapshots fixed state at the end of every dumped chunk too; the memory check needs state entries only for
+  layers that have state.
+- Selftests: test_shared_state.py on the fixture (`fixture.shared`: a KV source and a recurrent source).
