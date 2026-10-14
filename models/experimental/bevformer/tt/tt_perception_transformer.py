@@ -66,10 +66,7 @@ def rotation_gather(img_metas, bev_h, bev_w, rotate_center):
 
 
 class TtPerceptionTransformer:
-    """The encoder and its glue over a ``(bev_h, bev_w)`` grid and FPN levels of ``spatial_shapes``.
-
-    Owns a :class:`TTBEVFormerEncoder`, so ``params`` are single-use like its own.
-    """
+    """The encoder and its glue over a ``(bev_h, bev_w)`` grid and FPN levels of ``spatial_shapes``."""
 
     def __init__(self, params, device, *, bev_h, bev_w, spatial_shapes):
         """``params`` from ``model_preprocessing.create_perception_transformer_parameters``;
