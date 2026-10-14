@@ -87,3 +87,18 @@ for layers 0/49, steps 1/4; device-lint; submit via blx01 broker (t288/blx01-sub
   chain479.sh and relaunched it at 21:25 PDT with ADOPT=307 (waits on 307, no duplicate submit; tries 2-3 submit
   fresh). Files: state/runs/1831/{chain479.log,chain479.rc,chain479.done,replay479.txt}.
   Next: same as run 1822 (read replay479.txt).
+
+# t479 run 1842 (after g15blx02 reboot 23:28 PDT 10-13): STOPPED, no further continuation
+- Job 307 (d1, sla0.85) ran on blx01 at 22:53 PDT 10-13 after a 2.9 h queue wait and failed in 41.6 s, before any dump
+  (T409_EXIT=1). Post-job gate: "252 of 256 eth link(s) up — a link went down", fabric check "Connection mismatch
+  detected". Hardware drop, not our code. Nothing of ours is queued on blx01 (only ltx-host job 368), so no kill was needed.
+  chain479 then got refused (broker degraded-hold) and stopped when blx01 went off the network.
+- Drops: 2026-10-14 05:54 UTC, blx01, job 307 (ours), 4 eth links down / fabric mismatch; later 1/32 chips off the bus,
+  broker hold. blx01 down for repair until about 2026-10-17 03:04 UTC (NIC failure, chip 21 off the bus).
+- 23:35 PDT 10-13: blx03 broker HELD degraded (8/32 chips off the bus). Exabox tunnel up, but qualify.sh found no dit
+  node idle >= 2 h (rc 1). Exabox has a Turbo setup to reuse: /data/smarton/fasth3/t417 (MiniMax-H3, SLA LoRA v0.1,
+  src at 1d8e15320e3, run417.sh/submit417.sh). It lacks t479's dump plugin and replay.
+- Stop condition applied: no box can run the 0.85 replay now, and the task budget left (~$1.7) is too small to port d1
+  to exabox (code sync, driver, lint, cold JIT that already took >400 s for audio warm on blx01) and read the replay.
+  The cause of the colored-noise output is NOT localized. Known so far: token packing check (step 1) and the missing
+  SLA linear branch (LoRA v0.1 has no proj_l weights). Payoff cap was ~20%/step. No further SLA continuation proposed.
