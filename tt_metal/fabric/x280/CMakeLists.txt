@@ -284,7 +284,11 @@ if(_soc MATCHES "\nl2cpu:")
     message(FATAL_ERROR "Coordinate tests require the unchanged Metal descriptor without an l2cpu section")
 endif()
 foreach(_y 3 5 7 9)
+    set(_before "${_soc}")
     string(REPLACE "8-${_y}, " "" _soc "${_soc}")
+    if(_soc STREQUAL _before)
+        message(FATAL_ERROR "Coordinate test overlay: 8-${_y} not found in the descriptor's router_only list")
+    endif()
 endforeach()
 string(APPEND _soc "\nl2cpu: [8-3, 8-5, 8-7, 8-9]\n")
 file(WRITE "${_coord_root}/tt_metal/soc_descriptors/blackhole_140_arch.yaml" "${_soc}")
@@ -303,6 +307,9 @@ string(LENGTH "l2cpu_harvesting_mask: 0" _mask_length)
 math(EXPR _after_first "${_first} + ${_mask_length}")
 string(SUBSTRING "${_disagree}" 0 ${_after_first} _prefix)
 string(SUBSTRING "${_disagree}" ${_after_first} -1 _suffix)
+if(NOT _suffix MATCHES "l2cpu_harvesting_mask: 0")
+    message(FATAL_ERROR "Coordinate test fixture has no second unharvested L2CPU mask to disagree with")
+endif()
 string(REPLACE "l2cpu_harvesting_mask: 0" "l2cpu_harvesting_mask: 2" _suffix "${_suffix}")
 file(WRITE "${_coord_root}/disagreement.yaml" "${_prefix}${_suffix}")
 file(WRITE "${_coord_root}/unharvested.yaml" "${_cluster}")
@@ -322,6 +329,13 @@ foreach(_case Unharvested Harvested Disagreement)
             ${CMAKE_COMMAND} -E env --unset=TT_VISIBLE_DEVICES "TT_METAL_RUNTIME_ROOT=${_coord_root}"
             "TT_METAL_MOCK_CLUSTER_DESC_PATH=${_coord_root}/${_fixture}.yaml"
             $<TARGET_FILE:x280_runtime_coordinate_tests> "--gtest_filter=${_filter}"
+    )
+    # A filter that selects nothing exits 0; require at least one passed test.
+    set_tests_properties(
+        x280_coordinates_${_fixture}
+        PROPERTIES
+            PASS_REGULAR_EXPRESSION
+                "\\[  PASSED  \\] [1-9]"
     )
 endforeach()
 
