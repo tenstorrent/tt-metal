@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 # HW_FLOORS attribution, eltwise binary add LoFi on this head: block unpack and, by the scratch harness edit, the block
-# pack under it (the DEST hand-off job 2 configuration), with and without the block math call, in both 8-tile shapes.
+# pack under it: the DEST hand-off job 2 configuration (1x8, per-tile math) and the block math call (8x1); one row per
+# report key.
 # Not for merge.
 import inspect
 
@@ -21,7 +22,6 @@ NO, YES = DestAccumulation.No, DestAccumulation.Yes
 # name, input, output, dest acc, op, fidelity, dims, block (unpack and math), sync
 CFG = [
     ("add_lo_8_row", F16, F16, NO, ADD, LO, [32, 256], False, DestSync.Half),
-    ("add_lo_8_row_mb", F16, F16, NO, ADD, LO, [32, 256], True, DestSync.Half),
     ("add_lo_8_col_mb", F16, F16, NO, ADD, LO, [256, 32], True, DestSync.Half),
 ]
 
