@@ -222,6 +222,9 @@ std::optional<TensorTopology> scatter_output_topology(
             // Whole-mesh scatter of a 1-D label: piece i lands on ring rank i, which is the label's own order.
             return TensorTopology(in.distribution_shape(), TopologyPlacements{shard}, in.mesh_coords());
         }
+        // The input is N-D here, so this expands nothing: it checks that the label's axes are the mesh's (its shape
+        // fits the mesh per axis and its coordinates are a row-major block) and returns the placements as they are,
+        // or refuses a label no per-axis reading describes (one laid out row-major over a mesh its shape did not fit).
         auto expanded = uncollapse_placements(in, mesh_shape, &reason);
         if (!expanded.has_value()) {
             return fail(reason, Family::Scatter);
