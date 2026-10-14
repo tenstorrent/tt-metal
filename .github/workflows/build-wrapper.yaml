@@ -126,7 +126,7 @@ jobs:
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      publish-artifact: false
+      publish-artifact: true
       publish-package: false
       skip-tt-train: false
       tracy: false
