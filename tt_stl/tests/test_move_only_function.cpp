@@ -15,7 +15,6 @@
 namespace ttsl {
 namespace {
 
-// Asserted at build time so a change to the implementation cannot quietly regress them.
 static_assert(!std::is_copy_constructible_v<move_only_function<void()>>, "must be move-only");
 static_assert(!std::is_copy_assignable_v<move_only_function<void()>>, "must be move-only");
 // A non-const lvalue is the case a greedy forwarding constructor would swallow.
@@ -32,7 +31,6 @@ static_assert(
     !std::is_invocable_v<move_only_function<void()>&, int, int>,
     "must not claim to be invocable with a wrong argument list");
 
-// The public surface is std::move_only_function's.
 static_assert(std::is_same_v<move_only_function<int(char)>::result_type, int>);
 static_assert(!std::is_invocable_v<const move_only_function<void()>&>, "R(Args...) is not const-callable");
 static_assert(!std::is_constructible_v<move_only_function<void()>, int>, "must reject non-callables");
@@ -52,7 +50,6 @@ TEST(MoveOnlyFunctionTest, CPU_ReturnsValueAndTakesArguments) {
     EXPECT_EQ(add(2, 3), 5u);
 }
 
-// The reason this type exists: std::function cannot store a move-only capture at all.
 TEST(MoveOnlyFunctionTest, CPU_HoldsMoveOnlyCapture) {
     auto owned = std::make_unique<int>(7);
     move_only_function<int()> f{[owned = std::move(owned)]() { return *owned; }};
@@ -89,7 +86,6 @@ TEST(MoveOnlyFunctionTest, CPU_MoveAssignmentReplacesTarget) {
     EXPECT_EQ(dst(), 42);
 }
 
-// Exceeds the inline buffer, so this is the heap path.
 TEST(MoveOnlyFunctionTest, CPU_HoldsCaptureLargerThanInlineBuffer) {
     struct Big {
         std::uint64_t data[8] = {1, 2, 3, 4, 5, 6, 7, 8};
@@ -100,8 +96,6 @@ TEST(MoveOnlyFunctionTest, CPU_HoldsCaptureLargerThanInlineBuffer) {
     EXPECT_EQ(f(), 8u);
 }
 
-// std::function and std::move_only_function both yield an empty wrapper here, rather than storing
-// the null pointer as an ordinary target, reporting engaged and then calling through it.
 TEST(MoveOnlyFunctionTest, CPU_NullFunctionPointerIsEmpty) {
     void (*fp)() = nullptr;
     move_only_function<void()> f{fp};
@@ -121,12 +115,9 @@ TEST(MoveOnlyFunctionTest, CPU_NonNullFunctionPointerIsEngaged) {
     EXPECT_EQ(f(), 5);
 }
 
-// A moved-from wrapper must be empty; otherwise operator bool would report engaged and a call would
-// run a target that has been moved out.
 TEST(MoveOnlyFunctionTest, CPU_MovedFromIsEmpty) {
     move_only_function<int()> src{[]() { return 42; }};
     move_only_function<int()> dst{std::move(src)};
-    // Inspecting the moved-from source is the point of the test: its emptiness is the contract.
     EXPECT_FALSE(static_cast<bool>(src));  // NOLINT(bugprone-use-after-move)
     EXPECT_TRUE(src == nullptr);           // NOLINT(bugprone-use-after-move)
     EXPECT_TRUE(static_cast<bool>(dst));
@@ -140,7 +131,6 @@ TEST(MoveOnlyFunctionTest, CPU_MoveAssignLeavesSourceEmpty) {
     EXPECT_EQ(dst(), 42);
 }
 
-// Emptying only the target, not the invoker, made these run the moved-out callable.
 TEST(MoveOnlyFunctionTest, CPU_CallingMovedFromThrows) {
     move_only_function<int()> src{[p = std::make_unique<int>(42)] { return *p; }};
     move_only_function<int()> dst{std::move(src)};
@@ -156,7 +146,6 @@ TEST(MoveOnlyFunctionTest, CPU_CallingMoveAssignedFromThrows) {
     EXPECT_THROW(src(), std::bad_function_call);  // NOLINT(bugprone-use-after-move)
 }
 
-// Same for a heap-stored target, whose move steals the pointer rather than moving the object.
 TEST(MoveOnlyFunctionTest, CPU_CallingMovedFromHeapTargetThrows) {
     std::uint64_t big[8] = {1, 2, 3, 4, 5, 6, 7, 8};
     move_only_function<std::uint64_t()> src{[big]() { return big[0]; }};
@@ -179,7 +168,6 @@ TEST(MoveOnlyFunctionTest, CPU_SelfMoveAssignIsSafe) {
     EXPECT_EQ(f(), 1u);
 }
 
-// std::move_only_function yields an empty wrapper here, not an engaged one.
 TEST(MoveOnlyFunctionTest, CPU_EmptyStdFunctionIsEmpty) {
     std::function<void()> empty;
     move_only_function<void()> f{empty};
@@ -246,7 +234,6 @@ TEST(MoveOnlyFunctionTest, CPU_CallingEmptyThrows) {
     EXPECT_THROW(f(), std::bad_function_call);
 }
 
-// Counts live instances, so every relocate and destroy is accounted for.
 struct InstanceCounter {
     static inline int live = 0;
     InstanceCounter() noexcept { ++live; }
