@@ -164,7 +164,6 @@ public:
     move_only_function(const move_only_function&) = delete;
     move_only_function& operator=(const move_only_function&) = delete;
 
-    // The self-check is required: a self-move would destroy the target before moving from it.
     move_only_function& operator=(move_only_function&& other) noexcept {
         if (this != &other) {
             destroy_target();
