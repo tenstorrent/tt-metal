@@ -4,22 +4,23 @@
 
 // Cross-op MIXED-TILE transition test (register-state design): a real `unpack_tilize`
 // at one tile geometry G0 (the "polluter") followed by the transition under test —
-// `_llk_unpack_tilize_uninit_` (PR C1) + `_llk_unpack_reconfig_data_format_srca_impl_`
-// `<.. FACE_ROW_MAJOR>` (PR C2) — that retargets the SrcA baseline to a DIFFERENT
+// `_llk_unpack_tilize_uninit_` + `_llk_unpack_reconfig_data_format_srca_impl_`
+// `<.. FACE_ROW_MAJOR>` — that retargets the SrcA baseline to a DIFFERENT
 // geometry G1. The test then reads the SrcA config registers back and verifies they
 // are the canonical G1 baseline.
 //
-// This closes the last open `tilize_uninit` cell: "normal->tiny / tiny->normal with
-// reconfig" (axis F = tile-size transition, axis E = with-reconfig). Phase 3b covers
-// tilize->matmul geometry changes via a full `_llk_unpack_hw_configure_`; here the
-// re-establishment uses the lightweight C2 reconfig path, the ONLY mechanism that both
-// (a) re-commits the canonical SrcA Y-stride (the PR's new write) and (b) RETARGETS the
+// This covers the normal->tiny and tiny->normal tile-size transitions that go through
+// a reconfig. The polluter-matmul tests cover tilize->matmul geometry changes via a
+// full `_llk_unpack_hw_configure_`; here the re-establishment uses the lightweight
+// reconfig path, the ONLY mechanism that both (a) re-commits the canonical SrcA
+// Y-stride and (b) RETARGETS the
 // geometry — it rewrites `Tile_x_dim_cntx0 = canonical_unpA_tile_x_dim_cntx(G1.face_r_dim)`
 // and the tile-descriptor Z-dim = G1.num_faces (llk_unpack_common.h:170-174).
 //
 // Why a register-state check (not a 2nd data op): the run-1 victim of such a transition
 // is a SrcA datacopy whose correctness is *entirely* a function of these four SrcA
-// registers, and Phases 1/2 already prove "correct registers => correct data". Reading
+// registers, and the single-geometry tilize tests already show "correct registers =>
+// correct data". Reading
 // the registers directly verifies the transition for BOTH directions with no second
 // operand / golden (which a single-geometry stimuli harness can't lay out cleanly for
 // two different tile shapes).
@@ -29,7 +30,9 @@
 //   Transition (only when DO_RESTORE): `_llk_unpack_tilize_uninit_(G0)` +
 //           `_llk_unpack_reconfig_data_format_srca_impl_<.. FACE_ROW_MAJOR>(G1)`.
 //   Readback: UNP0 Y-stride / Z-stride, Tile_x_dim_cntx0, tile-descriptor Z-dim,
-//           compared against the canonical G1 baseline on-device via LLK_ASSERT.
+//           compared against the canonical G1 baseline on-device via LLK_ASSERT, plus
+//           the unpack-config tileize_mode bit, which the reconfig does not touch and
+//           so must be clear if (and only if) the uninit ran.
 //
 // DO_RESTORE=false is the negative control: with no transition the registers stay in
 // the G0 tilize state, so actual != G1-expected (the Tile_x_dim / Z-dim differ between
@@ -100,13 +103,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
     t6_semaphore_get<>(semaphore::PACK_DONE);
 
-    // ---- Transition under test: uninit (C1) + reconfig (C2) retarget G0 -> G1 ----
+    // ---- Transition under test: tilize uninit + FACE_ROW_MAJOR reconfig retarget G0 -> G1 ----
     if constexpr (DO_RESTORE)
     {
-        // C1: tear down the tilize-mutated SrcA baseline at the G0 geometry (WH 3-arg
-        // uninit threads face_r_dim so it restores the G0 operand baseline exactly).
+        // Tear down the tilize-mutated SrcA baseline at the G0 geometry. The reconfig below rewrites
+        // every register read back afterwards, so the uninit's own restore is not observed here.
         _llk_unpack_tilize_uninit_wrapper_(formats_array[0].unpack_A_dst, g0_num_faces, g0_face_r_dim);
-        // C2: the FACE_ROW_MAJOR reconfig re-commits the canonical SrcA Y/Z-stride AND
+        // The FACE_ROW_MAJOR reconfig re-commits the canonical SrcA Y/Z-stride AND
         // retargets the geometry to G1 (Tile_x_dim_cntx0 from g1_face_r_dim, descriptor
         // Z-dim from g1_num_faces). Same format both runs, so this is purely the
         // geometry/stride retarget (no data-format change).
@@ -127,8 +130,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         (cfg[UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32] & UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK) >> UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT;
     const std::uint32_t act_z_stride =
         (cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] & UNP0_ADDR_CTRL_ZW_REG_1_Zstride_MASK) >> UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT;
-    const std::uint32_t act_tile_x_dim = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
-    const std::uint32_t act_z_dim      = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1] >> 16;
+    const std::uint32_t act_tile_x_dim   = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
+    const std::uint32_t act_z_dim        = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1] >> 16;
+    const std::uint32_t act_tileize_mode = (cfg[THCON_SEC0_REG2_Tileize_mode_ADDR32] & THCON_SEC0_REG2_Tileize_mode_MASK) >> THCON_SEC0_REG2_Tileize_mode_SHAMT;
 
     const std::uint32_t dst_format     = formats_array[1].unpack_A_dst;
     const std::uint32_t exp_y_stride   = canonical_unpA_y_stride(dst_format);
@@ -143,6 +147,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         LLK_ASSERT(act_z_stride == exp_z_stride, "transition: SrcA Z-stride not the canonical G1 baseline");
         LLK_ASSERT(act_tile_x_dim == exp_tile_x_dim, "transition: Tile_x_dim_cntx0 not retargeted to G1 face_r_dim");
         LLK_ASSERT(act_z_dim == exp_z_dim, "transition: tile-descriptor Z-dim not retargeted to G1 num_faces");
+        // The reconfig only rewrites the output-format field of this word, so a clear bit is the uninit's doing.
+        LLK_ASSERT(act_tileize_mode == 0, "transition: tileize_mode still set after tilize uninit");
     }
     else
     {
@@ -152,6 +158,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const bool all_match =
             (act_y_stride == exp_y_stride) && (act_z_stride == exp_z_stride) && (act_tile_x_dim == exp_tile_x_dim) && (act_z_dim == exp_z_dim);
         LLK_ASSERT(!all_match, "negative control: SrcA already matches the G1 baseline without the transition");
+        LLK_ASSERT(act_tileize_mode == 1, "negative control: tileize_mode not left set by the polluter tilize");
     }
 }
 
