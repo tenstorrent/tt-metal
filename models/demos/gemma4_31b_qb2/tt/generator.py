@@ -6,9 +6,13 @@ The optimized loop replays two traces. Only the sampling trace writes the next
 token; position advances in the model trace. Host sampling is opt-in compatibility.
 """
 
+import hashlib
+import json
 import math
+import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 
 import torch
@@ -327,6 +331,10 @@ class Gemma4Generator:
         self.counters["token_readbacks"] += 1
         return ttnn.to_torch(ttnn.get_device_tensors(token)[0]).reshape(-1)[:batch].long()
 
+    def _audit_control(self):
+        path = Path("/prefix-controlled/control.json")
+        return json.loads(path.read_text()) if path.exists() else {}
+
     def _restore_prefill_history(self, state, page_tables, slot, start):
         """Gather the preceding sliding window from vLLM's retained KV pages.
 
@@ -334,6 +342,14 @@ class Gemma4Generator:
         request's current table are read; null pages are never valid history.
         Decode and cached continuation consume the same stored BF8 values.
         """
+        audit_sync = self._audit_control().get("synchronize", False)
+        if os.environ.get("GEMMA_PREFIX_AUDIT_SYNC") == "1":
+            audit_sync = "stages"
+        if audit_sync:
+            ttnn.synchronize_device(self.mesh)
+        audit_begin = time.perf_counter()
+        audit_gather = audit_convert = 0.0
+        audit_pages = 0
         histories = []
         for i, layer in enumerate(self.model.layers):
             if not layer.sliding:
@@ -345,10 +361,35 @@ class Gemma4Generator:
                 raise ValueError(f"Missing sliding prefix pages for layer {i} at position {start}: {pages}")
             pair = []
             for cache in state.kv[i]:
+                audit_stage = time.perf_counter()
                 parts = [cache[p : p + 1, :, :, :] for p in pages]
                 tail = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=2)
+                if audit_sync == "stages":
+                    ttnn.synchronize_device(self.mesh)
+                audit_gather += time.perf_counter() - audit_stage
+                audit_stage = time.perf_counter()
                 pair.append(ttnn.typecast(tail, ttnn.bfloat16))
+                if audit_sync == "stages":
+                    ttnn.synchronize_device(self.mesh)
+                audit_convert += time.perf_counter() - audit_stage
+                audit_pages += len(pages)
             histories.append(tuple(pair))
+        if audit_sync:
+            ttnn.synchronize_device(self.mesh)
+        logger.info(
+            "GEMMA_RESTORE_AUDIT "
+            + json.dumps(
+                {
+                    "start": start,
+                    "slot": slot,
+                    "pages": audit_pages,
+                    "gather_s": audit_gather,
+                    "convert_s": audit_convert,
+                    "total_s": time.perf_counter() - audit_begin,
+                    "synchronized": audit_sync,
+                }
+            )
+        )
         return histories
 
     def prefill_forward(
@@ -407,10 +448,17 @@ class Gemma4Generator:
                     if previous is None:
                         if not state.vllm_owned or start != aligned_start:
                             raise ValueError("Cached prefill must start at a whole page in the serving cache")
-                        previous = {
-                            "end": start,
-                            "layers": self._restore_prefill_history(state, page_table, slot, start),
-                        }
+                        audit_control = self._audit_control()
+                        if audit_control.get("restore") == "bf16_oracle":
+                            digest = hashlib.sha256(tokens[row, :start].numpy().tobytes()).hexdigest()
+                            snapshot = getattr(self, "_audit_bf16_snapshot", None)
+                            if snapshot is None or snapshot[0] != start or snapshot[1] != digest:
+                                raise ValueError("BF16 audit oracle requires an exact matching seeded prefix")
+                            restored = list(snapshot[2])
+                            logger.info("GEMMA_BF16_ORACLE " + json.dumps({"start": start, "sha256": digest}))
+                        else:
+                            restored = self._restore_prefill_history(state, page_table, slot, start)
+                        previous = {"end": start, "layers": restored}
                     if previous["end"] != start:
                         raise ValueError(
                             "Prefill history does not match the scheduler continuation: "
@@ -456,6 +504,9 @@ class Gemma4Generator:
             )
             if history_keys is not None:
                 state.prefill_history[history_keys[row]] = {"end": length, "layers": histories}
+                if self._audit_control().get("retain_bf16", False):
+                    digest = hashlib.sha256(tokens[row, :length].numpy().tobytes()).hexdigest()
+                    self._audit_bf16_snapshot = (length, digest, list(histories))
             outputs.append(
                 out if return_device else self._host_logits(out).reshape(1, -1, self.model.config.vocab_size)
             )
