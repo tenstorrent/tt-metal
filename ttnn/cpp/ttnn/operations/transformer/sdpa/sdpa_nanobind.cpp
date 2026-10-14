@@ -719,11 +719,12 @@ void bind_sdpa(nb::module_& mod) {
             persistent_output_buffer_joint_v (ttnn.Tensor, optional): Persistent buffer for the
                 gathered joint V tensor [b x nhv x L x dv]. Allocated internally when omitted.
             slot_id (ttnn.Tensor, optional): Cache-user slot read on-device during trace replay.
-                Must be a one-element UINT32 ROW_MAJOR DRAM tensor on the same mesh device as Q.
-                Must be supplied together with kv_actual_isl_tensor. Defaults to None.
+                Must be a UINT32 ROW_MAJOR DRAM tensor on the same mesh device as Q, with one element per
+                request (1 to 8; see Lanes below). Must be supplied together with kv_actual_isl_tensor.
+                Defaults to None.
             kv_actual_isl_tensor (ttnn.Tensor, optional): Prior valid global KV length read on-device
-                during trace replay. Has the same one-element UINT32 ROW_MAJOR DRAM contract as slot_id
-                and must be supplied together with it. Its value must be tile-aligned and below cache
+                during trace replay. Has the same UINT32 ROW_MAJOR DRAM contract and element count as
+                slot_id and must be supplied together with it. Its value must be tile-aligned and below cache
                 capacity. Padded Q rows beyond the cache boundary are ignored. Defaults to None.
             kv_cache_num_layers (int, optional): Number of layers packed into each cache-user slot.
                 None uses 1. The selected cache batch is
@@ -753,6 +754,13 @@ void bind_sdpa(nb::module_& mod) {
         as min(kv_actual_isl[0] + chunk, cache_capacity). The current chunk's actual end is not supplied;
         callers discard padded outputs. Causality protects real query rows from future padding. One
         program and one trace serve aligned and rotated chunks at every depth.
+
+        Lanes: slot_id / kv_actual_isl_tensor with B > 1 elements (up to 8) make one call serve B requests.
+        Q holds their CP-local rows stacked request-major, [1 x nh x B*N/num_devices x d] (Q batch 1, rows
+        split into B tile-aligned lanes), and the output stacks the same way. Request b reads cache slot
+        slot_id[b] with prior length kv_actual_isl[b]. The persistent K/V halo buffers take batch B.
+        Lanes need chunked sliding attention on the metadata path, k_splits 1 without segmented
+        accumulation, kv_stripe_split 1, and no joint tensors, attention sink or circular cache.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):

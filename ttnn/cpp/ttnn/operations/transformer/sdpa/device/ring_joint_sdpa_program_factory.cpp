@@ -468,9 +468,8 @@ RingWritePlan build_ring_write_plan(
 
 RingJointRuntimeDerivation build_runtime_derivation(
     const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
-    const auto& q_shape = tensor_args.input_q.logical_shape();
     const uint32_t k_chunk_size = args.get_k_chunk_size();
-    const uint32_t q_local_padded_N = q_shape[2];
+    const uint32_t q_local_padded_N = tensor_args.q_lane_rows();
     const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len();
     const RingJointInputParams joint_input_params = resolve_ring_joint_input_params(args, tensor_args);
 
@@ -606,7 +605,7 @@ std::optional<uint32_t> compute_gather_valid_Ht(
         return std::nullopt;
     }
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
-    const uint32_t n_local_q = tensor_args.input_q.padded_shape()[2];  // per-device Q slab (chunk_local)
+    const uint32_t n_local_q = tensor_args.q_lane_padded_rows();  // per-device Q slab (chunk_local), per lane
     const uint32_t kv_region = n_local_q / args.kv_stripe_split;
     const uint32_t chunk_global = kv_region * ring_size;
     if (tensor_args.has_metadata()) {
@@ -659,7 +658,7 @@ void apply_ring_joint_scalar_runtime_args(
     std::optional<ring_joint::ChunkedSlidingHaloLayout> runtime_halo_layout;
     if (uses_neighbor_halo) {
         runtime_halo_layout = ring_joint::build_chunked_sliding_halo_layout(
-            tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT,
+            tensor_args.q_lane_padded_rows() / tt::constants::TILE_HEIGHT,
             args.get_k_chunk_size() / tt::constants::TILE_HEIGHT,
             args.sliding_window_size.value(),
             tt::constants::TILE_HEIGHT,
@@ -1078,12 +1077,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool slot_from_metadata = tensor_args.has_metadata();
     const bool indexed_kv_cache = ttnn::prim::indexed_kv_cache_active(args, tensor_args);
     // Latent-V mode: V tensors are omitted and the reader reads V from K's buffer.
-    const uint32_t B = q_shape[0];
+    // Lanes: B is the lane count (validation forces Q batch 1) and each lane owns q_shape[2] / B of Q's stacked rows.
+    const uint32_t num_lanes = tensor_args.num_lanes();
+    const uint32_t B = q_shape[0] * num_lanes;
     const uint32_t NH = q_shape[1];
     const uint32_t NHK = k_shape[1];
     const uint32_t NHV = tensor_args.v_num_heads();
     const uint32_t DH = q_shape[3];
-    const uint32_t q_local_padded_N = q_shape[2];
+    const uint32_t q_local_padded_N = tensor_args.q_lane_rows();
     const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len();
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t gathered_padded_N = k_shape[2];
@@ -2126,7 +2127,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t cb_signal =
         use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
     // Reader-to-compute mailbox for the metadata-derived logical geometry.
-    const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
+    const uint32_t cb_kv_pad_derived =
+        allocate_cb(num_lanes > 1 ? ring_joint::kDerivedLanePageBytes : 64, 1, tt::DataFormat::UInt32);
 
     const std::vector<uint32_t> cb_compile_time_args = {
         cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,     cb_identity_scale_in,
@@ -3186,6 +3188,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"dense_causal_skip", dense_causal_skip ? 1u : 0u},
         {"seg_accum", seg_accum ? 1u : 0u},
         {"kv_stripe_split", args.kv_stripe_split},
+        {"num_lanes", num_lanes},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = ksplit_named_args;
@@ -3648,6 +3651,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 .q_local_tile_rows = chunked_sliding_halo_layout.q_local_tile_rows,
                 .halo_tile_rows = chunked_sliding_halo_layout.halo_tile_rows,
                 .source_device = transport_rank,
+                .num_lanes = num_lanes,
             };
             log_debug(
                 tt::LogOp,
@@ -3723,8 +3727,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             compute_gather_valid_Ht(args, tensor_args),
             tensor_args.slot_id,
             tensor_args.kv_actual_isl,
-            // The gather has R sources: its slab is the KV region, not the Q slab.
-            tensor_args.input_q.padded_shape()[2] / (tt::constants::TILE_HEIGHT * args.kv_stripe_split),
+            // The gather has R sources: its slab is the KV region (per lane), not the Q slab.
+            tensor_args.q_lane_padded_rows() / (tt::constants::TILE_HEIGHT * args.kv_stripe_split),
             // (user, layer)-major KV-cache batch factor: the all-gather reader computes the gathered slot as
             // slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx. Defaults (1, 0) keep callers unaffected.
             args.kv_cache_num_layers,

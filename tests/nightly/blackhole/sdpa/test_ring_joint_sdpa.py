@@ -4199,18 +4199,31 @@ def test_ring_mla_full_mesh_rejects_invalid_placements(expect_error):
 META_PATH_HOST_SCALARS: set = set()
 
 
-def _make_ring_mla_scalar_tensor(mesh_device, value):
-    """1-element uint32 replicated DRAM tensor ([1,1,1,1]) holding a single per-chunk scalar that the
-    trace-safe ring_mla reads on-device. Mirrors the update_padded_kv_cache / rotary metadata layout."""
-    payload = torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1)
+def _ring_joint_lane_metadata_tensor(mesh_device, values):
+    """One uint32 element per lane, replicated in DRAM; one value is the single-request metadata tensor."""
     return ttnn.from_torch(
-        payload,
+        torch.tensor(values, dtype=torch.int64).reshape(1, 1, 1, len(values)),
         device=mesh_device,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
+
+
+def _ring_joint_lane_metadata_host_tensor(mesh_device, values):
+    """HOST-side twin of _ring_joint_lane_metadata_tensor, for refreshing it in place with copy_host_to_device_tensor."""
+    return ttnn.from_torch(
+        torch.tensor(values, dtype=torch.int64).reshape(1, 1, 1, len(values)),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _make_ring_mla_scalar_tensor(mesh_device, value):
+    """1-element uint32 replicated DRAM tensor ([1,1,1,1]) holding a per-chunk scalar that ring_mla reads on-device."""
+    return _ring_joint_lane_metadata_tensor(mesh_device, [value])
 
 
 def _make_ring_mla_metadata(mesh_device, slot_id, actual_start):
@@ -6849,6 +6862,334 @@ def test_ring_joint_attention_multi_hop_wrapping_block_cyclic_sliding_reuse(loca
         ],
         halo_slots=2,
     )
+
+
+def run_ring_joint_sdpa_sliding_lanes_case(
+    prefix_chunks,
+    step_chunks,
+    expect_error,
+    chunk_size_local=256,
+    sliding_window_size=1024,
+    local_q_heads=4,
+    local_kv_heads=2,
+    head_dim=256,
+    q_chunk_size=128,
+    k_chunk_size=128,
+    replay=False,
+):
+    """Check one lanes call (B-element slot_id / kv_actual_isl) against one metadata-path call per lane.
+
+    With replay, the same B-lane program then serves the lanes in other orders, eagerly on a program-cache hit and
+    by trace replay, with the Q, metadata and halo buffers refreshed in place, so every lane's slot and prefix change.
+
+    prefix_chunks[s] is how many whole chunks cache slot s holds before the step; step_chunks lists the step's lanes
+    as (slot, chunk index), so lane b's prefix is chunk index * chunk_global. Every lane's K/V is in the cache before
+    attention, so a later chunk of the same request attends its earlier lanes through the cache. Rows past each
+    slot's filled length are high-magnitude garbage.
+    """
+    mesh_config = gpt_oss_chunked_mesh_config()
+    sp_size = mesh_config.sp_size
+    num_lanes = len(step_chunks)
+    num_slots = len(prefix_chunks)
+    nhq = local_q_heads * mesh_config.tp_size
+    nhk = local_kv_heads * mesh_config.tp_size
+    gqa_ratio = local_q_heads // local_kv_heads
+    chunk_global = chunk_size_local * sp_size
+    filled = [max([n] + [idx + 1 for s, idx in step_chunks if s == slot]) for slot, n in enumerate(prefix_chunks)]
+    # One spare group of garbage past the deepest slot; the host logical_n stays at this capacity and every lane's
+    # length comes from its kv_actual_isl element.
+    cache_groups = max(filled) + 1
+    cache_seq_per_dev = cache_groups * chunk_size_local
+    capacity = sp_size * cache_seq_per_dev
+    halo_tokens = math.ceil((sliding_window_size - 1) / k_chunk_size) * k_chunk_size
+
+    torch.manual_seed(CHUNKED_PREFILL_SEED + 901)
+    # Each slot's request K/V stream, through its deepest chunk; Q only for the step's chunks.
+    k_tokens = [fa_rand(1, nhk, n * chunk_global, head_dim) for n in filled]
+    v_tokens = [fa_rand(1, nhk, n * chunk_global, head_dim) for n in filled]
+    lane_q = [fa_rand(1, nhq, chunk_global, head_dim) for _ in step_chunks]
+
+    def cache_host(tokens):
+        # Each slot's filled chunks in the block-cyclic layout (device d's rows [g * local, (g + 1) * local) hold
+        # group g's device-d slab); rows past a slot's filled length stay garbage.
+        per_dev = torch.randn(num_slots, nhk, sp_size, cache_seq_per_dev, head_dim) * 100
+        for slot, n in enumerate(filled):
+            packed = to_balanced_growing_cache_layout(tokens[slot], sp_size, chunk_global, n - 1)
+            per_dev[slot, :, :, : n * chunk_size_local] = packed.reshape(nhk, sp_size, n * chunk_size_local, head_dim)
+        return per_dev.reshape(num_slots, nhk, capacity, head_dim)
+
+    lane_slots = [slot for slot, _ in step_chunks]
+    lane_prefixes = [idx * chunk_global for _, idx in step_chunks]
+    # Each device holds every lane's CP-local slab, request-major: [1, NH, B * local, D].
+    lanes_q_host = (
+        torch.stack(lane_q, dim=2)
+        .reshape(1, nhq, num_lanes, sp_size, chunk_size_local, head_dim)
+        .transpose(2, 3)
+        .reshape(1, nhq, sp_size * num_lanes * chunk_size_local, head_dim)
+    )
+
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, trace_region_size=RING_JOINT_TRACE_REGION_SIZE if replay else 0)
+    mesh_device = runtime.mesh_device
+    trace_id = None
+    try:
+        mesh_device.enable_program_cache()
+        input_dims = [None, None]
+        input_dims[runtime.sp_axis] = 2
+        if mesh_config.tp_size > 1:
+            input_dims[runtime.tp_axis] = 1
+        halo_dims = [None, None]
+        if mesh_config.tp_size > 1:
+            halo_dims[runtime.tp_axis] = 1
+
+        def upload(host, dtype, dims):
+            return ttnn.from_torch(
+                host,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+            )
+
+        tt_k = upload(cache_host(k_tokens), ttnn.bfloat8_b, input_dims)
+        tt_v = upload(cache_host(v_tokens), ttnn.bfloat8_b, input_dims)
+        composer = ttnn.create_mesh_composer(
+            mesh_device,
+            ttnn.MeshComposerConfig(
+                input_dims[0] if input_dims[0] is not None else -1,
+                input_dims[1] if input_dims[1] is not None else -1,
+            ),
+        )
+
+        def make_program_config(k_splits):
+            return ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+                q_chunk_size=q_chunk_size,
+                k_chunk_size=k_chunk_size,
+                exp_approx_mode=False,
+                k_splits=k_splits,
+            )
+
+        program_config = make_program_config(1)
+
+        def halo_buffer(batch):
+            # The halo buffer gets one batch per lane.
+            return upload(torch.zeros(batch, nhk, halo_tokens, head_dim), ttnn.bfloat8_b, halo_dims)
+
+        def invoke(tt_q, slots, prefixes, *, config=program_config, halo_batch=None, halos=None, metadata=None):
+            if halos is None:
+                halos = [halo_buffer(len(slots) if halo_batch is None else halo_batch) for _ in range(2)]
+                # The zero fill must land on every device before any neighbour's halo exchange writes into it.
+                ttnn.synchronize_device(mesh_device)
+            if metadata is None:
+                metadata = [_ring_joint_lane_metadata_tensor(mesh_device, values) for values in (slots, prefixes)]
+            return call_sdpa(
+                tt_q,
+                tt_k,
+                tt_v,
+                capacity,
+                is_causal=True,
+                is_balanced=False,
+                p_buf_k=halos[0],
+                p_buf_v=halos[1],
+                program_config=config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                ccl_semaphore_handles=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                sp_axis=runtime.sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                worker_sub_device_id=runtime.worker_sub_device_id,
+                ccl_column=runtime.ccl_column,
+                sliding_window_size=sliding_window_size,
+                slot_id=metadata[0],
+                kv_actual_isl_tensor=metadata[1],
+            )
+
+        logger.info(
+            f"sliding lanes: B={num_lanes}, TP={mesh_config.tp_size}, SP={sp_size}, local={chunk_size_local}, "
+            f"window={sliding_window_size}, slots={lane_slots}, prefixes={lane_prefixes}, capacity={capacity}"
+        )
+
+        per_request = []
+        for lane, (slot, prefix) in enumerate(zip(lane_slots, lane_prefixes, strict=True)):
+            tt_out = invoke(upload(lane_q[lane], ttnn.bfloat16, input_dims), [slot], [prefix])
+            ttnn.synchronize_device(mesh_device)
+            per_request.append(ttnn.to_torch(tt_out, mesh_composer=composer))
+            ttnn.deallocate(tt_out)
+
+        def stacked_q(order):
+            # Each device holds every lane's CP-local slab, request-major: [1, NH, B * local, D].
+            return (
+                torch.stack([lane_q[lane] for lane in order], dim=2)
+                .reshape(1, nhq, num_lanes, sp_size, chunk_size_local, head_dim)
+                .transpose(2, 3)
+                .reshape(1, nhq, sp_size * num_lanes * chunk_size_local, head_dim)
+            )
+
+        def read_lanes(tt_out):
+            return (
+                ttnn.to_torch(tt_out, mesh_composer=composer)
+                .reshape(1, nhq, sp_size, num_lanes, chunk_size_local, head_dim)
+                .transpose(2, 3)
+                .reshape(1, nhq, num_lanes, chunk_global, head_dim)
+            )
+
+        def check_order(lanes_out, order, label):
+            # Lane i of this call serves the step's lane order[i], so it must equal that lane's single-request call.
+            for position, lane in enumerate(order):
+                got, expected = lanes_out[:, :, position], per_request[lane]
+                assert torch.equal(got, expected), (
+                    f"{label}: position {position} (slot {lane_slots[lane]}, prefix {lane_prefixes[lane]}) differs "
+                    f"from its single-request call; max abs diff={(got - expected).abs().max().item()}"
+                )
+
+        tt_lanes_q = upload(lanes_q_host, ttnn.bfloat16, input_dims)
+        tt_out = invoke(tt_lanes_q, lane_slots, lane_prefixes)
+        ttnn.synchronize_device(mesh_device)
+        lanes_out = read_lanes(tt_out)
+        ttnn.deallocate(tt_out)
+
+        for lane, (slot, prefix) in enumerate(zip(lane_slots, lane_prefixes, strict=True)):
+            got, expected = lanes_out[:, :, lane], per_request[lane]
+            mismatch = got != expected
+            assert not mismatch.any(), (
+                f"lane {lane} (slot {slot}, prefix {prefix}) differs from its single-request call: "
+                f"mismatches={mismatch.sum().item()}, "
+                f"heads={mismatch.any(dim=(0, 2, 3)).nonzero().flatten().tolist()}, "
+                f"max abs diff={(got - expected).abs().max().item()}"
+            )
+            ref_out = torch_chunked_causal_sdpa_reference(
+                lane_q[lane],
+                k_tokens[slot][:, :, : prefix + chunk_global].repeat_interleave(gqa_ratio, dim=1),
+                v_tokens[slot][:, :, : prefix + chunk_global].repeat_interleave(gqa_ratio, dim=1),
+                prefix,
+                sliding_window_size=sliding_window_size,
+            )
+            assert_pcc_rmse(
+                ref_out,
+                got,
+                CHUNKED_PREFILL_PCC_THRESHOLD,
+                DEFAULT_RMSE_THRESHOLD,
+                f"sliding lane {lane} (slot {slot}, prefix {prefix})",
+            )
+
+        if replay:
+            identity = list(range(num_lanes))
+            orders = [identity[1:] + identity[:1], identity[::-1]]
+            halos = [halo_buffer(num_lanes) for _ in range(2)]
+            zero_halo = ttnn.from_torch(
+                torch.zeros(num_lanes, nhk, halo_tokens, head_dim),
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=halo_dims),
+            )
+            metadata = [_ring_joint_lane_metadata_tensor(mesh_device, values) for values in (lane_slots, lane_prefixes)]
+
+            def stage(order):
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(
+                        stacked_q(order),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        mesh_mapper=ttnn.ShardTensor2dMesh(
+                            mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_dims
+                        ),
+                    ),
+                    tt_lanes_q,
+                )
+                for halo in halos:
+                    ttnn.copy_host_to_device_tensor(zero_halo, halo)
+                for tensor, values in zip(
+                    metadata, ([lane_slots[lane] for lane in order], [lane_prefixes[lane] for lane in order])
+                ):
+                    ttnn.copy_host_to_device_tensor(_ring_joint_lane_metadata_host_tensor(mesh_device, values), tensor)
+                # Every device's writes must land before any device runs: a neighbour's halo exchange writes into
+                # this device's halo buffer over fabric, which this device's queue does not order after its own
+                # zero fill, so a late fill could overwrite halo rows that already arrived.
+                ttnn.synchronize_device(mesh_device)
+
+            # Program-cache hit: the same B-lane program with every lane's slot and prefix changed.
+            entries = mesh_device.num_program_cache_entries()
+            stage(orders[0])
+            tt_out = invoke(tt_lanes_q, None, None, halos=halos, metadata=metadata)
+            ttnn.synchronize_device(mesh_device)
+            assert mesh_device.num_program_cache_entries() == entries, "a reordered lanes call compiled a new program"
+            check_order(read_lanes(tt_out), orders[0], "cache hit")
+            ttnn.deallocate(tt_out)
+
+            # Trace replay: captured in one order, replayed in others, with only the buffers refreshed.
+            stage(identity)
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            traced_out = invoke(tt_lanes_q, None, None, halos=halos, metadata=metadata)
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            ttnn.synchronize_device(mesh_device)
+            for order in (orders[1], identity, orders[0]):
+                stage(order)
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+                check_order(read_lanes(traced_out), order, f"trace replay {order}")
+            return
+
+        # A lanes call runs one unit per (lane, head, Q chunk): a K split is rejected at validation.
+        with expect_error(RuntimeError, "k_splits must be 1 and segmented accumulation off"):
+            invoke(tt_lanes_q, lane_slots, lane_prefixes, config=make_program_config(3))
+        # The other lanes contract checks.
+        with expect_error(RuntimeError, "must have one element per lane like slot_id"):
+            invoke(tt_lanes_q, lane_slots, lane_prefixes[:-1])
+        with expect_error(RuntimeError, "must contain 1..8 elements"):
+            invoke(tt_lanes_q, [0] * 9, [0] * 9)
+        with expect_error(RuntimeError, "Lanes need a halo buffer with one batch per lane"):
+            invoke(tt_lanes_q, lane_slots, lane_prefixes, halo_batch=num_lanes + 1)
+        # One element per ROW_MAJOR row would put lanes 1.. on pages the reader never reads.
+        column = [
+            ttnn.from_torch(
+                torch.tensor(values, dtype=torch.int64).reshape(1, 1, num_lanes, 1),
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            for values in (lane_slots, lane_prefixes)
+        ]
+        with expect_error(RuntimeError, "must hold all its lane elements in one ROW_MAJOR row"):
+            invoke(tt_lanes_q, lane_slots, lane_prefixes, metadata=column)
+    finally:
+        if trace_id is not None:
+            ttnn.release_trace(mesh_device, trace_id)
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
+# name -> (whole chunks each cache slot holds before the step, the step's lanes as (slot, chunk index)).
+_SLIDING_LANES_SCENARIOS = {
+    "lane0_deepest": ((3, 0, 1, 2), [(0, 3), (1, 0), (2, 1), (3, 2)]),
+    # Lane 0 has the shortest (empty) prefix; it alone drives the call's ring-iteration masks.
+    "lane0_empty": ((0, 3, 1, 2), [(0, 0), (1, 3), (2, 1), (3, 2)]),
+    # One request's consecutive chunks in one step: lane k attends lanes 0..k-1 through the cache.
+    "same_one_request": ((3, 0, 0, 0), [(0, 3), (0, 4), (0, 5), (0, 6)]),
+    "same_two_by_two": ((2, 0, 0, 0), [(1, 0), (1, 1), (0, 2), (0, 3)]),
+    "two_lanes": ((0, 2), [(1, 2), (0, 0)]),
+    # An odd lane count (a 12 B metadata read) and the full kMaxLanes, which fills the derived page and the halo
+    # metadata page.
+    "three_lanes": ((1, 0, 2), [(0, 1), (1, 0), (2, 2)]),
+    "eight_lanes": ((0, 1, 2, 3, 0, 1, 2, 3), [(0, 0), (1, 1), (2, 2), (3, 3), (4, 0), (5, 1), (6, 2), (7, 3)]),
+}
+
+
+@pytest.mark.parametrize("scenario", list(_SLIDING_LANES_SCENARIOS))
+def test_ring_joint_attention_sliding_lanes_match_per_request(scenario, expect_error):
+    """Gemma4's sliding attention shape (W1024, D256, 4Q:2KV heads per device, 256-token slabs per device) with several
+    requests in one call: each lane is bit-identical to a one-request metadata-path call and matches torch."""
+    prefix_chunks, step_chunks = _SLIDING_LANES_SCENARIOS[scenario]
+    run_ring_joint_sdpa_sliding_lanes_case(prefix_chunks, step_chunks, expect_error)
+
+
+@pytest.mark.parametrize("scenario", ["lane0_deepest", "same_two_by_two"])
+def test_ring_joint_attention_sliding_lanes_cache_hit_and_trace_replay(scenario, expect_error):
+    """A B-lane program reused with every lane's slot and prefix changed, eagerly on a program-cache hit and by trace
+    replay: each lane stays bit-identical to its single-request call."""
+    prefix_chunks, step_chunks = _SLIDING_LANES_SCENARIOS[scenario]
+    run_ring_joint_sdpa_sliding_lanes_case(prefix_chunks, step_chunks, expect_error, replay=True)
 
 
 def test_ring_joint_attention_gpt_oss_chunked_sliding_indexed_kv_cache_accuracy():
