@@ -49,7 +49,7 @@ set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SHLIBDEPS FALSE)
 # ttml uses internal libraries from metalium/nn packages; dependencies are declared explicitly
 set(CPACK_DEBIAN_TTML_PACKAGE_SHLIBDEPS FALSE)
 
-set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_DEPENDS "nlohmann-json3-dev (>= 3.10)")
+set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_DEPENDS "nlohmann-json3-dev (>= 3.10), libyaml-cpp-dev, libprotobuf-dev")
 set(CPACK_DEBIAN_NN-DEV_PACKAGE_DEPENDS "libxtensor-dev (>= 0.23.10)")
 set(CPACK_DEBIAN_TTML_PACKAGE_DEPENDS "python3 (>= 3.8)")
 
