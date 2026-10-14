@@ -8,10 +8,10 @@ sampling.
 
 | | |
 |---|---|
-| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-234b28c-233b250` |
+| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-b983060-233b250` |
 | Size | 21.4 GB on disk (5.3 GB compressed), built 2026-10-14 |
 | Access | `docker run` pulls the image automatically on a new host. Pulling needs access to the `tenstorrent` packages on ghcr.io (check the digest with `docker image inspect <image> --format '{{.RepoDigests}}'`) |
-| tt-metal | `234b28cdb725e52d08becb3f1e19c60884fe66ca` (branch `ssinghal/dsv4p1`; adds the routed-expert SwiGLU clamp at every MoE site, see below) |
+| tt-metal | `b983060a726…` in the tag (branch `ssinghal/dsv4p1`): this guide and its runtime spec on top of `234b28cdb725e52d08becb3f1e19c60884fe66ca`, the code the image was built from (it adds the routed-expert SwiGLU clamp at every MoE site, see below; `/home/container_app_user/BUILD_INFO` in the image records `234b28cdb725…`) |
 | tt-inference-server | `233b250e85148bc25853786aff54c0949a994b76` (branch `ssinghal/dsv4p1`) |
 | vllm-tt-plugin | `ad9eed9ad9f7295fda00b8ec788dc30b34587647` (branch `ssinghal/dsv4p1`; the scheduler no longer splits a prompt across prefill steps when the token budget holds a whole prompt) |
 | Model | [`deepseek-ai/DeepSeek-V4.1-Flash`](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash) (476 GB of safetensors, 48 shards) |
@@ -111,7 +111,7 @@ Keep both on a disk local to the host (we used a local NVMe), not on a network f
 `docker run` pulls the image by itself the first time. To pull ahead of time:
 
 ```bash
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-234b28c-233b250
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-b983060-233b250
 docker pull $IMAGE
 ```
 
@@ -122,7 +122,7 @@ export CKPT=/path/to/deepseek-v41-flash        # the model checkpoint (read-only
 export CACHE=/path/to/dsv41_cache              # weights/ and kernels/ below; reused across starts
 export STATE=/path/to/dsv41_state              # small scratch dirs the server writes to
 export SPEC=$PWD/assets/runtime_spec_b16_k5_131072.json   # run from models/demos/blackhole/deepseek_v41_flash/ in tt-metal (see below)
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-234b28c-233b250   # or the image you built locally
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-b983060-233b250   # or the image you built locally
 
 mkdir -p $CKPT $CACHE/weights $CACHE/unified $CACHE/kernels $STATE/cache_root $STATE/logs $STATE/traces
 
