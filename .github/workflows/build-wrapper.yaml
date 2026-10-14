@@ -3,113 +3,27 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
-  actions: read
   packages: read
 jobs:
-  flash-host-contracts:
+  checkpoint-runtime:
     runs-on: tt-ubuntu-2204-large-stable
-    timeout-minutes: 35
+    timeout-minutes: 12
     container:
       image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-dev-amd64@sha256:01621216c5a6d2cc661550ff007d1d1c51ea1e9ba5808286d0c79ab325a03a61
-      env:
-        TT_METAL_HOME: /work
-        PYTHONPATH: /work:/work/ttnn
-        LD_LIBRARY_PATH: /work/build/lib
-        TT_FROM_PRECOMPILED_DIR: /work
-        PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: e21e0f3cfcbd0738b6a0ad18ea1a0a59457ab343
-          submodules: recursive
-          path: docker-job
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          artifact-ids: "11905114154"
-          run-id: "38584434196"
-          github-token: ${{ github.token }}
-          merge-multiple: true
-          path: /work
-      - name: Admit exact compiled artifact and interpreter
+          ref: ee801490377d44fe328dabb09ed619d30060d8ac
+          path: source
+          sparse-checkout: models/demos/blackhole/qwen38_flash_next
+      - name: Actual CPU imports and original downloader compatibility
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = e21e0f3cfcbd0738b6a0ad18ea1a0a59457ab343
-          echo "b01f1940507c326235c65a9c301b25b1bd48fac9fb91df7e1f752a3af01d6b6d  ttm_any.tar.zst" | sha256sum -c -
-          tar --zstd -xf ttm_any.tar.zst
-          /opt/venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3,12), sys.version; print(sys.version)'
-          uv pip install --python /opt/venv/bin/python -e .
-      - name: Real imports and original CPU host tests
-        timeout-minutes: 12
-        run: |
-          set -euo pipefail
-          cat > /tmp/flash-import-host.py <<'PY'
-          """CPU-only admission of the exact built Flash source, followed by original host tests."""
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-          import platform
-          import sys
-          import time
-
-          root = Path(sys.argv[1]).resolve(strict=True)
-          out = Path(sys.argv[2]).resolve()
-          out.mkdir(exist_ok=False)
-          assert sys.version_info[:2] == (3, 12), sys.version
-          assert platform.machine() == 'x86_64', platform.machine()
-
-          def tt_fds():
-              found = {}
-              for p in Path('/proc/self/fd').iterdir():
-                  try:
-                      target = os.readlink(p)
-                  except FileNotFoundError:
-                      continue
-                  if target.startswith('/dev/tenstorrent/'):
-                      found[p.name] = target
-              return found
-
-          assert not tt_fds()
-          import ttnn
-
-          def refuse_device(*args, **kwargs):
-              raise AssertionError('CPU host admission must not open a Tenstorrent device')
-
-          # These host tests use mock device operations. Real imports must never open a device.
-          for name in ('open_device', 'open_mesh_device', 'CreateDevice', 'CreateDevices'):
-              if hasattr(ttnn, name):
-                  setattr(ttnn, name, refuse_device)
-
-          import models.demos.blackhole.qwen38_flash_next.ttnn.model
-          import models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm
-          import pytest
-          origins = {}
-          for name, module in tuple(sys.modules.items()):
-              if not (name == 'ttnn' or name.startswith(('ttnn.', 'models.'))):
-                  continue
-              path = getattr(module, '__file__', None)
-              if path:
-                  p = Path(path).resolve(strict=True)
-                  assert p.is_relative_to(root), (name, str(p), str(root))
-                  origins[name] = {'path': str(p), 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
-          assert not tt_fds()
-          (out/'import-proof.json').write_text(json.dumps({'python':sys.version,'origins':origins,'tt_fds':tt_fds()},indent=2)+'\n')
-          rc = pytest.main(['--noconftest', '-q', str(root/'models/demos/blackhole/qwen38_flash_next/tests/test_moe_public_api_host.py'), str(root/'models/demos/blackhole/qwen38_flash_next/tests/test_ttnn_head_tail_split_static.py') + '::test_handoff_is_the_layer_0_residual_only_with_pinned_metadata', str(root/'models/demos/blackhole/qwen38_flash_next/tests/test_ttnn_head_tail_split_static.py') + '::test_handoff_does_not_retain_module_constants', str(root/'models/demos/blackhole/qwen38_flash_next/tests/test_ttnn_head_tail_split_static.py') + '::test_handoff_copy_replace_and_custom_metadata', str(root/'models/demos/blackhole/qwen38_flash_next/tests/test_qwen38_vllm_no_device.py') + '::test_bundle_metadata_names_the_hf_architecture_and_the_adapter', '--junitxml='+str(out/'host.xml')])
-          assert not tt_fds()
-          (out/'host-result.json').write_text(json.dumps({'pytest_exit':rc,'tt_fds':tt_fds(),'completed_unix':time.time()},indent=2)+'\n')
-          raise SystemExit(rc)
-          PY
-          timeout --signal=TERM --kill-after=15s 600s /opt/venv/bin/python /tmp/flash-import-host.py /work /work/flash-host-results
-      - name: Preserve host evidence
+          mkdir -p evidence
+          timeout 180 /opt/venv/bin/python .ci/flash-checkpoint/runtime_check.py 2>&1 | tee evidence/runtime.stdout
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: gpt-current-host-contracts
-          path: /work/flash-host-results
-          if-no-files-found: warn
+          name: flash-checkpoint-runtime
+          path: evidence
