@@ -199,6 +199,12 @@ void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t
     if (const char* m = std::getenv("MIMO_FL_DRISC_DMA_MAX")) {  // (probe: DMA reads in flight per stream)
         defs["SE_DRISC_DMA_MAX"] = m;
     }
+    if (const char* u = std::getenv("MIMO_FL_DRISC_UB")) {  // (probe: blocks per DRISC unit)
+        defs["SE_DRISC_UB"] = u;
+    }
+    if (std::getenv("MIMO_FL_DRISC_PROF")) {  // (debug: per-section cycles of the last call, in the dump)
+        defs["SE_DRISC_PROF"] = "1";
+    }
     if (std::getenv("MIMO_FL_W_NOREAD")) {  // (perf probe: no weight DMA, garbage)
         defs["SE_W_NOREAD"] = "1";
     }
@@ -311,7 +317,8 @@ void flat_drisc_dump(distributed::MeshDevice* mesh) {
             }
             log_info(
                 tt::LogOp,
-                "flat DRISC chip {} {} (virt {}): stop {} ready {:#x} done {} mpfe P1-P3 {} {} {}{}",
+                "flat DRISC chip {} {} (virt {}): stop {} ready {:#x} done {} mpfe P1-P3 {} {} {} prof dma {} refresh {} "
+                "write {} flush {} total {} refreshes {} units {}{}",
                 dev->id(),
                 c.str(),
                 v.str(),
@@ -321,6 +328,13 @@ void flat_drisc_dump(distributed::MeshDevice* mesh) {
                 w[13],
                 w[14],
                 w[15],
+                w[112],
+                w[113],
+                w[114],
+                w[115],
+                w[116],
+                w[117],
+                w[118],
                 jobs);
         }
     }
