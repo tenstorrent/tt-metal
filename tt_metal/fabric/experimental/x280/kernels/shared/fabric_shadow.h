@@ -115,7 +115,7 @@ typedef struct __attribute__((aligned(16))) {
     uint16_t my_device_id;
     fs_intra_mesh_direction_table_t intra_mesh_direction_table;
     fs_inter_mesh_direction_table_t inter_mesh_direction_table;
-    uint8_t opaque_tail[2060];
+    uint8_t opaque_tail[2188];
 } fs_routing_l1_info_t;
 
 UBENCH_LAYOUT_ASSERT(sizeof(fs_intra_mesh_direction_table_t) == 96u, "intra table is 256 packed 3-bit entries");
@@ -126,6 +126,6 @@ UBENCH_LAYOUT_ASSERT(
     offsetof(fs_routing_l1_info_t, intra_mesh_direction_table) == 36u, "intra table retains the production offset");
 UBENCH_LAYOUT_ASSERT(
     offsetof(fs_routing_l1_info_t, inter_mesh_direction_table) == 132u, "inter table retains the production offset");
-UBENCH_LAYOUT_ASSERT(sizeof(fs_routing_l1_info_t) == 2576u, "full routing image retains the production size");
+UBENCH_LAYOUT_ASSERT(sizeof(fs_routing_l1_info_t) == 2704u, "full routing image retains the production size");
 
 #endif
