@@ -3,7 +3,8 @@
 """Real Kimi-K3 inputs to the first decoder layer (``model.layers.0``, a KDA layer).
 
 The input to ``layers.0`` is exactly ``input_layernorm(embed_tokens[token_ids])`` (pinned against the vLLM
-trace by ``tests/kimi_k3/test_golden_contract.py``). Deeper layers' inputs follow earlier layers and AttnRes,
+trace by ``tests/kimi_k3/test_golden_contract.py``, and on sampled trace rows to within one BF16 ulp in a
+few elements per million by ``test_real_input.py``). Deeper layers' inputs follow earlier layers and AttnRes,
 so this module deliberately builds only the first layer's input: applying a later layer's norm to raw
 embeddings would be a proxy no real run produces.
 
@@ -66,6 +67,10 @@ def gutenberg_token_ids(cache_dir: Path) -> list[int]:
     return encoding.encode_ordinary(body)
 
 
+# Names what ``FirstLayerInput`` computes, for golden identities: a golden built another way is a different input.
+FIRST_LAYER_INPUT = "input_layernorm(embed_tokens), vLLM rounding (FP32, one BF16 rounding)"
+
+
 class FirstLayerInput:
     """``input_layernorm(embed_tokens[ids])`` for ``model.layers.0``, as the BF16 tensor the layer receives.
 
@@ -94,10 +99,11 @@ class FirstLayerInput:
     def __call__(self, token_ids: torch.Tensor | list[int]) -> torch.Tensor:
         """``[1, T, hidden]`` in the embedding dtype (BF16), for 1-D ``token_ids`` of length T."""
         embeddings = self.embedding[torch.as_tensor(token_ids, dtype=torch.long)]
-        # KimiRMSNorm: normalize in FP32, cast back to the input dtype, then scale (BF16 result).
-        normalized = embeddings.float()
-        normalized = normalized * torch.rsqrt(normalized.square().mean(-1, keepdim=True) + self.eps)
-        return (self.norm_weight * normalized.to(embeddings.dtype)).unsqueeze(0)
+        # vLLM's RMSNorm: normalize and scale in FP32, then round once to BF16. (HF KimiRMSNorm rounds the
+        # normalized value before scaling, which differs from the trace in 26% of elements by one ulp.)
+        hidden = embeddings.float()
+        hidden = hidden * torch.rsqrt(hidden.square().mean(-1, keepdim=True) + self.eps) * self.norm_weight.float()
+        return hidden.to(embeddings.dtype).unsqueeze(0)
 
 
 def chunk_decay_statistics(gate: torch.Tensor, chunk: int = 32, ceiling: float = 160.0) -> dict[str, float]:

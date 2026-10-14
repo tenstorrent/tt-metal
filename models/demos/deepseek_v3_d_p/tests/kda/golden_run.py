@@ -165,7 +165,12 @@ def load_window(run_dir: Path, start: int, end: int) -> tuple[torch.Tensor, KDAR
 def main() -> None:
     from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
     from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256, load_kda_layer_state_dict
-    from models.demos.deepseek_v3_d_p.tests.kda.real_input import KIMI_K3_REVISION, FirstLayerInput, gutenberg_token_ids
+    from models.demos.deepseek_v3_d_p.tests.kda.real_input import (
+        FIRST_LAYER_INPUT,
+        KIMI_K3_REVISION,
+        FirstLayerInput,
+        gutenberg_token_ids,
+    )
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
@@ -198,7 +203,7 @@ def main() -> None:
         "revision": KIMI_K3_REVISION,
         "layer": "model.layers.0",
         "weights_sha256": kda_state_dict_sha256(weights),
-        "input": "input_layernorm(embed_tokens)",
+        "input": FIRST_LAYER_INPUT,
         "token_source": source,
     }
     run_golden(

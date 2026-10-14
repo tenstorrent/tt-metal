@@ -24,7 +24,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_
 from models.demos.deepseek_v3_d_p.tests.kda.accuracy_metric import position_profile, slice_nrmse
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256, load_kda_layer_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.golden_run import MANIFEST, load_window, token_ids_sha256
-from models.demos.deepseek_v3_d_p.tests.kda.real_input import FirstLayerInput, gutenberg_token_ids
+from models.demos.deepseek_v3_d_p.tests.kda.real_input import FIRST_LAYER_INPUT, FirstLayerInput, gutenberg_token_ids
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
     make_kimi_k3_device_case,
@@ -59,6 +59,7 @@ def test_kimi_k3_layer0_against_fp64_golden(
     config = kimi_k3_kda_config()
     weights = load_kda_layer_state_dict(checkpoint, 0, config)
     assert kda_state_dict_sha256(weights) == manifest["identity"]["weights_sha256"], "golden used other weights"
+    assert manifest["identity"]["input"] == FIRST_LAYER_INPUT, f"golden input is {manifest['identity']['input']!r}"
     corpus = Path.home() / ".cache" / "tt-linear-layers-shared" / "text_corpus"
     token_ids = gutenberg_token_ids(corpus)[: manifest["tokens"]]
     assert token_ids_sha256(token_ids) == manifest["token_ids_sha256"], "golden used other tokens"
