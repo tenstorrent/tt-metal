@@ -272,6 +272,41 @@ def test_init_share_key_of_an_unlisted_source_keeps_every_line():
     )
 
 
+def test_init_share_key_keeps_the_names_that_change_init_code():
+    """eltwise binary's input formats, tile sizes and binary op, and pack_dest_bank's block and tile counts change the
+    instructions INIT executes (e.g. Float16 vs Float32 inputs: one unpack config value more), so they are in the key.
+    """
+    from helpers.perf.init_share import INIT_NEUTRAL
+
+    code = {
+        "UNPACK_A_IN",
+        "UNPACK_B_IN",
+        "UNPACK_S_IN",
+        "TILE_SIZE_UNPACK_A",
+        "TILE_SIZE_UNPACK_B",
+        "ELTWISE_BINARY_OP",
+    }
+    assert not code & INIT_NEUTRAL["eltwise_binary_test.cpp"]
+    assert INIT_NEUTRAL["pack_dest_bank_perf.cpp"] == {"LOOP_FACTOR"}
+
+
+def test_init_neutral_is_the_checked_table():
+    """INIT_NEUTRAL is the table checked on the full Wormhole perf suite: every key group, every thread, one executed INIT
+    window (Tensix words in full, same addresses and length) and one speed-of-light INIT value. Changing it needs that
+    check again before this digest is updated."""
+    from hashlib import sha256
+
+    from helpers.perf.init_share import INIT_NEUTRAL
+
+    table = repr(
+        sorted((source, sorted(names)) for source, names in INIT_NEUTRAL.items())
+    )
+    assert sha256(table.encode()).hexdigest()[:16] == "6112bfde4b3ba87e", (
+        "INIT_NEUTRAL changed: check every key group of the full suite again (one INIT window and one INIT value per "
+        "thread), then update this digest"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Wormhole perf builds place the functions a TILE_LOOP window runs (test_config.py assembly passes, sections.ld).
 # --------------------------------------------------------------------------- #
