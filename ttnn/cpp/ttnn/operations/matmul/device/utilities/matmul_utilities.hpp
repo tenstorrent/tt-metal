@@ -272,7 +272,8 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
 
         case UnaryOpType::GELU_TANH:
             result.type = KernelActivation::GELU_TANH;
-            // No parameters
+            // param0: 0 = accurate (FP32 tanh), any non-zero value = fast (BF16-grade); normalized like the unary path.
+            result.param0 = has_first && params[0] != 0.0f ? 1u : 0u;
             break;
 
         case UnaryOpType::TANH:
@@ -399,13 +400,13 @@ void move_common_entries(
 void get_optimal_dram_bank_to_reader_assignment(
     const tt::tt_metal::distributed::MeshDevice& device,
     std::vector<tt::tt_metal::CoreCoord>& all_worker_cores_ordered,
-    CoreRangeSet& all_worker_cores,
+    tt::tt_metal::CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc);
 
 std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::NOC noc,
     uint32_t workers_per_bank,
-    const CoreRangeSet& secondary_reader_excluded_cores);
+    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores);
 
 }  // namespace ttnn::prim::dram_sharded_helpers

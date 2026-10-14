@@ -305,7 +305,7 @@ class Vlm:
             tower.prepare_rope(grid_thw),
             vision_cu_seqlens(grid_thw),
             sp_factor=1,
-            length=self._max_patches,
+            pad_to=self._max_patches,
         )
 
         return tower.forward(

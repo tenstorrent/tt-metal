@@ -30,16 +30,16 @@ namespace tt::tt_metal::trace_dispatch {
 
 struct TraceDispatchMetadata {
     uint32_t cmd_sequence_sizeB;
-    std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& trace_worker_descriptors;
-    std::vector<SubDeviceId>& sub_device_ids;
+    const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& trace_worker_descriptors;
+    const std::vector<SubDeviceId>& sub_device_ids;
     uint32_t trace_buffer_page_size = 0;
     uint32_t trace_buffer_num_pages = 0;
     uint32_t trace_buffer_address = 0;
 
     TraceDispatchMetadata(
         uint32_t cmd_size,
-        std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& descriptors,
-        std::vector<SubDeviceId>& sub_devices,
+        const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& descriptors,
+        const std::vector<SubDeviceId>& sub_devices,
         uint32_t buf_page_size,
         uint32_t buf_num_pages,
         uint32_t buf_address) :

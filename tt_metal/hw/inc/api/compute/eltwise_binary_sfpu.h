@@ -8,6 +8,7 @@
 #ifdef TRISC_MATH
 #ifdef ARCH_QUASAR
 #include "ckernel_sfpu_binary.h"
+#include "ckernel_sfpu_binary_pow.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #else
 #include "ckernel_sfpu_binary.h"
@@ -167,6 +168,7 @@ ALWI void rsub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         odst,
         VectorMode::RC)));
 }
+#endif  // !ARCH_QUASAR
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void power_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
@@ -180,6 +182,8 @@ ALWI void power_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         odst,
         VectorMode::RC)));
 }
+
+#ifndef ARCH_QUASAR
 
 ALWI void eq_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
@@ -278,7 +282,11 @@ ALWI void rsub_binary_tile_init() {
     MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::RSUB))));
 }
 
+#endif  // !ARCH_QUASAR
+
 ALWI void power_binary_tile_init() { MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_pow_init, (APPROX)))); }
+
+#ifndef ARCH_QUASAR
 
 ALWI void eq_binary_tile_init() { MATH((SFPU_BINARY_INIT(eq))); }
 

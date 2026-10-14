@@ -40,6 +40,17 @@ struct SdpaDecodeParams {
     // the effective block_size and ≥ sliding_window_size when both are set. Paged-mode
     // only (validated in validate_on_program_cache_miss).
     std::optional<uint32_t> cache_position_modulo = std::nullopt;
+    // Speculative multi-position mode. 0 = off (legacy behaviour, byte-for-byte).
+    // When set to Tg (candidates per batch GROUP), the op folds Tg candidates that share one
+    // KV cache onto a single batch row, so each row scans its KV once instead of Tg times:
+    // Q is [1, B, Tg*32, DH] (batch b, row-tile j = candidate b*Tg + j), the page_table has
+    // B rows, and cur_pos_tensor holds B*Tg positions, ascending within each group of Tg —
+    // candidate b*Tg+j attends to [0, cur_pos[b*Tg+j]] inclusive, exactly like batch row
+    // b*Tg+j with that cur_pos in the legacy B*Tg-row form. B groups let the op fill a grid
+    // that one group's row-tile count cannot (L1 caps cores/head by Tg).
+    // Requires num_kv_heads==1, causal, paged, no sliding window, no MLA, unsharded bf16
+    // TILE Q with Tg*32 padded rows per batch.
+    uint32_t spec_multi_pos_tiles = 0;
 };
 
 struct SdpaDecodeInputs {

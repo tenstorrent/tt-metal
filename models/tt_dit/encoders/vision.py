@@ -27,6 +27,8 @@ from models.tt_dit.utils.tensor import bf16_tensor, typed_tensor
 
 # `ttnn` SDPA requires a tile-aligned head dimension.
 _TILE = 32
+# The SDPA op loads `cu_window_seqlens` into one uint32 tile and caps it there.
+_CU_WINDOW_ENTRIES = _TILE * _TILE
 
 
 class VisionParallel(NamedTuple):
@@ -42,6 +44,7 @@ class VisionParallel(NamedTuple):
     sp_axis: int | None = None
     sp_factor: int = 1
     ccl_manager: CCLManager | None = None
+    use_persistent_ccl_buffers: bool = True
 
     @property
     def tp(self) -> bool:
@@ -165,6 +168,19 @@ def vision_cu_seqlens(grid_thw: torch.Tensor) -> tuple[int, ...]:
     return tuple(bounds)
 
 
+def fixed_length_cu_window(cu_seqlens: Sequence[int]) -> tuple[int, ...]:
+    """`cu_seqlens` padded to the op's full capacity by repeating the last boundary.
+
+    The SDPA program-cache key includes the `cu_window_seqlens` tensor's shape, so a fixed length keeps
+    the window count out of the key. The repeats are empty windows, which the kernel's window search and
+    mask generator skip.
+    """
+    if len(cu_seqlens) > _CU_WINDOW_ENTRIES:
+        msg = f"cu_seqlens has {len(cu_seqlens)} entries; the windowed SDPA op holds at most {_CU_WINDOW_ENTRIES}"
+        raise ValueError(msg)
+    return (*cu_seqlens, *[cu_seqlens[-1]] * (_CU_WINDOW_ENTRIES - len(cu_seqlens)))
+
+
 def vision_rope_tensors(
     grid_thw: torch.Tensor,
     *,
@@ -247,7 +263,12 @@ def row_parallel_forward(linear: Linear | RowParallelLinear, x: ttnn.Tensor, p: 
     if not p.tp:
         return linear.forward(x)
     x, added = with_batch_axis(x)
-    out = p.ccl_manager.all_gather(linear.forward(x), dim=-1, mesh_axis=p.tp_axis, use_hyperparams=True)
+    out = p.ccl_manager.all_gather(
+        linear.forward(x, use_persistent_buffer=p.use_persistent_ccl_buffers),
+        dim=-1,
+        mesh_axis=p.tp_axis,
+        use_hyperparams=True,
+    )
     return drop_batch_axis(out, added=added)
 
 
@@ -263,7 +284,7 @@ def row_parallel_seq_forward(linear: Linear | RowParallelLinear, x: ttnn.Tensor,
     npad = (-rows) % (p.tp_factor * _TILE)
     if npad:
         x = ttnn.pad(x, [(0, 0), (0, npad), (0, 0)], value=0.0)
-    out = linear.forward(x, reduce_scatter_dim=-2)
+    out = linear.forward(x, reduce_scatter_dim=-2, use_persistent_buffer=p.use_persistent_ccl_buffers)
     out = p.ccl_manager.all_gather(out, dim=1, mesh_axis=p.tp_axis, use_hyperparams=True)
     if npad:
         out = out[:, :rows, :]
@@ -315,9 +336,11 @@ class VisionAttention(Module):
         mesh_device: ttnn.MeshDevice,
         parallel: VisionParallel | None = None,
         linear_compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
+        kv_gather_capacity: int | None = None,
     ) -> None:
         super().__init__()
         self._p = parallel or VisionParallel()
+        self._kv_gather_capacity = kv_gather_capacity
         self.mesh_device = mesh_device
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
@@ -525,8 +548,12 @@ class VisionAttention(Module):
             empty_joint,
             empty_joint,
             empty_joint,
-            persistent_output_buffer_k=ccl.get_ag_ping_pong_buffer(k.shape, 2, sp_axis, dtype=k.dtype),
-            persistent_output_buffer_v=ccl.get_ag_ping_pong_buffer(v.shape, 2, sp_axis, dtype=v.dtype),
+            persistent_output_buffer_k=ccl.get_ag_ping_pong_buffer(
+                k.shape, 2, sp_axis, dtype=k.dtype, capacity=self._kv_gather_capacity
+            ),
+            persistent_output_buffer_v=ccl.get_ag_ping_pong_buffer(
+                v.shape, 2, sp_axis, dtype=v.dtype, capacity=self._kv_gather_capacity
+            ),
             joint_strategy="rear",
             logical_n=local_seq_len * self._p.sp_factor,
             program_config=self._ring_program_config(local_seq_len),
@@ -559,7 +586,7 @@ class VisionAttention(Module):
         k = ccl.all_gather(k, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
         v = ccl.all_gather(v, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
         cu_window = ttnn.from_torch(
-            torch.tensor(cu_seqlens, dtype=torch.int32),
+            torch.tensor(fixed_length_cu_window(cu_seqlens), dtype=torch.int32),
             device=self.mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint32,

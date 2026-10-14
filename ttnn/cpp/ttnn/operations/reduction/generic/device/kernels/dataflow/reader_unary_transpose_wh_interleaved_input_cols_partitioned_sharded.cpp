@@ -78,4 +78,7 @@ void kernel_main() {
         }
         base_l1_addr += batch_size_bytes;
     }
+    // dfb_in1 is reserved above only to take its base address, so push the reserved tiles here
+    // to leave the buffer balanced.
+    dfb_in1.push_back(num_tiles);
 }

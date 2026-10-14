@@ -28,7 +28,7 @@ from tracy.common import (
     clear_profiler_runtime_artifacts,
 )
 
-from models.common.utility_functions import skip_for_blackhole
+from models.common.utility_functions import is_single_chip, skip_for_blackhole
 
 PROG_EXMP_DIR = "programming_examples/profiler"
 TRACY_TESTS_DIR = "./tests/ttnn/tracy"
@@ -38,6 +38,15 @@ def is_6u_wrapper():
     ctx = mp.get_context("spawn")
     with ctx.Pool() as pool:
         result = pool.apply(is_6u)
+        pool.close()
+        pool.join()
+    return result
+
+
+def is_single_chip_wrapper():
+    ctx = mp.get_context("spawn")
+    with ctx.Pool() as pool:
+        result = pool.apply(is_single_chip)
         pool.close()
         pool.join()
     return result
@@ -328,19 +337,9 @@ def test_full_buffer():
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
     statName = "Marker Repeat"
-    statNameEth = "Marker Repeat ETH"
 
     assert statName in stats.keys(), "Wrong device analysis format"
-
-    if statNameEth in stats.keys():
-        assert (
-            stats[statName]["stats"]["Count"] - stats[statNameEth]["stats"]["Count"]
-            in REF_COUNT_DICT[ENV_VAR_ARCH_NAME]
-        ), "Wrong Marker Repeat count"
-        assert stats[statNameEth]["stats"]["Count"] > 0, "Wrong Eth Marker Repeat count"
-        assert stats[statNameEth]["stats"]["Count"] % (OP_COUNT * ZONE_COUNT) == 0, "Wrong Eth Marker Repeat count"
-    else:
-        assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
+    assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
 def wildcard_match(pattern, words):
@@ -1105,20 +1104,8 @@ def test_timestamped_events():
     OP_COUNT = 2
     RISC_COUNT = 5
     ZONE_COUNT = 100
-    WH_ERISC_COUNTS = [0, 3, 6, 16]  # N150, N300, T3K, 6U
     WH_TENSIX_COUNTS = [72, 64, 56]
-    BH_ERISC_COUNTS = [0, 1, 6, 8]
     BH_TENSIX_COUNTS = [130, 120, 110]
-
-    WH_COMBO_COUNTS = []
-    for T in WH_TENSIX_COUNTS:
-        for E in WH_ERISC_COUNTS:
-            WH_COMBO_COUNTS.append((T, E))
-
-    BH_COMBO_COUNTS = []
-    for T in BH_TENSIX_COUNTS:
-        for E in BH_ERISC_COUNTS:
-            BH_COMBO_COUNTS.append((T, E))
 
     # Quasar's profiler is L1-only, the buffer fills and remaining markers are dropped, only the
     # iterations that fit are captured. Each iteration writes 10 words (zone start + TS_DATA +
@@ -1129,14 +1116,10 @@ def test_timestamped_events():
     QUASAR_EVENTS_PER_ITER = 2  # DeviceTimestampedData + DeviceRecordEvent
 
     REF_COUNT_DICT = {
-        "wormhole_b0": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in WH_COMBO_COUNTS],
-        "blackhole": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in BH_COMBO_COUNTS],
+        "wormhole_b0": [T * RISC_COUNT * OP_COUNT * ZONE_COUNT for T in WH_TENSIX_COUNTS],
+        "blackhole": [T * RISC_COUNT * OP_COUNT * ZONE_COUNT for T in BH_TENSIX_COUNTS],
         # Note: using emu-quasar-2x3_DISPATCH for both dispatch modes
         "quasar": [2 * QUASAR_RISC_COUNT * QUASAR_ITER_COUNT * QUASAR_EVENTS_PER_ITER],
-    }
-    REF_ERISC_COUNT = {
-        "wormhole_b0": [C * OP_COUNT * ZONE_COUNT for C in WH_ERISC_COUNTS],
-        "blackhole": [C * OP_COUNT * ZONE_COUNT for C in BH_ERISC_COUNTS],
     }
     TEST_BIN_DICT = {
         "wormhole_b0": "build/test/tt_metal/tools/profiler/test_timestamped_events",
@@ -1149,17 +1132,44 @@ def test_timestamped_events():
 
     devicesData = run_device_profiler_test(testName=TEST_BIN_DICT[ENV_VAR_ARCH_NAME], setupAutoExtract=True)
 
-    if ENV_VAR_ARCH_NAME in REF_ERISC_COUNT.keys():
-        eventCount = len(
-            devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["erisc_events"]
-        )
-        assert eventCount in REF_ERISC_COUNT[ENV_VAR_ARCH_NAME], "Wrong erisc event count"
-
     if ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys():
         eventCount = len(
             devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["all_events"]
         )
         assert eventCount in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong event count"
+
+
+def test_active_eth_slow_dispatch():
+    # Fast dispatch to active ethernet has been removed, so active ethernet kernels are only profiled here, under slow
+    # dispatch. Same kernel and loop count as test_timestamped_events, but nothing runs on Tensix.
+    OP_COUNT = 2
+    ZONE_COUNT = 100
+    ERISC_COUNTS = {
+        "wormhole_b0": [3, 6, 16],  # N300, T3K, 6U
+        "blackhole": [1, 6, 8],
+    }
+
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    if ENV_VAR_ARCH_NAME not in ERISC_COUNTS:
+        pytest.skip(f"No active ethernet cores on {ENV_VAR_ARCH_NAME}")
+
+    devicesData = run_device_profiler_test(
+        testName="build/test/tt_metal/tools/profiler/test_active_eth_slow_dispatch",
+        setupAutoExtract=True,
+        slowDispatch=True,
+    )
+
+    # Device 0 has no profiler data at all when it has no active ethernet cores to program
+    device = devicesData["data"]["devices"].get("0")
+    events = device["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"] if device else {}
+    eriscEventCount = len(events.get("erisc_events", []))
+    if eriscEventCount == 0 and is_single_chip_wrapper():
+        pytest.skip("Single chip, no active ethernet cores")
+
+    assert eriscEventCount in [
+        C * OP_COUNT * ZONE_COUNT for C in ERISC_COUNTS[ENV_VAR_ARCH_NAME]
+    ], f"Wrong erisc event count {eriscEventCount}"
+    assert len(events.get("all_events", [])) == eriscEventCount, "Events recorded outside the active ethernet cores"
 
 
 def test_noc_event_profiler_linked_multicast_hang():
@@ -1186,7 +1196,7 @@ def test_noc_event_profiler_linked_multicast_hang():
 
 def test_noc_event_profiler():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
-    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
+    assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole", "quasar"]
 
     testCommand = f"build/{PROG_EXMP_DIR}/test_noc_event_profiler"
     clear_profiler_runtime_artifacts()
@@ -1216,6 +1226,30 @@ def test_noc_event_profiler():
             "BARRIER" in event_type for event_type in event_types
         ), f"plain NOC tracing must not record barrier events, got: {event_types}"
         assert len(noc_trace_data) == 4, f"unexpected noc trace events: {event_types}"
+
+        # Must match the buffer set up in test_noc_event_profiler.cpp (single_tile_size, num_tiles). The kernel copies
+        # it DRAM -> L1 -> DRAM on NOC 0 from a single core, using DRAM bank 0.
+        TILE_HEIGHT = TILE_WIDTH = 32
+        BFLOAT16_BYTES = 2
+        NUM_TILES = 5
+        expected_num_bytes = NUM_TILES * TILE_HEIGHT * TILE_WIDTH * BFLOAT16_BYTES
+        noc_events = {event["type"]: event for event in noc_trace_data if "type" in event}
+        read_event, write_event = noc_events["READ"], noc_events["WRITE_"]
+        for event in (read_event, write_event):
+            assert event["num_bytes"] == expected_num_bytes, f"unexpected num_bytes: {event}"
+            assert event["noc"] == "NOC_0", f"unexpected noc: {event}"
+            if ENV_VAR_ARCH_NAME == "quasar":
+                assert event["proc"].startswith("QUASAR_DM"), f"unexpected proc: {event}"
+            else:
+                assert event["proc"] == "BRISC", f"unexpected proc: {event}"
+            assert "dx" in event and "dy" in event, f"missing destination coordinates: {event}"
+
+        # Every entry (both events and the kernel zone markers) comes from the one core running the kernel.
+        src_coords = {(event["sx"], event["sy"]) for event in noc_trace_data}
+        assert len(src_coords) == 1, f"expected a single source core, got: {src_coords}"
+        dst_coords = {(event["dx"], event["dy"]) for event in (read_event, write_event)}
+        assert len(dst_coords) == 1, f"READ and WRITE_ should target the same DRAM bank, got: {dst_coords}"
+        assert dst_coords != src_coords, f"destination should be a DRAM core, not the source core: {dst_coords}"
 
     # Validate SoC descriptor is produced and contains valid grid/core data
     expected_soc_descriptor_file = f"{PROFILER_ARTIFACTS_DIR}/noc_events_rpt/soc_descriptor.yaml"
@@ -1385,118 +1419,6 @@ def test_fabric_event_profiler_fabric_mux():
         assert (
             fabric_event_count == expected_output["FABRIC_EVENT_COUNT"]
         ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {expected_output['FABRIC_EVENT_COUNT']}"
-
-
-@skip_for_blackhole()
-def test_fabric_event_profiler_2d():
-    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
-    assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
-    is_6u_bool = is_6u_wrapper()
-
-    # test that current device has a valid fabric API connection
-    sanity_check_test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
-    sanity_check_test_name = "Fabric2DFixture.Test2DMCastConnAPI_1N1E1W"
-    sanity_check_succeeded = run_gtest_profiler_test(
-        sanity_check_test_bin, sanity_check_test_name, skip_get_device_data=True
-    )
-    if not sanity_check_succeeded:
-        logger.info("Device does not have testable fabric connections, skipping ...")
-        return
-
-    # if device supports fabric API, test fabric event profiler
-    test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
-    tests = [
-        "Fabric2DFixture.TestUnicastRaw_3E",
-        "Fabric2DFixture.TestMCastConnAPI_1W2E",
-        "Fabric2DFixture.Test2DMCastConnAPI_1N1E1W",
-    ]
-
-    if is_6u_bool:
-        tests.extend(
-            [
-                "Fabric2DFixture.TestUnicastRaw_3N",
-                "Fabric2DFixture.TestUnicastRaw_3N3E",
-                "Fabric2DFixture.TestMCastConnAPI_2N1S",
-                "Fabric2DFixture.Test2DMCastConnAPI_7N3E",
-            ]
-        )
-
-    all_tests_expected_event_counts = [
-        {
-            frozenset({"ns_hops": 0, "e_hops": 3, "w_hops": 0, "is_mcast": False}.items()): 10,
-        },
-        {
-            frozenset({"ns_hops": 0, "e_hops": 0, "w_hops": 1, "is_mcast": False}.items()): 100,
-            frozenset({"ns_hops": 0, "e_hops": 2, "w_hops": 0, "is_mcast": True}.items()): 100,
-        },
-        {
-            frozenset({"ns_hops": 1, "e_hops": 1, "w_hops": 1, "is_mcast": True}.items()): 100,
-            frozenset({"ns_hops": 0, "e_hops": 1, "w_hops": 0, "is_mcast": False}.items()): 100,
-            frozenset({"ns_hops": 0, "e_hops": 0, "w_hops": 1, "is_mcast": False}.items()): 100,
-        },
-    ]
-
-    if is_6u_bool:
-        all_tests_expected_event_counts.extend(
-            [
-                {
-                    frozenset({"ns_hops": 3, "e_hops": 0, "w_hops": 0, "is_mcast": False}.items()): 10,
-                },
-                {
-                    frozenset({"ns_hops": 2, "e_hops": 4, "w_hops": 0, "is_mcast": False}.items()): 10,
-                },
-                {
-                    frozenset({"ns_hops": 2, "e_hops": 0, "w_hops": 0, "is_mcast": True}.items()): 100,
-                    frozenset({"ns_hops": 1, "e_hops": 0, "w_hops": 0, "is_mcast": False}.items()): 100,
-                },
-                {
-                    frozenset({"ns_hops": 7, "e_hops": 3, "w_hops": 0, "is_mcast": True}.items()): 100,
-                    frozenset({"ns_hops": 0, "e_hops": 3, "w_hops": 0, "is_mcast": True}.items()): 100,
-                },
-            ]
-        )
-
-    for test_name, expected_event_counts in zip(tests, all_tests_expected_event_counts):
-        nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
-        try:
-            not_skipped = run_gtest_profiler_test(test_bin, test_name, False, True)
-            assert not_skipped, f"gtest command '{test_bin}' was skipped unexpectedly"
-        except subprocess.CalledProcessError as e:
-            ret_code = e.returncode
-            assert ret_code == 0, f"test command '{test_bin}' returned unsuccessfully"
-
-        noc_trace_files = []
-        for f in os.listdir(f"{PROFILER_LOGS_DIR}"):
-            if re.match(r"^noc_trace_dev[0-9]+_ID[0-9]+.json$", f):
-                noc_trace_files.append(f)
-
-        actual_event_counts = {}
-        for trace_file in noc_trace_files:
-            with open(f"{PROFILER_LOGS_DIR}/{trace_file}", "r") as nocTraceJson:
-                try:
-                    noc_trace_data = json.load(nocTraceJson)
-                except json.JSONDecodeError:
-                    raise ValueError(f"noc trace file '{trace_file}' is not a valid JSON file")
-
-                assert isinstance(noc_trace_data, list), f"noc trace file '{trace_file}' format is incorrect"
-                assert len(noc_trace_data) > 0, f"noc trace file '{trace_file}' is empty"
-                for event in noc_trace_data:
-                    assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
-                    if event.get("type", "").startswith("FABRIC_"):
-                        assert event.get("fabric_send", None) is not None
-                        fabric_send_metadata = event.get("fabric_send", None)
-                        assert fabric_send_metadata.get("eth_chan", None) is not None
-                        del fabric_send_metadata["eth_chan"]
-                        key = frozenset(fabric_send_metadata.items())
-                        if key not in actual_event_counts:
-                            actual_event_counts[key] = 0
-                        actual_event_counts[key] += 1
-
-        # compare expected event counts to actual event_counts
-        for event in expected_event_counts.keys() | actual_event_counts.keys():
-            assert expected_event_counts.get(event, 0) == actual_event_counts.get(
-                event, 0
-            ), f"There are {actual_event_counts.get(event, 0)} fabric events with fields {event}, expected {expected_event_counts.get(event, 0)}"
 
 
 def test_sub_device_profiler():
