@@ -68,11 +68,14 @@ def softmax_case(shape, dt):
     return setup, lambda d, x: ttnn.softmax(x, dim=-1, numeric_stable=False)
 
 
-def quant_case(shape, dt):
+def quant_case(shape, dt, sharded=False):
     def setup(d):
-        return (tens(d, shape, DRAM, dt),)
+        if sharded:
+            mem, shp = hs(d, 8, 256)
+            return (tens(d, shp, mem, dt), mem)
+        return (tens(d, shape, DRAM, dt), DRAM)
 
-    return setup, lambda d, x: ttnn.quantize(x, 0.05, 3)
+    return setup, lambda d, x, mem: ttnn.quantize(x, 0.05, 3, memory_config=mem)
 
 
 CASES = {
@@ -92,6 +95,7 @@ CASES = {
     "softmax_bf8_1x8x256x256": softmax_case((1, 8, 256, 256), "bf8"),
     "quant_bf16_1024x1024": quant_case((1, 1, 1024, 1024), "bf16"),
     "quant_fp32_1024x1024": quant_case((1, 1, 1024, 1024), "fp32"),
+    "quant_bf16_hs": quant_case(None, "bf16", sharded=True),
 }
 
 
