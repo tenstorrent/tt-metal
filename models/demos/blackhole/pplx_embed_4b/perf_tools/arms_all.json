@@ -1,0 +1,260 @@
+[
+ {
+  "name": "A-pplx-bs8-LoFi",
+  "B": 8,
+  "grid": [
+   12,
+   8
+  ],
+  "placement": "kvl1",
+  "fid": "LoFi",
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "A-pplx-bs16-LoFi",
+  "B": 16,
+  "grid": [
+   12,
+   10
+  ],
+  "placement": "kvl1",
+  "fid": "LoFi",
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "A-pplx-bs32-LoFi",
+  "B": 32,
+  "grid": [
+   12,
+   10
+  ],
+  "placement": "dram",
+  "fid": "LoFi",
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "A-pplx-bs8-HiFi2",
+  "B": 8,
+  "grid": [
+   12,
+   8
+  ],
+  "placement": "kvl1",
+  "fid": "HiFi2",
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "A-pplx-bs16-HiFi2",
+  "B": 16,
+  "grid": [
+   12,
+   10
+  ],
+  "placement": "kvl1",
+  "fid": "HiFi2",
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "A-pplx-bs32-HiFi2",
+  "B": 32,
+  "grid": [
+   12,
+   10
+  ],
+  "placement": "dram",
+  "fid": "HiFi2",
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "A-pplx-bs8-HiFi4",
+  "B": 8,
+  "grid": [
+   12,
+   8
+  ],
+  "placement": "kvl1",
+  "fid": "HiFi4",
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "A-pplx-bs16-HiFi4",
+  "B": 16,
+  "grid": [
+   12,
+   10
+  ],
+  "placement": "kvl1",
+  "fid": "HiFi4",
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "A-pplx-bs32-HiFi4",
+  "B": 32,
+  "grid": [
+   12,
+   10
+  ],
+  "placement": "dram",
+  "fid": "HiFi4",
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "B-pplx-bs16-LoFi-d64",
+  "B": 16,
+  "grid": [
+   12,
+   10
+  ],
+  "placement": "kvl1",
+  "fid": "LoFi",
+  "d": 64,
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "B-pplx-bs16-LoFi-d128",
+  "B": 16,
+  "grid": [
+   12,
+   10
+  ],
+  "placement": "kvl1",
+  "fid": "LoFi",
+  "d": 128,
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "B-pplx-bs16-LoFi-d256",
+  "B": 16,
+  "grid": [
+   12,
+   10
+  ],
+  "placement": "kvl1",
+  "fid": "LoFi",
+  "d": 256,
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "C-pplx-bs16-LoFi-exact-exp",
+  "B": 16,
+  "grid": [
+   12,
+   10
+  ],
+  "placement": "kvl1",
+  "fid": "LoFi",
+  "exp_approx": false,
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "D-sdxl-self-1024-LoFi",
+  "s": 1024,
+  "qc": 128,
+  "kc": 1024,
+  "fid": "LoFi",
+  "B": 2,
+  "nqh": 20,
+  "nkh": 20,
+  "d": 64,
+  "grid": [
+   11,
+   10
+  ],
+  "exp_approx": false,
+  "placement": "l1",
+  "dtype": "bf16",
+  "reuse_kv": false,
+  "concat": false,
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "D-sdxl-self-1024-HiFi2",
+  "s": 1024,
+  "qc": 128,
+  "kc": 1024,
+  "fid": "HiFi2",
+  "B": 2,
+  "nqh": 20,
+  "nkh": 20,
+  "d": 64,
+  "grid": [
+   11,
+   10
+  ],
+  "exp_approx": false,
+  "placement": "l1",
+  "dtype": "bf16",
+  "reuse_kv": false,
+  "concat": false,
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "D-sdxl-cross-77-LoFi",
+  "s": 1024,
+  "skv": 96,
+  "qc": 128,
+  "kc": 128,
+  "fid": "LoFi",
+  "B": 2,
+  "nqh": 20,
+  "nkh": 20,
+  "d": 64,
+  "grid": [
+   11,
+   10
+  ],
+  "exp_approx": false,
+  "placement": "l1",
+  "dtype": "bf16",
+  "reuse_kv": false,
+  "concat": false,
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "E-pplx-bs1-q256-8x8",
+  "B": 1,
+  "grid": [
+   8,
+   8
+  ],
+  "qc": 256,
+  "kc": 512,
+  "placement": "kvl1",
+  "fid": "LoFi",
+  "reuse_kv": false,
+  "rounds": 9,
+  "n": 4
+ },
+ {
+  "name": "E-pplx-bs1-packed-q192-11x8",
+  "B": 1,
+  "grid": [
+   11,
+   8
+  ],
+  "qc": 192,
+  "kc": 512,
+  "placement": "kvl1",
+  "fid": "LoFi",
+  "reuse_kv": false,
+  "pack_gqa": true,
+  "rounds": 9,
+  "n": 4
+ }
+]
