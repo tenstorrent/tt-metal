@@ -962,7 +962,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
                 std::optional<uint32_t> best;
                 for (uint32_t r = 0; r < n_rd; ++r) {
                     const bool used = std::any_of(p.rdn.begin(), p.rdn.end(), [r](auto t) { return t.first == r; });
-                    if (used || p.sg_rd(r) != k || !p.tensix_reader(r)) {
+                    // (perf probe MIMO_FL_RDN_HI=1: tails among readers 8.. only, as DRISC mode's default hybrid)
+                    const bool hi_only = std::getenv("MIMO_FL_RDN_HI") && r < 8;
+                    if (used || p.sg_rd(r) != k || !p.tensix_reader(r) || hi_only) {
                         continue;
                     }
                     if (!best || noc_hops(phys(p.down[tail]), phys(p.readers[r]), 1) <
