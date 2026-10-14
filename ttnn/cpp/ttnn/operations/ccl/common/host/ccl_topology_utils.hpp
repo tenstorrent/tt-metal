@@ -168,6 +168,14 @@ std::optional<tt::tt_metal::TensorTopology> reduce_scatter_output_topology(
 // get_linearized_index_from_physical_coord -- when that tensor is stored on every device of the mesh. With a
 // cluster_axis, a tensor that is not stored on every device, or no label, `label` is returned as is. A label whose
 // coordinate count differs from the storage's is a scatter-family refusal naming `op`.
+//
+// What it guards against, on a 1x4 line reduce-scattering dim 3 over the whole mesh (piece i goes to ring rank i,
+// the index into the storage coordinates):
+//   storage coordinates (ring order):   (0,0) (0,1) (0,2) (0,3)   -> the devices hold S[0] S[1] S[2] S[3]
+//   label coordinates of a tensor built from an explicit list (from_host_shards, combine_device_tensors):
+//                                       (0,2) (0,3) (0,0) (0,1)
+//   pure result `{4},[Shard{3}]` over the label's coordinates claims piece 0 is on (0,2), which holds S[2]: composing
+//   by it reads the pieces scrambled. Over the storage coordinates it names the device that holds each piece.
 std::optional<tt::tt_metal::TensorTopology> over_storage_ring_order(
     std::optional<tt::tt_metal::TensorTopology> label,
     const Tensor& ring_tensor,
