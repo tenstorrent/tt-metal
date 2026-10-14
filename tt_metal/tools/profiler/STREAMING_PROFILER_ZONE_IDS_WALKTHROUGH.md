@@ -1,12 +1,13 @@
 # Debug event ids: a worked example
 
-This page takes one debug event and follows its id through every stage: from the line of kernel source that
-declares it, through compile, link and load, to the device sending the id and the host turning it back into a name.
+This page takes one debug event and follows it through every stage: from the line of kernel source that declares it,
+through compile, link and load, to the device sending its id and the host turning that id back into the site's name
+and metadata.
 
-**The event.** For this example we picked a scoped event, `DeviceZoneScopedN("T1_Zone5")`, which marks the start
-and end of a region of code. It sits in the demo compute kernel next to nine others like it (`T1_Zone0` …
-`T1_Zone9`). We chose it because it is in the middle of the kernel, so its numbers are not zeros. Every other kind of
-debug event gets its id the same way.
+**The event.** For this example we picked a scoped event, `DeviceZoneScopedNC("T1_Zone5", 0x42D4F4)`, which marks
+the start and end of a region of code and asks for it to be drawn cyan. It sits in the demo compute kernel next to
+nine others like it (`T1_Zone0` … `T1_Zone9`). We chose it because it is in the middle of the kernel, so its numbers
+are not zeros. Every other kind of debug event gets its id the same way.
 
 **The data.** Every value below is real. It was read from the JIT-built ELF and the loader's output on a Blackhole
 p100a, running the demo program:
@@ -15,17 +16,18 @@ p100a, running the demo program:
 test_streaming_profiler_zones --gx 1 --gy 1 --iters 2 --markers 1
 ```
 
-Why it works this way is in [the design document](STREAMING_PROFILER_ZONE_IDS.md). This page only shows each step and
-where each number comes from.
+Why it works this way is in [the design document](STREAMING_PROFILER_ZONE_IDS.md); the metadata rules and the record
+layout are in `tt_metal/hw/inc/hostdev/debug_event_meta.h`. This page only shows each step and where each number
+comes from.
 
 Code identifiers on this page (`DeviceZoneScopedN`, the `.tt_observability_event_*` sections, `TT_PROFILER_TU_ID`, file names and
 log text) are quoted exactly as they are in the source today; they will be renamed separately.
 
 | step | stage | action | the id is |
 |---|---|---|---|
-| 1 | source | the debug event site is written | — |
-| 2 | preprocess | the macro names the site's handle `__tt_observability_event_0_6` (a name, not the id) | not yet a number |
-| 3 | compile | the site becomes assembler directives + `lui`/`addi` | not yet a number |
+| 1 | source | the debug event site is written, with its metadata struct | — |
+| 2 | preprocess | the macro names the site's handle `__tt_observability_event_0_6_1201dff1d8be0b60` (a name, not the id) | not yet a number |
+| 3 | compile | the metadata struct becomes assembler directives, plus `lui`/`addi` | not yet a number |
 | 4 | link | the linker places the handle | `0x06800005` |
 | 5 | link | the linker fills in the instructions | `0x06800005` |
 | 6 | link | the linker fills in the record | `0x06800005` |
@@ -34,9 +36,9 @@ log text) are quoted exactly as they are in the source today; they will be renam
 | 9 | load | the host reserves a block for the image | `47` |
 | 10 | load | the host rewrites the instructions | `47` |
 | 11 | load | the host rewrites the record | `47` |
-| 12 | load | the host registers the name | `47` |
+| 12 | load | the host registers the site and decodes its metadata | `47` |
 | 13 | run | the device packs the id into a marker | `47` |
-| 14 | decode | the host names the marker | `47` → `T1_Zone5` |
+| 14 | decode | the host names the marker | `47` → `T1_Zone5`, colour `0x42D4F4` |
 
 ## Before you start: the fixed numbers
 
@@ -48,7 +50,7 @@ the kernel.
 | `0x06600000` | `TT_OBSERVABILITY_EVENT_STR_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_observability_event_str` (the strings) |
 | `0x06700000` | `TT_OBSERVABILITY_EVENT_META_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_observability_event_meta` (the records) |
 | `0x06800000` | `TT_OBSERVABILITY_EVENT_IDS_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_observability_event_ids` (the handles) |
-| `16` | `TT_OBSERVABILITY_EVENT_META_RECORD_BYTES` | `tt_metal/hw/inc/hostdev/observability_event_id.h` | bytes per record: four 4-byte fields |
+| `16` | `kRecordHeaderBytes` | `tt_metal/hw/inc/hostdev/debug_event_meta.h` | bytes of a record's fixed header; the site's metadata fields follow it |
 | `0xFFFF` | `TT_ZONE_STALL_ID` | `tt_metal/hw/inc/hostdev/observability_event_id.h` | reserved id; the space handed out is `0 … 0xFFFE` |
 
 The three addresses are **made up**. None of these sections is ever loaded onto the device, so their addresses
@@ -68,33 +70,61 @@ The TRISC1 (math) kernel opens the event:
 
 ```cpp
 {
-    DeviceZoneScopedN("T1_Zone5");
+    DeviceZoneScopedNC("T1_Zone5", 0x42D4F4);
     ...   // ~12 us of work
 }
 ```
 
-It sits at **line 118** of `test_streaming_profiler_zones/kernels/zones_compute.cpp`; the host reports that line at
+It sits at **line 123** of `test_streaming_profiler_zones/kernels/zones_compute.cpp`; the host reports that line at
 the end. It is the sixth of the kernel's ten scoped events, `T1_Zone0` … `T1_Zone9`.
+
+**The site's metadata is a struct.** Each event macro passes the site a constant value of a plain C++ struct, and the
+host gets that value back, field by field. `DeviceZoneScopedNC` uses `ZoneColorMeta`:
+
+```cpp
+// tt_metal/hw/inc/hostdev/debug_event_meta.h
+struct ZoneColorMeta {
+    const char* name;
+    uint32_t color;  // 0xRRGGBB
+};
+
+// tt_metal/tools/profiler/kernel_profiler_streaming.hpp
+#define DeviceZoneScopedNC(name, color) DeviceZoneScopedWith(::tt::debug_event::ZoneColorMeta{name, color})
+```
+
+`DeviceZoneScopedN(name)` is the same with `ZoneMeta{name}`, and `DeviceZoneScopedWith(MyMeta{...})` takes a type of
+your own. Any **simple aggregate**, a struct with public data members only, can be one:
+
+- each field is a string literal (`const char*`), an integer, enum or `bool` of 1, 2, 4 or 8 bytes, or a nested
+  struct that follows the same rules;
+- 1 to 8 fields per struct;
+- the first field is the site's name;
+- every value is a compile-time constant.
+
+Breaking a rule (an array, a `float`, a base class, …) fails the build with one readable error. The device never sees
+any of this: it only ever has the site's id.
 
 ## 2. Preprocess: the site gets a label name
 
-> **Neither number below is the event id, and neither is part of it.** They only spell the *name* of an
+> **None of the numbers below is the event id, and none is part of it.** They only spell the *name* of an
 > assembler label, so the next steps can refer to the handle. The id is the label's *address*, which the
 > linker (step 4) and the loader (step 9) decide. The name is gone once the file is assembled.
 
-`DeviceZoneScopedN(name)` expands to `TT_OBSERVABILITY_EVENT_DEFINE_ID(hash, name)`, which spells the label name from two numbers:
+`DeviceZoneScopedWith(meta)` expands to `TT_DEBUG_SITE(hash, meta)`, which spells the label name from three parts:
 
 | part | value | from | why it is in the name |
 |---|---|---|---|
 | `TT_PROFILER_TU_ID` | `0` | the JIT compile command: `-DTT_PROFILER_TU_ID=0`, the source's index in its link | two sources of one link can be merged into one assembly by LTO; this keeps their names apart |
 | `__COUNTER__` | `6` | the seventh site in this source: `0` is `STACK-OVERFLOW` (in `kernel_profiler_streaming.hpp`), `1`–`5` are `T1_Zone0`–`T1_Zone4` | keeps the names of different sites in one source apart |
+| hash of the value | `1201dff1d8be0b60` | an FNV-1a hash of the metadata value: its type and every field, here `"T1_Zone5"` and `0x42D4F4` | a site inside a template can be instantiated with different values (a colour from a template parameter); they share the counter, so the hash keeps them apart |
 
-Label name: **`__tt_observability_event_0_6`**. Two different sites must not share a name; nothing else depends on it.
+Label name: **`__tt_observability_event_0_6_1201dff1d8be0b60`**. Two different sites, or one site with two different values, must
+not share a name; nothing else depends on it.
 
 > **This step is not strictly required; it is an optimization.** The id would work without a fixed name: a site could
 > give its handle an anonymous local label and still get a correct, unique id. What the name buys is
 > deduplication. When the compiler expands one event site many times (an event inside an `inline` function or a
-> template called from ten places), every copy of the site's asm carries the same label name, and the `.ifndef`
+> template called from ten places), every copy with the same value carries the same label name, and the `.ifndef`
 > from step 3 emits the handle and the record only for the first copy. So the event gets **one id, one record and
 > one name entry** however many copies of its code exist, instead of one per copy. That saves id space and keeps
 > the host's table to one entry per site.
@@ -102,56 +132,108 @@ Label name: **`__tt_observability_event_0_6`**. Two different sites must not sha
 > The deduplication works within one source file. An event in a header that two sources include still gets two ids,
 > one per source: `TT_PROFILER_TU_ID` is part of the name precisely to keep those two apart.
 
-## 3. Compile: directives plus two instructions
+## 3. Compile: the struct becomes directives, plus two instructions
 
-The compiler copies the site's asm into the kernel's assembler text verbatim (shown with `-fno-lto`; under LTO it is
-the same text, only the register differs):
+**How a struct becomes assembler text.** The site is one `asm` statement whose text is not written out by hand but
+computed by the compiler:
 
-```asm
-	.ifndef __tt_observability_event_0_6
-.pushsection .tt_observability_event_ids,"",@progbits
-__tt_observability_event_0_6:	.byte 0                         # the handle: exactly one byte
-.popsection
-.pushsection .tt_observability_event_str,"MS",@progbits,1
-8880:	.asciz "T1_Zone5"                        # name string
-8881:	.asciz ".../kernels/zones_compute.cpp"   # file string
-.popsection
-.pushsection .tt_observability_event_meta,"M",@progbits,16      # 16 = bytes per record
-.balign 4
-.long __tt_observability_event_0_6                              # record field 1: id   (4 bytes)
-.long 8880b                                      # record field 2: name (4 bytes)
-.long 8881b                                      # record field 3: file (4 bytes)
-.long 118                                        # record field 4: line (4 bytes)
-.popsection
-.endif
-	lui s3, %hi(__tt_observability_event_0_6)
-	addi s3, s3, %lo(__tt_observability_event_0_6)
+```cpp
+static constexpr auto tt_site_meta = ::tt::debug_event::ZoneColorMeta{"T1_Zone5", 0x42D4F4};
+asm((::tt::debug_event::detail::emit_site(tt_site_meta, "__tt_observability_event_0_6", __FILE__, __LINE__)) : "=r"(v));
 ```
 
-- `.byte 0` puts one byte in `.tt_observability_event_ids`. Its value is irrelevant; its **address** will be the id.
-- Each `.long` is 4 bytes, so one record is **4 × 4 = 16 bytes** (`TT_OBSERVABILITY_EVENT_META_RECORD_BYTES`).
-- `118` is `__LINE__` from step 1.
+`emit_site` is a `constexpr` function, so GCC runs it **during compilation** and uses the text it returns as the asm
+template. It walks the struct's fields with a C++17 structured binding (`auto& [a, b] = meta;`), finding how many
+fields there are by testing how many initializers `T{...}` accepts, and writes one directive per field. Nothing of
+it runs on the device. The text it returns for this site:
 
-Nothing is a number yet: the id is "wherever `__tt_observability_event_0_6` ends up".
+```asm
+.ifndef __tt_observability_event_0_6_1201dff1d8be0b60
+.pushsection .tt_observability_event_ids,"",@progbits
+__tt_observability_event_0_6_1201dff1d8be0b60:	.byte 0                        # the handle: exactly one byte
+.popsection
+.pushsection .tt_observability_event_meta,"",@progbits
+.balign 4
+.long __tt_observability_event_0_6_1201dff1d8be0b60                            # header: id
+.pushsection .tt_observability_event_str,"MS",@progbits,1
+8880:	.asciz "tt::debug_event::ZoneColorMeta:sw"
+.popsection
+.long 8880b                                                     # header: signature
+.pushsection .tt_observability_event_str,"MS",@progbits,1
+8880:	.asciz "/localdev/…/kernels/zones_compute.cpp"
+.popsection
+.long 8880b                                                     # header: file
+.long 123                                                       # header: line
+.pushsection .tt_observability_event_str,"MS",@progbits,1
+8880:	.asciz "T1_Zone5"
+.popsection
+.long 8880b                                                     # field 1, name: a pointer to the string
+.balign 4
+.long 4379892                                                   # field 2, color: 0x42D4F4
+.balign 4
+.popsection
+.endif
+	lui %0, %%hi(__tt_observability_event_0_6_1201dff1d8be0b60)
+	addi %0, %0, %%lo(__tt_observability_event_0_6_1201dff1d8be0b60)
+```
+
+The compiler replaces `%0` with a register (`s4` in this kernel).
+
+- `.byte 0` puts one byte in `.tt_observability_event_ids`. Its value is irrelevant; its **address** will be the id.
+- **The record** is a 16-byte header (id, signature, file, line) followed by the struct's fields in declaration
+  order: a string becomes a 4-byte pointer, an integer is stored at its own size, and each field is aligned to its
+  size (at most 4). `ZoneColorMeta` gives **16 + 4 + 4 = 24 bytes**; `ZoneMeta` gives 20. Records differ in size by
+  type.
+- **The signature** makes every record self-describing: `"<type name>:<field codes>"`, one code per field (`s`
+  string, `b`/`h`/`w`/`q` for 1/2/4/8 bytes, braces around a nested struct's codes). `ZoneColorMeta:sw` is a string
+  then a 4-byte integer. The host sizes and reads any record from its signature, without knowing the type; the type
+  name lets a reader ask for the struct back by name.
+- `123` is `__LINE__` from step 1.
+
+**A richer struct works the same way.** The colour above is one field among others; a site can carry any number of
+formatting attributes, grouped however suits it. A type of your own, with the style in a nested struct:
+
+```cpp
+struct Style { uint32_t color; uint8_t verbosity; };
+struct MyZoneMeta { const char* name; Style style; uint16_t flags; };
+
+DeviceZoneScopedWith(MyZoneMeta{"T1_Zone5", {0x42D4F4, 2}, 0x0001});
+```
+
+`emit_site` flattens the nested struct in place and marks its bounds with braces in the signature. The record body
+it writes after the same 16-byte header (the text `emit_site` returns for this value):
+
+| bytes | directive | field |
+|---|---|---|
+| 16–19 | `.long 8880b` → `"T1_Zone5"` | `name` |
+| 20–23 | `.long 4379892` (`0x42D4F4`) | `style.color` |
+| 24 | `.byte 2` | `style.verbosity` |
+| 26–27 | `.short 1` (after 1 byte of padding, aligned to 2) | `flags` |
+
+Signature `"MyZoneMeta:s{wb}h"`, 28 bytes in all. The host reads it with no code of its own for this type, and
+`site.meta->as<MyZoneMeta>()` gives the struct back.
+
+Nothing is a number yet: the id is "wherever `__tt_observability_event_0_6_1201dff1d8be0b60` ends up".
 
 ## 4. Link: the handle is placed
 
 The linker gathers every `.tt_observability_event_ids` byte of this image into one section and puts it at `TT_OBSERVABILITY_EVENT_IDS_VMA`,
-**`0x06800000`**. The bytes are laid end to end, one per site, in link order:
+**`0x06800000`**. The bytes are laid end to end, one per site, in link order (each label also ends in its value's
+hash, shortened to `_…` here):
 
 ```
-offset  address   label            site
-  0     06800000  __tt_observability_event_0_1    T1_Zone0
-  1     06800001  __tt_observability_event_0_2    T1_Zone1
-  2     06800002  __tt_observability_event_0_3    T1_Zone2
-  3     06800003  __tt_observability_event_0_4    T1_Zone3
-  4     06800004  __tt_observability_event_0_5    T1_Zone4
-  5     06800005  __tt_observability_event_0_6    T1_Zone5     ← this event
-  6     06800006  __tt_observability_event_0_7    T1_Zone6
+offset  address   label             site
+  0     06800000  __tt_observability_event_0_1_…   T1_Zone0
+  1     06800001  __tt_observability_event_0_2_…   T1_Zone1
+  2     06800002  __tt_observability_event_0_3_…   T1_Zone2
+  3     06800003  __tt_observability_event_0_4_…   T1_Zone3
+  4     06800004  __tt_observability_event_0_5_…   T1_Zone4
+  5     06800005  __tt_observability_event_0_6_…   T1_Zone5     ← this event
+  6     06800006  __tt_observability_event_0_7_…   T1_Zone6
    …
-  9     06800009  __tt_observability_event_0_10   T1_Zone9
- 10     0680000a  __tt_observability_event_0_11   TRISC-KERNEL (the whole-kernel event opened by the wrapper `trisck.cc`)
- 11     0680000b  __tt_observability_event_0_0    STACK-OVERFLOW
+  9     06800009  __tt_observability_event_0_10_…  T1_Zone9
+ 10     0680000a  __tt_observability_event_0_11_…  TRISC-KERNEL (the whole-kernel event opened by the wrapper `trisck.cc`)
+ 11     0680000b  __tt_observability_event_0_0_…   STACK-OVERFLOW
 ```
 
 `T1_Zone5` is the byte at **offset 5**, so its address, and its link-time id, is
@@ -184,43 +266,43 @@ address  word      instruction
 
 ## 6. Link: the record is filled in
 
-`.tt_observability_event_meta` sits at `TT_OBSERVABILITY_EVENT_META_VMA`, **`0x06700000`**. Records are 16 bytes each and in the same order as
-the handles, so `T1_Zone5`'s record, number 5, starts at `0x06700000 + 5 × 16 = 0x06700000 + 0x50 =`
-**`0x06700050`**. `readelf -x` prints it as:
+`.tt_observability_event_meta` sits at `TT_OBSERVABILITY_EVENT_META_VMA`, **`0x06700000`**. Records are in the same order as the handles, and the
+five before ours are all 24-byte `ZoneColorMeta` records, so `T1_Zone5`'s record starts at
+`0x06700000 + 5 × 24 = 0x06700000 + 0x78 =` **`0x06700078`**. Its 24 bytes, as `readelf -x` prints them:
 
 ```
-0x06700050:  05008006  a9006006  09006006  76000000
+0x06700078:  05008006  00006006  22006006  7b000000  cb006006  f4d44200
 ```
 
-The address on the left is where the row starts. The four groups are the four 4-byte fields from step 3, in file
-byte order. Reversing each group gives the number:
+The six groups are the six 4-byte words from step 3, in file byte order. Reversing each group gives the number:
 
-| field | bytes in file | as a number | meaning |
+| word | bytes in file | as a number | meaning |
 |---|---|---|---|
 | id | `05 00 80 06` | `0x06800005` | the handle's address from step 4 |
-| name | `a9 00 60 06` | `0x066000a9` | where `"T1_Zone5"` starts in `.tt_observability_event_str` |
-| file | `09 00 60 06` | `0x06600009` | where the file path starts in `.tt_observability_event_str` |
-| line | `76 00 00 00` | `0x76` = 118 | the line from step 1 |
+| signature | `00 00 60 06` | `0x06600000` | where `"tt::debug_event::ZoneColorMeta:sw"` starts in `.tt_observability_event_str` |
+| file | `22 00 60 06` | `0x06600022` | where the file path starts in `.tt_observability_event_str` |
+| line | `7b 00 00 00` | `0x7b` = 123 | the line from step 1 |
+| field 1, `name` | `cb 00 60 06` | `0x066000cb` | where `"T1_Zone5"` starts in `.tt_observability_event_str` |
+| field 2, `color` | `f4 d4 42 00` | `0x0042d4f4` | the colour, stored as the value itself |
 
-**Where `0x066000a9` comes from.** `.tt_observability_event_str` sits at `TT_OBSERVABILITY_EVENT_STR_VMA`, `0x06600000`, and is just the
+**Where `0x066000cb` comes from.** `.tt_observability_event_str` sits at `TT_OBSERVABILITY_EVENT_STR_VMA`, `0x06600000`, and is just the
 strings of all sites packed back to back, each ending in a `\0` byte, in the order the sites were emitted:
 
 | starts at | offset | string | its size (with `\0`) |
 |---|---|---|---|
-| `0x06600000` | 0 | `T1_Zone0` | 9 |
-| `0x06600009` | 9 | `/localdev/…/zones_compute.cpp` | 124 |
-| `0x06600085` | 133 | `T1_Zone1` | 9 |
-| `0x0660008e` | 142 | `T1_Zone2` | 9 |
-| `0x06600097` | 151 | `T1_Zone3` | 9 |
-| `0x066000a0` | 160 | `T1_Zone4` | 9 |
-| **`0x066000a9`** | **169** | **`T1_Zone5`** | 9 |
+| `0x06600000` | 0 | `tt::debug_event::ZoneColorMeta:sw` | 34 |
+| `0x06600022` | 34 | `/localdev/…/zones_compute.cpp` | 124 |
+| `0x0660009e` | 158 | `T1_Zone0` | 9 |
+| `0x066000a7` | 167 | `T1_Zone1` | 9 |
+| … | | | |
+| **`0x066000cb`** | **203** | **`T1_Zone5`** | 9 |
 
-`169` is not a size of anything in this event. It is how many bytes of strings came **before** it:
-`9 + 124 + 4 × 9 = 169`. The long file path appears only once: the section is marked mergeable (`"MS"` in step 3),
-so the linker keeps one copy and every `T1_ZoneN` record's file field points at it, `0x06600009`.
+`203` is how many bytes of strings came **before** it: `34 + 124 + 5 × 9 = 203`. The signature and the long file
+path appear only once: the section is marked mergeable (`"MS"` in step 3), so the linker keeps one copy and every
+`T1_ZoneN` record points at it.
 
-The host turns a pointer back into a string by subtracting the section's address: `0x066000a9 − 0x06600000 = 169`,
-then reads from byte 169 up to the next `\0`.
+The host turns a pointer back into a string by subtracting the section's address: `0x066000cb − 0x06600000 = 203`,
+then reads from byte 203 up to the next `\0`.
 
 ## 7. Link: the relocations are kept
 
@@ -230,12 +312,12 @@ The three that mention this handle:
 
 ```
 at address  type            symbol
-00007c34    R_RISCV_HI20    __tt_observability_event_0_6      ← the lui from step 5   (upper 20 bits)
-00007c38    R_RISCV_LO12_I  __tt_observability_event_0_6      ← the addi from step 5  (lower 12 bits)
-06700050    R_RISCV_32      __tt_observability_event_0_6      ← the record's id field from step 6 (all 32 bits)
+00007c34    R_RISCV_HI20    __tt_observability_event_0_6_1201dff1d8be0b60   ← the lui from step 5   (upper 20 bits)
+00007c38    R_RISCV_LO12_I  __tt_observability_event_0_6_1201dff1d8be0b60   ← the addi from step 5  (lower 12 bits)
+06700078    R_RISCV_32      __tt_observability_event_0_6_1201dff1d8be0b60   ← the record's id from step 6 (all 32 bits)
 ```
 
-These three lines are exactly the list of places the host will change in steps 10 and 11. They sit among 20,751
+These three lines are exactly the list of places the host will change in steps 10 and 11. They sit among 20,784
 relocations in this ELF (811 of them for `.text`).
 
 ## 8. Cache: nothing of it is loadable
@@ -304,26 +386,22 @@ can write any id up to `0xFFFE`.
 
 ## 11. Load: the record is rewritten
 
-The third relocation from step 7 points at `0x06700050`, the id field of record 5 in `.tt_observability_event_meta`. That address
-is *where* the value sits and does not change; the loader replaces the value inside it with the same 47, as the
-whole 32-bit word (`R_RISCV_32`, stored as the bytes `2f 00 00 00`):
+The third relocation from step 7 points at `0x06700078`, the id word of `T1_Zone5`'s record in `.tt_observability_event_meta`. That
+address is *where* the value sits and does not change; the loader replaces the value inside it with the same 47, as
+the whole 32-bit word (`R_RISCV_32`, stored as the bytes `2f 00 00 00`). The rest of the record is untouched:
 
 ```
-0x06700050:  05008006 …   →   2f000000 …
+0x06700078:  05008006 00006006 …   →   2f000000 00006006 …
 ```
 
-**Getting from `0x06700050` to 47:**
+**Getting from `0x06700078` to 47:**
 
 ```
-field at 0x06700050 holds          0x06800005      (step 6)
+id word at 0x06700078 holds        0x06800005      (step 6)
 minus where .tt_observability_event_ids was linked − 0x06800000   = 5, the event's offset
 plus this image's block start      + 42            (step 9)
                                    = 47
 ```
-
-The record's position gives the same offset: `(0x06700050 − 0x06700000) / 16 = 0x50 / 16 = 5`, record 5. That
-match is only because records and handles were emitted in the same order; the loader uses the field's value, not
-the position.
 
 **After steps 10 and 11, the same 47 is in three places:**
 
@@ -331,20 +409,33 @@ the position.
 |---|---|---|
 | `.tt_observability_event_ids` | the handle's address: the section now starts at 42, and this is byte 5 | the loader (it is where the 47 came from) |
 | `.text` | the `lui`/`addi` pair, which together produce 47 | the device, which puts it in the marker (step 13) |
-| `.tt_observability_event_meta` | the record's id field | the host, which maps 47 to `"T1_Zone5"` (step 12) |
+| `.tt_observability_event_meta` | the record's id word | the host, which maps 47 to the site (step 12) |
 
 The device and the host never consult each other; they agree because both were filled in from the same symbol.
 
-## 12. Load: the name is registered
+## 12. Load: the site and its metadata are registered
 
-The registry reads record 5, turns its two pointers back into strings (subtract `0x06600000`, read up to `\0`, as in
-step 6), and publishes:
+The registry walks `.tt_observability_event_meta` from the start, one record at a time. For each record it reads the 16-byte
+header, follows the signature pointer, and lets the field codes after the `:` say how many bytes follow and what
+they are. For `T1_Zone5`, `sw` means a 4-byte string pointer, then a 4-byte integer, so the record is 24 bytes and
+the next one starts right after it. It turns every string pointer back into a string (subtract `0x06600000`, read up
+to `\0`, as in step 6) and publishes:
 
 ```
-sites[47] = { name "T1_Zone5", file ".../kernels/zones_compute.cpp", line 118 }
+sites[47] = { name "T1_Zone5", file ".../kernels/zones_compute.cpp", line 123,
+              meta = "tt::debug_event::ZoneColorMeta:sw" { "T1_Zone5", 0x42d4f4 } }
 ```
 
-This happens before the image's bytes are copied to the device, so the name exists before the event can fire.
+A reader gets the struct back by asking for its type. `as<T>()` checks the signature against `T`'s and walks `T`'s
+fields with the same structured binding the compiler used in step 3, filling each one in:
+
+```cpp
+if (auto c = site.meta->as<tt::debug_event::ZoneColorMeta>()) {
+    // c->name == "T1_Zone5", c->color == 0x42D4F4
+}
+```
+
+This happens before the image's bytes are copied to the device, so the site is known before the event can fire.
 
 ## 13. Run: the device packs the marker
 
@@ -395,22 +486,25 @@ The compiler turns that line into these instructions:
 word0 = **`0x1800002F`**: type 3 in the top 5 bits, id 47 (`0x2f`) in the bottom 27. An event too long for the
 2-word packet ships type 2 (`ZONE_ATOMIC`) instead, giving `0x1000002F`; the id part is the same.
 
+The metadata adds nothing here: the packet is the same two words whatever struct the site carries.
+
 ## 14. Decode: the host names it
 
 The relay carries the ring buffer to the host. The decoder masks off the type to recover the id,
 `0x1800002F & 0x7FFFFFF = 47` (`0x7FFFFFF` is 27 one-bits), and calls `observability_event_of(47)`, which is one array load:
 
 ```
-sites[47]  →  "T1_Zone5"  zones_compute.cpp:118
+sites[47]  →  "T1_Zone5"  zones_compute.cpp:123  ZoneColorMeta{ color 0x42d4f4 }
 ```
 
+A consumer reads the metadata from there; the Tracy sink, for instance, draws the zone in its `ZoneColorMeta` colour.
 The run's subscriber received all of them: 105 scoped events and 12 point events, with 0 stalls.
 
 ---
 
 **Next run.** Another process may load the images in a different order and give `trisc1.elf` a different block.
-The ELF on disk still says `0x06800005`; only the in-memory copy, and so the id on the wire, changes. Names never
-change.
+The ELF on disk still says `0x06800005`; only the in-memory copy, and so the id on the wire, changes. Names and
+metadata never change.
 
 ## Reproduce
 
@@ -422,9 +516,9 @@ X=$E.xip.elf                                               # as loaded, written 
 
 $R -s -W $E | grep __tt_observability_event_                              # step 4: handles and their addresses
 $O -d --start-address=0x7c34 --stop-address=0x7c3c $E      # step 5
-$R -x .tt_observability_event_meta $E                                     # step 6: records (record 5 at 0x06700050)
+$R -x .tt_observability_event_meta $E                                     # step 6: records (T1_Zone5's at 0x06700078)
 $R -p .tt_observability_event_str $E                                      # step 6: strings and their offsets
-$R -r -W $E | grep __tt_observability_event_0_6                           # step 7
+$R -r -W $E | grep __tt_observability_event_0_6_                          # step 7
 $R -l -W $E | grep -A3 "Segment Sections"                  # step 8
 $R -S -W $X | grep tt_zone_ids                             # step 9: section address = base, size = sites
 $O -d --start-address=0x7c34 --stop-address=0x7c3c $X      # step 10
