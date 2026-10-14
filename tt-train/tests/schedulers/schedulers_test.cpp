@@ -951,7 +951,8 @@ TEST(ParamGroupSchedulingTest, MultiplicativeSchedulersScaleEveryGroupsBase) {
         ttml::schedulers::StepScheduler scheduler(&optimizer, /*step_size=*/2, /*gamma=*/0.5F);
         for (int s = 1; s <= 5; ++s) {
             scheduler.step();
-            expect_factor(optimizer, std::pow(0.5F, static_cast<float>(s / 2)), s);
+            const int num_decays = s / 2;  // gamma is applied once every step_size=2 steps
+            expect_factor(optimizer, std::pow(0.5F, static_cast<float>(num_decays)), s);
         }
     }
     {
