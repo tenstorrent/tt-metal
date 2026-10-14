@@ -55,7 +55,13 @@ void kernel_main() {
     auto read_block = [&](const uint32_t& token_idx, const uint32_t& width_size, const uint32_t& offset = 0) {
         dfb_in0.reserve_back(1);
         uint32_t weight_l1_addr = dfb_in0.get_write_ptr();
-        input_token_t token = static_cast<input_token_t>(index_scratch[token_idx + offset]);
+        input_token_t token;
+        {
+            // The NoC rewrites this scratchpad with each new index page, so on Quasar the DM core's L2 may
+            // still hold the previous page; scoped_lock invalidates the line before the read. No-op on WH/BH.
+            auto index_lock = index_scratch.scoped_lock(token_idx + offset, 1);
+            token = static_cast<input_token_t>(index_scratch[token_idx + offset]);
+        }
         read_token_async(noc, token, weights, weight_l1_addr, width_size);
         noc.async_read_barrier();
         dfb_in0.push_back(1);
