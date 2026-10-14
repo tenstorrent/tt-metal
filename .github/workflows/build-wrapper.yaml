@@ -1,190 +1,115 @@
 name: "Build TT-Metalium across all configs"
-
 on:
-  workflow_call:
-    inputs:
-      # Pre-built Docker image tags (optional - if provided, skips docker build)
-      ubuntu-2204-ci-build-tag:
-        required: false
-        type: string
-        default: ""
-      ubuntu-2204-dev-tag:
-        required: false
-        type: string
-        default: ""
-      ubuntu-2204-manylinux-tag:
-        required: false
-        type: string
-        default: ""
-      ubuntu-2404-ci-build-tag:
-        required: false
-        type: string
-        default: ""
-      ubuntu-2404-dev-tag:
-        required: false
-        type: string
-        default: ""
-      ubuntu-2404-manylinux-tag:
-        required: false
-        type: string
-        default: ""
-      # Single-platform build options (alternative to matrix build with docker tags)
-      platform:
-        required: false
-        type: string
-        default: ""
-        description: "Platform to target (Ubuntu 22.04, Ubuntu 24.04). If set, runs single-platform build instead of matrix."
-      build-type:
-        required: false
-        type: string
-        default: "Release"
-        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
-      runs-on:
-        required: false
-        type: string
-        default: "tt-ubuntu-2204-large-stable"
-        description: "Runner label for build-artifact jobs"
-      enable-lto:
-        required: false
-        type: boolean
-        default: false
-        description: "Enable Link Time Optimization (LTO)"
-      ref:
-        required: false
-        type: string
-        default: ""
-        description: "Git ref to checkout (defaults to github.sha if not provided)"
-      fetch-depth:
-        required: false
-        type: number
-        default: 500
-        description: "Git fetch depth passed through to build-artifact"
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
-        description: "Harbor pull-through prefix for CI images (empty to use canonical refs)"
   workflow_dispatch:
-    inputs:
-      platform:
-        required: false
-        type: choice
-        default: "Ubuntu 22.04"
-        options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to target"
-      build-type:
-        required: false
-        type: choice
-        default: Release
-        options:
-          - Release
-          - Debug
-          - RelWithDebInfo
-          - ASan
-          - TSan
-        description: "Build type configuration"
-      runs-on:
-        required: false
-        type: string
-        default: "tt-ubuntu-2204-large-stable"
-        description: "Runner label for build-artifact jobs"
-      enable-lto:
-        required: false
-        type: boolean
-        default: false
-        description: "Enable Link Time Optimization (LTO)"
-
 permissions:
   contents: read
-  packages: write
-
+  actions: read
+  packages: read
 jobs:
-  # =============================================================================
-  # NOTE: This workflow has two modes:
-  # 1. workflow_dispatch: Single platform build via build-dispatch job
-  # 2. workflow_call: Matrix build across multiple configs via build job
-  #
-  # Platform parsing is handled by build-artifact.yaml internally.
-  # =============================================================================
+  flash-host-contracts:
+    runs-on: tt-ubuntu-2204-large-stable
+    timeout-minutes: 35
+    container:
+      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-dev-amd64@sha256:01621216c5a6d2cc661550ff007d1d1c51ea1e9ba5808286d0c79ab325a03a61
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work:/work/ttnn
+        LD_LIBRARY_PATH: /work/build/lib
+        TT_FROM_PRECOMPILED_DIR: /work
+        PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: e21e0f3cfcbd0738b6a0ad18ea1a0a59457ab343
+          submodules: recursive
+          path: docker-job
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: "11905114154"
+          run-id: "38584434196"
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: /work
+      - name: Admit exact compiled artifact and interpreter
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = e21e0f3cfcbd0738b6a0ad18ea1a0a59457ab343
+          echo "b01f1940507c326235c65a9c301b25b1bd48fac9fb91df7e1f752a3af01d6b6d  ttm_any.tar.zst" | sha256sum -c -
+          tar --zstd -xf ttm_any.tar.zst
+          /opt/venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3,12), sys.version; print(sys.version)'
+          uv pip install --python /opt/venv/bin/python --no-deps --no-build-isolation -e .
+      - name: Real imports and original CPU host tests
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          cat > /tmp/flash-import-host.py <<'PY'
+          """CPU-only admission of the exact built Flash source, followed by original host tests."""
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import platform
+          import sys
+          import time
 
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
+          root = Path(sys.argv[1]).resolve(strict=True)
+          out = Path(sys.argv[2]).resolve()
+          out.mkdir(exist_ok=False)
+          assert sys.version_info[:2] == (3, 12), sys.version
+          assert platform.machine() == 'x86_64', platform.machine()
 
-  # build-dispatch is for direct workflow_dispatch calls only
-  build-dispatch:
-    needs: check-harbor
-    if: ${{ inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != '' }}
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      contents: read
-      packages: write
-    secrets: inherit
-    with:
-      harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
-      platform: ${{ inputs.platform }}
-      build-type: ${{ inputs.build-type || 'Release' }}
-      enable-lto: ${{ inputs.enable-lto || false }}
-      publish-artifact: false
-      publish-package: false
-      skip-tt-train: false
-      tracy: false
-      runs-on: ${{ inputs['runs-on'] }}
-      ref: ${{ inputs.ref }}
-      fetch-depth: ${{ github.event_name == 'workflow_dispatch' && 500 || inputs.fetch-depth }}
+          def tt_fds():
+              found = {}
+              for p in Path('/proc/self/fd').iterdir():
+                  try:
+                      target = os.readlink(p)
+                  except FileNotFoundError:
+                      continue
+                  if target.startswith('/dev/tenstorrent/'):
+                      found[p.name] = target
+              return found
 
-  # build job runs the matrix - either when called from merge-gate with pre-built tags,
-  # or when called via workflow_call without the platform dropdown
-  build:
-    needs: check-harbor
-    if: ${{ inputs.ubuntu-2204-ci-build-tag != '' || inputs.platform == '' }}
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      contents: read
-      packages: write
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        config:
-          - platform: "Ubuntu 22.04"
-            toolchain: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
-            build-type: "Debug"
-          - platform: "Ubuntu 22.04"
-            toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"
-            build-type: "Release"
-          - platform: "Ubuntu 22.04"
-            toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
-            build-type: "Release"
-          - platform: "Ubuntu 24.04"
-            toolchain: "cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
-            build-type: "Release"
-            enable-lto: true
-          - platform: "Ubuntu 24.04"
-            toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
-            build-type: "Release"
-    with:
-      harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
-      platform: ${{ matrix.config.platform }}
-      toolchain: ${{ matrix.config.toolchain }}
-      build-type: ${{ matrix.config.build-type }}
-      # Enable LTO only when explicitly set in the matrix config
-      enable-lto: ${{ matrix.config.enable-lto || false }}
-      publish-artifact: false
-      publish-package: false
-      skip-tt-train: false
-      tracy: false
-      runs-on: ${{ inputs['runs-on'] }}
-      ref: ${{ inputs.ref }}
-      fetch-depth: ${{ github.event_name == 'workflow_dispatch' && 500 || inputs.fetch-depth }}
-      # Pass pre-built docker image tags based on platform
-      ci-build-docker-image: ${{
-        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-ci-build-tag) ||
-        inputs.ubuntu-2204-ci-build-tag }}
-      dev-docker-image: ${{
-        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-dev-tag) ||
-        inputs.ubuntu-2204-dev-tag }}
-      manylinux-docker-image: ${{
-        (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-manylinux-tag) ||
-        inputs.ubuntu-2204-manylinux-tag }}
+          assert not tt_fds()
+          import ttnn
+
+          def refuse_device(*args, **kwargs):
+              raise AssertionError('CPU host admission must not open a Tenstorrent device')
+
+          # These host tests use mock device operations. Real imports must never open a device.
+          for name in ('open_device', 'open_mesh_device', 'CreateDevice', 'CreateDevices'):
+              if hasattr(ttnn, name):
+                  setattr(ttnn, name, refuse_device)
+
+          import models.demos.blackhole.qwen38_flash_next.ttnn.model
+          import models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm
+          import pytest
+          origins = {}
+          for name, module in tuple(sys.modules.items()):
+              if not (name == 'ttnn' or name.startswith(('ttnn.', 'models.'))):
+                  continue
+              path = getattr(module, '__file__', None)
+              if path:
+                  p = Path(path).resolve(strict=True)
+                  assert p.is_relative_to(root), (name, str(p), str(root))
+                  origins[name] = {'path': str(p), 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
+          assert not tt_fds()
+          (out/'import-proof.json').write_text(json.dumps({'python':sys.version,'origins':origins,'tt_fds':tt_fds()},indent=2)+'\n')
+          rc = pytest.main(['--noconftest', '-q', str(root/'models/demos/blackhole/qwen38_flash_next/tests/test_moe_public_api_host.py'), str(root/'models/demos/blackhole/qwen38_flash_next/tests/test_ttnn_head_tail_split_static.py') + '::test_handoff_is_the_layer_0_residual_only_with_pinned_metadata', str(root/'models/demos/blackhole/qwen38_flash_next/tests/test_ttnn_head_tail_split_static.py') + '::test_handoff_does_not_retain_module_constants', str(root/'models/demos/blackhole/qwen38_flash_next/tests/test_ttnn_head_tail_split_static.py') + '::test_handoff_copy_replace_and_custom_metadata', str(root/'models/demos/blackhole/qwen38_flash_next/tests/test_qwen38_vllm_no_device.py') + '::test_bundle_metadata_names_the_hf_architecture_and_the_adapter', '--junitxml='+str(out/'host.xml')])
+          assert not tt_fds()
+          (out/'host-result.json').write_text(json.dumps({'pytest_exit':rc,'tt_fds':tt_fds(),'completed_unix':time.time()},indent=2)+'\n')
+          raise SystemExit(rc)
+          PY
+          timeout --signal=TERM --kill-after=15s 600s /opt/venv/bin/python /tmp/flash-import-host.py /work /work/flash-host-results
+      - name: Preserve host evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gpt-current-host-contracts
+          path: /work/flash-host-results
+          if-no-files-found: warn
