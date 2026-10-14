@@ -1,0 +1,21 @@
+# X1 (topk_xl split DEST placement, merged #60291 head 762447a5c40): XB as built; XE = K 512 and 1024 even chunks at
+# tile 4 (bank 1); XP2 = XE with K 2048 odd and even chunks at tiles 4 and 6 (both bank 1, a bank-model probe).
+# ABBA twice with the XB/XE/XP2 repeats as A/A; counter builds once each; functional bits of test_topk_xl_split.py.
+r XB ids/xls.txt -
+r XE ids/xls.txt -
+r XP2 ids/xls.txt -
+r XP2 ids/xls.txt -
+r XE ids/xls.txt -
+r XB ids/xls.txt -
+r XB ids/xls.txt -
+r XE ids/xls.txt -
+r XP2 ids/xls.txt -
+r XP2 ids/xls.txt -
+r XE ids/xls.txt -
+r XB ids/xls.txt -
+c XB_wc ids/xls.txt - wc
+c XE_wc ids/xls.txt - wc
+c XP2_wc ids/xls.txt - wc
+b XB ids/xlt.txt - bits
+b XE ids/xlt.txt - bits
+b XP2 ids/xlt.txt - bits

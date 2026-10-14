@@ -1,0 +1,2 @@
+tt_metal/tt-llk/tests/helpers/include/topk_xl_split.h
+tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_topk_xl.h
