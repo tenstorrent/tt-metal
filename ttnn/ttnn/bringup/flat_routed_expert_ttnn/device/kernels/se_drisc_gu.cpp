@@ -297,6 +297,7 @@ void kernel_main() {
                         const uint32_t src0 = J.slot0 + (J.wr % J.ns) * J.ub * J.blk;
                         const uint32_t dst = J.land + (J.regions[c / J.per_e] * J.per_e + c % J.per_e) * J.blk;
                         const uint32_t trid = J.trid0 + J.wr % J.ns;
+#ifndef SE_W_NOFWD  // (perf probe: the weight blocks are not forwarded, only signalled)
                         for (uint32_t j = j0; j < j1; ++j) {  // receiver j gets block j / G (of the chunk)
                             const uint32_t src = src0 + (j / J.G - b) * J.blk;
                             if (J.blk <= NOC_MAX_BURST_SIZE) {
@@ -310,6 +311,7 @@ void kernel_main() {
                                 }
                             }
                         }
+#endif
                         ++J.wr;
                         PF_END(2)
                     }

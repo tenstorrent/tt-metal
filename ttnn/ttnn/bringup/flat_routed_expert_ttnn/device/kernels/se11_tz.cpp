@@ -52,7 +52,9 @@ void kernel_main() {
 #ifdef SE_ZONES
                 DeviceZoneScopedN("TZ_BLK");
 #endif
+#ifndef TZ_SKIP  // perf probe (MIMO_FL_TZ_SKIP): CB handshakes only, garbage tiles
                 fast_tilize_block(rm_cb, SE_SBT, sb_cb, 0, m * SE_SBT);
+#endif
             }
             cb_pop_front(rm_cb, 32);
         }

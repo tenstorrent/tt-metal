@@ -191,6 +191,9 @@ void kernel_main() {
             for (uint32_t q = 0; q < nrect; ++q) {
                 for (uint32_t k = 0; k < n; ++k) {
                     const uint32_t dst = ring + (gidx(sent + k) % x_slots) * blk_bytes;
+#ifdef XMC_NODATA  // perf probe (MIMO_FL_XMC_NODATA): only the XARR counts go out
+                    continue;
+#endif
                     for (uint32_t m = m0; m < m1; ++m) {
                         const bool last = k + 1 == n && m + 1 == m1;  // the chain ends before the next rectangle's
                         noc_async_write_multicast(
