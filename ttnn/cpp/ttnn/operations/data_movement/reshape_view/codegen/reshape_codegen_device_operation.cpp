@@ -75,8 +75,9 @@ ReshapeCodegenDeviceOperation::tensor_return_value_t ReshapeCodegenDeviceOperati
 }
 
 // With the full plan fitting, the hashed rung or depth is the same constant on every call, so calls share programs
-// exactly as the attributes and tensor args alone would key them. A call no plan fits hashes rung 0, which never has
-// an entry: it misses and the program factory raises.
+// exactly as the attributes and tensor args alone would key them. Under L1 pressure the hashed values step along fixed
+// ladders (tile-row rungs, power-of-two stick pushes, slab batches), so the key changes only when the frontier crosses
+// a rung. A call no plan fits hashes rung 0, which never has an entry: it misses and the program factory raises.
 ttsl::hash::hash_t ReshapeCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& plan = operation_attributes.plan;
