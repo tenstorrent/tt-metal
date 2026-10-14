@@ -172,9 +172,12 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/src/device
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
 )
-# Device-side executables default to the images this build produces.
-target_compile_definitions(x280_device INTERFACE X280_IMAGE_DIR="${X280_IMAGE_DIR}")
-add_dependencies(x280_device x280_images)
+# _x280_uses_images(<target>): <target> defaults to the images this build produces (X280_IMAGE_DIR).
+# A test or tool property, not the runtime's: the runtime takes image paths from its caller.
+function(_x280_uses_images target)
+    target_compile_definitions(${target} PRIVATE X280_IMAGE_DIR="${X280_IMAGE_DIR}")
+    add_dependencies(${target} x280_images)
+endfunction()
 
 set(X280_TEST_OUTPUT_DIR "${PROJECT_BINARY_DIR}/test/tt_metal/x280")
 
@@ -235,6 +238,7 @@ function(_x280_device_test name)
             RUNTIME_OUTPUT_DIRECTORY
                 ${X280_TEST_OUTPUT_DIR}
     )
+    _x280_uses_images(${name})
 endfunction()
 
 _x280_device_test(x280_runtime_device_tests
@@ -360,3 +364,4 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${X280_TEST_OUTPUT_DIR}
 )
+_x280_uses_images(x280_runtime_cli)
