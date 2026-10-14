@@ -1161,6 +1161,32 @@ The full op, not a bench: `MIMO_FL_DRISC=1` (read at program build) replaces the
   | 2048 | 384.1 (32%) | 383.4 (17%) | 383.8 (32%) | 383.1 (17%) | 382.5 |
   | 5120 | 950.2 (26%) | 949.5 (11%) | 949.8 (26%) | 949.2 (11%) | 948.4 |
 
+**Why x-only is slow (K3, 2026-10-14; probes in galaxy-unified `925a640e1ea`).** µs/expert, one P150, K3 shapes.
+`W_NOREAD` only skips the weights' DRAM reads; the readers / DRISCs still forward (garbage) gate/up blocks over the
+NoC, and that alone costs ~39 µs/expert (K3) - it was the small-M floor of the "x only" and "compute only" columns
+above. `MIMO_FL_W_NOFWD` removes it:
+
+| M | x only (above) | x only, no weight forward | nothing moving | compute only, no weight forward | compute only (above) |
+|---|---|---|---|---|---|
+| 32 | 40.1 | 10.1 | 10.1 | 11.4 | 39.7 |
+| 128 | 46.7 | 21.3 | 11.3 | 26.5 | 43.1 |
+| 256 | 55.8 | 41.7 | 21.1 | 50.1 | 53.3 |
+| 512 | 83.7 | 82.3 | 41.0 | 97.0 | 99.4 |
+| 2048 | 329.5 | 328.0 | 160.9 | 380.0 | 382.5 |
+| 5120 | 821.9 | 820.3 | 400.7 | 946.0 | 948.4 |
+
+The pure x path is linear in M at ~89 GB/s (x read twice, 17% of 512): 4 relays (primary + 1 helper per rectangle)
+at ~22 GB/s each. Isolation at M 5120 (x only): reads off 580 µs; reads only (tilize skipped, multicast without
+data) 856-858; DRISC off 821 (no change: not DRISC contention); reads on NOC0 911; read batch 1 / 2 / 4 (32 / 64 /
+128 reads per barrier) 958 / 858 / 809; one-packet read API no change; same bytes in half the requests (2 KB,
+`XRD_BIG`) 722; NH 2 / 3 (6 / 8 relays) 602 / 596 (then the tilize / multicast path, ~580, caps). Device-profiler
+zones at M 512: a relay BRISC spends 21-35 µs of ~175 in read barriers, 2.4 in CB waits and ~140 inside the read
+issue (~36 ns per 1 KB read) - the NIU not taking the next request, mostly per byte rather than per request: the
+core's in-flight reads x latency (the relays read all 8 banks from several hops; the weight readers sit one hop
+from their bank). In the real op it does not matter the same way: NH 2 is flat at M 64-512 (46.3 / 51.9 / 57.9 /
+63.1 / 77.6 / 101.2 vs 46.3 / 51.9 / 57.4 / 62.4 / 77.3 / 101.0) - at small / mid M x is extra DRAM bytes next to
+the weights at ~85% utilization, at large M it hides under compute (820 vs 946).
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
