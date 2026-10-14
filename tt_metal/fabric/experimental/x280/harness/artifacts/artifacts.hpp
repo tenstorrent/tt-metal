@@ -5,7 +5,7 @@
 // harness/artifacts/artifacts.hpp -- image/kernel path discovery.
 //
 // One-place resolution for:
-//   - X280 firmware image path (env-var, empty when unset).
+//   - X280 firmware image path (env-var override, else the build's image).
 //   - Tensix kernel source directory (tests/device/kernels), the same
 //     path the host cases already compute from __FILE__.
 //   - env_u32/env_str helpers and the strict decimal parser behind them.
@@ -24,11 +24,17 @@
 
 namespace x280::harness::artifacts {
 
-// Resolve X280 firmware image path from an env var. Returns an empty string
-// when the variable is unset. Tests treat "" as "GTEST_SKIP()".
-inline std::string image_path(const char* env_var) {
-    const char* p = std::getenv(env_var);
-    return p ? std::string(p) : std::string{};
+/**
+ * The X280 firmware image a case runs: the path in `env_var` when that variable
+ * is set and non-empty, otherwise `file` in the build's image directory
+ * (X280_IMAGE_DIR, compiled in by the CMake build). The path is not checked; a
+ * missing file fails where the case loads it.
+ */
+inline std::string image_path(const char* env_var, const char* file) {
+    if (const char* p = std::getenv(env_var); p != nullptr && *p != '\0') {
+        return p;
+    }
+    return std::string(X280_IMAGE_DIR) + "/" + file;
 }
 
 // The tests/device/kernels directory relative to a specific host test.

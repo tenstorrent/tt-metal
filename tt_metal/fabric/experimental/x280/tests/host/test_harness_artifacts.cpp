@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Host tests for the strict numeric environment knobs of harness/artifacts.
+// Host tests for the image lookup and the strict numeric environment knobs of
+// harness/artifacts.
 
 #include "harness/artifacts/artifacts.hpp"
 #include "tests/host/scoped_env.hpp"
@@ -11,6 +12,7 @@
 
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 
 namespace {
 
@@ -43,5 +45,22 @@ TEST(HarnessArtifacts, EnvU32RefusesMalformedOrOutOfRangeValues) {
         ScopedEnv env(kKnob, bad);
         EXPECT_THROW((void)hart::env_u32(kKnob), std::runtime_error);
         EXPECT_THROW((void)hart::env_u32(kKnob, 7u), std::runtime_error);
+    }
+}
+
+TEST(HarnessArtifacts, ImagePathTakesTheVariableOverTheBuildImage) {
+    constexpr const char* kImage = "X280_HARNESS_TEST_FW_IMAGE";
+    const std::string build_image = std::string(X280_IMAGE_DIR) + "/firmware-test.bin";
+    {
+        ScopedEnv env(kImage, nullptr);
+        EXPECT_EQ(hart::image_path(kImage, "firmware-test.bin"), build_image);
+    }
+    {
+        ScopedEnv env(kImage, "");
+        EXPECT_EQ(hart::image_path(kImage, "firmware-test.bin"), build_image);
+    }
+    {
+        ScopedEnv env(kImage, "/elsewhere/image.bin");
+        EXPECT_EQ(hart::image_path(kImage, "firmware-test.bin"), "/elsewhere/image.bin");
     }
 }

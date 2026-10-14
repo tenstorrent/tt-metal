@@ -460,6 +460,7 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${X280_TEST_OUTPUT_DIR}
 )
+_x280_uses_images(x280_bench_host_tests)
 add_test(NAME x280_bench_host_tests COMMAND x280_bench_host_tests)
 
 # Harness device tests; need hardware, so no CTest. test_fabric_shadow_layout.cpp is static

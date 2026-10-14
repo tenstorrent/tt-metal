@@ -8,13 +8,12 @@
 // A characterization case's SetUp is nearly identical across those
 // cases:
 //   1) if the Metal watcher is enabled, skip;
-//   2) if the case's X280 firmware image env var is unset, skip;
-//   3) create the case's MeshDevice: a unit mesh on chip 0 unless it names
+//   2) create the case's MeshDevice: a unit mesh on chip 0 unless it names
 //      its chips;
-//   4) open an X280Runtime with LimEccPrimingPolicy::RequirePrepared;
-//   5) pick the first enabled tile;
-//   6) require the tile to be in live resident idle;
-//   7) pin the chip-global X280 PLL to `X280_PLL_MHZ` (default 1750 MHz) on
+//   3) open an X280Runtime with LimEccPrimingPolicy::RequirePrepared;
+//   4) pick the first enabled tile;
+//   5) require the tile to be in live resident idle;
+//   6) pin the chip-global X280 PLL to `X280_PLL_MHZ` (default 1750 MHz) on
 //      every chip with a tile, and confirm the ARC telemetry echoes it.
 //
 // This header owns exactly that fixture. It does not carry any suite-
@@ -69,9 +68,12 @@ inline uint32_t x280_pll_mhz_from_env() {
 // A configuration for `open_or_skip`, so every case configures the same
 // set of switches by name rather than by argument position.
 struct OpenConfig {
-    // If empty, no image check runs -- Tensix-only cases (transport_bw
-    // tensix->x280) don't ship an X280 image.
+    // The case's X280 image: the variable that overrides it and its file in
+    // the build's image directory (artifacts::image_path). Empty for cases
+    // that ship no X280 image (transport_bw tensix->x280). `open_or_skip`
+    // does not read them.
     const char* image_env_var = "";
+    const char* image_file = "";
 
     // The case's Metal kernel source directory; suites resolve their kernel
     // paths and JIT include paths from it. `open_or_skip` does not read it.
@@ -139,13 +141,6 @@ struct Fixture {
 inline void open_or_skip(Fixture& f, const OpenConfig& cfg) {
     if (x280::harness::watcher_enabled()) {
         GTEST_SKIP() << "Metal watcher admits no L2CPU coordinate; run with watcher disabled";
-    }
-
-    if (cfg.image_env_var[0] != '\0') {
-        const std::string img = artifacts::image_path(cfg.image_env_var);
-        if (img.empty()) {
-            GTEST_SKIP() << "set " << cfg.image_env_var << " to the built firmware image";
-        }
     }
 
     if (cfg.mesh_device_ids.empty()) {
