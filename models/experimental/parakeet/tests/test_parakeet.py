@@ -53,11 +53,11 @@ def test_rel_positional_encoding():
     np.testing.assert_allclose(zero[1::2], 1.0, atol=1e-7)
 
 
-def test_unsupported_precision_fails(weights_path, hf_config):
+def test_unsupported_precision_fails(weights_path, hf_config, expect_error):
     from models.experimental.parakeet.tt import SUPPORTED_PRECISIONS, create_backend
 
     assert "bfp8_b" not in SUPPORTED_PRECISIONS
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "unsupported precision"):
         create_backend(weights_path, hf_config, device=None, precision="bfp8_b")
 
 
