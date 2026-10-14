@@ -38,6 +38,19 @@ def _save(name, t):
         torch.save(t.contiguous().view(torch.int16 if t.dtype == torch.bfloat16 else torch.int32), os.path.join(os.environ["SYNC_OUT"], f"{name}.pt"))
 
 
+def _gold(tag, a, b, out):
+    # per 32x32 tile: the largest error against a float64 reference of the dequantized inputs, relative to the tile's
+    # largest reference magnitude; tiles above 10 times the median are listed
+    ref = a @ b
+    e = (out - ref).abs().reshape(*ref.shape[:-2], ref.shape[-2] // 32, 32, ref.shape[-1] // 32, 32).amax(dim=(-3, -1))
+    m = ref.abs().reshape(*ref.shape[:-2], ref.shape[-2] // 32, 32, ref.shape[-1] // 32, 32).amax(dim=(-3, -1))
+    r = (e / m.clamp_min(1e-30)).flatten()
+    med = float(r.median())
+    bad = (r > 10 * med).nonzero().flatten().tolist()
+    with open(os.path.join(os.environ["GOLD_OUT"], "gold.txt"), "a") as f:
+        f.write(f"{tag}: tiles {r.numel()}, median rel err {med:.3e}, max {float(r.max()):.3e}, tiles above 10x median {len(bad)} {bad[:8]}\n")
+
+
 def _sdpa_inputs(device, batch, cur_pos):
     key = (batch, cur_pos)
     if key not in _SDPA:
@@ -160,4 +173,6 @@ def test_sync_mm(device, case):
     out = ttnn.matmul(a, b, compute_kernel_config=cfg, dtype=do, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kw)
     ttnn.synchronize_device(device)
     _save(f"{name}_{sync}", ttnn.to_torch(out))
+    if os.environ.get("GOLD_OUT") and name.startswith("g70b"):
+        _gold(f"{name}_{sync}", ttnn.to_torch(a).double(), ttnn.to_torch(b).double(), ttnn.to_torch(out).double())
     out.deallocate()
