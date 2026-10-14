@@ -121,6 +121,17 @@ any of this: it only ever has the site's id.
 Label name: **`__tt_observability_event_0_6_1201dff1d8be0b60`**. Two different sites, or one site with two different values, must
 not share a name; nothing else depends on it.
 
+> **Naming the label is an optimization, not a requirement.** A site could give its handle an anonymous local label,
+> and every copy would still get a correct, unique id with its own record. What a fixed name buys is deduplication:
+> when the compiler expands one site many times (an event in an `inline` function called from ten places), every copy
+> carries the same label, and the `.ifndef` from step 3 emits the handle and the record only for the first. The site
+> gets one id and one record however many copies of its code exist, which saves id space and keeps the host's table to
+> one entry per site. Sharing a name is also what makes the value hash necessary: copies may share one record only if
+> they carry the same value.
+>
+> The deduplication works within one source file. An event in a header that two sources include still gets two ids,
+> one per source: `TT_PROFILER_TU_ID` is part of the name precisely to keep those two apart.
+
 **Why the TU id and the counter are not enough.** They give a number per *place in the source*, and one place can
 carry several values:
 
@@ -149,17 +160,6 @@ copies with the same value still share one label and are deduplicated:
 sites. For a 64-bit hash, k distinct values of one site collide with probability about k² / 2⁶⁵: for **1,000**
 distinct values that is about **3 × 10⁻¹⁴** (real template sites have a handful of values). A collision would
 behave like the case without the hash, so it is not checked for.
-
-> **This step is not strictly required; it is an optimization.** The id would work without a fixed name: a site could
-> give its handle an anonymous local label and still get a correct, unique id. What the name buys is
-> deduplication. When the compiler expands one event site many times (an event inside an `inline` function or a
-> template called from ten places), every copy with the same value carries the same label name, and the `.ifndef`
-> from step 3 emits the handle and the record only for the first copy. So the event gets **one id, one record and
-> one name entry** however many copies of its code exist, instead of one per copy. That saves id space and keeps
-> the host's table to one entry per site.
->
-> The deduplication works within one source file. An event in a header that two sources include still gets two ids,
-> one per source: `TT_PROFILER_TU_ID` is part of the name precisely to keep those two apart.
 
 ## 3. Compile: the struct becomes directives, plus two instructions
 
