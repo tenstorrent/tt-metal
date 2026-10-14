@@ -82,17 +82,28 @@ xt::xarray<float> subtract_at_target_reference(
 }  // namespace
 
 class N300MeshWorkloadCacheHitTest : public ::testing::Test {
+public:
+    static void SetUpTestSuite() {
+        if (board_is_n300()) {
+            ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, kNumDevices));
+            ttml::autograd::ctx().set_seed(42);
+        }
+    }
+
+    static void TearDownTestSuite() {
+        if (board_is_n300()) {
+            ttml::autograd::ctx().close_device();
+        }
+    }
+
 protected:
     void SetUp() override {
         if (!board_is_n300()) {
             GTEST_SKIP() << "Needs the N300's 1x2 mesh";
         }
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, kNumDevices));
-        ttml::autograd::ctx().set_seed(42);
-    }
-
-    void TearDown() override {
-        ttml::autograd::ctx().close_device();
+        // The mesh is shared across the suite; start each test from an empty program cache so its first launch
+        // is a cache miss even under --gtest_repeat.
+        ttml::autograd::ctx().get_device().clear_program_cache();
     }
 
     // Launches `op` twice with fresh replicated inputs of the same shape and checks every device's result against
