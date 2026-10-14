@@ -248,6 +248,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
+    LLK_FID_POINT(); // fidelity experiment hook (ckernel.h), empty unless LLK_FID_T is defined
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_reduce_", tensor_shape);
 
     // Supported narrow tiles per BH Tiny Tile Summary: [16]x16 (num_faces=1) and [32]x16 (num_faces=2) only
@@ -488,7 +489,7 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
     // _llk_math_matmul_init_ / _llk_math_eltwise_binary_init_. A preceding copy_init that left
     // PRESERVE (keep denormals) would otherwise leak "keep" into the pool GMPOOL — harmless on HW
     // when fp32 DEST accumulation is enabled (the flag is ignored), but a real invariant violation.
-    math::_configure_default_zero_flag_state_<true>();
+    math::_configure_default_zero_flag_state_<math::ZeroFlagAt::init_holds>();
 }
 
 /**
