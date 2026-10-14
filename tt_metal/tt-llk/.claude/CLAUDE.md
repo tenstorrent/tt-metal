@@ -58,6 +58,7 @@ Trigger examples for `arch-lookup`:
 ## Coding Style
 
 - **`const` placement**: write `const <type>` (e.g. `const uint32_t x`), never `<type> const` (e.g. `uint32_t const x`). Semantics are identical, but the codebase uses `const <type>` everywhere — match it. Applies to all type qualifiers in the same position (e.g. `volatile`, `constexpr` modifiers on declarations).
+- **Literal arguments in HAL**: prefer existing named constants or enums for hardware modes. Otherwise, label numeric and boolean arguments in function/instruction calls and template instantiations with the declared parameter name immediately after the literal: `0 /*Shamt*/`, `false /*IsSrcB*/`, `wait(1 /*cycles*/)`. Declarations/defaults, arithmetic, assertions, and descriptor tables with a documented field layout need no redundant labels.
 
 ### Documentation
 

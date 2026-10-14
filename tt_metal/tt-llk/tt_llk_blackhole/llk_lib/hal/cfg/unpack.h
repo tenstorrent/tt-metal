@@ -88,8 +88,8 @@ private:
     template <std::uint32_t UnpackerIndex>
     static constexpr UnpackerAddrCtrlEntry select(UnpackerReg reg)
     {
-        return reg == UnpackerReg::Reg0   ? make<UnpackerIndex, 0>()
-               : reg == UnpackerReg::Reg1 ? make<UnpackerIndex, 1>()
+        return reg == UnpackerReg::Reg0   ? make<UnpackerIndex, 0 /*RegIndex*/>()
+               : reg == UnpackerReg::Reg1 ? make<UnpackerIndex, 1 /*RegIndex*/>()
                                           : detail::invalid_index<UnpackerAddrCtrlEntry>();
     }
 
@@ -98,12 +98,16 @@ public:
     constexpr UnpackerAddrCtrlEntry operator[](detail::CompileTimeIndex<RegIndex>) const
     {
         static_assert(RegIndex < detail::UnpackerRegisterCount, "unpacker register index out of range");
-        return unpacker == 0 ? make<0, RegIndex>() : unpacker == 1 ? make<1, RegIndex>() : detail::invalid_index<UnpackerAddrCtrlEntry>();
+        return unpacker == 0   ? make<0 /*UnpackerIndex*/, RegIndex>()
+               : unpacker == 1 ? make<1 /*UnpackerIndex*/, RegIndex>()
+                               : detail::invalid_index<UnpackerAddrCtrlEntry>();
     }
 
     constexpr UnpackerAddrCtrlEntry operator[](UnpackerReg reg) const
     {
-        return unpacker == 0 ? select<0>(reg) : unpacker == 1 ? select<1>(reg) : detail::invalid_index<UnpackerAddrCtrlEntry>();
+        return unpacker == 0   ? select<0 /*UnpackerIndex*/>(reg)
+               : unpacker == 1 ? select<1 /*UnpackerIndex*/>(reg)
+                               : detail::invalid_index<UnpackerAddrCtrlEntry>();
     }
 
     template <typename Function>
@@ -134,8 +138,8 @@ private:
     template <std::uint32_t UnpackerIndex>
     static constexpr const Field& select(UnpackerReg reg)
     {
-        return reg == UnpackerReg::Reg0   ? Fields<UnpackerIndex, 0>::Value
-               : reg == UnpackerReg::Reg1 ? Fields<UnpackerIndex, 1>::Value
+        return reg == UnpackerReg::Reg0   ? Fields<UnpackerIndex, 0 /*RegIndex*/>::Value
+               : reg == UnpackerReg::Reg1 ? Fields<UnpackerIndex, 1 /*RegIndex*/>::Value
                                           : detail::invalid_index<const Field&>();
     }
 
@@ -144,12 +148,14 @@ public:
     constexpr const Field& operator[](detail::CompileTimeIndex<RegIndex>) const
     {
         static_assert(RegIndex < detail::UnpackerRegisterCount, "unpacker register index out of range");
-        return unpacker == 0 ? Fields<0, RegIndex>::Value : unpacker == 1 ? Fields<1, RegIndex>::Value : detail::invalid_index<const Field&>();
+        return unpacker == 0   ? Fields<0 /*UnpackerIndex*/, RegIndex>::Value
+               : unpacker == 1 ? Fields<1 /*UnpackerIndex*/, RegIndex>::Value
+                               : detail::invalid_index<const Field&>();
     }
 
     constexpr const Field& operator[](UnpackerReg reg) const
     {
-        return unpacker == 0 ? select<0>(reg) : unpacker == 1 ? select<1>(reg) : detail::invalid_index<const Field&>();
+        return unpacker == 0 ? select<0 /*UnpackerIndex*/>(reg) : unpacker == 1 ? select<1 /*UnpackerIndex*/>(reg) : detail::invalid_index<const Field&>();
     }
 
     template <typename Function>
@@ -252,7 +258,9 @@ private:
 public:
     constexpr UnpackerContextEntry operator[](std::uint32_t context) const
     {
-        return unpacker == 0 ? select<0>(context) : unpacker == 1 ? select<1>(context) : detail::invalid_index<UnpackerContextEntry>();
+        return unpacker == 0   ? select<0 /*UnpackerIndex*/>(context)
+               : unpacker == 1 ? select<1 /*UnpackerIndex*/>(context)
+                               : detail::invalid_index<UnpackerContextEntry>();
     }
 };
 
@@ -342,7 +350,9 @@ public:
 
     constexpr UnpackerEntry operator[](std::uint32_t unpacker) const
     {
-        return unpacker == 0 ? make<0>(UnpackerContextFields {0}) : unpacker == 1 ? make<1>(UnpackerContextFields {1}) : detail::invalid_index<UnpackerEntry>();
+        return unpacker == 0   ? make<0 /*UnpackerIndex*/>(UnpackerContextFields {0 /*unpacker*/})
+               : unpacker == 1 ? make<1 /*UnpackerIndex*/>(UnpackerContextFields {1 /*unpacker*/})
+                               : detail::invalid_index<UnpackerEntry>();
     }
 
     /**
