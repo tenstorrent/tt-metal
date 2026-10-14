@@ -11,13 +11,20 @@ from helpers.llk_params import (
     ReduceDimension,
     ReducePool,
 )
-from helpers.param_config import parametrize
+from helpers.param_config import parametrize, quasar_mx_smoke
+from helpers.reduce_perf_matrix import (
+    CORE_FORMATS,
+    CORE_REDUCE_DIMS,
+    CORE_TILE_DIMENSIONS,
+    PERF_POOL_TYPES,
+    SCALAR_REPRESENTATIVE,
+    SHARED_EXTENSION_FORMATS,
+    perf_input_dimensions,
+    perf_math_fidelities,
+)
 from quasar.test_reduce_quasar import (
-    POOL_TYPES,
-    REDUCE_FORMATS,
     reduce_dest_acc_modes,
     reduce_dest_sync_modes,
-    reduce_math_fidelities,
     reduce_tile_dimensions,
 )
 from quasar.test_reduce_quasar import test_reduce_quasar as run_reduce_quasar
@@ -25,25 +32,22 @@ from quasar.test_reduce_quasar import (
     test_reduce_quasar_mxfp4_2x_gapool as run_reduce_quasar_mxfp4_2x_gapool,
 )
 
+# Quasar has no Bfp8_b, so its extension is the shared pairs plus the MX smoke pair.
+REDUCE_PERF_FORMATS = (
+    CORE_FORMATS
+    + SHARED_EXTENSION_FORMATS
+    + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+)
 
-@pytest.mark.perf
-@pytest.mark.quasar
-@pytest.mark.nightly
-@parametrize(
-    formats=REDUCE_FORMATS,
-    tile_dimensions=lambda formats: reduce_tile_dimensions(formats, is_perf=True),
-    dest_acc=reduce_dest_acc_modes,
-    reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
-    pool_type=POOL_TYPES,
-    math_fidelity=lambda formats, pool_type: reduce_math_fidelities(
-        formats, pool_type, is_perf=True
-    ),
+PERF_MEASUREMENT = dict(
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=True),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
-def test_perf_reduce_quasar(
+
+
+def _run_reduce_quasar_perf(
     perf_report,
     formats,
     tile_dimensions,
@@ -68,6 +72,85 @@ def test_perf_reduce_quasar(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
+        input_dimensions=perf_input_dimensions(tile_dimensions),
+    )
+
+
+@pytest.mark.perf
+@pytest.mark.quasar
+@pytest.mark.nightly
+@parametrize(
+    formats=REDUCE_PERF_FORMATS,
+    tile_dimensions=lambda formats: reduce_tile_dimensions(formats, is_perf=True),
+    dest_acc=reduce_dest_acc_modes,
+    reduce_dim=CORE_REDUCE_DIMS,
+    pool_type=PERF_POOL_TYPES,
+    math_fidelity=lambda formats, pool_type: perf_math_fidelities(
+        pool_type, get_valid_math_fidelities(formats)
+    ),
+    **PERF_MEASUREMENT,
+)
+def test_perf_reduce_quasar(
+    perf_report,
+    formats,
+    tile_dimensions,
+    dest_acc,
+    reduce_dim,
+    pool_type,
+    math_fidelity,
+    dest_sync_mode,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    _run_reduce_quasar_perf(
+        perf_report,
+        formats,
+        tile_dimensions,
+        dest_acc,
+        reduce_dim,
+        pool_type,
+        math_fidelity,
+        dest_sync_mode,
+        run_types,
+        loop_factor,
+        is_perf,
+    )
+
+
+@pytest.mark.perf
+@pytest.mark.quasar
+@pytest.mark.nightly
+@parametrize(
+    **SCALAR_REPRESENTATIVE,
+    tile_dimensions=CORE_TILE_DIMENSIONS,
+    **PERF_MEASUREMENT,
+)
+def test_perf_reduce_scalar_quasar(
+    perf_report,
+    formats,
+    dest_acc,
+    reduce_dim,
+    pool_type,
+    math_fidelity,
+    tile_dimensions,
+    dest_sync_mode,
+    run_types,
+    loop_factor,
+    is_perf,
+):
+    _run_reduce_quasar_perf(
+        perf_report,
+        formats,
+        tile_dimensions,
+        dest_acc,
+        reduce_dim,
+        pool_type,
+        math_fidelity,
+        dest_sync_mode,
+        run_types,
+        loop_factor,
+        is_perf,
     )
 
 
