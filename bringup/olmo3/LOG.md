@@ -79,3 +79,15 @@
 - evidence: /home/ubuntu/ssinghal/olmo3-logs/bench_ttis1.log
 - paths: models/demos/olmo_galaxy
 - data: {"tpot_ms": 42.4, "demo_tpot_ms": 38.3, "ttft_ms": 1508, "concurrency": 32}
+
+## E261014-0548-7c3
+- date: 2026-10-14T05:48:19
+- commit: 3512fcd0626
+- branch: ssinghal/olmo3-galaxy-main
+- host: UF-EV-A9-GWH02
+- track: serving
+- status: inferred
+- claim: All sampling on device (first token via the generator's prefill sampling branch; decode traces keyed by sampling variant, all captured at warmup). Found and fixed: the single baked decode trace silently ignored frequency/presence/repetition penalties (hello-fraction 1.00 with penalties=2.0 on a repetitive prompt; now 0.02-0.03). Through tt-inference-server at 32 concurrent, 128/128: greedy TPOT 40.7 ms (was 42.4), TTFT 1336 ms (was 1508); model-card sampling (T0.6 top_p0.95, default top_k32) 42.6 ms; 2K 48.8 ms; 4K P99 ITL 53 ms; mixed-variant stress 96/96 ok; seeds repeatable and distinct. Demo batch-32 unchanged 38.3 ms. Measured on the tree that became 3512fcd (uncommitted at the time); single unpaired runs.
+- evidence: /home/ubuntu/ssinghal/olmo3-logs/bench_x.log
+- paths: models/demos/olmo_galaxy
+- data: {"tpot_greedy_ms": 40.7, "tpot_sampled_ms": 42.6, "ttft_ms": 1336, "demo_tpot_ms": 38.3}
