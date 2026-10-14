@@ -22,6 +22,8 @@
 #include <string>
 #include <utility>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -67,6 +69,12 @@ struct CoreChainInfo {
 };
 
 namespace {
+
+// Scratch A/B knobs for #57395, not for merge.
+int ab_knob(const char* name, int fallback) {
+    const char* v = std::getenv(name);
+    return v != nullptr ? std::atoi(v) : fallback;
+}
 
 // Select the mask data format: user-provided mask dtype, or Float16_b for streaming (avoids Bfp4_b precision loss),
 // or Bfp4_b for legacy path.
@@ -369,7 +377,8 @@ void build_causal_chains(
     };
     // With a Q head per chain core the pooled pieces hold equal pair positions, while an own head chain holds its
     // injector until the sink has finished its longer light chunk.
-    const bool pool_every_head = pool_across_heads && heads_per_group >= kMaxCausalChainCores;
+    const bool pool_every_head =
+        pool_across_heads && heads_per_group >= kMaxCausalChainCores && ab_knob("SDPA_AB_OWN", 0) == 0;
     std::vector<std::size_t> pool;
     std::size_t idx = 0;
     while (idx < segments.size()) {
@@ -824,7 +833,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // 0: no K/V chains, 1: the non causal lock step chain, 2 and 3: causal prefix chains (see build_causal_chains).
     const bool block_float_kv =
         input_tensor_k.dtype() == DataType::BFLOAT8_B || input_tensor_k.dtype() == DataType::BFLOAT4_B;
-    const uint32_t kv_chain_mode = kv_chain_mode_for(
+    const uint32_t kv_chain_mode_pr = kv_chain_mode_for(
         use_causal_kernel,
         device->arch() == tt::ARCH::BLACKHOLE,
         causal_chains_pay(num_cores, DHt, input_tensor_k.dtype() == DataType::BFLOAT16, fp32_dest_acc_en),
@@ -835,6 +844,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         Sq_chunk_t,
         Sk_chunk_t,
         Skt);
+    const int ab_kv_mode = ab_knob("SDPA_AB_KVMODE", -1);
+    const uint32_t kv_chain_mode = (kv_chain_mode_pr >= 2 && (ab_kv_mode == 0 || ab_kv_mode == 2 || ab_kv_mode == 3))
+                                       ? static_cast<uint32_t>(ab_kv_mode)
+                                       : kv_chain_mode_pr;
     const bool kv_chains_possible = kv_chain_mode != 0;
     const bool remainder_on_last_cores = remainder_goes_to_last_cores(
         use_causal_kernel,
@@ -870,8 +883,26 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             tt::tile_size(fp32_dest_intermediate_dataformat(fp32_dest_acc_en)) +
         Sq_chunk_t * vDHt * tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype())) +
         (mask_tiles + 3 * Sq_chunk_t + 8) * fp32_tile_bytes;
-    const uint32_t kv_slots =
+    uint32_t kv_slots =
         kv_chain_slots(kv_chain_mode, Sk_chunk_t, kv_chunk_bytes, other_cb_bytes_bound, l1_budget_bytes);
+    if (kv_chain_mode != 0 && ab_knob("SDPA_AB_SLOTS", 0) == 2) {
+        kv_slots = 2;
+    }
+    if (std::getenv("SDPA_AB_LOG") != nullptr) {
+        std::fprintf(
+            stderr,
+            "SDPA_AB cfg nqh=%u nkh=%u Sq_t=%u Sk_t=%u q_chunks=%u cores=%u mode=%u (pr %u) slots=%u causal=%d\n",
+            NQH,
+            NKH,
+            Sq_chunk_t,
+            Sk_chunk_t,
+            q_num_chunks,
+            num_cores,
+            kv_chain_mode,
+            kv_chain_mode_pr,
+            kv_slots,
+            static_cast<int>(use_causal_kernel));
+    }
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * kv_slots;
@@ -996,7 +1027,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(static_cast<uint32_t>(windowed_mode));         // arg 33: K-range narrowing
     reader_compile_time_args.push_back(kv_chain_mode);                                // arg 34
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_mask_block_map));    // arg 35
-    reader_compile_time_args.push_back(kv_slots);                                   // arg 36: K/V CB depth in chunks
+    reader_compile_time_args.push_back(kv_slots);                                     // arg 36: K/V CB depth in chunks
     reader_compile_time_args.push_back(0);  // arg 37: fwd_done_semaphore_id placeholder
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -1577,6 +1608,32 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             "Chain construction complete: {} chains built, {} skipped due to conflicts",
             chains_built,
             chains_skipped);
+        if (std::getenv("SDPA_AB_LOG") != nullptr) {
+            uint32_t fp = 2166136261u;
+            uint32_t members = 0;
+            for (const auto& c : core_chain_info) {
+                for (uint32_t v :
+                     {static_cast<uint32_t>(c.participates),
+                      static_cast<uint32_t>(c.is_injector),
+                      static_cast<uint32_t>(c.is_sink),
+                      static_cast<uint32_t>(c.prev_physical.x),
+                      static_cast<uint32_t>(c.prev_physical.y),
+                      static_cast<uint32_t>(c.next_physical.x),
+                      static_cast<uint32_t>(c.next_physical.y)}) {
+                    fp = (fp ^ v) * 16777619u;
+                }
+                members += c.participates ? 1 : 0;
+            }
+            std::fprintf(
+                stderr,
+                "SDPA_AB chains nqh=%u q_chunks=%u built=%u members=%u own_knob=%d topo=%08x\n",
+                NQH,
+                q_num_chunks,
+                chains_built,
+                members,
+                ab_knob("SDPA_AB_OWN", 0),
+                fp);
+        }
 
         // Third pass: Check multicast eligibility — all-or-nothing policy.
         // First, check if ALL multi-core chains are eligible. Only if every chain
