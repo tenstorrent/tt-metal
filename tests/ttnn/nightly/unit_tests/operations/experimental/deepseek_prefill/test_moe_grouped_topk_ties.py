@@ -36,15 +36,15 @@ SCORE_FUNC = "sigmoid"  # Kimi's router affinity
 # production width.
 WIDTH_SWEEP = [256, 288, 384, 544]
 
-# The FPU keeps only 10 mantissa bits when it moves fp32 tiles, so the sort compares scores at that
-# precision. Every sigmoid value for logits from 8 up truncates to the same number, so experts with
-# logits in that range tie on the score alone. Values below are bf16-exact.
-PLATEAU_LOGITS = [9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 15.5, 9.5]
-COMPARED_MANTISSA_BITS = 10
+# fp32 sigmoid saturates to exactly 1.0 for logits from about 17.4 up, in torch and on device, so
+# experts with logits in that range tie on the score alone. Values below are bf16-exact.
+PLATEAU_LOGITS = [18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 30.0, 31.0, 19.0]
+# The sort keys are full fp32; the stable rank-tag engine keeps its 6-bit tag in the low mantissa
+# bits, so the sort compares 23 - 6 = 17 of them.
+COMPARED_MANTISSA_BITS = 17
 
-# Random-input test: enough rows that many of them have a tie at the k-th slot by chance.
+# Random-input test: one prefill chunk of rows.
 NATURAL_TOKENS = 640
-MIN_TIES_AT_CUT = 32
 
 # bf16 only: production feeds bf16 and the op upcasts internally, and the fp32 rows of this
 # directory are pruned on Blackhole in CI, so an fp32-only case would silently not run there.
@@ -59,8 +59,8 @@ LEVEL_LOGIT_BASE, LEVEL_LOGIT_STEP = 2.0, 0.75
 LEVEL_BIAS_STEP = 0.25
 
 # Smallest gap the construction must leave between adjacent classes, in biased-score units. The
-# realised gap is ~0.28; the datapath's effective comparison resolution is ~8e-4 relative, so this
-# leaves two orders of magnitude of headroom and only exact ties are ties.
+# realised gap is ~0.28; the sort compares 17 mantissa bits (~8e-6 relative), so only exact ties
+# are ties.
 MIN_CLASS_GAP = 0.05
 
 
@@ -142,8 +142,7 @@ def stable_golden(logits, bias, routing=KIMI):
 
 
 def as_compared(biased):
-    """The scores as the sort sees them: fp32 with the low 13 mantissa bits dropped. This reproduces
-    the device's order exactly; using the full fp32 values does not."""
+    """The scores as the sort sees them: fp32 with the rank tag's low mantissa bits dropped."""
     drop = 23 - COMPARED_MANTISSA_BITS
     keep = torch.tensor(-(1 << drop), dtype=torch.int32)
     return (biased.contiguous().view(torch.int32) & keep).view(torch.float32)
@@ -376,14 +375,11 @@ def natural_inputs(seed):
 
 def test_natural_inputs_follow_stable_order(device):
     """Random inputs, every row checked. The golden is a stable argsort of the scores the device
-    computed, at the precision the sort compares them, so only the sort is under test. With 10
-    mantissa bits, ties at the k-th slot happen by themselves in about a fifth of the rows."""
+    computed, at the precision the sort compares them, so only the sort is under test."""
     logits, bias = natural_inputs(seed=7)
     _, indices, biased = run_gate(device, logits, bias, stable_sort=True)
 
-    n_ties = ties_at_cut(biased, K)
-    logger.info(f"[natural] rows with a tie at slot {K}: {n_ties}/{NATURAL_TOKENS}")
-    assert n_ties >= MIN_TIES_AT_CUT, f"only {n_ties} rows have a tie at the cut; the test would prove little"
+    logger.info(f"[natural] rows with a tie at slot {K}: {ties_at_cut(biased, K)}/{NATURAL_TOKENS}")
     assert_index_domain(indices, K, TOTAL_EXPERTS)
     assert_indices_exact(indices, device_stable_golden(biased, K), K, context="[natural] ")
 
@@ -421,9 +417,8 @@ ACTIVATION_PATTERNS = {"plateau_top": pattern_plateau_top, "plateau_at_cut": pat
 
 @pytest.mark.parametrize("pattern", list(ACTIVATION_PATTERNS))
 def test_ties_made_by_the_activation(device, pattern):
-    """Ties between experts with different logits, created by the 10-bit precision of the compared
-    scores. This is how most ties arise in Kimi. The golden comes from the device's own scores; torch
-    would not tie them."""
+    """Ties between experts with different logits, created by the activation: sigmoid saturates to
+    exactly 1.0 in fp32. torch ties them too, so the golden matches the fp32 reference."""
     levels, logits, bias, expected_row = ACTIVATION_PATTERNS[pattern]()
     _, indices, biased = run_gate(device, logits, bias, stable_sort=True)
 
@@ -434,6 +429,7 @@ def test_ties_made_by_the_activation(device, pattern):
     ), f"[{pattern}] construction check failed: {golden[0, 0, 0].tolist()}"
     assert_index_domain(indices, K, TOTAL_EXPERTS)
     assert_indices_exact(indices, golden, K, context=f"[{pattern}] ")
+    assert_indices_exact(indices, stable_golden(logits, bias), K, context=f"[{pattern} vs torch] ")
 
 
 def negative_zeros(t):

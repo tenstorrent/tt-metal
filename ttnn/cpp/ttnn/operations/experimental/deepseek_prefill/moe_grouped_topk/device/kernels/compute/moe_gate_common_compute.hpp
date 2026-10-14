@@ -29,7 +29,6 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/eltwise_unary/bitwise.h"
 #include "api/dataflow/circular_buffer.h"
 
 // Gate-only fused sqrt(softplus(x)) + bias SFPU pass (fp32-accurate softplus, see the LLK header). Only
@@ -72,17 +71,13 @@ constexpr ckernel::TopkTieOrder GATE_TOPK_TIE_ORDER =
 
 // Stable engines: the comparator (STABLE_SORT) works on any key. The rank-tag engine (RANK_STAMPED)
 // stamps a GATE_TAG_BITS-wide chain-position tag into the low mantissa bits of each fp32 key and lets
-// the plain network order ties. It is lossless only while those bits are zero, which holds for keys
-// unpacked through SrcA as TF32 (mantissa bits 12..0 zero) and is certified by the factory as
-// sort_keys_tf32; on full-fp32 keys (the grouped path's group sums, the single-group sqrt(softplus)
-// top-k) the stamp clears the tag field first, so they compare at 23 - GATE_TAG_BITS = 17 mantissa bits.
+// the plain network order ties. The keys are full fp32, so the stamp clears the tag field first and
+// they compare at 23 - GATE_TAG_BITS = 17 mantissa bits.
 // It sorts stable-by-index only where candidates arrive in index order: the
 // single-group expert top-k and the group-score sort (column == group id), not the grouped path's
 // final top-k, whose winning-group tiles arrive in group-sum order. Everything else keeps the comparator.
 constexpr uint32_t GATE_TAG_BITS = 6;
-constexpr uint32_t TF32_ZERO_LOW_MANTISSA_BITS = 13;  // fp32 mantissa (23) - TF32 mantissa (10)
 static_assert((1u << GATE_TAG_BITS) >= 64, "a two-tile chain (ranks 0..63) must fit the tag field");
-static_assert(GATE_TAG_BITS <= TF32_ZERO_LOW_MANTISSA_BITS, "the rank tag must sit inside the TF32 zero bits");
 
 // The gate's TopK primitives in one place: stable_sort selects stable mode, rank_tag its engine
 // (rank tags, else the comparator). Every call site below goes through these.
@@ -202,9 +197,8 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
 // exact through SrcA and fp32 inputs are UnpackToDestFp32, so DEST holds the exact logits and bias, and
 // no fp32 upcast pass is needed. The bias add runs on the SFPU in full fp32 (the FPU add would read the
 // activation through SrcA as TF32 first). Packs the unbiased activated scores (gathered later for the
-// weights) and the biased sort keys. tf32_dump: the sort reads the keys through SrcA (TF32), so the
-// debug dump is truncated to the same 10-bit key the sort compares; production (no dump) skips it.
-template <uint32_t score_func, bool dump_biased = false, bool tf32_dump = false>
+// weights) and the biased sort keys.
+template <uint32_t score_func, bool dump_biased = false>
 void apply_score_func_add_bias(
     uint32_t cb_in_scores_id,
     uint32_t cb_in_bias_id,
@@ -212,7 +206,6 @@ void apply_score_func_add_bias(
     uint32_t cb_biased_scores_id,
     uint32_t width_tiles,
     uint32_t cb_biased_dump_id = 0) {
-    constexpr uint32_t tf32_key_mask = ~((1u << TF32_ZERO_LOW_MANTISSA_BITS) - 1u);
     CircularBuffer cb_in_scores(cb_in_scores_id);
     CircularBuffer cb_in_bias(cb_in_bias_id);
     CircularBuffer cb_activated_scores(cb_activated_scores_id);
@@ -252,10 +245,6 @@ void apply_score_func_add_bias(
             }
             add_binary_tile_init();
             add_binary_tile(0, 1, 1);
-        }
-        if constexpr (dump_biased && tf32_dump) {
-            bitwise_and_tile_init();
-            bitwise_and_tile<DataFormat::UInt32>(1, tf32_key_mask);
         }
         tile_regs_commit();
         cb_in_scores.pop_front(1);

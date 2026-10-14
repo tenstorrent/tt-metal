@@ -52,13 +52,9 @@ void kernel_main() {
     constexpr uint32_t log_width_tiles = get_named_compile_time_arg_val("log_width_tiles");
     constexpr bool stable_sort = get_named_compile_time_arg_val("stable_sort") != 0;
     constexpr uint32_t score_func = get_named_compile_time_arg_val("score_func");
-    // Single-group sigmoid path: rank-tag stable engine only when the factory certifies TF32 sort keys (see
-    // GATE_TAG_BITS). Grouped path and single-group sqrt(softplus) path: the keys are full fp32 (the factory
-    // unpacks those score CBs straight to DEST); their rank-tag sorts then compare the keys at
-    // 23 - GATE_TAG_BITS = 17 mantissa bits (exact ties keep the index order).
-    constexpr bool sort_keys_tf32 = get_named_compile_time_arg_val("sort_keys_tf32") != 0;
-    constexpr bool fp32_keys = n_groups > 1 || score_func == blocks::SCORE_FUNC_SQRTSOFTPLUS;
-    constexpr bool rank_tag = stable_sort && (sort_keys_tf32 || fp32_keys);
+    // The sort keys are full fp32 (the factory unpacks the score CBs straight to DEST); the rank-tag sorts
+    // compare them at 23 - GATE_TAG_BITS = 17 mantissa bits (exact ties keep the index order).
+    constexpr bool rank_tag = stable_sort;
 
     constexpr uint32_t end_phase = log_group_size - 1;
 
@@ -68,10 +64,8 @@ void kernel_main() {
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         // Activation and bias add in one pass straight from the raw inputs (no fp32 upcast pass), with the
-        // bias added in full fp32 on the SFPU. Grouped and single-group sqrt(softplus) paths: the keys stay
-        // full fp32 through every sort. Single-group sigmoid path: its sort compares TF32 keys (SrcA
-        // transpose), and the debug dump is truncated to the same key.
-        blocks::apply_score_func_add_bias<score_func, dump_biased_scores != 0, /*tf32_dump=*/!fp32_keys>(
+        // bias added in full fp32 on the SFPU. The keys stay full fp32 through every sort.
+        blocks::apply_score_func_add_bias<score_func, dump_biased_scores != 0>(
             cb_in_scores, cb_in_bias, cb_sigmoid_scores, cb_biased_scores, width_tiles, cb_biased_dump);
         // Note: cb_sigmoid_scores is NOT popped here - writer will pop it after gather
 
