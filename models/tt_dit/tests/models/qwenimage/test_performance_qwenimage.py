@@ -4,9 +4,12 @@
 
 import os
 import statistics
+from dataclasses import dataclass, field
+from typing import Any
 
 import pytest
 from loguru import logger
+from PIL import Image
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -14,10 +17,13 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.tt_dit.pipelines.events import log_section_durations, profiler_event_callback
 from models.tt_dit.pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
 
-from .device_params import MESH_DEVICE_PARAMS
+from .device_params import EDIT_MESH_DEVICE_PARAMS, MESH_DEVICE_PARAMS
+from .test_pipeline_qwenimage import DOG_IMAGE_PATH
 
 NUM_INFERENCE_STEPS = 50
-RUNS_PER_RESOLUTION = 2
+# The Qwen-Image-Edit-2511 model card's step count.
+EDIT_NUM_INFERENCE_STEPS = 40
+RUNS_PER_CASE = 2
 
 # Upper limits at 1024², in seconds, per (is Blackhole, mesh shape). Only the listed metrics are
 # checked.
@@ -52,15 +58,144 @@ RUN_TYPES = {
     (True, (4, 8)): "BH_GLX",
 }
 
-PROMPTS = [
-    'A coffee shop entrance features a chalkboard sign reading "Qwen Coffee $2 per cup," with a neon light '
-    'beside it displaying "通义千问". Next to it hangs a poster showing a beautiful Chinese woman, and beneath the '
-    'poster is written "π≈3.1415926-53589793-23846264-33832795-02384197". Ultra HD, 4K, cinematic composition',
-    'Tokyo neon alley at night, rain-slick pavement, cinematic cyberpunk lighting; include glowing sign text "深夜営業" in bold neon above a doorway; moody reflections, shallow depth of field.',
-    'Steamy ramen shop entrance at dusk; fabric noren curtain gently swaying; print "しょうゆラーメン" across the curtain in thick brush-style kana; warm lantern light, photorealistic.',
-    'Minimalist tea poster, cream background, elegant layout; vertical calligraphy "抹茶" centered in sumi ink; small red hanko-style seal "本格" in the corner; high-resolution graphic design.',
-    'Hardcover fantasy novel cover, textured paper, gold foil; title text "物語のはじまり" centered; author line "山本ひかり" below; tasteful serif typography, dramatic vignette illustration.',
-]
+# The prompts of the Qwen-Image-2512 and Qwen-Image-Edit-2511 model cards, as in our NVIDIA benchmark.
+PROMPT = (
+    "A 20-year-old East Asian girl with delicate, charming features and large, bright brown eyes—expressive and "
+    "lively, with a cheerful or subtly smiling expression. Her naturally wavy long hair is either loose or tied in "
+    "twin ponytails. She has fair skin and light makeup accentuating her youthful freshness. She wears a modern, cute "
+    "dress or relaxed outfit in bright, soft colors—lightweight fabric, minimalist cut. She stands indoors at an anime "
+    "convention, surrounded by banners, posters, or stalls. Lighting is typical indoor illumination—no staged "
+    "lighting—and the image resembles a casual iPhone snapshot: unpretentious composition, yet brimming with vivid, "
+    "fresh, youthful charm."
+)
+EDIT_PROMPT = (
+    "The magician bear is on the left, the alchemist bear is on the right, facing each other in the central park "
+    "square."
+)
+
+# Input aspect ratios for editing, (width, height); the edit output takes the last input's.
+EDIT_ASPECT_RATIOS = {"1:1": (1, 1), "16:9": (16, 9), "9:16": (9, 16)}
+
+
+@dataclass
+class Case:
+    label: str
+    num_inference_steps: int
+    kwargs: dict[str, Any] = field(default_factory=dict)
+
+
+def crop_to_aspect_ratio(image: Image.Image, aspect: tuple[int, int]) -> Image.Image:
+    width, height = image.size
+    target_width = min(width, height * aspect[0] // aspect[1])
+    target_height = min(height, width * aspect[1] // aspect[0])
+    left, top = (width - target_width) // 2, (height - target_height) // 2
+    return image.crop((left, top, left + target_width, top + target_height))
+
+
+def inpaint_inputs() -> dict[str, Any]:
+    image = Image.open(DOG_IMAGE_PATH).convert("RGB")
+    # Repaints the dog, with a margin around it.
+    mask = Image.new("L", image.size, 0)
+    mask.paste(255, (130, 20, 430, 425))
+    return {"image": image, "mask_image": mask, "strength": 1.0}
+
+
+def run_cases(
+    pipeline: QwenImagePipeline, cases: list[Case], *, prompt: str, file_prefix: str
+) -> tuple[BenchmarkProfiler, dict[str, list[int]]]:
+    """Runs each case RUNS_PER_CASE times and returns the profiler and each case's iterations."""
+    benchmark_profiler = BenchmarkProfiler()
+    iterations = {}
+    for c, case in enumerate(cases):
+        iterations[case.label] = []
+        for i in range(RUNS_PER_CASE):
+            iteration = c * RUNS_PER_CASE + i
+            iterations[case.label].append(iteration)
+
+            with benchmark_profiler("run", iteration=iteration):
+                images = pipeline(
+                    prompts=[prompt],
+                    num_inference_steps=case.num_inference_steps,
+                    traced=True,
+                    on_event=profiler_event_callback(benchmark_profiler, iteration),
+                    **case.kwargs,
+                )
+
+            logger.info(f"{case.label} run {i + 1}: {benchmark_profiler.get_duration('run', iteration):.2f}s")
+            log_section_durations(benchmark_profiler, iteration, per_step={"denoising": case.num_inference_steps})
+            tag = case.label.replace(" ", "_").replace(":", "x")
+            images[0].save(f"{file_prefix}_{tag}_perf_run{i}.png")
+    return benchmark_profiler, iterations
+
+
+def durations(profiler: BenchmarkProfiler, name: str, its: list[int]) -> list[float]:
+    return [profiler.get_duration(name, it) for it in its]
+
+
+def step_durations(profiler: BenchmarkProfiler, its: list[int], num_inference_steps: int) -> list[float]:
+    steps = []
+    for it in its:
+        for j in range(num_inference_steps):
+            assert profiler.contains_step(
+                f"denoising_step_{j}", it
+            ), f"All runs should have {num_inference_steps} denoising steps"
+            steps.append(profiler.get_duration(f"denoising_step_{j}", it))
+    return steps
+
+
+def print_stats(name: str, times: list[float]) -> None:
+    mean_time = statistics.mean(times)
+    std_time = statistics.stdev(times) if len(times) > 1 else 0
+    print(
+        f"{name:25} | Mean: {mean_time:8.4f}s | Std: {std_time:8.4f}s | "
+        f"Min: {min(times):8.4f}s | Max: {max(times):8.4f}s"
+    )
+
+
+def print_report(
+    *,
+    title: str,
+    profiler: BenchmarkProfiler,
+    iterations: dict[str, list[int]],
+    cases: list[Case],
+    config: QwenImagePipelineConfig,
+    mesh_device: ttnn.MeshDevice,
+) -> None:
+    dit = config.dit_parallel_config
+    print("\n" + "=" * 100)
+    print(title)
+    print("=" * 100)
+    print(f"Checkpoint: {config.checkpoint_name}, runs per case: {RUNS_PER_CASE}")
+    print(
+        f"Configuration: cfg={dit.cfg_parallel.factor}, sp={dit.sequence_parallel.factor}, "
+        f"tp={dit.tensor_parallel.factor}, encoder_tp={config.encoder_parallel_config.tensor_parallel.factor}"
+    )
+    print(f"Mesh Shape: {mesh_device.shape}")
+    print(f"Topology: {config.topology}, links: {config.num_links}")
+
+    for case in cases:
+        its = iterations[case.label]
+        encoding = durations(profiler, "encoder", its)
+        text_encoder = durations(profiler, "qwen_encoding", its)
+        steps = step_durations(profiler, its, case.num_inference_steps)
+        denoising = durations(profiler, "denoising", its)
+        vae = durations(profiler, "vae", its)
+        total = durations(profiler, "run", its)
+        # Everything outside the three stages: latent preparation (including encoding input images
+        # with the VAE), image conversion, host overhead.
+        other = [t - e - d - v for t, e, d, v in zip(total, encoding, denoising, vae, strict=True)]
+
+        print("-" * 100)
+        print(f"Case: {case.label}, {case.num_inference_steps} steps")
+        print_stats("Total Encoding", encoding)
+        print_stats("  Text Encoder", text_encoder)
+        print_stats("Denoising (per step)", steps)
+        print_stats("Denoising (total)", denoising)
+        print_stats("VAE Decoding", vae)
+        print_stats("Other", other)
+        print_stats("Total Pipeline", total)
+
+    print("=" * 100)
 
 
 @pytest.mark.parametrize(
@@ -68,6 +203,7 @@ PROMPTS = [
     [
         pytest.param(False, id="1024x1024"),
         # Off in CI, where it would lengthen the job; set QWENIMAGE_PERF_ALL_RESOLUTIONS=1 to run it.
+        # Also times inpainting.
         pytest.param(
             True,
             id="all_resolutions",
@@ -97,97 +233,33 @@ def test_qwenimage_pipeline_performance(
     pipeline = QwenImagePipeline.create_pipeline(mesh_device=mesh_device)
     # The configuration create_pipeline uses, for the report.
     config = QwenImagePipelineConfig.default(mesh_shape=mesh_device.shape)
-    cfg = config.dit_parallel_config.cfg_parallel.factor
-    sp = config.dit_parallel_config.sequence_parallel.factor
-    tp = config.dit_parallel_config.tensor_parallel.factor
-    encoder_tp = config.encoder_parallel_config.tensor_parallel.factor
 
     resolutions = list(config.resolutions) if all_resolutions else [(1024, 1024)]
+    cases = [
+        Case(f"{width}x{height}", NUM_INFERENCE_STEPS, {"width": width, "height": height})
+        for width, height in resolutions
+    ]
+    if all_resolutions:
+        # The dog image is square, so this inpaints at 1024².
+        cases.append(Case("inpaint 1024x1024", NUM_INFERENCE_STEPS, inpaint_inputs()))
 
-    benchmark_profiler = BenchmarkProfiler()
-    # Iterations of each resolution, in the profiler's numbering.
-    iterations = {}
-    for r, (width, height) in enumerate(resolutions):
-        iterations[width, height] = []
-        for i in range(RUNS_PER_RESOLUTION):
-            iteration = r * RUNS_PER_RESOLUTION + i
-            iterations[width, height].append(iteration)
-            prompt = PROMPTS[iteration % len(PROMPTS)]
+    benchmark_profiler, iterations = run_cases(pipeline, cases, prompt=PROMPT, file_prefix="qwenimage")
+    print_report(
+        title="QWEN IMAGE PIPELINE PERFORMANCE RESULTS",
+        profiler=benchmark_profiler,
+        iterations=iterations,
+        cases=cases,
+        config=config,
+        mesh_device=mesh_device,
+    )
 
-            with benchmark_profiler("run", iteration=iteration):
-                images = pipeline(
-                    prompts=[prompt],
-                    num_inference_steps=NUM_INFERENCE_STEPS,
-                    width=width,
-                    height=height,
-                    traced=True,
-                    on_event=profiler_event_callback(benchmark_profiler, iteration),
-                )
-
-            logger.info(f"{width}x{height} run {i + 1}: {benchmark_profiler.get_duration('run', iteration):.2f}s")
-            log_section_durations(benchmark_profiler, iteration, per_step={"denoising": NUM_INFERENCE_STEPS})
-            images[0].save(f"qwenimage_{width}_{height}_perf_run{i}.png")
-
-    def durations(name: str, its: list[int]) -> list[float]:
-        return [benchmark_profiler.get_duration(name, it) for it in its]
-
-    def step_durations(its: list[int]) -> list[float]:
-        steps = []
-        for it in its:
-            for j in range(NUM_INFERENCE_STEPS):
-                assert benchmark_profiler.contains_step(
-                    f"denoising_step_{j}", it
-                ), f"All runs should have {NUM_INFERENCE_STEPS} denoising steps"
-                steps.append(benchmark_profiler.get_duration(f"denoising_step_{j}", it))
-        return steps
-
-    def print_stats(name: str, times: list[float]) -> None:
-        mean_time = statistics.mean(times)
-        std_time = statistics.stdev(times) if len(times) > 1 else 0
-        print(
-            f"{name:25} | Mean: {mean_time:8.4f}s | Std: {std_time:8.4f}s | "
-            f"Min: {min(times):8.4f}s | Max: {max(times):8.4f}s"
-        )
-
-    print("\n" + "=" * 100)
-    print("QWEN IMAGE PIPELINE PERFORMANCE RESULTS")
-    print("=" * 100)
-    print("Model: QwenImage")
-    print(f"Inference Steps: {NUM_INFERENCE_STEPS}, runs per resolution: {RUNS_PER_RESOLUTION}")
-    print(f"Configuration: cfg={cfg}, sp={sp}, tp={tp}, encoder_tp={encoder_tp}")
-    print(f"Mesh Shape: {mesh_device.shape}")
-    print(f"Topology: {config.topology}, links: {config.num_links}")
-
-    for (width, height), its in iterations.items():
-        encoding = durations("encoder", its)
-        text_encoder = durations("qwen_encoding", its)
-        steps = step_durations(its)
-        denoising = durations("denoising", its)
-        vae = durations("vae", its)
-        total = durations("run", its)
-        # Everything outside the three stages: latent preparation, image conversion, host overhead.
-        other = [t - e - d - v for t, e, d, v in zip(total, encoding, denoising, vae, strict=True)]
-
-        print("-" * 100)
-        print(f"Image Size: {width}x{height}")
-        print_stats("Total Encoding", encoding)
-        print_stats("  Text Encoder", text_encoder)
-        print_stats("Denoising (per step)", steps)
-        print_stats("Denoising (total)", denoising)
-        print_stats("VAE Decoding", vae)
-        print_stats("Other", other)
-        print_stats("Total Pipeline", total)
-        print(f"Denoising throughput: {NUM_INFERENCE_STEPS / statistics.mean(denoising):.2f} steps/second")
-        print(f"Overall throughput: {1 / statistics.mean(total):.4f} images/second")
-
-    print("=" * 100)
-
-    its_1024 = iterations[1024, 1024]
+    its_1024 = iterations["1024x1024"]
     measurements = {
-        "total_encoding_time": statistics.mean(durations("encoder", its_1024)),
-        "denoising_steps_time": statistics.mean(step_durations(its_1024)) * NUM_INFERENCE_STEPS,
-        "vae_decoding_time": statistics.mean(durations("vae", its_1024)),
-        "total_time": statistics.mean(durations("run", its_1024)),
+        "total_encoding_time": statistics.mean(durations(benchmark_profiler, "encoder", its_1024)),
+        "denoising_steps_time": statistics.mean(step_durations(benchmark_profiler, its_1024, NUM_INFERENCE_STEPS))
+        * NUM_INFERENCE_STEPS,
+        "vae_decoding_time": statistics.mean(durations(benchmark_profiler, "vae", its_1024)),
+        "total_time": statistics.mean(durations(benchmark_profiler, "run", its_1024)),
     }
     expected_metrics = EXPECTED_METRICS[key]
 
@@ -210,6 +282,7 @@ def test_qwenimage_pipeline_performance(
                     value=benchmark_profiler.get_duration(step_name, iteration),
                     target=expected_metrics.get(metric),
                 )
+        dit = config.dit_parallel_config
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
             run_type=RUN_TYPES[key],
@@ -219,11 +292,11 @@ def test_qwenimage_pipeline_performance(
                 "width": 1024,
                 "height": 1024,
                 "num_steps": NUM_INFERENCE_STEPS,
-                "cfg_factor": cfg,
-                "sp_factor": sp,
-                "tp_factor": tp,
+                "cfg_factor": dit.cfg_parallel.factor,
+                "sp_factor": dit.sequence_parallel.factor,
+                "tp_factor": dit.tensor_parallel.factor,
                 "num_frames": 1,
-                "encoder_tp_factor": encoder_tp,
+                "encoder_tp_factor": config.encoder_parallel_config.tensor_parallel.factor,
                 "topology": str(config.topology),
                 "num_links": config.num_links,
             },
@@ -238,3 +311,48 @@ def test_qwenimage_pipeline_performance(
 
     pipeline.synchronize_devices()
     logger.info("Performance test completed successfully!")
+
+
+# Off in CI, where it would lengthen the job; set QWENIMAGE_PERF_EDIT=1 to run it.
+@pytest.mark.skipif(os.environ.get("QWENIMAGE_PERF_EDIT") != "1", reason="set QWENIMAGE_PERF_EDIT=1")
+@pytest.mark.parametrize(("mesh_device", "device_params"), EDIT_MESH_DEVICE_PARAMS, indirect=True)
+def test_qwenimage_edit_pipeline_performance(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    is_ci_env: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Times Qwen-Image-Edit-2511 with 1 to 3 input images at three aspect ratios, and edit inpainting.
+
+    Edit and Edit-2509 run the same transformer and text encoder, so they take the same time.
+    """
+    if is_ci_env:
+        monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+
+    checkpoint_name = "Qwen/Qwen-Image-Edit-2511"
+    pipeline = QwenImagePipeline.create_pipeline(mesh_device=mesh_device, checkpoint_name=checkpoint_name)
+    config = QwenImagePipelineConfig.default(mesh_shape=mesh_device.shape, checkpoint_name=checkpoint_name)
+
+    dog = Image.open(DOG_IMAGE_PATH).convert("RGB")
+    cases = [
+        Case(
+            f"{count} input {name}",
+            EDIT_NUM_INFERENCE_STEPS,
+            {"image": [crop_to_aspect_ratio(dog, aspect)] * count},
+        )
+        for count in range(1, config.max_images + 1)
+        for name, aspect in EDIT_ASPECT_RATIOS.items()
+    ]
+    cases.append(Case("inpaint 1 input 1:1", EDIT_NUM_INFERENCE_STEPS, inpaint_inputs()))
+
+    benchmark_profiler, iterations = run_cases(pipeline, cases, prompt=EDIT_PROMPT, file_prefix="qwenimage_edit_2511")
+    print_report(
+        title="QWEN IMAGE EDIT PIPELINE PERFORMANCE RESULTS",
+        profiler=benchmark_profiler,
+        iterations=iterations,
+        cases=cases,
+        config=config,
+        mesh_device=mesh_device,
+    )
+
+    pipeline.synchronize_devices()
