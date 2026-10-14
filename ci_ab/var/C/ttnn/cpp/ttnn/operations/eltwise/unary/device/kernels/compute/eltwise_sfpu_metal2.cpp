@@ -133,9 +133,11 @@ void kernel_main() {
 #if defined(ARCH_BLACKHOLE) && defined(SFPU_OP_CHAIN_0_FUNC_0) && !defined(SFPU_OP_CHAIN_0_FUNC_1)
         // A single op's init state outlives its calls, so only the first tile runs the init.
         if (i == 0) {
-            (void)0;
+            SFPU_OP_CHAIN_0_INIT_0
         }
-        SFPU_OP_CHAIN_0_FUNC_0
+        if (i != 0) {
+            SFPU_OP_CHAIN_0_FUNC_0
+        }
 #elif defined(ARCH_BLACKHOLE) && defined(SFPU_OP_CHAIN_0_TILE)
         // The host wraps the inits whose state nothing after them writes, and the inits a later tile repeats.
         SFPU_OP_CHAIN_0_TILE

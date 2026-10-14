@@ -1,5 +1,5 @@
 # unary: the init-once and chain forms ported to eltwise_sfpu_metal2.cpp (Q, the head) against the head without them
-# (P: main's metal2 kernel); C is Q without the single-op init (positive control); P2 repeats P.
+# (P: main's metal2 kernel); C is Q leaving the first tile of a single op unprocessed (positive control); P2 repeats P.
 BITS_VARIANTS="P Q P2 C"
 OPS="gelu,gelu_approx,gelu_tanh,gelu_bw_poly,celu,elu,selu,exp,exp_approx,exp2,expm1,sigmoid,sigmoid_approx,sigmoid_fastexp,silu,mish,softplus,tanhshrink,logsigmoid,snake_beta,i1,softcap,xielu,tanh"
 put() { for f in $2/*; do [ -f "$f" ] && mv "$f" "$1/$3__$(basename $f)"; done; rm -rf "$2"; }
