@@ -22,7 +22,9 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/program_spec_hw_fixture.hpp"
-namespace tt::tt_metal::experimental::scratch_cb_test {
+
+namespace tt::tt_metal::experimental {
+namespace {
 
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1ComputeKernel;
@@ -45,7 +47,7 @@ constexpr std::uint32_t kPatternC = 2;
 const NodeRange kNode{{0, 0}, {0, 0}};
 constexpr std::uint32_t kNumTiles = 64;            // pattern A payload; num_iters repeats it in rounds
 constexpr std::uint32_t kTileBytes = 32 * 32 * 2;  // Float16_b 32x32
-constexpr std::uint32_t kTileWords = kTileBytes / 4;
+constexpr std::uint32_t kScratchTileWords = kTileBytes / 4;
 constexpr std::uint32_t kSlots = 2;  // largest pattern A ring; smaller rings guard their actual capacity
 constexpr std::uint32_t kGuardBytes = 64;
 constexpr std::uint32_t kGuardValue = 0xA5C39E71u;
@@ -54,7 +56,7 @@ constexpr std::uint32_t kInAddr = 100 * 1024 + 0x40000;
 constexpr std::uint32_t kRingAAddr = kInAddr + kNumTiles * kTileBytes + kGuardBytes;
 constexpr std::uint32_t kRingBAddr = kRingAAddr + kSlots * kTileBytes + kGuardBytes;
 constexpr std::uint32_t kOutAddr = kRingBAddr + kSlots * kTileBytes + kGuardBytes;
-constexpr std::uint32_t kReportAddr = kOutAddr + kNumTiles * kTileBytes + kGuardBytes;
+constexpr std::uint32_t kScratchReportAddr = kOutAddr + kNumTiles * kTileBytes + kGuardBytes;
 constexpr std::uint32_t kReportWords = 2;
 
 // Pattern B ring depth, passed to the kernels as the scratch capacity.
@@ -149,7 +151,7 @@ Program MakeScratchCbProgram(distributed::MeshDevice& mesh_device, const Scratch
                  {"ring_addr", ring_addr},
                  {"ring_b_addr", kRingBAddr},
                  {"out_addr", kOutAddr},
-                 {"report_addr", kReportAddr}});
+                 {"report_addr", kScratchReportAddr}});
         }
         AddRuntimeArgsForNode(
             compute_args.runtime_arg_values,
@@ -171,18 +173,18 @@ Program MakeScratchCbProgram(distributed::MeshDevice& mesh_device, const Scratch
 // Tile t, datum k = bf16 0x4000 + (t << 7) + (k & 0x7F), XOR'd with seed in the mantissa: normal positive
 // values (exact through a bf16 datacopy) and distinct per tile, so a stale slot read is detected.
 std::vector<std::uint32_t> MakeInputTiles(std::uint32_t seed) {
-    std::vector<std::uint32_t> in(kNumTiles * kTileWords);
+    std::vector<std::uint32_t> in(kNumTiles * kScratchTileWords);
     for (std::uint32_t t = 0; t < kNumTiles; ++t) {
-        for (std::uint32_t w = 0; w < kTileWords; ++w) {
+        for (std::uint32_t w = 0; w < kScratchTileWords; ++w) {
             const std::uint32_t lo = (0x4000u + (t << 7) + ((2 * w) & 0x7Fu)) ^ seed;
             const std::uint32_t hi = (0x4000u + (t << 7) + ((2 * w + 1) & 0x7Fu)) ^ seed;
-            in[t * kTileWords + w] = (hi << 16) | lo;
+            in[t * kScratchTileWords + w] = (hi << 16) | lo;
         }
     }
     return in;
 }
 
-struct DatacopyResult {
+struct ScratchCbDatacopyResult {
     std::uint32_t mismatched_tiles = 0;  // final output tiles that differ from the input
     std::uint32_t scratch_errors = 0;    // transfers the consumer saw stale, reordered or corrupt
     std::uint32_t real_cb_errors = 0;
@@ -190,10 +192,10 @@ struct DatacopyResult {
 
 // PATTERN A on every node: writes distinct input tiles (varied by `seed` and the node), poisons the rings and
 // the output, guards both ends of every region, launches once, and totals the result over all nodes.
-DatacopyResult RunScratchCbDatacopy(
+ScratchCbDatacopyResult RunScratchCbDatacopy(
     distributed::MeshDevice& mesh_device, const ScratchCbRun& run, std::uint32_t seed, const NodeRange& nodes = kNode) {
     EXPECT_EQ(run.num_iters % kNumTiles, 0u);
-    std::vector<std::uint32_t> poison((kReportAddr + kReportWords * 4 - kRingAAddr) / 4, 0xDEADBEEFu);
+    std::vector<std::uint32_t> poison((kScratchReportAddr + kReportWords * 4 - kRingAAddr) / 4, 0xDEADBEEFu);
     std::vector<std::uint32_t> guard(kGuardBytes / 4, kGuardValue);
     const std::vector<std::uint32_t> guard_addresses = {
         kRingAAddr - kGuardBytes,
@@ -214,7 +216,7 @@ DatacopyResult RunScratchCbDatacopy(
     }
     LaunchProgram(mesh_device, MakeScratchCbProgram(mesh_device, run, nodes));
 
-    DatacopyResult result;
+    ScratchCbDatacopyResult result;
     const std::uint32_t last_round = run.num_iters / kNumTiles - 1;
     auto in = inputs.begin();
     for (const auto& node : nodes) {
@@ -225,18 +227,20 @@ DatacopyResult RunScratchCbDatacopy(
             EXPECT_EQ(actual, guard) << "L1 guard overwritten at " << address;
         }
         std::vector<std::uint32_t> report;
-        slow_dispatch::ReadFromL1(mesh_device, node, kReportAddr, kReportWords * sizeof(std::uint32_t), report);
+        slow_dispatch::ReadFromL1(mesh_device, node, kScratchReportAddr, kReportWords * sizeof(std::uint32_t), report);
         result.scratch_errors += report.at(0);
         result.real_cb_errors += report.at(1);
 
         for (std::uint32_t t = 0; t < kNumTiles; ++t) {
-            (*in)[t * kTileWords] = SequenceTag(last_round * kNumTiles + t);
+            (*in)[t * kScratchTileWords] = SequenceTag(last_round * kNumTiles + t);
         }
         std::vector<std::uint32_t> out;
         slow_dispatch::ReadFromL1(mesh_device, node, kOutAddr, kNumTiles * kTileBytes, out);
         for (std::uint32_t t = 0; t < kNumTiles; ++t) {
             if (!std::equal(
-                    out.begin() + t * kTileWords, out.begin() + (t + 1) * kTileWords, in->begin() + t * kTileWords)) {
+                    out.begin() + t * kScratchTileWords,
+                    out.begin() + (t + 1) * kScratchTileWords,
+                    in->begin() + t * kScratchTileWords)) {
                 ++result.mismatched_tiles;
             }
         }
@@ -245,7 +249,7 @@ DatacopyResult RunScratchCbDatacopy(
     return result;
 }
 
-void ExpectDatacopyCorrect(const DatacopyResult& r) {
+void ExpectDatacopyCorrect(const ScratchCbDatacopyResult& r) {
     EXPECT_EQ(r.scratch_errors, 0u) << "a transfer was stale, reordered, overwritten or corrupt";
     EXPECT_EQ(r.real_cb_errors, 0u) << "a real CB transfer was corrupt";
     EXPECT_EQ(r.mismatched_tiles, 0u) << "output != input";
@@ -254,10 +258,11 @@ void ExpectDatacopyCorrect(const DatacopyResult& r) {
 // PATTERN B: returns {pages produced, in-flight high-water mark}.
 std::vector<std::uint32_t> RunScratchCbBoundedProducer(distributed::MeshDevice& mesh_device, const ScratchCbRun& run) {
     std::vector<std::uint32_t> zero_report(kReportWords, 0u);
-    slow_dispatch::WriteToL1(mesh_device, kNode.start_coord, kReportAddr, zero_report);
+    slow_dispatch::WriteToL1(mesh_device, kNode.start_coord, kScratchReportAddr, zero_report);
     LaunchProgram(mesh_device, MakeScratchCbProgram(mesh_device, run, kNode));
     std::vector<std::uint32_t> r;
-    slow_dispatch::ReadFromL1(mesh_device, kNode.start_coord, kReportAddr, kReportWords * sizeof(std::uint32_t), r);
+    slow_dispatch::ReadFromL1(
+        mesh_device, kNode.start_coord, kScratchReportAddr, kReportWords * sizeof(std::uint32_t), r);
     return r;
 }
 
@@ -340,7 +345,7 @@ TEST_F(ProgramSpecHWTest, ScratchCbPingPong) {
     }
     constexpr std::uint32_t num_iters = 1025 * kNumTiles;
     auto in = MakeInputTiles(0x2Bu);
-    std::vector<std::uint32_t> poison((kReportAddr + kReportWords * 4 - kRingAAddr) / 4, 0xDEADBEEFu);
+    std::vector<std::uint32_t> poison((kScratchReportAddr + kReportWords * 4 - kRingAAddr) / 4, 0xDEADBEEFu);
     slow_dispatch::WriteToL1(*mesh_device, kNode.start_coord, kInAddr, in);
     slow_dispatch::WriteToL1(*mesh_device, kNode.start_coord, kRingAAddr, poison);  // covers both rings, out and report
     LaunchProgram(
@@ -349,10 +354,10 @@ TEST_F(ProgramSpecHWTest, ScratchCbPingPong) {
 
     std::vector<std::uint32_t> report;
     slow_dispatch::ReadFromL1(
-        *mesh_device, kNode.start_coord, kReportAddr, kReportWords * sizeof(std::uint32_t), report);
+        *mesh_device, kNode.start_coord, kScratchReportAddr, kReportWords * sizeof(std::uint32_t), report);
     EXPECT_EQ(report.at(0), 0u) << "a round came back stale, early or corrupt";
 
-    std::vector<std::uint32_t> expected(in.begin(), in.begin() + kTileWords);
+    std::vector<std::uint32_t> expected(in.begin(), in.begin() + kScratchTileWords);
     expected[0] = SequenceTag(num_iters - 1);
     std::vector<std::uint32_t> out;
     slow_dispatch::ReadFromL1(*mesh_device, kNode.start_coord, kOutAddr, kTileBytes, out);
@@ -396,4 +401,5 @@ TEST_F(ProgramSpecHWTest, ScratchCbAllNodes) {
     ExpectDatacopyCorrect(RunScratchCbDatacopy(*mesh_device, {.num_iters = 4 * kNumTiles}, 0x19u, all_nodes));
 }
 
-}  // namespace tt::tt_metal::experimental::scratch_cb_test
+}  // namespace
+}  // namespace tt::tt_metal::experimental
