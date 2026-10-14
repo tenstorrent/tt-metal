@@ -35,8 +35,7 @@ namespace ttnn {
 // 32-bit store of kStageGateOpen; the receiver closes it itself when a transfer flagged
 // kStageGateFlagCloseOnTransit passes, so exactly one burst is admitted per open. No
 // writer ever does a read-modify-write, so host (PCIe) and remote (NoC/fabric) writers
-// need no atomics. Word values / flag bits are in d2d_stage_gate.hpp. See
-// models/demos/common/prefill/docs/STAGE_GATE_DESIGN.md.
+// need no atomics. Word values / flag bits are in d2d_stage_gate.hpp.
 
 // Compile-time stage-gate configuration. num_gates == 0 (the default) compiles the gate
 // out entirely: no L1 is allocated and the receiver kernel is unchanged.
