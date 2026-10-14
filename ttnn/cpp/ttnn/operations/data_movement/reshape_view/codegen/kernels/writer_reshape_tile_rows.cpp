@@ -2,23 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Tile-row permutation TILE reshape writer. Assembles each output tile of a
-// batch in an L1 ring from face-row runs of the batch's staged source tiles
-// (local NOC self-reads), then writes each output tile once.
-//
-// Plan page (uint32): [n_in, n_out, in_page[in_slots], entry[out_slots]]
-// with entry = [out_page, n_runs, run[max_runs]] (entry_words each) and
-// run = slot << slot_shift | src_row << src_row_shift | dst_row << dst_row_shift
-// | rows. A run never crosses tile row 16 on either side, so it is one
-// contiguous span in each of the two faces of that half. slot == zero_slot
-// copies from a pre-zeroed tile (TILE padding rows). The host planner
-// (reshape_codegen_tile_rows_plan.hpp) owns this layout and passes every field
-// position here as a compile-time arg.
-//
-// Output tiles are written per ring of write_group tiles after one read
-// barrier; before the ring is refilled, writes_flushed guarantees its
-// previous DRAM writes have left L1. The flush waits for every outstanding
-// write, so a second ring would not overlap anything.
+// Tile-row permutation TILE reshape writer. Assembles each output tile of a batch in an L1 ring from face-row runs
+// of the batch's staged source tiles, then writes it once. Plan page layout: reshape_codegen_tile_rows_plan.hpp.
+// The flush before a ring refill waits for every outstanding write, so a second ring would overlap nothing.
 #include <cstdint>
 
 #include "api/core_local_mem.h"
@@ -135,6 +121,4 @@ void kernel_main() {
         plan_buffer.pop_front(1);
     }
     noc.async_write_barrier();
-    ring.push_back(write_group);
-    zero_tile.push_back(1);
 }
