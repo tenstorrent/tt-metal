@@ -432,6 +432,19 @@ jobs:
             if [[ '${{ matrix.leg.dispatch_mode }}' == 'sd' ]]; then
               export TT_METAL_SLOW_DISPATCH_MODE=1
             fi
+            # The LLK yamls run `pytest -m "$PYTEST_MARKERS"` (and the bit-exact one
+            # `--bit-exact-runs="$BIT_EXACT_RUNS"`) under `set -u`. Their owning pipelines
+            # set those from workflow inputs; mirror each pipeline's value here, or the
+            # leg dies on the unbound variable before pytest starts.
+            case '${{ matrix.leg.source_yaml }}' in
+              llk_pr_gate_tests)
+                export PYTEST_MARKERS="not perf and not nightly and not quasar and not accuracy" ;;
+              llk_e2e_tests)
+                export PYTEST_MARKERS="not perf and not quasar and not accuracy" ;;
+              llk_bit_exact_tests)
+                export PYTEST_MARKERS="not perf and not nightly and not accuracy and not quasar"
+                export BIT_EXACT_RUNS="500" ;;
+            esac
             # gate_workdir mirrors the owning pipeline's working-directory; empty for
             # everything that runs from /work. The reports dir is made again after
             # the cd, since a cmd writing to it does so relative to its own cwd.
