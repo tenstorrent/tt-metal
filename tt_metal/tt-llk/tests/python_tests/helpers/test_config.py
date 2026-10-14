@@ -140,6 +140,9 @@ _CALL = re.compile(
 _ASM_LABEL = re.compile(r"^([A-Za-z_.$][\w.$]*):")
 _ASM_INSTRUCTION = re.compile(r"^\t([a-z][a-z0-9.]*)(?:\s+(.*?))?\s*$")
 _ASM_SYMBOL = re.compile(r"[A-Za-z_.$][\w.$]*")
+# instructions that end a fall-through chain of blocks
+_CHAIN_ENDS = frozenset(("j", "jr", "ret", "tail", "mret"))
+_ASM_LOCAL_LABEL = re.compile(r"\.L(\d+)")
 _ASM_BRANCHES = frozenset(
     "beq bne blt bge bltu bgeu beqz bnez blez bgez bltz bgtz bgt ble bgtu bleu".split()
 )
@@ -242,21 +245,30 @@ def _init_callees_in_slot(text: str) -> str:
     )
 
 
-def _loop_window_calls(lines, kernel, names) -> list:
-    """the functions run_kernel calls (or takes the address of) on any path from its TILE_LOOP park to the next park
-    (barrier.h): every call its TILE_LOOP window can make"""
-    # (line, mnemonic, operands); inline assembly runs straight through
+def _kernel_body(lines, kernel) -> list:
+    """(line, op, operands) of every line of run_kernel between its label and .size: op ':' for a label, 'asm' for an
+    inline assembly line (each runs straight through), '' for any other directive"""
     body, app = [], False
     for i in range(kernel[1] + 1, kernel[2]):
         s = lines[i].strip()
         if s in ("#APP", "#NO_APP"):
             app = s == "#APP"
+            body.append((i, "", s))
         elif app:
             body.append((i, "asm", s))
         elif m := _ASM_LABEL.match(lines[i]):
             body.append((i, ":", m.group(1)))
         elif m := _ASM_INSTRUCTION.match(lines[i]):
             body.append((i, m.group(1), m.group(2) or ""))
+        else:
+            body.append((i, "", s))
+    return body
+
+
+def _window_reach(body) -> list:
+    """the run_kernel lines its TILE_LOOP window can run, from the TILE_LOOP park to the next park (barrier.h), in the
+    order a depth first walk reaches them first (fall-through before the branch target); [] without the park
+    """
     park = next(
         (
             k
@@ -268,9 +280,10 @@ def _loop_window_calls(lines, kernel, names) -> list:
     if park is None:
         return []
     labels = {s: k for k, (_, op, s) in enumerate(body) if op == ":"}
-    seen, todo, out = {park}, [park], []
+    seen, order, todo = {park}, [], [park]
     while todo:
         k = todo.pop()
+        order.append(k)
         _, op, operands = body[k]
         target = operands.split(",")[-1].strip()
         nxt = [k + 1]
@@ -284,13 +297,95 @@ def _loop_window_calls(lines, kernel, names) -> list:
             nxt = []
         elif op == "jr":  # a jump table: any label of the function
             nxt = list(labels.values())
-        if op not in (":", "asm"):
-            out += [t for t in _ASM_SYMBOL.findall(operands) if t in names]
-        for n in nxt:
+        for n in reversed(nxt):
             if n is not None and n < len(body) and n not in seen:
                 seen.add(n)
                 todo.append(n)
+    return order
+
+
+def _loop_window_calls(lines, kernel, names) -> list:
+    """the functions run_kernel calls (or takes the address of) on any path from its TILE_LOOP park to the next park
+    (barrier.h): every call its TILE_LOOP window can make"""
+    body, out = _kernel_body(lines, kernel), []
+    for k in _window_reach(body):
+        _, op, operands = body[k]
+        if op not in (":", "asm", ""):
+            out += [t for t in _ASM_SYMBOL.findall(operands) if t in names]
     return list(dict.fromkeys(out))
+
+
+def _window_chains_first(text: str) -> str:
+    """TILE_LOOP build assembly whose run_kernel has every fall-through chain its window can run right after the chain of
+    the TILE_LOOP park, in the order of their entry labels, and every other chain after them (the code after the
+    window's closing park starts one): no code the window does not run sits between its blocks, and their order is
+    the loop's own, so code outside the window cannot move them
+    """
+    lines = text.split("\n")
+    functions, _ = _asm_functions(lines)
+    kernel = next(
+        (f for n, f in functions.items() if n.startswith("_Z10run_kernel")), None
+    )
+    if kernel is None:
+        return text
+    body = _kernel_body(lines, kernel)
+    reach = _window_reach(body)
+    if not reach:
+        return text
+    last = max(k for k, (_, op, _) in enumerate(body) if op not in (":", ""))
+    reached = set(reach)
+    # chains end with a jump, a return or a tail call, and after the window's closing park (a jump is added there)
+    chains, start, split, app = [], 0, {}, 0
+    for k in range(last + 1):
+        _, op, s = body[k]
+        app = k if s == "#APP" else app
+        closing = s == "#NO_APP" and any(
+            j in reached and j != reach[0] and _PARK.search(body[j][2])
+            for j in range(app, k)
+        )
+        if op in _CHAIN_ENDS or k == last or (closing and k < last):
+            chains.append((start, k))
+            start = k + 1
+            if closing and k < last:
+                split[len(chains) - 1] = f".Lllk_after_park{len(split)}"
+    chain_of = [c for c, (a, b) in enumerate(chains) for _ in range(a, b + 1)]
+    window = {chain_of[k] for k in reach if k <= last}
+    anchor = chain_of[reach[0]]
+    # the other window chains by their entry label's number: GCC numbers labels as it creates them, the loop's in its
+    # own order, so code outside the window shifts the numbers but not their order (GCC's block order can change)
+    entry = {}
+    for k in range(last + 1):
+        _, op, s = body[k]
+        if (
+            op == ":"
+            and chain_of[k] not in entry
+            and (m := _ASM_LOCAL_LABEL.fullmatch(s))
+        ):
+            entry[chain_of[k]] = int(m.group(1))
+    order = (
+        [c for c in range(anchor) if c not in window]
+        + [anchor]
+        + sorted(window - {anchor}, key=lambda c: (entry.get(c, 1 << 30), c))
+        + [c for c in range(anchor + 1, len(chains)) if c not in window]
+    )
+    if order == list(range(len(chains))) and not split:
+        return text
+    out = []
+    for c in order:
+        a, b = chains[c]
+        if c - 1 in split:  # the code after a closing park starts a chain of its own
+            out.append(f"{split[c - 1]}:")
+        out += [lines[body[k][0]] for k in range(a, b + 1)]
+        if c in split:
+            out.append(f"\tj\t{split[c]}")
+    # CFI is emitted in text order; it only feeds .debug_frame, which nothing loads
+    out = [
+        line
+        for line in out + [lines[body[k][0]] for k in range(last + 1, len(body))]
+        if not line.lstrip().startswith(".cfi_")
+        or line.strip() in (".cfi_startproc", ".cfi_endproc")
+    ]
+    return "\n".join(lines[: kernel[1] + 1] + out + lines[kernel[2] :])
 
 
 def _loop_callees_in_slot(text: str) -> str:
@@ -2317,7 +2412,11 @@ class TestConfig:
             text = (
                 _text_after_libraries(_init_callees_in_slot(text), rest=False)
                 if init_only
-                else _harness_last(_text_after_libraries(_loop_callees_in_slot(text)))
+                else _harness_last(
+                    _text_after_libraries(
+                        _loop_callees_in_slot(_window_chains_first(text))
+                    )
+                )
             )
             if not init_only:
                 # level 6: a seventh of the time of the default 9 for 6 % more bytes
