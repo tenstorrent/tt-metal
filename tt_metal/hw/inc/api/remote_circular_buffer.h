@@ -19,18 +19,10 @@
 
 namespace experimental {
 
-// Per-receiver layout of the sender's local pages_sent / pages_acked slots.
-// For a sharded GCB the sender is a worker and slots live in the receivers'
-// config buffer pages at L1 alignment. For a DRAM-sender (DRISC) GCB the slots
-// live in DRISC L1 and can be packed at uint32 alignment — NoC atomic inc only
-// needs 4-byte alignment. The receiver-side layout is unchanged in both cases.
-#ifdef COMPILE_FOR_DRISC
-static constexpr uint32_t REMOTE_CB_LOCAL_PAGES_ACKED_OFFSET = sizeof(uint32_t);
-static constexpr uint32_t REMOTE_CB_LOCAL_PAGES_STRIDE = 2 * sizeof(uint32_t);
-#else
+// Per-receiver layout of the sender's local pages_sent / pages_acked slots. The sender is a worker
+// and the slots live in the config buffer pages at L1 alignment, the same layout its receivers use.
 static constexpr uint32_t REMOTE_CB_LOCAL_PAGES_ACKED_OFFSET = L1_ALIGNMENT;
 static constexpr uint32_t REMOTE_CB_LOCAL_PAGES_STRIDE = 2 * L1_ALIGNMENT;
-#endif
 
 namespace detail {
 
@@ -93,9 +85,9 @@ FORCE_INLINE void update_pages_acked(
     volatile tt_l1_ptr uint32_t* pages_acked_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(aligned_pages_acked_addr);
     *pages_acked_ptr += aligned_page_adjustment;
-    // remote_pages_acked_ptr is the canonical NoC target for the sender-side pages_acked
-    // counter; host writes the same value as aligned_pages_acked_ptr for sharded GCB (where
-    // local == remote) and the DRISC-side slot for DRAM-sender GCB.
+    // remote_pages_acked_ptr is the NoC target for the sender-side pages_acked counter; host
+    // writes the same value as aligned_pages_acked_ptr, since sender and receivers share an L1
+    // layout.
     uint64_t remote_ack_ptr_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, receiver_cb_interface.remote_pages_acked_ptr, noc);
     noc_fast_atomic_increment<nm>(
@@ -413,9 +405,9 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
     uint32_t next_receiver_start_addr_offset = 0;
     volatile tt_l1_ptr uint32_t* pages_sent_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr);
-    // The packed remote_pages_sent_ptr is the canonical NoC target for the receiver-side
-    // pages_sent counter; host writes the same value as aligned_pages_sent_ptr for sharded
-    // GCB (where local == remote) and the worker-side base for DRAM-sender GCB.
+    // The packed remote_pages_sent_ptr is the NoC target for the receiver-side pages_sent
+    // counter; host writes the same value as aligned_pages_sent_ptr, since sender and receivers
+    // share an L1 layout.
     uint32_t remote_sent_base = remote_cb_remote_pages_sent_ptr(remote_cb.num_receivers_and_remote_pages_sent_ptr);
     volatile tt_l1_ptr uint32_t* remote_noc_xy_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.receiver_noc_xy_ptr);
@@ -437,8 +429,6 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
 
         uint64_t remote_sent_ptr_addr = receiver_base + remote_sent_base;
         noc_semaphore_inc<posted>(remote_sent_ptr_addr, pages_sent, noc);
-        // Local stride may be smaller than the remote stride on a DRISC sender (see
-        // REMOTE_CB_LOCAL_PAGES_STRIDE) — the receiver-side layout is always L1-aligned.
         pages_sent_ptr += REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
         remote_sent_base += 2 * L1_ALIGNMENT;
         remote_noc_xy_ptr += 2;
