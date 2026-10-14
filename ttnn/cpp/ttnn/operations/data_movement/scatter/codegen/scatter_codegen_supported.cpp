@@ -114,14 +114,15 @@ bool supported_by_codegen(
         (!has_default_tile(input_tensor) || !has_default_tile(index_tensor) || !has_default_tile(src_tensor))) {
         return false;
     }
-    // ttnn::scatter()'s own validate_inputs only ever admits reduce in {None, "add", "multiply"}, so
-    // reduction_mode is 0, 1 or 2 here -- 3/4 (max/min) are unreachable and not handled below.
+    // scatter.cpp's scatter_reduction_mode() throws on any reduce string other than add/multiply
+    // before routing reaches this gate, so reduction_mode is one of the three named modes here.
     // BFLOAT16 reduction is only correct through the dedicated ROW_MAJOR accumulator (add/multiply,
     // full-stick FP32 accumulation): the generic value_kind switch scatter_common.hpp's
     // scatter_reduce_value implements has no bfloat16 case, so a TILE reduce -- or any reduce on the
     // plain (non-bf16-reduce) ROW_MAJOR reader -- would silently drop every duplicate update instead
     // of accumulating it.
-    if (reduction_mode != 0 && (layout != Layout::ROW_MAJOR || (reduction_mode != 1 && reduction_mode != 2))) {
+    if (reduction_mode != kReductionNone &&
+        (layout != Layout::ROW_MAJOR || (reduction_mode != kReductionAdd && reduction_mode != kReductionMultiply))) {
         return false;
     }
 
@@ -181,7 +182,7 @@ bool supported_by_codegen(
     // minimum viable RM plan's resident footprint is exactly what that formula reports, and the two
     // must not compute it differently or this ceiling admits a call the factory cannot build.
     const uint64_t input_page_bytes = ttnn::prim::scatter_rm_stick_page_bytes(input_tensor, input_stick_elems);
-    const bool bf16_reduce = reduction_mode == 1 || reduction_mode == 2;
+    const bool bf16_reduce = reduction_mode == kReductionAdd || reduction_mode == kReductionMultiply;
     return ttnn::prim::scatter_rm_min_plan_fits_l1(
         ttnn::prim::scatter_static_l1(input_tensor),
         input_page_bytes,
@@ -209,10 +210,9 @@ namespace {
 // See prefers_row_major_strategy(): the tile-row threshold, the longest stick the detour's untilize
 // may materialize, and the NOC transaction boundary the untilized stick must already sit on.
 constexpr uint32_t kRowMajorRerouteMaxHt = 32;
-// A carried-over ceiling, not a measured one: the widest stick the RM reader could hold fully
-// resident before it streamed index/src in chunks (input + output + index + src sticks of
-// 32768 x (2 + 2 + 4 + 2) bytes = 320 KiB). The chunked reader (scatter_rm_chunk_elems) no longer
-// needs it; it survives only as the detour's bound, which the L1 check below would otherwise set.
+// Longest stick the detour will untilize; wider TILE rows stay on the TILE factories. Carried over
+// from the prototype, not derived from L1: the chunked RM plan keeps only the input and output
+// sticks resident, so the L1 check below admits sticks far wider than this.
 constexpr uint32_t kRowMajorRerouteMaxStickElems = 32768;
 constexpr uint32_t kRowMajorRerouteNocAlign = 32;
 
