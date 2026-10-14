@@ -2,19 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute helpers for the DRAM-sharded unary work queue.
+// Compute helpers for the unary DRAM read work queue: with WORK_QUEUE the reader hands over tiles chunk by chunk
+// instead of a fixed count per core.
 
 #pragma once
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_buffer.h"
-#include "ttnn/operations/eltwise/unary/device/kernels/dram_sharded_common.hpp"
+#include "ttnn/operations/eltwise/unary/device/kernels/dram_read_common.hpp"
 
-namespace dram_shard {
+namespace dram_read {
 
 #if WORK_QUEUE
-// Tile count of the next chunk from the reader; 0 means done.
+// Tile count of the next chunk from the reader; 0 when there is no more work.
 ALWI uint32_t next_chunk_tiles() {
     DataflowBuffer counts(kCbComputeCount);
     counts.wait_front(1);
@@ -24,7 +25,7 @@ ALWI uint32_t next_chunk_tiles() {
 }
 #endif
 
-// Calls process(num_tiles) once, or with WORK_QUEUE process(count) once per chunk.
+// Calls process(num_tiles) once; with WORK_QUEUE, process(count) for every chunk instead.
 template <typename Process>
 ALWI void for_each_chunk(uint32_t num_tiles, Process process) {
 #if WORK_QUEUE
@@ -36,7 +37,8 @@ ALWI void for_each_chunk(uint32_t num_tiles, Process process) {
 #endif
 }
 
-// Per-tile loop counter: num_tiles iterations, or with WORK_QUEUE one per tile of every chunk.
+// Per-tile loop counter for kernels that loop over tiles themselves: num_tiles iterations, or with WORK_QUEUE one per
+// tile of every chunk.
 class Tiles {
 public:
 #if WORK_QUEUE
@@ -62,4 +64,4 @@ private:
     uint32_t left_ = 0;
 };
 
-}  // namespace dram_shard
+}  // namespace dram_read

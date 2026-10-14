@@ -30,17 +30,17 @@ const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal:
 
 bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
-// How a unary op on a DRAM sharded or interleaved tensor reads its pages; the flow is part of the program hash.
-enum class DramShardFlow : uint8_t {
-    None,           // main's path
+// How a unary op on a DRAM sharded or interleaved TILE tensor reads its pages. The flow is part of the program hash.
+enum class DramReadFlow : uint8_t {
+    None,           // main's path: each core reads a contiguous range, one page per barrier
     StaticBurst,    // even split, rotated order, several pages per barrier
     StaticOnePage,  // even split, rotated order, one page per barrier
-    WorkQueue,      // cores pull chunks from a scheduler
+    WorkQueue,      // cores pull chunks of pages from a scheduler core
 };
 
-struct DramShardPlan {
-    DramShardFlow flow = DramShardFlow::None;
-    // Page order, see dram_shard::RotatedPages.
+struct DramReadPlan {
+    DramReadFlow flow = DramReadFlow::None;
+    // Page order, see dram_read::RotatedPages.
     uint32_t shard_stride = 0;
     uint32_t num_shards = 0;
     uint32_t last_shard_pages = 0;
@@ -56,7 +56,8 @@ struct DramShardPlan {
     }
 };
 
-DramShardPlan get_dram_shard_plan(
+// Picks the read flow from the op chain's compute cost, the tensor layout and the pages per core.
+DramReadPlan get_dram_read_plan(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const tt::tt_metal::TensorSpec& input_spec,
     const tt::tt_metal::TensorSpec& output_spec,

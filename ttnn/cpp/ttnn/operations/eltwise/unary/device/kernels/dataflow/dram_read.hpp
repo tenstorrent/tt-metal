@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader and writer helpers for DRAM-sharded unary: rotated page order and work queue.
+// Reader and writer helpers for the unary DRAM read flows: the rotated page order, CB-sized page groups and the
+// work queue.
 
 #pragma once
 
@@ -15,33 +16,38 @@
 #include "api/dataflow/noc.h"
 #include "api/semaphore.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "ttnn/operations/eltwise/unary/device/kernels/dram_sharded_common.hpp"
+#include "ttnn/operations/eltwise/unary/device/kernels/dram_read_common.hpp"
 
-namespace dram_shard {
+namespace dram_read {
 
-// A request is kRequestTag | seq; a reply is (seq << kSeqShift) | chunk and counts only if seq matches.
-constexpr uint32_t kRequestTag = 0xA5000000u;
-constexpr uint32_t kTagMask = 0xFF000000u;
-constexpr uint32_t kSeqMask = 0xFFFu;
+// Work-queue messages are single words sent with NoC inline writes:
+//   request  worker -> its slot in the scheduler's table   seq
+//   reply    scheduler -> the worker's reply semaphore     (seq << kSeqShift) | chunk, chunk == kNoChunk when done
+// seq runs from 1 to kMaxSeq and changes with every request, so a worker never mistakes the previous reply for a new
+// one. The scheduler clears its table before it lets workers request, so 0 means no request.
+constexpr uint32_t kMaxSeq = 0xFFF;
 constexpr uint32_t kSeqShift = 20;
-constexpr uint32_t kDone = 0xFFFFFu;  // also the chunk mask
+constexpr uint32_t kNoChunk = (1u << kSeqShift) - 1;  // also the mask of the chunk field
 
 inline volatile tt_l1_ptr uint32_t* l1_words(uint32_t addr) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
 }
 
-// Writes val to l1_addr on the core whose coordinates are packed x | (y << 16).
-inline void write_word(const Noc& noc, uint32_t xy, uint32_t l1_addr, uint32_t val) {
-    noc.inline_dw_write(UnicastEndpoint{}, val, {.noc_x = xy & 0xFFFF, .noc_y = xy >> 16, .addr = l1_addr});
+// Writes one word to l1_addr on the core at NoC coordinates xy = x | (y << 16).
+inline void write_word(const Noc& noc, uint32_t xy, uint32_t l1_addr, uint32_t value) {
+    noc.inline_dw_write(UnicastEndpoint{}, value, {.noc_x = xy & 0xFFFF, .noc_y = xy >> 16, .addr = l1_addr});
 }
 
-// Visits slot 0 of every shard, then slot 1, and so on, so consecutive pages come from different banks.
+// The order in which a flow reads and writes pages: slot 0 of every shard, then slot 1, and so on, so consecutive
+// pages come from different banks. Slot k of shard s is page s * shard_stride + (k / shard_width) * row_pages +
+// k % shard_width. An interleaved tensor is one shard, so its order is the page order.
 struct RotatedPages {
-    uint32_t shard_stride;  // page ids between shards
+    uint32_t shard_stride;  // pages between the starts of two shards
     uint32_t num_shards;
-    uint32_t last_shard_pages;  // slots in the last, possibly short, shard
+    uint32_t last_shard_pages;  // slots in the last shard, which may be short
     uint32_t shard_width;       // pages per shard row
     uint32_t row_pages;         // pages per tensor row
+    // Cursor: the next page is shard_offset + slot_offset.
     uint32_t slot = 0;
     uint32_t shard = 0;
     uint32_t col = 0;           // slot % shard_width
@@ -57,21 +63,22 @@ struct RotatedPages {
             .row_pages = get_arg_val<uint32_t>(kArgPageOrder + 4)};
     }
 
-    void seek(uint32_t q) {
+    // Moves the cursor to position pos of the order. Past the last shard's slots, the slots have one shard fewer.
+    void seek(uint32_t pos) {
         const uint32_t full = last_shard_pages * num_shards;
-        if (q < full) {
-            slot = q / num_shards;
-            shard = q % num_shards;
+        if (pos < full) {
+            slot = pos / num_shards;
+            shard = pos % num_shards;
         } else {
-            slot = last_shard_pages + (q - full) / (num_shards - 1);
-            shard = (q - full) % (num_shards - 1);
+            slot = last_shard_pages + (pos - full) / (num_shards - 1);
+            shard = (pos - full) % (num_shards - 1);
         }
         col = slot % shard_width;
         slot_offset = (slot / shard_width) * row_pages + col;
         shard_offset = shard * shard_stride;
     }
 
-    // Slot k of shard s is page s * shard_stride + (k / shard_width) * row_pages + k % shard_width.
+    // Returns the page at the cursor and moves the cursor on.
     uint32_t next() {
         if (shard == num_shards - 1 && slot >= last_shard_pages) {
             next_slot();
@@ -98,9 +105,9 @@ struct RotatedPages {
     }
 };
 
-// Cuts page groups at the CB wrap, so each is contiguous in L1.
+// Splits runs of pages into groups that stop at the end of the CB, so each group is contiguous in L1.
 struct CbGroups {
-    uint32_t depth;
+    uint32_t depth;  // CB pages
     uint32_t pos = 0;
 
     uint32_t next(uint32_t want) {
@@ -110,7 +117,8 @@ struct CbGroups {
     }
 };
 
-// Work queue, reader side: each core is a worker that starts on chunk worker_id.
+// Work queue, reader side. Every core is a worker: it starts on chunk worker_id, and asks for its next chunk before
+// reading the current one, so the reply arrives while it reads. Each chunk goes on to compute and the writer.
 struct QueueReader {
     const Noc& noc;
     uint32_t worker_id;
@@ -118,58 +126,60 @@ struct QueueReader {
     uint32_t chunk_pages;
     uint32_t scheduler_xy;
     uint32_t seq = 0;
-    bool started = false;
+    bool scheduler_started = false;
 
     static QueueReader from_args(const Noc& noc) {
         return {
             .noc = noc,
-            .worker_id = get_arg_val<uint32_t>(kArgSplit),
-            .total_pages = get_arg_val<uint32_t>(kArgSplit + 1),
-            .chunk_pages = get_arg_val<uint32_t>(kArgQueue),
-            .scheduler_xy = get_arg_val<uint32_t>(kArgQueue + 1)};
+            .worker_id = get_arg_val<uint32_t>(kArgFirstPage),
+            .total_pages = get_arg_val<uint32_t>(kArgNumPages),
+            .chunk_pages = get_arg_val<uint32_t>(kArgChunkPages),
+            .scheduler_xy = get_arg_val<uint32_t>(kArgSchedulerXy)};
     }
 
-    // Calls process(first, count) per chunk, asking for the next chunk before reading this one.
-    template <typename Process>
-    void for_each_chunk(Process process) {
+    // Calls read(first, count) for every chunk this worker gets.
+    template <typename Read>
+    void for_each_chunk(Read read) {
         const uint32_t num_chunks = tt::data_movement::common::div_up(total_pages, chunk_pages);
-        for (uint32_t chunk = worker_id; chunk != kDone; chunk = receive()) {
-            const bool asked = try_request();  // before the scheduler starts, ask after reading
+        for (uint32_t chunk = worker_id; chunk != kNoChunk; chunk = wait_reply()) {
+            // Until the scheduler starts, the request has to wait until after the read.
+            const bool asked = try_request();
             if (chunk < num_chunks) {
                 const uint32_t first = chunk * chunk_pages;
                 const uint32_t count = std::min(chunk_pages, total_pages - first);
-                announce(first, count);
-                process(first, count);
+                hand_on(first, count);
+                read(first, count);
             }
             while (!asked && !try_request()) {
             }
         }
-        noc.async_write_barrier();  // flush request writes
-        announce(0, 0);
+        noc.async_write_barrier();  // the requests are NoC writes
+        hand_on(0, 0);              // tells compute and the writer that this worker is done
     }
 
-    // Requests a chunk if the scheduler has started; returns whether it did.
+    // Sends a request if the scheduler has started; returns whether it did.
     bool try_request() {
-        started = started || Semaphore<>(kGoSemaphore).value() == 1;
-        if (started) {
-            seq = (seq + 1) & kSeqMask;
-            seq += seq == 0;  // 0 means empty
+        scheduler_started = scheduler_started || Semaphore<>(kGoSemaphore).value() == 1;
+        if (scheduler_started) {
+            seq = seq % kMaxSeq + 1;
             const uint32_t table = DataflowBuffer(kCbRequestTable).get_write_ptr();
-            write_word(noc, scheduler_xy, table + sizeof(uint32_t) * worker_id, kRequestTag | seq);
+            write_word(noc, scheduler_xy, table + sizeof(uint32_t) * worker_id, seq);
         }
-        return started;
+        return scheduler_started;
     }
 
-    uint32_t receive() const {
+    // Waits for the reply to the latest request and returns its chunk.
+    uint32_t wait_reply() const {
         const Semaphore<> reply(kReplySemaphore);
-        uint32_t v;
+        uint32_t value;
         do {
-            v = reply.value();
-        } while ((v >> kSeqShift) != seq);
-        return v & kDone;
+            value = reply.value();
+        } while ((value >> kSeqShift) != seq);
+        return value & kNoChunk;
     }
 
-    static void announce(uint32_t first, uint32_t count) {
+    // Passes a chunk on: its tile count to compute, its first position and page count to the writer.
+    static void hand_on(uint32_t first, uint32_t count) {
         DataflowBuffer to_compute(kCbComputeCount);
         to_compute.reserve_back(1);
         l1_words(to_compute.get_write_ptr())[0] = count;
@@ -183,32 +193,31 @@ struct QueueReader {
     }
 };
 
-// Work queue, writer side; on one core it also runs the scheduler.
+// Work queue, writer side. On the scheduler core the writer also answers requests while it waits for its own pages.
 struct QueueWriter {
     const Noc& noc;
     bool is_scheduler;
     uint32_t num_chunks;
     uint32_t num_workers;
-    uint32_t coord_arg;                 // worker coordinates are common runtime args from here on
-    uint32_t next_chunk = num_workers;  // chunks below num_workers are first chunks
+    uint32_t worker_xy_arg;             // worker coordinates are common runtime args from this index on
+    uint32_t next_chunk = num_workers;  // chunks below num_workers are the workers' first chunks
     uint32_t workers_done = 0;
     volatile tt_l1_ptr uint32_t* table = l1_words(DataflowBuffer(kCbRequestTable).get_write_ptr());
     uint32_t last_seq[kMaxWorkers] = {};
 
-    static QueueWriter from_args(const Noc& noc, uint32_t coord_arg) {
-        const uint32_t total_pages = get_arg_val<uint32_t>(kArgSplit + 1);
-        const uint32_t chunk_pages = get_arg_val<uint32_t>(kArgQueue);
+    static QueueWriter from_args(const Noc& noc, uint32_t worker_xy_arg) {
         return {
             .noc = noc,
-            .is_scheduler = get_arg_val<uint32_t>(kArgSplit) != 0,
-            .num_chunks = tt::data_movement::common::div_up(total_pages, chunk_pages),
-            .num_workers = get_arg_val<uint32_t>(kArgQueue + 1),
-            .coord_arg = coord_arg};
+            .is_scheduler = get_arg_val<uint32_t>(kArgIsScheduler) != 0,
+            .num_chunks = tt::data_movement::common::div_up(
+                get_arg_val<uint32_t>(kArgNumPages), get_arg_val<uint32_t>(kArgChunkPages)),
+            .num_workers = get_arg_val<uint32_t>(kArgNumWorkers),
+            .worker_xy_arg = worker_xy_arg};
     }
 
-    // Calls process(first, count) per chunk from the reader, then serves requests until all workers are done.
-    template <typename Process>
-    void for_each_chunk(Process process) {
+    // Calls write(first, count) for every chunk the reader hands on, then keeps answering until every worker is done.
+    template <typename Write>
+    void for_each_chunk(Write write) {
         start();
         DataflowBuffer from_reader(kCbWriterChunk);
         while (true) {
@@ -221,7 +230,7 @@ struct QueueWriter {
             if (count == 0) {
                 break;
             }
-            process(first, count);
+            write(first, count);
         }
         serve_until([&] { return workers_done >= num_workers; });
     }
@@ -234,7 +243,7 @@ struct QueueWriter {
         }
     }
 
-    // On the scheduler core, clears the request table and lets the workers request.
+    // On the scheduler core, clears the request table, then lets the workers request.
     void start() {
         if (!is_scheduler) {
             return;
@@ -247,17 +256,16 @@ struct QueueWriter {
         }
     }
 
-    // Replies to new requests with the next chunk, or kDone when none are left.
+    // Answers every new request with the next chunk, or with kNoChunk once all chunks are out.
     void serve() {
         invalidate_l1_cache();
         for (uint32_t k = 0; k < num_workers; ++k) {
-            const uint32_t v = table[k];
-            const uint32_t seq = v & kSeqMask;
-            if ((v & kTagMask) != kRequestTag || seq == last_seq[k]) {
+            const uint32_t seq = table[k];
+            if (seq == 0 || seq == last_seq[k]) {
                 continue;
             }
             last_seq[k] = seq;
-            uint32_t chunk = kDone;
+            uint32_t chunk = kNoChunk;
             if (next_chunk < num_chunks) {
                 chunk = next_chunk++;
             } else {
@@ -267,7 +275,7 @@ struct QueueWriter {
         }
     }
 
-    uint32_t worker_xy(uint32_t k) const { return get_common_arg_val<uint32_t>(coord_arg + k); }
+    uint32_t worker_xy(uint32_t k) const { return get_common_arg_val<uint32_t>(worker_xy_arg + k); }
 };
 
-}  // namespace dram_shard
+}  // namespace dram_read

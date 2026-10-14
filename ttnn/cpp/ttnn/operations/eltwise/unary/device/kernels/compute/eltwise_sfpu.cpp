@@ -13,7 +13,7 @@
 #include "api/compute/eltwise_unary/rdiv.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "dram_sharded.hpp"
+#include "dram_read.hpp"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -26,7 +26,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_input, cb_output);
     copy_init(cb_input);
-    for (dram_shard::Tiles tiles(num_tiles); tiles.next();) {
+    for (dram_read::Tiles tiles(num_tiles); tiles.next();) {
         tile_regs_acquire();
 
         dfb_in.wait_front(1);

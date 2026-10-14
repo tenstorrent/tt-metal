@@ -6,8 +6,8 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
-#if SHARD_ROTATE
-#include "dram_sharded.hpp"
+#if DRAM_FLOW
+#include "dram_read.hpp"
 #endif
 
 void kernel_main() {
@@ -61,14 +61,14 @@ void kernel_main() {
     noc.async_write_barrier();
 #else
     const uint32_t page_bytes = get_local_cb_interface(cb_id_dst).fifo_page_size;
-#if SHARD_ROTATE
-    // DRAM flows: the reader's page order, WRITE_BURST pages per flush.
-    auto order = dram_shard::RotatedPages::from_args();
-    dram_shard::CbGroups groups{.depth = get_local_cb_interface(cb_id_dst).fifo_num_pages};
+#if DRAM_FLOW
+    // Writes in the reader's page order, WRITE_BURST pages per flush.
+    auto order = dram_read::RotatedPages::from_args();
+    dram_read::CbGroups groups{.depth = get_local_cb_interface(cb_id_dst).fifo_num_pages};
 #if WORK_QUEUE
-    auto queue = dram_shard::QueueWriter::from_args(noc, dst_args.next_common_runtime_args_offset());
+    auto queue = dram_read::QueueWriter::from_args(noc, dst_args.next_common_runtime_args_offset());
 #endif
-    auto write_chunk = [&](uint32_t first, uint32_t count) {
+    auto write_pages = [&](uint32_t first, uint32_t count) {
         order.seek(first);
         for (uint32_t done = 0; done < count;) {
             const uint32_t n = groups.next(std::min(count - done, uint32_t{WRITE_BURST}));
@@ -85,9 +85,9 @@ void kernel_main() {
         }
     };
 #if WORK_QUEUE
-    queue.for_each_chunk(write_chunk);
+    queue.for_each_chunk(write_pages);
 #else
-    write_chunk(start_id, num_pages);
+    write_pages(start_id, num_pages);
 #endif
 #else
     for (uint32_t i = start_id; i < end_id; ++i) {
@@ -96,7 +96,7 @@ void kernel_main() {
         noc.async_writes_flushed();
         dfb_dst.pop_front(onepage);
     }
-#endif  // SHARD_ROTATE
+#endif  // DRAM_FLOW
     noc.async_write_barrier();
 #endif
 #endif
