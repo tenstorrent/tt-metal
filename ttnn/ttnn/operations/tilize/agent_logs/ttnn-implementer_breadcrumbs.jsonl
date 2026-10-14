@@ -7,3 +7,9 @@
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-10-14T13:59:47+00:00"}
 {"event":"hypothesis","detail":"explicit output_padded_shape needs logical<padded TILE output; no python binding exists. Added ttnn.experimental.view(t, logical, padded) overload (metadata-only view_device), rebuilt _ttnn.so. Probe confirms rank0/1 and 4D views work, same buffer address.","ts":"2026-10-14T14:05:56+00:00"}
 {"event":"test_run","status":"pass","test":"test_tilize.py+test_tilize_knobs.py","detail":"33 passed after 2D split + pad reader","ts":"2026-10-14T14:08:20+00:00"}
+{"event":"test_run","status":"pass","test":"golden slice","detail":"31/31 bf16 interleaved pad/short_wide/square_large + program cache","ts":"2026-10-14T14:10:09+00:00"}
+{"event":"test_run","status":"pass","test":"test_translated padding/to_layout slice","detail":"421 passed, 82 xfailed (dtype gate)","ts":"2026-10-14T14:12:51+00:00"}
+{"event":"test_run","status":"pass","test":"test_tilize_geometry_padding.py","detail":"12 passed","ts":"2026-10-14T14:13:28+00:00"}
+{"event":"perf","lever":"interleaved_2d_split","before_ns":{"32x2048(1 core)":5645,"32x8192(1 core)":12221,"2048x2048(64 cores)":43187},"after_ns":{"32x2048(64)":4226,"32x8192(86)":6445,"2048x2048(110)":40661},"perf_focus_unchanged":{"16384x64":11190},"method":"per-timer-cluster span from profile_log_device.csv","ts":"2026-10-14T14:16:10+00:00"}
+{"event":"perf","lever":"segment-path bank stagger (start stick k%tile_h)","off_ns":{"32x2048":4520,"2048x2048":40350,"32x8192":6350},"on_ns":{"32x2048":4150,"2048x2048":39600,"32x8192":6100},"kept":true,"knob":"SEGMENT_BANK_STAGGER","ts":"2026-10-14T14:18:22+00:00"}
+{"event":"test_run","status":"pass","test":"unit dir 58 + golden slice 31 + translated slice 29","ts":"2026-10-14T14:19:27+00:00"}

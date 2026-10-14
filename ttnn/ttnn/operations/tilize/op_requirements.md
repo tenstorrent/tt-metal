@@ -30,7 +30,7 @@
 - **Golden baseline**: 238 supported_pass / 0 supported_fail / 0 xpass_drift; 56 xfail_wrong_mode are harness-side fp8 input-creation failures (see verification_report.md)
 - **Perf (BH p150b, 110 cores)**: `[1,1,16384,64]` 11.35 µs (reference 11.85 µs)
 
-### [ ] Refinement 1 — Full work geometry: 2-D split + padding
+### [x] Refinement 1 — Full work geometry: 2-D split + padding
 
 **Goal**: add `short_wide` and `square_large` to `SUPPORTED["tile_grid"]` by building the `interleaved_2d_split` regime (op_design.md Regimes), and add padding: `pad_mode` ∈ {auto, explicit}, `pad_value` ∈ {zero, positive, negative}, `alignment` ∈ {w_non_aligned, h_non_aligned, hw_non_aligned}, `rank` ∈ {0, 1} (rank 0/1 are only reachable with a pad; the pad synthesizes `[32,32]` / `[32, round_up(W,32)]`). Padding is filled in-kernel in `load_sticks_block` (op_design.md Dataflow, "Pad fill") — W tail, H tail, whole pad tile-rows/cols — with the fill encoded in the input format (negative integer fill bit_cast, never truncated). Output: logical shape = input's, padded shape = `output_padded_shape` or the tile-round. Interleaved placements only in this refinement (the sharded crosses land in Refinement 2).
 
@@ -44,6 +44,8 @@
 - `SUPPORTED["tile_grid"]` may list `short_wide` / `square_large` only once the split actually reaches the grid on them (report the core count reached on `[1,1,32,2048]` and `[1,1,2048,2048]`).
 
 **Done when**: every interleaved golden cell with `tile_grid ∈ {short_wide, square_large}` or `pad_mode ≠ none` passes at bf16, the program-cache cases `short_wide_canonical`, `square_large`, `auto_hw_tails_negative_fill` pass, and the acceptance + knob tests stay green.
+
+**Outcome**: landed. 26/26 targeted bf16 interleaved golden cells + 5 program-cache cases pass; translated padding/to_layout slice 421 pass. Cores reached (BH, 110): `[1,1,32,2048]` 64 cores (one tile each), `[1,1,2048,2048]` 110 cores (22×5). Device ns (row-only → 2-D): `[1,1,32,2048]` 5.6 → 4.1 µs, `[1,1,32,8192]` 12.2 → 6.1 µs (86 cores), `[1,1,2048,2048]` 43.2 → 39.6 µs (~420 GB/s, near DRAM roofline). short_wide stays latency-bound (32 × 64 B segment reads per core); next lever would be fewer, wider segment reads per core (e.g. cores_c capped so segments ≥ 128 B) — not tried, outside this refinement's scope.
 
 ### [ ] Refinement 2 — Sharded placements (all schemes, both shard APIs, crossovers)
 

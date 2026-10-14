@@ -42,6 +42,8 @@ COALESCE_BANK_READS = True
 COALESCE_MIN_CORES_PER_BANK = 2
 # Rotate each core's bank walk so the grid's requests spread over all banks at once.
 BANK_STAGGER = True
+# Segment (non-coalesced) reader: rotate each core's start stick within a tile-row (k % tile_h).
+SEGMENT_BANK_STAGGER = True
 # Staging slot budget for the coalesced reader (two slots); sets staging_tile_rows per chunk.
 STAGING_SLOT_BUDGET_BYTES = 16 * 1024
 # block_height_tiles: None => the core's whole row assignment (Phase 0: one row block).
@@ -327,7 +329,11 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
                 core_rows_tiles if BLOCK_HEIGHT_TILES is None else min(BLOCK_HEIGHT_TILES, core_rows_tiles)
             )
             rect = [row_start_tile, core_rows_tiles, col_start_tile, block_height_tiles]
-            stagger = (core_index[(core.x, core.y)] % stagger_groups) if (BANK_STAGGER and coalesce) else 0
+            k = core_index[(core.x, core.y)]
+            if coalesce:
+                stagger = (k % stagger_groups) if BANK_STAGGER else 0
+            else:  # segment reader: rotate the start stick of each tile-row
+                stagger = (k % tile_h) if SEGMENT_BANK_STAGGER else 0
             reader_rt[core.x][core.y] = [in_addr, *rect, stagger, fill_word]
             writer_rt[core.x][core.y] = [out_addr, *rect]
             compute_rt[core.x][core.y] = [core_rows_tiles, block_height_tiles]

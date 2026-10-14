@@ -9,6 +9,7 @@ Schema: `.claude/references/l1-footprint-discipline.md`. Block axes (from `op_de
 | `cb_rm_sticks_tail` (slot 1, implementer-added) | `in_depth_tile_rows · last_block_width_tiles`, page as `cb_rm_sticks` | `last_block_width_tiles` pages | as `cb_rm_sticks`, `cols: spans → last_block_width_tiles` | as `cb_rm_sticks` | reader | compute | allocated only when `last_block_width_tiles ≠ block_width_tiles` (ragged last column block, i.e. `num_col_blocks > 1`) | Cannot share `cb_rm_sticks`' ring: the tail quantum `last_block_width_tiles` does not divide `in_depth·block_width_tiles`, so a contiguous tail tile-row could straddle the ring end. Own ring = one quantum per ring (the design's ring-wrap note). Could alias `cb_rm_sticks` by lifetime (main blocks finish before the tail starts), but CB descriptors have no alias API here; cost ≤ main CB size, only on ragged shapes. |
 | `cb_tiles_out_tail` (slot 17, implementer-added) | `out_depth_tile_rows · last_block_width_tiles`, page as `cb_tiles_out` | `last_block_width_tiles` pages | as `cb_tiles_out`, `cols: spans → last_block_width_tiles` | as `cb_tiles_out` | compute | writer | same as `cb_rm_sticks_tail` | Same reason as `cb_rm_sticks_tail`. |
 | `cb_stick_staging` (slot 2, implementer-added, perf) | 1 page of `2 · num_banks · ceil(staging_tile_rows·tile_h / num_banks) · stick_bytes`; `staging_tile_rows = clamp(STAGING_SLOT_BUDGET_BYTES (16 KiB) // (tile_h·stick_bytes), 1, max core rows)` | one slot being copied out while the other slot's DRAM reads land | `{rows: streams → staging_tile_rows per slot, cols: spans the whole stick (only when num_col_blocks = 1), stick_in_tile: spans}` | input dtype (raw bytes) | reader | reader (local L1→L1 NoC copies into `cb_rm_sticks`) | whole kernel; allocated only when the bank-coalesced reader is active (interleaved source, one column block, aligned images, cores ≥ 2·num_banks) | Reader-private scratch, no CB handshake. Cannot be `cb_rm_sticks` itself: the wide per-bank reads land bank-grouped, and tilize needs row order, so a permuting copy between two buffers is required. ≈ 2×16 KiB (one slot may round up to a whole tile-row when a tile-row exceeds 16 KiB, i.e. up to 2 · tile_h · stick_bytes ≤ 2 · per-tile-row input bytes of the block). |
+| `cb_pad_fill` (slot 3, Refinement 1) | 1 page of `fill_row_bytes + 64`, `fill_row_bytes = block_width_tiles · 32 · in_elem_bytes + 64` | the whole fill row (read-only after setup) | `{rows: n/a (one stick), cols: spans → block_width_tiles (+64 B phase slack), stick_in_tile: n/a}` | input dtype (the pad value replicated) | reader (once, at kernel start: 64 B RISC seed + doubling local NoC copies) | reader (source of local L1→L1 fill copies into `cb_rm_sticks`) | whole kernel; allocated only when the output is padded | Reader-private, no CB handshake. Cannot be `cb_rm_sticks`: it must outlive every tile-row. Not a zero-tile helper case — the fill is an arbitrary value, and filling via NoC copies (not a RISC store loop per segment) keeps the DM engine moving the bytes. Mutually exclusive with `cb_stick_staging` (coalescing requires no padding). ≤ 255·128 + 128 B. |
 
 ## Symbol table
 
@@ -35,6 +36,7 @@ L1 = block_width_tiles · (in_depth_tile_rows · tile_h·32·in_elem_bytes
      + [num_col_blocks = 1 and coalesced]  2 · slot_bytes,
            slot_bytes = num_banks · ceil(staging_tile_rows·tile_h / num_banks) · stick_bytes
      + [ragged column blocking]  tail rings (≤ the main rings)
+     + [padded output]  fill row (≤ block_width_tiles · 32 · in_elem_bytes + 128 B)
    ≤ L1_BLOCK_BUDGET_BYTES (512 KiB) + staging (≤ 2 · tile_h · block_width_tiles·32·in_elem_bytes,
                                                ≤ 256 KiB at the bf16/fp32 caps)        (low_l1 = False)
    ≤ 8 · per_col_tile_bytes + staging(C ≤ 8: ≤ 2·32·256·4 = 64 KiB) ≤ 192 KiB          (low_l1 = True)
@@ -46,13 +48,17 @@ Staging and the tail rings are mutually exclusive (staging needs `num_col_blocks
 
 Scales linearly with `block_width_tiles` (knob) and the two depth knobs; independent of `block_height_tiles` (streamed) and of every tensor dimension. Phase 0 bf16 example: `[1,1,2048,64]` → `block_width_tiles = 2` → `2 · (2·2048 + 2·2048) = 16 KiB`.
 
-## Data-movement budget (chosen split: `interleaved_row_split`)
+Per-group CBs (Refinement 1): under `interleaved_2d_split` cores with different column extents
+(at most two: full and ragged last column group) get their own CB set sized by their own
+`block_width_tiles`, so every bound above holds per core.
+
+## Data-movement budget (chosen split: `interleaved_row_split`, `interleaved_2d_split` when R < grid)
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| `input_tensor` | 1 | each core reads only its own tile-rows' sticks, each stick segment once; nothing is re-read (no second pass, no shared operand). Coalesced reader: same bytes in `num_banks` wide reads per staging chunk instead of one read per stick, plus one local L1→L1 copy per stick (no extra DRAM crossing) | none |
+| `input_tensor` | 1 | each core reads only its own rectangle's stick segments (2-D split: `cores_c` segments per stick across cores, same bytes); pad regions are never read — they are filled by local copies from `cb_pad_fill`, each stick segment once; nothing is re-read (no second pass, no shared operand). Coalesced reader: same bytes in `num_banks` wide reads per staging chunk instead of one read per stick, plus one local L1→L1 copy per stick (no extra DRAM crossing) | none |
 | `output` | 1 | each tile packed once and written once by the core that produced it | none |
 
 Total per tier: DRAM `N·in_elem_bytes` read + `N_padded·out_elem_bytes` written (N = element count); NoC cross-core 0; local L1: each byte written once to `cb_rm_sticks`, read once by the unpacker, written once to `cb_tiles_out`, read once by the writer.
 
-> Cheapest-traffic split considered: `rows only` — bytes are identical across every candidate split (each crosses DRAM once); rows-only additionally issues the fewest read transactions (one per whole stick). Implemented: `rows only` (`interleaved_row_split`) — the implemented split is the cheapest. The 2-D split (`interleaved_2d_split`, same bytes, `cores_c×` more read transactions) is deferred because it serves only `short_wide` / `square_large` (and `tall_narrow` with `R < grid`), outside Phase 0's declared domain; the per-core rectangle RT args keep it a host-only change.
+> Cheapest-traffic split considered: `rows only` — bytes are identical across every candidate split (each crosses DRAM once); rows-only additionally issues the fewest read transactions (one per whole stick). Implemented: `rows only` whenever `R ≥ grid`, and `interleaved_2d_split` (same bytes, `cores_c×` more, shorter read transactions) only when `R < grid`, where the selector minimizes the busiest core's tile count (ties → more row cores). Refinement 1 measured on BH (110 cores): `[1,1,32,2048]` 5.6 → 4.1 µs, `[1,1,32,8192]` 12.2 → 6.1 µs, `[1,1,2048,2048]` 43.2 → 39.6 µs.

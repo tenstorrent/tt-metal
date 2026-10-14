@@ -10,7 +10,17 @@ from ttnn.operations.tilize import tilize
 
 
 @pytest.mark.parametrize(
-    "shape", [(1, 1, 16384, 64), (1, 1, 16384, 32), (1, 1, 32768, 64), (1, 1, 128, 64), (1, 1, 3520, 64)]
+    "shape",
+    [
+        (1, 1, 16384, 64),
+        (1, 1, 16384, 32),
+        (1, 1, 32768, 64),
+        (1, 1, 128, 64),
+        (1, 1, 3520, 64),
+        (1, 1, 32, 2048),  # short_wide (2-D split)
+        (1, 1, 2048, 2048),  # square_large (2-D split)
+        (1, 1, 32, 8192),  # short_wide, column-blocked per core
+    ],
 )
 def test_tilize_perf(device, shape):
     x = torch.randn(shape, dtype=torch.bfloat16)

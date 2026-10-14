@@ -59,7 +59,8 @@ void kernel_main() {
     const uint32_t core_rows_tiles = get_arg_val<uint32_t>(2);
     const uint32_t col_start_tile = get_arg_val<uint32_t>(3);
     const uint32_t block_height_tiles = get_arg_val<uint32_t>(4);
-    const uint32_t bank_stagger_offset = get_arg_val<uint32_t>(5);  // < min(num_banks, chunk sticks)
+    // coalesced path: < min(num_banks, chunk sticks); segment path: < tile_h (start stick)
+    const uint32_t bank_stagger_offset = get_arg_val<uint32_t>(5);
     const uint32_t fill_word = get_arg_val<uint32_t>(6);            // pad value, replicated to 32 bits
 
     const auto in_acc = TensorAccessor(in_args, src_addr, stick_page_bytes);
@@ -202,10 +203,14 @@ void kernel_main() {
 
                 cb_reserve_back(cb_id, width_tiles);
                 const uint32_t l1_base = get_write_ptr(cb_id);
-                uint32_t l1_write_addr = l1_base;
-                for (uint32_t i = 0; i < valid_sticks; ++i) {
-                    noc_async_read(in_acc.get_noc_addr(first_stick + i, seg_offset_bytes), l1_write_addr, data_bytes);
-                    l1_write_addr += seg_bytes;
+                // Bank stagger: start each core's stick walk at a different stick (consecutive
+                // sticks live in consecutive banks), so column-split cores reading the same sticks
+                // do not all queue on one bank at once.
+                uint32_t i = bank_stagger_offset < valid_sticks ? bank_stagger_offset : 0;
+                for (uint32_t k = 0; k < valid_sticks; ++k) {
+                    noc_async_read(
+                        in_acc.get_noc_addr(first_stick + i, seg_offset_bytes), l1_base + i * seg_bytes, data_bytes);
+                    i = (i + 1 == valid_sticks) ? 0 : i + 1;
                 }
                 noc_async_read_barrier();
                 if constexpr (has_padding) {
