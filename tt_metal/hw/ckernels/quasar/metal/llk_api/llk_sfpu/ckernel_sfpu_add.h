@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel_trisc_common.h"
+#include "ckernel_sfpu_srcs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_operand.h"
@@ -67,6 +68,17 @@ inline void calculate_add_int(
         Operand{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)},
         Operand{static_cast<int>(dst_index_out * dst_tile_size_sfpi)});
 }
+
+/**
+ * @brief SrcS Int32 ADD op type; Sfpi only.
+ *
+ * @tparam SIGN_MAGNITUDE_FORMAT: SrcS holds sign-magnitude Int32.
+ */
+template <bool SIGN_MAGNITUDE_FORMAT = true, SfpuImpl IMPL = SfpuImpl::Sfpi>
+using AddIntSrcs = SrcsBinary<
+    AddIntMath<SIGN_MAGNITUDE_FORMAT>,
+    sfpi::DataLayout::I32,
+    resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
 
 }  // namespace sfpu
 }  // namespace ckernel

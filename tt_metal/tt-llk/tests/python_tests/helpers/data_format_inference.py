@@ -257,7 +257,8 @@ def infer_unpack_out(
 
     if unpacking_to_srcs and is_fp32_dest_acc_en == DestAccumulation.Yes:
         # Unpack-to-SrcS cannot convert fp16 to TF32 (Tensix Formats conversion table).
-        if input_format in (DataFormat.Float16, DataFormat.Float16_b):
+        # Int32 stays Int32 so integer SFPU ops see integers in SrcS.
+        if input_format in (DataFormat.Float16, DataFormat.Float16_b, DataFormat.Int32):
             return input_format
         return DataFormat.Float32
 

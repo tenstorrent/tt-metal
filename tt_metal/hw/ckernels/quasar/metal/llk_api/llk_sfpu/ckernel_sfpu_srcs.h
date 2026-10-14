@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "ckernel_instr_params.h"
 #include "ckernel_trisc_common.h"
@@ -26,11 +27,13 @@ static_assert(sfpi::SFP_SRCSREG_STRIDE == ckernel::math::SFP_ROWS, "one sfpi ind
 template <sfpi::DataLayout LAYOUT>
 struct SrcsLayout {
     static_assert(
-        LAYOUT == sfpi::DataLayout::F16a || LAYOUT == sfpi::DataLayout::F16b || LAYOUT == sfpi::DataLayout::F32,
-        "SrcS SFPI adapters support F16a, F16b and F32 layouts");
+        LAYOUT == sfpi::DataLayout::F16a || LAYOUT == sfpi::DataLayout::F16b || LAYOUT == sfpi::DataLayout::F32 ||
+            LAYOUT == sfpi::DataLayout::I32,
+        "SrcS SFPI adapters support F16a, F16b, F32 and I32 layouts");
 
     static constexpr sfpi::DataLayout layout = LAYOUT;
-    static constexpr int rows = static_cast<int>(trisc::srcs_dims::ydim(LAYOUT == sfpi::DataLayout::F32));
+    static constexpr bool is_32bit = LAYOUT == sfpi::DataLayout::F32 || LAYOUT == sfpi::DataLayout::I32;
+    static constexpr int rows = static_cast<int>(trisc::srcs_dims::ydim(is_32bit));
     static_assert(
         rows > 0 && rows % static_cast<int>(ckernel::math::SFP_ROWS) == 0, "SrcS slice must contain whole SFPU passes");
 
@@ -41,11 +44,16 @@ struct SrcsLayout {
 
     // SrcS register format (unpack destination = pack source) implied by the layout.
     static constexpr DataFormat format = LAYOUT == sfpi::DataLayout::F32    ? DataFormat::Float32
+                                         : LAYOUT == sfpi::DataLayout::I32  ? DataFormat::Int32
                                          : LAYOUT == sfpi::DataLayout::F16a ? DataFormat::Float16
                                                                             : DataFormat::Float16_b;
 
+    // SFPI vector type the layout loads into.
+    using value_type = std::conditional_t<LAYOUT == sfpi::DataLayout::I32, sfpi::vInt, sfpi::vFloat>;
+
     // SFPLOAD/SFPSTORE format code, for the SFPLOADMACRO path.
     static constexpr std::uint32_t sfpmem = LAYOUT == sfpi::DataLayout::F32    ? p_sfpu::sfpmem::FP32
+                                            : LAYOUT == sfpi::DataLayout::I32  ? p_sfpu::sfpmem::INT32
                                             : LAYOUT == sfpi::DataLayout::F16a ? p_sfpu::sfpmem::FP16A
                                                                                : p_sfpu::sfpmem::FP16B;
 };
@@ -86,7 +94,7 @@ struct SrcsUnary<MATH, LAYOUT, SfpuImpl::Sfpi> : SfpuSrcsUnaryOp<SrcsUnary<MATH,
     using Layout = SrcsLayout<LAYOUT>;
 
     sfpi_inline static void calculate() {
-        using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, sfpi::vFloat>>;
+        using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, typename Layout::value_type>>;
         calculate_unary_operands<MATH, Layout::ops>(Operand{Layout::in0}, Operand{Layout::out});
     }
 };
@@ -127,7 +135,7 @@ struct SrcsBinary<MATH, LAYOUT, SfpuImpl::Sfpi> : SfpuSrcsBinaryOp<SrcsBinary<MA
     using Layout = SrcsLayout<LAYOUT>;
 
     sfpi_inline static void calculate() {
-        using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, sfpi::vFloat>>;
+        using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, typename Layout::value_type>>;
         calculate_binary_operands<MATH, Layout::ops>(Operand{Layout::in0}, Operand{Layout::in1}, Operand{Layout::out});
     }
 };
