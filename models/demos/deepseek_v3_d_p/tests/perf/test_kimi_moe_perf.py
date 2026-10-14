@@ -44,6 +44,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe import run_model
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.perf_utils import adjust_margin_for_ddr_speed
@@ -103,12 +104,17 @@ class _MoEPerfCase:
 # 5,331,206 / 5,438,128 / 5,344,249 ns (jobs 108833542648, 108591989836, 108483307703), so this is a
 # 5.0% speedup against their median, not a short record window.
 #
+# Re-centred 2026-10-08 to 4,782,881 ns (run 37730295536 / job 113160290526, main 36dc937428d), one
+# sample: 5.8% below the previous midpoint over the same 24 programs, so a real speedup rather than a
+# record window closing early. The previous scheduled run (f8c634a4085) still passed inside the old
+# band; the only fabric/CCL-wide change in between is Fabric express link routing (#57785).
+#
 # K2.7-Code is architecturally identical to K2.6 (61 layers, 384 routed experts, same dims), so the
 # MoE shapes are unchanged; only the label moved.
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    expected_ns=5_077_713,
+    expected_ns=4_782_881,
     # 4%, not 3%: K2.7 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
     # running second on an already-warm device, does not -- five samples on the previous shape spanned
     # 7.12% peak to peak against K3's 0.44%. Do NOT tighten this to match K3; the asymmetry is a
@@ -126,7 +132,7 @@ _K2_7 = _MoEPerfCase(
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    expected_ns=5_815_453,
+    expected_ns=6_207_960,
     # 3% retained: K3 runs second on an already-warm device and four samples on the previous shape
     # spanned just 0.44% peak to peak, so 3% is already generous -- the midpoint is what goes stale
     # here, not the width. Sub-nominal DDR doubles it to 6% via adjust_margin_for_ddr_speed.
@@ -137,6 +143,7 @@ _K3 = _MoEPerfCase(
         shared_hidden_dim=KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
         latent_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
         rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
+        routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
         shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
     ),
 )

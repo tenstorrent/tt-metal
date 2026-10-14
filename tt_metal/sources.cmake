@@ -48,10 +48,12 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/fabric_telemetry.hpp
     api/tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp
     api/tt-metalium/experimental/fabric/fabric_types.hpp
+    api/tt-metalium/experimental/fabric/link_health.hpp
     api/tt-metalium/experimental/fabric/mesh_graph.hpp
     api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp
     api/tt-metalium/experimental/fabric/physical_descriptor_builder.hpp
     api/tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp
+    api/tt-metalium/experimental/fabric/physical_node_id.hpp
     api/tt-metalium/experimental/fabric/physical_system_descriptor.hpp
     api/tt-metalium/experimental/fabric/pipeline_builder.hpp
     api/tt-metalium/experimental/fabric/routing_table_generator.hpp
@@ -243,7 +245,6 @@ set(JITAPI_FILES
     fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
     fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto
     fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto
-    fabric/fabric_edm_packet_header.hpp
     impl/dispatch/kernels/cq_commands.hpp
     impl/dispatch/kernels/cq_common.hpp
     impl/dispatch/kernels/cq_prefetch.hpp
@@ -256,12 +257,6 @@ set(JITAPI_FILES
     impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp
     soc_descriptors/blackhole_140_arch.yaml
     soc_descriptors/wormhole_b0_80_arch.yaml
-    tools/profiler/kernel_profiler.hpp
-    tools/profiler/perf_counters.hpp
-    tools/profiler/fabric_event_profiler.hpp
-    tools/profiler/noc_event_profiler.hpp
-    tools/profiler/noc_debugging_profiler.hpp
-    tools/profiler/noc_debugging_metadata.hpp
     tools/profiler/cpp_device_analyses.json
     impl/streaming_profiler/kernels/drisc_relay.cpp
     impl/dispatch/kernels/cq_dispatch.cpp

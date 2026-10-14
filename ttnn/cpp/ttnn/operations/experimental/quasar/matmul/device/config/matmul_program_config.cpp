@@ -6,6 +6,7 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/types.hpp"
 #include <ranges>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::experimental::quasar::matmul {
 
