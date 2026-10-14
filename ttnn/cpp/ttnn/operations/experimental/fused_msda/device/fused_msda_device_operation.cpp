@@ -52,6 +52,7 @@ MSDAShapes derive_shapes(
     const auto& attn = args.attention_weights;
 
     TT_FATAL(value.storage_type() == StorageType::DEVICE, "fused_msda: value must be on device");
+    TT_FATAL(value.device()->arch() != tt::ARCH::QUASAR, "fused_msda is not supported on Quasar");
     check_common_tensor(value, "value", value);
     check_common_tensor(attn, "attention_weights", value);
 
