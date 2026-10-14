@@ -11,9 +11,9 @@ inspection tools.
 - `<architecture>/lit.local.cfg` defines substitutions shared by that
   architecture's tests.
 
-Blackhole CFG runtime tests place each HAL function next to a `reference_`
-function using explicit `TT_*`/`TTI_*` instructions or MMIO operations. Read the
-two C++ bodies to see the expected behavior.
+Blackhole CFG runtime tests and MMIO compile-time tests place each HAL function
+next to a `reference_` function using explicit `TT_*`/`TTI_*` instructions or MMIO
+operations. Read the two C++ bodies to see the expected behavior.
 
 Tests write `objdump -drz` output to a text file, then pass it to
 `%{blackhole_compare_codegen}`. The script reads one adjacent function/reference
