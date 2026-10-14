@@ -129,6 +129,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
   input with a padded tail, and must call the layer-completion sink only after that layer's state is on the device.
 - **perf**: one picked performance change (the brief's details say which). Faster, same accuracy; keep the old
   behaviour selectable for comparison.
+- **scale**: the scaled run's reduced model (a partial bring-up on a box smaller than the deployment box):
+  `scaling.yaml`, and a reference and hooks that read their dimensions from the reduced checkpoint.
 - **optests**: every call the model makes to a derived op (`ttnn.bringup.*`) gets a random-input test case in that
   fork's `tests/`, following `models/demos/common/bringup/skill/bringup-fork-tests/SKILL.md`.
 - **fix**: a scripted gate (ladder rung, contract, profile) failed. The brief carries the log. Find the component whose

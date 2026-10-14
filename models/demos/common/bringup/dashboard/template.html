@@ -250,6 +250,12 @@ section[hidden]{display:none}
     <div class="sub" style="font-size:13px" id="shard-notes"></div>
   </section>
 
+  <section aria-labelledby="s-boxes" id="boxes-sec" hidden>
+    <div class="sec-head"><h2 id="s-boxes">Boxes</h2><p id="boxes-sub"></p></div>
+    <div class="tbl-wrap"><table id="boxes"><thead><tr><th>Box</th><th>Mesh</th><th>Scale</th><th class="num">Context (scaled)</th><th class="num">Full model: weights / longest context</th><th class="num">Run's layers: scaled / real</th></tr></thead><tbody></tbody></table></div>
+    <div class="tbl-wrap"><table id="box-conds"><thead></thead><tbody></tbody></table></div>
+  </section>
+
   <section aria-labelledby="s-prof" id="prof-sec">
     <div class="sec-head"><h2 id="s-prof"></h2><span class="tl-total" id="p-total"></span></div>
     <p class="sub" id="p-note" style="margin:0;font-size:13px"></p>
@@ -361,7 +367,8 @@ function worstMetric(t){
 function header(){
   $("#h1").textContent = D.title;
   document.title = D.page_title;
-  $("#facts").innerHTML = [["Model", D.model], ["Target", D.target], ["Box", D.box], ["Arch", D.arch]]
+  const Bx = D.boxes, dep = Bx && `${Bx.deploy.box} (${Bx.deploy.mesh.join("x")}), ${Bx.deploy.seq.toLocaleString()} tokens`;
+  $("#facts").innerHTML = [["Model", D.model], ["Deployment", dep], ["Target", D.target], ["Box", D.box + (Bx ? `, ${Bx.run.mode} mode` : "")], ["Arch", D.arch]]
     .filter(([, v]) => v).map(([k, v]) => `<span>${k} <b>${esc(v)}</b></span>`).join("");
   $("#gen").textContent = `Snapshot ${D.generated} · ${D.branch} @ ${D.head}`;
   const n = D.tasks.length, counts = {};
@@ -768,6 +775,22 @@ function finalTests(){
   else lines.push(["Contract tests", NR]);
   $("#final-lines").innerHTML = lines.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
 }
+function boxes(){
+  const B = D.boxes;
+  $("#boxes-sec").hidden = !B;
+  if (!B) return;
+  const m = x => x.join("x"), dep = B.deploy, run = B.run;
+  $("#boxes-sub").textContent = `Planned for ${dep.box} (${m(dep.mesh)}) at ${dep.seq.toLocaleString()} tokens in ${dep.chunk.toLocaleString()}-token chunks. This run: ${run.box} (${m(run.mesh)}), ${run.mode} mode${run.scaled ? ", with a scaled run (heads and experts cut so each chip holds what a deployment chip holds)" : ""}.` + (B.rows.length ? "" : " The per-box table appears once the plan gate has run.");
+  const gb = v => v == null || v < 0 ? "—" : v.toFixed(1);
+  $("#boxes tbody").innerHTML = B.rows.map(r => `<tr><td>${esc(r.box)}${r.deploy ? ' <span class="sub">deployment</span>' : ""}${r.run ? ' <span class="sub">this run</span>' : ""}</td><td class="mono">${m(r.mesh)}</td>` +
+    `<td class="mono">${Object.entries(r.scale).map(([k, v]) => `${esc(k)} ${+v.toFixed(4)}`).join(", ")}</td>` +
+    `<td class="num">${r.context.seq.toLocaleString()} / ${r.context.chunk.toLocaleString()}${r.context.exact ? "" : ' <span class="metric-bad">inexact</span>'}</td>` +
+    `<td class="num">${gb(r.full.weights_gb)} GB / ${r.full.longest_seq.toLocaleString()}</td><td class="num">${gb(r.partial_scaled_gb)} / ${gb(r.partial_real.gb)} GB <span class="sub">of ${gb(r.budget_gb)}</span></td></tr>`).join("");
+  const conds = (B.rows[0] || {}).conditions || [];
+  $("#box-conds thead").innerHTML = conds.length ? `<tr><th>Per-chip condition</th>${B.rows.map(r => `<th>${esc(r.box)}</th>`).join("")}</tr>` : "";
+  $("#box-conds tbody").innerHTML = conds.map((c, i) => `<tr><td>${esc(c.what)}</td>${B.rows.map(r => { const x = r.conditions[i];
+    return `<td class="mono ${x.same_as_deploy ? "" : "metric-bad"}">${x.per_chip == null ? "?" : +x.per_chip.toFixed(3)}: ${esc(x.path)}${x.same_as_deploy ? "" : " (differs)"}</td>`; }).join("")}</tr>`).join("");
+}
 function knowledge(){
   const K = D.knowledge;
   $("#know-sec").hidden = !K;
@@ -781,7 +804,7 @@ function knowledge(){
     ["Missing topics", list(K.missing, ([m, n]) => `${n}× ${esc(m)}`)],
   ].map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
 }
-function render(){ header(); deferred(); profile(); prior(); ladder(); dag(); ops(); timing(); positionsChart(); sharding(); pccChart(); finalTests(); knowledge();
+function render(){ header(); deferred(); profile(); prior(); ladder(); dag(); ops(); timing(); positionsChart(); sharding(); pccChart(); finalTests(); boxes(); knowledge();
   $("#foot").textContent = `Generated from ${D.source} (tasks.yaml, state.json, results/, components.yaml, plan.yaml) by models/demos/common/bringup/dashboard/export.py.`; }
 if (D) render();
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => D && render());
