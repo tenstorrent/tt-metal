@@ -540,6 +540,11 @@ FORCE_INLINE void noc_async_read_one_packet(
     WAYPOINT("NAOD");
 }
 
+#ifdef ARCH_BLACKHOLE
+// Largest read noc_async_read issues to a DRAM bank on Blackhole (workaround; see noc_async_read).
+constexpr uint32_t BH_DRAM_READ_MAX_PACKET_SIZE = 2048;
+#endif
+
 // clang-format off
 /**
  * Initiates an asynchronous read from a specified source node located at NOC
@@ -549,6 +554,10 @@ FORCE_INLINE void noc_async_read_one_packet(
  *
  * The source node can be either a DRAM bank or a Tensix core. To read from a PCIe-routed address, use
  * \a noc_async_read_pcie instead.
+ *
+ * On Blackhole, a read from a DRAM bank larger than BH_DRAM_READ_MAX_PACKET_SIZE (2 KiB) is issued as several
+ * reads of at most that size. This works around a NoC stall seen when large DRAM reads run alongside non-posted
+ * writes on the same NoC. Reads from L1 or PCIe are unchanged.
  *
  * Return value: None
  *
@@ -575,6 +584,29 @@ inline void noc_async_read(
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, dst_local_l1_addr, src_noc_addr, size, -1, false, noc);
     }
+
+#ifdef ARCH_BLACKHOLE
+    // Workaround: split reads from a DRAM bank into packets of at most BH_DRAM_READ_MAX_PACKET_SIZE. Each packet is
+    // counted in the read counters, so the read barriers still cover the whole transfer.
+    if (size > BH_DRAM_READ_MAX_PACKET_SIZE) {
+        const uint32_t src_xy = static_cast<uint32_t>(src_noc_addr >> NOC_ADDR_COORD_SHIFT);
+        bool src_is_dram = false;
+        for (uint32_t bank = 0; bank < NUM_DRAM_BANKS; ++bank) {
+            src_is_dram |= src_xy == dram_bank_to_noc_xy[noc][bank];
+        }
+        if (src_is_dram) {
+            while (size > BH_DRAM_READ_MAX_PACKET_SIZE) {
+                noc_async_read_one_packet<false>(
+                    src_noc_addr, dst_local_l1_addr, BH_DRAM_READ_MAX_PACKET_SIZE, noc, read_req_vc);
+                src_noc_addr += BH_DRAM_READ_MAX_PACKET_SIZE;
+                dst_local_l1_addr += BH_DRAM_READ_MAX_PACKET_SIZE;
+                size -= BH_DRAM_READ_MAX_PACKET_SIZE;
+            }
+            noc_async_read_one_packet<false>(src_noc_addr, dst_local_l1_addr, size, noc, read_req_vc);
+            return;
+        }
+    }
+#endif
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
         // noc_async_read_one_packet runs this assert itself, so it is not repeated here.
