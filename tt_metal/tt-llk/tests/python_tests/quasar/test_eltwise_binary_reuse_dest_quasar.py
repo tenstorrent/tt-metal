@@ -47,6 +47,7 @@ from helpers.test_variant_parameters import (
     OUTPUT_TILE_CNT,
     REUSE_DEST_TYPE,
     TEST_FACE_DIMS,
+    TILE_COUNT,
     generate_input_dim,
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
@@ -353,6 +354,7 @@ def test_eltwise_binary_reuse_dest_quasar(
         ],
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
+            TILE_COUNT(tile_cnt_input),
             INPUT_TILE_CNT(tile_cnt_input),
             OUTPUT_TILE_CNT(tile_cnt_output),
             NUM_TILES_IN_BLOCK(
