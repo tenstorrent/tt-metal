@@ -427,6 +427,53 @@ def test_where_scalar_bf16_inputs_fp32_output(device, scalar, scalar_is_true):
     assert torch.equal(ttnn.to_torch(out), expected)
 
 
+@pytest.mark.parametrize("scalar_is_true", [False, True], ids=["tts", "tst"])
+@pytest.mark.parametrize(
+    "c_dtype, t_dtype",
+    [(torch.bfloat16, torch.float32), (torch.float32, torch.bfloat16)],
+    ids=["bf16_predicate_fp32_tensor", "fp32_predicate_bf16_tensor"],
+)
+def test_where_scalar_mixed_float_predicate(device, c_dtype, t_dtype, scalar_is_true):
+    # tril/triu select float32 inputs against a bfloat16 0/1 mask, so where has to take a predicate whose
+    # dtype differs from the tensor's. The tensor keeps its dtype, and +-inf is selected, never combined.
+    to_ttnn = {torch.bfloat16: ttnn.bfloat16, torch.float32: ttnn.float32}
+    torch.manual_seed(0)
+    C = (torch.rand((64, 128)) > 0.5).to(c_dtype)
+    T = torch.empty((64, 128), dtype=t_dtype).uniform_(-100, 100)
+    T[::7, ::5] = float("inf")
+    T[3::7, 2::5] = -float("inf")
+    ttnn_C = ttnn.from_torch(C, dtype=to_ttnn[c_dtype], layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=to_ttnn[t_dtype], layout=ttnn.TILE_LAYOUT, device=device)
+
+    if scalar_is_true:
+        out = ttnn.where(ttnn_C, 0.0, ttnn_T)
+        expected = torch.where(C.bool(), torch.tensor(0.0, dtype=t_dtype), T)
+    else:
+        out = ttnn.where(ttnn_C, ttnn_T, 0.0)
+        expected = torch.where(C.bool(), T, torch.tensor(0.0, dtype=t_dtype))
+
+    assert out.dtype == to_ttnn[t_dtype]
+    assert torch.equal(ttnn.to_torch(out), expected)
+
+
+@pytest.mark.parametrize("c_shape", [(1, 128), (64, 1)], ids=["row_bcast", "col_bcast"])
+def test_where_scalar_mixed_float_predicate_with_broadcast_is_rejected(device, expect_error, c_shape):
+    # The broadcast where kernels do not reconfigure the unpacker between operands, so a mixed
+    # bfloat16/float32 pair is only accepted when the last two dims match.
+    ttnn_C = ttnn.from_torch(torch.ones(c_shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(torch.ones((64, 128)), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Mixed dtype is not supported"):
+        ttnn.where(ttnn_C, ttnn_T, 0.0)
+
+
+def test_where_scalar_mixed_float_predicate_row_major_is_rejected(device, expect_error):
+    # The mixed bfloat16/float32 pair is only accepted in TILE layout; row-major operands keep the rejection.
+    ttnn_C = ttnn.from_torch(torch.ones((64, 128)), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(torch.ones((64, 128)), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Mixed dtype is not supported"):
+        ttnn.where(ttnn_C, ttnn_T, 0.0)
+
+
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("h, w", [[64, 128]])
 @pytest.mark.parametrize("scalar", [15.5, float("nan"), float("inf"), -float("inf")])
