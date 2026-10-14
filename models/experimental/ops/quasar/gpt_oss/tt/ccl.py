@@ -24,7 +24,9 @@ class CCLManager:
         self.barrier_idx = 0
 
     def _init_subdevice(self):
-        compute_grid_size = ttnn.CoreCoord(8, 8)
+        # At most 8x8, and never larger than the device grid (smaller devices have fewer cores).
+        device_grid = self.mesh_device.compute_with_storage_grid_size()
+        compute_grid_size = ttnn.CoreCoord(min(8, device_grid.x), min(8, device_grid.y))
         self.ccl_cores = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
