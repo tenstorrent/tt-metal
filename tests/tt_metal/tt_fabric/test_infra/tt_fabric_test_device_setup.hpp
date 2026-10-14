@@ -354,6 +354,7 @@ public:
 
     // Original validation method for backward compatibility
     void validate_results() const;
+    void log_worker_diags() const;  // benchmark-mode worker diagnostics (CRAQ #52)
     void set_sync_core(tt::tt_metal::CoreCoord coord) { sync_core_coord_ = coord; };
     void set_local_runtime_args_for_core(
         const MeshCoordinate& device_coord,
@@ -406,7 +407,6 @@ private:
     void create_receiver_kernels();
     void validate_sender_results() const;
     void log_worker_diag(const tt::tt_metal::CoreCoord& core, const std::vector<uint32_t>& rb) const;
-    void log_worker_diags() const;
     void validate_receiver_results() const;
     void create_sync_kernel();
     void create_mux_kernels();
