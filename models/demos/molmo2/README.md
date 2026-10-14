@@ -8,10 +8,10 @@ Based on [allenai/Molmo2-8B](https://huggingface.co/allenai/Molmo2-8B).
 | Metric | Result |
 |--------|--------|
 | PCC (all 8 sub-block tests) | ≥ 0.998 |
-| 105-video accuracy — direct demo | **98/100 = 98%** |
-| 105-video accuracy — tt-inference-server (OpenAI API) | **98/100 = 98%** |
-| Prefill latency (S≈2700, 30 frames, T3K) | ~5–6 s |
-| Decode throughput (demo, untraced) | ~14.5 tok/s |
+| 105-video accuracy — direct demo | 98/100 (2026-04, not re-run on main) |
+| 105-video accuracy — OpenAI API (vllm-tt-plugin, 3-4 Galaxy slices, 2026-10-14) | **97/100 = 97%** (`verification/run_suite.py`) |
+| Prefill latency, server (median S≈2.4k tokens video) | ~1.7 s (34k-token/384-frame video: ~27 s) |
+| Decode throughput (server, traced) | ~19 tok/s |
 | Hardware | T3K (8 × Wormhole WH-B0) |
 
 ## Model Architecture
@@ -103,7 +103,26 @@ MESH_DEVICE=T3K pytest models/demos/molmo2/demo/demo.py \
 ]
 ```
 
-## Server (tt-inference-server)
+## Server (vllm-tt-plugin)
+
+Current main serves TT models through the standalone `vllm-tt-plugin` on upstream vLLM 0.30.0 (which ships a native
+Molmo2). Setup used for the numbers above:
+
+1. Copy tt-metal's `python_env`, then in the copy install vLLM and the plugin (`UV_HTTP_TIMEOUT=600`):
+   `VLLM_TARGET_DEVICE=empty uv pip install --no-deps --no-build-isolation --no-binary vllm vllm==0.30.0`
+   (needs `setuptools-rust`, `setuptools-scm`) and `uv pip install -e .` from the plugin repo.
+2. Apply `serve/vllm-tt-plugin-molmo2-multimodal.patch` to the plugin. By default the plugin only passes image
+   `pixel_values` to the model and rejects video; the patch lets a model declare `supported_mm_modalities` /
+   `mm_extra_input_fields` (Molmo2 needs the pooling indices and video tensors). Other models are unaffected.
+3. `VLLM_ENV=<that venv> SLICES="1 2 3" serve/launch_4x_galaxy_t3k.sh` starts one server per 1x8 slice on ports
+   8000+slice (`stop` to kill them). The adapter is registered with `TT_MODEL_CLASS_OVERRIDES`.
+4. `python models/demos/molmo2/tests/server_requests_smoke.py --port 8001 --image img.jpg --video /abs/clip.mp4`
+   (text, image URL / data-URL, two images, local and https video) and
+   `python models/demos/molmo2/verification/run_suite.py --ports 8000 8001 8002 8003` (105-test suite).
+
+The older docker / `run.py --docker-server` flow described below targets the retired fork-based image.
+
+## Server (tt-inference-server, legacy docker flow)
 
 Exposes an OpenAI-compatible HTTP API on port 8000.
 
@@ -352,6 +371,10 @@ models/demos/molmo2/
 ```
 
 ## Known Limitations
+
+0. **Slice 0 of the test Galaxy (tray 3 chip 4) hangs on long prefills** (34k-token video, 20-image prompt); slices 1-3 run
+   everything, see BRINGUP_LOG Session 11. Decode is ~19 tok/s (earlier T3K reference ~35 tok/s):
+   `verification/latency_comparison.md`. Request lengths up to the model's 36,864-token context work on healthy slices.
 
 1. **Batch size = 1** — multi-user concurrent inference not yet implemented
    (`forward_decode_step` decodes KV-cache slot 0; the demo runs users back to back).

@@ -1,0 +1,72 @@
+diff --git a/src/vllm_tt_plugin/model_runner.py b/src/vllm_tt_plugin/model_runner.py
+index 7f6af05..e62d55e 100644
+--- a/src/vllm_tt_plugin/model_runner.py
++++ b/src/vllm_tt_plugin/model_runner.py
+@@ -1000,9 +1000,17 @@ class TTModelRunner:
+         self.input_batch.refresh_logitsprocs()
+ 
+     def _validate_mm_feature(self, mm_feature: MultiModalFeatureSpec) -> None:
+-        """Validate the multimodal feature is an image."""
+-        if mm_feature.modality != "image":
+-            raise NotImplementedError("Only images are supported for now")
++        """Validate the multimodal feature's modality.
++
++        Models accept images only unless their TT class opts into more modalities via a
++        ``supported_mm_modalities`` class attribute (e.g. ``("image", "video")``).
++        """
++        allowed = getattr(self.model, "supported_mm_modalities", ("image",))
++        if mm_feature.modality not in allowed:
++            raise NotImplementedError(
++                f"Modality {mm_feature.modality!r} is not supported by this model "
++                f"(supported: {tuple(allowed)})"
++            )
+ 
+     def _gather_multi_modal_inputs(
+         self, req_indices: list[int] | None = None
+@@ -1042,6 +1050,12 @@ class TTModelRunner:
+             "pixel_values": [],
+             "image_grid_thw": [],
+         }
++        # Models can opt into additional per-feature fields (e.g. Molmo2's pooling indices and
++        # video tensors) via a ``mm_extra_input_fields`` class attribute; each is gathered with the
++        # same per-request / per-feature nesting as ``pixel_values``.
++        extra_fields = tuple(getattr(self.model, "mm_extra_input_fields", ()))
++        for field_name in extra_fields:
++            multi_modal_kwargs[field_name] = []
+ 
+         if req_indices is None:
+             req_indices = list(range(self.input_batch.num_reqs))
+@@ -1054,17 +1068,24 @@ class TTModelRunner:
+             if not req_state.mm_features:
+                 multi_modal_kwargs["pixel_values"].append(None)
+                 multi_modal_kwargs["image_grid_thw"].append(None)
++                for field_name in extra_fields:
++                    multi_modal_kwargs[field_name].append(None)
+                 continue
+ 
+             pv_array: list[torch.Tensor | None] = []
+             image_grid_thw_array: list[torch.Tensor | None] = []
++            extra_arrays: dict[str, list[torch.Tensor | None]] = {f: [] for f in extra_fields}
+             for mm_feature in req_state.mm_features:
+                 self._validate_mm_feature(mm_feature)
+                 item = mm_feature.data
+                 if item is None:
+                     pv_array.append(None)
+                     image_grid_thw_array.append(None)
++                    for field_name in extra_fields:
++                        extra_arrays[field_name].append(None)
+                     continue
++                for field_name in extra_fields:
++                    extra_arrays[field_name].append(item[field_name].data if field_name in item else None)
+                 # With prefix caching, an image whose tokens are fully inside the
+                 # cached prefix arrives with its tensor payload stripped; M-RoPE
+                 # models keep the CPU-side grid so positions can still be built.
+@@ -1077,6 +1098,8 @@ class TTModelRunner:
+ 
+             multi_modal_kwargs["pixel_values"].append(pv_array)
+             multi_modal_kwargs["image_grid_thw"].append(image_grid_thw_array)
++            for field_name in extra_fields:
++                multi_modal_kwargs[field_name].append(extra_arrays[field_name])
+ 
+         return multi_modal_kwargs
+ 

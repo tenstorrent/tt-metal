@@ -123,6 +123,16 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         "supports_prefix_caching": False,
         "supports_async_decode": False,
     }
+    # vllm-tt-plugin opt-ins (see its model_runner._gather_multi_modal_inputs): by default only the
+    # "image" modality and the pixel_values / image_grid_thw fields reach prefill_forward.
+    supported_mm_modalities = ("image", "video")
+    mm_extra_input_fields = (
+        "image_token_pooling",
+        "image_num_crops",
+        "pixel_values_videos",
+        "video_token_pooling",
+        "video_num_crops",
+    )
 
     def __init__(self, models, cfgs, submesh_devices, full_mesh_device, processor):
         assert len(models) == len(cfgs) == len(submesh_devices)
@@ -261,17 +271,18 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
     @staticmethod
     def _flatten(val, idx=0) -> list:
         """List of tensors for user ``idx``, using the same nesting rules as ``_unwrap``."""
+        # vLLM passes text-only requests as lists of None (e.g. pixel_values=[None]); drop those.
         if val is None:
             return []
         if not isinstance(val, list):
             return [val]
         if idx != 0 and idx < len(val):
             val = val[idx]
-            return list(val) if isinstance(val, list) else [val]
+            return [v for v in val if v is not None] if isinstance(val, list) else [val]
         flat = []
         for item in val:
             flat.extend(item if isinstance(item, list) else [item])
-        return flat
+        return [v for v in flat if v is not None]
 
     def _image_inputs(self, kwargs, idx):
         """(pixel_values [n_crops, 729, 588], image_token_pooling) for user ``idx``.
@@ -333,6 +344,9 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
                         flat.extend(item)
                     else:
                         flat.append(item)
+            flat = [v for v in flat if v is not None]
+            if not flat:
+                return None
             if len(flat) == 1:
                 return flat[0]
             try:
@@ -396,12 +410,10 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
             input_ids = tokens[u : u + 1, :seq_len]
 
             if token_type_ids is None and pv is not None:
-                _IMAGE_PATCH_ID = 151938
-                _IM_START = 151936
-                _IM_END = 151937
-                token_type_ids = (
-                    (input_ids == _IMAGE_PATCH_ID) | (input_ids == _IM_START) | (input_ids == _IM_END)
-                ).long()
+                # Same definition as the HF Molmo2Processor: every image/video marker token (patch,
+                # start/end, column, low-res and frame markers) attends bidirectionally in prefill.
+                marker_ids = getattr(self.processor, "image_token_ids", None) or [151936, 151937, 151938]
+                token_type_ids = torch.isin(input_ids, torch.tensor(marker_ids, dtype=input_ids.dtype)).long()
 
             model.reset_kv_cache(user_id=local_uid)
             vision_str = "video" if pixel_values_videos is not None else "image" if pixel_values is not None else "none"
@@ -506,9 +518,10 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
 
         real = next((l for l in out_logits if l is not None), None)
         if real is None:
-            return torch.zeros(0, 0)
+            return torch.zeros(batch_size, 1, 0)
         vocab = real.shape[-1]
         for u in range(batch_size):
             if out_logits[u] is None:
-                out_logits[u] = torch.zeros(1, vocab, dtype=real.dtype)
-        return torch.cat(out_logits, dim=0)  # [batch, vocab]
+                out_logits[u] = torch.zeros(1, 1, vocab, dtype=real.dtype)
+        # vllm-tt-plugin samples host-side with ``tt_out[rows, -1, :]`` -> [batch, 1, vocab].
+        return torch.cat([l.reshape(1, 1, vocab) for l in out_logits], dim=0)
