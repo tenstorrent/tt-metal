@@ -87,6 +87,7 @@ jobs:
       base_sha: ${{ steps.plan.outputs.base_sha }}
       mode: ${{ steps.plan.outputs.mode }}
       skus: ${{ steps.plan.outputs.skus }}
+      archs: ${{ steps.plan.outputs.archs }}
     steps:
       - name: Resolve the PR, its head and its merge-base
         id: plan
@@ -115,9 +116,9 @@ jobs:
             *) echo "::error::base must be merge-base or main"; exit 1 ;;
           esac
           case "$ARCH" in
-            all) skus="wh_n150_civ2,bh_p150b_civ2" ;;
-            wormhole) skus="wh_n150_civ2" ;;
-            blackhole) skus="bh_p150b_civ2" ;;
+            all) skus="wh_n150_civ2,bh_p150b_civ2"; archs="wormhole,blackhole" ;;
+            wormhole) skus="wh_n150_civ2"; archs="wormhole" ;;
+            blackhole) skus="bh_p150b_civ2"; archs="blackhole" ;;
             *) echo "::error::arch must be all, wormhole or blackhole"; exit 1 ;;
           esac
           {
@@ -126,6 +127,7 @@ jobs:
             echo "base_sha=$merge_base"
             echo "mode=$mode"
             echo "skus=$skus"
+            echo "archs=$archs"
           } >> "$GITHUB_OUTPUT"
           echo "PR #$PR_NUMBER head ${head:0:12} (current ${current:0:12}), merge-base ${merge_base:0:12}, mode $mode" >> "$GITHUB_STEP_SUMMARY"
 
@@ -156,7 +158,9 @@ jobs:
         run: pip3 install PyYAML
       - name: Build test matrix
         id: build-matrix
-        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        # This run's own copy: the workflow only runs from main, and the checkout above
+        # pins it to the commit the run started from.
+        uses: ./.github/actions/prepare-test-matrix
         with:
           tests-yaml: ./tests/pipeline_reorg/llk_sfpu_report_tests.yaml
           enabled-skus: ${{ needs.plan.outputs.skus }}
@@ -199,6 +203,16 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           ${{ matrix.test-group.cmd }}
+      # ci_run.sh copies its log when it exits; a leg that hits the job timeout never does.
+      - name: Keep the log of an unfinished run
+        if: always()
+        shell: bash
+        env:
+          LEG: ${{ matrix.test-group.name }}
+        run: |
+          mkdir -p sfpu-report-out
+          compgen -G "sfpu-report-out/run-*.log" >/dev/null ||
+            cp "$RUNNER_TEMP/llk-sfpu-report/run.log" "sfpu-report-out/run-${LEG##*_}.log" 2>/dev/null || true
       - name: Upload this architecture's results
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -210,8 +224,9 @@ jobs:
   collect:
     name: "Render the report"
     needs: [plan, measure]
-    # Not on cancel: a newer /llk-sfpu-test replaced this run and posts its own.
-    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    # Not on cancel: a newer /llk-sfpu-test replaced this run and posts its own. On a
+    # failed plan too, so the command's "measuring" note does not stay up.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-slim
     permissions:
       contents: read
@@ -236,6 +251,8 @@ jobs:
         env:
           PR_NUMBER: ${{ inputs.pr_number }}
           HEAD_SHA: ${{ needs.plan.outputs.head_sha }}
+          ARCHS: ${{ needs.plan.outputs.archs }}
+          PLAN_RESULT: ${{ needs.plan.result }}
           MEASURE_RESULT: ${{ needs.measure.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -244,24 +261,32 @@ jobs:
           shopt -s nullglob
           summaries=(parts/summary-*.json)
           if [ ${#summaries[@]} -gt 0 ]; then
-            python3 .github/llk_sfpu_report/report.py "${summaries[@]}" -o out/report.md
+            # An arch in ARCHS without a summary is named in the report as not finished.
+            python3 .github/llk_sfpu_report/report.py "${summaries[@]}" \
+              --expect "$ARCHS" --run-url "$RUN_URL" -o out/report.md
             cp "${summaries[@]}" out/
           else
+            if [ "$PLAN_RESULT" != success ]; then
+              what="Could not plan the run (the PR, its head or its merge-base did not resolve)"
+            else
+              what="The measurement did not finish (${MEASURE_RESULT})"
+            fi
             printf '%s\n' '<!-- llk-sfpu-report -->' '## LLK SFPU report' '' \
-              "The measurement did not finish (${MEASURE_RESULT}); see the [run](${RUN_URL})." > out/report.md
+              "${what}; see the [run](${RUN_URL})." > out/report.md
           fi
           cp parts/run-*.log out/ 2>/dev/null || true
           jq -n --arg pr "$PR_NUMBER" --arg sha "$HEAD_SHA" --arg run "$RUN_URL" \
-                --arg result "$MEASURE_RESULT" \
-                '{pr_number: ($pr|tonumber), head_sha: $sha, run_url: $run, measure: $result}' > out/meta.json
+                --arg plan "$PLAN_RESULT" --arg result "$MEASURE_RESULT" \
+                '{pr_number: $pr, head_sha: $sha, run_url: $run, plan: $plan, measure: $result}' > out/meta.json
           cat out/report.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the report
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: llk-sfpu-report
           path: out/
-      # Hides this PR's earlier reports and the command's "measuring" note (only
-      # this bot's, matched by their first line), then posts the new report.
+      # Posts the report, then hides this PR's earlier reports and the command's
+      # "measuring" note (only this bot's, matched by their first line). Posting comes
+      # first: hiding is tidying up, and a failed listing must not cost the report.
       - name: Post the report on the PR
         if: ${{ inputs.post_comment }}
         env:
@@ -270,16 +295,17 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
-          gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" --jq '
+          posted="$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" -F body=@out/report.md --jq .node_id)"
+          earlier="$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" --jq '
             .[] | select(.user.login == "github-actions[bot]")
                 | select((.body | startswith("<!-- llk-sfpu-report -->"))
                       or (.body | startswith("<!-- llk-sfpu-test:running -->")))
-                | .node_id' |
-            while read -r id; do
-              # shellcheck disable=SC2016 # $id is a GraphQL variable, not a shell one
-              gh api graphql --silent -f id="$id" -f query='
-                mutation($id: ID!) {
-                  minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId }
-                }' || echo "::warning::Could not hide an earlier report"
-            done
-          gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file out/report.md
+                | .node_id')" || { echo "::warning::Could not list the earlier reports to hide them"; exit 0; }
+          for id in $earlier; do
+            [ "$id" != "$posted" ] || continue
+            # shellcheck disable=SC2016 # $id is a GraphQL variable, not a shell one
+            gh api graphql --silent -f id="$id" -f query='
+              mutation($id: ID!) {
+                minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId }
+              }' || echo "::warning::Could not hide an earlier report"
+          done

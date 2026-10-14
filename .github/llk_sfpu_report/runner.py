@@ -26,6 +26,10 @@ TOOL_LLK = TOOL_ROOT / LLK_RELPATH
 SIMULATOR = False
 PYTHON_TESTS = TOOL_LLK / "tests" / "python_tests"
 
+#: pytest's exit code when nothing was selected (``pytest.ExitCode.NO_TESTS_COLLECTED``;
+#: ``pytest`` below is this module's function, not the package).
+NO_TESTS_COLLECTED = 5
+
 
 @dataclass
 class Side:
@@ -91,7 +95,7 @@ def pytest(side, arch, args, *, env=None, log=None, check=True):
             stdout=out,
             stderr=subprocess.STDOUT,
         )
-    if check and proc.returncode not in (0, 5):  # 5: nothing collected
+    if check and proc.returncode not in (0, NO_TESTS_COLLECTED):
         raise RuntimeError(f"pytest failed on the {side.name} side (exit {proc.returncode}); see {log}")
     return proc.returncode
 

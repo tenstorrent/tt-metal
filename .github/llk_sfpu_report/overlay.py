@@ -104,7 +104,9 @@ def make_plan(repo, head, base=None, main_ref="origin/main"):
         base_sha = commit_sha(repo, base)
     else:
         base_sha = commit_sha(repo, git(repo, "merge-base", commit_sha(repo, main_ref), head_sha, check=False))
-    changed = git(repo, "diff", "--name-only", base_sha, head_sha).splitlines()
+    # No rename detection: a moved header is its old path deleted and its new path added,
+    # so the old copy cannot stay behind on the head side and shadow the moved one.
+    changed = git(repo, "diff", "--no-renames", "--name-only", base_sha, head_sha).splitlines()
     return Plan(
         repo=repo,
         tool_sha=git(repo, "rev-parse", "HEAD"),
@@ -126,6 +128,7 @@ def device_diff(plan):
             "-C",
             str(plan.repo),
             "diff",
+            "--no-renames",
             "--binary",
             plan.base_sha,
             plan.head_sha,

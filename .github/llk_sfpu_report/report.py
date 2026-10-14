@@ -11,6 +11,7 @@ number comes from the summaries.
 
 import json
 import math
+import re
 from pathlib import Path
 
 from perf import ROWS_PER_TILE
@@ -20,6 +21,13 @@ STALE_DAYS = 14
 
 _ARCH = {"wormhole": "Wormhole", "blackhole": "Blackhole"}
 _FMT = {"Float16_b": "bf16", "Float16": "fp16", "Float32": "fp32", "Bfp8_b": "bfp8"}
+
+
+def code(text):
+    """``text`` as inline code. File names come from the PR, and git allows any of them:
+    a backtick or a newline would end the code span and put the rest of the name into a
+    bot comment as Markdown. Characters outside the plain set become ``?``."""
+    return "`" + re.sub(r"[^A-Za-z0-9_./+-]", "?", str(text)) + "`"
 
 
 def _fmt_pair(s):
@@ -75,7 +83,7 @@ def perf_section(summaries):
     ]
     rows = []
     for s in summaries:
-        for family, by_schedule in s["perf"].items():
+        for by_schedule in s["perf"].values():
             for row in by_schedule.get("loadmacro", []):
                 i, _, o = row["formats"].partition("->")
                 rows.append(((s["arch"], row["op"], i, o, row["approx"], row["dest_acc"]), row))
@@ -108,16 +116,26 @@ def perf_section(summaries):
 
 
 def _perf_regressed(row):
-    return any(row.get(rt, {}).get("regression") for rt in ("MATH_ISOLATE", "L1_TO_L1"))
+    """Slower beyond the thresholds, or ran on the base side and not on the head."""
+    return row.get("missing") == "head" or any(row.get(rt, {}).get("regression") for rt in ("MATH_ISOLATE", "L1_TO_L1"))
 
 
 def _perf_moved(row):
-    return any(
+    return bool(row.get("missing")) or any(
         row.get(rt, {}).get("regression") or row.get(rt, {}).get("improvement") for rt in ("MATH_ISOLATE", "L1_TO_L1")
     )
 
 
+#: A perf row's cells for a variant that ran on one side only.
+_ONE_SIDED = {
+    "head": ("–", "⚠️ no result", "–", "–", "ran on base only", "–"),
+    "base": ("–", "new", "–", "–", "ran on head only", "–"),
+}
+
+
 def _perf_cells(row):
+    if row.get("missing"):
+        return _ONE_SIDED[row["missing"]]
     m, l1 = row.get("MATH_ISOLATE", {}), row.get("L1_TO_L1", {})
     text = (
         f"{_num(row['text_base'])} → {_bold_if_better(row['text_head'], row['text_base'])} B"
@@ -138,10 +156,12 @@ def _loadmacro_note(summaries):
     """SFPLOADMACRO-disabled rows, only for kernels whose code differs between schedules."""
     rows = []
     for s in summaries:
-        for family, by_schedule in s["perf"].items():
+        for by_schedule in s["perf"].values():
             on = {(r["op"], r["formats"], r["dest_acc"], r["approx"]): r for r in by_schedule.get("loadmacro", [])}
             for r in by_schedule.get("no-loadmacro", []):
                 k = (r["op"], r["formats"], r["dest_acc"], r["approx"])
+                if r.get("missing"):
+                    continue  # its loadmacro twin says so
                 if (
                     k in on
                     and on[k].get("text_head") == r.get("text_head")
@@ -191,11 +211,17 @@ def _merge_approx(rows, cells):
     )
 
 
+#: A max error below this many ULP is small: any rise of it is a regression.
+SMALL_MAX_ULP = 16
+
+#: A larger max is a regression when it grows by more than this factor: a max of hundreds
+#: of millions of steps moving by 50 is the same broken range, not a new regression.
+MAX_GROWTH = 1.01
+
+
 def _max_grew(old, new):
-    """A higher max error that means something: any growth of a small max, or more
-    than 1% of a large one (a max of hundreds of millions of steps moving by 50 is the
-    same broken range, not a new regression)."""
-    return new > old and (old < 16 or new > old * 1.01)
+    """A higher max error that means something."""
+    return new > old and (old < SMALL_MAX_ULP or new > old * MAX_GROWTH)
 
 
 def _acc_reasons(rec):
@@ -307,7 +333,8 @@ def accuracy_section(summaries):
         "",
         "ULP steps against the correctly rounded reference (the golden of the functional tests). "
         "Unary ops: every finite input of the format (fp32: every 65,536th value). Binary ops: "
-        "random operand pairs from the op's functional-test domain, the same draw on both sides. "
+        "the operand pairs of the op's functional test (random over its domain; crafted pairs, "
+        "ties included, for comparisons), the same on both sides. "
         "Lanes a step count cannot describe (NaN, subnormal input, padding) are left out here and "
         "covered by the edge cases below. `worse / better` counts lanes whose error changed. "
         "⚠️ marks the cell that got worse: `max new` for a real rise in the max, "
@@ -331,6 +358,13 @@ def accuracy_section(summaries):
         ]
     if not shown_ulp and not shown_exact:
         lines.append("No accuracy change worth a row: max error and lane counts are unchanged.")
+    perf_only = _perf_only_variants(summaries)
+    if perf_only:
+        lines += [
+            "",
+            "Measured for perf, not for accuracy: " + ", ".join(perf_only) + ". Accuracy runs unary "
+            "ops with fast mode off, and binary ops with approx off.",
+        ]
     folded = len(folded_ulp) + len(folded_exact)
     if folded:
         lines += [
@@ -344,6 +378,20 @@ def accuracy_section(summaries):
             lines += ["", *_table(folded_exact, exact_head, _exact_cells)]
         lines += ["", "</details>"]
     return lines + [""]
+
+
+def _perf_only_variants(summaries):
+    """Perf variants accuracy does not run: fast mode on, or a binary op's approx Yes."""
+    out = []
+    for s in summaries:
+        for family, by_schedule in s["perf"].items():
+            for row in by_schedule.get("loadmacro", []):
+                op = row["op"].split(" (", 1)[0]
+                if row.get("fast_mode") == "Yes":
+                    out.append(f"`{op}` fast mode")
+                elif family == "binary" and row["approx"] != "No":
+                    out.append(f"`{op}` approx={row['approx']}")
+    return list(dict.fromkeys(out))
 
 
 def _val(x):
@@ -473,7 +521,7 @@ def findings(summaries):
             entry["fmts"].append(fmt)
 
     for s in summaries:
-        for family, by_schedule in s["perf"].items():
+        for by_schedule in s["perf"].values():
             default = {(r["op"], r["formats"], r["dest_acc"], r["approx"]): r for r in by_schedule.get("loadmacro", [])}
             for schedule, rows in by_schedule.items():
                 for row in rows:
@@ -486,14 +534,17 @@ def findings(summaries):
                         and (_perf_regressed(twin) or twin.get("text_head") == row.get("text_head"))
                     ):
                         continue  # the same code, or already listed for the default build
-                    m, l1 = row.get("MATH_ISOLATE", {}), row.get("L1_TO_L1", {})
-                    label, cell = ("math", m) if m.get("regression") else ("L1→L1", l1)
                     sched = "" if schedule == "loadmacro" else ", SFPLOADMACRO disabled"
                     where = f"{_fmt_pair(row['formats'])} dest_acc={row['dest_acc']}{sched}"
-                    what = (
-                        f"{label} {_num(cell['base'])} → {_num(cell['head'])} cycles/tile "
-                        f"({_speedup(cell['base'], cell['head']).strip('*')})"
-                    )
+                    m, l1 = row.get("MATH_ISOLATE", {}), row.get("L1_TO_L1", {})
+                    label, cell = ("math", m) if m.get("regression") else ("L1→L1", l1)
+                    if row.get("missing"):
+                        what = "ran on base, no result on head (did not build or run; see run.log)"
+                    else:
+                        what = (
+                            f"{label} {_num(cell['base'])} → {_num(cell['head'])} cycles/tile "
+                            f"({_speedup(cell['base'], cell['head']).strip('*')})"
+                        )
                     add(
                         "perf",
                         s["arch"],
@@ -506,6 +557,11 @@ def findings(summaries):
         for rec in s["accuracy"]:
             op, i, o, approx, dest = rec["key"]
             where = f"{_fmt_pair(f'{i}->{o}')} dest_acc={dest}"
+            for missing in rec.get("missing", []):
+                side, _, kind = missing.partition(" ")
+                if side == "head":
+                    what = f"{kind}: ran on base, no result on head (did not build or run; see run.log)"
+                    add("accuracy", s["arch"], op, i, where, what, approx)
             if "base" in rec and _acc_regressed(rec):
                 b, h = rec["base"], rec["head"]
                 if b.get("metric") == "exact":
@@ -552,9 +608,16 @@ def findings(summaries):
     return out
 
 
-def glance_section(summaries):
+def glance_section(summaries, not_measured=()):
     found = findings(summaries)
     if not found:
+        if not_measured:
+            missing = ", ".join(_ARCH[x["arch"]] for x in not_measured)
+            return [
+                f"**No regressions on {', '.join(_ARCH[x['arch']] for x in summaries)}.** "
+                f"{missing} was not measured: see the notes.",
+                "",
+            ]
         return [
             "**No regressions.** Nothing is slower beyond the thresholds, and no accuracy or "
             "edge-case result got worse. Details below.",
@@ -568,27 +631,32 @@ def glance_section(summaries):
     ]
 
 
+def _compared(x):
+    """What one arch's sides were, by its mode."""
+    if x["mode"] == "rebase":
+        return f"this PR's kernel changes on top of main (`{x['tool_sha'][:10]}`) against main itself"
+    return f"`{x['head_sha'][:10]}` (PR head) against `{x['base_sha'][:10]}` (merge-base)"
+
+
 def header(summaries):
     s = summaries[0]
-    archs = ", ".join(f"{_ARCH[x['arch']]} ({x['host_board']})" for x in summaries)
+    on = lambda xs: ", ".join(f"{_ARCH[x['arch']]} ({x['host_board']})" for x in xs)  # noqa: E731
+    if len({x["mode"] for x in summaries}) == 1:
+        tested = f"Tested {_compared(s)} on {on(summaries)}."
+    else:  # one arch fell back to rebase mode
+        tested = "Tested " + ", and ".join(f"{_compared(x)} on {on([x])}" for x in summaries) + "."
     lines = [
         COMMENT_MARKER,
         "## LLK SFPU report",
         "",
-        (
-            f"Tested this PR's kernel changes on top of main (`{s['tool_sha'][:10]}`) against main itself "
-            f"on {archs}. Silicon, speed of light."
-            if s["mode"] == "rebase"
-            else f"Tested `{s['head_sha'][:10]}` (PR head) against `{s['base_sha'][:10]}` (merge-base) on {archs}. "
-            "Silicon, speed of light."
-        ),
+        f"{tested} Silicon, speed of light.",
     ]
     if s.get("head_moved_to"):
         lines.append(
             f"> [!NOTE]\n> The PR has moved to `{s['head_moved_to'][:10]}` since; comment `/llk-sfpu-test` to re-run."
         )
     age = s.get("merge_base_age_days")
-    if s["mode"] != "rebase" and age is not None and age > STALE_DAYS:
+    if any(x["mode"] != "rebase" for x in summaries) and age is not None and age > STALE_DAYS:
         lines.append(
             f"> [!WARNING]\n> The merge-base is {age} days old. Main may have changed these kernels since: "
             "rebase, or re-run with `/llk-sfpu-test --base main`."
@@ -614,7 +682,7 @@ def notes_section(summaries, not_measured=()):
     if s.get("not_applied"):
         notes.append(
             "Files this PR changes that the measurement does not use (host-side test code runs from main): "
-            + ", ".join(f"`{p}`" for p in s["not_applied"][:10])
+            + ", ".join(code(p) for p in s["not_applied"][:10])
         )
     # A note every arch wrote is shown once; one only some archs wrote names them.
     per_arch = [x.get("notes", []) for x in summaries]
@@ -635,14 +703,17 @@ def _runs(summaries):
 
 def not_measured_report(summaries):
     """The whole comment when no architecture could be measured: why, and what to do."""
-    s = summaries[0]
-    lines = [
-        COMMENT_MARKER,
-        "## LLK SFPU report",
-        "",
-        f"**Not measured** on {', '.join(_ARCH[x['arch']] for x in summaries)}. {s['not_measured']}",
-        "",
-    ]
+    reasons = list(dict.fromkeys(x["not_measured"] for x in summaries))
+    lines = [COMMENT_MARKER, "## LLK SFPU report", ""]
+    if len(reasons) == 1:
+        lines += [f"**Not measured** on {', '.join(_ARCH[x['arch']] for x in summaries)}. {reasons[0]}", ""]
+    else:
+        for x in summaries:
+            lines += [f"**Not measured** on {_ARCH[x['arch']]}. {x['not_measured']}", ""]
+    ran = [x for x in summaries if x.get("head_sha")]  # a leg that did not finish left no summary
+    if not ran:
+        return lines
+    s = ran[0]
     if s.get("head_moved_to"):
         lines += [
             f"> [!NOTE]\n> The PR has moved to `{s['head_moved_to'][:10]}` since; comment `/llk-sfpu-test` to re-run.",
@@ -650,20 +721,25 @@ def not_measured_report(summaries):
         ]
     conflicts = sorted({f for x in summaries for f in x.get("conflicts", [])})
     if conflicts:
-        lines += ["Conflicting files:", "", *[f"- `{f}`" for f in conflicts], ""]
+        lines += ["Conflicting files:", "", *[f"- {code(f)}" for f in conflicts], ""]
     lines.append(
         f"PR head `{s['head_sha'][:10]}`, merge-base `{s['base_sha'][:10]}`, main `{s['tool_sha'][:10]}`. Runs: "
-        + _runs(summaries)
+        + _runs(ran)
         + "."
     )
     return lines
 
 
+def _modes(summaries):
+    modes = {x["mode"] for x in summaries}
+    if len(modes) == 1:
+        return f"`{modes.pop()}`"
+    return ", ".join(f"`{x['mode']}` ({_ARCH[x['arch']]})" for x in summaries)
+
+
 def footer(summaries):
     s = summaries[0]
     head, base, tool = s["head_sha"], s["base_sha"], s["tool_sha"]
-    mode = " --mode rebase" if s["mode"] == "rebase" else ""
-    ops = ",".join(s["ops"]["measured"])
     pr = s.get("pr_number")
     fetch = f"+refs/pull/{pr}/head:refs/remotes/origin/pr/{pr}" if pr else head
     lines = [
@@ -679,6 +755,9 @@ def footer(summaries):
         f"git checkout --detach {tool}",
     ]
     for x in summaries:
+        # Per arch: each detects its own ops, and one may have fallen back to rebase mode.
+        mode = " --mode rebase" if x["mode"] == "rebase" else ""
+        ops = ",".join(x["ops"]["measured"])
         cli = f"python3 .github/llk_sfpu_report/cli.py --arch {x['arch']} --head {head} --base {base}{mode} run"
         lines += [
             "",
@@ -696,14 +775,21 @@ def footer(summaries):
     lines += [
         "```",
         "",
-        f"Tool `{tool[:10]}`, mode `{s['mode']}`. Runs: " + _runs(summaries) + ".",
+        f"Tool `{tool[:10]}`, mode {_modes(summaries)}. Runs: " + _runs(summaries) + ".",
         "",
         "</details>",
     ]
     return lines
 
 
-def render(summaries):
+def render(summaries, expected=(), run_url=None):
+    """The comment. An arch in ``expected`` without a summary is reported as not
+    measured: its leg failed or timed out before writing one."""
+    present = {s["arch"] for s in summaries}
+    run = f"the [run]({run_url})" if run_url else "the run"
+    summaries = list(summaries) + [
+        {"arch": a, "not_measured": f"Its measurement did not finish; see {run}."} for a in expected if a not in present
+    ]
     summaries = sorted(summaries, key=lambda s: s["arch"] != "wormhole")
     not_measured = [s for s in summaries if s.get("not_measured")]
     summaries = [s for s in summaries if not s.get("not_measured")]
@@ -713,7 +799,7 @@ def render(summaries):
         # Empty tables and "no regressions" say nothing here; the notes say why.
         return _fit("\n".join(header(summaries) + notes_section(summaries, not_measured) + footer(summaries)) + "\n")
     parts = header(summaries)
-    parts += glance_section(summaries)
+    parts += glance_section(summaries, not_measured)
     parts += perf_section(summaries)
     parts += accuracy_section(summaries)
     parts += edge_section(summaries)
@@ -731,10 +817,8 @@ def _fit(text):
     """Keep the comment postable: fold <details> bodies first, then cut tables."""
     if len(text) <= MAX_CHARS:
         return text
-    import re
-
     text = re.sub(
-        r"(<details><summary>.*?</summary>)\n.*?\n</details>",
+        r"(<details><summary>(?!Reproduce<).*?</summary>)\n.*?\n</details>",
         r"\1\n\n(Too long for a comment: see the run's `llk-sfpu-report` artifact.)\n\n</details>",
         text,
         flags=re.S,
@@ -757,8 +841,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Render the LLK SFPU report comment.")
     ap.add_argument("summaries", nargs="+", help="summary.json per architecture")
     ap.add_argument("-o", "--out", default="-")
+    ap.add_argument("--expect", default="", help="comma-separated archs that should have a summary")
+    ap.add_argument("--run-url", help="the CI run, linked for an arch that did not finish")
     args = ap.parse_args(argv)
-    text = render([json.loads(Path(p).read_text()) for p in args.summaries])
+    summaries = [json.loads(Path(p).read_text()) for p in args.summaries]
+    text = render(summaries, [a for a in args.expect.split(",") if a], args.run_url)
     if args.out == "-":
         print(text, end="")
     else:

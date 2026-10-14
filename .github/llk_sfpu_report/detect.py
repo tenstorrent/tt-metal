@@ -26,12 +26,13 @@ MODULES = {
     "typecast": "perf_eltwise_unary_typecast.py",
     "binary": "perf_eltwise_binary_sfpu.py",
 }
-#: The kernel source each module compiles; its artefacts live under sources/<name>/.
+#: The kernel sources each module compiles; their artefacts live under sources/<name>/.
 SOURCES = {
-    "unary": "eltwise_unary_sfpu_perf.cpp",
-    "typecast": "eltwise_unary_typecast_perf.cpp",
-    # Shared with the functional tests; only the perf module is compiled here.
-    "binary": "sfpu_binary_test.cpp",
+    "unary": ["eltwise_unary_sfpu_perf.cpp"],
+    "typecast": ["eltwise_unary_typecast_perf.cpp"],
+    # Shared with the functional tests; only the perf module is compiled here. The
+    # Dest-broadcast variants (test_perf_eltwise_binary_sfpu_bcast) have their own kernel.
+    "binary": ["sfpu_binary_test.cpp", "sfpu_binary_bcast_test.cpp"],
 }
 
 _BINARY_OP = re.compile(r"SFPU_BINARY_OPERATION\s*=\s*ckernel::BinaryOp::(\w+)")
@@ -65,7 +66,8 @@ def compiled_variants(side, family):
     """{build.h sha: (op, math .text sha)} for every variant the side compiled."""
     out = {}
     objcopy = _objcopy(side)
-    for build_h in side.artefacts.glob(f"sources/{SOURCES[family]}/*/build.h"):
+    build_hs = [b for source in SOURCES[family] for b in side.artefacts.glob(f"sources/{source}/*/build.h")]
+    for build_h in build_hs:
         math = build_h.parent / "elf" / "math.elf"
         if not math.exists():
             continue
@@ -81,7 +83,8 @@ def compiled_variants(side, family):
 def compile_all(side, arch, family, log, jobs=8, only_ops=()):
     """Compile (never run) every variant of the family's perf module, math only.
 
-    Returns pytest's exit code: 0 when everything built, 1 when some variant did not.
+    Returns pytest's exit code: 0 when everything built, 1 when some variant did not,
+    ``runner.NO_TESTS_COLLECTED`` when ``only_ops`` selected nothing.
     """
     op_args = [a for op in only_ops for a in ("--op", op)]
     return runner.pytest(

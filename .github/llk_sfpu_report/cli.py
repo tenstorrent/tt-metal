@@ -93,14 +93,16 @@ def _math_op_names():
 
 
 def _sfpu_type_to_op(sfpu_types):
-    """detect.py reports SfpuType names (``tanh``); the harness selects MathOperation
-    names (``Tanh``). Most map by case; the rest are listed as not covered."""
-    names = _math_op_names()
+    """detect.py reports SfpuType names (``exponential``); the harness selects
+    MathOperation names (``Exp``). They map through the enum value the harness writes
+    into build.h; an SfpuType no unary MathOperation uses is listed as not covered."""
+    sys.path.insert(0, str(runner.PYTHON_TESTS))
+    from helpers.llk_params import SFPU_UNARY_OPERATIONS
+
+    names = {op.cpp_enum_value: op.name for op in SFPU_UNARY_OPERATIONS}
     mapped, unmapped = [], []
     for t in sfpu_types:
-        key = t.lower().replace("_", "")
-        hit = next((v for k, v in names.items() if k.replace("_", "") == key), None)
-        (mapped if hit else unmapped).append(hit or t)
+        (mapped if t in names else unmapped).append(names.get(t, t))
     return mapped, unmapped
 
 
@@ -152,9 +154,32 @@ def _family_of(op):
     return "binary" if op.startswith("Sfpu") else "unary"
 
 
+def _detected_ops(found, changed_files):
+    """The ops to measure from detect.changed_ops(): ``(ops, not_covered, one_sided)``.
+
+    An op whose variants built on one side only is measured too: on the side where it
+    builds, and the report flags what is missing on the other.
+    """
+    unary, binary = found.get("unary", {}), found.get("binary", {})
+    ops, not_covered = _sfpu_type_to_op(unary.get("changed", []) + unary.get("unmatched", []))
+    one_sided, _ = _sfpu_type_to_op(unary.get("unmatched", []))
+    binary_names = _binary_enum_to_op()
+    for enum in binary.get("changed", []) + binary.get("unmatched", []):
+        (ops if enum in binary_names else not_covered).append(binary_names.get(enum, enum))
+    one_sided += [binary_names[e] for e in binary.get("unmatched", []) if e in binary_names]
+    ops = _prioritize(list(dict.fromkeys(ops)), changed_files)
+    typecast = found.get("typecast", {})
+    if typecast.get("changed") or typecast.get("unmatched"):
+        ops.append("Typecast")
+        if typecast.get("unmatched"):
+            one_sided.append("Typecast")
+    return ops, not_covered, one_sided
+
+
 def _harness_compiles(side, arch, log, jobs):
     """Compile one ordinary op on ``side``: a failure means harness skew, not the PR."""
-    return detect.compile_all(side, arch, "unary", log, jobs, only_ops=("neg",)) in (0, 5)
+    built = detect.compile_all(side, arch, "unary", log, jobs, only_ops=("neg",))
+    return built in (0, runner.NO_TESTS_COLLECTED)
 
 
 class NotMeasured(Exception):
@@ -240,20 +265,19 @@ def cmd_run(args):
     if args.ops:
         ops, unknown = _requested_ops(args.ops)
         if unknown:
-            notes.append("Not an op name, skipped: " + ", ".join(f"`{o}`" for o in unknown) + ".")
+            notes.append("Not an op name, skipped: " + ", ".join(report.code(o) for o in unknown) + ".")
         why = "requested in the command"
         not_covered = []
         found = None
     else:
         found = detect.changed_ops(base, head, args.arch, log, jobs=args.jobs)
-        unary = [o for o in found.get("unary", {}).get("changed", [])]
-        ops, not_covered = _sfpu_type_to_op(unary)
-        binary_names = _binary_enum_to_op()
-        for enum in found.get("binary", {}).get("changed", []):
-            (ops if enum in binary_names else not_covered).append(binary_names.get(enum, enum))
-        ops = _prioritize(list(dict.fromkeys(ops)), plan.applied)
-        if found.get("typecast", {}).get("changed"):
-            ops.append("Typecast")
+        ops, not_covered, one_sided = _detected_ops(found, plan.applied)
+        if one_sided:
+            notes.append(
+                "Built on one side only, so measured where it builds: "
+                + ", ".join(f"`{o}`" for o in one_sided)
+                + " (the PR added or removed variants, or one side does not compile them; see run.log)."
+            )
         why = "auto-detected: their compiled SFPU code differs between the two sides"
         if len(ops) > MAX_OPS:
             notes.append(
@@ -270,7 +294,7 @@ def cmd_run(args):
     if not ops and other_arch_only:
         notes.append(
             f"This PR changes SFPU kernels of other architectures only, not {args.arch.title()}'s: "
-            + ", ".join(f"`{p}`" for p in sfpu_files[:4])
+            + ", ".join(report.code(p) for p in sfpu_files[:4])
             + ". Nothing to measure here."
         )
     elif not ops and sfpu_files:
@@ -278,7 +302,7 @@ def cmd_run(args):
             "This PR changes SFPU kernel files, but the machine code of no op this report covers "
             "(elementwise unary and binary SFPU, typecast) changed. The changed kernels may be "
             "ternary or structural SFPU ops (reduce, topk, ...), which a later version will cover: "
-            + ", ".join(f"`{Path(p).name}`" for p in sfpu_files[:8])
+            + ", ".join(report.code(Path(p).name) for p in sfpu_files[:8])
             + "."
         )
     print(f"ops: {ops}  not covered: {not_covered}")
@@ -308,6 +332,11 @@ def cmd_run(args):
                 continue
             verdicts = perf.compare(runs, THRESHOLDS[args.arch], THRESHOLDS["min_cycles"])
             perf_rows[family] = perf.rows(runs, verdicts)
+            if not any(perf_rows[family].values()):
+                notes.append(
+                    f"⚠️ The perf runs of {', '.join(f'`{o}`' for o in fam_ops)} left no results on "
+                    "either side; see run.log."
+                )
 
     acc_ops = [o for o in ops if o != "Typecast"]
     acc = []
@@ -325,16 +354,18 @@ def cmd_run(args):
             for side in (base, head)
         ]
         acc = accuracy.compare(work / "accuracy" / "base", work / "accuracy" / "head")
-        one_sided = [r for r in acc if r.get("missing")]
-        if one_sided:
+        # Missing on the head side is a regression the report flags; on the base side,
+        # the PR made the variant build.
+        head_only = [r for r in acc if any(m.startswith("base") for m in r.get("missing", []))]
+        if head_only:
             notes.append(
-                "Measured on one side only (the variant did not build or run on the other; "
-                "see run.log): "
-                + ", ".join(f"`{r['key'][0]} {r['key'][1]} dest_acc={r['key'][4]}`" for r in one_sided[:8])
+                "Accuracy measured on the head side only (the variant did not build or run at the "
+                "base; see run.log): "
+                + ", ".join(f"`{r['key'][0]} {r['key'][1]} dest_acc={r['key'][4]}`" for r in head_only[:8])
             )
         measured = {r["key"][0] for r in acc}
         missing = [o for o in acc_ops if o not in measured]
-        if missing and any(code not in (0, 5) for code in exit_codes):
+        if missing and any(code not in (0, runner.NO_TESTS_COLLECTED) for code in exit_codes):
             notes.append(
                 "⚠️ The accuracy run failed for "
                 + ", ".join(f"`{o}`" for o in missing)
@@ -411,7 +442,7 @@ def cmd_rerender(args):
     for family in summary["perf"]:
         runs = {
             sched: {
-                side: sorted((work / "perf" / family / sched / side).glob("run_*.csv")) for side in ("base", "head")
+                side: sorted((work / "perf" / family / sched / side).glob("run_*/*.csv")) for side in ("base", "head")
             }
             for sched in perf.SCHEDULES
             if (work / "perf" / family / sched).is_dir()

@@ -50,7 +50,8 @@ llk-sfpu-report.yaml (workflow_dispatch on main)
       ci_run.sh: checkout main, fetch the PR head + merge-base by SHA, then cli.py run:
         overlay   base and head trees (device C++ only from the PR)
         detect    compile every unary / typecast / binary perf variant on both sides,
-                  compare math .text -> the ops whose code changed (max 8, own kernel first)
+                  compare math .text -> the ops whose code changed, or that build on
+                  one side only (max 8, own kernel first)
         perf      compile once per side and schedule, 3 interleaved device runs per side,
                   L1_TO_L1 + MATH_ISOLATE, SFPLOADMACRO on/off; gate comparer
         accuracy  test_sfpu_report_accuracy.py on both sides; host-side ULP / exact
@@ -99,10 +100,11 @@ show only rows that changed, regressions first, and fold everything else into
 `<details>`. A regression is:
 
 - **perf**: slower beyond the LLK perf gate's thresholds (BH 2%, WH 8%, and more than
-  30 cycles per loop), in `MATH_ISOLATE` or `L1_TO_L1`;
+  30 cycles per loop), in `MATH_ISOLATE` or `L1_TO_L1`; or a variant that ran on the
+  base side and has no result on the head side;
 - **accuracy**: a higher max ULP (any rise below 16 steps, or more than 1%), or at
   least 0.1% of the lanes net worse, or new non-finite results; for comparisons and
-  integer ops, more wrong lanes;
+  integer ops, more wrong lanes; or a result missing on the head side;
 - **edge case**: a special input whose result changes kind (finite ↔ NaN/inf, sign,
   zero), or a NaN input that stops returning NaN.
 
@@ -124,19 +126,24 @@ is measured, and the report names the conflicting files and asks for a rebase.
 device needed) and compares the
 `.text` of each variant's math ELF, matched across sides by its generated `build.h`.
 An op is measured when its code changed, which catches ops that only include a
-changed header. Both sides compile through the same symlinked path, because profiler
-zone ids hash `__FILE__`.
+changed header, and when its variants build on one side only. Both sides compile
+through the same symlinked path, because profiler zone ids hash `__FILE__`.
 
 **Perf.** `perf.py` compiles each side once, then alternates base/head device runs
 (3 each by default), speed of light, `L1_TO_L1` and `MATH_ISOLATE`, with and without
 SFPLOADMACRO. The raw CSVs go through the LLK perf gate's own comparer
 (`tt-llk/perf/regression_compare.py`): median vs median, a regression is slower than
-the threshold (BH 2%, WH 8%) and by more than 30 cycles per loop.
+the threshold (BH 2%, WH 8%) and by more than 30 cycles per loop. The comparer only
+walks the head side's points, so the tool adds a row for every variant that ran on
+one side only.
 
 Binary rows are per operand tile, the unit the binary perf tests have used since
 #57137: their `tile_cnt` counts both input tiles, so a binary row is about half a
-result tile. The binary float family also sweeps the Dest broadcast; those variants
-get their own rows, labelled like `SfpuElwadd (bcast Row)`.
+result tile. A variant is every column of its perf CSV row, the way the comparer keys
+it, so each gets its own row: the binary float test's unpack broadcast
+(`SfpuElwadd (unpack bcast Row)`), the Dest-broadcast kernel
+(`SfpuElwadd (Dest bcast Row)`), fast mode (`Exp (fast_mode Yes)`) and the TopK sort
+switches.
 
 **Accuracy.** `test_sfpu_report_accuracy.py` runs each op over every
 finite input of bf16 and fp16 (fp32: every 65,536th value) and over a tile of special
@@ -145,8 +152,11 @@ It lives here, next to the tool; each run copies it into `tt_metal/tt-llk/tests/
 because the harness's `conftest.py` applies only to files there, and removes it after.
 `accuracy.py` compares the two sides lane by lane with the nightly ULP sweep's helpers
 (`helpers/ulp.py`, `helpers/ulp_sweep.py`): max/mean ULP, lanes that got worse or
-better, non-finite disagreements, and edge-case classes. No budget is involved: both
-sides run on the same device against the same golden.
+better, non-finite disagreements, and edge-case classes, the way the nightly sweep
+measures them (`golden_input`, `FLUSH_SUBNORMAL_OUTPUTS`, the cell's approx mode). No
+budget is involved: both sides run on the same device against the same golden. Unary
+ops run with fast mode off and binary ops with approx off; the report names the perf
+variants accuracy does not cover.
 
 ## Scope
 
@@ -154,13 +164,15 @@ sides run on the same device against the same golden.
 |---|---|---|---|
 | elementwise unary SFPU | `perf_eltwise_unary_sfpu.py` | ✅ | every finite bf16/fp16 input, fp32 strided, special values |
 | typecast | `perf_eltwise_unary_typecast.py` | ✅ | – |
-| elementwise binary SFPU (v1.1) | `perf_eltwise_binary_sfpu.py` | ✅ | random pairs from the functional test's domain, special-value cross product; comparisons and integer ops compared exactly |
+| elementwise binary SFPU (v1.1) | `perf_eltwise_binary_sfpu.py` | ✅ | the functional test's operand pairs (random over its domain, crafted for comparisons), special-value cross product; comparisons and integer ops compared exactly |
 
 Binary ops use the functional driver `sfpu_binary()` of `test_eltwise_binary_sfpu.py`, so
-operand layout, domains and golden are the functional test's. Ops the harness cannot
-feed in full say so in the report (logsigmoid is measured on x in [-8, 3.9]: its x > 4
-branch reads a device-computed exp(-x) the harness cannot supply). Not covered: `Mask`,
-`AddTopRow`, `CopyDest` (not elementwise functions of their inputs).
+operand layout, domains and golden are the functional test's, and so are the crafted
+operand pairs of the comparisons (`Eq`/`Ne`, `Lt`/`Gt`/`Le`/`Ge`, `Isclose`), which hold
+the ties a random draw never produces. Logsigmoid is measured on x in [-60, 60], both
+branches, with its second operand exp(-x) computed on the host (the functional test
+stops at 3.9, below the branch that reads it). Not covered: `Mask`, `AddTopRow`,
+`CopyDest` (not elementwise functions of their inputs).
 
 Later: ternary and structural SFPU kernels (reduce, topk, cumsum, welford), plots,
 ttnn-level timing, Quasar (needs the emulator). A changed kernel the report cannot

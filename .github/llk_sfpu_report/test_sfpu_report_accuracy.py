@@ -52,7 +52,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.ulp_sweep import stimuli_format_for, sweep_spec
+from helpers.ulp_sweep import golden_input, stimuli_format_for, sweep_spec
 
 pytestmark = pytest.mark.accuracy
 
@@ -123,8 +123,15 @@ def special_values(fmt):
 
 def _run(mathop, formats, approx_mode, dest_acc, src_A, tile_cnt, dimensions):
     src_B = src_A.clone()
+    # As the nightly ULP sweep computes it: on what the kernel receives (a -0.0 the
+    # unpack turns into +0.0 is +0.0 to the golden too).
     golden = get_golden_generator(UnarySFPUGolden)(
-        mathop, src_A, formats.output_format, dest_acc, formats.input_format, dimensions
+        mathop,
+        golden_input(src_A, formats.input_format, dest_acc),
+        formats.output_format,
+        dest_acc,
+        formats.input_format,
+        dimensions,
     )
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
@@ -295,10 +302,14 @@ EXACT_BINARY_OPS = {
     "SfpuIsclose",
 }
 
+#: Logsigmoid's x: both branches, including x > 4, which reads exp(-x) from in1.
+LOGSIGMOID_DOMAIN = (-60.0, 60.0)
+
 #: What the report says about an op's coverage when it is narrower than the format.
 BINARY_COVERAGE_NOTES = {
-    "SfpuLogsigmoid": "x in [-60, 60], with its second operand exp(-x) computed on the host "
-    "(ttnn computes it on the device with a fast exp, so device results can differ slightly)",
+    "SfpuLogsigmoid": f"x in [{LOGSIGMOID_DOMAIN[0]:g}, {LOGSIGMOID_DOMAIN[1]:g}], with its second "
+    "operand exp(-x) computed on the host (ttnn computes it on the device with a fast exp, so "
+    "device results can differ slightly)",
 }
 
 #: Ops whose second operand is a function of the first, not an independent input:
@@ -306,6 +317,24 @@ BINARY_COVERAGE_NOTES = {
 DERIVED_OPERAND = {
     "SfpuLogsigmoid": lambda x: torch.exp(-x.to(torch.float64)),
 }
+
+
+#: Ops whose functional test feeds crafted operand pairs, with the ties and clean 0/1
+#: verdicts a random draw never produces: op -> its stimuli builder in
+#: test_eltwise_binary_sfpu.py, which returns (spec_A, spec_B).
+PAIRED_STIMULI = {
+    **{op: "_eq_ne_stimuli_specs" for op in ("SfpuElwEq", "SfpuElwNe", "SfpuEqInt", "SfpuNeInt")},
+    **{op: "_comparison_stimuli_specs" for op in ("SfpuElwLt", "SfpuElwGt", "SfpuElwLe", "SfpuElwGe")},
+    "SfpuIsclose": "_isclose_stimuli_specs",
+}
+
+#: Ops whose golden cannot take a zero second operand (an int64 division raises).
+NONZERO_DIVISOR = {"SfpuDivInt32", "SfpuDivInt32Floor"}
+
+
+def _binary_dimensions(fmt):
+    """The functional driver's default size: 16 tile pairs, 8 for a 32-bit format."""
+    return [128, 128] if fmt.is_32_bit() else [256, 128]
 
 
 def _interleave(a, b):
@@ -355,11 +384,11 @@ def binary_special_values(fmt):
     ]
 
 
-def binary_special_pairs(fmt):
+def binary_special_pairs(fmt, op_name):
     """One tile pair: the cross product of the special values."""
     values = binary_special_values(fmt)
     dtype = torch.int64 if fmt.is_integer() else torch.float64
-    pairs = [(a, b) for a in values for b in values]
+    pairs = [(a, b) for a in values for b in values if b != 0 or op_name not in NONZERO_DIVISOR]
     n = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
     pairs = (pairs * (-(-n // len(pairs))))[:n]
     a = torch.tensor([p[0] for p in pairs], dtype=dtype)
@@ -400,13 +429,15 @@ def _binary_run(op_name, fmt, dest_acc, kind, monkeypatch):
             a = a.repeat(-(-n // a.numel()))[:n]
             b = derived(a)
         else:
-            a, b = binary_special_pairs(fmt)
+            a, b = binary_special_pairs(fmt, op_name)
         kwargs["src_A_override"] = _interleave(a, b)
     elif derived:
-        # The functional driver's default size: 16 tile pairs, 8 for a 32-bit format.
-        pairs = 8 if fmt.is_32_bit() else 16
-        a = torch.linspace(-60.0, 60.0, pairs * n, dtype=torch.float64)
+        dims = _binary_dimensions(fmt)
+        a = torch.linspace(*LOGSIGMOID_DOMAIN, dims[0] * dims[1] // 2, dtype=torch.float64)
+        kwargs["input_dimensions"] = dims
         kwargs["src_A_override"] = _interleave(a, derived(a))
+    elif op_name in PAIRED_STIMULI:
+        kwargs["spec_A"], kwargs["spec_B"] = getattr(fb, PAIRED_STIMULI[op_name])()
     elif op_name == "SfpuAtan2":
         kwargs["spec_A"] = StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     elif mathop in fb._INT_BINARY_STIMULI:
@@ -420,7 +451,6 @@ def _binary_run(op_name, fmt, dest_acc, kind, monkeypatch):
     if "src_A_override" in kwargs:
         src = kwargs["src_A_override"].to(src.dtype).flatten()
         src = src.repeat(captured["result"].numel() // src.numel())
-    n = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
     # Tile 2k holds in0 and the result, tile 2k+1 holds in1.
     pairs = lambda t: t.flatten()[: (t.numel() // (2 * n)) * 2 * n].reshape(-1, 2, n)  # noqa: E731
     s, g, r = (

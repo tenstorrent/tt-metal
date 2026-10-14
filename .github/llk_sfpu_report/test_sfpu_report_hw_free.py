@@ -174,8 +174,11 @@ def test_report_flags_the_regressions():
 
 def test_report_stays_under_the_comment_limit():
     summary = _summary()
-    summary["accuracy"] = summary["accuracy"] * 400
-    assert len(report.render([summary])) < 65536
+    rec = summary["accuracy"][0]
+    summary["accuracy"] = [dict(rec, key=[f"Op{i}", *rec["key"][1:]]) for i in range(600)]
+    text = report.render([summary])
+    assert len(text) < 65536 and "cut to fit a comment" in text
+    assert "git fetch origin" in text and "--ops Square --check" in text  # Reproduce is never folded
 
 
 def test_binary_ops_are_their_own_family():
@@ -187,18 +190,28 @@ def test_binary_ops_are_their_own_family():
 
 @pytest.mark.parametrize("family", sorted(detect.MODULES))
 def test_detection_compiles_modules_and_kernels_that_exist(family):
-    assert (runner.PYTHON_TESTS / detect.MODULES[family]).is_file()
-    assert (runner.TOOL_LLK / "tests" / "sources" / detect.SOURCES[family]).is_file()
+    module = runner.PYTHON_TESTS / detect.MODULES[family]
+    assert module.is_file()
+    for source in detect.SOURCES[family]:
+        assert (runner.TOOL_LLK / "tests" / "sources" / source).is_file()
+        assert (
+            f"sources/{source}"
+            in module.read_text() + (runner.PYTHON_TESTS / "test_eltwise_binary_sfpu.py").read_text()
+        )
 
 
 def test_the_accuracy_driver_is_in_the_harness_only_while_it_runs(monkeypatch, tmp_path):
     installed = runner.PYTHON_TESTS / accuracy.DRIVER
     assert accuracy.DRIVER_SOURCE.is_file() and not installed.exists()
+    stale = tmp_path / "out" / "Tanh__Float16_b-Float16_b__No__No__sweep.pt"
+    stale.parent.mkdir()
+    stale.write_text("an earlier run's result")
     seen = []
     monkeypatch.setattr(runner, "produce_consume", lambda *args, **kwargs: seen.append(installed.is_file()))
     accuracy.measure(None, "wormhole", ["Tanh"], tmp_path / "out", log=None)
     assert seen == [True]
     assert not installed.exists()
+    assert not stale.exists()  # compare() would read it as this run's
 
 
 def test_the_binary_accuracy_driver_hooks_names_that_exist():
@@ -228,7 +241,14 @@ def test_the_binary_accuracy_driver_hooks_names_that_exist():
         and isinstance(call.args[1], ast.Constant)
     }
     assert hooked == {"assert_against_contract", "generate_stimuli"}
-    assert hooked <= module_names(runner.PYTHON_TESTS / "test_eltwise_binary_sfpu.py")
+    # ... and calls the functional test's stimuli builders by name.
+    builders = {
+        node.value
+        for node in ast.walk(ast.parse(accuracy.DRIVER_SOURCE.read_text()))
+        if isinstance(node, ast.Constant) and str(node.value).endswith("_stimuli_specs")
+    }
+    assert builders
+    assert hooked | builders <= module_names(runner.PYTHON_TESTS / "test_eltwise_binary_sfpu.py")
 
 
 @pytest.mark.parametrize("exit_code, builds", [(0, True), (5, True), (1, False)])
@@ -391,23 +411,171 @@ def test_requested_ops_take_any_case_and_skip_unknown_names():
     assert unknown == ["tanhh"]
 
 
-def test_broadcast_variants_get_their_own_perf_row():
-    plain = {
-        "mathop": "MathOperation.SfpuElwadd",
+def _perf_csv(path, variants):
+    """A raw perf CSV as the harness writes it: a TILE_LOOP row per (op, fast_mode, cycles)."""
+    import pandas as pd
+
+    common = {
+        "marker": "TILE_LOOP",
         "formats.input_A": "Float16_b",
         "formats.output": "Float16_b",
         "dest_acc": "DestAccumulation.No",
         "approx_mode": "ApproximationMode.No",
-        "fast_mode": "FastMode.No",
-        "sfpu_bcast_dim": "BroadcastType.None_",
+        "tile_cnt": 4,
+        "loop_factor": 16,
     }
-    assert perf._row_key(plain)[0] == "SfpuElwadd"
-    row = dict(plain, sfpu_bcast_dim="BroadcastType.Row")
-    assert perf._row_key(row)[0] == "SfpuElwadd (bcast Row)"
-    # Families without the column (unary, typecast) and empty CSV cells keep the bare op.
-    unary = {k: v for k, v in plain.items() if k != "sfpu_bcast_dim"}
-    assert perf._row_key(unary) == perf._row_key(plain)
-    assert perf._row_key(dict(plain, sfpu_bcast_dim=NAN)) == perf._row_key(plain)
+    rows = [
+        dict(
+            common,
+            mathop=f"MathOperation.{op}",
+            fast_mode=f"FastMode.{fast}",
+            **{"mean(L1_TO_L1)": cycles + 1000, "mean(MATH_ISOLATE)": cycles, "TEXT_SIZE(MATH_ISOLATE)": 2048},
+        )
+        for op, fast, cycles in variants
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(path, index=False)
+    return path
+
+
+def _perf_runs(tmp_path, base, head):
+    """``perf.sweep``'s result, one CSV per run and side: ``{"loadmacro": {side: [csv...]}}``."""
+    return {
+        "loadmacro": {
+            side: [
+                _perf_csv(tmp_path / side / f"run_{i}" / "perf_eltwise_unary_sfpu.csv", variants)
+                for i, variants in enumerate(runs, start=1)
+            ]
+            for side, runs in (("base", base), ("head", head))
+        }
+    }
+
+
+def test_perf_runs_pool_into_one_median_per_variant(monkeypatch, tmp_path):
+    """Through sweep() and measure(), with the device run faked: the head side's third
+    run is slow, and the median of three outvotes it."""
+    head_runs = iter([10_000, 10_000, 30_000])
+
+    def device_run(side, arch, args, **kwargs):
+        if "--compile-consumer" in args:
+            stem = Path(detect.MODULES["unary"]).stem
+            cycles = next(head_runs) if side.name == "head" else 10_000
+            _perf_csv(side.llk / "perf_data" / "latest" / stem / f"{stem}.csv", [("Exp", "No", cycles)])
+        return 0
+
+    monkeypatch.setattr(runner, "pytest", device_run)
+    base, head = (runner.Side(n, n, tmp_path / n, tmp_path / f"build-{n}") for n in ("base", "head"))
+    runs = perf.sweep(base, head, "wormhole", "unary", ["Exp"], tmp_path / "perf", None, schedules=["loadmacro"])
+    verdicts = perf.compare(runs, cli.THRESHOLDS["wormhole"], cli.THRESHOLDS["min_cycles"])
+    assert len([r for r in verdicts["loadmacro"]["records"] if r["run_type"] == "MATH_ISOLATE"]) == 1
+    (row,) = perf.rows(runs, verdicts)["loadmacro"]
+    assert row["MATH_ISOLATE"]["head"] == row["MATH_ISOLATE"]["base"]  # the slow third run is outvoted
+    assert not row["MATH_ISOLATE"]["regression"]
+    assert (row["text_base"], row["text_head"]) == (2048, 2048)
+
+
+def test_a_variant_that_stops_running_on_the_head_side_is_a_regression(tmp_path):
+    both = ("Exp", "No", 10_000)
+    runs = _perf_runs(tmp_path, base=[[both, ("Exp", "Yes", 8_000)]], head=[[both]])
+    rows = perf.rows(runs, perf.compare(runs, 0.08, 30))["loadmacro"]
+    assert {(r["op"], r.get("missing")) for r in rows} == {("Exp", None), ("Exp (fast_mode Yes)", "head")}
+    summary = dict(_summary(), perf={"unary": {"loadmacro": rows}}, accuracy=[])
+    text = report.render([summary])
+    assert "perf: Wormhole `Exp (fast_mode Yes)` bf16 dest_acc=No approx=No: ran on base, no result on head" in text
+    assert "| ⚠️ no result |" in text
+    assert "Measured for perf, not for accuracy: `Exp` fast mode." in text
+
+
+def test_variants_are_labelled_by_the_switches_they_have_on():
+    common = dict(
+        mathop="SfpuElwadd",
+        **{"formats.input_A": "Float16_b", "formats.output": "Float16_b"},
+        dest_acc="No",
+        approx_mode="No",
+        broadcast_type="None_",
+        sfpu_bcast_dim="None_",
+    )
+    plain = dict(common, tile_cnt="32")
+    unpack = dict(plain, broadcast_type="Row")
+    dest = dict(common, sfpu_bcast_dim="Row", tile_cnt="3")  # test_perf_eltwise_binary_sfpu_bcast
+    bigger = dict(plain, tile_cnt="64")  # reads like `plain`: named by what differs
+    idents = [tuple(sorted(c.items())) for c in (plain, unpack, dest, bigger)]
+    labels = perf._labels(idents)
+    assert [labels[i] for i in idents] == [
+        "SfpuElwadd (tile_cnt 32)",
+        "SfpuElwadd (unpack bcast Row)",
+        "SfpuElwadd (Dest bcast Row)",
+        "SfpuElwadd (tile_cnt 64)",
+    ]
+
+
+def test_a_csv_cell_and_the_comparers_key_are_one_variant():
+    import numpy as np
+
+    assert perf._identity([("loop_factor", np.float64(16.0)), ("fast_mode", "FastMode.Yes")]) == perf._identity(
+        [("loop_factor", 16), ("fast_mode", "Yes"), ("test_module", "run_1"), ("stable_sort", NAN)]
+    )
+
+
+#: Perf test ids as the harness builds them (helpers/param_config.build_param_id).
+PERF_IDS = {
+    "float_add_bf16": "formats:Float16_b->Float16_b-dest_acc:No-mathop:SfpuElwadd-bcast_dim:None_",
+    "float_add_fp32": "formats:Float32->Float32-dest_acc:Yes-mathop:SfpuElwadd-bcast_dim:None_",
+    "float_sub_bf16": "formats:Float16_b->Float16_b-dest_acc:No-mathop:SfpuElwsub-bcast_dim:None_",
+    "gcd": "mathop:SfpuGcd-dest_acc:Yes",
+}
+
+
+def _selected(tmp_path, family, ops, formats):
+    """The test ids ``perf._args`` keeps, by pytest's own ``-k`` matching."""
+    (tmp_path / "test_ids.py").write_text(
+        "import pytest\n"
+        f"@pytest.mark.parametrize('case', {sorted(PERF_IDS.values())!r}, ids=str)\n"
+        "def test_perf_eltwise_binary_sfpu_float(case): pass\n"
+        "def test_perf_eltwise_binary_sfpu_div(): pass\n"
+    )
+    args = perf._args(family, ops, "loadmacro", formats)
+    k = args[args.index("-k") + 1] if "-k" in args else ""
+    out = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--co",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-o",
+            "addopts=",
+            "-k",
+            k,
+            "test_ids.py",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    ).stdout
+    found = [line.split("::", 1)[1] for line in out.splitlines() if "::" in line]
+    return {name for name, case in PERF_IDS.items() if f"[{case}]" in "".join(found)} | (
+        {"div"} if "test_perf_eltwise_binary_sfpu_div" in found else set()
+    )
+
+
+@pytest.mark.parametrize(
+    "ops, formats, selected",
+    [
+        (["SfpuElwadd"], [], {"float_add_bf16", "float_add_fp32"}),
+        (["SfpuElwdiv"], [], {"div"}),  # no mathop parameter: picked by its test name
+        (["SfpuGcd"], ["Int32"], {"gcd"}),  # no formats parameter: runs in its only format
+        (["SfpuElwadd", "SfpuElwdiv", "SfpuGcd"], ["Float16_b"], {"float_add_bf16", "div", "gcd"}),
+    ],
+)
+def test_perf_selects_exactly_the_requested_ops(tmp_path, ops, formats, selected):
+    assert _selected(tmp_path, "binary", ops, formats) == selected
+
+
+def test_typecast_perf_is_not_narrowed_by_op():
+    assert "-k" not in perf._args("typecast", ["Typecast"], "loadmacro")
 
 
 def test_reproduce_commands_drop_the_broadcast_label():
@@ -418,6 +586,25 @@ def test_reproduce_commands_drop_the_broadcast_label():
     text = report.render([summary])
     assert "| Square (bcast Row) |" in text
     assert "--ops Square --formats Float16_b,Float16 --check" in text
+
+
+def test_sfpu_types_map_to_math_operations_by_enum_value():
+    # Spelled differently (SfpuType::exponential is MathOperation.Exp), or the same.
+    assert cli._sfpu_type_to_op(["exponential", "sine", "negative", "tanh", "no_such_type"]) == (
+        ["Exp", "Sin", "Neg", "Tanh"],
+        ["no_such_type"],
+    )
+
+
+def test_ops_built_on_one_side_only_are_measured():
+    found = {
+        "unary": {"changed": ["tanh"], "unchanged": ["sine"], "unmatched": ["exponential"]},
+        "binary": {"changed": [], "unchanged": [], "unmatched": ["DIV"]},
+        "typecast": {"changed": [], "unchanged": ["typecast"], "unmatched": []},
+    }
+    ops, not_covered, one_sided = cli._detected_ops(found, [])
+    assert ops == ["Tanh", "Exp", "SfpuElwdiv"]
+    assert not_covered == [] and one_sided == ["Exp", "SfpuElwdiv"]
 
 
 def test_binary_enum_names_map_to_math_operations():
@@ -486,6 +673,76 @@ def test_report_renders_exact_ops():
     assert "a lane is right or wrong" in text
     assert "⚠️ 12" in text
     assert "`(inf, inf)`" in text
+
+
+def test_an_accuracy_result_missing_on_the_head_side_is_a_regression(tmp_path):
+    import torch
+
+    result = {"op": "Tanh", "in": "Float16_b", "out": "Float16_b", "approx": "No", "dest_acc": "No"}
+    for side in ("base", "head"):
+        (tmp_path / side).mkdir()
+    torch.save(dict(result, kind="sweep"), tmp_path / "base" / "Tanh__Float16_b-Float16_b__No__No__sweep.pt")
+    (rec,) = accuracy.compare(tmp_path / "base", tmp_path / "head")
+    assert rec["missing"] == ["head sweep"]
+    summary = dict(_summary(), perf={}, accuracy=[rec])
+    assert [f["text"] for f in report.findings([summary])] == [
+        "accuracy: Wormhole `Tanh` bf16 dest_acc=No approx=No: sweep: ran on base, no result on head "
+        "(did not build or run; see run.log)"
+    ]
+
+
+def test_each_arch_reproduces_its_own_mode_and_ops():
+    wormhole = dict(_nothing_measured("wormhole"), mode="rebase")
+    text = report.render([wormhole, dict(_summary(), arch="blackhole")])
+    assert (
+        "main itself on Wormhole (n150), and `cccccccccc` (PR head) against `bbbbbbbbbb` (merge-base) on Blackhole"
+        in text
+    )
+    assert (
+        "--arch wormhole --head " + "c" * 40 + " --base " + "b" * 40 + " --mode rebase run --ops <op> --check" in text
+    )
+    assert "--arch blackhole --head " + "c" * 40 + " --base " + "b" * 40 + " run --ops Square --check" in text
+    assert "mode `rebase` (Wormhole), `merge-base` (Blackhole)" in text
+
+
+def test_file_names_from_the_pr_cannot_write_markdown():
+    assert report.code("tt_metal/hw/ckernel_sfpu_exp.h") == "`tt_metal/hw/ckernel_sfpu_exp.h`"
+    assert report.code("a`@tenstorrent/x\nb.h") == "`a??tenstorrent/x?b.h`"
+    summary = dict(_summary(), not_applied=["tt_metal/tt-llk/tests/python_tests/x` @org/team `.py"])
+    assert "@org" not in report.render([summary])
+
+
+def test_an_arch_that_did_not_finish_is_named():
+    url = "https://github.com/tenstorrent/tt-metal/actions/runs/7"
+    clean = dict(_summary(), perf={}, accuracy=[])
+    text = report.render([clean], expected=["wormhole", "blackhole"], run_url=url)
+    assert "**No regressions on Wormhole.** Blackhole was not measured: see the notes." in text
+    assert f"- Blackhole was not measured. Its measurement did not finish; see the [run]({url})." in text
+    text = report.render([dict(_summary(), not_measured="Conflicts.")], expected=["wormhole", "blackhole"])
+    assert "**Not measured** on Wormhole. Conflicts." in text
+    assert "**Not measured** on Blackhole. Its measurement did not finish; see the run." in text
+
+
+def test_a_moved_device_file_leaves_no_copy_behind(tmp_path):
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True, text=True).stdout
+
+    old, new = "tt_metal/hw/inc/ckernel_sfpu_old.h", "tt_metal/hw/inc/sfpu/ckernel_sfpu_new.h"
+    git("init", "-q")
+    (tmp_path / old).parent.mkdir(parents=True)
+    (tmp_path / old).write_text("".join(f"line {i}\n" for i in range(40)))
+    commit = ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "c"]
+    git("add", "-A")
+    git(*commit)
+    base = git("rev-parse", "HEAD").strip()
+    (tmp_path / new).parent.mkdir(parents=True)
+    git("mv", old, new)
+    (tmp_path / new).write_text((tmp_path / new).read_text() + "edited\n")
+    git("add", "-A")
+    git(*commit)
+    plan = overlay.make_plan(tmp_path, "HEAD", base)
+    assert sorted(plan.applied) == sorted([old, new])
+    assert b"deleted file mode" in overlay.device_diff(plan)
 
 
 def test_findings_list_every_regression_once():

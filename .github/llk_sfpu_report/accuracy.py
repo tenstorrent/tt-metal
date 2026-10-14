@@ -26,17 +26,16 @@ sys.path.insert(0, str(runner.PYTHON_TESTS))
 DRIVER = "test_sfpu_report_accuracy.py"
 DRIVER_SOURCE = Path(__file__).resolve().parent / DRIVER
 
-#: Special-value classes of test_sfpu_report_accuracy.special_values().
-CLASSES = ("nan", "inf", "zero", "subnormal", "extreme")
-
 
 def measure(side, arch, ops, out_dir, log, jobs=8, formats=()):
     """Dump the side's raw results for ``ops`` (MathOperation names) to ``out_dir``.
 
-    Returns the device run's pytest exit code: 0 or 5 (nothing collected) is clean,
-    anything else means some variants failed and left no results.
+    Returns the device run's pytest exit code: 0 or ``runner.NO_TESTS_COLLECTED`` is
+    clean, anything else means some variants failed and left no results.
     """
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # compare() reads every result in the directory: a previous run's must not count.
+    shutil.rmtree(out_dir, ignore_errors=True)
+    out_dir.mkdir(parents=True)
     unary = [o for o in ops if not o.startswith("Sfpu")]
     binary = [o for o in ops if o.startswith("Sfpu")]
     env = {
@@ -57,8 +56,8 @@ def measure(side, arch, ops, out_dir, log, jobs=8, formats=()):
 def _sweep_stats(d):
     import torch
     from helpers.format_config import DataFormat
-    from helpers.llk_params import MathOperation
-    from helpers.ulp import ulp_distance, ulp_stats
+    from helpers.llk_params import ApproximationMode, MathOperation
+    from helpers.ulp import FLUSH_SUBNORMAL_OUTPUTS, ulp_distance, ulp_stats
     from helpers.ulp_sweep import measurable_mask, nonfinite_failures
 
     in_fmt, out_fmt = DataFormat[d["in"]], DataFormat[d["out"]]
@@ -74,9 +73,20 @@ def _sweep_stats(d):
     if d.get("binary"):
         # A lane is measurable only if both operands are.
         mask = mask & measurable_mask(d["src_b"], golden, result, in_fmt, output_format=out_fmt, dest_acc=dest)
-    distance = ulp_distance(golden, result)
+    # As test_unary_sfpu_ulp.py measures it: the Dest flushes subnormal results, and
+    # the approx mode names the cell for the sweep's known non-finite lanes.
+    distance = ulp_distance(golden, result, flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS)
     stats = ulp_stats(distance, mask)
-    nonfinite = nonfinite_failures(MathOperation[d["op"]], src, golden, result, in_fmt, out_fmt, dest_acc=dest)
+    nonfinite = nonfinite_failures(
+        MathOperation[d["op"]],
+        src,
+        golden,
+        result,
+        in_fmt,
+        out_fmt,
+        dest_acc=dest,
+        approx_mode=ApproximationMode[d["approx"]],
+    )
     flat = distance.reshape(-1).to(torch.int64)
     measured = mask.reshape(-1) & (flat >= 0)
     le1 = float(((flat <= 1) & measured).sum()) / max(int(measured.sum()), 1)
@@ -188,19 +198,25 @@ def variant_key(d):
 
 
 def compare(base_dir, head_dir):
-    """Returns a list of per-variant records, base vs head."""
+    """Returns a list of per-variant records, base vs head.
+
+    A result on one side only is recorded under ``missing`` as the side without it and
+    the stimulus (``"head sweep"``): the PR broke the variant, or made it build.
+    """
     import torch
 
     records = {}
     for kind in ("sweep", "random", "specials"):
-        for head_file in sorted(Path(head_dir).glob(f"*__{kind}.pt")):
-            base_file = Path(base_dir) / head_file.name
-            h = _load(head_file)
-            rec = records.setdefault(variant_key(h), {"key": variant_key(h)})
-            if not base_file.exists():
-                rec.setdefault("missing", []).append(f"base {kind}")
+        names = sorted({p.name for d in (base_dir, head_dir) for p in Path(d).glob(f"*__{kind}.pt")})
+        for name in names:
+            base_file, head_file = Path(base_dir) / name, Path(head_dir) / name
+            if not (base_file.exists() and head_file.exists()):
+                one = _load(base_file if base_file.exists() else head_file)
+                rec = records.setdefault(variant_key(one), {"key": variant_key(one)})
+                rec.setdefault("missing", []).append(f"{'base' if head_file.exists() else 'head'} {kind}")
                 continue
-            b = _load(base_file)
+            h, b = _load(head_file), _load(base_file)
+            rec = records.setdefault(variant_key(h), {"key": variant_key(h)})
             if kind in ("sweep", "random"):
                 bs, hs = _sweep_stats(b), _sweep_stats(h)
                 rec["kind"] = kind
