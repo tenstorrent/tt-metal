@@ -63,6 +63,21 @@ COPY_JOB_PAGE_BYTES = 16  # one L1-aligned page: 3 x uint32 job words
 BLOCK_HEIGHT_TILES = None
 # interleaved_2d_split: also cut the columns across cores when the row axis cannot fill the grid.
 ENABLE_2D_SPLIT = True
+# interleaved_2d_split cost model (Perf 2, measured): every tile-row costs a core tile_h stick read
+# REQUESTS whatever its segment width (~25-33 ns of NoC issue each on BH), so the busiest core's
+# cost is tiles + SPLIT_ROW_COST_TILES per tile-row; and a column core must read segments of at
+# least SPLIT_MIN_SEG_BYTES per stick unless the whole split uses <= SPLIT_SMALL_CORES_PER_BANK *
+# num_banks cores. [1,1,32,2048] 4.33 -> 2.38 us, [1,1,32,8192] 6.05 -> 4.17 us.
+SPLIT_ROW_COST_TILES = 10
+SPLIT_MIN_SEG_BYTES = 1024
+SPLIT_SMALL_CORES_PER_BANK = 2
+# NoC role swap (Perf 2, measured): on every NOC_SWAP_ROW_PERIOD-th logical worker row the reader
+# runs on NoC1 and the writer on NoC0 (kernels use noc_index throughout). ~30 % of the cores then
+# draw DRAM reads over NoC1, adding read capacity where NoC0 return paths are saturated:
+# [1,1,16384,64] -9.5 %, [1,1,16384,32] -12 % (BH p150b). Swapping more cores regresses (all: +80 %).
+# 0 = off. Carve-out (measured regression): the segment reader keeps the default NoCs — with the
+# Perf 2 split it regressed [1,1,32,8192] 4.14 -> 8.51 us and [1,1,32,2048] 2.38 -> 2.93 us.
+NOC_SWAP_ROW_PERIOD = 4
 # Leading (batch) dims the reader can pad independently; rank <= 2 + this.
 MAX_LEADING_DIMS = 4
 # Sharded regimes (op_design.md): pin the work split to a side's resident shards when that side's
@@ -179,31 +194,42 @@ def _split_weighted(total, weights):
     return ranges
 
 
-def _choose_split(num_cores, rows, col_units):
+def _choose_split(num_cores, rows, col_units, unit_bytes, num_banks):
     """(cores_r, cores_c): the regime selector of op_design.md.
 
     interleaved_row_split (cores_c = 1, cores_r = min(R, grid)) unless the row axis cannot fill the
     grid (R < num_cores); then interleaved_2d_split picks cores_r x cores_c <= grid minimizing the
-    busiest core's tile count, ties -> more row cores (longer stick segments), then fewer cores.
+    busiest core's cost (tiles + SPLIT_ROW_COST_TILES per tile-row), ties -> more row cores (longer
+    stick segments), then fewer cores. Column cuts narrower than SPLIT_MIN_SEG_BYTES per stick are
+    allowed only for splits of at most SPLIT_SMALL_CORES_PER_BANK * num_banks cores.
     """
-    best = (math.ceil(rows / min(rows, num_cores)) * col_units, -min(rows, num_cores), 1)
+
+    def cost(cores_r, cores_c):
+        rows_pc = math.ceil(rows / cores_r)
+        return rows_pc * math.ceil(col_units / cores_c) + SPLIT_ROW_COST_TILES * rows_pc
+
+    best = (cost(min(rows, num_cores), 1), -min(rows, num_cores), 1)
     best_rc = (min(rows, num_cores), 1)
     if rows >= num_cores or not ENABLE_2D_SPLIT:
         return best_rc
+    max_c = max(1, col_units // max(1, math.ceil(SPLIT_MIN_SEG_BYTES / unit_bytes)))
+    small_split = SPLIT_SMALL_CORES_PER_BANK * num_banks
     for cores_r in range(1, rows + 1):
         for cores_c in range(1, min(col_units, num_cores // cores_r) + 1):
-            key = (math.ceil(rows / cores_r) * math.ceil(col_units / cores_c), -cores_r, cores_c)
+            if cores_c > max_c and cores_r * cores_c > small_split:
+                continue
+            key = (cost(cores_r, cores_c), -cores_r, cores_c)
             if key < best:
                 best, best_rc = key, (cores_r, cores_c)
     return best_rc
 
 
-def _rect_assignment(device, tensor_rows_tiles, tensor_cols_tiles, col_unit_tiles):
+def _rect_assignment(device, tensor_rows_tiles, tensor_cols_tiles, col_unit_tiles, unit_bytes, num_banks):
     """Per-core rectangles: [(core, row_start, rows, col_start, cols)], row-wise core order."""
     grid = device.compute_with_storage_grid_size()
     num_cores = grid.x * grid.y
     col_units = math.ceil(tensor_cols_tiles / col_unit_tiles)
-    cores_r, cores_c = _choose_split(num_cores, tensor_rows_tiles, col_units)
+    cores_r, cores_c = _choose_split(num_cores, tensor_rows_tiles, col_units, unit_bytes, num_banks)
     # The first cores_r * cores_c cores of the grid, row-wise (one unit each).
     _, all_cores, _, _, _, _ = ttnn.split_work_to_cores(grid, cores_r * cores_c, row_wise=True)
     cores = ttnn.corerange_to_cores(all_cores, None, True)
@@ -459,7 +485,12 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
         regime = "full_grid"  # interleaved_row_split / interleaved_2d_split / sharded_full_grid
     if regime == "full_grid":
         all_cores, assignment, cores_c = _rect_assignment(
-            device, tensor_rows_tiles, tensor_cols_tiles, align_unit_tiles
+            device,
+            tensor_rows_tiles,
+            tensor_cols_tiles,
+            align_unit_tiles,
+            align_unit_tiles * seg_unit_bytes,
+            ttnn.get_memory_view(device, input_tensor.memory_config().buffer_type).num_banks,
         )
     else:
         assignment = (in_shards if in_resident else out_shards)[0]
@@ -573,6 +604,47 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
         if writer_copy_sticks:
             for cb_index in (CB_COPY_JOB, CB_COPY_DONE):
                 cbs.append(_cb(cb_index, IN_DEPTH_TILE_ROWS, COPY_JOB_PAGE_BYTES, input_tensor.dtype, group_cores))
+        # Reorder-free coalesced path (Perf 2): chunks land bank-grouped straight in cb_rm_sticks and
+        # the compute's fast-tilize unpacker undoes the bank grouping — no reader L1->L1 copies.
+        # Carve-out (cannot): anything that is not the fast-tilize datapath (fp32 / integer / fp8
+        # inputs, fp32 output, tile_h < 32, the bfp4 round pass), a writer copy share (it splits
+        # the copies this path removes), a padded stick page, a chunk not divisible by num_banks
+        # and the unpacker's 8-bit YDim / unit-dim limits keep the reorder copies.
+        group_rows = staging_group_bytes // stick_page_bytes
+        needs_reorder = (
+            not coalesce
+            or input_tensor.dtype != ttnn.bfloat16
+            or output_tensor.dtype == ttnn.float32
+            or tile_h != 32
+            or not 1 <= block_width_tiles <= 255
+            or num_col_blocks != 1
+            or bfp4_round
+            or bool(writer_copy_sticks)
+            or (staging_tile_rows * tile_h) % num_banks != 0
+            or stick_page_bytes != block_width_tiles * seg_unit_bytes
+            or staging_slot_bytes != staging_tile_rows * block_width_tiles * in_page_bytes
+            or group_rows > 255
+        )
+        rft = not needs_reorder
+        if rft:
+            # cb_rm_sticks IS the staging ring; drop the reader-private staging CB.
+            rft_cbs = []
+            for c in cbs:
+                fmt_ids = [f.buffer_index for f in c.format_descriptors]
+                if CB_STICK_STAGING in fmt_ids or CB_RM_STICKS in fmt_ids:
+                    continue
+                rft_cbs.append(c)
+            cbs[:] = rft_cbs
+            cbs.append(
+                _cb(
+                    CB_RM_STICKS,
+                    staging_slots * staging_tile_rows * block_width_tiles,
+                    in_page_bytes,
+                    input_tensor.dtype,
+                    group_cores,
+                    out_tile,
+                )
+            )
         fill_row_bytes = block_width_tiles * seg_unit_bytes + FILL_PHASE_BYTES
         if has_padding:
             # + FILL_PHASE_BYTES so the kernel can align the row base up to FILL_PHASE_BYTES.
@@ -641,6 +713,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             RETILE_STAGING_SLOTS,
             in_shards[2] if (retile and in_resident) else 0,  # resident shard width, tiles
             read_alignment if (seg_bounce and not coalesce and not in_resident) else 0,
+            int(in_mem.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED),
         ]
         reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         writer_ct = [
@@ -669,50 +742,75 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             CB_BFP4_ROUNDED,
             BFP4_ROUND_TILE_ROWS,
         ]
+        if rft:
+            compute_ct += [staging_tile_rows, first_chunk_tile_rows, group_rows]
+        rft_defines = [("TILIZE_REORDER_FREE", "1")] if rft else []
 
-        reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for core, row_start_tile, core_rows_tiles, col_start_tile, _ in entries:
-            block_height_tiles = (
-                core_rows_tiles if BLOCK_HEIGHT_TILES is None else min(BLOCK_HEIGHT_TILES, core_rows_tiles)
+        # Role-swapped rows (NOC_SWAP_ROW_PERIOD) get their own kernel set; CBs stay per group.
+        segment_reader = not (coalesce or retile or in_resident)
+        swap_period = 0 if segment_reader else NOC_SWAP_ROW_PERIOD
+        subgroups = {}
+        for entry in entries:
+            subgroups.setdefault(bool(swap_period) and entry[0].y % swap_period == 0, []).append(entry)
+        for swapped, sub_entries in subgroups.items():
+            sub_cores = (
+                group_cores
+                if len(subgroups) == 1
+                else ttnn.CoreRangeSet([ttnn.CoreRange(e[0], e[0]) for e in sub_entries])
             )
-            rect = [row_start_tile, core_rows_tiles, col_start_tile, block_height_tiles]
-            k = core_index[(core.x, core.y)]
-            if coalesce:
-                stagger = (k % stagger_groups) if BANK_STAGGER else 0
-            else:  # segment reader: rotate the start stick of each tile-row
-                stagger = (k % tile_h) if SEGMENT_BANK_STAGGER else 0
-            reader_rt[core.x][core.y] = [in_addr, *rect, stagger, fill_word]
-            writer_rt[core.x][core.y] = [out_addr, *rect]
-            compute_rt[core.x][core.y] = [core_rows_tiles, block_height_tiles]
+            if swapped:
+                reader_cfg = ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1
+                )
+                writer_cfg = ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0
+                )
+            else:
+                reader_cfg, writer_cfg = ttnn.ReaderConfigDescriptor(), ttnn.WriterConfigDescriptor()
+            reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+            for core, row_start_tile, core_rows_tiles, col_start_tile, _ in sub_entries:
+                block_height_tiles = (
+                    core_rows_tiles if BLOCK_HEIGHT_TILES is None else min(BLOCK_HEIGHT_TILES, core_rows_tiles)
+                )
+                rect = [row_start_tile, core_rows_tiles, col_start_tile, block_height_tiles]
+                k = core_index[(core.x, core.y)]
+                if coalesce:
+                    stagger = (k % stagger_groups) if BANK_STAGGER else 0
+                else:  # segment reader: rotate the start stick of each tile-row
+                    stagger = (k % tile_h) if SEGMENT_BANK_STAGGER else 0
+                reader_rt[core.x][core.y] = [in_addr, *rect, stagger, fill_word]
+                writer_rt[core.x][core.y] = [out_addr, *rect]
+                compute_rt[core.x][core.y] = [core_rows_tiles, block_height_tiles]
 
-        kernels.append(
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "tilize_reader.cpp"),
-                core_ranges=group_cores,
-                compile_time_args=reader_ct,
-                runtime_args=reader_rt,
-                defines=[(f"TILIZE_ABLATE_{n.upper()}", "1") for n in ABLATE],
-                config=ttnn.ReaderConfigDescriptor(),
+            kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "tilize_reader.cpp"),
+                    core_ranges=sub_cores,
+                    compile_time_args=reader_ct,
+                    runtime_args=reader_rt,
+                    defines=[(f"TILIZE_ABLATE_{n.upper()}", "1") for n in ABLATE] + rft_defines,
+                    config=reader_cfg,
+                )
             )
-        )
-        kernels.append(
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
-                core_ranges=group_cores,
-                compile_time_args=writer_ct,
-                runtime_args=writer_rt,
-                defines=[(f"TILIZE_ABLATE_{n.upper()}", "1") for n in ABLATE],
-                config=ttnn.WriterConfigDescriptor(),
+            kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
+                    core_ranges=sub_cores,
+                    compile_time_args=writer_ct,
+                    runtime_args=writer_rt,
+                    defines=[(f"TILIZE_ABLATE_{n.upper()}", "1") for n in ABLATE],
+                    config=writer_cfg,
+                )
             )
-        )
-        kernels.append(
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "tilize_compute.cpp"),
-                core_ranges=group_cores,
-                compile_time_args=compute_ct,
-                runtime_args=compute_rt,
-                config=_compute_config(input_tensor.dtype, output_tensor.dtype),
+            kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "tilize_compute.cpp"),
+                    core_ranges=sub_cores,
+                    compile_time_args=compute_ct,
+                    runtime_args=compute_rt,
+                    defines=rft_defines,
+                    config=_compute_config(input_tensor.dtype, output_tensor.dtype),
+                )
             )
-        )
 
     return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)

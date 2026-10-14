@@ -21,6 +21,15 @@
 // exactly: the output equals the host's round-to-nearest bfp4 conversion. The custom SFPU element
 // exists because no kernel_lib / LLK op rounds onto a per-row shared-exponent grid.
 
+// Helper bypass (Perf 2, measured): on the reorder-free coalesced path (TILIZE_REORDER_FREE) the
+// tilize does NOT go through compute_kernel_lib::tilize. The reader lands each chunk bank-grouped
+// (no L1->L1 reorder copies) and the fast-tilize UNPACK step is replaced by rft_unpack_block, which
+// re-programs the unpacker's X/Y dims so its Y/Z address counters walk sticks across bank groups;
+// fast-tilize init/uninit are called at LLK level (the API routes ct == 1 to standard tilize on BH).
+// No helper can give the tilize unpacker a per-row source address pattern. Op [1,1,16384,64]
+// 11.02 -> 10.53 us, [1,1,16384,32] 6.92 -> 5.74 us (BH p150b). Do not revert to the helper call
+// without re-measuring; see changelog "Perf 2".
+
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -84,6 +93,96 @@ inline void calculate_bfp4_round() {
 }
 
 }  // namespace ckernel::sfpu
+#endif
+
+#ifdef TILIZE_REORDER_FREE
+// ---------------------------------------------------------------------------------------------
+// reorder_free_tilize (perf experiment). Raw LLK: bypasses compute_kernel_lib::tilize /
+// fast_tilize_block's UNPACK step. The reader no longer restores row order with per-stick L1->L1
+// NoC copies; the chunk lands bank-grouped in cb_rm_sticks (stick s of the chunk at group s % 8,
+// group row s / 8, group stride = group_rows sticks) and the fast-tilize UNPACKER undoes the
+// permutation through its address counters: XDim := one stick (ct*32 datums) so CH0_Y steps one
+// stick, YDim := group_rows so CH0_Z steps one bank group. Each dvalid batch of 8 reads (sticks
+// 8d..8d+7 of a tile-row) walks Z = 0..7 (groups) at Y = d; the dvalid read bumps Y, a SETADCZW
+// resets CH0_Z. Math / pack fast-tilize stages are unchanged (same SrcA contract per dvalid).
+// No helper exposes a per-row source address pattern for the tilize unpacker.
+// ---------------------------------------------------------------------------------------------
+#ifdef TRISC_UNPACK
+inline void rft_unpack_override(uint32_t ct_dim, uint32_t group_rows) {
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+    // XDim (multi-context: Tile_x_dim_cntx0/1) = one stick.
+    TT_SETDMAREG(0, ct_dim * TILE_C_DIM, 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, ct_dim * TILE_C_DIM, 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
+    // YDim = group_rows (sticks per bank group), ZDim = 16 (unused).
+    TT_SETDMAREG(0, group_rows, 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, FACE_R_DIM, 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+    // MOP: plain read = CH0_Z+=1 (next group), CH1_Z+=1; dvalid read = CH0_Y+=1 (next stick), CH1_Z+=1.
+    constexpr std::uint8_t ADDRMOD_READ = 0b00'01'00'01;
+    constexpr std::uint8_t ADDRMOD_LAST = 0b00'01'01'00;
+    ckernel_unpack_template tmp = ckernel_unpack_template(
+        false,
+        false,
+        TT_OP_UNPACR_COMMON(SrcA, ADDRMOD_READ, 0),
+        TT_OP_NOP,
+        TT_OP_NOP,
+        TT_OP_NOP,
+        TT_OP_UNPACR_COMMON(SrcA, ADDRMOD_LAST, 1),
+        TT_OP_NOP,
+        TT_OP_NOP);
+    tmp.program();
+}
+
+// One unit (unit_dim tiles) of tile-row `t` of the chunk at the CB read pointer.
+inline void rft_unpack_block(uint32_t operand, uint32_t t, uint32_t col_tile, uint32_t stick_bytes) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t base_address =
+        (get_local_cb_interface(operand_id).fifo_rd_ptr - 1) + ((t * 4 * stick_bytes + col_tile * TILE_C_DIM * 2) >> 4);
+    volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+    _llk_unpack_configure_single_address_(base_address, cfg);
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+    TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b0011);
+    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111);
+    TT_MOP_CFG(0);
+#pragma GCC unroll 4
+    for (uint32_t d = 0; d < 4; ++d) {
+        TT_MOP(0, 8 - 1, 0x80);                             // 8 reads, dvalid on the 8th
+        TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0001);  // CH0_Z = 0 (group 0)
+    }
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
+#endif
+
+template <uint32_t ct, uint32_t cb_in, uint32_t cb_out>
+ALWI void rft_tilize_row(uint32_t t) {
+    constexpr uint32_t stick_bytes = ct * TILE_C_DIM * 2;
+    uint32_t tiles_done = 0;
+    uint32_t prev_chunk = 0;
+    PACK((llk_pack_fast_tilize_row_begin(cb_out, 0)));
+    while (tiles_done < ct) {
+        const uint32_t remaining = ct - tiles_done;
+        const uint32_t chunk = (remaining > 5) ? 4 : (remaining == 5) ? 2 : remaining;
+        MATH((llk_math_wait_for_dest_available()));
+        PACK((llk_packer_wait_for_math_done()));
+        if (chunk != prev_chunk) {
+            UNPACK((llk_unpack_fast_tilize_reinit_xdim(chunk)));
+            PACK((llk_pack_fast_tilize_reinit_unit_dim(cb_out, chunk)));
+            prev_chunk = chunk;
+        }
+        UNPACK((rft_unpack_block(cb_in, t, tiles_done, stick_bytes)));
+        MATH((llk_math_fast_tilize_block_<DST_ACCUM_MODE>(0, cb_in, 4)));
+        PACK((llk_pack_fast_tilize_row_chunk(0, cb_out, chunk)));
+        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+        tiles_done += chunk;
+    }
+    PACK((llk_pack_fast_tilize_row_end()));
+}
 #endif
 
 namespace {
@@ -157,6 +256,49 @@ void kernel_main() {
     const uint32_t core_rows_tiles = get_arg_val<uint32_t>(0);
     const uint32_t block_height_tiles = get_arg_val<uint32_t>(1);
 
+#ifdef TILIZE_REORDER_FREE
+    {
+        constexpr uint32_t staging_tile_rows = get_compile_time_arg_val(11);
+        constexpr uint32_t first_chunk_tile_rows = get_compile_time_arg_val(12);
+        constexpr uint32_t group_rows = get_compile_time_arg_val(13);
+        constexpr uint32_t ct = block_width_tiles;
+        constexpr uint32_t slot_pages = staging_tile_rows * ct;
+        static_assert(num_col_blocks == 1 && !has_tail && !bfp4_round && ct >= 1, "rft domain");
+        // Fast-tilize init/uninit called at LLK level: the API's fast_tilize_init routes ct == 1
+        // to the standard tilize on BH; here unit_dim 1 runs through the fast-tilize MOPs too.
+        constexpr uint32_t first_unit = (ct > 5) ? 4 : (ct == 5) ? 2 : ct;
+        compute_kernel_hw_startup(cb_rm_sticks, cb_tiles_out);
+        UNPACK((llk_unpack_fast_tilize_init(cb_rm_sticks, ct, first_unit)));
+        MATH((llk_math_fast_tilize_init<DST_ACCUM_MODE>(cb_rm_sticks)));
+        PACK((llk_pack_fast_tilize_init<DST_ACCUM_MODE>(cb_rm_sticks, cb_tiles_out, first_unit)));
+        UNPACK((rft_unpack_override(ct, group_rows)));
+        for (uint32_t row0 = 0; row0 < core_rows_tiles;) {
+            const uint32_t nominal = row0 == 0 ? first_chunk_tile_rows : staging_tile_rows;
+            const uint32_t rows = core_rows_tiles - row0 < nominal ? core_rows_tiles - row0 : nominal;
+            {
+                MaybeDeviceZoneScope("compute_cb_wait");
+                cb_wait_front(cb_rm_sticks, slot_pages);
+            }
+            for (uint32_t t = 0; t < rows; ++t) {
+                {
+                    MaybeDeviceZoneScope("compute_cb_reserve");
+                    cb_reserve_back(cb_tiles_out, ct);
+                }
+                {
+                    MaybeDeviceZoneScope("compute_tilize");  // payload only: waits are zoned above
+                    rft_tilize_row<ct, cb_rm_sticks, cb_tiles_out>(t);
+                }
+                cb_push_back(cb_tiles_out, ct);
+            }
+            cb_pop_front(cb_rm_sticks, slot_pages);
+            row0 += rows;
+        }
+        UNPACK((llk_unpack_fast_tilize_uninit<DST_ACCUM_MODE>()));
+        MATH((llk_math_fast_tilize_uninit<DST_ACCUM_MODE>(cb_rm_sticks)));
+        PACK((llk_pack_fast_tilize_uninit<DST_ACCUM_MODE>(cb_tiles_out)));
+        return;
+    }
+#endif
     compute_kernel_hw_startup(cb_rm_sticks, cb_tiles_out);
 
     for (uint32_t col_block = 0; col_block < num_full_col_blocks; ++col_block) {

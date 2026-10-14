@@ -176,3 +176,115 @@
 | helper | kind | what was missing / hard | helper ns | raw ns | site |
 |---|---|---|---|---|---|
 | `noc_async_write_one_packet_with_state` (dataflow_api, used for L1→L1 local copies) | capability | No way to issue a stream of same-size one-packet writes over more than one cmd buf: each call waits for its single cmd buf to be accepted before programming the next copy, and it read-modify-writes both write counters per call. There is no batch form ("issue N copies, bump counters by N once"). | 3270 (reorder zone/core); op 11459 | 2010 (reorder zone/core); op 11075 | `kernels/tilize_reader.cpp:328` (raw_copy), `:377–423` (walks) |
+
+## Perf 2 — Perf tournament round 2 (focus `[1,1,16384,64]` bf16 DRAM→DRAM)
+- Date: 2026-10-14. Board: BH p150b, 110 cores, 8 DRAM banks. All ns are per-timer-cluster spans (`perf_experiments/_tools/zones.py`). Each figure is the median of 3 profiled samples unless noted. Noise is ±3–5 %.
+- **Measured breakdown on the focus shape** (after Perf 1; ablation knob `ABLATE`, peeled cumulatively):
+
+  | Variant | ns |
+  |---|---|
+  | full | 11385 |
+  | −reorder | 10787 |
+  | −read | 8812 |
+  | −write | 8514 |
+  | −read −reorder | 8420 |
+  | −reorder −write | 7270 |
+  | −read −write | 3410 |
+  | all stubbed | 2049 |
+
+  - Per-core end times are spread from 4.5 to 11.2 µs. Launch skew is under 0.2 µs.
+  - `writer_flush` is 0.1–0.4 µs/core on x=1..4, but 2–6.7 µs on x=12..15. The east cores end last.
+  - `reader_read_barrier` is ≈6 µs on rows y=2..5 and ≈1.1 µs on y=11.
+- **Ranked bottleneck:**
+  1. DRAM/NoC traffic, read and write about equal (≈9.3 µs of 11.4). It is uneven across the grid: some NoC paths are saturated while bottom-row cores sit idle after 4.6 µs.
+  2. Reorder copies, 0.6 µs exposed. They share the reader's NoC0 port with the DRAM reads.
+  3. Fixed floor, 2.05 µs.
+  - **Secondary (outside the focus shape):** the segment path is 1.3–2.1× behind the feature_spec references. 32x2048 takes 4338 vs 2047 ns. Its `reader_issue` zone is 1.3–2.4 µs for 32 reads of 64 B.
+- **Portfolio and verdicts** (experiment dirs under `perf_experiments/`):
+
+  | Idea | Verdict | Standalone result |
+  |---|---|---|
+  | `geo_write_noc`: route writes by grid geometry | **WIN** (via a different mechanism) | NoC role swap on logical rows `y % 4 == 0`: focus 11100 → 10070, 16384x32 −12 %, 3520x64 −12 %, 32x8192 −10 %; 2048x2048 +7 %, 2x3x4096x96 +3 % |
+  | `geo_read_order`: per-core DRAM endpoint / bank order | NULL | Best variant `free_b0` 11128 vs 11121. `nearest` +6 %, `far_first` +5 %. Faster reads on the top rows just move the wall to the east cores' writes. |
+  | `reorder_free_tilize`: drop the L1→L1 reorder; the unpacker reads the bank-grouped chunk directly | **WIN** | focus 11016 → 10534 (pooled, 12 samples); 16384x32 −17 %; 3520x64 −13 %; bf16→bfp8 −14 %; no regressions |
+  | `segment_read_shape`: segment-path read cost | **WIN** | 32x2048 −45 %, 32x8192 −31 %, 128x64 −11 %, 256x256 −45 %; focus flat (path unchanged) |
+
+  - **`geo_write_noc`, details:**
+    - Per-(core, bank) write-port choice was null (−1 to −3 %).
+    - Swapping only the write-hot cores gave −3 %. Their flush stayed at 3–4 µs on NoC0, so the write hotspot is not a routing problem.
+    - What moved the wall: swapping NoC roles on about 30 % of the cores, in whole rows. Those cores then draw their DRAM reads over NoC1.
+    - Swapping more cores regresses: rows y ≤ 5 +3 %, all cores +80 %.
+  - **`geo_read_order`, details:**
+    - Rows y=2..5 starve because banks 0 and 4 both return NoC0 read data through row 11.
+    - Those rows are also served last in the bank's queue.
+  - **`segment_read_shape`, details:**
+    - Each read request costs ≈25–33 ns of NoC issue, whatever its width. On the segment path, the cost per core therefore scales with the number of tile-rows, not with segment width.
+    - Writer-issued reads were mixed: 256x256 +8 %. Not recommended.
+- **Graduated (all three wins, fastest together):**
+  1. **Reorder-free coalesced path** is now the coalesced reader's path for every fast-tilize case.
+     - Each chunk lands bank-grouped directly in `cb_rm_sticks`. That CB is now the staging ring, and `cb_stick_staging` is gone on this path (−8 KB L1/core).
+     - The compute's fast-tilize unpack is replaced by a raw-LLK walk. It sets XDim to one stick and YDim to the group rows, then steps the Z/Y address counters.
+     - **Carve-out (cannot):** these cases keep the reorder copies, because they are not the fast-tilize datapath or the unpacker cannot express them:
+       - fp32 / int / uint / fp8 input, or fp32 output
+       - tile_h < 32
+       - the bfp4 round pass
+       - a writer copy share
+       - a padded stick page
+       - a chunk not divisible by num_banks
+       - YDim > 255
+  2. **Segment path:**
+     - `_choose_split` now has a request-count cost model. The cost is tiles + `SPLIT_ROW_COST_TILES`=10 per tile-row.
+     - A column cut must give segments of at least `SPLIT_MIN_SEG_BYTES`=1024. The exception is a split of at most `SPLIT_SMALL_CORES_PER_BANK`·num_banks = 16 cores.
+     - The reader issues stateful one-packet reads per bank group (public `noc_async_read_one_packet_set_state/with_state`).
+     - **Carve-out (cannot):** reads wider than one packet, sticks split across pages, non-interleaved input and dynamic NoC mode keep `noc_async_read`.
+     - The old split policy is deleted. `test_2d_split_fills_grid` now checks the new policy.
+  3. **NoC role swap** (`NOC_SWAP_ROW_PERIOD`=4): on logical rows `y % 4 == 0`, the reader runs on NoC1 and the writer on NoC0, as a separate kernel set. No kernel change was needed.
+     - It applies on the coalesced, retile and resident/sharded paths.
+     - **Carve-out (measured regression):** the segment reader. On top of the new split, the swap measured 32x8192 4.14 → 8.51 µs and 32x2048 2.38 → 2.93 µs. It was also +7 % on 2048x2048 under the old split.
+     - Untested paths ride: the sharded guard cases below were not in the subagent's sweep, and they improved.
+     - On top of the reorder-free path, its marginal gain on the focus shape is small: pooled 10940 → 10871. It is large on 16384x32 (5.95 → 5.36 µs) and 3520x64 (3.33 → 2.92 µs).
+  - **Instrumentation:**
+    - Reorder-free compute splits `compute_cb_wait` and `compute_cb_reserve` from the payload-only `compute_tilize`.
+    - The reorder-free reader keeps `reader_issue` and `reader_read_barrier`, and zones its slot reserve as `reader_cb_reserve`.
+    - The segment stateful issue keeps `reader_issue`.
+- **Whole-op before → after** (A/B in one session; before = HEAD after Perf 1, 6 samples per arm):
+
+  | Shape | Before (ns) | After (ns) | Change |
+  |---|---|---|---|
+  | 16384x64 (focus) | 11106 | 10656 | −4.1 % |
+  | 16384x32 | 6975 | 5358 | −23 % |
+  | 32768x64 | 21325 | 21114 | flat (DRAM-bound) |
+  | 3520x64 | 3737 | 2929 | −22 % |
+  | 128x64 | 2126 | 1896 | −11 % |
+  | 32x2048 | 4332 | 2366 | −45 % |
+  | 32x8192 | 6113 | 4117 | −33 % |
+  | 2048x2048 | 39699 | 38263 | −3.6 % |
+
+  - Focus shape: 10.66 µs vs the 11.85 µs reference.
+  - 16384x32 now runs at 5.36 µs vs its 7.19 µs reference.
+  - 32x2048, 128x64 and 32x8192 are still above their references, at 2366 / 1896 / 4117 vs 2047 / 1679 / 3854.
+- **Guard set, sharded LOOSE_CASES** (new `test_tilize_perf_sharded`; before / after / after without swap, ns):
+
+  | Case | Before | After | After, no swap |
+  |---|---|---|---|
+  | height-sharded L1 → DRAM, 2048x512 | 8771 | 7254 | 8828 |
+  | DRAM → height-sharded L1 | 7721 | 5941 | 7350 |
+  | height-sharded same-spec | 1240 | 1238 | 1231 |
+  | block-sharded same-spec | 1210 | 1141 | 1189 |
+
+  No regression.
+- **Correctness:**
+  - Golden `eval/golden_tests/tilize/`: 2118 passed / 65 failed / 46 xfailed. These are the same counts and the same failure set as Perf 1: 56 fp8_e4m3 harness `from_torch` cells and the same 9 `test_translated` cells.
+  - Unit dir `tests/ttnn/unit_tests/operations/tilize/`: 298/298.
+  - Subagent checks, all torch.equal:
+    - reorder-free: 20 cases, ct 1..64, bf16 and bfp8 out, `--dev`
+    - segment: 28 cases, incl. padding, fp32/int32/uint8 bounce, L1 input, tile_h 16/4, `--dev`
+    - swap: all unit files with the swap forced on every path
+- **Outcome:** 4 ideas measured; 3 graduated, 1 null. Focus shape −4.1 % (11.11 → 10.66 µs), up to −45 % on short_wide shapes. No regression on the interleaved or sharded guard set.
+- **Precision:** unchanged. All paths are bit-exact. No precision knob was touched.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `compute_kernel_lib::tilize` / `fast_tilize_block` (unpack step) | capability | The tilize unpacker has no per-row source address pattern. It reads rows at one constant stride from the CB read pointer, so it cannot consume rows interleaved across bank groups (row i at `(i % 8)·group + (i / 8)·stick`). That forces 32 L1→L1 reorder copies per tile-row. A helper option for a 2-level row stride (Y = stick, Z = group) would remove the bypass. | 11016 (op, focus; reorder copies 2.0 µs/core) | 10534 (op, focus) | `kernels/tilize_compute.cpp:112` (`rft_unpack_override`), `:136` (`rft_unpack_block`) |
+| `fast_tilize_init` / `fast_tilize_uninit` (compute API) | capability | On BH the API routes ct == 1 to standard tilize, so the reorder-free path could not use fast tilize at unit width 1. The unpack override must also sit between init and the first block, and the API has no hook for that. Init/uninit are called at LLK level. Unit dim 1 through the fast-tilize MOPs was bit-exact. | n/a (no helper form of the path) | same run as above | `kernels/tilize_compute.cpp:268` |

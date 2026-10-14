@@ -95,7 +95,10 @@ void kernel_main() {
     // each stick into an aligned slot of cb_stick_staging (bounce) and local-copies it (L1 needs only
     // 16 B) into its row. 0 = never bounce.
     constexpr uint32_t seg_read_alignment = get_compile_time_arg_val(45);
-    constexpr auto in_args = TensorAccessorArgs<46>();
+    // Interleaved input: stick s sits in bank s % num_banks, and stick s + num_banks is the next page
+    // of the same bank (+ stick_page_bytes) — the segment path reads per bank group with state.
+    constexpr bool in_interleaved = get_compile_time_arg_val(46) != 0;
+    constexpr auto in_args = TensorAccessorArgs<47>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start_tile = get_arg_val<uint32_t>(1);
@@ -302,6 +305,61 @@ void kernel_main() {
             }
         };
 
+#ifdef TILIZE_REORDER_FREE
+        {
+            // reorder_free_tilize: chunk c lands bank-grouped straight in cb_rm_sticks slot
+            // c % staging_slots (cb_rm_sticks = staging_slots slots of slot_pages pages); compute's
+            // unpacker undoes the bank grouping. No L1->L1 copies at all.
+            constexpr uint32_t slot_pages = staging_tile_rows * block_width_tiles;
+            const uint32_t ring_base = get_write_ptr(cb_rm_sticks);
+            Noc noc;
+            static_assert(staging_slots >= 2 && staging_slots <= NOC_MAX_TRANSACTION_ID, "trid range");
+            uint32_t unpushed = 0;
+            auto issue_slot = [&](uint32_t chunk) {
+                const uint32_t slot = chunk % staging_slots;
+                {
+                    MaybeDeviceZoneScope("reader_cb_reserve");
+                    cb_reserve_back(cb_rm_sticks, (unpushed + 1) * slot_pages);  // slot of chunk - slots popped
+                }
+                ++unpushed;
+                dataflow_kernel_lib::set_read_trid(noc, slot + 1);
+                MaybeDeviceZoneScope("reader_issue");
+                const uint32_t n_sticks = chunk_rows(chunk) * tile_h;
+                const uint32_t stick0 = first_core_stick + chunk_row0(chunk) * tile_h;
+                const uint32_t base = ring_base + slot * slot_bytes;
+                const uint32_t groups = n_sticks < num_banks ? n_sticks : num_banks;
+                for (uint32_t k = 0; k < groups; ++k) {
+                    uint32_t g = k + bank_stagger_offset;
+                    g = g >= groups ? g - groups : g;
+                    const uint32_t count = (n_sticks - g + num_banks - 1) / num_banks;
+#ifdef TILIZE_ABLATE_READ
+                    if (count == 0xFFFFFFFF)
+#endif
+                        noc_async_read(
+                            in_acc.get_noc_addr(stick0 + g),
+                            base + g * max_per_group * stick_page_bytes,
+                            count * stick_page_bytes);
+                }
+            };
+            for (uint32_t c = 0; c + 1 < staging_slots && c < num_chunks; ++c) {
+                issue_slot(c);
+            }
+            for (uint32_t c = 0; c < num_chunks; ++c) {
+                const uint32_t slot = c % staging_slots;
+                {
+                    MaybeDeviceZoneScope("reader_read_barrier");
+                    dataflow_kernel_lib::async_read_barrier_with_trid(noc, slot + 1);
+                }
+                cb_push_back(cb_rm_sticks, slot_pages);
+                --unpushed;
+                if (c + staging_slots - 1 < num_chunks) {
+                    issue_slot(c + staging_slots - 1);  // into the slot chunk c - 1 used (popped)
+                }
+            }
+            dataflow_kernel_lib::set_read_trid(noc, 0);
+            return;
+        }
+#endif
         // Local copies all target this core with the same size: program the write cmd buffer once
         // (the reader issues no other writes), then each copy only sets src/dst addresses.
         constexpr bool one_packet_copies = seg_bytes <= NOC_MAX_BURST_SIZE;
@@ -539,7 +597,28 @@ void kernel_main() {
                 // Bank stagger: start each core's stick walk at a different stick (consecutive
                 // sticks live in consecutive banks), so column-split cores reading the same sticks
                 // do not all queue on one bank at once.
-                {
+                // Stateful per-bank issue (Perf 2, measured: per-read NoC issue cost dominates small
+                // segment reads; [1,1,128,64] 2.09 -> 1.90 us): one accessor call per bank group, then
+                // one-packet reads with state stepping one bank page per stick.
+                constexpr bool stateful_issue =
+                    in_interleaved && in_pages_per_stick == 1 && noc_mode == DM_DEDICATED_NOC;
+                if (stateful_issue && data_bytes <= NOC_MAX_BURST_SIZE) {
+                    MaybeDeviceZoneScope("reader_issue");
+                    const uint32_t groups = valid_sticks < num_banks ? valid_sticks : num_banks;
+                    uint32_t g = groups == 0 ? 0 : bank_stagger_offset % groups;
+                    for (uint32_t k = 0; k < groups; ++k) {
+                        const uint64_t a = in_acc.get_noc_addr(first_stick + g, seg_offset_bytes);
+                        noc_async_read_one_packet_set_state(a, data_bytes);
+                        uint32_t lo = (uint32_t)a;
+                        uint32_t dst = read_base + g * read_stride;
+                        for (uint32_t s = g; s < valid_sticks; s += num_banks) {
+                            noc_async_read_one_packet_with_state(lo, dst);
+                            lo += stick_page_bytes;
+                            dst += num_banks * read_stride;
+                        }
+                        g = (g + 1 == groups) ? 0 : g + 1;
+                    }
+                } else {
                     MaybeDeviceZoneScope("reader_issue");
                     uint32_t i = bank_stagger_offset < valid_sticks ? bank_stagger_offset : 0;
                     for (uint32_t k = 0; k < valid_sticks; ++k) {

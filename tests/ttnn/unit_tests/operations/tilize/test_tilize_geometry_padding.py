@@ -25,10 +25,12 @@ def _pad_expected(x, padded_shape, value):
     ids=["short_wide_canonical", "square_large", "short_wide_two_rows", "tiny", "ragged_cols"],
 )
 def test_2d_split_fills_grid(device, rows, cols):
-    """The rectangle split reaches min(R*C, grid) cores worth of work balance and covers every tile once."""
+    """The rectangle split covers every tile once, never costs more than the row split, and only cuts
+    columns narrower than SPLIT_MIN_SEG_BYTES on small splits (Perf 2 request-count cost model)."""
     grid = device.compute_with_storage_grid_size()
     num_cores = grid.x * grid.y
-    _, assignment, cores_c = pd._rect_assignment(device, rows, cols, 1)
+    unit_bytes, num_banks = 64, 8  # bf16 tile column; BH DRAM banks
+    _, assignment, cores_c = pd._rect_assignment(device, rows, cols, 1, unit_bytes, num_banks)
     covered = set()
     for _, r0, nr, c0, nc in assignment:
         for r in range(r0, r0 + nr):
@@ -37,11 +39,13 @@ def test_2d_split_fills_grid(device, rows, cols):
                 covered.add((r, c))
     assert len(covered) == rows * cols
     assert len(assignment) <= num_cores
-    busiest = max(nr * nc for _, _, nr, _, nc in assignment)
-    # Never worse than the row split, and short_wide spreads over the columns.
-    assert busiest <= math.ceil(rows / min(rows, num_cores)) * cols
-    if rows < num_cores and rows * cols >= num_cores:
-        assert len(assignment) >= num_cores // 2, f"only {len(assignment)} cores on {rows}x{cols}"
+    cost = lambda nr, nc: nr * nc + pd.SPLIT_ROW_COST_TILES * nr
+    busiest = max(cost(nr, nc) for _, _, nr, _, nc in assignment)
+    row_rows = math.ceil(rows / min(rows, num_cores))
+    assert busiest <= cost(row_rows, cols)
+    if cores_c > 1 and len(assignment) > pd.SPLIT_SMALL_CORES_PER_BANK * num_banks:
+        widest = max(nc for *_, nc in assignment)  # the ragged last column may be narrower
+        assert widest * unit_bytes >= pd.SPLIT_MIN_SEG_BYTES
 
 
 @pytest.mark.parametrize(
