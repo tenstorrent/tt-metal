@@ -1638,6 +1638,53 @@ def test_kimi_k3_moe_fabric2d(variant, config_only, mesh_device, device_params, 
     )
 
 
+# Kimi-K3 at the payload a model mesh opens with, on the 8x1 LoudBox: the direct path, and the top-16
+# dispatch_fabric2d with the routed expert overlapped with combine_fabric2d, run untraced so this PCC check
+# reaches it.
+@pytest.mark.parametrize("transport", ["direct", "fabric2d"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 1),
+            torus_y_device_params(fabric_payload_size=moe_fabric_payload(KimiK3Config)),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="torus-y-8x1",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k3"], indirect=True, ids=["kimi_k3"])
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(1800)
+def test_kimi_k3_moe_fabric2d_model_payload(
+    variant, config_only, mesh_device, device_params, num_links, request, transport
+):
+    fabric2d = transport == "fabric2d"
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=PREFILL_CHUNK_TOKENS_PER_CHIP,
+        emb_dim=KimiK3Config.EMB_SIZE,
+        hidden_dim=KimiK3Config.MOE_INTERMEDIATE_SIZE,
+        num_routed_experts=KimiK3Config.NUM_ROUTED_EXPERTS,
+        num_experts_per_tok=KimiK3Config.NUM_EXPERTS_PER_TOKEN,
+        dispatch_buffer_capacity_factor=5,
+        run_pcc_check=True,
+        num_links=num_links,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        request=request,
+        dispatch_impl=transport,
+        combine_impl=transport,
+        overlap_routed_expert_with_combine=fabric2d,
+        overlap_routed_expert_with_combine_eager=fabric2d,
+        **_KIMI_K3_RUN_MODEL_KWARGS,
+    )
+
+
 # Mistral-Small-4-119B MoE. Own test function rather than a row on test_ds_moe because the upstream
 # reference is a different class; the shared run_model body is unchanged.
 #
