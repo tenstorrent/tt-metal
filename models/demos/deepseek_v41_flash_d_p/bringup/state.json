@@ -132,6 +132,30 @@
   "status": "PASS",
   "waiting": null
  },
+ "R.3": {
+  "attempts": 0,
+  "duration_s": 489.5,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-10-14T20:37:57"
+   }
+  ],
+  "last_run": "2026-10-14T20:37:57",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/R.3.log",
+  "metrics": {
+   "boundaries_missing": 0,
+   "graph_errors": 0,
+   "graph_replay_maxabs": 0.0,
+   "maxabs_hidden": 0.0,
+   "pcc_hidden": 1.0000000000000162,
+   "pcc_state_min": 0.9999999999976749
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-14T20:29:47",
+  "status": "PASS"
+ },
  "R.4": {
   "attempts": 0,
   "duration_s": 16.9,
