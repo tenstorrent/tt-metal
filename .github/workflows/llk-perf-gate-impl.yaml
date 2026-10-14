@@ -75,7 +75,7 @@ on:
         default: L1_TO_L1
         type: string
       fail_on_regression:
-        description: "Fail the job on a regression. False reports to Slack only."
+        description: "Fail the job on a regression. False only reports it."
         required: false
         default: true
         type: boolean
@@ -111,9 +111,8 @@ on:
         type: string
       pr_number:
         description: >-
-          The PR the compared runs came from. Only used to label the Slack
-          message when there is no pull_request event to read it from,
-          as on a pilot dispatch. Nothing is posted to the PR.
+          The PR the compared runs came from, when there is no pull_request
+          event to read it from. Labels the report only.
         required: false
         type: string
 
@@ -460,12 +459,6 @@ jobs:
           SLACK_ON_PASS: ${{ inputs.slack_on_pass }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -z "$SLACK_CHANNEL_ID" ]; then
-            echo "LLK_PERF_GATE_SLACK_CHANNEL_ID is unset. No notification is sent."
-            echo "should_post=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
           if [[ "$PR_NUMBER" == "?" && "$GITHUB_REF" =~ gh-readonly-queue/[^/]+/pr-([0-9]+)- ]]; then
             PR_NUMBER="${BASH_REMATCH[1]}"
             PR_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
@@ -506,7 +499,7 @@ jobs:
             --exit-code "${GATE_EXIT_CODE:-0}" \
             --comparison-finished "${COMPARISON_FINISHED:-true}" \
             --measure-result "$MEASURE_RESULT" \
-            --channel "$SLACK_CHANNEL_ID" \
+            --channel "${SLACK_CHANNEL_ID:-unset}" \
             --pr-number "$PR_NUMBER" \
             --pr-url "$PR_URL" \
             --pr-title "$PR_TITLE" \
@@ -530,7 +523,12 @@ jobs:
         if: ${{ !cancelled() && inputs.slack && steps.slack.outputs.should_post == 'true' }}
         env:
           SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
         run: |
+          if [ -z "$SLACK_CHANNEL_ID" ]; then
+            echo "LLK_PERF_GATE_SLACK_CHANNEL_ID is unset. No notification is sent."
+            exit 0
+          fi
           if [ -z "$SLACK_BOT_TOKEN" ]; then
             echo "::error::LLK_SLACK_REPORTING_BOT_TOKEN is unset; the gate could not notify Slack."
             exit 0
@@ -581,7 +579,7 @@ jobs:
             if [ "${{ inputs.fail_on_regression }}" = "true" ]; then
               exit 1
             fi
-            echo "Report-only: Slack carries the verdict; the job does not fail."
+            echo "Report-only: the job does not fail."
             exit 0
           fi
 
