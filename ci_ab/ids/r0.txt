@@ -1,0 +1,3 @@
+perf_sfpu_misc.py::test_perf_sfpu_misc[row:('reshuffle_rows', InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, 0, False)-loop_factor:16-input_dimensions:[128, 64]]
+perf_sfpu_misc.py::test_perf_sfpu_misc[row:('reshuffle_rows', InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, 1, False)-loop_factor:16-input_dimensions:[128, 64]]
+perf_sfpu_misc.py::test_perf_sfpu_misc[row:('reshuffle_rows', InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, 2, False)-loop_factor:16-input_dimensions:[128, 64]]
