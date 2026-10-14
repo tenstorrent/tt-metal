@@ -10,6 +10,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -20,6 +21,7 @@
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_plan.hpp"
+#include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_tile_mapped_plan.hpp"
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_tile_rows_plan.hpp"
 
 namespace ttnn::prim {
@@ -29,16 +31,27 @@ namespace rcg = ttnn::operations::data_movement::reshape_codegen;
 
 namespace {
 
+constexpr const char* kCommonKernelDir = "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen";
 constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/data_movement/reshape_view/codegen/kernels";
 constexpr uint32_t kCbIn = tt::CBIndex::c_0;
 constexpr uint32_t kCbMid = tt::CBIndex::c_1;
+constexpr uint32_t kCbOut = tt::CBIndex::c_16;
+constexpr uint32_t kSeqIdentity = 0;
+// pack_untilize block width limit by DEST capacity: half as many tiles when datums are 32-bit.
+constexpr uint32_t kMaxBlockCtDim16 = 8;
+constexpr uint32_t kMaxBlockCtDim32 = 4;
+constexpr uint32_t kWideDatumBytes = 4;
 constexpr uint32_t kCbPlan = tt::CBIndex::c_0;
 constexpr uint32_t kCbStaged = tt::CBIndex::c_1;
 constexpr uint32_t kCbRing = tt::CBIndex::c_2;
 constexpr uint32_t kCbZero = tt::CBIndex::c_3;
 // Datums per face row; a tile-row run never crosses a face boundary, so the writer copies face rows.
 constexpr uint32_t kFaceWidth = 16;
+constexpr uint32_t kCbMap = tt::CBIndex::c_0;
+constexpr uint32_t kCbMappedInput = tt::CBIndex::c_1;
+constexpr uint32_t kCbScratch = tt::CBIndex::c_2;
 
+std::string common_kernel(const char* name) { return std::string(kCommonKernelDir) + "/" + name; }
 std::string op_kernel(const char* name) { return std::string(kKernelDir) + "/" + name; }
 
 CBDescriptor make_cb(
@@ -237,6 +250,75 @@ ProgramDescriptor build_rm_arbitrary(
     return desc;
 }
 
+ProgramDescriptor build_tile(const rcg::TilePlan& p, const Tensor& input, Tensor& output, const rcg::WorkSplit& split) {
+    ProgramDescriptor desc;
+    const CoreRangeSet& all_cores = split.all_cores;
+    const auto fmt = datatype_to_dataformat_converter(input.dtype());
+    Buffer* in_buf = input.buffer();
+    Buffer* out_buf = output.buffer();
+    const bool wide = input.element_size() == kWideDatumBytes;
+
+    desc.cbs.push_back(make_cb(kCbIn, fmt, p.tile_bytes, p.in_tiles, all_cores));
+    desc.cbs.push_back(make_cb(kCbMid, fmt, p.tile_bytes, p.in_tiles, all_cores));
+    desc.cbs.push_back(make_cb(kCbOut, fmt, p.tile_bytes, p.out_cb_depth, all_cores));
+
+    KernelDescriptor reader;
+    reader.kernel_source = common_kernel("reader_tile_interleaved_unified.cpp");
+    reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader.core_ranges = all_cores;
+    TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
+    reader.named_compile_time_args = {
+        {"seq_id", kSeqIdentity},
+        {"cb_id", kCbIn},
+        {"batch", 1},
+        {"src_page_pitch", 0},  // 0: use the accessor's own page size
+    };
+    reader.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer;
+    writer.kernel_source = common_kernel("writer_interleaved.cpp");
+    writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer.core_ranges = all_cores;
+    writer.compile_time_args = {kCbOut, p.out_page_bytes};
+    TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
+    writer.compile_time_args.push_back(p.write_batch);
+    writer.config = WriterConfigDescriptor{};
+
+    KernelDescriptor compute;
+    compute.kernel_source = op_kernel("compute_reshape_tile.cpp");
+    compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute.core_ranges = all_cores;
+    compute.compile_time_args = {
+        kCbIn, kCbMid, kCbOut, p.wt_in, p.wt_out, p.in_rows, p.out_rows, wide ? kMaxBlockCtDim32 : kMaxBlockCtDim16};
+    ComputeConfigDescriptor compute_config{.fp32_dest_acc_en = wide};
+    if (wide) {
+        // Untilize reads cb_in and tilize reads cb_mid; both must unpack 32-bit data straight to DEST.
+        compute_config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        compute_config.unpack_to_dest_mode[kCbIn] = UnpackToDestMode::UnpackToDestFp32;
+        compute_config.unpack_to_dest_mode[kCbMid] = UnpackToDestMode::UnpackToDestFp32;
+    }
+    compute.config = compute_config;
+
+    const auto cores = corerange_to_cores(split.all_cores, split.num_cores, false);
+    uint32_t in_tile_offset = 0;
+    uint32_t out_tile_offset = 0;
+    for (const auto& core : cores) {
+        const uint32_t n_chunks = split.group1.contains(core) ? split.units_group1 : split.units_group2;
+        const uint32_t n_in_tiles = n_chunks * p.in_tiles;
+        const uint32_t n_out_tiles = n_chunks * p.out_tiles;
+        reader.emplace_runtime_args(core, {in_buf, n_in_tiles, in_tile_offset});
+        writer.emplace_runtime_args(core, {out_buf, n_out_tiles, out_tile_offset});
+        compute.emplace_runtime_args(core, {n_chunks});
+        in_tile_offset += n_in_tiles;
+        out_tile_offset += n_out_tiles;
+    }
+
+    desc.kernels.push_back(std::move(reader));
+    desc.kernels.push_back(std::move(writer));
+    desc.kernels.push_back(std::move(compute));
+    return desc;
+}
+
 ProgramDescriptor build_tile_rows(
     const rcg::TileRowsLayout& layout,
     uint32_t staged_batches,
@@ -305,6 +387,69 @@ ProgramDescriptor build_tile_rows(
     return desc;
 }
 
+ProgramDescriptor build_tile_mapped(
+    const rcg::TileMappedLayout& layout,
+    uint32_t input_depth,
+    uint32_t tile_bytes,
+    const Tensor& input,
+    Buffer* map_buf,
+    Tensor& output,
+    const CoreRangeSet& grid) {
+    ProgramDescriptor desc;
+    const auto fmt = datatype_to_dataformat_converter(input.dtype());
+    Buffer* in_buf = input.buffer();
+    Buffer* out_buf = output.buffer();
+    const auto [num_cores, all_cores, group1, group2, rows1, rows2] = split_work_to_cores(grid, layout.num_rows, false);
+
+    desc.cbs.push_back(make_cb(kCbMap, tt::DataFormat::UInt32, layout.page_bytes(), 1, all_cores));
+    desc.cbs.push_back(make_cb(kCbMappedInput, fmt, tile_bytes, input_depth, all_cores));
+    desc.cbs.push_back(make_cb(kCbScratch, fmt, tile_bytes, 1, all_cores));
+
+    KernelDescriptor reader;
+    reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader.core_ranges = all_cores;
+    if (input_depth > 1) {
+        // Half-depth batches keep a slot free for the tile the writer still holds across rows.
+        reader.kernel_source = op_kernel("reader_reshape_tile_mapped_pipelined.cpp");
+        reader.compile_time_args = {
+            layout.page_bytes(), tile_bytes, kCbMap, kCbMappedInput, input_depth / 2, input_depth};
+    } else {
+        reader.kernel_source = op_kernel("reader_reshape_tile_mapped.cpp");
+        reader.compile_time_args = {layout.page_bytes(), tile_bytes, kCbMap, kCbMappedInput};
+    }
+    TensorAccessorArgs(*map_buf).append_to(reader.compile_time_args);
+    TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
+    reader.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer;
+    writer.kernel_source =
+        op_kernel(layout.sliced ? "writer_reshape_tile_mapped_ranged.cpp" : "writer_reshape_tile_mapped.cpp");
+    writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer.core_ranges = all_cores;
+    writer.compile_time_args = {
+        tile_bytes,
+        layout.entries_per_page,
+        static_cast<uint32_t>(input.element_size()),
+        kCbMap,
+        kCbMappedInput,
+        kCbScratch};
+    TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
+    writer.config = WriterConfigDescriptor{};
+
+    const auto cores = corerange_to_cores(all_cores, num_cores, false);
+    uint32_t start = 0;
+    for (const auto& core : cores) {
+        const uint32_t end = start + (group1.contains(core) ? rows1 : rows2);
+        reader.emplace_runtime_args(core, {in_buf, map_buf, start, end});
+        writer.emplace_runtime_args(core, {out_buf, start, end});
+        start = end;
+    }
+
+    desc.kernels.push_back(std::move(reader));
+    desc.kernels.push_back(std::move(writer));
+    return desc;
+}
+
 // ~Tensor force-frees its device buffer, so the table is held through a shared Tensor the workload owns. It lives
 // in interleaved DRAM, one table row per page.
 std::shared_ptr<Tensor> upload_table(
@@ -339,12 +484,29 @@ tt::tt_metal::ProgramDescriptor ReshapeCodegenProgramFactory::create_descriptor(
     Tensor& tensor_return_value) {
     const Tensor& input = tensor_args.input;
     const auto& plan = operation_attributes.plan;
+    const auto grid = rcg::reshape_core_grid(input, operation_attributes.sub_core_grids);
+    if (input.layout() == Layout::TILE) {
+        // Selection sends a TILE reshape here for the LCM route only. Routing already sent calls with no fitting
+        // program to native, so only the forced entry reaches this error.
+        const auto chosen =
+            rcg::live_tile_choice(input, operation_attributes.logical_output_shape, grid.num_cores(), plan);
+        const auto* lcm = chosen.has_value() ? std::get_if<rcg::TilePlan>(&*chosen) : nullptr;
+        TT_FATAL(
+            lcm != nullptr,
+            "ReshapeCodegen: no LCM tile plan fits the {} B of L1 free per core below the lowest L1 allocation; free "
+            "L1 tensors or use the native reshape",
+            ttnn::operations::data_movement::get_max_l1_space(input));
+        TT_FATAL(
+            tensor_return_value.buffer()->aligned_page_size() == lcm->out_page_bytes,
+            "Reshape output page {} differs from the page the plan assumed",
+            tensor_return_value.buffer()->aligned_page_size());
+        return build_tile(*lcm, input, tensor_return_value, rcg::split_units(grid, lcm->split.units));
+    }
     const uint32_t out_aligned_page = static_cast<uint32_t>(tensor_return_value.buffer()->aligned_page_size());
     TT_FATAL(
         out_aligned_page == plan.out_aligned_page,
         "Reshape output page {} differs from the page the plan assumed",
         out_aligned_page);
-    const auto grid = rcg::reshape_core_grid(input, operation_attributes.sub_core_grids);
 
     // Routing already sent calls with no fitting program to native, so only the forced entry reaches this error.
     const auto chosen = rcg::live_rm_choice(
@@ -397,6 +559,48 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileRowsProgramFactory::create_wo
         plan_owner,
         build_tile_rows(
             layout, chosen->staged_batches, tile_bytes, input, plan_owner->buffer(), tensor_return_value, grid),
+        tensor_coords);
+}
+
+tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileMappedProgramFactory::create_workload_descriptor(
+    const ReshapeCodegenParams& operation_attributes,
+    const ReshapeCodegenInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    const Tensor& input = tensor_args.input;
+    const auto grid = rcg::reshape_core_grid(input, operation_attributes.sub_core_grids);
+    const auto num_cores = static_cast<uint32_t>(grid.num_cores());
+    const uint32_t tile_bytes =
+        input.tensor_spec().tile().get_tile_size(datatype_to_dataformat_converter(input.dtype()));
+
+    // Routing already sent calls with no fitting map to native, so only the forced entry reaches this error.
+    const auto chosen =
+        rcg::live_tile_choice(input, operation_attributes.logical_output_shape, num_cores, operation_attributes.plan);
+    const auto* mapped = chosen.has_value() ? std::get_if<rcg::TileMappedChoice>(&*chosen) : nullptr;
+    TT_FATAL(
+        mapped != nullptr,
+        "ReshapeCodegen: no segment map fits the {} B of L1 free per core below the lowest L1 allocation; free L1 "
+        "tensors or use the native reshape",
+        ttnn::operations::data_movement::get_max_l1_space(input));
+    const rcg::TileMappedLayout& layout = mapped->layout;
+    TT_FATAL(
+        tensor_return_value.buffer()->num_pages() == layout.num_output_pages,
+        "Reshape output has {} tiles, the segment map expects {}",
+        tensor_return_value.buffer()->num_pages(),
+        layout.num_output_pages);
+
+    auto plan = rcg::build_tile_mapped_plan(
+        input.logical_shape(),
+        operation_attributes.logical_output_shape,
+        static_cast<uint32_t>(input.element_size()),
+        tile_bytes,
+        num_cores,
+        layout.sliced);
+    const auto map_owner = upload_table(std::move(plan.table), layout.num_rows, layout.page_words(), input);
+    return table_workload(
+        map_owner,
+        build_tile_mapped(
+            layout, mapped->input_depth, tile_bytes, input, map_owner->buffer(), tensor_return_value, grid),
         tensor_coords);
 }
 

@@ -25,9 +25,14 @@ void require_device_input(const Tensor& input) {
 }  // namespace
 
 ReshapeCodegenDeviceOperation::program_factory_t ReshapeCodegenDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    namespace rcg = ttnn::operations::data_movement::reshape_codegen;
     if (tensor_args.input.layout() == Layout::TILE) {
-        return ReshapeCodegenTileRowsProgramFactory{};
+        switch (operation_attributes.plan.tile_route) {
+            case rcg::TileRoute::TileRows: return ReshapeCodegenTileRowsProgramFactory{};
+            case rcg::TileRoute::TileMapped: return ReshapeCodegenTileMappedProgramFactory{};
+            case rcg::TileRoute::Lcm: break;
+        }
     }
     return ReshapeCodegenProgramFactory{};
 }
@@ -48,6 +53,12 @@ void ReshapeCodegenDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             plan.rm.has_value() || plan.rm_arbitrary.has_value(),
             "ReshapeCodegen was launched without a row-major geometry");
+        return;
+    }
+    if (plan.tile_route != rcg::TileRoute::TileRows) {
+        TT_FATAL(
+            plan.tile_route != rcg::TileRoute::Lcm || plan.lcm.has_value(),
+            "ReshapeCodegen was launched on the LCM route without its geometry");
         return;
     }
     const auto& layout = plan.tile_rows.layout;
@@ -78,36 +89,54 @@ ReshapeCodegenDeviceOperation::tensor_return_value_t ReshapeCodegenDeviceOperati
 
 // With the full plan fitting, the hashed rung or depth is the same constant on every call, so calls share programs
 // exactly as the attributes and tensor args alone would key them. Under L1 pressure the hashed values step along fixed
-// ladders (tile-row rungs, power-of-two stick pushes, slab batches), so the key changes only when the frontier crosses
+// ladders (tile-row rungs, LCM write batches, segment-map input depths, power-of-two stick pushes, slab batches), so the key changes only when the frontier crosses
 // a rung. A call no plan fits hashes rung 0, which never has an entry: it misses and the program factory raises.
 ttsl::hash::hash_t ReshapeCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& plan = operation_attributes.plan;
+    namespace rcg = ttnn::operations::data_movement::reshape_codegen;
     if (tensor_args.input.layout() == Layout::TILE) {
-        const auto chosen = ttnn::operations::data_movement::reshape_codegen::live_tile_rows_choice(
-            tensor_args.input, operation_attributes.logical_output_shape, plan.tile_rows);
-        const uint32_t max_in = chosen ? chosen->max_in : 0;
-        const uint32_t staged_batches = chosen ? chosen->staged_batches : 0;
-        return ttsl::hash::hash_objects_with_default_seed(operation_attributes, tensor_args, max_in, staged_batches);
+        const auto chosen = rcg::live_tile_choice(
+            tensor_args.input,
+            operation_attributes.logical_output_shape,
+            rcg::reshape_core_grid(tensor_args.input, operation_attributes.sub_core_grids).num_cores(),
+            plan);
+        // Tile rows: rung and staging depth. LCM: output CB depth and write batch. Segment map: slicing and input
+        // CB depth.
+        uint32_t first = 0;
+        uint32_t second = 0;
+        if (chosen.has_value()) {
+            if (const auto* rows = std::get_if<rcg::TileRowsChoice>(&*chosen)) {
+                first = rows->max_in;
+                second = rows->staged_batches;
+            } else if (const auto* lcm = std::get_if<rcg::TilePlan>(&*chosen)) {
+                first = lcm->out_cb_depth;
+                second = lcm->write_batch;
+            } else {
+                const auto& mapped = std::get<rcg::TileMappedChoice>(*chosen);
+                first = mapped.layout.sliced ? 1 : 0;
+                second = mapped.input_depth;
+            }
+        }
+        return ttsl::hash::hash_objects_with_default_seed(
+            operation_attributes, tensor_args, plan.tile_route, first, second);
     }
-    const auto chosen = ttnn::operations::data_movement::reshape_codegen::live_rm_choice(
+    const auto chosen = rcg::live_rm_choice(
         tensor_args.input,
         operation_attributes.logical_output_shape,
         operation_attributes.output_mem_config.buffer_type(),
-        ttnn::operations::data_movement::reshape_codegen::reshape_core_grid(
-            tensor_args.input, operation_attributes.sub_core_grids)
-            .num_cores(),
+        rcg::reshape_core_grid(tensor_args.input, operation_attributes.sub_core_grids).num_cores(),
         plan);
-    // Depth 0 is never built, so a call no program fits misses like a tile-rows call at rung 0.
+    // Depth 0 is never built, so a call no program fits misses like a TILE call that hashes zeros.
     uint32_t cb_depth = 0;
     uint32_t push_sticks = 0;
     bool slab = false;
     if (chosen.has_value()) {
-        if (const auto* stick = std::get_if<ttnn::operations::data_movement::reshape_codegen::RmPlan>(&*chosen)) {
+        if (const auto* stick = std::get_if<rcg::RmPlan>(&*chosen)) {
             cb_depth = stick->cb_depth;
             push_sticks = stick->push_sticks;
         } else {
-            cb_depth = std::get<ttnn::operations::data_movement::reshape_codegen::RmArbitraryPlan>(*chosen).batch;
+            cb_depth = std::get<rcg::RmArbitraryPlan>(*chosen).batch;
             slab = true;
         }
     }
