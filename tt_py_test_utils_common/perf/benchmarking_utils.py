@@ -212,16 +212,23 @@ class BenchmarkData:
             if parent_dir != "":
                 # exist_ok=True avoids a race when parallel MPI ranks create the directory concurrently
                 os.makedirs(parent_dir, exist_ok=True)
-            if os.path.exists(filename):
-                suffix = 2
-                while True:
-                    candidate = os.path.join(self.output_folder, f"partial_run_{run_start_ts}_{suffix}.pkl")
-                    if not os.path.exists(candidate):
-                        filename = candidate
-                        break
+            # Atomically reserve the output filename to avoid a TOCTOU race: a plain
+            # os.path.exists() check followed by open() lets two concurrent writers (for
+            # example parallel MPI ranks picking the same second-resolution run_start_ts)
+            # select the same path, so the second writer would silently overwrite the first.
+            # O_CREAT | O_EXCL fails if the file already exists, so we retry with the next
+            # numeric suffix until we win an exclusive create.
+            suffix = 2
+            while True:
+                try:
+                    fd = os.open(filename, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                except FileExistsError:
+                    filename = os.path.join(self.output_folder, f"partial_run_{run_start_ts}_{suffix}.pkl")
                     suffix += 1
-            with open(filename, "wb") as f:
-                f.write(pkl_data)
+                    continue
+                with os.fdopen(fd, "wb") as f:
+                    f.write(pkl_data)
+                break
             logger.info(f"Run and measurement data saved to {filename}")
         else:
             logger.info("Skipping saving partial benchmark data PKL since not running in CI environment")
