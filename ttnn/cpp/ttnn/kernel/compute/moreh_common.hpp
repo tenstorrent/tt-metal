@@ -271,6 +271,7 @@ ALWI void copy_tile_to_dfb(uint32_t itile = 0, uint32_t pop = 1) {
     }
 }
 
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <uint32_t DfbIn, uint32_t DfbOut>
 ALWI void sign_tile_to_dfb(uint32_t itile = 0, uint32_t pop = 1) {
     DataflowBuffer(DfbIn).wait_front(itile + 1);
@@ -285,6 +286,7 @@ ALWI void sign_tile_to_dfb(uint32_t itile = 0, uint32_t pop = 1) {
         DataflowBuffer(DfbIn).pop_front(pop);
     }
 }
+#endif  // !ARCH_QUASAR
 
 template <uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
 ALWI void add_tiles_to_dfb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
@@ -449,6 +451,7 @@ ALWI void recip_tile_to_dfb(uint32_t itile = 0, uint32_t pop = 1) {
     }
 }
 
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <uint32_t DfbIn, uint32_t DfbOut>
 ALWI void log_tile_to_dfb(uint32_t itile = 0, uint32_t pop = 1) {
     DataflowBuffer(DfbIn).wait_front(itile + 1);
@@ -463,7 +466,9 @@ ALWI void log_tile_to_dfb(uint32_t itile = 0, uint32_t pop = 1) {
         DataflowBuffer(DfbIn).pop_front(pop);
     }
 }
+#endif  // !ARCH_QUASAR
 
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <
     bool AbsX,
     bool RecipFinal,
@@ -513,7 +518,9 @@ ALWI void power_tile_to_dfb_impl(uint32_t p, bool p_is_negative) {
         ckl::Optional<RecipFinal, ckl::Recip<>>{},
         ckl::PackTile<moreh_output<DfbOut>>{});
 }
+#endif  // !ARCH_QUASAR
 
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <
     uint32_t DfbX,
     uint32_t DfbXpow,
@@ -525,7 +532,9 @@ ALWI void power_tile_to_dfb(uint32_t p, bool p_is_negative) {
     power_tile_to_dfb_impl<false, false, DfbX, DfbXpow, DfbLogX, DfbDecimal, DfbExpLogXMulDecimal, DfbCorrectXpow>(
         p, p_is_negative);
 }
+#endif  // !ARCH_QUASAR
 
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <
     uint32_t DfbX,
     uint32_t DfbXpow,
@@ -537,7 +546,9 @@ ALWI void power_tile_with_abs_x_to_dfb(uint32_t p, bool p_is_negative) {
     power_tile_to_dfb_impl<true, false, DfbX, DfbXpow, DfbLogX, DfbDecimal, DfbExpLogXMulDecimal, DfbCorrectXpow>(
         p, p_is_negative);
 }
+#endif  // !ARCH_QUASAR
 
+#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <
     uint32_t DfbX,
     uint32_t DfbXpow,
@@ -549,6 +560,7 @@ ALWI void power_and_recip_tile_to_dfb(uint32_t p, bool p_is_negative) {
     power_tile_to_dfb_impl<false, true, DfbX, DfbXpow, DfbLogX, DfbDecimal, DfbExpLogXMulDecimal, DfbRecipXpow>(
         p, p_is_negative);
 }
+#endif  // !ARCH_QUASAR
 
 ALWI void mul_tiles_to_cb(
     DataflowBuffer icb0,
