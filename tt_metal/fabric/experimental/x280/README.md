@@ -635,7 +635,8 @@ compiler tt-metal fetches (`runtime/sfpi`, or `/opt/tenstorrent/sfpi` with
 ./build_metal.sh --build-metal-tests --configure-only
 cmake -B build -DTT_METAL_BUILD_X280=ON
 ninja -C build x280_images x280_abi_headers x280_runtime_host_tests x280_runtime_coordinate_tests \
-  x280_bench_host_tests x280_bench_device_tests x280_bench_release_selector_tests
+  x280_bench_host_tests x280_bench_device_tests x280_bench_release_selector_tests \
+  x280_transport_bandwidth_tensix_to_x280 x280_transport_bandwidth_x280_to_tensix
 ctest --test-dir build -R x280      # image placement, pinned-input guards, header refusals, host, offline and mock-cluster tests; no device
 ```
 
@@ -646,6 +647,7 @@ ctest --test-dir build -R x280      # image placement, pinned-input guards, head
 | `firmware-pinned-input-prepare.bin` | `src/x280_pinned_input.c` | pinned-input preparation, run by `X280Tile::prepare_pinned_input` (§ 1) |
 | `firmware-atomic-bench.bin` | `src/atomic_bench.c` | cross-hart atomics micro-benchmark (§ 7); in the active-image contract set |
 | `firmware-active-session-fault.bin` | `src/active_session_fault.c` | traps and CEASEs hart 2, for `x280_active_failure_test` only |
+| `firmware-transport-bandwidth-x280-to-tensix.bin` | `src/transport_bandwidth_x280_to_tensix.cpp` | X280 -> Tensix member of transport_bandwidth, run by `x280_transport_bandwidth_x280_to_tensix`; the Tensix -> X280 member (`x280_transport_bandwidth_tensix_to_x280`) submits no X280 image |
 
 Every image compiles with `-mcpu=sifive-x280 -march=rv64gc -mabi=lp64d
 -mcmodel=medany -O2 -Werror`, freestanding, and links with
