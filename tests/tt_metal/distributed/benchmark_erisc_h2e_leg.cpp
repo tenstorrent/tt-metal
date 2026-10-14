@@ -124,7 +124,7 @@ BENCHMARK_DEFINE_F(H2ELegFixture, Bridge)(benchmark::State& state) {
     std::string err;
     auto leg = H2ELeg::create(mesh, cfg, err);
     if (!leg) {
-        state.SkipWithError(err.c_str());
+        state.SkipWithError(err);
         return;
     }
 
@@ -167,7 +167,7 @@ BENCHMARK_DEFINE_F(H2ELegFixture, Bridge)(benchmark::State& state) {
                 ++n;
             }
             if (n == 0 && !leg->first_error().empty()) {
-                state.SkipWithError(leg->first_error().c_str());
+                state.SkipWithError(leg->first_error());
                 return;
             }
             if (n == 0) {
@@ -176,7 +176,7 @@ BENCHMARK_DEFINE_F(H2ELegFixture, Bridge)(benchmark::State& state) {
                 const std::string why = "router stopped consuming -- stalled at " + std::to_string(f) + " of " +
                                         std::to_string(total_) + " frames injected, " +
                                         std::to_string(leg->drained(0)) + " consumed";
-                state.SkipWithError(why.c_str());
+                state.SkipWithError(why);
                 return;
             }
             const auto now = std::chrono::steady_clock::now();
@@ -272,7 +272,7 @@ BENCHMARK_DEFINE_F(H2ELegFixture, Bridge)(benchmark::State& state) {
         state.counters["verified"] = 1;
     }
     if (!leg->first_error().empty()) {
-        state.SkipWithError(leg->first_error().c_str());
+        state.SkipWithError(leg->first_error());
     }
 }
 

@@ -110,7 +110,10 @@ std::unique_ptr<H2ELeg> H2ELeg::create(const std::shared_ptr<MeshDevice>& mesh, 
     // The caller's channel wins, as in E2HLeg: link_idx into the active list can name a
     // different router than the one the caller resolved as bridged.
     const uint32_t chan = cfg.eth_chan != Config::kUnsetChan ? cfg.eth_chan : chans.at(cfg.link_idx);
-    im.eth_logical = soc.get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
+    // Narrowed on purpose: every callee below takes CoreType explicitly, so the core_type and
+    // coord_system UMD carries here would be dropped anyway -- say so rather than slice silently.
+    const auto eth = soc.get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
+    im.eth_logical = CoreCoord{eth.x, eth.y};
 
     // The receiver channel the remote ERISC would have written -- derived from fabric's own
     // allocator, never a constant.
