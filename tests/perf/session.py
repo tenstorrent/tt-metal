@@ -45,6 +45,8 @@ class Record:
     retry_skipped: int = 0
     # Why the re-run failed, if it did. The first run's statuses then stand.
     retry_error: str | None = None
+    # Cases that errored in the re-run, whose first-run statuses stand.
+    retry_case_errors: dict[str, str] = field(default_factory=dict)
     case_filter: str | None = None
 
     @property
@@ -118,12 +120,35 @@ def execute(suite: Suite, environment: str, case_filter: str | None = None) -> R
         retry_filter = runner.exact_filter(retry_cases) if suite.kind == "google_benchmark" else None
         try:
             retry_raw = contract.read(runner.run(suite, environment, out_dir, tag="retry", case_filter=retry_filter))
-            record.retry = {case: v for case, v in contract.aggregate(retry_raw).items() if case in retry_cases}
+            _check_retry_matches(retry_raw, record)
+            # An errored repetition makes the case's remaining samples untrustworthy, so it gets no re-run value.
+            record.retry_case_errors = {case: e for case, e in retry_raw.errors.items() if case in retry_cases}
+            record.retry = {
+                case: values
+                for case, values in contract.aggregate(retry_raw).items()
+                if case in retry_cases and case not in record.retry_case_errors
+            }
         except (runner.RunError, contract.ContractError) as error:
             print(f"Re-run failed, keeping the first run's statuses: {error}", flush=True)
             record.retry_error = str(error)
     record.save(out_dir / "measurements.json")
     return record
+
+
+def _check_retry_matches(retry_raw: contract.RawRun, record: Record) -> None:
+    """A re-run measured differently from the first run cannot confirm or clear its statuses."""
+    if retry_raw.metrics != record.metrics:
+        raise contract.ContractError("re-run declared different metrics from the first run")
+    # Errored cases are short of samples by definition and are handled per case by the caller.
+    counts = {
+        len(samples)
+        for case, per_metric in retry_raw.samples.items()
+        if case not in retry_raw.errors
+        for samples in per_metric.values()
+    }
+    counts |= {n for case, n in retry_raw.repetitions.items() if case not in retry_raw.errors}
+    if record.repetitions is not None and counts - {record.repetitions}:
+        raise contract.ContractError(f"re-run used {sorted(counts)} repetitions, first run used {record.repetitions}")
 
 
 def evaluate(
@@ -171,6 +196,11 @@ def publish(record: Record, suite: Suite, golden: golden_io.Golden, comparison: 
         )
     if record.retry_error:
         notes.append(f"Re-run failed, so statuses are from the first run only: {record.retry_error}")
+    if record.retry_case_errors:
+        notes.append(
+            f"Re-run errored for {len(record.retry_case_errors)} cases, so their statuses are from the first run: "
+            + ", ".join(sorted(record.retry_case_errors))
+        )
     kwargs = dict(
         context=record.context,
         golden_context=env.context if env else {},
