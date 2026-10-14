@@ -6,10 +6,11 @@ stored the way the HPCG rules require: every term of the 27-point stencil, an
 fp32 value and a 32-bit column index per non-zero, read through the column
 index (no stencil structure is exploited).
 
-**This is not an official HPCG result.** The rules require IEEE fp64 in every
-phase, and Tensix cores have no fp64 arithmetic, so this port runs in fp32.
-Within 50 iterations its residuals match an fp64 run of the same algorithm to
-4-6 digits.
+**This is not an official HPCG result.** It does the same math as HPCG, but it
+does not meet HPCG's precision rule or its run and scoring rules (see
+[Rules](#rules)). The main gap: the rules require IEEE fp64 in every phase, and
+Tensix cores have no fp64 arithmetic, so this port runs in fp32. Within 50
+iterations its residuals match an fp64 run of the same algorithm to 4-6 digits.
 
 ## Run
 
@@ -18,7 +19,7 @@ From `$TT_METAL_HOME`:
 | Command | What it does |
 | --- | --- |
 | `pytest models/experimental/hpcg/tests/test_hpcg.py` | every device op against numpy, then 3 CG iterations against fp64 (64³ and 160³) |
-| `python models/experimental/hpcg/demo/demo.py 192` | 50 traced CG iterations: ms per iteration, GFLOP/s, share of speed of light, residual history |
+| `python models/experimental/hpcg/demo/demo.py 192` | 50 traced CG iterations: ms per iteration, raw GFLOP/s, share of speed of light, residual history; HPCG-style rating where a CPU reference residual is known |
 | `python models/experimental/hpcg/demo/op_perf.py 192` | device time of each op against its speed of light |
 | `python models/experimental/hpcg/demo/kernel_counters.py 192 gs0 [--per-core]` | per-core cycle counters of one launch |
 | `python -m models.experimental.hpcg.reference.speed_of_light 192 23.75` | speed of light of one iteration, and the share a measured time reaches |
@@ -28,22 +29,81 @@ The grid size nx must be a multiple of 8 (HPCG's default is 104); 304 is the lar
 
 ## Results (P150a, 130 cores, 512 GB/s GDDR6)
 
-| Grid | ms / iteration | GFLOP/s | Speed of light | Share |
-| --- | ---: | ---: | ---: | ---: |
-| 104³ | 4.95 | 83.3 | 3.21 ms | 65% |
-| 128³ | 7.76 | 99.4 | 6.01 ms | 77.5% |
-| 192³ | 23.75 | 110.2 | 21.13 ms | 89.0% |
-| 240³ | 45.54 | 112.5 | 41.35 ms | 90.8% |
-| 288³ | 77.90 | 113.9 | 71.56 ms | 91.9% |
-| 304³ | 91.60 | 113.9 | 84.19 ms | 91.9% |
+Two numbers per grid:
 
-GFLOP/s uses HPCG's own flop count. The speed of light
-(`reference/speed_of_light.py`) is each operation's minimum DRAM traffic under
-the HPCG rules at 512 GB/s; every operation is memory-bound. The fastest rate
-measured with all 130 cores reading DRAM is about 490 GB/s (95.7%), and at
-288³ the fine-grid smoothers move their actual bytes at 98.6-99.9% of it.
-For comparison, the fp64 HPCG reference code on a 24-thread Ryzen 9 7900X runs
-the 192³ problem at 4.40 GFLOP/s.
+- **Raw GFLOP/s**: HPCG's flop count for the timed iterations divided by their
+  time. This measures how fast the device runs the solver.
+- **HPCG-style rating**: the formula HPCG's `ReportResults.cpp` uses for its
+  final score, computed by `demo/demo.py`. It makes two deductions:
+  - **extra iterations**: the 8-colour ordering needs 51-53 iterations to reach
+    the residual HPCG's reference code reaches in 50, and only 50 are credited;
+  - **setup time**: HPCG adds (setup + optimization time) / 10 to every set of
+    CG iterations. Here, setup is the host-side Python that builds the matrix
+    and every core's index tables: 1.6 s at 104³, 10.7 s at 192³. Slow host
+    setup, not device speed, causes most of the drop.
+
+| Grid | ms / iteration | Raw GFLOP/s | Speed of light | Share | Iterations to the reference residual | HPCG-style rating |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 104³ | 4.94 | 83.5 | 3.21 ms | 65% | 51 | 49.9 GFLOP/s |
+| 128³ | 7.76 | 99.5 | 6.01 ms | 77.5% | 53 | 54.1 GFLOP/s |
+| 192³ | 23.74 | 110.3 | 21.13 ms | 89.0% | 53 | 56.1 GFLOP/s |
+| 240³ | 45.54 | 112.5 | 41.35 ms | 90.8% | not measured | - |
+| 288³ | 77.90 | 113.9 | 71.56 ms | 91.9% | not measured | - |
+| 304³ | 91.60 | 113.9 | 84.19 ms | 91.9% | not measured | - |
+
+The iteration count needs the CPU reference residual for that grid size, which
+was only run up to 192³.
+
+Without the setup charge (iteration penalty only), the rating would be 81.8,
+93.8 and 104.1 GFLOP/s at 104³, 128³ and 192³.
+
+**Comparison with a CPU.** HPCG's fp64 reference code on a 24-thread Ryzen 9
+7900X rates 3.83, 4.02 and 4.40 GFLOP/s at 104³, 128³ and 192³. That is
+HPCG's final rating, so it already includes the setup charge (the reference
+code needs no extra iterations). Compared like for like, the P150's
+HPCG-style rating is 13.0x, 13.5x and 12.8x the CPU's. The raw device rate is
+21.8x to 25.1x the CPU's rating, but that comparison favours the P150, because
+only the CPU number carries HPCG's deductions.
+
+**Speed of light.** `reference/speed_of_light.py` is each operation's minimum
+DRAM traffic under the HPCG rules at 512 GB/s; every operation is
+memory-bound. The fastest rate measured with all 130 cores reading DRAM is
+about 490 GB/s (95.7%), and at 288³ the fine-grid smoothers move their actual
+bytes at 98.6-99.9% of it.
+
+## Rules
+
+Checked against HPCG 3.1's source (`main.cpp`, `ReportResults.cpp`,
+`TestCG.cpp`) and the [HPCG FAQ](https://www.hpcg-benchmark.org/faq/index.html).
+
+Followed:
+
+- **Unstructured matrix storage.** Each non-zero stores an fp32 value and a
+  32-bit column index, and x is read through that index. The 27-point
+  stencil's regular structure is not used.
+- **Every term, every sweep.** All 27 slots are multiplied in every pass,
+  including zero padding at the grid edges.
+- **No symmetry shortcut.** The full matrix is stored and read.
+- **Same algorithm.** 4 multigrid levels, one pre- and one post-smoothing
+  symmetric Gauss-Seidel per level, HPCG's restriction and prolongation, and
+  initial guess zero.
+- **Allowed reordering.** The 8-colour ordering and the y-bands are
+  reorderings; the iterations they add are measured and deducted in the
+  rating above.
+- **Flop count.** HPCG's own formula, with true non-zero counts.
+
+Not followed:
+
+- **fp64.** Everything runs in fp32.
+- **Run length.** An official run times at least 1800 s of CG sets; these
+  runs time 50 iterations (0.25-4.6 s).
+- **Problem size.** The FAQ asks for at least a quarter of main memory. 304³
+  uses about 7 GB of the card's 32 GB (22%), and it is the largest grid whose
+  data fits the cores' L1.
+- **Validation tests.** HPCG's TestCG, TestSymmetry and TestNorms are not run
+  against the device solver. TestSymmetry measures departures in units of
+  fp64 rounding, so an fp32 solver fails it: an all-fp32 build of the
+  reference code fails it on a CPU.
 
 ## Layout
 

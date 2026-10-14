@@ -6,7 +6,12 @@
 
 usage: python models/experimental/hpcg/demo/demo.py nx [iterations]
 Prints one JSON object per line. Timing: the CG start (r = b - A x) runs untraced, then one traced iteration is
-replayed back to back; best of 3. Host setup (matrix and index tables) is excluded, as in HPCG's raw rating.
+replayed back to back; best of 3. gflops is the raw rate: HPCG's flop count over the timed iterations.
+
+Where a CPU reference residual is known (CPU_REFERENCE_RESIDUAL_50), it also prints hpcg_rating_gflops, the
+formula of HPCG's ReportResults.cpp for a long run: credited work = 50 iterations' flops per CG set, time per set =
+the iterations this solver needs to reach the reference residual + (setup time) / 10. Setup here is building the
+matrix, index tables and programs on the host (HPCG's GenerateProblem + OptimizeProblem).
 """
 
 import json
@@ -33,9 +38,10 @@ def main(nx, iters):
     try:
         t0 = time.time()
         h = HPCG(device, nx)
+        setup_s = time.time() - t0
         emit(
             nx=nx,
-            setup_s=round(time.time() - t0, 1),
+            setup_s=round(setup_s, 1),
             rows=[L.n for L in h.levels],
             nnz=[L.nnz for L in h.levels],
             bands=[L.bands for L in h.levels],
@@ -75,6 +81,10 @@ def main(nx, iters):
         if nx in CPU_REFERENCE_RESIDUAL_50:
             hit = [k + 1 for k, r in enumerate(hist) if r <= CPU_REFERENCE_RESIDUAL_50[nx]]
             out["iterations_to_cpu_reference_residual"] = hit[0] if hit else None
+            if hit:
+                per_set = hit[0] * ms * 1e-3
+                out["rating_without_setup_gflops"] = round(50 * flops / per_set / 1e9, 2)
+                out["hpcg_rating_gflops"] = round(50 * flops / (per_set + setup_s / 10) / 1e9, 2)
         L0 = h.levels[0]
         out["max_abs_x_minus_1"] = float(np.max(np.abs(from_device(h.x)[L0.real] - 1)))
         emit(**out)
