@@ -3,6 +3,13 @@
 Split out of #59695. Adds one opt-in flag to `ttnn.transformer.scaled_dot_product_attention`; default `False`,
 so nothing changes unless a caller asks for it.
 
+> **Draft — sequenced behind the K/V retention work** (`amorrison/sdpa-gqa-kv-sharing`). This branch carries no
+> K/V retention, so at `d=128` each core re-reads K/V for every one of its query chunks and the batched shapes
+> are bandwidth-bound, where this flag has nothing to save. It is still a clear win on compute-bound shapes
+> (`d=64`: −8.9%; one Q chunk per core: −6.7%), and the measurements below show the batched shapes recovering
+> −5.3 / −6.6 / −6.4% once K/V stays resident. Landing it after that PR is what makes the batched case worth
+> having; the correctness and the accuracy trade-off below stand on their own either way.
+
 ## What it does
 
 With a single K chunk there is no online-softmax correction, so every exp'd score for a row is still sitting in
@@ -26,9 +33,9 @@ flag off → on (negative = faster with it on):
 | HiFi2, d=128, q_chunk 128 | **+6.0%** | **+5.6%** | **+6.5%** |
 | HiFi4, d=128, q_chunk 128 | **+8.8%** | **+8.5%** | **+8.7%** |
 
-The flat LoFi row is not a contradiction, it is the point: **this branch has no K/V retention**, so each core
-re-reads K/V for every one of its query chunks and at d=128 those calls are bandwidth-bound — there is no
-compute left to save. The gain is there as soon as the call is compute-bound again:
+The flat LoFi row is the K/V-retention gap, not a flaw in the flag: with each core re-reading K/V per query
+chunk, those d=128 calls are bandwidth-bound and there is no compute left to save. The gain is there as soon as
+the call is compute-bound again:
 
 | compute-bound config (LoFi) | delta |
 |---|---|
@@ -37,8 +44,9 @@ compute left to save. The gain is there as soon as the call is compute-bound aga
 | d=128, q_chunk 256, batch 1, d=64 | −6.9% |
 | d=128, q_chunk 256, batch 2 | −5.4% |
 
-For reference, the same batched shapes measured on the older stack *with* `reuse_kv` were −5.3 / −6.6 / −6.4%
-at batch 8 / 16 / 32, so these shapes should recover the gain once SDPA grows K/V retention.
+The same batched shapes measured on the older stack *with* `reuse_kv` were **−5.3 / −6.6 / −6.4%** at batch
+8 / 16 / 32 — same binary, same method, K/V simply resident. That is the configuration this PR is meant to serve,
+and the reason it is sequenced to land after K/V retention.
 
 The streaming kernel runs the exp on the pack thread, so that thread carries the exp *and* the row-sum packs.
 The flag removes the same ~339 cycles of row-sum packs from the pack thread at either fidelity — what changes is
