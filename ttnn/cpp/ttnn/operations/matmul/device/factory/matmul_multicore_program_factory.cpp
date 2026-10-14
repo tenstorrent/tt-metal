@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_program_factory.hpp"
 #include <map>
 #include <string>
@@ -264,7 +265,14 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
         {IN1_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
     };
     const KernelSpec::CompilerOptions compute_compiler_options{
-        .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_defines),
+        .defines = KernelSpec::CompilerOptions::Defines([&] {
+                    // scratch only (CI A/B): TT_MM_FORK_VARIANT selects the variant compiled from one fork source
+                    auto d = mm_kernel_defines;
+                    if (const char* v = std::getenv("TT_MM_FORK_VARIANT")) {
+                        d["FORK_VARIANT"] = v;
+                    }
+                    return d;
+                }()),
         .opt_level = KernelBuildOptLevel::O3,
     };
 

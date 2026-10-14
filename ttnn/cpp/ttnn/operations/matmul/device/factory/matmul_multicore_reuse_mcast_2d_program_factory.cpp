@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
@@ -1775,7 +1776,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
             "bmm_large_block_zm_fused_bias_activation_metal2.cpp",
         .compiler_options =
             {
-                .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_defines),
+                .defines = KernelSpec::CompilerOptions::Defines([&] {
+                    // scratch only (CI A/B): TT_MM_FORK_VARIANT selects the variant compiled from one fork source
+                    auto d = mm_kernel_defines;
+                    if (const char* v = std::getenv("TT_MM_FORK_VARIANT")) {
+                        d["FORK_VARIANT"] = v;
+                    }
+                    return d;
+                }()),
                 // Explicit, not a copied default: Metal 2.0's type-agnostic CompilerOptions defaults
                 // to O2, while the legacy ComputeConfigDescriptor this replaces defaulted compute
                 // kernels to O3. Left unset, the kernel would quietly drop a level. The data movement

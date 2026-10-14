@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
@@ -902,7 +903,14 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                 "bmm_large_block_zm_fused_bias_activation_metal2.cpp",
             .compiler_options =
                 {
-                    .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_defines),
+                    .defines = KernelSpec::CompilerOptions::Defines([&] {
+                    // scratch only (CI A/B): TT_MM_FORK_VARIANT selects the variant compiled from one fork source
+                    auto d = mm_kernel_defines;
+                    if (const char* v = std::getenv("TT_MM_FORK_VARIANT")) {
+                        d["FORK_VARIANT"] = v;
+                    }
+                    return d;
+                }()),
                     // A legacy ComputeConfigDescriptor with no opt_level resolves to O3; Metal 2.0's
                     // CompilerOptions defaults to O2, so it has to be stated.
                     .opt_level = KernelBuildOptLevel::O3,

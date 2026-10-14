@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <cstdlib>
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
 
 #include <tt-metalium/tt_metal.hpp>
@@ -607,7 +608,14 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                 "bmm_large_block_zm_fused_bias_activation_metal2.cpp",
             .compiler_options =
                 {
-                    .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_defines),
+                    .defines = KernelSpec::CompilerOptions::Defines([&] {
+                    // scratch only (CI A/B): TT_MM_FORK_VARIANT selects the variant compiled from one fork source
+                    auto d = mm_kernel_defines;
+                    if (const char* v = std::getenv("TT_MM_FORK_VARIANT")) {
+                        d["FORK_VARIANT"] = v;
+                    }
+                    return d;
+                }()),
                     .opt_level = KernelBuildOptLevel::O3,
                 },
             .dfb_bindings =
