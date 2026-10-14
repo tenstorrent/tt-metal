@@ -1,0 +1,11 @@
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_common_api.h
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_common_api.h
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_tile_api.h
+tt_metal/hw/inc/api/compute/experimental/reg_api.h
+tt_metal/hw/inc/api/compute/pack.h
+tt_metal/tt-llk/tt_llk_blackhole/common/inc/cpack_common.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack.h
+tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack_rows.h
+ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp
+ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.inl
+ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/compute/softmax.cpp
