@@ -64,7 +64,7 @@ struct ReaderScratch {
 // is visited twice; the reader, compute and writer must all walk this order.
 template <typename Process>
 inline void for_each_work_item(
-    uint32_t first, uint32_t count, uint32_t tile_rows, bool defer_first_rows, Process&& process) {
+    uint32_t first, uint32_t count, uint32_t tile_rows, bool defer_first_rows, const Process& process) {
     const uint32_t end = first + count;
     uint32_t segment_start = first;
     for (uint32_t index = first; index < end; ++index) {
