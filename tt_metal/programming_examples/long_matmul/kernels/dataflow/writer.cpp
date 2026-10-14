@@ -4,20 +4,10 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "../profile_markers.h"
-#include "../mode.h"
+#include "../config.h"
 
-// See kernels/compute/compute.cpp. Output arrives one BLOCK_M x BLOCK_N block at a time, in
-// row-major order within the block.
-#ifndef BLOCK_M
-#define BLOCK_M 1
-#endif
-#ifndef BLOCK_N
-#define BLOCK_N 1
-#endif
-
-constexpr uint32_t kBlockM = BLOCK_M;
-constexpr uint32_t kBlockN = BLOCK_N;
-constexpr uint32_t kBlockTiles = kBlockM * kBlockN;
+// Output arrives one BLOCK_M x BLOCK_N block at a time (see ../config.h), in row-major order
+// within the block.
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);

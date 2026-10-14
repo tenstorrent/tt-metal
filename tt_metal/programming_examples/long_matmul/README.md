@@ -85,9 +85,10 @@ nobody writes keep whatever DRAM held before.
 
 ## Power-experiment knobs
 
-All of these are read from the environment at startup and passed to the kernels as JIT defines,
-so each kernel is compiled with only the selected path in it. None of
-them need a correctness check beyond the checksum: the workload never verifies its output, so
+All of these are read from the environment at startup and passed to the kernels as JIT defines.
+The compute kernel is compiled with only the selected op, and an idle writer without its writes;
+an idle reader or idle compute keeps its code, since in `updated` mode it still does its first two
+steps for real. None of them need a correctness check beyond the checksum: the workload never verifies its output, so
 stale or garbage data is harmless. Do not use the idle modes for anything but power comparison.
 
 ### Idling a kernel
@@ -129,7 +130,7 @@ the clock starts.
 | Amplified writes | every re-write waits for its own NoC barrier, so at 100% amplification the writer sets the pace | re-writes go out back to back, one barrier per tile |
 | Amplification count with blocking | `2*Kt` per tile whatever the block | matches the blocked reader rate |
 | Idle reader / idle compute data | whatever L1 already holds | the first two slices / blocks are real |
-| Timed interval | starts before the input uploads and the kernel JIT compile | starts after `EnqueueMeshWorkload` returns |
+| Timed interval | starts before `EnqueueMeshWorkload`, so it includes any kernel JIT compile and possibly the tail of the input uploads | waits for the uploads to finish, then starts after `EnqueueMeshWorkload` returns |
 
 Measured on Wormhole n150, `1024 2048 2048 20`, 8x8, per-iteration time:
 
@@ -150,7 +151,7 @@ reader's volume, which is why its case 1 is almost 4x slower than case 0.
 amplification so that turning exactly one of reader / compute / writer off compares against
 case 1 with the other two unchanged.
 
-How much the writer's extra traffic slows the pipeline depends on `LONG_MATMUL_MODE` (below).
+How much the writer's extra traffic slows the pipeline depends on `LONG_MATMUL_MODE` (above).
 
 | `POWER_CASE` | Reader | Compute | Writer | Write amplification | Conventional subdir |
 |---|---|---|---|---|---|
@@ -230,9 +231,9 @@ The markers land in `generated/profiler/.logs/profile_log_device.csv`, read back
 
 | Kernel | Markers | Wait = blocked in | Active = time in |
 |---|---|---|---|
-| Reader | `READER_KERNEL_START/END`, `READER_WAIT_CYCLES`, `READER_TRANSFER_CYCLES` | `cb_reserve_back` | `noc_async_read_tile` + barrier |
+| Reader | `READER_KERNEL_START/END`, `READER_WAIT_CYCLES`, `READER_TRANSFER_CYCLES` | `cb_reserve_back` | `noc_async_read_page` + barrier |
 | Compute | `COMPUTE_KERNEL_START/END`, `COMPUTE_WAIT_CYCLES`, `COMPUTE_COMPUTE_CYCLES` | `cb_wait_front` (TRISC0), `tile_regs_acquire` (TRISC1), `tile_regs_wait` + `cb_reserve_back` (TRISC2) | the math loop (TRISC1), `pack_tile` (TRISC2) |
-| Writer | `WRITER_KERNEL_START/END`, `WRITER_WAIT_CYCLES`, `WRITER_TRANSFER_CYCLES` | `cb_wait_front` | `noc_async_write_tile` + barrier |
+| Writer | `WRITER_KERNEL_START/END`, `WRITER_WAIT_CYCLES`, `WRITER_TRANSFER_CYCLES` | `cb_wait_front` | `noc_async_write_page` + barrier |
 
 Each kernel records these once per run, not per tile. The compute markers appear three times per
 core, once per TRISC, since all three run the same code. The timestamp reads are compiled in only

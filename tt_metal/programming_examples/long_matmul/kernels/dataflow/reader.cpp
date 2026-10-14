@@ -5,20 +5,11 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "../profile_markers.h"
-#include "../mode.h"
+#include "../config.h"
 
-// See kernels/compute/compute.cpp. With a BLOCK_M x BLOCK_N output block, one column slice of
-// A and one row slice of B feed BLOCK_M * BLOCK_N multiplies, so per multiply this reads
+// With a BLOCK_M x BLOCK_N output block (see ../config.h), one column slice of A and one row
+// slice of B feed BLOCK_M * BLOCK_N multiplies, so per multiply this reads
 // (BLOCK_M + BLOCK_N) / (BLOCK_M * BLOCK_N) tiles instead of 2.
-#ifndef BLOCK_M
-#define BLOCK_M 1
-#endif
-#ifndef BLOCK_N
-#define BLOCK_N 1
-#endif
-
-constexpr uint32_t kBlockM = BLOCK_M;
-constexpr uint32_t kBlockN = BLOCK_N;
 
 #if defined(LONG_MATMUL_DISABLE_READER)
 constexpr bool kReaderIdle = true;
@@ -52,6 +43,7 @@ void kernel_main() {
     DeviceTimestampedData("READER_KERNEL_START", /*data=*/0);
     uint64_t wait_cycles = 0;
     uint64_t transfer_cycles = 0;
+    [[maybe_unused]] uint32_t real_steps_left = kRealStepsWhenIdle;  // only used when the reader is idle
 
     for (uint32_t iter = 0; iter < num_iterations; iter++) {
         for (uint32_t blk = 0; blk < num_output_blocks; blk++) {
@@ -66,10 +58,14 @@ void kernel_main() {
             for (uint32_t k = 0; k < Kt; k++) {
                 // When LONG_MATMUL_DISABLE_READER is set the reader keeps its full CB handshake --
                 // so compute still gets its tiles "delivered" every step and never deadlocks --
-                // but issues no DRAM traffic. In updated mode the first kRealStepsWhenIdle slices
-                // are still read for real, so compute works on real operands; in legacy mode it
-                // works on whatever L1 already held. With the reader not idle, read is always true.
-                const bool read = !kReaderIdle || (iter == 0 && blk == 0 && k < kRealStepsWhenIdle);
+                // but issues no DRAM traffic. In updated mode the first kRealStepsWhenIdle steps
+                // still read their slices for real, so compute works on real operands; in legacy
+                // mode it works on whatever L1 already held.
+                bool read = true;
+                if constexpr (kReaderIdle) {
+                    read = real_steps_left > 0;
+                    real_steps_left -= read ? 1 : 0;
+                }
                 {
                     // Column slice of A: rows row0..row0+kBlockM-1 at inner index k.
                     uint32_t t = prof::now();

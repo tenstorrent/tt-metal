@@ -14,19 +14,9 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/debug/dprint.h"
 #include "../profile_markers.h"
-#include "../mode.h"
+#include "../config.h"
 
 using std::uint32_t;
-
-// Output block handled per iteration, in tiles. BLOCK_M x BLOCK_N output tiles are accumulated
-// in the destination registers simultaneously, so one row of A and one column of B serve
-// BLOCK_M x BLOCK_N multiplies instead of one. 1x1 is the original tile-at-a-time behaviour.
-#ifndef BLOCK_M
-#define BLOCK_M 1
-#endif
-#ifndef BLOCK_N
-#define BLOCK_N 1
-#endif
 
 // Which per-tile instruction the compute kernel runs, selected by the host from LONG_MATMUL_OP.
 // Exactly one LONG_MATMUL_OP_* is defined; matmul is the default when the host passes none.
@@ -53,9 +43,10 @@ using std::uint32_t;
 #define LONG_MATMUL_OP_MATMUL 1
 #endif
 
-constexpr uint32_t kBlockM = BLOCK_M;
-constexpr uint32_t kBlockN = BLOCK_N;
-constexpr uint32_t kBlockTiles = kBlockM * kBlockN;
+// The whole output block lives in the destination registers at once.
+static_assert(
+    kBlockTiles <= ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>(),
+    "BLOCK_M * BLOCK_N exceeds the destination register capacity");
 
 #if defined(LONG_MATMUL_DISABLE_COMPUTE)
 constexpr bool kComputeIdle = true;
@@ -107,6 +98,7 @@ void kernel_main() {
     DeviceTimestampedData("COMPUTE_KERNEL_START", /*data=*/0);
     uint64_t wait_cycles = 0;
     uint64_t compute_cycles = 0;
+    [[maybe_unused]] uint32_t real_blocks_left = kRealStepsWhenIdle;  // only used when compute is idle
 
     constexpr uint32_t kProgressPrintInterval = 10;
     for (uint32_t iter = 0; iter < num_iterations; iter++) {
@@ -116,9 +108,13 @@ void kernel_main() {
         }
         for (uint32_t blk = 0; blk < num_output_blocks; blk++) {
             // With compute idle, updated mode still computes and packs the first
-            // kRealStepsWhenIdle blocks, so the output buffer the writer keeps sending holds real
-            // results; legacy mode never does. With compute not idle this is always true.
-            const bool compute = !kComputeIdle || (iter == 0 && blk < kRealStepsWhenIdle);
+            // kRealStepsWhenIdle blocks, so every slot of the output buffer the writer keeps
+            // sending holds real results; legacy mode never does.
+            bool compute = true;
+            if constexpr (kComputeIdle) {
+                compute = real_blocks_left > 0;
+                real_blocks_left -= compute ? 1 : 0;
+            }
             // TRISC1 acquires the tile registers -- kBlockTiles of them, one accumulator per
             // output tile in the block.
             uint32_t t_block = prof::now();

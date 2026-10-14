@@ -162,6 +162,11 @@ static uint32_t env_u32(const char* name, uint32_t fallback) {
     return (v == nullptr || *v == '\0') ? fallback : parse_u32(name, v);
 }
 
+// Every circular buffer holds this many slices or blocks, so the producer can fill the next one
+// while the consumer works on the current one. Must match kCbBufferDepth in kernels/config.h,
+// which idle kernels in updated mode rely on to fill every slot with real data.
+static constexpr uint32_t kCbBufferDepth = 2;
+
 // Write amplification that matches the reader's NoC read volume.
 static constexpr uint32_t kFullAmplificationPct = 100;
 static constexpr uint32_t kMaxAmplificationPct = 1000;
@@ -246,7 +251,7 @@ static PowerExperimentConfig resolve_power_experiment() {
     cfg.disable_reader = env_flag("LONG_MATMUL_DISABLE_READER");
     cfg.disable_compute = env_flag("LONG_MATMUL_DISABLE_COMPUTE");
     cfg.disable_writer = env_flag("LONG_MATMUL_DISABLE_WRITER");
-    cfg.write_amplification_pct = env_u32("LONG_MATMUL_WRITE_AMPLIFICATION_PCT", 0);
+    cfg.write_amplification_pct = env_u32("LONG_MATMUL_WRITE_AMPLIFICATION_PCT", /*fallback=*/0);
     TT_FATAL(
         cfg.write_amplification_pct <= kMaxAmplificationPct,
         "LONG_MATMUL_WRITE_AMPLIFICATION_PCT must be at most {}, got {}",
@@ -322,8 +327,8 @@ int main(int argc, char* argv[]) {
     // destination registers at once, so one column slice of A and one row slice of B feed
     // BLOCK_M*BLOCK_N multiplies. DRAM tile reads per multiply fall from 2 to
     // (BLOCK_M + BLOCK_N) / (BLOCK_M * BLOCK_N). 1x1 is the original tile-at-a-time behaviour.
-    const uint32_t block_m = env_u32("LONG_MATMUL_BLOCK_M", 1);
-    const uint32_t block_n = env_u32("LONG_MATMUL_BLOCK_N", 1);
+    const uint32_t block_m = env_u32("LONG_MATMUL_BLOCK_M", /*fallback=*/1);
+    const uint32_t block_n = env_u32("LONG_MATMUL_BLOCK_N", /*fallback=*/1);
     TT_FATAL(block_m >= 1 && block_n >= 1, "LONG_MATMUL_BLOCK_M/N must be >= 1");
     // The whole block lives in the destination registers simultaneously.
     TT_FATAL(
@@ -378,7 +383,8 @@ int main(int argc, char* argv[]) {
             : std::max<uint32_t>(
                   1u,
                   static_cast<uint32_t>(std::lround(
-                      (static_cast<double>(power_cfg.write_amplification_pct) / 100.0) * reads_per_output_tile)));
+                      (static_cast<double>(power_cfg.write_amplification_pct) / kFullAmplificationPct) *
+                      reads_per_output_tile)));
 
     try {
         constexpr int device_id = 0;
@@ -479,33 +485,19 @@ int main(int argc, char* argv[]) {
             auto dst_dram = distributed::MeshBuffer::create(
                 distributed::ReplicatedBufferConfig{.size = tile_bytes * Mt * Nt}, dram_config, mesh_device.get());
 
-            const auto cb_fmt = tt::DataFormat::Float16_b;
-            // Each CB must hold one whole slice (in0/in1) or one whole output block, doubled so
-            // the reader can prefetch the next step while compute works on the current one.
-            const uint32_t cb0_tiles = 2 * block_m;
-            const uint32_t cb1_tiles = 2 * block_n;
-            const uint32_t cb_out_tiles = 2 * block_m * block_n;
+            // Each CB holds kCbBufferDepth slices of A or B, or output blocks.
+            auto make_cb_config = [&](CBIndex cb_index, uint32_t tiles_per_slot) {
+                return CircularBufferConfig(
+                           kCbBufferDepth * tiles_per_slot * single_tile_size, {{cb_index, tt::DataFormat::Float16_b}})
+                    .set_page_size(cb_index, single_tile_size);
+            };
+            tt_metal::CreateCircularBuffer(program, all_cores, make_cb_config(CBIndex::c_0, block_m));
+            tt_metal::CreateCircularBuffer(program, all_cores, make_cb_config(CBIndex::c_1, block_n));
+            tt_metal::CreateCircularBuffer(program, all_cores, make_cb_config(CBIndex::c_16, block_m * block_n));
 
-            tt_metal::CreateCircularBuffer(
-                program,
-                all_cores,
-                CircularBufferConfig(cb0_tiles * single_tile_size, {{CBIndex::c_0, cb_fmt}})
-                    .set_page_size(CBIndex::c_0, single_tile_size));
-
-            tt_metal::CreateCircularBuffer(
-                program,
-                all_cores,
-                CircularBufferConfig(cb1_tiles * single_tile_size, {{CBIndex::c_1, cb_fmt}})
-                    .set_page_size(CBIndex::c_1, single_tile_size));
-
-            tt_metal::CreateCircularBuffer(
-                program,
-                all_cores,
-                CircularBufferConfig(cb_out_tiles * single_tile_size, {{CBIndex::c_16, cb_fmt}})
-                    .set_page_size(CBIndex::c_16, single_tile_size));
-
-            // Passed as JIT defines so the kernels can #if out every path that is not selected: the
-            // measured instruction stream contains only the chosen variant.
+            // Passed as JIT defines so the kernels compile only the selected op and leave out an
+            // idle writer's writes. An idle reader or idle compute keeps its code, because in
+            // updated mode it still does its first kCbBufferDepth steps for real.
             const std::string bm = std::to_string(block_m), bn = std::to_string(block_n);
             std::map<std::string, std::string> reader_defines{{"BLOCK_M", bm}, {"BLOCK_N", bn}};
             if (power_cfg.disable_reader) {
@@ -611,6 +603,11 @@ int main(int argc, char* argv[]) {
 
             distributed::EnqueueWriteMeshBuffer(cq, src0_dram, src0_vec, /*blocking=*/false);
             distributed::EnqueueWriteMeshBuffer(cq, src1_dram, src1_vec, /*blocking=*/false);
+            if (!legacy_mode) {
+                // Updated mode waits for the uploads here, so none of them lands in the measured
+                // interval. Legacy mode, like the published measurements, does not wait.
+                distributed::Finish(cq);
+            }
 
             std::string blocks_per_core_str;
             if (fixed_blocks_per_core > 0) {
@@ -625,11 +622,12 @@ int main(int argc, char* argv[]) {
             fmt::print("Active cores: {}  |  Blocks/core: {}\n", num_cores, blocks_per_core_str);
 
             fmt::print(
-                "Running {} iterations of {}x{}x{} HiFi4 matmul on {} cores...\n",
+                "Running {} iterations of {}x{}x{} {} on {} cores...\n",
                 num_iterations,
                 M,
                 N,
                 K,
+                power_cfg.op,
                 num_cores);
 
             distributed::MeshWorkload workload;
@@ -638,9 +636,9 @@ int main(int argc, char* argv[]) {
 
             // With a cold kernel cache the kernels are JIT-compiled inside EnqueueMeshWorkload
             // (0.75 s for the first grid on n150), before any of the program's commands reach the
-            // device. Updated mode starts the clock after it returns, which keeps the compile and
-            // the input uploads queued above out of the measured interval; legacy mode starts it
-            // before, as the published measurements did.
+            // device. Updated mode starts the clock after it returns, so the compile stays out of
+            // the measured interval; legacy mode starts it before, as the published measurements
+            // did.
             auto sys_start = std::chrono::system_clock::now();
             auto t_start = std::chrono::high_resolution_clock::now();
 
