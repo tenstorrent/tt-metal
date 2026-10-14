@@ -187,18 +187,22 @@ INPUT_TAGGERS = {
 # has cores. short_wide / square_large need the column cut (interleaved_2d_split)
 # and are refused until it lands.
 
+# low_l1 / buffer / rank / tile_height: knob-turns the Phase 0 kernels already realize
+# (low_l1 caps block_width_tiles at LOW_L1_BLOCK_WIDTH_TILES; TensorAccessor is buffer-type
+# agnostic; leading dims fold into tile-rows; tiny output tiles = CB tile dims + the helper's
+# tilize_block fallback). Verified bit-exact by the verifier and claimed here.
 SUPPORTED = {
     "dtype": [ttnn.bfloat16],
     "output_dtype": [ttnn.bfloat16],
-    "low_l1": [False],
+    "low_l1": [False, True],
     "shard_api": ["none"],
     "out_scheme": [_INTERLEAVED],
-    "buffer": ["dram_to_dram"],
-    "rank": [4],
+    "buffer": ["dram_to_dram", "dram_to_l1", "l1_to_l1", "l1_to_dram"],
+    "rank": [2, 3, 4, 5, 6],
     "orientation": ["none"],
     "pad_mode": ["none"],
     "pad_value": ["none"],
-    "tile_height": [32],
+    "tile_height": [32, 16, 8, 4, 2, 1],
     "in_tile_height": ["none"],
     "tile_grid": ["single_tile", "small", "tall_narrow"],
     "alignment": ["tile_aligned"],
@@ -224,17 +228,21 @@ PROPERTIES = {
 
 
 def _side_dict(mem_config):
-    nd_spec = getattr(mem_config, "nd_shard_spec", None)
-    if nd_spec is not None:
-        return {"kind": "sharded", "buffer": mem_config.buffer_type, "orientation": nd_spec.orientation, "scheme": None}
-    if mem_config.memory_layout in _SHARDED_LAYOUTS:
-        spec = mem_config.shard_spec
+    # A live tensor's memory_config() carries BOTH shard_spec and nd_shard_spec for a legacy
+    # 2D shard, and an ND spec expressible in 2D is canonicalized to HEIGHT/WIDTH/BLOCK — so
+    # legacy vs nd is not recoverable at runtime. Prefer the legacy reading whenever the
+    # layout is a 2D scheme; only a genuinely ND-only layout tags as nd. (Sharding support must
+    # therefore land legacy_2d and nd together.)
+    if mem_config.memory_layout in _SHARDED_LAYOUTS and mem_config.shard_spec is not None:
         return {
             "kind": "sharded",
             "buffer": mem_config.buffer_type,
-            "orientation": spec.orientation if spec is not None else "none",
+            "orientation": mem_config.shard_spec.orientation,
             "scheme": mem_config.memory_layout,
         }
+    nd_spec = getattr(mem_config, "nd_shard_spec", None)
+    if nd_spec is not None:
+        return {"kind": "sharded", "buffer": mem_config.buffer_type, "orientation": nd_spec.orientation, "scheme": None}
     return {"kind": "interleaved", "buffer": mem_config.buffer_type}
 
 
@@ -303,7 +311,10 @@ def _validate_well_formed(input_tensor, *, output_padded_shape, pad_value, tile)
         tile_h = 32
     shape = list(input_tensor.shape)
     padding_requested = output_padded_shape is not None or pad_value is not None
-    if not padding_requested:
+    # The alignment rule applies to ROW_MAJOR sources only: a TILE input already carries its
+    # own tile padding, so an H that is not a multiple of the OUTPUT tile height is a retile
+    # with an implicit H tail (tagged by alignment / in_tile_height), not a malformed call.
+    if not padding_requested and input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT:
         if len(shape) < 2:
             raise ValueError(f"tilize: rank-{len(shape)} input requires a padding argument")
         if shape[-1] % 32 != 0 or shape[-2] % tile_h != 0:
@@ -381,14 +392,17 @@ def tilize(
     output_memory_config = memory_config if memory_config is not None else input_tensor.memory_config()
     output_dtype = _resolve_output_dtype(input_tensor, dtype)
 
-    # Phase 0: no padding, so the output's logical == padded == input shape.
-    output_tensor = ttnn.allocate_tensor_on_device(
+    # Phase 0: no padding, so the output's logical == padded == input shape. The output
+    # carries the requested tile geometry (default 32x32); interleaved placement only.
+    out_tile = tile if tile is not None else ttnn.Tile([32, 32])
+    output_spec = ttnn.TensorSpec(
         ttnn.Shape(list(input_tensor.shape)),
         output_dtype,
         ttnn.TILE_LAYOUT,
-        device,
-        output_memory_config,
+        buffer_type=output_memory_config.buffer_type,
+        tile=out_tile,
     )
+    output_tensor = ttnn.allocate_tensor_on_device(output_spec, device)
 
     program_descriptor = create_program_descriptor(input_tensor, output_tensor, low_l1=low_l1)
     return ttnn.generic_op([input_tensor, output_tensor], program_descriptor)

@@ -21,6 +21,9 @@ Schema: `.claude/references/l1-footprint-discipline.md`. Block axes (from `op_de
 | `in_elem_bytes`, `out_elem_bytes` | `≤ 4` | dtype set in TARGET |
 | `L1_BLOCK_BUDGET_BYTES` | 512 KiB | host constant |
 | `per_col_tile_bytes` | `in_depth·in_page_bytes + out_depth·out_page_bytes` ≤ `2·4096 + 2·4096` | derived |
+| `stick_bytes` (in the staging term only) | `≤ block_width_tiles · 32 · in_elem_bytes` (+ alignment pad) | staging exists only when `num_col_blocks = 1`, i.e. the whole stick is one block, so the stick is bounded by the block cap |
+| `staging_tile_rows` | `max(1, min(core_rows, STAGING_SLOT_BUDGET_BYTES // (tile_h · stick_bytes)))`; slot ≤ `max(16 KiB, tile_h · stick_bytes)` rounded up to `num_banks` sticks | host clamp (`STAGING_SLOT_BUDGET_BYTES = 16 KiB`) |
+| `num_banks` | DRAM banks of the input buffer (BH 8, WH 12); coalescing gated on `cores_used ≥ 2·num_banks` | `ttnn.get_memory_view(...)`; L1-interleaved sources never meet the gate in practice |
 
 No tensor dimension appears in any capacity expression: `block_width_tiles` is `min(core_cols_tiles, cap)` and the cap is dimension-independent, so the footprint is bounded for every shape at both `low_l1` settings, and O(1) in the tensor's dims under `low_l1=True` (cap = 8).
 
@@ -29,10 +32,17 @@ No tensor dimension appears in any capacity expression: `block_width_tiles` is `
 ```
 L1 = block_width_tiles · (in_depth_tile_rows · tile_h·32·in_elem_bytes
                           + out_depth_tile_rows · out_tile_bytes)
-   ≤ L1_BLOCK_BUDGET_BYTES                       (low_l1 = False)   = 512 KiB
-   (+ tail rings ≤ the same again, only on ragged column blocking: ≤ 1 MiB total)
-   ≤ 8 · per_col_tile_bytes ≤ 8 · 16 KiB = 128 KiB  (low_l1 = True)
+     + [num_col_blocks = 1 and coalesced]  2 · slot_bytes,
+           slot_bytes = num_banks · ceil(staging_tile_rows·tile_h / num_banks) · stick_bytes
+     + [ragged column blocking]  tail rings (≤ the main rings)
+   ≤ L1_BLOCK_BUDGET_BYTES (512 KiB) + staging (≤ 2 · tile_h · block_width_tiles·32·in_elem_bytes,
+                                               ≤ 256 KiB at the bf16/fp32 caps)        (low_l1 = False)
+   ≤ 8 · per_col_tile_bytes + staging(C ≤ 8: ≤ 2·32·256·4 = 64 KiB) ≤ 192 KiB          (low_l1 = True)
 ```
+
+Staging and the tail rings are mutually exclusive (staging needs `num_col_blocks = 1`, a tail needs
+`num_col_blocks > 1`), so the worst case is `max(staging, tail rings)` on top of the main rings.
+(Verifier, Phase 0 audit: the staging term was missing from this total; added.)
 
 Scales linearly with `block_width_tiles` (knob) and the two depth knobs; independent of `block_height_tiles` (streamed) and of every tensor dimension. Phase 0 bf16 example: `[1,1,2048,64]` → `block_width_tiles = 2` → `2 · (2·2048 + 2·2048) = 16 KiB`.
 

@@ -117,3 +117,50 @@ def test_tilize_rejects_host_tensor(expect_error):
     tt_host = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     with expect_error((ValueError, RuntimeError), ""):
         tilize(tt_host)
+
+
+# --- Axes the verifier found already realized by the Phase 0 kernels (knob-turns) ---------
+
+
+@pytest.mark.parametrize("tile_h", [16, 8, 4, 2, 1])
+@pytest.mark.parametrize("shape", [(1, 1, 32, 64), (1, 1, 4096, 64)], ids=["small", "tall_narrow"])
+def test_tilize_tiny_tile(device, shape, tile_h):
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(
+        x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_out = tilize(tt_in, tile=ttnn.Tile([tile_h, 32]))
+    assert list(tt_out.tile.tile_shape) == [tile_h, 32]
+    assert torch.equal(ttnn.to_torch(tt_out), x)
+
+
+@pytest.mark.parametrize(
+    "in_mc, out_mc",
+    [
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        (ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+    ],
+    ids=["dram_to_l1", "l1_to_l1", "l1_to_dram"],
+)
+@pytest.mark.parametrize("low_l1", [False, True])
+def test_tilize_buffers_low_l1(device, in_mc, out_mc, low_l1):
+    torch.manual_seed(0)
+    x = torch.randn((1, 1, 4608, 288), dtype=torch.bfloat16)  # C=9: low_l1 -> blocks 8 + ragged 1
+    tt_in = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mc)
+    tt_out = tilize(tt_in, memory_config=out_mc, low_l1=low_l1)
+    assert tt_out.memory_config().buffer_type == out_mc.buffer_type
+    assert torch.equal(ttnn.to_torch(tt_out), x)
+
+
+@pytest.mark.parametrize("shape", [(64, 128), (2, 32, 64), (1, 2, 1, 32, 64), (2, 1, 1, 1, 32, 64)])
+def test_tilize_ranks(device, shape):
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(
+        x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_out = tilize(tt_in)
+    assert tuple(tt_out.shape) == tuple(shape)
+    assert torch.equal(ttnn.to_torch(tt_out), x)
