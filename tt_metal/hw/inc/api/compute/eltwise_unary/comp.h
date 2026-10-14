@@ -342,6 +342,10 @@ ALWI void unary_le_tile_init() { MATH(SFPU_UNARY_INIT(unary_le)); }
 namespace detail {
 // The int32 compares are signed. Flipping the sign bit of both the value and the scalar maps uint32 order onto
 // int32 order, and the compare then overwrites the biased word with its 1/0 result.
+// The xor runs under the unary_{gt,lt,ge,le} init the caller issued, with no bitwise_xor init of its own. That is
+// only safe while bitwise_xor_init() and those four inits are the same bare reset_counters(SET_ABD_F) on every
+// architecture. If bitwise_xor_init() ever programs op-specific state (an ADDR_MOD, as typecast_init does), these
+// four functions must issue it before the xor and restore the compare's init after it.
 constexpr uint32_t uint32_compare_bias = 0x80000000u;
 
 ALWI void bias_uint32_for_signed_compare(uint32_t idst) {
