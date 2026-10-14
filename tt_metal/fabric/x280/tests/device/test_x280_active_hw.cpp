@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Reversible active-session definitions. These require an already-live
-// resident idle and never write L2CPU_RESET.
+// Reversible active-session definitions. The fixture boots the first tile into
+// resident idle when it is not live; the tests never write L2CPU_RESET.
 
 #include "x280/device/x280_runtime.hpp"
 
@@ -95,13 +95,14 @@ protected:
         auto opened =
             X280Runtime::open(mesh_, RuntimeOpenConfig{.priming_policy = LimEccPrimingPolicy::RequirePrepared});
         if (!opened.runtime) {
-            GTEST_SKIP() << "prepared X280 runtime unavailable: " << opened.diagnostic;
+            GTEST_SKIP() << "prepared X280 runtime unavailable: " << x280::test::unprepared(opened);
         }
         runtime_ = std::make_unique<X280Runtime>(std::move(*opened.runtime));
         const auto ids = runtime_->tile_ids();
         if (ids.empty()) {
             GTEST_SKIP() << "no enabled X280 tiles";
         }
+        x280::test::boot_resident_idle(*runtime_, ids.front());
         tile_ = &runtime_->tile(ids.front());
         access_ = std::make_unique<detail::TileTestAccess>(*tile_);
     }
@@ -121,7 +122,7 @@ protected:
         const auto state = tile_->inspect();
         ASSERT_TRUE(state.observation_valid) << state.invalid_reason;
         if (!state.resident_idle_live || !state.pll_mhz.has_value()) {
-            GTEST_SKIP() << "requires an already-live resident idle with PLL telemetry";
+            GTEST_SKIP() << "requires a live resident idle with PLL telemetry";
         }
     }
 

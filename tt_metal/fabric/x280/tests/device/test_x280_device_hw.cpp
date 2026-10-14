@@ -26,6 +26,7 @@
 #include "x280_hw_addrs.hpp"
 #include "x280_runtime_impl.hpp"
 #include "x280_tile_impl.hpp"
+#include "x280_test_images.hpp"
 
 #include "x280.h"
 #include "rt/x280_noc_map.h"
@@ -145,7 +146,7 @@ protected:
             X280Runtime::open(mesh_, RuntimeOpenConfig{.priming_policy = LimEccPrimingPolicy::RequirePrepared});
         if (!opened.runtime) {
             if (needs_operator_preparation(opened)) {
-                GTEST_SKIP() << "X280 hardware needs operator preparation: " << opened.diagnostic;
+                GTEST_SKIP() << "X280 hardware needs operator preparation: " << x280::test::unprepared(opened);
             }
             FAIL() << "X280 runtime initialization failed: " << opened.diagnostic;
         }
@@ -201,7 +202,7 @@ protected:
             X280Runtime::open(mesh_, RuntimeOpenConfig{.priming_policy = LimEccPrimingPolicy::RequirePrepared});
         if (!opened.runtime) {
             if (needs_operator_preparation(opened)) {
-                GTEST_SKIP() << "X280 hardware needs operator preparation: " << opened.diagnostic;
+                GTEST_SKIP() << "X280 hardware needs operator preparation: " << x280::test::unprepared(opened);
             }
             FAIL() << "X280 runtime initialization failed: " << opened.diagnostic;
         }
@@ -287,7 +288,7 @@ TEST(X280DeviceMesh, RuntimeInventoryHasStableCrossChipIdentity) {
 
     auto opened = X280Runtime::open(mesh, RuntimeOpenConfig{.priming_policy = LimEccPrimingPolicy::RequirePrepared});
     if (!opened.runtime && needs_operator_preparation(opened)) {
-        GTEST_SKIP() << "X280 hardware needs operator preparation: " << opened.diagnostic;
+        GTEST_SKIP() << "X280 hardware needs operator preparation: " << x280::test::unprepared(opened);
     }
     ASSERT_TRUE(opened.runtime) << opened.diagnostic;
     auto runtime = std::move(*opened.runtime);
@@ -372,7 +373,7 @@ TEST(X280DeviceMesh, EveryVisibleDeviceOpensThroughAUnitMesh) {
         auto opened =
             X280Runtime::open(mesh, RuntimeOpenConfig{.priming_policy = LimEccPrimingPolicy::RequirePrepared});
         if (!opened.runtime && needs_operator_preparation(opened)) {
-            GTEST_SKIP() << "X280 hardware needs operator preparation: " << opened.diagnostic;
+            GTEST_SKIP() << "X280 hardware needs operator preparation: " << x280::test::unprepared(opened);
         }
         ASSERT_TRUE(opened.runtime) << opened.diagnostic;
         auto runtime = std::move(*opened.runtime);
@@ -396,7 +397,7 @@ TEST(X280DeviceMesh, DifferentLiveUnitMeshIsRejectedWithoutDisturbingOwner) {
     auto owner_opened =
         X280Runtime::open(owner_mesh, RuntimeOpenConfig{.priming_policy = LimEccPrimingPolicy::RequirePrepared});
     if (!owner_opened.runtime && needs_operator_preparation(owner_opened)) {
-        GTEST_SKIP() << "X280 hardware needs operator preparation: " << owner_opened.diagnostic;
+        GTEST_SKIP() << "X280 hardware needs operator preparation: " << x280::test::unprepared(owner_opened);
     }
     ASSERT_TRUE(owner_opened.runtime) << owner_opened.diagnostic;
     auto owner = std::move(*owner_opened.runtime);

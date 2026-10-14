@@ -39,17 +39,19 @@ TEST(X280ActiveFailure, TrapMakesTheTileUnhealthyAndRefusesReacquisition) {
 
     auto mesh = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0);
     auto opened = X280Runtime::open(mesh, RuntimeOpenConfig{.priming_policy = LimEccPrimingPolicy::RequirePrepared});
+    if (!opened.runtime && (opened.requires_preparation() || opened.requires_reset())) {
+        GTEST_SKIP() << x280::test::unprepared(opened);
+    }
     ASSERT_TRUE(opened.runtime) << opened.diagnostic;
     auto runtime = std::move(*opened.runtime);
     const auto ids = runtime.tile_ids();
     ASSERT_FALSE(ids.empty());
 
-    auto& tile = runtime.tile(ids.front());
-    const auto initial = tile.inspect();
-    ASSERT_TRUE(initial.observation_valid) << initial.invalid_reason;
-    if (!initial.resident_idle_live) {
-        GTEST_SKIP() << "intentional failure test requires an already-live resident idle";
+    x280::test::boot_resident_idle(runtime, ids.front());
+    if (IsSkipped() || HasFatalFailure()) {
+        return;
     }
+    auto& tile = runtime.tile(ids.front());
 
     ActiveRunRequest request;
     request.image_path = image;

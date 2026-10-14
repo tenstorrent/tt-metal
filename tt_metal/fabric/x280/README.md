@@ -568,7 +568,8 @@ broken path list fails on a laptop.
 
 Every runtime device test takes its image from `build/x280/` unless its
 variable names another (`X280_ACTIVE_FW_IMAGE` for `X280ActiveHw`, which runs
-the sentinel; `X280_ATOMIC_BENCH_FW_IMAGE`; `X280_ACTIVE_FAULT_FW_IMAGE`), so a
+the sentinel; `X280_ATOMIC_BENCH_FW_IMAGE`; `X280_ACTIVE_FAULT_FW_IMAGE`;
+`X280_IDLE_FW_IMAGE` for the resident idle the active fixtures boot), so a
 run from the build needs none of them. Set `X280_ACTIVE_FW_IMAGES` to exercise
 the guard:
 
