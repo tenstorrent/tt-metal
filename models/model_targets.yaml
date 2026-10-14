@@ -621,6 +621,12 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+          - batch_size: 1
+            seq_len: 74
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "TODO gap seeded from run 103674493962; populate measured targets."
       bh_galaxy_perf:
         entries:
           - batch_size: null
@@ -986,6 +992,55 @@ targets:
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   # Active e2e combinations with no centralized target yet must remain explicit TODOs.
+  deepseek-v3-b1:
+    aliases: ["deepseek-v3-b1"]
+    skus:
+      bh_sc4:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_sc16:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+  "[tt-train] tinyllama_1_1b_ddp32":
+    skus:
+      bh_sc1_high_power:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+  "[tt-train] qwen3_1_7b_ddp32_shakespeare":
+    skus:
+      bh_sc1_high_power:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+  "[tt-train] tiny_deepseek_v3_ddp32_char":
+    skus:
+      bh_sc1_high_power:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
   llama3.1-8b-dp:
     aliases: ["llama3.1-8b-dp"]
     skus:
@@ -1005,6 +1060,14 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+      p300x2:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
   llama3.1-8b-dp-galaxy:
     aliases: ["llama3.1-8b-dp-galaxy"]
     skus:
@@ -1223,6 +1286,12 @@ targets:
               top5: 100
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+          - batch_size: 32
+            seq_len: 712
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "TODO gap seeded from run 103674493962; populate measured targets."
   llama3.3-70b-galaxy:
     aliases: ["llama3.3-70b-galaxy"]
     skus:
@@ -1413,6 +1482,12 @@ targets:
               top5: 100.0
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+          - batch_size: 32
+            seq_len: 749
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "TODO gap seeded from run 103674493962; populate measured targets."
   phi-3-mini:
     aliases: ["Phi-3-mini", "Phi-3-mini-128k-instruct", "microsoft/Phi-3-mini-128k-instruct"]
     skus:
@@ -1606,6 +1681,12 @@ targets:
               prefill_time_to_first_token: 83.3
               prefill_time_to_first_token_tolerance: 0.2
             accuracy: {}
+          - batch_size: 32
+            seq_len: 707
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "TODO gap seeded from run 103674493962; populate measured targets."
   qwen2.5-vl-32b:
     aliases: ["Qwen2.5-VL-32B", "Qwen/Qwen2.5-VL-32B-Instruct"]
     skus:
@@ -1902,6 +1983,12 @@ targets:
               top5: 99
             owner_id: U08HL8X1ECD # Aniruddha Tupe
             team: models
+          - batch_size: 1
+            seq_len: 2770
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "TODO gap seeded from run 103674493962; populate measured targets."
   qwq-32b:
     aliases: ["QwQ-32B", "Qwen/QwQ-32B"]
     skus:
