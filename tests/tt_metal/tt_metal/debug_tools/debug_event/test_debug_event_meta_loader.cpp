@@ -6,7 +6,9 @@
 // .tt_observability_event_meta / .tt_observability_event_str bytes built here, with no ELF, no device and no device
 // compiler. Valid sections are written field by field the way emit_site() (hostdev/debug_event_meta.h) writes them;
 // damaged and stale ones are cut or hand-built from those. The walk must return exactly the records it can read, never
-// read outside the two sections, and stop at the first record it cannot size.
+// read outside the two sections, and stop at the first record it cannot size. The damage tests place every input
+// against an unreadable guard page, so a read past the end of either section crashes the test rather than passing
+// unseen.
 
 #include <gtest/gtest.h>
 
@@ -16,8 +18,12 @@
 #include <limits>
 #include <random>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 #include <vector>
+
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include "hostdev/debug_event_meta.h"
 #include "llrt/observability_event_meta.hpp"
@@ -30,6 +36,7 @@ using tt::llrt::parse_meta_records;
 using tt::llrt::ParsedMetaRecords;
 
 enum class Level : int8_t { Low = -1, High = 7 };
+enum Wide : uint64_t { kWideMax = std::numeric_limits<uint64_t>::max() };
 
 struct Style {
     uint32_t color;
@@ -48,6 +55,12 @@ struct AllWidths {
     int32_t i32;
     int64_t i64;
     Level level;
+    Wide wide;
+};
+struct Defaulted {
+    const char* name;
+    uint32_t color = 0x123456;
+    uint8_t verbosity = 4;
 };
 struct TwoStrings {
     const char* name;
@@ -114,6 +127,35 @@ private:
     std::vector<std::byte> str_;
 };
 
+// A copy of BYTES that ends exactly where an unreadable page begins: reading one byte past it faults.
+class Guarded {
+public:
+    explicit Guarded(std::span<const std::byte> bytes) {
+        const size_t page = static_cast<size_t>(::sysconf(_SC_PAGESIZE));
+        map_bytes_ = (bytes.size() + page - 1) / page * page + page;
+        void* p = ::mmap(nullptr, map_bytes_, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED) {
+            throw std::runtime_error("mmap failed");
+        }
+        map_ = static_cast<std::byte*>(p);
+        std::byte* guard = map_ + map_bytes_ - page;
+        ::mprotect(guard, page, PROT_NONE);
+        data_ = guard - bytes.size();
+        std::memcpy(data_, bytes.data(), bytes.size());
+        size_ = bytes.size();
+    }
+    ~Guarded() { ::munmap(map_, map_bytes_); }
+    Guarded(const Guarded&) = delete;
+    Guarded& operator=(const Guarded&) = delete;
+    std::span<const std::byte> span() const { return {data_, size_}; }
+
+private:
+    std::byte* map_ = nullptr;
+    size_t map_bytes_ = 0;
+    std::byte* data_ = nullptr;
+    size_t size_ = 0;
+};
+
 // Every string the walk returns must lie inside STR and end there.
 void expect_strings_inside(const ParsedMetaRecords& p, std::span<const std::byte> str) {
     const auto* lo = reinterpret_cast<const char*>(str.data());
@@ -146,15 +188,17 @@ TEST(DebugEventMetaLoader, CPU_ReadsEveryRecordTheEmitterWrites) {
             std::numeric_limits<uint16_t>::max(),
             -123456,
             std::numeric_limits<int64_t>::min(),
-            Level::Low},
+            Level::Low,
+            kWideMax},
         "c.cpp",
         30);
     s.record(6, TwoStrings{"first", "second"});
     s.record(7, ZoneMeta{"plain"});
+    s.record(8, Defaulted{"defaulted"});
 
     const ParsedMetaRecords p = s.parse();
     EXPECT_FALSE(p.stopped_early);
-    ASSERT_EQ(p.entries.size(), 5u);
+    ASSERT_EQ(p.entries.size(), 6u);
     expect_strings_inside(p, s.strs());
 
     EXPECT_EQ(p.entries[0].zone_id, 3u);
@@ -180,6 +224,7 @@ TEST(DebugEventMetaLoader, CPU_ReadsEveryRecordTheEmitterWrites) {
     EXPECT_EQ(all->i32, -123456);
     EXPECT_EQ(all->i64, std::numeric_limits<int64_t>::min());
     EXPECT_EQ(all->level, Level::Low);
+    EXPECT_EQ(all->wide, kWideMax);
     EXPECT_EQ(p.entries[2].line, 30u);
 
     // The name is the first string; a later one is just a field.
@@ -190,6 +235,12 @@ TEST(DebugEventMetaLoader, CPU_ReadsEveryRecordTheEmitterWrites) {
 
     EXPECT_EQ(p.entries[4].name, "plain");
     EXPECT_TRUE(p.entries[4].meta.as<ZoneMeta>().has_value());
+
+    // Members the site left to their defaults travel like any other value.
+    const auto defaulted = p.entries[5].meta.as<Defaulted>();
+    ASSERT_TRUE(defaulted.has_value());
+    EXPECT_EQ(defaulted->color, 0x123456u);
+    EXPECT_EQ(defaulted->verbosity, 4u);
 }
 
 TEST(DebugEventMetaLoader, CPU_EmptyOrShortSectionHasNoRecords) {
@@ -222,15 +273,17 @@ TEST(DebugEventMetaLoader, CPU_StopsAtARecordThatRunsPastTheSection) {
     EXPECT_EQ(p.entries[0].name, "kept");
     EXPECT_TRUE(p.stopped_early);
 
-    // Every cut point: never a record that does not fit, never a string outside the section.
+    // Every cut point: never a record that does not fit, never a read past the cut, never a string outside the
+    // section. The second record's last field (a uint64) ends the section, so only the full length holds both.
     Sections whole;
     whole.record(1, ZoneMeta{"kept"});
     whole.record(2, AllWidths{"cut", true, 1, 2, 3, 4, Level::High});
+    const Guarded str(whole.strs());
     for (size_t len = 0; len <= full; len++) {
-        std::vector<std::byte> meta(whole.meta().begin(), whole.meta().begin() + len);
-        p = parse_meta_records(meta, whole.strs(), Sections::kStrVma);
-        EXPECT_EQ(p.entries.size(), len < first_end ? 0u : len < full - 3 ? 1u : 2u) << "len " << len;
-        expect_strings_inside(p, whole.strs());
+        const Guarded meta(std::span<const std::byte>(whole.meta()).first(len));
+        p = parse_meta_records(meta.span(), str.span(), Sections::kStrVma);
+        EXPECT_EQ(p.entries.size(), len < first_end ? 0u : len < full ? 1u : 2u) << "len " << len;
+        expect_strings_inside(p, str.span());
     }
 }
 
@@ -357,9 +410,11 @@ TEST(DebugEventMetaLoader, CPU_SurvivesRandomDamage) {
         if (rng() % 5 == 0) {
             str.resize(rng() % (str.size() + 1));
         }
-        const ParsedMetaRecords p = parse_meta_records(meta, str, Sections::kStrVma);
+        const Guarded guarded_meta(meta);
+        const Guarded guarded_str(str);
+        const ParsedMetaRecords p = parse_meta_records(guarded_meta.span(), guarded_str.span(), Sections::kStrVma);
         EXPECT_LE(p.entries.size(), meta.size() / tt::debug_event::kRecordHeaderBytes);
-        expect_strings_inside(p, str);
+        expect_strings_inside(p, guarded_str.span());
         if (HasFailure()) {
             FAIL() << "iteration " << iter;
         }
