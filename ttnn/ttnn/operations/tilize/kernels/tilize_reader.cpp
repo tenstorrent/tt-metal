@@ -9,6 +9,11 @@
 // reserve `width` tile-sized pages, issue tile_h stick-segment reads (all in flight), one
 // barrier, push `width`. Page layout in the CB: tile_h rows of width*32 elements, which is
 // what the symmetric tilize helper consumes.
+//
+// Pad fill (has_padding): the output tile grid is the PADDED shape; the input is that shape's
+// prefix (left-expanded with 1s). Each segment reads only its in-range data bytes; the W tail,
+// H-tail sticks, sticks of pad images and whole pad tile-columns are filled by local L1->L1 NoC
+// copies from a one-segment fill row (the pad value in the input format), prepared once.
 
 #include <cstdint>
 
@@ -36,7 +41,18 @@ void kernel_main() {
     constexpr uint32_t num_banks = get_compile_time_arg_val(12);
     constexpr uint32_t cb_stick_staging = get_compile_time_arg_val(13);
     constexpr uint32_t staging_tile_rows = get_compile_time_arg_val(14);
-    constexpr auto in_args = TensorAccessorArgs<15>();
+    constexpr bool has_padding = get_compile_time_arg_val(15) != 0;
+    constexpr uint32_t cb_pad_fill = get_compile_time_arg_val(16);
+    constexpr uint32_t in_row_bytes = get_compile_time_arg_val(17);    // logical bytes of one input stick
+    constexpr uint32_t fill_row_bytes = get_compile_time_arg_val(18);  // >= max segment + fill_phase_bytes
+    constexpr uint32_t fill_phase_bytes = get_compile_time_arg_val(19);
+    constexpr bool leading_pad = get_compile_time_arg_val(20) != 0;
+    // Leading (batch) dims, outermost first: output (padded) and input extents.
+    constexpr uint32_t out_l0 = get_compile_time_arg_val(21), out_l1 = get_compile_time_arg_val(22),
+                       out_l2 = get_compile_time_arg_val(23), out_l3 = get_compile_time_arg_val(24);
+    constexpr uint32_t in_l0 = get_compile_time_arg_val(25), in_l1 = get_compile_time_arg_val(26),
+                       in_l2 = get_compile_time_arg_val(27), in_l3 = get_compile_time_arg_val(28);
+    constexpr auto in_args = TensorAccessorArgs<29>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start_tile = get_arg_val<uint32_t>(1);
@@ -44,6 +60,7 @@ void kernel_main() {
     const uint32_t col_start_tile = get_arg_val<uint32_t>(3);
     const uint32_t block_height_tiles = get_arg_val<uint32_t>(4);
     const uint32_t bank_stagger_offset = get_arg_val<uint32_t>(5);  // < min(num_banks, chunk sticks)
+    const uint32_t fill_word = get_arg_val<uint32_t>(6);            // pad value, replicated to 32 bits
 
     const auto in_acc = TensorAccessor(in_args, src_addr, stick_page_bytes);
 
@@ -114,12 +131,41 @@ void kernel_main() {
         return;
     }
 
+    // Fill row: seed FILL_PHASE bytes with RISC stores, then grow it by doubling local NoC copies.
+    uint32_t fill_base = 0;
+    if constexpr (has_padding) {
+        fill_base = (get_write_ptr(cb_pad_fill) + fill_phase_bytes - 1) & ~(fill_phase_bytes - 1);
+        volatile tt_l1_ptr uint32_t* seed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_base);
+        for (uint32_t k = 0; k < fill_phase_bytes / sizeof(uint32_t); ++k) {
+            seed[k] = fill_word;
+        }
+        for (uint32_t have = fill_phase_bytes; have < fill_row_bytes;) {
+            const uint32_t n = (fill_row_bytes - have < have) ? fill_row_bytes - have : have;
+            noc_async_write(fill_base, get_noc_addr(fill_base + have), n);
+            noc_async_write_barrier();
+            have += n;
+        }
+    }
+    // Local fill copy: the source offset matches dst modulo fill_phase_bytes, so the copy is
+    // NoC-alignment congruent and in element phase (segments start at multiples of 32 elements).
+    auto fill = [&](uint32_t dst_l1, uint32_t n_bytes) {
+        noc_async_write(fill_base + (dst_l1 & (fill_phase_bytes - 1)), get_noc_addr(dst_l1), n_bytes);
+    };
+
     for (uint32_t col_block = 0; col_block < num_col_blocks; ++col_block) {
         const bool is_tail = has_tail && (col_block == num_col_blocks - 1);
         const uint32_t cb_id = is_tail ? cb_rm_sticks_tail : cb_rm_sticks;
         const uint32_t width_tiles = is_tail ? last_block_width_tiles : block_width_tiles;
         const uint32_t seg_bytes = width_tiles * tile_col_bytes;
         const uint32_t seg_offset_bytes = (col_start_tile + col_block * block_width_tiles) * tile_col_bytes;
+        // In-range data bytes of this segment (W tail / whole pad columns => fewer, possibly 0).
+        uint32_t data_bytes = seg_bytes;
+        if constexpr (has_padding) {
+            data_bytes =
+                seg_offset_bytes >= in_row_bytes
+                    ? 0
+                    : (in_row_bytes - seg_offset_bytes < seg_bytes ? in_row_bytes - seg_offset_bytes : seg_bytes);
+        }
 
         for (uint32_t rb_start = 0; rb_start < core_rows_tiles; rb_start += block_height_tiles) {
             const uint32_t rb_end =
@@ -129,15 +175,51 @@ void kernel_main() {
                 const uint32_t tile_row = row_start_tile + r;
                 const uint32_t image = tile_row / tile_rows_per_image;
                 const uint32_t row_in_image = tile_row - image * tile_rows_per_image;
-                const uint32_t first_stick = image * image_height_sticks + row_in_image * tile_h;
+                const uint32_t first_h = row_in_image * tile_h;
+                // Output image -> input image (leading-dim padding: decode in output radices).
+                uint32_t in_image = image;
+                bool image_valid = true;
+                if constexpr (leading_pad) {
+                    uint32_t rem = image;
+                    const uint32_t d3 = rem % out_l3;
+                    rem /= out_l3;
+                    const uint32_t d2 = rem % out_l2;
+                    rem /= out_l2;
+                    const uint32_t d1 = rem % out_l1;
+                    const uint32_t d0 = rem / out_l1;
+                    image_valid = d0 < in_l0 && d1 < in_l1 && d2 < in_l2 && d3 < in_l3;
+                    in_image = ((d0 * in_l1 + d1) * in_l2 + d2) * in_l3 + d3;
+                }
+                // Sticks [first_h, first_h + valid_sticks) of this tile-row exist in the input.
+                uint32_t valid_sticks = tile_h;
+                if constexpr (has_padding) {
+                    valid_sticks =
+                        (!image_valid || data_bytes == 0 || first_h >= image_height_sticks)
+                            ? 0
+                            : (image_height_sticks - first_h < tile_h ? image_height_sticks - first_h : tile_h);
+                }
+                const uint32_t first_stick = in_image * image_height_sticks + first_h;
 
                 cb_reserve_back(cb_id, width_tiles);
-                uint32_t l1_write_addr = get_write_ptr(cb_id);
-                for (uint32_t i = 0; i < tile_h; ++i) {
-                    noc_async_read(in_acc.get_noc_addr(first_stick + i, seg_offset_bytes), l1_write_addr, seg_bytes);
+                const uint32_t l1_base = get_write_ptr(cb_id);
+                uint32_t l1_write_addr = l1_base;
+                for (uint32_t i = 0; i < valid_sticks; ++i) {
+                    noc_async_read(in_acc.get_noc_addr(first_stick + i, seg_offset_bytes), l1_write_addr, data_bytes);
                     l1_write_addr += seg_bytes;
                 }
                 noc_async_read_barrier();
+                if constexpr (has_padding) {
+                    // After the read barrier: a partial tail fill shares a NoC word with the data.
+                    if (data_bytes < seg_bytes) {
+                        for (uint32_t i = 0; i < valid_sticks; ++i) {
+                            fill(l1_base + i * seg_bytes + data_bytes, seg_bytes - data_bytes);
+                        }
+                    }
+                    for (uint32_t i = valid_sticks; i < tile_h; ++i) {
+                        fill(l1_base + i * seg_bytes, seg_bytes);
+                    }
+                    noc_async_write_barrier();
+                }
                 cb_push_back(cb_id, width_tiles);
             }
         }

@@ -9,7 +9,8 @@ eval/golden_tests/tilize/feature_spec.py, "Expected INPUT_TAGGERS"); validate()
 rebuilds the same scenario dict from the live call and runs the very same
 taggers on it, so the runtime gate and the test-side decoration cannot drift.
 
-Phase 0 builds the `interleaved_row_split` regime of op_design.md.
+Built regimes (op_design.md): `interleaved_row_split`, `interleaved_2d_split` (the host picks the
+per-core rectangle), and in-kernel pad fill (reader) for `pad_mode` auto / explicit.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ _SHARDED_LAYOUTS = (
 DOMINANT = 16
 
 _VALID_TILE_HEIGHTS = (32, 16, 8, 4, 2, 1)
+_MAX_PADDED_RANK = 6
 
 
 # ---------------------------------------------------------------------------
@@ -182,10 +184,9 @@ INPUT_TAGGERS = {
 # 2. SUPPORTED — Phase 0: the interleaved_row_split corner.
 # ---------------------------------------------------------------------------
 #
-# tile_grid: the row split places min(R, grid) cores. tall_narrow (R >= 16C) puts
-# the work on the row axis; single_tile / small have fewer tiles than the grid
-# has cores. short_wide / square_large need the column cut (interleaved_2d_split)
-# and are refused until it lands.
+# tile_grid: the row split places min(R, grid) cores; when R < grid the host switches to the
+# 2-D rectangle split (interleaved_2d_split), which reaches the grid on short_wide / square_large.
+# Padding (pad_mode / pad_value / alignment / rank 0-1): filled in-kernel by the reader.
 
 # low_l1 / buffer / rank / tile_height: knob-turns the Phase 0 kernels already realize
 # (low_l1 caps block_width_tiles at LOW_L1_BLOCK_WIDTH_TILES; TensorAccessor is buffer-type
@@ -198,14 +199,14 @@ SUPPORTED = {
     "shard_api": ["none"],
     "out_scheme": [_INTERLEAVED],
     "buffer": ["dram_to_dram", "dram_to_l1", "l1_to_l1", "l1_to_dram"],
-    "rank": [2, 3, 4, 5, 6],
+    "rank": [0, 1, 2, 3, 4, 5, 6],
     "orientation": ["none"],
-    "pad_mode": ["none"],
-    "pad_value": ["none"],
+    "pad_mode": ["none", "auto", "explicit"],
+    "pad_value": ["none", "zero", "positive", "negative"],
     "tile_height": [32, 16, 8, 4, 2, 1],
     "in_tile_height": ["none"],
-    "tile_grid": ["single_tile", "small", "tall_narrow"],
-    "alignment": ["tile_aligned"],
+    "tile_grid": ["single_tile", "small", "tall_narrow", "short_wide", "square_large"],
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned", "hw_non_aligned"],
 }
 
 
@@ -322,9 +323,13 @@ def _validate_well_formed(input_tensor, *, output_padded_shape, pad_value, tile)
                 f"tilize: input shape {shape} not aligned to tile ({tile_h}, 32) and no padding argument given"
             )
     if output_padded_shape is not None:
-        target = list(output_padded_shape)
+        target = [int(d) for d in output_padded_shape]
         if len(target) < len(shape) or any(t < s for t, s in zip(target[len(target) - len(shape) :], shape)):
             raise ValueError(f"tilize: output_padded_shape {target} is smaller than the input shape {shape}")
+        if len(target) < 2 or target[-1] % 32 != 0 or target[-2] % tile_h != 0:
+            raise ValueError(f"tilize: output_padded_shape {target} must end in multiples of ({tile_h}, 32)")
+        if len(target) > _MAX_PADDED_RANK:
+            raise ValueError(f"tilize: output_padded_shape rank {len(target)} > {_MAX_PADDED_RANK}")
 
 
 def validate(
@@ -391,12 +396,16 @@ def tilize(
     device = input_tensor.device()
     output_memory_config = memory_config if memory_config is not None else input_tensor.memory_config()
     output_dtype = _resolve_output_dtype(input_tensor, dtype)
-
-    # Phase 0: no padding, so the output's logical == padded == input shape. The output
-    # carries the requested tile geometry (default 32x32); interleaved placement only.
     out_tile = tile if tile is not None else ttnn.Tile([32, 32])
+    tile_h = _tile_height_of(out_tile)[0]
+
+    logical_shape = [int(d) for d in input_tensor.shape]
+    padded_shape = _resolve_padded_shape(logical_shape, output_padded_shape, pad_value, tile_h)
+
+    # The output buffer is laid out at the padded shape; a metadata-only view then restores the
+    # input's logical shape (no second dispatch). Interleaved placement only.
     output_spec = ttnn.TensorSpec(
-        ttnn.Shape(list(input_tensor.shape)),
+        ttnn.Shape(padded_shape if padded_shape is not None else logical_shape),
         output_dtype,
         ttnn.TILE_LAYOUT,
         buffer_type=output_memory_config.buffer_type,
@@ -404,5 +413,58 @@ def tilize(
     )
     output_tensor = ttnn.allocate_tensor_on_device(output_spec, device)
 
-    program_descriptor = create_program_descriptor(input_tensor, output_tensor, low_l1=low_l1)
-    return ttnn.generic_op([input_tensor, output_tensor], program_descriptor)
+    fill_word = _fill_word(input_tensor.dtype, pad_value) if padded_shape is not None else 0
+    program_descriptor = create_program_descriptor(
+        input_tensor, output_tensor, low_l1=low_l1, padded_shape=padded_shape, fill_word=fill_word
+    )
+    output_tensor = ttnn.generic_op([input_tensor, output_tensor], program_descriptor)
+    if padded_shape is not None and padded_shape != logical_shape:
+        output_tensor = ttnn.experimental.view(output_tensor, ttnn.Shape(logical_shape), ttnn.Shape(padded_shape))
+    return output_tensor
+
+
+def _round_up(x, unit):
+    return ((x + unit - 1) // unit) * unit
+
+
+def _resolve_padded_shape(shape, output_padded_shape, pad_value, tile_h):
+    """The output's padded shape, or None when no padding argument was given.
+
+    explicit: `output_padded_shape` as given. auto (`pad_value` only): last two dims rounded to
+    (tile_h, 32); rank 0 / 1 synthesize the tile dims ([tile_h, 32] / [tile_h, round(W, 32)]).
+    """
+    if output_padded_shape is not None:
+        return [int(d) for d in output_padded_shape]
+    if pad_value is None:
+        return None
+    if len(shape) == 0:
+        return [tile_h, 32]
+    if len(shape) == 1:
+        return [tile_h, _round_up(shape[0], 32)]
+    return list(shape[:-2]) + [_round_up(shape[-2], tile_h), _round_up(shape[-1], 32)]
+
+
+def _fill_word(in_dtype, pad_value):
+    """The pad value encoded in the INPUT format, replicated to one 32-bit word.
+
+    Floats convert exactly as torch does; integers bit_cast (a negative int fill is its
+    two's-complement bit pattern, never truncated through a float).
+    """
+    import torch  # local: ttnn forbids a global torch import
+
+    v = 0 if pad_value is None else pad_value
+    if in_dtype == ttnn.bfloat16:
+        # Same python-float -> bf16 conversion F.pad applies to its `value`.
+        bf16 = int(torch.tensor(float(v), dtype=torch.bfloat16).view(torch.int16).item()) & 0xFFFF
+        return bf16 | (bf16 << 16)
+    if in_dtype == ttnn.float32:
+        return int(torch.tensor(float(v), dtype=torch.float32).view(torch.int32).item()) & 0xFFFFFFFF
+    if in_dtype in (ttnn.uint32, ttnn.int32):
+        return int(v) & 0xFFFFFFFF
+    if in_dtype == ttnn.uint16:
+        h = int(v) & 0xFFFF
+        return h | (h << 16)
+    if in_dtype == ttnn.uint8:
+        b = int(v) & 0xFF
+        return b * 0x01010101
+    raise ValueError(f"tilize: no pad-fill encoding for input dtype {in_dtype}")

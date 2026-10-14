@@ -53,7 +53,15 @@ void bind_view(nb::module_& mod) {
             static_cast<ttnn::Tensor (*)(const ttnn::Tensor&, const ttsl::SmallVector<int32_t>&)>(
                 &ttnn::experimental::view),
             nb::arg("input_tensor"),
-            nb::arg("shape")));
+            nb::arg("shape")),
+        // Metadata-only (logical, padded) view: lets an op that writes a padded TILE buffer
+        // expose logical < padded without a second dispatch.
+        ttnn::overload_t(
+            static_cast<ttnn::Tensor (*)(const ttnn::Tensor&, const ttnn::Shape&, const ttnn::Shape&)>(
+                &ttnn::experimental::view),
+            nb::arg("input_tensor"),
+            nb::arg("logical_shape"),
+            nb::arg("padded_shape")));
 }
 
 }  // namespace ttnn::operations::experimental::reshape::detail
