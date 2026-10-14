@@ -67,7 +67,8 @@ std::optional<HostTensor> try_encode_bfp_matrix(
                     }
                 }
             };
-            if (tile_count < 256) {
+            // Nested conversion must not wait for work queued to the same pool.
+            if (tile_count < 256 || GetExecutor().this_worker_id() != -1) {
                 process(0, tile_count);
             } else {
                 const size_t chunks = std::max<size_t>(1, std::min(GetExecutor().num_workers(), tile_count / 128));

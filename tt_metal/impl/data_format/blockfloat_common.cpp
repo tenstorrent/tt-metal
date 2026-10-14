@@ -414,9 +414,9 @@ std::vector<uint32_t> pack_as_bfp_tiles(
                     }
                 }
             };
-            // Use Metal's existing bounded pool, including its nested-call and
-            // fork handling. Do not create a second runtime's thread team.
-            if (num_tiles < 256) {
+            // A Taskflow graph may occupy every worker with one topology.
+            // Finish nested packing inline so no worker waits on its own pool.
+            if (num_tiles < 256 || tt::tt_metal::detail::GetExecutor().this_worker_id() != -1) {
                 process(0, num_tiles);
                 return result;
             }

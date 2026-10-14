@@ -7,6 +7,7 @@
 #include <bit>
 #include <future>
 #include <limits>
+#include <latch>
 #include <random>
 #include <vector>
 
@@ -17,6 +18,7 @@
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/host_bfp_conversion.hpp>
+#include "common/executor.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -99,6 +101,27 @@ TEST_P(BfpHostPreparation, ConcurrentCalls) {
     for (auto& result : pending) {
         result.get();
     }
+}
+
+TEST_P(BfpHostPreparation, CallsFromSaturatedExecutor) {
+    const Shape shape{1024, 512};
+    const auto spec = TensorSpec(shape, TensorLayout(GetParam(), PageConfig(Layout::TILE), MemoryConfig{}));
+    const std::vector<float> source(shape.volume(), 1.25f);
+    const auto expected = HostTensor::from_span<float>(source, spec);
+    const auto expected_words = host_buffer::get_as<uint32_t>(expected);
+    auto& executor = detail::GetExecutor();
+    std::latch started(executor.num_workers());
+    tf::Taskflow graph;
+    for (size_t i = 0; i < executor.num_workers(); ++i) {
+        graph.emplace([&] {
+            started.arrive_and_wait();
+            const auto actual = HostTensor::from_span<float>(source, spec);
+            const auto words = host_buffer::get_as<uint32_t>(actual);
+            EXPECT_EQ(actual.tensor_spec(), spec);
+            EXPECT_TRUE(std::equal(words.begin(), words.end(), expected_words.begin(), expected_words.end()));
+        });
+    }
+    executor.run(graph).get();
 }
 
 TEST_P(BfpHostPreparation, StridedRowsAndSourceLifetime) {
