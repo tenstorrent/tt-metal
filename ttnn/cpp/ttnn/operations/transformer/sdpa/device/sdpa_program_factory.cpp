@@ -367,6 +367,9 @@ void build_causal_chains(
     auto pair_pos = [&](std::size_t idx) {
         return core_work[segments[idx].core_idx].head_work[segments[idx].head_work_index].global_start % q_num_chunks;
     };
+    // With a Q head per chain core the pooled pieces hold equal pair positions, while an own head chain holds its
+    // injector until the sink has finished its longer light chunk.
+    const bool pool_every_head = pool_across_heads && heads_per_group >= kMaxCausalChainCores;
     std::vector<std::size_t> pool;
     std::size_t idx = 0;
     while (idx < segments.size()) {
@@ -377,7 +380,7 @@ void build_causal_chains(
                 own.push_back(idx);
             }
         }
-        if (!pool_across_heads || own.size() >= kMinOwnHeadChain) {
+        if (!pool_across_heads || (own.size() >= kMinOwnHeadChain && !pool_every_head)) {
             link_causal_chain_pieces(
                 segments, own, core_work, core_chain_info, heads_per_group, chains_built, chains_skipped);
         } else {
