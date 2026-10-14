@@ -502,6 +502,7 @@ void matmul_blocks_swiglu(
             }
             tile_regs_commit();
 
+#ifndef ARCH_QUASAR  // Wormhole/Blackhole LLK internals; kernel_main refuses fused SwiGLU on Quasar
             // SFPU on the pack thread, as moe_compute's compute kernel runs its SwiGLU
             // (ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute.cpp):
             // tile_regs_wait() that also stalls CFG, so the SETC16 below waits for the math thread's commit
@@ -518,6 +519,7 @@ void matmul_blocks_swiglu(
                 }
             }
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+#endif
             for (uint32_t h = 0; h < subblock_h; h++) {
                 for (uint32_t w = 0; w < subblock_w; w += 2) {
                     pack_tile<true>(
@@ -577,6 +579,9 @@ void kernel_main() {
 #endif
 
     matmul_init(dfb::in0, dfb::in1);
+#ifdef ARCH_QUASAR
+    static_assert(!swiglu_in_k_loop, "fused SwiGLU (matmul_blocks_swiglu) is not ported to Quasar");
+#endif
     if constexpr (swiglu_in_k_loop) {
         PACK((minimal_matmul_swiglu_tile_init()));  // once: nothing else on the pack thread reprograms the SFPU
     }
