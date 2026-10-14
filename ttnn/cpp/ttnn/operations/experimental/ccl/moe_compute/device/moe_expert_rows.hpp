@@ -190,7 +190,7 @@ struct MoEExpertRowsDeviceOperation {
 };
 
 // Program 2 of an expert rows call: moe_compute's outputs from the row buffer and the routing table (ComputeOnly), or
-// the metadata, the double-buffer feed and selective_reduce_combine's kernels (FullLocal, FullCcl).
+// the metadata, the double-buffer feed and selective_reduce_combine's kernels (SingleDevice, FullCcl).
 struct MoEComputePlaceFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle place_kernel = 0;
