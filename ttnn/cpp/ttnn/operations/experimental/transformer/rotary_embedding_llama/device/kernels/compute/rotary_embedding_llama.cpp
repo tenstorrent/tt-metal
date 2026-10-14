@@ -122,6 +122,11 @@ void kernel_main() {
                 reconfig_data_format(cos_interm_dfb, trans_mat_dfb, sin_interm_dfb, in_dfb);
                 pack_reconfig_data_format(out_dfb, rotated_in_interm_dfb);
                 matmul_init(in_dfb, trans_mat_dfb);
+#ifdef ARCH_QUASAR
+                // Quasar: pack_reconfig_data_format only changes the format; pack_init is what retargets the
+                // packer BFD to a DFB. Without it every pack_tile below writes to the last pack_init'd DFB.
+                pack_init(rotated_in_interm_dfb);
+#endif
                 ACQ();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     matmul_tiles(in_dfb, trans_mat_dfb, j, in1_index, j);
@@ -132,6 +137,9 @@ void kernel_main() {
                 reconfig_data_format(trans_mat_dfb, rotated_in_interm_dfb, in_dfb, sin_dfb);
                 pack_reconfig_data_format(rotated_in_interm_dfb, sin_interm_dfb);
                 mul_init(rotated_in_interm_dfb, sin_dfb);
+#ifdef ARCH_QUASAR
+                pack_init(sin_interm_dfb);
+#endif
                 // sin_interim = rotated * sin
                 ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
                     ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
@@ -143,6 +151,12 @@ void kernel_main() {
 
                 reconfig_data_format(rotated_in_interm_dfb, in_dfb, sin_dfb, cos_dfb);
                 pack_reconfig_data_format(sin_interm_dfb, cos_interm_dfb);
+#ifdef ARCH_QUASAR
+                // Quasar bakes the operand BFDs into the binary init, so re-init for (input, cos), and retarget
+                // the packer to cos_interm. WH/BH reuse the (rotated_interm, sin) init above.
+                mul_init(in_dfb, cos_dfb);
+                pack_init(cos_interm_dfb);
+#endif
                 // cos_interim = x * cos
                 ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
                     ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
@@ -159,6 +173,10 @@ void kernel_main() {
 
                 reconfig_data_format(in_dfb, cos_interm_dfb, cos_dfb, sin_interm_dfb);
                 pack_reconfig_data_format(cos_interm_dfb, out_dfb);
+#ifdef ARCH_QUASAR
+                // ckl::add re-inits the unpack side itself but does not retarget the packer.
+                pack_init(out_dfb);
+#endif
                 // out = cos_interim + sin_interim
                 ckl::add<bulk_block_input(cos_interm_dfb), bulk_block_input(sin_interm_dfb), bulk_output(out_dfb)>(
                     ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt));
