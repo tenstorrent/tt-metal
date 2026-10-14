@@ -175,6 +175,14 @@ void kernel_main() {
         rb[TT_FABRIC_MISC_INDEX + 11] = static_cast<uint32_t>(signal_cycles);
         rb[TT_FABRIC_MISC_INDEX + 12] = static_cast<uint32_t>(signal_cycles >> 32);
         rb[TT_FABRIC_MISC_INDEX + 13] = waited;
+        // Credit window as the worker sees it at the end: its write counter, the router's last read
+        // counter, and the slot count (effective window = num_buffers - (wr - rd)).
+        if constexpr (NUM_TRAFFIC_CONFIGS == 1 && BENCHMARK_MODE) {
+            auto* conn = static_cast<EdmSenderType*>(sender_config->traffic_config_ptrs[0]->connection_ptr_);
+            rb[TT_FABRIC_MISC_INDEX + 14] = conn->buffer_slot_write_counter.counter;
+            rb[TT_FABRIC_MISC_INDEX + 15] = *conn->edm_buffer_local_free_slots_read_ptr;
+            rb[TT_FABRIC_MISC_INDEX + 16] = conn->num_buffers_per_channel;
+        }
     }
     // Write test results
     write_test_cycles(sender_config->get_result_buffer_address(), total_elapsed_cycles_outer_loop);
