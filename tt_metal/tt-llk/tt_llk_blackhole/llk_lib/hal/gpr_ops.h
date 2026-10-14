@@ -71,11 +71,12 @@ enum class BinaryOperation : std::uint8_t
 };
 
 template <typename Operand>
-struct OperandTraits;
+class OperandTraits;
 
 template <std::uint32_t Index>
-struct OperandTraits<hal::Gpr<Index>>
+class OperandTraits<hal::Gpr<Index>>
 {
+public:
     static constexpr bool is_static             = Index != hal::detail::DynamicGprIndex;
     static constexpr bool is_immediate          = false;
     static constexpr std::uint32_t static_value = Index;
@@ -94,8 +95,9 @@ struct OperandTraits<hal::Gpr<Index>>
 };
 
 template <std::uint32_t Value>
-struct OperandTraits<Immediate<Value>>
+class OperandTraits<Immediate<Value>>
 {
+public:
     static constexpr bool is_static             = Value != DynamicImmediateValue;
     static constexpr bool is_immediate          = true;
     static constexpr std::uint32_t static_value = Value;
