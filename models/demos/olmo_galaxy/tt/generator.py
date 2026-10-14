@@ -977,7 +977,7 @@ class Generator(WarmupForwardMixin):
             padded_page_table[user_id, :] = page_table[0, :]
         return padded_page_table
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False) -> None:
         # page_table gets padded properly in prefill_forward_text
         # be sure to pad correctly for non traced sequences in future warmup calls
         page_table = torch.zeros(1, 1, dtype=torch.int32)

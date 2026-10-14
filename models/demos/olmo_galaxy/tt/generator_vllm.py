@@ -43,6 +43,34 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: TtTransform
     return kv_cache
 
 
+def allocate_vllm_kv_cache_bf16(kv_cache_shape, dtype, num_layers, model: TtTransformer, tt_cache_path):
+    """Same as allocate_vllm_kv_cache but bf16, matching OLMo's demo KV cache (llama_attention.layer_past).
+
+    The shared helper allocates bfloat8_b; OLMo keeps K/V in bf16 to limit decode drift over long contexts,
+    and serving must not quietly lower that precision.
+    """
+    submesh = model.mesh_device
+    cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
+    kv_tt = []
+    for _ in tqdm(range(num_layers), desc="Allocating bf16 TT kv caches for each layer"):
+        kv_tt.append(
+            [
+                ttnn.as_tensor(
+                    cache_kv,
+                    device=submesh,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat16,
+                    # Separate cache files for K and V, and from the bfloat8_b caches of other models.
+                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}_bf16",
+                )
+                for kv in ["k", "v"]
+            ]
+        )
+    return [kv_tt]
+
+
 def initialize_vllm_text_transformer(
     hf_config,
     tt_data_parallel,
@@ -201,6 +229,47 @@ def initialize_vllm_text_transformer_olmo(
     return tt_model, model_args
 
 
+def _sample_first_tokens(logits, sampling_params):
+    """Sample one token per row of host logits [B, V] with the request's temperature / top_k / top_p / seed.
+
+    Rows with temperature 0 (or top_k 1) are greedy. Penalties are not applied to the first token.
+    """
+    num_rows = logits.shape[0]
+
+    def per_row(values, default):
+        if values is None:
+            return [default] * num_rows
+        values = list(values)
+        return [values[i] if i < len(values) and values[i] is not None else default for i in range(num_rows)]
+
+    temperature = per_row(getattr(sampling_params, "temperature", None), 0.0)
+    top_k = per_row(getattr(sampling_params, "top_k", None), 1)
+    top_p = per_row(getattr(sampling_params, "top_p", None), 1.0)
+    seeds = per_row(getattr(sampling_params, "seed", None), None)
+
+    tokens = torch.empty(num_rows, dtype=torch.int64)
+    for i in range(num_rows):
+        row = logits[i].float()
+        if temperature[i] <= 0 or top_k[i] == 1:
+            tokens[i] = row.argmax()
+            continue
+        probs = torch.softmax(row / temperature[i], dim=-1)
+        if 0 < top_k[i] < probs.numel():
+            kth = torch.topk(probs, int(top_k[i])).values[-1]
+            probs = torch.where(probs >= kth, probs, torch.zeros_like(probs))
+        if top_p[i] < 1.0:
+            sorted_probs, sorted_idx = torch.sort(probs, descending=True)
+            keep = (torch.cumsum(sorted_probs, dim=-1) - sorted_probs) < top_p[i]
+            mask = torch.zeros_like(probs, dtype=torch.bool)
+            mask[sorted_idx[keep]] = True
+            probs = torch.where(mask, probs, torch.zeros_like(probs))
+        generator = None
+        if seeds[i] is not None:
+            generator = torch.Generator().manual_seed(int(seeds[i]))
+        tokens[i] = torch.multinomial(probs / probs.sum(), 1, generator=generator)
+    return tokens
+
+
 def input_processor_for_llama_text(ctx, inputs):
     return inputs
 
@@ -309,7 +378,22 @@ class OLMo3ForCausalLM(Generator):
 
     model_capabilities = {
         "supports_prefix_caching": False,
+        "supports_sample_on_device": True,
+        # OLMo's on-device sampler (TtOlmoModelArgs.max_top_k) draws from the 32 most probable tokens;
+        # stochastic requests with top_k outside 1..32 are sampled on host by the plugin.
+        "max_device_top_k": 32,
     }
+
+    @classmethod
+    def get_max_tokens_all_users(cls, model_name, num_devices, tt_data_parallel, max_model_len, max_num_seqs):
+        """KV pool size in tokens (the plugin turns it into blocks).
+
+        The generic default (131072) leaves only ~2K tokens of headroom when 32 users prefill 4K each
+        (32 * 4096 = 131072), which pushes the pool to ~98% and made the device time out under vLLM's dynamic
+        scheduling. 160K leaves ~25K of margin (~85% usage) while a 64K single-user traced prefill's all-gather
+        buffer still fits in DRAM (4 * 64K = 262K overflowed it).
+        """
+        return max(160 * 1024, max_model_len)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -369,12 +453,54 @@ class OLMo3ForCausalLM(Generator):
         # is what text_olmo_demo.py already does (verified up to 32K ISL).
         # Sampling params (temperature, top_k, top_p, penalties) are still
         # honored on-device from the second token onwards via decode sampling.
-        kwargs.pop("sampling_params", None)
+        sampling_params = kwargs.pop("sampling_params", None)
         logits = super().prefill_forward_text(*args, **kwargs)
-        return logits[:, -1, :].argmax(dim=-1)
+        if sampling_params is None:
+            # The plugin selected host sampling for this batch (e.g. a stochastic request without a top_k the device
+            # sampler supports): it samples from the logits itself.
+            return logits
+        # Device sampling was requested: the plugin expects sampled tokens. The prefill logits are already on host,
+        # so sample the first token here with the request's own parameters.
+        return _sample_first_tokens(logits[:, -1, :], sampling_params)
 
-    def decode_forward(self, *args, **kwargs):
-        return super().decode_forward(*args, **kwargs)
+    def decode_forward(
+        self,
+        *args,
+        reload_inputs=None,
+        reload_page_table=None,
+        reload_sampling_params=None,
+        reset_sampling_state=None,
+        slot_remap=None,
+        defer_device_sampling=None,
+        **kwargs,
+    ):
+        """Adapt the plugin/warmup decode calls to OLMo's generator (which predates the explicit reload commands).
+
+        - The plugin (no ``decode_input_update_contract`` declared, so the legacy contract) sends ``reset_batch``
+          when the decode batch composition changed. OLMo's generator only refreshes the on-device sampling
+          params when ``reset_inputs`` is also set, so a changed batch must reload inputs.
+        - ``slot_remap`` (rows moved) is treated as a batch-layout change, see below.
+        - The shared warmup mixin sends the explicit ``reload_*`` / ``reset_sampling_state`` commands:
+          ``reload_inputs`` / ``reload_sampling_params`` map to ``reset_inputs``, ``reset_sampling_state`` to
+          ``reset_batch``.
+        """
+        # A slot remap says running requests moved to other batch rows. OLMo keeps no slot-indexed state (KV is
+        # addressed through the page table, which moves with the row) and every per-row input is reloaded when the
+        # batch layout changes, so a remap only has to force that reload.
+        layout_changed = slot_remap is not None
+        if defer_device_sampling:
+            raise NotImplementedError("OLMo decode does not support deferred device sampling")
+        kwargs.pop("prepare_trace", None)  # only sent to models defining _prepare_decode_trace_variant
+        kwargs.pop("skip_trace_precompile", None)
+        if reset_sampling_state is not None:
+            kwargs["reset_batch"] = bool(reset_sampling_state)
+        reset_inputs = kwargs.pop("reset_inputs", False)
+        reset_inputs = bool(
+            reset_inputs or reload_inputs or reload_sampling_params or layout_changed or kwargs.get("reset_batch")
+        )
+        if layout_changed:
+            kwargs["reset_batch"] = True
+        return super().decode_forward(*args, reset_inputs=reset_inputs, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, model=self.model, tt_cache_path=self.cache_path)
+        return allocate_vllm_kv_cache_bf16(*args, **kwargs, model=self.model, tt_cache_path=self.cache_path)

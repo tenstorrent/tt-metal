@@ -1,0 +1,4 @@
+{
+  "arch": "Olmo3ForCausalLM",
+  "main_class": "models.demos.olmo_galaxy.tt.generator_vllm:OLMo3ForCausalLM"
+}
