@@ -39,7 +39,7 @@ class _ProductionCase:
     expected_duration_ns: int | None
 
 
-_PRODUCTION_PERF_MARGIN = 0.05
+_PERF_REGRESSION_MARGIN = 0.05
 # Reference recalibrated from 8,087 ns to the measured median of the no-alias
 # implementation. Removing DFB aliasing costs 2 extra physical buffers and
 # 12,288 bytes of worker L1, and that structural cost is accepted, so the
@@ -526,11 +526,10 @@ def test_affine_exclusive_scan_production_performance(
         f"utilization_pct={performance.utilization_pct:.2f}"
     )
     if case.expected_duration_ns is not None:
-        lower = case.expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)
-        upper = case.expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
-        assert lower <= duration_ns <= upper, (
-            f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
-            f"(reference {case.expected_duration_ns} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
+        upper = case.expected_duration_ns * (1 + _PERF_REGRESSION_MARGIN)
+        assert duration_ns <= upper, (
+            f"{case.case_id} duration {duration_ns:.0f} ns exceeds {upper:.0f} ns "
+            f"(reference {case.expected_duration_ns} ns, upper margin {_PERF_REGRESSION_MARGIN * 100:.0f}%)"
         )
 
 

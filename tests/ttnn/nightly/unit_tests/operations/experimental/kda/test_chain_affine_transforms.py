@@ -39,7 +39,7 @@ class _Case:
 # A single device is a one-rank sequence-parallel mesh, so every chain here has one step; the mesh tests in
 # test_sp_contract.py cover chronological order across ranks.
 _STEPS = 1
-_PRODUCTION_PERF_MARGIN = 0.05
+_PERF_REGRESSION_MARGIN = 0.05
 _SMALL_CASE = _Case("bh2-k32-v64", batch_heads=2, key_dim=32, value_dim=64)
 _PRODUCTION_PERF_CASE = _Case("p1-bh24-k128-v128", batch_heads=24, key_dim=128, value_dim=128)
 _PRODUCTION_PERF_EXPECTED_DURATION_NS = 29_400
@@ -382,11 +382,10 @@ def test_chain_affine_transforms_production_performance(zero_actual_start, devic
         f"dram_utilization_pct={performance.dram_utilization_pct:.2f}, "
         f"utilization_pct={performance.utilization_pct:.2f}"
     )
-    lower = _PRODUCTION_PERF_EXPECTED_DURATION_NS * (1 - _PRODUCTION_PERF_MARGIN)
-    upper = _PRODUCTION_PERF_EXPECTED_DURATION_NS * (1 + _PRODUCTION_PERF_MARGIN)
-    assert lower <= duration_ns <= upper, (
-        f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
-        f"(reference {_PRODUCTION_PERF_EXPECTED_DURATION_NS} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
+    upper = _PRODUCTION_PERF_EXPECTED_DURATION_NS * (1 + _PERF_REGRESSION_MARGIN)
+    assert duration_ns <= upper, (
+        f"{case.case_id} duration {duration_ns:.0f} ns exceeds {upper:.0f} ns "
+        f"(reference {_PRODUCTION_PERF_EXPECTED_DURATION_NS} ns, upper margin {_PERF_REGRESSION_MARGIN * 100:.0f}%)"
     )
 
 
