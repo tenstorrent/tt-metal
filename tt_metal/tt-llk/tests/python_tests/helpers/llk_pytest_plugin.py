@@ -734,8 +734,8 @@ def _select_tests_by_op(config, items):
 def _split_by_cost(config, items):
     """Cut the tests, in collection order, into --perf-splits chunks of equal estimated time.
 
-    A test weighs its module's cost from perf_split_costs.json divided by the module's test
-    count. The chunks are contiguous, so a module's tests, and the ELFs they share, stay in one
+    A test weighs its module's cost from perf_split_costs.json (perf_split_costs_sol.json with
+    --speed-of-light, which compiles every variant) divided by the module's test count. The chunks are contiguous, so a module's tests, and the ELFs they share, stay in one
     shard except at a cut point. This runs before _collapse_runtime_only_variants, so the
     compile and run passes cut the same list.
     """
@@ -749,12 +749,15 @@ def _split_by_cost(config, items):
         )
 
     arch = TestConfig.CHIP_ARCH.value
-    table = json.loads(
-        (Path(__file__).resolve().parents[2] / "perf_split_costs.json").read_text()
+    costs_file = (
+        "perf_split_costs_sol.json"
+        if TestConfig.SPEED_OF_LIGHT
+        else "perf_split_costs.json"
     )
+    table = json.loads((Path(__file__).resolve().parents[2] / costs_file).read_text())
     module_cost = table.get(arch)
     if module_cost is None:
-        raise pytest.UsageError(f"perf_split_costs.json has no costs for {arch}")
+        raise pytest.UsageError(f"{costs_file} has no costs for {arch}")
 
     modules = [item.path.stem for item in items]
     unknown = sorted(set(modules) - module_cost.keys())
