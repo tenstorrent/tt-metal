@@ -255,7 +255,7 @@ void kernel_main() {
                        (J.dmax >= 255 || experimental::dma_get_reads_outstanding(stream) < J.dmax)) {
                     const uint32_t upc = J.rg / J.ub, c = J.rd / upc, b = (J.rd % upc) * J.ub;
                     const uint32_t src = J.gddr + (J.loads[c / J.per_e] * J.per_e + c % J.per_e) * J.chunk + b * J.blk;
-#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
+#if !defined(SE_W_NOREAD) && !defined(SE_GU_NOREAD)  // (perf probe: gate/up weights not read, garbage)
                     // (no ready poll: at most NS <= 15 reads are in flight, far below the stream's queue)
                     experimental::dma_async_read<false>(
                         stream, src, J.slot0 + (J.rd % J.ns) * J.ub * J.blk, J.ub * J.blk);

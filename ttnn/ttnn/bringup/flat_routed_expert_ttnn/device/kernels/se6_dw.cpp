@@ -129,7 +129,7 @@ void kernel_main() {
             l1[i] = dst(b + i, i);
         }
         for (uint32_t i = 0; i < n; ++i) {
-#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
+#if !defined(SE_W_NOREAD) && !defined(SE_DN_NOREAD)  // (perf probe: down weights not read, garbage)
             noc_async_read(wsrc(blk(b + i)), l1[i], slot * tile_bytes);
 #endif
         }

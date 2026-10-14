@@ -56,6 +56,12 @@
 #ifdef SE_DBG
 #include "api/debug/dprint.h"
 #endif
+// (perf probe SE_H_NODATA: the h slices are not written to the down cores - the counters still move; garbage y)
+#ifdef SE_H_NODATA
+#define SE_H_WRITE(...) ((void)0)
+#else
+#define SE_H_WRITE(...) noc_async_write(__VA_ARGS__)
+#endif
 #ifdef SE_ZONES
 #include "tools/profiler/kernel_profiler.hpp"
 #define SE_MARK(name)            \
@@ -249,8 +255,15 @@ void kernel_main() {
     uint32_t iters = 0;
 #ifdef SE_GU_ONLY
     const uint32_t my_group = get_arg_val<uint32_t>(14);
+#ifdef SE_NO_MATH
+    // (no math: h no longer waits for x, so stay until every x block is published to the unpacker)
+    constexpr bool all_x = true;
+#else
+    constexpr bool all_x = false;
+#endif
     while (h_sent < num_v || (nsucc > 0 && x_fwd[0] < num_v * x_per_v * xp) ||
-           (nsucc > 1 && x_fwd[1] < num_v * x_per_v * xp) || (!is_b && pushed < total_w)) {
+           (nsucc > 1 && x_fwd[1] < num_v * x_per_v * xp) || (!is_b && pushed < total_w) ||
+           (all_x && x_pub < num_v * x_per_v)) {
 #else
     while (out_done < num_v) {
 #endif
@@ -395,7 +408,7 @@ void kernel_main() {
                 const uint32_t hxy = get_arg_val<uint32_t>(21 + hd);
                 const uint64_t bc_h = get_noc_addr(hxy >> 16, hxy & 0xFFFF, h_all_addr);
                 for (uint32_t p = 0; p < np; ++p) {
-                    noc_async_write(
+                    SE_H_WRITE(
                         src + (p * mt + h_uu * hu) * h_tile_bytes,
                         bc_h + dst + p * hu * h_tile_bytes,
                         hu * h_tile_bytes,
@@ -437,13 +450,13 @@ void kernel_main() {
                 const uint64_t bc_h = get_noc_addr(hxy >> 16, hxy & 0xFFFF, h_all_addr);
 #ifdef SE_GU_ONLY
                 // Down cores keep h K-tile-major ([K][rows] per group): this core's NP K-tiles are one run.
-                noc_async_write(src, bc_h + dst + cg * np * mt * h_tile_bytes, np * mt * h_tile_bytes, noc_index, h_vc);
+                SE_H_WRITE(src, bc_h + dst + cg * np * mt * h_tile_bytes, np * mt * h_tile_bytes, noc_index, h_vc);
 #else
                 for (uint32_t m = 0; m < mt; ++m) {
                     for (uint32_t p = 0; p < np; ++p) {  // h_all: row-major within K-blocks of KBLK tiles
                         const uint32_t k = cg * np + p;
                         const uint32_t off = ((k / kblk) * mt * kblk + m * kblk + k % kblk) * h_tile_bytes;
-                        noc_async_write(src + (m * np + p) * h_tile_bytes, bc_h + dst + off, h_tile_bytes);
+                        SE_H_WRITE(src + (m * np + p) * h_tile_bytes, bc_h + dst + off, h_tile_bytes);
                     }
                 }
 #endif

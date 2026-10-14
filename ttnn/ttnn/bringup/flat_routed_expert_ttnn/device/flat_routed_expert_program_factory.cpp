@@ -181,6 +181,21 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     if (std::getenv("MIMO_FL_W_NOREAD")) {
         dyn_def["SE_W_NOREAD"] = "1";
     }
+    // traffic probes (read at program build; garbage outputs): MIMO_FL_GU_NOREAD / MIMO_FL_DN_NOREAD - no gate/up /
+    // down weight reads; MIMO_FL_H_NODATA - no h data from the gate/up to the down cores or down the chains (the
+    // counters still move); MIMO_FL_NO_MATH - no matmul / activation (every CB handshake stays: traffic only)
+    for (const auto& [env, def] : std::initializer_list<std::pair<const char*, const char*>>{
+             {"MIMO_FL_GU_NOREAD", "SE_GU_NOREAD"},
+             {"MIMO_FL_DN_NOREAD", "SE_DN_NOREAD"},
+             {"MIMO_FL_H_NODATA", "SE_H_NODATA"},
+             {"MIMO_FL_NO_MATH", "SE_NO_MATH"}}) {
+        if (std::getenv(env)) {
+            dyn_def[def] = "1";
+        }
+    }
+    if (std::getenv("MIMO_FL_NO_MATH")) {
+        dyn_def["SE_NO_ACT"] = "1";
+    }
     if (dn_reg) {
         dyn_def["SE_DN_REG"] = "1";
     }
@@ -355,6 +370,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             // MIMO_FL_YRM_PACKTILE - the down compute packs tiles instead of untilizing (y is garbage either way)
             if (std::getenv("MIMO_FL_YRM_NOWRITE")) {
                 d["SE_YRM_NOWRITE"] = "1";
+            }
+            if (std::getenv("MIMO_FL_YRM_SELF")) {  // (perf probe: y written onto itself in L1, no DRAM)
+                d["SE_YRM_SELF"] = "1";
             }
             if (const char* vc = std::getenv("MIMO_FL_YRM_VC")) {
                 d["SE_YRM_VC"] = vc;
