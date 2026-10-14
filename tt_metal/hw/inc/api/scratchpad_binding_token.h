@@ -55,6 +55,12 @@ public:
         crta_offset_(crta_offset), size_in_bytes_(size_in_bytes), llk_metadata_(llk) {}
 
 private:
+    friend constexpr DataFormat get_dataformat(const ScratchpadBindingToken&);
+    friend constexpr uint8_t get_face_r_dim(const ScratchpadBindingToken&);
+    friend constexpr uint8_t get_face_c_dim(const ScratchpadBindingToken&);
+    friend constexpr uint8_t get_num_faces_r_dim(const ScratchpadBindingToken&);
+    friend constexpr uint8_t get_num_faces_c_dim(const ScratchpadBindingToken&);
+
     template <typename T>
     friend class Scratchpad;
 

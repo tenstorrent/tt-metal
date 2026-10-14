@@ -16,6 +16,23 @@ struct LLKOperandExtractor;
 }
 
 namespace tensor_accessor {
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+struct TensorBindingToken;
+}
+
+// TensorBindingToken is itself a template, so these overloads are parameterized by its offsets.
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+constexpr DataFormat get_dataformat(const tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>&);
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+constexpr uint8_t get_face_r_dim(const tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>&);
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+constexpr uint8_t get_face_c_dim(const tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>&);
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+constexpr uint8_t get_num_faces_r_dim(const tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>&);
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+constexpr uint8_t get_num_faces_c_dim(const tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>&);
+
+namespace tensor_accessor {
 
 // TensorBindingToken:
 //
@@ -57,6 +74,12 @@ struct TensorBindingToken {
     explicit constexpr TensorBindingToken(binding_details::LLKMetadata llk) noexcept : llk_metadata_(llk) {}
 
 private:
+    friend constexpr DataFormat(::get_dataformat<CTA_OFFSET, ADDR_CRTA_OFFSET>)(const TensorBindingToken&);
+    friend constexpr uint8_t(::get_face_r_dim<CTA_OFFSET, ADDR_CRTA_OFFSET>)(const TensorBindingToken&);
+    friend constexpr uint8_t(::get_face_c_dim<CTA_OFFSET, ADDR_CRTA_OFFSET>)(const TensorBindingToken&);
+    friend constexpr uint8_t(::get_num_faces_r_dim<CTA_OFFSET, ADDR_CRTA_OFFSET>)(const TensorBindingToken&);
+    friend constexpr uint8_t(::get_num_faces_c_dim<CTA_OFFSET, ADDR_CRTA_OFFSET>)(const TensorBindingToken&);
+
     template <const auto& Token>
     friend struct binding_details::LLKOperandExtractor;
 
