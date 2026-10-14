@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-from itertools import product
 
 import pytest
 import torch
@@ -78,11 +77,7 @@ def reduce_dest_sync_modes(*, is_perf=False):
 
 
 def reduce_dest_acc_modes(*, is_perf=False):
-    return (
-        [DestAccumulation.No]
-        if is_perf
-        else [DestAccumulation.No, DestAccumulation.Yes]
-    )
+    return [DestAccumulation.No, DestAccumulation.Yes]
 
 
 def reduce_tile_dimensions(formats, *, is_perf=False):
@@ -104,27 +99,19 @@ def reduce_input_dimensions():
     return [64, 64]
 
 
-def generate_pool_type_and_math_fidelity_combinations(formats, *, is_perf=False):
-    def is_valid_combination(pool_type, math_fidelity):
-        # Max pool only supports LoFi
-        if pool_type == ReducePool.Max:
-            return math_fidelity == MathFidelity.LoFi
-        # Sum and Average support all fidelities
-        return True
+PERF_MATH_FIDELITIES = [MathFidelity.LoFi, MathFidelity.HiFi4]
 
+
+def reduce_math_fidelities(formats, pool_type, *, is_perf=False):
+    # GMPOOL (Max) ignores fidelity, so only LoFi is meaningful.
+    if pool_type == ReducePool.Max:
+        return [MathFidelity.LoFi]
     # MX inputs decode to Float16_b in the src registers, so LoFi is already full
     # precision for them; get_valid_math_fidelities applies that cap.
-    fidelities = [MathFidelity.LoFi] if is_perf else get_valid_math_fidelities(formats)
-
-    return [
-        combo
-        for combo in product(POOL_TYPES, fidelities)
-        if is_valid_combination(*combo)
-    ]
-
-
-def reduce_pool_type_and_math_fidelity_combinations(formats, *, is_perf=False):
-    return generate_pool_type_and_math_fidelity_combinations(formats, is_perf=is_perf)
+    valid = get_valid_math_fidelities(formats)
+    if is_perf:
+        return [f for f in PERF_MATH_FIDELITIES if f in valid]
+    return valid
 
 
 @pytest.mark.quasar
@@ -135,8 +122,9 @@ def reduce_pool_type_and_math_fidelity_combinations(formats, *, is_perf=False):
     ),
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=False),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
-    pool_type_and_math_fidelity=lambda formats: reduce_pool_type_and_math_fidelity_combinations(
-        formats, is_perf=False
+    pool_type=POOL_TYPES,
+    math_fidelity=lambda formats, pool_type: reduce_math_fidelities(
+        formats, pool_type, is_perf=False
     ),
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
     run_types=[[PerfRunType.L1_TO_L1]],
@@ -147,7 +135,8 @@ def test_reduce_quasar(
     tile_dimensions,
     dest_acc,
     reduce_dim,
-    pool_type_and_math_fidelity,
+    pool_type,
+    math_fidelity,
     dest_sync_mode,
     run_types,
     loop_factor,
@@ -155,8 +144,6 @@ def test_reduce_quasar(
     is_perf=False,
     perf_report=None,
 ):
-
-    pool_type, math_fidelity = pool_type_and_math_fidelity
     tile_shape = construct_tile_shape(tile_dimensions)
 
     input_dimensions = (
