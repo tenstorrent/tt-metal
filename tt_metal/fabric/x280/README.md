@@ -238,15 +238,15 @@ and the eth_credit and packet-injection L2CPU sites.
 The ISA's L2CPU translated range and UMD's mapping differ; the software lookup
 does not establish NIU configuration or prove traffic delivery on silicon.
 
-The Metal-linked `x280_coordinate_tests` target exercises the production
+The Metal-linked `x280_runtime_coordinate_tests` target exercises the production
 transport without opening an X280 execution runtime or accessing silicon.
 CTest prepares a test-owned descriptor overlay for unharvested, harvested,
 and disagreeing two-chip mock meshes; it does not edit the Metal checkout.
-With a device-enabled build configured against the unchanged Metal pin:
+With the X280 build enabled (§ 6, Build targets):
 
 ```sh
-cmake --build <build-dir> --target x280_coordinate_tests
-ctest --test-dir <build-dir> --output-on-failure -R '^X280Coordinates'
+cmake --build build --target x280_runtime_coordinate_tests
+ctest --test-dir build --output-on-failure -R '^x280_coordinates'
 ```
 
 `X280Runtime::lim_shape()` reports the effective partition. `X280Tile` exposes
@@ -567,7 +567,8 @@ as C, C++ and, for the two `entry.S` includes, assembly.
 `cleanup`, then `active_all_idle` and `terminal_status == SUCCESS` on all four
 harts — against every image named in `X280_ACTIVE_FW_IMAGES`, a colon-separated
 list. Adding a conforming image means adding a path, not writing a test. The
-list falls back to the singular `X280_ACTIVE_FW_IMAGE` when it is unset.
+list falls back to the singular `X280_ACTIVE_FW_IMAGE` when it is unset, and
+with both unset to the build's sentinel and atomic-bench in `build/x280/`.
 
 A path that does not resolve costs its case but is never dropped silently.
 `X280ActiveContractImages.EveryRequestedImageResolves` compares what was
@@ -585,14 +586,16 @@ broken path list fails on a laptop. `X280_ACTIVE_FW_IMAGE` is a fallback for
 instantiating `X280ActiveContract` when `X280_ACTIVE_FW_IMAGES` is unset, but
 it does not count as a request for this guard test.
 
-Set both variables when running the whole binary: `X280_ACTIVE_FW_IMAGE` gates
-`X280ActiveHw`, every case of which runs the sentinel.
+Every runtime device test takes its image from `build/x280/` unless its
+variable names another (`X280_ACTIVE_FW_IMAGE` for `X280ActiveHw`, which runs
+the sentinel; `X280_ATOMIC_BENCH_FW_IMAGE`; `X280_ACTIVE_FAULT_FW_IMAGE`), so a
+run from the build needs none of them. Set `X280_ACTIVE_FW_IMAGES` to exercise
+the guard:
 
 ```bash
 export TT_VISIBLE_DEVICES=0                              # UMD chip id
 export TT_METAL_RUNTIME_ROOT="$PWD"
 B=$PWD/build/x280
-export X280_ACTIVE_FW_IMAGE=$B/firmware.bin              # gates X280ActiveHw
 export X280_ACTIVE_FW_IMAGES="$B/firmware.bin:$B/firmware-atomic-bench.bin"
 
 build/test/tt_metal/x280/x280_runtime_device_tests --gtest_filter='*X280ActiveContract*'
