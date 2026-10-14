@@ -469,137 +469,70 @@ TEST_F(FactoryDescriptorControlPlaneFixture, StrictIntermeshAllowsAnUnusedHoleWh
     }
 }
 
-// RELAXED intermesh with EVERY live cable on one boundary down (issue #56762). The factory descriptor
-// lists 16 cables between mesh 2 and mesh 3 (bh-glx-110-d02u02 chips 0,1,4,5,8,9,12,13 chans 8 and 9 to
-// bh-glx-110-d01u02 chips 24,25,28,29,16,17,20,21); the live descriptor has none of them. Init still
-// finishes: the control plane places on the factory topology, pairing binds nothing across that boundary
-// (the connection is logical-only), and all 16 factory cables are link records, split by the mesh-graph
-// count like any other intermesh hole: min(count, 16) stay downed, the rest are unused. The driver runs
-// this with count 4 and with count 16 on that boundary, so the split is read from the mesh graph.
-TEST_F(FactoryDescriptorControlPlaneFixture, RelaxedBoundaryWithNoLiveCableFilesEveryFactoryCable) {
+// A RELAXED connection the factory never cabled (issue #56762). The diagonal mesh graph adds mesh 0 to
+// mesh 2 on top of the pod's ring; the four hosts are cabled as a ring, so that boundary has no factory
+// cable and no live cable. Init still finishes, with the connection logical-only: placement goes through
+// the zero-link rung, pairing binds nothing across it, and LinkHealth has nothing to file for it, since a
+// record is a factory cable the live descriptor lacks. Driven on the missing_links captures, whose four
+// missing factory cables are filed exactly as they are without the diagonal.
+TEST_F(FactoryDescriptorControlPlaneFixture, RelaxedConnectionWithNoFactoryCableIsLogicalOnly) {
     const auto& control_plane =
         open_control_plane(tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     ASSERT_TRUE(control_plane.has_factory_descriptor());
     const auto* link_health = control_plane.get_link_health();
     ASSERT_NE(link_health, nullptr);
     const auto& mesh_graph = control_plane.get_mesh_graph();
-    expect_distinct_intermesh(control_plane, true);
+    EXPECT_TRUE(mesh_graph.is_inter_mesh_policy_relaxed());
+
+    const MeshId diagonal_a{0};
+    const MeshId diagonal_b{2};
+    ASSERT_EQ(intermesh_request(mesh_graph, diagonal_a, diagonal_b), 4u);
+    const auto on_diagonal = [&](MeshId a, MeshId b) {
+        return (a == diagonal_a && b == diagonal_b) || (a == diagonal_b && b == diagonal_a);
+    };
 
     const auto& downed = link_health->get_downed_links();
     const auto& unused = link_health->get_unused_downed_links();
 
-    // The dead boundary, d02u02 end first. Each cable is filed once per direction.
-    struct Cable {
-        ChipId src_chip;
-        chan_id_t src_chan;
-        ChipId dst_chip;
-        chan_id_t dst_chan;
-    };
-    const std::vector<Cable> boundary = {
-        {0, 8, 24, 8},
-        {0, 9, 24, 9},
-        {1, 8, 25, 8},
-        {1, 9, 25, 9},
-        {4, 8, 28, 8},
-        {4, 9, 28, 9},
-        {5, 8, 29, 8},
-        {5, 9, 29, 9},
-        {8, 8, 16, 8},
-        {8, 9, 16, 9},
-        {9, 8, 17, 8},
-        {9, 9, 17, 9},
-        {12, 8, 20, 8},
-        {12, 9, 20, 9},
-        {13, 8, 21, 8},
-        {13, 9, 21, 9},
-    };
-    const std::size_t factory_cables = boundary.size();
-
-    // Same-host cabling and the other three boundaries are the healthy captures, so that boundary is the
-    // only source of records.
-    EXPECT_EQ(downed.size() + unused.size(), 2 * factory_cables);
+    // Nothing is filed for the diagonal: there is no factory cable to be missing.
     for (const auto& link : downed) {
-        EXPECT_TRUE(link.is_intermesh()) << "downed " << link.src_node << " chan " << static_cast<int>(link.src_chan);
+        EXPECT_FALSE(link.is_intermesh() && on_diagonal(link.src_mesh(), link.dst_mesh()))
+            << "downed " << link.src_node << " chan " << static_cast<int>(link.src_chan);
     }
     for (const auto& link : unused) {
-        EXPECT_TRUE(link.is_intermesh()) << "unused " << link.src_node << " chan " << static_cast<int>(link.src_chan);
+        EXPECT_FALSE(link.is_intermesh() && on_diagonal(link.src_mesh(), link.dst_mesh()))
+            << "unused " << link.src_node << " chan " << static_cast<int>(link.src_chan);
     }
+    EXPECT_TRUE(link_health->get_downed_intermesh_links(diagonal_a, diagonal_b).empty());
+    EXPECT_TRUE(link_health->get_downed_intermesh_links(diagonal_b, diagonal_a).empty());
+    EXPECT_TRUE(link_health->get_exit_nodes_with_downed_links(diagonal_a, diagonal_b).empty());
 
-    // Which mesh pair the boundary is, read off one of its cables (whichever set the split put it in).
-    const auto* sample = find_cable(control_plane, downed, 5, 9, 29, 9);
-    if (sample == nullptr) {
-        sample = find_cable(control_plane, unused, 5, 9, 29, 9);
+    // The captures' four missing factory cables are still the only records, one per direction each.
+    EXPECT_EQ(downed.size() + unused.size(), 8u);
+    // Subtorus, not routed by the mesh graph.
+    EXPECT_TRUE(has_cable(control_plane, unused, 0, 0, 8, 0));
+    // Torus: mesh graph 2, factory 4, live 3.
+    EXPECT_TRUE(has_cable(control_plane, unused, 15, 4, 23, 4));
+    // Mesh: mesh graph 2, factory 2, live 1.
+    EXPECT_TRUE(has_cable(control_plane, downed, 0, 6, 4, 0));
+    // Intermesh: 16 factory, 15 live. Which set it lands in depends on the count the placement put on its
+    // boundary: downed only when the count needs all 16.
+    const auto* inter = find_cable(control_plane, downed, 5, 9, 29, 9);
+    const bool inter_downed = inter != nullptr;
+    if (!inter_downed) {
+        inter = find_cable(control_plane, unused, 5, 9, 29, 9);
     }
-    ASSERT_NE(sample, nullptr);
-    const MeshId src_mesh = sample->src_mesh();
-    const MeshId dst_mesh = sample->dst_mesh();
-    ASSERT_NE(src_mesh, dst_mesh);
-    const std::size_t requested = intermesh_request(mesh_graph, src_mesh, dst_mesh);
-    ASSERT_GT(requested, 0u);
-    const std::size_t downed_per_direction = std::min(requested, factory_cables);
+    ASSERT_NE(inter, nullptr);
+    EXPECT_FALSE(on_diagonal(inter->src_mesh(), inter->dst_mesh()));
+    const std::size_t inter_request = intermesh_request(mesh_graph, inter->src_mesh(), inter->dst_mesh());
+    EXPECT_EQ(inter_downed, inter_request > 15) << "request " << inter_request;
+    EXPECT_TRUE(has_cable(control_plane, inter_downed ? downed : unused, 29, 9, 5, 9));
+    EXPECT_EQ(control_plane.fsd_rerouting_active(), !downed.empty());
 
-    // Every factory cable is filed in both directions, in exactly one set.
-    for (const auto& cable : boundary) {
-        const bool forward_downed =
-            has_cable(control_plane, downed, cable.src_chip, cable.src_chan, cable.dst_chip, cable.dst_chan);
-        const bool forward_unused =
-            has_cable(control_plane, unused, cable.src_chip, cable.src_chan, cable.dst_chip, cable.dst_chan);
-        EXPECT_NE(forward_downed, forward_unused) << "chip " << cable.src_chip << " chan "
-                                                  << static_cast<int>(cable.src_chan) << " -> chip " << cable.dst_chip;
-        const bool back_downed =
-            has_cable(control_plane, downed, cable.dst_chip, cable.dst_chan, cable.src_chip, cable.src_chan);
-        const bool back_unused =
-            has_cable(control_plane, unused, cable.dst_chip, cable.dst_chan, cable.src_chip, cable.src_chan);
-        EXPECT_NE(back_downed, back_unused) << "chip " << cable.dst_chip << " chan " << static_cast<int>(cable.dst_chan)
-                                            << " -> chip " << cable.src_chip;
-    }
-    EXPECT_EQ(downed.size(), 2 * downed_per_direction);
-    EXPECT_EQ(unused.size(), 2 * (factory_cables - downed_per_direction));
-    EXPECT_TRUE(control_plane.fsd_rerouting_active());
-
-    // Logical view of the downed records: resolved, intermesh, on that pair, and (pairing never bound
-    // them) without a direction. Each one is unhealthy through both the ControlPlane and LinkHealth.
-    const auto on_boundary = [&](const experimental::LinkInfo& link) {
-        return (link.src_mesh() == src_mesh && link.dst_mesh() == dst_mesh) ||
-               (link.src_mesh() == dst_mesh && link.dst_mesh() == src_mesh);
-    };
-    for (const auto& link : downed) {
-        EXPECT_TRUE(link.logical_resolved);
-        EXPECT_EQ(link.scope, experimental::LinkScope::InterMesh);
-        EXPECT_TRUE(on_boundary(link));
-        EXPECT_EQ(link.src_direction, RoutingDirection::NONE);
-        EXPECT_FALSE(control_plane.is_link_healthy(link.src_node, link.src_chan));
-        EXPECT_FALSE(link_health->is_link_healthy(link.src_node, link.src_chan));
-        EXPECT_TRUE(link_health->find_downed_link(link.src_node, link.src_chan).has_value());
-    }
-    for (const auto& link : unused) {
-        EXPECT_TRUE(link.logical_resolved);
-        EXPECT_TRUE(on_boundary(link));
-    }
-    EXPECT_EQ(link_health->get_downed_intermesh_links().size(), 2 * downed_per_direction);
-    EXPECT_EQ(link_health->get_downed_intermesh_links(src_mesh, dst_mesh).size(), downed_per_direction);
-    EXPECT_EQ(link_health->get_downed_intermesh_links(dst_mesh, src_mesh).size(), downed_per_direction);
-    // Eight chips face the boundary, two cables each. Holes are filed chan 8 first, so below eight every
-    // downed record is on its own chip.
-    EXPECT_EQ(
-        link_health->get_exit_nodes_with_downed_links(src_mesh, dst_mesh).size(),
-        std::min<std::size_t>(downed_per_direction, 8));
-    EXPECT_EQ(
-        link_health->get_exit_nodes_with_downed_links(dst_mesh, src_mesh).size(),
-        std::min<std::size_t>(downed_per_direction, 8));
-
-    // Physical view, which is what a technician works in.
-    EXPECT_EQ(link_health->get_downed_links_for_host("bh-glx-110-d02u02").size(), downed_per_direction);
-    EXPECT_EQ(link_health->get_downed_links_for_host("bh-glx-110-d01u02").size(), downed_per_direction);
-    EXPECT_EQ(
-        link_health->get_downed_links_between_hosts("bh-glx-110-d02u02", "bh-glx-110-d01u02").size(),
-        2 * downed_per_direction);
-    EXPECT_TRUE(link_health->get_downed_links_for_host("bh-glx-110-d01u08").empty());
-    EXPECT_TRUE(link_health->get_downed_links_for_host("bh-glx-110-d02u08").empty());
-
-    // Pairing: nothing across the dead boundary, the full request everywhere else. A rank sees its own mesh.
-    const auto is_dead_boundary = [&](MeshId a, MeshId b) {
-        return (a == src_mesh && b == dst_mesh) || (a == dst_mesh && b == src_mesh);
+    // Pairing: nothing across the diagonal, min(request, live) on every ring boundary. A rank sees its
+    // own mesh.
+    const auto holds_missing_cable = [&](MeshId a, MeshId b) {
+        return (a == inter->src_mesh() && b == inter->dst_mesh()) || (a == inter->dst_mesh() && b == inter->src_mesh());
     };
     for (const auto local : control_plane.get_local_mesh_id_bindings()) {
         for (const auto peer : mesh_graph.get_mesh_ids()) {
@@ -607,7 +540,10 @@ TEST_F(FactoryDescriptorControlPlaneFixture, RelaxedBoundaryWithNoLiveCableFiles
             if (request == 0) {
                 continue;
             }
-            const std::size_t expected = is_dead_boundary(local, peer) ? 0 : request;
+            std::size_t expected = 0;
+            if (!on_diagonal(local, peer)) {
+                expected = std::min<std::size_t>(request, holds_missing_cable(local, peer) ? 15 : 16);
+            }
             EXPECT_EQ(assigned_toward(control_plane, local, peer), expected) << local << " -> " << peer;
         }
     }
