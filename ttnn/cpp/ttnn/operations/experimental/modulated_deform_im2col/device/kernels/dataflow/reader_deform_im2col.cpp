@@ -96,8 +96,7 @@ constexpr uint32_t IN_ORIGIN_X = 4;
 constexpr uint32_t GEOM_IN_TILES = 5;
 constexpr uint32_t KERNEL_Y = 0;
 constexpr uint32_t KERNEL_X = 1;
-constexpr uint32_t FP32_TILE_NBYTES = 32 * 32 * sizeof(uint32_t);
-constexpr uint32_t BF16_TILE_NBYTES = 32 * 32 * sizeof(uint16_t);
+constexpr uint32_t TILE_ELEMENTS = 32 * 32;
 
 static_assert(kernel_positions <= 32, "the geometry tiles hold one kernel position per column");
 static_assert((OFFSET_CLAMP & (OFFSET_CLAMP - 1)) == 0, "the offset clamp works on the bfloat16 exponent");
@@ -133,10 +132,14 @@ inline uint32_t tile_element(uint32_t row, uint32_t col) {
     return ((row >> 4) * 2 + (col >> 4)) * 256 + (row & 15) * 16 + (col & 15);
 }
 
+// Zeros a stick with NoC reads of the core's zero region, which cost one read issue each where
+// storing the words would cost one store per word; corners outside the input are many on cores
+// whose rows lie along an image edge, and the slowest core sets the op's time.
 inline void zero_stick(uint32_t l1_addr) {
-    CoreLocalMem<volatile uint32_t> dst(l1_addr);
-    for (uint32_t i = 0; i < STICK_NBYTES / sizeof(uint32_t); ++i) {
-        dst[i] = 0;
+    const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
+    for (uint32_t offset = 0; offset < STICK_NBYTES; offset += MEM_ZEROS_SIZE) {
+        const uint32_t nbytes = STICK_NBYTES - offset < MEM_ZEROS_SIZE ? STICK_NBYTES - offset : MEM_ZEROS_SIZE;
+        noc_async_read(zeros, l1_addr + offset, nbytes);
     }
 }
 
@@ -180,8 +183,8 @@ void kernel_main() {
         for (uint32_t r = 0; r < TILE_ROWS; ++r) {
             for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
                 const uint32_t element = tile_element(r, kk) * sizeof(uint32_t);
-                CoreLocalMem<volatile uint32_t> ky(kernel_l1 + KERNEL_Y * FP32_TILE_NBYTES + element);
-                CoreLocalMem<volatile uint32_t> kx(kernel_l1 + KERNEL_X * FP32_TILE_NBYTES + element);
+                CoreLocalMem<volatile uint32_t> ky(kernel_l1 + KERNEL_Y * TILE_ELEMENTS * sizeof(uint32_t) + element);
+                CoreLocalMem<volatile uint32_t> kx(kernel_l1 + KERNEL_X * TILE_ELEMENTS * sizeof(uint32_t) + element);
                 ky[0] = int_to_fp32(static_cast<int32_t>(kk / KERNEL_W) * DILATION_H);
                 kx[0] = int_to_fp32(static_cast<int32_t>(kk % KERNEL_W) * DILATION_W);
             }
@@ -204,21 +207,22 @@ void kernel_main() {
         // (h_out, w_out) of the block's first row, then stepped row by row.
         uint32_t h_o = (row0 / OUT_W) % OUT_H;
         uint32_t w_o = row0 % OUT_W;
+        tt_l1_ptr uint32_t* geom = reinterpret_cast<tt_l1_ptr uint32_t*>(geom_l1);
         for (uint32_t r = 0; r < valid_rows; ++r) {
             const uint32_t origin_y = int_to_fp32(static_cast<int32_t>(h_o) * STRIDE_H - PAD_H);
             const uint32_t origin_x = int_to_fp32(static_cast<int32_t>(w_o) * STRIDE_W - PAD_W);
-            CoreLocalMem<volatile uint16_t> off(offset_mask_l1 + r * offset_mask_page_nbytes);
+            const tt_l1_ptr uint16_t* off =
+                reinterpret_cast<const tt_l1_ptr uint16_t*>(offset_mask_l1 + r * offset_mask_page_nbytes);
             // The mask logits follow the row's 2*K*K offsets.
-            CoreLocalMem<volatile uint16_t> msk(
-                offset_mask_l1 + r * offset_mask_page_nbytes + 2 * kernel_positions * sizeof(uint16_t));
+            const tt_l1_ptr uint16_t* msk = off + 2 * kernel_positions;
+            tt_l1_ptr uint32_t* row = geom + tile_element(r, 0);
             for (uint32_t kk = 0; kk < kernel_positions; ++kk) {
-                const uint32_t element = tile_element(r, kk) * sizeof(uint32_t);
-                CoreLocalMem<volatile uint32_t> dst(geom_l1 + element);
-                dst[IN_DY * FP32_TILE_NBYTES / sizeof(uint32_t)] = saturate_to_fp32(off[2 * kk]);
-                dst[IN_DX * FP32_TILE_NBYTES / sizeof(uint32_t)] = saturate_to_fp32(off[2 * kk + 1]);
-                dst[IN_MASK * FP32_TILE_NBYTES / sizeof(uint32_t)] = saturate_to_fp32(msk[kk]);
-                dst[IN_ORIGIN_Y * FP32_TILE_NBYTES / sizeof(uint32_t)] = origin_y;
-                dst[IN_ORIGIN_X * FP32_TILE_NBYTES / sizeof(uint32_t)] = origin_x;
+                tt_l1_ptr uint32_t* dst = row + tile_element(0, kk);
+                dst[IN_DY * TILE_ELEMENTS] = saturate_to_fp32(off[2 * kk]);
+                dst[IN_DX * TILE_ELEMENTS] = saturate_to_fp32(off[2 * kk + 1]);
+                dst[IN_MASK * TILE_ELEMENTS] = saturate_to_fp32(msk[kk]);
+                dst[IN_ORIGIN_Y * TILE_ELEMENTS] = origin_y;
+                dst[IN_ORIGIN_X * TILE_ELEMENTS] = origin_x;
             }
             if (++w_o == OUT_W) {
                 w_o = 0;
@@ -240,7 +244,8 @@ void kernel_main() {
                 CoreLocalMem<uint32_t> src(tiles_l1 + t * output_tile_nbytes);
                 noc.async_write(src, output_acc, output_tile_nbytes, {.offset_bytes = 0}, {.page_id = first_tile + t});
             }
-            noc.async_write_barrier();
+            // The tiles only need to have left L1 before compute refills the slots.
+            noc.async_writes_flushed();
             output_cb.pop_front(CHANNEL_TILES);
         }
     };
@@ -281,16 +286,17 @@ void kernel_main() {
             // Only column 0 of each row is read by the column broadcast.
             scalar_tile_cb.reserve_back(CORNERS);
             const uint32_t scalar_l1 = scalar_tile_cb.get_write_ptr();
+            const tt_l1_ptr uint32_t* index =
+                reinterpret_cast<const tt_l1_ptr uint32_t*>(index_l1) + tile_element(0, kk);
+            const tt_l1_ptr uint16_t* w = reinterpret_cast<const tt_l1_ptr uint16_t*>(weight_l1) + tile_element(0, kk);
+            tt_l1_ptr uint16_t* lane = reinterpret_cast<tt_l1_ptr uint16_t*>(scalar_l1);
             for (uint32_t r = 0; r < TILE_ROWS; ++r) {
-                const uint32_t element = tile_element(r, kk);
-                CoreLocalMem<volatile uint32_t> index(index_l1);
-                page[r] = image_page[r] + index[element];
+                const uint32_t row = tile_element(r, 0);
+                page[r] = image_page[r] + index[row];
                 for (uint32_t c = 0; c < CORNERS; ++c) {
-                    CoreLocalMem<volatile uint16_t> w(weight_l1 + c * BF16_TILE_NBYTES);
-                    CoreLocalMem<volatile uint16_t> lane(
-                        scalar_l1 + c * BF16_TILE_NBYTES + tile_element(r, 0) * sizeof(uint16_t));
-                    weight[c][r] = r < valid_rows ? w[element] : 0;
-                    lane[0] = weight[c][r];
+                    const uint16_t value = r < valid_rows ? w[c * TILE_ELEMENTS + row] : 0;
+                    weight[c][r] = value;
+                    lane[c * TILE_ELEMENTS + row] = value;
                 }
             }
             scalar_tile_cb.push_back(CORNERS);
@@ -325,5 +331,8 @@ void kernel_main() {
         }
         index_cb.pop_front(1);
         weight_cb.pop_front(CORNERS);
+    }
+    if constexpr (WRITES_OUTPUT) {
+        noc.async_write_barrier();
     }
 }
