@@ -472,6 +472,10 @@ void TestContext::validate_results() {
             tt::LogTest,
             "Skipping validation (performance_test_mode: {})",
             enchantum::to_string(performance_test_mode_));
+        // Benchmark-mode worker diagnostics (CRAQ #52): read the sender result buffers and print them.
+        for (const auto& [coord, device] : test_devices_) {
+            device.log_worker_diags();
+        }
         return;
     }
 

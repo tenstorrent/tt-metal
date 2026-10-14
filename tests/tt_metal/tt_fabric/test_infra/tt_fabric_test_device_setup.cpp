@@ -1401,6 +1401,24 @@ void TestDevice::validate_sender_results() const {
     }
 }
 
+void TestDevice::log_worker_diags() const {
+    std::vector<tt::tt_metal::CoreCoord> sender_cores;
+    for (const auto& [core, _] : this->senders_) {
+        sender_cores.push_back(core);
+    }
+    if (sender_cores.empty()) {
+        return;
+    }
+    auto data = this->device_info_provider_->read_buffer_from_cores(
+        this->coord_,
+        sender_cores,
+        sender_memory_map_->get_result_buffer_address(),
+        sender_memory_map_->get_result_buffer_size());
+    for (const auto& core : sender_cores) {
+        this->log_worker_diag(core, data.at(core));
+    }
+}
+
 // Worker diagnostics written by the benchmark-mode sender kernel (CRAQ #52): result buffer words
 // 4/5 = elapsed cycles, 2/3 = packets, MISC(16)+9/+10 = wait cycles, +11/+12 = signal cycles,
 // +13 = packets that waited for a slot.
