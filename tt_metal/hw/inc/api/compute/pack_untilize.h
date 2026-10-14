@@ -230,6 +230,21 @@ ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t cal
         icb, ocb, call_line);
 }
 
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_UNPACK)
+// A block row of 16-bit or block-float tiles takes one unpack context; 32-bit tiles keep one unpack-to-DEST handshake each.
+template <uint32_t block_ct_dim>
+ALWI void pack_untilize_unpack_block_row(uint32_t icb) {
+    const uint32_t operand_id = get_operand_id(icb);
+    if (should_unpack_to_dest(UnpackToDestEn, unpack_src_format[operand_id], unpack_dst_format[operand_id])) {
+        for (uint32_t c = 0; c < block_ct_dim; ++c) {
+            llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, c);
+        }
+    } else {
+        llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(icb, 0, block_ct_dim);
+    }
+}
+#endif
+
 // clang-format off
 /**
  * Performs the untilize operation on a block of tiles. Loops over the provided block size. The block is characterized
@@ -262,15 +277,27 @@ ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t cal
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
     LLK_SAN_FUNCTION();
+#ifdef ARCH_BLACKHOLE
+    constexpr bool unpack_block = block_ct_dim > 2;
+#else
+    constexpr bool unpack_block = false;
+#endif
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
         MATH((llk_math_wait_for_dest_available()));
+#ifdef ARCH_BLACKHOLE
+        if constexpr (unpack_block) {
+            UNPACK((pack_untilize_unpack_block_row<block_ct_dim>(icb)));
+        }
+#endif
         for (uint32_t c = 0; c < block_ct_dim; ++c) {
 #ifndef ARCH_QUASAR
-            UNPACK((llk_unpack_A<
-                    BroadcastType::NONE,
-                    false /*acc_to_dest*/,
-                    EltwiseBinaryReuseDestType::NONE,
-                    UnpackToDestEn>(icb, c)));
+            if constexpr (!unpack_block) {
+                UNPACK((llk_unpack_A<
+                        BroadcastType::NONE,
+                        false /*acc_to_dest*/,
+                        EltwiseBinaryReuseDestType::NONE,
+                        UnpackToDestEn>(icb, c)));
+            }
             MATH((
                 llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
                     c, icb)));
