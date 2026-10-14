@@ -34,37 +34,38 @@
 // One tile-row's worth of work: expand the broadcast operand's column tile once into llk_post, then run
 // the binary op freq times (reusing the expanded tile) against the streamed OTHER operand. Mirrors the CB
 // col-bcast process_tile with the DFB API + the ROW kernel's ARCH_QUASAR gasket fixes.
+// The DataflowBuffer arguments are kernel_main's objects: an object built here would drain at every return.
 ALWI void process_tile(
-    uint32_t dfb_bcast_id,
-    uint32_t dfb_llk_post_id,
-    uint32_t dfb_pre_lhs_id,
-    uint32_t dfb_post_lhs_id,
-    uint32_t dfb_pre_rhs_id,
-    uint32_t dfb_post_rhs_id,
-    uint32_t dfb_out_id,
+    DataflowBuffer& dfb_bcast,
+    DataflowBuffer& dfb_llk_post,
+    DataflowBuffer& dfb_pre_lhs,
+    DataflowBuffer& dfb_post_lhs,
+    DataflowBuffer& dfb_pre_rhs,
+    DataflowBuffer& dfb_post_rhs,
+    DataflowBuffer& dfb_out,
     uint32_t freq,
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
+    const uint32_t dfb_bcast_id = dfb_bcast.get_id();
+    const uint32_t dfb_llk_post_id = dfb_llk_post.get_id();
+    const uint32_t dfb_post_lhs_id = dfb_post_lhs.get_id();
+    const uint32_t dfb_post_rhs_id = dfb_post_rhs.get_id();
+    const uint32_t dfb_out_id = dfb_out.get_id();
 
     // BCAST_OP / OTHER_OP (eltwise_utils_common.hpp) resolve to LHS / RHS off BCAST_INPUT; pair the
-    // pre/post DFB ids the same way so the broadcast operand is preprocessed once and the other streams.
+    // pre/post DFBs the same way so the broadcast operand is preprocessed once and the other streams.
 #if BCAST_INPUT
-    const uint32_t dfb_pre_bcast_id = dfb_pre_rhs_id;
-    const uint32_t dfb_post_bcast_id = dfb_post_rhs_id;
-    const uint32_t dfb_pre_other_id = dfb_pre_lhs_id;
-    const uint32_t dfb_post_other_id = dfb_post_lhs_id;
+    DataflowBuffer& dfb_pre_bcast = dfb_pre_rhs;
+    DataflowBuffer& dfb_post_bcast = dfb_post_rhs;
+    DataflowBuffer& dfb_pre_other = dfb_pre_lhs;
+    DataflowBuffer& dfb_post_other = dfb_post_lhs;
 #else
-    const uint32_t dfb_pre_bcast_id = dfb_pre_lhs_id;
-    const uint32_t dfb_post_bcast_id = dfb_post_lhs_id;
-    const uint32_t dfb_pre_other_id = dfb_pre_rhs_id;
-    const uint32_t dfb_post_other_id = dfb_post_rhs_id;
+    DataflowBuffer& dfb_pre_bcast = dfb_pre_lhs;
+    DataflowBuffer& dfb_post_bcast = dfb_post_lhs;
+    DataflowBuffer& dfb_pre_other = dfb_pre_rhs;
+    DataflowBuffer& dfb_post_other = dfb_post_rhs;
 #endif
-    DataflowBuffer dfb_bcast(dfb_bcast_id);
-    DataflowBuffer dfb_llk_post(dfb_llk_post_id);
-    DataflowBuffer dfb_post_bcast(dfb_post_bcast_id);
-    DataflowBuffer dfb_post_other(dfb_post_other_id);
-    DataflowBuffer dfb_out(dfb_out_id);
 
     // --- Broadcast pass (ONCE per tile-row): partial column tile -> full tile in llk_post. Identical to
     // the ROW kernel's broadcast pass except for the COL broadcast type. ---
@@ -99,7 +100,7 @@ ALWI void process_tile(
 #endif
 
     // Broadcast operand's activation chain runs ONCE (its expanded tile is reused across the row).
-    PREPROCESS(BCAST_OP, dfb_pre_bcast_id, dfb_post_bcast_id, dfb_out_id, num_tiles_per_cycle);
+    PREPROCESS(BCAST_OP, dfb_pre_bcast, dfb_post_bcast, dfb_out_id, num_tiles_per_cycle);
     dfb_post_bcast.wait_front(num_tiles_per_cycle);
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
@@ -108,7 +109,7 @@ ALWI void process_tile(
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         // OTHER operand streams one tile per iteration.
-        PREPROCESS(OTHER_OP, dfb_pre_other_id, dfb_post_other_id, dfb_out_id, num_tiles_per_cycle);
+        PREPROCESS(OTHER_OP, dfb_pre_other, dfb_post_other, dfb_out_id, num_tiles_per_cycle);
         dfb_post_other.wait_front(num_tiles_per_cycle);
 
         dfb_out.reserve_back(num_tiles_per_cycle);
@@ -183,6 +184,24 @@ void kernel_main() {
     binary_tiles_init<true, BINARY_OP_TYPE>(dfb_post_lhs_id, dfb_post_rhs_id);
 #endif
 
+    // Each object drains once, at kernel exit. An activation chain reads its operand from the pre ring. Without
+    // one, PREPROCESS compiles to nothing, and the pre object is the post one.
+    DataflowBuffer dfb_bcast(dfb_bcast_id);
+    DataflowBuffer dfb_llk_post(dfb_llk_post_id);
+    DataflowBuffer dfb_post_lhs(dfb_post_lhs_id);
+    DataflowBuffer dfb_post_rhs(dfb_post_rhs_id);
+    DataflowBuffer dfb_out(dfb_out_id);
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer dfb_pre_lhs(dfb_pre_lhs_id);
+#else
+    DataflowBuffer& dfb_pre_lhs = dfb_post_lhs;
+#endif
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer dfb_pre_rhs(dfb_pre_rhs_id);
+#else
+    DataflowBuffer& dfb_pre_rhs = dfb_post_rhs;
+#endif
+
     // freq/tile_start reuse loop: freq = Wt tiles per broadcast, tile_start is the per-core column offset.
     // The first complete group starts at tile_start; subsequent groups start at 0; a partial trailing
     // group (remaining_iterations) closes the core's tile count. Mirrors the CB col-bcast kernel_main.
@@ -191,13 +210,13 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         process_tile(
-            dfb_bcast_id,
-            dfb_llk_post_id,
-            dfb_pre_lhs_id,
-            dfb_post_lhs_id,
-            dfb_pre_rhs_id,
-            dfb_post_rhs_id,
-            dfb_out_id,
+            dfb_bcast,
+            dfb_llk_post,
+            dfb_pre_lhs,
+            dfb_post_lhs,
+            dfb_pre_rhs,
+            dfb_post_rhs,
+            dfb_out,
             tile_freq,
             tile_start,
             num_tiles_per_cycle);
@@ -205,13 +224,13 @@ void kernel_main() {
 
     if (remaining_iterations > 0) {
         process_tile(
-            dfb_bcast_id,
-            dfb_llk_post_id,
-            dfb_pre_lhs_id,
-            dfb_post_lhs_id,
-            dfb_pre_rhs_id,
-            dfb_post_rhs_id,
-            dfb_out_id,
+            dfb_bcast,
+            dfb_llk_post,
+            dfb_pre_lhs,
+            dfb_post_lhs,
+            dfb_pre_rhs,
+            dfb_post_rhs,
+            dfb_out,
             remaining_iterations,
             tile_start,
             num_tiles_per_cycle);

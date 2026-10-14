@@ -115,6 +115,11 @@ inline bool is_gen1_arch(tt::ARCH arch) { return arch == tt::ARCH::WORMHOLE_B0 |
 
 inline bool is_gen1_arch(const Hal& hal) { return is_gen1_arch(hal.get_arch()); }
 
+// Archs with a compute semaphore implementation (the Tensix hardware semaphore, UNPACK <-> PACK).
+inline bool has_compute_semaphore(tt::ARCH arch) { return arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR; }
+
+inline bool has_compute_semaphore(const Hal& hal) { return has_compute_semaphore(hal.get_arch()); }
+
 inline bool nodes_intersect(const Nodes& a, const Nodes& b) {
     NodeRangeSet a_set = to_node_range_set(a);
     NodeRangeSet b_set = to_node_range_set(b);
