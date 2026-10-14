@@ -1,0 +1,6 @@
+bits head test_g70b_bits.py - -
+bits ctl test_g70b_bits.py - -
+bits main test_g70b_bits.py - -
+bits mainb test_g70b_bits.py - -
+bits preM test_g70b_bits.py - -
+bits mainpre test_g70b_bits.py - -
