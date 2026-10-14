@@ -35,6 +35,8 @@ void kernel_main() {
 
         tile_regs_acquire();
 
+        // copy_init does not reconfigure the unpacker data format, and the operands may differ in dtype.
+        reconfig_data_format_srca(dfb_pre_in3.get_id(), dfb_pre_in1.get_id());
         copy_init(dfb_pre_in1.get_id());
 #if defined(ARCH_BLACKHOLE)
         if constexpr (operands_to_dest<tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2>()) {
@@ -45,9 +47,11 @@ void kernel_main() {
         {
             copy_tile(dfb_pre_in1.get_id(), 0, 0);  // Copy to dst reg 0
 
+            reconfig_data_format_srca(dfb_pre_in1.get_id(), dfb_pre_in2.get_id());
             copy_init(dfb_pre_in2.get_id());
             copy_tile(dfb_pre_in2.get_id(), 0, 1);  // Copy to dst reg 1
 
+            reconfig_data_format_srca(dfb_pre_in2.get_id(), dfb_pre_in3.get_id());
             copy_init(dfb_pre_in3.get_id());
             copy_tile(dfb_pre_in3.get_id(), 0, 2);  // Copy to dst reg 2
         }
