@@ -73,11 +73,15 @@ struct ScatterCodegenDeviceOperation {
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 };
 
+// `reduction_mode` is one of scatter_codegen_supported.hpp's kReduction* modes; the prim derives
+// every other attribute from the tensors itself.
 Tensor scatter_codegen(
-    const ScatterCodegenParams& params,
     const Tensor& input_tensor,
     const Tensor& index_tensor,
     const Tensor& src_tensor,
-    const std::optional<Tensor>& output_tensor);
+    uint32_t reduction_mode,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<Tensor>& output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids);
 
 }  // namespace ttnn::prim
