@@ -11,7 +11,6 @@
 
 #include "device/scatter_device_operation.hpp"
 #include "codegen/scatter_codegen_device_operation.hpp"
-#include "codegen/scatter_codegen_program_factory.hpp"
 #include "codegen/scatter_codegen_supported.hpp"
 
 #include "slice/slice.hpp"
@@ -26,6 +25,8 @@ namespace ttnn::operations::data_movement {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
+// Widen together with scatter_reduction_mode() below: routing runs that parser ahead of
+// validate_inputs(), so a string admitted here but unknown there never reaches native.
 constexpr std::string_view ALLOWED_REDUCTIONS[] = {"add", "multiply"};
 
 // validate dimension constraints before sending down to device operation working on the last dimension
@@ -252,22 +253,21 @@ scatter::ScatterReductionType get_scatter_reduction_type_from_string(
     return scatter::ScatterReductionType::INVALID;
 }
 
-// The codegen kernels' own reduction_mode convention (scatter_common.hpp's scatter_reduce_value):
-// 0=replace, 1=add, 2=multiply. Derived from the one string parser this file has rather than
-// re-parsing the string, so a reduce the parser knows but the kernels do not (amax/amin) can never be
+// The codegen prim's reduction_mode (scatter_codegen_supported.hpp's kReduction* constants, the
+// kernels' own numbering). Derived from the one string parser this file has rather than re-parsing
+// the string, so a reduce the parser knows but the codegen factories do not (amax/amin) can never be
 // read as a plain overwrite. ttnn::scatter() consults this through codegen_can_serve() BEFORE
-// validate_inputs() runs, so an unsupported string must fail here on its own. ScatterReductionType's
-// ordinals do not match the kernel convention, so the two are never interconverted by casting.
+// validate_inputs() runs, on the native leg too, so an unsupported string fails here on its own and
+// with validate_inputs()'s wording. ScatterReductionType's ordinals do not match the kernel
+// numbering, so the two are never interconverted by casting.
 uint32_t scatter_reduction_mode(const std::optional<std::string>& opt_reduction_string) {
     if (!opt_reduction_string.has_value()) {
-        return 0;
+        return scatter::kReductionNone;
     }
     switch (get_scatter_reduction_type_from_string(opt_reduction_string)) {
-        case scatter::ScatterReductionType::ADD: return 1;
-        case scatter::ScatterReductionType::MULTIPLY: return 2;
-        default:
-            TT_THROW(
-                "scatter: reduce must be either 'add' or 'multiply' (case-sensitive), got {}", *opt_reduction_string);
+        case scatter::ScatterReductionType::ADD: return scatter::kReductionAdd;
+        case scatter::ScatterReductionType::MULTIPLY: return scatter::kReductionMultiply;
+        default: TT_THROW("reduce must be either 'add' or 'multiply' (case-sensitive), got {}", *opt_reduction_string);
     }
 }
 
@@ -452,15 +452,14 @@ Tensor scatter_codegen_dispatch(
         transformed_source_tensor = ttnn::to_layout(transformed_source_tensor, Layout::ROW_MAJOR);
     }
 
-    auto params = ttnn::prim::build_scatter_codegen_params(
+    Tensor output = ttnn::prim::scatter_codegen(
         transformed_input_tensor,
         transformed_index_tensor,
         transformed_source_tensor,
         reduction_mode,
         final_memory_config,
+        std::nullopt,
         sub_core_grid);
-    Tensor output = ttnn::prim::scatter_codegen(
-        params, transformed_input_tensor, transformed_index_tensor, transformed_source_tensor, std::nullopt);
     if (rerouted_to_row_major) {
         output = ttnn::to_layout(output, Layout::TILE);
     }
