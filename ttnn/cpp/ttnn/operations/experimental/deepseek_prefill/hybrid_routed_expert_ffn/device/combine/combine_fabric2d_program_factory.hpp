@@ -51,7 +51,7 @@ tt::tt_metal::TensorSpec forwarding_buffer_spec(const CombineFabric2dParams& arg
 
 // Where a chip's routed-expert writers report: its collector's core and the per-step count array on it.
 struct CollectorTarget {
-    tt::tt_metal::CoreCoord worker_virtual;
+    tt::tt_metal::CoreCoord logical;
     uint32_t counts_addr = 0;
 };
 
