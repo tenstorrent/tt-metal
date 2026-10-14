@@ -262,6 +262,10 @@ void kernel_main() {
                 const volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
                     metadata_read_ptr + t * aligned_dispatched_metadata_page_size);
                 uint32_t dst_chip = metadata[0];
+#ifdef LOCAL_ONLY
+                // Reject malformed metadata before it reaches a compiled-out fabric send.
+                ASSERT(dst_chip == linearized_mesh_coord);
+#endif
                 uint32_t untilize_row_addr = untilize_read_ptr + t * aligned_output_page_size;
 
                 if (dst_chip == linearized_mesh_coord) {
