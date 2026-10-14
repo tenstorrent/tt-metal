@@ -119,8 +119,6 @@ target_link_libraries(
         Metalium::Metal::Impl
         metal_common_libs
         common
-        # every TT::Metalium::Types object, not just the archive members tt_metal's own code references
-        $<TARGET_OBJECTS:tt_metalium_types>
         TT::Metalium::Types
         jit_build
         llrt

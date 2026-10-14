@@ -190,14 +190,9 @@ target_include_directories(
         ${Metalium_BINARY_DIR}/tools/scaleout # FSD proto header for physical_descriptor_builder.cpp
 )
 
-# libtt_metal.so must carry every topology object (tools, tests and external consumers reach these symbols through
-# tt_metal), so link the library's objects directly rather than relying on which archive members fabric's own
-# objects happen to reference. (Whole-archive is not an option: scaleout_tools is an OBJECT library whose objects
-# are embedded in the archive and also linked into tt_metal directly.)
 target_link_libraries(
     fabric
     PRIVATE
-        $<TARGET_OBJECTS:tt_fabric_topology_utils>
         TT::FabricTopologyUtils
         TT::ScaleoutTools
         Metalium::Metal::LLRT
