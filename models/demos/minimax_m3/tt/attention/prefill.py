@@ -195,7 +195,15 @@ def attention_forward(
                     kv_actual=cached_len,
                     sp_axis=mesh_config.sp_axis,
                 )
-        if cached_len > 0:
+        # The exact-size path's top-k needs at least topk_blocks block columns, so a cold chunk shorter than the
+        # top-k window also takes the cache-read path, whose top-k is bounded by kv_len.
+        chunk_global = seq_len * mesh_device.shape[mesh_config.sp_axis]
+        topk_window = config.msa_topk_blocks * config.msa_block_size
+        if cached_len > 0 or chunk_global < topk_window:
+            assert kv_cache is not None, (
+                f"MSA chunk of {chunk_global} tokens at cached_len={cached_len} needs a KV cache "
+                f"(a cold chunk reads it when shorter than the {topk_window}-token top-k window)"
+            )
             # Cache-read: the current chunk attends the accumulated prefix, gathered across SP straight
             # from this (user, layer) slot of the packed cache (msa_sp_attention_cache_read). cached_len may be
             # mid-slab (a 32-aligned multi-turn resume); the read sizes the gather for the fullest rank.

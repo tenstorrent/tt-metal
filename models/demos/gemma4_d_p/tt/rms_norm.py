@@ -97,7 +97,14 @@ class RMSNorm(nn.Module):
             packer_l1_acc=False,
         )
 
+    def shard_memory_config(self, x):
+        """The block-sharded layout this norm runs in for x's shape, or None."""
+        geometry = _block_shard_geometry(x.padded_shape[-2], x.padded_shape[-1])
+        return None if geometry is None else _block_sharded_memory_config(*geometry)
+
     def forward(self, x, memory_config=None):
+        """A memory_config equal to shard_memory_config(x) returns the block-sharded output as is; an x already in
+        that layout is not resharded."""
         geometry = _block_shard_geometry(x.padded_shape[-2], x.padded_shape[-1])
         if geometry is None:
             return ttnn.rms_norm(
@@ -109,7 +116,7 @@ class RMSNorm(nn.Module):
             )
         shard_memory_config = _block_sharded_memory_config(*geometry)
         program_config = _block_sharded_program_config(*geometry)
-        x_sharded = ttnn.to_memory_config(x, shard_memory_config)
+        x_sharded = x if x.memory_config() == shard_memory_config else ttnn.to_memory_config(x, shard_memory_config)
         out_sharded = ttnn.rms_norm(
             x_sharded,
             weight=self.tt_weight,
@@ -118,7 +125,10 @@ class RMSNorm(nn.Module):
             memory_config=shard_memory_config,
             compute_kernel_config=self.compute_kernel_config,
         )
-        x_sharded.deallocate(True)
+        if x_sharded is not x:
+            x_sharded.deallocate(True)
+        if memory_config is not None and memory_config == shard_memory_config:
+            return out_sharded
         out = ttnn.sharded_to_interleaved(out_sharded, memory_config or ttnn.DRAM_MEMORY_CONFIG)
         out_sharded.deallocate(True)
         return out

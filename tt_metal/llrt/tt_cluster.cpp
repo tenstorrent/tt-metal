@@ -86,9 +86,11 @@ std::unique_ptr<tt::umd::ClusterDescriptor> get_mock_cluster_desc(const tt::llrt
 }  // namespace
 namespace tt {
 
-std::unordered_set<ChipId> Cluster::simulator_target_devices(const std::filesystem::path& simulator_dir) {
+std::unordered_set<ChipId> Cluster::simulator_target_devices(const std::filesystem::path& simulator_dir, tt::ARCH arch) {
+    // Open every chip UMD discovery finds for wh/bh.
+    const bool umd_discovers_topology = simulator_dir.extension() == ".so" && arch != tt::ARCH::QUASAR;
     std::error_code error;  // An unreadable directory counts as no layout, rather than throwing.
-    if (std::filesystem::exists(simulator_dir / "ip_layout.yaml", error)) {
+    if (umd_discovers_topology || std::filesystem::exists(simulator_dir / "ip_layout.yaml", error)) {
         return {};
     }
     return {0};
@@ -439,6 +441,10 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     if (this->target_type_ == TargetDevice::Silicon) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = std::nullopt,  // Automatically determine number of host mem channels.
+            // Names the accelerator group on the descriptor discovery builds. Nullopt on bare metal,
+            // where UMD falls back to gethostname(). UMD throws if this is set to an illegal id, so
+            // do not pre-validate it here and keep two copies of the rule.
+            .topology_discovery_options = {.cluster_id = rtoptions_.get_cluster_id()},
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
@@ -451,13 +457,15 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
                 .sdesc_path = sdesc_path,
                 .cluster_descriptor = mock_cluster_desc.get(),
                 .simulator_directory = rtoptions_.get_simulator_path(),
+                .serve_simulation_devices_over_sockets = rtoptions_.get_simulator_serve_over_sockets(),
             });
         } else {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
                 .num_host_mem_ch_per_mmio_device = 1,
-                .target_devices = simulator_target_devices(rtoptions_.get_simulator_path()),
+                .target_devices = simulator_target_devices(rtoptions_.get_simulator_path(), this->arch_),
                 .simulator_directory = rtoptions_.get_simulator_path(),
+                .serve_simulation_devices_over_sockets = rtoptions_.get_simulator_serve_over_sockets(),
             });
         }
     } else if (this->target_type_ == TargetDevice::Mock) {
@@ -856,6 +864,9 @@ void Cluster::write_core(
     tt_cxy_pair core,
     uint64_t addr,
     std::optional<tt::umd::IoOrdering> ordering) const {
+    if (sz_in_bytes == 0) {
+        return;  // nothing to write
+    }
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
     if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
@@ -945,7 +956,7 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
 }
 
 void Cluster::read_core(std::vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
-    data.resize(size_in_bytes / sizeof(uint32_t));
+    data.resize((size_in_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t));
     read_core(data.data(), size_in_bytes, core, addr);
 }
 
@@ -1118,7 +1129,7 @@ void* Cluster::host_dma_address(uint64_t offset, ChipId src_device_id, uint16_t 
 }
 
 uint64_t Cluster::get_pcie_base_addr_from_device(ChipId chip_id) const {
-    return this->driver_->get_pcie_base_addr_from_device(chip_id);
+    return this->driver_->get_sysmem_window_noc_base(chip_id);
 }
 
 const std::unordered_set<ChipId>& Cluster::get_devices_controlled_by_mmio_device(ChipId mmio_device_id) const {

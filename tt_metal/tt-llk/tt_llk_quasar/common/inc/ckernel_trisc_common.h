@@ -307,6 +307,20 @@ inline void t6_semaphore_get(const std::uint8_t index)
     TT_SEMGET(0, semaphore::t6_sem(index));
 }
 
+// Tensix thread semaphore init optionally stalled
+// Can stall on up to 3 resources at a time
+template <std::uint32_t WaitRes0 = p_stall::NOTHING, std::uint32_t WaitRes1 = p_stall::NOTHING, std::uint32_t WaitRes2 = p_stall::NOTHING>
+inline void t6_semaphore_init(const std::uint8_t index, const std::uint8_t min_value, const std::uint8_t max_value)
+{
+    // Each slot is independently optional: emit the stall whenever any resource is named.
+    if constexpr (WaitRes0 != p_stall::NOTHING || WaitRes1 != p_stall::NOTHING || WaitRes2 != p_stall::NOTHING)
+    {
+        TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
+    }
+
+    TT_SEMINIT(max_value, min_value, 0, semaphore::t6_sem(index));
+}
+
 /**
  * @brief Set packer's dest register offset to the current dest bank base.
  *

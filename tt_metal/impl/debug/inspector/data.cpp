@@ -645,6 +645,7 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT_CUSTOM("target_device", static_cast<int>(rt.get_target_device()));
     RT(simulator_enabled);
     RT_CUSTOM("simulator_path", rt.get_simulator_path().string());
+    RT(simulator_serve_over_sockets);
     RT(mock_enabled);
     RT(mock_cluster_desc_path);
     RT(visible_devices);
@@ -674,7 +675,6 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(disable_fabric_2_erisc_mode);
     RT(disable_dma_ops);
     RT(disable_sfploadmacro);
-    RT(disable_xip_dump);
     RT(skip_eth_cores_with_retrain);
     RT(use_mesh_graph_descriptor_2_0);
     RT(custom_fabric_mesh_graph_desc_path);

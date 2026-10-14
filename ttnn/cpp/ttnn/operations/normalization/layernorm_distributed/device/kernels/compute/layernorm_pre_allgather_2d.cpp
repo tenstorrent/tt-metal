@@ -108,61 +108,64 @@ void kernel_main() {
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
             reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
         dfb_inp.pop_front(Wt);
-        dfb_reduce.pop_front(1);
-    }
 
-    // On a merge core, do a final sum over the column's partial statistics and write the result to
-    // the output buffer. Only the merge-core build binds that output buffer, so the whole block is
-    // gated at the preprocessor rather than on a runtime flag.
+        // On a merge core, do a final sum over the column's partial statistics for this row and write
+        // the result to the output buffer. Only the merge-core build binds that output buffer, so the
+        // whole block is gated at the preprocessor rather than on a runtime flag.
 #ifdef IS_MERGE_CORE
-    {
-        DataflowBuffer dfb_x2_merge(dfb::x2_merge);
-        DataflowBuffer dfb_out_final(dfb::out_final);
-        constexpr int dst0 = 0;
+        {
+            DataflowBuffer dfb_x2_merge(dfb::x2_merge);
+            DataflowBuffer dfb_out_final(dfb::out_final);
+            constexpr int dst0 = 0;
 
-        // Wait for all num_cores_y tiles
-        dfb_x2_merge.wait_front(num_cores_y);
-        dfb_zero.wait_front(1);
+            // Wait for all num_cores_y tiles
+            dfb_x2_merge.wait_front(num_cores_y);
+            dfb_zero.wait_front(1);
 
-        // Initialize accumulation
-        reconfig_data_format(dfb::x2_merge, dfb::zero);
-        pack_reconfig_data_format(dfb::out_final);
-        // Add all the column's partials together. The accurate path sums them in Dest on the SFPU;
-        // add_tiles would pull each through SrcA/SrcB and round it to TF32.
-        if constexpr (unpack_fp32_active) {
-            copy_init(dfb::x2_merge);
-            add_binary_tile_init();
-        } else {
-            add_init(dfb::x2_merge, dfb::zero, true);
-        }
-
-        tile_regs_acquire();
-        if constexpr (unpack_fp32_active) {
-            copy_tile(dfb::x2_merge, 0, dst0);
-            for (uint32_t i = 1; i < num_cores_y; i++) {
-                copy_tile(dfb::x2_merge, i, dst0 + 1);
-                add_binary_tile(dst0, dst0 + 1, dst0);
+            // Initialize accumulation
+            reconfig_data_format(dfb::x2_merge, dfb::zero);
+            pack_reconfig_data_format(dfb::out_final);
+            // Add all the column's partials together. The accurate path sums them in Dest on the SFPU;
+            // add_tiles would pull each through SrcA/SrcB and round it to TF32.
+            if constexpr (unpack_fp32_active) {
+                copy_init(dfb::x2_merge);
+                add_binary_tile_init();
+            } else {
+                add_init(dfb::x2_merge, dfb::zero, true);
             }
-        } else {
-            for (uint32_t i = 0; i < num_cores_y; i++) {
-                add_tiles(dfb::x2_merge, dfb::zero, i, 0, dst0);
+
+            tile_regs_acquire();
+            if constexpr (unpack_fp32_active) {
+                copy_tile(dfb::x2_merge, 0, dst0);
+                for (uint32_t i = 1; i < num_cores_y; i++) {
+                    copy_tile(dfb::x2_merge, i, dst0 + 1);
+                    add_binary_tile(dst0, dst0 + 1, dst0);
+                }
+            } else {
+                for (uint32_t i = 0; i < num_cores_y; i++) {
+                    add_tiles(dfb::x2_merge, dfb::zero, i, 0, dst0);
+                }
             }
+            tile_regs_commit();
+
+            dfb_x2_merge.pop_front(num_cores_y);
+
+            dfb_out_final.reserve_back(onetile);
+
+            tile_regs_wait();
+            pack_tile(dst0, dfb::out_final);
+            tile_regs_release();
+
+            dfb_out_final.push_back(onetile);
         }
-        tile_regs_commit();
-
-        dfb_x2_merge.pop_front(num_cores_y);
-        // The zero tile is pushed once by the reader and waited once above, unconditionally. The
-        // unpack_fp32_active path never reads it; the other path reuses the one tile across all
-        // num_cores_y adds. Neither pops it, so pop it once here to balance the buffer.
-        dfb_zero.pop_front(1);
-
-        dfb_out_final.reserve_back(onetile);
-
-        tile_regs_wait();
-        pack_tile(dst0, dfb::out_final);
-        tile_regs_release();
-
-        dfb_out_final.push_back(onetile);
+#endif
     }
+
+    // The reader pushes the reduce scaler and the zero tile once, and every row reads them, so each is
+    // popped once here, after the last row. The merge block waits for the zero tile on every row, but
+    // only the path without unpack_fp32_active reads it, reusing the one tile across all num_cores_y adds.
+    dfb_reduce.pop_front(1);
+#ifdef IS_MERGE_CORE
+    dfb_zero.pop_front(1);
 #endif
 }
