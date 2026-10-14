@@ -35,3 +35,38 @@ def test_tilize_knobs(device, monkeypatch, shape, budget_tiles, block_height):
     )
     out = ttnn.to_torch(tilize(tt_in))
     assert torch.equal(out, x)
+
+
+@pytest.mark.parametrize(
+    "shape, tile_h, knobs",
+    [
+        # Split reorder: the writer RISC copies half of every tile-row's sticks.
+        ((1, 1, 16384, 64), 32, {"WRITER_COPY_SHARE": 0.5}),
+        ((1, 1, 16384, 32), 32, {"WRITER_COPY_SHARE": 0.75}),
+        ((1, 1, 8192, 64), 16, {"WRITER_COPY_SHARE": 0.5}),
+        # Staging ring: 3 slots of 2 tile-rows, short first chunk, with and without the split.
+        ((1, 1, 32768, 64), 32, {"STAGING_SLOTS": 3, "STAGING_SLOT_BUDGET_BYTES": 8192, "FIRST_CHUNK_TILE_ROWS": 1}),
+        (
+            (1, 1, 32768, 64),
+            32,
+            {
+                "STAGING_SLOTS": 4,
+                "STAGING_SLOT_BUDGET_BYTES": 4096,
+                "FIRST_CHUNK_TILE_ROWS": 1,
+                "WRITER_COPY_SHARE": 0.5,
+            },
+        ),
+    ],
+)
+def test_tilize_coalesced_reader_knobs(device, monkeypatch, shape, tile_h, knobs):
+    """Coalesced (bank-grouped staging) reader at non-default ring / split-reorder settings."""
+    for name, value in knobs.items():
+        assert hasattr(pd, name), name
+        monkeypatch.setattr(pd, name, value)
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(
+        x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    out = ttnn.to_torch(tilize(tt_in, tile=ttnn.Tile([tile_h, 32])))
+    assert torch.equal(out, x)

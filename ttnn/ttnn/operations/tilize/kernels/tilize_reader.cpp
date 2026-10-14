@@ -18,6 +18,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_rm_sticks = get_compile_time_arg_val(0);
@@ -35,8 +36,10 @@ void kernel_main() {
     // tile-row aligned): interleaved page p lives in bank p % num_banks at offset
     // (p / num_banks) * page, so the sticks of one bank inside a run of consecutive sticks are
     // contiguous there and come in ONE wide read into a reader-private staging buffer
-    // (staging_tile_rows tile-rows per chunk, two slots so the next chunk's DRAM reads overlap
-    // this chunk's local copies). Local L1->L1 NoC writes then restore row order for the tilize.
+    // (staging_tile_rows tile-rows per chunk; the first chunk may be shorter). The staging ring has
+    // staging_slots slots, each chunk tagged with its own transaction id, so a chunk is retired by
+    // a per-trid barrier while the next chunks' DRAM reads stay on the wire. Local L1->L1 NoC
+    // writes then restore row order for the tilize.
     constexpr bool coalesce_bank_reads = get_compile_time_arg_val(11) != 0;
     constexpr uint32_t num_banks = get_compile_time_arg_val(12);
     constexpr uint32_t cb_stick_staging = get_compile_time_arg_val(13);
@@ -59,7 +62,15 @@ void kernel_main() {
     // logical bytes of one page; page id of (stick, piece) = stick * in_pages_per_stick + piece.
     constexpr uint32_t in_pages_per_stick = get_compile_time_arg_val(30);
     constexpr uint32_t in_page_data_bytes = get_compile_time_arg_val(31);
-    constexpr auto in_args = TensorAccessorArgs<32>();
+    constexpr uint32_t staging_slots = get_compile_time_arg_val(32);  // coalesced path: chunks in flight
+    // Coalesced path, split reorder: the writer RISC copies the last writer_copy_sticks sticks of
+    // every tile-row (on its own NoC, in parallel). Per tile-row the reader posts a copy job
+    // {dst, staging slot base, first stick} on cb_copy_job and waits for the ack on cb_copy_done.
+    constexpr uint32_t writer_copy_sticks_arg = get_compile_time_arg_val(33);  // 0 = reader copies all
+    constexpr uint32_t cb_copy_job = get_compile_time_arg_val(34);
+    constexpr uint32_t cb_copy_done = get_compile_time_arg_val(35);
+    constexpr uint32_t first_chunk_tile_rows = get_compile_time_arg_val(36);  // <= staging_tile_rows
+    constexpr auto in_args = TensorAccessorArgs<37>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start_tile = get_arg_val<uint32_t>(1);
@@ -105,11 +116,24 @@ void kernel_main() {
         const uint32_t staging_base = get_write_ptr(cb_stick_staging);
         const uint32_t first_core_stick = row_start_tile * tile_h;  // images are tile-row aligned here
 
-        auto issue_chunk = [&](uint32_t chunk_row0, uint32_t slot) {
-            const uint32_t rows =
-                (core_rows_tiles - chunk_row0 < staging_tile_rows) ? core_rows_tiles - chunk_row0 : staging_tile_rows;
-            const uint32_t n_sticks = rows * tile_h;
-            const uint32_t stick0 = first_core_stick + chunk_row0 * tile_h;
+        // Chunk geometry: chunk 0 has first_chunk_tile_rows (<= staging_tile_rows) so the first data
+        // lands sooner and the pipeline fills early; every later chunk has staging_tile_rows.
+        auto chunk_row0 = [&](uint32_t chunk) -> uint32_t {
+            return chunk == 0 ? 0 : first_chunk_tile_rows + (chunk - 1) * staging_tile_rows;
+        };
+        auto chunk_rows = [&](uint32_t chunk) -> uint32_t {
+            const uint32_t row0 = chunk_row0(chunk);
+            const uint32_t nominal = chunk == 0 ? first_chunk_tile_rows : staging_tile_rows;
+            return (core_rows_tiles - row0 < nominal) ? core_rows_tiles - row0 : nominal;
+        };
+        const uint32_t num_chunks =
+            core_rows_tiles <= first_chunk_tile_rows
+                ? 1
+                : 1 + (core_rows_tiles - first_chunk_tile_rows + staging_tile_rows - 1) / staging_tile_rows;
+
+        auto issue_chunk = [&](uint32_t chunk, uint32_t slot) {
+            const uint32_t n_sticks = chunk_rows(chunk) * tile_h;
+            const uint32_t stick0 = first_core_stick + chunk_row0(chunk) * tile_h;
             const uint32_t base = staging_base + slot * slot_bytes;
             const uint32_t groups = n_sticks < num_banks ? n_sticks : num_banks;
             for (uint32_t k = 0; k < groups; ++k) {
@@ -127,25 +151,49 @@ void kernel_main() {
         // Local copies all target this core with the same size: program the write cmd buffer once
         // (the reader issues no other writes), then each copy only sets src/dst addresses.
         constexpr bool one_packet_copies = seg_bytes <= NOC_MAX_BURST_SIZE;
+        // The writer's share applies to single-packet stick copies only (the writer gates identically).
+        constexpr uint32_t writer_copy_sticks = one_packet_copies ? writer_copy_sticks_arg : 0;
+        static_assert(writer_copy_sticks <= tile_h, "writer share exceeds the tile-row");
+        constexpr uint32_t reader_copy_sticks = tile_h - writer_copy_sticks;
         if constexpr (one_packet_copies) {
             noc_async_write_one_packet_set_state(get_noc_addr(staging_base), seg_bytes);
         }
 
-        uint32_t slot = 0;
-        issue_chunk(0, 0);
-        for (uint32_t chunk_row0 = 0; chunk_row0 < core_rows_tiles; chunk_row0 += staging_tile_rows) {
-            noc_async_read_barrier();  // only this chunk's reads are outstanding
-            const uint32_t next_row0 = chunk_row0 + staging_tile_rows;
-            if (next_row0 < core_rows_tiles) {
-                issue_chunk(next_row0, slot ^ 1);
+        // Chunk c lands in slot c % staging_slots with trid slot + 1 (trid 0 = untagged). At most
+        // staging_slots - 1 chunks are in flight ahead of the one being reordered: chunk
+        // c + staging_slots - 1 is issued once chunk c has landed, into the slot chunk c - 1 just
+        // drained — the earliest chunk always has the DRAM to itself first.
+        static_assert(staging_slots >= 2 && staging_slots <= NOC_MAX_TRANSACTION_ID, "trid range");
+        Noc noc;
+        auto issue_tagged = [&](uint32_t chunk) {
+            const uint32_t slot = chunk % staging_slots;
+            dataflow_kernel_lib::set_read_trid(noc, slot + 1);
+            issue_chunk(chunk, slot);
+        };
+        for (uint32_t c = 0; c + 1 < staging_slots && c < num_chunks; ++c) {
+            issue_tagged(c);
+        }
+        for (uint32_t c = 0; c < num_chunks; ++c) {
+            const uint32_t slot = c % staging_slots;
+            dataflow_kernel_lib::async_read_barrier_with_trid(noc, slot + 1);  // only chunk c
+            if (c + staging_slots - 1 < num_chunks) {
+                issue_tagged(c + staging_slots - 1);
             }
             const uint32_t base = staging_base + slot * slot_bytes;
-            const uint32_t rows =
-                (core_rows_tiles - chunk_row0 < staging_tile_rows) ? core_rows_tiles - chunk_row0 : staging_tile_rows;
+            const uint32_t rows = chunk_rows(c);
             for (uint32_t t = 0; t < rows; ++t) {
                 cb_reserve_back(cb_rm_sticks, block_width_tiles);
                 uint32_t dst_l1 = get_write_ptr(cb_rm_sticks);
-                for (uint32_t i = 0; i < tile_h; ++i) {
+                if constexpr (writer_copy_sticks > 0) {
+                    cb_reserve_back(cb_copy_job, 1);
+                    volatile tt_l1_ptr uint32_t* job =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_copy_job));
+                    job[0] = dst_l1 + reader_copy_sticks * seg_bytes;
+                    job[1] = base;
+                    job[2] = t * tile_h + reader_copy_sticks;
+                    cb_push_back(cb_copy_job, 1);
+                }
+                for (uint32_t i = 0; i < reader_copy_sticks; ++i) {
                     const uint32_t s = t * tile_h + i;  // stick index inside the chunk
                     const uint32_t src_l1 = base + ((s % num_banks) * max_per_group + s / num_banks) * stick_page_bytes;
                     if constexpr (one_packet_copies) {
@@ -156,10 +204,16 @@ void kernel_main() {
                     dst_l1 += seg_bytes;
                 }
                 noc_async_write_barrier();
+                if constexpr (writer_copy_sticks > 0) {
+                    cb_wait_front(cb_copy_done, 1);
+                    cb_pop_front(cb_copy_done, 1);
+                }
                 cb_push_back(cb_rm_sticks, block_width_tiles);
             }
-            slot ^= 1;
+            // Slot drained (all copies of this chunk acked, both RISCs): chunk c + staging_slots
+            // may land in it (issued after chunk c + 1 lands).
         }
+        dataflow_kernel_lib::set_read_trid(noc, 0);  // restore untagged
         return;
     }
 

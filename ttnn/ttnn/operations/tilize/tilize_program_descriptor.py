@@ -25,6 +25,8 @@ CB_RM_STICKS = 0  # reader -> compute: RM stick segments, tile-sized pages
 CB_RM_STICKS_TAIL = 1  # same, for the ragged last column block (own ring quantum)
 CB_STICK_STAGING = 2  # reader-private scratch: bank-grouped sticks of one tile-row
 CB_PAD_FILL = 3  # reader-private: one stick segment of the pad value (source of local fill copies)
+CB_COPY_JOB = 4  # reader -> writer: split-reorder copy job per tile-row {dst, slot base, first stick}
+CB_COPY_DONE = 5  # writer -> reader: split-reorder ack per tile-row (token page)
 CB_TILES_OUT = 16  # compute -> writer: tiled output pages
 CB_TILES_OUT_TAIL = 17  # same, for the ragged last column block
 
@@ -44,8 +46,18 @@ COALESCE_MIN_CORES_PER_BANK = 2
 BANK_STAGGER = True
 # Segment (non-coalesced) reader: rotate each core's start stick within a tile-row (k % tile_h).
 SEGMENT_BANK_STAGGER = True
-# Staging slot budget for the coalesced reader (two slots); sets staging_tile_rows per chunk.
+# Coalesced reader staging ring: STAGING_SLOT_BUDGET_BYTES per slot sets staging_tile_rows per
+# chunk (>= 1 whole tile-row); STAGING_SLOTS chunks are in flight at once (one trid each, <= 15).
 STAGING_SLOT_BUDGET_BYTES = 16 * 1024
+STAGING_SLOTS = 2  # >= 2: chunks in flight ahead of the one being reordered = STAGING_SLOTS - 1
+# Rows of the FIRST chunk (None = staging_tile_rows): a short first chunk lands sooner, so the
+# reorder/compute/write pipeline starts earlier under grid-wide DRAM contention.
+FIRST_CHUNK_TILE_ROWS = None
+# Split reorder (coalesced reader): fraction of every tile-row's stick copies the WRITER RISC does
+# on its own NoC, in parallel with the reader's (0 = reader does all). Only with an interleaved
+# (non-resident) output, single-packet sticks.
+WRITER_COPY_SHARE = 0.0
+COPY_JOB_PAGE_BYTES = 16  # one L1-aligned page: 3 x uint32 job words
 # block_height_tiles: None => the core's whole row assignment (Phase 0: one row block).
 BLOCK_HEIGHT_TILES = None
 # interleaved_2d_split: also cut the columns across cores when the row axis cannot fill the grid.
@@ -371,11 +383,15 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
     )
     max_core_rows = max(entry[2] for entry in assignment)
     staging_tile_rows = max(1, min(max_core_rows, STAGING_SLOT_BUDGET_BYTES // (tile_h * stick_page_bytes)))
-    staging_slot_bytes = num_banks * math.ceil(staging_tile_rows * tile_h / num_banks) * stick_page_bytes
-    staging_bytes = 2 * staging_slot_bytes
+    # One bank group of a slot (the reader derives the same max_per_group in-kernel).
+    staging_group_bytes = math.ceil(staging_tile_rows * tile_h / num_banks) * stick_page_bytes
+    staging_slot_bytes = num_banks * staging_group_bytes
+    first_chunk_tile_rows = min(staging_tile_rows, FIRST_CHUNK_TILE_ROWS or staging_tile_rows)
+    staging_slots = max(2, STAGING_SLOTS)
+    staging_bytes = staging_slots * staging_slot_bytes
     # Bank stagger (coalesced reader): core k starts its bank walk at bank k % groups, where
     # groups = min(num_banks, sticks in the smallest chunk) so the offset is always in range.
-    min_chunk_sticks = min(min(entry[2] for entry in assignment), staging_tile_rows) * tile_h
+    min_chunk_sticks = min(min(entry[2] for entry in assignment), first_chunk_tile_rows) * tile_h
     stagger_groups = min(num_banks, min_chunk_sticks)
     core_index = {(entry[0].x, entry[0].y): k for k, entry in enumerate(assignment)}
 
@@ -422,6 +438,13 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             )
         if coalesce:
             cbs.append(_cb(CB_STICK_STAGING, 1, staging_bytes, input_tensor.dtype, group_cores))
+        # Split reorder: the writer copies its share of each tile-row's sticks. Both kernels drop
+        # the split (share -> 0) when a stick copy is wider than one NoC packet.
+        copy_seg_bytes = block_width_tiles * seg_unit_bytes
+        writer_copy_sticks = int(tile_h * WRITER_COPY_SHARE) if coalesce and not out_resident else 0
+        if writer_copy_sticks:
+            for cb_index in (CB_COPY_JOB, CB_COPY_DONE):
+                cbs.append(_cb(cb_index, IN_DEPTH_TILE_ROWS, COPY_JOB_PAGE_BYTES, input_tensor.dtype, group_cores))
         fill_row_bytes = block_width_tiles * seg_unit_bytes + FILL_PHASE_BYTES
         if has_padding:
             # + FILL_PHASE_BYTES so the kernel can align the row base up to FILL_PHASE_BYTES.
@@ -476,6 +499,11 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             int(in_resident),
             in_pages_per_stick,
             in_page_data_bytes,
+            staging_slots,
+            writer_copy_sticks,
+            CB_COPY_JOB,
+            CB_COPY_DONE,
+            first_chunk_tile_rows,
         ]
         reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         writer_ct = [
@@ -485,6 +513,13 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             out_page_bytes,
             *col_geometry,
             int(out_resident),
+            writer_copy_sticks,
+            CB_COPY_JOB,
+            CB_COPY_DONE,
+            copy_seg_bytes,
+            num_banks,
+            staging_group_bytes,
+            stick_page_bytes,
         ]
         writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
         compute_ct = [CB_RM_STICKS, CB_RM_STICKS_TAIL, CB_TILES_OUT, CB_TILES_OUT_TAIL, *col_geometry]

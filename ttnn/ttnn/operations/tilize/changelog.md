@@ -40,3 +40,18 @@
 - Perf (BH p150b, per-timer-cluster span): `[1,1,2048,512]` height-in→DRAM 8.7 µs (ref 8.3), DRAM→height-out 7.4–7.7 µs (ref 7.0; coalesced vs segment reader within noise), height same-spec 1.16 µs (ref 0.93); `[1,1,512,512]` block COL same-spec 1.13 µs (ref 0.89). Same-spec is fixed launch/init overhead only.
 - Issues encountered: none blocking. Partial width shards, several shards per core and DRAM-sharded inputs are correct but not resident (accessor path).
 - Tests added: `tests/ttnn/unit_tests/operations/tilize/test_tilize_sharded.py` (same-spec height/width/block COL/block 3x2/ND rank-3/ragged last shard with residency asserts; input/output pinned, cross-spec, DRAM-sharded in/out, full-grid with width-sharded piece reads, ragged width shard; pad into block-sharded output).
+
+## Refinement 3 — Speed up the perf-flagged profile `[1,1,16384,64]`
+- Date: 2026-10-14
+- What was done:
+  - Coalesced reader: staging ring of `STAGING_SLOTS` slots (default 2), one read transaction id per slot. Chunk `c` is retired by a per-trid barrier, and chunk `c + slots − 1` is issued after chunk `c` lands, so only the earliest chunk is on the DRAM at first. At 2 slots this is the old schedule.
+  - `FIRST_CHUNK_TILE_ROWS` knob (default None = the normal chunk size): an optional shorter first chunk.
+  - Split reorder (`WRITER_COPY_SHARE`, default 0 = off). The writer RISC copies a share of each tile-row's sticks from staging into `cb_rm_sticks` as NoC1 self-reads. The reader posts a job `{dst, slot base, first stick}` on `cb_copy_job` (slot 4) and waits for the ack on `cb_copy_done` (slot 5). While waiting for its output, the writer keeps serving later jobs. Both kernels turn it off for multi-packet sticks; it is never used with a resident output.
+  - Perf test: readable ids (`16384x64`), `TILIZE_PERF_KNOBS` (JSON knob overrides) and `TILIZE_PERF_ITERS` (N profiled samples per process).
+  - Reused: coalesced reader, staging CB, writer row loop, knob module. Added: trid ring, first-chunk knob, writer copy-job path and its two token CBs.
+- Perf (BH p150b, 110 cores, medians of 15–30 samples, per-timer-cluster span): `[1,1,16384,64]` HEAD 10.94 µs → final default 10.96–11.13 µs, no knob setting better (see the refinement's **Outcome** line for the sweep). Guard shapes, final vs HEAD: 3520x64 3.68/3.70, 32768x64 20.79/20.90, 128x64 1.90/1.90, 16384x32 7.54/7.43 µs (all noise).
+- Findings: the op is limited by total NoC/DRAM throughput (reads only ≈ 300 GB/s, writes only ≈ 250 GB/s), and per-core end times depend on grid position. Reorder copies cost ≈ 25 cycles per 128 B self-copy, about 2.8 µs per core with no DRAM traffic, but only ≈ 0.9 µs is exposed in the full run. Reading over NoC1 is much worse. 512 B per-bank reads are 25 % worse than 2 KiB.
+- Accuracy achieved: bit-exact (torch.equal); PCC=1.0, rtol=0, atol=0 on every shape tested, including the non-default knob settings.
+- Golden test progress: bf16 loose slice 10/10 passing; unit test directory 79/79.
+- Issues encountered: the CSV `DEVICE KERNEL DURATION` is invalid on this board (offset timer cluster), so spans are computed from the device log. Run-to-run noise is ±3 %, so single samples cannot resolve these levers; medians of 15–30 samples are used. A `static_assert` inside a discarded `if constexpr` still fires in a non-template kernel, so the assert was made conditional.
+- Tests added: `test_tilize_knobs.py::test_tilize_coalesced_reader_knobs` (split reorder at shares 0.5/0.75 including a 16-high tile; 3- and 4-slot rings with a short first chunk, with and without the split).
