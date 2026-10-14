@@ -458,9 +458,7 @@ Blackhole-only and unicast-only (`umd/device/tt_kmd_lib/tt_kmd_lib.h`, with
 `blackhole_implementation.hpp` placing the field at bits 70 and 59).
 
 These invariants are supported by `x280/include/noc.h`,
-`x280/src/atomic_bench.c`, `x280/boot/entry.S`,
-and
-`x280/benchmarks/COMPLETE_BANDWIDTH_RESULTS.md`.
+`x280/src/atomic_bench.c` and `x280/boot/entry.S`.
 
 ## Case model
 
@@ -528,10 +526,10 @@ images this tree does not carry, with their DRAM-result publication and cache
 eviction. It is not the harness result schema; placement, clock state,
 correctness, and other harness metadata remain host-side concerns.
 
-X280 images are built separately, by `x280/Makefile` and the rv64gcv toolchain,
-and located at run time by a caller-supplied path. The component hard-codes no
-build-tree location; a driver may default the path from an environment
-variable. Images are flat binaries loaded at a fixed address, not ELFs.
+X280 images are built with the tt-metal build, by `x280_add_image` and the SFPI
+compiler, and located at run time by a caller-supplied path. The component
+hard-codes no build-tree location; the tests and the harness default the path to
+the build's image directory, and an environment variable overrides it. Images are flat binaries loaded at a fixed address, not ELFs.
 
 `ActiveRunRequest::image_path` is a trusted harness-artifact contract, not an
 arbitrary binary interface. The caller supplies an image built for the expected
@@ -678,8 +676,8 @@ record per-handle clock intent. No public `X280Hart` exists: per-hart protocol
 records are internal values of the stable tile until separately placed images
 demonstrate a caller-facing hart contract.
 
-The component is the `x280_device` target, built by `x280/CMakeLists.txt` as a
-standalone CMake project, with public headers under `x280/include/x280/device/`.
+The component is the `x280_device` target, built by `x280/CMakeLists.txt` inside
+the tt-metal build when `TT_METAL_BUILD_X280` is on, with public headers under `x280/include/x280/device/`.
 
 The public runtime binds to a `MeshDevice` the caller already opened.
 `RuntimeImpl` holds the weak mesh-liveness reference and owns its `ChipImpl`
@@ -1026,8 +1024,8 @@ Writable outbound-NOC programming and any public hart object remain outside
 this surface.
 
 The old tile-global active mailbox ABI is deleted and its addresses are
-unallocated. Every image in this tree speaks the
-per-hart protocol; the Python boot flow that drove the old one is retired
+unallocated. Every image in this tree speaks the per-hart protocol; the Python
+boot flow that drove the old one is retired
 (D-030). A tile already running the old resident image requires an ASIC reset
 before the versioned per-hart resident can be installed.
 
@@ -1175,12 +1173,11 @@ silently disagree.
 
 | | Today | Should be |
 |---|---|---|
-| Host tools (`x280_runtime_cli`) | `TT_VISIBLE_DEVICES=2 tool` | `tool --device 2` |
 | gtest cases | `TT_VISIBLE_DEVICES=2 case` | `case --device 2` (or a `--device` gtest flag) |
 | Reset | `tt-smi -r 2` under an inherited filter | `env -u TT_VISIBLE_DEVICES tt-smi -r 2`, verified |
 
-`x280_runtime_cli` already accepts `--chip N`, so the pattern exists; what is
-missing is that the *device* (which card) is still ambient while the *chip*
+The session fixture already takes chip ids as an argument
+(`OpenConfig::mesh_device_ids`), so the pattern exists; what is missing is that the *device* (which card) is still ambient while the *chip*
 (which die on that card) is an argument. The work is:
 
 1. Add a `--device <umd-id>` option to every host binary, defaulting to the
@@ -1538,14 +1535,11 @@ result.
   private later-milestone window mechanisms, and Metal access adapter.
 - `x280/src/device/x280_active.cpp` — runtime submission, active observation,
   acknowledged return, and unhealthy restoration handling.
-- `x280/CMakeLists.txt` and `x280/tools/x280_runtime_cli.cpp` — standalone
-  component build and operator-facing composition of the public surface.
+- `x280/CMakeLists.txt` — the component build.
 - `x280/include/noc.h` — X280 ports, descriptors, apertures, and window
   installation.
 - `x280/src/atomic_bench.c` and `x280/boot/entry.S` — CPU-atomic behavior and
   probe safety.
-- `x280/benchmarks/COMPLETE_BANDWIDTH_RESULTS.md` — measured X280 port
-  behavior.
 - `x280/include/x280_address_map.h` — canonical LIM, DDR, CLINT, firmware
   region, sentinel, ECC marker, and trap addresses shared by host, firmware,
   and preprocessed assembly.
@@ -1560,13 +1554,13 @@ result.
 - `x280/src/lim_idle.c` — resident-idle protocol and multi-hart handoff.
 - `x280/ld/x280-lim-idle.ld` and `x280/ld/x280.ld` — resident and active image
   placement.
-- `tt-metal/tt_metal/llrt/tlb_config.cpp` — Blackhole L2CPU static TLB
+- `tt_metal/llrt/tlb_config.cpp` — Blackhole L2CPU static TLB
   configuration over the LIM window.
-- `tt-metal/tt_metal/llrt/tt_cluster.hpp` and UMD `device/cluster.hpp` —
+- `tt_metal/llrt/tt_cluster.hpp` and UMD `device/cluster.hpp` —
   Metal wrapper read/write/topology surface plus the temporary raw ARC
   telemetry capability.
-- `tt-metal/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_memory_map.hpp`
+- `tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_memory_map.hpp`
   — precedent for a bounded named test-memory map.
-- `tt-metal/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.*` and
+- `tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.*` and
   `tt_fabric_test_device_setup.cpp` — useful orchestration precedents without
   adopting their YAML specification layer.

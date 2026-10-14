@@ -1616,22 +1616,22 @@ rule, participant topology, or result interpretation updates this document.
 Host-runtime and X280 window implementation references are maintained in the
 harness LLD. Suite implementations additionally rely on:
 
-- [`tt-metal/tt_metal/hw/inc/api/dataflow/noc.h`](../tt-metal/tt_metal/hw/inc/api/dataflow/noc.h)
+- [`tt_metal/hw/inc/api/dataflow/noc.h`](../../../tt_metal/hw/inc/api/dataflow/noc.h)
   — Tensix NOC issue, flush, and barrier operations.
-- [`tt-metal/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_sender.cpp`](../tt-metal/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_sender.cpp)
+- [`tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_sender.cpp`](../../../tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_sender.cpp)
   and
-  [`tt-metal/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_responder.cpp`](../tt-metal/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_responder.cpp)
+  [`tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_responder.cpp`](../../../tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_responder.cpp)
   — production-fabric RTT prior art for cache handling and polling, not the
   p2p mailbox backend.
-- [`tt-metal/tt_metal/fabric/routing_table_generator.cpp`](../tt-metal/tt_metal/fabric/routing_table_generator.cpp)
+- [`tt_metal/fabric/routing_table_generator.cpp`](../../../tt_metal/fabric/routing_table_generator.cpp)
   and
-  [`tt-metal/tt_metal/fabric/control_plane.cpp`](../tt-metal/tt_metal/fabric/control_plane.cpp)
+  [`tt_metal/fabric/control_plane.cpp`](../../../tt_metal/fabric/control_plane.cpp)
   and
-  [`tt-metal/tt_metal/fabric/compressed_routing_path.cpp`](../tt-metal/tt_metal/fabric/compressed_routing_path.cpp)
+  [`tt_metal/fabric/compressed_routing_path.cpp`](../../../tt_metal/fabric/compressed_routing_path.cpp)
   — host routing-direction generation, compressed/source-routed forms, and
   device routing-table publication.
-- [`tt-metal/tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp`](../tt-metal/tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp)
+- [`tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp`](../../../tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp)
   and
-  [`tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h`](../tt-metal/tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h)
+  [`tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h`](../../../tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h)
   — production worker/EDM buffer-slot flow control and Ethernet TXQ/RXQ plus
   packet-resend setup; these are not application-credit semantics.

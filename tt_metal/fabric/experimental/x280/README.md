@@ -619,6 +619,7 @@ A host NOC access to an L2CPU takes the L2CPU-local address (for example, `X280_
 |---|---|---|
 | Memory Port write reaches L3 but not physical DDR | Memory Port is a cache-fill path, not a store-through path | Use System Port for outbound NOC writes; only use MemPort for cached DDR reads |
 | 16 KB `noc_async_write` from Tensix hangs | NIU outstanding-write queue overflow | Either keep barriers, batch them, or use `<posted=true>` template parameter |
+| An `IDLE_ETH` kernel compiles but its result stays zero | Fast dispatch does not load or release idle-ERISC kernels | Link the executable against `x280_slow_dispatch` (`CMakeLists.txt`), which sets `TT_METAL_SLOW_DISPATCH_MODE=1` before `main` |
 ---
 
 ## 6. Reference: tests, fixtures, scripts
@@ -633,8 +634,9 @@ compiler tt-metal fetches (`runtime/sfpi`, or `/opt/tenstorrent/sfpi` with
 ```bash
 ./build_metal.sh --build-metal-tests --configure-only
 cmake -B build -DTT_METAL_BUILD_X280=ON
-ninja -C build x280_images x280_abi_headers x280_runtime_host_tests x280_runtime_coordinate_tests
-ctest --test-dir build -R x280      # image placement, pinned-input guards, host and mock-cluster tests; no device
+ninja -C build x280_images x280_abi_headers x280_runtime_host_tests x280_runtime_coordinate_tests \
+  x280_bench_host_tests x280_bench_device_tests x280_bench_release_selector_tests
+ctest --test-dir build -R x280      # image placement, pinned-input guards, header refusals, host, offline and mock-cluster tests; no device
 ```
 
 | Image (`build/x280/`) | Source | Use |
@@ -651,6 +653,39 @@ Every image compiles with `-mcpu=sifive-x280 -march=rv64gc -mabi=lp64d
 `x280_image_layout` checks resident idle's `.text` at `0x08000000` and the
 sentinel's at `0x08001000`. The `x280_abi_headers` build target compiles each
 ABI header alone as C, C++ and, for the two `entry.S` includes, assembly.
+It also compiles each benchmark suite header under `kernels/` alone, as C and
+C++, or as C++ only for the templates.
+
+### Benchmark harness
+
+The benchmark executables share the harness under `harness/`. Its session
+fixture (`harness/session/session.hpp`) opens the mesh and the runtime with
+`LimEccPrimingPolicy::RequirePrepared` and boots resident idle itself: on every
+chip whose enabled L2CPUs are all held in reset it runs one `boot_tiles` batch
+over all of them, the one batch that chip-reset lifetime admits, then sets PLL4
+to `X280_PLL_MHZ` (default 1750). A chip with only some L2CPUs out of reset
+cannot boot the rest, so its cases skip until `tt-smi -r`. Images default to
+`build/x280/` as the tests' do; each `X280_*_FW_IMAGE` variable, and
+`X280_IDLE_FW_IMAGE` for resident idle, names another file.
+
+Every executable that launches a Metal kernel on a core-local RISC (an
+`IDLE_ETH` or `ACTIVE_ETH` Ethernet core, or a DRISC) requires
+`TT_METAL_SLOW_DISPATCH_MODE=1` in the environment before `MeshDevice` is
+constructed. Fast dispatch does not support `IDLE_ETH`: the kernel may JIT
+compile while the selected Ethernet core remains reset-held with no complete
+runtime arguments, kernel text, or `RUN_MSG_GO`. Each such executable links the
+`x280_slow_dispatch` object library (`CMakeLists.txt`), which sets the variable
+to `1` before `main`, overriding and logging any other value, so a direct
+invocation needs no setting. Each fixture that launches on a core-local RISC
+references the library, so an executable that omits it fails to link, and
+fails before opening the device, naming the missing link, when the variable is
+not `1`.
+
+`select_drisc_endpoint` (`harness/targets/drisc_endpoint.hpp`), which places the
+core_sync DRISC worker, has an offline check against the Blackhole SoC
+descriptor under Metal's runtime root (`TT_METAL_RUNTIME_ROOT`, or the
+repository root as the working directory). It needs no device and runs in the
+`x280_bench_device_offline` CTest.
 
 ### Active-image contract suite
 
