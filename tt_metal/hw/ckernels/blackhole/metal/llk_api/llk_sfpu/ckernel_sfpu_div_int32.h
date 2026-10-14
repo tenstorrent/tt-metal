@@ -25,8 +25,8 @@ sfpi_inline void div_int32_lm_row(const uint in0, const uint in1, const uint out
     TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
     TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG5, 3);
     TTI_SFPPUSHC(0, 0, 0, sfpi::SFPPUSHC_MOD1_PUSH);
-    TTI_SFPGT(0, p_sfpu::LREG3, p_sfpu::LCONST_0, 1);
     TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG5, p_sfpu::LREG12, p_sfpu::LREG6, 1);
+    TTI_SFPGT(0, p_sfpu::LREG3, p_sfpu::LCONST_0, 1);
     TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG6, p_sfpu::LCONST_0, p_sfpu::LREG2, 2);
     TTI_SFPPOPC(0, 0, 0, sfpi::SFPPOPC_MOD1_POP);
     TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 2);
@@ -74,7 +74,7 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
         sfpi::dst_reg++;
     }
 #else
-    // SFPLOADMACRO schedule of the sfpi body above; SFPPUSHC and SFPPOPC sit in MAD latency slots and float(in1)
+    // SFPLOADMACRO schedule of the sfpi body above; SFPPUSHC, SFPGT and SFPPOPC sit in MAD latency slots and float(in1)
     // stays in L7.
     constexpr uint dst_tile_size = 64;
     constexpr uint row_len = 25;
