@@ -78,12 +78,14 @@ The same pipeline runs [Qwen-Image-Edit](https://huggingface.co/Qwen/Qwen-Image-
 `checkpoint_name`. The text encoder sees the input images through the Qwen2.5-VL vision tower, and
 the transformer sees their latents appended to the generated image's. Pass `image=` one image, or up
 to three for Edit-2509 and 2511; the output takes the supported resolution closest in aspect ratio
-to the last one. With `mask_image=`, Qwen-Image-Edit inpaints a single image.
+to the last one. With `mask_image=` and a single input image, all three inpaint: only the white part
+of the mask is edited.
 
 The edit tests pass on BH LoudBox (2x4). On BH QuietBox 2, Qwen-Image-Edit passes; the other
 checkpoints have not been run there yet. On Wormhole, edits run out of DRAM: the transformer's
-weights take about 10 GB of each chip's 12 GB, which leaves too little for the vision tower and the
-longer image sequences.
+weights take about 10 GB of each chip's 12 GB, which leaves too little for the text encoder and the
+longer image sequences. With the text encoder on the CPU (`use_torch_text_encoder=True`) and
+`max_images=1`, inpainting with Edit-2509 and 2511 passes on WH 2x4.
 
 ```bash
 pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py::test_qwenimage_edit -k 2x4
