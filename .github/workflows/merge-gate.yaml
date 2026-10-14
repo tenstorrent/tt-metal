@@ -698,6 +698,9 @@ jobs:
       # Report-only for the first week. To block, set this to true and add both
       # llk-perf-merge-gate jobs to optional-jobs in Merge Gate Status.
       fail_on_regression: false
+      # The only LLK perf gate that posts to the regressions channel, and only a regression or a skip.
+      slack: true
+      slack_on_pass: false
     secrets: inherit
 
   # ===========================================================================
