@@ -1,6 +1,6 @@
 name: "Sanity tests nightly debug run"
 
-run-name: "Sanity tests nightly debug run${{ github.event.schedule == '0 1 * * *' && ' with watcher' || (inputs.enable-watcher && ' with watcher' || '') }}${{ github.event.schedule == '0 2 * * *' && ' with LLK asserts' || (inputs.enable-llk-asserts && ' with LLK asserts' || '') }}${{ github.event.schedule == '0 3 * * *' && ' with LLK sanitizer' || (inputs.enable-llk-sanitizer && ' with LLK sanitizer' || '') }}"
+run-name: "Sanity tests nightly debug run${{ (github.event.schedule == '0 1 * * *' || inputs.enable-watcher) && ' with watcher' || '' }}${{ (github.event.schedule == '0 2 * * *' || inputs.enable-llk-asserts) && ' with LLK asserts' || '' }}${{ (github.event.schedule == '0 3 * * *' || inputs.enable-llk-sanitizer) && ' with LLK sanitizer' || '' }}"
 
 on:
   schedule:
@@ -10,7 +10,7 @@ on:
     - cron: "0 1 * * *"
     # Runs nightly at 2:00 AM UTC with LLK asserts enabled
     - cron: "0 2 * * *"
-    # Runs nightly at 3:00 AM UTC with the LLK sanitizer enabled (TTNN conv group only, Ubuntu 22.04)
+    # Runs nightly at 3:00 AM UTC with the LLK sanitizer enabled
     - cron: "0 3 * * *"
 
   workflow_dispatch:
@@ -30,7 +30,7 @@ on:
       enable-llk-sanitizer:
         default: false
         type: boolean
-        description: "Enable LLK sanitizer (implies LLK asserts; runs only the TTNN sanitizer test list, Ubuntu 22.04, no TTSIM)"
+        description: "Enable LLK sanitizer"
       run-wormhole-tests:
         default: true
         type: boolean
@@ -100,22 +100,12 @@ jobs:
       enable-llk-sanitizer: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer == 'true' }}
       run-wormhole: ${{ inputs.run-wormhole-tests || github.event_name == 'schedule' }}
       run-blackhole: ${{ inputs.run-blackhole-tests || github.event_name == 'schedule' }}
-      # The sanitizer slot runs TTNN sanity only (its own reduced list, see
-      # tests/pipeline_reorg/ttnn_sanitizer_tests.yaml): every other suite is switched off.
-      run-sim: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' && (inputs.run-ttsim-tests || github.event_name == 'schedule') }}
-      run-t3000-sanity-tests: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' }}
-      run-fabric-sanity-tests: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' }}
-      run-ops-sanity-tests: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' }}
-      run-umd-sanity-tests: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' }}
-      run-ttsim-sanity-tests: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' }}
-      run-blackhole-multi-card-sanity-tests: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' }}
-      run-models-sanity-tests: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' }}
+      run-sim: ${{ inputs.run-ttsim-tests || github.event_name == 'schedule' }}
 
   sanity-nightly-debug-ubuntu-24:
     name: Sanity tests nightly debug run (Ubuntu 24.04${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' && ' with watcher' || '' }}${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' && ' with LLK asserts' || '' }}${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer == 'true' && ' with LLK sanitizer' || '' }})
     needs: [determine-debug-flags]
-    # One platform is enough for the sanitizer slot; it runs on Ubuntu 22.04 only.
-    if: ${{ always() && !cancelled() && needs.determine-debug-flags.outputs.enable-llk-sanitizer != 'true' && (github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests) }}
+    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests) }}
     uses: ./.github/workflows/sanity-tests.yaml
     secrets: inherit
     with:
@@ -125,6 +115,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       enable-watcher: ${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' }}
       enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
+      enable-llk-sanitizer: ${{ needs.determine-debug-flags.outputs.enable-llk-sanitizer == 'true' }}
       run-wormhole: ${{ inputs.run-wormhole-tests || github.event_name == 'schedule' }}
       run-blackhole: ${{ inputs.run-blackhole-tests || github.event_name == 'schedule' }}
       run-sim: false # ttsim requires gcc-12 which is not available on Ubuntu 24.04

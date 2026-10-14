@@ -1,5 +1,6 @@
 # LLK Sanitizer Skip List
-# Tests deselected on hardware when the LLK sanitizer is on (see ttnn_sanitizer_tests.yaml).
+# Tests deselected on hardware TTNN legs when the LLK sanitizer is on
+# (see .github/workflows/ttnn-sanity-tests-impl.yaml).
 #
 # Structure: same as ttsim-skip-list.yaml — one section per architecture, each entry a
 # pytest node id or file. Tests that apply to all architectures are duplicated in each section.

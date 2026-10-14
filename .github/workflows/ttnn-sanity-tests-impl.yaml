@@ -41,15 +41,10 @@ on:
         type: boolean
         default: false
       enable-llk-sanitizer:
-        description: "Enable the LLK sanitizer (implies LLK asserts); deselects tests/pipeline_reorg/llk-sanitizer-skip-list.yaml on hardware legs"
+        description: "Enable LLK sanitizer"
         required: false
         type: boolean
         default: false
-      tests-yaml:
-        description: "Test-group list to build the matrix from"
-        required: false
-        type: string
-        default: "./tests/pipeline_reorg/ttnn_sanity_tests.yaml"
       ref:
         required: false
         type: string
@@ -110,14 +105,12 @@ jobs:
   load-test-matrix:
     runs-on: ubuntu-slim
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
-      sim-libs: ${{ steps.build-matrix.outputs.sim-libs }}
+      matrix: ${{ steps.llk-sanitizer.outputs.matrix || steps.build-matrix.outputs.matrix }}
+      sim-libs: ${{ inputs.enable-llk-sanitizer && '[]' || steps.build-matrix.outputs.sim-libs }}
       skip-args-wormhole_b0: ${{ steps.skip-list.outputs.skip-args-wormhole_b0 }}
       skip-args-blackhole: ${{ steps.skip-list.outputs.skip-args-blackhole }}
-      san-skip-args-wormhole_b0: ${{ steps.san-skip-list.outputs.skip-args-wormhole_b0 }}
-      san-skip-args-blackhole: ${{ steps.san-skip-list.outputs.skip-args-blackhole }}
     env:
-      TESTS_YAML_PATH: ${{ inputs.tests-yaml || './tests/pipeline_reorg/ttnn_sanity_tests.yaml' }}
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn_sanity_tests.yaml
       TTSIM_SKIP_LIST_YAML: ./tests/pipeline_reorg/ttsim-skip-list.yaml
       LLK_SANITIZER_SKIP_LIST_YAML: ./tests/pipeline_reorg/llk-sanitizer-skip-list.yaml
     steps:
@@ -159,21 +152,27 @@ jobs:
               print(f"skip-args-{arch}={args}")
           PY
 
-      # Same shape as the TTSim list above, for tests the LLK sanitizer cannot run yet
-      # (unsupported/untagged LLK APIs). Applied on hardware legs only, and only when the
-      # sanitizer is on. See tests/pipeline_reorg/llk-sanitizer-skip-list.yaml.
-      - name: Load LLK sanitizer skip list
-        id: san-skip-list
+      # LLK sanitizer: hardware legs of the groups marked `llk_sanitizer: true` in the tests yaml,
+      # with llk-sanitizer-skip-list.yaml appended to each cmd as --deselect args.
+      - name: Restrict matrix for the LLK sanitizer
+        id: llk-sanitizer
         if: ${{ inputs.enable-llk-sanitizer }}
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import os, yaml
-          import shlex
+          import json, os, shlex, yaml
           skips = yaml.safe_load(open(os.environ["LLK_SANITIZER_SKIP_LIST_YAML"])) or {}
-          for arch in ("wormhole_b0", "blackhole"):
-              # Parametrized ids carry spaces and quotes; pytest shlex-splits PYTEST_ADDOPTS.
-              args = " ".join(shlex.quote("--deselect=" + p) for p in (skips.get(arch) or []))
-              print(f"skip-args-{arch}={args}")
+          # Same per-arch args as the TTSim step, quoted: parametrized ids contain spaces and quotes.
+          skip_args = {
+              sku_prefix: " ".join(shlex.quote("--deselect=" + p) for p in (skips.get(arch) or []))
+              for sku_prefix, arch in (("wh_", "wormhole_b0"), ("bh_", "blackhole"))
+          }
+          rows = [r for r in json.loads(os.environ["MATRIX"])
+                  if r.get("llk_sanitizer") and r["sku"][:3] in skip_args]
+          for r in rows:
+              r["cmd"] += " " + skip_args[r["sku"][:3]]
+          print("matrix=" + json.dumps(rows))
           PY
 
   # Fetch ttsim simulator binaries once for the whole matrix; only needed when
@@ -407,15 +406,6 @@ jobs:
             export OMP_NUM_THREADS=2
             export MKL_NUM_THREADS=2
             export OMP_WAIT_POLICY=passive
-            # LLK sanitizer legs: deselect the tests it cannot run yet (empty unless the sanitizer is on).
-            # Shell-quoted for pytest's shlex split, so it arrives via a quoted heredoc (like TEST_GROUP_CMD).
-            SAN_SKIP_ARGS=$(cat <<'SAN_SKIP_EOF'
-            ${{ inputs.enable-llk-sanitizer && (startsWith(matrix.test-group.sku, 'wh_') && needs.load-test-matrix.outputs.san-skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'bh_') && needs.load-test-matrix.outputs.san-skip-args-blackhole) || '' }}
-            SAN_SKIP_EOF
-            )
-            if [ -n "$SAN_SKIP_ARGS" ]; then
-              export PYTEST_ADDOPTS="${PYTEST_ADDOPTS:+$PYTEST_ADDOPTS }$SAN_SKIP_ARGS"
-            fi
             # Whether THIS matrix leg should be profiled: experiment on + this is the chosen HW group.
             # (Never true on sim legs — this step's `if` already excludes sim_* SKUs.)
             PERF_PROFILE_THIS="${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}"

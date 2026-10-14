@@ -31,6 +31,11 @@ on:
         type: boolean
         default: false
         description: "Enable LLK asserts"
+      enable-llk-sanitizer:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK sanitizer"
       ref:
         required: false
         type: string
@@ -122,6 +127,7 @@ jobs:
           env-from-image: ${{ inputs.prebuilt-image != '' }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-llk-sanitizer: ${{ inputs.enable-llk-sanitizer || false }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./docker-job/.github/actions/run-with-log
