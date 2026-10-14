@@ -84,9 +84,12 @@ class Generator(WarmupForwardMixin):
         self.tt_logits_accumulated_batched = []  # Temporary list for batched prefill
         self.prev_page_table = None
         self.prefill_traces_warmup = False
-        self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
+        # Decode traces are keyed by (return_logits, sampling variant): the sampling ops are traced inside the decode
+        # trace, so each variant of the sampling graph needs its own trace (see _decode_trace_key).
+        self.trace_ids_decode = defaultdict(lambda: None)
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
+        self._last_decode_trace_key = None
         # llama_70b_galaxy/tt/generator_vllm.py:318-322 disables this for the same
         # reason: split-sampling traces lazy-capture inside the running decode trace,
         # which trips main's stricter trace rules on merged main.
@@ -456,14 +459,15 @@ class Generator(WarmupForwardMixin):
 
             sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_sampled)[0]).to(torch.int32)
 
-            # sampled_tokens has 32 entries ordered by slot.
-            sampled_tensor = sampled_tokens[0, 0, 0, :]  # Shape: [32]
+            # sampled_tokens has 32 entries ordered by slot. Its rank depends on the sampling graph that ran
+            # (argmax-only returns [1, 1, 32]), so flatten rather than index.
+            sampled_tensor = sampled_tokens.reshape(-1)[: self.model_args.max_batch_size]  # Shape: [32]
             output_toks = sampled_tensor[empty_slots]
 
             if tt_log_probs is not None:
                 tt_lp = tt_log_probs
                 log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_lp)[0])
-                prefill_log_probs = log_probs_torch[0, 0, 0, :][empty_slots]
+                prefill_log_probs = log_probs_torch.reshape(-1)[: self.model_args.max_batch_size][empty_slots]
 
         if return_logits:
             # TODO: the current solution runs the argmax even if we are returning logits
@@ -671,6 +675,7 @@ class Generator(WarmupForwardMixin):
 
             sampling_module = self.model.sampling
             sampling_module.reset_sampling_params(sampling_params)
+            self._canonicalize_sampling_variant()
             if reset_batch:
                 sampling_module.reset_prompt_tokens(prompt_tokens)
                 sampling_module.reset_output_state(output_tokens)
@@ -809,6 +814,38 @@ class Generator(WarmupForwardMixin):
 
         return tt_out_trace
 
+    def _canonicalize_sampling_variant(self):
+        """Keep the set of reachable decode sampling graphs equal to the set warmup captures.
+
+        Warmup sweeps: the argmax-only graph (plain greedy), and the general top-k graph for every
+        (penalties, log_probs) combination. The sampling module would also pick the argmax-only graph for greedy
+        rows that carry penalties or log-probs, a variant warmup never captures (capturing one while serving would
+        allocate behind live traces). The general graph handles greedy rows too (k=1), so use it there.
+        """
+        sampling = self.model.sampling
+        if (sampling._penalties_active or getattr(sampling, "_log_probs_active", False)) and (
+            sampling.tt_sampling._force_argmax_sampling
+        ):
+            sampling.tt_sampling._force_argmax_sampling = False
+
+    def _decode_trace_key(self, return_logits):
+        """Key of the decode trace for the sampling graph that is currently configured.
+
+        The sampling ops run inside the decode trace, so the graph baked into a trace is fixed at capture time:
+        argmax-only vs general top-k, with or without penalties, with or without log-probs.
+        """
+        if return_logits:
+            return (True, None)
+        sampling = self.model.sampling
+        return (
+            False,
+            (
+                bool(sampling.tt_sampling.force_argmax_sampling),
+                bool(sampling._penalties_active),
+                bool(getattr(sampling, "_log_probs_active", False)),
+            ),
+        )
+
     def _decode_easy_trace_text(
         self,
         tokens,
@@ -824,8 +861,9 @@ class Generator(WarmupForwardMixin):
         Run decode forward text with tracing
         """
         tokens = tokens.view(-1, 1)
-        # The trace is different depending on whether we are returning logits or sampling on device
-        if not self.trace_ids_decode[return_logits]:
+        # One trace per (return_logits, sampling variant).
+        key = self._decode_trace_key(return_logits)
+        if not self.trace_ids_decode[key]:
             trace_id, tt_out_tok, *device_inputs = self._capture_trace_text(
                 tokens,
                 current_pos,
@@ -835,9 +873,13 @@ class Generator(WarmupForwardMixin):
                 is_page_table_sharded=is_page_table_sharded,
                 return_logits=return_logits,
             )
-            self.trace_ids_decode[return_logits] = trace_id
-            self.trace_inputs_decode[return_logits] = device_inputs
-            self.trace_output_decode[return_logits] = tt_out_tok
+            self.trace_ids_decode[key] = trace_id
+            self.trace_inputs_decode[key] = device_inputs
+            self.trace_output_decode[key] = tt_out_tok
+        if key != self._last_decode_trace_key:
+            # Each trace owns its input buffers (tokens, positions, rope indices, page table); they hold stale
+            # values after another trace ran, so a switch always reloads them from the host.
+            reset_inputs = True
         if reset_inputs:
             host_inputs = self.model.prepare_decode_inputs_host(
                 tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
@@ -845,22 +887,23 @@ class Generator(WarmupForwardMixin):
             shard_specs = self.model.prepare_decode_shard_configs(is_cur_pos_sharded, is_page_table_sharded)
             device_inputs = copy_host_to_device(
                 host_tensors=host_inputs,
-                device_tensors=self.trace_inputs_decode[return_logits],
+                device_tensors=self.trace_inputs_decode[key],
                 shard_specs=shard_specs,
             )
         trace_tok_rm = self._decode_forward_trace_text(
-            self.trace_ids_decode[return_logits],
-            self.trace_inputs_decode[return_logits],
-            self.trace_output_decode[return_logits],
+            self.trace_ids_decode[key],
+            self.trace_inputs_decode[key],
+            self.trace_output_decode[key],
             tokens,
             current_pos,
             page_table=page_table,
         )
+        self._last_decode_trace_key = key
 
         if self.enable_split_sampling and not return_logits:
             return self.model.sampling.sample(
                 logits=trace_tok_rm[0],
-                tt_out_tok=self.trace_inputs_decode[return_logits][0],
+                tt_out_tok=self.trace_inputs_decode[key][0],
             )
 
         return trace_tok_rm
@@ -999,6 +1042,33 @@ class Generator(WarmupForwardMixin):
             )
         finally:
             self.long_isl_warmup_seqlens = previous_long_isl_warmup
+        if can_sample_on_device and not enable_trace:
+            self._warmup_prefill_sampling(kv_cache, greedy_only)
+
+    def _warmup_prefill_sampling(self, kv_cache, greedy_only):
+        """Compile the on-device first-token sampling of prefill for every sampling variant warmup covers.
+
+        The sampling ops run eagerly after the (traced) prefill forward and depend on the sampling variant
+        (argmax-only, general top-k, penalties, log-probs). Compiling one on a live request would allocate kernel
+        cache entries behind live traces, so do it here, once, before any trace is captured.
+        """
+        warmup_page_table = torch.zeros(1, 1, dtype=torch.int32)
+        warmup_tokens = torch.zeros(1, 128, dtype=torch.long)
+        warmup_prompt_lens = torch.tensor([128], dtype=torch.long)
+        for sampling_params in self._create_sampling_params(True, 1, greedy_only=greedy_only):
+            if sampling_params is None:
+                continue
+            logger.info(f"Warming up prefill sampling for sampling params: {sampling_params}")
+            self.prefill_forward_text(
+                warmup_tokens,
+                warmup_page_table,
+                kv_cache,
+                warmup_prompt_lens,
+                False,
+                sampling_params,
+                [0],
+                None,
+            )
 
     ## Destructor (used to delete ttnn trace if exists)
 

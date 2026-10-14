@@ -284,17 +284,24 @@ def run_olmo_demo(
         # ── Actual prefill ───────────────────────────────────────────────
         logger.info("Starting prefill...")
         profiler.start("inference_prefill", iteration=batch_idx)
+        # Debug: OLMO_PREFILL_SAMPLING=1 samples the first token on device with the request's sampling params (the path
+        # the vLLM server uses); the default returns logits and takes the argmax on host.
+        prefill_device_sampling = os.environ.get("OLMO_PREFILL_SAMPLING") == "1"
         toks = generator.prefill_forward_text(
             input_tokens_prefill_pt,
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
             enable_trace=use_prefill_trace,
+            sampling_params=device_sampling_params if prefill_device_sampling else None,
         )
 
-        # toks is logits when sampling_params=None — take argmax
-        prefilled_token = toks[:, :, :].argmax(dim=-1).view(-1, 1)
-        if dump_logits_path:
+        if prefill_device_sampling:
+            prefilled_token = (toks[0] if isinstance(toks, tuple) else toks).reshape(-1, 1).to(torch.int64)
+        else:
+            # toks is logits when sampling_params=None — take argmax
+            prefilled_token = toks[:, :, :].argmax(dim=-1).view(-1, 1)
+        if dump_logits_path and not prefill_device_sampling:
             dumped_logits["prefill"] = toks.reshape(toks.shape[0], -1)[:batch_size].to(torch.float32).clone()
         profiler.end("inference_prefill", iteration=batch_idx)
         logger.info("Prefill finished")

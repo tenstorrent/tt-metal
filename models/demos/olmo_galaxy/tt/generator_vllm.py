@@ -229,47 +229,6 @@ def initialize_vllm_text_transformer_olmo(
     return tt_model, model_args
 
 
-def _sample_first_tokens(logits, sampling_params):
-    """Sample one token per row of host logits [B, V] with the request's temperature / top_k / top_p / seed.
-
-    Rows with temperature 0 (or top_k 1) are greedy. Penalties are not applied to the first token.
-    """
-    num_rows = logits.shape[0]
-
-    def per_row(values, default):
-        if values is None:
-            return [default] * num_rows
-        values = list(values)
-        return [values[i] if i < len(values) and values[i] is not None else default for i in range(num_rows)]
-
-    temperature = per_row(getattr(sampling_params, "temperature", None), 0.0)
-    top_k = per_row(getattr(sampling_params, "top_k", None), 1)
-    top_p = per_row(getattr(sampling_params, "top_p", None), 1.0)
-    seeds = per_row(getattr(sampling_params, "seed", None), None)
-
-    tokens = torch.empty(num_rows, dtype=torch.int64)
-    for i in range(num_rows):
-        row = logits[i].float()
-        if temperature[i] <= 0 or top_k[i] == 1:
-            tokens[i] = row.argmax()
-            continue
-        probs = torch.softmax(row / temperature[i], dim=-1)
-        if 0 < top_k[i] < probs.numel():
-            kth = torch.topk(probs, int(top_k[i])).values[-1]
-            probs = torch.where(probs >= kth, probs, torch.zeros_like(probs))
-        if top_p[i] < 1.0:
-            sorted_probs, sorted_idx = torch.sort(probs, descending=True)
-            keep = (torch.cumsum(sorted_probs, dim=-1) - sorted_probs) < top_p[i]
-            mask = torch.zeros_like(probs, dtype=torch.bool)
-            mask[sorted_idx[keep]] = True
-            probs = torch.where(mask, probs, torch.zeros_like(probs))
-        generator = None
-        if seeds[i] is not None:
-            generator = torch.Generator().manual_seed(int(seeds[i]))
-        tokens[i] = torch.multinomial(probs / probs.sum(), 1, generator=generator)
-    return tokens
-
-
 def input_processor_for_llama_text(ctx, inputs):
     return inputs
 
@@ -434,34 +393,10 @@ class OLMo3ForCausalLM(Generator):
         return self.model_args.model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
-        # Root-cause fix: never run on-device sampling during prefill for OLMo.
-        #
-        # The shared Generator.prefill_forward_text on-device-sampling branch
-        # does: switch_mode("decode") -> sampling_module.reset_sampling_params
-        # -> reset_prompt_tokens -> reset_output_state -> seed_manager.reset_seed.
-        # reset_sampling_params calls reset_trace() whenever force_argmax_sampling
-        # flips (models/common/sampling/generator.py L202-203), which wipes every
-        # decode sampling trace captured during warmup. The previous workaround
-        # (cycling modes and clearing decode/sampling traces after every request)
-        # just triggered recapture on the next request, defeating warmup entirely.
-        #
-        # With sampling_params=None, prefill_forward_text sets return_logits=True
-        # (generator.py L172), skips the on-device-sampling block, and leaves
-        # decode + sampling module state untouched. Decode traces captured during
-        # warmup stay valid across prefill->decode for every subsequent request.
-        # Host-side argmax on the single last-token logits vector is cheap and
-        # is what text_olmo_demo.py already does (verified up to 32K ISL).
-        # Sampling params (temperature, top_k, top_p, penalties) are still
-        # honored on-device from the second token onwards via decode sampling.
-        sampling_params = kwargs.pop("sampling_params", None)
-        logits = super().prefill_forward_text(*args, **kwargs)
-        if sampling_params is None:
-            # The plugin selected host sampling for this batch (e.g. a stochastic request without a top_k the device
-            # sampler supports): it samples from the logits itself.
-            return logits
-        # Device sampling was requested: the plugin expects sampled tokens. The prefill logits are already on host,
-        # so sample the first token here with the request's own parameters.
-        return _sample_first_tokens(logits[:, -1, :], sampling_params)
+        # The plugin passes sampling_params when it samples on device: the generator then samples the first token on
+        # device (per-user params scattered to the users' batch slots) and returns tokens. Without it (host
+        # sampling) it returns the logits for the plugin's host sampler.
+        return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(
         self,

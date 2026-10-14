@@ -23,15 +23,21 @@ cd vllm-tt-plugin && source docs/install-vllm-tt.sh      # vLLM 0.30.0 (VLLM_TAR
 * KV cache is allocated **bf16**, like the demo (`allocate_vllm_kv_cache_bf16`); the shared helper allocates bfloat8_b.
 * The KV pool is 160K tokens (`get_max_tokens_all_users`): with the generic 131072 a batch of 32 users x 4K tokens fills
   ~98% of the pool and the device timed out.
-* Prefill returns host-sampled first tokens (honouring the request's temperature / top_k / top_p / seed) when the plugin
-  asks for device sampling, and the raw logits when it asks for host sampling.
+* All sampling is on device. Prefill samples the first token with the generator's on-device branch (per-user params
+  scattered to the users' batch slots); decode samples inside the traced step. The sampling ops are baked into the
+  decode trace, so the generator keeps one decode trace per sampling variant -- argmax-only (plain greedy), and the
+  general top-k graph for each (penalties, log-probs) combination -- and warmup captures all of them
+  (`_decode_trace_key`, `_canonicalize_sampling_variant`). Switching variants reloads the new trace's inputs. Without
+  this the first-captured variant silently served every request (penalties were ignored). Warmup also compiles the
+  prefill sampling for each variant (`_warmup_prefill_sampling`). When the plugin samples on host (e.g. a `top_k`
+  above the device limit) prefill returns the logits instead.
 
 ## Run
 
 Direct (no tt-inference-server):
 
 ```bash
-MESH_DEVICE=TG HF_MODEL=<weights dir> TT_CACHE_PATH=<cache dir> TT_LEAN_DECODE_WARMUP=1 \
+MESH_DEVICE=TG HF_MODEL=<weights dir> TT_CACHE_PATH=<cache dir> \
 EXTRA_MODELS_DIR=$TT_METAL_HOME/models/demos/olmo_galaxy/vllm_models \
 vllm serve <weights dir> --served-model-name allenai/Olmo-3.1-32B-Think --max-model-len 65536 \
   --max-num-seqs 32 --block-size 64 --override-generation-config '{"top_k": 32}' \
@@ -57,23 +63,25 @@ it, and `top_k: 0` requests the full distribution (host sampling).
 
 ## Measured (single unpaired runs, `vllm bench serve --dataset-name random --ignore-eos`, 32 concurrent)
 
-| workload | TPOT mean | notes |
+| workload (through tt-inference-server) | TPOT mean | notes |
 |---|---|---|
-| 128 in / 128 out, greedy | 42.4 ms (23.6 tok/s/user) | demo `batch-32`: 38.3 ms (26.1 tok/s/user) |
-| 128 / 128, temperature 0.6, top_p 0.95 (default top_k 32) | 42.8 ms | device sampling |
-| same with top_k unset and no server default | 127 ms | host sampling |
-| 2048 / 128 | 51 ms | |
-| 4096 / 128 | P99 ITL 55 ms | 64 requests, no failures |
+| 128 in / 128 out, greedy | 40.7 ms (24.6 tok/s/user) | demo `batch-32`: 38.3 ms (26.1 tok/s/user); TTFT 1.34 s |
+| 128 / 128, temperature 0.6, top_p 0.95 (default top_k 32) | 42.6 ms | general top-k graph, on device |
+| same with top_k unset and no server default | ~127 ms | host sampling (measured earlier) |
+| 2048 / 128 | 48.8 ms | |
+| 4096 / 128 | P99 ITL 53 ms | 64 requests, no failures |
 
-The ~4 ms/token gap to the demo is the synchronous scheduling of the legacy decode contract (the demo overlaps host
+Mixed-variant stress (greedy, sampled, seeds, frequency/presence/repetition penalties) at 32 concurrent: 96/96 requests
+complete with the right token counts; penalties visibly change a repetitive prompt (hello fraction 1.00 -> 0.02).
+
+The remaining ~2 ms/token gap to the demo is the synchronous scheduling of the legacy decode contract (the demo overlaps host
 work with the device step). Closing it needs the explicit reload contract (`decode_input_update_contract = 1`,
 `supports_async_decode`) in `tt/generator.py`; see `models/demos/llama3_70b_galaxy/tt/generator.py: decode_forward`.
 
-Long context through the server: needle retrieval passes at ~28K and ~57K prompt tokens.
+Long context through the server: needle retrieval passes at ~28K and ~57K prompt tokens (greedy) and ~27K (sampled).
 
 ## Known issues
 
 * Batch-32 decode is not bit-reproducible run to run on the test host; localized to one chip's ring matmul
   (`bringup/olmo3/LOG.md`). The effect is ~1 bf16 ulp on one output column.
-* Penalties are not applied to the first token (it is sampled on host from the prefill logits).
 * Async scheduling / speculative decoding / prefix caching are not supported.
