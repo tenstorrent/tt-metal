@@ -29,8 +29,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/distributed_context.hpp
     api/tt-metalium/distributed_host_buffer.hpp
     api/tt-metalium/experimental/allocation/allocation.hpp
-    api/tt-metalium/experimental/allocation/device_span.hpp
-    api/tt-metalium/experimental/allocation/utils.hpp
     api/tt-metalium/experimental/allocation_context.hpp
     api/tt-metalium/experimental/allocator.hpp
     api/tt-metalium/experimental/dispatch_telemetry.hpp
