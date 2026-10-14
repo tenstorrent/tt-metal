@@ -45,6 +45,7 @@ file(
     roll/device/kernels/*.cpp
     reshape_view/device/device/*.cpp
     reshape_view/codegen/kernels/*.cpp
+    reshape_view/codegen/kernels/*.h
     scatter/device/kernels/*.cpp
     scatter/device/kernels/*.hpp
     sharded/device/kernels/*.cpp

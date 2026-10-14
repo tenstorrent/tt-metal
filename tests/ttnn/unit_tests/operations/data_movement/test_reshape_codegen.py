@@ -79,6 +79,13 @@ _PATHS = [
     ("tile_rows_int32", [1, 64, 1024], [1, 64, 8, 128], ttnn.int32, ttnn.TILE_LAYOUT),
     ("tile_rows_uint32", [1, 64, 1024], [1, 64, 8, 128], ttnn.uint32, ttnn.TILE_LAYOUT),
     ("tile_rows_uint16", [1, 64, 1024], [1, 64, 8, 128], ttnn.uint16, ttnn.TILE_LAYOUT),
+    # Row-major stick program: dividing widths.
+    ("rm_split", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ("rm_merge_uint32", [256, 2, 64], [256, 128], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+    # Row-major slab program: widths that do not divide, and dividing widths whose stick program does not fit L1.
+    ("rm_arbitrary_bf16", [64, 97], [97, 64], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ("rm_arbitrary_fp32", [64, 97], [97, 64], ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ("rm_slab_dividing", [2, 409600], [4, 204800], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
 ]
 
 
@@ -94,8 +101,8 @@ def test_reshape_codegen_bit_exact(device, path, in_shape, out_shape, dtype, lay
 
 @pytest.mark.parametrize(
     "path,in_shape,out_shape,dtype,layout",
-    [p for p in _PATHS if p[0] == "tile_rows"],
-    ids=["tile_rows"],
+    [p for p in _PATHS if p[0] in ("tile_rows", "rm_split", "rm_arbitrary_bf16")],
+    ids=["tile_rows", "rm_split", "rm_arbitrary_bf16"],
 )
 def test_reshape_codegen_sub_core_grids(device, path, in_shape, out_shape, dtype, layout):
     source = _make(in_shape, dtype)
@@ -141,9 +148,20 @@ def test_reshape_codegen_edge_shapes(device, case, in_shape, out_shape, dtype):
     _assert_bits(padded, codegen.cpu().to_torch_with_padded_shape(), dtype)
 
 
-# (id, in shape, out shape, dtype, layout, expected route). Shapes outside the tile-rows scope, and shapes
-# is_demoted sends back, run native.
+# (id, in shape, out shape, dtype, layout, expected route). Row-major demotion is decided by stick sizes
+# (rm_native_faster) and taken only where native runs and the stick program fits (demotion_applies). TILE demotion is
+# decided by the tile plan (is_demoted); shapes the tile-rows program does not take run native.
 _ROUTES = [
+    # 512 B -> 256 B split: codegen keeps every short write in flight.
+    ("rm_split", [512, 256], [1024, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
+    # 256 B -> 512 B DRAM merge: from 256 B native's two kernels read faster.
+    ("rm_merge_demoted", [512, 128], [256, 256], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "native"),
+    # Same merge in uint16, which native rejects.
+    ("rm_merge_uint16", [512, 128], [256, 256], ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
+    # A demoted merge whose stick program does not fit L1 runs the slab program, which beats native.
+    ("rm_merge_slab", [64, 50001], [32, 100002], ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
+    # Widths that do not divide are never demoted.
+    ("rm_arbitrary", [64, 97], [97, 64], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
     # Head split: batching cuts source reads 32x.
     ("tile_rows", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
     # 4-head merge: the cut is only 4x, but each output tile reads 24 fewer padded source tiles.
@@ -153,7 +171,6 @@ _ROUTES = [
     ("tile_width_uint16", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.uint16, ttnn.TILE_LAYOUT, "codegen"),
     # A width that is not a multiple of 32 is not a tile-row permutation.
     ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "native"),
-    ("row_major", [512, 256], [1024, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "native"),
 ]
 
 
@@ -170,10 +187,41 @@ def test_reshape_codegen_routing(device, case, in_shape, out_shape, dtype, layou
     assert device.num_program_cache_entries() == entries, f"auto did not take {route}"
 
 
+# (id, source sticks as a multiple of the grid plus an offset, pieces per source stick, expected route). An L1 split of
+# 3-element pieces (6 or 12 B), a size where the port moves one source stick faster than native.
+_PAIRED_ROUTES = [
+    # One source stick per core: the port's single pass beats native's single kernel.
+    ("one_per_core", 1, 0, 8, "codegen"),
+    # Two per core: native moves one on each of its kernels, the port both through one pipeline.
+    ("two_per_core", 1, 3, 8, "native"),
+    ("two_per_core_full", 2, 0, 8, "native"),
+    # Three per core: native's busier kernel moves two and the port catches up.
+    ("three_per_core", 2, 1, 8, "codegen"),
+    # Enough pieces per stick that the port's cheaper repack pays for the second stick.
+    ("two_per_core_long", 1, 3, 43, "codegen"),
+]
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("case,grids,extra,ratio,route", _PAIRED_ROUTES, ids=[r[0] for r in _PAIRED_ROUTES])
+def test_reshape_codegen_routing_paired_l1_split(device, case, grids, extra, ratio, route, dtype):
+    grid = device.compute_with_storage_grid_size()
+    sticks = grids * grid.x * grid.y + extra
+    in_shape, out_shape = [sticks, ratio * 3], [sticks, ratio, 3]
+    source = _make(in_shape, dtype)
+    x = _to_device(device, source, dtype, ttnn.ROW_MAJOR_LAYOUT, _L1)
+    expected_leg = _force_codegen if route == "codegen" else _force_native
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(expected_leg(x, out_shape, memory_config=_L1)), dtype)
+    entries = device.num_program_cache_entries()
+    out = ttnn.reshape(x, out_shape, memory_config=_L1)
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
+    assert device.num_program_cache_entries() == entries, f"auto did not take {route}"
+
+
 @pytest.mark.parametrize(
     "path,in_shape,out_shape,dtype,layout",
-    [p for p in _PATHS if p[0] == "tile_rows"],
-    ids=["tile_rows"],
+    [p for p in _PATHS if p[0] in ("tile_rows", "rm_split", "rm_arbitrary_bf16")],
+    ids=["tile_rows", "rm_split", "rm_arbitrary_bf16"],
 )
 def test_reshape_codegen_cache_hit_new_addresses(device, path, in_shape, out_shape, dtype, layout):
     source = _make(in_shape, dtype)
@@ -278,10 +326,37 @@ def test_reshape_codegen_routes_native_when_no_plan_fits_l1(device, expect_error
     ttnn.deallocate(hog)
 
 
+@pytest.mark.parametrize("mem", [_DRAM, _L1], ids=["dram", "l1"])
+@pytest.mark.parametrize(
+    "path,in_shape,out_shape,dtype,layout",
+    [p for p in _PATHS if p[0] in ("rm_split", "rm_arbitrary_bf16")],
+    ids=["rm_split", "rm_arbitrary_bf16"],
+)
+def test_reshape_codegen_rm_cache_hit_changed_free_l1(device, path, in_shape, out_shape, dtype, layout, mem):
+    # Row-major buffers are sized from the L1 free at launch, so the same call under less free L1 must not reuse a
+    # program planned for more.
+    source = _make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, layout, mem)
+    out = _force_codegen(x, out_shape, memory_config=mem)
+    _assert_bits(expected, ttnn.to_torch(out), dtype)
+    ttnn.deallocate(out)
+    for bytes_per_core in (256 * 1024, 512 * 1024):
+        hog = _l1_hog(device, bytes_per_core)
+        out = _force_codegen(x, out_shape, memory_config=mem)
+        _assert_bits(expected, ttnn.to_torch(out), dtype)
+        ttnn.deallocate(out)
+        ttnn.deallocate(hog)
+    # With the hogs freed the first plan comes back and hits its program.
+    grown = device.num_program_cache_entries()
+    out = _force_codegen(x, out_shape, memory_config=mem)
+    _assert_bits(expected, ttnn.to_torch(out), dtype)
+    assert device.num_program_cache_entries() == grown
+
+
 _OUT_OF_SCOPE = [
     ("bfloat8_b", [1, 1, 64, 128], [1, 1, 128, 64], ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
     ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
-    ("row_major", [512, 256], [1024, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
 ]
 
 

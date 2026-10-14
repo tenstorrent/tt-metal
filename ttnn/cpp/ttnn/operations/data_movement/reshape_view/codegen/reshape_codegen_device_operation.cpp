@@ -23,8 +23,11 @@ void require_device_input(const Tensor& input) {
 }  // namespace
 
 ReshapeCodegenDeviceOperation::program_factory_t ReshapeCodegenDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ReshapeCodegenTileRowsProgramFactory{};
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    if (tensor_args.input.layout() == Layout::TILE) {
+        return ReshapeCodegenTileRowsProgramFactory{};
+    }
+    return ReshapeCodegenProgramFactory{};
 }
 
 void ReshapeCodegenDeviceOperation::validate_on_program_cache_miss(
@@ -38,7 +41,14 @@ void ReshapeCodegenDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.output_mem_config,
         operation_attributes.sub_core_grids);
     TT_FATAL(reason == nullptr, "ReshapeCodegen: {}", reason);
-    const auto& layout = operation_attributes.plan.tile_rows.layout;
+    const auto& plan = operation_attributes.plan;
+    if (input.layout() == Layout::ROW_MAJOR) {
+        TT_FATAL(
+            plan.rm.has_value() || plan.rm_arbitrary.has_value(),
+            "ReshapeCodegen was launched without a row-major plan");
+        return;
+    }
+    const auto& layout = plan.tile_rows.layout;
     TT_FATAL(
         input.buffer()->num_pages() == layout.num_input_pages,
         "Reshape input has {} tiles, the tile-row plan expects {}",
@@ -62,16 +72,32 @@ ReshapeCodegenDeviceOperation::tensor_return_value_t ReshapeCodegenDeviceOperati
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-// With the full plan fitting, the hashed rung is the same constant on every call, so calls share programs exactly as
-// the attributes and tensor args alone would key them. A call no plan fits hashes rung 0, which never has an entry:
-// it misses and the program factory raises.
+// With the full tile-rows plan fitting, the hashed rung is the same constant on every call, so calls share programs
+// exactly as the attributes and tensor args alone would key them. A call no plan fits hashes rung 0, which never has
+// an entry: it misses and the program factory raises.
 ttsl::hash::hash_t ReshapeCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto chosen = ttnn::operations::data_movement::reshape_codegen::live_tile_rows_choice(
-        tensor_args.input, operation_attributes.logical_output_shape, operation_attributes.plan.tile_rows);
-    const uint32_t max_in = chosen ? chosen->max_in : 0;
-    const uint32_t staged_batches = chosen ? chosen->staged_batches : 0;
-    return ttsl::hash::hash_objects_with_default_seed(operation_attributes, tensor_args, max_in, staged_batches);
+    const auto& plan = operation_attributes.plan;
+    if (tensor_args.input.layout() == Layout::TILE) {
+        const auto chosen = ttnn::operations::data_movement::reshape_codegen::live_tile_rows_choice(
+            tensor_args.input, operation_attributes.logical_output_shape, plan.tile_rows);
+        const uint32_t max_in = chosen ? chosen->max_in : 0;
+        const uint32_t staged_batches = chosen ? chosen->staged_batches : 0;
+        return ttsl::hash::hash_objects_with_default_seed(operation_attributes, tensor_args, max_in, staged_batches);
+    }
+    uint32_t cb_depth = 0;
+    uint32_t push_sticks = 0;
+    // Dividing widths fall back to the slab program when the stick program does not fit live L1.
+    bool rm_arbitrary = false;
+    if (plan.rm.has_value()) {
+        cb_depth = plan.rm->cb_depth;
+        push_sticks = plan.rm->push_sticks;
+    } else if (plan.rm_arbitrary.has_value()) {
+        cb_depth = plan.rm_arbitrary->batch;
+        rm_arbitrary = true;
+    }
+    return ttsl::hash::hash_objects_with_default_seed(
+        operation_attributes, tensor_args, cb_depth, push_sticks, rm_arbitrary);
 }
 
 Tensor reshape_codegen(

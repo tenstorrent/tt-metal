@@ -39,23 +39,25 @@ bool supported_by_codegen(
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
 bool supported_by_codegen(const Tensor& input, const ttnn::Shape& logical_output_shape);
 
-// Perf routing only: native's tiled reshape measures faster than the tile-rows program, so routing sends the call
-// to native. True unless the full plan cuts reads 8x, saves 16+ reads per output tile, or copies whole face halves
-// over more than one native round; thresholds fitted on Blackhole. Never true for uint16, which native rejects.
+// Perf routing only, TILE: native's tiled reshape measures faster than the tile-rows program, so routing sends the
+// call to native. True unless the full plan cuts reads 8x, saves 16+ reads per output tile, or copies whole face
+// halves over more than one native round; thresholds fitted on Blackhole. Never true for uint16, which native rejects,
+// nor for ROW_MAJOR, whose demotion routed_launch_plan decides from stick sizes and the static fit.
 bool is_demoted(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
 
-// The plan when routing sends this call to codegen (supported_by_codegen && !is_demoted, and some plan fits the
-// L1 free once the output is allocated), else nullopt.
+// The plan when routing sends this call to codegen (supported_by_codegen, not demoted, and some plan fits the L1 free
+// once the output is allocated), else nullopt.
 std::optional<LaunchPlan> routed_launch_plan(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
-// The plan for the forced entry, which ignores is_demoted; raises with unsupported_reason's text otherwise.
+// The plan for the forced entry, which ignores demotion; raises with unsupported_reason's text otherwise, or when no
+// row-major program fits the L1 free at launch.
 LaunchPlan forced_launch_plan(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
