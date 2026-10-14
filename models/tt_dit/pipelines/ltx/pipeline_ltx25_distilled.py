@@ -36,6 +36,7 @@ from ...utils.ltx import (
     LTX25_VIDEO_VAE_CONV_DEFAULT,
     default_ltx25_path,
     default_ltx25_video_vae,
+    ltx25_text_encoder_is_stale,
 )
 from .pipeline_ltx_distilled import LTXDistilledPipeline
 
@@ -234,7 +235,12 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
         ``diffusion_decoder`` selects the DiffVAE over the conv decoder; ``diffvae_options`` (a
         :class:`DiffVAEOptions`, through ``kwargs``) says how it runs.
         """
-        text_encoder = text_encoder or gemma_path or default_ltx25_path(LTX25_TEXT_ENCODER)
+        text_encoder = (
+            text_encoder
+            or gemma_path
+            or os.environ.get("LTX25_TEXT_ENCODER_PATH")
+            or default_ltx25_path(LTX25_TEXT_ENCODER)
+        )
         transformer = transformer or checkpoint_name or default_ltx25_path(LTX25_DISTILLED_TRANSFORMER)
         video_vae = video_vae or default_ltx25_video_vae(diffusion=False)
         diffvae = default_ltx25_video_vae(diffusion=True) if diffusion_decoder else None
@@ -262,6 +268,13 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
             raise FileNotFoundError(f"LTX-2.5 video VAE {video_vae} does not exist")
         if "ltx-2.3" in os.path.basename(video_vae) or "LTX-2.3" in video_vae:
             logger.warning(f"LTX-2.5 conv video VAE falling back to 2.3 monolith {video_vae}")
+        if ltx25_text_encoder_is_stale(text_encoder):
+            logger.warning(
+                f"STALE LTX-2.5 TEXT ENCODER: {text_encoder} is the pre-2026-08-17 Gemma-4 file that "
+                "Lightricks replaced (HF commit 1b92891ced) to match the 2.5 DiT. Point "
+                "LTX25_TEXT_ENCODER_PATH at text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors "
+                "from revision 49b093a39c or later."
+            )
         with safe_open(transformer, framework="pt") as f:
             version = (f.metadata() or {}).get("model_version", "?")
         logger.info(
