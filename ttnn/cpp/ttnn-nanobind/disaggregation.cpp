@@ -76,7 +76,11 @@ void bind_disaggregation_api(nb::module_& mod) {
         What kind of cached tensor a config's chunks belong to.
         Each value corresponds to one TemporalPolicy alternative.
     )")
-        .value("Kv", KvChunkTensorType::Kv, "Dense: full KV / MLA latent over [0, prefix_len).");
+        .value("Kv", KvChunkTensorType::Kv, "Dense: full KV / MLA latent over [0, prefix_len).")
+        .value(
+            "Snapshot",
+            KvChunkTensorType::Snapshot,
+            "None: fixed-size state keyed by the prefix_len it was snapshotted at (SSM / KDA state).");
 
     // KvChunkAddressTableConfig - Configuration struct
     nb::class_<KvChunkAddressTableConfig>(mod, "KvChunkAddressTableConfig", R"(

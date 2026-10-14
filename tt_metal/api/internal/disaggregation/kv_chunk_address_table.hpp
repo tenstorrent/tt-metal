@@ -45,7 +45,9 @@ static_assert(sizeof(KvCacheLocation) == 16, "KvCacheLocation must be 16 bytes f
 // alternative (how the tensor's sequence coordinate is interpreted). Only the types the chunk map
 // can currently address are listed; new values are added as their TemporalPolicy gains support.
 enum class KvChunkTensorType : uint8_t {
-    Kv = 0,  // temporal::Dense — full KV / MLA latent over [0, prefix_len)
+    Kv = 0,        // temporal::Dense — full KV / MLA latent over [0, prefix_len)
+    Snapshot = 1,  // temporal::None  — fixed-size state keyed by the prefix_len it was snapshotted at
+                   //                   (no sequence axis; SSM / KDA state)
 };
 
 // Configuration for constructing a KvChunkAddressTable.
