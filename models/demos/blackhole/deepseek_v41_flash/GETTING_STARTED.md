@@ -8,10 +8,10 @@ sampling.
 
 | | |
 |---|---|
-| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-b983060-233b250` |
+| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-e68e45f-233b250` |
 | Size | 21.4 GB on disk (5.3 GB compressed), built 2026-10-14 |
 | Access | `docker run` pulls the image automatically on a new host. Pulling needs access to the `tenstorrent` packages on ghcr.io (check the digest with `docker image inspect <image> --format '{{.RepoDigests}}'`) |
-| tt-metal | `b983060a726…` in the tag (branch `ssinghal/dsv4p1`): this guide and its runtime spec on top of `234b28cdb725e52d08becb3f1e19c60884fe66ca`, the code the image was built from (it adds the routed-expert SwiGLU clamp at every MoE site, see below; `/home/container_app_user/BUILD_INFO` in the image records `234b28cdb725…`) |
+| tt-metal | `e68e45f85da78973931b5d1d545617f91c5e16cd` (branch `ssinghal/dsv4p1`; the routed-expert SwiGLU clamp at every MoE site, see below, plus this guide, its runtime spec and the GSM8K eval scripts) |
 | tt-inference-server | `233b250e85148bc25853786aff54c0949a994b76` (branch `ssinghal/dsv4p1`) |
 | vllm-tt-plugin | `ad9eed9ad9f7295fda00b8ec788dc30b34587647` (branch `ssinghal/dsv4p1`; the scheduler no longer splits a prompt across prefill steps when the token budget holds a whole prompt) |
 | Model | [`deepseek-ai/DeepSeek-V4.1-Flash`](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash) (476 GB of safetensors, 48 shards) |
@@ -84,7 +84,7 @@ Time from `docker run` until `GET /health` returns 200:
 | Weight cache and kernel cache both populated for this configuration (a later start on the same host) | ~13 min (13.4 min, measured twice on one host) |
 | Weight cache populated, this configuration not yet run on the host (kernel cache still to fill) | ~30-33 min (29.5 and 32.6 min measured on one host: about 13 min building the 40 layers, then about 16-19 min compiling kernels and capturing the prefill and spec traces) |
 | This image, both caches populated (16-user speculative server, 40,000-token context) | 14.0 min (`docker run` to `/health`) |
-| This image with the runtime spec of this guide (131,072-token context), weight cache populated, kernel cache from earlier runs on the host | 20.1 min (`docker run` 18:47:55, `/health` 19:07:59) |
+| This image with the runtime spec of this guide (131,072-token context), weight cache populated, kernel cache from earlier runs on the host | 20.1 min (`docker run` 18:47:55, `/health` 19:07:59); 13.4 min on a repeat start of the same server (19:25:35 to 19:39:00) |
 | First start with nothing cached | not re-measured on this image; earlier first starts of the same weights took 60-90 min |
 
 Two caches make later starts fast; both are mounted in the `docker run` below:
@@ -112,7 +112,7 @@ Keep both on a disk local to the host (we used a local NVMe), not on a network f
 `docker run` pulls the image by itself the first time. To pull ahead of time:
 
 ```bash
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-b983060-233b250
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-e68e45f-233b250
 docker pull $IMAGE
 ```
 
@@ -123,7 +123,7 @@ export CKPT=/path/to/deepseek-v41-flash        # the model checkpoint (read-only
 export CACHE=/path/to/dsv41_cache              # weights/ and kernels/ below; reused across starts
 export STATE=/path/to/dsv41_state              # small scratch dirs the server writes to
 export SPEC=$PWD/assets/runtime_spec_b16_k5_131072.json   # run from models/demos/blackhole/deepseek_v41_flash/ in tt-metal (see below)
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-b983060-233b250   # or the image you built locally
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-e68e45f-233b250   # or the image you built locally
 
 mkdir -p $CKPT $CACHE/weights $CACHE/unified $CACHE/kernels $STATE/cache_root $STATE/logs $STATE/traces
 
@@ -238,7 +238,7 @@ CTX_ROOT=~/dsv41/docker-ctx \
 The script exports the sources into `$CTX_ROOT/<tt-metal-11>-<tt-inference-server-8>-<plugin-7>`, builds the
 toolchain base image `tt-metalium-ci-build:local-<tt-metal-11>` from tt-metal's own `dockerfile/docker-bake.hcl`
 (4.7 GB), then builds the server image and prints `BUILT dsv41-flash-local:<tt-metal-11>-<tt-inference-server-8>-<plugin-7>`
-(for this guide's commits: `dsv41-flash-local:234b28cdb72-233b250e-ad9eed9`).
+(for this guide's commits: `dsv41-flash-local:e68e45f85da-233b250e-ad9eed9`).
 
 | Variable / flag | Use |
 |---|---|
@@ -267,7 +267,7 @@ Notes on the build:
 Check the image:
 
 ```bash
-IMAGE=dsv41-flash-local:234b28cdb72-233b250e-ad9eed9     # the tag the script printed
+IMAGE=dsv41-flash-local:e68e45f85da-233b250e-ad9eed9     # the tag the script printed
 docker run --rm --entrypoint cat $IMAGE /home/container_app_user/BUILD_INFO
 docker run --rm --entrypoint wc $IMAGE -c /home/container_app_user/app/src/run_vllm_api_server.py   # 53132 bytes, not 0
 ```
@@ -284,7 +284,7 @@ Do steps 1 and 3 of "Launch the server" (prerequisites; checkout, caches and run
 local image in step 4:
 
 ```bash
-export IMAGE=dsv41-flash-local:234b28cdb72-233b250e-ad9eed9     # the image you built
+export IMAGE=dsv41-flash-local:e68e45f85da-233b250e-ad9eed9     # the image you built
 # step 4: the same docker run as above, which uses $IMAGE
 ```
 
@@ -356,14 +356,15 @@ IMAGE=$IMAGE CKPT=$CKPT SPEC=$PWD/assets/runtime_spec_b16_k5_131072.json STATE=$
 - **Entry script.** `assets/eval_client_entry.sh` is mounted as the client's entry point: `run.py` calls `git rev-parse HEAD` on
   its own tree, and the tree in the image is an empty `git init` owned by another user, so the script trusts it
   and commits it before starting `run.py`.
-- **Output.** The report is `$STATE/eval/workflow_logs/reports_output/evals/report_*.md` (the score table at the
-  bottom), and the raw lm-eval samples are next to it.
+- **Output.** The report is `$STATE/eval/cache_root/workflow_logs/reports_output/evals/report_*.md` (the score table at the
+  bottom); the run logs are in `$STATE/eval/cache_root/workflow_logs/run_logs/`.
 - **Time.** About 20 minutes for the 1319 questions at concurrency 16 (20.4 min measured in a container run), plus the
   first-run setup (about 15 minutes measured: managed Python, the workflow environment and the dataset; later runs skip it).
 - **Quick check.** Extra arguments go to `run.py`: `./assets/run_gsm8k_eval.sh --limit-samples-mode smoke-test` runs 8 questions.
 
-Results with this protocol: **96.29 %** on this image (16 users, speculative decoding, 40,000-token context; the same
-number from a host server and from the container run), 95.75 ± 0.56 % on the previous image. Sampling at temperature 1.0 makes a
+Results with this protocol on this image (16 users, speculative decoding): **96.29 %** with a 40,000-token context (the same
+number from a host server and from the container run) and **95.45 %** with this guide's 131,072-token server run through
+`assets/run_gsm8k_eval.sh`; 95.75 ± 0.56 % on the previous image. Sampling at temperature 1.0 makes a
 run differ from the next by about half a percent, so compare scores within that margin.
 
 ## Notes
