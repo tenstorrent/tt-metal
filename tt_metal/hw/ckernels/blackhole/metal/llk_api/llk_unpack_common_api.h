@@ -364,9 +364,10 @@ inline void llk_unpack_set_srcb_dummy_valid() {
 }
 
 /**
- * Unpack-thread halves of tile_regs_acquire / tile_regs_commit. No-ops on this architecture: the unpacker never
- * writes DEST directly, so the DEST section handshake is entirely between math and pack. Quasar's unpack-to-dest
- * path gives these a body.
+ * Unpack-thread halves of tile_regs_acquire / tile_regs_commit. No-ops on this architecture: its unpack-to-dest path
+ * (_llk_unpack_A_ with unpack_to_dest) synchronizes with math per tile on the UNPACK_TO_DEST semaphore inside the
+ * LLKs, so there is no section-level unpack handshake for these to run. Quasar's unpack-to-dest path gives them a
+ * body.
  */
 inline void llk_unpack_wait_for_dest_available() {}
 

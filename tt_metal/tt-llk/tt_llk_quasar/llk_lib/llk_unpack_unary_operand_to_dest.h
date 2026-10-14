@@ -7,7 +7,6 @@
 #include <cstdint>
 
 #include "ckernel_trisc_common.h"
-#include "llk_sync.h"
 #include "llk_unpack_common.h"
 
 using namespace ckernel;
@@ -19,7 +18,8 @@ using namespace ckernel::trisc;
  * Unpack owns the DEST section base in the unpack-to-dest path: it is the DEST producer (UNP_DEST), so it programs the
  * per-TRISC section base itself rather than letting the math middleman set it on its behalf. TriscID::Unpack selects the
  * same SEC slot the UNP_DEST client reads, regardless of which TRISC this code is compiled for. This establishes the
- * bank-0 base; @ref _llk_unpack_dest_section_done_ flips it per section in SyncHalf.
+ * bank-0 base; the section handshake's @ref _llk_sync_advance_dest_section_ flips it per section in SyncHalf
+ * (per-section sequence at @ref _llk_unpack_unary_operand_to_dest_init_).
  *
  * @note Call once per program before the first @ref _llk_unpack_unary_operand_to_dest_init_, never from a per-op init: op writers may
  *       re-run the per-op init inside their tile loop, and a reset there would pin unpack to bank 0 while pack keeps
@@ -38,7 +38,7 @@ inline void _llk_unpack_dest_init_()
  *
  * One UNPACR_DEST per run. Both the L1 and DEST tile counters auto-increment (Src/Dst_Tile_Idx_Inc = 1), so back-to-back
  * runs land consecutive tiles at consecutive DEST positions. No dvalid is set: the UNPACK_MATH / MATH_PACK section
- * handshake (@ref _llk_unpack_wait_for_dest_available_ / @ref _llk_unpack_dest_section_done_) takes its place.
+ * handshake takes its place (per-section sequence at @ref _llk_unpack_unary_operand_to_dest_init_).
  *
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is stored in the buffer descriptor table;
  *        allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
@@ -79,8 +79,12 @@ inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t bu
  *       section stays counted in one of the two semaphores from unpack write to pack release. T1 never flips the
  *       section base (unpack owns it, see @ref _llk_unpack_dest_init_).
  * @note @ref _llk_unpack_dest_init_ must have run once on this thread before the first call. Per section on this
- *       thread: @ref _llk_unpack_wait_for_dest_available_, any number of @ref _llk_unpack_unary_operand_to_dest_tile_ /
- *       @ref _llk_unpack_unary_operand_to_dest_block_, then @ref _llk_unpack_dest_section_done_.
+ *       thread: @ref _llk_sync_wait_ STALL_ON_MAX on MATH_PACK and UNPACK_MATH (a DEST bank is free), any number of
+ *       @ref _llk_unpack_unary_operand_to_dest_tile_ / @ref _llk_unpack_unary_operand_to_dest_block_, then, behind an
+ *       UNPACK0 drain, @ref _llk_sync_post_ UNPACK_MATH; SyncHalf: flip the section base
+ *       (@ref _llk_sync_advance_dest_section_). The unpack_to_dest arm of @ref _llk_unpack_unary_operand_ runs this
+ *       sequence inline; tt-metal runs it in tile_regs_acquire / tile_regs_commit (llk_unpack_wait_for_dest_available /
+ *       llk_unpack_dest_section_done, quasar llk_unpack_common_api.h).
  */
 inline void _llk_unpack_unary_operand_to_dest_init_(const std::uint32_t buf_desc_id)
 {
@@ -93,8 +97,8 @@ inline void _llk_unpack_unary_operand_to_dest_init_(const std::uint32_t buf_desc
  * @brief Unpacks one tile of a single operand directly into the math DEST register at dst_tile_idx of the current
  *        section. No synchronization.
  *
- * Any number of these calls, each at its own dst_tile_idx, form one section when bracketed by
- * @ref _llk_unpack_wait_for_dest_available_ and @ref _llk_unpack_dest_section_done_.
+ * Any number of these calls, each at its own dst_tile_idx, form one section when bracketed by the section handshake
+ * (per-section sequence at @ref _llk_unpack_unary_operand_to_dest_init_).
  *
  * @param l1_tile_idx: Index into the L1 buffer of the tile
  * @param dst_tile_idx: DEST tile index, relative to the current section base. Must be below the section's tile capacity
@@ -115,8 +119,7 @@ inline void _llk_unpack_unary_operand_to_dest_tile_(const std::uint32_t l1_tile_
  *
  * Same as num_tiles calls of @ref _llk_unpack_unary_operand_to_dest_tile_ at L1 indices l1_tile_stride apart and
  * consecutive DEST indices: the DEST counter is set once and auto-increments per MOP run, the L1 counter is set per
- * tile. Bracket with @ref _llk_unpack_wait_for_dest_available_ and @ref _llk_unpack_dest_section_done_ like the tile
- * call.
+ * tile. Bracket with the section handshake like the tile call.
  *
  * @param l1_tile_idx: Index into the L1 buffer of the first tile of the block
  * @param dst_tile_idx: DEST tile index of the first tile, relative to the current section base. The pack thread reads

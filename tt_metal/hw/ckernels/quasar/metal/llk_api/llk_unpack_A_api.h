@@ -50,7 +50,9 @@ inline constexpr ckernel::trisc::BfdResource unpack_a_bfd_resource() {
  * Otherwise uses the unary / unary-broadcast path. For the non-broadcast path the UNP_DEST routing
  * decision is made solely from the `unpack_to_dest` template parameter (no format inspection); when true,
  * all operands (including 16-bit) are routed to DEST through `_llk_unpack_unary_operand_to_dest_init_`, the
- * semaphore-synchronized unpack-to-dest primitive; otherwise `_llk_unpack_unary_operand_init_` targets UNP_A.
+ * unpack-to-dest primitive (its section handshake runs once per tile_regs_acquire / tile_regs_commit in
+ * llk_unpack_wait_for_dest_available / llk_unpack_dest_section_done, not per tile); otherwise
+ * `_llk_unpack_unary_operand_init_` targets UNP_A.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar in dest-reuse path; kept for API parity
