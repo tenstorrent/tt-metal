@@ -14,7 +14,8 @@
 //
 // RT: 0 gddr address, 1 DRISC L1 slot base, 2 BLK_BYTES, 3 N_BLOCKS, 4 SLOTS (<= 8), 5 R (<= 8), 6 landing address,
 //     7 LAND_SLOTS, 8 timing address (32 B aligned; scratch follows at +32), 9 barrier noc_x, 10 noc_y, 11 array address, 12 IDX,
-//     13 N, 14.. R x (noc_x, noc_y) of the receivers
+//     13 N, 14 MODE (0: DMA + write, 1: NoC writes only - the same L1 slots re-sent, no DMA; 2: DMA only - no writes),
+//     15.. R x (noc_x, noc_y) of the receivers
 
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
@@ -34,8 +35,8 @@ void kernel_main() {
     const uint32_t timing = get_arg_val<uint32_t>(8);
     uint32_t rx[8], ry[8];
     for (uint32_t j = 0; j < R; ++j) {
-        rx[j] = get_arg_val<uint32_t>(14 + 2 * j);
-        ry[j] = get_arg_val<uint32_t>(15 + 2 * j);
+        rx[j] = get_arg_val<uint32_t>(15 + 2 * j);
+        ry[j] = get_arg_val<uint32_t>(16 + 2 * j);
     }
     experimental::dma_set_burst_size(255);
     Noc noc;
@@ -59,17 +60,22 @@ void kernel_main() {
             }
         }
     }
+    const uint32_t mode = get_arg_val<uint32_t>(14);
+    const bool do_dma = mode != 1, do_write = mode != 2;
     const uint64_t t0 = get_timestamp();
     // prime: up to SLOTS reads in flight (FIFO completion on one stream)
     const uint32_t prime = n < slots ? n : slots;
-    for (uint32_t i = 0; i < prime; ++i) {
+    for (uint32_t i = 0; i < prime && do_dma; ++i) {
         experimental::dma_async_read(stream, gddr + i * blk, l1 + i * blk, blk);
     }
     for (uint32_t i = 0; i < n; ++i) {
         const uint32_t s = i % slots;
         const uint32_t ahead = n - i - 1 < slots - 1 ? n - i - 1 : slots - 1;  // reads still in flight after i's
-        experimental::dma_async_read_wait_n(stream, static_cast<uint8_t>(ahead));
+        if (do_dma) {
+            experimental::dma_async_read_wait_n(stream, static_cast<uint8_t>(ahead));
+        }
         const uint32_t j = i % R;
+        if (do_write) {
         noc.async_write<NocOptions::TXN_ID>(
             src,
             dst,
@@ -77,13 +83,21 @@ void kernel_main() {
             {.addr = l1 + s * blk},
             {.noc_x = rx[j], .noc_y = ry[j], .addr = land + ((i / R) % land_slots) * blk},
             NocOptVals{.trid = static_cast<uint8_t>(1 + s)});
+        }
         if (i + slots < n) {
-            noc.async_writes_flushed<NocOptions::TXN_ID>({.trid = static_cast<uint8_t>(1 + s)});
-            experimental::dma_async_read(stream, gddr + (i + slots) * blk, l1 + s * blk, blk);
+            if (do_write) {
+                noc.async_writes_flushed<NocOptions::TXN_ID>({.trid = static_cast<uint8_t>(1 + s)});
+            }
+            if (do_dma) {
+                experimental::dma_async_read(stream, gddr + (i + slots) * blk, l1 + s * blk, blk);
+            }
         }
     }
-    for (uint32_t s = 0; s < prime; ++s) {
+    for (uint32_t s = 0; s < prime && do_write; ++s) {
         noc.async_write_barrier<NocOptions::TXN_ID>({.trid = static_cast<uint8_t>(1 + s)});
+    }
+    if (do_dma && !do_write) {
+        experimental::dma_async_read_barrier(stream);
     }
     const uint64_t t1 = get_timestamp();
     CoreLocalMem<uint64_t> out(timing);

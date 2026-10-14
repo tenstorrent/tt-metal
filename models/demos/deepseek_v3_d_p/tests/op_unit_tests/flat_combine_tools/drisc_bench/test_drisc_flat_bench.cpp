@@ -23,6 +23,7 @@
 
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
@@ -146,7 +147,10 @@ TEST_F(DriscFlatBenchFixture, GateUpDelivery) {
     const uint32_t clk_mhz = MetalContext::instance().get_cluster().get_device_aiclk(dev_->get_device_ids()[0]);
     const FlatPlan& p = plan_;
     const uint32_t Ht = p.H / 32, It = p.I / 32, nk = Ht / p.kblk;
-    const uint32_t blk = p.kblk * 2 * p.np * p.tile;          // one gate/up core's block of a chunk
+    // one gate/up core's block of a chunk; DRISC_FLAT_WMULT=k sends k blocks per write (same bytes, k x larger
+    // writes and k x fewer of them: what a layout with each receiver's blocks contiguous would allow)
+    const uint32_t wmult = env_u32("DRISC_FLAT_WMULT", 1);
+    const uint32_t blk = p.kblk * 2 * p.np * p.tile * wmult;
     const uint32_t n_readers = static_cast<uint32_t>(p.gu.size()) / p.R;  // the Tensix readers this replaces
     ASSERT_EQ(n_readers, 2 * banks) << "plan with 2 readers per bank expected";
     const uint32_t ep = env_u32("DRISC_FLAT_EP", 2), slots = env_u32("DRISC_FLAT_SLOTS", 4);
@@ -154,7 +158,9 @@ TEST_F(DriscFlatBenchFixture, GateUpDelivery) {
     const NOC drisc_noc = env_u32("DRISC_FLAT_NOC", 0) ? NOC::NOC_1 : NOC::NOC_0;
     ASSERT_TRUE(ep == 1 || ep == 2);
     ASSERT_LE(slots * blk + 2048, drisc_l1_size_) << "DRISC slots + timing / barrier scratch do not fit its L1";
-    const uint32_t per_reader = p.E * nk * p.R;  // blocks per Tensix reader
+    ASSERT_EQ((p.E * nk) % wmult, 0u);
+    const uint32_t per_reader = p.E * nk * p.R / wmult;  // writes (blocks) per Tensix reader
+    const uint32_t sender_mode = env_u32("DRISC_FLAT_SENDER_MODE", 0);  // 0 DMA + write, 1 writes only, 2 DMA only
     const uint64_t gu_bytes = uint64_t(per_reader) * n_readers * blk;
 
     // DRISC-usable endpoints (subchannel != the syseng-owned NOC0 worker endpoint)
@@ -200,7 +206,7 @@ TEST_F(DriscFlatBenchFixture, GateUpDelivery) {
     log_info(
         LogTest,
         "DRISC flat bench: H {} I {} E {}, {} gate/up cores ({} per reader), {} down cores; gate/up {:.1f} MB in {} B "
-        "blocks, {} DRISC senders per bank on {}, {} slots; down {:.1f} MB; aiclk {} MHz",
+        "writes, {} DRISC senders per bank on {}, {} slots, sender mode {}; down {:.1f} MB; aiclk {} MHz",
         p.H,
         p.I,
         p.E,
@@ -212,6 +218,7 @@ TEST_F(DriscFlatBenchFixture, GateUpDelivery) {
         ep,
         drisc_noc == NOC::NOC_0 ? "NOC0" : "NOC1",
         slots,
+        sender_mode,
         dn_bytes / 1e6,
         clk_mhz);
 
@@ -247,7 +254,8 @@ TEST_F(DriscFlatBenchFixture, GateUpDelivery) {
                             bar_v.y,
                             bar_addr,
                             b * ep + e,
-                            n_all};
+                            n_all,
+                            sender_mode};
                         // receivers in block order: block i -> receiver i % R'; with one sender per bank its blocks
                         // alternate between the two readers' cores (R' = 2R)
                         for (uint32_t r : rds) {
@@ -356,5 +364,181 @@ TEST_F(DriscFlatBenchFixture, GateUpDelivery) {
             med(span_dn),
             bytes / t / 1e3,
             bytes / t / 1e3 / 512.0 * 100.0);
+    }
+}
+
+// One DRAM tile (bank 0's first DRISC-usable subchannel) reading only its own bank and writing to ONE Tensix core:
+// DMA only, NoC writes only (the same L1 slots re-sent), and both pipelined, for a near and a far receiver and two
+// block sizes. Separates the tile's DMA read rate from its NoC write injection rate.
+TEST_F(DriscFlatBenchFixture, SingleDriscOneTensix) {
+    const auto& soc = MetalContext::instance().get_cluster().get_soc_desc(dev_->build_id());
+    const uint32_t clk_mhz = MetalContext::instance().get_cluster().get_device_aiclk(dev_->get_device_ids()[0]);
+    const uint32_t noc0_sub = endpoint_for_noc(soc, 0, NOC::NOC_0).y;
+    uint32_t sub = 0;
+    for (uint32_t s = 0; s < soc.get_dram_compute_grid_size().y; ++s) {
+        if (s != noc0_sub) {
+            sub = s;
+            break;
+        }
+    }
+    const CoreCoord lc{0, sub};
+    const CoreCoord dv = dev_->virtual_core_from_logical_core(lc, CoreType::DRAM);
+    const auto grid = dev_->compute_with_storage_grid_size();
+    const uint64_t total = 32ull << 20;  // bytes per run
+    auto buf = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = total * 8},
+        {.page_size = static_cast<uint32_t>(total), .buffer_type = BufferType::DRAM},
+        dev_);
+    const uint32_t bar_addr = tensix_l1_ + 512 * 1024;
+    log_info(LogTest, "single DRISC: bank 0 subchannel {} (virtual {}), {} MB per run", sub, dv.str(), total >> 20);
+    for (const CoreCoord rx_l : {CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}}) {
+        const CoreCoord rx = dev_->virtual_core_from_logical_core(rx_l, CoreType::WORKER);
+        for (const uint32_t blk : {9216u, 16384u}) {
+            const uint32_t slots = 4, n = static_cast<uint32_t>(total / blk);
+            ASSERT_LE(slots * blk + 2048, drisc_l1_size_);
+            const uint32_t timing_off = (slots * blk + 31) / 32 * 32;
+            for (const uint32_t mode : {2u, 1u, 0u}) {
+                std::vector<double> us;
+                for (uint32_t it = 0; it < 4; ++it) {
+                    Program program = CreateProgram();
+                    auto k = CreateKernel(
+                        program,
+                        "tests/tt_metal/tt_metal/test_kernels/misc/drisc_flat_gu_sender.cpp",
+                        lc,
+                        DramConfig{.noc = NOC::NOC_0});
+                    SetRuntimeArgs(
+                        program,
+                        k,
+                        lc,
+                        {buf->address(),
+                         drisc_l1_,
+                         blk,
+                         n,
+                         slots,
+                         1u,
+                         tensix_l1_,
+                         4u,
+                         drisc_l1_ + timing_off,
+                         rx.x,
+                         rx.y,
+                         bar_addr,
+                         0u,
+                         1u,
+                         mode,
+                         rx.x,
+                         rx.y});
+                    const std::vector<uint32_t> zeros(64, 0);
+                    MetalContext::instance().get_cluster().write_core(
+                        zeros.data(), zeros.size() * sizeof(uint32_t), tt_cxy_pair(dev_->build_id(), rx), bar_addr);
+                    MetalContext::instance().get_cluster().l1_barrier(dev_->build_id());
+                    run(program);
+                    if (it == 0) {
+                        continue;
+                    }
+                    auto [a, b] = read_t(dv, drisc_l1_noc_ + timing_off);
+                    us.push_back(double(b - a) / clk_mhz);
+                }
+                std::sort(us.begin(), us.end());
+                const double t = us[us.size() / 2];
+                log_info(
+                    LogTest,
+                    "single DRISC -> Tensix {} ({}): {:22s} blk {:5d} B: {:8.1f} us -> {:6.1f} GB/s",
+                    rx_l.str(),
+                    rx.str(),
+                    mode == 2 ? "DMA only" : (mode == 1 ? "NoC writes only" : "DMA + NoC writes"),
+                    blk,
+                    t,
+                    double(total) / t / 1e3);
+            }
+        }
+    }
+}
+
+// Both DRISC-usable tiles of bank 0, each reading its half of the bank region and writing to its own Tensix core:
+// does the pair reach the bank's 64 GB/s?
+TEST_F(DriscFlatBenchFixture, TwoDriscOneBank) {
+    const auto& soc = MetalContext::instance().get_cluster().get_soc_desc(dev_->build_id());
+    const uint32_t clk_mhz = MetalContext::instance().get_cluster().get_device_aiclk(dev_->get_device_ids()[0]);
+    const uint32_t noc0_sub = endpoint_for_noc(soc, 0, NOC::NOC_0).y;
+    std::vector<uint32_t> subs;
+    for (uint32_t s = 0; s < soc.get_dram_compute_grid_size().y; ++s) {
+        if (s != noc0_sub) {
+            subs.push_back(s);
+        }
+    }
+    ASSERT_GE(subs.size(), 2u);
+    const uint64_t per_tile = 16ull << 20;
+    auto buf = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = 2 * per_tile * 8},
+        {.page_size = static_cast<uint32_t>(2 * per_tile), .buffer_type = BufferType::DRAM},
+        dev_);
+    const std::array<CoreCoord, 2> rx_l = {CoreCoord{0, 0}, CoreCoord{1, 0}};
+    const CoreCoord bar = dev_->virtual_core_from_logical_core(rx_l[0], CoreType::WORKER);
+    const uint32_t bar_addr = tensix_l1_ + 512 * 1024;
+    for (const uint32_t blk : {9216u, 16384u}) {
+        const uint32_t slots = 4, n = static_cast<uint32_t>(per_tile / blk);
+        const uint32_t timing_off = (slots * blk + 31) / 32 * 32;
+        for (const uint32_t mode : {2u, 1u, 0u}) {
+            std::vector<double> us;
+            for (uint32_t it = 0; it < 4; ++it) {
+                Program program = CreateProgram();
+                std::vector<CoreCoord> dvs;
+                for (uint32_t e = 0; e < 2; ++e) {
+                    const CoreCoord lc{0, subs[e]};
+                    const CoreCoord rx = dev_->virtual_core_from_logical_core(rx_l[e], CoreType::WORKER);
+                    auto k = CreateKernel(
+                        program,
+                        "tests/tt_metal/tt_metal/test_kernels/misc/drisc_flat_gu_sender.cpp",
+                        lc,
+                        DramConfig{.noc = NOC::NOC_0});
+                    SetRuntimeArgs(
+                        program,
+                        k,
+                        lc,
+                        {buf->address() + static_cast<uint32_t>(e * per_tile),
+                         drisc_l1_,
+                         blk,
+                         n,
+                         slots,
+                         1u,
+                         tensix_l1_,
+                         4u,
+                         drisc_l1_ + timing_off,
+                         bar.x,
+                         bar.y,
+                         bar_addr,
+                         e,
+                         2u,
+                         mode,
+                         rx.x,
+                         rx.y});
+                    dvs.push_back(dev_->virtual_core_from_logical_core(lc, CoreType::DRAM));
+                }
+                const std::vector<uint32_t> zeros(64, 0);
+                MetalContext::instance().get_cluster().write_core(
+                    zeros.data(), zeros.size() * sizeof(uint32_t), tt_cxy_pair(dev_->build_id(), bar), bar_addr);
+                MetalContext::instance().get_cluster().l1_barrier(dev_->build_id());
+                run(program);
+                if (it == 0) {
+                    continue;
+                }
+                uint64_t s0 = UINT64_MAX, e1 = 0;
+                for (const auto& dv : dvs) {
+                    auto [a, b] = read_t(dv, drisc_l1_noc_ + timing_off);
+                    s0 = std::min(s0, a);
+                    e1 = std::max(e1, b);
+                }
+                us.push_back(double(e1 - s0) / clk_mhz);
+            }
+            std::sort(us.begin(), us.end());
+            const double t = us[us.size() / 2];
+            log_info(
+                LogTest,
+                "two DRISCs on bank 0 -> 2 Tensix: {:22s} blk {:5d} B: {:8.1f} us -> {:6.1f} GB/s (both tiles)",
+                mode == 2 ? "DMA only" : (mode == 1 ? "NoC writes only" : "DMA + NoC writes"),
+                blk,
+                t,
+                double(2 * per_tile) / t / 1e3);
+        }
     }
 }

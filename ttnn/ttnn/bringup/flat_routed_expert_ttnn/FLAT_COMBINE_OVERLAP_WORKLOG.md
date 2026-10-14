@@ -817,8 +817,18 @@ not synchronized: per-group spans only. us per call:
 - Under the combined load (the call's small-M regime) DRISC delivery finishes ~7% sooner than the Tensix readers +
   forwarders (~344 vs 371 us) without 16 Tensix cores - those cells would free the LoudBox overlap layout (64 gate/up
   in rows 1-9 next to combine) or add compute. x / h / y traffic not included; DRISC on NOC1 hung (untested further).
-- Open: why the per-DRISC write rate stops at ~25 GB/s (per-block flush, NOC2AXI, the DRISC L1 read port), and whether
-  a split (DRISCs for part of the gate/up stream or for the down weights, Tensix readers for the rest) beats both.
+- **Where the ~25 GB/s per DRISC comes from** (SingleDriscOneTensix / TwoDriscOneBank tests, sender modes):
+  one tile alone: DMA 64 GB/s (its bank's full share), NoC writes 45.7 / 56.2 GB/s (9 / 16 KB writes; distance does
+  not matter), DMA + writes 37.3 / 47.1. Bank 0's two tiles, each to its own Tensix: DMA + writes 63.9 GB/s = the
+  bank's 64 (writes alone 91.5 / 112.8). All 16 tiles into the 64 gate/up cores: writes only (no DMA) 385 GB/s, DMA
+  only 509; 2x / 4x larger writes slower (366 / 347): NoC fan-in into the gate/up cores, not a slow DRISC. With the
+  down cores reading too, DMA-only senders take ~335 us (170 MB at ~507 GB/s: the DRAM ceiling) and normal DRISC
+  delivery 340-344 us (~96% of it) vs the Tensix readers' 371. (Tensix readers reach 509 GB/s alone because they pull
+  through each bank's third, firmware-owned tile, one hop from the reader.)
+- Prefetcher reference (test_prefetcher_BH_bw_bench.py on this box): DRISC best 318 GB/s (recv-contig / pipe), Tensix
+  worker prefetcher best 390. DRISC kernels may use NOC1 only on tiles that are no bank's NOC1 endpoint (firmware NIU
+  modes, 010c7e15f2a): the hang above.
+- Open: the x / h / y traffic on top; then a flat prototype (DRISC reader on the on-device schedule, reader cells freed).
 
 ## 9. How to run (PR tree)
 ```
