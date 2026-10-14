@@ -2879,30 +2879,31 @@ bool build_sat_placement_constraints(
         if (!constraints.set_same_rank_groups_constraint({}, host_seat_groups)) {
             return false;
         }
-        // HARD host-count cap = bin-packing bound on CHIPS, not mesh count: sum the single-host meshes'
-        // chip footprints and divide by the largest host, so a heterogeneous MGD packs small meshes
-        // together and compacts to the true minimum. An infeasible cap is retried via next(), then dropped.
+        // HARD host-count cap = sum the single-host meshes' chip footprints and divide by the largest
+        // host, so a heterogeneous MGD packs small meshes together and compacts toward the fewest hosts.
+        // This is a lower bound (it ignores per-mesh fragmentation when mesh sizes don't divide the host);
+        // an infeasible cap is retried via next(), then dropped. A pool can hold both single-host and
+        // split-host candidates, so a mesh counts as single-host when ANY of its candidates fits on one
+        // host -- never just candidates().front(); the chip count is the mesh size, equal across candidates.
         std::size_t total_single_host_asics = 0;
         for (const auto& [mesh_id, pool] : pools) {
             (void)mesh_id;
-            if (pool->candidates().empty()) {
-                continue;
-            }
-            // Any candidate gives the mesh's chip count; a mesh is single-host when its chips share a host.
-            const Candidate& rep = pool->candidates().front();
-            std::string host;
-            bool single_host = true;
-            for (const AsicID& asic : rep.asics()) {
-                const std::string name = physical_system_descriptor.get_host_name_for_asic(asic);
-                if (host.empty()) {
-                    host = name;
-                } else if (name != host) {
-                    single_host = false;
-                    break;
+            for (const Candidate& cand : pool->candidates()) {
+                std::string host;
+                bool single_host = true;
+                for (const AsicID& asic : cand.asics()) {
+                    const std::string name = physical_system_descriptor.get_host_name_for_asic(asic);
+                    if (host.empty()) {
+                        host = name;
+                    } else if (name != host) {
+                        single_host = false;
+                        break;
+                    }
                 }
-            }
-            if (single_host && !host.empty()) {
-                total_single_host_asics += rep.asics().size();
+                if (single_host && !host.empty()) {
+                    total_single_host_asics += cand.asics().size();
+                    break;  // count each mesh once
+                }
             }
         }
         std::map<std::string, std::size_t> host_asic_counts;
