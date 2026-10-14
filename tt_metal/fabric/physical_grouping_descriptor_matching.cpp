@@ -2891,8 +2891,11 @@ bool build_sat_placement_constraints(
             for (const Candidate& cand : pool->candidates()) {
                 std::string host;
                 bool single_host = true;
-                for (const AsicID& asic : cand.asics()) {
-                    const std::string name = physical_system_descriptor.get_host_name_for_asic(asic);
+                for (std::size_t i = 0; i < cand.asic_count(); ++i) {
+                    const auto asic_id = physical_system_descriptor.find_asic_id(cand.asic(i));
+                    const std::string name = asic_id.has_value()
+                                                 ? physical_system_descriptor.get_host_name_for_asic(*asic_id)
+                                                 : std::string{};
                     if (host.empty()) {
                         host = name;
                     } else if (name != host) {
@@ -2901,20 +2904,17 @@ bool build_sat_placement_constraints(
                     }
                 }
                 if (single_host && !host.empty()) {
-                    total_single_host_asics += cand.asics().size();
+                    total_single_host_asics += cand.asic_count();
                     break;  // count each mesh once
                 }
             }
         }
+        // Largest host's chip capacity, in one pass: the running max of per-host counts is the max total.
         std::map<std::string, std::size_t> host_asic_counts;
+        std::size_t max_host_asics = 0;
         for (const auto& [asic_id, desc] : physical_system_descriptor.get_asic_descriptors()) {
             (void)asic_id;
-            ++host_asic_counts[desc.host_name];
-        }
-        std::size_t max_host_asics = 0;
-        for (const auto& [host, count] : host_asic_counts) {
-            (void)host;
-            max_host_asics = std::max(max_host_asics, count);
+            max_host_asics = std::max(max_host_asics, ++host_asic_counts[desc.host_name]);
         }
         if (max_host_asics > 0 && total_single_host_asics > 0) {
             const std::size_t k = (total_single_host_asics + max_host_asics - 1) / max_host_asics;
