@@ -25,5 +25,6 @@ Set `EXTRA_MODELS_DIR` to `models/demos` and select architecture
 `TTGemma4A4BForCausalLM`. The model entrypoint is
 `models.demos.gemma4_26b_a4b_qb2.tt.generator_vllm:Gemma4ForCausalLM`.
 
-The precision policy is fixed by `config/precision.json`. Experiment logs and
-bring-up artifacts remain in the Agentic Research repository.
+The selected BFP8 precision policy is fixed by `config/precision.json`.
+Experiment logs and bring-up artifacts remain in the Agentic Research
+repository.

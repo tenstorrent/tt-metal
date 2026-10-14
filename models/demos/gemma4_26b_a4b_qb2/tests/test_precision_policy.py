@@ -11,10 +11,14 @@ def test_committed_precision_policy_is_complete():
     selected = precision_policy.resolve_precision_config()
 
     assert selected["schema_version"] == 1
-    assert selected["config_id"]
+    assert selected["config_id"] == "bfp8_release_selected"
+    assert selected["model"]["head_weight_dtype"] == "bfloat8_b"
     assert set(selected["layer_types"]) == {"sliding_attention", "full_attention"}
     for kind in selected["layer_types"]:
-        assert precision_policy.layer_precision_config(selected, 0, kind)
+        layer = precision_policy.layer_precision_config(selected, 0, kind)
+        assert layer
+        assert layer["expert_gate_dtype"] == "bfloat8_b"
+        assert layer["expert_down_dtype"] == "bfloat8_b"
 
 
 def test_precision_policy_returns_independent_values():
