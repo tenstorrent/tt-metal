@@ -222,8 +222,9 @@ class DraftMoEBlock:
     def __init__(self, md, weights, batch_per_device, topology=ttnn.Topology.Linear, buffers=None):
         from models.common.modules.moe.tt_moe_decode import TTMoEDecode
         from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
+        from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import clamp_text
 
-        text = CONFIG_PATH.read_text()
+        text = clamp_text(CONFIG_PATH.read_text(), "mtp")
         text = text.replace("batch_per_device: 4 ", f"batch_per_device: {batch_per_device} ", 1)
         text = text.replace("num_routed_experts: 384", f"num_routed_experts: {N_ROUTED}").replace(
             "select_experts_k: 6", f"select_experts_k: {TOPK}"

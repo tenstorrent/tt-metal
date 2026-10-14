@@ -15,7 +15,14 @@ from models.demos.blackhole.deepseek_v41_flash.reference import ref_layer as R
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_weights import load_moe_layer
 
 
-def golden_moe(x, w, k=6, scale=1.5):
+def _swiglu(g, u, limit):
+    if limit > 0:  # the reference Expert: up clamped on both sides, gate only from above
+        u = torch.clamp(u, -limit, limit)
+        g = torch.clamp(g, max=limit)
+    return torch.nn.functional.silu(g) * u
+
+
+def golden_moe(x, w, k=6, scale=1.5, limit=0.0, shared=True):
     s = torch.nn.functional.softplus(x.float() @ w["gate_weight"]).sqrt()  # [n, 384]
     idx = (s + w["gate_bias"]).topk(k, dim=-1).indices
     wt = s.gather(1, idx)
@@ -25,10 +32,12 @@ def golden_moe(x, w, k=6, scale=1.5):
         xt = x[t : t + 1].float()
         for j in range(k):
             e = int(idx[t, j])
-            h = torch.nn.functional.silu(xt @ w["w0"][0, e].float()) * (xt @ w["w1"][0, e].float())
+            h = _swiglu(xt @ w["w0"][0, e].float(), xt @ w["w1"][0, e].float(), limit)
             out[t] += wt[t, j] * (h @ w["w2"][0, e].float())[0]
+        if not shared:  # DSV41MoEBlock (shared_in_moe=False) leaves the shared expert to the layer
+            continue
         sid = 384
-        h = torch.nn.functional.silu(xt @ w["shared_w0"][sid][0, 0].float()) * (xt @ w["shared_w1"][sid][0, 0].float())
+        h = _swiglu(xt @ w["shared_w0"][sid][0, 0].float(), xt @ w["shared_w1"][sid][0, 0].float(), limit)
         out[t] += (h @ w["shared_w2"][sid][0, 0].float())[0]
     return out, idx
 

@@ -3,6 +3,8 @@
 
 """Device test: DSV41MoEBlock on a Blackhole Galaxy vs the torch golden on real layer weights/activations."""
 
+import os
+
 import pytest
 import torch
 
@@ -49,7 +51,13 @@ def test_moe_block(mesh_device, layer_id):
     x = cap["x"].reshape(batch, 1, 1, -1).to(torch.bfloat16)  # [batch, 1, 1, hidden]
 
     w = load_moe_layer(layer_id)
-    golden, _ = golden_moe(x.reshape(batch, -1), w)  # [batch, hidden]
+    wg = load_moe_layer(
+        layer_id, experts=range(384)
+    )  # host copies of the routed experts for the golden (a warm weight cache skips them)
+    golden, _ = golden_moe(
+        x.reshape(batch, -1), wg, limit=float(os.environ.get("DSV41_GOLD_LIMIT", "10")), shared=False
+    )  # [batch, hidden]; the decode experts apply the checkpoint's swiglu clamp
+    del wg
 
     K = calibrate_gate_cutoff(layer_id, seed=99)  # calibration tokens differ from the test batch
     moe = DSV41MoEBlock(mesh_device, w, topology=ttnn.Topology.Linear, batch_per_device=per_dev, gate_bias_shift=K)
