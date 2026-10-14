@@ -292,6 +292,55 @@ def test_tensor_prefetcher_BH_param(
     assert passing, f"[{name}] PCC check failed: {output_str}"
 
 
+# The PrefetcherPipe twin of test_tensor_prefetcher_BH_param: the same legacy K-row-major weights and
+# batched (stream_in1=False) gather-in0 consumer, with one pipe per bank holding one layer. The
+# misaligned cases give the ring a ragged tail the pipe leaves as a trailing gap at every wrap.
+@pytest.mark.parametrize(
+    "name,k_tiles_per_shard,n_tiles_per_receiver,recv_per_bank,dtype,ring_misalign_bytes",
+    [
+        ("qkv_small", 8, 1, 1, ttnn.bfloat16, 0),
+        ("qkv_med", 16, 1, 1, ttnn.bfloat16, 0),
+        ("qkv_large", 32, 1, 1, ttnn.bfloat16, 0),
+        ("ff_wide", 8, 2, 1, ttnn.bfloat16, 0),
+        ("ff_widest", 16, 4, 1, ttnn.bfloat16, 0),
+        ("o_proj_r64", 2, 2, 8, ttnn.bfloat8_b, 0),
+        ("qkv_bf8_r64", 2, 6, 8, ttnn.bfloat8_b, 0),
+        ("ff1_r64", 2, 7, 8, ttnn.bfloat8_b, 0),
+        ("qkv_small_misaligned", 8, 1, 1, ttnn.bfloat16, 16),
+        ("ff_wide_misaligned", 8, 2, 1, ttnn.bfloat16, 16),
+    ],
+)
+def test_tensor_prefetcher_gather_in0_pipes_krow_major(
+    device, name, k_tiles_per_shard, n_tiles_per_receiver, recv_per_bank, dtype, ring_misalign_bytes
+):
+    setup = _streaming_gather_in0_setup(
+        device,
+        name,
+        k_tiles_per_shard,
+        n_tiles_per_receiver,
+        recv_per_bank,
+        dtype,
+        None,
+        out_subblock_w=min(n_tiles_per_receiver, 8),
+        stream_in1=False,
+    )
+    _space, pipes = _make_tensor_prefetcher_pipes(
+        device,
+        setup["bank_to_receivers"],
+        setup["ring_size"] * setup["entry_size"] + ring_misalign_bytes,
+        single_sender=True,
+    )
+    _prefetch_and_check_runs_over_pipes(
+        device,
+        setup,
+        pipes,
+        _hifi4_compute_kernel_config(device),
+        f"gather_in0_pipes_krow_major {name}",
+        runs=1,
+        pcc_threshold=0.999 if dtype == ttnn.bfloat16 else 0.99,
+    )
+
+
 # ---------------------------------------------------------------------------
 # create_global_circular_buffer_for_matmul_1d factory
 # ---------------------------------------------------------------------------
@@ -733,6 +782,81 @@ def test_tensor_prefetcher_multi_tensor(device, num_tensors, num_layers):
     ttnn.synchronize_device(device)
 
 
+@pytest.mark.parametrize("num_tensors,num_layers", [(1, 1), (2, 1), (3, 1), (2, 5), (3, 10)])
+def test_tensor_prefetcher_multi_tensor_pipes(device, num_tensors, num_layers):
+    """The PrefetcherPipe twin of test_tensor_prefetcher_multi_tensor: several K-row-major weights, each
+    queued num_layers times in one flattened list (which splits across request pages), delivered through
+    one pipe per bank and drained by a discard receiver."""
+    num_dram_banks = device.dram_grid_size().x
+    ring_size = num_dram_banks * _MT_NUM_RECV_PER_BANK
+    weights = [_make_mt_weight(device, seed=0xB100 + i, num_dram_banks=num_dram_banks) for i in range(num_tensors)]
+
+    # A K-row-major weight is cut into ceil(k_tiles / ring_size)-tile K-blocks.
+    k_block_w_tiles = (_MT_K // ttnn.TILE_SIZE + ring_size - 1) // ring_size
+    n_tiles_per_recv = (_MT_N // num_dram_banks // _MT_NUM_RECV_PER_BANK) // ttnn.TILE_SIZE
+    push_page_size = k_block_w_tiles * n_tiles_per_recv * _MT_TILE_BYTES
+
+    bank_to_receivers = [
+        (b, _bank_receivers_row_major(b, _MT_NUM_RECV_PER_BANK, ring_cols=num_dram_banks))
+        for b in range(num_dram_banks)
+    ]
+    _space, pipes = _make_tensor_prefetcher_pipes(
+        device, bank_to_receivers, ring_size * push_page_size, single_sender=True
+    )
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device, [(w, ring_size) for w in weights] * num_layers, prefetcher_pipes=pipes
+        )
+        ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
+            device,
+            num_iters=num_layers * num_tensors * ring_size,
+            page_size_bytes=push_page_size,
+            prefetcher_pipes=pipes,
+        )
+
+
+def test_tensor_prefetcher_block_count_rejects_uneven_krow_major_fanout_over_pipes(device, expect_error):
+    """The PrefetcherPipe twin of test_tensor_prefetcher_block_count_rejects_uneven_krow_major_fanout: a
+    K-row-major weight is sliced by one receivers-per-bank count, so pipes whose banks drive different
+    receiver counts that still average out are rejected rather than delivering the wrong pages."""
+    num_dram_banks = device.dram_grid_size().x
+    if num_dram_banks < 3:
+        pytest.skip(f"uneven fan-out needs at least 3 DRAM banks; device has {num_dram_banks}")
+    recv_per_bank = 2
+    receiver_count = num_dram_banks * recv_per_bank
+    dtype = ttnn.bfloat16
+
+    # Same total receivers as a uniform recv_per_bank=2 mapping, redistributed so bank 0 gives up a
+    # receiver to bank 1.
+    uneven_receiver_counts = [1, 3] + [recv_per_bank] * (num_dram_banks - 2)
+    bank_to_receivers = []
+    next_ring_pos = 0
+    for bank, count in enumerate(uneven_receiver_counts):
+        cores = []
+        for pos in range(next_ring_pos, next_ring_pos + count):
+            core = ttnn.CoreCoord(pos % num_dram_banks, pos // num_dram_banks)
+            cores.append(ttnn.CoreRange(core, core))
+        bank_to_receivers.append((bank, ttnn.CoreRangeSet(cores)))
+        next_ring_pos += count
+
+    per_core_N = 1
+    weight = _make_krow_major_weight(
+        device,
+        torch.zeros(1, 1, 2 * receiver_count * ttnn.TILE_SIZE, receiver_count * ttnn.TILE_SIZE),
+        num_dram_banks=num_dram_banks,
+        dtype=dtype,
+    )
+    program_config = _krow_major_program_config(
+        num_dram_banks, recv_per_bank, recv_per_bank, in0_block_w=1, per_core_N=per_core_N, gather=False
+    )
+    _space, pipes = _make_tensor_prefetcher_pipes(
+        device, bank_to_receivers, 4 * per_core_N * _bytes_per_tile(dtype), single_sender=True
+    )
+    with expect_error(RuntimeError, "sliced by one receivers-per-bank count"):
+        ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(program_config, weight, prefetcher_pipes=pipes)
+
+
 # ---------------------------------------------------------------------------
 # Receiver-contiguous DRAM layout smoke
 # ---------------------------------------------------------------------------
@@ -1165,7 +1289,9 @@ def _streaming_gather_in0_setup(
     one ``entry_size`` page of the GCB or the pipes. ``out_subblock_w`` defaults to one subblock across
     the worker's columns. ``k_tiles`` below ``k_tiles_per_shard * ring_size`` pads the last in0 shards,
     and the weight's per-receiver shard with them; ``hop_cores`` adds in0-only cores to the ring.
-    ``act_dtype`` is the activation's dtype; ``dtype`` is the weight's.
+    ``act_dtype`` is the activation's dtype; ``dtype`` is the weight's. A ``distribution_strategy`` of
+    None makes a legacy K-row-major (WIDTH_SHARDED) weight instead, which pairs each bank with a
+    contiguous arc and cannot be padded.
     """
     num_dram_banks = device.dram_grid_size().x
     ring_size = num_dram_banks * recv_per_bank
@@ -1184,9 +1310,22 @@ def _streaming_gather_in0_setup(
     # (ROUND_ROBIN_1D strided / CONTIGUOUS_1D contiguous) is matched by the bank pairing below.
     torch.manual_seed(zlib.crc32(name.encode()))
     pt_weight = torch.randn(1, 1, K, N)
-    weight_mem_config = _recv_contig_weight_memory_config(
-        K, N, num_dram_banks, ring_size, distribution_strategy, shard_k=K_padded
-    )
+    krow_major = distribution_strategy is None
+    assert not krow_major or K == K_padded, "a K-row-major bank shard holds exactly the weight's K"
+    if krow_major:
+        weight_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}),
+                [K, N // num_dram_banks],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+    else:
+        weight_mem_config = _recv_contig_weight_memory_config(
+            K, N, num_dram_banks, ring_size, distribution_strategy, shard_k=K_padded
+        )
 
     def make_weight(pt):
         return ttnn.as_tensor(pt, device=device, dtype=dtype, memory_config=weight_mem_config, layout=ttnn.TILE_LAYOUT)
@@ -1256,9 +1395,10 @@ def _streaming_gather_in0_setup(
         use_height_and_width_as_shard_shape=True,
     )
     bank_to_receivers = _bank_to_receivers(
-        distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D, num_dram_banks, recv_per_bank, ring_cols
+        distribution_strategy != ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D, num_dram_banks, recv_per_bank, ring_cols
     )
     return {
+        "single_sender": krow_major,
         "ring_size": ring_size,
         "pt_act": pt_act,
         "pt_weight": pt_weight,
@@ -1494,9 +1634,9 @@ def test_tensor_prefetcher_mcast_in0(device, weight_layout, gcb_size_misalign_by
     ), "second mcast_in0 invocation did not hit the program cache"
 
 
-# PrefetcherPipe delivery is receiver-contiguous only: a pipe sender pushes each receiver its own
-# shard and cannot slice one bank's shard across receivers the way the K-row-major layout needs.
-_MCAST_IN0_PIPE_LAYOUTS = {name: strategy for name, strategy in _MCAST_IN0_LAYOUTS.items() if strategy is not None}
+# PrefetcherPipe delivery takes both layouts; a K-row-major weight needs one pipe per bank, since one
+# read of a bank's shard feeds all of that bank's receivers.
+_MCAST_IN0_PIPE_LAYOUTS = _MCAST_IN0_LAYOUTS
 
 
 def _mcast_in0_pipe_program_config(ring_cols, ring_rows, in0_block_w, per_core_N):
@@ -1550,16 +1690,20 @@ def _mcast_in0_pipe_setup(device, weight_layout, per_core_N=1, dtype=ttnn.bfloat
     torch.manual_seed(zlib.crc32(f"mcast_in0_pipes_{weight_layout}_{per_core_N}".encode()))
     pt_weight = torch.randn(1, 1, K, N)
     distribution_strategy = _MCAST_IN0_PIPE_LAYOUTS[weight_layout]
-    tt_weight = _make_recv_contig_weight(
-        device,
-        pt_weight,
-        num_dram_banks=num_dram_banks,
-        ring_size=receiver_count,
-        dtype=dtype,
-        distribution_strategy=distribution_strategy,
-    )
+    krow_major = distribution_strategy is None
+    if krow_major:
+        tt_weight = _make_krow_major_weight(device, pt_weight, num_dram_banks=num_dram_banks, dtype=dtype)
+    else:
+        tt_weight = _make_recv_contig_weight(
+            device,
+            pt_weight,
+            num_dram_banks=num_dram_banks,
+            ring_size=receiver_count,
+            dtype=dtype,
+            distribution_strategy=distribution_strategy,
+        )
     bank_to_receivers = _bank_to_receivers(
-        distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D, num_dram_banks, recv_per_bank, ring_cols
+        distribution_strategy != ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D, num_dram_banks, recv_per_bank, ring_cols
     )
 
     pt_act = torch.randn(1, 1, M, K)
@@ -1596,14 +1740,17 @@ def _mcast_in0_pipe_setup(device, weight_layout, per_core_N=1, dtype=ttnn.bfloat
         "num_dram_banks": num_dram_banks,
         "recv_per_bank": recv_per_bank,
         "ring_cols": ring_cols,
+        # A K-row-major weight needs one pipe per bank.
+        "single_sender": krow_major,
     }
 
 
-def _make_tensor_prefetcher_pipes(device, bank_to_receivers, ring_size):
+def _make_tensor_prefetcher_pipes(device, bank_to_receivers, ring_size, single_sender=False):
     """A PrefetcherPipeSpace over the matmul's workers and the Tensor-prefetcher pipes carved from it.
 
-    Every ring is ``ring_size`` bytes. Returns (space, pipes): the space must outlive the pipes, so
-    callers keep both.
+    Every ring is ``ring_size`` bytes. ``single_sender`` gives each bank one pipe, as a K-row-major
+    weight needs, rather than splitting a bank's receivers across its two senders. Returns (space,
+    pipes): the space must outlive the pipes, so callers keep both.
     """
     receiver_domain = ttnn.CoreRangeSet(
         {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
@@ -1616,7 +1763,9 @@ def _make_tensor_prefetcher_pipes(device, bank_to_receivers, ring_size):
         max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in bank_to_receivers),
         num_dram_senders=2 * len(bank_to_receivers),
     )
-    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(space, bank_to_receivers)
+    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+        space, bank_to_receivers, support_multi_receiver_shards=single_sender
+    )
     return space, pipes
 
 
@@ -1694,7 +1843,10 @@ def test_tensor_prefetcher_mcast_in0_pipes(device, weight_layout, ring_half_bloc
     # Before any matmul runs on the receiver grid: pipe rings come from the persistent L1 arena,
     # which refuses a core that a live Program (one a program-cache hit keeps alive) has sealed.
     _space, pipes = _make_tensor_prefetcher_pipes(
-        device, setup["bank_to_receivers"], setup["entry_size"] * ring_half_blocks // 2
+        device,
+        setup["bank_to_receivers"],
+        setup["entry_size"] * ring_half_blocks // 2,
+        single_sender=setup["single_sender"],
     )
 
     compute_kernel_config = _hifi4_compute_kernel_config(device)
@@ -1726,18 +1878,13 @@ def test_tensor_prefetcher_mcast_in0_pipes(device, weight_layout, ring_half_bloc
     ), "second mcast_in0 pipes invocation did not hit the program cache"
 
 
-def test_tensor_prefetcher_mcast_in0_pipes_rejects_krow_major_weight(device, expect_error):
-    """A pipe sender pushes each receiver its own shard, so the K-row-major weight is rejected."""
-    setup = _mcast_in0_pipe_setup(device, "recv_contig_contiguous")
-    krow_weight = _make_krow_major_weight(
-        device,
-        setup["pt_weight"],
-        num_dram_banks=setup["num_dram_banks"],
-        dtype=ttnn.bfloat16,
-    )
+def test_tensor_prefetcher_mcast_in0_pipes_rejects_krow_major_weight_over_split_banks(device, expect_error):
+    """One read of a K-row-major bank shard feeds every receiver of the bank, so pipes that split a
+    bank's receivers across its two senders cannot deliver it."""
+    setup = _mcast_in0_pipe_setup(device, "krow_major")
     _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 2 * setup["entry_size"])
-    with expect_error(RuntimeError, "receiver-contiguous"):
-        _linear_over_pipes(setup, pipes, weight=krow_weight)
+    with expect_error(RuntimeError, "needs one sender per DRAM bank"):
+        _linear_over_pipes(setup, pipes)
 
 
 def test_tensor_prefetcher_mcast_in0_pipes_rejects_ring_without_lookahead(device, expect_error):

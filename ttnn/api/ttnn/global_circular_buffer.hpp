@@ -110,10 +110,11 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
 // PrefetcherPipe-delivery counterpart of the overload above, for a matmul reading in1 from
 // DRAM-sender PrefetcherPipes instead of a GCB. It lives beside the GCB overload because the
 // weight <-> matmul contract it enforces is the same one; only the transport object that names the
-// receivers differs, and for gather-in0 a receiver's shard may run past the weight's K, so that a ring
-// whose last in0 shards are padded can cut it into whole shard-deep K-blocks. Receiver-contiguous
-// weights only: pipe delivery cannot slice a bank's shard across receivers, so a legacy K-row-major
-// weight is rejected here rather than silently delivering the wrong pages.
+// receivers differs, and for gather-in0 a receiver-contiguous shard may run past the weight's K, so
+// that a ring whose last in0 shards are padded can cut it into whole shard-deep K-blocks. A legacy
+// K-row-major weight takes its receivers per bank from the pipes rather than from
+// num_global_cb_receivers, and needs one pipe per bank (support_multi_receiver_shards), each with the
+// same receiver count.
 uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const ttnn::Tensor& weight,

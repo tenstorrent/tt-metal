@@ -524,6 +524,11 @@ void kernel_main() {
                 // `(a + b) - slot`.
                 constexpr uint32_t stage_slot_sum = stage_slot_a + stage_slot_b;
 
+                // Converts the aligned-page free space the credit poll reports into whole blocks of
+                // t_page_bytes_per_recv, the unit both loops push in.
+                const uint32_t fifo_pages_per_block =
+                    t_page_bytes_per_recv / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+
                 // Branch on layout. The branch is per-tensor (100% predictable across the
                 // inner chunk loop), so adding the second branch costs nothing in the
                 // hot path.
@@ -552,7 +557,15 @@ void kernel_main() {
 
                     for (uint32_t c = 0; c < total_chunks; ++c) {
                         if (sb == 0 && ch == 0) {
-                            experimental::remote_cb_reserve_back(remote_cb_id, 1);
+                            // Wait for room for this whole block at every receiver. The poll reads the
+                            // credit counters wherever the transport keeps them, which is what lets this
+                            // loop feed a PrefetcherPipe as well as a GlobalCircularBuffer. A block that
+                            // reaches the usable limit also credits the trailing gap, but that needs no
+                            // extra room: the gap never holds data, so it is free whenever the block is.
+                            while (poll_min_free_aligned_pages(
+                                       iface, num_receivers, local_acked_base, local_pages_stride) <
+                                   fifo_pages_per_block) {
+                            }
                             fifo_snapshot = iface.fifo_wr_ptr;
                             cum_offset_in_page = 0;
                         }
@@ -687,11 +700,6 @@ void kernel_main() {
                     // packet counts come out exact (no truncation loss).
                     const uint32_t subs_per_stage_slot = kStageSlotBytes / t_chunk_bytes;
                     const uint32_t max_chunk_bytes = subs_per_stage_slot * t_chunk_bytes;
-
-                    // fifo_pages_per_block converts aligned-page free space into
-                    // "blocks of t_page_bytes_per_recv" — the batch unit B uses.
-                    const uint32_t fifo_pages_per_block =
-                        t_page_bytes_per_recv / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
 
                     constexpr uint32_t slot_addrs[3] = {stage_slot_0, stage_slot_1, stage_slot_2};
 

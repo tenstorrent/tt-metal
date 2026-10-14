@@ -1396,13 +1396,15 @@ void validate_prefetcher_pipes_gather_in0_geometry(
     // slab has to be ring_size shard widths deep, padded past the weight's K when the shards are. (A
     // worker-sender pipe's producer is the caller's, and lays out its entries itself.) Checked ahead of
     // the shared weight checks, whose K-blocking rule a padded ring with an unpadded slab would trip
-    // first; a weight that is not a 2D receiver-contiguous one is left to them.
+    // first; a weight that is not a 2D receiver-contiguous one is left to them. That includes a legacy
+    // K-row-major weight, whose bank shard holds exactly the weight's K and so cannot be padded.
     const auto pipes = ttnn::prefetcher_pipe_refs(prefetcher_pipes);
     const tt::tt_metal::experimental::PrefetcherPipe& first_pipe = pipes.front();
     const auto& weight_nd_shard_spec = input_tensor_b.nd_shard_spec();
     const bool tensor_prefetcher_2d_slab =
         first_pipe.sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram &&
-        weight_nd_shard_spec.has_value() && weight_nd_shard_spec->shard_shape.rank() == 2;
+        !input_tensor_b.buffer()->has_shard_spec() && weight_nd_shard_spec.has_value() &&
+        weight_nd_shard_spec->shard_shape.rank() == 2;
     if (tensor_prefetcher_2d_slab) {
         const uint32_t slab_K_tiles = weight_nd_shard_spec->shard_shape[0] / in1_tile.get_height();
         const uint32_t weight_K_tiles = b_shape_padded[-2] / in1_tile.get_height();

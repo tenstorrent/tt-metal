@@ -186,9 +186,9 @@ enum class LayoutMode : uint32_t {
 // than 2. In exchange, receiver-contiguous is the loop with dynamic multi-block batching.
 //
 // So a GlobalCircularBuffer keeps the K-row-major reading it has always had, and PrefetcherPipe
-// delivery -- which consumes receiver-contiguous only -- gets the other. (K-row-major's third fit
-// rung, chunking a too-wide K-row across receivers, is not among the differences: its M is capped
-// at num_receivers, so at one receiver per bank neither layout can chunk N.)
+// delivery takes receiver-contiguous for its batching. (K-row-major's third fit rung, chunking a
+// too-wide K-row across receivers, is not among the differences: its M is capped at num_receivers,
+// so at one receiver per bank neither layout can chunk N.)
 enum class LayoutTieBreak : uint8_t {
     PreferKRowMajor,
     PreferReceiverContiguous,
@@ -536,26 +536,6 @@ TensorPrefetcherTensorLayout compute_tensor_layout(
         return compute_tensor_layout_krow_major(t, block_count, receivers_per_bank, ring_half, context_id);
     }
     return compute_tensor_layout_recv_contig(t, block_count, stage_third, context_id);
-}
-
-// The one precondition of the PrefetcherPipe delivery path: every receiver owns a private ring, so
-// the sender must have a private stream of whole blocks to put in it, which is the
-// receiver-contiguous layout. It is a property of the page stream the sender produces, so it is
-// checked against the computed layout rather than against the caller's spec -- which is why this
-// runs here, after compute_tensor_layout, rather than in queue().
-//
-// Neither the rotation nor the ring's block capacity is checked: streaming credits every receiver
-// the same amount per round exactly as batched delivery does (it varies only which DRAM block
-// feeds a receiver), and a ring that holds a single block only costs a consumer its lookahead --
-// the generic one-whole-page floor in serialize_request_pages is what keeps the sender's poll from
-// spinning forever. A block size the ring does not divide is fine too: the trailing remainder
-// becomes a gap that holds no block, and both endpoints credit it at the wrap.
-void validate_prefetcher_pipe_delivery(const TensorPrefetcherTensorLayout& layout, uint32_t tensor_idx) {
-    TT_FATAL(
-        layout.layout_mode == static_cast<uint32_t>(LayoutMode::ReceiverContiguous),
-        "Tensor prefetcher: PrefetcherPipe delivery supports receiver-contiguous tensors only, but input tensor {} "
-        "resolved to the K-row-major layout. Shard it so each receiver owns a disjoint contiguous shard.",
-        tensor_idx);
 }
 
 // Where the DRISC kernel reads a group selector's mask page: a NoC endpoint as virtual coordinates
@@ -1287,15 +1267,14 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         // rotation participates in dedup (slot_equal), so tensors that differ only in rotation get
         // distinct slots.
         layout.streaming = streaming ? 1u : 0u;
+        // One read of a K-row-major bank shard feeds every receiver of that bank, so its sender has to
+        // own them all.
         TT_FATAL(
             layout.layout_mode != static_cast<uint32_t>(LayoutMode::KRowMajor) || krow_compatible_mapping,
             "Tensor prefetcher: K-row-major input tensor {} requires exactly one primary sender per DRAM bank; "
-            "the supplied target uses a split or incompatible sender topology.",
+            "the supplied target uses a split or incompatible sender topology. Create the target with "
+            "support_multi_receiver_shards=true.",
             tensor_idx);
-
-        if (pipe_delivery) {
-            validate_prefetcher_pipe_delivery(layout, tensor_idx);
-        }
 
         // The sender's free-space poll counts whole per-receiver pages; if the target's per-receiver
         // ring can't hold even one full page the poll never reaches a usable block and the DRISC

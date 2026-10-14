@@ -7,6 +7,7 @@
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 #include <memory>
+#include <unordered_set>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
@@ -317,10 +318,14 @@ uint32_t validate_recv_contig_weight_for_matmul_1d(
 // request names (compute_tensor_layout_krow_major in tensor_prefetcher_manager.cpp) and each receiver
 // gets its own N-slice of every block — so the per-receiver page stream is the same shape either
 // consumer sees on a receiver-contiguous weight.
+//
+// `recv_per_bank` is how many receivers each bank's shard is sliced across: what the delivery target
+// gives every bank, which the caller has already checked is the same for each.
 uint32_t validate_krow_major_weight_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const ttnn::Tensor& weight,
-    uint32_t receiver_count) {
+    uint32_t receiver_count,
+    uint32_t recv_per_bank) {
     TT_FATAL(
         program_config.gather_in0 != program_config.mcast_in0,
         "legacy K-row-major Tensor prefetcher requires exactly one of gather_in0 or mcast_in0 to be true");
@@ -333,12 +338,11 @@ uint32_t validate_krow_major_weight_for_matmul_1d(
         "stream_in1 requires a receiver-contiguous weight: the legacy K-row-major sender cannot deliver a "
         "per-receiver ring rotation, so a streaming matmul would wait forever on natural-order blocks");
     TT_FATAL(receiver_count > 0, "receiver_count must be > 0");
-    const uint32_t recv_per_bank = static_cast<uint32_t>(program_config.num_global_cb_receivers);
-    TT_FATAL(recv_per_bank > 0, "num_global_cb_receivers must be > 0");
+    TT_FATAL(recv_per_bank > 0, "receivers per bank must be > 0");
     TT_FATAL(
         receiver_count % recv_per_bank == 0,
-        "global_cb receiver count ({}) must be a whole number of banks at num_global_cb_receivers ({}) per bank; "
-        "the legacy K-row-major layout gives every bank the same receiver fan-out",
+        "receiver count ({}) must be a whole number of banks at {} receivers per bank; the legacy K-row-major "
+        "layout gives every bank the same receiver fan-out",
         receiver_count,
         recv_per_bank);
     const uint32_t num_senders = receiver_count / recv_per_bank;
@@ -378,15 +382,15 @@ uint32_t validate_krow_major_weight_for_matmul_1d(
     const uint32_t shard_N_tiles = shard_N / tile_w;
     TT_FATAL(
         shard_N_tiles % recv_per_bank == 0,
-        "per-bank N ({} tiles) must be divisible by num_global_cb_receivers ({})",
+        "per-bank N ({} tiles) must be divisible by the {} receivers per bank",
         shard_N_tiles,
         recv_per_bank);
     const uint32_t per_recv_N_tiles = shard_N_tiles / recv_per_bank;
     TT_FATAL(
         per_recv_N_tiles == program_config.per_core_N,
         "program_config.per_core_N ({}) must equal the weight's per-receiver N ({} tiles = per-bank N {} tiles / "
-        "num_global_cb_receivers {}); otherwise the prefetcher's pushed page size and the matmul's in1 remote-CB "
-        "page size disagree and the page-credit accounting desyncs",
+        "{} receivers per bank); otherwise the prefetcher's pushed page size and the matmul's in1 page size "
+        "disagree and the page-credit accounting desyncs",
         program_config.per_core_N,
         per_recv_N_tiles,
         shard_N_tiles,
@@ -451,7 +455,8 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     }
     // Weight checks first: they establish num_global_cb_receivers > 0 and that it divides the
     // receiver count, which is what the per-sender rule below is stated against.
-    const uint32_t block_count = validate_krow_major_weight_for_matmul_1d(program_config, weight, receiver_count);
+    const uint32_t block_count = validate_krow_major_weight_for_matmul_1d(
+        program_config, weight, receiver_count, static_cast<uint32_t>(program_config.num_global_cb_receivers));
     validate_krow_major_gcb_topology(program_config, gcb);
     return block_count;
 }
@@ -464,16 +469,38 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
         tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(ttnn::prefetcher_pipe_refs(prefetcher_pipes))
             .num_cores();
     TT_FATAL(receiver_count > 0, "prefetcher_pipes has no receivers");
-    TT_FATAL(
-        is_receiver_contiguous_weight(weight),
-        "PrefetcherPipe delivery is receiver-contiguous only: allocate the weight with an NdShardSpec giving each "
-        "receiver its own (full K, N/receiver_count) DRAM shard. The legacy K-row-major WIDTH_SHARDED layout needs a "
-        "sender that slices one bank's shard across its receivers, which this transport does not do.");
-    return validate_recv_contig_weight_for_matmul_1d(
-        program_config,
-        weight,
-        receiver_count,
-        program_config.gather_in0 ? SlabDepth::PaddedForPipeGather : SlabDepth::WeightK);
+    if (is_receiver_contiguous_weight(weight)) {
+        return validate_recv_contig_weight_for_matmul_1d(
+            program_config,
+            weight,
+            receiver_count,
+            program_config.gather_in0 ? SlabDepth::PaddedForPipeGather : SlabDepth::WeightK);
+    }
+
+    // K-row-major: one read of a bank's shard serves every receiver on that bank, so each bank has one
+    // sender, and the sender slices the shard by a single receivers-per-bank count, so each sender
+    // drives the same number of receivers.
+    const auto mapping = tt::tt_metal::experimental::GetPrefetcherPipeSenderReceiverMapping(
+        ttnn::prefetcher_pipe_refs(prefetcher_pipes));
+    const uint32_t recv_per_bank = mapping.front().second.num_cores();
+    std::unordered_set<uint32_t> banks;
+    for (const auto& [sender, receivers] : mapping) {
+        const auto bank = static_cast<uint32_t>(sender.x);
+        TT_FATAL(
+            banks.insert(bank).second,
+            "a legacy K-row-major (WIDTH_SHARDED) weight needs one sender per DRAM bank, but bank {} has two "
+            "prefetcher_pipes; create them with support_multi_receiver_shards=True",
+            bank);
+        TT_FATAL(
+            receivers.num_cores() == recv_per_bank,
+            "a legacy K-row-major (WIDTH_SHARDED) weight is sliced by one receivers-per-bank count, but bank {}'s pipe "
+            "drives {} receivers and bank {}'s drives {}; the sender would deliver the wrong pages",
+            bank,
+            receivers.num_cores(),
+            mapping.front().first.x,
+            recv_per_bank);
+    }
+    return validate_krow_major_weight_for_matmul_1d(program_config, weight, receiver_count, recv_per_bank);
 }
 
 // Builds the GCB for a legacy K-row-major (WIDTH_SHARDED) weight: one shard per DRAM bank, the
@@ -546,7 +573,8 @@ static GlobalCircularBuffer build_matmul_1d_gcb_krow_major(
         validate_grid_for_consumer(cfg, i, receiver_count);
 
         // ---- Per-(config, weight) K-row-major cross-checks and consumer-specific K-block count ----
-        const uint32_t block_count = validate_krow_major_weight_for_matmul_1d(cfg, w, receiver_count);
+        const uint32_t block_count =
+            validate_krow_major_weight_for_matmul_1d(cfg, w, receiver_count, num_recv_per_bank);
 
         const uint32_t in1_block_size = gcb_page_bytes(cfg, w, block_count);
         TT_FATAL(in1_block_size > 0, "config[{}] in1_block_size computed as 0", i);

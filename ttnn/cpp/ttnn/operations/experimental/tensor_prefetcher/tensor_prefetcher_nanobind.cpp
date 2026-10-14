@@ -164,8 +164,8 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                 prefetcher_pipes (List[PrefetcherPipe]): DRAM-sender PrefetcherPipes (created via
                     ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher) to deliver into
                     instead of a GCB. Pass every pipe from one such call, in any order; a subset
-                    or a mix of two calls' pipes is rejected. Receiver-contiguous tensors only; rotation works as it does
-                    for a GCB. A tensor's per-receiver block size need not equal the pipes'
+                    or a mix of two calls' pipes is rejected. A legacy K-row-major tensor needs one pipe
+                    per bank (support_multi_receiver_shards=True); rotation works as it does for a GCB. A tensor's per-receiver block size need not equal the pipes'
                     entry_size nor divide the ring, so size the ring for the consumer: one block is
                     enough for the transport, two for a consumer that keeps a block of lookahead.
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh that
@@ -334,8 +334,9 @@ void bind_tensor_prefetcher(nb::module_& mod) {
 
             Args:
                 program_config: The 1D matmul program config that will consume the weight.
-                weight: The DRAM weight tensor. Either layout with global_cb; receiver-contiguous
-                    only with prefetcher_pipes.
+                weight: The DRAM weight tensor, in either layout. A legacy K-row-major weight takes
+                    its receivers per bank from num_global_cb_receivers with global_cb, and from the
+                    pipes (one per bank) with prefetcher_pipes.
                 global_cb: The DRAM-sender GCB the prefetcher and matmul share.
                 prefetcher_pipes: The DRAM-sender PrefetcherPipes the prefetcher and matmul share,
                     as an alternative third argument to global_cb.

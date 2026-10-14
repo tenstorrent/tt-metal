@@ -63,19 +63,14 @@ def _receiver_rows(num_dram_banks: int, recv_per_bank: int) -> int:
     return ring_size // _ring_grid_cols(num_dram_banks, ring_size)
 
 
-def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_layers, row_offset=0, dual_senders=False):
-    """Build a DRAM-sender GCB sized to the prefetcher's per-receiver-per-block push.
+def _krow_major_weight_and_bank_map(device, K, N, dtype, recv_per_bank, row_offset=0):
+    """Legacy K-row-major weight + bank->receiver pairing shared by both DRAM-sender transports.
 
-    `row_offset` shifts the receiver grid down; the multi-GCB switching test uses
-    it to place two GCBs on disjoint receiver rows for the same prefetcher.
+    One WIDTH_SHARDED shard per bank, K padded to a whole number of ring blocks; bank b's
+    receivers sit at ring positions [b*recv_per_bank, (b+1)*recv_per_bank) on a row-major grid,
+    in the order the sender slices the bank's shard. `row_offset` shifts the receiver grid down.
 
-    `dual_senders` requests the two-sender-per-bank GCB variant. With recv_per_bank=1
-    each bank has a single receiver that cannot split, so every bank falls back to its
-    primary sender — the mapping is identical to a single-sender GCB and stays
-    K-row-major compatible.
-
-    Returns (tt_weight, addrs, gcb, num_iters_total, push_page_size_bytes, ring_size).
-    """
+    Returns (tt_weight, bank_to_receivers, push_page_size, ring_size)."""
     tile_bytes = _bytes_per_tile(dtype)
     num_dram_banks = device.dram_grid_size().x
     ring_size = num_dram_banks * recv_per_bank
@@ -102,6 +97,29 @@ def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_la
     tt_weight = ttnn.as_tensor(
         pt_weight, device=device, dtype=dtype, memory_config=weight_mem_config, layout=ttnn.TILE_LAYOUT
     )
+    bank_to_receivers = [
+        (b, _bank_receivers_row_major(b, recv_per_bank, ring_cols=ring_cols, row_offset=row_offset))
+        for b in range(num_dram_banks)
+    ]
+    return tt_weight, bank_to_receivers, push_page_size, ring_size
+
+
+def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_layers, row_offset=0, dual_senders=False):
+    """Build a DRAM-sender GCB sized to the prefetcher's per-receiver-per-block push.
+
+    `row_offset` shifts the receiver grid down; the multi-GCB switching test uses
+    it to place two GCBs on disjoint receiver rows for the same prefetcher.
+
+    `dual_senders` requests the two-sender-per-bank GCB variant. With recv_per_bank=1
+    each bank has a single receiver that cannot split, so every bank falls back to its
+    primary sender — the mapping is identical to a single-sender GCB and stays
+    K-row-major compatible.
+
+    Returns (tt_weight, addrs, gcb, num_iters_total, push_page_size_bytes, ring_size).
+    """
+    tt_weight, bank_to_receivers, push_page_size, ring_size = _krow_major_weight_and_bank_map(
+        device, K, N, dtype, recv_per_bank, row_offset=row_offset
+    )
 
     # addrs tensor (unused on DRAM-core path but required by op contract).
     addrs = ttnn.from_torch(
@@ -119,10 +137,6 @@ def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_la
         ),
     )
 
-    bank_to_receivers = [
-        (b, _bank_receivers_row_major(b, recv_per_bank, ring_cols=ring_cols, row_offset=row_offset))
-        for b in range(num_dram_banks)
-    ]
     gcb_size = _GCB_DEPTH_PAGES * push_page_size
     gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
         device, bank_to_receivers, gcb_size, support_multi_receiver_shards=not dual_senders
@@ -221,6 +235,43 @@ def test_validator_dram_sender(device, K, N, dtype, recv_per_bank, num_layers):
             print_stride=max(1, ring_size // 4),
             global_cb=gcb,
         )
+
+
+@pytest.mark.parametrize(
+    "K,N,dtype,recv_per_bank,num_layers",
+    [
+        (448, 1792, ttnn.bfloat16, 1, 2),  # default bench shape, fast path (full block fits)
+        (2048, 3584, ttnn.bfloat8_b, 2, 1),  # multi-tensor shape, K-sub path (M=1)
+        (4096, 14336, ttnn.bfloat8_b, 8, 1),  # FF1 production shape, K-sub+M path
+    ],
+    ids=["bench_default", "multi_ksub", "ff1_ksub_mchunk"],
+)
+def test_validator_pipe_krow_major(device, K, N, dtype, recv_per_bank, num_layers):
+    """Legacy K-row-major weight -> PrefetcherPipes, validated byte-for-byte against the source tensor.
+
+    The pipe twin of test_validator_dram_sender. One sender per bank reads K-rows of the bank's whole
+    shard and slices each across that bank's receivers, so a receiver's pipe sees the same per-block
+    pages a receiver-contiguous weight would give it. ff1 is the case whose K-row does not fit a stage
+    half, so the sender also chunks N across the receivers (M > 1). With one receiver per bank the two
+    layouts name the same bytes, and bench_default goes through the receiver-contiguous loop instead.
+    """
+    tt_weight, pipes, bank_to_receivers, _push_page_size, ring_size = _setup_weight_and_pipes_krow_major(
+        device, K, N, dtype, recv_per_bank
+    )
+    with tensor_prefetcher_session(device):
+        _queue_and_validate_pipes(device, tt_weight, pipes, bank_to_receivers, ring_size, num_layers=num_layers)
+
+
+def test_validator_pipe_krow_major_rejects_dual_senders(device, expect_error):
+    """One read of a K-row-major bank shard feeds every receiver on the bank, so a bank split across two
+    senders cannot deliver it."""
+    tt_weight, bank_to_receivers, push_page_size, ring_size = _krow_major_weight_and_bank_map(
+        device, 2048, 3584, ttnn.bfloat8_b, recv_per_bank=2
+    )
+    pipes, _space = _make_pipes(device, bank_to_receivers, _GCB_DEPTH_PAGES * push_page_size, dual_senders=True)
+    with tensor_prefetcher_session(device):
+        with expect_error(RuntimeError, "requires exactly one primary sender per DRAM bank"):
+            ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], prefetcher_pipes=pipes)
 
 
 @pytest.mark.parametrize(
@@ -563,6 +614,17 @@ def _setup_weight_and_pipes_recv_contig(
     tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
         device, K, N, dtype, recv_per_bank, distribution_strategy=distribution_strategy, row_offset=row_offset
     )
+    pipes, pipe_space = _make_pipes(
+        device, bank_to_receivers, (push_page_size // entry_divisor) * num_entries, dual_senders=dual_senders
+    )
+    result = (tt_weight, pipes, bank_to_receivers, push_page_size, ring_size)
+    return (*result, pipe_space) if return_space else result
+
+
+def _make_pipes(device, bank_to_receivers, ring_size_bytes, dual_senders=False):
+    """A PrefetcherPipeSpace over exactly the receivers in ``bank_to_receivers`` and the Tensor-prefetcher
+    pipes carved from it, every ring ``ring_size_bytes``. Returns (pipes, space); the space must outlive
+    the pipes."""
     receiver_domain = ttnn.CoreRangeSet(
         {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
     )
@@ -570,7 +632,7 @@ def _setup_weight_and_pipes_recv_contig(
         device,
         sender_cores=ttnn.CoreRangeSet(set()),
         receiver_domain=receiver_domain,
-        ring_size=(push_page_size // entry_divisor) * num_entries,
+        ring_size=ring_size_bytes,
         max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in bank_to_receivers),
         num_dram_senders=2 * len(bank_to_receivers),
     )
@@ -579,8 +641,20 @@ def _setup_weight_and_pipes_recv_contig(
         bank_to_receivers,
         support_multi_receiver_shards=not dual_senders,
     )
-    result = (tt_weight, pipes, bank_to_receivers, push_page_size, ring_size)
-    return (*result, pipe_space) if return_space else result
+    return pipes, pipe_space
+
+
+def _setup_weight_and_pipes_krow_major(device, K, N, dtype, recv_per_bank, row_offset=0, num_entries=_GCB_DEPTH_PAGES):
+    """PrefetcherPipe analogue of _setup_weight_and_gcb_dram_sender: the same K-row-major weight and
+    bank->receiver pairing (see _krow_major_weight_and_bank_map), over one pipe per bank, since one read
+    of a bank's shard feeds all of that bank's receivers. The ring holds `num_entries` blocks.
+
+    Returns (tt_weight, pipes, bank_to_receivers, push_page_size, ring_size)."""
+    tt_weight, bank_to_receivers, push_page_size, ring_size = _krow_major_weight_and_bank_map(
+        device, K, N, dtype, recv_per_bank, row_offset=row_offset
+    )
+    pipes, _space = _make_pipes(device, bank_to_receivers, push_page_size * num_entries)
+    return tt_weight, pipes, bank_to_receivers, push_page_size, ring_size
 
 
 @pytest.mark.parametrize("streaming", [False, True], ids=["batched", "streaming"])
