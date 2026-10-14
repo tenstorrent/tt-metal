@@ -39,10 +39,6 @@ MAX_NEW_TOKENS = 256
 MEAN_CER_GATE = 0.01  # "gate: <= 1.00%" -- see tests/probe_ocr_e2e.py history
 GT_CER_GATE = 0.03  # headroom over the measured mean; a broken tower reads far above it
 
-# Report-only decode telemetry for the CI dashboard (#58596). _read_page appends one
-# (decode_tokens, decode_seconds) pair per page; the CI test aggregates and emits them.
-_DECODE_STATS: list[tuple[int, float]] = []
-
 
 def _to_torch_logits(x, mesh, vocab_size: int, row: int = -1) -> torch.Tensor:
     """Logits at row; prefill returns the 32-row block holding the last token, so pass last_token_idx % 32."""
@@ -68,7 +64,21 @@ def _cer(ref: str, hyp: str) -> float:
     return prev[-1] / len(ref)
 
 
-def _read_page(sample: dict, processor, tower, generator, embed_tokens, image_token_id, ref, text_args, device) -> str:
+def _read_page(
+    sample: dict,
+    processor,
+    tower,
+    generator,
+    embed_tokens,
+    image_token_id,
+    ref,
+    text_args,
+    device,
+    decode_stats: list[tuple[int, float]],
+) -> str:
+    # Report-only decode telemetry for the CI dashboard (#58596): appends one
+    # (decode_tokens, decode_seconds) pair per page to the caller-owned accumulator,
+    # keeping each test's stats isolated from the others.
     img = Image.open(os.path.join(DEMO, sample["image"])).convert("RGB")
     messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": OCR_PROMPT}]}]
     text = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
@@ -143,7 +153,7 @@ def _read_page(sample: dict, processor, tower, generator, embed_tokens, image_to
         generated.append(token)
         decode_tokens += 1
 
-    _DECODE_STATS.append((decode_tokens, time.perf_counter() - decode_start))
+    decode_stats.append((decode_tokens, time.perf_counter() - decode_start))
 
     return tokenizer.decode([t for t in generated if t not in eos], skip_special_tokens=True)
 
@@ -187,9 +197,10 @@ def test_ocr_mean_cer_vs_hf_reference(device, hf_goldens):
     assert samples, "hf_goldens.json has no samples"
     pipeline = _build_pipeline(device)
 
+    decode_stats: list[tuple[int, float]] = []
     cers = []
     for s in samples:
-        text = _read_page(s, *pipeline, device)
+        text = _read_page(s, *pipeline, device, decode_stats)
         c = _cer(s["hf_output"], text)
         cers.append(c)
         print(f"[{s['name']}] CERvsHF={c * 100:.2f}%  TT={text[:120]!r}")
@@ -215,9 +226,10 @@ def test_ocr_mean_cer_vs_ground_truth(device, tmp_path):
     assert not missing, f"no renderable sample in bucket(s) {sorted(missing)}"
 
     pipeline = _build_pipeline(device)
+    decode_stats: list[tuple[int, float]] = []
     cers = []
     for s, path in samples:
-        text = _read_page({"image": path}, *pipeline, device)
+        text = _read_page({"image": path}, *pipeline, device, decode_stats)
         c = _cer(s.ground_truth, text)
         cers.append(c)
         print(f"[{s.name}] bucket={s.bucket} CERvsTruth={c * 100:.2f}%")
@@ -229,8 +241,8 @@ def test_ocr_mean_cer_vs_ground_truth(device, tmp_path):
 
     # Report-only perf for the CI dashboard (#58596): aggregate single-user decode rate
     # across all pages. No-op outside CI; device is still open for the SKU lookup.
-    total_tokens = sum(n for n, _ in _DECODE_STATS)
-    total_decode_s = sum(s for _, s in _DECODE_STATS)
+    total_tokens = sum(n for n, _ in decode_stats)
+    total_decode_s = sum(s for _, s in decode_stats)
     if total_tokens > 0 and total_decode_s > 0:
         decode_tps_u = total_tokens / total_decode_s
         report_e2e_metrics(
