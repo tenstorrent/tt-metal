@@ -1,11 +1,11 @@
 # --- Meshes ---------------------------------------------------------------
-# Single-galaxy two-mesh repro exercising PER-MESH fabric configs declared in the MGD: the two connected
-# meshes run DIFFERENT 2D torus axes.
-#   - M_Y: 2x2 RING,LINE  -> FABRIC_2D_TORUS_Y (ring on dim 0).
-#   - M_X: 2x4 LINE,RING  -> FABRIC_2D_TORUS_X (genuine ring on the size-4 dim 1).
-# The two meshes (12 ASICs) sit on one 32-ASIC galaxy and are inter-mesh connected. Reuses the generic
-# multi-mesh sanity config (topology-agnostic; the MGD fixes the per-mesh configs). Checks that two meshes
-# running different torus configs coexist and route inter-mesh without hanging/starving (relates to #56515).
+# Single-galaxy 3-mesh ring exercising PER-MESH fabric configs declared in the MGD, with meshes on
+# DIFFERENT 2D torus axes AND different shapes:
+#   - M_Y: 2x2 RING,LINE -> FABRIC_2D_TORUS_Y (ring on dim 0)      [mesh 0 and mesh 2]
+#   - M_X: 2x4 LINE,RING -> FABRIC_2D_TORUS_X (genuine ring on the size-4 dim 1)  [mesh 1]
+# The three meshes (16 ASICs) sit on one 32-ASIC galaxy and are ring-connected (0 -> 1 -> 2 -> 0). Reuses
+# the generic multi-mesh sanity config (topology-agnostic; the MGD fixes the per-mesh configs). Checks that
+# meshes running different torus configs coexist and route inter-mesh without hanging/starving (rel. #56515).
 mesh_descriptors {
   name: "M_Y"
   arch: BLACKHOLE
@@ -33,10 +33,21 @@ graph_descriptors {
   type: "FABRIC"
   instances { mesh { mesh_descriptor: "M_Y" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "M_X" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M_Y" mesh_id: 2 } }
 
   connections {
     nodes { mesh { mesh_descriptor: "M_Y" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "M_X" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M_X" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M_Y" mesh_id: 2 } }
+    channels { count: 4 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M_Y" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M_Y" mesh_id: 0 } }
     channels { count: 4 policy: RELAXED }
   }
 }

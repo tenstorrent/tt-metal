@@ -79,7 +79,7 @@
     bh_galaxy:
       timeout: 15
       mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_per_mesh_torus_yx_mesh_graph_descriptor.textproto
-  owner_id: U08RRAU5E15 # Ridvan Song
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
   budget_type: e2e
 
