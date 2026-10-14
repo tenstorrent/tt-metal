@@ -2950,8 +2950,6 @@ struct SolveRung {
     bool soft_seams;
     const char* name;
 };
-constexpr int kHardSeamConflictCap = 300'000;
-constexpr int kSoftSeamConflictCap = 300'000;
 constexpr std::array<SolveRung, 4> kSolveLadder{{
     {/*drop_host_cap=*/false, /*soft_seams=*/false, "hard seams, host cap"},
     {/*drop_host_cap=*/true, /*soft_seams=*/false, "hard seams, host cap dropped"},
@@ -3256,8 +3254,7 @@ bool SatPlacementEnumerationSession::MasterSolve::restart(bool relaxed_mode, boo
         relaxed_mode ? ConnectionValidationMode::RELAXED : ConnectionValidationMode::STRICT,
         /*quiet_mode=*/true,
         TopologyMappingSolverEngine::Sat,
-        owner_->unique_shapes_,
-        soft_seams ? kSoftSeamConflictCap : kHardSeamConflictCap);
+        owner_->unique_shapes_);
     for (const auto& mapping : owner_->excluded_seat_maps()) {
         session->exclude_mapping(mapping);
     }
