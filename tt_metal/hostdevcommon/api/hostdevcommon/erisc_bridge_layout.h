@@ -142,6 +142,11 @@ constexpr bool bridge_segment_offset_ok(
     std::uint32_t arenas,
     std::uint32_t ring_pages,
     std::uint32_t packet_capacity) {
+    // The indices come off the wire too: out of range, bridge_segment_offset() returns a base past
+    // the region and every comparison below would pass against memory that is not ours.
+    if (arena_idx >= arenas || static_cast<std::uint32_t>(arena) >= kBridgeArenas) {
+        return false;
+    }
     const std::uint64_t lo = bridge_segment_offset(arena_idx, arena, arenas, ring_pages, packet_capacity);
     const std::uint64_t seg = bridge_segment_bytes(ring_pages, packet_capacity);
     // Subtract, never add: offset comes off the wire, and offset + length can wrap past the upper

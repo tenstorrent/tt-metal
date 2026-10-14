@@ -359,7 +359,7 @@ BENCHMARK_DEFINE_F(PipeFixture, Bridge)(benchmark::State& state) {
     std::string herr;
     auto h2h = EriscH2HSocket::create(hc, herr);
     if (!h2h) {
-        state.SkipWithError((err.empty() ? herr : err).c_str());
+        state.SkipWithError(err.empty() ? herr : err);
         return;
     }
     E2H2H2EPipeline pipe(std::move(h2h), std::move(e2h), std::move(h2e), batch_);
@@ -399,7 +399,7 @@ BENCHMARK_DEFINE_F(PipeFixture, Bridge)(benchmark::State& state) {
     int bad = err.empty() ? 0 : 1;
     MPI_Allreduce(MPI_IN_PLACE, &bad, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
     if (bad != 0) {
-        state.SkipWithError(err.empty() ? "the other rank failed setup" : err.c_str());
+        state.SkipWithError(err.empty() ? "the other rank failed setup" : err);
         return;
     }
     // Before the producer: every release_cyc must follow the anchor, or the modular difference wraps.
@@ -414,8 +414,12 @@ BENCHMARK_DEFINE_F(PipeFixture, Bridge)(benchmark::State& state) {
                                         frames_,
                                         dev_coord)
                                   : bb::Producer{};
-    if (g_rank == 0 && !prod.ok) {
-        state.SkipWithError(prod.err.c_str());
+    // Agreed, not local: rank 1 would otherwise run on into the collectives below and wait there
+    // for a peer that has already left.
+    int prod_bad = (g_rank == 0 && !prod.ok) ? 1 : 0;
+    MPI_Allreduce(MPI_IN_PLACE, &prod_bad, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+    if (prod_bad != 0) {
+        state.SkipWithError(g_rank == 0 ? prod.err : std::string("rank 0 could not launch the producer"));
         return;
     }
 
@@ -549,7 +553,7 @@ BENCHMARK_DEFINE_F(PipeFixture, Bridge)(benchmark::State& state) {
         bb::emit_rtt_us(state, std::move(us));
     }
     if (!pipe.first_error().empty()) {
-        state.SkipWithError(pipe.first_error().c_str());
+        state.SkipWithError(pipe.first_error());
     } else if (h[2] != 0) {
         g_stalled = true;
         std::string why = "stalled: forwarded " + std::to_string(h[3]) + ", injected " + std::to_string(h[4]) +
