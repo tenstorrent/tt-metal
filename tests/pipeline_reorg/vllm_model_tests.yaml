@@ -193,7 +193,9 @@
 
 # dFlash on the plugin's speculative contract: vLLM schedules the drafts and
 # the plugin verifies and accepts them, so every step streams. Server flags
-# match "Gemma4-31B dFlash tp=8" apart from the class and --speculative-config.
+# match "Gemma4-31B dFlash tp=8" apart from the class, --speculative-config and
+# --no-async-scheduling: the class declares no async decode, because a row the
+# drafter answers leaves the plain decode's device-resident inputs stale.
 #
 # The 2048-position ring allocates a KV shape no other leg caches, so the first
 # run on a fresh cache needs mlperf-write-access.
@@ -209,12 +211,12 @@
   mesh-device: P150x8
   arch: arch-blackhole
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
-  additional-server-args: "--max_model_len 131072 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --no-async-scheduling --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 5"
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --no-async-scheduling --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 5"
   # conc-1 at the client: this class speculates only while one request is live.
   # `vllm bench serve` sends greedy requests to exercise speculation. The
   # server can also serve sampled requests through ordinary decode.
   additional-benchmark-args: "--max-concurrency 1 --num-prompts 8 --temperature 0"
-  # GEMMA4_SPEC_RING_HEADROOM_BLOCKS=16: 131072 turns bounded sliding KV on,
+  # GEMMA4_SPEC_RING_HEADROOM_BLOCKS=16: 262144 turns bounded sliding KV on,
   #   and an exact 1024-position ring has no room for the K + 1 verify rows, so
   #   the class stops speculating near position 1018. 16 blocks make it 2048.
   # GEMMA4_CHUNKED_PREFILL_TRACE=0: the impl exports 1 for 31B, and a traced
