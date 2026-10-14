@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"test_bf16_gamma[1x1x32x64-axis1]","notes":"second param errored at mesh re-open under --dev (fabric ethernet timeout), not op related","ts":"2026-10-14T10:27:03+00:00"}
