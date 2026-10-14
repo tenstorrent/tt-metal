@@ -170,13 +170,12 @@ class DecoderLayer:
         if _DELTA_PROBE:
             _delta_stats("moe_out ", self.layer_idx, hidden_states)
 
-        # DFlash consumes the MoE branch output itself, before it is folded into
-        # the residual stream.  This is the same boundary as Blaze's
-        # FCMatmulForward and is intentionally not the decoder-layer output.
-        if dflash_accumulator is not None:
-            dflash_accumulator.tap(hidden_states, self.layer_idx)
-
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)
+
+        # DFlash (z-lab/gpt-oss-120b-DFlash) trains on decoder-layer outputs, HF
+        # hidden_states[layer_id + 1], i.e. after this residual add.
+        if dflash_accumulator is not None:
+            dflash_accumulator.tap(hidden_states, self.layer_idx)
 
         return hidden_states

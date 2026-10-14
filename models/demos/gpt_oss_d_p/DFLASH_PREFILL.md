@@ -21,13 +21,15 @@ the full model on a Galaxy. *TSU* is tokens per second per user during decode.
 
 ## Producer contract
 
-The target taps the MoE branch output immediately after `self.mlp(...)` and
-before the residual add at layers `1, 9, 17, 25, 33`. For target hidden width
-`H=2880`, drafter `fc.weight` is an `nn.Linear` weight with shape
-`[H, 5*H]`. Prefill accumulates:
+The target taps the decoder-layer output, after the MoE residual add, at layers
+`1, 9, 17, 25, 33`. This is what
+[z-lab/gpt-oss-120b-DFlash](https://huggingface.co/z-lab/gpt-oss-120b-DFlash)
+trains on: `extract_context_feature` reads HF `hidden_states[layer_id + 1]`.
+For target hidden width `H=2880`, drafter `fc.weight` is an `nn.Linear` weight
+with shape `[H, 5*H]`. Prefill accumulates:
 
 ```text
-reduced_hidden = Σ moe_output_i @ fc.weight[:, i*H:(i+1)*H].T
+reduced_hidden = Σ layer_output_i @ fc.weight[:, i*H:(i+1)*H].T
 ```
 
 The result is pre-norm. The producer must not apply the drafter's
@@ -92,7 +94,7 @@ export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
 export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
 export GPT_OSS_WEIGHTS_FROM_CACHE=1 EXPERT_DTYPE=bf4
 export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
-export BLAZE_DFLASH_SEED_REF=/mnt/models/blaze/openai/gpt-oss-120b/cache/dflash/seed_1016.pt
+export BLAZE_DFLASH_SEED_REF=/mnt/models/blaze/openai/gpt-oss-120b/cache/dflash/seed_1016_postres.pt
 export TT_HF_DRAFT_MODEL=/path/to/gpt-oss-120b-DFlash
 # Linear needs no mesh descriptor. For ring, unset this and export
 # TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
@@ -108,8 +110,8 @@ failures are reported together. Floors (CI sets the same values explicitly):
 | variable | default | gate |
 |---|---|---|
 | `GPT_OSS_KV_PCC_MIN` | unset | min per-layer target KV PCC (0.85 in CI) |
-| `GPT_OSS_DFLASH_PCC_MIN` | 0.88 | aggregate pre-norm feature PCC |
-| `GPT_OSS_DFLASH_POS_PCC_MIN` | 0.20 | worst single-position feature PCC |
+| `GPT_OSS_DFLASH_PCC_MIN` | 0.97 | aggregate pre-norm feature PCC |
+| `GPT_OSS_DFLASH_POS_PCC_MIN` | 0.40 | worst single-position feature PCC |
 | `GPT_OSS_DFLASH_LOGITS_PCC_MIN` | 0.90 | final-row logits PCC over the seed's top-64 ids |
 | `GPT_OSS_DFLASH_TOP10_OVERLAP_MIN` | 7 | ids shared by our and the seed's top-10 |
 | `GPT_OSS_DFLASH_SEED_TOP1_MIN` | unset | seed sanity: its teacher-forced top-1 hit rate on the prompt |
@@ -156,7 +158,7 @@ The pre-P/D ladder mirrors Kimi's test semantics:
 The SC1 model-store paths used by CI are:
 
 ```text
-/mnt/models/blaze/openai/gpt-oss-120b/cache/dflash/seed_1016.pt
+/mnt/models/blaze/openai/gpt-oss-120b/cache/dflash/seed_1016_postres.pt
 /mnt/models/blaze/openai/gpt-oss-120b/cache/dflash/true_prefill_1k.trace.pt
 /mnt/models/blaze/openai/gpt-oss-120b/cache/dflash/true_prefill_torch_control_1k.pt
 ```

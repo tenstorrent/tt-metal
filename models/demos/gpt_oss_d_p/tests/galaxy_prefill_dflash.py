@@ -17,8 +17,8 @@ Optional:
   PREFILL_DFLASH_HANDOFF_OUT output .pt for the reload/DFlash compatibility gate
   PREFILL_DFLASH_COMPAT_CONTROL prefill-by-decode control result .pt
   PREFILL_DFLASH_COMPAT_RESULT  reload consumer result .pt
-  GPT_OSS_DFLASH_PCC_MIN     aggregate pre-norm PCC floor (default 0.88)
-  GPT_OSS_DFLASH_POS_PCC_MIN per-position pre-norm PCC floor (default 0.20)
+  GPT_OSS_DFLASH_PCC_MIN     aggregate pre-norm PCC floor (default 0.97)
+  GPT_OSS_DFLASH_POS_PCC_MIN per-position pre-norm PCC floor (default 0.40)
   GPT_OSS_DFLASH_LOGITS_PCC_MIN final-row logits PCC over the seed's top-k ids (default 0.90)
   GPT_OSS_DFLASH_TOP10_OVERLAP_MIN shared ids between our and the seed's top-10 (default 7)
   GPT_OSS_DFLASH_SEED_TOP1_MIN optional floor on the seed's own teacher-forced top-1 hit rate
@@ -152,7 +152,7 @@ def _write_consumer_fixture(
         "prompt_token_ids": list(token_ids),
         "reduced_hidden": trace_reduced,
         "next_token": next_token,
-        "block_size": int(os.getenv("PREFILL_DFLASH_BLOCK_SIZE", "8")),
+        "block_size": int(os.getenv("PREFILL_DFLASH_BLOCK_SIZE", (seed or {}).get("block_size", 10))),
         "hidden_dim": int(reduced_pre.shape[-1]),
         "target_layer_ids": TARGET_LAYERS,
     }
@@ -327,10 +327,10 @@ def main() -> int:
             reduced_reference = reduced[:reference_positions]
             aggregate = _pcc(reference, reduced_reference)
             per_position = torch.tensor([_pcc(reference[i], reduced_reference[i]) for i in range(reference_positions)])
-            pcc_min = float(os.getenv("GPT_OSS_DFLASH_PCC_MIN", "0.88"))
+            pcc_min = float(os.getenv("GPT_OSS_DFLASH_PCC_MIN", "0.97"))
             if aggregate < pcc_min:
                 gate_failures.append(f"reduced_hidden aggregate PCC {aggregate:.5f} < {pcc_min}")
-            pos_min = float(os.getenv("GPT_OSS_DFLASH_POS_PCC_MIN", "0.20"))
+            pos_min = float(os.getenv("GPT_OSS_DFLASH_POS_PCC_MIN", "0.40"))
             if float(per_position.min()) < pos_min:
                 gate_failures.append(f"reduced_hidden min per-position PCC {per_position.min():.5f} < {pos_min}")
 

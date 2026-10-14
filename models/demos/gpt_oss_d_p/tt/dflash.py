@@ -3,7 +3,8 @@
 
 """DFlash feature generation contracts for GPT-OSS prefill.
 
-The GPT-OSS DFlash checkpoint projects five target-layer MoE outputs with one
+The GPT-OSS DFlash checkpoint projects five target decoder-layer outputs (HF
+``hidden_states[layer_id + 1]``, after the MoE residual add) with one
 ``nn.Linear`` weight::
 
     fc(cat([h_1, h_9, h_17, h_25, h_33]))
@@ -374,8 +375,8 @@ class TtDFlashFeatureAccumulator:
         self._tapped = []
         self.fc_enqueue_ms = {}
 
-    def tap(self, moe_output, global_layer_idx: int) -> None:
-        """Project a pre-residual MoE output and add it to the running feature."""
+    def tap(self, layer_output, global_layer_idx: int) -> None:
+        """Project a decoder-layer output (post-residual) and add it to the running feature."""
 
         import time
 
@@ -392,15 +393,15 @@ class TtDFlashFeatureAccumulator:
                 f"DFlash taps arrived out of order: got layer {global_layer_idx}, "
                 f"expected layer {expected_layer} after {tuple(self._tapped)}"
             )
-        if moe_output.shape[-1] != self.config.hidden_size:
+        if layer_output.shape[-1] != self.config.hidden_size:
             raise ValueError(
-                f"DFlash layer {global_layer_idx} activation width={moe_output.shape[-1]}, "
+                f"DFlash layer {global_layer_idx} activation width={layer_output.shape[-1]}, "
                 f"expected {self.config.hidden_size}"
             )
 
         started = time.perf_counter()
         projected = ttnn.linear(
-            moe_output,
+            layer_output,
             self.fc_slices[global_layer_idx],
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

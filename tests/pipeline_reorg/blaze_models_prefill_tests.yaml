@@ -1438,7 +1438,7 @@
       ln -s "$DFLASH_SRC/drafter_config.json" "$TT_HF_DRAFT_MODEL/config.json"
       ln -s "$DFLASH_SRC/drafter_model.safetensors" "$TT_HF_DRAFT_MODEL/model.safetensors"
       export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
-      export BLAZE_DFLASH_SEED_REF=/mnt/models/blaze/openai/gpt-oss-120b/cache/dflash/seed_1016.pt
+      export BLAZE_DFLASH_SEED_REF=/mnt/models/blaze/openai/gpt-oss-120b/cache/dflash/seed_1016_postres.pt
       export PREFILL_DFLASH_HANDOFF_OUT=/tmp/gptoss_dflash_true_prefill_1k.pt
       export GPT_OSS_WEIGHTS_FROM_CACHE=1
       # bf4 experts match the P/D DFlash producer and the handoff the Blaze consumer gate was proven on.
@@ -1447,11 +1447,11 @@
       export PREFILL_TPS_ITERS=3
       export GPT_OSS_KV_PCC_MIN=0.85
       export PREFILL_REQUIRE_GALAXY=1
-      # Measured vs the independent HF seed: reduced-hidden PCC 0.896 aggregate and 0.248 min per
-      # position (bf4 experts, linear); final-row logits PCC 0.959 over the seed's top-64 and top-10
-      # overlap 9 on the recorded 1k handoffs.
-      export GPT_OSS_DFLASH_PCC_MIN=0.88
-      export GPT_OSS_DFLASH_POS_PCC_MIN=0.20
+      # Measured vs the independent HF seed (decoder-layer outputs, hidden_states[layer_id + 1]):
+      # reduced-hidden PCC 0.987 aggregate and 0.469 min per position (bf4 experts, linear);
+      # final-row logits PCC 0.959 over the seed's top-64 and top-10 overlap 9.
+      export GPT_OSS_DFLASH_PCC_MIN=0.97
+      export GPT_OSS_DFLASH_POS_PCC_MIN=0.40
       export GPT_OSS_DFLASH_LOGITS_PCC_MIN=0.90
       export GPT_OSS_DFLASH_TOP10_OVERLAP_MIN=7
       timeout -k 2m 25m mpirun --pernode --tag-output bash -lc '
