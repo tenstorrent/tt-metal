@@ -203,6 +203,7 @@ class DenseDecodePlan:
         from ..fused_decode.config import DENSE_MOE_CORES, DENSE_MOE_WORKERS_PER_BANK
 
         tile = ttnn.TILE_SIZE
+        self.tokens = tokens
         grid = mesh_device.compute_with_storage_grid_size()
         cores = DENSE_MOE_CORES
         n_act = num_experts * intermediate_local

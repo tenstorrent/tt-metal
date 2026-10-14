@@ -84,18 +84,22 @@ class Experts:
         self.ccl_manager = ccl_manager
         self.program_config = program_config
 
-        # Load weights
-        self.weights = load_expert_weights(
-            mesh_device=mesh_device,
-            config=config,
-            state_dict=state_dict,
-            mesh_config=mesh_config,
-            weight_dtype=weight_dtype,
-            tensor_cache_path=tensor_cache_path,
-        )
-
-        # Cache prefill sparsity (created once, reused for all prefill calls)
-        self.prefill_sparsity = self._create_prefill_sparsity()
+        # Load weights. The batched dense path (dense_decode_tokens) serves prefill too, from its own layout, so the
+        # per-expert weights are not loaded there (they are ~2.5 GB per device for gpt-oss-20b at TP=4, the margin a
+        # 128k-token context needs at batch 32).
+        self.weights = None
+        self.prefill_sparsity = None
+        if not dense_decode_tokens:
+            self.weights = load_expert_weights(
+                mesh_device=mesh_device,
+                config=config,
+                state_dict=state_dict,
+                mesh_config=mesh_config,
+                weight_dtype=weight_dtype,
+                tensor_cache_path=tensor_cache_path,
+            )
+            # Cache prefill sparsity (created once, reused for all prefill calls)
+            self.prefill_sparsity = self._create_prefill_sparsity()
 
         # Fused decode (TP over mesh columns, no expert parallelism): only the routed experts are computed, by the
         # DRAM-streaming ops of fused_decode/stream.py (ops and buffers shared by every layer through the CCL manager).
@@ -210,6 +214,8 @@ class Experts:
             return ttnn.reshape(
                 out, (1, 1, tokens, self.config.hidden_size), (1, 1, max(32, tokens), self.config.hidden_size)
             )
+        if self.dense_decode_weights is not None:
+            return self._prefill_forward_dense(hidden_states, topk_expert_weights)
         # Determine mode based on sequence length. Decode with several tokens per device (batch > 1 without expert
         # parallelism) takes the prefill path: each token's experts are the same computation either way, and the
         # one-token decode ops below only accept a single token.
@@ -236,3 +242,37 @@ class Experts:
                 program_config=self.program_config,
                 prefill_sparsity=self.prefill_sparsity,
             )
+
+    def _prefill_forward_dense(self, hidden_states, routing_weights):
+        """Prefill MoE of the batched dense path: the sequence in tiles of plan tokens, each through
+        decode_forward_dense (every expert, from the side-by-side weights), then one TP all-reduce.
+
+        hidden_states: [1, 1, S, hidden] with S a multiple of the plan's tokens; routing_weights: [S, num_experts]."""
+        plan, hidden = self.dense_decode_plan, self.config.hidden_size
+        tokens = plan.tokens
+        seq_len = hidden_states.shape[-2]
+        assert seq_len % tokens == 0, f"prefill length {seq_len} is not a multiple of {tokens}"
+        experts = routing_weights.shape[-1]
+        routing_weights = ttnn.reshape(routing_weights, (seq_len, experts))
+        parts, groups = [], []
+        for start in range(0, seq_len, tokens):
+            x = ttnn.slice(hidden_states, [0, 0, start, 0], [1, 1, start + tokens, hidden])
+            w = ttnn.slice(routing_weights, [start, 0], [start + tokens, experts])
+            parts.append(decode_forward_dense(x, w, self.dense_decode_weights, plan, self.config))
+            x.deallocate(True)
+            if len(parts) == 64:
+                groups.append(ttnn.concat(parts, dim=2))
+                for t in parts:
+                    t.deallocate(True)
+                parts = []
+        if parts:
+            groups.append(ttnn.concat(parts, dim=2) if len(parts) > 1 else parts[0])
+            if len(parts) > 1:
+                for t in parts:
+                    t.deallocate(True)
+        partial = groups[0] if len(groups) == 1 else ttnn.concat(groups, dim=2)
+        if len(groups) > 1:
+            for t in groups:
+                t.deallocate(True)
+        out = apply_tensor_parallel_allreduce(partial, self.mesh_config, self.mesh_device, seq_len, self.ccl_manager)
+        return ttnn.reshape(out, (1, 1, seq_len, hidden), (1, 1, max(32, seq_len), hidden))
