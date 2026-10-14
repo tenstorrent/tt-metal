@@ -253,3 +253,87 @@ I re-applied the attempt above unchanged; it had passed under an older framework
 - Result: PASS. pcc 0.999979, auto_margin_min 1.86. Tightest check is column 867: 0.0314 vs golden (limit 0.0613).
   vs CPU, rel is 0.0062 (limit 0.0122). 6 device ops, 0 host FLOPs. C.sliding.mlp regression PASS.
 - Re-run: `bfw job check --task C.global.mlp`
+
+## M.1 (all-device model, ladder s4096)
+
+- Built `tt/model.py`:
+  - `TtGemma4Block` runs `run_block(BLOCK_GRAPH)` with one device fn per step: the same modules the component tests
+    validated. Boundaries are freed after their last reader, using a schedule built once at load. The block input is
+    never freed (the caller owns it).
+  - `TtGemma4Model` holds the bf16 embedding table with sqrt(H) folded in, the blocks and the final norm.
+    `new_caches(max_seq)` builds RoPE and page tables outside the forward.
+  - `cache_to_torch` reads back the KV of mesh row 0.
+- Built `hooks.py:Gemma4DeviceModel` and `_DeviceState` (the ladder adapter):
+  - Token ids are uploaded in `embed`, outside `layer`.
+  - The LM head (tied, softcap 30) runs on the host on the ladder's sampled rows only.
+  - `formats()` reports bfloat8_b for K and V.
+- Ladder s4096 (2 x 2048):
+  - Passing gates: host transfers per layer 0, at least 69 ttnn ops per layer, worst layer pcc 0.99286, state pcc min
+    0.99346, bias <= 0.0034 on every layer.
+  - Other results: final hidden pcc 0.99828, top1 0.968, top5 0.951. Chunk 1 took 2.14 s and the load 232 s.
+  - Failing gate: rel_layer must be <= 0.05. L10 is 0.052, the peak is L18 at 0.120, and L29 is 0.038.
+- Diagnosis, which the next attempt should not repeat:
+  - Each block is accurate when teacher-forced on the golden input and golden KV prefix: out rel 0.007-0.010 on layers
+    0-12.
+  - The chained-run excess comes from a few tokens of chunk 1. Rows 1275, 1240 and 584 (positions 3323 and 3288 are
+    "the" in "...to the guard,\nand from the") go from row rel 0.06 to about 1.0 at layer 8. At layer 9 several
+    more tokens flip.
+  - Cause: sliding-attention head 7 of layer 8 is near a tie. For row 1275, the golden logit on key 1240 is 10.3; from
+    the device input it is 7.7, which drops pmax from 0.88 to 0.37.
+  - The fp32 CPU reference with the golden input (device KV prefix or golden) gives row rel 0.003 there. So the flip is
+    caused by the input drift that layers 0-7 accumulate, not by layer 8's kernels.
+  - CPU simulation over all 30 layers, chained, peak rel_layer:
+    | perturbation | peak rel_layer |
+    |---|---|
+    | fp32 reference alone | 0.0017 |
+    | bf16 rounding of every activation only | 0.109 |
+    | bfp8 KV only | 0.082 |
+    | bfp8 expert weights only | 0.110 |
+    | bfp8 attention weights only | 0.117 |
+    | bf16 + bfp8 everywhere | 0.119 (device: 0.120) |
+    | 1e-4 multiplicative noise on the embedding only | 0.101 (seeds 1-2: 0.019-0.020) |
+    | 1e-3 multiplicative noise on the embedding only | 0.027-0.065 |
+    | 1e-2 multiplicative noise on the embedding only | 0.107-0.109 |
+  - Conclusion: under the spec's required formats (bf16 activations, bfp8 weights and KV), the 30-layer stack is
+    chaotic on these tokens. Every one of the mandated formats breaks rel 0.05 on its own.
+  - Tried on the device: an fp32 residual stream (h_mid, ffn_sum and block out in fp32; norms emit bf16). L12 rel went
+    from 0.0633 to 0.0636, so there was no effect, and it was reverted.
+- Re-run: `bfw job check --task M.1`. Ladder only:
+  `BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all generated/bringup/gemma4_a4b_glx/tests/test_ladder.py`.
+- Later, the gate's rel_layer_L* limit went from 0.05 to 0.15 (tasks.yaml, framework side). The same code then
+  passed with no changes: `bfw job check --task M.1` PASS, rel peak L18 0.1196, pcc_layer min 0.99286 (L18),
+  pcc_state_min 0.99346, bias max 0.0034 (L19), 0 host transfers and 69 ops per layer. Final hidden pcc 0.99828,
+  top1 0.968, top5 0.951. All 56 C/S regressions PASS.
+- Run gemma4-glx-15, M.1 attempt 1: no code change.
+  - `bfw job check --task M.1` FAILs before it runs anything: "frozen under another framework or thresholds:
+    re-run render-tests". The task's frozen binding (a76a2fda…, frozen 2026-10-13T17:46) no longer matches the
+    current framework (defaults.yaml layer_rel 0.15, changed 2026-10-14 09:51) (726dbbd1…).
+  - tasks.yaml's M.1 gate metric is still `rel_layer_L*: <= 0.05`.
+  - The frozen ladder run alone, `BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all
+    generated/bringup/gemma4_a4b_glx/tests/test_ladder.py`, PASSES. It checks against defaults layer_rel 0.15. Results:
+    worst layer pcc 0.992858, state 0.993465, final hidden 0.998278, top1 0.9684, top5 0.9506, 0 host transfers,
+    69 ops per layer.
+  - Before M.1 can pass, the framework side needs both of these: re-run render-tests to re-freeze M.1, and make the
+    ledger's rel_layer_L* limit match layer_rel 0.15.
+
+## L.s16384 (ladder s16384, 2 x 8192)
+
+- First check, with no code change: only one gate failed, `bias_layer_L29 = 0.00618` (limit 0.005). Everything
+  else passed: layer pcc min 0.9976, rel max 0.070, state 0.9947, final hidden 0.9986, top5 0.954, 0 host transfers.
+- Diagnosis (scratch tests under generated/diag_l29, not committed):
+  - L29 teacher-forced on the golden input and golden KV prefix: out bias -0.0013. L23 and L28 are the same
+    (<= 0.0013). So no single layer is wrong.
+  - In the chained run, L29's bias comes from post_ffn_norm: ffn_sum bias +0.004, ffn_out -0.0058. The CPU fp32
+    reference, fed the device's L28 output, also gives -0.0051. So most of this is input drift that L29's norm weight
+    amplifies: channel 2240 (post_ffn w 9.94) carries 55 % of the weighted energy.
+  - Per-layer bias trail over the 30 layers drifts negative: L26 -0.0013, L28 -0.0027, L29 -0.0062.
+  - One systematic device term: `ttnn.rms_norm(x, weight=w)` gives a median row norm ratio of -0.00066 to -0.00075 on
+    real L29 activations. Fp32 in and out, or an fp32 weight, does not change it. rms_norm without a weight is
+    unbiased (+0.00006), and so is a separate multiply by w. Each block has 7 such norms.
+- Fix: the `NORM_WEIGHT` setting (tt/settings.py), default "separate". `TtRMSNorm` does typecast to fp32, rms_norm with
+  no weight, then one multiply by the fp32 weight that rounds to bf16. "fused" keeps the old single op. The cost is
+  about 1.5 ms vs 0.35 ms per norm at 8192 x 2816 (8 ops per layer call more: 83 instead of 69). Chunk 1 took 3.5 s.
+- Result, ladder s16384 alone: PASS. Worst layer pcc 0.99626, final hidden 0.99849, top1 0.958, top5 0.956, state
+  0.99383, 0 host transfers.
+- Re-run: `bfw job check --task L.s16384`. Ladder only:
+  `BRINGUP_RUNG=s16384 scripts/run_safe_pytest.sh --run-all generated/bringup/gemma4_a4b_glx/tests/test_ladder.py`.

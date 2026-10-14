@@ -55,6 +55,11 @@ TABLE = {
         (True, False),
         "2026-10-13 C.sliding.experts: each mesh row runs the experts on its S/8 tokens, then all_gather over the rows",
     ),
+    "NORM_WEIGHT": Setting(
+        "separate",
+        ("separate", "fused"),
+        "2026-10-14 L.s16384: RMSNorm weight as a separate fp32 multiply (fused ttnn.rms_norm weight biases norms -0.07 %)",
+    ),
 }
 
 MAX_PRECISION = {
@@ -69,6 +74,7 @@ MAX_PRECISION = {
     "ROUTER_WEIGHT_DTYPE": "float32",
     "EXPERTS_MATMUL_FIDELITY": "HiFi4",
     "EXPERTS_MATMUL_FP32_ACC": True,
+    "NORM_WEIGHT": "separate",
 }
 
 settings = Settings("GEMMA4_A4B_GLX_", TABLE, max_precision=MAX_PRECISION)
