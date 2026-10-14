@@ -42,9 +42,15 @@ inline bool decode_step(const std::uint32_t c1, const std::uint32_t r, const std
 template <std::uint32_t K>
 constexpr std::uint32_t tiles_per_sequence = K == 2048 ? 2 : 1;
 
+// DEST bank 1 starts at tile 4 in 32-bit mode: one-tile chunks with an even id sit there, so MATH's face moves on
+// one chunk do not hold PACK's SFPU loads on the other.
 template <std::uint32_t K>
 constexpr std::uint32_t chunk_tile(const std::uint32_t chunk)
 {
+    if constexpr (tiles_per_sequence<K> == 1)
+    {
+        return chunk == 0 ? 0 : (chunk & 1) ? 1 : 4;
+    }
     return tiles_per_sequence<K> * (chunk == 0 ? 0 : 2 - (chunk & 1));
 }
 
@@ -175,7 +181,6 @@ template <std::uint32_t K>
 inline __attribute__((noinline)) void sfpu_stage(const std::uint32_t chunk, const std::uint32_t stage)
 {
     using namespace ckernel::sfpu;
-    constexpr int sequence_rows     = 64 * tiles_per_sequence<K>;
     const std::uint32_t tile_offset = chunk_tile<K>(chunk) << 6;
     const bool ascending            = chunk > 0;
     switch (stage)
@@ -216,11 +221,11 @@ inline __attribute__((noinline)) void sfpu_stage(const std::uint32_t chunk, cons
             {
                 if (chunk & 1)
                 {
-                    _topk_xl_split_merge_<K, sequence_rows, true>(0);
+                    _topk_xl_split_merge_<K, (chunk_tile<K>(1) << 6), true>(0);
                 }
                 else
                 {
-                    _topk_xl_split_merge_<K, 2 * sequence_rows, true>(0);
+                    _topk_xl_split_merge_<K, (chunk_tile<K>(2) << 6), true>(0);
                 }
             }
             break;
