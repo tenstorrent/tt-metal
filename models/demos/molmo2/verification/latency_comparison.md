@@ -3,6 +3,13 @@
 Suite: the 105 multiple-choice video requests in `test.jsonl` (temperature 0, max_tokens 16), run through
 `run_suite.py` against OpenAI-compatible servers. Date of the new runs: 2026-10-14.
 
+## Headline (per user: the GPU baseline was measured with local video files)
+
+Like for like is therefore the local `file://` pass: **TT 1x8 slice 2.31 s mean / 1.76 s median / 4.54 s p90 vs GPU baseline 3.61 / 3.11 / 6.38 s**
+(mean 36% lower, 1.56x faster). The GPU model is not recorded. The https rows below include ~1.6 s of video download per request and are not
+comparable to the GPU number. Caveats: short answers (max_tokens 16) so prefill dominates; decode is 19 tok/s vs ~35 on the March T3K reference;
+numbers were measured without TT_MM_THROTTLE_PERF=3 (about +12% on the DP=4 suite).
+
 ## What the reference numbers are
 
 | Reference | Source | Hardware / stack | Notes |
