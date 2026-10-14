@@ -108,6 +108,7 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape)
 {
+asm volatile("nop"); // gate experiment arm bn: one NOP at the top of the init
 #if defined(LLK_EXP_NOP_UNPACK_INIT) && defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
     asm volatile(".rept " LLK_EXP_BH_S_(LLK_EXP_NOP_UNPACK_INIT) "\n\tnop\n\t.endr"); // experiment hook (integ4)
 #endif
