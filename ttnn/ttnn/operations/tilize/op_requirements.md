@@ -86,7 +86,7 @@
 
 **Done when**: every golden and translated retile cell (`tile_geometry_retile` group, `test_tilize_retile`, program-cache `retile_32_to_16`) passes at bf16.
 
-### [ ] Refinement 5 — Numerical configurability: all input/output dtypes
+### [~] Refinement 5 — Numerical configurability: all input/output dtypes
 
 **Goal**: add `dtype` ∈ {float32, fp8_e4m3, uint32, int32, uint16, uint8} and `output_dtype` ∈ {float32, bfloat8_b, bfloat4_b, uint32, int32, uint16, uint8} to SUPPORTED (all legal pairs per feature_spec INVALID), with in-kernel cast at pack time (output CB format = output dtype), bit-exact passthrough for fp32 and 32-bit ints (`fp32_dest_acc_en=True`, `UnpackToDestFp32` on `cb_rm_sticks`, `Fp32Mode::Lossless` — never fast tilize with UnpackToDestFp32), and correct per-width integer handling (uint8 segment alignment: `dram_align_unit_tiles = 2` on 64 B-aligned BH).
 
@@ -99,6 +99,16 @@
 - Regression tests `test_integer_passthrough`, `test_extreme_magnitudes`, `test_pad_value_extremes` (currently failing on the dtype gate) must pass after this refinement. The fp32 LOOSE_CASE `[1,1,8192,32]` (BH ref 7000 ns) joins the perf guard set.
 
 **Done when**: every buildable golden cell with a non-bf16 `dtype` or `output_dtype` passes (bit-exact on the diagonal, within `helpers._transition_tolerance` on casts), the three regression tests above pass, and no Phase 0–4 cell regresses.
+
+### [ ] Refinement 5a — bfloat4_b round-to-nearest before pack (padded / tiny-sample bfp4 cells)
+
+**Goal**: lift the bfloat4_b output PCC above the 0.98 floor on the remaining near-miss cells (`1x1x50x50` with a nonzero `pad_value`, rank-1 `[64]` auto-pad), all source dtypes.
+
+**Finding (Refinement 5)**: the packer's bfp4 conversion truncates the mantissa; on the same data device bfp4 reaches PCC ≈ 0.984 unpadded / ≈ 0.980 padded vs ≈ 0.993 / ≈ 0.991 for the host (round-to-nearest) conversion. These cells measure 0.978–0.981 across seeds (flaky at the floor). `bfp8_pack_precise=True` (single-stage pack from Float16_b/Float32 instead of via Bfp8) was measured: no change.
+
+**Next lever**: an SFPU pre-round in DEST between unpack and pack — per 16-element face row, find the max exponent and add half an ulp of the bfp4 grid (3-bit mantissa at that exponent) so the packer's truncation becomes round-to-nearest. Compute kernel: `eltwise_chain`-style dest-resident step after the tilize datacopy (requires the non-fast tilize path or a copy_tile pass). Gate it on `output_dtype == bfloat4_b` only.
+
+**Done when**: the bfp4 golden cells pass reliably (≥ 0.98 over repeated runs) and no other cell regresses.
 
 ### [ ] Refinement 6 — Second perf pass on `[1,1,16384,64]`
 

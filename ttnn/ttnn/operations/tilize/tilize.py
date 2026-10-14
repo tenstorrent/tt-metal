@@ -9,6 +9,9 @@ eval/golden_tests/tilize/feature_spec.py, "Expected INPUT_TAGGERS"); validate()
 rebuilds the same scenario dict from the live call and runs the very same
 taggers on it, so the runtime gate and the test-side decoration cannot drift.
 
+Dtypes (Refinement 5): every legal dtype x output_dtype pair; cast at pack time (output CB format =
+output dtype); 32-bit inputs tilize bit-exact through a 32-bit DEST.
+
 Built regimes (op_design.md): `interleaved_row_split`, `interleaved_2d_split` (the host picks the
 per-core rectangle), in-kernel pad fill (reader) for `pad_mode` auto / explicit, and the sharded
 regimes `sharded_same_spec_in_place`, `sharded_input_pinned`, `sharded_output_pinned`,
@@ -196,8 +199,17 @@ INPUT_TAGGERS = {
 # agnostic; leading dims fold into tile-rows; tiny output tiles = CB tile dims + the helper's
 # tilize_block fallback). Verified bit-exact by the verifier and claimed here.
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
-    "output_dtype": [ttnn.bfloat16],
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.fp8_e4m3, ttnn.uint32, ttnn.int32, ttnn.uint16, ttnn.uint8],
+    "output_dtype": [
+        ttnn.bfloat16,
+        ttnn.float32,
+        ttnn.bfloat8_b,
+        ttnn.bfloat4_b,
+        ttnn.uint32,
+        ttnn.int32,
+        ttnn.uint16,
+        ttnn.uint8,
+    ],
     "low_l1": [False, True],
     "shard_api": ["none", "legacy_2d", "nd"],
     "out_scheme": [
@@ -226,6 +238,17 @@ SUPPORTED = {
 # retile_tile_input reads whole input tiles and de-faces them; it has no pad-fill stage (a TILE
 # input already carries its own tile padding, which becomes the output's H tail).
 EXCLUSIONS = [{"in_tile_height": h, "pad_mode": mode} for h in (32, 16, 8, 4, 2, 1) for mode in ("auto", "explicit")]
+# Block-float outputs share one exponent per 16-element face row; tiny tiles (< 32 rows) have no
+# block-float layout in ttnn (the reference refuses them too).
+EXCLUSIONS += [
+    {"output_dtype": d, "tile_height": h} for d in (ttnn.bfloat8_b, ttnn.bfloat4_b) for h in (16, 8, 4, 2, 1)
+]
+# A rank-0 scalar into a block-float output is one lossy value: its PCC is undefined (0), so the
+# value can only be checked exactly, which a 7-/3-bit block mantissa cannot meet.
+EXCLUSIONS += [{"output_dtype": d, "rank": 0} for d in (ttnn.bfloat8_b, ttnn.bfloat4_b)]
+# A negative fill is outside the uint16 / uint8 value domain: the bit pattern lands (two's
+# complement, bit_cast), but it reads back as 2^w - |v|, never as the negative value itself.
+EXCLUSIONS += [{"dtype": d, "pad_value": "negative"} for d in (ttnn.uint16, ttnn.uint8)]
 
 
 PROPERTIES = {
@@ -485,6 +508,9 @@ def _fill_word(in_dtype, pad_value):
         return bf16 | (bf16 << 16)
     if in_dtype == ttnn.float32:
         return int(torch.tensor(float(v), dtype=torch.float32).view(torch.int32).item()) & 0xFFFFFFFF
+    if in_dtype == ttnn.fp8_e4m3:
+        b = int(torch.tensor(float(v), dtype=torch.float8_e4m3fn).view(torch.uint8).item()) & 0xFF
+        return b * 0x01010101
     if in_dtype in (ttnn.uint32, ttnn.int32):
         return int(v) & 0xFFFFFFFF
     if in_dtype == ttnn.uint16:

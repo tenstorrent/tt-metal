@@ -83,7 +83,12 @@ void kernel_main() {
     constexpr uint32_t in_cols_tiles = get_compile_time_arg_val(42);
     constexpr uint32_t retile_slots = get_compile_time_arg_val(43);
     constexpr uint32_t shard_cols_tiles = get_compile_time_arg_val(44);  // resident retile source
-    constexpr auto in_args = TensorAccessorArgs<45>();
+    // Segment path: a stick segment whose byte width is not a multiple of the source read alignment
+    // (1-byte dtypes on 64 B-aligned DRAM) would land at a non-congruent L1 row. Such a block reads
+    // each stick into an aligned slot of cb_stick_staging (bounce) and local-copies it (L1 needs only
+    // 16 B) into its row. 0 = never bounce.
+    constexpr uint32_t seg_read_alignment = get_compile_time_arg_val(45);
+    constexpr auto in_args = TensorAccessorArgs<46>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start_tile = get_arg_val<uint32_t>(1);
@@ -368,6 +373,11 @@ void kernel_main() {
         noc_async_write(fill_base + (dst_l1 & (fill_phase_bytes - 1)), get_noc_addr(dst_l1), n_bytes);
     };
 
+    uint32_t bounce_base = 0;
+    if constexpr (seg_read_alignment != 0) {
+        bounce_base = (get_write_ptr(cb_stick_staging) + seg_read_alignment - 1) & ~(seg_read_alignment - 1);
+    }
+
     for (uint32_t col_block = 0; col_block < num_col_blocks; ++col_block) {
         const bool is_tail = has_tail && (col_block == num_col_blocks - 1);
         const uint32_t cb_id = is_tail ? cb_rm_sticks_tail : cb_rm_sticks;
@@ -418,15 +428,25 @@ void kernel_main() {
 
                 cb_reserve_back(cb_id, width_tiles);
                 const uint32_t l1_base = get_write_ptr(cb_id);
+                const bool bounce = seg_read_alignment != 0 && (seg_bytes % seg_read_alignment) != 0;
+                const uint32_t read_base = bounce ? bounce_base : l1_base;
+                const uint32_t read_stride =
+                    bounce ? (seg_bytes + seg_read_alignment - 1) & ~(seg_read_alignment - 1) : seg_bytes;
                 // Bank stagger: start each core's stick walk at a different stick (consecutive
                 // sticks live in consecutive banks), so column-split cores reading the same sticks
                 // do not all queue on one bank at once.
                 uint32_t i = bank_stagger_offset < valid_sticks ? bank_stagger_offset : 0;
                 for (uint32_t k = 0; k < valid_sticks; ++k) {
-                    read_stick_bytes(first_stick + i, seg_offset_bytes, l1_base + i * seg_bytes, data_bytes);
+                    read_stick_bytes(first_stick + i, seg_offset_bytes, read_base + i * read_stride, data_bytes);
                     i = (i + 1 == valid_sticks) ? 0 : i + 1;
                 }
                 noc_async_read_barrier();
+                if (bounce && data_bytes > 0) {
+                    for (uint32_t k = 0; k < valid_sticks; ++k) {
+                        noc_async_write(read_base + k * read_stride, get_noc_addr(l1_base + k * seg_bytes), data_bytes);
+                    }
+                    noc_async_write_barrier();
+                }
                 if constexpr (has_padding) {
                     // After the read barrier: a partial tail fill shares a NoC word with the data.
                     if (data_bytes < seg_bytes) {

@@ -76,6 +76,29 @@ RETILE_STAGING_SLOTS = 2
 
 TILE_WIDTH = 32
 
+# Input formats unpacked straight into a 32-bit DEST (UnpackToDestFp32 on the stick CBs): the
+# 32-bit formats tilize bit-exact this way (with the helper's Fp32Mode::Lossless — never fast
+# tilize with UnpackToDestFp32).
+UNPACK_TO_DEST_DTYPES = (ttnn.float32, ttnn.int32, ttnn.uint32)
+# Formats that need a 32-bit DEST on either side: the 32-bit formats (no truncation through a
+# 16-bit DEST), fp8_e4m3 (an "A"-exponent format; BH requires fp32_dest_acc_en) and uint8 (reads
+# back as zeros through a 16-bit DEST — measured).
+DEST32_DTYPES = (ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.fp8_e4m3, ttnn.uint8)
+NUM_CIRCULAR_BUFFERS = 64
+
+
+def _compute_config(in_dtype, out_dtype):
+    """ComputeConfigDescriptor for the tilize compute kernel (defaults for 16-bit paths)."""
+    cfg = ttnn.ComputeConfigDescriptor()
+    if in_dtype in DEST32_DTYPES or out_dtype in DEST32_DTYPES:
+        cfg.fp32_dest_acc_en = True
+    if in_dtype in UNPACK_TO_DEST_DTYPES:
+        modes = [ttnn.UnpackToDestMode.Default] * NUM_CIRCULAR_BUFFERS
+        for cb_index in (CB_RM_STICKS, CB_RM_STICKS_TAIL):
+            modes[cb_index] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        cfg.unpack_to_dest_mode = modes
+    return cfg
+
 
 def _align_down(x, unit):
     return (x // unit) * unit
@@ -86,7 +109,7 @@ def compute_blocking(
 ):
     """Column blocking: (block_width_tiles, num_col_blocks, last_block_width_tiles).
 
-    `staging_col_bytes`: extra reader-private bytes per column tile (retile staging ring)."""
+    `staging_col_bytes`: extra reader-private bytes per column tile (retile staging ring / segment bounce)."""
     per_col_tile_bytes = IN_DEPTH_TILE_ROWS * in_page_bytes + OUT_DEPTH_TILE_ROWS * out_page_bytes + staging_col_bytes
     if low_l1:
         max_bw = LOW_L1_BLOCK_WIDTH_TILES
@@ -344,6 +367,11 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
     align_unit_tiles = read_alignment // math.gcd(read_alignment, seg_unit_bytes)
 
     retile_staging_col_bytes = RETILE_STAGING_SLOTS * unit_in_tile_rows * in_tile_page_bytes if retile else 0
+    # Segment bounce (reader): a segment narrower than the read alignment's unit cannot land
+    # NoC-congruent in its CB row; such blocks read through one aligned tile-row of cb_stick_staging.
+    # Only 1-byte dtypes on 64 B-aligned DRAM need it (seg_unit_bytes = 32 < 64).
+    seg_bounce = not retile and seg_unit_bytes % read_alignment != 0
+    bounce_col_bytes = tile_h * seg_unit_bytes if seg_bounce else 0  # per column tile
 
     def blocking_for(core_cols_tiles):
         return compute_blocking(
@@ -353,7 +381,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             in_elem_bytes=in_elem_bytes,
             low_l1=low_l1,
             read_alignment=read_alignment,
-            staging_col_bytes=retile_staging_col_bytes,
+            staging_col_bytes=retile_staging_col_bytes + bounce_col_bytes,
         )
 
     # --- Regime selector (op_design.md "Selection function") ---------------------------------
@@ -473,6 +501,10 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             )
         if coalesce:
             cbs.append(_cb(CB_STICK_STAGING, 1, staging_bytes, input_tensor.dtype, group_cores))
+        if seg_bounce and not coalesce and not in_resident:
+            # Aliases CB_STICK_STAGING (coalesce / retile never take the segment path).
+            stride = math.ceil(block_width_tiles * seg_unit_bytes / read_alignment) * read_alignment
+            cbs.append(_cb(CB_STICK_STAGING, 1, tile_h * stride + read_alignment, input_tensor.dtype, group_cores))
         if retile and not in_resident:
             retile_slot_bytes = unit_in_tile_rows * block_width_tiles * in_tile_page_bytes
             cbs.append(
@@ -552,6 +584,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             in_cols_tiles,
             RETILE_STAGING_SLOTS,
             in_shards[2] if (retile and in_resident) else 0,  # resident shard width, tiles
+            read_alignment if (seg_bounce and not coalesce and not in_resident) else 0,
         ]
         reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         writer_ct = [
@@ -611,7 +644,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
                 core_ranges=group_cores,
                 compile_time_args=compute_ct,
                 runtime_args=compute_rt,
-                config=ttnn.ComputeConfigDescriptor(),
+                config=_compute_config(input_tensor.dtype, output_tensor.dtype),
             )
         )
 

@@ -7,11 +7,30 @@
 // init / uninit / reconfig once per block (Phase 0: once per core). The helper owns all CB
 // wait/pop/reserve/push (symmetric tile-sized pages, block width per tile-row). The ragged last
 // column block is a second instantiation on its own CB pair.
+//
+// Fp32Mode::Lossless: a 32-bit input CB is tagged UnpackToDestFp32 by the host (with
+// fp32_dest_acc_en), so fp32 takes the bit-exact standard tilize path instead of fast tilize
+// (tf32 truncation). The mode has no effect on non-fp32 input formats.
 
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+
+namespace {
+template <uint32_t block_width_tiles, uint32_t cb_in, uint32_t cb_out>
+ALWI void tilize_block(uint32_t rows) {
+    using namespace compute_kernel_lib::tilize_config;
+    compute_kernel_lib::tilize<
+        block_width_tiles,
+        cb_in,
+        cb_out,
+        InitUninitMode::InitAndUninit,
+        WaitMode::WaitBlock,
+        ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+        Fp32Mode::Lossless>(rows);
+}
+}  // namespace
 
 void kernel_main() {
     constexpr uint32_t cb_rm_sticks = get_compile_time_arg_val(0);
@@ -33,7 +52,7 @@ void kernel_main() {
         for (uint32_t rb_start = 0; rb_start < core_rows_tiles; rb_start += block_height_tiles) {
             const uint32_t rows =
                 (core_rows_tiles - rb_start < block_height_tiles) ? core_rows_tiles - rb_start : block_height_tiles;
-            compute_kernel_lib::tilize<block_width_tiles, cb_rm_sticks, cb_tiles_out>(rows);
+            tilize_block<block_width_tiles, cb_rm_sticks, cb_tiles_out>(rows);
         }
     }
 
@@ -41,7 +60,7 @@ void kernel_main() {
         for (uint32_t rb_start = 0; rb_start < core_rows_tiles; rb_start += block_height_tiles) {
             const uint32_t rows =
                 (core_rows_tiles - rb_start < block_height_tiles) ? core_rows_tiles - rb_start : block_height_tiles;
-            compute_kernel_lib::tilize<last_block_width_tiles, cb_rm_sticks_tail, cb_tiles_out_tail>(rows);
+            tilize_block<last_block_width_tiles, cb_rm_sticks_tail, cb_tiles_out_tail>(rows);
         }
     }
 }

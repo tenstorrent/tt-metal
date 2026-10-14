@@ -69,3 +69,17 @@
 - Golden test progress: bf16 retile `test_op` 6/6, translated `test_tilize_retile` 210/210 (42 same-height skips), program-cache `retile_32_to_16` 1/1. Prior bf16 `test_op` cells 59/59. The 24 fp8_e4m3 retile cells fail in the harness's `from_torch` (fp8 has no TILE form) with or without this change — not op work.
 - Issues encountered: None.
 - Tests added: `tests/ttnn/unit_tests/operations/tilize/test_tilize_retile.py` (36 interleaved height pairs × 4 shapes, 3 sharded schemes × 3 pairs).
+
+## Refinement 5 — Numerical configurability: all input/output dtypes
+- Date: 2026-10-14
+- What was done:
+  - SUPPORTED: `dtype` += float32, fp8_e4m3, uint32, int32, uint16, uint8; `output_dtype` += float32, bfloat8_b, bfloat4_b, uint32, int32, uint16, uint8 (all legal pairs; feature_spec INVALID prunes the rest).
+  - Program descriptor: `_compute_config(in, out)` — `fp32_dest_acc_en` when either side is 32-bit, fp8_e4m3 (BH requires it) or uint8 (reads back as zeros through a 16-bit DEST, measured); `UnpackToDestFp32` on `cb_rm_sticks` / `cb_rm_sticks_tail` for 32-bit inputs (fp32, int32, uint32). 16-bit paths keep the prior default config (byte-identical).
+  - Compute: the tilize helper call takes `Fp32Mode::Lossless` (fp32 inputs take the bit-exact standard tilize path, never fast tilize with UnpackToDestFp32; no effect on other formats — bf16 still fast-tilizes).
+  - Reader: segment bounce for 1-byte dtypes on 64 B-aligned DRAM. A 32·k-byte stick row in the CB page is not 64 B-congruent with its DRAM source, so rows read garbage; such blocks read each stick into an aligned slot of `cb_stick_staging` (idle on this path) and local-copy it into its row. New CT arg `seg_read_alignment` (0 = off; bf16/fp32/16-bit never bounce). Bounce bytes are charged in `compute_blocking`'s per-column budget.
+  - Pad fill: fp8_e4m3 encoding added (integers already bit_cast).
+  - EXCLUSIONS: block-float outputs × tile_height < 32; block-float outputs × rank 0 (one lossy scalar, PCC undefined); uint16/uint8 × negative pad_value (the bit-cast pattern lands but reads back as 2^w − |v|; for uint8 the torch oracle itself raises).
+- Accuracy achieved: bit-exact on every diagonal (fp32 incl. ±1e30 and ±3.4e38 fill, int32/uint32 incl. the int32↔uint32 bit-cast, uint16, uint8), bf16→fp32 exact; fp32→bf16 / →bfp8 PCC ≥ 0.9999; fp8→fp32/bf16 PCC 1.0 (fp8 subnormals flush to zero in hardware); bfp4 PCC ≈ 0.984 unpadded, 0.978–0.981 on 50x50 padded cells (shapes [1,1,32..64,32..8224], [2,3,96,1056], [1,1,3200,32], [1,1,50,50]).
+- Golden test progress: new-dtype slice 831 passed / 59 failed / 46 xfailed (2090 skipped). Of the 59 failures, 56 are fp8_e4m3 on sharded / retile scenarios where the harness's `from_torch` cannot build the input (out of scope per verifier note); 3 are bfp4 near-misses (PCC 0.978–0.980 vs floor 0.98, flaky across seeds) — follow-up Refinement 5a. bf16→bf16 slice 74/74; regression tests 10/10 (test_integer_passthrough, test_extreme_magnitudes, test_pad_value_extremes pass).
+- Issues encountered: uint8 zeros through 16-bit DEST (fixed: 32-bit DEST); 1-byte DRAM reads non-congruent (fixed: bounce); fp8 requires fp32 DEST on BH (fixed). bfp4 packer truncation (open, 5a). `bfp8_pack_precise` measured: no effect on bfp4.
+- Tests added: `tests/ttnn/unit_tests/operations/tilize/test_tilize_dtypes.py` (diagonal + cast pairs, 1-byte narrow-width DRAM bounce, integer negative fill).

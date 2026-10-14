@@ -18,3 +18,5 @@
 {"event":"test_run","status":"pass","tests":"tests/ttnn/unit_tests/operations/tilize/ (79) + golden test_op_loose bf16 (10)","ts":"2026-10-14T15:21:47+00:00"}
 {"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-10-14T15:24:24+00:00"}
 {"event":"test_run","status":"pass","tests":"test_tilize_retile.py 153/153; golden retile bf16 6/6, translated retile 210/210, program_cache retile 1/1; unit dir 232/232","ts":"2026-10-14T15:34:26+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-10-14T15:37:03+00:00"}
+{"event":"test_run","refinement":5,"result":"partial","golden_new_dtype":"831 pass / 59 fail (56 fp8 harness-unbuildable, 3 bfp4 near-miss)","unit":"284 pass","ts":"2026-10-14T16:06:35+00:00"}
