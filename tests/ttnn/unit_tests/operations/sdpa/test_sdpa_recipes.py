@@ -139,6 +139,16 @@ def test_sdpa_recipe_rejects_unsupported(expect_error, device, invalid):
     assert device.num_program_cache_entries() == before, "Unsupported arguments must fail before dispatch"
 
 
+def test_sdpa_recipe_requires_sfploadmacro(expect_error, device, monkeypatch):
+    """Kernels built without SFPLOADMACRO (the simulator's TT_METAL_DISABLE_SFPLOADMACRO) cannot run a recipe."""
+    tensors = [to_device(device, randn(1, 1, 256, 128, seed=s)) for s in (33, 34, 35)]
+    monkeypatch.setenv("TT_METAL_DISABLE_SFPLOADMACRO", "1")
+    before = device.num_program_cache_entries()
+    with expect_error(RuntimeError, "SFPLOADMACRO"):
+        ttnn.transformer.scaled_dot_product_attention(*tensors, is_causal=False, precision=ttnn.SDPAPrecision.BALANCED)
+    assert device.num_program_cache_entries() == before
+
+
 def round_significand(values, bits):
     values = values.double()
     step = torch.ldexp(torch.ones_like(values), torch.frexp(values.abs())[1] - bits)
