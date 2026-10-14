@@ -62,28 +62,12 @@ env:
   #                                  from ttsim_lib, so no static cmd is complete.
   #   llk_ttnop_tests.yaml           runs only through its specialized manual/weekly
   #                                  workflow, which supplies TTNOP setup and recovery.
-  #   llk_perf_merge_gate_tests.yaml runs only through llk-perf-impl, which runs cmd
-  #                                  from tt_metal/tt-llk in the LLK CI image.
-  #   llk_pr_gate_tests.yaml         cmds start with `cd tests/python_tests` (or
-  #   llk_e2e_tests.yaml             `./tests/run_llk_perf_*.sh`) and read env the
-  #   llk_bit_exact_tests.yaml       owning impl injects (PYTEST_MARKERS,
-  #   llk_perf_tests.yaml            BIT_EXACT_RUNS). Those impls run from
-  #                                  tt_metal/tt-llk in the LLK CI image after
-  #                                  setup_testing_env.sh. From /work the cd fails
-  #                                  before pytest starts.
-  #
-  # This is not an exemption: the legs still block the PR until an owner approves.
   UNSUPPORTED_YAMLS: >-
     vllm_model_tests.yaml
     ttnn_sweep_tests.yaml
     single_card_profiler_tests.yaml
     llk_ttsim_weekly.yaml
     llk_ttnop_tests.yaml
-    llk_perf_merge_gate_tests.yaml
-    llk_pr_gate_tests.yaml
-    llk_e2e_tests.yaml
-    llk_bit_exact_tests.yaml
-    llk_perf_tests.yaml
 
   # Yamls under tests/pipeline_reorg/ that legitimately hold no test matrix, so the
   # gate has nothing to prove for them. ttsim-skip-list.yaml is a per-arch mapping of
@@ -128,22 +112,6 @@ env:
   # enable-watcher: true.
   WATCHER_YAMLS: >-
     models_unit_tests.yaml
-
-  # Yamls whose cmds run from tt_metal/tt-llk, matching the working-directory their
-  # pipelines set (llk-smoke/e2e/perf/bit-exact-impl, via LLK_PATH). Their entries
-  # open with `cd tests/python_tests`, which from the gate's /work would otherwise
-  # land in tt-metal's own tests/.
-  #
-  # llk_unit_tests.yaml and llk_merge_gate_tests.yaml are absent on purpose: they run
-  # gtest binaries from build/test and their impl works out of /work.
-  #
-  # llk_ttnop_tests.yaml and llk_perf_merge_gate_tests.yaml are workdir-relative too,
-  # but sit in UNSUPPORTED_YAMLS. Add them here if they ever leave that list.
-  LLK_WORKDIR_YAMLS: >-
-    llk_pr_gate_tests.yaml
-    llk_e2e_tests.yaml
-    llk_perf_tests.yaml
-    llk_bit_exact_tests.yaml
 
 jobs:
   scope:
@@ -443,19 +411,18 @@ jobs:
             if [[ '${{ matrix.leg.dispatch_mode }}' == 'sd' ]]; then
               export TT_METAL_SLOW_DISPATCH_MODE=1
             fi
-            # The LLK yamls run `pytest -m "$PYTEST_MARKERS"` (and the bit-exact one
-            # `--bit-exact-runs="$BIT_EXACT_RUNS"`) under `set -u`. Their owning pipelines
-            # set those from workflow inputs; mirror each pipeline's value here, or the
-            # leg dies on the unbound variable before pytest starts.
-            case '${{ matrix.leg.source_yaml }}' in
-              llk_pr_gate_tests)
-                export PYTEST_MARKERS="not perf and not nightly and not quasar and not accuracy" ;;
-              llk_e2e_tests)
-                export PYTEST_MARKERS="not perf and not quasar and not accuracy" ;;
-              llk_bit_exact_tests)
-                export PYTEST_MARKERS="not perf and not nightly and not accuracy and not quasar"
-                export BIT_EXACT_RUNS="500" ;;
-            esac
+            # Ambient variables the cmd reads, declared as `env:` on the entry itself
+            # (see tests/pipeline_reorg/llk_*.yaml). The LLK cmds run
+            # `pytest -m "$PYTEST_MARKERS"` under `set -u`, so an unset one kills the
+            # leg before pytest starts. A quoted heredoc keeps values with spaces
+            # intact, one KEY=VALUE per line; the delimiter must not appear in a value.
+            while IFS= read -r gate_env_kv; do
+              if [[ -n "$gate_env_kv" ]]; then
+                export "$gate_env_kv"
+              fi
+            done <<'GATE_ENV_EOF'
+            ${{ matrix.leg.gate_env }}
+            GATE_ENV_EOF
             # gate_workdir mirrors the owning pipeline's working-directory; empty for
             # everything that runs from /work. The reports dir is made again after
             # the cd, since a cmd writing to it does so relative to its own cwd.

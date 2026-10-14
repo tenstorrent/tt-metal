@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import re
 import textwrap
 from pathlib import Path
 
@@ -94,7 +95,6 @@ class Repo:
         unsupported_skus: str = DEFAULT_UNSUPPORTED_SKUS,
         files: list[str] | None = None,
         non_matrix_files: str = DEFAULT_NON_MATRIX,
-        llk_workdir_files: str = "",
         no_source_scope: bool = False,
     ):
         """
@@ -116,8 +116,6 @@ class Repo:
             unsupported_skus,
             "--non-matrix-files",
             non_matrix_files,
-            "--llk-workdir-files",
-            llk_workdir_files,
             "--output",
             "result.json",
         ]
@@ -542,9 +540,7 @@ def test_shard_and_arch_disambiguate_same_name(repo: Repo):
 # --- filter ------------------------------------------------------------------
 
 
-def run_with_matrices(
-    repo: Repo, matrices: dict[str, list], unsupported_skus: str = DEFAULT_UNSUPPORTED_SKUS, llk_workdir_files: str = ""
-):
+def run_with_matrices(repo: Repo, matrices: dict[str, list], unsupported_skus: str = DEFAULT_UNSUPPORTED_SKUS):
     """Invoke the gate with prepare_test_matrix output stubbed out."""
     matrix_dir = repo.root / "matrices"
     matrix_dir.mkdir(exist_ok=True)
@@ -562,8 +558,6 @@ def run_with_matrices(
             unsupported_skus,
             "--matrix-dir",
             str(matrix_dir),
-            "--llk-workdir-files",
-            llk_workdir_files,
             "--output",
             "result.json",
         ],
@@ -900,6 +894,7 @@ LLK_SRC_YAML = """\
       timeout: 10
   team: llk
   owner_id: U020
+  workdir: tt_metal/tt-llk
 
 - name: llk beta
   cmd: ./tests/run_llk_perf.sh
@@ -908,6 +903,7 @@ LLK_SRC_YAML = """\
       timeout: 10
   team: llk
   owner_id: U021
+  workdir: tt_metal/tt-llk
 """
 
 
@@ -931,14 +927,14 @@ def llk_repo(tmp_path: Path) -> Repo:
 def test_llk_cmds_resolve_against_their_working_directory(llk_repo: Repo):
     """Their cmds are relative to tt_metal/tt-llk, not the checkout root."""
     llk_repo.write("tt_metal/tt-llk/tests/python_tests/test_llk.py", "def test_llk(): assert True\n")
-    code, payload, stderr = llk_repo.scope(llk_workdir_files="llk_src_tests.yaml")
+    code, payload, stderr = llk_repo.scope()
     assert code == 0, stderr
     assert sorted(leg["name"] for leg in payload["run_legs"]) == ["llk alpha"]
 
 
 def test_llk_script_reference_resolves_against_the_working_directory(llk_repo: Repo):
     llk_repo.write("tt_metal/tt-llk/tests/run_llk_perf.sh", "#!/bin/bash\necho hi\n")
-    code, payload, stderr = llk_repo.scope(llk_workdir_files="llk_src_tests.yaml")
+    code, payload, stderr = llk_repo.scope()
     assert code == 0, stderr
     assert sorted(leg["name"] for leg in payload["run_legs"]) == ["llk beta"]
 
@@ -946,7 +942,7 @@ def test_llk_script_reference_resolves_against_the_working_directory(llk_repo: R
 def test_workdir_does_not_make_root_paths_match(llk_repo: Repo):
     """The repo-root decoy must not be picked up by a workdir-relative token."""
     llk_repo.write("tests/python_tests/decoy.py", "def test_decoy(): assert True\n")
-    code, payload, stderr = llk_repo.scope(llk_workdir_files="llk_src_tests.yaml")
+    code, payload, stderr = llk_repo.scope()
     assert code == 0, stderr
     assert payload["run_legs"] == []
 
@@ -1041,34 +1037,43 @@ def test_no_source_scope_restores_yaml_only_behaviour(src_repo: Repo):
 # --- llk working directory ---------------------------------------------------
 
 
-def test_llk_yaml_legs_carry_the_llk_working_directory(repo: Repo):
+WORKDIR_YAML = BASE_TESTS_YAML.replace("  owner_id: U001\n", "  owner_id: U001\n  workdir: tt_metal/tt-llk\n")
+
+
+def test_entry_declared_workdir_reaches_the_leg(repo: Repo):
     """Their pipelines run from tt_metal/tt-llk, so a cmd's `cd` is relative to that."""
-    repo.write("tests/pipeline_reorg/llk_perf_tests.yaml", BASE_TESTS_YAML)
-    code, payload, _ = repo.scope(llk_workdir_files="llk_perf_tests.yaml")
+    repo.write("tests/pipeline_reorg/llk_perf_tests.yaml", WORKDIR_YAML)
+    code, payload, _ = repo.scope()
     assert code == 0
-    legs = [leg for leg in payload["run_legs"] if leg["file"].endswith("llk_perf_tests.yaml")]
+    legs = [leg for leg in payload["run_legs"] if leg["name"] == "unit alpha"]
     assert legs and all(leg["workdir"] == "tt_metal/tt-llk" for leg in legs)
 
 
-def test_unlisted_yaml_gets_no_working_directory(repo: Repo):
+def test_entry_without_workdir_runs_from_the_root(repo: Repo):
     """llk_unit_tests.yaml runs gtest binaries from /work like every other pipeline."""
     repo.write("tests/pipeline_reorg/llk_unit_tests.yaml", BASE_TESTS_YAML)
-    code, payload, _ = repo.scope(llk_workdir_files="llk_perf_tests.yaml")
+    code, payload, _ = repo.scope()
     assert code == 0
     legs = [leg for leg in payload["run_legs"] if leg["file"].endswith("llk_unit_tests.yaml")]
     assert legs and all(leg["workdir"] == "" for leg in legs)
 
 
 def test_workdir_reaches_the_dispatched_row(repo: Repo):
-    repo.write("tests/pipeline_reorg/llk_perf_tests.yaml", BASE_TESTS_YAML)
+    repo.write("tests/pipeline_reorg/llk_perf_tests.yaml", WORKDIR_YAML)
     rows = [
         matrix_row("unit alpha [wh_n150_civ2]", "wh_n150_civ2", arch="wormhole_b0"),
         matrix_row("unit alpha [wh_n300_civ2]", "wh_n300_civ2", arch="wormhole_b0"),
         matrix_row("unit beta [bh_p150]", "bh_p150", arch="blackhole"),
     ]
-    code, payload, stderr = run_with_matrices(repo, {"llk_perf_tests": rows}, llk_workdir_files="llk_perf_tests.yaml")
+    code, payload, stderr = run_with_matrices(repo, {"llk_perf_tests": rows})
     assert code == 0, stderr
-    assert payload["legs"] and all(row["gate_workdir"] == "tt_metal/tt-llk" for row in payload["legs"])
+    # Per entry, not per file: only `unit alpha` declares one, and a stale shared
+    # value would hand `unit beta` a working directory it never asked for.
+    by_name = {}
+    for row in payload["legs"]:
+        by_name.setdefault(row["name"].split(" [")[0], set()).add(row["gate_workdir"])
+    assert by_name["unit alpha"] == {"tt_metal/tt-llk"}
+    assert by_name["unit beta"] == {""}
 
 
 # --- mirrored definitions ----------------------------------------------------
@@ -1640,3 +1645,74 @@ def test_a_dash_leading_base_fails_the_gate_rather_than_reaching_git(repo: Repo,
     assert result.returncode == 1
     assert "git revision" in result.stderr
     assert not target.exists()
+
+
+# --- entry-declared env ------------------------------------------------------
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_entry_env_flattens_to_key_value_lines():
+    mod = gate_module()
+    entry = {"name": "x", "env": {"A": "one two", "B": "3"}}
+    assert mod.entry_env(entry, "f.yaml") == "A=one two\nB=3"
+
+
+def test_entry_env_is_empty_when_undeclared():
+    mod = gate_module()
+    assert mod.entry_env({"name": "x"}, "f.yaml") == ""
+
+
+@pytest.mark.parametrize("bad", [{"env": []}, {"env": "PYTEST_MARKERS=x"}, {"env": {1: "x"}}])
+def test_entry_env_rejects_a_non_mapping(bad):
+    mod = gate_module()
+    with pytest.raises(Exception) as excinfo:
+        mod.entry_env({"name": "x", **bad}, "f.yaml")
+    assert "invalid 'env'" in str(excinfo.value)
+
+
+def test_entry_env_rejects_a_multiline_value():
+    """The run step reads one KEY=VALUE per line, so a newline would corrupt the rest."""
+    mod = gate_module()
+    with pytest.raises(Exception) as excinfo:
+        mod.entry_env({"name": "x", "env": {"A": "one\ntwo"}}, "f.yaml")
+    assert "spans lines" in str(excinfo.value)
+
+
+# The value each LLK pipeline passes in production, and where it is written. If a
+# pipeline changes its marker set, this fails and names the yaml to update -- the
+# drift that a value hardcoded in the gate would have hidden.
+LLK_ENV_SOURCES = {
+    "llk_pr_gate_tests": (".github/workflows/sanity-tests.yaml", "PYTEST_MARKERS", "pytest-markers"),
+    "llk_e2e_tests": (".github/workflows/llk-e2e.yaml", "PYTEST_MARKERS", "pytest-markers"),
+}
+
+
+@pytest.mark.parametrize("stem,spec", sorted(LLK_ENV_SOURCES.items()))
+def test_declared_env_matches_the_owning_pipeline(stem: str, spec: tuple):
+    workflow, env_key, input_key = spec
+    tests_yaml = REPO_ROOT / "tests" / "pipeline_reorg" / f"{stem}.yaml"
+    wf = REPO_ROOT / workflow
+    if not tests_yaml.exists() or not wf.exists():
+        pytest.skip("run from a full checkout")
+
+    import yaml as _yaml
+
+    declared = {tuple(sorted(e["env"].items())) for e in _yaml.safe_load(tests_yaml.read_text())}
+    assert len(declared) == 1, f"{stem}: entries disagree on env"
+    declared_value = dict(declared.pop())[env_key]
+
+    # Written either as `pytest-markers: "<value>"` or, where the pipeline allows an
+    # override, as `${{ inputs.x || '<value>' }}`. Take every quoted literal on the line.
+    text = wf.read_text()
+    passed = [
+        literal
+        for line in text.splitlines()
+        if re.search(rf"\b{re.escape(input_key)}\s*:", line)
+        for literal in re.findall(r"\"([^\"]+)\"|'([^']+)'", line)
+        for literal in [next(g for g in literal if g)]
+    ]
+    assert declared_value in passed, (
+        f"{stem}.yaml declares {env_key}={declared_value!r}, which {workflow} no longer passes "
+        f"(it passes {passed!r}). Update the tests yaml so the gate runs what the pipeline runs."
+    )
