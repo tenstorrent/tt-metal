@@ -1507,23 +1507,25 @@ timed loop.
 
 For the current lookup and forwarding source, the in-memory input is fixed
 rather than swept. It is
-one 4160-byte image containing the complete 2576-byte routing layout and
+one 4288-byte image containing the complete 2704-byte routing layout and
 sixteen 96-byte packet headers. The fixture covers same-mesh and cross-mesh
 table selection and varying expected directions. The host supplies an
 independent direction oracle, and the timed loop consumes the returned
 directions through a witness. Forwarding always consumes the first header at
-`0x0A000A40`.
+`0x0A000AC0`.
 
 ### Prepared storage
 
-The lookup image resides at `[0x0A000000, 0x0A001040)` in cached Zero Device.
+The lookup image resides at `[0x0A000000, 0x0A0010C0)` in cached Zero Device.
 It requires the exact 14-LIM-way shape with way 1 pinned and way 0 retained for
 general cache use. All masters keep active replacement bits `01` while the
 compatible sequence runs.
 
-Preparation and final teardown are explicit CLI operations outside the case
-lifetime. External ownership and fresh-placement provenance are prerequisites;
-the CLI flags assert those facts rather than establish them. Between cases
+Preparation and final teardown are suite operations outside the case lifetime:
+each pipeline executable prepares before its first device case and tears down
+after its last. Ownership and fresh-placement provenance are prerequisites the
+suite cannot establish; it prepares only on a tile its own process booted from
+reset-held, so each executable runs after an ASIC reset. Between cases
 there is no cache flush, `WAYENABLE` change, mask change, repinning, allocation,
 or restoration. A failed setup, crash, or unconfirmed participant cleanup ends
 the prepared sequence.
@@ -1538,7 +1540,7 @@ outside that sequence.
 - One concrete packet header is 96 bytes with a 35-byte route buffer.
 - Packed destination chip and mesh fields begin at offsets 83 and 85. Base
   alignment does not permit aligned loads of those fields.
-- The complete routing image remains 2576 bytes. Its intra-mesh direction
+- The complete routing image is 2704 bytes, tt-metal's `routing_l1_info_t`. Its intra-mesh direction
   table begins at offset 36 and its inter-mesh table at offset 132.
 - `route_compute` selects the intra table by destination chip when the
   destination mesh equals the local mesh; otherwise it selects the inter table

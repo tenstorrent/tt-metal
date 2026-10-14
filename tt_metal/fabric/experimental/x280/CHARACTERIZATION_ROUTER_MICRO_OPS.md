@@ -52,7 +52,7 @@ destination-window sweep, table-placement sweep, or header-placement sweep.
 Instrumentation remains a measurement mode, not an implementation alternative.
 
 Forwarding's source is the first 96-byte header in the prepared Zero Device image
-at `0x0A000A40`. DECIDE stops after
+at `0x0A000AC0`. DECIDE stops after
 the load, decode, cursor update, and witness update without issuing the packet.
 
 ## ID 6: destination-to-next-hop lookup
@@ -129,14 +129,14 @@ The complete `routing_l1_info_t` layout remains present:
 
 | Region | Offset | Bytes |
 |---|---:|---:|
-| Full routing image | `0x000` | 2576 |
+| Full routing image | `0x000` | 2704 |
 | Intra-mesh direction table | 36 | 96 |
 | Inter-mesh direction table | 132 | 384 |
-| Alignment padding after routing image | `0xA10` | 48 |
-| Header array | `0xA40` | 1536 |
-| End of reserved input | `0x1040` | — |
+| Alignment padding after routing image | `0xA90` | 48 |
+| Header array | `0xAC0` | 1536 |
+| End of reserved input | `0x10C0` | — |
 
-The routing image is retained at its full 2576-byte production layout even
+The routing image is retained at its full 2704-byte production layout even
 though the lookup reads only `my_mesh_id` and one direction table. This keeps
 the production offsets and packed 3-bit direction representation. The retired
 compressed routing-path and exit-node fields are opaque unused bytes, not
@@ -160,9 +160,9 @@ The lookup routing image and headers occupy one fixed cached Zero Device region
 on each participating L2CPU tile:
 
 ```text
-[0x0A000000, 0x0A001040)  4160 bytes
-    +0x000  full 2576-byte routing image
-    +0xA40  sixteen 96-byte packet headers
+[0x0A000000, 0x0A0010C0)  4288 bytes
+    +0x000  full 2704-byte routing image
+    +0xAC0  sixteen 96-byte packet headers
 ```
 
 The required prepared profile is:
@@ -177,31 +177,29 @@ The required prepared profile is:
 | Prepared active mask bits | `0b01` for every master |
 | Population owner | native hart 0, cache master 34 |
 
-Preparation is one explicit operation before the compatible sequence, and
-teardown is one explicit operation after every participant is confirmed idle:
+Preparation is one operation before the compatible sequence, and teardown is
+one operation after every participant is confirmed idle. Each pipeline
+executable runs both itself (`tests/device/suites/pipeline_stage/pinned_input.hpp`):
+the first device case prepares the session tile, and the suite tears it down
+after its last case, whatever the cases' outcomes.
 
-```text
---prepare-pinned-input --fresh-cache --exclusive-device
-    --prepare-pinned-input-image PREPARE_PATH
-
---teardown-pinned-input --exclusive-device
-    --teardown-pinned-input-image TEARDOWN_PATH
-```
-
-`--fresh-cache` and `--exclusive-device` assert external prerequisites. They do
-not establish exclusive ownership or prove fresh line placement. The operator
-must already own the device for the whole sequence and know that the reserved
-addresses do not have stale copies in another way.
+Neither operation can establish exclusive ownership or prove fresh line
+placement. The operator must own the device for the executable's run. The
+suite prepares only on a tile its own process booted from reset-held, so the
+reserved addresses cannot have stale copies in another way; on a tile it found
+already running, every device case skips naming `tt-smi -r`. Each pipeline
+executable therefore runs after an ASIC reset.
 
 Preparation and teardown are separate build artifacts compiled from the same
 source. The build supplies exactly one mandatory compile-time operation define
 to each artifact; the source rejects neither or both. Their CLI flags and
-environment fallbacks are also separate, so an automatic default cannot select
-the opposite operation; the selected path is still trusted and the host
-rejects a mismatched operation result. Build them with
-`make -C x280 pinned-input-prepare pinned-input-teardown`.
+environment overrides (`X280_PINNED_INPUT_{PREPARE,TEARDOWN}_FW_IMAGE`) and
+build defaults are also separate and fixed by the call site, so a default
+cannot select the opposite operation; the selected path is still trusted and
+the host rejects a mismatched operation result. `ninja x280_images` builds
+them.
 
-Preparation places all 65 cache lines in way 1, then removes way 1 from all 38
+Preparation places all 67 cache lines in way 1, then removes way 1 from all 38
 masters' replacement masks. Compatible cases keep those masks fixed. They may
 coherently replace the bytes in already pinned lines before warmup, but they do
 not flush the region, change `WAYENABLE`, invalidate or repin lines, allocate a
@@ -248,7 +246,7 @@ region. Fifty-two bytes are meaningful and the remaining bytes must be zero:
 | 10 | fixture ID | 32 |
 
 On X280, the staged input is ordinary owned LIM. At case initialization, hart 0 copies
-its 4160 bytes coherently into the already prepared region and verifies the
+its 4288 bytes coherently into the already prepared region and verifies the
 live bytes and fixture. This update is not cache preparation and does not
 change the fixed masks.
 
@@ -260,8 +258,8 @@ are not told apart.
 
 Before binding any output, each X280 entry validates every applicable owned span:
 arguments, staged lookup input, result, and optional samples. Each must be
-aligned, have a non-overflowing checked end, lie wholly inside the prepared-14
-available-LIM interval `[0x08154000, 0x081c0000)`, and be pairwise
+aligned, have a non-overflowing checked end, lie wholly inside the available-LIM
+window the host publishes (`[0x08131B00, 0x081C0000)` at 14 LIM ways), and be pairwise
 non-overlapping. Forwarding's fixed Zero Device source is not an owned-LIM span;
 it is checked separately with `x280_pinned_input_contains(&X280_PINNED_INPUT_ROUTER_REGION, addr, bytes)`.
 
@@ -273,7 +271,7 @@ extent. The section uses the same common prefix, followed by
 the backend cookie, the result and sample-region addresses, and the hop count
 at byte 40. Forwarding runs uninstrumented, so the sample-region address must
 be zero. The source address
-is not an argument: it is fixed at `0x0A000A40`.
+is not an argument: it is fixed at `0x0A000AC0`.
 
 ## Timing and result contract
 
@@ -346,7 +344,7 @@ Its fixed identities are `member="route_compute"`,
 `subject="next-hop direction-table lookup"`,
 `fixture="direction_table_v1"`, `packet_header_bytes=96`,
 `route_buffer_capacity=35`, `header_count=16`, and the fixed prepared base and
-4160-byte extent. Successful rows report `wayenable=1`, `pinned_way=1`, and
+4288-byte extent. Successful rows report `wayenable=1`, `pinned_way=1`, and
 `waymask_bits=1`; these identify the admitted policy and are distinct from the
 full observed-register value published only on refusal. The instrumented row's
 `cpu_samples` holds the raw rdcycle samples; the tabulator derives the per-item
@@ -392,7 +390,7 @@ does not imply preserved cycle values.
 
 Forwarding summary rows report
 `source_placement="pinned_zero_device"`,
-`source_base=0x0A000A40`,
+`source_base=0x0A000AC0`,
 `source_bytes=96`, `packet_header_bytes`, `route_buffer_capacity`,
 `instrumentation`, `hop_count`,
 `stage_witness`, verification, and the common timing fields.
@@ -433,7 +431,7 @@ A current forwarding observation is valid only when:
     admission before outputs were bound;
   * terminal state is `DONE`, verification reports a match, the witness equals
     the host oracle, and the item count is complete;
-  * source is `0x0A000A40` and hop count is 4.
+  * source is `0x0A000AC0` and hop count is 4.
 
 **Acceptance boundaries**:
 A host build establishes that host C++ executables compile and link. Separate

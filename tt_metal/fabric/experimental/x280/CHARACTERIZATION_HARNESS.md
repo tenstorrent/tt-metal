@@ -620,12 +620,13 @@ a mismatch before ECC priming or shape application. It does not pin cache ways
 or establish retained Zero Device storage. Unreadable shape observations are
 refused without attempting PLL recovery.
 
-The pipeline group uses an externally owned prepared cache policy across its
-separate executables. Explicit `x280_runtime_cli` preparation places the fixed
-4160-byte Zero Device region into way 1 and pins it; normal final teardown
-re-enables that way only after confirmed resident idle. Both operations require
-the pre-existing 14-LIM-way partition and operator-asserted exclusive ownership;
-preparation additionally requires fresh-placement provenance. See
+The pipeline group uses a prepared cache policy within each executable. The
+pipeline_stage suite's preparation places the fixed 4288-byte Zero Device
+region into way 1 and pins it before the first device case; its final teardown
+re-enables that way only after confirmed resident idle, after the last case.
+Both operations require the 14-LIM-way partition and operator-owned exclusive
+use of the device; preparation runs only on a tile the same process booted
+from reset-held, its fresh-placement provenance. See
 [`README.md` / Prepared pipeline inputs](README.md#prepared-pipeline-inputs-x280-only).
 
 `RunSpec`'s `session::OpenConfig` marks whether the prepared profile is
