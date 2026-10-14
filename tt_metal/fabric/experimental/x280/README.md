@@ -668,7 +668,8 @@ ninja -C build x280_images x280_abi_headers x280_runtime_host_tests x280_runtime
   x280_transport_bandwidth_tensix_to_x280 x280_transport_bandwidth_x280_to_tensix \
   x280_p2p_latency_x280_same_tile x280_p2p_latency_x280_peer_tile x280_p2p_latency_tensix_peer_tile \
   x280_p2p_latency_erisc_peer_tile x280_p2p_latency_drisc_peer_tile \
-  x280_pipeline_stage_route_compute x280_pipeline_stage_route_forward
+  x280_pipeline_stage_route_compute x280_pipeline_stage_route_forward \
+  x280_core_sync_director x280_core_sync_characterization
 ctest --test-dir build -R x280      # image placement, pinned-input guards, header refusals, host, offline and mock-cluster tests; no device
 ```
 
@@ -685,6 +686,8 @@ ctest --test-dir build -R x280      # image placement, pinned-input guards, head
 | `firmware-p2p-latency-metal-peer-tile.bin` | `src/p2p_latency_metal_peer_tile.cpp` | X280 half of the Tensix, idle-ERISC and free-DRISC peers (`x280_p2p_latency_{tensix,erisc,drisc}_peer_tile`) |
 | `firmware-pipeline-stage-route-compute.bin` | `src/pipeline_stage_route_compute.cpp` | X280 L2CPU route_compute over the pinned input, run by `x280_pipeline_stage_route_compute` |
 | `firmware-pipeline-stage-route-forward.bin` | `src/pipeline_stage_route_forward.cpp` | X280 L2CPU route_forward over the first pinned header, run by `x280_pipeline_stage_route_forward` |
+| `firmware-core-sync-director.bin` | `src/core_sync_director.cpp` | the X280 participant or director of `core_sync_barrier`, run by `x280_core_sync_director` and `x280_core_sync_characterization` (built only when named) |
+| `firmware-core-sync-release-probe.bin` | `src/core_sync_release_probe.cpp` | test-only release of one or more X280 multicast groups, run by `x280_core_sync_director` |
 
 Every image compiles with `-mcpu=sifive-x280 -march=rv64gc -mabi=lp64d
 -mcmodel=medany -O2 -Werror`, freestanding, and links with
