@@ -402,10 +402,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                 formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
-            if (FAST_TILIZE_TWO_TILE_ROW && !w_step && !input_32b && datum_size_in_bytes(formats.pack_dst) == 2)
+            if (FAST_TILIZE_TWO_TILE_ROW && !w_step && !is_fp32_dest_acc_en && !input_32b && datum_size_in_bytes(formats.pack_dst) == 2)
             {
                 // As llk_pack_fast_tilize_init_two_tile_row.
-                _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0 /* use_32bit_dest */, formats.pack_dst, 2, 4 /* num_faces */, formats.pack_src);
+                _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                    0 /* use_32bit_dest */, formats.pack_dst, unit_dims[0], 4 /* num_faces */, formats.pack_src);
             }
             else
             {
