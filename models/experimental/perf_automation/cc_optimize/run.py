@@ -3784,14 +3784,19 @@ def _device_answers() -> bool:
     any device -- NOT the startup probe, which raises on an unrecognised board_type and would call
     this host's own `p300c` dead.
 
-    Failure to answer returns False, which resets exactly as before -- this only ever ADDS a reason
-    not to reset, never a reason to.
+    Failure to answer returns False, which resets exactly as before.
+
+    ANSWERING IS NOT WORKING. tt-smi reports the ARC, which keeps answering while the chip's cores are
+    hung -- the state a timed-out device run leaves behind. So a board that answers is also asked to run
+    one op (probes.device_runs_work, after the child was killed, so the device is free), and only a
+    definite failure there turns "answered" into "reset". No answer from that probe (None) keeps the
+    old verdict.
     """
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-        from agent.probes import device_is_responsive
+        from agent.probes import device_is_responsive, device_runs_work
 
-        return bool(device_is_responsive(_LIVENESS_PROBE_S))
+        return bool(device_is_responsive(_LIVENESS_PROBE_S)) and device_runs_work() is not False
     except Exception:  # noqa: BLE001 -- no answer, a slow answer, or no probe at all: reset as before
         return False
 

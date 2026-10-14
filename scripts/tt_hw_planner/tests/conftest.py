@@ -47,6 +47,8 @@ _DEVICE_PRIMITIVES = (
     ("models.experimental.perf_automation.agent.device_recovery", "device_holders"),
     ("models.experimental.perf_automation.agent.device_recovery", "recover"),
     ("models.experimental.perf_automation.agent.probes", "_device_reset"),
+    # Opens every visible chip and runs an op on it -- a device run beside a live one.
+    ("models.experimental.perf_automation.agent.probes", "device_runs_work"),
     ("scripts.tt_hw_planner.trace_gate", "reclaim_mesh"),
     # Not a kill, but the same class of accident: this is what LAUNCHES a run on the board. A test
     # that drives the capture without patching above it would start a real device pytest beside a
