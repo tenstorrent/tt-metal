@@ -316,6 +316,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         drisc_dual_def["SE_GRANT_SEM"] = std::to_string(GRANT);
     }
+    if (p.drisc && flat_drisc_tiles() == 2) {  // both tiles of a bank every call (se_drisc.hpp SD_PAIRED)
+        drisc_dual_def["SE_DRISC_PAIRED_ALWAYS"] = "1";
+    }
     // readers (read NOC0, forward NOC1): the chain-tail readers also compute down columns (se9_rdown)
     std::vector<CoreCoord> rdn_cores, plain;
     for (const auto& [r, tail] : p.rdn) {

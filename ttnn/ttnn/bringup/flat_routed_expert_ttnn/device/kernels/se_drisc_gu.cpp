@@ -78,7 +78,7 @@ inline void fast_inc(uint8_t noc, uint32_t coord) {
 }
 
 struct Job {
-    uint32_t gddr, chunk, blk, rg, R, G, per_e, land, units, slot0, ns, trid0, ub;
+    uint32_t gddr, chunk, blk, rg, R, G, per_e, land, units, slot0, ns, trid0, ub, dmax;
     uint32_t rd, wr, fl;
     uint8_t noc;
     uint8_t loads[SD_MAX_LOADS], regions[SD_MAX_LOADS];
@@ -177,6 +177,11 @@ void kernel_main() {
             J.land = d[SD_LAND];
             const uint32_t dsem = d[SD_DATA_SEM], n_load = d[SD_N_LOAD], gsem = d[SD_GRANTS];
             J.dsem = dsem;
+#ifdef SE_DRISC_DMA_MAX  // (probe MIMO_FL_DRISC_DMA_MAX: DMA reads in flight)
+            J.dmax = SE_DRISC_DMA_MAX;
+#else
+            J.dmax = d[SD_PAIRED] ? 2 : 255;  // (se_drisc.hpp SD_PAIRED)
+#endif
             for (uint32_t l = 0; l < n_load; ++l) {
                 const uint32_t v = d[SD_LOADS + l];
                 J.loads[l] = v & 0xFF;
@@ -244,14 +249,10 @@ void kernel_main() {
 #endif
                 const uint8_t stream = (SE_DRISC_STREAM0 + k) & 1, noc = J.noc;
                 // DMA ahead into free slots (unit rd: chunk rd / RG of load (rd / RG) / PER_E, block rd % RG)
-#ifndef SE_DRISC_DMA_MAX
-#define SE_DRISC_DMA_MAX 255
-#endif
                 {
                 PF_BEGIN
                 while (J.rd < J.units && J.rd - J.fl < J.ns &&
-                       (SE_DRISC_DMA_MAX >= 255 ||
-                        experimental::dma_get_reads_outstanding(stream) < SE_DRISC_DMA_MAX)) {
+                       (J.dmax >= 255 || experimental::dma_get_reads_outstanding(stream) < J.dmax)) {
                     const uint32_t upc = J.rg / J.ub, c = J.rd / upc, b = (J.rd % upc) * J.ub;
                     const uint32_t src = J.gddr + (J.loads[c / J.per_e] * J.per_e + c % J.per_e) * J.chunk + b * J.blk;
 #ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
