@@ -19,9 +19,6 @@ namespace ttnn::operations::data_movement::reshape_codegen {
 
 namespace {
 
-// Per-core RM scratch holds this many sticks, each with this much slack beyond its aligned page.
-constexpr uint32_t kScratchSticks = 8;
-constexpr uint32_t kScratchSlackBytes = 64;
 // Largest slab an output stick is cut into.
 constexpr uint32_t kMaxSlabBytes = 4096;
 // Most slabs gathered behind one read barrier.
@@ -169,7 +166,7 @@ std::optional<RmPlan> rm_geometry(
 
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     plan.cb_page = plan.can_coalesce ? plan.new_stick : tt::round_up(plan.new_stick, l1_alignment);
-    plan.scratch_bytes = plan.can_coalesce ? 0 : kScratchSticks * (plan.old_aligned + kScratchSlackBytes);
+    plan.scratch_bytes = plan.can_coalesce ? 0 : kRmScratchSticks * (plan.old_aligned + kRmScratchSlackBytes);
     return plan;
 }
 
