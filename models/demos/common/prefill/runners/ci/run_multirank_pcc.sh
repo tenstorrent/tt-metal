@@ -34,6 +34,7 @@ PCC_THRESHOLD=0.85
 GOLDEN_LEN=56320
 EXPECTED_TPS="${PREFILL_EXPECTED_TPS:-}"
 PERF_BASELINES="${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_baselines.json"
+PERF_GATE="${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_gate.py"
 # Demand a measurement even before a baseline exists, so a leg being calibrated cannot pass green
 # on nothing.
 REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-0}"
@@ -355,9 +356,18 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
   # The summary normally runs in the EXIT trap, after this point; force it early so the gate has
   # a file to read. The trap's own call is a no-op once this one has run.
   emit_summary
-  python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_gate.py" \
+  PERF_POWER=""
+  if [ -z "${EXPECTED_TPS}" ] && [ -f "${PERF_BASELINES}" ]; then
+    PERF_POWER=$("${MPIRUN}" -np 1 --host "${RESOLVED_HOSTS%%,*}:1" --bind-to none --allow-run-as-root \
+      bash -lc "cd '${TT_METAL_HOME}' && PYTHONPATH='${TT_METAL_HOME}' python3 ${PERF_GATE} --print-power" | tail -n 1) || true
+    case "${PERF_POWER}" in
+      8kw|14kw) ;;
+      *) echo "perf baseline WARN: power probe on ${RESOLVED_HOSTS%%,*} returned '${PERF_POWER}'" >&2; PERF_POWER="" ;;
+    esac
+  fi
+  python3 "${PERF_GATE}" \
     "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" \
-    --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" \
+    --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" --power "${PERF_POWER}" \
     --expected-tps "${EXPECTED_TPS}" --margin "${PREFILL_PERF_MARGIN:-}" \
     --require "${REQUIRE_TPS}" || PERF_GATE_RC=$?
 fi

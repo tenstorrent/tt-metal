@@ -17,14 +17,13 @@ METRICS = {
 def power_class():
     from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_tdp_limit_max, is_high_power
 
-    if is_high_power():
-        return "14kw"
+    cls = "14kw" if is_high_power() else "8kw"
     try:
         tdp = get_tdp_limit_max()
     except Exception as e:
         tdp = f"unreadable ({type(e).__name__})"
-    print(f"perf baseline: TDP_LIMIT_MAX={tdp} is below 130 W; using 8kw", file=sys.stderr)
-    return "8kw"
+    print(f"perf baseline: TDP_LIMIT_MAX={tdp} -> {cls} (14kw needs >= 130 W)", file=sys.stderr)
+    return cls
 
 
 def lookup(table, model, config, cls):
@@ -69,7 +68,8 @@ def check(rec, path, label, metric, expected, margin, fast_fails):
 
 def main():
     parser = argparse.ArgumentParser(description="Gate a prefill run's perf JSON against its baseline.")
-    parser.add_argument("perf_json")
+    parser.add_argument("perf_json", nargs="?")
+    parser.add_argument("--print-power", action="store_true", help="print this host's power class and exit")
     parser.add_argument("--table", default="")
     parser.add_argument("--model", default="")
     parser.add_argument("--config", default="")
@@ -80,6 +80,9 @@ def main():
     )
     parser.add_argument("--require", default="0", help="1 fails the run if nothing was measured")
     args = parser.parse_args()
+    if args.print_power:
+        print(power_class())
+        return 0
 
     probe, baseline, fast_fails = None, None, False
     if args.expected_tps:
