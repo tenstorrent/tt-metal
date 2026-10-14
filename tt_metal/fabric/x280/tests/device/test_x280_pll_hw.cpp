@@ -51,8 +51,6 @@
 #include <vector>
 
 using namespace x280::test;
-using x280::harness::cluster;
-using x280::harness::watcher_enabled;
 
 namespace {
 

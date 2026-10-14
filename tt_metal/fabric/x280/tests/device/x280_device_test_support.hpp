@@ -12,7 +12,6 @@
 
 #pragma once
 
-#include "harness/metal_context.hpp"
 #include "impl/context/metal_context.hpp"
 
 #include "x280/device/x280_state.hpp"
@@ -31,10 +30,16 @@
 
 namespace x280::test {
 
+/** The process's tt::Cluster, owned by MetalContext and valid while it lives. */
+inline const tt::Cluster& cluster() { return tt::tt_metal::MetalContext::instance().get_cluster(); }
+
+/** Whether Metal's watcher is enabled; its host NoC sanitizer admits no L2CPU coordinate. */
+inline bool watcher_enabled() { return tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled(); }
+
 // Only ARC messaging and telemetry need this. operator* on a const unique_ptr
 // yields a non-const referent, so borrowing the driver needs no cast; nothing here
 // constructs a Cluster, so there is no second owner.
-inline tt::umd::Cluster& driver() { return *x280::harness::cluster().get_driver(); }
+inline tt::umd::Cluster& driver() { return *cluster().get_driver(); }
 
 inline std::string chip_label(tt::ChipId chip) { return "chip " + std::to_string(chip); }
 

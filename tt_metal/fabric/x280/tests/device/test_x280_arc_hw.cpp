@@ -19,7 +19,6 @@
 #include <string>
 
 using namespace x280::test;
-using x280::harness::cluster;
 
 TEST(X280Arc, ArcMessageRoundTrip) {
     tt::umd::NocIdSwitcher noc_guard(tt::umd::NocId::NOC0);
