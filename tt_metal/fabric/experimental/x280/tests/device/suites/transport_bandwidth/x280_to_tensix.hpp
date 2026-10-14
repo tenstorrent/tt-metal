@@ -155,7 +155,8 @@ inline void run_axis(
     hreg::write_args(*f.tile, XR.args, block);
 
     hexec::X280Launch launch{
-        .image_path = hart_::image_path("X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE"),
+        .image_path = hart_::image_path(
+            "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE", "firmware-transport-bandwidth-x280-to-tensix.bin"),
         .run_value = run_value,
         .args_addr = XR.args.addr,
         .args_bytes = XR.args.bytes,

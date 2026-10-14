@@ -29,6 +29,7 @@ protected:
             .open =
                 {
                     .image_env_var = "X280_TRANSPORT_BW_X280_TO_TENSIX_FW_IMAGE",
+                    .image_file = "firmware-transport-bandwidth-x280-to-tensix.bin",
                     .kernel_dir = x280::harness::artifacts::kernel_dir_of(__FILE__),
                 },
             .suite_label = "transport_bandwidth_x280_to_tensix",
