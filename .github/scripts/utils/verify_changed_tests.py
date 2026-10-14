@@ -92,7 +92,6 @@ PACKAGE_INSTALL_PREFIXES = ("/usr/share/tt-metalium", "/usr/libexec/tt-metalium"
 # Where the LLK pipelines run their cmds from (their LLK_PATH). Their entries open
 # with `cd tests/python_tests`, which from the gate's /work would otherwise land in
 # tt-metal's own tests/.
-LLK_WORKDIR = "tt_metal/tt-llk"
 
 DEFAULT_TTSIM_SKIP_LIST = "tests/pipeline_reorg/ttsim-skip-list.yaml"
 DEFAULT_SKU_CONFIG = ".github/sku_config.yaml"
@@ -340,7 +339,7 @@ def cmd_referenced_paths(cmd, tracked, dirs, workdir="", gitlinks=frozenset()):
     A token counts only if it is a tracked file or a directory tracked files sit
     under, so `-k some_filter` and untracked `./build/test/...` never match.
 
-    workdir is the leg's working directory (see resolve_workdir): the LLK yamls'
+    workdir is the leg's working directory (see entry_workdir): the LLK yamls'
     cmds are relative to it. Tokens resolve workdir-first then from the root, since
     a cmd can legitimately name both.
     """
@@ -585,13 +584,41 @@ def needs_packages(entry):
     return any(prefix in cmd for prefix in PACKAGE_INSTALL_PREFIXES)
 
 
-def resolve_workdir(path, llk_workdir_files):
+def entry_env(entry, path):
+    """The entry's declared `env`, flattened to KEY=VALUE lines for the run step.
+
+    Some cmds read ambient variables -- the LLK ones run `pytest -m "$PYTEST_MARKERS"`
+    under `set -u` -- which the owning pipeline sets from a workflow input. Declaring
+    them on the entry keeps the value next to the cmd that needs it, so this gate and
+    any other consumer read the same source instead of each carrying its own copy.
+    """
+    env = entry.get("env")
+    if env is None:
+        return ""
+    if not isinstance(env, dict) or not all(isinstance(k, str) for k in env):
+        raise GateError(f"{path}: entry '{entry.get('name')}' has an invalid 'env'; expected a mapping of names")
+    for key, value in env.items():
+        if "\n" in key or "\n" in str(value):
+            raise GateError(f"{path}: env {key!r} spans lines; the run step reads one KEY=VALUE per line")
+    return "\n".join(f"{key}={value}" for key, value in env.items())
+
+
+def entry_workdir(entry, path):
     """The directory a leg's cmd runs from, relative to the checkout root.
 
-    Empty except for the LLK yamls. Told rather than derived: `cd tests/python_tests`
-    says nothing about which tree it is relative to.
+    Declared on the entry, like `env`, because it is a property of the test rather
+    than of this gate: the LLK cmds open with `cd tests/python_tests` or call
+    `./tests/run_llk_perf_*.sh`, both relative to the tree their pipeline sets as
+    its working-directory. Empty means the checkout root, which is everything else.
     """
-    return LLK_WORKDIR if os.path.basename(path) in llk_workdir_files else ""
+    workdir = entry.get("workdir")
+    if workdir is None:
+        return ""
+    if not isinstance(workdir, str) or not workdir or "\n" in workdir:
+        raise GateError(f"{path}: entry '{entry.get('name')}' has an invalid 'workdir'; expected a relative path")
+    if workdir.startswith("/") or ".." in workdir.split("/"):
+        raise GateError(f"{path}: entry '{entry.get('name')}' workdir {workdir!r} must stay inside the checkout")
+    return workdir.rstrip("/")
 
 
 def scope_file(
@@ -601,7 +628,6 @@ def scope_file(
     tracy_files,
     non_matrix_files,
     unsupported_files,
-    llk_workdir_files,
     base_path=None,
     tracked=None,
     dirs=None,
@@ -669,8 +695,6 @@ def scope_file(
     # Removed entries are ignored: no test left to prove. Metadata-only edits fall
     # out here too, since behavioural_view() excludes them.
 
-    workdir = resolve_workdir(path, llk_workdir_files)
-
     # Entries already touched above keep their reason and are not added twice.
     if changed_src:
         already = {key for key, _, _ in touched}
@@ -678,7 +702,12 @@ def scope_file(
             if key in already:
                 continue
             hits = sources_touching(
-                entry.get("cmd") or "", tracked or set(), dirs or set(), changed_src, workdir, gitlinks or frozenset()
+                entry.get("cmd") or "",
+                tracked or set(),
+                dirs or set(),
+                changed_src,
+                entry_workdir(entry, path),
+                gitlinks or frozenset(),
             )
             if hits:
                 touched.append((key, entry, "source:" + ",".join(hits)))
@@ -697,6 +726,7 @@ def scope_file(
             continue
 
         team = entry.get("team")
+        workdir = entry_workdir(entry, path)
         for sku in runnable:
             run_legs.append(
                 {
@@ -709,6 +739,7 @@ def scope_file(
                     "profile": resolve_profile(path, tracy_files),
                     "packages": needs_packages(entry),
                     "workdir": workdir,
+                    "env": entry_env(entry, path),
                 }
             )
 
@@ -722,7 +753,6 @@ def build_scope(
     tracy_files,
     non_matrix_files,
     unsupported_files,
-    llk_workdir_files,
     renames=None,
     changed_src=None,
 ):
@@ -750,7 +780,6 @@ def build_scope(
             tracy_files,
             non_matrix_files,
             unsupported_files,
-            llk_workdir_files,
             base_path=renames.get(path),
             tracked=tracked,
             dirs=dirs,
@@ -940,6 +969,7 @@ def filter_matrix(scope, matrices, skips):
             row["gate_profile"] = leg["profile"]
             row["gate_packages"] = leg["packages"]
             row["gate_workdir"] = leg["workdir"]
+            row["gate_env"] = leg["env"]
             if str(row.get("sku", "")).startswith("sim_"):
                 stripped = PYTEST_TIMEOUT_FLAG.sub("", row.get("cmd") or "")
                 if stripped != row.get("cmd"):
@@ -995,7 +1025,6 @@ def run(args):
     tracy_files = set(split_list(args.tracy_files))
     non_matrix_files = set(split_list(args.non_matrix_files))
     unsupported_files = set(split_list(args.unsupported_files))
-    llk_workdir_files = set(split_list(args.llk_workdir_files))
     base = merge_base(args.base)
     files = args.files if args.files is not None else changed_files(base)
     files = [f for f in files if f.startswith(TESTS_DIR + "/")]
@@ -1019,7 +1048,6 @@ def run(args):
         tracy_files,
         non_matrix_files,
         unsupported_files,
-        llk_workdir_files,
         renames=renames,
         changed_src=changed_src,
     )
@@ -1112,14 +1140,6 @@ def main(argv=None):
             "Yaml basenames the gate cannot dispatch, e.g. vllm_model_tests.yaml whose "
             "entries carry no cmd (default: $UNSUPPORTED_YAMLS). Edits to these are routed "
             "to their code owners for review instead of being run."
-        ),
-    )
-    parser.add_argument(
-        "--llk-workdir-files",
-        default=os.environ.get("LLK_WORKDIR_YAMLS", ""),
-        help=(
-            f"Yaml basenames whose cmds run from {LLK_WORKDIR} rather than the checkout root, "
-            "matching their pipelines' working-directory (default: $LLK_WORKDIR_YAMLS)."
         ),
     )
     parser.add_argument(
