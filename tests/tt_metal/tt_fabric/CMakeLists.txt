@@ -31,14 +31,14 @@ target_include_directories(
     PRIVATE
         # physical_descriptor_builder.hpp pulls the FSD + PSD generated proto headers
         ${Metalium_BINARY_DIR}/tools/scaleout # protobuf/factory_system_descriptor.pb.h
-        "$<TARGET_PROPERTY:scaleout_topology,BINARY_DIR>" # protobuf/physical_system_descriptor.pb.h
+        "$<TARGET_PROPERTY:tt_fabric_topology_utils,BINARY_DIR>" # protobuf/physical_system_descriptor.pb.h
 )
 
 # The physical_descriptor_builder test includes generated FSD/PSD proto headers.
 add_dependencies(
     fabric_unit_tests
     scaleout_generated_protos
-    topology_generated_protos
+    fabric_topology_utils_generated_protos
 )
 
 set_target_properties(

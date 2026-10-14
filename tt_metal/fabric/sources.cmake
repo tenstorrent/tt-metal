@@ -16,10 +16,10 @@ set(FABRIC_JIT_API_HEADERS
     hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
 )
 
-# Runtime-free topology sources — compiled into the lean TT::ScaleoutTopology static library
+# Runtime-free topology sources — compiled into the lean TT::FabricTopologyUtils static library
 # (see tt_metal/fabric/CMakeLists.txt). NOTE: mesh_graph.cpp, routing_table_generator.cpp and topology_mapper.cpp
 # stay in FABRIC_SOURCES below (MeshGraph, the routing-table builder and the runtime TopologyMapper stay in fabric).
-set(TOPOLOGY_SOURCES
+set(FABRIC_TOPOLOGY_UTILS_SOURCES
     mesh_graph_descriptor.cpp
     physical_system_descriptor.cpp
     physical_system_descriptor_diff.cpp
@@ -35,7 +35,7 @@ set(TOPOLOGY_SOURCES
     physical_descriptor_builder.cpp
     # Runtime-free TUs the library needs for a standalone link: the strong-type formatters/operators and the
     # MeshShape/MeshCoordinate implementations (owned by common, compiled here instead so libscaleout_topology.a
-    # is self-contained; libtt_metal.so still gets exactly one copy via fabric -> scaleout_topology).
+    # is self-contained; libtt_metal.so still gets exactly one copy via fabric -> tt_fabric_topology_utils).
     fabric_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../common/mesh_coord.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../common/shape_base.cpp

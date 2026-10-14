@@ -35,7 +35,7 @@ include(protobuf)
 
 # Descriptor protos consumed by the runtime-free topology lib vs. fabric-runtime protos. All generate into the
 # same protobuf/ dir so consumers resolve headers via ${CMAKE_CURRENT_BINARY_DIR}.
-set(TOPOLOGY_PROTO_SCHEMAS
+set(FABRIC_TOPOLOGY_UTILS_PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mesh_graph_descriptor.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_system_descriptor.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_grouping_descriptor.proto
@@ -46,10 +46,10 @@ set(FABRIC_PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/intermesh_connection_table.proto
 )
 
-set(TOPOLOGY_GENERATED_PROTO_SRCS)
-foreach(PROTO_FILE ${TOPOLOGY_PROTO_SCHEMAS})
+set(FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_SRCS)
+foreach(PROTO_FILE ${FABRIC_TOPOLOGY_UTILS_PROTO_SCHEMAS})
     GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
-    list(APPEND TOPOLOGY_GENERATED_PROTO_SRCS ${PROTO_SRCS})
+    list(APPEND FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_SRCS ${PROTO_SRCS})
 endforeach()
 
 set(FABRIC_GENERATED_PROTO_SRCS)
@@ -59,42 +59,44 @@ foreach(PROTO_FILE ${FABRIC_PROTO_SCHEMAS})
 endforeach()
 
 # ---------------------------------------------------------------------------
-# TT::ScaleoutTopology — runtime-free topology library: MGD + PSD + PGD (proto + class), the topology solver, the
+# TT::FabricTopologyUtils — runtime-free topology library: MGD + PSD + PGD (proto + class), the topology solver, the
 # topology mapper utils and the offline FSD->PSD builder. It links no tt_metal runtime target. fabric links it so its objects also land in libtt_metal.so for in-tree consumers; external consumers
-# (e.g. Fabric Manager) can link TT::ScaleoutTopology from the installed tt-metalium package without libtt_metal.
+# (e.g. Fabric Manager) can link TT::FabricTopologyUtils from the installed tt-metalium package without libtt_metal.
 # ---------------------------------------------------------------------------
 add_library(
-    scaleout_topology
+    tt_fabric_topology_utils
     STATIC
-    ${TOPOLOGY_SOURCES}
-    ${TOPOLOGY_GENERATED_PROTO_SRCS}
+    ${FABRIC_TOPOLOGY_UTILS_SOURCES}
+    ${FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_SRCS}
 )
-add_library(TT::ScaleoutTopology ALIAS scaleout_topology)
+add_library(TT::FabricTopologyUtils ALIAS tt_fabric_topology_utils)
 set_target_properties(
-    scaleout_topology
+    tt_fabric_topology_utils
     PROPERTIES
         EXPORT_NAME
-            ScaleoutTopology
-) # installed name == in-tree alias
+            FabricTopologyUtils # installed name == in-tree alias
+        OUTPUT_NAME
+            tt-fabric-topology-utils # libtt-fabric-topology-utils.a
+)
 set_source_files_properties(
-    ${TOPOLOGY_GENERATED_PROTO_SRCS}
+    ${FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_SRCS}
     PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION
             TRUE
 )
 
-add_custom_target(topology_generated_protos DEPENDS ${TOPOLOGY_GENERATED_PROTO_SRCS})
+add_custom_target(fabric_topology_utils_generated_protos DEPENDS ${FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_SRCS})
 add_dependencies(
-    scaleout_topology
-    topology_generated_protos
+    tt_fabric_topology_utils
+    fabric_topology_utils_generated_protos
     scaleout_generated_protos
 )
 if(TARGET all_generated_files)
-    add_dependencies(all_generated_files topology_generated_protos)
+    add_dependencies(all_generated_files fabric_topology_utils_generated_protos)
 endif()
 
 target_include_directories(
-    scaleout_topology
+    tt_fabric_topology_utils
     PUBLIC
         "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/tt_metal/api>" # public headers (installed by tt_metal's api file set)
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
@@ -115,7 +117,7 @@ target_include_directories(
 # not resolve them to this build's in-tree targets, which cannot be exported. (yaml-cpp is not bundled: a consumer
 # that links its own copy would get every symbol twice.)
 target_link_libraries(
-    scaleout_topology
+    tt_fabric_topology_utils
     PUBLIC
         TT::STL
         TT::Metalium::HostDevCommon
@@ -130,26 +132,26 @@ target_link_libraries(
         $<BUILD_INTERFACE:cadical::cadical>
         $<BUILD_INTERFACE:Boost::asio> # boost/move header used by common/mesh_coord.cpp
 )
-target_compile_features(scaleout_topology PUBLIC cxx_std_20)
+target_compile_features(tt_fabric_topology_utils PUBLIC cxx_std_20)
 # Repo build accelerators (match fabric / scaleout_tools): unity build + shared PCH. Generated proto sources are
 # already excluded from unity above via SKIP_UNITY_BUILD_INCLUSION.
-TT_ENABLE_UNITY_BUILD(scaleout_topology)
-tt_reuse_precompile_headers(scaleout_topology TT::CommonPCH)
+TT_ENABLE_UNITY_BUILD(tt_fabric_topology_utils)
+tt_reuse_precompile_headers(tt_fabric_topology_utils TT::CommonPCH)
 # Default visibility (NOT hidden): fabric links this lib into libtt_metal.so, so its symbols are exported from the .so
-# exactly as before the split. A consumer must link EITHER tt_metal OR TT::ScaleoutTopology, never both: the
+# exactly as before the split. A consumer must link EITHER tt_metal OR TT::FabricTopologyUtils, never both: the
 # descriptor protos would register twice ("File already exists in database").
 # Bundle cadical (SAT solver) object files into the archive so an external consumer does not need to build it.
 # In-tree, libtt_metal.so links libcadical.a itself; the archive members are then never pulled, so nothing is
 # defined twice.
-target_sources(scaleout_topology PRIVATE $<TARGET_OBJECTS:cadical>)
-install(TARGETS scaleout_topology EXPORT Metalium ARCHIVE COMPONENT metalium-dev)
+target_sources(tt_fabric_topology_utils PRIVATE $<TARGET_OBJECTS:cadical>)
+install(TARGETS tt_fabric_topology_utils EXPORT Metalium ARCHIVE COMPONENT metalium-dev)
 # The archive carries the compiled MGD/PSD/PGD protos, so a consumer must use these generated headers rather than
 # compile the .proto schemas again (two copies register twice: "File already exists in database").
-set(TOPOLOGY_GENERATED_PROTO_HDRS ${TOPOLOGY_GENERATED_PROTO_SRCS})
-list(FILTER TOPOLOGY_GENERATED_PROTO_HDRS INCLUDE REGEX "\\.pb\\.h$")
+set(FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_HDRS ${FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_SRCS})
+list(FILTER FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_HDRS INCLUDE REGEX "\\.pb\\.h$")
 install(
     FILES
-        ${TOPOLOGY_GENERATED_PROTO_HDRS}
+        ${FABRIC_TOPOLOGY_UTILS_GENERATED_PROTO_HDRS}
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tt-metalium/protobuf
     COMPONENT metalium-dev
 )
@@ -195,8 +197,8 @@ target_include_directories(
 target_link_libraries(
     fabric
     PRIVATE
-        $<TARGET_OBJECTS:scaleout_topology>
-        TT::ScaleoutTopology
+        $<TARGET_OBJECTS:tt_fabric_topology_utils>
+        TT::FabricTopologyUtils
         TT::ScaleoutTools
         Metalium::Metal::LLRT
         umd::tt-umd
