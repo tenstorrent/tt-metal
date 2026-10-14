@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
-// Allocation experiment, not a device test. SCHEME=0: unannotated;
-// SCHEME=1: Nathan's before-input/after-output read/write pairs;
-// SCHEME=2: effect metadata; SCHEME=3: caller-owned C++ lifetime.
-// USE_SFPI_API spells scheme 3 through the existing public LRegFile API.
-// Both raw producer and consumer are real words.
-// This does not implement or substitute for the proposed sfpvalue builtin.
+// Compile-only allocation check, not a device test. The raw L0 value written
+// by the SFPLOADI word must stay in L0 until the SFPSTORE word reads it, even
+// though a typed load/store temporary is allocated in between. SCHEME=2 and
+// SCHEME=3 must keep that temporary off L0; SCHEME=0 and 1 are reported only.
+//   SCHEME=0: no annotation.
+//   SCHEME=1: LREG read/write builtins after the producer and before the consumer.
+//   SCHEME=2: raw-LREG effect metadata.
+//   SCHEME=3: the value carried through C++ (USE_SFPI_API: via sfpi::l_reg).
 #ifndef SCHEME
 #error "select SCHEME=0, 1, 2, or 3"
 #endif
