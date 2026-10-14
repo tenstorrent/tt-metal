@@ -49,8 +49,9 @@ ALWI void custom_mm_block_init(
             (S0.face_r_dim == 1 || S0.face_r_dim == 2 || S0.face_r_dim == 4 || S0.face_r_dim == 8),
         "custom_mm_block: in0 tile shape must be [1|2|4|8, 32]");
     static_assert(
-        S1.face_r_dim == 16 && S1.face_c_dim == 16 && S1.num_faces_r_dim == 2 && S1.num_faces_c_dim == 2,
-        "custom_mm_block: in1 tile shape must be [32, 32]");
+        S1.face_r_dim == 16 && S1.face_c_dim == 16 && S1.num_faces_r_dim == 2 &&
+            (S1.num_faces_c_dim == 2 || (S1.num_faces_c_dim == 1 && !transpose)),
+        "custom_mm_block: in1 tile shape must be [32, 32], or [32, 16] without transpose");
 
     // Referenced only inside UNPACK/MATH, so PACK would otherwise warn -Wunused-but-set-variable.
     [[maybe_unused]] constexpr auto in0_descriptor = experimental::LLKOperand<F0, S0>::descriptor;
@@ -59,13 +60,13 @@ ALWI void custom_mm_block_init(
 
     UNPACK((llk_unpack_hw_configure<fp32_dest_acc_en, in1_descriptor, in0_descriptor>()));
     UNPACK((_llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
-        S0.face_r_dim, static_cast<std::uint32_t>(in1_register_format), ct_dim)));
+        S0.face_r_dim, static_cast<std::uint32_t>(in1_register_format), ct_dim, S1.total_num_faces())));
 
     MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));
     // Match the unpacker's physical ordering, including the source-format
     // caches maintained by current Metal: weights -> SrcA, activations -> SrcB.
     MATH((llk_math_hw_configure<fp32_dest_acc_en, in1_descriptor, in0_descriptor>()));
-    MATH((_llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(S0.face_r_dim, ct_dim)));
+    MATH((_llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(S0.face_r_dim, ct_dim, S1.total_num_faces())));
 
     PACK((llk_pack_dest_init<fp32_dest_acc_en, ckernel::PackMode::Default>(out_cb_id)));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
@@ -88,8 +89,9 @@ ALWI void custom_mm_block_init(
     const std::uint32_t ct_dim = 1) {
     SAN_HOOK(unsupported());
     static_assert(
-        S1.face_r_dim == 16 && S1.face_c_dim == 16 && S1.num_faces_r_dim == 2 && S1.num_faces_c_dim == 2,
-        "custom_mm_block: in1 tile shape must be [32, 32]");
+        S1.face_r_dim == 16 && S1.face_c_dim == 16 && S1.num_faces_r_dim == 2 &&
+            (S1.num_faces_c_dim == 2 || (S1.num_faces_c_dim == 1 && !transpose)),
+        "custom_mm_block: in1 tile shape must be [32, 32], or [32, 16] without transpose");
     constexpr auto in1_register_format = infer_unpack_dst_format(F1, fp32_dest_acc_en);
 
     UNPACK(({
@@ -106,7 +108,10 @@ ALWI void custom_mm_block_init(
             experimental::tile_stride_words(F1, S1),
             get_local_cb_interface(in0_id).fifo_page_size);
         _llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
-            get_operand_face_r_dim(in0_id), static_cast<std::uint32_t>(in1_register_format), ct_dim);
+            get_operand_face_r_dim(in0_id),
+            static_cast<std::uint32_t>(in1_register_format),
+            ct_dim,
+            S1.total_num_faces());
     }));
 
     MATH(({
@@ -114,7 +119,8 @@ ALWI void custom_mm_block_init(
         llk_math_pack_sync_init<fp32_dest_acc_en>();
         _llk_math_hw_configure_<fp32_dest_acc_en>(
             static_cast<std::uint32_t>(in1_register_format), unpack_dst_format[in0_id]);
-        _llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(get_operand_face_r_dim(in0_id), ct_dim);
+        _llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(
+            get_operand_face_r_dim(in0_id), ct_dim, S1.total_num_faces());
     }));
 
     PACK((llk_pack_dest_init<fp32_dest_acc_en, ckernel::PackMode::Default>(out_cb_id)));
@@ -144,13 +150,14 @@ ALWI void custom_mm_block_init_short(
             (S0.face_r_dim == 1 || S0.face_r_dim == 2 || S0.face_r_dim == 4 || S0.face_r_dim == 8),
         "custom_mm_block: in0 tile shape must be [1|2|4|8, 32]");
     static_assert(
-        S1.face_r_dim == 16 && S1.face_c_dim == 16 && S1.num_faces_r_dim == 2 && S1.num_faces_c_dim == 2,
-        "custom_mm_block: in1 tile shape must be [32, 32]");
+        S1.face_r_dim == 16 && S1.face_c_dim == 16 && S1.num_faces_r_dim == 2 &&
+            (S1.num_faces_c_dim == 2 || (S1.num_faces_c_dim == 1 && !transpose)),
+        "custom_mm_block: in1 tile shape must be [32, 32], or [32, 16] without transpose");
 
     constexpr auto in1_register_format = infer_unpack_dst_format_2op<F1, F0>(DST_ACCUM_MODE);
     UNPACK((_llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
-        S0.face_r_dim, static_cast<std::uint32_t>(in1_register_format), ct_dim)));
-    MATH((_llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(S0.face_r_dim, ct_dim)));
+        S0.face_r_dim, static_cast<std::uint32_t>(in1_register_format), ct_dim, S1.total_num_faces())));
+    MATH((_llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(S0.face_r_dim, ct_dim, S1.total_num_faces())));
 
     PACK((_llk_pack_custom_mm_init_<dense_packing>()));
 }
@@ -166,17 +173,22 @@ ALWI void custom_mm_block_init_short(
     const std::uint32_t in0_cb_id, experimental::LLKOperand<F1, S1> /*in1*/, const std::uint32_t ct_dim = 1) {
     SAN_HOOK(unsupported());
     static_assert(
-        S1.face_r_dim == 16 && S1.face_c_dim == 16 && S1.num_faces_r_dim == 2 && S1.num_faces_c_dim == 2,
-        "custom_mm_block: in1 tile shape must be [32, 32]");
+        S1.face_r_dim == 16 && S1.face_c_dim == 16 && S1.num_faces_r_dim == 2 &&
+            (S1.num_faces_c_dim == 2 || (S1.num_faces_c_dim == 1 && !transpose)),
+        "custom_mm_block: in1 tile shape must be [32, 32], or [32, 16] without transpose");
     constexpr auto in1_register_format = infer_unpack_dst_format(F1, DST_ACCUM_MODE);
     UNPACK(({
         const auto in0_id = get_operand_id(in0_cb_id);
         _llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
-            get_operand_face_r_dim(in0_id), static_cast<std::uint32_t>(in1_register_format), ct_dim);
+            get_operand_face_r_dim(in0_id),
+            static_cast<std::uint32_t>(in1_register_format),
+            ct_dim,
+            S1.total_num_faces());
     }));
     MATH(({
         const auto in0_id = get_operand_id(in0_cb_id);
-        _llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(get_operand_face_r_dim(in0_id), ct_dim);
+        _llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(
+            get_operand_face_r_dim(in0_id), ct_dim, S1.total_num_faces());
     }));
 
     PACK((_llk_pack_custom_mm_init_<dense_packing>()));
@@ -196,15 +208,24 @@ ALWI void custom_mm_block(
     const std::uint32_t in1_tile_index,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
+    const std::uint32_t ct_dim = 1,
+    const std::uint32_t in1_stride = 0) {
     SAN_HOOK(unsupported());
     static_assert(experimental::is_legal_tile_shape(S0), "Illegal activation tile shape");
     static_assert(experimental::is_legal_tile_shape(S1), "Illegal weight tile shape");
     constexpr std::uint32_t in0_tile_size = experimental::tile_stride_words(F0, S0);
     constexpr std::uint32_t in1_tile_size = experimental::tile_stride_words(F1, S1);
     UNPACK((_llk_unpack_AB_custom_mm_<read_transposed>(
-        in1.l1_address, in0.l1_address, in1_tile_index, in0_tile_index, in1_tile_size, in0_tile_size, kt_dim, ct_dim)));
-    MATH((_llk_math_custom_mm_<finalize>(S0.face_r_dim, dst_index, kt_dim, ct_dim)));
+        in1.l1_address,
+        in0.l1_address,
+        in1_tile_index,
+        in0_tile_index,
+        in1_tile_size,
+        in0_tile_size,
+        kt_dim,
+        ct_dim,
+        in1_stride)));
+    MATH((_llk_math_custom_mm_<finalize>(S0.face_r_dim, dst_index, kt_dim, ct_dim, S1.total_num_faces())));
 }
 
 template <bool finalize = true, bool read_transposed = false, DataFormat F1, TensorShape S1>
@@ -215,7 +236,8 @@ ALWI void custom_mm_block(
     const std::uint32_t in1_tile_index,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
+    const std::uint32_t ct_dim = 1,
+    const std::uint32_t in1_stride = 0) {
     SAN_HOOK(unsupported());
     constexpr std::uint32_t in1_tile_size = experimental::tile_stride_words(F1, S1);
     UNPACK(({
@@ -229,11 +251,12 @@ ALWI void custom_mm_block(
             in1_tile_size,
             in0.fifo_page_size,
             kt_dim,
-            ct_dim);
+            ct_dim,
+            in1_stride);
     }));
     MATH(({
         const auto in0_id = get_operand_id(in0_cb_id);
-        _llk_math_custom_mm_<finalize>(get_operand_face_r_dim(in0_id), dst_index, kt_dim, ct_dim);
+        _llk_math_custom_mm_<finalize>(get_operand_face_r_dim(in0_id), dst_index, kt_dim, ct_dim, S1.total_num_faces());
     }));
 }
 

@@ -20,15 +20,23 @@ using namespace ckernel::math;
 // CUSTOM_MM
 // Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
 // in0 tile shape: [{1, 2, 4, 8}, 32]
-// in1 tile shape: [32, 32]
+// in1 tile shape: [32, 32], or [32, 16] (in1_num_faces == 2, no transpose) for 16-wide output tiles
 // rt_dim: 1
 // ct_dim: any integer from 1 to 16
 // kt_dim: any integer from 1 to 256 (inclusive)
 // fidelity: LoFi only
 // throttle: not supported
 
+// Replay program length: a tile's MVMULs plus its finalization, which moves 4 more rows per output face
+// with an 8-row in0. A [32, 16] in1 tile has one output face, a [32, 32] one has two.
+inline std::uint32_t custom_mm_replay_buf_len(const std::uint32_t operandB_face_r_dim, const std::uint32_t in1_num_faces)
+{
+    const std::uint32_t lower_row_moves = operandB_face_r_dim == 8 ? 1 : 0;
+    return in1_num_faces == 2 ? 5 + lower_row_moves : 9 + 2 * lower_row_moves;
+}
+
 template <bool transpose, bool split_acc, bool dense_packing>
-inline void custom_mm_configure_addrmod()
+inline void custom_mm_configure_addrmod(const std::uint32_t in1_num_faces = TILE_NUM_FACES)
 {
     constexpr std::uint8_t ADDR_MOD_0_SRCA_INCR  = transpose ? 32 : 16;
     constexpr std::uint8_t ADDR_MOD_1_SRCA_INCR  = transpose ? (64 - 16) : 16;
@@ -94,12 +102,63 @@ inline void custom_mm_configure_addrmod()
     }
         .set(ADDR_MOD_7); // NOP, has to be ADDR_MOD_7 to match with address mods configured in silu
                           // for fusing matmul and activation
+
+    if (in1_num_faces == 2)
+    {
+        // A [32, 16] in1 is two faces in SrcA rows 0 and 16 (its K halves), so a tile is two MVMULs:
+        // F0 @ F0 => 0, then step SrcA and SrcB to the second K half, F1 @ F1 => 0 (8 if split_acc).
+        addr_mod_t {
+            .srca = {.incr = 16, .clr = 0, .cr = 0},
+            .srcb = {.incr = 16, .clr = 0, .cr = 0},
+            .dest = {.incr = split_acc ? 8 : 0, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_0);
+    }
+}
+
+inline void custom_mm_configure_narrow_mop(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim)
+{
+    load_replay_buf(
+        ckernel::math::replay_buf_offset,
+        custom_mm_replay_buf_len(operandB_face_r_dim, 2),
+        [operandB_face_r_dim]
+        {
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // F0 @ F0 => 0
+
+            // Finalization phase, as in the full-tile program but for the one output face
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // F1 @ F1 => 0 (8 if split_acc), back to the tile base
+
+            // Move the 4 rows of the split partial to rows 32+ of SrcB
+            TTI_MOVD2B(0, 32, ADDR_MOD_5, p_movd2a::MOV_4_ROWS, 0 + 8);
+            // Move lower 4 rows if they exist
+            if (operandB_face_r_dim == 8)
+            {
+                TTI_MOVD2B(0, 0 + 4, ADDR_MOD_7, p_movd2a::MOV_4_ROWS, 0 + 8 + 4);
+            }
+
+            // Zero SrcA as it is not reused and we need to add zero to the split partial in SrcB
+            TTI_ZEROSRC(0, 1, 0, 1);
+
+            // Partial in dest + split partial in SrcB (row 32) => final face in dest (clear only SrcA as B is reused)
+            TTI_ELWADD(1, 1, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
+        });
+
+    // The first MVMUL from the replay buffer, then the second K half ends the tile or the block as in the full program
+    const std::uint32_t mvmul_base      = lltt::replay_insn(ckernel::math::replay_buf_offset + 0, 1);
+    const std::uint32_t mvmul_end_tile  = TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0);
+    const std::uint32_t mvmul_end_block = TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);
+
+    ckernel_template tmp = ckernel_template(1, ct_dim, mvmul_base, mvmul_end_tile);
+    tmp.set_last_inner_loop_instr(mvmul_end_block);
+    tmp.set_last_outer_loop_instr(mvmul_end_block);
+
+    tmp.program();
 }
 
 template <bool split_acc>
 inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim)
 {
-    const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
+    const std::uint32_t replay_buf_len = custom_mm_replay_buf_len(operandB_face_r_dim, TILE_NUM_FACES);
 
     load_replay_buf(
         ckernel::math::replay_buf_offset,
@@ -171,15 +230,25 @@ inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, con
  * @tparam dense_packing: Lay output tiles 32 DEST rows apart instead of 64.
  * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
  * @param ct_dim: Number of output column tiles.
+ * @param in1_num_faces: Faces per in1 tile: 4 for [32, 32], 2 for [32, 16] (16-wide output tiles, no transpose).
  * @note Establishes the operand-driven default Src zero-substitution state, which @ref _llk_math_custom_mm_ asserts
  *       under LLK asserts. Re-run this init after any math op that leaves the flag at keep (a copy init does).
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_custom_mm_init_.
  */
 template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
-inline void _llk_math_custom_mm_init_(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim = 1)
+inline void _llk_math_custom_mm_init_(
+    const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim = 1, const std::uint32_t in1_num_faces = TILE_NUM_FACES)
 {
-    custom_mm_configure_addrmod<transpose, split_acc, dense_packing>();
-    custom_mm_configure_mop<split_acc>(operandB_face_r_dim, ct_dim);
+    LLK_ASSERT(in1_num_faces == TILE_NUM_FACES || (in1_num_faces == 2 && !transpose), "custom_mm: in1 must be [32, 32], or [32, 16] without transpose");
+    custom_mm_configure_addrmod<transpose, split_acc, dense_packing>(in1_num_faces);
+    if (in1_num_faces == 2)
+    {
+        custom_mm_configure_narrow_mop(operandB_face_r_dim, ct_dim);
+    }
+    else
+    {
+        custom_mm_configure_mop<split_acc>(operandB_face_r_dim, ct_dim);
+    }
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
@@ -195,20 +264,25 @@ inline void _llk_math_custom_mm_init_(const std::uint32_t operandB_face_r_dim, c
  * @param dst_index: DEST tile index to write.
  * @param kt_dim: Number of k-tiles to accumulate.
  * @param ct_dim: Number of output column tiles.
+ * @param in1_num_faces: Faces per in1 tile, as passed to @ref _llk_math_custom_mm_init_.
  * @note Call @ref _llk_math_custom_mm_init_ first, and again after any other math op (a copy init leaves the Src
  *       zero flag at keep).
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_custom_mm_.
  */
 template <bool finalize = true>
 inline void _llk_math_custom_mm_(
-    const std::uint32_t operandB_face_r_dim, const std::uint32_t dst_index, const std::uint32_t kt_dim, const std::uint32_t ct_dim = 1)
+    const std::uint32_t operandB_face_r_dim,
+    const std::uint32_t dst_index,
+    const std::uint32_t kt_dim,
+    const std::uint32_t ct_dim        = 1,
+    const std::uint32_t in1_num_faces = TILE_NUM_FACES)
 {
     LLK_ASSERT(
         math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
         "custom_mm: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
         "this call left it at keep, so denormal Src operands would not be flushed");
 
-    const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
+    const std::uint32_t replay_buf_len = custom_mm_replay_buf_len(operandB_face_r_dim, in1_num_faces);
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
     // Run mop kt_dim - 1 times, the last inner dim is handled separately to choose whether to run finalization or not

@@ -57,6 +57,7 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     CUSTOM_MM_CALLS,
+    CUSTOM_MM_IN1_WINDOW,
     IN_FACE_DIMS,
     NUM_FACES,
     TemplateParameter,
@@ -78,8 +79,12 @@ SUPPORTED_M = (1, 2, 4, 8)
 _PACKERS = {
     DataFormat.Float16_b: pack_bfp16,
     DataFormat.Float32: pack_fp32,
-    DataFormat.Bfp8_b: lambda tensor: bytes(pack_bfp8_b(tensor)),
-    DataFormat.Bfp4_b: lambda tensor: bytes(pack_bfp4_b(tensor)),
+    DataFormat.Bfp8_b: lambda tensor, num_faces=4: bytes(
+        pack_bfp8_b(tensor, num_faces=num_faces)
+    ),
+    DataFormat.Bfp4_b: lambda tensor, num_faces=4: bytes(
+        pack_bfp4_b(tensor, num_faces=num_faces)
+    ),
 }
 
 _BFP_UNPACKERS = {
@@ -105,7 +110,17 @@ class CustomMMStimuliConfig(StimuliConfig):
     focused odd-K cases also use a uniform BFP4_b or BFP8_b stream for B.
     """
 
-    def __init__(self, kt, ct, in0_format, in1_format, out_format, packed_a, packed_b):
+    def __init__(
+        self,
+        kt,
+        ct,
+        in0_format,
+        in1_format,
+        out_format,
+        packed_a,
+        packed_b,
+        in1_row_tiles=None,
+    ):
         super().__init__(
             buffer_A=torch.zeros(
                 1, dtype=torch.float32
@@ -114,7 +129,7 @@ class CustomMMStimuliConfig(StimuliConfig):
             tile_count_A=kt,
             buffer_B=torch.zeros(1, dtype=torch.float32),  # placeholder
             stimuli_B_format=in1_format,
-            tile_count_B=kt * ct,
+            tile_count_B=kt * (in1_row_tiles or ct),
             stimuli_res_format=out_format,
             tile_count_res=ct,
         )
@@ -137,13 +152,21 @@ def _run_custom_mm(
     calls=CUSTOM_MM_CALLS(),
     preserve_zero_flag=False,
     operands=None,
+    in1_window=CUSTOM_MM_IN1_WINDOW(),
+    in1_tile_w=DEFAULT_TILE_C_DIM,
 ):
     """Run custom_mm and check it against the golden; return the (M, N) result.
 
     ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
+    ``in1_window`` lays B out ``stride`` tiles wide and computes the ct-tile column window at ``col_start``.
+    ``in1_tile_w`` 16 uses [32, 16] B tiles, giving [M, 16] output tiles.
     """
     K = kt * DEFAULT_TILE_R_DIM
-    N = ct * DEFAULT_TILE_C_DIM
+    N = ct * in1_tile_w
+    in1_row_tiles = in1_window.stride or ct
+    col_start = in1_window.col_start
+    in1_tile_dims = [DEFAULT_TILE_R_DIM, in1_tile_w]
+    in1_faces = 2 * in1_tile_w // FACE_C_DIM
     in0_format = formats.input_format
     in1_format = formats.input_format_B
     out_format = formats.output_format
@@ -153,7 +176,7 @@ def _run_custom_mm(
     if operands is None:
         torch.manual_seed(0)
         torch_a = torch.randn((M, K), dtype=torch.float32)
-        torch_b = torch.randn((K, N), dtype=torch.float32)
+        torch_b = torch.randn((K, in1_row_tiles * in1_tile_w), dtype=torch.float32)
     else:
         torch_a, torch_b = operands
 
@@ -162,15 +185,15 @@ def _run_custom_mm(
     for i in range(kt * 2):
         packed_a += in0_packer(torch_a[:, i * FACE_C_DIM : (i + 1) * FACE_C_DIM])
 
-    # in1 (B -> SrcA): kt*ct full [32,32] tiles, k-major / c-minor -- the order the SrcA
-    # CFGSHIFTMASK walk reads them (read_transposed=false: contiguous tiles).
+    # in1 (B -> SrcA): kt*in1_row_tiles full [32,32] tiles, k-major / c-minor -- the order the SrcA
+    # CFGSHIFTMASK walk reads them (read_transposed=false). The kernel reads a ct-wide window of each row.
     packed_b = b""
     golden_b = torch_b.clone()
     for r in range(kt):
-        for c in range(ct):
+        for c in range(in1_row_tiles):
             blk = torch_b[
                 r * DEFAULT_TILE_R_DIM : (r + 1) * DEFAULT_TILE_R_DIM,
-                c * DEFAULT_TILE_C_DIM : (c + 1) * DEFAULT_TILE_C_DIM,
+                c * in1_tile_w : (c + 1) * in1_tile_w,
             ]
             # Face-major (tilized) layout inside each 32x32 tile. Tilize in the input
             # format so the returned dtype matches the packer (pack_fp32 rejects a
@@ -178,28 +201,33 @@ def _run_custom_mm(
             tiled_blk = tilize(
                 blk.reshape(-1),
                 stimuli_format=in1_format,
-                tile_dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
+                tile_dimensions=in1_tile_dims,
             )
-            packed_tile = in1_packer(tiled_blk)
+            packed_tile = (
+                in1_packer(tiled_blk, num_faces=in1_faces)
+                if in1_format in _BFP_UNPACKERS
+                else in1_packer(tiled_blk)
+            )
             packed_b += packed_tile
             if in1_format in _BFP_UNPACKERS:
                 golden_b[
                     r * DEFAULT_TILE_R_DIM : (r + 1) * DEFAULT_TILE_R_DIM,
-                    c * DEFAULT_TILE_C_DIM : (c + 1) * DEFAULT_TILE_C_DIM,
+                    c * in1_tile_w : (c + 1) * in1_tile_w,
                 ] = untilize(
-                    _BFP_UNPACKERS[in1_format](packed_tile),
-                    tile_dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
+                    _BFP_UNPACKERS[in1_format](packed_tile, num_faces=in1_faces),
+                    tile_dimensions=in1_tile_dims,
                 ).reshape(
-                    DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM
+                    DEFAULT_TILE_R_DIM, in1_tile_w
                 )
 
     # Golden: plain A @ B (LoFi), row-major, NOT tilized -- the device-side layout is
     # undone in the result reorder below. Instantiate MatmulGolden directly (not via
     # get_golden_generator) so the compile-producer's dummy generator does not break the
     # narrow-M reshape.
+    window_cols = slice(col_start * in1_tile_w, (col_start + ct) * in1_tile_w)
     golden = MatmulGolden()(
         torch_a,
-        golden_b,
+        golden_b[:, window_cols].contiguous(),
         out_format,
         MathFidelity.LoFi,
         input_A_dimensions=[M, K],
@@ -219,14 +247,24 @@ def _run_custom_mm(
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
             calls,
             CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
+            in1_window,
         ],
         runtimes=[
-            # Result / in0 use 2 faces (M x 16 each); in1 (B) uses 4 full faces.
-            NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
+            # in0 uses 2 faces (M x 16 each); in1 (B) 4, or 2 for [32, 16]; the result one face per 16 columns.
+            NUM_FACES(
+                num_faces=in1_tile_w // FACE_C_DIM, num_faces_A=2, num_faces_B=in1_faces
+            ),
             IN_FACE_DIMS(in0_face_r_dim=M),
         ],
         variant_stimuli=CustomMMStimuliConfig(
-            kt, ct, in0_format, in1_format, out_format, packed_a, packed_b
+            kt,
+            ct,
+            in0_format,
+            in1_format,
+            out_format,
+            packed_a,
+            packed_b,
+            in1_row_tiles,
         ),
         dest_acc=dest_acc,
     )
@@ -238,8 +276,8 @@ def _run_custom_mm(
     # Device packs ct tiles; within a tile the two 16-col faces (M x FACE_C_DIM, row-major)
     # sit contiguously, padded out to a full 32-row tile. Drop the per-tile padding
     # (span = len // ct) and reorder to row-major (M, N). Only the M defined rows survive.
-    faces_per_tile = DEFAULT_TILE_C_DIM // FACE_C_DIM
-    per_tile = res_tensor.reshape(ct, -1)[:, : M * DEFAULT_TILE_C_DIM]
+    faces_per_tile = in1_tile_w // FACE_C_DIM
+    per_tile = res_tensor.reshape(ct, -1)[:, : M * in1_tile_w]
     res_tensor = (
         per_tile.reshape(ct, faces_per_tile, M, FACE_C_DIM)
         .permute(2, 0, 1, 3)
@@ -263,6 +301,10 @@ def _run_custom_mm(
         active_golden = active_golden[active_golden > 0]
         mean_active = active_golden.mean().item() if active_golden.numel() else 0.0
         custom_atol = max(FLOAT16B_DEFAULT_ATOL, ACC_ATOL_PER_KT * kt * mean_active)
+        if in1_window.split_acc:
+            # split_acc rounds its two partial sums to bf16 apart before the finalize merges them, so an
+            # output that cancels to near zero is off by up to a bf16 step of a partial (2^-7 of its size).
+            custom_atol = max(custom_atol, golden.abs().max().item() * 2**-7)
 
     assert passed_test(
         golden, res_tensor, out_format, custom_atol=custom_atol, print_pcc=True
@@ -372,6 +414,80 @@ def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format):
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
     _run_custom_mm(
         M, kt, ct, formats, DestAccumulation.No, CUSTOM_MM_CALLS(num_calls=num_calls)
+    )
+
+
+# Column windows of a wider in1, read through in1_stride: an output wider than 16 tiles (one DEST pass)
+# is produced window by window this way. ct == 1 takes its row step on the full-unpack tile, and odd kt
+# runs the single-K tail, so both sit next to the paired MOP path.
+IN1_WINDOW_CASES = [
+    # (id, M, kt, ct, stride, col_start, calls, in1 format)
+    ("ct1", 1, 4, 1, 3, 2, 1, DataFormat.Float16_b),
+    ("ct2", 4, 4, 2, 5, 1, 1, DataFormat.Float16_b),
+    ("ct16-of-40", 1, 2, 16, 40, 16, 1, DataFormat.Float16_b),
+    ("odd-k-ct3", 8, 3, 3, 7, 4, 1, DataFormat.Bfp8_b),
+    ("odd-k-ct1-bfp4", 1, 5, 1, 4, 3, 1, DataFormat.Bfp4_b),
+    ("two-calls-ct4", 1, 8, 4, 12, 8, 2, DataFormat.Float16_b),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "M,kt,ct,stride,col_start,num_calls,in1_format",
+    [pytest.param(*case[1:], id=case[0]) for case in IN1_WINDOW_CASES],
+)
+def test_custom_mm_in1_window(M, kt, ct, stride, col_start, num_calls, in1_format):
+    """A ct-wide column window of a stride-tile-wide in1, checked against that window's golden."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        CUSTOM_MM_CALLS(num_calls=num_calls),
+        in1_window=CUSTOM_MM_IN1_WINDOW(stride=stride, col_start=col_start),
+    )
+
+
+# [32, 16] in1 tiles: 16-wide output tiles, so an output width of any multiple of 16 columns. split_acc
+# finalizes on the last call; full-tile split_acc cases sit alongside as the reference for that path.
+SPLIT_AND_NARROW_CASES = [
+    # (id, M, kt, ct, in1 tile width, split_acc, stride, col_start, calls, in1 format)
+    ("n16-m1", 1, 4, 1, 16, False, 0, 0, 1, DataFormat.Float16_b),
+    ("n16-m8-split", 8, 4, 1, 16, True, 0, 0, 1, DataFormat.Float16_b),
+    ("n48-m4-odd-k-split", 4, 3, 3, 16, True, 0, 0, 1, DataFormat.Float16_b),
+    ("n80-bfp8-split", 1, 8, 5, 16, True, 0, 0, 1, DataFormat.Bfp8_b),
+    ("n16-bfp4-odd-k-split", 1, 5, 1, 16, True, 0, 0, 1, DataFormat.Bfp4_b),
+    ("n256-m8-split", 8, 2, 16, 16, True, 0, 0, 1, DataFormat.Float16_b),
+    ("n32-window-split", 2, 4, 2, 16, True, 5, 2, 1, DataFormat.Float16_b),
+    ("n48-two-calls-split", 1, 8, 3, 16, True, 0, 0, 2, DataFormat.Float16_b),
+    ("full-m8-split", 8, 4, 3, 32, True, 0, 0, 1, DataFormat.Float16_b),
+    ("full-m1-odd-k-bfp4-split", 1, 5, 2, 32, True, 0, 0, 1, DataFormat.Bfp4_b),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "M,kt,ct,in1_tile_w,split_acc,stride,col_start,num_calls,in1_format",
+    [pytest.param(*case[1:], id=case[0]) for case in SPLIT_AND_NARROW_CASES],
+)
+def test_custom_mm_split_acc_and_narrow_in1(
+    M, kt, ct, in1_tile_w, split_acc, stride, col_start, num_calls, in1_format
+):
+    """[32, 16] in1 tiles and split accumulation with finalization, against the plain golden."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format)
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        CUSTOM_MM_CALLS(num_calls=num_calls),
+        in1_window=CUSTOM_MM_IN1_WINDOW(
+            stride=stride, col_start=col_start, split_acc=split_acc
+        ),
+        in1_tile_w=in1_tile_w,
     )
 
 

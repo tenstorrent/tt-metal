@@ -27,7 +27,7 @@ namespace ckernel {
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] without transpose (16-wide output tiles)
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -81,7 +81,7 @@ ALWI void custom_mm_block_init(
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] without transpose (16-wide output tiles)
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -124,7 +124,7 @@ ALWI void custom_mm_block_init_short(
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] without transpose (16-wide output tiles)
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -144,6 +144,7 @@ ALWI void custom_mm_block_init_short(
  * | dst_index       | The index of the tile in DST REG to which the result C will be written                                          | uint32_t | Must be less than the acquired size of DST REG   | True                  |
  * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Any integer from 1 to 256 (inclusive)            | True                  |
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16                                          | False (default 1)     |
+ * | in1_stride      | in1 tiles between consecutive K rows (output columns if read_transposed); 0 = packed ct_dim (kt_dim) block      | uint32_t | 0, or >= ct_dim (kt_dim if read_transposed)      | False (default 0)     |
  */
 // clang-format on
 template <bool finalize = true, bool read_transposed = false>
@@ -154,9 +155,10 @@ ALWI void custom_mm_block(
     const std::uint32_t in1_tile_index,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
+    const std::uint32_t ct_dim = 1,
+    const std::uint32_t in1_stride = 0) {
     UNPACK((llk_unpack_AB_custom_mm<read_transposed>(
-        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim)));
+        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim, in1_stride)));
     MATH((llk_math_custom_mm<finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
 }
 
@@ -169,7 +171,7 @@ ALWI void custom_mm_block(
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] without transpose (16-wide output tiles)
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -187,6 +189,7 @@ ALWI void custom_mm_block(
  * | in1_tile_index  | The index of the tile in block B from the second input CB                                                       | uint32_t | Must be less than the size of the CB             | True                  |
  * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Any integer from 1 to 256 (inclusive)            | True                  |
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16                                          | False (default 1)     |
+ * | in1_stride      | in1 tiles between consecutive K rows (output columns if read_transposed); 0 = packed ct_dim (kt_dim) block      | uint32_t | 0, or >= ct_dim (kt_dim if read_transposed)      | False (default 0)     |
  */
 // clang-format on
 template <bool read_transposed = false>
@@ -196,9 +199,10 @@ ALWI void custom_mm_block_unpack(
     const std::uint32_t in0_tile_index,
     const std::uint32_t in1_tile_index,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
+    const std::uint32_t ct_dim = 1,
+    const std::uint32_t in1_stride = 0) {
     UNPACK((llk_unpack_AB_custom_mm<read_transposed>(
-        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim)));
+        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim, in1_stride)));
 }
 
 // clang-format off
@@ -210,7 +214,7 @@ ALWI void custom_mm_block_unpack(
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] without transpose (16-wide output tiles)
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
  * kt_dim: any integer from 1 to 256 (inclusive)

@@ -12,7 +12,7 @@
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] without transpose
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -29,8 +29,9 @@ inline void llk_math_custom_mm_init(
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
+    const std::uint32_t operandA_num_faces = get_operand_num_faces(get_operand_id(operand1));
 
-    _llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(operandB_face_r_dim, ct_dim);
+    _llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(operandB_face_r_dim, ct_dim, operandA_num_faces);
 }
 
 template <bool finalize = true>
@@ -44,6 +45,7 @@ inline void llk_math_custom_mm(
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
+    const std::uint32_t operandA_num_faces = get_operand_num_faces(get_operand_id(operand1));
 
-    _llk_math_custom_mm_<finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim);
+    _llk_math_custom_mm_<finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim, operandA_num_faces);
 }
