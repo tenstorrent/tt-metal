@@ -8,6 +8,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstdlib>
 #include <set>
 
 #include <tt-metalium/allocator.hpp>
@@ -218,6 +219,15 @@ ProgramDescriptor recipe_compute_program(
     return program;
 }
 
+void require_recipe_sfploadmacro() {
+    // The JIT build reads this option from RunTimeOptions (get_disable_sfploadmacro, tt_metal internal), which
+    // takes it from this variable alone, enabled by a leading '1'.
+    const char* disabled = std::getenv("TT_METAL_DISABLE_SFPLOADMACRO");
+    TT_FATAL(
+        disabled == nullptr || disabled[0] != '1',
+        "SDPA precision recipes require SFPLOADMACRO (TT_METAL_DISABLE_SFPLOADMACRO is set)");
+}
+
 PrecisionPolicy resolve_recipe_policy(
     const Tensor& q,
     const Tensor& k,
@@ -226,6 +236,7 @@ PrecisionPolicy resolve_recipe_policy(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<SDPAProgramConfig>& program_config) {
     TT_FATAL(q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
+    require_recipe_sfploadmacro();
     const float head_dim = static_cast<float>(q.logical_shape()[-1]);
     TT_FATAL(
         !scale || *scale == 1.0f / std::sqrt(head_dim),
@@ -275,6 +286,7 @@ void validate_ring_recipe_inputs(
     const char* name = op == RecipeOp::ExpRing ? "exp ring" : "ring";
     const auto kv_dtype = k.dtype();
     resolve_precision_policy(select_recipe(precision, kv_dtype));
+    require_recipe_sfploadmacro();
     TT_FATAL(q.device()->arch() == tt::ARCH::BLACKHOLE, "Named {} recipes require Blackhole", name);
     TT_FATAL(q.dtype() == DataType::BFLOAT16, "Named {} recipes require BF16 Q, got {}", name, q.dtype());
     TT_FATAL(

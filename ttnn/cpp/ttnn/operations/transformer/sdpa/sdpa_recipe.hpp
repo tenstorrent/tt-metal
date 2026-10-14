@@ -72,6 +72,11 @@ tt::tt_metal::ProgramDescriptor recipe_compute_program(
     uint32_t k_tiles,
     uint32_t d_tiles);
 
+// Throws when the kernels are built without SFPLOADMACRO (TT_METAL_DISABLE_SFPLOADMACRO, set on the simulator): the
+// recipes' exps record SFPLOADMACRO programs and compute wrong results without them. resolve_recipe_policy and
+// validate_ring_recipe_inputs call it, so every recipe call checks it before dispatch.
+void require_recipe_sfploadmacro();
+
 PrecisionPolicy resolve_recipe_policy(
     const Tensor& q,
     const Tensor& k,

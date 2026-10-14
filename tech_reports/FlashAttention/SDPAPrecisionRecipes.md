@@ -110,6 +110,8 @@ compute level; they cut K/V bandwidth and L1 to about a half or a quarter.
 - Batch and GQA are supported. Q/K lengths need not be tile or chunk multiples. Head dim and chunk sizes must be
   tile multiples, and the chunks must fit in L1.
 - Tiled, interleaved DRAM inputs and output. Q and the output are BF16.
+- The recipes' exps are built on SFPLOADMACRO: with `TT_METAL_DISABLE_SFPLOADMACRO` set (as on the simulator), a
+  recipe call raises before dispatch.
 - A recipe cannot be combined with `compute_kernel_config` or `exp_approx_mode=False`, and `scale` must be the
   default 1/√D. Unsupported arguments raise before dispatch; there is no fallback.
 
