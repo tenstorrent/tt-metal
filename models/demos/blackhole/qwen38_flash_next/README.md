@@ -1,9 +1,13 @@
 # Qwen3.8-Flash-Next on Blackhole
 
 This model port originates from **Samuel Jett** ([sjettTT](https://github.com/sjettTT), sjett@tenstorrent.com),
-source commit `cd9a11771107ea2c27da3303a0556ff7343e4af5`. See [PROVENANCE.md](PROVENANCE.md) for the source,
-target base, original MoE prerequisites [#57448](https://github.com/tenstorrent/tt-metal/pull/57448) and
-[#57564](https://github.com/tenstorrent/tt-metal/pull/57564), and the merged public GDN prerequisite.
+source commit `cd9a11771107ea2c27da3303a0556ff7343e4af5`. See [PROVENANCE.md](PROVENANCE.md) for
+source attribution and integration revisions. The original MoE prerequisites
+[#57448](https://github.com/tenstorrent/tt-metal/pull/57448) and
+[#57564](https://github.com/tenstorrent/tt-metal/pull/57564) are merged. This integration uses Samuel Jett's
+packed routing [#60469](https://github.com/tenstorrent/tt-metal/pull/60469) and expert rows
+[#59945](https://github.com/tenstorrent/tt-metal/pull/59945); their normal reviews and the integrated native
+qualification remain outstanding. The model uses the public extent-one local-output API.
 
 The implementation uses four Blackhole devices as a 1x4 mesh, BF4 routed experts, BF8 dense weights, and a host
 PLE table mapped from the checkpoint. The publication validation targets one request at a time and a 32,768-token

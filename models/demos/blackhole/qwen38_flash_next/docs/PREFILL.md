@@ -1,3 +1,5 @@
+> Historical source-fork guide. Replay-ring and rows-form switches described below belong to the retired pipeline. The maintained port uses the public local-output API; see [the current provenance](../PROVENANCE.md). Measurements here do not qualify the replacement integration.
+
 # Prefill: the chunk bodies and the opt-in slab
 
 > Historical source notes from Samuel Jett (sjettTT, sjett@tenstorrent.com), frozen at

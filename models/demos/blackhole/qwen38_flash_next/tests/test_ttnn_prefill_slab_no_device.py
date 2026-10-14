@@ -87,27 +87,6 @@ def test_slab_one_call_switch(expect_error, monkeypatch) -> None:
     assert not moe_module.moe_slab_one_call_enabled() and moe_module.routed_tokens_per_call_for(SLAB) == 128
     assert moe_module.routed_tokens_per_call_for(128) == 128 and moe_module.routed_tokens_per_call_for(32) == 32
     monkeypatch.delenv(moe_module.MOE_SLAB_ONE_CALL_ENV)
-    # the one-call slab's ring mode: unset = 3 (three rings, the default since 2026-09-26), 0 / 1 / 2 admitted,
-    # nothing refused, anything else refused as unknown
-    monkeypatch.delenv(moe_module.MOE_SLAB_RINGS_ENV, raising=False)
-    assert moe_module.moe_slab_prefill_rings() == 3 == moe_module.MOE_SLAB_RINGS_DEFAULT
-    assert moe_module.MOE_SLAB_RINGS_ADMITTED == (0, 1, 2, 3)
-    for value in ("0", "1", "2", "3"):
-        monkeypatch.setenv(moe_module.MOE_SLAB_RINGS_ENV, value)
-        assert moe_module.moe_slab_prefill_rings() == int(value)
-    assert moe_module.MOE_SLAB_RINGS_REFUSED == {}
-    monkeypatch.setenv(moe_module.MOE_SLAB_RINGS_ENV, "4")
-    with expect_error(ValueError):  # allow-pytest.raises: pure contract test
-        moe_module.moe_slab_prefill_rings()
-    monkeypatch.delenv(moe_module.MOE_SLAB_RINGS_ENV)
-    # the kwarg reaches the op from the one-call slab (its ring switch) and from the one-tile rows forms (their
-    # QWEN38_MOE_ROWS_FORM table); the 128-row chunk passes None (the op's default)
-    partial = inspect.getsource(moe_module.Qwen38TTNNMoE._routed_partial)
-    assert "prefill_rings=self.prefill_rings," in partial
-    prop = inspect.getsource(moe_module.Qwen38TTNNMoE.prefill_rings.fget)
-    assert "if self.slab_one_call:" in prop and "rings = moe_slab_prefill_rings()" in prop
-    assert "return rings if rings else None" in prop
-    assert 'return MOE_ROWS_FORMS[getattr(self, "rows_form", "fulllocal")][1]' in prop
     assert moe_module.SLAB_REDUCE_BLOCK_ROWS == 512 and SLAB % moe_module.SLAB_REDUCE_BLOCK_ROWS == 0
     # a slab whose rows the 512-row blocks do not divide is refused at construction, not at its first slice
     init = inspect.getsource(moe_module.Qwen38TTNNMoE.__init__)
@@ -138,7 +117,7 @@ def test_slab_one_call_switch(expect_error, monkeypatch) -> None:
         3968,
     ]
     routed = inspect.getsource(moe_module.Qwen38TTNNMoE._routed_partial)
-    assert "zero_fill_non_owned_rows=self.zero_fill_non_owned_rows" in routed
+    assert "cluster_axis=LOCAL_COMBINE_AXIS" in routed
     assert "if self.slab and not self.slab_one_call:" in routed and "if self.slab_one_call:" in routed
     blocks = inspect.getsource(moe_module.Qwen38TTNNMoE._weighted_reduce_slab_blocks)
     assert blocks.count("deepseek_moe_fast_reduce_nc_fused(") == 1 and "range(0, self.rows, block)" in blocks
@@ -240,30 +219,12 @@ def test_slab_reduce_never_frees_what_it_did_not_create(monkeypatch, rows: int) 
 
 
 def test_slab_moe_defaults_when_nothing_is_set(monkeypatch) -> None:
-    """The shipping frame: with neither switch set, a slab instance runs the one-call MoE (no zero fill of the rows
-    it does not own) on two rings -- prefill_rings 2 on the instance -- and the 128-/32-row chunks keep their forms
-    (prefill_rings None: the kwarg is not passed); QWEN38_MOE_SLAB_RINGS=0 restores one ring (None = the op's
-    default stream)."""
+    """Slabs use one public local-output call; the 128/32-row chunk plans are unchanged."""
     monkeypatch.delenv(moe_module.MOE_SLAB_ONE_CALL_ENV, raising=False)
-    monkeypatch.delenv(moe_module.MOE_SLAB_RINGS_ENV, raising=False)
-    assert moe_module.moe_slab_one_call_enabled() and moe_module.moe_slab_prefill_rings() == 3
+    assert moe_module.moe_slab_one_call_enabled()
     assert moe_module.routed_tokens_per_call_for(SLAB) == SLAB
     assert moe_module.routed_tokens_per_call_for(LONG_CHUNK_ROWS) == LONG_CHUNK_ROWS
     assert moe_module.routed_tokens_per_call_for(CHUNK_ROWS) == CHUNK_ROWS
-    one_call = SimpleNamespace(slab_one_call=True)
-    blocks = SimpleNamespace(slab_one_call=False)
-    assert moe_module.Qwen38TTNNMoE.prefill_rings.fget(one_call) == 3
-    assert moe_module.Qwen38TTNNMoE.prefill_rings.fget(blocks) is None  # only the one-call slab reads the switch
-    assert moe_module.Qwen38TTNNMoE.zero_fill_non_owned_rows.fget(one_call) is False
-    assert moe_module.Qwen38TTNNMoE.zero_fill_non_owned_rows.fget(blocks) is True
-    monkeypatch.setenv(moe_module.MOE_SLAB_RINGS_ENV, "0")
-    assert moe_module.Qwen38TTNNMoE.prefill_rings.fget(one_call) is None  # one ring = the op's default stream
-    assert moe_module.Qwen38TTNNMoE.prefill_rings.fget(blocks) is None
-    monkeypatch.setenv(moe_module.MOE_SLAB_RINGS_ENV, "1")
-    assert moe_module.Qwen38TTNNMoE.prefill_rings.fget(one_call) == 1
-    monkeypatch.setenv(moe_module.MOE_SLAB_RINGS_ENV, "2")
-    assert moe_module.Qwen38TTNNMoE.prefill_rings.fget(one_call) == 2
-    assert moe_module.Qwen38TTNNMoE.prefill_rings.fget(blocks) is None
 
 
 def _reshape_is_view(layout: str, source: tuple[int, ...], target: tuple[int, ...]) -> bool:
@@ -364,32 +325,18 @@ def test_a_reshape_source_is_freed_only_when_the_reshape_copied() -> None:
     assert sum(1 for site in RESHAPE_FREE_SITES if site[5]) == 2
 
 
-def test_slab_moe_switches_are_admitted_before_the_device(expect_error, monkeypatch) -> None:
-    """A refused QWEN38_MOE_SLAB_RINGS ends the process at its start: the server admits both slab MoE switches right
-    after its --prefill-slab argument checks and before the runtime admission opens a device, and every slab MoE
-    instance re-admits them at construction (not at its first forward, 79 s into the warm pass)."""
+def test_slab_call_size_is_admitted_before_the_device(expect_error, monkeypatch) -> None:
     from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_server as server_module
 
     monkeypatch.delenv(moe_module.MOE_SLAB_ONE_CALL_ENV, raising=False)
-    monkeypatch.delenv(moe_module.MOE_SLAB_RINGS_ENV, raising=False)
-    assert moe_module.admit_slab_moe_switches() == (True, moe_module.MOE_SLAB_RINGS_DEFAULT)
-    monkeypatch.setenv(moe_module.MOE_SLAB_RINGS_ENV, "0")
-    assert moe_module.admit_slab_moe_switches() == (True, 0)
+    assert moe_module.moe_slab_one_call_enabled() is True
     monkeypatch.setenv(moe_module.MOE_SLAB_ONE_CALL_ENV, "0")
-    monkeypatch.setenv(moe_module.MOE_SLAB_RINGS_ENV, "3")  # the blocks never read the ring switch
-    assert moe_module.admit_slab_moe_switches() == (False, 0)
-    monkeypatch.setenv(moe_module.MOE_SLAB_ONE_CALL_ENV, "1")
-    assert moe_module.admit_slab_moe_switches() == (True, 3)
-    monkeypatch.setenv(moe_module.MOE_SLAB_RINGS_ENV, "4")
-    with expect_error(ValueError, match="must be one of"):  # allow-pytest.raises: pure contract test
-        moe_module.admit_slab_moe_switches()
+    assert moe_module.moe_slab_one_call_enabled() is False
+    monkeypatch.setenv(moe_module.MOE_SLAB_ONE_CALL_ENV, "invalid")
+    with expect_error(ValueError):
+        moe_module.moe_slab_one_call_enabled()
     main = inspect.getsource(server_module.main)
-    admit = main.index("admit_slab_moe_switches()")
-    assert "if args.prefill_slab is not None:" in main[:admit]
-    assert admit < main.index("runtime_admission.admit_runtime(args)")
-    assert "raise SystemExit(str(error)) from error" in main[admit : admit + 200]
-    init = inspect.getsource(moe_module.Qwen38TTNNMoE.__init__)
-    assert "if self.slab_one_call:\n            admit_slab_moe_switches()" in init
+    assert main.index("moe_slab_one_call_enabled()") < main.index("runtime_admission.admit_runtime(args)")
 
 
 def test_prefill_matmul_config_covers_the_rows_and_columns_with_whole_subblocks(expect_error) -> None:

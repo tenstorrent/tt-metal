@@ -79,7 +79,6 @@ def _bare_moe(rows: int) -> Qwen38TTNNMoE:
         layout=moe_module.ttnn.ROW_MAJOR_LAYOUT,
         memory=moe_module.ttnn.DRAM_MEMORY_CONFIG,
     )
-    instance.local_output = False  # the production path: FullLocal (QWEN38_MOE_LOCAL_OUTPUT unset)
     instance._owned_buffers_released = False
     instance._owns_local_combine_output = True
     instance.output_height_shard_dim = 1
@@ -98,68 +97,16 @@ def _attribute_call(tree: ast.AST, name: str) -> list[ast.Call]:
     ]
 
 
-def test_rows_form_switch(expect_error, monkeypatch) -> None:
-    """QWEN38_MOE_ROWS_FORM (unset = rings2): the one-tile rows forms' moe_compute launch form.  rings2 = the local output
-    path with two rings (the default since 2026-09-27: per launch 42.0 + 10.87 n -> 36.1 + 7.39 n us over n distinct
-    local experts on the 1x4 p150 line, the combine pages bitwise the FullLocal form); fulllocal = the fused local
-    combine (the fallback); localoutput / replay / rings3 diagnostics.  Only one-tile rows instances read it; a ring
-    count of two or more turns the op's zero fill off (the model's fill before every call keeps the unowned rows zero).
-    """
-
-    assert moe_module.MOE_ROWS_FORM_ENV == "QWEN38_MOE_ROWS_FORM"
-    assert moe_module.MOE_ROWS_FORM_DEFAULT == "rings2"
-    assert moe_module.MOE_ROWS_FORMS == {
-        "fulllocal": (False, None),
-        "localoutput": (True, None),
-        "replay": (True, 1),
-        "rings2": (True, 2),
-        "rings3": (True, 3),
-    }
-    monkeypatch.delenv(moe_module.MOE_ROWS_FORM_ENV, raising=False)
-    assert moe_module.moe_rows_form() == "rings2"
-    for form in moe_module.MOE_ROWS_FORMS:
-        monkeypatch.setenv(moe_module.MOE_ROWS_FORM_ENV, form)
-        assert moe_module.moe_rows_form() == form
-    monkeypatch.setenv(moe_module.MOE_ROWS_FORM_ENV, "rings4")
-    with expect_error(ValueError):  # allow-pytest.raises: pure contract test
-        moe_module.moe_rows_form()
-    monkeypatch.delenv(moe_module.MOE_ROWS_FORM_ENV)
-    # the instance: one-tile rows read the switch, every other instance is fulllocal there; the local output path
-    # and the kwargs follow the table
-    init = inspect.getsource(Qwen38TTNNMoE.__init__)
-    assert 'self.rows_form = moe_rows_form() if self.row_contract.row_tiles == 1 else "fulllocal"' in init
-    assert (
-        "self.local_output = moe_local_output_enabled() or self.slab_one_call or MOE_ROWS_FORMS[self.rows_form][0]"
-        in init
-    )
-    # every moe_compute launch of the class passes the form's kwargs: the plain path (_routed_partial), the served
-    # routing-in-L1 path (_routed_local_sum, the decode and MTP verify rows) and the 128-row form's tiles
+def test_moe_calls_use_public_local_output_api() -> None:
     for launch in (Qwen38TTNNMoE._routed_partial, Qwen38TTNNMoE._routed_local_sum, Qwen38TTNNMoE._routed_partial_tiles):
-        source = inspect.getsource(launch)
-        assert source.count("ttnn.experimental.moe_compute(") == 1, launch.__name__
-        assert "local_combine=not self.local_output," in source, launch.__name__
-        assert "zero_fill_non_owned_rows=self.zero_fill_non_owned_rows," in source, launch.__name__
-        assert "prefill_rings=self.prefill_rings," in source, launch.__name__
-    partial = inspect.getsource(Qwen38TTNNMoE._routed_partial)
-    zero_fill = inspect.getsource(Qwen38TTNNMoE.zero_fill_non_owned_rows.fget)
-    assert 'return (MOE_ROWS_FORMS[getattr(self, "rows_form", "fulllocal")][1] or 0) < 2' in zero_fill
-    for rows, form, rings, local_output, zero_fill_expected in (
-        (1, "rings2", 2, True, False),
-        (5, "rings2", 2, True, False),
-        (5, "fulllocal", None, False, True),
-        (5, "localoutput", None, True, True),
-        (5, "replay", 1, True, True),
-        (32, "rings3", 3, True, False),
-    ):
-        instance = _bare_moe(rows)
-        instance.rows_form = form
-        instance.local_output = moe_module.MOE_ROWS_FORMS[form][0]
-        assert instance.prefill_rings == rings
-        assert instance.local_output is local_output
-        assert instance.zero_fill_non_owned_rows is zero_fill_expected
-    # the fill before every call stays for every one-tile rows form (the unowned rows of a rings form are zero by it)
-    assert "if self.rows != LONG_PREFILL_CHUNK_ROWS and not self.slab_one_call:" in partial
-    assert "ttnn.fill(self.local_combine_output, 0.0, output_tensor=self.local_combine_output)" in partial
+        calls = _attribute_call(ast.parse(textwrap.dedent(inspect.getsource(launch))), "moe_compute")
+        assert len(calls) == 1
+        keywords = {keyword.arg: keyword.value for keyword in calls[0].keywords}
+        assert keywords["cluster_axis"].id == "LOCAL_COMBINE_AXIS"
+        assert keywords["compute_only"].value is False
+        assert (
+            not {"local_combine", "zero_fill_non_owned_rows", "prefill_rings", "enable_a2a_pipeline"} & keywords.keys()
+        )
 
 
 def test_builder_owns_one_lazy_ccl_manager(monkeypatch) -> None:

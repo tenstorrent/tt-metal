@@ -13,21 +13,23 @@ records both Author and Committer as `Codex <codex@openai.com>`. This export
 attribution is distinct from Samuel Jett's source maintenance, subsequent
 optimizations and original operation commits retained below.
 
-The port targets tt-metal `bdfc59036eea3e988ba0e2374c12ca0c15c6c970` and depends
-on Samuel Jett's original [tt-metal PR #57564](https://github.com/tenstorrent/tt-metal/pull/57564),
-head `df54becdb774e4b9ac21d664e7eb346ebe91d4d6`. Compact expert packing belongs
-to that original prerequisite. The publication stack carries its six commits
-with their original author attribution; it does not present that work as an
-independent new contribution.
+The current integration starts from tt-metal `3407283c1ca1998d95cf576c8f6130a8b8f9d5cc`.
+Samuel Jett's compact packing [#57564](https://github.com/tenstorrent/tt-metal/pull/57564)
+and extent-one local output [#57448](https://github.com/tenstorrent/tt-metal/pull/57448)
+are merged upstream. His replacement packed routing [#60469](https://github.com/tenstorrent/tt-metal/pull/60469)
+at `07dc40e532e51fc74a8caba37852d3d208543494` and expert rows
+[#59945](https://github.com/tenstorrent/tt-metal/pull/59945) at
+`70f967df3c8d221be5ef79d979cd3d9f986d0bed` retain their original author history.
+The retired pipeline [#58476](https://github.com/tenstorrent/tt-metal/pull/58476) is closed;
+its kernels and launch switches are not part of this integration.
 
-The MoE ancestry also retains Samuel Jett's original
-[PR #57448](https://github.com/tenstorrent/tt-metal/pull/57448), head
-`ae0691f1cf3fc4c227bc0a0f48a43959589b09fc`: four source-ring and LocalOutput
-commits, separate from the six compact-packing commits. Both original PRs
-remain prerequisites. The additional packed-token, streaming and replay work
-is scoped after them; their existing contributions are not duplicated in a
-new prerequisite review. The source's explicit local-combine and idle-expert
-handling remains part of the additional port.
+The model selects the public local-output path with `cluster_axis=0` on its 1x4 mesh.
+That path writes owned expert rows into the caller's persistent output. The model's
+existing fill or owner-masked reduction controls unowned rows. Expert-row placement
+currently requires the fused combine, so the integration keeps SingleCluster calls
+on the ring writer; it does not reinterpret them as single-device fused calls.
+This compatibility choice is not a measured performance result. Build and native
+qualification of the integrated revision remain required.
 
 Applicable public GDN callers reuse Izajasz Wrosz's merged upstream
 [PR #57440](https://github.com/tenstorrent/tt-metal/pull/57440), commit
@@ -48,9 +50,8 @@ These operator results do not qualify whole-model source trajectories, serving,
 task quality or another hardware topology.
 
 Port adaptations preserve the model's numerical policy while using current
-trace-allocation APIs and the current native build. The shared MoE streaming
-pipeline is an explicit model opt-in, so existing operation callers keep their
-serial pipeline and buffer sizes. The vLLM adapter declares its fabric settings
+trace-allocation APIs and the current native build. The native operation selects its supported implementation; the model does not
+request private replay-ring or pipeline variants. The vLLM adapter declares its fabric settings
 through model capabilities before device creation, using the existing
 `EXTRA_MODELS_DIR` route in plugin commit
 `1d87a00e7d91ec246582d07865ec4f8b0a8fb25c`.

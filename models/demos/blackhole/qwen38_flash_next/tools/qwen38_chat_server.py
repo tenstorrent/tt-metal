@@ -116,11 +116,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.builder import (
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import is_slab_rows
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_rows_scan as gdn_rows_scan_module
-from models.demos.blackhole.qwen38_flash_next.ttnn.moe import (
-    admit_slab_moe_switches,
-    moe_local_output_enabled,
-    moe_rows_form,
-)
+from models.demos.blackhole.qwen38_flash_next.ttnn.moe import moe_slab_one_call_enabled
 from models.demos.blackhole.qwen38_flash_next.ttnn.vision_residency import (
     PEAK_ACTIVATION_BYTES_PER_ROW_PER_DIE,
     VISION_ROW_BUCKETS,
@@ -2424,10 +2420,10 @@ def main() -> int:
     if args.prefill_slab is not None and not is_slab_rows(args.prefill_slab):
         raise SystemExit(f"--prefill-slab takes a multiple of 128 in 256..4096, got {args.prefill_slab}")
     if args.prefill_slab is not None:
-        # the slab MoE switches (QWEN38_MOE_SLAB_ONE_CALL / QWEN38_MOE_SLAB_RINGS) are admitted here, before any
+        # The slab call-size switch is checked here before any
         # device is opened: a refused ring count is a start-up error, not a poisoned model 79 s into the warm pass
         try:
-            admit_slab_moe_switches()
+            moe_slab_one_call_enabled()
         except ValueError as error:
             raise SystemExit(str(error)) from error
     try:
@@ -3035,8 +3031,7 @@ def main() -> int:
                 "mtp_drafts_admitted": list(mtp_drafts_admitted),
                 "fused_kernels": sorted(fused.enabled_names()),
                 "dram_workers_per_bank": report["chain"]["dram_workers_per_bank"],
-                "moe_local_output": moe_local_output_enabled(),
-                "moe_rows_form": moe_rows_form(),
+                "moe_local_output": True,
                 "dram_workers_fallback": report["chain"]["dram_workers_fallback"],
                 "dram_workers_placement": report["chain"].get("dram_workers_placement"),
                 "dense_weight_dtype": report["chain"]["dense_weight_dtype"],
