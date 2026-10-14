@@ -1,1 +1,1 @@
-perf_matmul.py
+perf_matmul_row_mop.py perf_matmul.py
