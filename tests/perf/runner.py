@@ -81,7 +81,8 @@ def run(suite: Suite, environment: str, out_dir: Path, *, tag: str, case_filter:
         command.append(f"--benchmark_filter={_checked_filter(case_filter)}")
     # Removed first so the check below proves this run wrote it, not an earlier one.
     output.unlink(missing_ok=True)
-    _execute(command, os.environ.copy(), out_dir / f"{tag}.log")
+    with tempfile.TemporaryDirectory(prefix=f"perf_{suite.name}_") as scratch:
+        _execute(command, _suite_env(suite, 0, out_dir, scratch), out_dir / f"{tag}.log")
     if not output.is_file():
         raise RunError(f"{suite.binary.name} wrote no output to {output}")
     return [output]
@@ -91,23 +92,31 @@ def _run_contract_process(suite: Suite, binary: Path, rep_dir: Path, rep: int) -
     rep_dir.mkdir(parents=True, exist_ok=True)
     output = rep_dir / "result.json"
     output.unlink(missing_ok=True)
-    env = os.environ.copy()
-    for name in suite.env_unset:
-        env.pop(name, None)
-    # {scratch} is for bulky per-repetition state such as caches, which must not end up in the CI artifacts.
     with tempfile.TemporaryDirectory(prefix=f"perf_{suite.name}_") as scratch:
-        for name, value in suite.env.items():
-            try:
-                env[name] = value.format(rep=rep, rep_dir=rep_dir, scratch=scratch, env=os.environ)
-            except KeyError as missing:
-                raise RunError(f"suite {suite.name} needs ${missing.args[0]} to set {name}") from None
-            except (IndexError, AttributeError, ValueError) as error:
-                raise RunError(f"suite {suite.name} has a malformed template for {name}: {error}") from None
+        env = _suite_env(suite, rep, rep_dir, scratch)
         env["TT_PERF_OUTPUT"] = str(output)
         _execute([str(binary), *suite.args], env, rep_dir / "run.log")
     if not output.is_file():
         raise RunError(f"{suite.binary.name} wrote no output to {output}; it must honor TT_PERF_OUTPUT")
     return output
+
+
+def _suite_env(suite: Suite, rep: int, rep_dir: Path, scratch: str) -> dict:
+    """The caller's environment with the suite's env_unset removed and its env templates applied.
+
+    {scratch} is for bulky per-process state such as caches, which must not end up in the CI artifacts.
+    """
+    env = os.environ.copy()
+    for name in suite.env_unset:
+        env.pop(name, None)
+    for name, value in suite.env.items():
+        try:
+            env[name] = value.format(rep=rep, rep_dir=rep_dir, scratch=scratch, env=os.environ)
+        except KeyError as missing:
+            raise RunError(f"suite {suite.name} needs ${missing.args[0]} to set {name}") from None
+        except (IndexError, AttributeError, ValueError) as error:
+            raise RunError(f"suite {suite.name} has a malformed template for {name}: {error}") from None
+    return env
 
 
 def _execute(command: list[str], env: dict, log_path: Path) -> None:
