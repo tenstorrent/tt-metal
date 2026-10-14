@@ -12,10 +12,10 @@ namespace ttml::metal {
 
 // Largest tile-aligned divisor of Q+K+V that is <= 256 and fits the per-core L1 budget. Measured on a p300 at
 // T=4096 (fused fw / fused bw, ms):
-//   Q=K=V=2048: chunk 64 -> 1.12 / 1.17, 128 -> 0.82 / 1.05, 256 -> 0.42 / 0.94
-//   Q=K=V=4096: chunk 64 -> 2.24 / 2.48, 128 -> 1.60 / 2.33, 256 -> 0.80 / 2.70
+//   Q=K=V=2048: chunk 64 -> 1.12 / 1.33, 128 -> 0.82 / 1.14, 256 -> 0.42 / 0.99
+//   Q=K=V=4096: chunk 64 -> 2.24 / 2.25, 128 -> 1.60 / 1.95, 256 -> 0.80 / 2.10
 // The forward always prefers 256 and the training step (fw + bw, one chunk for both) is fastest at 256 for both
-// widths; at Q=K=V=4096 the backward alone is 14% faster at 128. Chunk 32 makes the reader issue 64-byte row
+// widths; at Q=K=V=4096 the backward alone is 7% faster at 128. Chunk 32 makes the reader issue 64-byte row
 // reads and is 2.4x slower than 256 on the backward.
 uint32_t qkv_causal_conv1d_silu_chunk_size(uint32_t channels, const ttnn::distributed::MeshDevice& device);
 

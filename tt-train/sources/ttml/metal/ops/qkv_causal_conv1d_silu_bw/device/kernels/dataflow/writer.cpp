@@ -112,7 +112,7 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
                     grad_tap_partial,
                     grad_tap_tile_bytes,
                     {.offset_bytes = (tap * block_ct + ct) * grad_tap_tile_bytes},
-                    {.page_id = (split * tap_count + tap) * Ct + ct_start + ct});
+                    {.page_id = (tap * splits + split) * Ct + ct_start + ct});
             }
         }
         noc.async_write_barrier();

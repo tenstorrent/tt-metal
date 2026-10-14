@@ -111,7 +111,7 @@ QkvCausalConv1dSiluBackwardOperation::spec_return_value_t QkvCausalConv1dSiluBac
             Shape({1, attrs.sequence, c}),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attrs.output_mem_config)),
         TensorSpec(
-            Shape({attrs.sequence_splits, qkv_conv_bw_tap_count, tt::constants::TILE_HEIGHT, c}),
+            Shape({qkv_conv_bw_tap_count, attrs.sequence_splits * tt::constants::TILE_HEIGHT, c}),
             TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config))};
 }
 

@@ -86,15 +86,16 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor>
 
     auto outputs = ttnn::prim::ttml_qkv_causal_conv1d_silu_bw(
         grad_q, grad_k, grad_v, input, history, tap0, tap1, tap2, tap3, params);
-    // Partials are fp32; reduce over splits and rows in fp32, then cast the [1,4,1,C] result once.
+    // Partials are fp32 [4, splits*32, C]: one fp32 row reduction (reducing an outer dim in fp32 is ~20x slower),
+    // then cast the [4, 1, C] result once.
     auto grad_taps =
-        ttnn::typecast(ttnn::sum(outputs[1], ttsl::SmallVector<int>{0, 2}, /*keepdim=*/true), ttnn::DataType::BFLOAT16);
+        ttnn::typecast(ttnn::sum(outputs[1], ttsl::SmallVector<int>{1}, /*keepdim=*/true), ttnn::DataType::BFLOAT16);
     const auto grad_tap = [&](int32_t tap, const ttnn::Tensor& like) {
         auto grad = ttnn::slice(
             grad_taps,
-            ttsl::SmallVector<int32_t>{0, tap, 0, 0},
-            ttsl::SmallVector<int32_t>{1, tap + 1, 1, static_cast<int32_t>(channels)},
-            ttsl::SmallVector<int32_t>{1, 1, 1, 1});
+            ttsl::SmallVector<int32_t>{tap, 0, 0},
+            ttsl::SmallVector<int32_t>{tap + 1, 1, static_cast<int32_t>(channels)},
+            ttsl::SmallVector<int32_t>{1, 1, 1});
         return ttnn::reshape(grad, like.logical_shape());
     };
     return {outputs[0], grad_tap(0, tap0), grad_tap(1, tap1), grad_tap(2, tap2), grad_tap(3, tap3)};

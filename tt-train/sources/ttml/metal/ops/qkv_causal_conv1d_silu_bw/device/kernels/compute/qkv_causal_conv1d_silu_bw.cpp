@@ -12,8 +12,13 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
-// Stages are noinline: inlined into one big kernel body the compiler merges their LLK init sequences and the
-// init immediates stop being compile-time constants ("impossible constraint in asm").
+// Every stage below (conv, silu_backward, accumulate_grad_tap, grad_input_tile) is marked [[gnu::noinline]].
+// Each stage starts with LLK *_init calls that program the math hardware through inline assembly, and some of
+// those instructions take their operand as an immediate: a number baked into the instruction bits, which GCC
+// must know at compile time. If GCC inlines all stages into one function it sees several similar init
+// sequences, merges them into one copy and passes the differing value through a register. That is fine for
+// normal code but not for an immediate, and the build fails with "impossible constraint in 'asm'". Keeping each
+// stage a separate function keeps every init's operand a constant.
 constexpr uint32_t tap_count = 4;
 constexpr uint32_t dst_tiles = 4;
 constexpr auto DEST_TO_SRCB = EltwiseBinaryReuseDestType::DEST_TO_SRCB;
