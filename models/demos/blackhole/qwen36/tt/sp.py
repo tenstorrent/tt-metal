@@ -58,14 +58,6 @@ class SeqParallel:
         self.actual_start = up(torch.tensor([0], dtype=torch.int64), ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         # chain_affine_transforms requires HiFi2 + fp32 dest accumulation; the U @ S_c combine runs HiFi4 by default.
         self._chain_cfg = self._compute_config(ttnn.MathFidelity.HiFi2)
-        # chain_affine_transforms value-column split: v_split cores per head instead of one (45 -> 27 us per call at P=4,
-        # BH=6, bit-exact; QWEN36_SP_CHAIN_V_SPLIT=1 is the old one-core-per-head behaviour). Needs Dv / 32 divisible by the
-        # split and Nv * split within the worker grid, else fall back to 1.
-        chain_v_split = int(os.environ.get("QWEN36_SP_CHAIN_V_SPLIT", "4"))
-        grid = mesh.compute_with_storage_grid_size()
-        if chain_v_split < 1 or (self.Dv // 32) % chain_v_split != 0 or self.Nv * chain_v_split > grid.x * grid.y:
-            chain_v_split = 1
-        self.chain_v_split = chain_v_split
         # The combine is O = O0 + U @ S_c (gdn_combine and gdn_combine_fold); lower fidelity is faster, so validate accuracy
         # before changing the default. QWEN36_SP_COMBINE_FIDELITY: hifi4 (default) | hifi2 | lofi; fp32 dest acc stays on.
         combine_fidelity = os.environ.get("QWEN36_SP_COMBINE_FIDELITY", "hifi4").strip().lower()
@@ -225,7 +217,6 @@ class SeqParallel:
             memory_config=dram,
             compute_kernel_config=self._chain_cfg,
             sequence_parallel_axis=self.axis,
-            v_split=self.chain_v_split,
         )
         ttnn.deallocate(final)
         ttnn.deallocate(gathered)
@@ -293,7 +284,6 @@ class SeqParallel:
             memory_config=dram,
             compute_kernel_config=self._chain_cfg,
             sequence_parallel_axis=self.axis,
-            v_split=self.chain_v_split,
         )
         ttnn.deallocate(final)
         ttnn.deallocate(gathered)
