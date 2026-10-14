@@ -863,9 +863,6 @@ when watcher is enabled; subsequent ARC/L2CPU wrapper access remains subject to
 the Metal sanitizer and fails pending upstream support. Production code does
 not bypass the wrapper for topology, register, or LIM access.
 
-The runtime CLI reports the selected physical chip and runtime-shared Metal
-route. That presentation is tooling policy, not a public runtime method.
-
 The host-access PR characterization historically demonstrated the following on
 Blackhole Galaxy, before the lean runtime API landed:
 

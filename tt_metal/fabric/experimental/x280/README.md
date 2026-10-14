@@ -669,7 +669,8 @@ ninja -C build x280_images x280_abi_headers x280_runtime_host_tests x280_runtime
   x280_p2p_latency_x280_same_tile x280_p2p_latency_x280_peer_tile x280_p2p_latency_tensix_peer_tile \
   x280_p2p_latency_erisc_peer_tile x280_p2p_latency_drisc_peer_tile \
   x280_pipeline_stage_route_compute x280_pipeline_stage_route_forward \
-  x280_core_sync_director x280_core_sync_characterization
+  x280_core_sync_director x280_core_sync_characterization \
+  x280_packet_injection_tensix_to_x280 x280_packet_injection_erisc_to_x280_header
 ctest --test-dir build -R x280      # image placement, pinned-input guards, header refusals, host, offline and mock-cluster tests; no device
 ```
 
@@ -688,6 +689,7 @@ ctest --test-dir build -R x280      # image placement, pinned-input guards, head
 | `firmware-pipeline-stage-route-forward.bin` | `src/pipeline_stage_route_forward.cpp` | X280 L2CPU route_forward over the first pinned header, run by `x280_pipeline_stage_route_forward` |
 | `firmware-core-sync-director.bin` | `src/core_sync_director.cpp` | the X280 participant or director of `core_sync_barrier`, run by `x280_core_sync_director` and `x280_core_sync_characterization` (built only when named) |
 | `firmware-core-sync-release-probe.bin` | `src/core_sync_release_probe.cpp` | test-only release of one or more X280 multicast groups, run by `x280_core_sync_director` |
+| `firmware-packet-injection-{latency-include,latency-exclude,throughput,backpressure-include,backpressure-exclude}.bin` | `src/packet_injection_x280.cpp` | the X280 consumer of packet_injection, one image per mode and creation flag; `x280_packet_injection_tensix_to_x280` runs each point's variant and `x280_packet_injection_erisc_to_x280_header` the throughput image. The latency variants link the pinned-input operations |
 
 Every image compiles with `-mcpu=sifive-x280 -march=rv64gc -mabi=lp64d
 -mcmodel=medany -O2 -Werror`, freestanding, and links with
@@ -762,6 +764,20 @@ no NIU. X280 addresses the DRISC mailbox by its
 untagged local offset while host reads and writes use the tagged DRISC-L1 view.
 DRISC measurements are raw `get_timestamp()` ticks carrying the same per-run
 AICLK evidence and externally usable conversion rate.
+
+### packet_injection
+
+`x280_packet_injection_tensix_to_x280` injects fabric packet headers from
+Tensix BRISC/NCRISC producers into an X280 consumer, and
+`x280_packet_injection_erisc_to_x280_header` from 1 to 14 idle ERISCs. Both
+open the 14-way `LimLayout::PacketInjection` profile. The ERISC member links
+`x280_slow_dispatch` (§ Benchmark harness). The header-ingress member, which
+runs on the packet-injection throughput image, is in
+[`CHARACTERIZATION_PACKET_INJECTION.md`](CHARACTERIZATION_PACKET_INJECTION.md#erisc-header-ingress-member);
+the ID 14 contract and the removed single-writer prototype are in
+[`CHARACTERIZATION_PACKET_HEADER_INGRESS.md`](CHARACTERIZATION_PACKET_HEADER_INGRESS.md).
+Each record names the tt-metal revision the executable was built from
+(`tt_metal_sha`, `source_dirty`).
 
 ### Paired Tensix/X280 cases
 

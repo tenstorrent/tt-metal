@@ -607,7 +607,7 @@ changes it only by switching image and gtest selector.
 |---|---|---|
 | `PACKET_INJECTION_MODE` | 1 latency, 2 throughput, 3 backpressure | Measurement mode. A kernel define the host sets from the gtest selector, not an environment variable. |
 | `PACKET_INJECTION_INCLUDE_CREATION` | 0, 1 | Whether the timed interval includes header construction. Must be 0 in throughput. |
-| `X280_PACKET_INJECTION_FW_IMAGE` | path | X280 firmware image. Its filename must contain the variant name the gtest selector expects, or the test skips. |
+| `X280_PACKET_INJECTION_FW_IMAGE` | path | X280 firmware image. Unset, each point uses the build's `firmware-packet-injection-<variant>.bin`. A set path must contain the variant name the gtest selector expects, or the test skips. |
 
 ### Runtime parameters
 
@@ -876,9 +876,8 @@ all-zero ERISC result there is an invalid launch, not a measurement. The fixture
 fails before the device opens, naming the missing link, if the variable is not `1`.
 
 ```bash
-env TT_VISIBLE_DEVICES=0 TT_METAL_RUNTIME_ROOT="$PWD/tt-metal" \
-  X280_PACKET_INJECTION_FW_IMAGE="$PWD/x280/build/firmware-packet-injection-throughput.bin" \
-  "$BUILD"/x280_packet_injection_erisc_to_x280_header \
+env TT_VISIBLE_DEVICES=0 TT_METAL_RUNTIME_ROOT="$PWD" \
+  build/test/tt_metal/x280/x280_packet_injection_erisc_to_x280_header \
   --gtest_filter='Axes/PacketInjectionEriscToX280Header.Run/writers2_b1'
 ```
 
@@ -1015,43 +1014,32 @@ and RISC `w & 1` — four tiles, both NoCs, in ascending page order. Note that
 The assumption mask below remains an explicit limitation of the benchmark
 contract, not a statement about whether the benchmark runs.
 
-Build into a scratch directory against the pinned tt-metal tree. A full build
-into `x280/build_Release` does not complete on these hosts -- `llvm-ar-20` is
-absent -- so every command below names an out-of-tree build directory, and
-`$BUILD` stands for it.
+Build in a tt-metal tree configured with `TT_METAL_BUILD_X280` (README § Build
+targets), from the repository root:
 
 ```bash
-BUILD=/tmp/pi-build   # any scratch path; never x280/build_Release
+# Images (all five variants), header checks, host tests and the executable
+ninja -C build x280_images x280_abi_headers x280_bench_host_tests \
+  x280_packet_injection_tensix_to_x280
 
-cmake -S x280 -B "$BUILD" -DCMAKE_BUILD_TYPE=Release \
-  -DTT_METAL_DIR=<tt-metal checkout> \
-  -DTT_METAL_BUILD_DIR=<tt-metal checkout>/build_Release
+# Host-only tests (admission, ABI, state-model, layout), image placement and
+# the pinned-input and packet-injection selection guards
+ctest --test-dir build -R 'x280_(bench_host_tests|image_layout|pinned_input|packet_injection)' --output-on-failure
 
-# Host-only tests (admission, ABI, state-model, layout)
-cmake --build "$BUILD" --target x280_host_tests -j 16
-ctest --test-dir "$BUILD" -R X280HostState --output-on-failure
-
-# Firmware compilation and lints
-make -C x280 packet-injection test-headers test-pinned-input-selection \
-  test-packet-injection-selection test-linker test-active-stop-poll
-
-# Device test executable build
-cmake --build "$BUILD" --target x280_packet_injection_tensix_to_x280 -j 16
-
-# Execution example (requires exclusive device reservation)
-env TT_METAL_RUNTIME_ROOT="$PWD/tt-metal" \
-  X280_PACKET_INJECTION_FW_IMAGE="$PWD/x280/build/firmware-packet-injection-latency-include.bin" \
+# Execution example (requires exclusive device reservation); the point's image
+# defaults to build/x280/firmware-packet-injection-latency-include.bin
+env TT_METAL_RUNTIME_ROOT="$PWD" \
   PACKET_INJECTION_TILES="0,0" PACKET_INJECTION_T=1 \
   PACKET_INJECTION_FAMILY=brisc PACKET_INJECTION_S=16 \
   PACKET_INJECTION_B=1 PACKET_INJECTION_C=1 PACKET_INJECTION_K=1 \
   PACKET_INJECTION_W=1000 PACKET_INJECTION_N=4096 \
-  "$BUILD"/x280_packet_injection_tensix_to_x280 \
+  build/test/tt_metal/x280/x280_packet_injection_tensix_to_x280 \
   --gtest_filter='Config/PacketInjectionTensixToX280.Run/LatencyInclude'
 
 # Producer JIT compile gate: no firmware image, no prepared runtime, no dispatch
-env TT_VISIBLE_DEVICES=0 TT_METAL_RUNTIME_ROOT="$PWD/tt-metal" \
-  TT_METAL_CACHE="$PWD/x280/build/jit-cache-bu1" TT_METAL_FORCE_JIT_COMPILE=1 \
+env TT_VISIBLE_DEVICES=0 TT_METAL_RUNTIME_ROOT="$PWD" \
+  TT_METAL_CACHE="$PWD/build/jit-cache-bu1" TT_METAL_FORCE_JIT_COMPILE=1 \
   TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 \
-  "$BUILD"/x280_packet_injection_tensix_to_x280 \
+  build/test/tt_metal/x280/x280_packet_injection_tensix_to_x280 \
   --gtest_filter='PacketInjectionCompile.BothRiscsCompileForEveryVariant'
 ```
