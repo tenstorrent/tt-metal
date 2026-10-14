@@ -153,8 +153,11 @@ inline void misc_op_init()
 inline void misc_op_body(std::uint32_t tile)
 {
     if constexpr (SFPU_MISC_INIT_PER_TILE) { misc_op_init(); }
+#ifdef ARCH_BLACKHOLE
     if constexpr (SFPU_MISC_OPERATION == 0 && SFPU_MISC_PARAM == 3) { _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::rand<false, true>, tile, VectorMode::None, RAND_FROM, RAND_SCALE); }
-    else if constexpr (SFPU_MISC_OPERATION == 0) { _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::rand<false>, tile, VectorMode::RC, RAND_FROM, RAND_SCALE); }
+    else
+#endif
+    if constexpr (SFPU_MISC_OPERATION == 0) { _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::rand<false>, tile, VectorMode::RC, RAND_FROM, RAND_SCALE); }
     else if constexpr (SFPU_MISC_OPERATION == 1) { _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_dropout<false, MISC_ITERATIONS>, tile, MISC_VECTOR_MODE, DROPOUT_PROBABILITY, DROPOUT_SCALE); }
     else if constexpr (SFPU_MISC_OPERATION == 3 && SFPU_MISC_PARAM == 2) { _llk_math_eltwise_binary_sfpu_params_(ckernel::sfpu::copy_dest_value<false, MISC_ITERATIONS>, 0, 1, 0, MISC_VECTOR_MODE); }
     else if constexpr (SFPU_MISC_OPERATION == 3) { _llk_math_eltwise_binary_sfpu_params_(ckernel::sfpu::copy_dest_value<MISC_MATH_FORMAT, false, MISC_ITERATIONS>, 0, 1, 0, MISC_VECTOR_MODE); }
