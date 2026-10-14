@@ -500,6 +500,15 @@ static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
 static_assert(offsetof(watcher_msg_t, debug_ring_buf) % sizeof(uint32_t) == 0);
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(core_info_msg_t) % sizeof(uint32_t) == 0);
+// The dispatchers build go_msg_t words through the struct; the host builds word 0 with Hal::make_go_msg_u32.
+static_assert(offsetof(go_msg_t, signal) == 0 && offsetof(go_msg_t, go_count) == 1);
+static_assert(offsetof(go_msg_t, master_x) == sizeof(uint32_t) && sizeof(go_msg_t) == 2 * sizeof(uint32_t));
+// Host writes into the GO mailbox: the sub-device reset's GO slot clear writes the whole go_messages array and the
+// GO index write writes go_message_index, each with a NOC write that needs an aligned destination. go_processed and
+// the individual slot words are written with 4-byte writes skewed within their aligned line.
+static_assert(offsetof(mailboxes_t, go_messages) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
+static_assert(offsetof(mailboxes_t, go_message_index) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
+static_assert(offsetof(mailboxes_t, go_processed) % sizeof(uint32_t) == 0);
 
 struct eth_word_t {
     volatile uint32_t bytes_sent;
