@@ -15,6 +15,7 @@
 #include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
+#include "sfpu/experimental/ckernel_sfpu_generic_moe_gate_topk.h"
 
 namespace ckernel
 {
@@ -793,6 +794,44 @@ inline void _init_generalized_moe_gate_topk()
     // uses reg 14 to broadcast, which would clobber the reciprocal constants if they were initialized ahead
     // of time, so both WH and BH set them up within those fns. Kept (empty) because the topk_init wrapper
     // chain calls it on both arches.
+}
+
+// The id tile the host uploads for one block, face 0 of DEST tile 1: id(r, c) = 16 c + r (the transposed arange).
+// A 4-row load at offset 0 holds row r, even column c in the lane whose LTILEID is 16 r + c.
+inline void _generalized_moe_gate_write_transposed_ids_()
+{
+    constexpr std::uint32_t ids = generic_moe_gate_indices_tile;
+    TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG0, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    TTI_SFPSHFT((-4) & 0xFFF, 0, p_sfpu::LREG1, 1);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0xF);
+    TTI_SFPAND(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+    TTI_SFPSHFT(4, 0, p_sfpu::LREG2, 1);
+    TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    // Four rows down add 4, the odd column of a pair adds 16.
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::LO16, ADDR_MOD_7, ids + 0);
+    TTI_SFPIADD(16, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_7, ids + 2);
+    TTI_SFPIADD(4, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_7, ids + 4);
+    TTI_SFPIADD(20, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_7, ids + 6);
+    TTI_SFPIADD(8, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_7, ids + 8);
+    TTI_SFPIADD(24, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_7, ids + 10);
+    TTI_SFPIADD(12, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_7, ids + 12);
+    TTI_SFPIADD(28, p_sfpu::LREG2, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_7, ids + 14);
+}
+
+// The one-block route when the host's ids are that identity: write them, then the generic SFPU-only sort.
+template <bool APPROXIMATION_MODE>
+inline void _generalized_moe_gate_identity_sort_()
+{
+    _generalized_moe_gate_write_transposed_ids_();
+    _generic_moe_gate_topk_<false, 8, 256, false, true, false>(0, 0);
 }
 
 } // namespace sfpu
