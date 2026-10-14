@@ -272,19 +272,19 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
 
 
 @dataclass
-class SFPU_TERNARY_PRIOR_UNARY_INIT(TemplateParameter):
-    """Run a unary SFPU op's init before the ternary op's init, in ``sfpu_ternary_test.cpp``.
+class SFPU_CLOBBER_LREGS(TemplateParameter):
+    """Test hook that checks an SFPU op's init is self-sufficient.
 
-    Emits ``#define SFPU_TERNARY_PRIOR_UNARY_INIT SfpuType::<op>``. A fused compute kernel
-    runs several SFPU inits back to back, so the ternary op's init must program every
-    constant register its body reads rather than inherit what the previous init left there.
-    Variants that leave this out compile exactly as before.
+    Emits ``#define SFPU_CLOBBER_LREGS``. The kernel then calls ``clobber_sfpu_lregs()``
+    (``sfpu_test_helpers.h``) just before the op's init. That writes 0x41CDABCD to every SFPU
+    register a kernel can write, as another op's init would leave its own values there in a
+    fused compute kernel. An init that does not program a register its body reads then
+    produces wrong results, instead of passing on whatever reset or an earlier kernel happened
+    to leave there. Variants that leave this out compile exactly as before.
     """
 
-    prior_unary_mathop: MathOperation = None
-
     def convert_to_cpp(self) -> str:
-        return f"#define SFPU_TERNARY_PRIOR_UNARY_INIT SfpuType::{self.prior_unary_mathop.cpp_enum_value}"
+        return "#define SFPU_CLOBBER_LREGS"
 
 
 @dataclass

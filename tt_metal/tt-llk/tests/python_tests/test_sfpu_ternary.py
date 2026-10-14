@@ -36,15 +36,15 @@ from helpers.test_variant_parameters import (
     DISABLE_SRC_ZERO_FLAG,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_CLOBBER_LREGS,
     SFPU_TERNARY_OP,
-    SFPU_TERNARY_PRIOR_UNARY_INIT,
     SFPU_TERNARY_SCALAR,
 )
 
 _SCALAR_VALUE = 2.0
 
 #: The default approximation mode sfpu_ternary_test.cpp is compiled with, and so the one
-#: test_sfpu_ternary's contract names. test_sfpu_ternary_approx_after_prior_init overrides it.
+#: test_sfpu_ternary's contract names. test_sfpu_ternary_approx_after_lreg_clobber overrides it.
 _APPROX_MODE = ApproximationMode.No
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
 
@@ -84,7 +84,7 @@ def _run_sfpu_ternary(
     spec_B=None,
     spec_C=None,
     approx_mode=_APPROX_MODE,
-    prior_unary_init=None,
+    clobber_lregs=False,
 ):
     # The specs below carry no seed; seed here so a near-tolerance variant cannot pass by luck.
     torch.manual_seed(0)
@@ -131,8 +131,8 @@ def _run_sfpu_ternary(
         DISABLE_SRC_ZERO_FLAG(True),
         DEST_SYNC(),
     ]
-    if prior_unary_init is not None:
-        templates.append(SFPU_TERNARY_PRIOR_UNARY_INIT(prior_unary_init))
+    if clobber_lregs:
+        templates.append(SFPU_CLOBBER_LREGS())
 
     configuration = TestConfig(
         "sources/sfpu_ternary_test.cpp",
@@ -220,13 +220,14 @@ _TERNARY_RECIP_NEWTON_OPS = [
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=_TERNARY_RECIP_NEWTON_OPS,
 )
-def test_sfpu_ternary_approx_after_prior_init(formats, dest_acc, mathop):
-    """APPROX_MODE=Yes, after another op's init has left its own vConstFloatPrgm0.
+def test_sfpu_ternary_approx_after_lreg_clobber(formats, dest_acc, mathop):
+    """APPROX_MODE=Yes, with the SFPU registers clobbered before the op's init.
 
-    cbrt's init runs first and leaves 0x1.c09806p0 (~1.75) in vConstFloatPrgm0, as a fused
-    kernel would. On Blackhole, sfpu_reciprocal_init<true> leaves vConstFloatPrgm0 alone
-    (the approximate reciprocal runs no Newton step), so an init that forwarded
-    APPROX_MODE there handed the Newton step 1.75 instead of 2.0 and scaled 1/c by 0.75.
+    clobber_sfpu_lregs() leaves 0x41CDABCD (about 25.7) in vConstFloatPrgm0, as another op's
+    init would leave its own value in a fused kernel. On Blackhole, sfpu_reciprocal_init<true>
+    leaves vConstFloatPrgm0 alone (the approximate reciprocal runs no Newton step), so an init
+    that forwarded APPROX_MODE there handed the Newton step 25.7 instead of 2.0, and 1/c came
+    out about 24.7 times too large.
     """
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip(
@@ -242,7 +243,7 @@ def test_sfpu_ternary_approx_after_prior_init(formats, dest_acc, mathop):
         dest_acc,
         mathop,
         approx_mode=ApproximationMode.Yes,
-        prior_unary_init=MathOperation.Cbrt,
+        clobber_lregs=True,
     )
 
 

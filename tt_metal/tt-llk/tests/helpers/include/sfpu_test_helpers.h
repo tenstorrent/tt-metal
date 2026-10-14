@@ -50,4 +50,34 @@ inline void calculate_mask_binary(const std::uint32_t /*dst_index_in0*/, const s
 {
     calculate_mask<APPROXIMATION_MODE, ITERATIONS>();
 }
+
+// Bit pattern clobber_sfpu_lregs() writes: as a float about 25.7, a value no SFPU kernel programs as a constant.
+// Keep it positive and well above 1. A near-zero or negative value (0xABCDABCD is about -1.46e-12) can slip
+// through guards: sfpu_reciprocal_iter skips its Newton update when Prgm0 is below about 1, so it fell back to
+// the approximate reciprocal and passed the approx-mode contract instead of failing.
+constexpr std::uint32_t SFPU_LREG_CLOBBER_BITS = 0x41CDABCDu;
+
+// Writes SFPU_LREG_CLOBBER_BITS to every SFPU register a kernel can write and later read back. Run it just
+// before an op's init, where a fused compute kernel would run another op's init: an init that does not program
+// a register its body reads then gives wrong results, instead of passing on what reset or an earlier kernel left.
+//  - LREG0..7: general purpose.
+//  - LREG12..14: the programmable constants (vConstFloatPrgm0..2). SFPCONFIG copies LREG0 into them, so they go
+//    first, while LREG0 holds the pattern.
+// Left alone: LREG8..10 and LREG15 are read-only (fixed constants, lane id), and LREG11 (LCONST_neg1, -1.0) is a
+// core-wide constant any kernel may read without programming it (see _restore_lconst_neg1_).
+inline void clobber_sfpu_lregs()
+{
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, SFPU_LREG_CLOBBER_BITS >> 16);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, SFPU_LREG_CLOBBER_BITS & 0xFFFF);
+    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+    TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG5, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG6, 0);
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG7, 0);
+}
 } // namespace ckernel::sfpu

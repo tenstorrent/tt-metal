@@ -114,10 +114,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             // Ternary SFPU: out(tile 0) = f(a=0, b=1, c=2). VectorMode::RC drives 4 faces
             // (8 rows each) so the per-call ITERATIONS is 8, matching the production APIs.
-#ifdef SFPU_TERNARY_PRIOR_UNARY_INIT
-            // Another SFPU op's init first, as in a fused compute kernel: it leaves its own values in the
-            // programmable constant registers, which the ternary op's init must overwrite where its body reads them.
-            test_utils::call_unary_sfpu_operation_init<SFPU_TERNARY_PRIOR_UNARY_INIT, APPROX_MODE, is_fp32_dest_acc_en, 8 /*ITERATIONS*/>(MATH_FMT);
+#ifdef SFPU_CLOBBER_LREGS
+            // Test hook: fill the SFPU registers with garbage first, as another op's init would in a fused compute
+            // kernel. The ternary op's init must program every register its body reads.
+            ckernel::sfpu::clobber_sfpu_lregs();
 #endif
             test_utils::call_ternary_sfpu_operation_init<SFPU_TERNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en>();
             test_utils::call_ternary_sfpu_operation<dest_sync, is_fp32_dest_acc_en, SFPU_TERNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, 8>(
