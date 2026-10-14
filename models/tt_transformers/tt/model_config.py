@@ -40,6 +40,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf  # Minimal addition for Mistral vision
 from models.tt_transformers.tt.load_checkpoints import (
+    check_checkpoint_index,
     convert_hf_to_meta,
     convert_hf_to_meta_mllama,
     convert_hf_to_meta_mllama_no_qkv_permute,
@@ -3567,6 +3568,9 @@ class ModelArgs:
             state_dict = model.state_dict()
         else:
             # Always HuggingFace since we only support HF_MODEL now
+            # Outside the per-layer read's try: a rejected index must not fall back to from_pretrained,
+            # which would open the escaping shard itself.
+            check_checkpoint_index(self.CKPT_DIR)
             state_dict = self._load_hf_state_dict_for_configured_layers()
             if state_dict is None:
                 model_cls = self.get_hf_model_cls()
@@ -4214,6 +4218,8 @@ class ModelArgs:
     def reference_transformer(self, wrap=True, load_checkpoint=False):
         from transformers import AutoConfig
 
+        # Every branch below may call from_pretrained(self.CKPT_DIR), and callers need not have run load_state_dict.
+        check_checkpoint_index(self.CKPT_DIR)
         model_cls = self.get_hf_model_cls()
 
         # HF is much faster at loading from a checkpoint than generating from config
@@ -4357,6 +4363,8 @@ class ModelArgs:
         # Always HuggingFace since we only support HF_MODEL now
         from transformers import AutoConfig
 
+        # Every branch below may call from_pretrained(self.CKPT_DIR), and callers need not have run load_state_dict.
+        check_checkpoint_index(self.CKPT_DIR)
         model_cls = self.get_hf_model_cls()
 
         if self.dummy_weights and not load_checkpoint:
