@@ -4,9 +4,10 @@
 
 """Fused CG vector kernels: one pass over whole fp32 vectors per call, split evenly over the cores by tiles.
 
-  dot   part[core] = partial a . b (a 1024-lane tile per core; the caller reduces part with TT-NN)
+  dot   bytes [64 core, 64 core + 4) of part = this core's share of a . b (the rest of its 64-byte slot zeroed);
+        DotFinishOp adds the slots
   axpy  b = a + (s1 / s2) b                  (CG's p = z + beta p, beta = rtz / rtz_old)
-  xr    x += (s1 / s2) p, r -= (s1 / s2) Ap, part[core] = partial r . r    (alpha = rtz / pAp)
+  xr    x += (s1 / s2) p, r -= (s1 / s2) Ap, and this core's share of r . r in its slot of part   (alpha = rtz / pAp)
 The scalar quotient s1 / s2 is computed on chip (IEEE fp32 division in the reader), so no host round trip.
 """
 
@@ -124,6 +125,86 @@ class CgVectorOp:
         self.prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
         self.io = [x for x in (a, b, c, d, s1, s2) if x is not None] + [part if mode != "axpy" else o1]
         self.nc = nc
+
+    def __call__(self):
+        return ttnn.generic_op(self.io, self.prog)
+
+
+class DotFinishOp:
+    """Finishes a dot product on one core: adds the per-core values in the first nparts pages of `part` (64-byte slots,
+    zero elsewhere), reduces the 1024 lanes, and
+    writes the value to element (0, 0) of `out` (an fp32 32x32 tile). keep_old: first copies out's current tile to
+    `old` (CG's previous r.z). sqrt: writes the square root (the residual norm). Replaces two ttnn.sum calls and a
+    ttnn.copy (or ttnn.sqrt) with one launch."""
+
+    def __init__(self, device, part, nparts, out, old=None, keep_old=False, sqrt=False):
+        if keep_old and old is None:
+            raise ValueError("keep_old needs the `old` tile")
+        old = old if old is not None else out
+        cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+        ra, wa, ca = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        ra[0][0] = [part.buffer_address(), nparts]
+        wa[0][0] = [out.buffer_address(), old.buffer_address()]
+        ca[0][0] = [nparts]
+        cbs_ids = dict(CB_A=0, CB_OUT=16, CB_T=17)
+        defs = [(k, str(v)) for k, v in cbs_ids.items()] + [("VB", str(VB))]
+        if keep_old:
+            defs.append(("KEEP_OLD", "1"))
+        if sqrt:
+            defs.append(("SQRT", "1"))
+
+        def cb(idx, n):
+            return ttnn.CBDescriptor(
+                total_size=n * 4096,
+                core_ranges=cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.float32, page_size=4096)
+                ],
+            )
+
+        cbs = [cb(cbs_ids["CB_A"], 2 * VB), cb(cbs_ids["CB_OUT"], 1), cb(cbs_ids["CB_T"], 1)]
+        cfg = ttnn.ComputeConfigDescriptor(
+            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False
+        )
+        m = [ttnn.UnpackToDestMode.Default] * 64
+        m[cbs_ids["CB_A"]] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        cfg.unpack_to_dest_mode = ttnn._ttnn.program_descriptor.VectorUnpackToDestMode(m)
+        src = ttnn.KernelDescriptor.SourceType.FILE_PATH
+
+        def accessors(*ts):
+            return [x for t in ts for x in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
+
+        kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=f"{KERNEL_ROOT}/finish_reader.cpp",
+                source_type=src,
+                core_ranges=cores,
+                compile_time_args=accessors(part),
+                defines=defs,
+                runtime_args=ra,
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=f"{KERNEL_ROOT}/finish_writer.cpp",
+                source_type=src,
+                core_ranges=cores,
+                compile_time_args=accessors(out, old),
+                defines=defs,
+                runtime_args=wa,
+                config=ttnn.WriterConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=f"{KERNEL_ROOT}/finish_compute.cpp",
+                source_type=src,
+                core_ranges=cores,
+                compile_time_args=[],
+                defines=defs,
+                runtime_args=ca,
+                config=cfg,
+            ),
+        ]
+        self.prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+        self.io = [part, old, out]
 
     def __call__(self):
         return ttnn.generic_op(self.io, self.prog)

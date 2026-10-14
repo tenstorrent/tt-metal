@@ -54,10 +54,10 @@ def main(nx):
         res["spmv_cg"] = (timed(h.ops["spmv_cg"]), S["SpMVAp"])
         v = h.vops
         # fused vector kernels against the limits of the HPCG operations they replace
-        res["dot_r_z"] = (timed(lambda: (v["rz"](), ttnn.copy(h.psum(), h.rtz))), S["DDOT"])
-        res["p_update"] = (timed(lambda: (v["p"](), ttnn.copy(h.rtz, h.rtz_old))), S["WAXPBY"])
-        res["dot_p_Ap"] = (timed(lambda: (v["pAp"](), ttnn.copy(h.psum(), h.pAp))), S["DDOT"])
-        res["x_r_update_norm"] = (timed(lambda: (v["xr"](), ttnn.sqrt(h.psum()))), 2 * S["WAXPBY"] + S["DDOT"])
+        res["dot_r_z"] = (timed(lambda: (v["rz"](), v["rz_fin"]())), S["DDOT"])
+        res["p_update"] = (timed(v["p"]), S["WAXPBY"])
+        res["dot_p_Ap"] = (timed(lambda: (v["pAp"](), v["pAp_fin"]())), S["DDOT"])
+        res["x_r_update_norm"] = (timed(lambda: (v["xr"](), v["nr_fin"]())), 2 * S["WAXPBY"] + S["DDOT"])
         tot = sum(us for us, _ in res.values())
         print(
             json.dumps(

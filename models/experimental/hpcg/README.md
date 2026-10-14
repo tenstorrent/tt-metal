@@ -46,24 +46,24 @@ Two numbers per grid:
 
 | Grid | ms / iteration | Raw GFLOP/s | Speed of light | Share | Iterations to the reference residual | HPCG-style rating |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 104³ | 4.94 | 83.4 | 3.21 ms | 65% | 51 | 77.1 GFLOP/s |
-| 128³ | 7.76 | 99.4 | 6.01 ms | 77.5% | 53 | 88.6 GFLOP/s |
-| 192³ | 23.74 | 110.3 | 21.13 ms | 89.0% | 53 | 99.5 GFLOP/s |
-| 240³ | 45.54 | 112.5 | 41.35 ms | 90.8% | not measured | - |
-| 288³ | 77.90 | 113.9 | 71.56 ms | 91.9% | not measured | - |
-| 304³ | 91.60 | 113.9 | 84.19 ms | 91.9% | not measured | - |
+| 104³ | 4.88 | 84.5 | 3.21 ms | 65.9% | 51 | 77.9 GFLOP/s |
+| 128³ | 7.69 | 100.3 | 6.01 ms | 78.1% | 53 | 89.4 GFLOP/s |
+| 192³ | 23.68 | 110.6 | 21.13 ms | 89.2% | 53 | 99.7 GFLOP/s |
+| 240³ | 45.49 | 112.7 | 41.35 ms | 90.9% | not measured | - |
+| 288³ | 77.84 | 114.0 | 71.56 ms | 91.9% | not measured | - |
+| 304³ | 91.53 | 114.0 | 84.19 ms | 92.0% | not measured | - |
 
 The iteration count needs the CPU reference residual for that grid size, which
 was only run up to 192³.
 
-Without the setup charge (iteration penalty only), the rating would be 81.8,
-93.8 and 104.0 GFLOP/s at 104³, 128³ and 192³.
+Without the setup charge (iteration penalty only), the rating would be 82.8,
+94.6 and 104.3 GFLOP/s at 104³, 128³ and 192³.
 
 **Comparison with a CPU.** HPCG's fp64 reference code on a 24-thread Ryzen 9
 7900X rates 3.83, 4.02 and 4.40 GFLOP/s at 104³, 128³ and 192³. That is
 HPCG's final rating, so it already includes the setup charge (the reference
 code needs no extra iterations). Compared like for like, the P150's
-HPCG-style rating is 20.1x, 22.0x and 22.6x the CPU's.
+HPCG-style rating is 20.3x, 22.2x and 22.7x the CPU's.
 
 **Speed of light.** `reference/speed_of_light.py` is each operation's minimum
 DRAM traffic under the HPCG rules at 512 GB/s; every operation is
@@ -144,5 +144,6 @@ Not followed:
   phases. The pre-smoother also runs the residual SpMV. SpMV passes keep the
   same per-phase wait, so cores stream DRAM in lockstep.
 - **Fused vector work.** Dot products, `p = z + beta p` and the `x`, `r`
-  update with `|r|^2` are one pass each; TT-NN only reduces the per-core
-  partial sums and takes the square root.
+  update with `|r|^2` are one pass each. Each core reduces its share of a dot
+  product to one number on the SFPU; a one-core launch adds the 130 numbers
+  (and takes the square root for `|r|`), so no TT-NN op runs in the iteration.

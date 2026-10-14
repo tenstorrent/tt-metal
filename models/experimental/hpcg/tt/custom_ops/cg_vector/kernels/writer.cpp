@@ -56,8 +56,14 @@ void kernel_main() {
 #else
     constexpr uint32_t cbp = CB_OUT3;
 #endif
+    // this core's value is element (0, 0) = word 0 of the packed tile: it goes to its own 64-byte slot of PART (the
+    // rest of the slot zeroed), so the finish step reads core-count * 64 bytes instead of one tile per core
     cb_wait_front(cbp, 1);
-    noc_async_write(get_read_ptr(cbp), PART.get_noc_addr(core), 4096);
+    volatile tt_l1_ptr uint32_t* w = (volatile tt_l1_ptr uint32_t*)get_read_ptr(cbp);
+    for (uint32_t i = 1; i < 16; ++i) {
+        w[i] = 0;
+    }
+    noc_async_write(get_read_ptr(cbp), PART.get_noc_addr((core * 64) / 4096) + (core * 64) % 4096, 64);
     noc_async_write_barrier();
     cb_pop_front(cbp, 1);
 #endif

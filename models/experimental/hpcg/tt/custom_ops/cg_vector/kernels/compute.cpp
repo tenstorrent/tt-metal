@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Fused CG vector kernels, compute (SFPU, fp32 in DEST). DOT keeps the running partial in DEST; XR chains its
-// partial r.r through CB_ACC (pack the running tile, unpack it with the next one). One core's partial is a
-// 1024-lane tile.
+// partial r.r through CB_ACC (pack the running tile, unpack it with the next one). Each core's 1024-lane partial is
+// then reduced on the SFPU to one value at element (0, 0), so the finish step adds only one number per core.
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/compute_kernel_api.h"
 
 void kernel_main() {
     const uint32_t nt = get_arg_val<uint32_t>(0);
@@ -37,6 +38,9 @@ void kernel_main() {
             add_binary_tile(2, 0, 2);
         }
     }
+    sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+    sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(2);
+    sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(2);
     tile_regs_commit();
     tile_regs_wait();
     cb_reserve_back(CB_OUT, 1);
@@ -85,6 +89,11 @@ void kernel_main() {
             cb_pop_front(CB_ACC, 1);
             add_binary_tile_init();
             add_binary_tile(6, 5, 5);
+        }
+        if (t + 1 == nt) {  // this core's r.r partial: reduced to one value at element (0, 0)
+            sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+            sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(5);
+            sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(5);
         }
         cb_pop_front(CB_C, 1);
         cb_pop_front(CB_D, 1);

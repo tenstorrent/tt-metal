@@ -8,14 +8,13 @@ One CG iteration, as HPCG 3.1's CG.cpp with a 4-level multigrid preconditioner (
   multigrid, per level l = 0..2: pre-smoother + residual SpMV + r - A z (one sparse-row launch), restriction,
       the coarser level, prolongation (gather and add in one launch), post-smoother; level 3: one smoother
   rtz = r.z, p = z + (rtz / rtz_old) p, Ap = A p, pAp = p.Ap, x += alpha p, r -= alpha Ap, |r|
-Every matrix and vector pass is a custom op (tt/custom_ops); TT-NN reduces the per-core dot partials and takes
-the square root. The whole iteration is trace-capturable.
+Every matrix and vector pass is a custom op (tt/custom_ops), including the final sums of the dot products. The whole iteration is trace-capturable.
 """
 
 import ttnn
 
 from models.experimental.hpcg.reference.problem import COLOUR_ORDER, build
-from models.experimental.hpcg.tt.custom_ops.cg_vector import CgVectorOp
+from models.experimental.hpcg.tt.custom_ops.cg_vector import CgVectorOp, DotFinishOp
 from models.experimental.hpcg.tt.custom_ops.sparse_rows import SparseRowOp, SparseRowPlan, slot_pages
 from models.experimental.hpcg.tt.custom_ops.sparse_rows.op import debug_buffer, noc_coords
 from models.experimental.hpcg.tt.layout import TILE, rows_to_device, to_device, zeros_device
@@ -63,7 +62,7 @@ class HPCG:
     vops: "rz", "pAp" dot partials; "p": p update; "xr": x and r update with the partial r.r.
     """
 
-    def __init__(self, device, nx, bands=None, order=COLOUR_ORDER, kernel_debug=False):
+    def __init__(self, device, nx, bands=None, order=COLOUR_ORDER, kernel_debug=False, level_cores=None):
         if nx % 8:
             raise ValueError(f"nx must be a multiple of 8 (4 multigrid levels), got {nx}")
         self.device = device
@@ -73,7 +72,8 @@ class HPCG:
         self.levels = build(nx, bands, slot_stride)
         self.order = list(order)
         noc_xy = noc_coords(device)
-        self.lv = [DeviceLevel(device, L, nc, noc_xy) for L in self.levels]
+        lc = list(level_cores or []) + [nc] * 4  # cores per level for the smoothers (default: all)
+        self.lv = [DeviceLevel(device, L, min(nc, lc[l]), noc_xy) for l, L in enumerate(self.levels)]
         L0 = self.levels[0]
         self.b = to_device(device, L0.B)
         self.x, self.r, self.p, self.Ap, self.zero = (zeros_device(device, L0.P) for _ in range(5))
@@ -185,51 +185,50 @@ class HPCG:
             self.ops[("prolong", l)]()
             self.ops[("gs", l)]()
 
-    def psum(self):
-        """Sum of the per-core dot partials (a 1x1 tensor)."""
-        s = ttnn.sum(self.part, dim=-2, keepdim=True, compute_kernel_config=self.acc)
-        return ttnn.sum(s, dim=-1, keepdim=True, compute_kernel_config=self.acc)
-
     def dot(self, a, b):
         s = ttnn.sum(ttnn.multiply(a, b), dim=-2, keepdim=True, compute_kernel_config=self.acc)
         return ttnn.sum(s, dim=-1, keepdim=True, compute_kernel_config=self.acc)
 
     def setup_cg(self):
-        """CG start (HPCG CG.cpp): x = 0, p = 0, r = b - A p, normr0 = |r|; rtz_old = 1 so iteration 1's
-        p = z + rtz * 0 = z. Untraced; writes only persistent buffers."""
+        """CG start (HPCG CG.cpp): x = 0, p = 0, r = b - A p, normr0 = |r|. r.z starts at 1, so iteration 1 keeps 1 as
+        the previous r.z and its p = z + (r.z / 1) * 0 = z. Untraced; writes only persistent buffers."""
         ttnn.copy(self.zero, self.x)
         ttnn.copy(self.zero, self.p)
         self.ops["spmv_cg"]()
         ttnn.subtract(self.b, self.Ap, output_tensor=self.r)
         nr = ttnn.sqrt(self.dot(self.r, self.r))
         self.normr0 = float(ttnn.to_torch(nr).reshape(-1)[0])
-        one = ttnn.add(ttnn.multiply(nr, 0.0), 1.0)
         if self.vops is None:
-            self.rtz_old = one
-            self.rtz = ttnn.add(ttnn.multiply(nr, 0.0), 0.0)
-            self.pAp = ttnn.add(ttnn.multiply(nr, 0.0), 0.0)
+            self._one = ttnn.add(ttnn.multiply(nr, 0.0), 1.0)
+            self.rtz = ttnn.add(ttnn.multiply(nr, 0.0), 1.0)
+            self.rtz_old, self.pAp, self.normr = (ttnn.add(ttnn.multiply(nr, 0.0), 0.0) for _ in range(3))
             z = self.lv[0].z
+            rz = CgVectorOp(self.device, "dot", self.r, z, part=self.part)
+            n = -(-rz.nc * 64 // (4 * TILE))  # pages holding one 64-byte slot per core
             self.vops = dict(
-                rz=CgVectorOp(self.device, "dot", self.r, z, part=self.part),
+                rz=rz,
+                rz_fin=DotFinishOp(self.device, self.part, n, self.rtz, old=self.rtz_old, keep_old=True),
                 pAp=CgVectorOp(self.device, "dot", self.p, self.Ap, part=self.part),
+                pAp_fin=DotFinishOp(self.device, self.part, n, self.pAp),
                 p=CgVectorOp(self.device, "axpy", z, self.p, s1=self.rtz, s2=self.rtz_old),
                 xr=CgVectorOp(
                     self.device, "xr", self.x, self.p, self.r, self.Ap, s1=self.rtz, s2=self.pAp, part=self.part
                 ),
+                nr_fin=DotFinishOp(self.device, self.part, n, self.normr, sqrt=True),
             )
         else:
-            ttnn.copy(one, self.rtz_old)
+            ttnn.copy(self._one, self.rtz)
 
     def iteration(self):
-        """One CG iteration; returns |r| as a 1x1 device tensor."""
+        """One CG iteration; returns |r| as a 1x1 device tensor (the same tensor every call)."""
         self.mg(0)
         v = self.vops
-        v["rz"]()
-        ttnn.copy(self.psum(), self.rtz)  # rtz = r.z
-        v["p"]()  # p = z + (rtz / rtz_old) p
-        ttnn.copy(self.rtz, self.rtz_old)
+        v["rz"]()  # per-core partials of r.z
+        v["rz_fin"]()  # previous r.z kept, then r.z
+        v["p"]()  # p = z + (r.z / previous r.z) p
         self.ops["spmv_cg"]()  # Ap = A p
         v["pAp"]()
-        ttnn.copy(self.psum(), self.pAp)  # pAp = p.Ap
-        v["xr"]()  # x += alpha p, r -= alpha Ap (alpha = rtz / pAp), r.r
-        return ttnn.sqrt(self.psum())
+        v["pAp_fin"]()  # p.Ap
+        v["xr"]()  # x += alpha p, r -= alpha Ap (alpha = r.z / p.Ap), partials of r.r
+        v["nr_fin"]()  # |r| = sqrt(r.r)
+        return self.normr
