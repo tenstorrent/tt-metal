@@ -350,7 +350,7 @@ class TtMoe(LightweightModule):
         token plus 64 B (fabric2d_min_payload_size), which moe_fabric_payload_size opens the mesh with. A
         fabric2d combine also needs a dispatch buffer that holds every routed token, until combine_fabric2d
         clamps overflow tokens. A fabric2d dispatch also needs num_experts_per_tok <=
-        DISPATCH_FABRIC2D_MAX_TOPK, and no trace.
+        DISPATCH_FABRIC2D_MAX_TOPK.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -749,15 +749,7 @@ class TtMoe(LightweightModule):
     def set_trace_controller(self, controller):
         """Attach (or clear with None) a SubDeviceTraceController. While set, the shared-expert/
         dispatch overlap routes its sub-device load/clear through the controller so a ttnn trace can
-        be split at those boundaries (see utils/sub_device_trace.py).
-
-        Raises ValueError with a fabric2d dispatch, which has not been validated across traced launches.
-        TtPrefillRuntime sets a controller on every traced build, before the first traced forward."""
-        if controller is not None and self.dispatch_impl == "fabric2d":
-            raise ValueError(
-                "TtMoe: dispatch_impl 'fabric2d' cannot be traced: dispatch_fabric2d has not been validated "
-                "across traced launches"
-            )
+        be split at those boundaries (see utils/sub_device_trace.py)."""
         self._trace_controller = controller
         if controller is not None and self.overlap_routed_expert_with_combine:
             self._fetch_combine_forwarding_buffer()

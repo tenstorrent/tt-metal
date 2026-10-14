@@ -144,11 +144,6 @@ for _var, _impl in (("PREFILL_MOE_DISPATCH", MOE_DISPATCH_IMPL), ("PREFILL_MOE_C
         raise ValueError(f"{_var} must be one of {_MOE_IMPLS}, got {_impl!r}")
 
 assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DFLASH=1 are mutually exclusive"
-# TtMoe refuses a trace controller too; this fails before the mesh opens.
-assert not (MOE_DISPATCH_IMPL == "fabric2d" and USE_TRACE), (
-    "PREFILL_MOE_DISPATCH=fabric2d is incompatible with PREFILL_USE_TRACE=1: dispatch_fabric2d has not been "
-    "validated across traced launches. Run with PREFILL_USE_TRACE=0."
-)
 
 # DFlash runs traced, and only traced. The eager drafter path is no longer a supported configuration:
 # the tap fires from inside the verifier forward, so trace capture is what the wiring is built and
