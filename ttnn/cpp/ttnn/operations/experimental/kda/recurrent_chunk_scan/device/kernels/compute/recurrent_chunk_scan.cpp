@@ -19,7 +19,6 @@
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 
 enum class ElementwiseOperation { ADD, SUBTRACT };
-enum class ChunkInputPolicy { RETAIN, CONSUME };
 
 template <uint32_t Mt, uint32_t Kt, uint32_t Nt>
 FORCE_INLINE void matrix_multiply(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& output) {
@@ -185,83 +184,6 @@ FORCE_INLINE void extract_paths(DataflowBuffer& pair, DataflowBuffer& output) {
     }
 }
 
-template <ChunkInputPolicy InputPolicy, uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Paths = 1>
-FORCE_INLINE void compute_value_new(
-    DataflowBuffer& current_state,
-    DataflowBuffer& kd,
-    DataflowBuffer& v_beta,
-    DataflowBuffer& t_inv,
-    DataflowBuffer& state_projection,
-    DataflowBuffer& difference,
-    DataflowBuffer& corrected_value) {
-    constexpr uint32_t chunk_key_tiles = Ct * Kt;
-    constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
-    constexpr uint32_t chunk_value_tiles = Ct * Vt;
-    constexpr uint32_t state_columns = Paths * Vt;
-    constexpr uint32_t chunk_state_tiles = Ct * state_columns;
-    constexpr uint32_t key_state_tiles = Kt * state_columns;
-
-    if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
-        kd.wait_front(chunk_key_tiles);
-    }
-    current_state.wait_front(key_state_tiles);
-    matrix_multiply<Ct, Kt, state_columns>(kd, current_state, state_projection);
-    state_projection.wait_front(chunk_state_tiles);
-    if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
-        kd.pop_front(chunk_key_tiles);
-        v_beta.wait_front(chunk_value_tiles);
-    }
-    if constexpr (Paths == 1) {
-        elementwise<ElementwiseOperation::SUBTRACT, chunk_value_tiles, chunk_value_tiles>(
-            v_beta, state_projection, difference);
-    } else {
-        static_assert(Ct == 1, "paired summaries take one tile row per chunk");
-        subtract_from_values<Vt, Paths>(v_beta, state_projection, difference);
-    }
-    difference.wait_front(chunk_state_tiles);
-    if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
-        v_beta.pop_front(chunk_value_tiles);
-    }
-    state_projection.pop_front(chunk_state_tiles);
-    if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
-        t_inv.wait_front(chunk_chunk_tiles);
-    }
-    matrix_multiply<Ct, Ct, state_columns>(t_inv, difference, corrected_value);
-    corrected_value.wait_front(chunk_state_tiles);
-    if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
-        t_inv.pop_front(chunk_chunk_tiles);
-    }
-    difference.pop_front(chunk_state_tiles);
-}
-
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void compute_chunk_output(
-    DataflowBuffer& current_state,
-    DataflowBuffer& corrected_value,
-    DataflowBuffer& q_decay,
-    DataflowBuffer& intra,
-    DataflowBuffer& state_projection,
-    DataflowBuffer& value_projection,
-    DataflowBuffer& output) {
-    constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
-    constexpr uint32_t chunk_key_tiles = Ct * Kt;
-    constexpr uint32_t chunk_value_tiles = Ct * Vt;
-
-    q_decay.wait_front(chunk_key_tiles);
-    matrix_multiply<Ct, Kt, Vt>(q_decay, current_state, state_projection);
-    state_projection.wait_front(chunk_value_tiles);
-    q_decay.pop_front(chunk_key_tiles);
-    intra.wait_front(chunk_chunk_tiles);
-    matrix_multiply<Ct, Ct, Vt>(intra, corrected_value, value_projection);
-    value_projection.wait_front(chunk_value_tiles);
-    intra.pop_front(chunk_chunk_tiles);
-    pack_reconfig_data_format(output.get_id());
-    elementwise<ElementwiseOperation::ADD, chunk_value_tiles, chunk_value_tiles>(
-        state_projection, value_projection, output);
-    state_projection.pop_front(chunk_value_tiles);
-    value_projection.pop_front(chunk_value_tiles);
-}
-
 FORCE_INLINE void multiply_by_decay(
     DataflowBuffer& state, DataflowBuffer& decay, DataflowBuffer& output, uint32_t key_tiles, uint32_t value_tiles) {
     constexpr uint32_t dst_tiles =
@@ -294,42 +216,6 @@ FORCE_INLINE void multiply_by_decay(
     output.push_back(count);
 }
 
-template <ChunkInputPolicy InputPolicy, uint32_t Ct, uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void update_state(
-    DataflowBuffer& current_state,
-    DataflowBuffer& destination,
-    DataflowBuffer& corrected_value,
-    DataflowBuffer& k_decay_transposed,
-    DataflowBuffer& final_decay) {
-    constexpr uint32_t chunk_value_tiles = Ct * Vt;
-    constexpr uint32_t key_value_tiles = Kt * Vt;
-    constexpr uint32_t key_chunk_tiles = Kt * Ct;
-
-    if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
-        k_decay_transposed.wait_front(key_chunk_tiles);
-        final_decay.wait_front(Kt);
-    }
-    // The update and the decayed state are each packed to FP32 and then added. Accumulating the matmul onto the
-    // decayed state in DST instead changes the result enough that Kimi-K3's chunked prefill drifts from the
-    // reference over consecutive calls (L24 worst-layer PCC 0.981 -> 0.953 at 56k tokens).
-    DataflowBuffer state_update(dfb::state_update);
-    DataflowBuffer state_temporary(dfb::state_temporary);
-    matrix_multiply<Kt, Ct, Vt>(k_decay_transposed, corrected_value, state_update);
-    state_update.wait_front(key_value_tiles);
-    multiply_by_decay(current_state, final_decay, state_temporary, Kt, Vt);
-    state_temporary.wait_front(key_value_tiles);
-    elementwise<ElementwiseOperation::ADD, key_value_tiles, key_value_tiles>(
-        state_temporary, state_update, destination);
-    state_temporary.pop_front(key_value_tiles);
-    state_update.pop_front(key_value_tiles);
-    if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
-        k_decay_transposed.pop_front(key_chunk_tiles);
-        final_decay.pop_front(Kt);
-    }
-    corrected_value.pop_front(chunk_value_tiles);
-    current_state.pop_front(key_value_tiles);
-}
-
 // The zero-seeded B and identity-seeded A + B recurrences advance together as one [Kt, 2 * Vt] state, so every
 // operation covers both; each tile's arithmetic is the same as advancing them apart.
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
@@ -348,6 +234,8 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     DataflowBuffer summary_head_output(dfb::summary_head_output);
     DataflowBuffer summary_head_state(dfb::summary_head_state);
     DataflowBuffer transport_state(dfb::transport_state);
+    DataflowBuffer state_update(dfb::state_update);
+    DataflowBuffer state_temporary(dfb::state_temporary);
 
     constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
@@ -366,10 +254,27 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         t_inv.wait_front(chunk_chunk_tiles);
         k_decay_transposed.wait_front(key_chunk_tiles);
         final_decay.wait_front(Kt);
-        compute_value_new<ChunkInputPolicy::RETAIN, Ct, Kt, Vt, 2>(
-            current, kd, v_beta, t_inv, scratch, value_new, scratch);
-        update_state<ChunkInputPolicy::RETAIN, Ct, Kt, pair_columns>(
-            current, last ? final_state : state_ring, scratch, k_decay_transposed, final_decay);
+        // The decayed state reads only the incoming state, so it is issued between kd S and the subtraction that
+        // waits on it. The operations and their operand order are those of compute_value_new and update_state.
+        current.wait_front(key_pair_tiles);
+        matrix_multiply<Ct, Kt, pair_columns>(kd, current, scratch);  // kd S
+        multiply_by_decay(current, final_decay, state_temporary, Kt, pair_columns);
+        scratch.wait_front(Ct * pair_columns);
+        subtract_from_values<Vt, 2>(v_beta, scratch, value_new);
+        value_new.wait_front(Ct * pair_columns);
+        scratch.pop_front(Ct * pair_columns);
+        matrix_multiply<Ct, Ct, pair_columns>(t_inv, value_new, scratch);  // v_new
+        scratch.wait_front(Ct * pair_columns);
+        value_new.pop_front(Ct * pair_columns);
+        matrix_multiply<Kt, Ct, pair_columns>(k_decay_transposed, scratch, state_update);
+        state_update.wait_front(key_pair_tiles);
+        state_temporary.wait_front(key_pair_tiles);
+        elementwise<ElementwiseOperation::ADD, key_pair_tiles, key_pair_tiles>(
+            state_temporary, state_update, last ? final_state : state_ring);
+        state_temporary.pop_front(key_pair_tiles);
+        state_update.pop_front(key_pair_tiles);
+        scratch.pop_front(Ct * pair_columns);
+        current.pop_front(key_pair_tiles);
         if (split_chunk != 0 && chunk + 1 == split_chunk) {
             state_ring.wait_front(key_pair_tiles);
             pack_reconfig_data_format(summary_head_output.get_id());
@@ -411,12 +316,19 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     DataflowBuffer final_decay(dfb::final_decay);
     DataflowBuffer output(dfb::output);
     DataflowBuffer output_intermediate(dfb::output_intermediate);
+    DataflowBuffer query_projection(dfb::query_projection);
     DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
     DataflowBuffer final_state(dfb::final_state);
     DataflowBuffer scratch(dfb::scratch);
+    DataflowBuffer state_update(dfb::state_update);
+    DataflowBuffer state_temporary(dfb::state_temporary);
     DataflowBuffer tail_entry_states(dfb::tail_entry_states);
 
+    constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
+    constexpr uint32_t chunk_key_tiles = Ct * Kt;
+    constexpr uint32_t chunk_value_tiles = Ct * Vt;
     constexpr uint32_t key_value_tiles = Kt * Vt;
+    constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
     pack_reconfig_data_format(dfb::scratch);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
@@ -434,14 +346,60 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         }
         DataflowBuffer& destination = chunk == num_chunks - 1 ? final_state : state_ring;
 
-        compute_value_new<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(
-            current_state, kd, v_beta, t_inv, scratch, output_intermediate, value_new);
-        compute_chunk_output<Ct, Kt, Vt>(
-            current_state, value_new, q_decay, intra, output_intermediate, scratch, output);
+        // Each stage waits for the previous one's packed result. Every stage that reads only the incoming state
+        // runs first, and each dependent stage is issued after independent work, so the math thread rarely waits on
+        // a pack. The operations and their operand order are those of the straight-line recurrence.
+        current_state.wait_front(key_value_tiles);
+        kd.wait_front(chunk_key_tiles);
+        matrix_multiply<Ct, Kt, Vt>(kd, current_state, scratch);  // kd S
+        q_decay.wait_front(chunk_key_tiles);
+        matrix_multiply<Ct, Kt, Vt>(q_decay, current_state, query_projection);  // q_decay S
+        final_decay.wait_front(Kt);
+        multiply_by_decay(current_state, final_decay, state_temporary, Kt, Vt);  // dl * S
+        kd.pop_front(chunk_key_tiles);
+        q_decay.pop_front(chunk_key_tiles);
+        final_decay.pop_front(Kt);
 
+        // v_new = T_inv (v_beta - kd S).
+        scratch.wait_front(chunk_value_tiles);
+        v_beta.wait_front(chunk_value_tiles);
+        elementwise<ElementwiseOperation::SUBTRACT, chunk_value_tiles, chunk_value_tiles>(
+            v_beta, scratch, output_intermediate);
+        output_intermediate.wait_front(chunk_value_tiles);
+        v_beta.pop_front(chunk_value_tiles);
+        scratch.pop_front(chunk_value_tiles);
+        t_inv.wait_front(chunk_chunk_tiles);
+        matrix_multiply<Ct, Ct, Vt>(t_inv, output_intermediate, value_new);
+        value_new.wait_front(chunk_value_tiles);
+        t_inv.pop_front(chunk_chunk_tiles);
+        output_intermediate.pop_front(chunk_value_tiles);
+
+        // The state update and the output's intra-chunk term both read v_new. The update and the decayed state are
+        // each packed to FP32 and then added: accumulating the matmul onto the decayed state in DST instead changes
+        // the result enough that Kimi-K3's chunked prefill drifts from the reference over consecutive calls.
+        k_decay_transposed.wait_front(key_chunk_tiles);
+        matrix_multiply<Kt, Ct, Vt>(k_decay_transposed, value_new, state_update);
+        intra.wait_front(chunk_chunk_tiles);
+        matrix_multiply<Ct, Ct, Vt>(intra, value_new, scratch);  // intra v_new
+        state_update.wait_front(key_value_tiles);
+        state_temporary.wait_front(key_value_tiles);
+        elementwise<ElementwiseOperation::ADD, key_value_tiles, key_value_tiles>(
+            state_temporary, state_update, destination);
+        state_temporary.pop_front(key_value_tiles);
+        state_update.pop_front(key_value_tiles);
+        k_decay_transposed.pop_front(key_chunk_tiles);
+        intra.pop_front(chunk_chunk_tiles);
+        value_new.pop_front(chunk_value_tiles);
+        current_state.pop_front(key_value_tiles);
+
+        // The chunk output, issued after the next state so the next chunk's first stage never waits on it.
+        scratch.wait_front(chunk_value_tiles);
+        query_projection.wait_front(chunk_value_tiles);
+        pack_reconfig_data_format(output.get_id());
+        elementwise<ElementwiseOperation::ADD, chunk_value_tiles, chunk_value_tiles>(query_projection, scratch, output);
+        query_projection.pop_front(chunk_value_tiles);
+        scratch.pop_front(chunk_value_tiles);
         pack_reconfig_data_format(dfb::state_ring);
-        update_state<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(
-            current_state, destination, value_new, k_decay_transposed, final_decay);
     }
 }
 
