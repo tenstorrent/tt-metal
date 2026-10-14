@@ -10,7 +10,7 @@
 #include <tt-metalium/workload_descriptor.hpp>
 
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_supported.hpp"
+#include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_plan.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -21,7 +21,7 @@ struct ReshapeCodegenParams {
     ttnn::Shape logical_output_shape;
     tt::tt_metal::MemoryConfig output_mem_config;
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
-    // Planned once before launch; the hash, the factory selection and the factories read it instead of live L1.
+    // Not in the key: it follows from the shapes, which are.
     ttnn::operations::data_movement::reshape_codegen::LaunchPlan plan;
 
     static constexpr auto attribute_names =

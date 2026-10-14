@@ -5,10 +5,9 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <vector>
-
-#include <tt-metalium/core_coord.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -51,27 +50,32 @@ struct TileRowsPlan {
     std::vector<uint32_t> table;  // [num_batches, page_words], one device page per batch
 };
 
+// The planner's batches for one shape pair; only build_tile_rows_plan reads them.
+struct TileRowsSchedule;
+
+// The planner's verdict for one shape pair.
+struct TileRowsChoice {
+    TileRowsLayout layout;
+    uint32_t max_out = 0;
+    // Runs over real rows; source tiles native reads (each output tile reads its distinct sources once); source
+    // tiles tile rows reads (each batch reads its distinct sources once).
+    uint64_t runs = 0;
+    uint64_t native_reads = 0;
+    uint64_t batch_reads = 0;
+    // Set when this call ran the planner, null when the choice came from the memo.
+    std::shared_ptr<const TileRowsSchedule> schedule;
+};
+
 // Whether every output tile row is one whole tile row of the input.
 bool is_tile_row_permutation(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape);
 
-// Layout of the plan the factory would upload, or nullopt when the shapes are not a tile-row permutation or exceed
-// the caps. Memoized on the shapes: the gate and program hash run per call and planning walks every output tile row.
-std::optional<TileRowsLayout> tile_rows_layout(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape);
+// nullopt when the shapes are not a tile-row permutation or the plan exceeds its size caps. Memoized on the shapes.
+std::optional<TileRowsChoice> plan_tile_rows(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape);
 
-// The full plan whose layout tile_rows_layout returned; only call when that returned a value.
-TileRowsPlan build_tile_rows_plan(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape);
+// The plan `choice` describes; reuses its schedule when set.
+TileRowsPlan build_tile_rows_plan(
+    const ttnn::Shape& in_shape, const ttnn::Shape& out_shape, const TileRowsChoice& choice);
 
 uint64_t tile_rows_l1_bytes(const TileRowsLayout& layout, uint32_t tile_bytes);
-
-// Whether the tile-rows program measures faster than native's tiled reshape on `num_cores` cores. Native reads every
-// distinct source tile of each output tile; tile rows reads a source once per batch of output tiles but runs fewer
-// batches than native runs tiles at once. It wins when batching cuts reads by at least the smallest batch size, or
-// when every output tile is whole face halves of its sources and native needs more than one round. False when the
-// shapes are not a tile-row permutation.
-bool tile_rows_beats_native(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape, uint32_t num_cores);
-
-// Whether the tile-rows program's buffers fit `l1_budget`; false when the shapes are not a tile-row permutation or
-// exceed the caps.
-bool tile_rows_fits(const Tensor& input, const ttnn::Shape& logical_output_shape, uint64_t l1_budget);
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen

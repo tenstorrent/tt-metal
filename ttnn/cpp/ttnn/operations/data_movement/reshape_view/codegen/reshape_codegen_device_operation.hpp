@@ -25,13 +25,8 @@ struct ReshapeCodegenDeviceOperation {
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    // The gate's verdict is part of the key, so a hit only needs a device input.
+    // Everything the gate reads is in the key, so a hit only needs a device input.
     static void validate_on_program_cache_hit(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    // The plan adds nothing to the key: the tile-rows program has fixed CB depths and its geometry follows from the
-    // shapes.
-    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static spec_return_value_t compute_output_specs(
