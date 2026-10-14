@@ -84,7 +84,9 @@ def check_noc_status(
             read_noc_id = to_noc_id(noc_index)
         except:
             log_check_location(
-                location, False, f"{message}Read invalid noc_index {noc_index} from core, expected 0 or 1. Value likely corrupted."
+                location,
+                False,
+                f"{message}Read invalid noc_index {noc_index} from core, expected 0 or 1. Value likely corrupted.",
             )
             return
 
