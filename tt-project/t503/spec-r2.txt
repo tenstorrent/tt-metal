@@ -1,0 +1,8 @@
+ID=t503-ab-r2
+TASK=t503
+CONFIG=t503-ltx25-te-ab
+TIMEOUT=600
+WORKDIR=/var/tmp/fasth3/t503
+ENV=/home/smarton/fasth3/runner/env.yaml
+CMD=bash /var/tmp/fasth3/t503/run503.sh
+NEEDS=/var/tmp/fasth3/t503/ltx25/diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors,/var/tmp/fasth3/t503/ltx25/text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors,/var/tmp/fasth3/t503/te0817/text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors,/var/tmp/fasth3/t503/cache,/var/tmp/fasth3/t503/jit
