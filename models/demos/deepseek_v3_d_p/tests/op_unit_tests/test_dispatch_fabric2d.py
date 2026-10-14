@@ -489,8 +489,8 @@ def _moe_grid_split(mesh_device, dispatch_rows=1):
     """The model's split: dispatch gets the first `dispatch_rows` rows of the grid, the shared expert
     the rest.
 
-    `tt_moe.py` splits rows [0, dispatch_sd_rows) against the remainder, with `dispatch_sd_rows`
-    currently 1, so the two ops run on disjoint cores and overlap on chip.
+    `tt_moe.py` splits rows [0, dispatch_sd_rows) against the remainder, so the two ops run on disjoint
+    cores and overlap on chip. `dispatch_sd_rows` is 2 with dispatch_impl="fabric2d" and 1 otherwise.
     """
     grid = mesh_device.compute_with_storage_grid_size()
     last = dispatch_rows - 1
@@ -524,8 +524,9 @@ def test_dispatch_fabric2d_subdevice(mesh_device, device_params, num_links, capf
     rest. The op is run four times, each time given a different sub-device:
 
     1. Rows 0 and 1 with a TILE input, so the untilizers need row 1 too: must succeed, byte-exact,
-       with every untilizer in row 1 (no warning that some spilled elsewhere).
-    2. Row 0 only, the model's split today, with a ROW_MAJOR input: must succeed, byte-exact.
+       with every untilizer in row 1 (no warning that some spilled elsewhere). This is the model's
+       split with dispatch_impl="fabric2d".
+    2. Row 0 only, with a ROW_MAJOR input: must succeed, byte-exact.
     3. Everything but row 0: must refuse, and the error must name a row-0 core. That shows the op
        places its streams in row 0, so runs 1 and 2 were not a fluke.
     4. Part of row 0: must refuse. An op that ignored its sub-device would take the whole grid and
