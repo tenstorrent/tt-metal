@@ -69,10 +69,21 @@ def test_mean(device, batch_size, h, w, dim, keepdim, dtype):
         )
 
 
-@pytest.mark.parametrize("shape", [(2, 3, 4, 5), (7, 17, 41, 31)])
-@pytest.mark.parametrize("dim", [0, 1, 2, 3, [0, 1], [2, 3], [0, 1, 2]])
-@pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "dtype": {"bf16": ttnn.bfloat16, "fp32": ttnn.float32},
+            "keepdim": [True, False],
+            "dim": [0, 1, 2, 3, [0, 1], [2, 3], [0, 1, 2]],
+            "shape": [(2, 3, 4, 5), (7, 17, 41, 31)],
+        },
+        keep=lambda shape, dim, keepdim, dtype: shape == (7, 17, 41, 31)
+        and (
+            (dtype == ttnn.bfloat16 and keepdim and dim in (0, 2, 3, [2, 3], [0, 1, 2]))
+            or (dtype == ttnn.float32 and not keepdim and dim in (3, [0, 1, 2]))
+        ),
+    )
+)
 def test_mean_scaling(device, shape, dim, keepdim, dtype):
     """Ones input → uniform mean; check the exact result via ULP (both dtypes)."""
     torch.manual_seed(0)
@@ -109,9 +120,17 @@ def test_mean_scaling_factor(device, shape, dim, scalar, dtype):
     assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1)
 
 
-@pytest.mark.parametrize("mem_config", [None, ttnn.DRAM_MEMORY_CONFIG, "block", "height"])
-@pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "dtype": {"bf16": ttnn.bfloat16, "fp32": ttnn.float32},
+            "keepdim": [True, False],
+            "mem_config": [None, ttnn.DRAM_MEMORY_CONFIG, "block", "height"],
+        },
+        keep=lambda mem_config, keepdim, dtype: mem_config in ("block", "height")
+        and ((dtype == ttnn.bfloat16 and keepdim) or (dtype == ttnn.float32 and not keepdim)),
+    )
+)
 def test_mean_shard(device, mem_config, keepdim, dtype):
     torch.manual_seed(0)
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
