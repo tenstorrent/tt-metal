@@ -1056,6 +1056,27 @@ The full op, not a bench: `MIMO_FL_DRISC=1` (read at program build) replaces the
   output was NOT bit-identical (the DMA overwrote a slot a write was still reading); with pairs no gain (42.5 vs 41.2
   at M 64). Slots are released on acknowledgement (flushed) only. Probe reverted.
 
+- **Pure DRISC gate/up (MIMO_FL_DRISC_PURE=1, opt-in)**: all 16 slots from DRAM cores, no Tensix weight reads (the
+  reader cells keep only reader down columns where the plan has them: se9_rdown skips its gate/up on DRISC calls).
+  Switch mode (tiles 3): slots 0-7 on each bank's free tile (NOC1); slot r + 8 on the bank's other Metal tile (NOC0,
+  DMA stream 1) on calls with counts <= 224 (384 with reader down columns), else as the free tile's second job (NOC0;
+  NOC1 with reader down columns); the launcher posts the job to the one serving and a skip (atomic, no descriptor) to
+  the other, all descriptors batched behind one write barrier; gate/up cores assigned by the DRISC tiles. Bit-identical
+  on both shapes. us / expert, Tensix -> pure:
+  | M | GLM-Flash E36 | K2.7 E12 |
+  |---|---|---|
+  | 32 | 32.9 -> 32.9 | 58.1 -> 58.5 |
+  | 64 | 35.4 -> 34.9 | 62.3 -> 62.6 |
+  | 128 | 40.1 -> 39.9 | 68.6 -> 68.9 |
+  | 192 | 45.2 -> 45.5 | 77.5 -> 76.0 |
+  | 256 | 49.6 -> 49.5 | 83.6 -> 85.2 |
+  | 384 | 57.4 -> 55.7 | 99.1 -> 103.3 |
+  | 512 | 70.6 -> 70.8 | 123.5 -> 124.6 |
+  | 2048 | 273.4 -> 273.7 | 443.1 -> 442.8 |
+  | 5120 | 679.5 -> 679.8 | 1085.0 -> 1084.4 |
+  Parity within ~1% except K2.7 M 256 / 384 (+2 / +4%). The dual default stays better (GLM-Flash M 64 34.0, K2.7 M 512
+  119.6) and keeps all reader cells busy; pure frees the plain reader cells (9 on K2.7, 15 on GLM-Flash: idle).
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
