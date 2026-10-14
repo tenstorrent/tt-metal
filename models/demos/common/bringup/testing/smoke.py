@@ -16,6 +16,7 @@ import time
 import torch
 
 from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.testing.harness import begin_chunk
 
 
 def prompt_ids(s, tok) -> list[int]:
@@ -53,6 +54,7 @@ def run_smoke(s, mesh, max_new: int = 8) -> dict:
         tokens = torch.tensor(seq + [0] * (chunk - len(seq)), dtype=torch.long)  # pad after the prompt: causal
         state = model.new_state(chunk)
         t0 = time.time()
+        begin_chunk(model, tokens, 0)  # F65
         h = model.embed(tokens)
         for i in layers:
             h2 = model.layer(i, h, 0, state)

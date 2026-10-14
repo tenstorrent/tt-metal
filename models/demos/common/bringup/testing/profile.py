@@ -23,6 +23,7 @@ from collections import defaultdict
 from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.reference.golden import Golden
 from models.demos.common.bringup.testing import accuracy_guard, cpu_bridge, profiler
+from models.demos.common.bringup.testing.harness import begin_chunk
 from models.demos.common.bringup.testing.host_transfers import HostTransfers
 
 
@@ -51,6 +52,7 @@ def full_prefill(s, model, state, layers, rung, tokens) -> dict | None:
         marks, t0 = [], time.time()
         for c in range(n):
             s0 = c * chunk
+            begin_chunk(model, tokens[s0 : s0 + chunk], s0)  # F65
             h = model.embed(tokens[s0 : s0 + chunk])
             for i in layers:
                 h2 = model.layer(i, h, s0, state)
@@ -237,6 +239,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         run_layers = layers if only is None else only
         run_starts = starts if only is None else {k for n, k in enumerate(only) if n == 0 or only[n - 1] != k - 1}
         h = None
+        begin_chunk(model, tokens, start)  # F65
         for i in run_layers:
             if i in run_starts:
                 if h is not None:
