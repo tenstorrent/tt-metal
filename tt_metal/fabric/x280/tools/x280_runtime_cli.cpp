@@ -137,7 +137,7 @@ void usage(const char* argv0) {
         "                  Build one with: make -C x280 lim-idle\n"
         "  --prepare-pinned-input\n"
         "                  admit exact WAYENABLE=1 and baseline mask bits 11,\n"
-        "                  populate the fixed 4160-byte Zero Device region via\n"
+        "                  populate the fixed 4288-byte Zero Device region via\n"
         "                  hart 0, then pin way 1 with mask bits 01 for all 38\n"
         "                  masters. Requires explicit fresh-cache provenance and\n"
         "                  externally exclusive ownership; performs no reset,\n"
