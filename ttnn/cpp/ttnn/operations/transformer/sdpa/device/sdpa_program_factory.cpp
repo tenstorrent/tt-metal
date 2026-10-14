@@ -1557,15 +1557,19 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // only for the DRAM reads they save (K/V in DRAM) or when they multicast, and stop paying once a core holds many
     // Q chunks of a key. Blackhole 32/8 S=512 k512: chains win 1-14% at bs2-4 (DRAM), tie at bs8, and lose up to
     // 40% at bs16-32 (11x8, 12x10) and 13-14% at bs1 with L1-resident K/V and unicast chains.
+    constexpr uint32_t kMaxRetainChainBatch = 8;
+    // KV-head chain key only up to this batch; see the key choice below.
+    constexpr uint32_t kMaxKvHeadChainKeyBatch = 4;
     const bool kv_in_l1 = input_tensor_k.buffer()->buffer_type() == tt::tt_metal::BufferType::L1 &&
                           input_tensor_v.buffer()->buffer_type() == tt::tt_metal::BufferType::L1;
-    const bool retain_skips_chains = kv_retain != 0 && B > 8;
+    const bool retain_skips_chains = kv_retain != 0 && B > kMaxRetainChainBatch;
     if (!use_causal_kernel && !is_chunked && !has_sliding_window && !is_windowed && !retain_skips_chains) {
         // With K/V retention the chains share its key, so a core's run of one key is one chain segment. Otherwise key
-        // them by KV head at B <= 4, so one DRAM read of a KV head's K/V serves its whole GQA group (11-46% faster at
-        // bs2-4, Blackhole). From B = 8 the KV-head key gains nothing at q128/q256 and loses at q512 (+23-27% at
-        // bs8-32), where it only adds short unicast chains, so keep the Q-head key there.
-        const uint32_t key_q_heads = kv_retain != 0 ? kv_retain : (B <= 4 ? kv_chain_key_q_heads(NQH, NKH, NVH) : 1);
+        // them by KV head at B <= kMaxKvHeadChainKeyBatch, so one DRAM read of a KV head's K/V serves its whole GQA
+        // group (11-46% faster at bs2-4, Blackhole). From B = 8 the KV-head key gains nothing at q128/q256 and loses at
+        // q512 (+23-27% at bs8-32), where it only adds short unicast chains, so keep the Q-head key there.
+        const uint32_t key_q_heads =
+            kv_retain != 0 ? kv_retain : (B <= kMaxKvHeadChainKeyBatch ? kv_chain_key_q_heads(NQH, NKH, NVH) : 1);
         KvChains chains = build_kv_chains(
             device,
             grid_size,
