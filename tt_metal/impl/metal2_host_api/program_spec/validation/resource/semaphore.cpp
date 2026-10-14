@@ -40,6 +40,23 @@ void ValidateSemaphoreBindings(const KernelSpec& kernel, tt::ARCH arch) {
             kernel.unique_id,
             binding.accessor_name);
         ValidateAccessorNameLength(kernel.unique_id, "semaphore", binding.accessor_name);
+        TT_FATAL(
+            !kernel.is_compute_kernel() || global_semaphore_name(binding) == nullptr,
+            "Compute kernel '{}' binds GlobalSemaphoreParameter '{}' (accessor_name '{}'). "
+            "GlobalSemaphores are only available to data-movement kernels.",
+            kernel.unique_id,
+            semaphore_resource_name(binding),
+            binding.accessor_name);
+    }
+    // A GlobalSemaphore accessor also emits a `<accessor>_t` token type into sem::.
+    for (const auto& binding : kernel.semaphore_bindings) {
+        TT_FATAL(
+            global_semaphore_name(binding) == nullptr || !accessor_names.contains(binding.accessor_name + "_t"),
+            "Kernel '{}' semaphore accessor_name '{}_t' collides with the token type generated for GlobalSemaphore "
+            "accessor '{}'",
+            kernel.unique_id,
+            binding.accessor_name,
+            binding.accessor_name);
     }
 
     // Blackhole and Quasar support local semaphore bindings on UNPACK and PACK (SemScope::COMPUTE_ATOMIC).
@@ -61,7 +78,11 @@ void ValidateComputeSemaphores(const ValidationContext& ctx) {
     std::unordered_set<std::string_view> sem_has_dm;
     for (const auto& kernel : spec.kernels) {
         for (const auto& binding : kernel.semaphore_bindings) {
-            (kernel.is_compute_kernel() ? sem_has_compute : sem_has_dm).insert(*binding.semaphore_spec_name);
+            const SemaphoreSpecName* sem_name = program_semaphore_name(binding);
+            if (sem_name == nullptr) {
+                continue;
+            }
+            (kernel.is_compute_kernel() ? sem_has_compute : sem_has_dm).insert(**sem_name);
         }
     }
     for (const auto& name : sem_has_compute) {
@@ -104,6 +125,15 @@ void ValidateComputeSemaphores(const ValidationContext& ctx) {
             "capacity of a compute semaphore and has no effect on a data-movement semaphore.",
             sem.unique_id,
             max_value);
+    }
+}
+
+void ValidateGlobalSemaphoresUsed(const ValidationContext& ctx) {
+    for (const auto& global_semaphore : ctx.spec.global_semaphore_parameters) {
+        TT_FATAL(
+            ctx.collected.global_semaphore_binders.contains(global_semaphore.unique_id),
+            "GlobalSemaphoreParameter '{}' is declared but not bound by any kernel",
+            global_semaphore.unique_id);
     }
 }
 

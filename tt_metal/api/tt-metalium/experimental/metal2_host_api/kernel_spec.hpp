@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/global_semaphore_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
@@ -150,11 +151,20 @@ struct KernelSpec {
     Group<DFBBinding> dfb_bindings;
 
     // Semaphore bindings
-    // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
-    // The kernel constructs a Semaphore from the binding token: Semaphore(sem::<accessor_name>)
+    // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level):
+    //  - a program semaphore (SemaphoreSpecName -> ProgramSpec::semaphores), or
+    //  - a global semaphore (GlobalSemaphoreParamName -> ProgramSpec::global_semaphore_parameters).
+    //
+    // The kernel constructs the semaphore from the resulting binding token:
+    //   Semaphore(sem::<accessor_name>)        for a program semaphore
+    //   GlobalSemaphore(sem::<accessor_name>)  for a global semaphore (data-movement kernels only)
     struct SemaphoreBinding {
-        SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
-        std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
+        using SemaphoreResourceName = std::variant<SemaphoreSpecName, GlobalSemaphoreParamName>;
+
+        SemaphoreResourceName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
+        std::string accessor_name;                  // binding token name (used in the kernel source code)
+
+        bool is_global() const { return std::holds_alternative<GlobalSemaphoreParamName>(semaphore_spec_name); }
     };
     Group<SemaphoreBinding> semaphore_bindings;
 

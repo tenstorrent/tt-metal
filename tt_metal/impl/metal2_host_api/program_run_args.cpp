@@ -15,8 +15,10 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/fmt.hpp>
+#include "impl/buffers/global_semaphore_impl.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -305,6 +307,70 @@ void BindPrefetcherPipeArgs(
     program_impl.bind_prefetcher_pipe_parameters(binds);
 }
 
+// Validate GlobalSemaphore arguments:
+//   - Every supplied argument names a declared GlobalSemaphoreParameter.
+//   - The GlobalSemaphore is arena-backed (experimental::CreatePersistentGlobalSemaphore), lives on
+//     the Program's MeshDevice, and covers every node of every kernel that binds the parameter.
+//   - When require_all is true (SetProgramRunArgs): every declared parameter is supplied.
+// Unlike PrefetcherPipe, a different GlobalSemaphore may be supplied on any later call.
+void ValidateGlobalSemaphoreArgs(
+    const Program& program,
+    const Table<GlobalSemaphoreParamName, ProgramRunArgs::GlobalSemaphoreArgument>& global_semaphore_args,
+    bool require_all) {
+    const detail::ProgramImpl& program_impl = program.impl();
+
+    for (const auto& [param_name, sem_arg] : global_semaphore_args) {
+        const auto* binding = program_impl.get_global_semaphore_parameter(param_name.get());
+        TT_FATAL(
+            binding != nullptr,
+            "ProgramRunArgs supplies a GlobalSemaphore argument for '{}', but the Program declares no "
+            "GlobalSemaphoreParameter of that name.",
+            param_name);
+        const GlobalSemaphoreImpl& sem = sem_arg.get().impl();
+        TT_FATAL(
+            sem.is_persistent(),
+            "GlobalSemaphoreArgument for '{}' is not a persistent GlobalSemaphore. Metal 2.0 GlobalSemaphore bindings "
+            "need one address on every core; create it with experimental::CreatePersistentGlobalSemaphore.",
+            param_name);
+        TT_FATAL(
+            &sem.device() == binding->device,
+            "GlobalSemaphoreArgument for '{}' supplies a GlobalSemaphore created on a different MeshDevice than the "
+            "one this Program was built for.",
+            param_name);
+        TT_FATAL(
+            sem.cores().intersection(binding->cores).num_cores() == binding->cores.num_cores(),
+            "GlobalSemaphoreArgument for '{}' supplies a GlobalSemaphore on nodes {}, which do not cover the nodes {} "
+            "of the kernels that bind it.",
+            param_name,
+            sem.cores().str(),
+            binding->cores.str());
+        TT_FATAL(
+            sem.address() <= std::numeric_limits<uint32_t>::max(),
+            "GlobalSemaphoreArgument for '{}' has address 0x{:x}, which does not fit the 32-bit address table",
+            param_name,
+            sem.address());
+    }
+    if (require_all) {
+        for (const std::string& declared : program_impl.get_registered_global_semaphore_parameter_names()) {
+            TT_FATAL(
+                global_semaphore_args.contains(GlobalSemaphoreParamName{declared}),
+                "GlobalSemaphoreParameter '{}' is declared in the Program but has no GlobalSemaphoreArgument entry.",
+                declared);
+        }
+    }
+}
+
+// Write each supplied GlobalSemaphore's address into its parameter's table slot. Omitted
+// parameters keep their prior address.
+void BindGlobalSemaphoreArgs(
+    detail::ProgramImpl& program_impl,
+    const Table<GlobalSemaphoreParamName, ProgramRunArgs::GlobalSemaphoreArgument>& global_semaphore_args) {
+    for (const auto& [param_name, sem_arg] : global_semaphore_args) {
+        program_impl.bind_global_semaphore_parameter(
+            param_name.get(), static_cast<uint32_t>(sem_arg.get().impl().address()));
+    }
+}
+
 // Internal validation function - validates ProgramRunArgs against the Program's schema.
 //
 // Named RTAs/CRTAs and vararg RTAs/CRTAs are validated separately:
@@ -512,6 +578,9 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
 
     // Validate PrefetcherPipe arguments (delegated to shared helper; full path requires all).
     ValidatePrefetcherPipeArgs(program, params.advanced_options.prefetcher_pipe_args, /*require_all=*/true);
+
+    // Validate GlobalSemaphore arguments (full path requires all).
+    ValidateGlobalSemaphoreArgs(program, params.global_semaphore_args, /*require_all=*/true);
 }
 
 // Emit the CRTA words for a single tensor binding, in order:
@@ -966,6 +1035,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     // Bind PrefetcherPipe objects to their parameters' slots (per node; a relay DFB over them is
     // pointed at the pipe ring here). Sticky across calls.
     BindPrefetcherPipeArgs(program_impl, params.advanced_options.prefetcher_pipe_args);
+    BindGlobalSemaphoreArgs(program_impl, params.global_semaphore_args);
     program_impl.mark_program_run_args_initialized();
 }
 
@@ -1269,6 +1339,10 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
     // PrefetcherPipe args: any may be omitted (the binding is sticky); a supplied one must name a
     // declared parameter and match its geometry.
     ValidatePrefetcherPipeArgs(program, params.advanced_options.prefetcher_pipe_args, /*require_all=*/false);
+
+    // GlobalSemaphore args: any may be omitted (the prior address is kept); a supplied one may be a
+    // different GlobalSemaphore than before.
+    ValidateGlobalSemaphoreArgs(program, params.global_semaphore_args, /*require_all=*/false);
 }
 
 void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
@@ -1444,6 +1518,10 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
     // ---- PrefetcherPipe args: omitted parameters keep their bound pipe; a supplied one is bound
     //      (no-op when it is the already-bound object) ----
     BindPrefetcherPipeArgs(program_impl, params.advanced_options.prefetcher_pipe_args);
+
+    // ---- GlobalSemaphore args: omitted parameters keep their address; a supplied one rewrites its
+    //      table slot (picked up by the cached launch commands on the next enqueue) ----
+    BindGlobalSemaphoreArgs(program_impl, params.global_semaphore_args);
 }
 
 ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation) {
@@ -1473,6 +1551,17 @@ ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramR
                     name);
             }
             base.advanced_options.prefetcher_pipe_args.insert({name, arg});
+        }
+
+        // GlobalSemaphore args: union by parameter name (disjoint).
+        for (const auto& [name, arg] : other.global_semaphore_args) {
+            if (!skip_validation) {
+                TT_FATAL(
+                    !base.global_semaphore_args.contains(name),
+                    "MergeProgramRunArgs: GlobalSemaphoreParameter '{}' is specified in more than one ProgramRunArgs.",
+                    name);
+            }
+            base.global_semaphore_args.insert({name, arg});
         }
 
         // DFB run overrides: union by DFB name (disjoint).

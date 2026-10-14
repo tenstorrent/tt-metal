@@ -103,6 +103,13 @@ struct ProgramCommandSequence {
     // Copies the current host-only CrossNode page image into the cached launch command
     // before each enqueue. The destination is the dedicated config Buffer.
     std::vector<CrossNodeConfigUpdate> cross_node_config_updates;
+    // Copies the program's current GlobalSemaphore address table into every cached table write
+    // before each enqueue.
+    struct GlobalSemTableUpdate {
+        void* dst;
+        uint32_t size;
+    };
+    std::vector<GlobalSemTableUpdate> global_sem_table_updates;
     std::vector<LaunchMsgData> launch_messages;
     std::vector<CQDispatchWritePackedCmd*> launch_msg_write_packed_cmd_ptrs;
     std::vector<CQDispatchWritePackedCmd*> unicast_launch_msg_write_packed_cmd_ptrs;

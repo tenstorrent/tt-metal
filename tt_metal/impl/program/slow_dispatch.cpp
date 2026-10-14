@@ -262,6 +262,17 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
                     uint64_t addr = kernel_config_base + prefetcher_pipe_offset;
                     metal_ctx.get_cluster().write_core(device_id, physical_core, prefetcher_pipe_vec, addr);
                 }
+
+                // GlobalSemaphore address table: same image on every core with a binding.
+                if (kernel_group->launch_msg.view().kernel_config().global_sem_offset() != REMOTE_DFB_OFFSET_NONE) {
+                    const uint32_t global_sem_offset = program_config.global_sem_offset;
+                    TT_FATAL(
+                        global_sem_offset != REMOTE_DFB_OFFSET_NONE,
+                        "GlobalSemaphore bindings present but global_sem_offset is NONE");
+                    uint64_t addr = kernel_config_base + global_sem_offset;
+                    metal_ctx.get_cluster().write_core(
+                        device_id, physical_core, program.impl().global_semaphore_table(), addr);
+                }
             }
             program.impl().init_semaphores(device, logical_core, index);
         }

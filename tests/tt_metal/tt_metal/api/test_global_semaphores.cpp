@@ -5,9 +5,15 @@
 #include <gtest/gtest.h>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <optional>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/global_semaphore.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <vector>
 
 #include <tt-metalium/device.hpp>
@@ -126,6 +132,130 @@ TEST_F(MeshDispatchFixture, ResetGlobalSemaphores) {
                 EXPECT_EQ(sem_vals[0], reset_value);
             }
         }
+    }
+}
+
+namespace {
+
+void ExpectPersistentValueOnEveryCore(
+    const distributed::MeshDevice& mesh_device, const GlobalSemaphore& sem, const CoreRangeSet& cores, uint32_t value) {
+    const auto& cluster = MetalContext::instance().get_cluster();
+    for (IDevice* device : mesh_device.get_devices()) {
+        for (const auto& core : corerange_to_cores(cores)) {
+            auto sem_vals =
+                cluster.read_core(device->id(), device->worker_core_from_logical_core(core), sem.address(), sizeof(uint32_t));
+            EXPECT_EQ(sem_vals[0], value) << "device " << device->id() << " core " << core.str();
+        }
+    }
+}
+
+}  // namespace
+
+// Initial value and reset land on every core of the grid, on every device, at the one arena address.
+// The full grid makes the fast-dispatch reset a multi-row multicast.
+TEST_F(MeshDispatchFixture, PersistentGlobalSemaphoreInitAndResetReachEveryCore) {
+    for (const auto& mesh_device : devices_) {
+        const auto grid = mesh_device->compute_with_storage_grid_size();
+        const CoreRangeSet cores(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+
+        auto sem = experimental::CreatePersistentGlobalSemaphore(*mesh_device, cores, 0x1234);
+        EXPECT_TRUE(std::get<2>(sem.attribute_values()));
+        distributed::Synchronize(*mesh_device, std::nullopt);
+        ExpectPersistentValueOnEveryCore(*mesh_device, sem, cores, 0x1234);
+
+        sem.reset_semaphore_value(0xABCD);
+        distributed::Synchronize(*mesh_device, std::nullopt);
+        ExpectPersistentValueOnEveryCore(*mesh_device, sem, cores, 0xABCD);
+    }
+}
+
+// Several disjoint ranges in one CoreRangeSet: every range is reset, nothing between them is touched.
+TEST_F(MeshDispatchFixture, PersistentGlobalSemaphoreResetCoversEveryRange) {
+    for (const auto& mesh_device : devices_) {
+        const CoreRangeSet cores(std::vector<CoreRange>{CoreRange({0, 0}, {1, 1}), CoreRange({3, 0}, {3, 2})});
+        const CoreCoord untouched{2, 0};
+
+        auto sem = experimental::CreatePersistentGlobalSemaphore(*mesh_device, cores, 0);
+        const auto& cluster = MetalContext::instance().get_cluster();
+        for (IDevice* device : mesh_device->get_devices()) {
+            cluster.write_core(
+                device->id(), device->worker_core_from_logical_core(untouched), std::vector<uint32_t>{0x5A5A}, sem.address());
+            cluster.l1_barrier(device->id());
+        }
+
+        sem.reset_semaphore_value(7);
+        distributed::Synchronize(*mesh_device, std::nullopt);
+        ExpectPersistentValueOnEveryCore(*mesh_device, sem, cores, 7);
+        ExpectPersistentValueOnEveryCore(*mesh_device, sem, CoreRangeSet(CoreRange(untouched)), 0x5A5A);
+    }
+}
+
+TEST_F(MeshDispatchFixture, PersistentGlobalSemaphoreFreedSlotIsReused) {
+    for (const auto& mesh_device : devices_) {
+        const CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
+        DeviceAddr first_address = 0;
+        {
+            auto first = experimental::CreatePersistentGlobalSemaphore(*mesh_device, cores, 0);
+            first_address = first.address();
+            auto second = experimental::CreatePersistentGlobalSemaphore(*mesh_device, cores, 0);
+            EXPECT_NE(second.address(), first_address);
+        }
+        auto again = experimental::CreatePersistentGlobalSemaphore(*mesh_device, cores, 0);
+        EXPECT_EQ(again.address(), first_address);
+    }
+}
+
+// Copies share one arena slot; it is freed only when the last copy goes away.
+TEST_F(MeshDispatchFixture, PersistentGlobalSemaphoreCopiesShareSlot) {
+    for (const auto& mesh_device : devices_) {
+        const CoreRangeSet cores(CoreRange({0, 0}, {0, 0}));
+        std::optional<GlobalSemaphore> copy;
+        DeviceAddr address = 0;
+        {
+            auto sem = experimental::CreatePersistentGlobalSemaphore(*mesh_device, cores, 0);
+            address = sem.address();
+            copy = sem;
+            EXPECT_EQ(copy->address(), address);
+        }
+        auto other = experimental::CreatePersistentGlobalSemaphore(*mesh_device, cores, 0);
+        EXPECT_NE(other.address(), address);
+    }
+}
+
+// Placing program-local L1 seals the core's arena: creation fails while the program is alive and
+// succeeds again once it is destroyed.
+TEST_F(MeshDispatchFixture, PersistentGlobalSemaphoreCreationFailsOnSealedCores) {
+    for (const auto& mesh_device : devices_) {
+        const CoreRange core_range({0, 0}, {0, 0});
+        {
+            distributed::MeshWorkload workload;
+            Program program = CreateProgram();
+            const uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
+            CreateCircularBuffer(
+                program,
+                core_range,
+                CircularBufferConfig(2 * page_size, {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}})
+                    .set_page_size(tt::CBIndex::c_0, page_size));
+            CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+                core_range,
+                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+            RunProgram(mesh_device, workload);
+
+            EXPECT_ANY_THROW(experimental::CreatePersistentGlobalSemaphore(*mesh_device, CoreRangeSet(core_range), 0));
+        }
+        EXPECT_NO_THROW(experimental::CreatePersistentGlobalSemaphore(*mesh_device, CoreRangeSet(core_range), 0));
+    }
+}
+
+TEST_F(MeshDispatchFixture, PersistentGlobalSemaphoreHashDiffersFromBufferBacked) {
+    for (const auto& mesh_device : devices_) {
+        const CoreRangeSet cores(CoreRange({0, 0}, {0, 0}));
+        auto persistent = experimental::CreatePersistentGlobalSemaphore(*mesh_device, cores, 0);
+        auto buffer_backed = CreateGlobalSemaphore(*mesh_device, cores, 0);
+        EXPECT_NE(std::hash<GlobalSemaphore>{}(persistent), std::hash<GlobalSemaphore>{}(buffer_backed));
     }
 }
 

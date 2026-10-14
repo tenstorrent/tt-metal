@@ -255,6 +255,15 @@ public:
         uint32_t size_bytes,
         bool blocking,
         ttsl::Span<const SubDeviceId> sub_device_ids = {});
+    // Writes the same payload to `address` on every core of `logical_worker_cores`, on every local
+    // device, ordered after previously enqueued programs. Uses one multicast write per rectangle.
+    void enqueue_write_to_core_ranges(
+        const CoreRangeSet& logical_worker_cores,
+        DeviceAddr address,
+        const void* src,
+        uint32_t size_bytes,
+        bool blocking,
+        ttsl::Span<const SubDeviceId> sub_device_ids = {});
     void enqueue_read_shard_from_core(
         DeviceMemoryAddress address,
         void* dst,

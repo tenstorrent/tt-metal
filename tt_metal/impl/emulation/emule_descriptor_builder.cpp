@@ -390,6 +390,13 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
             k.process_prefetcher_pipe_binding_handles([&kd](const std::string& name, uint8_t prefetcher_pipe_id) {
                 kd.bindings.prefetcher_pipe.push_back(PrefetcherPipeBinding{name, prefetcher_pipe_id});
             });
+            k.process_global_semaphore_binding_handles([&k](const std::string& name, uint8_t /*slot*/) {
+                TT_THROW(
+                    "Kernel '{}' binds GlobalSemaphore accessor '{}'; GlobalSemaphore bindings are not supported on "
+                    "the emulator yet",
+                    k.name(),
+                    name);
+            });
             k.process_scratchpad_binding_handles([&kd](
                                                      const std::string& name,
                                                      uint32_t size_bytes,

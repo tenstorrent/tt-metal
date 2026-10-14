@@ -537,6 +537,54 @@ uint32_t finalize_prefetcher_pipes(
     return tt::align(base_offset + prefetcher_pipe_region_bytes, metal_ctx.hal().get_alignment(HalMemType::L1));
 }
 
+uint32_t finalize_global_semaphores(
+    const MetalContext& metal_ctx,
+    uint32_t programmable_core_type_index,
+    ttsl::Span<ProgramImpl*> programs,
+    uint32_t base_offset) {
+    // GlobalSemaphores are Tensix-only. Logical coordinates overlap across core types, so other core
+    // types never get the table even where their coordinates match a binding kernel's nodes.
+    const bool is_tensix = programmable_core_type_index ==
+                           metal_ctx.hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    uint8_t max_num_slots = 0;
+    if (is_tensix) {
+        for (ProgramImpl* program : programs) {
+            max_num_slots = std::max(max_num_slots, program->num_global_semaphore_slots());
+        }
+    }
+
+    if (max_num_slots == 0) {
+        for (ProgramImpl* program : programs) {
+            for (auto& kg : program->get_kernel_groups(programmable_core_type_index)) {
+                kg->launch_msg.view().kernel_config().global_sem_offset() = REMOTE_DFB_OFFSET_NONE;
+            }
+        }
+        return base_offset;
+    }
+
+    const uint32_t global_sem_offset = base_offset;
+    const uint32_t region_bytes = global_sem_region_words(max_num_slots) * sizeof(uint32_t);
+    TT_FATAL(
+        global_sem_offset <= std::numeric_limits<uint16_t>::max(),
+        "GlobalSemaphore table offset {} overflows uint16_t launch-msg field",
+        global_sem_offset);
+    TT_FATAL(
+        global_sem_offset != REMOTE_DFB_OFFSET_NONE,
+        "GlobalSemaphore table offset collides with REMOTE_DFB_OFFSET_NONE (0x{:x})",
+        REMOTE_DFB_OFFSET_NONE);
+
+    for (ProgramImpl* program : programs) {
+        const CoreRangeSet& bound_cores = program->global_semaphore_cores();
+        for (auto& kg : program->get_kernel_groups(programmable_core_type_index)) {
+            const bool has_bindings = kg->core_ranges.intersects(bound_cores);
+            kg->launch_msg.view().kernel_config().global_sem_offset() =
+                has_bindings ? static_cast<uint16_t>(global_sem_offset) : REMOTE_DFB_OFFSET_NONE;
+        }
+    }
+
+    return tt::align(base_offset + region_bytes, metal_ctx.hal().get_alignment(HalMemType::L1));
+}
+
 std::vector<uint32_t> build_prefetcher_pipe_config_payload(
     const ProgramImpl& program, const std::vector<ProgramImpl::PrefetcherPipeParticipant>& sparse_participants) {
     const uint8_t num_program_slots = program.num_prefetcher_pipe_slots();
@@ -1031,6 +1079,8 @@ struct Transfer {
     // If set, this transfer materializes one host-only CrossNode page into its
     // dedicated config Buffer and must be refreshed before every cached enqueue.
     std::optional<std::pair<CoreCoord, uint8_t>> cross_node_config;
+    // If set, this transfer is the GlobalSemaphore address table and is refreshed before every cached enqueue.
+    bool global_sem_table = false;
     size_t end() const { return start + data.size(); }
 };
 struct PairHash {
@@ -1772,6 +1822,55 @@ private:
     std::vector<std::vector<uint32_t>> payloads_;
 };
 
+// Generates multicast writes of the GlobalSemaphore address table into the worker-config ringbuffer.
+// The table is the same on every core (a persistent GlobalSemaphore has one address everywhere), so
+// each kernel group with a binding gets one write per core range. The cached command is refreshed
+// from ProgramImpl::global_semaphore_table() in update_program_dispatch_commands.
+class GlobalSemaphoreCommandGenerator {
+public:
+    void construct_commands(
+        const MetalContext& metal_ctx,
+        IDevice* device,
+        const CommandConstants& constants,
+        ProgramImpl& program,
+        BatchedTransfers& batched_transfers) {
+        if (program.num_global_semaphore_slots() == 0) {
+            return;
+        }
+
+        const auto& hal = metal_ctx.hal();
+        const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        const auto& program_config = program.get_program_config(index);
+        const uint32_t start_addr = program_config.global_sem_offset;
+        TT_FATAL(
+            start_addr != REMOTE_DFB_OFFSET_NONE,
+            "GlobalSemaphoreCommandGenerator: unexpected REMOTE_DFB_OFFSET_NONE with GlobalSemaphore slots present");
+
+        table_ = program.global_semaphore_table();
+        const auto table_bytes = ttsl::Span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(table_.data()), table_.size() * sizeof(uint32_t));
+        const CoreRangeSet& bound_cores = program.global_semaphore_cores();
+        for (const auto& kg : program.get_kernel_groups(index)) {
+            if (!kg->core_ranges.intersects(bound_cores)) {
+                continue;
+            }
+            for (const CoreRange& core_range : kg->core_ranges.ranges()) {
+                const CoreCoord virtual_start =
+                    device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
+                const CoreCoord virtual_end =
+                    device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
+                auto noc_xy_addr =
+                    device->get_noc_multicast_encoding(constants.noc_index, CoreRange(virtual_start, virtual_end));
+                batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] =
+                    std::vector<Transfer>{{.start = start_addr, .data = table_bytes, .global_sem_table = true}};
+            }
+        }
+    }
+
+private:
+    std::vector<uint32_t> table_;
+};
+
 class ProgramBinaryCommandGenerator {
 public:
     // Generate kernel_bins_cmds (for multicast) and kernel_bins_unicast_cmds (for unicast) for the binaries in the
@@ -2235,6 +2334,10 @@ public:
                          data_collection_location[j],
                          static_cast<uint32_t>(transfer.data.size())});
                 }
+                if (transfer.global_sem_table) {
+                    program_command_sequence.global_sem_table_updates.push_back(
+                        {data_collection_location[j], static_cast<uint32_t>(transfer.data.size())});
+                }
                 if (transfer.rta_data) {
                     // When watcher enabled, transfer.data contains [count | args...]
                     // rt_args_data points to args location (data + offset)
@@ -2632,6 +2735,10 @@ void assemble_device_commands(
 
     PrefetcherPipeCommandGenerator prefetcher_pipe_command_generator;
     prefetcher_pipe_command_generator.construct_commands(
+        metal_ctx, mesh_device, constants, program, batched_transfers);
+
+    GlobalSemaphoreCommandGenerator global_semaphore_command_generator;
+    global_semaphore_command_generator.construct_commands(
         metal_ctx, mesh_device, constants, program, batched_transfers);
 
     BatchedTransferGenerator batched_transfer_generator;
@@ -3042,6 +3149,18 @@ void update_program_dispatch_commands(
         std::memcpy(update.dst, page.data(), page_bytes);
     }
 
+    // Refresh the GlobalSemaphore address table: UpdateProgramRunArgs may have bound a different
+    // GlobalSemaphore since the commands were assembled.
+    const std::vector<uint32_t>& global_sem_table = program.global_semaphore_table();
+    for (const auto& update : cached_program_command_sequence.global_sem_table_updates) {
+        TT_FATAL(
+            global_sem_table.size() * sizeof(uint32_t) == update.size,
+            "GlobalSemaphore cached table size changed from {} to {} bytes",
+            update.size,
+            global_sem_table.size() * sizeof(uint32_t));
+        std::memcpy(update.dst, global_sem_table.data(), update.size);
+    }
+
     // Update RTAs.
     for (auto& rta_update : cached_program_command_sequence.rta_updates) {
         memcpy(rta_update.dst, rta_update.src, rta_update.size);
@@ -3221,6 +3340,15 @@ void update_traced_program_dispatch_commands(
             update.size,
             page.size() * sizeof(uint32_t));
         std::memcpy(update.dst, page.data(), update.size);
+    }
+    // GlobalSemaphore address table, from the capture-time snapshot.
+    for (const auto& update : cached_program_command_sequence.global_sem_table_updates) {
+        TT_FATAL(
+            trace_node.global_sem_table.size() * sizeof(uint32_t) == update.size,
+            "GlobalSemaphore traced table size changed from {} to {} bytes",
+            update.size,
+            trace_node.global_sem_table.size() * sizeof(uint32_t));
+        std::memcpy(update.dst, trace_node.global_sem_table.data(), update.size);
     }
     // Update RTAs.
     TT_ASSERT(cached_program_command_sequence.rta_updates.size() == trace_node.rta_data.size());
@@ -3546,7 +3674,8 @@ TraceNode create_trace_node(
         std::move(rta_data),
         std::move(all_cb_configs_payloads),
         std::move(all_dfb_configs_payloads),
-        std::move(cross_node_config_pages)};
+        std::move(cross_node_config_pages),
+        program.global_semaphore_table()};
 }
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {

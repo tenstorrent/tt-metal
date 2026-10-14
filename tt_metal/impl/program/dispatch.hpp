@@ -127,6 +127,14 @@ uint32_t finalize_prefetcher_pipes(
     ttsl::Span<detail::ProgramImpl*> programs,
     uint32_t base_offset);
 
+// Size the GlobalSemaphore address table from the workload-wide max slot count and point the
+// launch message of every kernel group with a GlobalSemaphore binding at it.
+uint32_t finalize_global_semaphores(
+    const MetalContext& metal_ctx,
+    uint32_t programmable_core_type_index,
+    ttsl::Span<detail::ProgramImpl*> programs,
+    uint32_t base_offset);
+
 // Cores of a kernel group that share the same CrossNodeDFB kernel-config payload.
 // Each rectangle in `cores` can be covered by a single multicast.
 struct CrossNodeDFBCoreGroup {

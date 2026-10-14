@@ -29,6 +29,7 @@ ProgramResources RegisterResources(
 
     WireDFBAliases(spec, resources.dfbs.id, program_impl);
     resources.semaphores = RegisterSemaphores(spec, collected, metal_env, program_impl);
+    resources.global_semaphores = ReserveGlobalSemaphoreSlots(mesh_device, spec, collected, program_impl);
     return resources;
 }
 
@@ -44,7 +45,8 @@ KernelResourceBindings ResolveKernelResourceBindings(
             resources.dfbs.id),
         .semaphores = MakeSemaphoreBindingHandles(
             kernel_spec, collected.semaphore_binders, resources.semaphores.id, resources.semaphores.scope),
-        .prefetcher_pipes = {}};
+        .prefetcher_pipes = {},
+        .global_semaphores = MakeGlobalSemaphoreBindingHandles(kernel_spec, resources.global_semaphores)};
     if (auto pipe_it = resources.prefetcher_pipes.find(&kernel_spec); pipe_it != resources.prefetcher_pipes.end()) {
         bindings.prefetcher_pipes = pipe_it->second;
     }

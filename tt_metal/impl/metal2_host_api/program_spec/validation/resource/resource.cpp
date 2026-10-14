@@ -46,6 +46,7 @@ void ValidateResourceUsage(const ValidationContext& ctx, tt::ARCH arch) {
     ValidateScratchpadsUsed(ctx);
     ValidateTensorParametersUsed(ctx);
     ValidatePrefetcherPipesUsed(ctx);
+    ValidateGlobalSemaphoresUsed(ctx);
 }
 
 }  // namespace tt::tt_metal::experimental

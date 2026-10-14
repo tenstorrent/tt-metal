@@ -90,7 +90,8 @@ void validate_semaphore(const AttnResGatherSoftmaxParams& args, const AttnResGat
         args.semaphore.device() == tensor_args.partial.device(),
         "AttnResGatherSoftmax requires the semaphore on the same device as its operands");
     // By value: attribute_values() returns a temporary tuple.
-    const auto [semaphore_cores, semaphore_buffer_type] = args.semaphore.attribute_values();
+    const auto [semaphore_cores, semaphore_buffer_type, semaphore_is_persistent] = args.semaphore.attribute_values();
+    (void)semaphore_is_persistent;
     const auto grid = tensor_args.partial.device()->compute_with_storage_grid_size();
     const CoreCoord gather_core{grid.x - 1, grid.y - 1};
     TT_FATAL(

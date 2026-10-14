@@ -184,6 +184,14 @@ struct PrefetcherPipeBindingHandle {
     uint8_t prefetcher_pipe_id = 0;
 };
 
+// Metal 2.0: per-kernel resolved GlobalSemaphore accessor (a KernelSpec::SemaphoreBinding naming a
+// GlobalSemaphoreParameter). The slot indexes the program's per-launch GlobalSemaphore address table.
+// Emitted as a GlobalSemaphoreBindingToken in the `sem::` namespace.
+struct GlobalSemaphoreBindingHandle {
+    std::string accessor_name;
+    uint8_t slot = 0;
+};
+
 // Metal 2.0: ordered TensorBinding tokens (KernelAdvancedOptions::tensor_binding_sequences).
 struct TensorBindingSequenceHandle {
     std::string sequence_name;
@@ -332,6 +340,15 @@ public:
     void set_prefetcher_pipe_binding_handles(std::vector<PrefetcherPipeBindingHandle> handles) {
         prefetcher_pipe_binding_handles_ = std::move(handles);
     }
+    // GlobalSemaphore binding handles are set post-construction, like PrefetcherPipe handles.
+    void process_global_semaphore_binding_handles(
+        std::function<void(const std::string& accessor_name, uint8_t slot)>) const override;
+    const std::vector<GlobalSemaphoreBindingHandle>& global_semaphore_binding_handles() const {
+        return global_semaphore_binding_handles_;
+    }
+    void set_global_semaphore_binding_handles(std::vector<GlobalSemaphoreBindingHandle> handles) {
+        global_semaphore_binding_handles_ = std::move(handles);
+    }
     void process_tensor_binding_sequences(
         std::function<void(const std::string& sequence_name, const std::vector<std::string>& members)>) const override;
     void set_tensor_binding_sequences(std::vector<TensorBindingSequenceHandle> sequences) {
@@ -458,6 +475,8 @@ protected:
     std::vector<TensorBindingSequenceHandle> tensor_binding_sequences_;
     // Metal 2.0: PrefetcherPipe accessors -> program slot (set post-construction, like scratchpads).
     std::vector<PrefetcherPipeBindingHandle> prefetcher_pipe_binding_handles_;
+    // Metal 2.0: GlobalSemaphore accessors -> program table slot (set post-construction).
+    std::vector<GlobalSemaphoreBindingHandle> global_semaphore_binding_handles_;
     // Metal 2.0: number of user CTA-vararg words at the start of compile_time_args_.
     uint32_t compile_time_vararg_count_{0};
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;

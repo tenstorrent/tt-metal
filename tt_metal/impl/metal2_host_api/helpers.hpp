@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <umd/device/types/arch.hpp>
@@ -18,6 +19,7 @@
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 
 #include "llrt/hal.hpp"
 
@@ -130,6 +132,25 @@ inline bool nodes_intersect(const Nodes& a, const Nodes& b) {
 // operator== compares the range lists, so equal sets with different range splits compare unequal).
 inline bool same_node_set(const NodeRangeSet& a, const NodeRangeSet& b) {
     return a.num_cores() == b.num_cores() && a.intersection(b).num_cores() == a.num_cores();
+}
+
+// ============================================================================
+// Semaphore binding helpers
+// ============================================================================
+
+// The program semaphore a SemaphoreBinding names, or nullptr for a GlobalSemaphore binding.
+inline const SemaphoreSpecName* program_semaphore_name(const KernelSpec::SemaphoreBinding& binding) {
+    return std::get_if<SemaphoreSpecName>(&binding.semaphore_spec_name);
+}
+
+// The GlobalSemaphoreParameter a SemaphoreBinding names, or nullptr for a program semaphore binding.
+inline const GlobalSemaphoreParamName* global_semaphore_name(const KernelSpec::SemaphoreBinding& binding) {
+    return std::get_if<GlobalSemaphoreParamName>(&binding.semaphore_spec_name);
+}
+
+// The bound resource's name, for messages.
+inline const std::string& semaphore_resource_name(const KernelSpec::SemaphoreBinding& binding) {
+    return std::visit([](const auto& name) -> const std::string& { return name.get(); }, binding.semaphore_spec_name);
 }
 
 // ============================================================================

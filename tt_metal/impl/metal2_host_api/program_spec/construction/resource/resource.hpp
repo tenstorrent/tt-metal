@@ -181,6 +181,25 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
     const SemaphoreNameToScopeMap& semaphore_name_to_scope);
 
 // ----------------------------------------------------------------------------
+// GlobalSemaphores (global_semaphore.cpp)
+// ----------------------------------------------------------------------------
+
+using GlobalSemaphoreSlotMap = std::unordered_map<GlobalSemaphoreParamName, uint8_t>;
+
+// Register GlobalSemaphoreParameters with the Program: one address-table slot per parameter, placed on
+// the nodes of the kernels that bind it. Must precede kernel creation: the slot is baked into the
+// kernel's `sem::<accessor>` token.
+GlobalSemaphoreSlotMap ReserveGlobalSemaphoreSlots(
+    distributed::MeshDevice& mesh_device,
+    const ProgramSpec& spec,
+    const CollectedSpecData& collected,
+    detail::ProgramImpl& program_impl);
+
+// Register GlobalSemaphores with a Kernel
+std::vector<tt::tt_metal::GlobalSemaphoreBindingHandle> MakeGlobalSemaphoreBindingHandles(
+    const KernelSpec& kernel_spec, const GlobalSemaphoreSlotMap& slots);
+
+// ----------------------------------------------------------------------------
 // Scratchpads (scratchpad.cpp)
 // ----------------------------------------------------------------------------
 
@@ -214,6 +233,7 @@ struct ProgramResources {
     DataflowBufferHandles dfbs;
     PrefetcherPipeHandlesByKernel prefetcher_pipes;
     SemaphoreHandles semaphores;
+    GlobalSemaphoreSlotMap global_semaphores;
 };
 
 // Register every resource with the Program (resource.cpp fixes the order).
@@ -231,6 +251,7 @@ struct KernelResourceBindings {
     tt::tt_metal::DataflowBufferBindingHandleMap dfbs;
     tt::tt_metal::SemaphoreBindingHandleMap semaphores;
     std::vector<tt::tt_metal::PrefetcherPipeBindingHandle> prefetcher_pipes;
+    std::vector<tt::tt_metal::GlobalSemaphoreBindingHandle> global_semaphores;
 };
 
 KernelResourceBindings ResolveKernelResourceBindings(

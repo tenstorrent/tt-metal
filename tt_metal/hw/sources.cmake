@@ -230,11 +230,15 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/noc_semaphore.h
     inc/api/dataflow/semaphore_dm_impl.h
     inc/api/dataflow/semaphore_binding_token.h
+    inc/api/dataflow/global_semaphore.h
+    inc/api/dataflow/global_semaphore_binding_token.h
+    inc/api/dataflow/global_semaphore_fabric.h
     inc/api/core_local_mem.h
     inc/api/tensor/noc_traits.h
     inc/hostdev/buf_rw_common.h
     inc/hostdev/debug_ring_buffer_common.h
     inc/hostdev/dev_msgs.h
+    inc/hostdev/global_semaphore_constants.h
     inc/hostdev/device_print_common.h
     inc/hostdev/device_print_structures.h
     inc/hostdev/profiler_common.h

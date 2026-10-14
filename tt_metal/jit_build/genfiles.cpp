@@ -288,6 +288,14 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     });
     sort(pipe_entries.begin(), pipe_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
+    // GlobalSemaphore bindings: sorted by name, like pipe entries.
+    vector<tt::tt_metal::GlobalSemBindingEntry> global_sem_entries;
+    settings.process_global_semaphore_binding_handles(
+        [&global_sem_entries](const string& name, uint8_t slot) { global_sem_entries.push_back({name, slot}); });
+    sort(global_sem_entries.begin(), global_sem_entries.end(), [](const auto& a, const auto& b) {
+        return a.name < b.name;
+    });
+
     // Tensor binding sequences: user order (matches Kernel::compute_hash); no sort.
     struct TensorBindingSequenceEntry {
         string name;
@@ -337,6 +345,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         // Defines SemaphoreBindingToken and SemScope. Header-only and dependency-free,
         // so it is safe on compute builds too.
         content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
+    }
+    if (!global_sem_entries.empty()) {
+        // Defines GlobalSemaphoreBindingToken (dependency-free); the kernel includes
+        // api/dataflow/global_semaphore.h itself to use it.
+        content << "#include \"api/dataflow/global_semaphore_binding_token.h\"\n";
     }
 
     // This is included unconditionally for the `get_token_if_present()` helper, as it needs to see the full templated
@@ -397,6 +410,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 
     // Emit Semaphore bindings
     tt::tt_metal::emit_semaphore_binding_tokens(content, sem_entries);
+    tt::tt_metal::emit_global_semaphore_binding_tokens(content, global_sem_entries);
 
     // Emit Tensor bindings
     content << "namespace tensor {\n";

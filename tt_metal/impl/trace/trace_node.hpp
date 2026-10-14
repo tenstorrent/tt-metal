@@ -46,6 +46,9 @@ struct TraceNode {
     // snapshot of each CrossNodeDFB host config page, so the traced launch replays the
     // binding that was current at capture.
     std::vector<std::vector<uint32_t>> cross_node_config_pages;
+    // Capture-time snapshot of the program's GlobalSemaphore address table (written to every entry
+    // of global_sem_table_updates in the ProgramCommandSequence).
+    std::vector<uint32_t> global_sem_table;
 
     TraceDispatchMetadata dispatch_metadata;
 };
