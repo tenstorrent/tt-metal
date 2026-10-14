@@ -125,14 +125,14 @@ TEST(MeasurementAiclk, EvidenceCarriesAndSerialisesEachReference) {
             EXPECT_EQ(evidence.conversion_hz, rejected ? 0u : 1000000000u) << spelling;
 
             const auto json = x280::harness::output::clock_json(evidence);
-            const std::string field = std::string("\"reference_counter\":\"") + spelling + "\"";
+            const std::string field = std::string(R"("reference_counter":")") + spelling + "\"";
             EXPECT_EQ(count_occurrences(json, "\"reference_counter\""), 1u) << json;
             ASSERT_EQ(count_occurrences(json, field), 1u) << json;
             if (reference == Counter::TensixLiveTimer) {
                 tensix_json = json;
             } else {
                 auto restored = json;
-                restored.replace(restored.find(field), field.size(), "\"reference_counter\":\"tensix_live_timer\"");
+                restored.replace(restored.find(field), field.size(), R"("reference_counter":"tensix_live_timer")");
                 EXPECT_EQ(restored, tensix_json);
             }
         }
