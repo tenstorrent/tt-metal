@@ -31,16 +31,13 @@ permissions:
 
 env:
   # Logical SKUs this gate must never dispatch: hardware too scarce to spend on a
-  # gate run. Touching an entry that covers one of these does not run it -- the PR
-  # is blocked until a code owner of the edited file approves it.
-  #
-  # Add a SKU     -> those legs stop auto-running and need an owner approval.
-  # Remove a SKU  -> the gate runs those legs itself and merge waits on them.
+  # gate run. Those legs are dropped and an entry left with none goes entirely;
+  # nothing is reported, CODEOWNERS gates the edit.
   #
   # Names are validated against .github/sku_config.yaml, so a typo fails the gate
   # rather than silently letting a galaxy leg auto-run. The sim_* galaxy SKUs are
   # absent on purpose: they run on CPU under ttsim and cost nothing scarce.
-  REVIEW_ONLY_SKUS: >-
+  UNSUPPORTED_SKUS: >-
     wh_galaxy
     wh_galaxy_perf
     bh_galaxy
@@ -109,6 +106,7 @@ env:
     runtime_perf_profiler_tests.yaml
     blackhole_e2e_tests.yaml
     models_device_perf_tests.yaml
+
   # Pipelines that run their legs under the watcher do it through setup-job's
   # enable-watcher input, which also sets TT_METAL_WATCHER_DISABLE_ETH=1 (and NOINLINE,
   # APPEND). A leg cmd that only exports TT_METAL_WATCHER=N relies on that: with the
@@ -120,6 +118,22 @@ env:
   WATCHER_YAMLS: >-
     models_unit_tests.yaml
 
+  # Yamls whose cmds run from tt_metal/tt-llk, matching the working-directory their
+  # pipelines set (llk-smoke/e2e/perf/bit-exact-impl, via LLK_PATH). Their entries
+  # open with `cd tests/python_tests`, which from the gate's /work would otherwise
+  # land in tt-metal's own tests/.
+  #
+  # llk_unit_tests.yaml and llk_merge_gate_tests.yaml are absent on purpose: they run
+  # gtest binaries from build/test and their impl works out of /work.
+  #
+  # llk_ttnop_tests.yaml and llk_perf_merge_gate_tests.yaml are workdir-relative too,
+  # but sit in UNSUPPORTED_YAMLS. Add them here if they ever leave that list.
+  LLK_WORKDIR_YAMLS: >-
+    llk_pr_gate_tests.yaml
+    llk_e2e_tests.yaml
+    llk_perf_tests.yaml
+    llk_bit_exact_tests.yaml
+
 jobs:
   scope:
     name: Scope changed tests
@@ -128,8 +142,7 @@ jobs:
     outputs:
       status: ${{ steps.gate.outputs.status }}
       expected-leg-count: ${{ steps.gate.outputs.expected-leg-count }}
-      review-leg-count: ${{ steps.gate.outputs.review-leg-count }}
-      review-met: ${{ steps.gate.outputs.review-met }}
+      dropped-leg-count: ${{ steps.gate.outputs.dropped-leg-count }}
       leg-digest: ${{ steps.gate.outputs.leg-digest }}
       needs-default: ${{ steps.gate.outputs.needs-default }}
       needs-profiler: ${{ steps.gate.outputs.needs-profiler }}
@@ -153,18 +166,14 @@ jobs:
       - name: Install dependencies
         run: pip3 install PyYAML
 
-      - name: Scope the changed tests, narrow the matrix, enforce owner review
+      - name: Scope the changed tests and narrow the matrix
         id: gate
         # Pinned to @main: a PR branch runs the current gate, not whatever
         # copy (or lack of one) happens to sit at its own head.
         uses: tenstorrent/tt-metal/.github/actions/verify-changed-tests@main
-        env:
-          GH_TOKEN: ${{ github.token }}
         with:
           event: ${{ github.event_name }}
           base: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-          repo: ${{ github.repository }}
-          pr: ${{ github.event.pull_request.number }}
           output: scope.json
 
       - name: Summarise
@@ -175,7 +184,7 @@ jobs:
             echo
             echo "Status: \`${{ steps.gate.outputs.status }}\`"
             echo "Legs to prove: \`${{ steps.gate.outputs.expected-leg-count }}\`"
-            echo "Legs needing an owner review: \`${{ steps.gate.outputs.review-leg-count }}\`"
+            echo "Legs dropped (SKUs this gate does not dispatch): \`${{ steps.gate.outputs.dropped-leg-count }}\`"
             echo "Leg digest: \`${{ steps.gate.outputs.leg-digest }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -423,6 +432,26 @@ jobs:
             if [[ '${{ matrix.leg.dispatch_mode }}' == 'sd' ]]; then
               export TT_METAL_SLOW_DISPATCH_MODE=1
             fi
+            # The LLK yamls run `pytest -m "$PYTEST_MARKERS"` (and the bit-exact one
+            # `--bit-exact-runs="$BIT_EXACT_RUNS"`) under `set -u`. Their owning pipelines
+            # set those from workflow inputs; mirror each pipeline's value here, or the
+            # leg dies on the unbound variable before pytest starts.
+            case '${{ matrix.leg.source_yaml }}' in
+              llk_pr_gate_tests)
+                export PYTEST_MARKERS="not perf and not nightly and not quasar and not accuracy" ;;
+              llk_e2e_tests)
+                export PYTEST_MARKERS="not perf and not quasar and not accuracy" ;;
+              llk_bit_exact_tests)
+                export PYTEST_MARKERS="not perf and not nightly and not accuracy and not quasar"
+                export BIT_EXACT_RUNS="500" ;;
+            esac
+            # gate_workdir mirrors the owning pipeline's working-directory; empty for
+            # everything that runs from /work. The reports dir is made again after
+            # the cd, since a cmd writing to it does so relative to its own cwd.
+            if [[ -n '${{ matrix.leg.gate_workdir }}' ]]; then
+              cd '${{ matrix.leg.gate_workdir }}'
+              mkdir -p generated/test_reports
+            fi
             eval "$CMD"
 
       - name: ${{ matrix.leg.name }} (simulator)
@@ -444,6 +473,10 @@ jobs:
             ${{ matrix.leg.cmd }}
             GATE_CMD_EOF
             )
+            if [[ -n '${{ matrix.leg.gate_workdir }}' ]]; then
+              cd '${{ matrix.leg.gate_workdir }}'
+              mkdir -p generated/test_reports
+            fi
             eval "$CMD"
 
       - uses: ./docker-job/.github/actions/upload-artifact-with-job-uuid
@@ -451,6 +484,11 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+          # LLK legs write their junit xml beside the tests they run, not into
+          # generated/test_reports, so collect both. A path matching nothing warns.
+          path: |
+            /work/generated/test_reports/
+            /work/tt_metal/tt-llk/tests/python_tests/pytest-report-*.xml
 
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
@@ -498,20 +536,19 @@ jobs:
               || fail "${{ needs.scope.outputs.leg-count }} leg(s) did not all pass (run-tests: ${{ needs.run-tests.result }})."
           fi
 
-          # Reported, not failed on: CODEOWNERS and the branch ruleset already block the merge.
-          if [[ '${{ needs.scope.outputs.review-met }}' == 'false' ]]; then
-            echo "::notice::${{ needs.scope.outputs.review-leg-count }} leg(s) on highly contended SKUs still need an approving review from a code owner; the branch ruleset holds the merge until then. See the scope job for which files and owners."
-          fi
-
           case '${{ needs.scope.outputs.status }}' in
             no_op)
-              echo "No behaviour-affecting test-entry changes. Nothing to prove."
-              ;;
-            blocked)
-              echo "${{ needs.scope.outputs.leg-count }} leg(s) ran; ${{ needs.scope.outputs.review-leg-count }} on highly contended SKUs are left to code owner review."
+              if [[ '${{ needs.scope.outputs.dropped-leg-count || 0 }}' != '0' ]]; then
+                echo "::notice::${{ needs.scope.outputs.dropped-leg-count }} leg(s) were dropped: their SKUs are ones this gate does not dispatch. Nothing ran here; CODEOWNERS gates the edit. See the scope job for which entries."
+              else
+                echo "No behaviour-affecting test-entry changes. Nothing to prove."
+              fi
               ;;
             run)
               echo "All ${{ needs.scope.outputs.leg-count }} leg(s) passed."
+              if [[ '${{ needs.scope.outputs.dropped-leg-count || 0 }}' != '0' ]]; then
+                echo "::notice::${{ needs.scope.outputs.dropped-leg-count }} further leg(s) were dropped on SKUs this gate does not dispatch."
+              fi
               ;;
             *)
               fail "unrecognised scope status '${{ needs.scope.outputs.status }}'."
