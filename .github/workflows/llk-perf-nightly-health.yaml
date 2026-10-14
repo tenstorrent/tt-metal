@@ -1,8 +1,9 @@
 name: "LLK perf nightly health"
 
 on:
-  schedule:
-    - cron: '0 9 * * *'
+  workflow_run:
+    workflows: ["LLK perf", "LLK perf gate"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       date:
@@ -17,6 +18,7 @@ permissions:
 jobs:
   health:
     name: "Check the nightlies and message the owner"
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'schedule'
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -35,10 +37,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
           OWNER_SLACK_ID: U0BCPNHUF43
-          DAY: ${{ inputs.date }}
+          DAY: ${{ inputs.date || github.event.workflow_run.created_at }}
+          TRIGGER_RUN: ${{ github.event.workflow_run.id }}
         run: |
           python3 tt_metal/tt-llk/perf/nightly_health.py \
-            --repo "$GITHUB_REPOSITORY" --channel "$OWNER_SLACK_ID" ${DAY:+--date "$DAY"}
+            --repo "$GITHUB_REPOSITORY" --channel "$OWNER_SLACK_ID" \
+            ${DAY:+--date "${DAY:0:10}"} ${TRIGGER_RUN:+--trigger-run "$TRIGGER_RUN"}
+          [ -f health_payload.json ] || exit 0
           RESPONSE=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
             -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
             -H "Content-type: application/json; charset=utf-8" \
@@ -47,3 +52,15 @@ jobs:
             *'"ok":true'*) echo "Sent the health message." ;;
             *) echo "::error::Slack rejected the health message: ${RESPONSE}"; exit 1 ;;
           esac
+      - name: Report a failed check
+        if: failure()
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+          OWNER_SLACK_ID: U0BCPNHUF43
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 -c 'import json, os; print(json.dumps({"channel": os.environ["OWNER_SLACK_ID"], "text": ":warning: LLK perf nightly health check failed: " + os.environ["RUN_URL"]}))' > failed_payload.json
+          curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H "Content-type: application/json; charset=utf-8" \
+            --data @failed_payload.json

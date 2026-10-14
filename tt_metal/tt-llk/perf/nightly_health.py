@@ -8,18 +8,21 @@ import datetime as dt
 import json
 import re
 import subprocess
+import sys
 
 import yaml
 
 NIGHTLIES = (
-    ("SoL", ".github/workflows/llk-perf.yaml"),
-    ("non-SoL", ".github/workflows/llk-perf-gate.yaml"),
+    ("SoL", "llk-perf.yaml"),
+    ("non-SoL", "llk-perf-gate.yaml"),
 )
 VERDICT = re.compile(r"verdict=(\w+) regressions=(\d+)")
 BASELINE = re.compile(r"(?:^|Z )baseline \S+ \(([0-9a-f]+), (\d{4}-\d{2}-\d{2})", re.M)
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 LEG = re.compile(r"(llk_perf_\w+ group \d+/\d+)")
 ARCHES = ("blackhole", "wormhole")
+SHORT_SHA = 11
+ROLLUP_JOBS = ("summary", "Report status")
 
 
 def _gh(*args):
@@ -42,20 +45,13 @@ def leg_limits(tests_yaml):
     return {e["name"]: max(s["timeout"] for s in e["skus"].values()) for e in entries}
 
 
-def scheduled_run(repo, path, day):
-    wf = _gh(
-        "api",
-        "--paginate",
-        f"repos/{repo}/actions/workflows?per_page=100",
-        "--jq",
-        f'.workflows[] | select(.path == "{path}") | .id',
-    ).split()[0]
+def scheduled_run(repo, workflow, day):
     runs = _json_lines(
         _gh(
             "api",
-            f"repos/{repo}/actions/workflows/{wf}/runs?event=schedule&created={day}&per_page=10",
+            f"repos/{repo}/actions/workflows/{workflow}/runs?event=schedule&created={day}&per_page=10",
             "--jq",
-            ".workflow_runs[] | {id, html_url, head_sha, status, conclusion} | @json",
+            ".workflow_runs[] | {id, html_url, head_sha, status, conclusion, updated_at} | @json",
         )
     )
     return runs[0] if runs else None
@@ -74,14 +70,16 @@ def run_jobs(repo, run_id):
 
 
 def job_log(repo, job_id):
-    return ANSI.sub(
-        "",
-        _gh(
+    try:
+        log = _gh(
             "api",
             "--allow-escape-sequences",
             f"repos/{repo}/actions/jobs/{job_id}/logs",
-        ),
-    )
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"no log for job {job_id}: {e.stderr.strip()}", file=sys.stderr)
+        return ""
+    return ANSI.sub("", log)
 
 
 def gate_result(log, day):
@@ -90,11 +88,23 @@ def gate_result(log, day):
     return {
         "verdict": verdict.group(1) if verdict else "no verdict",
         "regressions": int(verdict.group(2)) if verdict else 0,
-        "baseline": baseline.group(1)[:11] if baseline else None,
+        "baseline": baseline.group(1)[:SHORT_SHA] if baseline else None,
         "baseline_age": (
             (day - dt.date.fromisoformat(baseline.group(2))).days if baseline else None
         ),
     }
+
+
+def _is_gate(job):
+    return "Compare" in job["name"] and job["conclusion"] not in (None, "skipped")
+
+
+def _leg_problem(leg):
+    if leg["conclusion"] == "success":
+        return None
+    if leg["used"] is not None and leg["used"] >= 100:
+        return "timed out"
+    return leg["conclusion"] or "not finished"
 
 
 def assess(name, run, jobs, logs, limits, day):
@@ -111,6 +121,7 @@ def assess(name, run, jobs, logs, limits, day):
         return report
     if run["status"] != "completed":
         report["problems"].append(f"{name}: run still {run['status']}")
+    other_failures = []
     for job in jobs:
         leg = LEG.search(job["name"])
         if leg:
@@ -126,17 +137,13 @@ def assess(name, run, jobs, logs, limits, day):
             report["legs"].append(
                 {"leg": leg.group(1), "conclusion": job["conclusion"], "used": used}
             )
-            if job["conclusion"] != "success":
-                report["problems"].append(
-                    f"{name}: {leg.group(1)} {job['conclusion'] or 'not finished'}"
-                )
         elif "Upload perf data to the warehouse" in job["name"]:
             report["upload"] = job["conclusion"]
             if job["conclusion"] != "success":
                 report["problems"].append(
                     f"{name}: upload {job['conclusion'] or 'not finished'}"
                 )
-        elif "Compare" in job["name"] and job["conclusion"] != "skipped":
+        elif _is_gate(job):
             arch = next((a for a in ARCHES if a in job["name"]), "?")
             gate = gate_result(logs.get(job["id"], ""), day)
             report["gates"][arch] = gate
@@ -147,18 +154,29 @@ def assess(name, run, jobs, logs, limits, day):
                 report["problems"].append(
                     f"{name} {arch}: gate {gate['verdict']}{count}"
                 )
+        elif job["conclusion"] not in (None, "success", "skipped") and not any(
+            rollup in job["name"] for rollup in ROLLUP_JOBS
+        ):
+            other_failures.append(f"{name}: {job['name']} {job['conclusion']}")
+    report["legs"].sort(key=lambda l: l["leg"])
+    report["problems"][:0] = [
+        f"{name}: {l['leg']} {_leg_problem(l)}"
+        for l in report["legs"]
+        if _leg_problem(l)
+    ]
+    report["problems"] += other_failures
     for arch in ARCHES:
         if run["status"] == "completed" and arch not in report["gates"]:
             report["problems"].append(f"{name} {arch}: no gate verdict")
+    if run["conclusion"] not in (None, "success") and not report["problems"]:
+        report["problems"].append(f"{name}: run {run['conclusion']}")
     return report
 
 
 def _legs_line(legs):
     parts = []
     for arch, short in (("blackhole", "BH"), ("wormhole", "WH")):
-        mine = sorted(
-            (l for l in legs if f"_{arch} " in l["leg"]), key=lambda l: l["leg"]
-        )
+        mine = [l for l in legs if f"_{arch} " in l["leg"]]
         if mine:
             cells = " ".join(
                 f"{l['leg'].split()[-1]} {l['used'] if l['used'] is not None else '?'}%"
@@ -184,7 +202,7 @@ def build_text(day, reports):
             lines.append(f"*{r['name']}*: no scheduled run")
             continue
         lines.append(
-            f"*{r['name']}* <{run['html_url']}|run> · `{run['head_sha'][:11]}` · {run['conclusion'] or run['status']}"
+            f"*{r['name']}* <{run['html_url']}|run> · `{run['head_sha'][:SHORT_SHA]}` · {run['conclusion'] or run['status']}"
         )
         lines.append(f"legs, % of limit used: {_legs_line(r['legs'])}")
         lines.append(f"upload: {r['upload'] or 'not run'}")
@@ -201,6 +219,12 @@ def build_text(day, reports):
     return "\n".join(lines)
 
 
+def last_to_finish(runs, trigger_run):
+    if any(r is None or r["status"] != "completed" for r in runs):
+        return False
+    return max(runs, key=lambda r: r["updated_at"])["id"] == trigger_run
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo", required=True)
@@ -209,19 +233,25 @@ def main(argv=None):
     ap.add_argument(
         "--date", default=dt.datetime.now(dt.timezone.utc).date().isoformat()
     )
+    ap.add_argument(
+        "--trigger-run",
+        type=int,
+        help="send only once every nightly of the day is done and this run finished last",
+    )
     ap.add_argument("--out", default="health_payload.json")
     a = ap.parse_args(argv)
     day = dt.date.fromisoformat(a.date)
+    runs = [scheduled_run(a.repo, workflow, a.date) for _, workflow in NIGHTLIES]
+    if a.trigger_run and not last_to_finish(
+        [r for r in runs if r is not None], a.trigger_run
+    ):
+        print("not the last nightly of the day to finish; that one sends the message")
+        return 0
     limits = leg_limits(a.tests_yaml)
     reports = []
-    for name, path in NIGHTLIES:
-        run = scheduled_run(a.repo, path, a.date)
+    for (name, _), run in zip(NIGHTLIES, runs):
         jobs = run_jobs(a.repo, run["id"]) if run else []
-        logs = {
-            j["id"]: job_log(a.repo, j["id"])
-            for j in jobs
-            if "Compare" in j["name"] and j["conclusion"] not in (None, "skipped")
-        }
+        logs = {j["id"]: job_log(a.repo, j["id"]) for j in jobs if _is_gate(j)}
         reports.append(assess(name, run, jobs, logs, limits, day))
     text = build_text(a.date, reports)
     with open(a.out, "w") as fh:
