@@ -51,7 +51,16 @@ constexpr std::uint32_t chunk_tile(const std::uint32_t chunk)
     {
         return chunk == 0 ? 0 : (chunk & 1) ? 1 : 4;
     }
-    return tiles_per_sequence<K> * (chunk == 0 ? 0 : 2 - (chunk & 1));
+    // K 2048: even chunks take tiles 0 and 2 in turn (bank 0), odd chunks 4 and 6 (bank 1); each merge leaves the
+    // survivor in the merged chunk's tiles, so it always sits in the bank the next chunk does not use.
+    return (chunk & 1) ? 4 + ((chunk >> 1) & 1) * 2 : ((chunk >> 1) & 1) * 2;
+}
+
+// Where chunk `chunk`'s rebuild finds the survivor.
+template <std::uint32_t K>
+constexpr std::uint32_t survivor_tile(const std::uint32_t chunk)
+{
+    return K == 2048 ? chunk_tile<K>(chunk) : 0;
 }
 
 #ifdef LLK_TRISC_MATH
@@ -138,7 +147,7 @@ inline void math_row(const std::uint32_t num_chunks, CopyChunk&& copy_chunk)
                     ckernel::sfpu::enter_transpose_cfg_block();
                     cfg_open = true;
                 }
-                ckernel::sfpu::_topk_xl_split_transpose_<K>(chunk_tile<K>(stage >= STAGES_FIRST_CHUNK ? 0 : chunk) << 6);
+                ckernel::sfpu::_topk_xl_split_transpose_<K>((stage >= STAGES_FIRST_CHUNK ? survivor_tile<K>(chunk) : chunk_tile<K>(chunk)) << 6);
             }
 
             ckernel::t6_semaphore_post<ckernel::p_stall::MATH>(F2S);
@@ -217,7 +226,28 @@ inline __attribute__((noinline)) void sfpu_stage(const std::uint32_t chunk, cons
             break;
         case 6:
             _topk_xl_split_columns_<K, 0>(tile_offset, ascending);
-            if (chunk > 0)
+            if constexpr (K == 2048)
+            {
+                // The merge reads the survivor `distance` rows past the chunk (mod the 1024-row Dst address) and
+                // leaves the result in the chunk's tiles.
+                switch (chunk & 3)
+                {
+                    case 1:
+                    case 3:
+                        _topk_xl_split_merge_<K, 768, true>(tile_offset);
+                        break;
+                    case 2:
+                        _topk_xl_split_merge_<K, 128, true>(tile_offset);
+                        break;
+                    default:
+                        if (chunk > 0)
+                        {
+                            _topk_xl_split_merge_<K, 384, true>(tile_offset);
+                        }
+                        break;
+                }
+            }
+            else if (chunk > 0)
             {
                 if (chunk & 1)
                 {
@@ -230,10 +260,10 @@ inline __attribute__((noinline)) void sfpu_stage(const std::uint32_t chunk, cons
             }
             break;
         case 7:
-            _topk_xl_split_rebuild_build_<K>(0, false);
+            _topk_xl_split_rebuild_build_<K>(survivor_tile<K>(chunk) << 6, false);
             break;
         default:
-            _topk_xl_split_columns_<K, 0>(0, false);
+            _topk_xl_split_columns_<K, 0>(survivor_tile<K>(chunk) << 6, false);
             break;
     }
 }
@@ -255,6 +285,20 @@ inline void pack_row(const std::uint32_t num_chunks)
             take_math_token();
             sfpu_stage<K>(chunk, stage);
             ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
+        }
+    }
+    if constexpr (K == 2048)
+    {
+        // The epilogue takes the survivor from tile 0.
+        const std::uint32_t from = survivor_tile<K>(num_chunks - 1) << 6;
+        if (from != 0)
+        {
+            ckernel::sfpu::_topk_xl_split_begin_(0);
+            for (std::uint32_t a = 0; a < 128; a += 2)
+            {
+                TT_SFPLOAD(ckernel::p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, from + a);
+                TT_SFPSTORE(ckernel::p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, a);
+            }
         }
     }
 }

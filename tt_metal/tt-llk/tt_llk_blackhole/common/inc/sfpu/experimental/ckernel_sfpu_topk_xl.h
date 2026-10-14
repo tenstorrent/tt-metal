@@ -4139,12 +4139,13 @@ inline void _topk_xl_split_columns_(const std::uint32_t tile_offset, const bool 
     }
 }
 
-// _topk_xl_merge_<K, true> with the incoming run `distance` rows past the survivor at tile_offset.
+// _topk_xl_merge_<K, true> of the runs at tile_offset and `distance` rows past it (mod 1024 rows), result at tile_offset.
 template <std::uint32_t K, int distance, bool macros = (K >= 1024)>
 inline void _topk_xl_split_merge_(const std::uint32_t tile_offset)
 {
     constexpr int tiles_per_sequence = K == 2048 ? 2 : 1;
-    static_assert(distance > 0 && distance % (64 * tiles_per_sequence) == 0 && distance < 512, "the incoming run sits whole sequences past the survivor");
+    static_assert(
+        distance > 0 && distance % (64 * tiles_per_sequence) == 0 && distance < 1024, "the other run sits whole sequences past tile_offset, mod 1024 rows");
     constexpr int n_iters = K == 512 ? 2 : K == 1024 ? 4 : 8;
     topk_mop_config<true>();
     _topk_xl_split_begin_(tile_offset);
