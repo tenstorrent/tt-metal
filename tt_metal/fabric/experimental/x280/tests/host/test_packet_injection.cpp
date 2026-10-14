@@ -11,6 +11,7 @@
 
 #include "x280/device/x280_state.hpp"
 #include "x280_address_map.h"
+#include "x280_hart_protocol.h"
 #include "kernels/packet_injection/packet_injection_abi.h"
 #include "kernels/packet_injection/packet_injection_slot.hpp"
 #include "kernels/shared/tensix_live_timer.h"
@@ -1735,12 +1736,13 @@ TEST(PacketInjectionMemoryProfile, ArenaExcludesImageStacksTrapsSocket) {
 }
 
 TEST(PacketInjectionMemoryProfile, RespectsBackedSize) {
-    // If backed bytes does not reach 0x154000 (socket end), arena is empty
-    const auto empty_arena = x280::available_lim_for_layout(x280::LimLayout::PacketInjection, 0x153FFFULL);
+    // If backed bytes does not reach the end of the hart protocol block, arena is empty
+    constexpr uint64_t kReservedBytes = X280_HART_PROTOCOL_END - X280_LIM_BASE;
+    const auto empty_arena = x280::available_lim_for_layout(x280::LimLayout::PacketInjection, kReservedBytes - 1u);
     EXPECT_EQ(empty_arena.size(), 0u);
 
-    // Reaching 0x154000 enables the full lower arena
-    const auto valid_arena = x280::available_lim_for_layout(x280::LimLayout::PacketInjection, 0x154000ULL);
+    // Reaching it enables the full lower arena
+    const auto valid_arena = x280::available_lim_for_layout(x280::LimLayout::PacketInjection, kReservedBytes);
     EXPECT_EQ(valid_arena.size(), 917376ULL);
 }
 
