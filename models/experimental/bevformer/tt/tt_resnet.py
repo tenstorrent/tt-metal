@@ -179,6 +179,19 @@ class TTBottleneck:
         self.with_dcn = "conv_offset" in conv_pth.conv2
         dram_convs = self.dram_convs(dram_activation, dram_input)
         self.is_downsample = "downsample" in conv_pth
+        # conv2d reshapes a DRAM input to NHWC, which in TILE copies it whenever the width is not
+        # a tile multiple. A layer's first block feeds its input to two such convs, the strided
+        # conv1 and the downsample, so one ROW_MAJOR copy, which reshapes for free, serves both.
+        conv1_reads_dram = dram_activation or dram_input
+        self.row_major_input = (
+            self.is_downsample
+            and conv1_reads_dram
+            and input_layout == ttnn.TILE_LAYOUT
+            and tuple(conv_args.conv1.stride) != (1, 1)
+            and tuple(conv_args.downsample[0].stride) != (1, 1)
+        )
+        if self.row_major_input:
+            input_layout = ttnn.ROW_MAJOR_LAYOUT
 
         # conv2d and ttnn.linear keep their input's dtype and emit TILE, and the DCN branch
         # emits bfloat16.
@@ -254,6 +267,8 @@ class TTBottleneck:
             )
 
     def __call__(self, x_identity):
+        if self.row_major_input:
+            x_identity = ttnn.to_layout(x_identity, ttnn.ROW_MAJOR_LAYOUT)
         x, _, _ = self.conv1(x_identity)
 
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
