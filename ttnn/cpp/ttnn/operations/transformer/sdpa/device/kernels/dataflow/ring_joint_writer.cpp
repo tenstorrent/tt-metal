@@ -762,10 +762,14 @@ void kernel_main() {
     const auto stats_writer = TensorAccessor(stats_args, stats_addr);
 
     constexpr bool output_has_no_padding = !has_joint_q && (q_local_padded_Nt % Sq_chunk_t == 0);
-    using StaticOutputTileShape = StaticTensorTileShape<B, NH, q_local_padded_Nt, vDHt>;
+    // Lanes: the output stacks the lanes' rows like Q, [1, NH, num_lanes * rows, DV].
+    constexpr uint32_t num_lanes = get_named_compile_time_arg_val("num_lanes");
+    constexpr uint32_t out_batch = num_lanes > 1 ? 1 : B;
+    constexpr uint32_t out_rows_t = num_lanes > 1 ? num_lanes * q_local_padded_Nt : q_local_padded_Nt;
+    using StaticOutputTileShape = StaticTensorTileShape<out_batch, NH, out_rows_t, vDHt>;
     using OutputTileShape = std::conditional_t<output_has_no_padding, StaticOutputTileShape, TensorTileShape>;
 
-    const auto output_tile_logical = OutputTileShape(B, NH, q_local_padded_Nt, vDHt);
+    const auto output_tile_logical = OutputTileShape(out_batch, NH, out_rows_t, vDHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, Lt, vDHt);
     // stats tensor is 2× the sequence length: first half stores max (used by both eager and
     // deferred-norm paths), second half stores sum (deferred-norm only).
@@ -906,10 +910,15 @@ void kernel_main() {
                 const uint32_t nb = decoded_q.nb;
                 const uint32_t nq = decoded_q.nq;
                 const uint32_t q_chunk = decoded_q.q_chunk;
-                const auto qi = get_q_chunk_info<has_joint_q>(
+                auto qi = get_q_chunk_info<has_joint_q>(
                     q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
-                const uint32_t end_seq_tile =
+                uint32_t end_seq_tile =
                     get_end_seq_tile<has_joint_q>(qi, ring_id / kv_stripe_split, Lt, q_local_padded_Nt);
+                if constexpr (num_lanes > 1) {
+                    const auto lane_rows = lane_q_chunk_rows(nb, nq, q_chunk, Sq_chunk_t, q_local_padded_Nt, vDHt);
+                    qi.out_slice = lane_rows.slice;
+                    end_seq_tile = lane_rows.end_seq_tile;
+                }
 
                 if (!single_q_chunk) {
                     CircularBuffer cb_sig(cb_signal);
