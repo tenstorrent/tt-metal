@@ -20,7 +20,6 @@ struct ComputeConfig;
 struct EthernetConfig;
 
 class IDevice;
-struct BufferConfig;
 class CircularBufferConfig;
 using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 
