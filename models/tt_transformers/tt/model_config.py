@@ -1755,9 +1755,15 @@ class ModelArgs:
                 k_chunk_size=k_chunk,
             )
         grid = self.mesh_device.compute_with_storage_grid_size() if self.mesh_device is not None else None
-        # From batch 8 decode is faster on the full grid (measured on Blackhole); below that the (8, 8) grid is faster.
+        # The full Blackhole grid is faster from batch 8 up to 64 (user, KV head) pairs per device; at 256 pairs (8B at
+        # batch 32) the (8, 8) grid is faster from position 2047.
         wide_blackhole_grid = (
-            is_blackhole() and grid is not None and grid.x > 8 and grid.y > 4 and self.max_batch_size >= 8
+            is_blackhole()
+            and grid is not None
+            and grid.x > 8
+            and grid.y > 4
+            and self.max_batch_size >= 8
+            and self.max_batch_size * max(1, self.n_kv_heads // self.cluster_shape[1]) <= 64
         )
         if wide_blackhole_grid:
             # The op reads batch b's Q from the b-th core of sub_core_grids, so the 8x4 Q shard block comes first.
