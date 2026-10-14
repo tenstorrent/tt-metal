@@ -85,7 +85,8 @@ static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPLUT(3, 8)) == 0xffu);
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPAND(2, 3)) == 0x0cu);
 static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPAND(2, 3)) == 0x08u);
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSHFT(0, 2, 3, 4)) == 0x0cu);
-static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSHFT(0, 2, 3, 5)) == 0x08u);
+static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSHFT(0, 2, 3, 5)) == 0x0cu);
+static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSHFT(0, 2, 3, 1)) == 0x08u);
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPTRANSP) == 0xffu);
 static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPTRANSP) == 0xffu);
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPMUL24(1, 2, 4, 0)) == 0x06u);
@@ -108,12 +109,12 @@ static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPLUT(3, 8, 0)) == 0xffu);
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPAND(0, 2, 3, 0)) == 0x0cu);
 static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPAND(0, 2, 3, 0)) == 0x08u);
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSHFT(0, 2, 3, 4)) == 0x0cu);
+static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSHFT(0, 2, 3, 5)) == 0x0cu);
+static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSHFT(0, 2, 3, 1)) == 0x08u);
 #if defined(TEST_BH)
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPAND(5, 2, 3, 1)) == 0x24u);
-static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSHFT(0, 2, 3, 5)) == 0x0cu);
 #else
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPAND(5, 2, 3, 1)) == 0x0cu);
-static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPSHFT(0, 2, 3, 5)) == 0x08u);
 #endif
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPTRANSP(0, 0, 0, 0)) == 0xffu);
 static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPTRANSP(0, 0, 0, 0)) == 0xffu);

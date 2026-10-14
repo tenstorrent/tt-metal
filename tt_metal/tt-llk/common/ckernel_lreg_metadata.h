@@ -80,12 +80,10 @@ constexpr unsigned read(unsigned x) {
         case 0x74: case 0x75: return (m & 4) ? 0xffu : bit(dd) | ((m & 8) ? bit(7) : 0u);
         case 0x76: case 0x77: case 0x78: case 0x7d: case 0x81: case 0x90: return bit(cc);
         case 0x79: return bit(cc) | ((m & 1) ? 0u : bit(dd));
-        case 0x7a:
-#if defined(TT_LLK_SFPU_ARCH_BH)
-            return bit(dd) | (!(m & 1) || (m & 4) ? bit(cc) : 0u);
-#else
-            return bit(dd) | ((m & 1) ? 0u : bit(cc));
-#endif
+        // lreg_c is the shift amount unless bit 0 selects imm12, and the data
+        // input when bit 2 is set (BH/QSR). WH documents no bit 2; honoring it
+        // there only adds a read.
+        case 0x7a: return bit(dd) | (!(m & 1) || (m & 4) ? bit(cc) : 0u);
         case 0x7b: return (m & 8) || (m & 1) ? 0u : bit(cc);
         case 0x7c: return (m & 8) ? 0u : bit(cc);
         case 0x7e: case 0x7f:
