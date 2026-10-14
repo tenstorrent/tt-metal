@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,7 @@ RESERVED_ARGS = ("--benchmark_out", "--benchmark_repetitions")
 _REGEX_SPECIAL = set(".^$|()[]{}*+?\\")
 # Benchmark binaries must come from the build tree; suites.yaml cannot point anywhere else.
 BINARY_ROOT = REPO_ROOT / "build"
+STDBUF = shutil.which("stdbuf")
 
 
 class RunError(RuntimeError):
@@ -112,13 +114,23 @@ def _execute(command: list[str], env: dict, log_path: Path) -> None:
     # The binary is checked to be under BINARY_ROOT, the args come from the checked-in suites.yaml, a user filter is
     # validated, and there is no shell, so no outside text can change what runs.
     print("+ " + " ".join(command), flush=True)
+    # A pipe makes the binary's stdio block-buffered; line buffering keeps output up to a hang visible.
+    line_buffered = [STDBUF, "-oL", "-eL"] if STDBUF else []
     with open(log_path, "w") as log:
         process = subprocess.Popen(
-            command, cwd=REPO_ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, shell=False
+            [*line_buffered, *command],
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            shell=False,
         )
         for line in process.stdout:
             sys.stdout.write(line)
+            sys.stdout.flush()
             log.write(line)
+            log.flush()
         returncode = process.wait()
     if returncode:
         raise RunError(f"{Path(command[0]).name} exited with {returncode}; see {log_path}")
