@@ -102,16 +102,17 @@ _x280_compile(
 )
 
 #[[
-x280_add_image(NAME <stem> SOURCES <source>... [LIM_IDLE] [DEFINES <macro>...] [INCLUDES <dir>...])
+x280_add_image(NAME <stem> SOURCES <source>... [LIM_IDLE] [DEFINES <macro>...] [INCLUDES <dir>...]
+               [COMPILE_OPTIONS <flag>...])
 
 Builds ${X280_IMAGE_DIR}/<stem>.elf and <stem>.bin from C and C++ (.cpp) sources, and adds them
 to x280_images. An image links the active lifecycle harness and ld/x280.ld (.text at
 0x08001000), or with LIM_IDLE the per-hart entry and ld/x280-lim-idle.ld (.text at 0x08000000).
-DEFINES and INCLUDES (directories relative to this tree's root) apply to this image's sources
-only; C++ sources also get -std=c++17 -fno-exceptions -fno-rtti.
+DEFINES, INCLUDES (directories relative to this tree's root) and COMPILE_OPTIONS apply to this
+image's sources only; C++ sources also get -std=c++17 -fno-exceptions -fno-rtti.
 #]]
 function(x280_add_image)
-    cmake_parse_arguments(PARSE_ARGV 0 ARG "LIM_IDLE" "NAME" "SOURCES;DEFINES;INCLUDES")
+    cmake_parse_arguments(PARSE_ARGV 0 ARG "LIM_IDLE" "NAME" "SOURCES;DEFINES;INCLUDES;COMPILE_OPTIONS")
     if(NOT ARG_NAME OR NOT ARG_SOURCES OR ARG_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "x280_add_image: needs NAME and SOURCES; unparsed: '${ARG_UNPARSED_ARGUMENTS}'")
     endif()
@@ -137,7 +138,7 @@ function(x280_add_image)
         if(source MATCHES "\\.cpp$")
             list(APPEND flags ${_x280_cxxflags})
         endif()
-        _x280_compile("${object}" "${source}" ${flags} ${ARG_INCLUDES} ${ARG_DEFINES})
+        _x280_compile("${object}" "${source}" ${flags} ${ARG_COMPILE_OPTIONS} ${ARG_INCLUDES} ${ARG_DEFINES})
         list(APPEND objects "${object}")
     endforeach()
 
