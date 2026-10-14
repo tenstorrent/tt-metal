@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_batched_hs_dram_sharded_program_factory.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
@@ -570,7 +571,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
             "bmm_large_block_zm_fused_bias_activation_metal2.cpp",
         .compiler_options =
             {
-                .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_defines),
+                .defines = KernelSpec::CompilerOptions::Defines([&] {
+                    // scratch only (CI A/B): TT_MM_FORK_VARIANT selects the variant compiled from one fork source
+                    auto d = mm_kernel_defines;
+                    if (const char* v = std::getenv("TT_MM_FORK_VARIANT")) {
+                        d["FORK_VARIANT"] = v;
+                    }
+                    return d;
+                }()),
                 .opt_level = KernelBuildOptLevel::O3,
             },
         .dfb_bindings =

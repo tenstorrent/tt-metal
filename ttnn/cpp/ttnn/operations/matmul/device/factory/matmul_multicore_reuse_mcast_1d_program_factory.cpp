@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include <algorithm>
@@ -4436,7 +4437,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                       "bmm_large_block_zm_fused_bias_activation_metal2.cpp",
             .compiler_options =
                 {
-                    .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_defines),
+                    .defines = KernelSpec::CompilerOptions::Defines([&] {
+                    // scratch only (CI A/B): TT_MM_FORK_VARIANT selects the variant compiled from one fork source
+                    auto d = mm_kernel_defines;
+                    if (const char* v = std::getenv("TT_MM_FORK_VARIANT")) {
+                        d["FORK_VARIANT"] = v;
+                    }
+                    return d;
+                }()),
                     // A legacy ComputeConfigDescriptor with no opt_level resolves to O3; Metal 2.0's
                     // CompilerOptions defaults to O2, so it has to be stated.
                     .opt_level = KernelBuildOptLevel::O3,
@@ -4960,7 +4968,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
                       "bmm_large_block_zm_fused_bias_activation_gathered_metal2.cpp",
             .compiler_options =
                 {
-                    .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_defines),
+                    .defines = KernelSpec::CompilerOptions::Defines([&] {
+                    // scratch only (CI A/B): TT_MM_FORK_VARIANT selects the variant compiled from one fork source
+                    auto d = mm_kernel_defines;
+                    if (const char* v = std::getenv("TT_MM_FORK_VARIANT")) {
+                        d["FORK_VARIANT"] = v;
+                    }
+                    return d;
+                }()),
                     // The legacy builder's ComputeConfig defaults to O3; Metal 2.0's CompilerOptions
                     // defaults to O2, so it has to be stated.
                     .opt_level = KernelBuildOptLevel::O3,
@@ -5965,7 +5980,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
                       "bmm_large_block_zm_fused_bias_activation_metal2.cpp",
             .compiler_options =
                 {
-                    .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_defines),
+                    .defines = KernelSpec::CompilerOptions::Defines([&] {
+                    // scratch only (CI A/B): TT_MM_FORK_VARIANT selects the variant compiled from one fork source
+                    auto d = mm_kernel_defines;
+                    if (const char* v = std::getenv("TT_MM_FORK_VARIANT")) {
+                        d["FORK_VARIANT"] = v;
+                    }
+                    return d;
+                }()),
                     // A legacy ComputeConfigDescriptor with no opt_level resolves to O3; Metal 2.0's
                     // CompilerOptions defaults to O2, so it has to be stated.
                     .opt_level = KernelBuildOptLevel::O3,
