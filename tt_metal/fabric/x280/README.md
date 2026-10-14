@@ -8,6 +8,144 @@ The supported host boundary is the C++ `X280Runtime` described in § 1.
 
 ---
 
+## Using the X280 runtime
+
+### Production code
+
+Metal opens the device; the runtime binds to that mesh. A caller opens Metal,
+then `X280Runtime::open` with the default `AutoPrime` policy and the LIM shape
+it needs. When the open reports `requires_reset()`, the caller closes the mesh,
+resets the chip with `tt::umd::WarmReset::warm_reset`, recreates the mesh and
+opens again. It then boots the tiles it uses with `boot_tiles`, and runs X280
+work beside its Metal workloads:
+
+```cpp
+#include "x280/device/x280_runtime.hpp"
+#include "impl/context/metal_context.hpp"
+#include <llrt/tt_cluster.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <umd/device/warm_reset.hpp>
+
+using tt::tt_metal::distributed::MeshDevice;
+
+auto mesh = MeshDevice::create_unit_mesh(chip);
+const x280::RuntimeOpenConfig config{.lim_shape = x280::LimShape{.lim_ways = 15}};  // 11 to 15 LIM ways
+auto opened = x280::X280Runtime::open(mesh, config);
+if (opened.requires_reset()) {
+    // The PCIe device number (/dev/tenstorrent/<N>); an empty list resets every device.
+    const int pcie = tt::tt_metal::MetalContext::instance().get_cluster().get_chips_with_mmio().at(chip);
+    mesh->close();
+    mesh.reset();
+    tt::umd::WarmReset::warm_reset({pcie});
+    mesh = MeshDevice::create_unit_mesh(chip);
+    opened = x280::X280Runtime::open(mesh, config);
+}
+if (!opened.ready()) {
+    throw std::runtime_error(opened.diagnostic);
+}
+x280::X280Runtime& runtime = *opened.runtime;
+
+const x280::TileId id = runtime.tile_ids().front();
+const x280::MultiTileBootRequest boot{
+    .tiles = {id}, .idle_image_path = image_dir + "/firmware-lim-idle.bin", .allow_reset_release = true};
+if (const auto booted = runtime.boot_tiles(boot); !booted.ready()) {
+    throw std::runtime_error(booted.diagnostic);
+}
+
+x280::X280Tile& tile = runtime.tile(id);
+const uint64_t args = tile.available_lim().begin;
+tile.write_available_lim(args, args_block);  // whole 64-byte lines, rewritten for every run
+const auto enqueued = runtime.enqueue(
+    tile,
+    x280::ActiveRunRequest{
+        .image_path = image_dir + "/my-image.bin",
+        .run_value = ++generation,
+        .args_addr = args,
+        .args_bytes = args_block.size()});
+if (!enqueued.session) {
+    throw std::runtime_error(x280::describe(enqueued));
+}
+EnqueueMeshWorkload(mesh->mesh_command_queue(), workload, /*blocking=*/false);
+const auto result = runtime.session(enqueued.session).wait_until_result_ready(std::chrono::seconds(1));
+Finish(mesh->mesh_command_queue());
+const auto cleaned = runtime.cleanup(enqueued.session, std::chrono::seconds(3));
+```
+
+`chip`, `image_dir` (the build's `build/x280/`), `args_block`, `generation` and
+`workload` are the caller's.
+
+- **The reset is the caller's choice.** `warm_reset` resets the whole chip:
+  Tensix, Ethernet and every L2CPU tile, not just the one being prepared. The
+  runtime never resets anything; it reports `ResetRequired` and stops.
+- **What survives a reset.** LIM ECC priming persists across a warm reset, so
+  the reset after a prime is needed once per device, not per process. Booted
+  tiles do not: every reset returns them to reset-held, and each process that
+  finds a tile held boots it again. `boot_tiles` boots one batch per chip-reset
+  lifetime, so boot every tile you need in one call. It leaves PLL4 at
+  `kSafePllMhz`; `set_pll` sets the operating clock under the PLL4 ownership
+  rules in `x280_runtime.hpp`.
+- **One execution per tile.** A second `enqueue` while a session is live
+  returns `Busy`. `cleanup` ends a session once; the runtime destructor cleans
+  up any still live.
+- **Arguments.** `args_addr` must be cache-line aligned and lie wholly inside
+  the tile's `available_lim()`; `enqueue` checks that placement and nothing
+  else. LIM keeps the previous run's block, so the image must check that the
+  block is this run's, for example by a run value the host writes into it,
+  before using it (`x280_hart_args`, `rt/x280_idle.h`).
+- **Device-side synchronization is the caller's.** The runtime orders nothing
+  between an X280 image and Tensix or Ethernet kernels. `wait_until_result_ready`
+  and `Finish` each wait for their own side only; any handoff between the two
+  goes through flags or counters the caller places in L1 or LIM.
+- **Slow dispatch for idle-ERISC and DRISC peers.** A Metal program on idle
+  Ethernet or DRAM RISC-V cores that the X280 exchanges data with needs
+  `TT_METAL_SLOW_DISPATCH_MODE=1`.
+- **Watcher off.** With `TT_METAL_WATCHER` set, the host NoC sanitizer rejects
+  the ARC register reads `open` starts with (§ 1, C++ host runtime boundary).
+
+TODO: a helper that runs this open, reset, reopen and boot sequence and returns
+a ready runtime, with the reset still an explicit caller opt-in.
+
+### Tests
+
+Reversible device tests open with `LimEccPrimingPolicy::RequirePrepared`, so
+they never commit `WayEnable`, and their fixtures boot resident idle when the
+tile is not already running it (`tests/device/x280_test_images.hpp`). On an
+unprimed device they skip and name the fix. Prime each device once, then reset
+it:
+
+```bash
+X280_ALLOW_LIM_ECC_PRIME=1 TT_VISIBLE_DEVICES=0 build/test/tt_metal/x280/x280_prime_test
+env -u TT_VISIBLE_DEVICES tt-smi -r 0
+```
+
+Tests take images from the build's `build/x280/` (`X280_IMAGE_DIR`, compiled in
+by CMake); an `X280_*_FW_IMAGE` variable names another file (§ 6). A test that
+changes the chip for the rest of a reset lifetime, or can wedge it, lives in
+its own executable and runs only when its `X280_ALLOW_*` variable is `1`:
+`x280_prime_test` (`X280_ALLOW_LIM_ECC_PRIME`), `x280_shape_test`
+(`X280_ALLOW_LIM_SHAPE_CHANGE`), `x280_active_failure_test`
+(`X280_ALLOW_ACTIVE_SESSION_FAILURE`) and `x280_pll_test`
+(`X280_ALLOW_PLL_SLEW`).
+
+### Building an X280 image
+
+An image is a freestanding C program compiled when tt-metal builds, with the
+SFPI compiler; nothing is compiled for the X280 at run time. Add one with
+`x280_add_image` (`x280_image.cmake`) in this directory's `CMakeLists.txt`:
+
+```cmake
+x280_add_image(NAME my-image SOURCES src/my_image.c DEFINES MY_IMAGE_MODE=1)
+```
+
+It builds `build/x280/my-image.{elf,bin}` as part of `x280_images`. An active
+image, the default, links the lifecycle harness and `ld/x280.ld` at
+`0x08001000`; its `main` follows the active-image contract (§ 3). `LIM_IDLE`
+links the per-hart entry and `ld/x280-lim-idle.ld` at `0x08000000` instead;
+only the resident idle is built that way.
+
+---
+
 ## 1. Hardware overview
 
 A Blackhole chip exposes **four L2CPU tiles**, each containing a SiFive
@@ -131,15 +269,14 @@ the entire sequence of benchmark executables. Neither matching input bytes nor
 mask readback proves fresh placement. The runtime checks neither prerequisite;
 the caller establishes both.
 
-LIM ECC is primed once per reset lifetime: run `x280_prime_test` with
-`X280_ALLOW_LIM_ECC_PRIME=1`, then `tt-smi -r`. On that primed device, open the
-runtime with `LimEccPrimingPolicy::RequirePrepared` and `LimShape{14}`, so shape
-provisioning cannot silently run the ECC primer, then boot resident idle
-(`build/x280/firmware-lim-idle.bin`) through `X280Runtime::boot_tiles` with
-`allow_reset_release` set. The runtime applies an increase-only shape only while
-every L2CPU remains in reset; it refuses a request that would expand LIM.
+Prime, open and boot as in "Using the X280 runtime", opening with
+`LimEccPrimingPolicy::RequirePrepared` and `LimShape{14}` so shape provisioning
+cannot silently run the ECC primer. The runtime applies an increase-only shape
+only while every L2CPU remains in reset; it refuses a request that would expand
+LIM.
 
-The `x280_images` target builds the two operation-specific images. Each runs as
+The `x280_images` target builds the two operation-specific images; no
+executable in this tree runs them, the pipeline benchmarks do. Each runs as
 an active image on a tile in confirmed healthy resident idle, with no other
 session live: prepare once, run the compatible pipeline configurations
 sequentially on the same tile, then tear down.
@@ -530,7 +667,7 @@ ctest --test-dir build -R x280      # image placement, pinned-input guards, host
 |---|---|---|
 | `firmware-lim-idle.bin` | `src/lim_idle.c` | resident idle, the runtime prerequisite |
 | `firmware.bin` | `src/main.c` | active session success image (the sentinel) |
-| `firmware-pinned-input-prepare.bin`, `firmware-pinned-input-teardown.bin` | `src/x280_pinned_input.c` | pinned-input preparation and teardown (§ 1) |
+| `firmware-pinned-input-prepare.bin`, `firmware-pinned-input-teardown.bin` | `src/x280_pinned_input.c` | pinned-input preparation and teardown (§ 1); no executable in this tree runs them |
 | `firmware-atomic-bench.bin` | `src/atomic_bench.c` | cross-hart atomics micro-benchmark (§ 7); in the active-image contract set |
 | `firmware-active-session-fault.bin` | `src/active_session_fault.c` | traps and CEASEs hart 2, for `x280_active_failure_test` only |
 
