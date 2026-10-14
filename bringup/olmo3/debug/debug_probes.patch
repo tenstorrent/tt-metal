@@ -1,0 +1,438 @@
+diff --git a/models/demos/olmo_galaxy/demo/text_olmo_demo.py b/models/demos/olmo_galaxy/demo/text_olmo_demo.py
+index cd2595faa92..c2449bf245c 100644
+--- a/models/demos/olmo_galaxy/demo/text_olmo_demo.py
++++ b/models/demos/olmo_galaxy/demo/text_olmo_demo.py
+@@ -15,6 +15,7 @@ Run with:
+     pytest models/demos/olmo_galaxy/demo/text_olmo_demo.py::test_olmo_text_demo -v -k "quick"
+ """
+ 
++import hashlib
+ import json
+ import os
+ from datetime import datetime
+@@ -46,6 +47,25 @@ def _safe_decode(tokenizer, token_ids, skip_special_tokens=True):
+     return tokenizer.convert_tokens_to_string([t for t in tokens if t is not None])
+ 
+ 
++def _make_op_probe(records):
++    """Debug (OLMO_OP_PROBE=<path>): checksum every ttnn op output per device and per row during one eager decode step."""
++    import hashlib
++
++    def hook(operation, args, kwargs, output):
++        outs = output if isinstance(output, (list, tuple)) else [output]
++        for t in outs:
++            if not isinstance(t, ttnn.Tensor) or t.storage_type() != ttnn.StorageType.DEVICE or not t.is_allocated():
++                continue
++            hashes, rows = [], []
++            for dt in ttnn.get_device_tensors(t):
++                x = ttnn.to_torch(dt).float()
++                hashes.append(hashlib.md5(x.numpy().tobytes()).hexdigest()[:12])
++                rows.append(x.reshape(-1, x.shape[-1]).double().sum(-1) if x.dim() >= 2 else x.double().sum().reshape(1))
++            records.append({"op": str(operation.python_fully_qualified_name), "shape": tuple(t.shape), "hashes": hashes, "rows": rows})
++
++    return hook
++
++
+ def create_olmo_tt_model(
+     mesh_device,
+     max_batch_size,
+@@ -121,6 +141,8 @@ def run_olmo_demo(
+     stop_at_eos=False,
+ ):
+     enable_trace = os.environ.get("OLMO_DECODE_TRACE", "1") == "1"
++    if os.environ.get("OLMO_MAX_NEW"):  # debug: cap generated tokens for quick determinism bisects
++        max_generated_tokens = int(os.environ["OLMO_MAX_NEW"])
+     prefill_enable_trace = True
+     print_outputs = not is_ci_env
+ 
+@@ -175,6 +197,24 @@ def run_olmo_demo(
+         enable_prefetcher_performance_mode=enable_prefetcher_performance_mode,
+     )
+ 
++    if os.environ.get("OLMO_WEIGHT_READ_TEST"):
++        # Debug: read layer 0 w1/w3 back from a few devices repeatedly; any change between reads = flaky weight memory.
++        n_reads = int(os.environ["OLMO_WEIGHT_READ_TEST"])
++        mlp = model.layers[0].feed_forward
++        for wname in ("w1", "w3"):
++            tensors = ttnn.get_device_tensors(getattr(mlp, wname))
++            for dev in (21, 22, 23, 5):
++                first, flips = None, []
++                for i in range(n_reads):
++                    x = ttnn.to_torch(tensors[dev]).float().contiguous()
++                    h = hashlib.md5(x.numpy().tobytes()).hexdigest()[:10]
++                    if first is None:
++                        first = (h, x)
++                    elif h != first[0]:
++                        diff = (x != first[1]).nonzero()
++                        flips.append((i, len(diff), diff[:2].tolist()))
++                logger.info(f"WEIGHT_READ {wname} dev {dev}: {n_reads} reads, {len(flips)} differed from read 0; {flips[:3]}")
++
+     tokenizer = model_args.tokenizer
+     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
+ 
+@@ -237,6 +277,15 @@ def run_olmo_demo(
+             seed=seed,
+             repetition_penalty=repetition_penalty,
+         )
++        # Debug: OLMO_HOST_SAMPLING=1 returns decode logits and takes the argmax on host instead of the
++        # on-device sampler; OLMO_DUMP_LOGITS=<path> saves prefill logits and the first decode steps' logits.
++        host_sampling = os.environ.get("OLMO_HOST_SAMPLING") == "1"
++        repeat_step = os.environ.get("OLMO_REPEAT_STEP") == "1"  # needs OLMO_HOST_SAMPLING=1
++        step_hashes = []
++        if host_sampling:
++            device_sampling_params = None
++        dump_logits_path = os.environ.get("OLMO_DUMP_LOGITS")
++        dumped_logits = {}
+ 
+         # ── KV cache reset for repeat batches ────────────────────────────
+         if batch_idx != 0:
+@@ -282,6 +331,24 @@ def run_olmo_demo(
+ 
+         # toks is logits when sampling_params=None — take argmax
+         prefilled_token = toks[:, :, :].argmax(dim=-1).view(-1, 1)
++        if dump_logits_path:
++            dumped_logits["prefill"] = toks.reshape(toks.shape[0], -1)[:batch_size].to(torch.float32).clone()
++        if os.environ.get("OLMO_DUMP_KV"):
++            # Debug: md5 per (layer, K/V, device, user, block) of the KV blocks each user owns right after prefill.
++            kv_hashes = {}
++            n_blocks = (max(prefill_lens) + page_params["page_block_size"] - 1) // page_params["page_block_size"]
++            for layer_id in (0, 1, 31, 63):
++                layer_past = tt_kv_cache[0][layer_id]
++                for kv_name, cache in zip("kv", layer_past):
++                    for dev, dt in enumerate(ttnn.get_device_tensors(cache)):
++                        cache_t = ttnn.to_torch(dt).float()
++                        for user in range(batch_size):
++                            for blk in range(n_blocks):
++                                block = cache_t[int(page_table[user, blk])]
++                                kv_hashes[(layer_id, kv_name, dev, user, blk)] = hashlib.md5(
++                                    block.numpy().tobytes()
++                                ).hexdigest()[:10]
++            torch.save(kv_hashes, os.environ["OLMO_DUMP_KV"])
+         profiler.end("inference_prefill", iteration=batch_idx)
+         logger.info("Prefill finished")
+ 
+@@ -320,6 +387,13 @@ def run_olmo_demo(
+             else:
+                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
+ 
++            probe_path = os.environ.get("OLMO_OP_PROBE") if iteration == 0 else None
++            if probe_path:
++                assert not enable_trace, "OLMO_OP_PROBE needs OLMO_DECODE_TRACE=0"
++                probe_records = []
++                ttnn.CONFIG.enable_fast_runtime_mode = False  # op hooks only fire on the slow (decorated) path
++                probe_ctx = ttnn.register_post_operation_hook(_make_op_probe(probe_records))
++                probe_ctx.__enter__()
+             tt_out_tok, read_event = generator.decode_forward(
+                 out_tok,
+                 current_pos,
+@@ -336,16 +410,38 @@ def run_olmo_demo(
+             )
+             read_events.append(read_event)
+             tt_out_toks.append(tt_out_tok)
++            if probe_path:
++                probe_ctx.__exit__(None, None, None)
++                torch.save(probe_records, probe_path)
++                logger.info(f"Op probe: {len(probe_records)} op outputs saved to {probe_path}")
+ 
+             if iteration == 0:
+                 profiler.end("compile_decode", iteration=batch_idx)
+                 decode_compile_time = profiler.get_duration("compile_decode", iteration=batch_idx)
+                 logger.info(f"Iteration {iteration} (compile): {1000*decode_compile_time:.4f}ms")
+ 
+-            if iteration > 0:
++            # Device sampling keeps the next token on device, so reads lag one step; host sampling must
++            # read this step's logits before the next step can be fed.
++            if iteration > 0 or host_sampling:
+                 ttnn.event_synchronize(read_events.pop(0)[0])
+                 tt_out_result = generator.process_decode_output_host(tt_out_toks.pop(0))
+                 out_tok = tt_out_result[0]
++                if host_sampling:
++                    step_logits = out_tok.reshape(out_tok.shape[0], -1)
++                    if dump_logits_path and not repeat_step and len(dumped_logits) <= 8:
++                        dumped_logits[f"decode_{iteration}"] = step_logits[:batch_size].to(torch.float32).clone()
++                    if repeat_step:
++                        # Determinism probe: replay the same step (same token, same position) every iteration.
++                        row_hashes = [hashlib.md5(step_logits[u].contiguous().view(torch.int16).numpy().tobytes()).hexdigest()[:10] for u in range(batch_size)]
++                        step_hashes.append(row_hashes)
++                        if dump_logits_path:
++                            if "ref" not in dumped_logits:
++                                dumped_logits["ref"] = step_logits[:batch_size].to(torch.float32).clone()
++                            elif row_hashes != step_hashes[0] and len(dumped_logits) < 6:
++                                dumped_logits[f"hit_replay_{len(step_hashes) - 1}"] = step_logits[:batch_size].to(torch.float32).clone()
++                        out_tok = prefilled_token.reshape(-1).clone()
++                    else:
++                        out_tok = step_logits.argmax(dim=-1)
+ 
+                 if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
+                     out_tok = out_tok.repeat(32, 1)
+@@ -360,14 +456,15 @@ def run_olmo_demo(
+                             if all(user_done):
+                                 users_decoding = False
+ 
+-                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
+-                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+-                tokens_per_second_per_user = 1 / decode_iteration_time
+-                logger.info(
+-                    f"Decode iter {iteration}: tok/s/user={tokens_per_second_per_user:.2f}, "
+-                    f"Throughput={batch_size*tokens_per_second_per_user:.2f} tok/s, "
+-                    f"Time={1000*decode_iteration_time:.2f} ms"
+-                )
++                if iteration > 0:
++                    profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
++                    decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
++                    tokens_per_second_per_user = 1 / decode_iteration_time
++                    logger.info(
++                        f"Decode iter {iteration}: tok/s/user={tokens_per_second_per_user:.2f}, "
++                        f"Throughput={batch_size*tokens_per_second_per_user:.2f} tok/s, "
++                        f"Time={1000*decode_iteration_time:.2f} ms"
++                    )
+ 
+             if print_outputs and not is_ci_env and iteration > 0 and iteration % 10 == 0:
+                 for user in range(min(batch_size, 4)):
+@@ -377,7 +474,8 @@ def run_olmo_demo(
+                         text = "..." + text[-117:]
+                     logger.info(f"  [User {user}] {text}")
+ 
+-            current_pos += 1
++            if not repeat_step:
++                current_pos += 1
+             iteration += 1
+ 
+             if users_decoding:
+@@ -400,6 +498,32 @@ def run_olmo_demo(
+ 
+         # OLMO_DUMP_TOKENS=<path>: save prompts + generated ids so two runs can be diffed per user
+         # (models/demos/olmo_galaxy/scripts/compare_decode_tokens.py).
++        if dump_logits_path:
++            torch.save(dumped_logits, dump_logits_path)
++        if repeat_step:
++            ref = step_hashes[0]
++            mismatch = [(i, [u for u in range(batch_size) if h[u] != ref[u]]) for i, h in enumerate(step_hashes) if h != ref]
++            logger.info(
++                f"REPEAT_STEP: {len(step_hashes)} replays of one decode step, {len(mismatch)} differ from replay 0; "
++                f"first mismatches (replay, users): {mismatch[:10]}"
++            )
++        if os.environ.get("OLMO_LAYER_PROBE") == "1":
++            from models.demos.olmo_galaxy.tt.llama_decoder import LAYER_PROBE_RECORDS
++
++            torch.save(LAYER_PROBE_RECORDS, os.environ["OLMO_LAYER_PROBE_OUT"])
++            if repeat_step:
++                n_stage = len(LAYER_PROBE_RECORDS) // max(len(step_hashes), 1)
++                ref_rec = LAYER_PROBE_RECORDS[:n_stage]
++                tally = {}
++                for r in range(1, len(step_hashes)):
++                    recs = LAYER_PROBE_RECORDS[r * n_stage : (r + 1) * n_stage]
++                    for a, b in zip(ref_rec, recs):
++                        if a["hashes"] != b["hashes"]:
++                            key = (a["layer"], a["stage"])
++                            ndev = sum(x != y for x, y in zip(a["hashes"], b["hashes"]))
++                            tally.setdefault(key, []).append((r, ndev))
++                            break
++                logger.info("REPEAT_STEP first-differing probe per hit (layer, stage): " + str({k: (len(v), v[:3]) for k, v in tally.items()}))
+         dump_path = os.environ.get("OLMO_DUMP_TOKENS")
+         if dump_path:
+             with open(dump_path, "w") as f:
+diff --git a/models/demos/olmo_galaxy/tt/llama_decoder.py b/models/demos/olmo_galaxy/tt/llama_decoder.py
+index 74cf78a73ec..e97ac257c6a 100644
+--- a/models/demos/olmo_galaxy/tt/llama_decoder.py
++++ b/models/demos/olmo_galaxy/tt/llama_decoder.py
+@@ -1,6 +1,8 @@
+ # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ 
+ # SPDX-License-Identifier: Apache-2.0
++import os
++
+ import ttnn
+ from models.common.lightweightmodule import LightweightModule
+ from models.common.rmsnorm import RMSNorm
+@@ -9,6 +11,37 @@ from models.demos.olmo_galaxy.tt.llama_attention import TtLlamaAttention
+ from models.demos.olmo_galaxy.tt.llama_mlp import TtLlamaMLP
+ 
+ 
++# Debug (OLMO_SYNC_AT=attn,ff,layer): synchronize the device at those points of every OLMo decode layer to
++# find the op boundary where a missing sync/barrier lets a race through.
++_SYNC_AT = set(filter(None, os.environ.get("OLMO_SYNC_AT", "").split(",")))
++
++# Debug (OLMO_LAYER_PROBE=1): record md5 + per-row sums per device of each decode layer stage (eager decode only);
++# the demo saves LAYER_PROBE_RECORDS (see scripts/compare_layer_probes.py).
++LAYER_PROBE_ON = os.environ.get("OLMO_LAYER_PROBE") == "1"
++LAYER_PROBE_RECORDS = []
++_PROBE_SAVE_DEVS = [int(x) for x in os.environ.get("OLMO_PROBE_SAVE_DEVS", "").split(",") if x]
++_PROBE_STAGES = set(filter(None, os.environ.get("OLMO_LAYER_PROBE_STAGES", "").split(",")))
++
++
++def _layer_probe(layer_num, stage, tensor, mesh_device):
++    if not LAYER_PROBE_ON:
++        return
++    if _PROBE_STAGES and stage not in _PROBE_STAGES and not (stage.startswith("mlp.") and "mlp.*" in _PROBE_STAGES):
++        return
++    import hashlib
++
++    import torch
++
++    full = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).float().contiguous()
++    per_dev = full.reshape(mesh_device.get_num_devices(), -1)
++    hashes = [hashlib.md5(per_dev[d].numpy().tobytes()).hexdigest()[:10] for d in range(per_dev.shape[0])]
++    rec = {"layer": layer_num, "stage": stage, "hashes": hashes, "rows": per_dev.double().sum(-1, keepdim=True)}
++    for d in _PROBE_SAVE_DEVS:  # OLMO_PROBE_SAVE_DEVS=22: keep that device's tensor (bf16) to see what a bad output looks like
++        rec.setdefault("dev_tensors", {})[d] = per_dev[d].to(torch.bfloat16).clone()
++        rec["shape"] = tuple(tensor.shape)
++    LAYER_PROBE_RECORDS.append(rec)
++
++
+ class TtTransformerBlock(LightweightModule):
+     def __init__(
+         self,
+@@ -302,14 +335,19 @@ class TtTransformerBlock(LightweightModule):
+                 batch_size=batch_size,
+             )
+             self._capture("attn_out", attn_out)
++            _layer_probe(self.layer_num, "attn_out", attn_out, self.mesh_device)
++            if "attn" in _SYNC_AT:
++                ttnn.synchronize_device(self.mesh_device)
+ 
+             attn_normed, _ = self.ff_norm(attn_out, None, mode)
+             self._capture("attn_normed", attn_normed)
++            _layer_probe(self.layer_num, "attn_normed", attn_normed, self.mesh_device)
+             attn_normed_dram = ttnn.to_memory_config(attn_normed, ttnn.DRAM_MEMORY_CONFIG)
+             ttnn.deallocate(attn_normed)
+ 
+             h_attn_dram = ttnn.add(x_res_dram, attn_normed_dram)
+             self._capture("h_attn", h_attn_dram)
++            _layer_probe(self.layer_num, "h_attn", h_attn_dram, self.mesh_device)
+             ttnn.deallocate(attn_normed_dram)
+             ttnn.deallocate(x_res_dram)
+ 
+@@ -317,9 +355,13 @@ class TtTransformerBlock(LightweightModule):
+ 
+             ff_out = self.feed_forward.forward(ff_in, mode, batch_size=batch_size)
+             self._capture("ff_out", ff_out)
++            _layer_probe(self.layer_num, "ff_out", ff_out, self.mesh_device)
++            if "ff" in _SYNC_AT:
++                ttnn.synchronize_device(self.mesh_device)
+ 
+             ff_normed, _ = self.attention_norm(ff_out, None, mode)
+             self._capture("ff_normed", ff_normed)
++            _layer_probe(self.layer_num, "ff_normed", ff_normed, self.mesh_device)
+             ff_normed_dram = ttnn.to_memory_config(ff_normed, ttnn.DRAM_MEMORY_CONFIG)
+             ttnn.deallocate(ff_normed)
+ 
+@@ -330,6 +372,9 @@ class TtTransformerBlock(LightweightModule):
+             out = ttnn.to_memory_config(out_dram, skip_mem_cfg)
+             ttnn.deallocate(out_dram)
+             self._capture("layer_out", out)
++            _layer_probe(self.layer_num, "layer_out", out, self.mesh_device)
++            if "layer" in _SYNC_AT:
++                ttnn.synchronize_device(self.mesh_device)
+ 
+             return out, None
+ 
+diff --git a/models/demos/olmo_galaxy/tt/llama_mlp.py b/models/demos/olmo_galaxy/tt/llama_mlp.py
+index e237d33ff12..24c41a5508f 100644
+--- a/models/demos/olmo_galaxy/tt/llama_mlp.py
++++ b/models/demos/olmo_galaxy/tt/llama_mlp.py
+@@ -26,6 +26,9 @@ def pad_to_next_multiple(tensor):
+     return padded_tensor
+ 
+ 
++_HAMMER_W1 = int(__import__("os").environ.get("OLMO_HAMMER_W1", "0"))
++
++
+ class TtLlamaMLP(LightweightModule):
+     def __init__(
+         self,
+@@ -49,6 +52,7 @@ class TtLlamaMLP(LightweightModule):
+         self.model_config = model_config
+         self.prefetcher_setup = prefetcher_setup
+         self.tt_ccl = tt_ccl
++        self.layer_num_dbg = layer_num
+         # PCC-debug capture: parent test sets this to True; otherwise no-op.
+         self.capture_intermediates = False
+         self.captured = {}
+@@ -140,10 +144,43 @@ class TtLlamaMLP(LightweightModule):
+ 
+             logger.warning(f"  [mlp capture] {name}: failed — {e}")
+ 
++    def _hammer_w1(self, x, ref_out, dtype, pc):
++        """Debug (OLMO_HAMMER_W1=K): rerun the layer-0 w1 matmul K times on identical inputs; report per-device output flips."""
++        import hashlib
++
++        import torch
++        from loguru import logger
++
++        def per_dev_hashes(t):
++            full = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float().contiguous()
++            per_dev = full.reshape(self.mesh_device.get_num_devices(), -1)
++            return [hashlib.md5(per_dev[d].numpy().tobytes()).hexdigest()[:10] for d in range(per_dev.shape[0])]
++
++        ref = per_dev_hashes(ref_out)
++        flips = {}
++        for i in range(_HAMMER_W1):
++            out = ttnn.linear(
++                x,
++                self.w1,
++                compute_kernel_config=self.args.compute_kernel_config_hifi3,
++                dtype=dtype,
++                program_config=pc,
++                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
++            )
++            for d, (a, b) in enumerate(zip(ref, per_dev_hashes(out))):
++                if a != b:
++                    flips[d] = flips.get(d, 0) + 1
++            ttnn.deallocate(out)
++        logger.info(f"HAMMER_W1: {_HAMMER_W1} reruns, per-device output flips vs first run: {flips}")
++
+     def _debug_check_mlp(self, name, tensor):
+         """Check tensor for Inf/NaN and log stats."""
+         import os
+ 
++        if os.environ.get("OLMO_LAYER_PROBE") == "1":
++            from models.demos.olmo_galaxy.tt.llama_decoder import _layer_probe
++
++            _layer_probe(self.layer_num_dbg, "mlp." + name, tensor, self.mesh_device)
+         if os.environ.get("DEBUG_DECODE", "0") != "1":
+             return
+         try:
+@@ -211,6 +248,8 @@ class TtLlamaMLP(LightweightModule):
+                     program_config=pc_1_3,
+                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                 )
++                if _HAMMER_W1 and self.layer_num_dbg == 0:
++                    self._hammer_w1(x, w1_out, ff_out_dtype, pc_1_3)
+                 w1_out_dram = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
+                 ttnn.deallocate(w1_out)
+                 self._debug_check_mlp("w1_out_dram", w1_out_dram)
+diff --git a/models/demos/olmo_galaxy/tt/olmo_model_config.py b/models/demos/olmo_galaxy/tt/olmo_model_config.py
+index 7e1e0356d02..8e168c50242 100644
+--- a/models/demos/olmo_galaxy/tt/olmo_model_config.py
++++ b/models/demos/olmo_galaxy/tt/olmo_model_config.py
+@@ -33,6 +33,20 @@ from models.demos.olmo_galaxy.tt.model_config import (
+ from models.tt_transformers.tt.common import freqs_to_rotation_matrix, get_base_model_name, get_out_subblock_w
+ 
+ 
++def _ring_grid_with_swaps(grid):
++    """Debug: OLMO_RING_SWAP="6,6:3,6;6,7:3,7" moves those ring slots to other logical cores (same ring index)."""
++    import os
++
++    spec = os.environ.get("OLMO_RING_SWAP", "")
++    if not spec:
++        return grid
++    swaps = {}
++    for pair in spec.split(";"):
++        a, b = pair.split(":")
++        swaps[tuple(int(v) for v in a.split(","))] = tuple(int(v) for v in b.split(","))
++    return [swaps.get(c, c) for c in grid]
++
++
+ class TtOlmoModelArgs(TtModelArgs):
+     """OLMo-3.1-32B model configuration for TT Galaxy."""
+ 
+@@ -376,7 +390,7 @@ class TtOlmoModelArgs(TtModelArgs):
+                     ttnn.CoreCoord(x, y),
+                     ttnn.CoreCoord(x, y),
+                 )
+-                for x, y in PREFETCHER_NOC1_GRID
++                for x, y in _ring_grid_with_swaps(PREFETCHER_NOC1_GRID)
+             ]
+         )
+         pf_mm_out_core_range_set = ttnn.CoreRangeSet(

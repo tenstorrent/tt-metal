@@ -15,6 +15,7 @@ Run with:
     pytest models/demos/olmo_galaxy/demo/text_olmo_demo.py::test_olmo_text_demo -v -k "quick"
 """
 
+import hashlib
 import json
 import os
 from datetime import datetime
@@ -121,6 +122,8 @@ def run_olmo_demo(
     stop_at_eos=False,
 ):
     enable_trace = os.environ.get("OLMO_DECODE_TRACE", "1") == "1"
+    if os.environ.get("OLMO_MAX_NEW"):  # debug: cap generated tokens for quick determinism bisects
+        max_generated_tokens = int(os.environ["OLMO_MAX_NEW"])
     prefill_enable_trace = True
     print_outputs = not is_ci_env
 
@@ -237,6 +240,15 @@ def run_olmo_demo(
             seed=seed,
             repetition_penalty=repetition_penalty,
         )
+        # Debug: OLMO_HOST_SAMPLING=1 returns decode logits and takes the argmax on host instead of the
+        # on-device sampler; OLMO_DUMP_LOGITS=<path> saves prefill logits and the first decode steps' logits.
+        host_sampling = os.environ.get("OLMO_HOST_SAMPLING") == "1"
+        repeat_step = os.environ.get("OLMO_REPEAT_STEP") == "1"  # needs OLMO_HOST_SAMPLING=1
+        step_hashes = []
+        if host_sampling:
+            device_sampling_params = None
+        dump_logits_path = os.environ.get("OLMO_DUMP_LOGITS")
+        dumped_logits = {}
 
         # ── KV cache reset for repeat batches ────────────────────────────
         if batch_idx != 0:
@@ -282,6 +294,8 @@ def run_olmo_demo(
 
         # toks is logits when sampling_params=None — take argmax
         prefilled_token = toks[:, :, :].argmax(dim=-1).view(-1, 1)
+        if dump_logits_path:
+            dumped_logits["prefill"] = toks.reshape(toks.shape[0], -1)[:batch_size].to(torch.float32).clone()
         profiler.end("inference_prefill", iteration=batch_idx)
         logger.info("Prefill finished")
 
@@ -342,10 +356,35 @@ def run_olmo_demo(
                 decode_compile_time = profiler.get_duration("compile_decode", iteration=batch_idx)
                 logger.info(f"Iteration {iteration} (compile): {1000*decode_compile_time:.4f}ms")
 
-            if iteration > 0:
+            # Device sampling keeps the next token on device, so reads lag one step; host sampling must
+            # read this step's logits before the next step can be fed.
+            if iteration > 0 or host_sampling:
                 ttnn.event_synchronize(read_events.pop(0)[0])
                 tt_out_result = generator.process_decode_output_host(tt_out_toks.pop(0))
                 out_tok = tt_out_result[0]
+                if host_sampling:
+                    step_logits = out_tok.reshape(out_tok.shape[0], -1)
+                    if dump_logits_path and not repeat_step and len(dumped_logits) <= 8:
+                        dumped_logits[f"decode_{iteration}"] = step_logits[:batch_size].to(torch.float32).clone()
+                    if repeat_step:
+                        # Determinism probe: replay the same step (same token, same position) every iteration.
+                        row_hashes = [
+                            hashlib.md5(step_logits[u].contiguous().view(torch.int16).numpy().tobytes()).hexdigest()[
+                                :10
+                            ]
+                            for u in range(batch_size)
+                        ]
+                        step_hashes.append(row_hashes)
+                        if dump_logits_path:
+                            if "ref" not in dumped_logits:
+                                dumped_logits["ref"] = step_logits[:batch_size].to(torch.float32).clone()
+                            elif row_hashes != step_hashes[0] and len(dumped_logits) < 6:
+                                dumped_logits[f"hit_replay_{len(step_hashes) - 1}"] = (
+                                    step_logits[:batch_size].to(torch.float32).clone()
+                                )
+                        out_tok = prefilled_token.reshape(-1).clone()
+                    else:
+                        out_tok = step_logits.argmax(dim=-1)
 
                 if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
                     out_tok = out_tok.repeat(32, 1)
@@ -360,14 +399,17 @@ def run_olmo_demo(
                             if all(user_done):
                                 users_decoding = False
 
-                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
-                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
-                tokens_per_second_per_user = 1 / decode_iteration_time
-                logger.info(
-                    f"Decode iter {iteration}: tok/s/user={tokens_per_second_per_user:.2f}, "
-                    f"Throughput={batch_size*tokens_per_second_per_user:.2f} tok/s, "
-                    f"Time={1000*decode_iteration_time:.2f} ms"
-                )
+                if iteration > 0:
+                    profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                    decode_iteration_time = profiler.get_duration(
+                        f"inference_decode_time_{iteration}", iteration=batch_idx
+                    )
+                    tokens_per_second_per_user = 1 / decode_iteration_time
+                    logger.info(
+                        f"Decode iter {iteration}: tok/s/user={tokens_per_second_per_user:.2f}, "
+                        f"Throughput={batch_size*tokens_per_second_per_user:.2f} tok/s, "
+                        f"Time={1000*decode_iteration_time:.2f} ms"
+                    )
 
             if print_outputs and not is_ci_env and iteration > 0 and iteration % 10 == 0:
                 for user in range(min(batch_size, 4)):
@@ -377,7 +419,8 @@ def run_olmo_demo(
                         text = "..." + text[-117:]
                     logger.info(f"  [User {user}] {text}")
 
-            current_pos += 1
+            if not repeat_step:
+                current_pos += 1
             iteration += 1
 
             if users_decoding:
@@ -400,6 +443,17 @@ def run_olmo_demo(
 
         # OLMO_DUMP_TOKENS=<path>: save prompts + generated ids so two runs can be diffed per user
         # (models/demos/olmo_galaxy/scripts/compare_decode_tokens.py).
+        if dump_logits_path:
+            torch.save(dumped_logits, dump_logits_path)
+        if repeat_step:
+            ref = step_hashes[0]
+            mismatch = [
+                (i, [u for u in range(batch_size) if h[u] != ref[u]]) for i, h in enumerate(step_hashes) if h != ref
+            ]
+            logger.info(
+                f"REPEAT_STEP: {len(step_hashes)} replays of one decode step, {len(mismatch)} differ from replay 0; "
+                f"first mismatches (replay, users): {mismatch[:10]}"
+            )
         dump_path = os.environ.get("OLMO_DUMP_TOKENS")
         if dump_path:
             with open(dump_path, "w") as f:
