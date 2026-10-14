@@ -5,6 +5,7 @@
 #include "moe_grouped_topk_device_operation.hpp"
 
 #include <bit>
+#include <cstdlib>
 
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/program_descriptors.hpp>
@@ -163,7 +164,8 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
                                 default_unpack(cb_winning_group_scores);
     // On Blackhole the index tiles no sort compares are uint16 (bit 0 the one-group template, bit 1 the group template,
     // bit 2 the grouped template and winning-group tiles); the rank-tag sorts get each token's winning groups by id.
-    const bool blackhole = device->arch() == tt::ARCH::BLACKHOLE;
+    // CI A/B scratch only: CI_AB_MAIN_FACTORY set builds main's program (every Blackhole-only choice below off).
+    const bool blackhole = device->arch() == tt::ARCH::BLACKHOLE && std::getenv("CI_AB_MAIN_FACTORY") == nullptr;
     const bool index_words_compared = operation_attributes.stable_sort && !sort_keys_tf32;
     const uint32_t index_u16_mask = (blackhole && !index_words_compared) ? 0x7u : 0u;
     const bool winning_groups_by_id = blackhole && operation_attributes.stable_sort && sort_keys_tf32;
