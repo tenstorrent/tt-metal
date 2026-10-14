@@ -28,17 +28,14 @@ namespace tt::tt_metal::trace_dispatch {
 void reset_host_dispatch_state_for_trace(
     uint32_t num_sub_devices,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
-    DispatchArray<uint32_t>& expected_num_workers_completed,
+    CompletionCounterArray<uint32_t>& expected_num_workers_completed,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state_reset,
-    DispatchArray<uint32_t>& expected_num_workers_completed_reset,
+    CompletionCounterArray<uint32_t>& expected_num_workers_completed_reset,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr_reset) {
     // Record the original value of expected_num_workers_completed, and reset it to 0.
-    std::copy(
-        expected_num_workers_completed.begin(),
-        expected_num_workers_completed.begin() + num_sub_devices,
-        expected_num_workers_completed_reset.begin());
-    std::fill(expected_num_workers_completed.begin(), expected_num_workers_completed.begin() + num_sub_devices, 0);
+    expected_num_workers_completed_reset = expected_num_workers_completed;
+    expected_num_workers_completed.fill(0);
 
     // Record original value of launch msg buffer
     std::copy(
@@ -54,22 +51,19 @@ void reset_host_dispatch_state_for_trace(
     std::copy(config_buffer_mgr.begin(), config_buffer_mgr.begin() + num_sub_devices, config_buffer_mgr_reset.begin());
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         // Sync values in the trace need to match up with the counter starting at 0 again.
-        config_buffer_mgr[i].mark_completely_full(expected_num_workers_completed[i]);
+        config_buffer_mgr[i].mark_completely_full(0);
     }
 }
 
 void load_host_dispatch_state(
     uint32_t num_sub_devices,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
-    DispatchArray<uint32_t>& expected_num_workers_completed,
+    CompletionCounterArray<uint32_t>& expected_num_workers_completed,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state_reset,
-    DispatchArray<uint32_t>& expected_num_workers_completed_reset,
+    CompletionCounterArray<uint32_t>& expected_num_workers_completed_reset,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr_reset) {
-    std::copy(
-        expected_num_workers_completed_reset.begin(),
-        expected_num_workers_completed_reset.begin() + num_sub_devices,
-        expected_num_workers_completed.begin());
+    expected_num_workers_completed = expected_num_workers_completed_reset;
     std::copy(
         worker_launch_message_buffer_state_reset.begin(),
         worker_launch_message_buffer_state_reset.begin() + num_sub_devices,
@@ -83,7 +77,7 @@ void issue_trace_commands(
     SystemMemoryManager& sysmem_manager,
     const TraceDispatchMetadata& dispatch_md,
     uint8_t cq_id,
-    const DispatchArray<uint32_t>& expected_num_workers_completed) {
+    const CompletionCounterArray<uint32_t>& expected_num_workers_completed) {
     MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
     void* cmd_region = sysmem_manager.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB, cq_id);
 
@@ -99,17 +93,19 @@ void issue_trace_commands(
         dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
     }
 
+    const auto& mem_map = metal_ctx.dispatch_mem_map();
     for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
         auto index = *id;
+        const uint32_t counter_index = mem_map.get_completion_counter_index(index);
 
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
         command_sequence.add_dispatch_go_signal_mcast(
-            expected_num_workers_completed[index],
+            expected_num_workers_completed[counter_index],
             // go_signal word 0: REPLAY_TRACE control (go_count is a dispatcher-overridden placeholder). The
             // done-return address (word 1) already points at this CQ: the replay sends SET_GO_SIGNAL_NOC_ADDR first
             // whenever another CQ last configured the slot.
             metal_ctx.hal().make_go_msg_u32(0, dev_msgs::RUN_MSG_REPLAY_TRACE),
-            metal_ctx.dispatch_mem_map().get_completion_stream(index),
+            mem_map.get_completion_stream(counter_index),
             static_cast<uint8_t>(index),
             desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
                 ? index
@@ -121,8 +117,8 @@ void issue_trace_commands(
     // this step, before sending kernel config data to workers or notifying dispatch_s that its safe to send the
     // go_signal. Clear the dispatch <--> worker semaphore, since trace starts at 0.
     for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
-        auto index = *id;
-        uint32_t expected_num_workers = expected_num_workers_completed[index];
+        const uint32_t counter_index = mem_map.get_completion_counter_index(*id);
+        uint32_t expected_num_workers = expected_num_workers_completed[counter_index];
         if (desc.num_traced_programs_needing_go_signal_multicast) {
             expected_num_workers += mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
         }
@@ -131,7 +127,7 @@ void issue_trace_commands(
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
                 0,
-                metal_ctx.dispatch_mem_map().get_completion_stream(index),
+                mem_map.get_completion_stream(counter_index),
                 expected_num_workers,
                 cq_id,
                 1);
@@ -139,7 +135,7 @@ void issue_trace_commands(
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
-            metal_ctx.dispatch_mem_map().get_completion_stream(index),
+            mem_map.get_completion_stream(counter_index),
             expected_num_workers,
             cq_id);
     }
@@ -189,11 +185,13 @@ void update_worker_state_post_trace_execution(
     const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& trace_worker_descriptors,
     DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr,
-    DispatchArray<uint32_t>& expected_num_workers_completed) {
+    CompletionCounterArray<uint32_t>& expected_num_workers_completed,
+    const DispatchMemMap& mem_map) {
     for (const auto& [id, desc] : trace_worker_descriptors) {
         auto index = *id;
+        const uint32_t counter_index = mem_map.get_completion_counter_index(index);
         // Update the expected worker cores counter due to trace programs completion
-        expected_num_workers_completed[index] = desc.num_completion_worker_cores;
+        expected_num_workers_completed[counter_index] = desc.num_completion_worker_cores;
         // After trace runs, the rdptr on each worker will be incremented by the number of programs in the trace
         // Update the wptr on host to match state. If the trace doesn't execute on a
         // class of worker (unicast or multicast), it doesn't reset or modify the
@@ -205,7 +203,7 @@ void update_worker_state_post_trace_execution(
         // The config buffer manager is unaware of what memory is used inside the trace, so mark all memory as used so
         // that it will force a stall and avoid stomping on in-use state.
         // TODO(jbauman): Reuse old state from the trace.
-        config_buffer_mgr[index].mark_completely_full(expected_num_workers_completed[index]);
+        config_buffer_mgr[index].mark_completely_full(expected_num_workers_completed[counter_index]);
     }
 }
 

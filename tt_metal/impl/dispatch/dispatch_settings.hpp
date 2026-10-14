@@ -176,4 +176,8 @@ private:
 template <typename T>
 using DispatchArray = std::array<T, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>;
 
+// Per-CQ arrays indexed by completion counter (DispatchMemMap::get_completion_counter_index), not by sub-device.
+template <typename T>
+using CompletionCounterArray = std::array<T, DispatchSettings::DISPATCH_COMPLETION_COUNTERS>;
+
 }  // namespace tt::tt_metal

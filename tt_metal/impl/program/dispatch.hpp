@@ -245,10 +245,12 @@ void write_program_command_sequence(
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
+// Resets the config buffer managers and the completion counters of sub-devices [0, num_entries_to_reset).
 void reset_config_buf_mgrs_and_expected_workers(
     const Hal& hal,
+    const DispatchMemMap& mem_map,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
-    DispatchArray<uint32_t>& expected_num_workers_completed,
+    CompletionCounterArray<uint32_t>& expected_num_workers_completed,
     uint32_t num_entries_to_reset,
     uint32_t worker_l1_unreserved_start);
 
@@ -256,7 +258,7 @@ void reset_worker_dispatch_state_on_device(
     distributed::MeshDevice* mesh_device,
     SystemMemoryManager& manager,
     uint8_t cq_id,
-    const DispatchArray<uint32_t>& expected_num_workers_completed,
+    const CompletionCounterArray<uint32_t>& expected_num_workers_completed,
     bool reset_launch_msg_state,
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
 
@@ -265,7 +267,7 @@ void reset_worker_dispatch_state_on_device(
 void clear_worker_go_messages_on_device(
     Device* device,
     uint8_t cq_id,
-    const DispatchArray<uint32_t>& expected_num_workers_completed,
+    const CompletionCounterArray<uint32_t>& expected_num_workers_completed,
     uint32_t num_sub_devices,
     ttsl::Span<const uint32_t> done_addr_words);
 

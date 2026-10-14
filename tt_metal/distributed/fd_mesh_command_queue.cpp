@@ -216,6 +216,7 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     active_distributed_context_(std::move(distributed_context)) {
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
+        MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map(),
         config_buffer_mgr_,
         expected_num_workers_completed_,
         DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
@@ -365,6 +366,12 @@ void FDMeshCommandQueue::wait_for_outstanding_reads(std::unique_lock<std::mutex>
     }
 }
 
+uint32_t FDMeshCommandQueue::completion_counter_index(SubDeviceId sub_device_id) const {
+    return MetalContext::instance(mesh_device_->impl().get_context_id())
+        .dispatch_mem_map()
+        .get_completion_counter_index(*sub_device_id);
+}
+
 void FDMeshCommandQueue::clear_expected_num_workers_completed() {
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {
@@ -391,7 +398,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
     }
     // Clear counter(s) on host to reflect update device state
     for (auto sub_device_id : sub_device_ids) {
-        expected_num_workers_completed_[*sub_device_id] = 0;
+        expected_num_workers_completed_[completion_counter_index(sub_device_id)] = 0;
         cross_node_program_completion_counts_[*sub_device_id].clear();
     }
 
@@ -454,10 +461,11 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
 
     program_dispatch::ProgramDispatchMetadata dispatch_metadata;
+    const uint32_t counter_index = completion_counter_index(sub_device_id);
     // Expected number of workers from the previous run
     uint32_t expected_num_workers_completed = sysmem_manager.get_bypass_mode()
                                                   ? trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores
-                                                  : expected_num_workers_completed_[*sub_device_id];
+                                                  : expected_num_workers_completed_[counter_index];
     const auto updated_worker_counts =
         program_dispatch::get_expected_num_workers_completed_updates(expected_num_workers_completed, num_workers);
 
@@ -474,7 +482,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         }
     }
 
-    expected_num_workers_completed_[*sub_device_id] = updated_worker_counts.current;
+    expected_num_workers_completed_[counter_index] = updated_worker_counts.current;
     expected_num_workers_completed = updated_worker_counts.previous;
 
     // Only order CrossNode config Buffer rewrites when this workload re-launches a
@@ -778,7 +786,7 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
 
     if (tt::IsProgramRealtimeProfilerActive(extract_context_id(mesh_device_))) {
         for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
-            const uint32_t wait_count = expected_num_workers_completed_[*sub_device_id];
+            const uint32_t wait_count = expected_num_workers_completed_[completion_counter_index(sub_device_id)];
             for (auto* device : mesh_device_->get_devices()) {
                 write_rt_profiler_flush(id_, sub_device_id, device->sysmem_manager(), wait_count);
             }
@@ -1338,6 +1346,7 @@ void FDMeshCommandQueue::reset_worker_state(
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
+        MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map(),
         config_buffer_mgr_,
         expected_num_workers_completed_,
         mesh_device_->num_sub_devices(),
@@ -1506,7 +1515,8 @@ void FDMeshCommandQueue::submit_replay_buffer(
         worker_descriptors,
         cq_shared_state_->worker_launch_message_buffer_state,
         config_buffer_mgr_,
-        expected_num_workers_completed_);
+        expected_num_workers_completed_,
+        MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map());
 
     // Mirror the dispatcher's per-sub-device go_count for the gos this replay issued. Only multicast gos advance it:
     // the trace's multicast program gos plus the REPLAY_TRACE reset go, which is multicast only when the trace has
@@ -1670,10 +1680,11 @@ void FDMeshCommandQueue::record_end() {
                 trace_worker_descriptor.num_traced_programs_needing_go_signal_multicast++;
             }
         }
-        DispatchArray<uint32_t> starting_workers_completed{};
+        CompletionCounterArray<uint32_t> starting_workers_completed{};
         // SimpleTraceAllocator assumes the sync starts at 0, so keep track of the number of allocations to add.
         for (auto& [sub_device_id, trace_worker_descriptor] : trace_worker_descriptors) {
-            starting_workers_completed[*sub_device_id] = trace_worker_descriptor.num_completion_worker_cores;
+            starting_workers_completed[completion_counter_index(sub_device_id)] =
+                trace_worker_descriptor.num_completion_worker_cores;
         }
 
         for (uint32_t node_idx = 0; node_idx < trace_nodes.size(); node_idx++) {
@@ -1724,7 +1735,7 @@ void FDMeshCommandQueue::record_end() {
             // this device range's trace stream contribute starting_workers_completed to the
             // dispatch completion counter. Offset sync_count before it is patched into the stall
             // command by update_traced_program_dispatch_commands.
-            node.dispatch_metadata.sync_count += starting_workers_completed[*sub_device_id];
+            node.dispatch_metadata.sync_count += starting_workers_completed[completion_counter_index(sub_device_id)];
 
             // Update the generated dispatch commands based on the state of the CQ and the ring buffer
             program_dispatch::update_traced_program_dispatch_commands(
@@ -1856,6 +1867,7 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
         }
         program_dispatch::reset_config_buf_mgrs_and_expected_workers(
             MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
+            MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map(),
             config_buffer_mgr_,
             expected_num_workers_completed_,
             mesh_device_->num_sub_devices(),

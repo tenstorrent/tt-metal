@@ -309,8 +309,9 @@ uint32_t DispatchMemMap::get_completion_counter_index(uint32_t sub_device_index)
     return counter_index;
 }
 
-uint32_t DispatchMemMap::get_completion_stream(uint32_t sub_device_index) const {
-    return get_dispatch_stream_index(get_completion_counter_index(sub_device_index));
+uint32_t DispatchMemMap::get_completion_stream(uint32_t counter_index) const {
+    TT_ASSERT(counter_index < DispatchSettings::DISPATCH_COMPLETION_COUNTERS);
+    return get_dispatch_stream_index(counter_index);
 }
 
 uint32_t DispatchMemMap::get_completion_counter_addr(uint8_t cq_id, uint32_t counter_index) const {

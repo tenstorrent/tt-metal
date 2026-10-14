@@ -104,8 +104,8 @@ public:
     // offset passed in go_msg_t word 1, relative to the CQ's get_completion_counter_offset.
     uint32_t get_completion_counter_index(uint32_t sub_device_index) const;
 
-    // Stream register holding a sub-device's completion counter (arches with stream registers).
-    uint32_t get_completion_stream(uint32_t sub_device_index) const;
+    // Stream register holding a completion counter (arches with stream registers).
+    uint32_t get_completion_stream(uint32_t counter_index) const;
 
     // L1 address of a completion counter in cq_id's counter block (arches without stream registers).
     uint32_t get_completion_counter_addr(uint8_t cq_id, uint32_t counter_index) const;

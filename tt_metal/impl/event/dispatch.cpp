@@ -97,7 +97,7 @@ void issue_record_event_commands(
     HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
-        auto offset_index = *sub_device_ids[i];
+        const uint32_t counter_index = metal_ctx.dispatch_mem_map().get_completion_counter_index(*sub_device_ids[i]);
         // recording an event does not have any side-effects on the dispatch completion count
         // hence clear_count is set to false, i.e. the number of workers on the dispatcher is
         // not reset
@@ -110,15 +110,15 @@ void issue_record_event_commands(
             command_sequence.add_dispatch_wait_with_prefetch_stall(
                 wait_flags,
                 0,
-                metal_ctx.dispatch_mem_map().get_completion_stream(offset_index),
-                expected_num_workers_completed[offset_index],
+                metal_ctx.dispatch_mem_map().get_completion_stream(counter_index),
+                expected_num_workers_completed[counter_index],
                 cq_id);
         } else {
             command_sequence.add_dispatch_wait(
                 wait_flags,
                 0,
-                metal_ctx.dispatch_mem_map().get_completion_stream(offset_index),
-                expected_num_workers_completed[offset_index],
+                metal_ctx.dispatch_mem_map().get_completion_stream(counter_index),
+                expected_num_workers_completed[counter_index],
                 cq_id);
         }
     }
