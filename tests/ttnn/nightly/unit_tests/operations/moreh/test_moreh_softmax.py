@@ -558,4 +558,4 @@ def test_softmax_bfloat8_b_intermediates(shape, dim, strategy, device):
 
     passing, out = comp_allclose_and_pcc(torch_output, ttnn_output, rtol=0, atol=16 * rounding_floor)
     logger.debug(out)
-    assert passing
+    assert passing, out
