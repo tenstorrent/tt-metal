@@ -502,6 +502,9 @@ obligations are left to the image, and `X280ActiveContract` in
    one: it also makes obligation 2 non-fatal, because a coordinator that
    forgets to release its workers does not strand them.
    `X280ActiveContract` checks it on hardware.
+   The `p2p_latency` X280 images break it in their timed poll, which checks
+   STOP only when built with `-DP2P_LATENCY_POLL_CHECKS_STOP`: a token that
+   never arrives there strands the hart until `tt-smi -r`.
 2. **Every hart reaches `return`.** One hart that never returns blocks every
    aggregate wait.
 3. **No WFI.** Host NOC writes raise no interrupt on this part, so a
@@ -636,7 +639,9 @@ compiler tt-metal fetches (`runtime/sfpi`, or `/opt/tenstorrent/sfpi` with
 cmake -B build -DTT_METAL_BUILD_X280=ON
 ninja -C build x280_images x280_abi_headers x280_runtime_host_tests x280_runtime_coordinate_tests \
   x280_bench_host_tests x280_bench_device_tests x280_bench_release_selector_tests \
-  x280_transport_bandwidth_tensix_to_x280 x280_transport_bandwidth_x280_to_tensix
+  x280_transport_bandwidth_tensix_to_x280 x280_transport_bandwidth_x280_to_tensix \
+  x280_p2p_latency_x280_same_tile x280_p2p_latency_x280_peer_tile x280_p2p_latency_tensix_peer_tile \
+  x280_p2p_latency_erisc_peer_tile x280_p2p_latency_drisc_peer_tile
 ctest --test-dir build -R x280      # image placement, pinned-input guards, header refusals, host, offline and mock-cluster tests; no device
 ```
 
@@ -648,6 +653,9 @@ ctest --test-dir build -R x280      # image placement, pinned-input guards, head
 | `firmware-atomic-bench.bin` | `src/atomic_bench.c` | cross-hart atomics micro-benchmark (§ 7); in the active-image contract set |
 | `firmware-active-session-fault.bin` | `src/active_session_fault.c` | traps and CEASEs hart 2, for `x280_active_failure_test` only |
 | `firmware-transport-bandwidth-x280-to-tensix.bin` | `src/transport_bandwidth_x280_to_tensix.cpp` | X280 -> Tensix member of transport_bandwidth, run by `x280_transport_bandwidth_x280_to_tensix`; the Tensix -> X280 member (`x280_transport_bandwidth_tensix_to_x280`) submits no X280 image |
+| `firmware-p2p-latency-x280-same-tile.bin` | `src/p2p_latency_x280_same_tile.cpp` | X280 hart <-> X280 hart on one tile, run by `x280_p2p_latency_x280_same_tile` |
+| `firmware-p2p-latency-x280-peer-tile.bin` | `src/p2p_latency_x280_peer_tile.cpp` | X280 <-> X280 on two L2CPU tiles, both participants, run by `x280_p2p_latency_x280_peer_tile` |
+| `firmware-p2p-latency-metal-peer-tile.bin` | `src/p2p_latency_metal_peer_tile.cpp` | X280 half of the Tensix, idle-ERISC and free-DRISC peers (`x280_p2p_latency_{tensix,erisc,drisc}_peer_tile`) |
 
 Every image compiles with `-mcpu=sifive-x280 -march=rv64gc -mabi=lp64d
 -mcmodel=medany -O2 -Werror`, freestanding, and links with
@@ -688,6 +696,60 @@ core_sync DRISC worker, has an offline check against the Blackhole SoC
 descriptor under Metal's runtime root (`TT_METAL_RUNTIME_ROOT`, or the
 repository root as the working directory). It needs no device and runs in the
 `x280_bench_device_offline` CTest.
+
+### p2p_latency Metal peers
+
+All three Metal-peer executables consume
+`X280_P2P_LATENCY_METAL_PEER_TILE_FW_IMAGE`, defaulting to
+`build/x280/firmware-p2p-latency-metal-peer-tile.bin`. They compile
+`kernels/p2p_latency/metal_peer_entry.cpp` with exactly one of
+`P2P_LATENCY_TARGET_TENSIX`, `P2P_LATENCY_TARGET_IDLE_ERISC`, or
+`P2P_LATENCY_TARGET_DRISC`. The X280 backend ID is `0x10000006`;
+the Metal result retains its target-specific backend ID. The shared
+`metal_peer_args.h` cookie identifies the 16-word layout, independently of
+target selection.
+Unless `P2P_LATENCY_{TENSIX,ERISC,DRISC}_PEER_TILE_W` is set, each first runs
+an unrecorded `W=8` pilot and sizes the measured launch's warm-up to 25 ms of
+device work, so the AICLK elapsed bound stays well inside its limit
+(`MEASUREMENT.md`); a set value is used as given.
+
+`x280_p2p_latency_erisc_peer_tile` launches only an inactive Ethernet core in
+`Eth::IDLE` mode and exchanges 4-byte tokens over same-chip NOC; it sends no
+Ethernet-link traffic. The ERISC participant reports raw wall-clock ticks with
+per-run AICLK evidence. The host reads CMFW's programmed maximum and validates
+start, end and whole-run counter rates plus throttle telemetry before publishing
+a conversion rate. It is an implementation smoke path, not a production fabric
+transition. It and `x280_p2p_latency_drisc_peer_tile` link `x280_slow_dispatch`
+(§ Benchmark harness).
+
+`x280_p2p_latency_drisc_peer_tile` selects bank 0's free non-endpoint DRISC and
+exchanges 4-byte tokens over NOC0 as a mechanical same-chip smoke target. Its
+kernel is launched through forced slow dispatch with the tensor prefetcher
+inactive. It requires NOC0 in the stream mode DRISC firmware sets, and switches
+no NIU. X280 addresses the DRISC mailbox by its
+untagged local offset while host reads and writes use the tagged DRISC-L1 view.
+DRISC measurements are raw `get_timestamp()` ticks carrying the same per-run
+AICLK evidence and externally usable conversion rate.
+
+### Paired Tensix/X280 cases
+
+A paired case runs its two halves on different core types: p2p_latency's
+`tensix_peer_tile` member runs `src/p2p_latency_metal_peer_tile.cpp` on an X280
+hart and `kernels/p2p_latency/metal_peer_entry.cpp` on a Tensix core. Its block
+layouts are headers both halves compile; the framework defines no wire format.
+
+What the framework supplies is three things: the opaque argument span
+(`ActiveRunRequest::args_addr` and `args_bytes`, read by the image through
+`x280_hart_args` and `x280_hart_args_bytes`,
+validated for placement only — D-032), `noc_open_window_2m`, which refuses an
+out-of-range coordinate rather than truncating it into a different real tile
+and reads back the window it programmed, and `X280_TLB_PAIRED_BASE`, the slot
+range a paired case draws its outbound window from.
+
+Both sides bound their own wait, and neither bound depends on the other side.
+The X280 side polls for STOP while it waits (`rt/x280_idle.h`), so the host's
+STOP always ends it; the Tensix side carries its own cycle deadline, because Metal's `Finish`
+has none and an unbounded kernel wait hangs the host with no way back.
 
 ### Active-image contract suite
 
