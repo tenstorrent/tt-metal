@@ -232,6 +232,9 @@ void flat_drisc_ensure(distributed::MeshDevice* mesh, uint32_t n_slots, uint32_t
     if (std::getenv("MIMO_FL_DRISC_PROF")) {  // (debug: per-section cycles of the last call, in the dump)
         defs["SE_DRISC_PROF"] = "1";
     }
+    if (std::getenv("MIMO_FL_W_NOFWD")) {  // (perf probe: weight blocks signalled, not written to the gate/up cores)
+        defs["SE_W_NOFWD"] = "1";
+    }
     if (std::getenv("MIMO_FL_W_NOREAD")) {  // (perf probe: no weight DMA, garbage)
         defs["SE_W_NOREAD"] = "1";
     }

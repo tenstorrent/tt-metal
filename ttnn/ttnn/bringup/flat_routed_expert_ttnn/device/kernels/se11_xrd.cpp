@@ -138,7 +138,15 @@ void kernel_main() {
                     for (uint32_t r = 0; r < 32 && r0 + r < count; ++r) {
 #endif
 #ifdef XRD_INDEXED
+#ifdef XRD_BIG  // perf probe (MIMO_FL_XRD_BIG): same bytes in half the requests (2 segments of every other row)
+                        if (r % 2 == 0) {
+                            noc_async_read<2 * seg>(
+                                get_noc_addr(idx[m * 32 + r] * ppr, xg, (j * seg) % (row_bytes - seg)), dst + r * seg,
+                                2 * seg);
+                        }
+#else
                         read_seg(idx[m * 32 + r], j, dst + r * seg);
+#endif
 #else
                         read_seg(off + r0 + r, j, dst + r * seg);
 #endif

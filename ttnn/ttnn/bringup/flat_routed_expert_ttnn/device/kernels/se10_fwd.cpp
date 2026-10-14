@@ -104,6 +104,7 @@ void kernel_main() {
                 const uint32_t dst = landing + (issued % slots) * blk_bytes;
 #endif
                 const uint32_t trid = 1 + issued % depth;
+#ifndef SE_W_NOFWD  // (perf probe: the weight blocks are not forwarded, only signalled)
                 for (uint32_t j = 0; j < R; ++j) {  // (a block may exceed one NoC packet: bursts, one id)
                     for (uint32_t o = 0; o < blk_bytes; o += NOC_MAX_BURST_SIZE) {
                         const uint32_t n = blk_bytes - o < NOC_MAX_BURST_SIZE ? blk_bytes - o : NOC_MAX_BURST_SIZE;
@@ -117,6 +118,7 @@ void kernel_main() {
                             fwd_vc);
                     }
                 }
+#endif
                 ++issued;
             }
         }

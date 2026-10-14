@@ -176,6 +176,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     if (p.nsg > 1) {
         dyn_def["SE_SG"] = std::to_string(p.nsg);
     }
+    if (std::getenv("MIMO_FL_W_NOFWD")) {  // (perf probe: gate/up weight blocks signalled, not forwarded)
+        dyn_def["SE_W_NOFWD"] = "1";
+    }
     // perf probe (read at program build): MIMO_FL_W_NOREAD=1 - the weight readers skip their DRAM reads (garbage
     // weights), every other transfer stays: the flat expert's NoC pattern without most of its DRAM traffic
     if (std::getenv("MIMO_FL_W_NOREAD")) {
@@ -605,7 +608,10 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         // perf probes (read at program build; not in the program hash, so a process uses one setting):
         // MIMO_FL_XRD_SKIP=n: the relays read no x rows from DRAM (garbage tiles), MIMO_FL_XRD_BATCH: chunks per read
-        // barrier (must divide RM_CHUNKS)
+        // barrier (must divide RM_CHUNKS), MIMO_FL_XRD_BIG: the same bytes in half the requests (indexed; garbage)
+        if (std::getenv("MIMO_FL_XRD_BIG")) {
+            xrd_def["XRD_BIG"] = "1";
+        }
         if (const char* skip = std::getenv("MIMO_FL_XRD_SKIP")) {
             xrd_def["XRD_SKIP_READS"] = skip;
         }
@@ -627,15 +633,24 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                x_rd_noc,
                {0, t.x.logical_shape()[-1] * 2, E, MT, p.nsb, S, xrd_batch, idx_arg, p.H / t.x.logical_shape()[-1]},
                xrd_def);
-        const auto ktz = cp("se11_tz.cpp", xrel, {0, 1, MT}, with(dyn_def, {{"SE_SBT", sbt}}));
+        // MIMO_FL_TZ_SKIP: the relays' tilizers only do the CB handshakes; MIMO_FL_XMC_NODATA: the multicasters send
+        // only the XARR counts (garbage x on the gate/up cores)
+        Defines tz_def = with(dyn_def, {{"SE_SBT", sbt}});
+        if (std::getenv("MIMO_FL_TZ_SKIP")) {
+            tz_def["TZ_SKIP"] = "1";
+        }
+        const auto ktz = cp("se11_tz.cpp", xrel, {0, 1, MT}, tz_def);
         const std::vector<CoreCoord> prim(p.relays.begin(), p.relays.begin() + (x_once ? 1 : NR));
-        const Defines xmc_def = with(
+        Defines xmc_def = with(
             dyn_def,
             {{"SE_SBT", sbt},
              {"XMC_WHOLE_SB", "1"},
              {"XMC_HELPER", "1"},
              {"SE_XNH", std::to_string(p.nh)},
              {"XMC_ZERO_WORDS", "1"}});
+        if (std::getenv("MIMO_FL_XMC_NODATA")) {
+            xmc_def["XMC_NODATA"] = "1";
+        }
         // (x read once with forwarding: one kernel per primary, its half XMC_FWD_K)
         std::vector<KernelHandle> kxms;
         for (uint32_t q = 0; q < (p.xfwd ? prim.size() : 1u); ++q) {
