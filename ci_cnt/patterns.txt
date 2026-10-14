@@ -1,2 +1,2 @@
-Elwadd && math_fidelity:LoFi && Float16_b->Float16_b && input_dimensions:[32, 256] && dest_sync:Half && dest_acc:No && transpose_srca:No && acc_to_dest:False && unpack_to_dest:False
-Elwmul && math_fidelity:HiFi4 && Float16_b->Float16_b && input_dimensions:[32, 256] && dest_sync:Half && dest_acc:No && transpose_srca:No && acc_to_dest:False && unpack_to_dest:False
+Elwadd && math_fidelity:LoFi && Float16_b->Float16_b && input_dimensions:[32, 256] && dest_acc:No && transpose_srca:No && acc_to_dest:False
+Elwmul && Float16_b->Float16_b && input_dimensions:[32, 256] && dest_acc:No && transpose_srca:No && acc_to_dest:False
