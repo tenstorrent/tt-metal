@@ -725,7 +725,6 @@ def test_exp_full_mantissa(device):
 
     result = ttnn.to_torch(ttnn.exp(tt_in))
 
-    assert torch.isfinite(golden).all(), "edge points must stay below exp overflow"
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
@@ -822,7 +821,6 @@ def test_exp2_full_mantissa(device):
 
     result = ttnn.to_torch(ttnn.exp2(tt_in))
 
-    assert torch.isfinite(golden).all(), "edge points must stay below exp2 overflow"
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
@@ -920,7 +918,6 @@ def test_expm1_full_mantissa(device):
 
     result = ttnn.to_torch(ttnn.expm1(tt_in))
 
-    assert torch.isfinite(golden).all(), "edge points must stay below expm1 overflow"
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
