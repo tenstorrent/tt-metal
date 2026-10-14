@@ -854,6 +854,208 @@ not synchronized: per-group spans only. us per call:
 - Next if pursued: flat's real relay NoCs (x reads on NOC1) in the bench, then the flat prototype with the DRISC
   tiles at low MPFE priority, judged on the LoudBox overlap layout it would enable.
 
+### 8g. The flat op with DRISC gate/up senders (MIMO_FL_DRISC=1, galaxy tree, 2026-10-14)
+The full op, not a bench: `MIMO_FL_DRISC=1` (read at program build) replaces the 16 Tensix readers + forwarders
+(se_reader.cpp + se10_fwd.cpp) with 16 persistent DRISC kernels (se_drisc_gu.cpp, 2 tiles per bank: endpoint indices
+1 and 2; index 0 is firmware's). Pieces:
+- **Launch next to fast dispatch** (flat_drisc.cpp): a DRAM-only Program per chip, compiled with force_slow_dispatch
+  and started by slow_dispatch::LaunchProgramAsync on the first flat program build (as the tensor prefetcher); the host
+  waits for each kernel's READY word (it zeroes its credit words first). The kernels serve every call until
+  `flat_drisc_stop` (Python: ttnn.close_device / close_mesh_device are wrapped to stop them first). Trace-compatible:
+  nothing per call on the host.
+- **Per call**: reader slot r's Tensix core (se_drisc_go.cpp, BRISC) builds the schedule (se_dyn_load, as the reader
+  did) and writes a job descriptor (weight region, block / chunk sizes, landing ring, the receivers, the data
+  semaphore's address, the loads' expert + ring region) into its DRISC's L1, then atomically bumps its job counter.
+- **DRISC loop**: per unit (chunk, block): GDDR DMA into one of ~10 L1 slots (in order), write to the block's
+  receivers once they granted the chunk (transaction id per slot), bump their data semaphores when flushed.
+- **Credits**: the gate/up receivers atomically increment a word in the DRISC's L1 (cumulative over calls: a call
+  grants max(ring, chunks), the DRISC carries the base). DRISC L1 from Tensix = local address + 0x20_0000_0000 with the
+  high address register set by hand (the stock NoC calls mask it to the PCIe bits; se_drisc.hpp). **It must go on
+  NOC0**: tile 1 of each bank is the bank's NOC1 endpoint, its NOC1 NIU is in NOC2AXI mode and the tagged write never
+  reached L1 (first hang: tile-1 senders saw 0 grants, tile 2 streamed until compute stalled). The receivers' BRISC
+  (NOC1) issues these on NOC0 after noc_local_state_init(0) (firmware only initializes its own NOC's counters).
+- Plan: gate/up cores per slot by NOC0 hops from the slot's DRISC tile (same-side), reader down columns off.
+- **Bit-identical** to the default at M 128 (GLM-Flash E36, y dump torch.equal).
+- First perf (card 1, us / expert, default -> DRISC): M 32 33.0 -> 33.1, 64 35.4 -> 36.9, 128 40.2 -> 41.2, 256 49.7
+  -> 54.5, 384 57.4 -> 63.7, 512 70.6 -> 78.0, 768 104.3 -> 107.7, 1024 138.1 -> 140.2, 2048 273.4 -> 274.6, 5120
+  679.5 -> 680.5. Neutral at the ends, up to +11% mid-M; the 16 reader cells are idle (only the launcher BRISC).
+
+- **Why mid-M lost** (M 64 / 256 / 384 / 512 probes, us / expert): not DRAM, not bandwidth. W_NOREAD (no weight
+  reads): Tensix 21.9 / 36.9 / 53.2 / 70.1, DRISC 25.2 / 40.0 / 56.8 / 73.1. W_NOREAD + X_RESIDENT (x never moves):
+  Tensix 20.9 / 35.8 / 52.8 / 69.6, DRISC **17.1** / 35.7 / 52.6 / 69.5. The DRISC delivery is faster on its own; it
+  loses by sharing NOC0 with the x relays' multicast into the gate/up cores (the Tensix forwarders were on NOC1).
+- Knobs that did not help: weight writes on VC 1 vs 3 (same), MPFE weights (DRISC 0 / 1, ordinary 5 / 7: within 2%),
+  same-side gate/up assignment by real NOC0 hops (worse than the first, accidental mixed one: 56.5 vs 54.5 at M 256;
+  the first plan used translated DRAM coordinates 17/18 as if physical), x multicast moved to NOC1 with the receivers
+  on NOC0 (MIMO_FL_DRISC_XNOC=1: M 512 78 -> 122, the relays sit for NOC0 multicast).
+- **Hazard: no kernel on a bank's NOC1-endpoint tile.** With the down weight reads on NOC1 (MIMO_FL_DN_NOC0=1) and
+  DRISC kernels on tile 1 (each bank's NOC1 endpoint) the x relays' NOC1 DRAM reads never returned (issued -
+  received 46; hang, twice). With only the bank's non-endpoint tile in use the same config runs. So one tile per bank
+  (MIMO_FL_DRISC_TILES=1, default): it serves both of the bank's slots, one per NoC (NOC1 is legal there), a DMA
+  stream each, 4 L1 slots each.
+- **Credits without NoC writes from the receivers**: the receivers count grants in their own semaphore (id 1, zero
+  per launch); the DRISC reads the counters when it runs out (the receivers are the x multicast's destinations: their
+  NOC0 writes are the documented wedge pattern). Bit-identical.
+- **The freed reader cells as down cores**: one launcher core posts all 16 jobs; the other 15 cells go to the down
+  pool (GLM-Flash 26 -> 32 down cores, 4 columns each instead of 5). Down is the large-M bottleneck (MIMO_FL_ND=22:
+  M 2048 273 -> 326).
+- Current (committed 9411d5ca544, galaxy tree), us / expert, default -> DRISC: M 64 35.4 -> 55.5, 128 40.2 -> 56.2,
+  256 49.7 -> 57.1, 384 57.4 -> 60.9, 512 70.6 -> 69.0, 1024 138.1 -> 134.3, 2048 273.4 -> 265.4, 5120 679.5 -> 659.3.
+  Bit-identical at M 128. Large M -3%; small M capped by one tile per bank (~21 GB/s each; two tiles per bank gave M
+  64 36.7 but are unsafe).
+
+- **The "endpoint tile hazard" was my configuration, not tile 1** (isolation, all with MIMO_FL_DN_NOC0=1 = heavy NOC1
+  DRAM reads; GLM-Flash M 64..2048; tt-triage on every hang: only the x relays' NOC1 DRAM reads outstanding, the
+  DRISCs idle waiting for grants):
+  | config | result |
+  |---|---|
+  | kernels on tile 1 only (8 slots, rest Tensix readers) | pass |
+  | kernels on tile 2 only (8 slots) | pass |
+  | both tiles, 16 slots, both on DMA stream 0 (the hang config) | HANG (3 of 3) |
+  | same, burst size register untouched | HANG |
+  | same, no DRISC DMA (writes only) | pass |
+  | same, tile 2 on DMA stream 1 | pass (2 of 2) |
+  | same, stream 0 but <= 2 DMA reads in flight per tile | pass |
+  The streams' hardware read counters are per tile (each equals its own count), yet two tiles of a bank on the same
+  stream with ~7 reads in flight each wedge the bank's NOC2AXI reads; the mechanism (memory-controller ID / ordering)
+  is not proven. Codex (--yolo, read-only analysis) agreed it is bank-level (controller / MPFE / NOC2AXI path), noted
+  the tensor prefetcher uses both tiles per bank with ~2 reads in flight, and that my MPFE port = 1 + logical index
+  is likely wrong (the prefetcher resolves physical subchannels) - which explains why the MPFE knob did nothing.
+  Fix: a bank's two tiles DMA on different streams (MIMO_FL_DRISC_STREAM_SPLIT, default on). Two tiles per bank is the
+  default again (MIMO_FL_DRISC_TILES=2), tile 2 (stream mode on both NIUs) writes on NOC1 (MIMO_FL_DRISC_NOC1, default).
+- Small M is back at parity with two tiles; one tile per bank was write-loop bound (~21-28 GB/s per tile, no DMA
+  needed to show it; freeing slots on "sent" instead of "acked" made it worse: 55 -> 59 us at M 64).
+- Down-core placement: the 15 freed reader cells as down cores (41 total, 3-4 columns) give large M -3% but cost mid M
+  (reader cells idle, 26 down: M 384 / 512 60.5 / 72.5; 41 down 63.1 / 77.0). Capping the count (29 / 30 / 32 / 34,
+  freed cells last or not) or more chains (9 / 11) did not help.
+- Now (two tiles, split streams, tile 2 on NOC1, 41 down), us / expert, default -> DRISC: M 64 35.4 -> 35.5, 256 49.7
+  -> 50.9, 384 57.4 -> 63.1, 512 70.6 -> 77.0, 2048 273.4 -> 265.7. Bit-identical at M 128. A hybrid (8 DRISC slots +
+  8 Tensix readers, MIMO_FL_DRISC_SLOTS=8) beats default at small M (M 64 / 128 / 256: 35.0 / 38.7 / 47.7) but loses
+  at large M with its 33-core down layout (2048: 289.9).
+
+- **Default DRISC config = the hybrid** (MIMO_FL_DRISC=1): one DRISC slot per bank on the tile that is no endpoint,
+  writing on NOC1 (all weights on NOC1, as the Tensix forwarders), the other 8 slots keep Tensix readers + forwarders
+  (and reader down columns where the plan uses them, tails among the Tensix slots); the 7 freed reader cells stay idle
+  (as down cores next to the remaining readers they cost large M). Bit-identical on GLM-Flash (M 128) and K2.7 (H 7168
+  E 12, M 128). us / expert, default -> DRISC:
+  | M | GLM-Flash | K2.7 E12 |
+  |---|---|---|
+  | 32 | 33.0 -> 31.6 | |
+  | 64 | 35.4 -> 34.1 | 62.1 -> 60.7 |
+  | 128 | 40.2 -> 38.8 | 68.7 -> 67.8 |
+  | 256 | 49.7 -> 49.0 | 83.7 -> 82.7 |
+  | 384 | 57.4 -> 58.9 | |
+  | 512 | 70.6 -> 71.5 | 123.8 -> 133.0 |
+  | 1024 | 138.1 -> 138.5 | |
+  | 2048 | 273.4 -> 273.9 | 442.8 -> 453.2 |
+  | 5120 | 679.5 -> 679.8 | |
+  Full DRISC (MIMO_FL_DRISC_TILES=2 MIMO_FL_DRISC_SLOTS=16, freed cells as down): GLM-Flash 2048 265.7 but 512 77.0;
+  K2.7 worse everywhere (2048 522.9: no reader down columns).
+
+- K2.7 M 512 gap (+7%) probes: not the reader-down tails (default with tails among readers 8.. only: 123.9), not the
+  gate/up assignment (readers' assignment: 135.2), not MPFE: with the port mapping fixed (P1 + UMD subchannel, as the
+  prefetcher; the old 1 + endpoint index was wrong, so earlier MPFE runs were no-ops) every setting is worse (DRISC /
+  ordinary 0/5 145.9, 1/7 146.0, 7/3 147.7, 7/1 147.6 vs untouched 133). Open.
+
+- **K2.7 gap closed: x reads need priority at the DRAM controller.** No-weight-read probes are identical (M 512 114.2
+  vs 114.3), so the gap was DRAM arbitration. The controller's MPFE weights are 0 on every port by default (round robin
+  between ports); with the DRISC's DMA on its own port the x relays' reads (the bank's NOC1-endpoint port) lose share.
+  Burst size (16 / 64 / 255) and DMA depth (1 / 2) do not matter; demoting the DRISC alone (0,7,7) fixes large M but
+  costs small M; favoring only the NOC1-endpoint port (x reads) is the setting: K2.7 0,0,3 = 0,0,7. On GLM-Flash
+  (no reader down columns) any x favoring costs ~1%, so the weights are per plan: the launcher sends them per call in
+  the job descriptor (SD_MPFE; x weight 3 when the plan has reader down columns, else untouched), the DRISC applies
+  them when they change and restores the found weights on exit. (Card 1's bank 0 P1 read 6 - stale.)
+- **Final (DRISC hybrid default), us / expert, Tensix readers -> DRISC, both bit-identical at M 128:**
+  | M | GLM-Flash E36 | K2.7 E12 |
+  |---|---|---|
+  | 32 | 33.0 -> 31.6 | 58.0 -> 56.5 |
+  | 64 | 35.4 -> 34.1 | 62.1 -> 60.8 |
+  | 128 | 40.2 -> 38.9 | 68.7 -> 67.9 |
+  | 256 | 49.7 -> 49.0 | 83.7 -> 82.6 |
+  | 384 | 57.4 -> 58.8 | 98.8 -> 100.2 |
+  | 512 | 70.6 -> 71.5 | 123.8 -> 120.6 |
+  | 1024 | 138.1 -> 138.5 | 229.5 -> 227.6 |
+  | 2048 | 273.4 -> 273.9 | 442.8 -> 441.9 |
+  | 5120 | 679.5 -> 679.8 | 1085.3 -> 1084.9 |
+  -2..-4% at M <= 128, parity at large M, +1..2.5% at GLM M 384 / 512 and K2.7 M 384; 7 Tensix cells free (idle).
+
+- **Why not all 16 slots on DRISC (full mode)**: re-measured with x favored (MPFE 0,0,3): GLM-Flash M 64 / 256 / 384 /
+  512 / 2048 34.4 / 56.7 / 62.3 / 72.5 / 265.2 (512 77.0 -> 72.5 from the arbitration fix; 2048 -3% vs Tensix); K2.7
+  M 512 / 2048 142.8 / 514.9. Probes (K2.7): no weight reads 134.8 / 506.5 vs Tensix 114.2 / 435.8; plus x resident
+  112.6 / 434.1 (parity). So full mode is x-delivery bound on NOC0: a bank's second tile is its NOC1 endpoint (NOC2AXI
+  on NOC1) and can only send on NOC0, putting half the weights next to the x multicast; x on NOC1 is much worse with
+  the relays where they are. Structural - hence the hybrid (8 DRISC slots on NOC1 + 8 Tensix readers).
+- Hybrid probes without effect: Tensix slots on the DRAM-adjacent reader cells (MIMO_FL_DRISC_RD_SWAP=1: GLM 384 /
+  512 59.3 / 71.6, K2.7 99.6 / 120.7), the readers' gate/up assignment for DRISC slots (GLM 59.3 / 70.6).
+
+- More x helpers per rectangle (MIMO_FL_NH=2, DRISC or not): worse (GLM M 512 / 2048 83.5 / 326.3: they take down
+  cells). The pushed branch (origin galaxy-unified, rebased base) builds the flat op library cleanly (verify worktree,
+  384 / 384; the ttnn Python module target is not in that configuration).
+
+- **Dual slots (default with MIMO_FL_DRISC=1)**: the 8 DRISC slots keep their Tensix readers + forwarders too; every
+  kernel decides per call from the schedule (dyn.max_cnt <= SE_DRISC_MAXCNT: 256 tokens, 128 with reader down
+  columns) whether those slots stream from the DRAM cores (receivers count grants locally, readers / forwarders /
+  reader-down tails skip their gate/up work) or from the Tensix readers (no DRISC jobs posted: the DRISCs wait). DRISC
+  slot 0's own reader posts the jobs (se_drisc_post.hpp; no free cell on the 11 x 10 grid). The GDDR MPFE weights a
+  DRISC call sets persist over Tensix calls (K2.7 M >= 512 gains from them). Bit-identical on both shapes. us /
+  expert, Tensix default -> dual (same card, back to back):
+  | M | GLM-Flash E36 | K2.7 E12 |
+  |---|---|---|
+  | 32 | 33.0 -> 31.5 | 58.1 -> 57.0 |
+  | 64 | 35.4 -> 34.0 | 62.3 -> 60.6 |
+  | 96 | 37.6 -> 36.6 | 65.6 -> 64.0 |
+  | 128 | 40.2 -> 39.4 | 68.6 -> 67.5 |
+  | 160 / 192 | 43.6 / 45.3 -> 42.7 / 44.9 | 72.6 / 77.5 -> 72.7 / 77.5 |
+  | 256 | 49.7 -> 49.5 | 83.6 -> 83.6 |
+  | 384 | 57.4 -> 57.5 | 99.1 -> 99.8 |
+  | 512 | 70.6 -> 70.6 | 123.5 -> 119.6 |
+  | 1024 | 138.1 -> 138.1 | 229.7 -> 227.2 |
+  | 2048 | 273.4 -> 273.4 | 443.1 -> 441.9 |
+  | 5120 | 679.5 -> 679.5 | 1085.0 -> 1084.4 |
+- **x is the mid-M DRAM cost, not its multicast** (GLM-Flash, us / expert M 256 / 384 / 512): default 49.6 / 57.5 /
+  70.6, relays skip the x DRAM reads (MIMO_FL_XRD_SKIP=1, multicast kept) 40.7 / 53.1 / 70.1; forced DRISC path 49.5 /
+  59.7 / 70.7, without x reads 39.9 / 53.1 / 70.0 (the DRISC path's M 384 loss was its DMA slowing the x reads). x is
+  read as row-major bf16 2 KB row segments (x [T, H], one 8 KB page per token row, scattered by token_index), both
+  rectangles' relays read all of x: 4 MB / expert at M 256 next to ~14 MB of weights. Reads in flight do not matter
+  (MIMO_FL_XRD_BATCH 1 / 4: same / worse); 64-tile super-blocks (4 KB reads) do not fit the relay L1 (~1.9 MB). The
+  lever: read x once, both rectangles' relays sharing the super-blocks and each multicasting into both rectangles
+  (the earlier MIMO_FL_X1 single-multicaster probe lost at large M).
+
+- **Validated on the LoudBox model and made the default** (MIMO_FL_DRISC=0: off; also off without DRAM cores, with
+  subgrids, inside the combine overlap):
+  - test_layer_perf.py::test_chunk_perf on the 2x4 mesh (fake weights, layers 1-4, chunk 2048 at 53248 so per-expert
+    counts take the DRISC path: every DRISC tile 32,256 DMA reads): traced replay output identical to eager; device
+    busiest-chip sum 22.0 vs 22.2 ms (Tensix), L3 experts 1.93 vs 1.99 ms. (At chunk 5120 every call took the Tensix
+    path.) A first attempt failed in fabric init (router handshake on device 0's links) in both modes: box reset fixed it.
+  - test_flat_stress.py, 100,000 mesh calls (800,000 chip calls, 4 x / h regimes x 7 routing patterns, L1 shifts,
+    matmuls in between): PASS, bit-exact determinism, no hang; the per-call switch flipped constantly (each DRISC tile
+    42,859 jobs, 82 M DMA reads), all DRISCs stopped cleanly at close.
+
+- **x read once, two variants (probes, off; both bit-identical)**, GLM-Flash us / expert M 32 / 64 / 128 / 256 / 512 /
+  2048 (default with DRISC dual: 31.5 / 34.0 / 39.4 / 49.5 / 70.6 / 273.4):
+  - MIMO_FL_X2=1: rectangle k's relays read / tilize the super-blocks g % 2 == k, its primary multicasts them into
+    both rectangles (receivers merge the two streams, se5_recv SE_X_RELAY2): 33.7 / 34.5 / 38.2 / 64.8 / 123.0 /
+    454.8. The cross-grid multicasts (each primary into the far rectangle) cost what MIMO_FL_X1 did.
+  - MIMO_FL_XFWD=1: the same halves, each primary multicasts its half locally and forwards each tilized super-block
+    (one unicast + barrier) to the other primary, which multicasts it from a 2-slot forward ring: 38.4 / 39.1 / 40.5 /
+    69.3 / 129.6 / 484.1. The primary's NCRISC (multicast + forward of every super-block) becomes the bottleneck.
+  Reading x once needs a relay-role redesign (e.g. helpers writing tilized x to both primaries, primaries only
+  multicasting); not pursued here.
+
+- **All 16 slots on DRAM cores, one tile per bank (both slots on NOC1; no Tensix readers)**: the DRISC loop was the
+  limit. Profiled (SE_DRISC_PROF, cycles at aiclk): ~800 cycles per 9 KB block whatever the job count (DMA issue ~195,
+  write ~200, flush + increments ~155, loop ~230) -> ~15 GB/s per tile. Now: units of UB blocks (one DMA, one id, one
+  flush check; two jobs per tile -> pairs), writes / atomics with their constant registers set once per call, DMA
+  issue without the ready poll. GLM-Flash us / expert M 64 / 128 / 256 / 512 (Tensix 35.4 / 40.2 / 49.7 / 70.6):
+  before 57.8 / 58.6 / 59.9 / 70.9, pairs 42.4 / 43.8 / 50.1 / 70.7, + fast path 41.2 / 43.0 / 49.6 / 70.7
+  (bit-identical). Parity from M 256; small M is bound by the tile's ~92 KB of L1 for in-flight bytes (quads with
+  fewer slots: 44.2 at M 64). With two tiles per bank small M is at parity but the NOC0 tile costs mid M. The dual
+  default (single blocks per tile) is unchanged: 31.5 / 34.0 / 39.2 / 49.5 / 70.6 at M 32 / 64 / 128 / 256 / 512.
+
+- **Do not refill a DRISC slot on "sent"** (NIU_MST_WRITE_REQS_OUTGOING_ID(id) == 0): with single-block units the
+  output was NOT bit-identical (the DMA overwrote a slot a write was still reading); with pairs no gain (42.5 vs 41.2
+  at M 64). Slots are released on acknowledgement (flushed) only. Probe reverted.
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
