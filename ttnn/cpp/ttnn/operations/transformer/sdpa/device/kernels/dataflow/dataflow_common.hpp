@@ -661,11 +661,7 @@ void generate_lightweight_mask_tiles(
 
 template <uint32_t tile_bytes>
 inline void fill_custom_diagonal_tile_bfp4(
-    Noc noc,
-    uint32_t cb_id,
-    uint32_t tile_id,
-    int32_t leading_diagonal_offset,
-    int32_t trailing_diagonal_offset) {
+    Noc noc, uint32_t cb_id, uint32_t tile_id, int32_t leading_diagonal_offset, int32_t trailing_diagonal_offset) {
     // Assert that we're not in a case where the entire tile should be fully masked or fully allowed
     // Those cases should be handled before calling this function
     ASSERT(leading_diagonal_offset >= -32 && trailing_diagonal_offset >= -32);
@@ -1107,6 +1103,39 @@ inline void issue_block_reads(
     Noc noc;
     for (uint32_t r = 0; r < num_rows; ++r) {
         uint32_t dst = dst_addr + (dst_row_origin + r) * outer_stride;
+#ifdef RING_JOINT_STRIPED_HALO
+        if constexpr (!ReaderType::DSpec::is_interleaved) {
+            if (inner_stride == tile_bytes) {
+                // V rows (and single-row K blocks) are contiguous in L1.
+                // Coalesce only source pages proven physically consecutive.
+                // Interleaved tensors retain their original per-tile path.
+                const uint32_t max_pages = NOC_MAX_BURST_SIZE / tile_bytes;
+                for (uint32_t col = 0; col < cols;) {
+                    const uint64_t source = reader.get_noc_addr(tile_id + col, 0, noc.get_noc_id());
+                    uint32_t count = 1;
+                    while (count < max_pages && col + count < cols &&
+                           reader.get_noc_addr(tile_id + col + count, 0, noc.get_noc_id()) ==
+                               source + count * tile_bytes) {
+                        ++count;
+                    }
+                    noc.async_read(
+                        tensor_accessor::Page(source, 0),
+                        CoreLocalMem<uint8_t>(dst + col * tile_bytes),
+                        count * tile_bytes,
+                        {},
+                        {});
+                    col += count;
+                    barrier_count += count;
+                    if (barrier_threshold > 0 && barrier_count >= barrier_threshold) {
+                        noc.async_read_barrier();
+                        barrier_count = 0;
+                    }
+                }
+                tile_id += row_stride;
+                continue;
+            }
+        }
+#endif
         for (uint32_t col = 0; col < cols; ++col) {
             noc.async_read(reader, CoreLocalMem<uint32_t>(dst), tile_bytes, {.page_id = tile_id}, {});
             ++tile_id;
@@ -1450,12 +1479,8 @@ struct PaddedAddrGenerator {
     }
 
     void issue_writes_no_padding(
-        Noc noc,
-        const Slice& slice,
-        uint32_t src_addr,
-        uint32_t outer_stride,
-        uint32_t inner_stride,
-        uint32_t trid = 0) const {
+        Noc noc, const Slice& slice, uint32_t src_addr, uint32_t outer_stride, uint32_t inner_stride, uint32_t trid = 0)
+        const {
         issue_block_writes(
             noc,
             reader,

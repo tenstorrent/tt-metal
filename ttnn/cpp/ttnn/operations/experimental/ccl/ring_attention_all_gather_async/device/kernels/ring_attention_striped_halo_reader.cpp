@@ -31,6 +31,8 @@ enum CompileTimeArg : uint32_t {
     kCollectsArrivals,
     kArrivalsExpected,
     kMulticast,
+    kOutputBankOwnedSchedule,
+    kNumDramBanks,
     kNumFixedCompileTimeArgs,
 };
 
@@ -42,6 +44,8 @@ constexpr uint32_t input_page_size = get_compile_time_arg_val(kInputPageSize);
 constexpr uint32_t num_inputs = get_compile_time_arg_val(kNumInputs);
 constexpr uint32_t prefetch_packets = get_compile_time_arg_val(kPrefetchPackets);
 constexpr uint32_t meta_cb_id = get_compile_time_arg_val(kMetaCbId);
+constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule) == 1;
+constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
 // Only one exchange per halo waits for arrivals and signals the SDPA: every hop's writer increments
 // the same rendezvous core, so this one reader can gate on the whole halo. One signaller means one
 // incrementer per semaphore, which is what Semaphore::up requires to not drop updates.
@@ -151,18 +155,42 @@ void kernel_main() {
             const auto pages = ring_attention_all_gather::compute_link_page_range(
                 (rows.end - rows.begin) * width, geometry.num_links, worker_link);
             for (uint32_t bh = 0; bh < input_batch_head_count[input]; ++bh) {
-                uint32_t tiles_read = pages.start;
-                prefetch_batch_read_tiles<input_page_size, packet_size_in_pages, prefetch_packets, 1>(
-                    noc,
-                    cb_output,
-                    tiles_read,
-                    pages.end,
-                    cb_fifo_limit,
-                    cb_fifo_size,
-                    input_accessors[input],
-                    [&](uint32_t tile) {
-                        return input_batch_base[input] + bh * input_stride_pages[input] + rows.begin * width + tile;
-                    });
+                if constexpr (output_bank_owned_schedule) {
+                    const uint32_t valid_pages = (rows.end - rows.begin) * width;
+                    const uint32_t source_base =
+                        input_batch_base[input] + bh * input_stride_pages[input] + rows.begin * width;
+                    const uint32_t output_base =
+                        bh * input_stride_pages[input] * geometry.ring_size +
+                        (geometry.source_rank * geometry.cache_local_rows + rows.begin) * width;
+                    ring_attention_all_gather::BankOwnedPacketSchedule<num_dram_banks> schedule(
+                        output_base, valid_pages, worker_link, geometry.num_links, packet_size_in_pages);
+                    prefetch_batch_read_packets<input_page_size, packet_size_in_pages, prefetch_packets>(
+                        noc,
+                        cb_output,
+                        schedule.packets_remaining,
+                        cb_fifo_limit,
+                        cb_fifo_size,
+                        input_accessors[input],
+                        [&](uint32_t& count) {
+                            uint32_t first = 0;
+                            schedule.next_packet(first, count);
+                            return source_base + first;
+                        },
+                        [](uint32_t first, uint32_t page) { return first + page * num_dram_banks; });
+                } else {
+                    uint32_t tiles_read = pages.start;
+                    prefetch_batch_read_tiles<input_page_size, packet_size_in_pages, prefetch_packets, 1>(
+                        noc,
+                        cb_output,
+                        tiles_read,
+                        pages.end,
+                        cb_fifo_limit,
+                        cb_fifo_size,
+                        input_accessors[input],
+                        [&](uint32_t tile) {
+                            return input_batch_base[input] + bh * input_stride_pages[input] + rows.begin * width + tile;
+                        });
+                }
             }
         }
     }

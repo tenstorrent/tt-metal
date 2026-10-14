@@ -35,7 +35,10 @@ constexpr bool send_backward = get_compile_time_arg_val(7);
 constexpr uint32_t meta_cb_id = get_compile_time_arg_val(8);
 // Compile argument 9 is the legacy multicast flag; striped routing is derived below.
 
-constexpr uint32_t page_size_base_idx = 10;
+constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(10) == 1;
+constexpr uint32_t num_dram_banks = get_compile_time_arg_val(11);
+constexpr uint32_t output_page_stride = output_bank_owned_schedule ? num_dram_banks : 1;
+constexpr uint32_t page_size_base_idx = 12;
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -157,7 +160,7 @@ void kernel_main() {
         }
         std::array<uint64_t, NOC_SCATTER_WRITE_MAX_CHUNKS> noc_addrs{};
         for (uint32_t i = 0; i < count; ++i) {
-            const uint32_t tile = output_origin_page[input_idx] + first_page + i;
+            const uint32_t tile = output_origin_page[input_idx] + first_page + i * output_page_stride;
             noc_addrs[i] = output_noc_addr(input_idx, output_batch_head_base + tile);
         }
         // Pages that land back to back go as one plain write: one address to encode instead of a scatter of `count`.
@@ -207,26 +210,57 @@ void kernel_main() {
                 (rows.end - rows.begin) * width, geometry.num_links, worker_link);
             output_origin_page[input_idx] = (geometry.source_rank * geometry.cache_local_rows + rows.begin) * width;
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
-                uint32_t tiles_read = pages.start;
-                output_batch_head_base = bh_idx * output_batch_head_stride_pages[input_idx];
-                while (tiles_read < pages.end) {
-                    const uint32_t count = std::min(pages.end - tiles_read, packet_size_in_pages);
-                    cb_output.wait_front(packet_size_in_pages);
-                    const size_t l1_read_addr = cb_output.get_read_ptr();
-                    const bool last = input_idx + 1 == num_inputs && bh_idx + 1 == input_batch_head_count[input_idx] &&
-                                      tiles_read + count == pages.end;
-                    const uint32_t signal_pages = last ? std::min<uint32_t>(count, 2) : 0;
-                    const uint32_t plain_pages = count - signal_pages;
-                    send_pages(input_idx, tiles_read, plain_pages, l1_read_addr, false);
-                    send_pages(
-                        input_idx,
-                        tiles_read + plain_pages,
-                        signal_pages,
-                        l1_read_addr + plain_pages * output_page_size,
-                        true);
-                    signaled |= last;
-                    tiles_read += count;
-                    cb_output.pop_front(packet_size_in_pages);
+                if constexpr (output_bank_owned_schedule) {
+                    output_batch_head_base = bh_idx * output_batch_head_stride_pages[input_idx];
+                    ring_attention_all_gather::BankOwnedPacketSchedule<num_dram_banks> schedule(
+                        output_batch_head_base + output_origin_page[input_idx],
+                        (rows.end - rows.begin) * width,
+                        worker_link,
+                        geometry.num_links,
+                        packet_size_in_pages);
+                    uint32_t first = 0;
+                    uint32_t count = 0;
+                    while (schedule.next_packet(first, count)) {
+                        cb_output.wait_front(packet_size_in_pages);
+                        const size_t l1_read_addr = cb_output.get_read_ptr();
+                        const bool last = input_idx + 1 == num_inputs &&
+                                          bh_idx + 1 == input_batch_head_count[input_idx] &&
+                                          schedule.packets_remaining == 0;
+                        const uint32_t signal_pages = last ? std::min<uint32_t>(count, 2) : 0;
+                        const uint32_t plain_pages = count - signal_pages;
+                        send_pages(input_idx, first, plain_pages, l1_read_addr, false);
+                        send_pages(
+                            input_idx,
+                            first + plain_pages * output_page_stride,
+                            signal_pages,
+                            l1_read_addr + plain_pages * output_page_size,
+                            true);
+                        signaled |= last;
+                        cb_output.pop_front(packet_size_in_pages);
+                    }
+                } else {
+                    uint32_t tiles_read = pages.start;
+                    output_batch_head_base = bh_idx * output_batch_head_stride_pages[input_idx];
+                    while (tiles_read < pages.end) {
+                        const uint32_t count = std::min(pages.end - tiles_read, packet_size_in_pages);
+                        cb_output.wait_front(packet_size_in_pages);
+                        const size_t l1_read_addr = cb_output.get_read_ptr();
+                        const bool last = input_idx + 1 == num_inputs &&
+                                          bh_idx + 1 == input_batch_head_count[input_idx] &&
+                                          tiles_read + count == pages.end;
+                        const uint32_t signal_pages = last ? std::min<uint32_t>(count, 2) : 0;
+                        const uint32_t plain_pages = count - signal_pages;
+                        send_pages(input_idx, tiles_read, plain_pages, l1_read_addr, false);
+                        send_pages(
+                            input_idx,
+                            tiles_read + plain_pages,
+                            signal_pages,
+                            l1_read_addr + plain_pages * output_page_size,
+                            true);
+                        signaled |= last;
+                        tiles_read += count;
+                        cb_output.pop_front(packet_size_in_pages);
+                    }
                 }
             }
         }
