@@ -111,7 +111,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
 
     uint32_t random_seed = 0;
 
-    auto* device = &input_values_tensor.mutable_device();
+    const auto& device = input_values_tensor.device();
 
     // The bitonic top-k LLK carries sort indices through the dest register, and the index
     // load/store width is tied to fp32_dest_acc_en (INT32 when enabled, LO16 otherwise). WH/BH
@@ -120,7 +120,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     // architecture (e.g. Quasar, which additionally lacks UInt16/UInt32 tile (DFB) metadata
     // support) uses 32-bit (Int32) index intermediates with fp32 dest accumulation enabled. This
     // is gated on !(WH || BH) so new architectures default to the safe 32-bit path.
-    const bool use_32bit_index = !(device->arch() == tt::ARCH::WORMHOLE_B0 || device->arch() == tt::ARCH::BLACKHOLE);
+    const bool use_32bit_index = !(device.arch() == tt::ARCH::WORMHOLE_B0 || device.arch() == tt::ARCH::BLACKHOLE);
 
     // Use the stable bitonic top-k network: on exact value ties the candidate at the lowest position
     // wins, so the sampled index does not depend on how the network swaps equal values.
@@ -155,7 +155,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     uint32_t Wt = input_shape[3] / tile_width;
     auto num_cores = num_users;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     CoreRangeSet core_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, true);
 
     if (sub_core_grids.has_value()) {
@@ -286,13 +286,13 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
              {"tile_height", tile_height},
              {"use_32bit_index", static_cast<uint32_t>(use_32bit_index)},
              {"num_users", num_users}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // 32-bit (Int32) sort indices require fp32 dest accumulation so the top-k LLK loads/stores
     // indices in INT32 mode; the 16-bit (UInt16) path uses LO16 mode with fp32 dest acc off. Every
     // other field keeps its default, matching what the compute config defaulted to before.
-    const ComputeGen1Config compute_config{
+    const ComputeHardwareConfig compute_config{
         .enable_32_bit_dest = use_32bit_index,
     };
 
@@ -518,7 +518,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
                  {"num_cores", num_cores},
                  {"use_32bit_index", static_cast<uint32_t>(use_32bit_index)},
                  {"num_users", num_users}},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         };
     };
 

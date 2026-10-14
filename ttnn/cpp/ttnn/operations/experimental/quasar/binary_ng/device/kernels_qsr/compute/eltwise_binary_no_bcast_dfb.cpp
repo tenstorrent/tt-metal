@@ -5,14 +5,15 @@
 // Metal 2.0 / DataflowBuffer (DFB) FPU compute kernel for binary_ng's no-broadcast binary op,
 // Quasar-native.
 //
-// Diverges from kernels_dfb/compute/eltwise_binary_no_bcast_dfb.cpp only in the trip count: thread c
-// of C processes num_tiles / C tiles. Which tiles it gets is the DFB's assignment, not the kernel's.
+// Diverges from kernels_dfb/compute/eltwise_binary_no_bcast_dfb.cpp in two ways: thread c of C
+// processes its own share of num_tiles, and a borrowed shard's tiles past the largest multiple of C
+// come through the tail rings (TAIL_TILES). Which tiles a thread gets is the DFB's assignment.
 //
 // Otherwise mirrors the CircularBuffer kernels/compute/eltwise_binary_no_bcast.cpp, with the CB->DFB
 // swap. Uses the same define machinery the descriptor factory builds: BINARY_OP / BINARY_OP_TYPE
 // (the binary op), HAS_ACTIVATIONS / PREPROCESS / PROCESS_POST_ACTIVATIONS (lhs/rhs/post activation
-// chains), PACK_RELU (fused RELU fast path). Layout-agnostic: the reader/writer absorb all
-// sharded/interleaved/mixed differences, so this kernel is identical for every layout combination.
+// chains), PACK_RELU (fused RELU fast path). Apart from the tail rings, the reader and the writer
+// absorb every layout difference.
 //
 // DFB operand naming mirrors the CB CBIndex mapping:
 //   dfb::pre_lhs  (= CBIndex::c_0)   dfb::pre_rhs (= c_1)   dfb::out (= c_2)
@@ -23,12 +24,17 @@
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 #include "eltwise_utils_common.hpp"
+#if HAS_MAIN_RING
+// Its preprocess helper names dfb::pre_lhs, which a program with no borrowed ring does not have.
 #include "eltwise_utils_dfb.hpp"
+#endif
 
 void kernel_main() {
+#if HAS_MAIN_RING
     const uint32_t num_tiles = get_arg(args::num_tiles);
 
     constexpr uint32_t num_tiles_per_cycle = get_arg(args::num_tiles_per_cycle);
@@ -97,14 +103,59 @@ void kernel_main() {
     };
 
     // Thread c of C consumes its own share. WHICH tiles is the DFB's business, so unlike the
-    // dataflow kernels only the trip count changes here. The gate's even divisibility makes the
-    // division exact.
-    const uint32_t my_tiles = num_tiles / get_num_threads();
+    // dataflow kernels only the trip count changes here. The DFB hands consumer thread c the
+    // sub-stream {c, c+C, ...}, whose length is floor(n/C) + (c < n mod C): low thread ids take
+    // the remainder. A truncating divide would leave num_tiles % C entries unconsumed and hang.
+    const uint32_t num_threads = get_num_threads();
+    const uint32_t my_tiles = num_tiles / num_threads + (get_my_thread_id() < num_tiles % num_threads ? 1u : 0u);
 
-    // No remainder branch: the gate rejects sharding, which pins num_tiles_per_cycle to 1, so
-    // my_tiles % num_tiles_per_cycle is always 0.
     const uint32_t num_full_chunks = my_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
         process_tiles(num_tiles_per_cycle);
     }
+    // Neither the default batch, min(8, shard tiles), nor the knob's n need divide a thread's share, so a
+    // remainder can be left. Dropping it would hang a NoC writer on credits that never arrive, or leave
+    // borrowed output tiles uncomputed. Mirrors kernels_dfb's compute kernel.
+    const uint32_t remainder = my_tiles % num_tiles_per_cycle;
+    if (remainder > 0) {
+        process_tiles(remainder);
+    }
+#else
+    // No borrowed ring: a shard smaller than C lives entirely in the tail rings.
+    compute_kernel_hw_startup(
+        static_cast<uint32_t>(dfb::pre_lhs_tail),
+        static_cast<uint32_t>(dfb::pre_rhs_tail),
+        static_cast<uint32_t>(dfb::out_tail));
+#endif
+#if TAIL_TILES
+#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST) or defined(PACK_RELU)
+#error "the tail rings carry no activation chain or fused RELU, and the native gate admits neither"
+#endif
+    // A borrowed shard's tiles past the largest multiple of C: one tail entry per compute thread. A thread
+    // past TAIL_TILES computes on padding, which the writer drops.
+    {
+        constexpr auto dfb_tail_lhs_id = static_cast<uint32_t>(dfb::pre_lhs_tail);
+        constexpr auto dfb_tail_rhs_id = static_cast<uint32_t>(dfb::pre_rhs_tail);
+        constexpr auto dfb_tail_out_id = static_cast<uint32_t>(dfb::out_tail);
+        DataflowBuffer dfb_tail_lhs(dfb_tail_lhs_id);
+        DataflowBuffer dfb_tail_rhs(dfb_tail_rhs_id);
+        DataflowBuffer dfb_tail_out(dfb_tail_out_id);
+        binary_tiles_init<true, BINARY_OP_TYPE>(dfb_tail_lhs_id, dfb_tail_rhs_id);
+        // pack_tile keeps writing to the ring the packer was set up for, whatever id it is given, so
+        // retarget it; the format is the output's already.
+        pack_init(dfb_tail_out_id);
+        dfb_tail_lhs.wait_front(1);
+        dfb_tail_rhs.wait_front(1);
+        dfb_tail_out.reserve_back(1);
+        tile_regs_acquire();
+        BINARY_OP(dfb_tail_lhs_id, dfb_tail_rhs_id, 0, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, dfb_tail_out_id);
+        tile_regs_release();
+        dfb_tail_out.push_back(1);
+        dfb_tail_lhs.pop_front(1);
+        dfb_tail_rhs.pop_front(1);
+    }
+#endif
 }

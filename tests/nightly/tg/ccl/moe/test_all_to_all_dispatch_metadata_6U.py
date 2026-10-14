@@ -770,6 +770,7 @@ def get_shared_expert_to_device_map(routed_experts, devices, mode):
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
@@ -860,6 +861,7 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, routed_experts_per_d
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
@@ -945,6 +947,7 @@ def test_correctness_linear(mesh_device, mesh_shape, cluster_axis, routed_expert
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
@@ -952,6 +955,7 @@ def test_correctness_linear(mesh_device, mesh_shape, cluster_axis, routed_expert
             "trace_region_size": 500000,
         },
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,

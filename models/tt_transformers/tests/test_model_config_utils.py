@@ -5,6 +5,7 @@
 from types import MethodType, SimpleNamespace
 
 import pytest
+import torch
 
 import ttnn
 from models.tt_transformers.tt.common import Mode
@@ -17,6 +18,52 @@ from models.tt_transformers.tt.model_config import (
     create_galaxy_ff1_out_reduce_scatter_memcfg,
     should_pad_sampling_logits_to_power_of_2,
 )
+
+
+@torch.no_grad()
+def test_native_phi3_reference_decoder_supplies_position_embeddings():
+    from transformers import DynamicCache, Phi3Config, Phi3ForCausalLM
+
+    config = Phi3Config(
+        vocab_size=128,
+        hidden_size=64,
+        intermediate_size=128,
+        num_hidden_layers=1,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        max_position_embeddings=256,
+        original_max_position_embeddings=256,
+        bos_token_id=1,
+        eos_token_id=2,
+        pad_token_id=0,
+    )
+    model = Phi3ForCausalLM(config).eval()
+    generator = torch.Generator().manual_seed(0)
+
+    args = SimpleNamespace(
+        reference_transformer=lambda wrap, load_checkpoint: model,
+        head_dim=config.hidden_size // config.num_attention_heads,
+        base_model_name="Phi-3-mini-128k-instruct",
+        use_hf_rope=False,
+    )
+
+    for batch_size, seq_len in ((32, 1), (1, 128)):
+        hidden_states = torch.randn(batch_size, seq_len, config.hidden_size, generator=generator)
+        position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch_size, -1)
+        position_embeddings = model.model.rotary_emb(hidden_states, position_ids)
+        expected = model.model.layers[0](
+            hidden_states,
+            position_ids=position_ids,
+            position_embeddings=position_embeddings,
+            past_key_values=DynamicCache(),
+            use_cache=True,
+        )
+        expected = expected[0] if isinstance(expected, tuple) else expected
+
+        reference_decoder = ModelArgs.reference_decoder(args)
+        actual = reference_decoder(hidden_states, start_pos=0, freqs_cis_i=None)
+
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("seq_len", [128, 4096])
@@ -211,3 +258,38 @@ def test_llama31_8b_dram_reader_counts_remain_default_on_unvalidated_devices():
 
     for tensor_group in (TensorGroup.WQKV, TensorGroup.WO, TensorGroup.FF1_FF3, TensorGroup.FF2):
         assert args.get_dram_sharded_matmul_num_workers(tensor_group, 14336) == 1
+
+
+@pytest.mark.parametrize(
+    "device_name,model_name,seq_len,expected_override",
+    [
+        ("N150", "Llama-3.1-8B", 480, None),
+        ("N150", "Llama-3.1-8B", 512, 4),
+        ("N150", "Llama-3.1-8B", 1024, 4),
+        ("N150", "Llama-3.1-8B", 2048, 4),
+        ("N150", "Llama-3.2-3B", 512, None),
+        ("P150", "Llama-3.1-8B", 512, None),
+        ("T3K", "Llama-3.1-8B", 512, None),
+    ],
+)
+def test_llama8_n150_prefill_k_block_scope(device_name, model_name, seq_len, expected_override):
+    args = _llama_model_args(device_name)
+    args.model_name = model_name
+    args.dim = 4096
+    args.hidden_dim = 14336
+    args.cluster_shape = (1, 1)
+    args.prefill_len_cutoff = 512
+    args.dram_shard_grid_width = 8
+    args.is_galaxy = False
+    args.mlp1_3_grid = lambda seq_len: (8, 8)
+    overrides = []
+
+    def matmul_config(**kwargs):
+        overrides.append(kwargs["in0_block_w"])
+        return ModelArgs.matmul_config(args, **kwargs)
+
+    args.matmul_config = matmul_config
+    config = args.get_mlp_ff1_3_prg_config(Mode.PREFILL, seq_len)
+    assert overrides == [expected_override]
+    assert config.in0_block_w == (4 if expected_override else 8)
+    assert (args.dim // ttnn.TILE_SIZE) % config.in0_block_w == 0

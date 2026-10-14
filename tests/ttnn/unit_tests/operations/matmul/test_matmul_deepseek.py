@@ -1538,3 +1538,183 @@ def test_matmul_dram_sharded_single_kblock(device, num_iters):
         pcc_threshold=0.99,
         check_ulp=False,
     )
+
+
+def run_batched_dram_sharded_matmul(
+    device,
+    batches_per_core,
+    m,
+    k,
+    n,
+    in0_dtype,
+    in1_dtype,
+    out_dtype,
+    fused_activation,
+    torch_activation,
+    num_k_blocks,
+    expected_pcc,
+    frobenius_threshold=0.05,
+    compute_kernel_config=None,
+    tile_h=32,
+    tile_w=32,
+):
+    """Run one batch-sharded DRAM matmul and check it against a torch reference.
+
+    The batch is derived from the device's DRAM bank count so that `batches_per_core` - the shard
+    depth the factory's buffer sizing keys off - is the same on every arch. A hardcoded batch is
+    not: Wormhole has 12 DRAM banks and Blackhole 8, so batch=12 is one batch per core on the one
+    and two on the other, and only `batches_per_core > 1` gives an output shard bigger than a
+    single block of output tiles.
+
+    `num_k_blocks` splits the contracted dimension into that many inner-dim blocks
+    (in0_block_w = K / num_k_blocks), which is what drives the factory's accumulation loop.
+    `torch_activation` is the host-side equivalent of `fused_activation`, or None.
+    """
+    torch.manual_seed(0)
+
+    optimal_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    num_dram_banks = len(optimal_worker_cores)
+
+    batch = num_dram_banks * batches_per_core
+    m_padded = pad_to_tile(m, tile_h)
+    k_padded = pad_to_tile(k, tile_w)
+    n_padded = pad_to_tile(n, tile_w)
+
+    in0_orig = torch.randn([1, batch, m, k], dtype=torch.bfloat16)
+    in1_orig = torch.randn([1, batch, k, n], dtype=torch.bfloat16)
+
+    in0 = torch.zeros([1, batch, m_padded, k_padded], dtype=torch.bfloat16)
+    in0[:, :, :m, :k] = in0_orig
+    in1 = torch.zeros([1, batch, k_padded, n_padded], dtype=torch.bfloat16)
+    in1[:, :, :k, :n] = in1_orig
+
+    # The L1 shard grid must follow the factory's worker ordering, or the data routing is wrong.
+    worker_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_worker_cores]
+    )
+    dram_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))})
+
+    in0_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(worker_grid, [batches_per_core * m_padded, k_padded], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    in1_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_shard_grid, [batches_per_core * k_padded, n_padded], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    out_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(worker_grid, [batches_per_core * m_padded, n_padded], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    in0_t = ttnn.from_torch(
+        in0,
+        tile=ttnn.Tile((tile_h, tile_w)),
+        dtype=in0_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+    in1_t = ttnn.from_torch(
+        in1,
+        tile=ttnn.Tile((32, tile_w)),  # in1 tile height must be 32 (inner dim constraint)
+        dtype=in1_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in1_memory_config,
+    )
+
+    k_tiles = k_padded // tile_w
+    assert k_tiles % num_k_blocks == 0, f"K in tiles ({k_tiles}) must be divisible by num_k_blocks ({num_k_blocks})"
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
+        in0_block_w=k_tiles // num_k_blocks,
+        per_core_M=m_padded // tile_h,
+        per_core_N=n_padded // tile_w,
+        fused_activation=fused_activation,
+    )
+
+    output_t = ttnn.matmul(
+        in0_t,
+        in1_t,
+        program_config=program_config,
+        memory_config=out_memory_config,
+        dtype=out_dtype,
+        compute_kernel_config=compute_kernel_config,
+        output_tile=ttnn.Tile((tile_h, tile_w)),
+    )
+
+    output_tensor = ttnn.to_torch(output_t)[:, :, :m, :n]
+
+    pt_out = torch.matmul(in0_orig, in1_orig)
+    if torch_activation is not None:
+        pt_out = torch_activation(pt_out)
+
+    # Element-wise allclose is not a meaningful check on a bfloat8_b-weighted matmul.
+    assert_numeric_metrics(
+        pt_out,
+        output_tensor,
+        check_allclose=False,
+        frobenius_threshold=frobenius_threshold,
+        pcc_threshold=expected_pcc,
+        check_ulp=False,
+    )
+
+
+# Fused-activation cases. RELU takes the packer path (PACK_RELU); everything else is configured as
+# an SFPU op through compile-time activation args.
+BATCHED_DRAM_SHARDED_ACTIVATIONS = [
+    (None, None),
+    (ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), torch.relu),
+    (ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU), torch.nn.functional.silu),
+]
+BATCHED_DRAM_SHARDED_ACTIVATION_IDS = ["no_activation", "relu_packer", "silu_sfpu"]
+
+
+@pytest.mark.parametrize(
+    "fused_activation, torch_activation",
+    BATCHED_DRAM_SHARDED_ACTIVATIONS,
+    ids=BATCHED_DRAM_SHARDED_ACTIVATION_IDS,
+)
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["fp32_acc_off", "fp32_acc_on"])
+@pytest.mark.parametrize("num_k_blocks", [1, 4], ids=["one_k_block", "four_k_blocks"])
+def test_matmul_batched_dram_sharded_compute_variants(
+    device, fused_activation, torch_activation, fp32_dest_acc_en, num_k_blocks
+):
+    """Cover the factory's fused-activation, dest-accumulation and inner-dim-blocking branches.
+
+    (num_k_blocks, fp32_dest_acc_en) picks aliased vs. separate intermed0; >1 block enables packer L1 accumulation.
+
+    Two batches per core and four inner-dim blocks are what make this a regression test for the
+    dropped-block bug. Both are needed: the output shard has to be larger than one block of output
+    tiles for the aliasing to be unsafe, and a buffer aliased over two batches still accumulates
+    blocks / 2 + 1 of the blocks - which is the right answer at one and two blocks, and wrong only
+    from four on.
+    """
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=True,
+    )
+
+    run_batched_dram_sharded_matmul(
+        device,
+        batches_per_core=2,
+        m=32,
+        k=128,
+        n=64,
+        in0_dtype=ttnn.bfloat16,
+        in1_dtype=ttnn.bfloat8_b,
+        out_dtype=ttnn.bfloat16,
+        fused_activation=fused_activation,
+        torch_activation=torch_activation,
+        num_k_blocks=num_k_blocks,
+        # bfloat8_b weights set the floor here; the SFPU activations lose a little more on top.
+        expected_pcc=0.99,
+        compute_kernel_config=compute_kernel_config,
+    )

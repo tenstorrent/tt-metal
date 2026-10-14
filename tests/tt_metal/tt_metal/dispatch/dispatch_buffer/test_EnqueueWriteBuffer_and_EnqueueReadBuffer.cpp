@@ -1566,9 +1566,8 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToDramBank0) {
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToAllDramBanks) {
     auto mesh_device = this->device_;
-    auto* device = mesh_device->get_devices()[0];
     TestBufferConfig config = {
-        .num_pages = uint32_t(device->allocator()->get_num_banks(BufferType::DRAM)),
+        .num_pages = uint32_t(mesh_device->allocator()->get_num_banks(BufferType::DRAM)),
         .page_size = 2048,
         .buftype = BufferType::DRAM};
 
@@ -1581,10 +1580,9 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToAllDramBanks) {
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
     auto mesh_device = this->device_;
-    auto* device = mesh_device->get_devices()[0];
     constexpr uint32_t num_round_robins = 2;
     TestBufferConfig config = {
-        .num_pages = num_round_robins * (device->allocator()->get_num_banks(BufferType::DRAM)),
+        .num_pages = num_round_robins * (mesh_device->allocator()->get_num_banks(BufferType::DRAM)),
         .page_size = 2048,
         .buftype = BufferType::DRAM};
 
@@ -1651,10 +1649,9 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestIssueMultipleReadWriteComma
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDramWrapsAcrossBanksAndTransactions) {
     auto mesh_device = this->device_;
-    auto* device = mesh_device->get_devices()[0];
     constexpr uint32_t page_size = 200;
     const uint32_t max_prefetch_command_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
-    const uint32_t num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
+    const uint32_t num_banks = mesh_device->allocator()->get_num_banks(BufferType::DRAM);
     const uint32_t num_pages = std::max(4 * num_banks, (max_prefetch_command_size / page_size) + num_banks);
     TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
 

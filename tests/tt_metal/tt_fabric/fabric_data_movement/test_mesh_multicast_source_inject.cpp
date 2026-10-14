@@ -79,36 +79,52 @@ enum class SourceInjectCoverage {
 };
 
 template <typename Visitor>
-bool visit_candidate_branches(const tt_metal::distributed::MeshShape& mesh_shape, const Visitor& visitor) {
+bool visit_candidate_branches(
+    const tt_metal::distributed::MeshShape& mesh_shape,
+    const AxisRouteTopology& y_topology,
+    const AxisRouteTopology& x_topology,
+    uint32_t root_y,
+    uint32_t root_x,
+    const Visitor& visitor) {
     const uint32_t y_size = mesh_shape[0];
     const uint32_t x_size = mesh_shape[1];
+
+    // An extent that runs off a non-wrapping axis is not a legal request. encode_2d_mcast_maps walks a
+    // one-directional chordless axis modularly (mcast_walk_direction) rather than over the reverse
+    // tree, so overrunning a LINE end encodes a tooth on an edge the mesh does not have: it is dropped
+    // in transit, while the anchor's own action still looks like a legal single-output branch. Bounding
+    // the enumeration here keeps the reachable target set and target_devices() in agreement.
+    const uint32_t max_n = y_topology.wraps ? y_size - 1 : root_y;
+    const uint32_t max_s = y_topology.wraps ? y_size - 1 : y_size - 1 - root_y;
+    const uint32_t max_e = x_topology.wraps ? x_size - 1 : x_size - 1 - root_x;
+    const uint32_t max_w = x_topology.wraps ? x_size - 1 : root_x;
 
     // Preserve the production client's four-way decomposition. E and W cover the source row
     // independently; N and S are separate trunks whose target rows may carry both E and W teeth.
     // Stop as soon as the visitor finds enough coverage; large meshes need not materialize or scan
     // every possible branch.
-    for (uint32_t east = 1; east < x_size; ++east) {
+    for (uint32_t east = 1; east <= max_e; ++east) {
         if (visitor(SourceInjectBranch{RoutingDirection::E, SourceInjectExtents{.e = east}})) {
             return true;
         }
     }
-    for (uint32_t west = 1; west < x_size; ++west) {
+    for (uint32_t west = 1; west <= max_w; ++west) {
         if (visitor(SourceInjectBranch{RoutingDirection::W, SourceInjectExtents{.w = west}})) {
             return true;
         }
     }
-    for (uint32_t east = 0; east < x_size; ++east) {
-        for (uint32_t west = 0; west < x_size; ++west) {
+    for (uint32_t east = 0; east <= max_e; ++east) {
+        for (uint32_t west = 0; west <= max_w; ++west) {
             if (east + west >= x_size) {
                 continue;
             }
-            for (uint32_t north = 1; north < y_size; ++north) {
+            for (uint32_t north = 1; north <= max_n; ++north) {
                 if (visitor(SourceInjectBranch{
                         RoutingDirection::N, SourceInjectExtents{.n = north, .e = east, .w = west}})) {
                     return true;
                 }
             }
-            for (uint32_t south = 1; south < y_size; ++south) {
+            for (uint32_t south = 1; south <= max_s; ++south) {
                 if (visitor(SourceInjectBranch{
                         RoutingDirection::S, SourceInjectExtents{.s = south, .e = east, .w = west}})) {
                     return true;
@@ -296,77 +312,78 @@ std::optional<SourceInjectCandidate> select_candidate(BaseFabricFixture* fixture
                 }
                 const ChipId source_physical_id = source_physical_id_opt.value();
 
-                const bool found_preferred_branch = visit_candidate_branches(mesh_shape, [&](const auto& branch) {
-                    const auto& extents = branch.extents;
-                    std::string failure;
-                    // Run the production reverse-tree encoder for one client branch. Geometry alone
-                    // cannot reveal an express Z output selected for this exact source and target set.
-                    const auto root_outputs = mcast_root_output_directions(
-                        mesh_graph,
-                        mesh_id,
-                        *y_topology,
-                        *x_topology,
-                        root_y,
-                        root_x,
-                        extents.n,
-                        extents.s,
-                        extents.e,
-                        extents.w,
-                        &failure);
-                    TT_FATAL(
-                        failure.empty(),
-                        "Failed to derive multicast outputs for mesh {} chip {}: {}",
-                        mesh_id,
-                        source_chip_id,
-                        failure);
-                    // A legal branch may leave on its cardinal output and, for N/S under express
-                    // routing, Z. Reject wrapped/combined candidates that change the logical branch.
-                    if (!outputs_match_branch(root_outputs, branch.primary_output)) {
+                const bool found_preferred_branch = visit_candidate_branches(
+                    mesh_shape, *y_topology, *x_topology, root_y, root_x, [&](const auto& branch) {
+                        const auto& extents = branch.extents;
+                        std::string failure;
+                        // Run the production reverse-tree encoder for one client branch. Geometry alone
+                        // cannot reveal an express Z output selected for this exact source and target set.
+                        const auto root_outputs = mcast_root_output_directions(
+                            mesh_graph,
+                            mesh_id,
+                            *y_topology,
+                            *x_topology,
+                            root_y,
+                            root_x,
+                            extents.n,
+                            extents.s,
+                            extents.e,
+                            extents.w,
+                            &failure);
+                        TT_FATAL(
+                            failure.empty(),
+                            "Failed to derive multicast outputs for mesh {} chip {}: {}",
+                            mesh_id,
+                            source_chip_id,
+                            failure);
+                        // A legal branch may leave on its cardinal output and, for N/S under express
+                        // routing, Z. Reject wrapped/combined candidates that change the logical branch.
+                        if (!outputs_match_branch(root_outputs, branch.primary_output)) {
+                            return false;
+                        }
+
+                        const bool all_outputs_connectable =
+                            std::all_of(root_outputs.begin(), root_outputs.end(), [&](RoutingDirection output) {
+                                return direction_is_connectable(control_plane, source, output);
+                            });
+                        if (!all_outputs_connectable) {
+                            return false;
+                        }
+
+                        auto targets = target_devices(
+                            control_plane, source, root_y, root_x, extents, mesh_shape, local_physical_ids);
+                        if (!targets.has_value() || targets->empty()) {
+                            return false;
+                        }
+
+                        SourceInjectCandidate candidate{
+                            source,
+                            source_physical_id,
+                            root_y,
+                            root_x,
+                            branch.primary_output,
+                            extents,
+                            root_outputs,
+                            std::move(targets.value()),
+                            express};
+                        const bool exercises_z_fanout = candidate_exercises_z_fanout(candidate);
+                        const bool has_multiple_targets = candidate.target_physical_ids.size() >= 2;
+                        if (is_better_candidate(candidate, best)) {
+                            best = std::move(candidate);
+                        }
+
+                        // Cardinal plus Z is the widest legal branch root and directly exercises the
+                        // express behavior this API adds over the existing single-connection path.
+                        if (express && exercises_z_fanout) {
+                            return true;
+                        }
+                        // On a non-express mesh the fanout degenerates to one cardinal connection. Prefer
+                        // a branch with at least two targets so the test still exercises multicast delivery.
+                        if (!express && has_multiple_targets) {
+                            return true;
+                        }
                         return false;
-                    }
-
-                    const bool all_outputs_connectable =
-                        std::all_of(root_outputs.begin(), root_outputs.end(), [&](RoutingDirection output) {
-                            return direction_is_connectable(control_plane, source, output);
-                        });
-                    if (!all_outputs_connectable) {
-                        return false;
-                    }
-
-                    auto targets =
-                        target_devices(control_plane, source, root_y, root_x, extents, mesh_shape, local_physical_ids);
-                    if (!targets.has_value() || targets->empty()) {
-                        return false;
-                    }
-
-                    SourceInjectCandidate candidate{
-                        source,
-                        source_physical_id,
-                        root_y,
-                        root_x,
-                        branch.primary_output,
-                        extents,
-                        root_outputs,
-                        std::move(targets.value()),
-                        express};
-                    const bool exercises_z_fanout = candidate_exercises_z_fanout(candidate);
-                    const bool has_multiple_targets = candidate.target_physical_ids.size() >= 2;
-                    if (is_better_candidate(candidate, best)) {
-                        best = std::move(candidate);
-                    }
-
-                    // Cardinal plus Z is the widest legal branch root and directly exercises the
-                    // express behavior this API adds over the existing single-connection path.
-                    if (express && exercises_z_fanout) {
-                        return true;
-                    }
-                    // On a non-express mesh the fanout degenerates to one cardinal connection. Prefer
-                    // a branch with at least two targets so the test still exercises multicast delivery.
-                    if (!express && has_multiple_targets) {
-                        return true;
-                    }
-                    return false;
-                });
+                    });
                 if (found_preferred_branch) {
                     return best;
                 }

@@ -802,10 +802,8 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
     // The two same-source instances raw-write disjoint output page ranges; the output shard is
     // resident and nothing drains it. Two role-free touchers over one grid -> assign 1P + 1C.
     spec.kernels = {
-        make_worker(
-            kGenReaderKernel, ttnn::create_reader_datamovement_config(device->arch()), DFBEndpointType::PRODUCER),
-        make_worker(
-            kGenWriterKernel, ttnn::create_writer_datamovement_config(device->arch()), DFBEndpointType::CONSUMER),
+        make_worker(kGenReaderKernel, ttnn::create_reader_datamovement_config(), DFBEndpointType::PRODUCER),
+        make_worker(kGenWriterKernel, ttnn::create_writer_datamovement_config(), DFBEndpointType::CONSUMER),
     };
 
     // Output sharded DFB, built on the output buffer's borrowed memory so its backing L1 address is

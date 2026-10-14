@@ -24,6 +24,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/math.hpp>
 #include "tt_align.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
@@ -412,8 +413,10 @@ public:
         return mesh_adjacency_map;
     }
 
+    tt::ARCH get_arch() const { return mesh_device_->arch(); }
+
     uint32_t get_max_connections_per_device() const override {
-        auto arch = tt::tt_metal::hal::get_arch();
+        auto arch = get_arch();
         switch (arch) {
             case tt::ARCH::BLACKHOLE: return 5;  // N, S, E, W, Z
             default: return 4;                   // N, S, E, W
@@ -476,12 +479,12 @@ public:
 
     std::shared_ptr<MeshBuffer> create_mesh_buffer_helper(
         const std::vector<tt::tt_metal::CoreCoord>& cores, uint32_t address, uint32_t size_bytes) const {
-        std::set<CoreRange> all_cores_set;
+        std::set<tt::tt_metal::CoreRange> all_cores_set;
         for (const auto& core : cores) {
-            all_cores_set.insert(CoreRange(core));
+            all_cores_set.insert(tt::tt_metal::CoreRange(core));
         }
 
-        auto all_cores = CoreRangeSet(all_cores_set);
+        auto all_cores = tt::tt_metal::CoreRangeSet(all_cores_set);
         auto num_cores = all_cores_set.size();
         auto total_size = size_bytes * num_cores;
         auto shard_params = tt::tt_metal::ShardSpecBuffer(
@@ -1874,8 +1877,8 @@ public:
 
 private:
     // Helper methods for device frequency validation (performance testing)
-    static uint32_t get_expected_baseline_frequency_mhz() {
-        auto arch = tt::tt_metal::hal::get_arch();
+    uint32_t get_expected_baseline_frequency_mhz() const {
+        auto arch = get_arch();
         switch (arch) {
             case tt::ARCH::WORMHOLE_B0: return 1000;
             case tt::ARCH::BLACKHOLE: return 1350;
@@ -1883,9 +1886,9 @@ private:
         }
     }
 
-    static uint32_t get_frequency_tolerance_mhz() {
+    uint32_t get_frequency_tolerance_mhz() const {
         // Note: these tolerances are initally set as placeholders and should be calibrated based on empirical data
-        auto arch = tt::tt_metal::hal::get_arch();
+        auto arch = get_arch();
         switch (arch) {
             case tt::ARCH::WORMHOLE_B0: return 10;
             case tt::ARCH::BLACKHOLE: return 20;

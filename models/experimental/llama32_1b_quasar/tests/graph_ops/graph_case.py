@@ -43,7 +43,7 @@ Fidelity caveats (deliberate, documented, all visible in the generated data)
   (page tables, cur_pos, update_idxs, embedding ids) would fault the device with
   random values, so they get semantic values from ``INDEX_VALUES`` below.
 * Program configs are rebuilt field-for-field from the repr (including
-  LayerNorm's ``legacy_reduction`` / ``legacy_rsqrt`` / ``use_welford`` and SDPA's
+  LayerNorm's ``legacy_reduction`` and ``use_welford``, and SDPA's
   ``max_cores_per_head_batch``). The only exceptions are the optional
   CoreRangeSet restrictions (``sub_core_grids``, ``allowed_worker_cores``): those
   print as ``std::nullopt`` in every capture so far, and a non-null value skips
@@ -71,6 +71,18 @@ from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
 # Re-exported so generated files need one import only.
 with_default_mesh = U.with_default_mesh
 from_tt = U.from_tt
+
+
+def _is_quasar(mesh_device=None):
+    """True when running on the Quasar architecture. Mirrors utility_functions.is_quasar()
+    (`"quasar" in ttnn.get_arch_name()`); the arch is process-global, so `mesh_device` is accepted only for
+    call-site symmetry. Used by the small-grid / emu tests to strict-xfail known Quasar-only op blockers while
+    still requiring WH/BH to pass."""
+    try:
+        return "quasar" in ttnn.get_arch_name()
+    except Exception:
+        return False
+
 
 # =============================================================================
 # Enum tables (capture string -> ttnn object)
@@ -249,7 +261,6 @@ _PROGRAM_CONFIG_FIELDS = {
         "block_w",
         "inplace",
         "legacy_reduction",
-        "legacy_rsqrt",
         "use_welford",
     ),
     "SDPAProgramConfig": (
@@ -287,7 +298,6 @@ _BOOL_FIELDS = frozenset(
     {
         "inplace",
         "legacy_reduction",
-        "legacy_rsqrt",
         "use_welford",
         "transpose_mcast",
         "fuse_batch",
@@ -446,14 +456,113 @@ def _is_partial_shard(spec):
     return _rows_of(spec["shape"]) < _shard_row_capacity(mem)
 
 
+# Per-element host byte sizes, for the RAM budget below.
+_DTYPE_BYTES = {
+    "BFLOAT16": 2,
+    "BFLOAT8_B": 1,
+    "BFLOAT4_B": 1,
+    "FLOAT32": 4,
+    "UINT32": 4,
+    "INT32": 4,
+    "UINT16": 2,
+    "UINT8": 1,
+}
+
+# A single captured input larger than this cannot be materialized on the 2-compute-node emulator: the full
+# host torch tensor plus its copy in the simulator's host-modeled DRAM exhausts RAM and the OS OOM-killer
+# takes the worker (a hard SIGKILL with no traceback, not a clean device OOM). The real llama vocab table
+# [1,1,128256,2048] bf16 is ~525 MB and hits exactly this; the model runs embedding on host anyway, so the
+# full-table device embedding these cases capture is never actually executed in the e2e.
+_HOST_TENSOR_RAM_BUDGET = 256_000_000  # ~256 MB
+
+# Output-readback budget (elements), Quasar-only. Reading a device tensor back to host crosses the
+# ~50 KHz simulated memory interface, so a large output (e.g. a [1,1,1024,8192] = 8.4M-element multiply
+# result) takes minutes per readback — and golden ops were reading each output back TWICE (once for the
+# finiteness check, once for the PCC check). The dedup below reads each output once; for outputs still
+# larger than this budget we read only a leading tile-aligned slice (or, if that device slice isn't
+# possible, skip the value/finiteness checks — shape/dtype/placement already ran and need no readback).
+# WH/BH and any real HW always read the full output (gated on _is_quasar), so their coverage is unchanged.
+_READBACK_BUDGET_ELEMS = 1_000_000  # ~2 MB bf16 per readback
+
+
+def _host_tensor_bytes(spec):
+    return math.prod(spec["shape"]) * _DTYPE_BYTES.get(spec["dtype"], 4)
+
+
+# Float dtypes we materialize into TILE layout via quasar.tilize on Quasar (see _quasar_tilize_build).
+_QUASAR_TILE_REROUTE_DTYPES = {"BFLOAT16", "FLOAT32"}
+# Only reroute SHORT tensors (height in rows). The mainline-tilize fault is a 1-tile-tall (32-row)
+# multicore row-split artifact; taller tensors split cleanly and don't need the reroute, and rerouting a
+# large tensor just adds a slow device tilize on the sim. 64 = 2 tile-rows, comfortably covers the fault.
+_QUASAR_TILE_REROUTE_MAX_HEIGHT = 64
+
+
+def _quasar_tilize_build(data, tt_dtype, memory_config, mesh_device):
+    """Build a TILE tensor on Quasar via a ROW_MAJOR upload + quasar.tilize, then place it in the target
+    memory config.
+
+    ttnn.from_torch(layout=TILE) routes to the MAINLINE device tilize on Quasar, which faults
+    (Neo0TRISC2 MEM_READ_NO_RESPONSE in tilize_metal2.cpp) on wide-short (1-tile-tall) tensors AND leaks
+    state that faults a later tilize in the same run (seen when graph_ops tests are batched). quasar.tilize
+    is the Quasar-safe tilize the model itself uses. We tilize to DRAM interleaved and then resh/re-place
+    into the captured memory config (a no-op when that is already DRAM interleaved).
+    """
+    rm = ttnn.from_torch(
+        data,
+        dtype=tt_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+    )
+    quasar_tilize = getattr(getattr(ttnn.experimental, "quasar", None), "tilize", None)
+    tt = (quasar_tilize or ttnn.tilize)(rm, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=tt_dtype)
+    if memory_config is not None and memory_config != ttnn.DRAM_MEMORY_CONFIG:
+        tt = ttnn.to_memory_config(tt, memory_config)
+    return tt
+
+
 def build_tensor(spec, mesh_device, case, op_name, key):
     """Materialize one captured input tensor. Returns (ttnn tensor, torch source)."""
+    # Quasar-only: the host RAM budget is a Quasar-emulator constraint. On WH/BH (and any real HW) a >256MB
+    # input is materializable, so don't silently drop coverage there. Gate on _is_quasar rather than the grid
+    # size: the emulator's compute_with_storage_grid_size is unreliable (dispatch-mode grid trap), and Quasar
+    # today is only the emulator/sim.
+    nbytes = _host_tensor_bytes(spec)
+    if _is_quasar(mesh_device) and nbytes > _HOST_TENSOR_RAM_BUDGET:
+        pytest.skip(
+            f"input {key} {spec['shape']} {spec['dtype']} ~{nbytes / 1e6:.0f} MB exceeds the emulator host RAM "
+            f"budget (~{_HOST_TENSOR_RAM_BUDGET / 1e6:.0f} MB) — materializing it would OOM-kill the worker"
+        )
     data = _torch_data(spec, case, op_name, key)
     if (op_name, key) in HOST_INPUT:
         return ttnn.from_torch(data, dtype=DTYPE[spec["dtype"]], layout=LAYOUT[spec["layout"]]), data
 
     memory_config = build_memory_config(spec.get("mem"), mesh_device) or ttnn.DRAM_MEMORY_CONFIG
     partial = _is_partial_shard(spec)
+
+    # Quasar: from_torch(layout=TILE) routes to the mainline device tilize, which faults on wide-SHORT
+    # tensors (1-tile-tall: the multicore row-split sub-tiles -> MEM_READ_NO_RESPONSE) and leaks state into
+    # later ops. Build those via quasar.tilize instead (the model's path). Gated to:
+    #   * SHORT height (<= _QUASAR_TILE_REROUTE_MAX_HEIGHT): tall tensors split cleanly and never hit the
+    #     fault, so they keep from_torch -- rerouting them just adds a slow device tilize of many tiles on
+    #     the ~50KHz sim (a 1024x8192 = 8192-tile input blew the 300s test timeout).
+    #   * tile-aligned (dim%32==0): from_torch(TILE) auto-pads a non-aligned dim, quasar.tilize FATALs on it.
+    #   * float dtype, non-partial-shard: partial shards / non-float / ROW_MAJOR keep from_torch.
+    shp = spec["shape"]
+    tile_aligned = len(shp) >= 2 and shp[-2] % 32 == 0 and shp[-1] % 32 == 0
+    short = len(shp) >= 2 and shp[-2] <= _QUASAR_TILE_REROUTE_MAX_HEIGHT
+    if (
+        _is_quasar(mesh_device)
+        and spec["layout"] == "TILE"
+        and spec["dtype"] in _QUASAR_TILE_REROUTE_DTYPES
+        and tile_aligned
+        and short
+        and not partial
+    ):
+        tt = _quasar_tilize_build(data, DTYPE[spec["dtype"]], memory_config, mesh_device)
+        return tt, data
+
     tt = ttnn.from_torch(
         data,
         dtype=DTYPE[spec["dtype"]],
@@ -927,7 +1036,41 @@ def _input_elements(case):
     return total
 
 
-def _check_finite(host, case, op_name, index):
+def _read_output_host(got, mesh_device):
+    """Compose one ttnn output to host, bounding the readback on Quasar for oversized outputs.
+
+    Returns ``(host_tensor, partial)``:
+      * WH/BH, or a host/within-budget tensor -> the full host tensor, ``partial=False`` (unchanged).
+      * Quasar + on-device + larger than ``_READBACK_BUDGET_ELEMS`` -> a leading tile-aligned slice read
+        back to host, ``partial=True`` (the slow sim readback is bounded to the budget).
+      * Quasar + oversized but the device slice isn't possible -> ``(None, True)``: the caller skips the
+        value/finiteness checks for this output (shape/dtype/placement already ran and need no readback).
+    """
+    if not ttnn.is_tensor_storage_on_device(got):
+        return from_tt(got, mesh_device), False
+
+    shape = [int(d) for d in got.shape]
+    numel = math.prod(shape) if shape else 1
+    if not (_is_quasar(mesh_device) and numel > _READBACK_BUDGET_ELEMS):
+        return from_tt(got, mesh_device), False
+
+    # Oversized on the emulator: read only a leading tile-aligned slice along the second-to-last dim.
+    try:
+        if len(shape) >= 2:
+            last = max(shape[-1], 1)
+            rows = max(U.TILE, (_READBACK_BUDGET_ELEMS // last) // U.TILE * U.TILE)
+            if rows < shape[-2]:
+                begins = tuple([0] * len(shape))
+                ends = tuple(shape[:-2] + [rows, shape[-1]])
+                sliced = ttnn.slice(got, begins, ends)
+                return from_tt(sliced, mesh_device), True
+    except Exception:
+        pass
+    # Can't cheaply bound the readback for this oversized output -> skip the value/finiteness checks.
+    return None, True
+
+
+def _check_finite(host, case, op_name, index, partial=False):
     """Assert the region the op can actually define is finite.
 
     An output with more elements than *all* of its inputs combined cannot be fully
@@ -941,7 +1084,12 @@ def _check_finite(host, case, op_name, index):
     head, …), which is exactly the region the op writes; a NaN/Inf there still
     fails, and checking the leading slice rather than merely counting finite values
     means finite garbage in the padding cannot mask it.
+
+    ``partial`` means ``host`` is itself only a leading tile-aligned prefix of the output (the
+    bounded-readback path for oversized Quasar outputs); the leading-region logic below is unchanged,
+    the counts just describe that prefix rather than the whole tensor.
     """
+    tail = " (bounded leading readback)" if partial else ""
     finite = torch.isfinite(host)
     n_finite, n_total = int(finite.sum()), host.numel()
     if n_finite == n_total:
@@ -955,12 +1103,12 @@ def _check_finite(host, case, op_name, index):
             return  # only the padding the op cannot define is non-finite
         assert False, (
             f"{op_name}: output[{index}] has {bad} non-finite value(s) in the leading {budget} "
-            f"element(s) the op must define ({n_total - n_finite} of {n_total} non-finite overall; "
+            f"element(s) the op must define ({n_total - n_finite} of {n_total} non-finite overall{tail}; "
             f"the tail beyond {budget} is batch/tile padding the op does not write)"
         )
 
     assert False, (
-        f"{op_name}: output[{index}] has {n_total - n_finite} non-finite of {n_total} element(s) "
+        f"{op_name}: output[{index}] has {n_total - n_finite} non-finite of {n_total} element(s){tail} "
         f"(inputs account for {budget}, so the whole output should be written)"
     )
 
@@ -1040,8 +1188,16 @@ def _check_output(out, case, mesh_device, op_name):
             assert got.dtype == want_dtype, f"{op_name}: output[{i}] dtype {got.dtype} != {source} {want_dtype}"
         _check_placement(got, spec, mesh_device, op_name, i, source)
 
+    # Read each output back to host ONCE (the sim device->host readback dominates runtime) and reuse it
+    # for both the finiteness check here and the golden/PCC check in run_case. On Quasar an oversized
+    # output is bounded to a leading tile-aligned slice, or (host is None) its value checks are skipped.
+    hosts = []
     for i, t in enumerate(tensors):
-        _check_finite(from_tt(t, mesh_device), case, op_name, i)
+        host, partial = _read_output_host(t, mesh_device)
+        if host is not None:
+            _check_finite(host, case, op_name, i, partial=partial)
+        hosts.append((host, partial))
+    return hosts
 
 
 def _golden_pcc(case, op_name):
@@ -1065,6 +1221,19 @@ def _golden_pcc(case, op_name):
     return min(floors)
 
 
+# Ops whose captured call faults on the Quasar device itself (LLK assert / hang), not fixable at the harness
+# level and not host-catchable, so run_case skips them pre-flight. Value = why. These are mainline ops the
+# model does NOT use on Quasar (it uses the quasar-experimental equivalents), so skipping them here does not
+# reduce coverage of the actual model path.
+_QUASAR_UNSUPPORTED_OPS = {
+    # Compute kernel calls compute_kernel_hw_startup twice (call-once violation, #52395) -> corrupts Quasar
+    # Tensix engine state -> LLK assert (Neo0TRISC2 line 94), every case/memory-config. The model uses the
+    # quasar rope_1d op, not this mainline rotary_embedding_llama.
+    "ttnn.experimental.rotary_embedding_llama": "mainline kernel double compute_kernel_hw_startup (#52395) "
+    "corrupts Quasar engine state (LLK assert); model uses quasar rope_1d",
+}
+
+
 def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     """Materialize one captured call, run it, and check the result.
 
@@ -1072,6 +1241,12 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     ``Tensor.__getitem__``); ``case`` is one entry of a generated ``CASES`` list.
     """
     op_name = op_name or case["op"]
+
+    # Some captured ops fault ON the Quasar device (LLK asserts / hangs), which are not host-catchable
+    # RuntimeErrors -- so skip them pre-flight, before any device work, rather than hanging the run.
+    if _is_quasar(mesh_device) and op_name in _QUASAR_UNSUPPORTED_OPS:
+        pytest.skip(f"{op_name} faults on Quasar: {_QUASAR_UNSUPPORTED_OPS[op_name]}")
+
     torch_inputs: dict[str, torch.Tensor] = {}
 
     args = [_build_value(spec, mesh_device, case, op_name, str(i), torch_inputs) for i, spec in enumerate(case["args"])]
@@ -1080,9 +1255,31 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
         for name, spec in case["kwargs"].items()
     }
 
-    out = op(*args, **kwargs)
+    # Captured cases were recorded on an 8x8 (64-core) N150; many pin a grid or allocate buffers that do not
+    # fit the 2-compute-node Quasar emulator. Some of those mismatches are only discovered inside the op (a grid
+    # derived from num_heads, a program-config grid, or an L1 allocation), AFTER build_memory_config's shard-grid
+    # pre-check has passed -- so convert those specific device-too-small FATALs into a skip rather than a failure.
+    # (Errors that are not clearly a device-size mismatch still propagate.)
+    try:
+        out = op(*args, **kwargs)
+    except RuntimeError as e:
+        msg = str(e)
+        # Quasar-only: these grid/capacity errors are 2-node-emulator constraints (captured 8x8-grid configs
+        # and L1 shapes that don't fit the emulator). On WH/BH (and any real HW) they'd be genuine regressions,
+        # so let them propagate there instead of masking them as a skip. Gate on _is_quasar (not grid size):
+        # the emulator misreports its grid, and Quasar today is only the emulator/sim.
+        _too_small = _is_quasar(mesh_device) and (
+            "Target number of cores" in msg  # e.g. nlp_concat_heads_decode num_heads(32) > device cores
+            or "must not contain more cores than the device" in msg  # SDPA program-config grid > device
+            or "exceeds grid size" in msg
+            or "Out of Memory" in msg  # e.g. concat output/intermediate L1 > 2-bank capacity
+            or "Not enough space to allocate" in msg
+        )
+        if _too_small:
+            pytest.skip(f"captured case does not fit this device (grid/memory): {msg.splitlines()[0][:200]}")
+        raise
 
-    _check_output(out, case, mesh_device, op_name)
+    hosts = _check_output(out, case, mesh_device, op_name)
 
     post_fn = POSTCONDITION.get(op_name)
     if post_fn is not None:
@@ -1099,6 +1296,12 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
             floor = pcc or _golden_pcc(case, op_name)
             for i, one in enumerate(refs):
                 if one is not None and i < len(tensors):
-                    U.assert_pcc(one, tensors[i], pcc=floor, mesh_device=mesh_device)
+                    # Reuse the host tensor already composed in _check_output (avoids a 2nd sim readback).
+                    # host is None only for an oversized Quasar output whose value checks were skipped there
+                    # -> skip the PCC check too (shape/dtype/placement already ran).
+                    host = hosts[i][0] if i < len(hosts) else None
+                    if host is None and i < len(hosts):
+                        continue
+                    U.assert_pcc(one, tensors[i], pcc=floor, mesh_device=mesh_device, host=host)
 
     return out

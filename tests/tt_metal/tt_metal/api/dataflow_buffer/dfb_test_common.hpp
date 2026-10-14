@@ -137,8 +137,11 @@ inline m2::KernelSpec make_dm_kernel(
         .source = std::filesystem::path{source_path},
         .num_threads = num_threads,
         .hw_config =
-            m2::DataMovementGen2Config{
-                .disable_dfb_implicit_sync_for = std::move(disable_implicit_sync_for),
+            m2::DataMovementHardwareConfig{
+                .config_2xx =
+                    m2::DataMovementHardwareConfig::DataMovement2XXConfig{
+                        .disable_dfb_implicit_sync_for = std::move(disable_implicit_sync_for),
+                    },
             },
     };
 }
@@ -149,15 +152,17 @@ inline m2::KernelSpec make_compute_kernel(
         .unique_id = unique_id,
         .source = std::filesystem::path{source_path},
         .num_threads = num_threads,
-        .hw_config = m2::ComputeGen2Config{},
+        .hw_config = m2::ComputeHardwareConfig{},
     };
 }
 
 inline void disable_implicit_sync_for(m2::KernelSpec& kernel, m2::DFBSpecName dfb_name) {
     auto& dm_cfg = std::get<m2::DataMovementHardwareConfig>(kernel.hw_config);
-    TT_FATAL(std::holds_alternative<m2::DataMovementGen2Config>(dm_cfg), "Can only set implicit sync for Gen2 Kernel");
-    auto& gen2_cfg = std::get<m2::DataMovementGen2Config>(dm_cfg);
-    gen2_cfg.disable_dfb_implicit_sync_for.push_back(std::move(dfb_name));
+    if (!dm_cfg.config_2xx) {
+        dm_cfg.config_2xx = m2::DataMovementHardwareConfig::DataMovement2XXConfig{};
+    }
+    auto& config_2xx = *dm_cfg.config_2xx;
+    config_2xx.disable_dfb_implicit_sync_for.push_back(std::move(dfb_name));
 }
 
 inline void maybe_disable_implicit_sync(m2::KernelSpec& kernel, bool implicit_sync, m2::DFBSpecName dfb_name) {
@@ -389,11 +394,11 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
          .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = p.cap}};
 
-    // Config is arch-specific (the _2_0 kernels are the same either way): Gen2 on Quasar,
-    // Gen1 on WH/BH. On WH/BH a DFB lowers to a circular buffer and ValidateProgramSpec rejects
-    // a Gen2 config, so mirror the legacy driver -- DM producer -> RISCV_0, DM consumer ->
-    // RISCV_1/NOC_1, Tensix -> ComputeGen1. The make_*_kernel helpers default to Gen2; override
-    // to Gen1 on WH/BH here (only 1x1 explicit-sync cases reach WH/BH per the skip gate above).
+    // Config is arch-specific (the _2_0 kernels are the same either way). On WH/BH a DFB lowers to
+    // a circular buffer and ValidateProgramSpec requires config_1xx on DM kernels, so mirror the
+    // legacy driver -- DM producer -> RISCV_0, DM consumer -> RISCV_1/NOC_1, Tensix -> default
+    // ComputeHardwareConfig. The make_*_kernel helpers set no config_1xx; override on WH/BH here
+    // (only 1x1 explicit-sync cases reach WH/BH per the skip gate above).
     if (mesh_device.arch() == ARCH::QUASAR) {
         // Gen2 implicit-sync opt-out (#45160): only DM endpoints carry the per-kernel flag; for
         // ImplicitSyncFalse it keeps the host from programming implicit ISR/txn metadata over the
@@ -405,17 +410,27 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             maybe_disable_implicit_sync(consumer, p.implicit_sync, DFB);
         }
     } else {
-        // WH/BH: Gen1 config (Gen1 has no implicit sync, so no disable knob needed).
+        // WH/BH: config_1xx pins (WH/BH has no implicit sync, so no disable knob needed).
         if (p.producer_type == M2PorCType::DM) {
-            producer.hw_config = m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
+            producer.hw_config = m2::DataMovementHardwareConfig{
+                .config_1xx =
+                    m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    },
+            };
         } else {
-            producer.hw_config = m2::ComputeGen1Config{};
+            producer.hw_config = m2::ComputeHardwareConfig{};
         }
         if (p.consumer_type == M2PorCType::DM) {
-            consumer.hw_config = m2::DataMovementGen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1};
+            consumer.hw_config = m2::DataMovementHardwareConfig{
+                .config_1xx =
+                    m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = tt::tt_metal::NOC::NOC_1,
+                    },
+            };
         } else {
-            consumer.hw_config = m2::ComputeGen1Config{};
+            consumer.hw_config = m2::ComputeHardwareConfig{};
         }
     }
 

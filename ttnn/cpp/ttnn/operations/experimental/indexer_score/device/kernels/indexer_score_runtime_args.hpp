@@ -21,6 +21,7 @@ enum : uint32_t {
     SlotMetadata,
     NumLayers,
     LayerIndex,
+    ValidEnd,
     Count
 };
 }

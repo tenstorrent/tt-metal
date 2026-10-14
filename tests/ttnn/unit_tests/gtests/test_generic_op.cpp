@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <tt_metal/api/tt-metalium/core_coord.hpp>
 #include <tt_metal/api/tt-metalium/work_split.hpp>
 #include <tt_metal/api/tt-metalium/host_api.hpp>
@@ -34,6 +35,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
 #include <ttnn/distributed/distributed_tensor.hpp>
@@ -41,11 +43,41 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tests/tt_metal/tt_fabric/common/fabric_fixture.hpp"
 
 namespace ttnn::operations::generic::test {
+
+namespace {
+
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
+
+constexpr const char* kEmptyKernelSource = "void kernel_main() {}";
+
+std::vector<Tensor> make_io_tensors(tt::tt_metal::distributed::MeshDevice* device) {
+    const tt::tt_metal::TensorSpec spec(
+        ttnn::Shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
+        TensorLayout(tt::tt_metal::DataType::BFLOAT16, PageConfig(tt::tt_metal::Layout::TILE), MemoryConfig{}));
+    return {ttnn::create_device_tensor(spec, device), ttnn::create_device_tensor(spec, device)};
+}
+
+// A single-core program whose only kernel is `kernel_source`.
+ProgramDescriptor make_single_core_program(const std::string& kernel_source) {
+    const CoreCoord core(0, 0);
+    return ProgramDescriptor{
+        .kernels = {KernelDescriptor{
+            .kernel_source = kernel_source,
+            .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
+            .core_ranges = CoreRangeSet(CoreRange(core, core)),
+            .config = tt::tt_metal::ReaderConfigDescriptor{},
+        }},
+    };
+}
+
+}  // namespace
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
     uint32_t batch = 1;
@@ -137,7 +169,13 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         .cbs = {input_cb_descriptor, output_cb_descriptor},
     };
 
+    // The launch after preparation reuses the prepared workload and still computes the correct result.
+    const std::size_t cache_entries_before_preparation = this->device_->num_program_cache_entries();
+    ttnn::experimental::prepare_generic_op(
+        std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before_preparation + 1);
     ttnn::generic_op(std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before_preparation + 1);
     Tensor output_tensor = device_output_tensor.cpu();
     auto allclose = ttnn::allclose<uint32_t>(golden, output_tensor);
     ASSERT_TRUE(allclose);
@@ -1635,8 +1673,8 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
     receiver_device->quiesce_devices();
 
     std::vector<uint32_t> sender_status;
-    tt::tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt::tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -1646,8 +1684,8 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
 
     std::vector<uint32_t> receiver_status;
 
-    tt::tt_metal::detail::ReadFromDeviceL1(
-        receiver_device->get_devices()[0],
+    tt::tt_metal::slow_dispatch::ReadFromL1(
+        *receiver_device,
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -1659,6 +1697,53 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
     uint64_t receiver_words =
         ((uint64_t)receiver_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | receiver_status[TT_FABRIC_WORD_CNT_INDEX];
     EXPECT_EQ(sender_words, receiver_words);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpPreparationReusesProgramCache) {
+    const std::vector<Tensor> io_tensors = make_io_tensors(this->device_);
+    const ProgramDescriptor program_descriptor = make_single_core_program(kEmptyKernelSource);
+
+    const std::size_t cache_entries_before = this->device_->num_program_cache_entries();
+    ttnn::experimental::prepare_generic_op(io_tensors, program_descriptor);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before + 1);
+    ttnn::experimental::prepare_generic_op(io_tensors, program_descriptor);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before + 1);
+}
+
+TEST_F(TTNNFixtureWithDevice, TestGenericOpPreparationUnderNoDispatchCaptureLeavesProgramCacheUnchanged) {
+    const std::vector<Tensor> io_tensors = make_io_tensors(this->device_);
+    const ProgramDescriptor cached_program_descriptor = make_single_core_program(kEmptyKernelSource);
+    ttnn::experimental::prepare_generic_op(io_tensors, cached_program_descriptor);
+    // Any hash that differs from the cached program's makes this preparation a cache miss.
+    constexpr std::uint64_t kUncachedProgramHash = 1;
+    ProgramDescriptor uncached_program_descriptor = cached_program_descriptor;
+    uncached_program_descriptor.custom_program_hash = kUncachedProgramHash;
+
+    const std::size_t cache_entries_before = this->device_->num_program_cache_entries();
+    {
+        ttnn::graph::ScopedGraphCapture capture(ttnn::graph::GraphProcessor::RunMode::NO_DISPATCH);
+        ttnn::experimental::prepare_generic_op(io_tensors, cached_program_descriptor);
+        ttnn::experimental::prepare_generic_op(io_tensors, uncached_program_descriptor);
+    }
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before);
+}
+
+// Kernels compile after the workload is created, so a compilation failure exercises the order in which a new workload
+// is used and then cached.
+TEST_F(TTNNFixtureWithDevice, TestGenericOpCompilationFailureLeavesProgramCacheUnchanged) {
+    const std::vector<Tensor> io_tensors = make_io_tensors(this->device_);
+    const ProgramDescriptor program_descriptor =
+        make_single_core_program("void kernel_main() { undefined_function(); }");
+
+    const std::size_t cache_entries_before = this->device_->num_program_cache_entries();
+    EXPECT_THAT(
+        [&] { ttnn::experimental::prepare_generic_op(io_tensors, program_descriptor); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Failed to generate binaries")));
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before);
+    EXPECT_THAT(
+        [&] { ttnn::generic_op(io_tensors, program_descriptor); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Failed to generate binaries")));
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before);
 }
 
 }  // namespace ttnn::operations::generic::test

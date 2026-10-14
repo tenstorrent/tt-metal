@@ -108,13 +108,14 @@ def test_refiner_unet(
 # Format: {test_id: {"wormhole": perf_ns, "blackhole": perf_ns}}
 DEVICE_PERF_EXPECTATIONS = {
     "unet_1024x1024": {
-        "wormhole": 191_201_442 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        # mean of 3 scheduled bh_p150 runs 2026-09-19..09-21 (74.85M..74.93M) after #56767 (nlp_create_qkv_heads kernels, 2026-09-18)
-        "blackhole": 74_890_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        # mean of 3 scheduled wh_n150 runs 2026-10-10..10-12 (187.29M..187.60M); previous target 191.20M
+        "wormhole": 187_442_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        # mean of 3 scheduled bh_p150 runs 2026-10-10..10-12 (70.70M..70.74M); previous target 73.75M (2026-09-24, #55698)
+        "blackhole": 70_724_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "unet_512x512": {
-        # mean of 3 scheduled wh_n150 runs 2026-09-19..09-21 (78.01M..78.29M) after #56767 (nlp_create_qkv_heads kernels, 2026-09-18)
-        "wormhole": 78_107_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        # mean of 3 scheduled wh_n150 runs 2026-10-10..10-12 (73.25M..73.35M); previous target 77.80M
+        "wormhole": 73_287_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "refiner_unet_1024x1024": {
@@ -128,7 +129,8 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_decode_1024x1024": {
         "wormhole": 663_083_865,
-        "blackhole": 267_498_780,
+        # bh_p150 run 2026-09-25 (260.30M) on #55698; previous target 267.50M
+        "blackhole": 260_304_000,
     },
     "vae_decode_512x512": {
         "wormhole": 167_473_541,
@@ -136,10 +138,12 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_encode_1024x1024": {
         "wormhole": 328_968_938,  # Note: this is an average value of 30 test runs due to high variability
-        "blackhole": 141_175_333,
+        # bh_p150 run 2026-09-25 (137.84M) on #55698; previous target 141.18M
+        "blackhole": 137_841_000,
     },
     "vae_encode_512x512": {
-        "wormhole": 82_885_000,  # mean of 10 scheduled wh_n150 runs 2026-09-05..09-14 (82.69M..83.09M, sigma 0.16%)
+        # Mean of two local Wormhole runs on 2026-09-25 after GroupNorm wait reordering (80.60-80.92 ms).
+        "wormhole": 80_760_000,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {

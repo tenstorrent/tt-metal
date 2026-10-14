@@ -26,7 +26,8 @@ import sys
 
 import yaml
 
-from failure_title import _RUNNER_TAG
+# "Llama 3.1-8B e2e tests [bh_p150]" -> the entry is named without the runner tag.
+_RUNNER_TAG = re.compile(r"\s*\[[^\]]*\]$")
 
 PIPELINE_REORG = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "tests", "pipeline_reorg")

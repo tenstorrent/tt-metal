@@ -16,6 +16,7 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -66,8 +67,6 @@ ttnn::device_operation::ProgramArtifacts ConcatS2SRMProgramFactory::create_progr
     const TensorParamName INPUT_0{"input_0"};
     const TensorParamName INPUT_1{"input_1"};
     const TensorParamName OUTPUT{"output"};
-
-    const auto& device = output.device();
 
     // Height-sharded row count is the whole flattened height, not just dim[-2]: the shards
     // tile (prod(dims[0..-2]), dims[-1]). Using padded_shape()[-2] under-counts whenever the
@@ -228,14 +227,14 @@ ttnn::device_operation::ProgramArtifacts ConcatS2SRMProgramFactory::create_progr
             .source = KERNEL_SOURCE,
             .dfb_bindings = make_dfb_bindings(DFBEndpointType::PRODUCER),
             .compile_time_args = reader_cta,
-            .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
+            .hw_config = ttnn::create_reader_datamovement_config(),
         });
         kernels.push_back(KernelSpec{
             .unique_id = writer_name,
             .source = KERNEL_SOURCE,
             .dfb_bindings = make_dfb_bindings(DFBEndpointType::CONSUMER),
             .compile_time_args = writer_cta,
-            .hw_config = ttnn::create_writer_datamovement_config(device.arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         });
         work_units.push_back(WorkUnitSpec{
             .name = "main" + suffix,

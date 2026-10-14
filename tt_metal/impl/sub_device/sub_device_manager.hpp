@@ -18,6 +18,7 @@
 #include "allocator.hpp"
 #include "impl/allocator/persistent_l1_arena.hpp"
 #include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "sub_device.hpp"
 #include "sub_device_types.hpp"
 #include <impl/context/context_types.hpp>
@@ -51,10 +52,7 @@ public:
     const std::vector<SubDeviceId>& get_sub_device_ids() const;
     const SubDevice& sub_device(SubDeviceId sub_device_id) const;
 
-    const vector_aligned<uint32_t>& noc_mcast_unicast_data() const;
     bool has_noc_mcast_txns(SubDeviceId sub_device_id) const;
-    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const;
-    uint8_t noc_unicast_data_start_index(SubDeviceId sub_device_id) const;
 
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& get_core_go_message_mapping() const;
 
@@ -105,10 +103,7 @@ private:
 
     std::array<uint32_t, NumHalProgrammableCoreTypes> num_cores_{};
 
-    vector_aligned<uint32_t> noc_mcast_unicast_data_;
     std::vector<bool> has_noc_mcast_txns_;
-    std::vector<uint8_t> num_noc_unicast_txns_;
-    std::vector<uint8_t> noc_unicast_data_start_index_;
 
     std::vector<std::pair<CoreRangeSet, uint32_t>> core_go_message_mapping_;
 

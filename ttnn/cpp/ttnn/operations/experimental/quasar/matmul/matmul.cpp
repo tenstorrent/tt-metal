@@ -146,8 +146,9 @@ static bool get_post_process_bias(
         if (bias_padded_shape[-2] != tile_height) {
             post_process_bias = true;
         } else if (program_config.has_value()) {
-            // Check if the provided program config is MatmulMultiCoreProgramConfig
-            post_process_bias = std::holds_alternative<MatmulMultiCoreProgramConfig>(program_config.value());
+            // MatmulMultiCoreProgramConfig and MatmulUnifiedProgramConfig do not fuse bias
+            post_process_bias = std::holds_alternative<MatmulMultiCoreProgramConfig>(program_config.value()) ||
+                                std::holds_alternative<MatmulUnifiedProgramConfig>(program_config.value());
         } else if (!user_core_coord.has_value()) {
             // When program_config and user_core_coord are not provided, config is auto-generated
 

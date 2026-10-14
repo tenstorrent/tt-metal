@@ -60,7 +60,7 @@ using tt::tt_metal::ShardSpecBuffer;
 std::shared_ptr<tt_metal::distributed::MeshBuffer> PrepareBuffer(
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
     uint32_t size,
-    CoreRangeSet& logical_crs,
+    tt::tt_metal::CoreRangeSet& logical_crs,
     std::vector<uint32_t>& fill_data) {
     auto shard_parameters = ShardSpecBuffer(logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
     tt_metal::distributed::DeviceLocalBufferConfig device_local_config{
@@ -99,7 +99,7 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
 
         uint32_t result_size = NUM_DEVICES * sizeof(uint32_t);
         std::vector<uint32_t> result_buffer_data(NUM_DEVICES, 0);
-        CoreRangeSet core_range = {logical_core};
+        tt::tt_metal::CoreRangeSet core_range = {logical_core};
         result_buffers[src_idx] = PrepareBuffer(src_device, result_size, core_range, result_buffer_data);
         programs[src_idx] = tt::tt_metal::CreateProgram();
 

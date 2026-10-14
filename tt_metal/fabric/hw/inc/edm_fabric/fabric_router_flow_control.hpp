@@ -90,11 +90,11 @@ using ReceiverChannelResponseCreditSenderFor = std::conditional_t<
 // The two implementations do not agree on how they are built: the counter form needs its channel
 // index, the stream-register form reads the stream id table in its default constructor.
 template <typename CreditSender>
-constexpr CreditSender make_credit_sender(size_t channel_index) {
+FORCE_INLINE void construct_credit_sender_in_place(CreditSender& slot, size_t channel_index) {
     if constexpr (std::is_constructible_v<CreditSender, size_t>) {
-        return CreditSender(channel_index);
+        new (&slot) CreditSender(channel_index);
     } else {
-        return CreditSender();
+        new (&slot) CreditSender();
     }
 }
 
@@ -103,8 +103,11 @@ struct ReceiverChannelResponseCreditSendersImpl;
 
 template <size_t... Is>
 struct ReceiverChannelResponseCreditSendersImpl<std::index_sequence<Is...>> {
-    std::tuple<ReceiverChannelResponseCreditSenderFor<Is>...> credit_senders{
-        make_credit_sender<ReceiverChannelResponseCreditSenderFor<Is>>(Is)...};
+    FORCE_INLINE ReceiverChannelResponseCreditSendersImpl() {
+        (construct_credit_sender_in_place(std::get<Is>(credit_senders), Is), ...);
+    }
+
+    std::tuple<ReceiverChannelResponseCreditSenderFor<Is>...> credit_senders;
 
     // Every access site has the channel as a compile-time value, so no runtime indexing is needed.
     template <size_t RECEIVER_CHANNEL>
@@ -198,8 +201,11 @@ struct SenderChannelFromReceiverCreditsImpl;
 
 template <size_t... Is>
 struct SenderChannelFromReceiverCreditsImpl<std::index_sequence<Is...>> {
-    std::tuple<SenderChannelFromReceiverCreditsFor<Is>...> credits{
-        make_credit_sender<SenderChannelFromReceiverCreditsFor<Is>>(Is)...};
+    FORCE_INLINE SenderChannelFromReceiverCreditsImpl() {
+        (construct_credit_sender_in_place(std::get<Is>(credits), Is), ...);
+    }
+
+    std::tuple<SenderChannelFromReceiverCreditsFor<Is>...> credits;
 
     template <size_t SENDER_CHANNEL>
     FORCE_INLINE auto& get() {

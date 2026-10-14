@@ -319,6 +319,42 @@ void check_embed(const std::string& fixture, std::size_t num_corners) {
     }
 }
 
+// True when the embedded Y tree contains a transit chord. The encoder keeps the canonical tree
+// in that case; a tree with no Z edge is chordless and a one-direction extent walks that way.
+bool y_tree_has_transit_chord(const std::vector<std::uint8_t>& trees, std::uint32_t y_size) {
+    const std::uint32_t edge_count = Routing2DCodec::mcast_tree_edge_count(y_size);
+    for (std::uint32_t i = 0; i < edge_count; i++) {
+        const auto edge = Routing2DCodec::get_mcast_tree_edge(trees.data(), i);
+        if (Routing2DCodec::mcast_edge_output(edge) == Routing2DCodec::Y2_Z) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Straight modular walk, independent of the encoder. `before` is the decreasing cardinal (N or W).
+std::vector<std::uint8_t> directional_axis_actions(
+    int axis_len, int root, int before_hops, int after_hops, std::uint8_t before_bit, std::uint8_t after_bit) {
+    std::vector<std::uint8_t> actions(axis_len, 0);
+    const auto walk = [&](int hops, bool decreasing, std::uint8_t bit) {
+        for (int k = 1; k <= hops; k++) {
+            const int steps = k % axis_len;
+            if (steps == 0) {
+                continue;
+            }
+            const int dest = decreasing ? (root + axis_len - steps) % axis_len : (root + steps) % axis_len;
+            const int pred = decreasing ? (dest + 1) % axis_len : (dest + axis_len - 1) % axis_len;
+            actions[pred] |= bit;
+        }
+    };
+    if (before_hops != 0 && after_hops == 0) {
+        walk(before_hops, true, before_bit);
+    } else if (after_hops != 0 && before_hops == 0) {
+        walk(after_hops, false, after_bit);
+    }
+    return actions;
+}
+
 // The rectangle the client asked for, as row/column target sets.
 std::vector<bool> target_rows(int axis_len, int root, int before_hops, int after_hops) {
     std::vector<bool> targets(axis_len, false);
@@ -387,15 +423,34 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
 
                     const auto targets_y = target_rows(y_len, root_y, n_hops, s_hops);
                     const auto targets_x = target_rows(x_len, root_x, w_hops, e_hops);
+                    const bool y_one_direction = (n_hops == 0) != (s_hops == 0);
+                    const bool x_one_direction = (e_hops == 0) != (w_hops == 0);
                     // The anchor column always delivers; target_rows only stands in the root when an
-                    // axis has no extent at all.
-                    auto want_x = expected_actions(mesh_graph, MeshId{0}, *x_topo, root_x, targets_x);
+                    // axis has no extent at all. A chordless one-direction extent walks that cardinal
+                    // instead of the canonical tie-break, which would leave the opposite way.
+                    auto want_x = (x_one_direction && x_len > 1)
+                                      ? directional_axis_actions(
+                                            x_len,
+                                            root_x,
+                                            w_hops,
+                                            e_hops,
+                                            Routing2DCodec::ACTION_WEST,
+                                            Routing2DCodec::ACTION_EAST)
+                                      : expected_actions(mesh_graph, MeshId{0}, *x_topo, root_x, targets_x);
                     for (int x = 0; x < x_len; x++) {
                         if (targets_x[x] || x == root_x) {
                             want_x[x] |= Routing2DCodec::ACTION_LOCAL_DELIVER;
                         }
                     }
-                    auto want_y = expected_actions(mesh_graph, MeshId{0}, *y_topo, root_y, targets_y);
+                    auto want_y = (y_one_direction && y_len > 1 && !y_tree_has_transit_chord(trees, y_size))
+                                      ? directional_axis_actions(
+                                            y_len,
+                                            root_y,
+                                            n_hops,
+                                            s_hops,
+                                            Routing2DCodec::ACTION_NORTH,
+                                            Routing2DCodec::ACTION_SOUTH)
+                                      : expected_actions(mesh_graph, MeshId{0}, *y_topo, root_y, targets_y);
                     const std::uint8_t x_root_action = want_x[root_x];
                     const std::uint8_t teeth =
                         x_root_action & (Routing2DCodec::ACTION_EAST | Routing2DCodec::ACTION_WEST);
@@ -463,6 +518,81 @@ TEST(McastReverseTreeTest, OneDirectionBranchUsesTransitChord) {
 
     EXPECT_EQ(actions[root_y] & Routing2DCodec::ACTION_ETH_MASK, Routing2DCodec::ACTION_SOUTH);
     EXPECT_NE(actions[2] & Routing2DCodec::ACTION_Z, 0);
+}
+
+// Galaxy all-gather load-balances an even ring by putting axis/2 hops on the short cardinal
+// (4 north on Y=8, 2 west on X=4). The canonical tie-break steps toward increasing coordinates, so
+// pruning that tree gives the root both directions and fabric_set_mcast_route asserts. A chordless
+// one-direction extent has to leave on the requested cardinal only.
+TEST(McastReverseTreeTest, ChordlessEvenRingTieFollowsRequestedDirection) {
+    const auto path = fabric_router_tests::write_temp_descriptor(
+        "fabric_8x4_chordless_torus.textproto",
+        R"(
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [8, 4] dim_types: [RING, RING] }
+  host_topology   { dims: [1, 1] }
+  channels { count: 2 }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)");
+    const MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path);
+    const auto y_topo = derive_axis_topology(mesh_graph, MeshId{0}, 0);
+    const auto x_topo = derive_axis_topology(mesh_graph, MeshId{0}, 1);
+    ASSERT_EQ(y_topo.axis_len, 8);
+    ASSERT_EQ(x_topo.axis_len, 4);
+    ASSERT_TRUE(y_topo.wraps);
+    ASSERT_TRUE(x_topo.wraps);
+
+    constexpr std::uint32_t root_y = 0;
+    constexpr std::uint32_t root_x = 0;
+    const auto y_size = static_cast<std::uint32_t>(y_topo.axis_len);
+    const auto x_size = static_cast<std::uint32_t>(x_topo.axis_len);
+    std::vector<std::uint8_t> trees(Routing2DCodec::MCAST_TREE_CAPACITY_BYTES, 0);
+    std::string failure;
+    ASSERT_TRUE(
+        embed_mcast_reverse_trees(mesh_graph, MeshId{0}, y_topo, x_topo, root_y, root_x, trees.data(), &failure))
+        << failure;
+
+    const auto encode = [&](std::uint32_t n, std::uint32_t s, std::uint32_t e, std::uint32_t w) {
+        std::vector<std::uint8_t> actions(y_size + x_size, 0);
+        encode_2d_mcast_maps(actions.data(), trees.data(), y_size, x_size, root_y, root_x, n, s, e, w);
+        return actions;
+    };
+    const auto root_eth = [](std::uint8_t action) { return action & Routing2DCodec::ACTION_ETH_MASK; };
+
+    // Writer alt spine: 4 hops north on the length-8 ring. The opposite row is chip 4.
+    const auto north_tie = encode(/*n=*/4, 0, 0, 0);
+    EXPECT_EQ(root_eth(north_tie[root_y]), Routing2DCodec::ACTION_NORTH);
+    EXPECT_EQ(north_tie[4] & Routing2DCodec::ACTION_SOUTH, 0);
+    EXPECT_NE(north_tie[4] & Routing2DCodec::ACTION_LOCAL_DELIVER, 0);
+    EXPECT_NE(north_tie[7] & Routing2DCodec::ACTION_NORTH, 0);
+
+    // Primary south half agrees with the tie-break and stays south.
+    const auto south_tie = encode(0, /*s=*/4, 0, 0);
+    EXPECT_EQ(root_eth(south_tie[root_y]), Routing2DCodec::ACTION_SOUTH);
+
+    // Strictly closer than the tie: 3 north never needed the opposite chip.
+    const auto north_short = encode(/*n=*/3, 0, 0, 0);
+    EXPECT_EQ(root_eth(north_short[root_y]), Routing2DCodec::ACTION_NORTH);
+
+    // Writer line alt: 2 hops west on the length-4 ring, no vertical extent, so the X teeth are
+    // copied onto the root Y byte. That byte is what fabric_set_mcast_route checks.
+    const auto west_tie = encode(0, 0, 0, /*w=*/2);
+    EXPECT_EQ(root_eth(west_tie[root_y]), Routing2DCodec::ACTION_WEST);
+    EXPECT_EQ(root_eth(west_tie[y_size + root_x]), Routing2DCodec::ACTION_WEST);
+    EXPECT_NE(west_tie[y_size + root_x] & Routing2DCodec::ACTION_LOCAL_DELIVER, 0);
+    EXPECT_EQ(west_tie[y_size + 2] & Routing2DCodec::ACTION_EAST, 0);
+
+    const auto east_tie = encode(0, 0, /*e=*/2, 0);
+    EXPECT_EQ(root_eth(east_tie[root_y]), Routing2DCodec::ACTION_EAST);
+
+    // Alt rectangle: 4 north plus both horizontal directions. The source row is not a Y target, so
+    // the E/W teeth stay off the root and the root leaves only north.
+    const auto alt_rect = encode(/*n=*/4, 0, /*e=*/1, /*w=*/2);
+    EXPECT_EQ(root_eth(alt_rect[root_y]), Routing2DCodec::ACTION_NORTH);
+    EXPECT_EQ(std::popcount(static_cast<unsigned>(root_eth(alt_rect[root_y]))), 1);
 }
 
 // Combined full extents keep a Y-root's outputs within N/S/Z.

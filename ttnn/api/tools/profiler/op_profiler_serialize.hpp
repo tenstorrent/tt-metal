@@ -25,6 +25,7 @@
 #include <tracy/TracyC.h>
 
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/type_name.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -35,6 +36,8 @@ class Program;
 namespace detail {
 // Note: no default argument here — redefinition of default argument is ill-formed when tt_metal.hpp is also included.
 // Callers in this header always pass all three arguments explicitly.
+// The profiler keeps a lightweight declaration to avoid the full API include.
+// NOLINTNEXTLINE(readability-redundant-declaration)
 uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op);
 }  // namespace detail
 }  // namespace tt::tt_metal

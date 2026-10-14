@@ -84,8 +84,10 @@ class TopKRouter:
 
         # Fused op support: matmul + topk + softmax in one kernel
         # The fused kernel uses 4 groups of 3 cores, one per N-tile (32 experts
-        # each), so it requires exactly 128 experts. Enable automatically when possible.
-        self.use_fused_op = self.num_experts == 128
+        # each), so it requires exactly 128 experts and 12 DRAM-aligned cores.
+        # Blackhole has only 8 DRAM banks; use the generic router on that architecture.
+        # Issue for native 8 bank BH support: https://github.com/tenstorrent/tt-metal/issues/57186
+        self.use_fused_op = self.num_experts == 128 and not ttnn.device.is_blackhole(mesh_device)
         self._fused_bias = None
         # Keep the original unsharded bias for fused op initialization
         # (ttnn.as_tensor shards self.bias across the mesh, but the fused op
@@ -177,11 +179,8 @@ class TopKRouter:
         if needs_typecast:
             ttnn.deallocate(hidden_states_bf16)
 
-        # Kernel produces uint16 RM [B, k_padded] and bf16 RM [B, k_padded].
-        # Slice to [B, top_k] in RM and return directly.
-        # fused_decode.py handles RM input natively (zero-cost reshape to 4D).
-        expert_indices = ttnn.slice(indices_rm, [0, 0], [B, self.top_k])
-        expert_weights = ttnn.slice(weights_rm, [0, 0], [B, self.top_k])
-        ttnn.deallocate(indices_rm)
-        ttnn.deallocate(weights_rm)
-        return expert_indices, expert_weights
+        # The op already reports uint16 / bf16 RM [B, top_k] (32 physical rows), so return its outputs as they are;
+        # fused_decode.py handles RM input natively (zero-cost reshape to 4D). Do not slice + deallocate here: a slice
+        # that covers the whole logical shape is a no-op that aliases its input, and ttnn.deallocate (force=True)
+        # would then free the tensors returned to the caller.
+        return indices_rm, weights_rm

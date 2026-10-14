@@ -25,6 +25,7 @@ struct ReduceAffineTransformsInputs {
     Tensor a;
     Tensor b;
     Tensor actual_start;
+    std::optional<Tensor> actual_end;
 };
 
 }  // namespace ttnn::experimental::prim

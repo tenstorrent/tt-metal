@@ -99,8 +99,6 @@ ttnn::device_operation::ProgramArtifacts FullInterleavedProgramFactory::create_p
         .runtime_arg_names = {"fill_value", "num_pages_per_core", "start_id"},
     };
 
-    const auto arch = operation_attributes.mesh_device->arch();
-
     m2::Group<m2::KernelSpec> kernels;
     m2::Group<m2::DataflowBufferSpec> dataflow_buffers;
     m2::Group<m2::KernelSpecName> work_unit_kernels;
@@ -113,7 +111,7 @@ ttnn::device_operation::ProgramArtifacts FullInterleavedProgramFactory::create_p
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .compile_time_args = compile_time_args,
         .runtime_arg_schema = runtime_arg_schema,
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
     dataflow_buffers.push_back(make_fill_value_dfb(FILL_VALUE_WRITER));
     work_unit_kernels.push_back(WRITER);
@@ -130,7 +128,7 @@ ttnn::device_operation::ProgramArtifacts FullInterleavedProgramFactory::create_p
             .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
             .compile_time_args = compile_time_args,
             .runtime_arg_schema = runtime_arg_schema,
-            .hw_config = ttnn::create_reader_datamovement_config(arch),
+            .hw_config = ttnn::create_reader_datamovement_config(),
         });
         dataflow_buffers.push_back(make_fill_value_dfb(FILL_VALUE_READER));
         work_unit_kernels.push_back(READER);

@@ -59,8 +59,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMPARE_PY="$SCRIPT_DIR/perf_regression_compare.py"
 LLK_PRIMARY="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# The canonical compare module, shared with the PR gate, so the skill and the
+# gate can never disagree about what counts as a regression.
+COMPARE_PY="$LLK_PRIMARY/perf/regression_compare.py"
 REPO_ROOT="$(git -C "$LLK_PRIMARY" rev-parse --show-toplevel)"
 # tt-llk relative to the repo root -- the same path inside every worktree.
 LLK_RELPATH="${LLK_PRIMARY#"$REPO_ROOT"/}"
@@ -117,7 +119,7 @@ CURRENT_REF="HEAD"
 ITERATIONS=3
 # Measured on a 5-run baseline of unchanged code, not guessed. See
 # docs/perf_evaluation/results/blackhole-nonsol/README.md and the constants in
-# perf_regression_compare.py.
+# perf/regression_compare.py.
 THRESHOLD=0.02
 MIN_CYCLES=30
 SPEED_OF_LIGHT=0

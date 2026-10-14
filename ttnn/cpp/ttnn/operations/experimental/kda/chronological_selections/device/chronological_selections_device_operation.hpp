@@ -15,6 +15,7 @@ struct ChronologicalSelectionsParams {
 };
 struct ChronologicalSelectionsInputs {
     Tensor actual_start;
+    std::optional<Tensor> actual_end;
 };
 struct ChronologicalSelectionsFactory {
     static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(

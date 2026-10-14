@@ -30,8 +30,14 @@
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #endif
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
+#ifndef ARCH_QUASAR
+// ckernel.h / ckernel_defs.h are compute(TRISC)-only: they pull in ckernel_addrmod.h -> ckernel_trisc_id.h,
+// which #errors without COMPILE_FOR_TRISC on a DM build. They are needed here only for the BRISC->compute
+// batch-valid mailbox handoff (ckernel::mailbox_write below), which has no Quasar equivalent. Guard both
+// out on Quasar (matches the DM-side handoff guard for the other matmul readers).
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#endif
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -208,7 +214,20 @@ void kernel_main() {
     // count_nonzero(sparsity) == num_batch_compute when nnz is supplied (see num_batch_compute above).
     [[maybe_unused]] uint32_t num_valid_batches = 0;
 
-    for (uint32_t b = 0; b < in0_B; ++b) {
+    // Broadcast-A reuse (in0_B == 1, in1_B > 1): the in0 buffer holds one per-core copy of A
+    // (per_core_M * K tiles, i.e. num_blocks_h_dim * num_blocks_inner_dim blocks), but compute consumes
+    // num_blocks_h_dim * num_blocks_w_dim * num_blocks_inner_dim blocks per batch. Batch 0 leaves the
+    // buffer in exactly the order compute re-reads it only when one outer block count is 1: with
+    // h == 1 each W block is the same K pass again, and with w == 1 the buffer is the whole M x K image
+    // filled once. Then the extra batches just replay pointer credits. With both > 1 later W blocks
+    // overwrite earlier M blocks, so the extra batches re-read A from DRAM instead.
+    // See https://github.com/tenstorrent/tt-metal/issues/57183.
+    constexpr bool in0_replay_in_buffer = in0_reuse_in_dfb && (num_blocks_h_dim == 1 || num_blocks_w_dim == 1);
+    constexpr bool in0_reread_per_batch = in0_reuse_in_dfb && !in0_replay_in_buffer;
+    constexpr uint32_t in0_num_batches_read = in0_reread_per_batch ? in1_B : in0_B;
+
+    for (uint32_t b = 0; b < in0_num_batches_read; ++b) {
+        [[maybe_unused]] const uint32_t in0_batch_start_tile_id = in0_tensor_start_tile_id;
 #ifdef SPARSITY
         if constexpr (batchB > 0 && !use_indices) {
             noc.async_read(s_sparsity, dfb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
@@ -241,9 +260,13 @@ void kernel_main() {
 #endif  // SKIP_MCAST
 
                     // We need to pass the value to compute cores regardless of the value of is_batch_valid
+#ifndef ARCH_QUASAR
+                    // No BRISC->compute mailbox on Quasar; the compute kernel treats every batch as valid
+                    // there (see bmm_large_block_zm_fused_bias_activation_metal2.cpp ARCH_QUASAR guard).
                     ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, static_cast<uint32_t>(is_batch_valid));
                     ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, static_cast<uint32_t>(is_batch_valid));
                     ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, static_cast<uint32_t>(is_batch_valid));
+#endif
                 }
 
                 if (!is_batch_valid) {
@@ -456,13 +479,17 @@ void kernel_main() {
         // optimization we just read the tensor slice once into each core's L1 and keep it there for all weight
         // batches since the needed in0 data is already in L1 after batch 0, we can just move read pointer for this
         // buffer so compute kernel thinks it has new data
-        if (in0_reuse_in_dfb) {
+        if constexpr (in0_replay_in_buffer) {
             for (uint32_t fake_batch = 0; fake_batch < in1_B - in0_B; ++fake_batch) {
-                for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
+                for (uint32_t blk = 0; blk < num_blocks_h_dim * num_blocks_w_dim * num_blocks_inner_dim; ++blk) {
                     dfb_in0.reserve_back(in0_block_num_tiles);
                     dfb_in0.push_back(in0_block_num_tiles);
                 }
             }
+        }
+        if constexpr (in0_reread_per_batch) {
+            // Every weight batch reads the same A slice.
+            in0_tensor_start_tile_id = in0_batch_start_tile_id;
         }
     }
     noc.async_write_barrier();

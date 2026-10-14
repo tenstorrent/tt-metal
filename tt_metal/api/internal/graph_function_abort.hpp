@@ -5,6 +5,7 @@
 #pragma once
 
 #include <any>
+#include <cstddef>
 #include <exception>
 #include <functional>
 #include <memory>
@@ -109,6 +110,7 @@ public:
 
 private:
     template <class F>
+    // NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward) -- Reuse the callback as an lvalue for every processor.
     void for_started(F&& f) {
         if (!started_processors_.empty()) {
             for (auto& processor : started_processors_) {

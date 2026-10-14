@@ -101,10 +101,10 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     auto all_max_val = ttnn_fixed::distributed::all_gather(local_max, 3, cluster_axis);
     auto global_max = ttnn::max(all_max_val, 3, /* keepdim */ true);
 
-    // Step 3: fused (logits - global_max).exp() into FP32 — single binary_ng kernel,
-    // no intermediate [B,1,S,V/tp_size] FP32 tensor.
+    // Step 3: fused (logits - global_max).exp() into FP32 — single binary_ng kernel.
     auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
     auto local_sum = ttnn::sum(local_exp, 3, /* keepdim */ true, std::nullopt, core::ComputeKernelConfig::precise());
+    local_exp.deallocate();
     auto global_sum = ttnn_fixed::distributed::all_reduce(local_sum, cluster_axis);
 
     // log_normalizer = global_max + log(global_sum)  [B,1,S,1]
@@ -169,11 +169,12 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
         if (!out->is_grad_initialized()) {
             return;
         }
+        auto scaled_inv_sum = ttnn::multiply(ttnn::reciprocal(global_sum), inv_N);  // [B,1,S,1] FP32
 
         auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
-
-        auto softmax_k = ttnn::multiply(local_exp, ttnn::reciprocal(global_sum));
-        auto scaled_softmax = ttnn::multiply(softmax_k, inv_N, ttnn::DataType::BFLOAT16);
+        auto scaled_softmax = ttnn::multiply(local_exp, scaled_inv_sum, ttnn::DataType::BFLOAT16);
+        local_exp.deallocate();
+        scaled_inv_sum.deallocate();
 
         // Single mesh workload — the program factory derives each device's shard window
         // from its mesh coordinate, mirroring the forward-pass select_target_logit call.
@@ -186,7 +187,9 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
             scaled_softmax,
             /*subtract_value=*/inv_N);
 
-        logits->add_grad(ttnn::multiply(scaled_softmax, out->get_grad(), ttnn::DataType::BFLOAT16));
+        // grad = (softmax_k - onehot_k) * scale * upstream, written back into scaled_softmax.
+        ttnn::multiply_(scaled_softmax, out->get_grad());
+        logits->add_grad(scaled_softmax);
     };
 
     out->set_node(autograd::add_backward_node(std::move(grad_fn), out, logits));

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bitset>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -177,6 +178,41 @@ void ReduceScatterFusedOpSignaler::init_reduce_scatter(
     }
 
     initialized_reduce_scatter = true;
+}
+
+void ReduceScatterFusedOpSignaler::init_reduce_scatter(
+    ProgramDescriptor& desc, const IDevice* device, const CoreRangeSet& core_range_to_signal) {
+    this->fused_op_receiver_cores_noc.clear();
+    for (const auto& range : core_range_to_signal.ranges()) {
+        for (const auto& core : grid_to_cores(range.start_coord, range.end_coord, true)) {
+            this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+        }
+    }
+    this->fused_op_receiver_signal_semaphores.push_back(add_semaphore_descriptor(desc, core_range_to_signal));
+    this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
+    this->fused_op_signaler_mode =
+        this->num_fused_op_cores_to_signal > 1 ? FusedOpSignalerMode::MULTI : FusedOpSignalerMode::SINGLE;
+    initialized_reduce_scatter = true;
+}
+
+uint32_t add_semaphore_descriptor(
+    ProgramDescriptor& desc, const CoreRangeSet& cores, uint32_t initial_value, tt::CoreType core_type) {
+    TT_FATAL(!cores.ranges().empty(), "Expected a non-empty CoreRangeSet");
+    constexpr uint32_t kSemaphoresPerCore = 16;
+    std::bitset<kSemaphoresPerCore> used;
+    for (const auto& sem : desc.semaphores) {
+        if (sem.core_type == core_type && sem.id < kSemaphoresPerCore && sem.core_ranges.intersects(cores)) {
+            used.set(sem.id);
+        }
+    }
+    for (uint32_t id = 0; id < kSemaphoresPerCore; id++) {
+        if (!used.test(id)) {
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = id, .core_type = core_type, .core_ranges = cores, .initial_value = initial_value});
+            return id;
+        }
+    }
+    TT_THROW("No semaphore id is free on every core of {}", cores.str());
 }
 
 void ReduceScatterFusedOpSignaler::init_fused_op() { initialized_fused_op = true; }
@@ -409,8 +445,11 @@ void MatmulFusedOpSignaler::init_llama_rs_cores_rs(const CoreRangeSet& rs_cores,
         "attempted to initialize signaler to llama rs which has a different type");
     this->initialized_llama_reduce_scatter_part1 = true;
     this->rs_cores = rs_cores;
-    auto rs_cores_superset = rs_cores.bounding_box();
-    this->rs_semaphore = tt::tt_metal::CreateSemaphore(program, rs_cores_superset, INVALID);
+    // Allocate on the RS cores themselves, never on their bounding box: the dispatcher initializes a
+    // semaphore on every core of its range, and the box is not owned by this program. On Wormhole
+    // Galaxy it spans the DRAM prefetcher's sender column, whose kernel-config ring (live kernel text)
+    // sits at the same L1 offsets.
+    this->rs_semaphore = tt::tt_metal::CreateSemaphore(program, rs_cores, INVALID);
 }
 
 void MatmulFusedOpSignaler::init_llama_rs_cores_mm(
@@ -424,7 +463,10 @@ void MatmulFusedOpSignaler::init_llama_rs_cores_mm(
     TT_FATAL(cores.size() > privilaged_index, "Privileged index is out of range of the matmul cores");
     this->privilaged_core = cores.at(privilaged_index);
     this->privilaged_core_physical = device->worker_core_from_logical_core(this->privilaged_core);
-    this->matmul_privilaged_semaphore = tt::tt_metal::CreateSemaphore(program, privilaged_core, 0);
+    // Also reserved on the RS cores so its id can never alias rs_semaphore: the privileged core has no
+    // rs_semaphore slot of its own, so it relays this semaphore's value into rs_semaphore on the RS cores.
+    this->matmul_privilaged_semaphore =
+        tt::tt_metal::CreateSemaphore(program, this->rs_cores.merge(CoreRangeSet(CoreRange(this->privilaged_core))), 0);
     this->matmul_semaphore_target = cores.size() - 1;
 }
 
@@ -443,27 +485,26 @@ void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_mm(
     if (current_core.x == this->privilaged_core.x && current_core.y == this->privilaged_core.y) {
         out_rt_args.push_back(1);
         out_rt_args.push_back(this->matmul_semaphore_target);
-        // coordinates of the bounding box
-        auto rs_cores_superset = this->rs_cores.bounding_box();
-        const CoreRange rs_cores_superset_physical = CoreRange(
-            device->worker_core_from_logical_core(rs_cores_superset.start_coord),
-            device->worker_core_from_logical_core(rs_cores_superset.end_coord));
-        if (writer_noc == NOC::NOC_1) {
-            out_rt_args.push_back(rs_cores_superset_physical.end_coord.x);
-            out_rt_args.push_back(rs_cores_superset_physical.end_coord.y);
-            out_rt_args.push_back(rs_cores_superset_physical.start_coord.x);
-            out_rt_args.push_back(rs_cores_superset_physical.start_coord.y);
-        } else {
-            out_rt_args.push_back(rs_cores_superset_physical.start_coord.x);
-            out_rt_args.push_back(rs_cores_superset_physical.start_coord.y);
-            out_rt_args.push_back(rs_cores_superset_physical.end_coord.x);
-            out_rt_args.push_back(rs_cores_superset_physical.end_coord.y);
-        }
-        // Size of the bounding box
-        uint32_t rs_cores_superset_size = (rs_cores_superset.end_coord.y - rs_cores_superset.start_coord.y + 1) *
-                                          (rs_cores_superset.end_coord.x - rs_cores_superset.start_coord.x + 1);
-        out_rt_args.push_back(rs_cores_superset_size);
         out_rt_args.push_back(static_cast<uint32_t>(this->rs_semaphore));
+        // Signal the RS cores one rectangle at a time. Their bounding box also holds cores this program
+        // does not own (other sub-devices), which must never receive this write.
+        const auto& rs_ranges = this->rs_cores.ranges();
+        out_rt_args.push_back(static_cast<uint32_t>(rs_ranges.size()));
+        for (const auto& range : rs_ranges) {
+            const CoreCoord start = device->worker_core_from_logical_core(range.start_coord);
+            const CoreCoord end = device->worker_core_from_logical_core(range.end_coord);
+            // NOC1 walks the grid in the opposite direction, so its rectangles are given end first.
+            const bool noc1 = writer_noc == NOC::NOC_1;
+            const CoreCoord& first = noc1 ? end : start;
+            const CoreCoord& last = noc1 ? start : end;
+            out_rt_args.insert(
+                out_rt_args.end(),
+                {static_cast<uint32_t>(first.x),
+                 static_cast<uint32_t>(first.y),
+                 static_cast<uint32_t>(last.x),
+                 static_cast<uint32_t>(last.y),
+                 static_cast<uint32_t>(range.size())});
+        }
     } else {
         out_rt_args.push_back(0);
     }

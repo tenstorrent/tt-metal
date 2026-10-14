@@ -24,6 +24,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import (
     MHCConfig,
     MHCHead,
@@ -31,8 +32,10 @@ from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import (
     mhc_expand,
     sinkhorn_knopp,
 )
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import TtMHCHead, TtMHCWrap
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import mhc_expand as tt_mhc_expand
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 PCC = 0.999
 PCC_PROJ = 0.998  # TT fp32-matmul ceiling at reduction depth n*C=28672 (see module docstring)
@@ -102,6 +105,68 @@ def test_project(device, T, C):
 
     d_mixes = TtMHCWrap(device, cfg, fn, base, scale).project(_up_x(device, x))
     _check("mixes", r_mixes, ttnn.to_torch(d_mixes), PCC_PROJ)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (4, 2),
+            fabric2d_device_params(fabric_payload_size=DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-mesh-4x2",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("T", [32], ids=["T32"])
+@pytest.mark.parametrize("C", [256, 7168], ids=["C256", "C7168"])
+def test_project_tp_sharded(mesh_device, device_params, T, C):
+    """The same projection with the hidden split across the TP axis: each chip's matmul is a
+    partial inner product and its squares a partial sum, and both are all-reduced."""
+    torch.manual_seed(0)
+    cfg = MHCConfig(dim=C, n=4)
+    fn, base, scale = _params(cfg, 1.0, seed=2)
+    x = torch.randn(1, T, cfg.n, C)
+
+    xf = x.reshape(T, cfg.n * C).float()
+    rsqrt = torch.rsqrt(xf.square().mean(-1, keepdim=True) + cfg.norm_eps)
+    r_mixes = (F.linear(xf, fn) * rsqrt).reshape(1, 1, T, cfg.mix_hc)
+
+    # The TP split cuts the last dim contiguously, so the columns are reordered chip-major-then-
+    # stream to give each chip its own hidden slice of every stream.
+    tp = mesh_device.shape[1]
+    packed = x.reshape(1, T, cfg.n, tp, C // tp).permute(0, 1, 3, 2, 4).reshape(1, 1, T, cfg.n * C)
+    x_tt = ttnn.from_torch(
+        packed.contiguous(),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.float32,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 3)),
+    )
+
+    wrap = TtMHCWrap(
+        mesh_device,
+        cfg,
+        fn,
+        base,
+        scale,
+        tp_axis=1,
+        topology=per_axis_topology(device_params["fabric_config"])[1],
+    )
+    # The all-reduce leaves the result on every chip, so replica 0 is the whole answer.
+    d_mixes = ttnn.to_torch(wrap.project(x_tt), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0:1]
+    _check(f"mixes-tp C={C}", r_mixes, d_mixes)
+    # PCC is scale-invariant, so it cannot see a wrong RMS divisor: a chip-local width would land
+    # here at 0.5. The bound is the device rsqrt's bias, which is 0.9990 on one chip too.
+    ratio = (d_mixes.float().norm() / r_mixes.float().norm()).item()
+    assert abs(ratio - 1.0) < 5e-3, f"scale drift {ratio:.6f}: the RMS divisor must be the global width"
 
 
 @pytest.mark.parametrize("T", [1, 32], ids=["T1", "T32"])

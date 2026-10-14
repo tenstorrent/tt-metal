@@ -45,6 +45,13 @@ public:
     tt::tt_metal::CoreCoord get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const;
     tt::tt_metal::CoreCoord get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const;
 
+    // Bitmask of NOC indices for which `translated_coord` is a DRAM view's preferred endpoint (worker
+    // or eth): the NIUs on that core that forward DRAM accesses over AXI, so they must stay in NOC2AXI
+    // mode. Bit N is NOC N. DRISC firmware puts every NIU outside this mask into stream mode, where the
+    // DRISC can initiate NOC transactions. Argument must be a TRANSLATED (UMD) coord; returns 0 for a
+    // core that is no view's endpoint.
+    uint8_t get_dram_endpoint_noc_mask(const tt::tt_metal::CoreCoord& translated_coord) const;
+
     // The DRAM cores Metal may place kernels/firmware on, in the requested coordinate system. This is
     // the single source of truth for "usable DRAM cores": every DRAM loop in Metal (firmware init,
     // launch-message reset, watcher, inspector) should iterate this rather than get_cores(DRAM) so the
@@ -95,8 +102,9 @@ private:
     // index get_dram_core_for_channel expects; callers want the logical one.
     size_t get_physical_channel_for_dram_view(int dram_view) const;
 
-    // True if `translated_coord` is any DRAM view's NOC0 worker endpoint (the subchannel a NOC0 DRAM
-    // access routes to) -- the syseng-owned endpoint excluded by get_metal_dram_cores on Blackhole.
+    // True if `translated_coord` is any DRAM view's NOC0 endpoint (the subchannel a NOC0 DRAM access
+    // routes to) -- the syseng-owned endpoint excluded by get_metal_dram_cores on Blackhole. The NOC0
+    // bit of get_dram_endpoint_noc_mask, named for its one caller.
     // Argument must be a TRANSLATED (UMD) coord; a metal-logical {view, subchannel} coord never matches.
     bool is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const;
 

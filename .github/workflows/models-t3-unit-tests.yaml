@@ -29,10 +29,12 @@ on:
           - gemma-2-2b
           - gemma-2-9b
           - gemma-4-e2b
+          - paddleocr-vl-1.6
           - gemma-4-e4b
           - hunyuan-image-3.0
           - panoptic-deeplab
           - bevformer
+          - diffusiondrive
           - mistral-small-3.1-24b
           - sd35
           - mochi
@@ -46,6 +48,7 @@ on:
           - openpdn-mnist
           - yunet
           - xtts-v2
+          - vibevoice-1.5b
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false

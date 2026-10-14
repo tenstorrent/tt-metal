@@ -43,7 +43,7 @@ Fidelity caveats (deliberate, documented, all visible in the generated data)
   (page tables, cur_pos, update_idxs, embedding ids) would fault the device with
   random values, so they get semantic values from ``INDEX_VALUES`` below.
 * Program configs are rebuilt field-for-field from the repr (including
-  LayerNorm's ``legacy_reduction`` / ``legacy_rsqrt`` / ``use_welford`` and SDPA's
+  LayerNorm's ``legacy_reduction`` and ``use_welford``, and SDPA's
   ``max_cores_per_head_batch``). The only exceptions are the optional
   CoreRangeSet restrictions (``sub_core_grids``, ``allowed_worker_cores``): those
   print as ``std::nullopt`` in every capture so far, and a non-null value skips
@@ -249,7 +249,6 @@ _PROGRAM_CONFIG_FIELDS = {
         "block_w",
         "inplace",
         "legacy_reduction",
-        "legacy_rsqrt",
         "use_welford",
     ),
     "SDPAProgramConfig": (
@@ -287,7 +286,6 @@ _BOOL_FIELDS = frozenset(
     {
         "inplace",
         "legacy_reduction",
-        "legacy_rsqrt",
         "use_welford",
         "transpose_mcast",
         "fuse_batch",
@@ -789,15 +787,30 @@ def _ref_mesh_partition(inputs, kwargs, case):
     return x
 
 
+def _ref_rotary_embedding_llama(inputs, kwargs, case):
+    """Meta-format rope: ``x * cos + (x @ trans) * sin``, ``trans`` applied per 32-wide tile.
+
+    The op multiplies every 32-column tile of ``x`` by the same 32x32 transformation
+    matrix, so the full-width rotation is that tile repeated on the block diagonal.
+    cos/sin broadcast like torch does: over heads in prefill ([1,1,seq,hd] against
+    [1,heads,seq,hd]) and over the head rows in decode, where the op broadcasts row 0
+    of a [1,1,1,hd] cos/sin across the shard (``mul_bcast_rows`` in
+    rotary_embedding_llama_sharded.cpp).
+    """
+    x, cos, sin, trans = (inputs[k].float() for k in ("0", "1", "2", "3"))
+    if x.shape[-1] % 32:
+        return None
+    tile = trans.reshape(-1, trans.shape[-2], trans.shape[-1])[0, :32, :32]
+    rotation = torch.block_diag(*([tile] * (x.shape[-1] // 32)))
+    return x * cos + (x @ rotation) * sin
+
+
 # Ops whose output is a deterministic function of the inputs we generated. A
 # reference here is worth more than the structural checks: it catches a permutation,
 # a mis-split or a wrong reduction that every shape/dtype/placement assertion passes.
 #
 # Everything absent from this table is checked for shape / dtype / placement /
 # finiteness only. What is left out, and why:
-#   * rope — the Meta-format cos/sin plus the tile-wise transformation matrix make a
-#     torch reference fiddly and easy to get subtly wrong; the hand-written
-#     tests/ops/test_rotary_embedding_llama.py:33 came to the same conclusion;
 #   * SDPA — the captured page tables/positions describe the KV geometry, but a
 #     reference would have to reimplement chunked flash attention;
 #   * the paged caches — value semantics are checked by POSTCONDITION instead, which
@@ -837,6 +850,7 @@ GOLDEN = {
     "ttnn.expand": _ref_expand,
     "ttnn.zeros_like": _ref_zeros_like,
     "ttnn.mesh_partition": _ref_mesh_partition,
+    "ttnn.experimental.rotary_embedding_llama": _ref_rotary_embedding_llama,
 }
 
 

@@ -1772,6 +1772,7 @@ def test_padded_1d_matmul(mesh_device, side, has_program_config):
     (3, 4, 4),
 ])
 # fmt: on
+@pytest.mark.merge_gate
 def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
     torch.manual_seed(0)
 
@@ -1833,6 +1834,7 @@ def test_matmul_with_matched_width_height_from_1D(device, k_size, n_size):
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("w", [(4), (2)])
 def test_matmul_does_dot_product(device, w):
     torch.manual_seed(0)
@@ -1872,6 +1874,7 @@ def test_matmul_does_dot_product(device, w):
     (3, 1, 4, 2),
     ])
 # fmt: on
+@pytest.mark.merge_gate
 def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
     torch.manual_seed(0)
     torch_input_tensor_a = torch.rand((n_size, c, h, w), dtype=torch.bfloat16)
@@ -1956,6 +1959,7 @@ def test_matmul_same_shape_but_invalid(device, input_a, input_b, expect_error):
         ttnn.matmul(input_tensor_a, input_tensor_b)
 
 
+@pytest.mark.merge_gate
 def test_tutorial_matmul(device):
     torch.manual_seed(0)
 
@@ -2048,6 +2052,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "batch_size_0, batch_size_1, m_size, k_size, n_size, bcast_batch, input_a_sharded_memory_config_args, input_b_sharded_memory_config_args",
     [
@@ -2314,6 +2319,7 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "n_size, c, m, k, n",
     [
@@ -2549,6 +2555,62 @@ def test_matmul_with_transpose_and_configs(device, b, s, m, k, n, transpose_a, t
         frobenius_threshold=0.001 * k,
         pcc_threshold=0.999,
         check_ulp=True,
+    )
+
+
+# Regression: transpose_a=True + fused ReLU + no bias — packer ReLU must only
+# cover the matmul output pack, not the in0 transpose stage.
+@pytest.mark.parametrize(
+    "program_config",
+    [
+        ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(1, 8),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=32,
+            per_core_N=2,
+            fuse_batch=True,
+            mcast_in0=True,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        ),
+        ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(2, 2),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=16,
+            out_block_w=8,
+            per_core_M=16,
+            per_core_N=8,
+            transpose_mcast=False,
+            fuse_batch=True,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        ),
+    ],
+)
+def test_matmul_transpose_a_fused_relu_no_bias(device, program_config):
+    torch.manual_seed(0)
+    # Pre-transpose A is [K, M]; transpose_a=True operates on A.T so logical mm is [M, K] x [K, N]
+    k, m, n = 32, 1024, 512
+    torch_a = torch.randn((1, 1, k, m), dtype=torch.bfloat16)
+    torch_b = torch.randn((1, 1, k, n), dtype=torch.bfloat16)
+    torch_out = torch.relu(torch_a.transpose(-1, -2) @ torch_b)
+
+    a_t = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    b_t = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.matmul(a_t, b_t, transpose_a=True, program_config=program_config)
+    out = ttnn.to_torch(out)
+
+    assert out.shape == torch_out.shape
+    assert_numeric_metrics(
+        torch_out,
+        out,
+        atol=0.012 * k,
+        rtol=0.002 * k,
+        frobenius_threshold=0.001 * k,
+        pcc_threshold=0.99,
+        check_ulp=False,
     )
 
 
@@ -2883,6 +2945,7 @@ def test_interleaved_input_sharded_output_matmul(device):
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "n_size, c, m, k, n",
     [
@@ -2914,6 +2977,7 @@ def test_optional_output_argument(device, n_size, c, m, k, n):
     assert_with_pcc(output, optional_output_tensor, 0.999)
 
 
+@pytest.mark.merge_gate
 def test_small_matmul_pcc(device):
     torch.manual_seed(0)
     pcc = 0.99
@@ -4538,6 +4602,103 @@ def test_matmul_per_core_m_exceeds_mt_rejected(device, expect_error, config_kind
         ttnn.matmul(in0, in1, program_config=program_config)
 
 
+@skip_for_slow_dispatch()
+def test_matmul_batched_weights_optional_input_slot(device):
+    """Vector prim::matmul must pass a size-1 optional-input slot (bias unused)."""
+    torch.manual_seed(0)
+    m, k, n = 32, 32, 32
+    torch_a = torch.randn(1, 1, m, k, dtype=torch.bfloat16)
+    torch_b = torch.randn(1, 1, k, n, dtype=torch.bfloat16)
+    in0 = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    in1 = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        transpose_mcast=False,
+        fuse_batch=True,
+    )
+    grid = device.compute_with_storage_grid_size()
+    if grid.y < 2:
+        pytest.skip("Need 2 rows for dummy global CB")
+    gcb = ttnn.create_global_circular_buffer(
+        device,
+        [(ttnn.CoreCoord(0, 0), ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 1))}))],
+        3200,
+    )
+    worker = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    mgr = device.create_sub_device_manager([ttnn.SubDevice([worker])], 0)
+    device.load_sub_device_manager(mgr)
+    try:
+        outs = ttnn.matmul_batched_weights(
+            in0,
+            [in1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=program_config,
+            global_cb=gcb,
+            sub_device_id=ttnn.SubDeviceId(0),
+        )
+        assert len(outs) == 1, f"Expected one output tensor, got {len(outs)}"
+        assert_with_pcc(torch_a.float() @ torch_b.float(), ttnn.to_torch(outs[0]).float(), 0.99)
+    finally:
+        device.reset_sub_device_stall_group()
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(mgr)
+
+
+@skip_for_slow_dispatch()
+def test_quasar_matmul_batched_weights_optional_input_slot(device):
+    """Quasar vector prim::matmul must pass a size-1 optional-input slot (bias unused)."""
+    if device.arch() != ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar-only API")
+    qsr = ttnn.experimental.quasar
+    torch.manual_seed(0)
+    m, k, n = 32, 32, 32
+    torch_a = torch.randn(1, 1, m, k, dtype=torch.bfloat16)
+    torch_b = torch.randn(1, 1, k, n, dtype=torch.bfloat16)
+    in0 = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    in1 = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = qsr.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        transpose_mcast=False,
+        fuse_batch=True,
+    )
+    grid = device.compute_with_storage_grid_size()
+    if grid.y < 2:
+        pytest.skip("Need 2 rows for dummy global CB")
+    gcb = ttnn.create_global_circular_buffer(
+        device,
+        [(ttnn.CoreCoord(0, 0), ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 1))}))],
+        3200,
+    )
+    worker = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    mgr = device.create_sub_device_manager([ttnn.SubDevice([worker])], 0)
+    device.load_sub_device_manager(mgr)
+    try:
+        outs = qsr.matmul_batched_weights(
+            in0,
+            [in1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=program_config,
+            global_cb=gcb,
+            sub_device_id=ttnn.SubDeviceId(0),
+        )
+        assert len(outs) == 1, f"Expected one output tensor, got {len(outs)}"
+        assert_with_pcc(torch_a.float() @ torch_b.float(), ttnn.to_torch(outs[0]).float(), 0.99)
+    finally:
+        device.reset_sub_device_stall_group()
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(mgr)
+
+
 def _offset_cancellation_inputs(m, k, n, offset, seed=0):
     """Matrix A is a small random signal plus a large constant offset. Matrix B has each column that
     sums to zero, so the constant offset from A contributes nothing to A @ B, and the correct result
@@ -4732,3 +4893,54 @@ def test_matmul_fp32_crossblock_reload_untilize_precision(device, packer_l1_acc)
         check_frobenius=True,
         check_ulp=False,
     )
+
+
+# Broadcast-A batched matmul ([1, 1, M, K] x [1, B, K, N]) on the 1D mcast_in1 path keeps A in L1 and
+# reuses it for every weight batch. Covers every outer-block shape: replay when one of the h/w block
+# counts is 1, re-read from DRAM when both are > 1. Used to hang whenever h * w > 1.
+# See https://github.com/tenstorrent/tt-metal/issues/57183.
+@pytest.mark.parametrize(
+    "per_core_M, out_block_h, per_core_N, out_block_w",
+    [
+        (2, 2, 4, 4),  # h=1, w=1
+        (2, 2, 4, 2),  # h=1, w=2
+        (4, 2, 4, 4),  # h=2, w=1
+        (4, 2, 4, 2),  # h=2, w=2
+        (4, 2, 6, 2),  # h=2, w=3
+    ],
+)
+@pytest.mark.parametrize("k_tiles", [2, 4, 8], ids=["inner1", "inner2", "inner4"])
+@pytest.mark.parametrize("in1_B", [2, 3])
+def test_matmul_bcast_in0_reuse_outer_blocks(device, per_core_M, out_block_h, per_core_N, out_block_w, k_tiles, in1_B):
+    torch.manual_seed(0)
+    num_cores, in0_block_w = 4, 2
+    M, K, N = num_cores * per_core_M * 32, k_tiles * 32, per_core_N * 32
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(num_cores, 1),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+
+    # Run twice with fresh data: the second run reuses the cached program with new buffer addresses.
+    with device.cache_entries_counter.measure():
+        for _ in range(2):
+            in0 = torch.randn(1, 1, M, K).bfloat16()
+            in1 = torch.randn(1, in1_B, K, N).bfloat16()
+            in0_t = ttnn.from_torch(in0, layout=ttnn.TILE_LAYOUT, device=device)
+            in1_t = ttnn.from_torch(in1, layout=ttnn.TILE_LAYOUT, device=device)
+            output = ttnn.to_torch(ttnn.matmul(in0_t, in1_t, program_config=program_config))
+
+            expected = in0.float() @ in1.float()
+            # Check each weight batch separately: a stale in0 buffer only corrupts batches after the first.
+            for b in range(in1_B):
+                assert_with_pcc(expected[0, b], output[0, b], 0.999)
+    assert device.cache_entries_counter.total == 1

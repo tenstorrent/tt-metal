@@ -6,7 +6,7 @@
 #include "api/debug/assert.h"
 #include "internal/ethernet/tunneling.h"
 
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include <tt-metalium/experimental/fabric/edm_fabric_counters.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
@@ -34,7 +34,7 @@
 #include "noc_overlay_parameters.h"
 #include "api/alignment.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
-#include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdevcommon/fabric_telemetry_msgs.h"
 #ifdef FABRIC_2D
 // The router re-encodes an intermesh packet's route when it lands, via
 // fabric_set_2d_intermesh_landing_route(). Include its declaration directly and only for the 2D call site.
@@ -1813,9 +1813,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     FabricTelemetryT local_fabric_telemetry{};
     auto fabric_telemetry = reinterpret_cast<volatile FabricTelemetryT*>(MEM_AERISC_FABRIC_TELEMETRY_BASE);
 
-    const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
-    auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
-    tt::tt_fabric::routing_l1_info_t routing_table = *routing_table_l1;
+    // Read the routing table in place
+    const auto& routing_table =
+        *reinterpret_cast<const tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table.state_manager);
 
     // Keep hot routing coordinates in address-untaken scalars so they remain in registers across the
     // main loop; the RISC data cache is disabled for this build.
@@ -1899,7 +1900,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 #endif
     volatile uint32_t* fabric_heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(FABRIC_KERNEL_HEARTBEAT_ADDR);
 
-    auto execute_main_loop = [&]() {
+    auto execute_main_loop = [&]() __attribute__((always_inline)) {
         ActualSpeedySenderState<super_speedy_mode> local_speedy_sender_state;
         ActualSpeedyReceiverState<super_speedy_mode, 0> local_speedy_receiver_state;
 #if defined(FABRIC_2D_VC2_SERVICED)
@@ -2580,6 +2581,12 @@ __attribute__((optimize("Os"))) void teardown(
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Update here when enabling dynamic noc mode");
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+
+#ifdef ARCH_BLACKHOLE
+    // Tagged write completion does not reset command-buffer transaction IDs.
+    // Restore this ERISC's dedicated NoC before the kernel-return checks.
+    noc_clear_packet_tags(noc_index);
+#endif
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();

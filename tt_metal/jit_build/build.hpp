@@ -35,12 +35,17 @@ using vector_cache_aligned = std::vector<T, ttsl::aligned_allocator<T, CACHE_LIN
 
 class JitBuildSettings;
 
+// Root of the tt-metal cache: TT_METAL_CACHE as captured by `rtoptions` if set, else
+// ~/.cache/tt-metal-cache/, else /tmp/tt-metal-cache/.
+std::string get_cache_root(const llrt::RunTimeOptions& rtoptions);
+
 struct JitBuiltStateConfig {
     HalProgrammableCoreType core_type{};
     HalProcessorClassType processor_class{};
     int processor_id = 0;
     bool is_fw = false;
     uint32_t dispatch_message_addr = 0;
+    bool fds_signalling = false;
     // Set `is_cooperative` when Metal FW/Kernel code is loaded on risc with some base FW running.
     // In this case Metal FW will need to facilitate context switching to base FW (e.g. code running on WH active
     // eriscs)
@@ -62,7 +67,7 @@ public:
         const std::map<std::string, std::string>& device_kernel_defines);
 
     tt::ARCH get_arch() const { return arch_; }
-    uint32_t get_max_cbs() const { return max_cbs_; };
+    uint32_t get_max_dfbs() const { return max_dfbs_; };
     const tt::llrt::RunTimeOptions& get_rtoptions() const { return *rtoptions_; }
     const std::string& get_root_path() const { return root_; }
     const std::string& get_out_root_path() const { return out_root_; }
@@ -82,7 +87,7 @@ private:
     const tt::llrt::RunTimeOptions* rtoptions_{nullptr};
 
     tt::ARCH arch_{tt::ARCH::Invalid};
-    uint32_t max_cbs_{};
+    uint32_t max_dfbs_{};
 
     // Paths
     std::string root_;
@@ -225,6 +230,10 @@ void sync_build_steps(std::vector<std::shared_future<void>>& events);
 // Returns immediately if hash was already built.
 // If build_fn throws, subsequent callers will retry.
 void jit_build_once(size_t hash, const std::function<void()>& build_fn);
+
+// Like jit_build_once(), but returns false instead of occupying the caller while
+// another thread builds the same hash.
+bool jit_build_once_no_wait(size_t hash, const std::function<void()>& build_fn);
 
 // Clear the JIT build cache so that subsequent jit_build_once() calls re-execute.
 void jit_build_cache_clear();

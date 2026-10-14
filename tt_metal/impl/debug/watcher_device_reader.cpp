@@ -8,8 +8,10 @@
 #include <cstdio>
 #include <cctype>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -20,6 +22,7 @@
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
+#include "llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -154,6 +157,67 @@ CoreCoord virtual_noc_coordinate(
     return cluster.get_virtual_coordinate_from_physical_coordinates(device_id, physical_coord);
 }
 
+// Under ATT a unicast operand carries no coordinates. Decode it through the active map: the window
+// and endpoint row it reaches and the offset inside that target. Tiles are reported in the
+// kernel-visible frame, which is the frame the XY uses, so the messages keep the same shape.
+string get_att_unicast_target_str(std::string_view map_name, uint64_t operand) {
+    const quasar_att::MapInfo* info = quasar_att::find_map(map_name);
+    if (info == nullptr) {
+        return fmt::format("Unknown core (ATT map '{}' is not known) [operand=0x{:016x}]", map_name, operand);
+    }
+    const noc_att::MapData& map = info->map;
+    const noc_att::OperandTarget target = noc_att::classify_operand(map, operand);
+    // An endpoint word is (y << 6) | x in the NOC_NODE_ID frame; the map's offset takes it back to the
+    // frame the host publishes.
+    const auto descriptor_coord = [&map](uint32_t word) -> std::optional<CoreCoord> {
+        const int64_t x = static_cast<int64_t>(word & 0x3f) - map.node_id_offset_x;
+        const int64_t y = static_cast<int64_t>((word >> 6) & 0x3f) - map.node_id_offset_y;
+        if (x < 0 || y < 0) {
+            return std::nullopt;
+        }
+        return CoreCoord{static_cast<std::size_t>(x), static_cast<std::size_t>(y)};
+    };
+    const auto coord_str = [&](uint32_t word) {
+        const auto coord = descriptor_coord(word);
+        return coord.has_value() ? coord->str() : fmt::format("node word 0x{:03x}", word);
+    };
+    using Kind = noc_att::OperandTarget::Kind;
+    switch (target.kind) {
+        case Kind::Self: return fmt::format("its own core (ATT self window) L1[addr=0x{:08x}]", target.local_address);
+        case Kind::Worker:
+        case Kind::FullTile: {
+            const auto coord = descriptor_coord(target.endpoint_word);
+            const bool dispatch_tile = target.kind == Kind::FullTile && coord.has_value() &&
+                                       noc_att::resolve(map, noc_att::Address::dispatch(coord->x, coord->y, 0)).valid;
+            return fmt::format(
+                "{} core w/ virtual coords {} L1[addr=0x{:08x}]",
+                dispatch_tile ? "Dispatch" : "Tensix",
+                coord_str(target.endpoint_word),
+                target.local_address);
+        }
+        case Kind::Dram: {
+            string where = target.endpoint_known ? fmt::format("w/ virtual coords {}", coord_str(target.endpoint_word))
+                                                 : fmt::format("at ATT selector {}", target.selector);
+            if (target.bank != noc_att::DRAM_BANK_UNKNOWN) {
+                where += fmt::format(" (bank {})", target.bank);
+            }
+            return fmt::format("DRAM core {} DRAM[addr=0x{:08x}]", where, target.local_address);
+        }
+        case Kind::Invalid:
+        default:
+            if (target.window == noc_att::WindowClass::Invalid) {
+                return fmt::format(
+                    "Unknown core (ATT operand 0x{:016x} matches no window of map '{}')", operand, map_name);
+            }
+            return fmt::format(
+                "Unknown core (ATT operand 0x{:016x} names selector {} of a window of map '{}', which lists no "
+                "tile for it)",
+                operand,
+                target.selector,
+                map_name);
+    }
+}
+
 // Helper function to get string rep of noc target.
 string get_noc_target_str(
     MetalEnvImpl& env,
@@ -163,6 +227,8 @@ string get_noc_target_str(
     dev_msgs::debug_sanitize_addr_msg_t::ConstView san) {
     const auto& hal = env.get_hal();
     auto& cluster = env.get_cluster();
+    const std::optional<std::string_view> att_map =
+        hal.get_arch() == tt::ARCH::QUASAR ? env.get_rtoptions().get_noc_att_map() : std::nullopt;
     auto get_core_and_mem_type = [&hal, &cluster](
                                      tt::ChipId device_id, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
         // Get the virtual coord from the noc coord
@@ -206,6 +272,9 @@ string get_noc_target_str(
             target_virtual_noc_core_start.str(),
             target_virtual_noc_core_end.str(),
             type_and_mem.second);
+    } else if (att_map.has_value()) {
+        out += get_att_unicast_target_str(*att_map, san.noc_addr());
+        return out;
     } else {
         CoreCoord target_virtual_noc_core = {
             hal.get_noc_ucast_addr_x(san.noc_addr()), hal.get_noc_ucast_addr_y(san.noc_addr())};
@@ -229,6 +298,16 @@ string get_l1_target_str(
         san.len());
     return out;
 }
+
+// Quasar: each global semaphore is a 0x40-byte alias window where a read at +4*(inc+8) posts `inc`
+// and returns the pre-increment value (see api/debug/ring_buffer.h, which posts 1 from the device).
+// Reading the base is therefore a GET of 8, not a peek: it decrements the MPSC head and raises
+// GLOBAL_SEMAPHORES (GET_UNDERFLOW / GET_ON_UNINITIALIZED). inc == 0 is the non-mutating read.
+constexpr uint64_t watcher_ring_buf_sem_peek_addr =
+    TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR + 4 * (0 + 8);
+
+// A NOC sanitize record still partially written after this many consecutive polls is reported as corruption.
+constexpr uint32_t max_partial_sanitize_polls = 3;
 
 dev_msgs::launch_msg_t::ConstView get_valid_launch_message(dev_msgs::mailboxes_t::ConstView mbox_data) {
     uint32_t launch_msg_read_ptr = mbox_data.launch_msg_rd_ptr();
@@ -407,7 +486,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     TT_ASSERT(this->f != nullptr);
 
     if (f != stdout && f != stderr) {
-        log_info(tt::LogMetal, "Watcher checking device {}", device_id);
+        log_debug(tt::LogMetal, "Watcher checking device {}", device_id);
     }
 
     DumpData dump_data;
@@ -595,14 +674,16 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
         l1_read_buf.data(), l1_read_buf.size(), {static_cast<size_t>(reader.device_id), virtual_coord}, mailbox_addr);
 
     // Quasar's MPSC head lives in a semaphore register rather than the mailbox. Read it here with the
-    // rest of the snapshot.
+    // rest of the snapshot. Gated on the same condition as DumpRingBuffer(), the only consumer: with
+    // the ring buffer disabled the device firmware never initializes semaphore 31, so touching it at
+    // all would fault.
     uint32_t sem_head = 0;
-    if (hal.get_arch() == tt::ARCH::QUASAR) {
+    if (hal.get_arch() == tt::ARCH::QUASAR && !rtoptions.watcher_ring_buffer_disabled()) {
         reader.env.get_cluster().read_core(
             &sem_head,
             sizeof(sem_head),
             {static_cast<size_t>(reader.device_id), virtual_coord},
-            TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR);
+            watcher_ring_buf_sem_peek_addr);
     }
 
     return Core(
@@ -708,9 +789,15 @@ void WatcherDeviceReader::Core::Dump() const {
 }
 
 void WatcherDeviceReader::Core::DumpL1Status() const {
+    const auto& hal = reader_.env.get_hal();
+    // The L1[0] canary guards the reset jump that generate_risc_startup_addr writes at L1[0]. The
+    // qsr.s1 simulator boots the DM from the tile-reset shadow register instead, so L1[0] is not the
+    // live reset vector there and DM firmware data may overwrite it; skip the canary on that model only.
+    if (reader_.env.get_rtoptions().is_qsr_s1_simulator()) {
+        return;
+    }
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    const auto& hal = reader_.env.get_hal();
     const auto l1_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
     data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, l1_base, sizeof(uint32_t));
     TT_ASSERT(programmable_core_type_ == HalProgrammableCoreType::TENSIX);
@@ -726,21 +813,47 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
     auto san = mbox_data_.watcher().sanitize()[noc];
     string error_msg;
 
+    // Quasar DMs publish this record through the cache and flush it to L1 a 64B line at a time, so a
+    // poll can see it partially written. Re-check a partial record on later polls instead of failing.
+    // A published value never equals its field's sentinel.
+    const bool all_sentinel =
+        san.noc_addr() == DEBUG_SANITIZE_SENTINEL_OK_64 && san.l1_addr() == DEBUG_SANITIZE_SENTINEL_OK_32 &&
+        san.len() == DEBUG_SANITIZE_SENTINEL_OK_32 && san.which_risc() == DEBUG_SANITIZE_SENTINEL_OK_16 &&
+        san.is_multicast() == DEBUG_SANITIZE_SENTINEL_OK_8 && san.is_write() == DEBUG_SANITIZE_SENTINEL_OK_8 &&
+        san.is_target() == DEBUG_SANITIZE_SENTINEL_OK_8;
+    const bool no_sentinel =
+        san.noc_addr() != DEBUG_SANITIZE_SENTINEL_OK_64 && san.l1_addr() != DEBUG_SANITIZE_SENTINEL_OK_32 &&
+        san.len() != DEBUG_SANITIZE_SENTINEL_OK_32 && san.which_risc() != DEBUG_SANITIZE_SENTINEL_OK_16 &&
+        san.is_multicast() != DEBUG_SANITIZE_SENTINEL_OK_8 && san.is_write() != DEBUG_SANITIZE_SENTINEL_OK_8 &&
+        san.is_target() != DEBUG_SANITIZE_SENTINEL_OK_8;
+    const bool complete = san.return_code() == dev_msgs::DebugSanitizeOK ? all_sentinel : no_sentinel;
+    const std::pair<CoreCoord, int> record_key{virtual_coord_, noc};
+    if (!complete) {
+        if (++reader_.partial_sanitize_polls_[record_key] < max_partial_sanitize_polls) {
+            return;
+        }
+        error_msg = fmt::format(
+            "Watcher unexpected noc debug state on core {}, partially written record noc{} risc {} {{0x{:08x}, {} }} "
+            "return code {}",
+            virtual_coord_.str(),
+            noc,
+            san.which_risc(),
+            san.noc_addr(),
+            san.len(),
+            san.return_code());
+        error_msg += " (corrupted noc sanitization state - sanitization memory overwritten)";
+        log_warning(tt::LogMetal, "Watcher detected NOC error and stopped device:");
+        log_warning(tt::LogMetal, "{}: {}", core_str_, error_msg);
+        DumpWaypoints(true);
+        DumpRingBuffer(true);
+        LogRunningKernels();
+        reader_.watcher_server.set_exception_message(fmt::format("{}: {}", core_str_, error_msg));
+        TT_THROW("{}: {}", core_str_, error_msg);
+    }
+    reader_.partial_sanitize_polls_.erase(record_key);
+
     switch (san.return_code()) {
-        case dev_msgs::DebugSanitizeOK:
-            if (san.noc_addr() != DEBUG_SANITIZE_SENTINEL_OK_64 || san.l1_addr() != DEBUG_SANITIZE_SENTINEL_OK_32 ||
-                san.len() != DEBUG_SANITIZE_SENTINEL_OK_32 || san.which_risc() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
-                san.is_multicast() != DEBUG_SANITIZE_SENTINEL_OK_8 || san.is_write() != DEBUG_SANITIZE_SENTINEL_OK_8 ||
-                san.is_target() != DEBUG_SANITIZE_SENTINEL_OK_8) {
-                error_msg = fmt::format(
-                    "Watcher unexpected noc debug state on core {}, reported valid got noc{}{{0x{:08x}, {} }}",
-                    virtual_coord_.str(),
-                    san.which_risc(),
-                    san.noc_addr(),
-                    san.len());
-                error_msg += " (corrupted noc sanitization state - sanitization memory overwritten)";
-            }
-            break;
+        case dev_msgs::DebugSanitizeOK: break;
         case dev_msgs::DebugSanitizeNocAddrUnderflow:
             error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += string(san.is_target() ? " (NOC target" : " (Local L1") + " address underflow).";
@@ -831,9 +944,25 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
 
 void WatcherDeviceReader::Core::DumpAssertStatus() const {
     auto assert_status = mbox_data_.watcher().assert_status();
+    // On the qsr.s1 model an assert record can reach the host partially written through the cached L1
+    // alias: the firmware claims the record before filling it, and its TRISC boot assert shows up with
+    // the claim but failure code 0, or with a garbled claim. On that model only, such a record is
+    // reported and polling continues.
+    const bool qsr_s1 = reader_.env.get_rtoptions().is_qsr_s1_simulator();
+    const bool tolerant_record = qsr_s1;
     if (assert_status.tripped() == dev_msgs::DebugAssertOK) {
         if (assert_status.line_num() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
             assert_status.which() != DEBUG_SANITIZE_SENTINEL_OK_8) {
+            if (tolerant_record) {
+                log_warning(
+                    tt::LogMetal,
+                    "Watcher assert record on {} reported OK with non-sentinel fields (which={} line=0x{:x}); ignoring "
+                    "(qsr.s1 simulator, partial record)",
+                    core_str_,
+                    assert_status.which(),
+                    assert_status.line_num());
+                return;
+            }
             TT_THROW(
                 "Watcher unexpected assert state on core {}, reported OK but got processor {}, line {}.",
                 virtual_coord_.str(),
@@ -841,6 +970,19 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
                 assert_status.line_num());
         }
         return;  // no assert tripped, nothing to do
+    }
+    if (tolerant_record) {
+        // The firmware claims the record (claim == 0xDEADBEEF) before filling it, so a tripped record
+        // without the claim was not written by assert_and_hang().
+        log_warning(
+            tt::LogMetal,
+            "Watcher assert record on {}: tripped={} which={} line_num=0x{:x} claim=0x{:x} hw_fault_info=0x{:016x}",
+            core_str_,
+            assert_status.tripped(),
+            assert_status.which(),
+            assert_status.line_num(),
+            assert_status.claim(),
+            assert_status.hw_fault_info());
     }
     std::string error_msg = fmt::format(
         "{}: {} ", core_str_, get_riscv_name(reader_.env.get_hal(), programmable_core_type_, assert_status.which()));
@@ -850,6 +992,17 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
         assert_status.hw_fault_info());
     if (assert_msg.empty()) {
         LogRunningKernels();
+        if (tolerant_record) {
+            DumpWaypoints(true);
+            DumpRingBuffer(true);
+            log_warning(
+                tt::LogMetal,
+                "Watcher assert record on {} has unknown failure code {}; continuing to poll (qsr.s1 simulator, "
+                "partial record)",
+                core_str_,
+                assert_status.tripped());
+            return;
+        }
         TT_THROW(
             "Watcher data corruption, noc assert state on core {} unknown failure code: {}.\n",
             virtual_coord_.str(),
@@ -862,6 +1015,13 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     DumpWaypoints(true);
     DumpRingBuffer(true);
     LogRunningKernels();
+    if (qsr_s1 && assert_status.claim() != 0xDEADBEEF) {
+        log_warning(
+            tt::LogMetal,
+            "Watcher assert record on {} noted; continuing to poll (qsr.s1 simulator, partial record)",
+            core_str_);
+        return;
+    }
     reader_.watcher_server.set_exception_message(error_msg);
     TT_THROW("Watcher detected tripped assert and stopped device.");
 }
@@ -1163,11 +1323,11 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
 
     if (hal.has_stream_registers()) {
         uint32_t operand_start_stream = hal.get_operand_start_stream();
-        uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+        uint32_t max_dfbs = hal.get_num_dataflow_buffers();
 
         // Read back all of the stream state, most of it is unused
         std::vector<uint32_t> data;
-        for (uint32_t operand = 0; operand < max_cbs; operand++) {
+        for (uint32_t operand = 0; operand < max_dfbs; operand++) {
             uint32_t base = hal.get_noc_overlay_start_addr() +
                             ((operand_start_stream + operand) * hal.get_noc_stream_reg_space_size());
 

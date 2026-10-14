@@ -28,7 +28,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
     using namespace ttnn::prim::slice_metal2;
 
     const auto& input = tensor_args.input;
-    tt::tt_metal::IDevice* device = input.device();
+    tt::tt_metal::distributed::MeshDevice* device = input.device();
 
     uint32_t num_unpadded_tiles = output.physical_volume() / TILE_HW;
 
@@ -130,7 +130,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
             {
                 .runtime_arg_names = {"start_id", "num_tiles"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options =
             {
                 // Per-core: the id_per_dim seed.
@@ -164,7 +164,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Reader per-core: start_id, num_tiles, and the id_per_dim seed.

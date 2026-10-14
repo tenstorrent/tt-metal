@@ -997,7 +997,8 @@ TEST(MultiHost, TestSubtorus4x4PipelineMgdPinningsExact) {
 
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        fabric_router_tests::fabric_config_for_active_mgd(),
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -1725,8 +1726,11 @@ TEST(MultiHost, TestLlama8b1x2PodControlPlaneInit) {
         GTEST_SKIP() << "Requires Blackhole Galaxy mock (single-pod llama 8b decode pod MGDs)";
     }
 
+    // Use the config the pod MGD declares (RING dim -> FABRIC_2D_TORUS_Y) so it matches the
+    // ControlPlaneFixture layout/corner checks sharing this tt-run process (no set-once fabric-config clash).
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        fabric_router_tests::fabric_config_for_active_mgd(),
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -1817,8 +1821,11 @@ TEST(MultiHost, TestLlama8b2x1PodControlPlaneInit) {
         GTEST_SKIP() << "Requires Blackhole Galaxy mock (single-pod llama 8b decode pod MGDs)";
     }
 
+    // Use the config the pod MGD declares (RING dim -> FABRIC_2D_TORUS_Y) so it matches the
+    // ControlPlaneFixture layout/corner checks sharing this tt-run process (no set-once fabric-config clash).
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        fabric_router_tests::fabric_config_for_active_mgd(),
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();

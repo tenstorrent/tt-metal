@@ -30,7 +30,6 @@
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operation.hpp"
 #include <tt_stl/reflection.hpp>

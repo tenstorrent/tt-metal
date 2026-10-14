@@ -53,7 +53,7 @@
 #define MEM_DM_FIRMWARE_SIZE (1024 * 12)
 #define MEM_TRISC_FIRMWARE_SIZE (1024 * 5)
 #define MEM_DM_KERNEL_SIZE (1024 * 48)
-#define MEM_DM_GLOBAL_SIZE (1024 * 2)
+#define MEM_DM_GLOBAL_SIZE (1024 * 4)  // the DM .data section also holds .rodata (the ATT map tables)
 #define MEM_TRISC_GLOBAL_SIZE (1024 * 2)
 // Per-DM stride of the local region: crt0 puts tp at base + n * size and sp at base + (n+1) * size,
 // so these also place every stack. The DM D$ indexes on addr[10:6] (2-way, 32 sets of 64 B), so keep
@@ -201,7 +201,7 @@
 // Dedicated cached-only pool for DM_LOCAL_CACHED semaphores: whole 64B cache lines that
 // nothing on the NoC/uncached path ever writes, so a cached AMO's line write-back can never
 // clobber NoC-written data. 8B rows indexed by semaphore id: [0] = counter, [1] = the seed
-// protocol word for the generated entry/exit stubs.
+// protocol word for the firmware's cached-pool entry/exit.
 #define MEM_DM_CACHED_SEM_BASE (MEM_NOC_SEM_LOCK_BASE + MEM_NOC_SEM_LOCK_SIZE)
 #define MEM_DM_CACHED_SEM_ROW 8
 #define MEM_DM_CACHED_SEM_SIZE 128  // keep >= NUM_SEMAPHORES * MEM_DM_CACHED_SEM_ROW

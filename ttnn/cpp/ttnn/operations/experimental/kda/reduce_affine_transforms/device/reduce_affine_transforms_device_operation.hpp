@@ -32,6 +32,7 @@ std::pair<Tensor, Tensor> reduce_affine_transforms(
     const DeviceComputeKernelConfig&,
     const Tensor&,
     uint32_t sequence_parallel_axis,
-    uint32_t local_rows);
+    uint32_t local_rows,
+    const std::optional<Tensor>& actual_end);
 
 }  // namespace ttnn::experimental::prim

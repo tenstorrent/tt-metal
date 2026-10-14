@@ -10,10 +10,11 @@
 
 #include "ckernel.h"
 #include "internal/firmware_common.h"
+#include "api/compile_time_args.h"
 
 #include "chlkc_list.h"
 
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "api/remote_circular_buffer_api.h"

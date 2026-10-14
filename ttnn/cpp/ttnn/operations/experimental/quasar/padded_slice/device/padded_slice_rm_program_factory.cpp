@@ -91,6 +91,8 @@ get_padded_slice_runtime_args_rm_sharded_output(
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
 
+    const int slice_row_size_bytes = static_cast<int>(actual_output_shape[-1] * input_tensor.element_size());
+
     uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
     uint32_t start_addr = input_tensor.buffer()->address();
     std::vector<uint32_t> common_reader_kernel_args = {
@@ -148,7 +150,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
         }
 
         int this_input_row_size_bytes =
-            std::max(std::min<int>(output_row_size_bytes, input_page_size - width_offset), 0);
+            std::max(std::min<int>(output_row_size_bytes, slice_row_size_bytes - width_offset), 0);
         uint32_t this_core_num_sticks = num_sticks_per_core;
         // [#48552] Clamp to the real output sticks so the reader doesn't over-read past the source on the
         // tile-rounded padded shard tail (see total_output_sticks note above).
@@ -213,7 +215,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
 
     uint32_t num_cores_channels =
         ttnn::operations::experimental::quasar::detail::get_num_cores_channels_from_sharded_tensor(output);
-    uint32_t input_row_size_bytes = (a.logical_shape()[-1] * a.element_size()) / num_cores_channels;
+    uint32_t slice_row_size_bytes = (actual_output_shape[-1] * a.element_size()) / num_cores_channels;
 
     TT_FATAL(
         output.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
@@ -233,11 +235,9 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
     const bool is_non_aligned = (output_row_size_bytes % alignment) != 0;
 
-    // pad_output_row: output row wider than the input row -> the padding writer. Not yet ported to Quasar
-    // (the resnet stem is non-pad: sliced C == input C). The pad path can be added later mirroring the
-    // shared writer_unary_sharded_padded_rm kernel.
-    const bool pad_output_row = output_row_size_bytes > input_row_size_bytes;
-    TT_FATAL(!pad_output_row, "Quasar padded_slice: pad-row path (output_row > input_row) not yet ported.");
+    // Pad-row writer is not yet ported.
+    const bool pad_output_row = output_row_size_bytes > slice_row_size_bytes;
+    TT_FATAL(!pad_output_row, "Quasar padded_slice: pad-row path (output_row > slice_row) not yet ported.");
 
     const uint32_t output_cb_page_size =
         is_non_aligned ? tt::round_up(output_row_size_bytes, dst_buffer_alignment) : output_row_size_bytes;
@@ -300,8 +300,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
             "num_read_per_barrier"}};
     // Per-dim geometry tail (num_output_sticks_per_dim, num_input_sticks_per_dim, id_per_dim).
     reader.advanced_options.num_runtime_varargs = 3 * num_dims;
-    reader.hw_config =
-        ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
+    reader.hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
 
     // Writer: drain/commit the OUTPUT DFB (non-pad). Reuses the ported i2s sharded writer.
     KernelSpec writer{
@@ -311,8 +310,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
             "writer_unary_sharded.cpp"};
     writer.dfb_bindings = {ConsumerOf(PS_OUT_DFB, "out")};
     writer.runtime_arg_schema = {.runtime_arg_names = {"num_units"}};
-    writer.hw_config =
-        ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
+    writer.hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
 
     spec.kernels = {reader, writer};
     spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {PS_READER, PS_WRITER}, .target_nodes = total_cores}};

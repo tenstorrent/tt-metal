@@ -146,7 +146,6 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_dfb, uint32_t num_tiles)
     DataflowBuffer dfb_in1(in1);
     DataflowBuffer dfb_out(out_dfb);
     // inputs come in full, outputs go out full
-    copy_init(in0);
     binary_max_tile_init();
 
     constexpr uint32_t dst_reg_0 = 0;
@@ -156,7 +155,13 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_dfb, uint32_t num_tiles)
     dfb_out.reserve_back(num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
+        // copy_init programs the unpacker for one DFB; Quasar asserts if copy_tile then reads another
+        // (LLK reinit guard), so re-init per operand.
+        reconfig_data_format_srca(in0);
+        copy_init(in0);
         copy_tile(in0, i, dst_reg_0);
+        reconfig_data_format_srca(in1);
+        copy_init(in1);
         copy_tile(in1, i, dst_reg_1);
         binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_0, vector_mode);
         tile_regs_commit();
@@ -313,15 +318,10 @@ void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, uint32_t cols, bool do_eltwis
 }
 
 #if defined(TRISC_MATH) && !defined(ARCH_QUASAR)
-template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void recip_tile_first_column(uint32_t idst) {
     SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_recip_first_column,
-        (legacy_compat, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::C);
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_recip_first_column, (is_fp32_dest_acc_en), idst, VectorMode::C);
 }
 #endif
 
@@ -334,7 +334,12 @@ void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     // Postcondition: in_dfb has num_tiles produced
     reconfig_data_format_srca(in_dfb);
     copy_init(in_dfb);
+#ifdef ARCH_QUASAR
     recip_tile_init();
+#else
+    // The first-column helper uses SFPI, not full-tile LOADMACRO/replay state.
+    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::sfpu_reciprocal_init, (APPROX)));
+#endif
     pack_reconfig_out(in_dfb);
 
     dfb_in.wait_front(num_tiles);
@@ -1120,7 +1125,7 @@ void sigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t 
     sigmoid_tile_init();
 #else
     exp_tile_init<false>();
-    // recip_tile_first_column<false>() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
+    // recip_tile_first_column() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
     // that SFPU state here. Blackhole needs vConstFloatPrgm0 = 2.0 for Newton-Raphson; Wormhole
     // needs vConstFloatPrgm0/1/2 loaded with reciprocal polynomial coefficients.
     // This init programs persistent SFPU constants, not per-tile data. It intentionally comes after
@@ -1148,8 +1153,7 @@ void sigmoid_sub(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t 
             0 /*dst_index*/,
             VectorMode::C,
             0x3F800000 /*scalar*/));
-        // recip_tile<false>(0, (int)VectorMode::C);
-        MATH((recip_tile_first_column<false>(0 /*dst_index*/)));  // WH/BH fused fast path
+        MATH((recip_tile_first_column(0 /*dst_index*/)));  // WH/BH fused fast path
 #endif
         tile_regs_commit();
         tile_regs_wait();
@@ -1311,11 +1315,13 @@ ALWI void matmul_blocks(
             }
             if (add_mask) {
                 dfb_mask.wait_front(out_subblock_num_tiles);
-                dfb_zero.wait_front(1);
+                // zero_dfb is identity_scale_in: the zero tile sits behind the reduce scaler (entry 1).
+                constexpr uint32_t zero_tile_idx = 1;
+                dfb_zero.wait_front(zero_tile_idx + 1);
                 reconfig_data_format(zero_dfb, mask_dfb);
                 add_init(zero_dfb, mask_dfb, true);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                    add_tiles(zero_dfb, mask_dfb, 0, i, i);
+                    add_tiles(zero_dfb, mask_dfb, zero_tile_idx, i, i);
                 }
                 reconfig_data_format(in1_dfb, in0_dfb);
                 matmul_block_init(in0_dfb, in1_dfb, transpose, subblock_w, subblock_h, in0_block_w);
@@ -1391,6 +1397,10 @@ void matmul_reduce(uint32_t in1_dfb, const uint32_t& out_dfb) {
 
         tile_regs_commit();
         dfb_out.pop_front(subblock_h);
+        // In-place: reserve before packing. On Quasar the POP (unpack thread) and PUSH (pack thread)
+        // land on the tile counter asynchronously; without this WAIT_FREE the PUSH can beat the POP
+        // and overflow a DFB sized to exactly subblock_h.
+        dfb_out.reserve_back(subblock_h);
 
         tile_regs_wait();
         for (uint32_t i = 0; i < subblock_h; i++) {
@@ -2245,10 +2255,15 @@ void sdpa_inner_loop(
             //    This compares the previous max with the sink logit
             reconfig_data_format(dfb_attention_sink, dfb_identity_scale_in);
 
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_attention_sink, dfb_identity_scale_in, Sq_chunk_t, 1>(
-                alias_cur_max, alias_prev_max, true);
+            // Runtime-cols reduce_c (as in the flash loop above): the compile-time-cols overload copies
+            // prev_max with a within-face-only transpose, which Quasar's unpack-A init rejects.
+            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_attention_sink, dfb_identity_scale_in, Sq_chunk_t>(
+                alias_cur_max, alias_prev_max, 1, true);
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
+            //    sub_exp_block packs via a bare pack_tile; on Quasar the packer is still latched to
+            //    alias_cur_max from the reduce above, so point it at dfb_exp_max_diff first.
+            pack_reconfig_out(dfb_exp_max_diff);
             sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, dfb_exp_max_diff, Sq_chunk_t);
             DataflowBuffer(alias_prev_max).pop_front(Sq_chunk_t);
 

@@ -18,6 +18,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "intermesh_routing_test_utils.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests::multihost_utils {
 std::random_device rd;  // Non-deterministic seed source
@@ -90,7 +91,7 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
     );
     // Randomly select a tx device
     auto random_dev = std::uniform_int_distribution<uint32_t>(0, devices.size() - 1)(global_rng);
-    auto src_physical_device_id = devices[random_dev]->get_devices()[0]->id();
+    auto src_physical_device_id = devices[random_dev]->get_device_ids()[0];
     auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
     const auto& sender_device = devices[random_dev];
     // Randomly select a tx core
@@ -160,8 +161,8 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
     // Validate status of sender
     std::vector<uint32_t> sender_status;
 
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -208,7 +209,7 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
 
     // Randomly select an rx device
     auto random_dev = std::uniform_int_distribution<uint32_t>(0, devices.size() - 1)(global_rng);
-    auto dst_physical_device_id = devices[random_dev]->get_devices()[0]->id();
+    auto dst_physical_device_id = devices[random_dev]->get_device_ids()[0];
     auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
     const auto& receiver_device = devices[random_dev];
 
@@ -249,8 +250,8 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
     // Validate status of the receiver
     std::vector<uint32_t> receiver_status;
 
-    tt_metal::detail::ReadFromDeviceL1(
-        receiver_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *receiver_device,
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -365,8 +366,8 @@ void run_mcast_sender_step(
 
     // Validate status of sender
     std::vector<uint32_t> sender_status;
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -476,8 +477,8 @@ void run_mcast_recv_step(
     // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, _] : recv_programs) {
         std::vector<uint32_t> receiver_status;
-        tt_metal::detail::ReadFromDeviceL1(
-            dev->get_devices()[0],
+        tt_metal::slow_dispatch::ReadFromL1(
+            *dev,
             receiver_logical_core,
             worker_mem_map.test_results_address,
             worker_mem_map.test_results_size_bytes,

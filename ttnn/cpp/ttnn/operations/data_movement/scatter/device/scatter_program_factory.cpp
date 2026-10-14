@@ -159,7 +159,7 @@ ttnn::device_operation::ProgramArtifacts ScatterProgramFactory::create_program_a
                      "source_chunk_size",
                      "scatter_reduction_type"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         // Per-dimension shape extents (input dims then index dims). N = rank-1 per tensor; the
         // count varies with rank across instantiations, so these are delivered as runtime varargs.
         .advanced_options =
@@ -186,7 +186,7 @@ ttnn::device_operation::ProgramArtifacts ScatterProgramFactory::create_program_a
             {
                 .runtime_arg_names = {"start_stick_id", "sticks_for_core", "input_and_output_chunk_size"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Per-dimension shape extents are the same on every node; build once and bind per node.

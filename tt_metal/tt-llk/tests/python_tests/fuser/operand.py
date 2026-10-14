@@ -9,6 +9,19 @@ from typing import List, Optional, Tuple
 import torch
 from helpers.device_io import read_from_device, write_to_device
 from helpers.llk_params import DataFormat, PartialFace, format_dict, format_tile_sizes
+from helpers.pack import (
+    pack_bfp8_b,
+    pack_bfp16,
+    pack_fp8_e4m3,
+    pack_fp16,
+    pack_fp32,
+    pack_int8,
+    pack_int16,
+    pack_int32,
+    pack_uint8,
+    pack_uint16,
+    pack_uint32,
+)
 from helpers.stimuli_generator import (
     StimuliSpec,
     default_spec_for_format,
@@ -23,6 +36,20 @@ from helpers.tile_shape import TileShape, construct_tile_shape
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import unpack_res_tiles
 
+L1_PACKERS = {
+    DataFormat.Float16: pack_fp16,
+    DataFormat.Float16_b: pack_bfp16,
+    DataFormat.Float32: pack_fp32,
+    DataFormat.Bfp8_b: pack_bfp8_b,
+    DataFormat.Int32: pack_int32,
+    DataFormat.UInt32: pack_uint32,
+    DataFormat.Int16: pack_int16,
+    DataFormat.UInt16: pack_uint16,
+    DataFormat.Fp8_e4m3: pack_fp8_e4m3,
+    DataFormat.Int8: pack_int8,
+    DataFormat.UInt8: pack_uint8,
+}
+
 
 class BfdResource(Enum):
     UNP0 = "ckernel::trisc::BfdResource::Unp0"
@@ -35,35 +62,27 @@ class L1AccessMode(Enum):
     STRIDED = "ckernel::trisc::L1AccessMode::Strided"
 
 
-def bfd_current(engine: BfdResource) -> str:
-    return f"ckernel::trisc::bfd_current<{engine.value}>()"
-
-
 @dataclass
 class Operand:
     name: str
     dimensions: Tuple[int, int]
     data_format: DataFormat
-    tile_shape: TileShape = field(
-        default_factory=lambda: construct_tile_shape(
-            (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
-        )
-    )
+    tile_shape: TileShape
     l1_address: Optional[int] = None
-    is_input: bool = False
     is_output: bool = False
-    sfpu: bool = True
     _raw_data: Optional[torch.Tensor] = None
     _master_golden: Optional[torch.Tensor] = None
-    const_value: Optional[float] = None
+    intervals: Optional[List[Tuple[float, float]]] = None
     l1_golden: Optional[torch.Tensor] = None
-    tile_count: Optional[int] = None
-    tile_count_x: Optional[int] = None
-    tile_count_y: Optional[int] = None
-    tile_size: Optional[int] = None
+    tile_count: int = field(init=False)
+    tile_count_x: int = field(init=False)
+    tile_count_y: int = field(init=False)
+    tile_size: int = field(init=False)
     acc_atol: float = 0.0
     acc_rtol: float = 0.0
     acc_pcc: float = 1.0
+    atol: Optional[float] = None
+    rtol: Optional[float] = None
 
     def __post_init__(self):
         self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()
@@ -94,8 +113,15 @@ class Operand:
         faces_needed = self.tile_count * self.tile_shape.total_num_faces()
         faces_data = []
 
-        if self.const_value is not None:
-            spec = StimuliSpec.constant(self.const_value)
+        if self.intervals is not None:
+            if (
+                len(self.intervals) == 1
+                and self.intervals[0][0] == self.intervals[0][1]
+                and not self.data_format.is_integer()
+            ):
+                spec = StimuliSpec.constant(self.intervals[0][0])
+            else:
+                spec = StimuliSpec.uniform(intervals=self.intervals)
         else:
             spec = default_spec_for_format(self.data_format)
 
@@ -147,35 +173,7 @@ class Operand:
         Returns:
             List of (address, packed_data) tuples, one per tile.
         """
-        from helpers.pack import (
-            pack_bfp8_b,
-            pack_bfp16,
-            pack_fp8_e4m3,
-            pack_fp16,
-            pack_fp32,
-            pack_int8,
-            pack_int16,
-            pack_int32,
-            pack_uint8,
-            pack_uint16,
-            pack_uint32,
-        )
-
-        packers = {
-            DataFormat.Float16: pack_fp16,
-            DataFormat.Float16_b: pack_bfp16,
-            DataFormat.Float32: pack_fp32,
-            DataFormat.Bfp8_b: pack_bfp8_b,
-            DataFormat.Int32: pack_int32,
-            DataFormat.UInt32: pack_uint32,
-            DataFormat.Int16: pack_int16,
-            DataFormat.UInt16: pack_uint16,
-            DataFormat.Fp8_e4m3: pack_fp8_e4m3,
-            DataFormat.Int8: pack_int8,
-            DataFormat.UInt8: pack_uint8,
-        }
-
-        pack_function = packers.get(self.data_format)
+        pack_function = L1_PACKERS.get(self.data_format)
         if not pack_function:
             raise ValueError(f"Unsupported data format: {self.data_format.name}")
 
@@ -236,12 +234,20 @@ class Operand:
         self,
         engine: BfdResource,
         mode: L1AccessMode = L1AccessMode.CONTINUOUS,
+        *,
+        result_name: Optional[str] = None,
     ) -> str:
+        assignment = f"const auto {result_name} = " if result_name else ""
+        data_format = (
+            DataFormat.Int16
+            if self.data_format == DataFormat.UInt16
+            else self.data_format
+        )
         return (
-            f"ckernel::trisc::bfd_alloc_and_program<{engine.value}, {mode.value}>("
+            f"{assignment}ckernel::trisc::bfd_alloc_and_program<{engine.value}, {mode.value}>("
             f"{self.tile_shape.cpp_value}, "
             f"{hex(self.l1_address)} / 16, "
-            f"{self.data_format.cpp_underlying_value});\n"
+            f"{data_format.cpp_underlying_value});\n"
         )
 
 
@@ -254,8 +260,10 @@ class OperandRegistry:
         name: str,
         dimensions: Tuple[int, int],
         data_format: DataFormat,
-        const_value: Optional[float] = None,
+        intervals: Optional[List[Tuple[float, float]]] = None,
         tile_dims: Optional[Tuple[int, int]] = None,
+        atol: Optional[float] = None,
+        rtol: Optional[float] = None,
     ) -> Operand:
         if name in self.operands:
             operand = self.operands[name]
@@ -281,8 +289,10 @@ class OperandRegistry:
             dimensions=dimensions,
             data_format=data_format,
             is_output=False,
-            const_value=const_value,
+            intervals=intervals,
             tile_shape=tile_shape,
+            atol=atol,
+            rtol=rtol,
         )
         self.operands[name] = operand
         return operand
@@ -297,9 +307,6 @@ class OperandRegistry:
             )
 
         return self.operands[name]
-
-    def get_all_inputs(self) -> list[Operand]:
-        return [op for op in self.operands.values() if op.is_input]
 
     def get_all_outputs(self) -> list[Operand]:
         return [op for op in self.operands.values() if op.is_output]

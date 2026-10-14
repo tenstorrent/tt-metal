@@ -39,15 +39,15 @@ bool stage_profile_enabled() {
 constexpr const char* KERNEL_ROOT =
     "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels";
 
-std::pair<uint32_t, uint32_t> virtual_core(IDevice* device, uint32_t x, uint32_t y) {
-    const auto core = device->worker_core_from_logical_core(CoreCoord{x, y});
+std::pair<uint32_t, uint32_t> virtual_core(const MeshDevice& device, uint32_t x, uint32_t y) {
+    const auto core = device.worker_core_from_logical_core(CoreCoord{x, y});
     return {core.x, core.y};
 }
 
 // Host-side wire encoder for this operation's rotating multicasts. The device
 // kernels consume a NOC-ordered rectangle followed by row-major senders.
 std::vector<uint32_t> rotating_mcast_args(
-    IDevice* device, NOC noc, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
+    const MeshDevice& device, NOC noc, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
     uint32_t xlo = UINT32_MAX;
     uint32_t ylo = UINT32_MAX;
     uint32_t xhi = 0;
@@ -78,7 +78,8 @@ std::vector<uint32_t> rotating_mcast_args(
     return args;
 }
 
-std::array<uint32_t, 4> mcast_rect_args(IDevice* device, NOC noc, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
+std::array<uint32_t, 4> mcast_rect_args(
+    const MeshDevice& device, NOC noc, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {
     const auto args = rotating_mcast_args(device, noc, x0, y0, x1, y1);
     return {args[0], args[1], args[2], args[3]};
 }
@@ -461,7 +462,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         mcast_compile_time_args(geo::SEM_X_BASE, geo::SEM_X_BASE + 1, hgroups - 1, /*handshake=*/true);
     const auto h_mcast_ct =
         mcast_compile_time_args(geo::SEM_H_BASE, geo::SEM_H_BASE + 1, num_cores - 1, /*handshake=*/true);
-    const auto h_mcast_noc1_args = mcast_rect_args(device, NOC::NOC_1, 0, 0, hgroups - 1, kgroups - 1);
+    const auto h_mcast_noc1_args = mcast_rect_args(*device, NOC::NOC_1, 0, 0, hgroups - 1, kgroups - 1);
 
     std::vector<std::array<uint32_t, 4>> h_group_rect_args(
         (kgroups + blocking.mgroup_rows - 1) / blocking.mgroup_rows, {0, 0, 0, 0});
@@ -469,7 +470,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         for (uint32_t group = 0; group < h_group_rect_args.size(); ++group) {
             const uint32_t y0 = group * blocking.mgroup_rows;
             h_group_rect_args[group] = mcast_rect_args(
-                device, NOC::NOC_0, 0, y0, hgroups - 1, std::min(y0 + blocking.mgroup_rows - 1, kgroups - 1));
+                *device, NOC::NOC_0, 0, y0, hgroups - 1, std::min(y0 + blocking.mgroup_rows - 1, kgroups - 1));
         }
     }
 
@@ -628,7 +629,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     }
     // The full-grid multicast table is identical on every worker. Send it once
     // as common arguments instead of repeating it in every core's launch payload.
-    const auto h_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, 0, hgroups - 1, kgroups - 1);
+    const auto h_mcast_args = rotating_mcast_args(*device, NOC::NOC_0, 0, 0, hgroups - 1, kgroups - 1);
     reader_bindings.append(h_mcast_args);
     // Keep optional bias addresses last so the multicast offset is unconditional.
     if (operation_arguments.fuse_bias) {
@@ -656,7 +657,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
             const uint32_t index = y * hgroups + x;
             const uint32_t group_index = (y % blocking.mgroup_rows) * hgroups + x;
             KernelDescriptor::RTArgList reader_args;
-            const auto x_mcast_args = rotating_mcast_args(device, NOC::NOC_0, 0, y, hgroups - 1, y);
+            const auto x_mcast_args = rotating_mcast_args(*device, NOC::NOC_0, 0, y, hgroups - 1, y);
             reader_args.reserve(
                 10 + 2 * kgroups + x_mcast_args.size() + h_group_rect_args[y / blocking.mgroup_rows].size());
             reader_args.push_back(blocking.kr_sizes[y]);
@@ -670,7 +671,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
             reader_args.push_back(x);
             reader_args.push_back(y);
             for (uint32_t row = 0; row < kgroups; ++row) {
-                const auto [vx, vy] = virtual_core(device, x, row);
+                const auto [vx, vy] = virtual_core(*device, x, row);
                 reader_args.push_back(vx);
                 reader_args.push_back(vy);
             }
@@ -693,11 +694,11 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
             writer_args.push_back(x);
             writer_args.push_back(y);
             writer_args.push_back(x % kgroups);
-            const auto [diag_x, diag_y] = virtual_core(device, y, y);
+            const auto [diag_x, diag_y] = virtual_core(*device, y, y);
             writer_args.push_back(diag_x);
             writer_args.push_back(diag_y);
             for (uint32_t row = 0; row < kgroups; ++row) {
-                const auto [vx, vy] = virtual_core(device, x, row);
+                const auto [vx, vy] = virtual_core(*device, x, row);
                 writer_args.push_back(vx);
                 writer_args.push_back(vy);
             }

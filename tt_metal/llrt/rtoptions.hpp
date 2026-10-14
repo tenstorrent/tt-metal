@@ -20,6 +20,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -30,7 +31,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>  // For DispatchCoreConfig
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
+#include "hostdevcommon/fabric_telemetry_msgs.h"
 
 // Forward declarations — full definitions not needed in this header
 namespace tt::tt_metal {
@@ -243,7 +244,8 @@ class RunTimeOptions {
     bool profiler_accumulate = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
-    bool profiler_sync_events_enabled = false;
+    bool streaming_profiler_sync_events_enabled = false;
+    bool streaming_profiler_inline_enabled = true;
     // Streaming device profiler. Mutually exclusive with profiler_enabled (the legacy profiler):
     // the two device producers overlay the same L1 profiler region and the two hosts would both drive it.
     bool streaming_profiler_enabled = false;
@@ -303,6 +305,9 @@ class RunTimeOptions {
     // Quasar interim path: dispatch cores from core descriptor YAML (Tensix grid) instead of soc dispatch-engine tiles.
     bool use_quasar_tensix_dispatch_cores = false;
 
+    std::string noc_att_map_;
+    bool noc_att_specified_ = false;
+
     std::filesystem::path simulator_path = "";
 
     bool fast_dispatch = true;
@@ -340,6 +345,9 @@ class RunTimeOptions {
 
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
     bool enable_2_erisc_mode = true;
+
+    // Only Blackhole acts on this; resolved down when base FW predates debug_buf_t::scratchpad.
+    bool eth_ptp_trace = true;
 
     // Tri-state override for Blackhole DRAM programmable cores in the HAL:
     //   nullopt = auto-detect (firmware + topology), the default
@@ -379,6 +387,9 @@ class RunTimeOptions {
     // Mock cluster initialization using a provided cluster descriptor
     std::string mock_cluster_desc_path;
 
+    // Cluster id handed to UMD topology discovery; unset means UMD uses the OS hostname
+    std::optional<std::string> cluster_id;
+
     // Consolidated target device selection
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;
     // Timeout duration for operations
@@ -407,8 +418,15 @@ class RunTimeOptions {
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
 
+    // Serve simulation devices over sockets, you can disable it with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=0.
+    bool simulator_serve_over_sockets = true;
+
     // NOC API version for Quasar
     uint32_t quasar_noc_api_version = 2;
+
+    // Quasar IP variant from QUASAR_ARCH_VARIANT: a directory under tt_metal/tt-llk/tt_llk_quasar/arch/ whose
+    // headers shadow the base Quasar ones. Empty means the base Quasar part.
+    std::string quasar_arch_variant;
 
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
@@ -420,9 +438,6 @@ class RunTimeOptions {
     // User override for fabric kernel compiler optimization level
     // If not set, automatic selection is used (O3 when VC1 inactive, Os when VC1 active)
     std::optional<tt_metal::KernelBuildOptLevel> fabric_kernel_opt_level = std::nullopt;
-
-    // Disable XIP dump
-    bool disable_xip_dump = false;
 
     // Dump JIT build commands to stdout for debugging
     bool dump_build_commands = false;
@@ -674,14 +689,16 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
             get_measure_dfb_init_time_enabled(),
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
-            get_disable_fabric_2_erisc_mode());
+            get_disable_fabric_2_erisc_mode(),
+            get_eth_ptp_trace(),
+            get_quasar_arch_variant());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -689,6 +706,12 @@ public:
         if (get_brisc_firmware_variant() == BriscFirmwareVariant::Blaze) {
             compile_hash_str += "_blaze_runtime_reload_";
             compile_hash_str += get_brisc_firmware_header();
+        }
+        // Each ATT map gets its own JIT build directory so toggling ATT does not rebuild the non-ATT
+        // tree. Appended only when a map is selected so non-ATT cache keys stay unchanged.
+        if (!noc_att_map_.empty()) {
+            compile_hash_str += "_att:";
+            compile_hash_str += noc_att_map_;
         }
         return compile_hash_str;
     }
@@ -716,7 +739,8 @@ public:
     }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
-    bool get_profiler_sync_events_enabled() const { return profiler_sync_events_enabled; }
+    bool get_streaming_profiler_sync_events_enabled() const { return streaming_profiler_sync_events_enabled; }
+    bool get_streaming_profiler_inline_enabled() const { return streaming_profiler_inline_enabled; }
     bool get_streaming_profiler_enabled() const { return streaming_profiler_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
@@ -804,6 +828,15 @@ public:
         return runtime_target_device_ == TargetDevice::Simulator || runtime_target_device_ == TargetDevice::Emule;
     }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
+    // The qsr.s1 (Grendel) emulation model, recognised by its simulator directory name (emu-qsr-s1-*).
+    bool is_qsr_s1_simulator() const {
+        std::string simulator = simulator_path.string();
+        while (simulator.size() > 1 && simulator.back() == '/') {
+            simulator.pop_back();
+        }
+        return get_simulator_enabled() &&
+               std::filesystem::path(simulator).filename().string().starts_with("emu-qsr-s1");
+    }
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size
@@ -815,6 +848,17 @@ public:
 
     // If this fallback is removed, should also remove dispatch_cores entry from core descriptor YAML files.
     bool get_use_quasar_tensix_dispatch_cores() const { return use_quasar_tensix_dispatch_cores; }
+
+    // Quasar ATT map selected for device NoC traffic (TT_METAL_NOC_ATT); nullopt = plain XY addressing.
+    std::optional<std::string_view> get_noc_att_map() const {
+        if (noc_att_map_.empty()) {
+            return std::nullopt;
+        }
+        return std::string_view(noc_att_map_);
+    }
+    // True when TT_METAL_NOC_ATT was set explicitly.
+    bool is_noc_att_specified() const { return noc_att_specified_; }
+    void set_noc_att_map(std::string map) { noc_att_map_ = std::move(map); }
 
     bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
@@ -833,6 +877,10 @@ public:
     bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }
 
     void set_enable_2_erisc_mode(bool enable) { enable_2_erisc_mode = enable; }
+
+    bool get_eth_ptp_trace() const { return eth_ptp_trace; }
+
+    void set_eth_ptp_trace(bool enable) { eth_ptp_trace = enable; }
 
     std::optional<bool> get_blackhole_dram_programmable_cores_override() const {
         return blackhole_dram_programmable_cores_override;
@@ -897,6 +945,11 @@ public:
 
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
+
+    // Cluster id to stamp on the discovered cluster descriptor. Nullopt on bare metal, where UMD
+    // falls back to the OS hostname; set from TT_METAL_CLUSTER_ID in a container or a VM, where the
+    // hostname names the container or the guest rather than the accelerator group.
+    const std::optional<std::string>& get_cluster_id() const { return cluster_id; }
 
     // Mock cluster accessors
     bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
@@ -974,7 +1027,11 @@ public:
 
     bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
 
+    bool get_simulator_serve_over_sockets() const { return simulator_serve_over_sockets; }
+    void set_simulator_serve_over_sockets(bool enable) { simulator_serve_over_sockets = enable; }
+
     uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
+    const std::string& get_quasar_arch_variant() const { return quasar_arch_variant; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 
@@ -982,8 +1039,6 @@ public:
     void set_fabric_kernel_opt_level(std::optional<tt_metal::KernelBuildOptLevel> opt_level) {
         fabric_kernel_opt_level = opt_level;
     }
-
-    bool get_disable_xip_dump() const { return disable_xip_dump; }
 
     bool get_dump_build_commands() const { return dump_build_commands; }
 

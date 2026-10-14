@@ -424,6 +424,30 @@ def _materialize_kda_weights(
     return materialized, convolution_taps
 
 
+def _fold_decay_scale(
+    projection: ttnn.Tensor, bias: ttnn.Tensor, scale: ttnn.Tensor
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Fold the bounded gate's per-head scale into the decay projection and bias on device.
+
+    The bounded gate is lower_bound * sigmoid(scale * (x @ W + bias)); with the scale folded in, the projection
+    applies the sigmoid as its fused activation. Folding after the weights are loaded, rather than when they are
+    prepared, keeps the cached tensors unscaled, so the cache schema is unchanged. The product is taken in FP32 and
+    rounded to BF16 once.
+    """
+    scale_fp32 = ttnn.typecast(scale, ttnn.float32)
+    scale_row_fp32 = ttnn.reshape(scale_fp32, (1, scale_fp32.shape[-1]))
+    folded = []
+    for tensor, factor in ((projection, scale_row_fp32), (bias, scale_fp32)):
+        tensor_fp32 = ttnn.typecast(tensor, ttnn.float32)
+        product = ttnn.multiply(tensor_fp32, factor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        folded.append(ttnn.typecast(product, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        ttnn.deallocate(tensor_fp32)
+        ttnn.deallocate(product)
+        ttnn.deallocate(tensor)
+    ttnn.deallocate(scale_fp32)
+    return folded[0], folded[1]
+
+
 def load_kda_weights(
     device: ttnn.Device | ttnn.MeshDevice,
     config: KDAConfig,
@@ -462,6 +486,12 @@ def load_kda_weights(
         tensor_parallel_axis=tensor_parallel_axis,
         place_on_device=True,
     )
+    if config.gate_lower_bound is not None:
+        materialized["decay_output_projection"], materialized["decay_bias_flat"] = _fold_decay_scale(
+            materialized["decay_output_projection"],
+            materialized["decay_bias_flat"],
+            materialized["decay_scale_flat"],
+        )
     return KDAWeights(
         **materialized,
         convolution_taps=convolution_taps,

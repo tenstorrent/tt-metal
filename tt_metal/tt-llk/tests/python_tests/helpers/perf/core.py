@@ -437,6 +437,25 @@ def _run_id() -> str:
     return tag if attempt == "1" else f"{tag}-{attempt}"
 
 
+VALID_PIPELINES = ("pr", "nightly", "baseline", "merge_baseline")
+
+
+def _pipeline(event: str) -> str:
+    """Which pipeline produced this run: one of ``VALID_PIPELINES``.
+
+    Read from PIPELINE when the workflow says so; otherwise inferred from the
+    GitHub event, which can only tell a PR from everything else.
+    """
+    explicit = os.environ.get("PIPELINE", "").strip()
+    if explicit:
+        if explicit not in VALID_PIPELINES:
+            raise ValueError(
+                f"PIPELINE must be one of {VALID_PIPELINES}, got {explicit!r}"
+            )
+        return explicit
+    return "pr" if event == "pull_request" else "nightly"
+
+
 def _ci_provenance() -> dict:
     """Run-context provenance for a published Parquet batch, read from the CI
     environment (best-effort defaults when run off-CI)."""
@@ -447,7 +466,7 @@ def _ci_provenance() -> dict:
         "run_id": _run_id(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         # Lowercase, as the warehouse's RUNS.PIPELINE stores them.
-        "pipeline": "pr" if event == "pull_request" else "nightly",
+        "pipeline": _pipeline(event),
         "pr_number": os.environ.get("PR_NUMBER") or None,
     }
 
@@ -697,54 +716,80 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
     how the perf kernels are written, not of the profiler, so it lives here and runs once per run.
 
     Within a thread a zone that contains another is a wrapper (trisc.cpp's KERNEL), not a phase.
-    Quasar has no entry rendezvous yet.
     """
-    if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
+    raw = profiler_data.zones().raw()
+    starts = raw[raw["type"] == "ZONE_START"]
+    if starts.empty:
         return
-    # The profiler view pairs every ZONE_START with the ZONE_END that follows it.
-    zones = profiler_data.zones().frame()
-    if zones.empty:
-        return
-    zones = zones.assign(finish=zones["timestamp"] + zones["duration"])
+    begins = starts["timestamp"].to_numpy()
+    ends = raw[raw["type"] == "ZONE_END"]["timestamp"].to_numpy()
     # Identity is the name: marker_id is a per-callsite hash, different on every thread.
-    span = (
-        zones.groupby([MARKER, "thread"])
-        .agg(begin=("timestamp", "min"), finish=("finish", "max"))
-        .reset_index()
-    )
-    wrappers = set()
-    for _, group in span.groupby("thread"):
-        rows = group.to_dict("records")
-        for a in rows:
-            for b in rows:
-                if (
-                    a is not b
-                    and a["begin"] <= b["begin"] <= b["finish"] <= a["finish"]
-                ):
-                    wrappers.add(a[MARKER])
-    phases = (
-        span[~span[MARKER].isin(wrappers)]
-        .groupby(MARKER)
-        .agg(first_open=("begin", "min"), last_close=("finish", "max"))
-        .sort_values("first_open")
-        .reset_index()
-    )
+    span = {}
+    for key, begin, finish in zip(zip(starts[MARKER], starts["thread"]), begins, ends):
+        b, f = span.get(key, (begin, finish))
+        span[key] = (min(b, begin), max(f, finish))
+    wrappers = {
+        a
+        for (a, ta), (ba, fa) in span.items()
+        for (b, tb), (bb, fb) in span.items()
+        if ta == tb and a != b and ba <= bb <= fb <= fa
+    }
+    phases = {}
+    for (marker, _), (begin, finish) in span.items():
+        if marker not in wrappers:
+            b, f = phases.get(marker, (begin, finish))
+            phases[marker] = (min(b, begin), max(f, finish))
     prev = None
-    for row in phases.itertuples(index=False):
+    for marker, (first_open, last_close) in sorted(
+        phases.items(), key=lambda p: (p[1][0], p[0])
+    ):
         if (
             prev is not None
-            and row.marker not in NON_RENDEZVOUS_MARKERS
-            and prev.last_close > row.first_open
+            and marker not in NON_RENDEZVOUS_MARKERS
+            and prev[1] > first_open
         ):
             raise AssertionError(
-                f"Zones overlap across threads: the last {prev.marker} closed at "
-                f"{prev.last_close} but the first {row.marker} opened at {row.first_open}, "
-                f"{prev.last_close - row.first_open} cycles earlier. Both windows therefore "
+                f"Zones overlap across threads: the last {prev[0]} closed at "
+                f"{prev[1]} but the first {marker} opened at {first_open}, "
+                f"{prev[1] - first_open} cycles earlier. Both windows therefore "
                 f"cover time belonging to the other phase. The usual cause is a kernel opening "
                 f"its zones with ZONE_SCOPED instead of START_PERF_MEASURE, which is what "
                 f"supplies the cross-thread rendezvous at zone entry."
             )
-        prev = row
+        prev = (marker, last_close)
+
+
+RUN_TYPE_PRESETS = {
+    "ALL_ISOLATION_MODES": ("UNPACK_ISOLATE", "MATH_ISOLATE", "PACK_ISOLATE"),
+    "ALL_MODES": ("L1_TO_L1", "UNPACK_ISOLATE", "MATH_ISOLATE", "PACK_ISOLATE"),
+}
+
+
+def _expand_run_types(text):
+    """Run-type names from a comma list; presets expand, unknown names are an error."""
+    names = set()
+    for item in (n.strip() for n in text.split(",")):
+        if not item:
+            continue
+        if item in RUN_TYPE_PRESETS:
+            names.update(RUN_TYPE_PRESETS[item])
+        elif item in PerfRunType.__members__:
+            names.add(item)
+        else:
+            raise ValueError(
+                f"LLK_PERF_RUN_TYPES: unknown run type {item!r}; use a PerfRunType "
+                f"name or one of {sorted(RUN_TYPE_PRESETS)}"
+            )
+    return names
+
+
+def _selected_run_types(run_types):
+    """LLK_PERF_RUN_TYPES narrows what a run measures. Empty means all of them."""
+    wanted = os.environ.get("LLK_PERF_RUN_TYPES", "").strip()
+    if not wanted:
+        return list(run_types)
+    names = _expand_run_types(wanted)
+    return [rt for rt in run_types if rt.name in names]
 
 
 class PerfConfig(TestConfig):
@@ -767,6 +812,7 @@ class PerfConfig(TestConfig):
         l1_acc=L1Accumulation.No,
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
+        requires_vector_ext: bool = False,
     ):
 
         # Initialize passed templates and runtimes here so we don't get variant hash issues
@@ -782,7 +828,7 @@ class PerfConfig(TestConfig):
                 runtimes.copy(),
                 run_type,
             )
-            for run_type in run_types
+            for run_type in _selected_run_types(run_types)
         ]
 
         super().__init__(
@@ -801,6 +847,7 @@ class PerfConfig(TestConfig):
             l1_acc,
             skip_build_header,
             compile_time_formats,
+            requires_vector_ext=requires_vector_ext,
         )
 
     @staticmethod
@@ -929,6 +976,9 @@ class PerfConfig(TestConfig):
             )
 
     def run(self, perf_report: PerfReport, run_count=1):
+        if not self.run_configs:
+            pytest.skip("LLK_PERF_RUN_TYPES selects none of this test's run types")
+
         results = []
         counter_results_list = []
         code_sizes = {}
@@ -1013,13 +1063,8 @@ class PerfConfig(TestConfig):
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
             stats_df = get_stats(ProfilerData.concat(variant_raw_data))
-            # A WC build intentionally suppresses ZONE_SCOPED timing events and
-            # emits counter metrics instead. Quasar excludes the WC TRISC flag,
-            # so it still requires wall-clock stats even when counters are requested.
-            counter_only_build = (
-                TestConfig.ENABLE_PERF_COUNTERS
-                and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
-            )
+            # Only the no-counter build must produce wall-clock stats; a counter build may return counters alone.
+            counter_only_build = TestConfig.ENABLE_PERF_COUNTERS
             if not stats_df.empty or not counter_only_build:
                 PerfConfig._validate_profiler_stats(stats_df, run_type)
                 results.append(stats_df)

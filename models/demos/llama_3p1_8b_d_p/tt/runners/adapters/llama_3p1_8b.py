@@ -15,10 +15,8 @@ nothing heavy may be imported at module load: no torch, no ttnn, no transformers
 reference modeling. Everything heavy is imported lazily inside the methods. ``Llama31_8BConfig`` is
 safe to name at class-definition time because it is a pure constants class with no imports of its own.
 
-Scaffold status (tt-blaze#4143): the two self-contained methods are live; ``allocate_kv_cache`` and
-``build_runtime`` raise until their dependencies land. Registration in ``ADAPTER_PATHS`` is
-deliberately NOT part of this change — it lands with #4149, so a half-built model is not reachable
-by name from the runner.
+The eager runtime targets one SP4/TP8 rank and two slots. Its default live gate is 2K;
+larger configured capacities require separate device acceptance.
 """
 
 from __future__ import annotations
@@ -44,7 +42,7 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
     # PREFILL_HF_MODEL overrides, and when it does it supplies both config and weights.
     hf_model_default = "models/tt_transformers/model_params/Llama-3.1-8B-Instruct"
     ttnn_cache_default = ""  # TTNN weight-cache root; PREFILL_TTNN_CACHE overrides (empty => no cache)
-    prefill_trace_default = ""  # golden trace dir (token_ids + KV); PREFILL_TRACE_DIR overrides
+    prefill_trace_default = "/mnt/models/llama-3.1-8b-prefill-cache/golden/llama31_8b_kv_2048_32L"
     default_gate_mode = "DEVICE_FP32"  # dense model — no gate; the engine reads this unconditionally
 
     # --- test metadata ---
@@ -115,7 +113,21 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
         Llama needs only the single packed cache — no bounded sliding-window split, because all 32
         layers are full-causal.
         """
-        raise NotImplementedError("Llama-3.1-8B prefill KV cache lands with tt-blaze#4141 (prefill: KV cache).")
+        from models.demos.llama_3p1_8b_d_p.tt.tt_prefill_runtime import config_from_params
+
+        config_from_params(params)
+        import ttnn
+        from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
+        from models.demos.llama_3p1_8b_d_p.tt.kv_cache import allocate_kv_cache
+
+        return allocate_kv_cache(
+            mesh_device,
+            MeshConfig(params.mesh_shape, tp=params.tp_factor),
+            num_users=params.num_users,
+            num_layers=params.num_layers,
+            max_seq_len=params.max_seq_len,
+            cache_dtype=ttnn.bfloat8_b,
+        )
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Build the model + runtime for this rank.
@@ -123,10 +135,10 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
         The runtime is stateless w.r.t. the KV cache (``owns_kv_cache=False``): the engine allocated
         it via ``allocate_kv_cache`` and passes it into every call that touches it.
         """
-        raise NotImplementedError(
-            "Llama-3.1-8B prefill runtime lands with tt-blaze#4148 (prefill: Prefill model) and "
-            "#4149 (prefill: Runner integration)."
-        )
+        from models.demos.llama_3p1_8b_d_p.tt.model_config import resolve_weights_path
+        from models.demos.llama_3p1_8b_d_p.tt.tt_prefill_runtime import build_runtime
+
+        return build_runtime(mesh_device, params=params, checkpoint_path=resolve_weights_path())
 
     # ------------------------------------------------------------------
     # Test-only reference handles (lazy by contract)

@@ -130,7 +130,7 @@ void test_operation_infrastructure() {
 
     auto mem_config = tt::tt_metal::MemoryConfig{};
     auto worker_grid = ttnn::operations::unary::get_worker_grid(
-        input_tensor, std::nullopt, std::optional<tt::tt_metal::MemoryConfig>(mem_config), std::nullopt, mem_config);
+        input_tensor, std::nullopt, std::optional<tt::tt_metal::MemoryConfig>(mem_config), std::nullopt);
 
     Op::operation_attributes_t op_args{
         .op_chain = {EltwiseUnaryWithParam{UnaryOpType::SQRT}},

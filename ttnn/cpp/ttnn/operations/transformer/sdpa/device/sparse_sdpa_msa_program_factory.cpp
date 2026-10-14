@@ -6,7 +6,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <array>
@@ -105,7 +104,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     const uint32_t out_tile_bytes = tt::tile_size(out_df);
 
     // Work split and the hash-excluded per-dispatch scalars (K/V slot offsets, group strides, per-coordinate
-    // causal chunk_start) come from the helper override_runtime_arguments also uses, so the values baked here
+    // causal geometry) come from the helper override_runtime_arguments also uses, so the values baked here
     // and the ones patched on a cache hit cannot drift.
     const auto dyn = SparseSDPAMsaOperation::compute_dispatch_args(attrs, t, mesh_dispatch_coordinate);
     const tt::tt_metal::CoreCoord grid = dyn.grid;
@@ -249,7 +248,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
     auto [math_fidelity, math_approx, fp32_acc, packer_l1_acc, dst_full_sync] =
-        get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), attrs.compute_kernel_config);
+        get_compute_kernel_config_args(t.q.device()->arch(), attrs.compute_kernel_config);
     (void)packer_l1_acc;
 
     // Query sub-blocking: qsb tile rows must fit in DEST.
@@ -313,7 +312,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         reader_rt[RArg::kReaderVGroupStride] = dyn.v_group_tile_stride;
         // Baked per-coordinate (one program per device, so each rank masks against its own global
         // position) and re-applied on cache hits.
-        reader_rt[RArg::kReaderChunkStart] = dyn.chunk_start_local;
+        reader_rt[RArg::kReaderChunkStart] = dyn.causal.chunk_start;
+        reader_rt[RArg::kReaderStraddleRow] = dyn.causal.straddle_row;
+        reader_rt[RArg::kReaderStraddleJump] = dyn.causal.straddle_jump;
         reader_desc.emplace_runtime_args(core, reader_rt);
 
         using WArg = SparseSDPAMsaOperation::WriterArg;

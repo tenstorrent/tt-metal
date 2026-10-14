@@ -13,7 +13,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_static_channels_ct_args.hpp"
-#include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "api/alignment.h"
 
 #include <array>

@@ -6,7 +6,6 @@ import math
 
 import pytest
 import torch
-import torch.nn.functional as F
 from loguru import logger
 from tracy.process_model_log import post_process_ops_log, run_device_profiler
 
@@ -16,39 +15,6 @@ from models.tt_dit.utils.padding import get_padded_vision_seq_len
 from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
-
-
-def torch_sdpa(q, k, v, joint_q, joint_k, joint_v, num_devices):
-    scale = k.size(-1) ** -0.5
-    seq_len = k.size(2)
-    slice_seq_len = seq_len // num_devices
-    out = None
-    lse = None
-    lse_list = []
-    Q = torch.cat([q, joint_q], dim=2)
-    for ring_id in range(num_devices):
-        k_slice = k[:, :, ring_id * slice_seq_len : (ring_id + 1) * slice_seq_len, :]
-        v_slice = v[:, :, ring_id * slice_seq_len : (ring_id + 1) * slice_seq_len, :]
-        if ring_id == num_devices - 1:
-            k_slice = torch.cat([k_slice, joint_k], dim=2)
-            v_slice = torch.cat([v_slice, joint_v], dim=2)
-        attn_weights = torch.matmul(Q, k_slice.transpose(-2, -1)) * scale
-        cur_max, _ = torch.max(attn_weights, dim=-1, keepdim=True)
-        attn_weights = torch.exp(attn_weights - cur_max)
-        cur_sum = torch.sum(attn_weights, dim=-1, keepdim=True)
-        cur_out = torch.matmul(attn_weights, v_slice)
-        cur_out = cur_out / cur_sum
-        cur_lse = cur_max + torch.log(cur_sum)
-        if ring_id == 0:
-            out = cur_out
-            lse = cur_lse
-        else:
-            sig = F.sigmoid(cur_lse - lse)
-            out = out - sig * (out - cur_out)
-            lse = lse - F.logsigmoid(lse - cur_lse)
-        lse_list.append(lse)
-
-    return out, lse_list
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):

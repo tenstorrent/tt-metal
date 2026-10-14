@@ -143,6 +143,14 @@ bool can_use_sharded_optimized_factories(
 }
 }  // namespace
 
+// A tilize row wider than this many tiles is routed by select_program_factory() to the multicore
+// Block/Default wide-row path (reader_unary_stick_layout_split_rows). That path's FLOAT32 variant hangs on
+// Quasar — fp32 unpack-to-DEST is unimplemented in the LLK — so validate_on_program_cache_miss() rejects it
+// there. This is the picker's selection boundary (shared with threshold_row_block in select_program_factory),
+// NOT a tuned DEST-capacity limit: a future fp32 unpack-to-DEST LLK fix should REMOVE the Quasar guard
+// entirely rather than raise this number.
+constexpr uint32_t WIDE_ROW_TILE_THRESHOLD = 32;
+
 void TilizeDeviceOperation::validate_on_program_cache_miss(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
@@ -198,6 +206,16 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
             input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::UINT8 or
             input_tensor_a.dtype() == DataType::FP8_E4M3,
         "data type must be bfloat16, float32, uint32, int32, uint16, uint8, or fp8_e4m3");
+    // On Quasar, wide multicore FLOAT32 tilize hangs because fp32 unpack-to-DEST is not implemented.
+    // Reject the affected route before launch. Callers can cast to BFLOAT16 or use
+    // ttnn.experimental.quasar.tilize instead.
+    TT_FATAL(
+        !(input_tensor_a.device()->arch() == tt::ARCH::QUASAR && input_tensor_a.dtype() == DataType::FLOAT32 &&
+          operation_attributes.use_multicore && (width / tile_width) > WIDE_ROW_TILE_THRESHOLD),
+        "Wide FLOAT32 tilize ({} tiles/row) is not supported on Quasar: the fp32 unpack-to-DEST LLK path is "
+        "unimplemented and the wide multicore tilize hangs. Cast the input to BFLOAT16 before tilizing, or use "
+        "ttnn.experimental.quasar.tilize.",
+        width / tile_width);
     // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format. Reject non-float outputs:
     // fp8 itself is ROW_MAJOR-only, and integer outputs are meaningless for a float input.
     {
@@ -348,7 +366,7 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
 
     size_t grid_area = available_grid.num_cores();
     auto [ncores, nblocks_per_core] = compute_ncores(grid_area, nblocks);
-    constexpr uint32_t threshold_row_block = 32;
+    constexpr uint32_t threshold_row_block = WIDE_ROW_TILE_THRESHOLD;
     if (num_tiles_per_row > threshold_row_block &&
         (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
         uint32_t num_blocks_block =
@@ -365,18 +383,6 @@ TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_outpu
     const TilizeDeviceOperation::operation_attributes_t& args,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
-}
-
-// Re-point slot 0 of every core's args for one kernel. Shared by the tilize factories' cache-hit
-// hooks so the slot layout the factories all bake has a single home.
-void patch_tilize_kernel_slot0(tt::tt_metal::Program& program, uint32_t kernel_idx, uint32_t address) {
-    for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kernel_idx)) {
-        for (auto& a : col) {
-            if (a.size() > 0) {
-                a[0] = address;
-            }
-        }
-    }
 }
 
 ttnn::Tensor tilize(

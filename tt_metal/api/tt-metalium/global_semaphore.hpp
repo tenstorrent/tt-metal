@@ -4,19 +4,21 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <ostream>
 #include <tuple>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal_types.hpp>
 
-// forward declarations
 namespace tt::tt_metal {
+
+using DeviceAddr = std::uint64_t;
+
 class IDevice;
-class GlobalSemaphore;
 class GlobalSemaphoreImpl;
 namespace distributed {
 class MeshDevice;
@@ -41,9 +43,7 @@ public:
         uint32_t initial_value,
         BufferType buffer_type = BufferType::L1);
 
-    // Internal constructor (internal use only)
-    GlobalSemaphore(GlobalSemaphoreImpl&& impl);
-
+    explicit GlobalSemaphore(GlobalSemaphoreImpl impl);
     GlobalSemaphore(const GlobalSemaphore& other);
     GlobalSemaphore& operator=(const GlobalSemaphore& other);
 
@@ -61,8 +61,11 @@ public:
     static constexpr auto attribute_names = std::forward_as_tuple("cores", "buffer_type");
     std::tuple<CoreRangeSet, BufferType> attribute_values() const;
 
+    GlobalSemaphoreImpl& impl();
+    const GlobalSemaphoreImpl& impl() const;
+
 private:
-    std::unique_ptr<GlobalSemaphoreImpl> pimpl_;
+    std::unique_ptr<GlobalSemaphoreImpl> impl_;
 };
 
 }  // namespace tt::tt_metal

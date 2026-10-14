@@ -23,15 +23,18 @@ from .llk_params import (
     EltwiseBinaryReuseDestType,
     FastMode,
     FusedSort,
+    GatedReduceScale,
     ImpliedMathFormat,
     L1Accumulation,
     MathFidelity,
     MathOperation,
     NarrowTile,
     PerfRunType,
+    ReduceOrder,
     ReducePool,
     SdpaFwOp,
     SdpaOp,
+    SfpuSrcsImpl,
     StableSort,
     StochasticRounding,
     Tilize,
@@ -44,6 +47,12 @@ from .llk_params import (
     VectorMode,
 )
 from .matmul_sweep import validate_tile_dimensions
+from .sfpu_dispatch_constants import RELU_MAX_THRESHOLD
+
+
+def _fp32_bits(value: float) -> int:
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
 
 # Base parameter classes
 
@@ -108,6 +117,21 @@ class BROADCAST_TYPE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr auto BROADCAST_TYPE = ckernel::BroadcastType::{self.broadcast_type.value};"
+
+
+@dataclass
+class SFPU_BCAST_DIM(TemplateParameter):
+    """Dest-side SFPU row/col broadcast for ``sfpu_binary_bcast_test.cpp``.
+
+    Distinct from :class:`BROADCAST_TYPE`, which selects unpack-A broadcast on
+    the pairing kernel. ``None_`` is unused by the 3-tile kernel; pairing and
+    add_top_row pass it so every binary-SFPU variant emits the same CSV column.
+    """
+
+    sfpu_bcast_dim: BroadcastType = BroadcastType.None_
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto BCAST_DIM = ckernel::BroadcastType::{self.sfpu_bcast_dim.value};"
 
 
 @dataclass
@@ -308,6 +332,30 @@ class SFPU_UNARY_THRESHOLD(TemplateParameter):
 
 
 @dataclass
+class RAND_RANGE(TemplateParameter):
+    """rand output interval ``[from, from + scale]`` as fp32 bits; emitted as macros over the dispatcher defaults."""
+
+    rand_from_bits: int = 0x3F800000  # 1.0f
+    rand_scale_bits: int = 0x40000000  # 2.0f
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"#define RAND_FROM_BITS {self.rand_from_bits:#010x}u\n"
+            f"#define RAND_SCALE_BITS {self.rand_scale_bits:#010x}u"
+        )
+
+
+@dataclass
+class RAND_SEED(TemplateParameter):
+    """rand PRNG seed; emitted as a macro over the dispatcher default."""
+
+    rand_seed: int = 0x12345678
+
+    def convert_to_cpp(self) -> str:
+        return f"#define RAND_SEED {self.rand_seed:#010x}u"
+
+
+@dataclass
 class SFPU_RELU_MIN_INT_THRESHOLD(TemplateParameter):
     """Integer threshold for relu_min's vInt branch, as a two's-complement uint32.
 
@@ -329,6 +377,32 @@ class SFPU_RELU_MIN_INT_THRESHOLD(TemplateParameter):
 
 
 @dataclass
+class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
+    """Float threshold for relu_max, emitted as its fp32 bit pattern.
+
+    Emitted as a macro rather than a constexpr for the same reason as
+    :class:`SFPU_RELU_MIN_INT_THRESHOLD`: sfpu_operations.h selects on ``#ifdef``, the
+    header is shared by every unary test, and only the relu_max threshold sweep sets this.
+    Unset means the kernel's fixed 5.0 (RELU_MAX_THRESHOLD on the golden side).
+
+    Takes a Python float and emits its IEEE-754 single bits, which is the encoding
+    ``relu_max_tile`` takes (relu6 passes ``0x40c00000u``), so 0.0, -0.0 and a negative
+    threshold are all expressible.
+
+    The field is ``relu_max_threshold``, not ``threshold``: parameter field names become
+    perf-CSV headers and must be unique across classes (test_perf_header_gate.py), and
+    :class:`SFPU_RELU_MIN_INT_THRESHOLD` already owns ``threshold``. The default is the
+    golden's RELU_MAX_THRESHOLD, so only the C++ fallback in sfpu_operations.h is a copy.
+    """
+
+    relu_max_threshold: float = RELU_MAX_THRESHOLD
+
+    def convert_to_cpp(self) -> str:
+        bits = struct.unpack("<I", struct.pack("<f", self.relu_max_threshold))[0]
+        return f"#define SFPU_RELU_MAX_THRESHOLD {bits:#010x}u"
+
+
+@dataclass
 class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 
@@ -342,6 +416,28 @@ class SFPU_SHIFT_AMOUNT(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"#define SFPU_SHIFT_AMOUNT {self.shift_amount}u"
+
+
+@dataclass
+class SFPU_POLYGAMMA_ORDER(TemplateParameter):
+    """Order n for polygamma, emitted as the (n, scale) fp32 bit patterns ttnn passes.
+
+    ``scale`` is (-1)^(n+1) * n!, exact in fp32 for every supported order (1..11). Macros
+    rather than constexprs for the same reason as :class:`SFPU_SHIFT_AMOUNT`: sfpu_operations.h
+    selects on ``#ifdef``, and a test that does not set this keeps trigamma (n = 1).
+    """
+
+    polygamma_order: int = 1
+
+    def convert_to_cpp(self) -> str:
+        n = self.polygamma_order
+        if not 1 <= n <= 11:
+            raise ValueError(f"polygamma supports orders 1 to 11, got {n}")
+        scale = (-1) ** (n + 1) * math.factorial(n)
+        return (
+            f"#define SFPU_POLYGAMMA_N_BITS {_fp32_bits(n):#x}u\n"
+            f"#define SFPU_POLYGAMMA_SCALE_BITS {_fp32_bits(scale):#x}u"
+        )
 
 
 @dataclass
@@ -369,11 +465,29 @@ class APPROX_MODE(TemplateParameter):
 
 
 @dataclass
+class SFPU_SRCS_IMPL(TemplateParameter):
+    sfpu_srcs_impl: SfpuSrcsImpl
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool SFPU_SRCS_LOADMACRO = {self.sfpu_srcs_impl.cpp_enum_value};"
+
+
+@dataclass
 class SFPU_TYPED_BF16_STORE(TemplateParameter):
     typed_bf16_store: bool = False
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool SFPU_TYPED_BF16_STORE = {str(self.typed_bf16_store).lower()};"
+
+
+@dataclass
+class SFPU_INPUT_SCALE(TemplateParameter):
+    """``calculate_add_rsqrt``'s ``INPUT_SCALE``: the fp32 factor on x, as raw bits."""
+
+    input_scale_bits: int = 0x3F800000  # 1.0f
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SFPU_INPUT_SCALE = {self.input_scale_bits}u;"
 
 
 @dataclass
@@ -431,6 +545,33 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
                 f"constexpr bool UNINIT_RESTORE_MOP = {str(self.restore_mop).lower()};",
                 f"constexpr bool UNINIT_SKIP = {str(self.skip).lower()};",
                 f"constexpr std::uint32_t BLOCK_MOP_NUM_FACES = {self.block_mop_num_faces}u;",
+            ]
+        )
+
+
+@dataclass
+class CUSTOM_MM_CALLS(TemplateParameter):
+    """Split a custom_mm test kernel's K over back-to-back execute calls that accumulate into one DEST.
+
+    ``CUSTOM_MM_NUM_CALLS``  number of execute calls; 1 is the single-call kernel. With more than one,
+                             the unpacker first leaves a non-zero SrcA clear value (a both-bank SrcB
+                             clear only corrupts the SrcA writes it overlaps while unpacker 0's last
+                             SrcA clear value is non-zero, and that value outlives kernels), and math
+                             waits 2000 cycles before each call, so the unpacker reaches the next call
+                             while math still holds the previous call's banks.
+    ``CUSTOM_MM_REARM``      compressed kernel only: leave a -inf SrcA clear value after every call,
+                             as a max-reduce or top-k between calls would. It undoes the end-of-call
+                             stall's clear to 0, which otherwise hides a both-bank clear in the execute.
+    """
+
+    num_calls: int = 1
+    rearm: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t CUSTOM_MM_NUM_CALLS = {self.num_calls}u;",
+                f"constexpr bool CUSTOM_MM_REARM = {str(self.rearm).lower()};",
             ]
         )
 
@@ -767,8 +908,20 @@ class REDUCE_POOL_TYPE(TemplateParameter):
 
 
 @dataclass
+class REDUCE_ORDER(TemplateParameter):
+    """Order of the chained SFPU reduce passes in sfpu_reduce_multidim_test.cpp, all under one
+    shared init_reduce (see ReduceOrder; the kernel names the values REDUCE_ORDER_*).
+    """
+
+    reduce_order: ReduceOrder = ReduceOrder.ColRow
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int REDUCE_ORDER = {self.reduce_order.value};"
+
+
+@dataclass
 class SDPA_OP(TemplateParameter):
-    sdpa_op: SdpaOp = SdpaOp.RecipLegacy
+    sdpa_op: SdpaOp = SdpaOp.RecipIter
 
     def convert_to_cpp(self) -> str:
         return f"constexpr int SDPA_OP = {self.sdpa_op.value};"
@@ -1182,30 +1335,13 @@ class SAMPLING_OP(TemplateParameter):
 
 
 @dataclass
-class SAMPLING_LEGACY_COMPAT(TemplateParameter):
-    """``legacy_compat`` template argument of ``calculate_sampling_recip_scalar``."""
-
-    legacy_compat: bool = True
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr bool SAMPLING_LEGACY_COMPAT = {str(self.legacy_compat).lower()};"
-
-
-@dataclass
 class MOE_GATE_TOPK(TemplateParameter):
     """Compile-time configuration of the generic MoE-gate top-k SFPU entry.
 
-    Mirrors the first five template parameters of
-    ``ckernel::sfpu::_generic_moe_gate_topk_<normalize, num_selected_experts,
-    num_total_experts, zero_tail, full_sort, generate_indices = true>``. The
-    dataclass defaults are the compute-API wrapper's
-    (api/compute/experimental/generic_moe_gate.h), not the template's -- the only
-    template parameter carrying a C++ default is the sixth, ``generate_indices``.
-
-    ``generate_indices`` is deliberately not modelled: the driver instantiates with
-    five arguments, so it is pinned to true and the kernel always numbers the experts
-    itself. The caller-supplied index-mapping path (generate_indices = false) is
-    therefore untested.
+    Defaults match the compute API. ``generate_indices=False`` preserves the
+    caller's expert IDs, while ``scores_include_bias=True`` returns biased
+    scores as well as using them to select experts. Extra scaling stays disabled
+    in this driver.
     """
 
     num_selected_experts: int = 8
@@ -1213,6 +1349,8 @@ class MOE_GATE_TOPK(TemplateParameter):
     normalize: bool = False
     zero_tail: bool = False
     full_sort: bool = False
+    generate_indices: bool = True
+    scores_include_bias: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1221,6 +1359,8 @@ class MOE_GATE_TOPK(TemplateParameter):
             f"constexpr bool MOE_GATE_NORMALIZE = {str(self.normalize).lower()};",
             f"constexpr bool MOE_GATE_ZERO_TAIL = {str(self.zero_tail).lower()};",
             f"constexpr bool MOE_GATE_FULL_SORT = {str(self.full_sort).lower()};",
+            f"constexpr bool MOE_GATE_GENERATE_INDICES = {str(self.generate_indices).lower()};",
+            f"constexpr bool MOE_GATE_SCORES_INCLUDE_BIAS = {str(self.scores_include_bias).lower()};",
         ]
         return "\n".join(lines)
 
@@ -1388,6 +1528,42 @@ class ZERO_POINT(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "std::uint32_t ZERO_POINT;", "I"
+
+
+@dataclass
+class MAX_POOL_WITH_INDICES(TemplateParameter):
+    """Compile-time knobs of the Quasar max_pool_with_indices SFPU kernel.
+
+    ``max_pool_num_rows`` is the kernel's 9-versus-32 row dispatch selector, ``max_pool_row_major`` picks
+    ``DataLayout::ROW_MAJOR`` over ``DataLayout::TILE``, and ``max_pool_accumulate`` carries the
+    running max across chunks in the Dest tiles above the operands."""
+
+    max_pool_num_rows: int = 9
+    max_pool_row_major: bool = False
+    max_pool_accumulate: bool = False
+
+    def convert_to_cpp(self) -> str:
+        layout = "ROW_MAJOR" if self.max_pool_row_major else "TILE"
+        lines = [
+            f"constexpr int MAX_POOL_NUM_ROWS = {self.max_pool_num_rows};",
+            f"constexpr ckernel::DataLayout MAX_POOL_LAYOUT = ckernel::DataLayout::{layout};",
+            f"constexpr bool MAX_POOL_ACCUMULATE = {str(self.max_pool_accumulate).lower()};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class MAX_POOL_CHUNK(RuntimeParameter):
+    """Index of the max_pool_with_indices call in its accumulation chain; chunk 0 seeds
+    the running max, later chunks fold into it. Ignored unless accumulate is set."""
+
+    max_pool_chunk: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t MAX_POOL_CHUNK = {self.max_pool_chunk}u;"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t MAX_POOL_CHUNK;", "I"
 
 
 @dataclass
@@ -1914,18 +2090,30 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
     read_transposed    : selects the transposed SrcA (in1) L1 walk in the unpack LLK.
     mm_transpose       : the `transpose` init flag threaded through the unpack/math inits
                          (addr_mod SrcA increment + Haloize_mode).
+    sdpa_row_stride    : physical SrcA row width in tiles for read_transposed. None
+                         omits the LLK argument; zero and kt_dim retain tight packing.
+    sdpa_input_tile_offset : leading SrcA tiles skipped before the matmul input.
+    preserve_src_zero_flag : math leaves the Src zero flag at keep before the init, as a preceding
+                         copy_tile_init does.
     """
 
     signal_granularity: int = 1
     read_transposed: bool = False
     mm_transpose: bool = False
+    sdpa_row_stride: int | None = None
+    sdpa_input_tile_offset: int = 0
+    preserve_src_zero_flag: bool = False
 
     def convert_to_cpp(self) -> str:
         lines = [
             f"#define SIGNAL_GRANULARITY {self.signal_granularity}",
             f"#define READ_TRANSPOSED {str(self.read_transposed).lower()}",
             f"#define MM_TRANSPOSE {str(self.mm_transpose).lower()}",
+            f"#define SDPA_INPUT_TILE_OFFSET {self.sdpa_input_tile_offset}",
+            f"#define SDPA_PRESERVE_SRC_ZERO_FLAG {str(self.preserve_src_zero_flag).lower()}",
         ]
+        if self.sdpa_row_stride is not None:
+            lines.append(f"#define SDPA_ROW_STRIDE {self.sdpa_row_stride}")
         return "\n".join(lines)
 
 
@@ -2024,13 +2212,47 @@ class CLAMPED_SILU_PARAMS(TemplateParameter):
     scalar0: float = 1.0
     scalar1: float = 1.0
 
-    @staticmethod
-    def _fp32_bits(value: float) -> int:
-        return struct.unpack("<I", struct.pack("<f", value))[0]
-
     def convert_to_cpp(self) -> str:
         return (
             f"#define CLAMPED_SILU_OP_{self.clamped_silu_op}\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {self._fp32_bits(self.scalar0)}u;\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {self._fp32_bits(self.scalar1)}u;"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {_fp32_bits(self.scalar0)}u;\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {_fp32_bits(self.scalar1)}u;"
+        )
+
+
+@dataclass
+class GATED_REDUCE_PARAMS(TemplateParameter):
+    gate: str
+    up: str
+    scale_flags: GatedReduceScale
+    live_rows: int = 32
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"#define GATED_REDUCE_GATE ckernel::sfpu::GatedReduceGate::{self.gate}\n"
+            f"#define GATED_REDUCE_UP ckernel::sfpu::GatedReduceUp::{self.up}\n"
+            f"constexpr bool GATED_REDUCE_GATE_SCALE = {str(bool(self.scale_flags & GatedReduceScale.Gate)).lower()};\n"
+            f"constexpr bool GATED_REDUCE_UP_SCALE = {str(bool(self.scale_flags & GatedReduceScale.Up)).lower()};\n"
+            f"constexpr bool GATED_REDUCE_OUT_SCALE = {str(bool(self.scale_flags & GatedReduceScale.Out)).lower()};\n"
+            f"constexpr int GATED_REDUCE_ROWS = {self.live_rows};"
+        )
+
+
+@dataclass
+class GATED_REDUCE_SCALARS(RuntimeParameter):
+    gated_scale_bits: int
+    gated_out_scale_bits: int
+    gated_limit_bits: int
+    gated_alpha_bits: int
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            f"constexpr std::uint32_t {name.upper()} = {value}u;"
+            for name, value in vars(self).items()
+        )
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return (
+            "\n".join(f"std::uint32_t {name.upper()};" for name in vars(self)),
+            "IIII",
         )

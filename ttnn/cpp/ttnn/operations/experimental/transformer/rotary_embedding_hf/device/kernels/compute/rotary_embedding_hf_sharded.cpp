@@ -74,7 +74,8 @@ void kernel_main() {
     CircularBuffer sin_interm_cb(sin_interm_cb_id);
     CircularBuffer out_cb(out_cb_id);
 
-    compute_kernel_hw_startup(in_cb_id, sin_cb_id, sin_interm_cb_id);  // General Init for all binary ops
+    // Scalar CB is always Float16_b.
+    compute_kernel_hw_startup(in_cb_id, scalar_cb_id, rotated_in_interm_cb_id);
 
     // Wait for the reader kernel (reader_rotary_embedding_hf_sharded.cpp) to
     // write -1.0 into the scalar CB and push it.
@@ -111,8 +112,12 @@ void kernel_main() {
                         ckl::InputTileMapping::Block,
                         ckl::DataFormatReconfig::Enabled,
                         ckl::TileAddressing::Offset),
-                    ckl::input(scalar_cb_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{
-                    half_Wt, 0u},
+                    ckl::input(
+                        scalar_cb_id,
+                        ckl::BroadcastDim::Scalar,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::DataFormatReconfig::Enabled)>{half_Wt, 0u},
                 // Copy first half to second half of rotated buffer
                 ckl::CopyTile<
                     ckl::input(in_cb_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),

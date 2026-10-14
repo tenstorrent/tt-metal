@@ -14,7 +14,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/remote_circular_buffer.h"
-#include "experimental/drisc_mode.h"
 
 // DRISC firmware does not define cb_interface (no CB infrastructure on DRAM cores);
 // the remote_cb_* API references cb_interface[cb_id], so define it here.
@@ -79,9 +78,6 @@ void kernel_main() {
     // the override.
     iface.num_receivers_and_remote_pages_sent_ptr = remote_cb_pack(num_receivers, remote_pages_sent_worker_l1_addr);
 
-    // DRISC needs stream mode for NIU-initiated NoC traffic.
-    experimental::drisc_set_stream_mode();
-
     experimental::resize_remote_sender_cb_interface<false>(remote_cb_id, page_size, noc_index);
 
     // 5) Reserve and push num_pages, one page at a time.
@@ -103,5 +99,4 @@ void kernel_main() {
     // fifo_rd_ptr for the next program; this smoke kernel doesn't have a follow-on consumer
     // and the mock config block above doesn't reserve that slot, so skip it.
     noc_async_atomic_barrier();
-    experimental::drisc_set_noc2axi_mode();
 }

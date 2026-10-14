@@ -49,6 +49,7 @@ struct IndexerScoreDeviceOperation {
         const Tensor& k,
         const Tensor& weights,
         uint32_t chunk_start_idx,
+        uint32_t key_compression_ratio,
         bool apply_relu,
         uint32_t num_groups,
         uint32_t block_size,
@@ -69,7 +70,8 @@ namespace ttnn::experimental {
 
 // Two public frontends over one shared device op: the lightning indexer's two flavours differ only in
 // fixed knobs, so each gets its own callable. Both share the program factory + 3 kernels (flavour = compile-
-// time args) and produce a row-major bf16 score. Causality: key t visible to query s iff t <= chunk_start + s.
+// time args) and produce a row-major bf16 score. Causality: key t is visible to query s iff
+// t < floor((chunk_start + s + 1) / key_compression_ratio).
 //
 // BLOCK-CYCLIC K LAYOUT: the gathered K cache is a per-SP-shard slab (chunked prefill + SP all-gather), so the
 // reader reads it back in natural token order via an invP remap. The interface matches
@@ -99,6 +101,7 @@ ttnn::Tensor indexer_score_dsa(
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
+    uint32_t key_compression_ratio = 1,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
@@ -117,6 +120,7 @@ ttnn::Tensor indexer_score_dsa(
 // chunk_start_idx / seq_shard_axes / cache_batch_idx / kv_len: same semantics as indexer_score_dsa (the last
 // two are runtime, hash-excluded pass-throughs -- no recompile when the slot or valid length changes). MSA
 // has no TP sub-shard, so seq_shard_axes takes at most one axis ([sp]).
+// block_cyclic_cache_tp_sharded: same KV-dedup key remap as indexer_score_dsa (index_k striped across sp*tp).
 // num_groups is required (no default): per-GQA-group selection is MSA's purpose, so the caller must state
 // the group count explicitly. It is placed before the defaulted optionals so the signature stays well-formed.
 ttnn::Tensor indexer_score_msa(
@@ -132,7 +136,8 @@ ttnn::Tensor indexer_score_msa(
     std::optional<uint32_t> kv_len = std::nullopt,
     const std::optional<std::vector<uint32_t>>& seq_shard_axes = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    bool block_cyclic_cache_tp_sharded = false);
 
 // FUSED DSA (ttnn.experimental.ring_indexer_score_dsa): subsumes the SP all-gather. Instead of pre-gathering
 // K, the caller hands this chip's LOCAL K shard `k_local` [B,1,sll,D] (the all-gather input) plus a
@@ -158,6 +163,7 @@ ttnn::Tensor ring_indexer_score_dsa(
     uint32_t num_links = 1,
     std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id = std::nullopt,
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
+    uint32_t key_compression_ratio = 1,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
@@ -168,6 +174,9 @@ ttnn::Tensor ring_indexer_score_dsa(
     bool block_cyclic_cache_tp_sharded = false,
     // For trace replay, supplies chunk_start_idx on-device. Mutually exclusive with chunk_start_idx and kv_len.
     const std::optional<ttnn::Tensor>& chunk_start_idx_tensor = std::nullopt,
+    // Real-token end (actual_end); caps the derived kv_len at ceil32(valid_end) so a partial chunk scores
+    // the same window the scalar path does. Requires chunk_start_idx_tensor.
+    const std::optional<ttnn::Tensor>& valid_end_tensor = std::nullopt,
     // Trace-safe cache-slot select: 1-element uint32 USER id; the reader recomposes
     // user_id * index_cache_num_layers + index_cache_layer_idx. Mutually exclusive with cache_batch_idx.
     const std::optional<ttnn::Tensor>& cache_batch_idx_tensor = std::nullopt,

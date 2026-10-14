@@ -4,13 +4,21 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
+#include <string>
+#include <tt_stl/span.hpp>
 #include <umd/device/types/arch.hpp>
+#include <tt-metalium/device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <hostdevcommon/common_values.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/mesh_config.hpp>
 
 namespace tt::tt_metal {
 
@@ -27,29 +35,29 @@ struct FabricConfigDescriptor {
     tt_fabric::FabricRouterConfig router_config = {};
 };
 
-// Configuration for a MetalEnv.
+// Configuration for a MetalEnv. The default targets the physical cluster.
 //
-// The default descriptor discovers and connects to the physical cluster present in the system.
-// A custom MetalEnvDescriptor can be supplied to target a mock/simulated cluster instead.
+// Set mock_cluster_desc_path to bind a mock cluster instead: a path, or a bare filename that is searched for in the
+// known cluster descriptor directories. nullopt is the physical cluster. An empty path is not a mock cluster.
 //
-// Only one MetalEnv for the physical cluster may exist at a time  due to UMD limitations.
-class MetalEnvDescriptor {
-public:
-    MetalEnvDescriptor() = default;
+// Only one MetalEnv for the physical cluster may exist at a time due to UMD limitations. There is no limit on the
+// number of mock clusters.
+struct MetalEnvDescriptor {
+    std::optional<std::string> mock_cluster_desc_path = std::nullopt;
 
-    explicit MetalEnvDescriptor(const std::string& mock_cluster_desc_path);
+    bool is_mock_device() const { return mock_cluster_desc_path.has_value() && !mock_cluster_desc_path->empty(); }
+};
 
-    explicit MetalEnvDescriptor(std::optional<std::string> mock_cluster_desc_path);
-
-    MetalEnvDescriptor(std::optional<std::string> mock_cluster_desc_path, FabricConfigDescriptor fabric_config_desc);
-
-    bool is_mock_device() const { return mock_cluster_desc_path_.has_value(); }
-    const std::string& mock_cluster_desc_path() const { return *mock_cluster_desc_path_; }
-    const FabricConfigDescriptor& fabric_config_descriptor() const { return fabric_config_desc_; }
-
-protected:
-    std::optional<std::string> mock_cluster_desc_path_ = std::nullopt;
-    FabricConfigDescriptor fabric_config_desc_;
+// Options for creating a MeshDevice from a MetalEnv.
+//
+// num_command_queues, dispatch_core_config and worker_l1_size apply to the whole MetalEnv: while a MeshDevice created
+// from it is open, other create_* calls must pass the same values.
+struct CreateMeshDeviceOptions {
+    size_t l1_small_size = DEFAULT_L1_SMALL_SIZE;
+    size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
+    uint8_t num_command_queues = 1;
+    DispatchCoreConfig dispatch_core_config;
+    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
 };
 
 class MetalEnvImpl;
@@ -57,8 +65,9 @@ class MetalEnvImpl;
 // A MetalEnv provides an interface for the runtime environment to access a homogeneous cluster of Tenstorrent devices.
 // It exposes several query functions for the hardware capabilities and cluster configuration.
 //
-// The FabricConfigDescriptor in the MetalEnvDescriptor describes the topology of the devices — how they are
-// interconnected and how traffic is routed between them. From this topology the MetalEnv constructs the
+// Fabric configuration describes the topology of the devices — how they are interconnected and how traffic is
+// routed between them. Set it with configure_fabric() before the first get_system_mesh() or create_* call; those
+// calls materialize the topology and freeze the configuration. From this topology the MetalEnv constructs the
 // system mesh, which virtualizes and partitions the physical hardware for placement queries.
 //
 // Note, MetalEnv is a RAII object. As such, it must outlive every object that uses it (e.g. MeshDevice).
@@ -76,6 +85,15 @@ public:
 
     /// @return The descriptor used to construct this MetalEnv.
     const MetalEnvDescriptor& get_descriptor() const;
+
+    // Configure fabric for this environment. May be called repeatedly (last call wins) until the topology is
+    // materialized by get_system_mesh() or a create_* call; afterwards it throws. Never calling it leaves fabric
+    // disabled. num_routing_planes must be greater than 0 when set; leaving it unset uses every available plane.
+    void configure_fabric(const FabricConfigDescriptor& fabric);
+
+    /// @return The fabric configuration requested via configure_fabric. Disabled by default. This is the requested
+    /// configuration: the runtime may still enable fabric for dispatch on remote devices without changing it.
+    const FabricConfigDescriptor& get_fabric_config_descriptor() const;
 
     /// @return Architecture of this environment.
     tt::ARCH get_arch() const;
@@ -98,8 +116,8 @@ public:
     /// @return Required address alignment in bytes for L1 allocations of this environment.
     uint32_t get_l1_alignment() const;
 
-    /// @return Maximum number of circular buffers per core of this environment.
-    uint32_t get_arch_num_circular_buffers() const;
+    /// @return Maximum number of dataflow buffers per core of this environment.
+    uint32_t get_num_dataflow_buffers() const;
 
     /// @return Maximum usable L1 size in bytes when the ring-buffer size is 0 of this environment.
     uint32_t get_max_worker_l1_unreserved_size() const;
@@ -120,43 +138,21 @@ public:
 
     // Create a MeshDevice which will use this MetalEnv
     std::shared_ptr<distributed::MeshDevice> create_mesh_device(
-        const distributed::MeshDeviceConfig& config,
-        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-        size_t num_command_queues = 1,
-        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
-        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+        const distributed::MeshDeviceConfig& config, const CreateMeshDeviceOptions& options = {});
 
     // Create a unit mesh for the physical device ID which will use this MetalEnv
-    std::shared_ptr<distributed::MeshDevice> create_unit_mesh_device(
-        int device_id,
-        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-        size_t num_command_queues = 1,
-        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
-        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+    std::shared_ptr<distributed::MeshDevice> create_unit_mesh(
+        ChipId device_id, const CreateMeshDeviceOptions& options = {});
 
     // Create a unit mesh for each physical device ID in the list which will use this MetalEnv
-    std::map<int, std::shared_ptr<distributed::MeshDevice>> create_unit_meshes(
-        const std::vector<int>& device_ids,
-        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-        size_t num_command_queues = 1,
-        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
-        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
-
-    // Create a SubDevice that uses this MetalEnv
-    SubDevice create_sub_device(ttsl::Span<const CoreRangeSet> cores);
+    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> create_unit_meshes(
+        ttsl::Span<const ChipId> device_ids, const CreateMeshDeviceOptions& options = {});
 
 private:
     friend class MetalEnvAccessor;
     std::unique_ptr<MetalEnvImpl> impl_;
 
     MetalEnvImpl& impl() { return *impl_; }
-    MetalEnvDescriptor descriptor_;
 };
 
 }  // namespace tt::tt_metal

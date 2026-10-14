@@ -129,6 +129,8 @@ target_include_directories(
         debug
         profiler
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
+        # internal/profiler/perf_counters.hpp includes the shared tt-llk counter headers
+        ${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tools/include
         ${CMAKE_CURRENT_BINARY_DIR}
 )
 target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
@@ -158,9 +160,10 @@ if(TT_METAL_USE_EMULE)
     target_link_libraries(
         impl
         PRIVATE
-            tt-emule::headers
+            tt_emule_runtime
             dl
     )
+    target_include_directories(impl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/emulation)
 endif()
 
 # Generate Inspector RPC stub file

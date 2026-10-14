@@ -15,6 +15,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -280,7 +281,7 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
                 // row-major one counts pages.
                 .runtime_arg_names = {rm_layout ? "num_pages" : "num_tiles", "start_tensor", "start_tensor_id"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = std::move(reader_advanced_options),
     };
 
@@ -310,7 +311,7 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
                 .runtime_arg_names = rm_layout ? Group<std::string>{"stick_size", "num_sticks", "start_id"}
                                                : Group<std::string>{"num_pages", "start_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     Group<KernelSpec> kernels;

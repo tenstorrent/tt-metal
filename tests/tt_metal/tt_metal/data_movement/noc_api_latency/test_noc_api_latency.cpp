@@ -132,10 +132,16 @@ bool run_noc_api_latency_test(distributed::MeshDevice& mesh_device, const NocApi
 
     DataMovementHardwareConfig noc_kernel_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        noc_kernel_hw_config = DataMovementGen2Config{};
+        noc_kernel_hw_config = DataMovementHardwareConfig{};
     } else {
-        noc_kernel_hw_config = DataMovementGen1Config{
-            .processor = riscv, .noc = test_config.noc_id, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+        noc_kernel_hw_config = DataMovementHardwareConfig{
+            .config_1xx =
+                DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = riscv,
+                    .noc = test_config.noc_id,
+                    .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+                },
+        };
     }
     ProgramSpec spec{
         .name = "noc_api_latency_test",

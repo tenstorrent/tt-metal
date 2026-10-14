@@ -21,8 +21,7 @@ namespace tt::tt_metal {
 class DramSubchannelHelperFixture : public BlackholeSingleCardFixture {};
 
 TEST_F(DramSubchannelHelperFixture, PicksUnreservedSubchannelPerBank) {
-    auto mesh_device = devices_[0];
-    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device->get_device_ids()[0]);
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(this->device().get_device_ids()[0]);
 
     const uint32_t num_banks = soc_desc.get_num_dram_views();
     const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
@@ -56,7 +55,7 @@ TEST_F(DramSubchannelHelperFixture, PicksUnreservedSubchannelPerBank) {
         const CoreCoord expected_logical =
             soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank), static_cast<int>(expected_free));
         const CoreCoord picked_logical =
-            mesh_device->impl().pick_unused_dram_logical_core(mesh_device->get_devices()[0], bank);
+            this->device().impl().pick_unused_dram_logical_core(this->device().get_devices()[0], bank);
         EXPECT_EQ(picked_logical, expected_logical) << "Mismatch for bank " << bank;
 
         tt::umd::CoreCoord picked_coord = soc_desc.get_dram_core_for_channel(
@@ -128,8 +127,8 @@ TEST_F(DramSubchannelHelperFixture, LogicalSubchannelOrderFollowsEndpointRole) {
 // table orders each view's NOC0 worker endpoint first, so returning the UMD coord resolved onto the
 // syseng-owned NOC0 endpoint for every view whose worker_endpoint[0] is not subchannel 0.
 TEST_F(DramSubchannelHelperFixture, MetalDramCoresLogicalResolvesToTranslatedSet) {
-    auto mesh_device = devices_[0];
-    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device->get_device_ids()[0]);
+    const auto device_id = this->device().get_device_ids()[0];
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
     const auto& cluster = MetalContext::instance().get_cluster();
 
     const auto translated_cores = soc_desc.get_metal_dram_cores(tt::CoordSystem::TRANSLATED);
@@ -155,8 +154,8 @@ TEST_F(DramSubchannelHelperFixture, MetalDramCoresLogicalResolvesToTranslatedSet
     std::set<std::pair<size_t, size_t>> resolved;
     for (const auto& logical_core : logical_cores) {
         // The conversion watcher and any other logical-coord consumer goes through.
-        const CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
-            mesh_device->get_device_ids()[0], logical_core, CoreType::DRAM);
+        const CoreCoord virtual_core =
+            cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::DRAM);
         EXPECT_FALSE(noc0_endpoints.contains({virtual_core.x, virtual_core.y}))
             << "LOGICAL core " << logical_core.str() << " resolved to NOC0 worker endpoint (" << virtual_core.x << ", "
             << virtual_core.y << ")";
@@ -169,10 +168,9 @@ TEST_F(DramSubchannelHelperFixture, MetalDramCoresLogicalResolvesToTranslatedSet
 }
 
 TEST_F(DramSubchannelHelperFixture, RejectsOutOfRangeBank) {
-    auto mesh_device = devices_[0];
-    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device->get_device_ids()[0]);
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(this->device().get_device_ids()[0]);
     const uint32_t num_banks = soc_desc.get_num_dram_views();
-    EXPECT_ANY_THROW(mesh_device->impl().pick_unused_dram_logical_core(mesh_device->get_devices()[0], num_banks));
+    EXPECT_ANY_THROW(this->device().impl().pick_unused_dram_logical_core(this->device().get_devices()[0], num_banks));
 }
 
 }  // namespace tt::tt_metal

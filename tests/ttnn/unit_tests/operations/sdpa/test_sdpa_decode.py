@@ -158,6 +158,42 @@ def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dt
     assert device.cache_entries_counter.total == 1
 
 
+@pytest.mark.parametrize("num_chunks", [1, 2, 3], ids=["inactive-core", "one-per-core", "multiple-per-core"])
+def test_sdpa_decode_non_causal_chunk_distribution(device, num_chunks):
+    """Exercise both sides of the single-local-chunk specialization with two cores per KV head."""
+    torch.manual_seed(1234)
+    heads, kv_heads, head_dim, chunk_size = 8, 2, 64, 32
+    q = torch.randn(1, 1, heads, head_dim)
+    k = torch.randn(1, kv_heads, num_chunks * chunk_size, head_dim)
+    v = torch.randn_like(k)
+    tq, tk, tv = (ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, v))
+    out = ttnn.transformer.scaled_dot_product_attention_decode(
+        tq,
+        tk,
+        tv,
+        is_causal=False,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(2, 2),
+            q_chunk_size=32,
+            k_chunk_size=chunk_size,
+            max_cores_per_head_batch=2,
+            exp_approx_mode=False,
+        ),
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        ),
+    )
+    ref = torch.nn.functional.scaled_dot_product_attention(
+        q.permute(0, 2, 1, 3),
+        k.repeat_interleave(heads // kv_heads, dim=1),
+        v.repeat_interleave(heads // kv_heads, dim=1),
+    )
+    assert_with_pcc(ref.permute(0, 2, 1, 3), ttnn.to_torch(out), 0.999)
+
+
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [

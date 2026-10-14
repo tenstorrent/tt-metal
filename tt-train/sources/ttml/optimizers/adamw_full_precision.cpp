@@ -116,11 +116,13 @@ serialization::StateDict AdamWFullPrecision::get_state_dict() const {
     if (m_config.amsgrad) {
         dict["max_exp_avg_sq"] = m_max_exp_avg_sq;
     }
+    save_initial_lr(dict);
     return dict;
 }
 
 void AdamWFullPrecision::set_state_dict(const serialization::StateDict& dict) {
     set_lr(serialization::get_value_type<float>(dict, "lr"));
+    restore_initial_lr(dict);
     set_beta1(serialization::get_value_type<float>(dict, "beta1"));
     set_beta2(serialization::get_value_type<float>(dict, "beta2"));
     m_config.epsilon = serialization::get_value_type<float>(dict, "epsilon");

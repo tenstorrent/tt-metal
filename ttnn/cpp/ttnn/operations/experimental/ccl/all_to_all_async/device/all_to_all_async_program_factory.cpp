@@ -13,6 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include <algorithm>
 #include <sstream>
 #include <type_traits>
@@ -200,7 +201,7 @@ ttnn::device_operation::CachedProgram<AllToAllAsyncProgram::shared_variables_t> 
     const auto& semaphore = operation_attributes.semaphore;
 
     tt::tt_metal::Program program{};
-    IDevice* device = tensor_args.input_tensor.device();
+    MeshDevice* device = tensor_args.input_tensor.device();
 
     // Basic configuration
     const bool enable_async_output = false;

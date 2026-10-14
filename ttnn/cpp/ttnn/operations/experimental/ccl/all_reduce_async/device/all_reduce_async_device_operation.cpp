@@ -22,7 +22,7 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
     const auto& page_size = input_tensor.buffer()->page_size();
 
     TT_FATAL(
-        (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
+        (input_tensor.device()->arch() != tt::ARCH::BLACKHOLE) ||
             (input_tensor.memory_config().buffer_type() != BufferType::DRAM),
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
         "by the fabric api");
@@ -150,12 +150,12 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     //
     // RING topology (bisection argument):
     //   RS phase — bisection link carries (N-1)*S/(2N) bytes.
-    //   AG phase — bisection link carries ceil((N-1)*S/2) bytes.
+    //   AG phase — bisection link carries ceil((N-1)*S/(2N)) bytes.
     //   Hops per phase: ceil((N-1)/2) (ring diameter).
     //
     // LINEAR topology (edge-device bottleneck):
     //   RS phase — edge link carries (N-1)*S/N bytes.
-    //   AG phase — edge link carries (N-1)*S bytes.
+    //   AG phase — edge link carries (N-1)*S/N bytes (gathers the S/N-byte RS output).
     //   Hops per phase: N-1 (linear diameter).
     // =========================================================================
     uint64_t rs_bottleneck_bytes = 0;  // reduce-scatter phase: bytes through the most-loaded link
@@ -165,11 +165,11 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
         // Single device: no fabric communication
     } else if (tt::tt_fabric::is_ring_or_torus(args.topology)) {
         rs_bottleneck_bytes = tt::div_up((N - 1) * slice_size, 2);
-        ag_bottleneck_bytes = tt::div_up((N - 1) * S, 2);
+        ag_bottleneck_bytes = tt::div_up((N - 1) * slice_size, 2);
         num_hops = tt::div_up(N - 1, 2u);
     } else {
         rs_bottleneck_bytes = (N - 1) * slice_size;
-        ag_bottleneck_bytes = (N - 1) * S;
+        ag_bottleneck_bytes = (N - 1) * slice_size;
         num_hops = N - 1;
     }
     // AllReduce = ReduceScatter + AllGather: two sequential fabric phases, so their

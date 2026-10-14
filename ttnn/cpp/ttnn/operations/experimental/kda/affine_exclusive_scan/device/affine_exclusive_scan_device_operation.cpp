@@ -29,6 +29,9 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
         "{}: local_rows must contain a positive whole number of 32-token chunks per group",
         operation_name);
     kda_factory_detail::check_actual_start(in.a, in.actual_start, operation_name);
+    if (in.actual_end) {
+        kda_factory_detail::check_actual_start(in.actual_start, *in.actual_end, "affine_exclusive_scan");
+    }
     constexpr std::array accepted_summary_dtypes = {tt::tt_metal::DataType::FLOAT32, tt::tt_metal::DataType::BFLOAT16};
     kda_factory_detail::check_allocated_device_tensor(in.a, operation_name, "a");
     TT_FATAL(
@@ -160,7 +163,8 @@ Tensor affine_exclusive_scan(
     const DeviceComputeKernelConfig& cfg,
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
-    uint32_t local_rows) {
+    uint32_t local_rows,
+    const std::optional<Tensor>& actual_end) {
     // Cache-miss validation cannot protect attribute construction on cache hits. Keep these guards here because the
     // launcher divides by groups and indexes all three input shapes before dispatching validation.
     TT_FATAL(groups > 0, "affine_exclusive_scan: groups_per_head must be positive");
@@ -189,7 +193,8 @@ Tensor affine_exclusive_scan(
             .tail_a = tail_a,
             .tail_b = tail_b,
             .tail_entry_states = tail_entry_states,
-            .actual_start = actual_start});
+            .actual_start = actual_start,
+            .actual_end = actual_end});
     return outputs[0];
 }
 }  // namespace ttnn::experimental::prim

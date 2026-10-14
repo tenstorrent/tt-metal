@@ -4,6 +4,7 @@
 
 #include <tt_stl/reflection.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
@@ -26,7 +27,7 @@ uint32_t get_sharding_core_count(const ttnn::Tensor& t) {
 std::vector<CoreCoord> get_shard_cores(const ttnn::Tensor& t) {
     std::vector<CoreCoord> coordinates;
     coordinates.reserve(get_sharding_core_count(t));
-    const tt::tt_metal::IDevice* device = t.device();
+    const tt::tt_metal::distributed::MeshDevice* device = t.device();
     struct ShardSpec shard_spec = t.shard_spec().value();
     const auto core_ranges = t.buffer()->shard_spec().grid().ranges();
     bool shard_grid_transposed =
@@ -67,7 +68,7 @@ std::vector<CoreCoord> get_shard_cores(const ttnn::Tensor& t) {
 std::vector<uint32_t> generate_run_time_args(const ttnn::Tensor& t) {
     std::vector<uint32_t> args;
     args.reserve((get_sharding_core_count(t) + 1) / 2);
-    const tt::tt_metal::IDevice* device = t.device();
+    const tt::tt_metal::distributed::MeshDevice* device = t.device();
     struct ShardSpec shard_spec = t.shard_spec().value();
     const auto core_ranges = t.buffer()->shard_spec().grid().ranges();
     bool shard_grid_transposed =
