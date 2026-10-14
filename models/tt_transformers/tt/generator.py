@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import math
 import os
 from collections import defaultdict
@@ -129,12 +130,13 @@ def gather_batched_prefill_samples(
 
 
 def prepare_prefill_page_tables_per_layer(
-    page_tables, request_indices, device_rows, batch_size, prompt_lens, block_sizes
+    page_tables, request_indices, device_rows, batch_size, prompt_lens, block_sizes, prefill_seq_len
 ):
     """Map request-ordered host tables to prefill rows, exposing only owned pages.
 
     A scheduler table can retain stale block IDs beyond the request's valid
     length. Those columns and padding rows must never reach cache-fill kernels.
+    Columns cover the padded kernel input, with -1 beyond each real prompt.
     Layers sharing a table and block size retain one shared prepared table.
     """
     if page_tables is None:
@@ -156,16 +158,29 @@ def prepare_prefill_page_tables_per_layer(
         key = (id(table), block_size)
         if key not in prepared:
             owned_blocks = [num_blocks_in_seq(int(prompt_lens[i]), block_size) for i in request_indices]
-            width = min(table.shape[1], max(owned_blocks))
+            width = num_blocks_in_seq(prefill_seq_len, block_size)
             mapped = table.new_full((batch_size, width), -1)
             for request, row, blocks in zip(request_indices, device_rows, owned_blocks):
                 if not 0 <= request < table.shape[0] or not 0 <= row < batch_size:
                     raise ValueError("Request or prefill device row is outside the page table")
-                copied = min(width, blocks)
+                copied = min(width, blocks, table.shape[1])
                 mapped[row, :copied] = table[request, :copied]
             prepared[key] = mapped
         result.append(prepared[key])
     return result
+
+
+def validate_compact_prefill_model(model, model_args):
+    """Reject opt-ins whose cache or sampling layout cannot preserve slots."""
+    if not getattr(model_args, "batched_prefill_compact_rows", False):
+        return
+    if getattr(model, "users_row_sharded", False):
+        raise ValueError("Compact batched prefill does not support row-sharded users")
+    if getattr(model, "_supports_on_device_sampling", False):
+        extract = getattr(model, "extract_last_tokens_batched_prefill", None)
+        slot_map = inspect.signature(extract).parameters.get("slot_map") if callable(extract) else None
+        if slot_map is None or slot_map.kind == inspect.Parameter.POSITIONAL_ONLY:
+            raise ValueError("Compact batched prefill with device sampling requires an explicit slot_map parameter")
 
 
 # Position of the page table within the decode input tuple produced by
@@ -221,6 +236,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         For bringup, make this class general to any backend implementation, as long as it takes torch tensors and returns torch tensors.
 
         """
+        for instance, args in zip(model, model_args):
+            validate_compact_prefill_model(instance, args)
         self.model = model
         self.model_args = model_args
         self.mesh_device = mesh_device
@@ -1384,6 +1401,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # Opt-in models can use request-order prefill rows, then scatter the
         # final hidden states into physical sampler slots via ``slot_map``.
         compact_rows = bool(getattr(self.model_args[0], "batched_prefill_compact_rows", False))
+        # This opt-in limit counts padded kernel tokens, not real prompt tokens.
         max_batched_len = getattr(self.model_args[0], "batched_prefill_max_tokens_per_user", None)
         if use_batched_prefill and max_batched_len is not None and prefill_seq_lens[0] > max_batched_len:
             use_batched_prefill = False
@@ -1443,6 +1461,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     padded_batch if use_batched_prefill else 1,
                     prompt_lens,
                     [int(layer_cache[0].shape[2]) for layer_cache in kv_cache[model_id]],
+                    prefill_seq_len,
                 )
             if getattr(self.model[model_id], "users_row_sharded", False):
                 local_kwargs["global_user_id"] = batch_user_ids if use_batched_prefill else user_id
