@@ -42,7 +42,7 @@ constexpr double kRingHopCycles = 350.0;                    // cost model: the r
 constexpr double kCostMargin = 0.10;           // cost model: the margin the expert rows path must predict over the ring
 constexpr uint64_t kRingSmallCbBytes = 4096;   // the ring tilize cores' count / flag CBs
 constexpr double kFeedExpertCycles = 1500.0;   // cost model: the combine feed's handshake per active expert
-constexpr double kFeedRowCyclesLocal = 200.0;  // cost model: the combine feed per row, FullLocal
+constexpr double kFeedRowCyclesLocal = 200.0;  // cost model: the combine feed per row, SingleDevice
 constexpr double kFeedRowCyclesCcl = 400.0;    // cost model: the combine feed per row, FullCcl (fabric sends)
 constexpr uint64_t kRingFitMargin = 32768;     // L1 the ring-fit estimate leaves for what it does not model
 // cost model, jobs of several row tiles: cycles to write one FP32 partial tile to L1 and read it back into DEST, and
@@ -765,6 +765,10 @@ std::optional<MoEExpertRowsParams> select_moe_compute_expert_rows(
     if (forced_kernel != nullptr && std::string(forced_kernel) == "ring") {
         return ring_because("TT_METAL_MOE_COMPUTE_KERNEL=ring");
     }
+    if (args.path == MoEComputePath::SingleCluster) {
+        return ring_because(
+            "an extent-1 cluster axis builds no combine for the expert rows feed; dm1 writes the output");
+    }
     if (!stream_kernels(mesh_device->arch()).has_value()) {
         return ring_because("no expert rows weight-stream variant for this architecture");
     }
@@ -890,8 +894,8 @@ std::optional<MoEExpertRowsParams> select_moe_compute_expert_rows(
     // ring and with one row tile per job (M = 1), at most 32 M rows with weight-stationary jobs (M > 1). A bank's
     // weights come at 1 / banks of the DRAM peak, so the busiest bank sets the stream time S of a job. The ring
     // computes each job on one core per bank and pays a ring pass per job; the expert rows path spreads the work over
-    // readers_per_bank cores per bank and runs G expert groups in parallel. With the combine (FullLocal, FullCcl) the
-    // ring overlaps it with its compute, while the expert rows path feeds it one expert at a time after its rows
+    // readers_per_bank cores per bank and runs G expert groups in parallel. With the combine (SingleDevice, FullCcl)
+    // the ring overlaps it with its compute, while the expert rows path feeds it one expert at a time after its rows
     // exist, so that path also pays the feed: per active expert and per row.
     //   t_ring = J(32) (max(S, ring tiles per core * c) + ring * hop)
     //   t_expert_rows(M) = max(J(32 M) S, ceil(J(32) / G) * (busiest * c + reloads(M) * r))
@@ -1475,8 +1479,8 @@ void MoEExpertRowsFactory::override_runtime_arguments(
 
 //-----------------------------------------------------------------------------------------------------------------
 // Program 2: moe_compute's outputs from the rows and the routing table. ComputeOnly: place.cpp on the combine cores
-// writes the metadata and the double buffer. FullLocal / FullCcl: place.cpp writes the metadata from the feeder cores
-// (one per ring position) and signals the combine; feed.cpp on the same cores streams each expert's rows into the
+// writes the metadata and the double buffer. SingleDevice / FullCcl: place.cpp writes the metadata from the feeder
+// cores (one per ring position) and signals the combine; feed.cpp on the same cores streams each expert's rows into the
 // double buffer with the ring program's handshake; the combine cores run selective_reduce_combine's own kernels
 // (with FullCcl, its fabric path and mux cores).
 //-----------------------------------------------------------------------------------------------------------------
@@ -1573,7 +1577,7 @@ ttnn::device_operation::CachedProgram<MoEComputePlaceFactory::shared_variables_t
         TT_FATAL(
             args.combine_params.has_value() && args.combine_params->local_combine == !ccl &&
                 tensor_return_value.size() == 6,
-            "moe_compute expert rows place: FullLocal / FullCcl need their combine parameters and 6 outputs");
+            "moe_compute expert rows place: SingleDevice / FullCcl need their combine parameters and 6 outputs");
         const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
             mesh_device, ntp, dp, H, args.combine_params->mux_core_range_set, args.bh_ring_size);
         shared.cores = selection.matmul_cores;

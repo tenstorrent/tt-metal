@@ -2,18 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""moe_compute ComputeOnly and FullLocal through the expert rows programs on one card.
+"""moe_compute ComputeOnly and SingleDevice through the expert rows programs on one card.
 
 On Blackhole, moe_compute runs the expert-row program plus a second program: metadata and placement
-(ComputeOnly), or metadata, the double-buffer feed and selective_reduce_combine's own kernels (FullLocal);
+(ComputeOnly), or metadata, the double-buffer feed and selective_reduce_combine's own kernels (SingleDevice);
 TT_METAL_MOE_COMPUTE_KERNEL=ring|expert_rows forces a path and TT_METAL_MOE_COMPUTE_ROW_TILES=M the expert rows
 path's row tiles per job (M > 1: weight-stationary jobs). These tests check, for both paths on the same inputs:
   - outputs 0-2 (counts, activation rows, e_t) against the 6U goldens, and equal between the two paths;
   - output 4: every row of the last two local experts (what moe_compute leaves in its double buffer) against an FP32
     golden on the BFP4-rounded weights;
-  - FullLocal output 5 (the combine output): bitwise equal between the paths, and against the FP32 golden;
+  - SingleDevice output 5 (the combine output): bitwise equal between the paths, and against the FP32 golden;
   - a repeated call and a traced call bitwise equal to the eager call, in every DEST mode and with the defaults;
-  - rows (output 4, and every row through the FullLocal combine) of jobs of M row tiles bitwise equal to one row
+  - rows (output 4, and every row through the SingleDevice combine) of jobs of M row tiles bitwise equal to one row
     tile per job, in every DEST mode.
 """
 
@@ -369,15 +369,16 @@ def _expert_rows_and_ring(case, **precision):
 
 
 def _full_local(case, out_before=None, **precision):
-    """One FullLocal call on each path (fresh program cache): outputs 0-2 match the goldens on both; the combine output
-    is bitwise equal between the paths (the combine copies rows that are bitwise equal). Returns the combine outputs."""
+    """One SingleDevice call on each path (fresh program cache): outputs 0-2 match the goldens on both; the combine
+    output is bitwise equal between the paths (the combine copies rows that are bitwise equal). Returns the combine
+    outputs."""
     res = {}
     for name, programs in (("expert_rows", 2), ("ring", 1)):
         with _kernel(name):
             out = case.new_combine_output()
             outs, added = _programs_added(case.mesh_device, lambda: case.call(compute_only=False, out=out, **precision))
-            assert len(outs) == 6, f"FullLocal must return 6 tensors, got {len(outs)}"
-            assert added == programs, f"{name} FullLocal call compiled {added} programs, expected {programs}"
+            assert len(outs) == 6, f"SingleDevice must return 6 tensors, got {len(outs)}"
+            assert added == programs, f"{name} SingleDevice call compiled {added} programs, expected {programs}"
             res[name] = ttnn.to_torch(outs[5]).reshape(case.K, case.T, case.H)
             res[name + "_outs"] = case.read(outs[:5], check=True)
             ttnn.deallocate(outs[5])
@@ -536,14 +537,14 @@ FULL_LOCAL_SHAPES = [
 @pytest.mark.parametrize("shape", FULL_LOCAL_SHAPES)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_full_local(mesh_device, mesh_shape, shape):
-    """FullLocal (compute_only=False on one card): the combine output of the expert rows path is bitwise equal to the
+    """SingleDevice (compute_only=False on one card): the combine output of the expert rows path is bitwise equal to the
     ring path's and within 1 % rel L2 of the FP32 golden (HiFi4, FP32 DEST)."""
     _skip_unless_blackhole(mesh_device)
     E, T, K, N, H, act, limit = SHAPES[shape]
     case = _Case(mesh_device, E, T, K, N, H, act=act, limit=limit)
     res = _full_local(case, math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
     rel = case.combine_rel_l2(res["expert_rows"])
-    logger.info(f"{shape}: FullLocal combine rel L2 {rel:.5f} (HiFi4, FP32 DEST)")
+    logger.info(f"{shape}: SingleDevice combine rel L2 {rel:.5f} (HiFi4, FP32 DEST)")
     assert rel <= 0.01, f"combine output rel L2 {rel}"
 
 
@@ -552,7 +553,7 @@ def test_moe_compute_expert_rows_full_local(mesh_device, mesh_shape, shape):
 @pytest.mark.parametrize("kind", ["random", "skewed", "empty"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_full_local_routing(mesh_device, mesh_shape, kind, tokens):
-    """FullLocal over token counts and uneven experts (experts with no token, one expert in every token)."""
+    """SingleDevice over token counts and uneven experts (experts with no token, one expert in every token)."""
     _skip_unless_blackhole(mesh_device)
     case = _Case(mesh_device, 16, tokens, 8, 512, 2048, kind=kind)
     res = _full_local(case, math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
@@ -563,7 +564,7 @@ def test_moe_compute_expert_rows_full_local_routing(mesh_device, mesh_shape, kin
 @pytest.mark.parametrize("mode", sorted(PRECISION_MODES))
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_full_local_deterministic(mesh_device, mesh_shape, mode):
-    """FullLocal: eager, repeated eager and a trace replay give bitwise-equal combine outputs in every DEST mode and
+    """SingleDevice: eager, repeated eager and a trace replay give bitwise-equal combine outputs in every DEST mode and
     with the defaults."""
     _skip_unless_blackhole(mesh_device)
     precision = PRECISION_MODES[mode]
@@ -583,7 +584,7 @@ def test_moe_compute_expert_rows_full_local_deterministic(mesh_device, mesh_shap
     with _kernel("expert_rows"):
         first = combine(run()[0])
         second = combine(run()[0])
-        assert torch.equal(first, second), "repeated eager FullLocal call differs"
+        assert torch.equal(first, second), "repeated eager SingleDevice call differs"
         out = case.new_combine_output()
         ttnn.synchronize_device(mesh_device)
         tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -594,7 +595,7 @@ def test_moe_compute_expert_rows_full_local_deterministic(mesh_device, mesh_shap
         ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
         traced = ttnn.to_torch(outs[5]).view(torch.int16)
         ttnn.release_trace(mesh_device, tid)
-    assert torch.equal(first, traced), "traced FullLocal call differs"
+    assert torch.equal(first, traced), "traced SingleDevice call differs"
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
@@ -673,7 +674,7 @@ def test_moe_compute_expert_rows_duplicate_ids(mesh_device, mesh_shape, compute_
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_listing_over_tokens(mesh_device, mesh_shape, compute_only):
     """Every k of every token names expert 0 (K T entries). moe_compute's ring overruns expert 0's e_t page (and its
-    FullLocal does not finish); the expert rows path keeps the first T entries in token order (tokens 0 .. T / K - 1,
+    SingleDevice does not finish); the expert rows path keeps the first T entries in token order (tokens 0 .. T / K - 1,
     K times each), reports that count, and finishes."""
     _skip_unless_blackhole(mesh_device)
     T, K = 32, 8
@@ -793,7 +794,7 @@ def test_moe_compute_expert_rows_row_tiles_deterministic(mesh_device, mesh_shape
 @pytest.mark.parametrize("kind", ["random", "hot_last", "cold_last"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_expert_rows_row_tiles_full_local(mesh_device, mesh_shape, kind, mode):
-    """FullLocal: the combine output (every routed row of every expert) with jobs of 4 row tiles is bitwise equal to
+    """SingleDevice: the combine output (every routed row of every expert) with jobs of 4 row tiles is bitwise equal to
     one row tile per job and to the ring path's."""
     _skip_unless_blackhole(mesh_device)
     precision = PRECISION_MODES[mode]
@@ -804,7 +805,7 @@ def test_moe_compute_expert_rows_row_tiles_full_local(mesh_device, mesh_shape, k
     with _kernel("expert_rows"), _env(ROW_TILES_ENV, 4):
         out = case.new_combine_output()
         outs, added = _programs_added(case.mesh_device, lambda: case.call(compute_only=False, out=out, **precision))
-        assert added == 2, f"FullLocal call with 4 row tiles per job compiled {added} programs, expected 2"
+        assert added == 2, f"SingleDevice call with 4 row tiles per job compiled {added} programs, expected 2"
         many = ttnn.to_torch(outs[5]).reshape(case.K, case.T, case.H)
         case.read(outs[:5], check=True)
         ttnn.deallocate(outs[5])
