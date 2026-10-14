@@ -141,6 +141,17 @@ TEST(MoveOnlyFunctionTest, CPU_NonNullFunctionPointerIsEngaged) {
     EXPECT_EQ(f(), 5);
 }
 
+int answer() { return 42; }
+
+// A function name is a function reference, which cannot be null; gcc rejects comparing it to nullptr.
+TEST(MoveOnlyFunctionTest, CPU_ConstructsFromFunctionName) {
+    move_only_function<int()> f{answer};
+    EXPECT_EQ(f(), 42);
+    move_only_function<int()> g;
+    g = answer;
+    EXPECT_EQ(g(), 42);
+}
+
 TEST(MoveOnlyFunctionTest, CPU_MovedFromIsEmpty) {
     move_only_function<int()> src{[]() { return 42; }};
     move_only_function<int()> dst{std::move(src)};

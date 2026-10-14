@@ -112,7 +112,7 @@ public:
     template <typename F>
         requires detail::MoveOnlyFunctionTarget<F, move_only_function, R, Args...>
     move_only_function(F&& f) {
-        if constexpr (detail::is_nullable_callable_v<std::decay_t<F>>) {
+        if constexpr (detail::is_nullable_callable_v<std::remove_cvref_t<F>>) {
             if (f == nullptr) {
                 tag_ = empty_tag();
                 return;
