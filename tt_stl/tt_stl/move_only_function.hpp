@@ -42,13 +42,12 @@ struct is_move_only_function : std::false_type {};
 template <typename Signature>
 struct is_move_only_function<move_only_function<Signature>> : std::true_type {};
 
-// The sources std::move_only_function leaves empty when they compare equal to nullptr.
 template <typename T>
 inline constexpr bool is_nullable_callable_v =
     std::is_pointer_v<T> || std::is_member_pointer_v<T> || is_move_only_function<T>::value;
 
-// Whether returning a V as R binds R to a temporary, which C++23's is_invocable_r rejects. Checked where
-// the compiler provides the trait: clang-20 does; gcc-12 does not, nor does its own std::move_only_function.
+// Checked where the compiler provides the trait: clang-20 does; gcc-12 does not, nor does its own
+// std::move_only_function.
 template <typename R, typename V>
 inline constexpr bool binds_to_temporary_v =
 #if __has_builtin(__reference_converts_from_temporary)
