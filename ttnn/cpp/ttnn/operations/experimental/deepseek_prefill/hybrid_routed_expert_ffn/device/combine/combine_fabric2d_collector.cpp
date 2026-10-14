@@ -19,17 +19,20 @@ void add_collector(
     const DevicePlacement& placement,
     uint32_t counts_addr,
     uint32_t ready_sem,
-    uint32_t progress_sem) {
+    uint32_t progress_sem,
+    bool gate_untilizers) {
     cmbf2d::op::CollectorPlan plan{.counts_addr = counts_addr, .ready_sem = ready_sem};
-    // Only the untilizers: they are the cores that read routed-expert output from DRAM, so only they can run
-    // ahead of it. The readers consume what the untilizers staged in L1 and are ordered behind them.
-    for (const auto& group : placement.untilizers) {
-        for (const auto& untilizer : group) {
-            plan.waiting.push_back(untilizer.worker_virtual);
+    if (gate_untilizers) {
+        // Only the untilizers: they are the cores that read routed-expert output from DRAM, so only they can
+        // run ahead of it. The readers consume what the untilizers staged in L1 and are ordered behind them.
+        for (const auto& group : placement.untilizers) {
+            for (const auto& untilizer : group) {
+                plan.waiting.push_back(untilizer.worker_virtual);
+            }
         }
+        // An empty list would leave every DRAM reader ungated, which reads stale rows rather than failing.
+        TT_FATAL(!plan.waiting.empty(), "combine_fabric2d: overlapped with the routed expert but no core gates on it");
     }
-    // An empty list would leave every DRAM reader ungated, which reads stale rows rather than failing.
-    TT_FATAL(!plan.waiting.empty(), "combine_fabric2d: overlapped with the routed expert but no core gates on it");
 
     tt::tt_metal::KernelDescriptor kernel;
     kernel.kernel_source =

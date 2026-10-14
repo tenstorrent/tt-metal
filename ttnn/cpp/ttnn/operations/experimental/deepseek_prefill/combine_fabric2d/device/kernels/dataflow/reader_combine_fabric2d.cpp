@@ -641,10 +641,6 @@ struct Reader {
 };
 
 void kernel_main() {
-#ifdef CMBF2D_IDLE
-    // Measurement mode: the routed expert runs as overlapped, with no combine traffic beside it.
-    return;
-#endif
     const Dram dram = open_dram();
     Reader reader{dram, read_control_tables(dram)};
 

@@ -420,16 +420,23 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         generate_assignments(ring_chip_ids(args.device, coord, args.axis), my_dg_index(args, coord), args.num_links);
     const auto& groups = placement.at(coord).untilizers;
 
+    // TT_CMBF2D_IDLE=1 is a measurement mode: only the collector is built, so the routed expert is timed as
+    // overlapped, released and reporting as usual, but with no combine traffic beside it.
+    static const bool idle =
+        std::getenv("TT_CMBF2D_IDLE") != nullptr && std::string(std::getenv("TT_CMBF2D_IDLE")) == "1";
+
     // Every id on every combine core of this chip, stream and untilizer cores alike: a peer's copy is
     // addressed by the id it has on the sender's own core. Declared before the fabric connections, which
     // take the lowest ids still free on a sender core and would otherwise claim these.
     std::set<CoreRange> combine_cores;
-    for (const auto& [stream, self] : placement.at(coord).streams) {
-        combine_cores.insert(CoreRange(self.worker_logical));
-    }
-    for (const auto& group : groups) {
-        for (const auto& untilizer : group) {
-            combine_cores.insert(CoreRange(untilizer.logical));
+    if (!idle) {
+        for (const auto& [stream, self] : placement.at(coord).streams) {
+            combine_cores.insert(CoreRange(self.worker_logical));
+        }
+        for (const auto& group : groups) {
+            for (const auto& untilizer : group) {
+                combine_cores.insert(CoreRange(untilizer.logical));
+            }
         }
     }
     combine_cores.insert(CoreRange(placement.at(coord).collector.value().logical));
@@ -441,17 +448,22 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             .initial_value = 0});
     }
 
-    // TT_CMBF2D_IDLE=1 is a measurement mode: combine's data-movement kernels exit at once and only the
-    // collector runs, so the routed expert is timed as overlapped but with no combine traffic beside it.
-    static const bool idle =
-        std::getenv("TT_CMBF2D_IDLE") != nullptr && std::string(std::getenv("TT_CMBF2D_IDLE")) == "1";
+    if (idle) {
+        add_collector(
+            desc,
+            args,
+            placement.at(coord),
+            l1.collector_counts,
+            sems.ready(),
+            sems.progress(),
+            /*gate_untilizers=*/false);
+        return desc;
+    }
+
     // combine_fabric2d's own kernels are what get built here; this define is what selects their
     // overlapped form, in place of a second copy of each kernel that only added it.
     const auto add_combine_defines = [&](tt::tt_metal::KernelDescriptor& kernel) {
         kernel.defines.emplace_back("CMBF2D_OVERLAPPED", "1");
-        if (idle) {
-            kernel.defines.emplace_back("CMBF2D_IDLE", "1");
-        }
     };
 
     for (const auto& [stream, self] : placement.at(coord).streams) {
@@ -584,7 +596,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         }
     }
 
-    add_collector(desc, args, placement.at(coord), l1.collector_counts, sems.ready(), sems.progress());
+    add_collector(
+        desc, args, placement.at(coord), l1.collector_counts, sems.ready(), sems.progress(), /*gate_untilizers=*/true);
     return desc;
 }
 }  // namespace
