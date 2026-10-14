@@ -1407,6 +1407,8 @@ class Case:
     # ulp_sweep only: sweep a range too large for one run in batches of this
     # many tiles (offset walks the range). None = single run.
     batch_tiles: Optional[int] = None
+    # Per-case pytest-timeout ceiling, for a sweep that cannot fit the run's --timeout.
+    timeout_s: Optional[int] = None
 
     @property
     def test_id(self) -> str:
@@ -1446,12 +1448,14 @@ CASES = [
     ),
     # host-batched fp32 sweep: every fp32 value in a full octave [1.0, 2.0]
     # (2^23 values) in 64-tile batches. Exercises the batching loop + timing.
-    # Slow — ~128 device runs (minutes).
+    # Slow — ~128 device runs (minutes): ~2 min on a Wormhole n150, against the
+    # 60 s --timeout the LLK e2e workflow passes.
     Case(
         op=MathOperation.Reciprocal,
         spec=StimuliSpec.ulp_sweep(low=1.0, high=2.0),
         fmt=FP32,
         name="Reciprocal-fp32-batched",
+        timeout_s=600,
     ),
     # Diagnostic-only example (uncomment to explore a known-inaccurate op without failing the run):
     # Case(op=MathOperation.Gelu, spec=StimuliSpec.ramp(low=-13.0, high=13.0), expect_pass=False),
@@ -1738,7 +1742,17 @@ def run_case(case: Case) -> bool:
 
 
 @pytest.mark.accuracy
-@pytest.mark.parametrize("case", CASES, ids=[c.test_id for c in CASES])
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(
+            c,
+            id=c.test_id,
+            marks=[] if c.timeout_s is None else [pytest.mark.timeout(c.timeout_s)],
+        )
+        for c in CASES
+    ],
+)
 def test_sfpu_stress(case: Case):
     passed = run_case(case)
     if case.expect_pass:
