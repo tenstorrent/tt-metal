@@ -46,15 +46,19 @@ heads) at 512x1024. The run used the Detectron2 Cityscapes weights on ttsim Blac
   outside `SKIP_OPS`; no call was unreconstructible.
 - **Value coverage: 160 of 161 cases (392 of 394 calls) are checked against a torch
   golden.** The exception is one `unsqueeze_to_4D` case (2 calls) whose output the capture
-  never observed again; it gets shape/dtype/placement/finiteness only.
+  never observed again; it gets shape/dtype/placement/finiteness only. Ops that only move,
+  relayout or view data are held to **bit-exact** output (see below), the rest to PCC.
 - **All 161 pass** on ttsim Blackhole with the 5x4 grid. One file per pytest invocation took
-  about 23 min for `conv2d` and under 15 s for each other file.
-- **9 of 161 cases are marked `emulator`**, spread over 7 of the 19 ops: one 1x1 `conv2d` on
-  the ASPP pooling branch's single pixel, plus small `reshape`/`to_layout`/`to_memory_config`/
-  `to_device`/`unsqueeze_to_4D`/`upsample` cases. Everything else is a 512x1024-derived
-  activation with thousands of rows (32,768 rows at stride 4, 131,072 at stride 2). The
-  classifier treats the `input_tensor` keyword and a `concat` list's first operand as the
-  primary activation (`conftest._primary_input`).
+  about 8 min for `conv2d` and under 15 s for each other file.
+- **23 of 161 cases are marked `emulator`**, spread over 11 of the 19 ops: one 1x1 `conv2d`
+  on the ASPP pooling branch's single pixel, and the stride-16/32 activations
+  (e.g. 32x64x256) of `add`, `concat`, `relu`, `reshape`, `to_layout`, `to_memory_config`,
+  `typecast`, `unsqueeze_to_4D` and `upsample`, plus `to_device`. The cap is the VAD-variant
+  suite's 48x48x256 elements on the primary activation, not the LLM suites' 128 rows, which
+  is smaller than a 12x12 feature map. Everything at stride 4 or 2 (up to 256x512x256) is
+  far over it, as is anything sharded over more than 8 cores. The classifier treats the
+  `input_tensor` keyword and a `concat` list's first operand as the primary activation
+  (`conftest._primary_input`).
 
 - 3 ops are deliberately not generated (`SKIP_OPS`): `ttnn.deallocate` (nothing to assert),
   `ttnn.from_torch` (exercised by every case's input upload) and `ttnn.to_torch` (used by
@@ -121,9 +125,28 @@ inputs on host. If it uploaded them instead, conv2d would treat them as already 
 The steady-state path, a second inference reusing the prepared device weights, is not in
 this capture.
 
-**`compute_config` dropped.** Conv's spelling of `compute_kernel_config` is captured only
-as an object address. It is now in the generator's `DROP_KWARGS`. Without that, every conv
-case was unreconstructible.
+**`compute_config` dropped, then restored from the model.** Conv's spelling of
+`compute_kernel_config` is captured only as an object address, so it is in the generator's
+`DROP_KWARGS` (without that, every conv case was unreconstructible). The model builds every
+conv's compute config from the same defaults (`panoptic_deeplab/tt/model_configs.py`: LoFi,
+fp32 dest accumulation, no packer L1 accumulation), so `op_utils.default_kwargs` passes
+exactly that to every conv2d case. Not restored: the `packer_l1_acc=True` the model sets on
+its deep 1x1 bottleneck and ASPP convs, since a case does not say which layer it was.
+
+**Goldens from the values the device holds; bit-exact data movement.** Each input is read
+back after upload (`graph_case._held_values`), so a bfloat8_b input's quantization is in the
+reference. Ops that only move, relayout or view data (`graph_case.LOSSLESS`: reshape,
+permute, slice, concat, `to_layout`, `to_memory_config`, move, reshard, ...) must then
+reproduce it bit for bit, as in the yolo and VAD-variant suites (`assert_lossless`), instead
+of passing a PCC floor that is 0.97 for bfloat8_b. Two exceptions keep PCC (against the
+read-back inputs): a cast to a narrower dtype, which rounds by design; and a bfloat8_b
+`permute` or `concat`, which repack their output through the packer instead of copying tiles
+(`graph_case._REPACKS_BLOCK_FLOAT`). On ttsim Blackhole a width concat of bfloat8_b changes
+~9% of elements by one mantissa step even for tile-aligned operands, and even when an operand
+is concatenated with itself, while a `dim=2` concat and every other data-movement op here is
+bit-exact. Permute regroups values under new shared exponents and rounds them differently
+from the host quantizer. 6 cases fall under this (all 5 `concat` cases and `permute` 00); 3
+of them (concat 02/03, permute 00) fail an exact check.
 
 **Nested return value.** `conv2d(..., return_output_dim=True, return_weights_and_bias=True)`
 returns `(out, [h, w], [weight, bias])`. The capture records its tensors depth first:
@@ -164,8 +187,8 @@ takes the id's shape/dtype/placement from the first tensor keyword argument
 ## Fidelity
 
 The llama README's fidelity table applies: random tensor values (weights included),
-`compute_config` / `compute_kernel_config` dropped, replicated onto the `(1, 1)` mesh the
-capture ran on. Each generated file's docstring lists the gaps that apply to *that* op.
+`compute_kernel_config` dropped (conv2d's restored from the model source, see above),
+replicated onto the `(1, 1)` mesh the capture ran on. Each generated file's docstring lists the gaps that apply to *that* op.
 
 The capture came from **ttsim**, the functional simulator, not silicon. Op selection,
 shapes and configs come from the host-side ttnn code and are the same either way. Only

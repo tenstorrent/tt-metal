@@ -30,8 +30,11 @@ What a case run does
    all of Q, K and V checked. Where the capture never observed an output, what the
    call itself pins down is used instead (``_derived_spec``), and ops whose result
    metadata cannot show they did anything get an explicit ``POSTCONDITION``;
-5. on top of that, a torch golden (PCC) for the ops where a reference is
-   unambiguous — see ``GOLDEN``.
+5. on top of that, a torch golden for the ops where a reference is unambiguous —
+   see ``GOLDEN``. It is computed from the inputs as read back from the device, so
+   a block-float input's quantization is already in the reference, and it is PCC
+   for ops that compute, but bit-exact for ops that only move, relayout or view
+   data (``LOSSLESS``).
 
 Fidelity caveats (deliberate, documented, all visible in the generated data)
 ---------------------------------------------------------------------------
@@ -39,6 +42,8 @@ Fidelity caveats (deliberate, documented, all visible in the generated data)
   (``<WormholeComputeKernelConfig object at 0x…>``) — its fields are NOT in the
   capture, so the kwarg is dropped and the op's default is used. This can move
   PCC (math fidelity / fp32 accumulation) but not shapes or program structure.
+  Where the model's source fixes the config for every call of an op,
+  ``op_utils.default_kwargs`` restores it (conv2d here).
 * Tensor *values* are not captured; inputs are random. Index-like tensors
   (page tables, cur_pos, update_idxs, embedding ids) would fault the device with
   random values, so they get semantic values from ``INDEX_VALUES`` below.
@@ -593,12 +598,13 @@ def _is_partial_shard(spec):
 
 
 def build_tensor(spec, mesh_device, case, op_name, key):
-    """Materialize one captured input tensor. Returns (ttnn tensor, torch source)."""
+    """Materialize one captured input tensor. Returns (ttnn tensor, the values it holds)."""
     data = _torch_data(spec, case, op_name, key)
     # A host conv weight is the raw [O, I, kH, kW] tensor conv2d prepares itself; on
     # device it would be taken as already prepared.
     if spec.get("host") or (op_name, key) in HOST_INPUT:
-        return ttnn.from_torch(data, dtype=DTYPE[spec["dtype"]], layout=LAYOUT[spec["layout"]]), data
+        tt = ttnn.from_torch(data, dtype=DTYPE[spec["dtype"]], layout=LAYOUT[spec["layout"]])
+        return tt, _held_values(tt, data, spec, None)
 
     memory_config = build_memory_config(spec.get("mem"), mesh_device) or ttnn.DRAM_MEMORY_CONFIG
     partial = _is_partial_shard(spec)
@@ -613,7 +619,22 @@ def build_tensor(spec, mesh_device, case, op_name, key):
     )
     if partial:
         tt = ttnn.to_memory_config(tt, memory_config)
-    return tt, data
+    return tt, _held_values(tt, data, spec, mesh_device)
+
+
+def _held_values(tt, data, spec, mesh_device):
+    """The values ``tt`` actually holds, shaped like ``data``.
+
+    A block-float tensor is quantized on upload (a shared exponent per face), so the
+    torch source is not what the op sees. The golden is built from the read-back
+    instead: an op that must preserve its input can then be held to bit-exactness
+    (``LOSSLESS``), and a computing op is not charged for the upload's rounding.
+    Integer inputs are exact either way and stay integer (they index pages and rows).
+    """
+    if NO_GOLDEN or spec["dtype"] in _INT_DTYPES:
+        return data
+    host = ttnn.to_torch(tt).float() if mesh_device is None else from_tt(tt, mesh_device)
+    return host.reshape(-1)[: data.numel()].reshape(data.shape)
 
 
 def _build_value(spec, mesh_device, case, op_name, key, torch_sink):
@@ -1162,6 +1183,81 @@ GOLDEN = {
     "ttnn.reshard": _ref_identity,
 }
 
+# Ops that only move, relayout or view data. Their output must hold exactly the input's
+# values, so they are compared bit for bit (``U.assert_lossless``) instead of by PCC: on
+# tensors this large a PCC floor — 0.97 for bfloat8_b — passes a corrupted tile or two.
+# Bit-exactness needs the output dtype to represent every input value (``_holds_exactly``);
+# a cast down, e.g. ``to_layout(..., dtype=bfloat8_b)`` of a bfloat16 input, rounds by
+# design and keeps the PCC check, and so do the ops in ``_REPACKS_BLOCK_FLOAT`` on a
+# block-float output.
+LOSSLESS = frozenset(
+    {
+        "ttnn.to_memory_config",
+        "ttnn.to_device",
+        "ttnn.sharded_to_interleaved",
+        "ttnn.interleaved_to_sharded",
+        "ttnn.untilize",
+        "ttnn.to_layout",
+        "ttnn.move",
+        "ttnn.reshard",
+        "ttnn.reshape",
+        "ttnn.unsqueeze",
+        "ttnn.unsqueeze_to_4D",
+        "ttnn.permute",
+        "ttnn.transpose",
+        "ttnn.slice",
+        "ttnn.concat",
+        "ttnn.split",
+    }
+)
+
+# Dtypes each dtype converts into without rounding (block-float values are a 7- or 3-bit
+# mantissa under a shared exponent, which bfloat16 holds exactly).
+_EXACT_INTO = {
+    "BFLOAT4_B": {"BFLOAT4_B", "BFLOAT8_B", "BFLOAT16", "FLOAT32"},
+    "BFLOAT8_B": {"BFLOAT8_B", "BFLOAT16", "FLOAT32"},
+    "BFLOAT16": {"BFLOAT16", "FLOAT32"},
+    "FLOAT32": {"FLOAT32"},
+}
+
+
+def _holds_exactly(case, out):
+    """Whether ``out``'s dtype can represent every value of every float input."""
+    want = next((name for name, dt in DTYPE.items() if dt == out.dtype), None)
+    for spec in _tensor_specs(case):
+        if spec["dtype"] in _INT_DTYPES:
+            continue
+        if want not in _EXACT_INTO.get(spec["dtype"], ()):
+            return False
+    return True
+
+
+# Ops that repack a block-float output through the packer rather than copying its tiles,
+# so values come back rounded again and are not bit-exact even where every input was
+# already representable. Measured on ttsim Blackhole with bfloat8_b inputs that were read
+# back exactly: ``permute`` regroups values under new shared exponents, and the device's
+# rounding does not match the host quantizer's; a width (``dim=3``) ``concat`` changes
+# ~9% of elements by one mantissa step even for tile-aligned operands, and even when an
+# operand is concatenated with itself (a ``dim=2`` concat, and every other op in
+# ``LOSSLESS``, is bit-exact). These keep the PCC check against the read-back inputs.
+_REPACKS_BLOCK_FLOAT = frozenset({"ttnn.permute", "ttnn.concat"})
+_BLOCK_FLOAT = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+
+
+def _bit_exact(op_name, case, out):
+    """Whether this output is held to bit-exactness rather than PCC (see ``LOSSLESS``)."""
+    if op_name not in LOSSLESS or not _holds_exactly(case, out):
+        return False
+    return not (op_name in _REPACKS_BLOCK_FLOAT and out.dtype in _BLOCK_FLOAT)
+
+
+def _tensor_specs(case):
+    for spec in list(case["args"]) + list(case["kwargs"].values()):
+        if spec.get("k") == "t":
+            yield spec
+        elif spec.get("k") == "tlist":
+            yield from spec["tensors"]
+
 
 # =============================================================================
 # Derived expectations (for outputs the capture never observed)
@@ -1539,6 +1635,9 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
             alias if alias is not None else _build_value(spec, mesh_device, case, op_name, name, torch_inputs)
         )
 
+    for name, value in U.default_kwargs(op_name, mesh_device).items():
+        kwargs.setdefault(name, value)
+
     out = op(*args, **kwargs)
 
     _check_output(out, case, mesh_device, op_name)
@@ -1557,7 +1656,11 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
             tensors = _output_tensors(out)
             floor = pcc or _golden_pcc(case, op_name)
             for i, one in enumerate(refs):
-                if one is not None and i < len(tensors):
+                if one is None or i >= len(tensors):
+                    continue
+                if _bit_exact(op_name, case, tensors[i]):
+                    U.assert_lossless(one, tensors[i], mesh_device=mesh_device)
+                else:
                     U.assert_pcc(one, tensors[i], pcc=floor, mesh_device=mesh_device)
 
     return out
