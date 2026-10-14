@@ -96,8 +96,12 @@ bool can_use_high_bw_all_gather(
     if (!cluster_axis.has_value()) {
         return false;
     }
+    auto& device = ttml::autograd::ctx().get_device();
+    if (tensor.device() != &device) {
+        return false;
+    }
 
-    const bool blackhole = tensor.device()->arch() == tt::ARCH::BLACKHOLE;
+    const bool blackhole = device.arch() == tt::ARCH::BLACKHOLE;
     const auto& tensor_topology = tensor.tensor_topology();
     const bool distributed_over_axis = cluster_axis.value() < tensor_topology.placements().size() &&
                                        cluster_axis.value() < tensor_topology.distribution_shape().dims();
@@ -119,23 +123,13 @@ bool can_use_high_bw_all_gather(
 }
 
 ttnn::Tensor high_bw_all_gather(
-    const ttnn::Tensor& tensor,
-    const int gather_dim,
-    const std::optional<uint32_t>& cluster_axis,
-    const uint32_t num_links) {
-    if (!cluster_axis.has_value()) {
-        throw std::logic_error("high_bw_all_gather requires a cluster axis");
-    }
+    const ttnn::Tensor& tensor, const int gather_dim, const uint32_t cluster_axis, const uint32_t num_links) {
     auto* mesh_device = tensor.device();
     auto gathered_shape = tensor.padded_shape();
-    gathered_shape[gather_dim] *= mesh_device->shape()[cluster_axis.value()];
+    gathered_shape[gather_dim] *= mesh_device->shape()[cluster_axis];
     const auto output = ttnn::create_device_tensor(
-        tt::tt_metal::TensorSpec(
-            gathered_shape,
-            tt::tt_metal::TensorLayout(
-                tensor.dtype(), tt::tt_metal::PageConfig(ttnn::Layout::TILE), tensor.memory_config())),
-        mesh_device);
-    const auto [ready, data_valid] = ttml::autograd::ctx().get_ccl_resources().get_high_bw_all_gather_semaphores();
+        tt::tt_metal::TensorSpec(gathered_shape, tensor.tensor_spec().tensor_layout()), mesh_device);
+    const auto& [ready, data_valid] = ttml::autograd::ctx().get_ccl_resources().get_high_bw_all_gather_semaphores();
     return ttnn::experimental::high_bw_all_gather(
         tensor,
         gather_dim,
@@ -169,7 +163,7 @@ ttnn::Tensor all_gather(const ttnn::Tensor& tensor, const int dim, const std::op
     const int rank = static_cast<int>(tensor.logical_shape().rank());
     const int gather_dim = dim < 0 ? dim + rank : dim;
     if (can_use_high_bw_all_gather(tensor, gather_dim, cluster_axis, num_links)) {
-        return high_bw_all_gather(tensor, gather_dim, cluster_axis, num_links);
+        return high_bw_all_gather(tensor, gather_dim, cluster_axis.value(), num_links);
     }
 
     // Determine topology based on cluster axis configuration (Ring if torus, Linear otherwise)

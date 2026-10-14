@@ -35,7 +35,7 @@ std::pair<tt::tt_metal::GlobalSemaphore, tt::tt_metal::GlobalSemaphore> make_hig
 
 }  // namespace
 
-CCLResources::CCLResources() : high_bw_all_gather_semaphores(make_high_bw_all_gather_semaphores()) {
+CCLResources::CCLResources() {
     auto& device = ttml::autograd::ctx().get_device();
     const auto core_range_set = make_full_grid_core_range_set(device);
 
@@ -101,9 +101,12 @@ std::vector<tt::tt_metal::GlobalSemaphore> CCLResources::get_all_reduce_barrier_
     return semaphores;
 }
 
-std::pair<tt::tt_metal::GlobalSemaphore, tt::tt_metal::GlobalSemaphore>
+const std::pair<tt::tt_metal::GlobalSemaphore, tt::tt_metal::GlobalSemaphore>&
 CCLResources::get_high_bw_all_gather_semaphores() {
-    return high_bw_all_gather_semaphores;
+    if (!high_bw_all_gather_semaphores.has_value()) {
+        high_bw_all_gather_semaphores.emplace(make_high_bw_all_gather_semaphores());
+    }
+    return *high_bw_all_gather_semaphores;
 }
 
 bool CCLResources::has_direct_neighbor_route(
