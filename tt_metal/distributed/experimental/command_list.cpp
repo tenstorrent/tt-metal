@@ -17,6 +17,7 @@
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
+#include <tt_stl/fmt.hpp>
 
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/distributed/mesh_coord_utils.hpp"
