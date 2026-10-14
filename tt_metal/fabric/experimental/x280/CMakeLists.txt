@@ -613,4 +613,41 @@ foreach(_member erisc_peer_tile drisc_peer_tile)
     )
 endforeach()
 
+# ---------------------------------------------------------------------------
+# pipeline_stage: X280-only router micro-operations over the pinned input: route_compute (the
+# destination-to-next-hop lookup) and route_forward (the forward decision). Both executables need
+# the 14-way LIM profile.
+# ---------------------------------------------------------------------------
+foreach(_member compute forward)
+    x280_add_image(
+        NAME firmware-pipeline-stage-route-${_member}
+        SOURCES src/pipeline_stage_route_${_member}.cpp
+        INCLUDES
+            kernels/shared
+            kernels/pipeline_stage
+            kernels/pipeline_stage/backends
+    )
+endforeach()
+set(_x280_pipeline_stage_dirs
+    ${_x280_shared_dir}
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/pipeline_stage
+)
+foreach(_header pipeline_stage_common.h route_compute_args.h route_forward_args.h)
+    _x280_check_header(${_header} c ${_x280_pipeline_stage_dirs})
+    _x280_check_header(${_header} c++ ${_x280_pipeline_stage_dirs})
+endforeach()
+foreach(_header pipeline_stage_frontend_cxx.hpp x280_member_backend.hpp x280_route_compute.hpp x280_route_forward.hpp)
+    _x280_check_header(${_header} c++ ${_x280_pipeline_stage_dirs}
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/pipeline_stage/backends
+    )
+endforeach()
+target_sources(x280_bench_host_tests PRIVATE tests/host/test_pipeline_stage.cpp)
+target_include_directories(x280_bench_host_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/kernels/pipeline_stage)
+foreach(_member compute forward)
+    _x280_device_test(x280_pipeline_stage_route_${_member}
+        tests/device/test_pipeline_stage_route_${_member}_hw.cpp
+        KERNELS shared pipeline_stage
+    )
+endforeach()
+
 add_custom_target(x280_abi_headers ALL DEPENDS ${_x280_header_stamps})
