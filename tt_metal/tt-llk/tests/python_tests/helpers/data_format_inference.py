@@ -216,6 +216,13 @@ def infer_unpack_out(
     if input_format.is_mx_format():
         return DataFormat.Float16_b
 
+    # Int4/UInt4 can only exist in L1. The unpacker widens them to 8-bit
+    # (Int4 -> sign-magnitude Int8, UInt4 -> zero-extended UInt8).
+    if input_format == DataFormat.Int4:
+        return DataFormat.Int8
+    if input_format == DataFormat.UInt4:
+        return DataFormat.UInt8
+
     # Sub-byte BFP formats can only exist in L1. For UNPACR configuration,
     # BFP2/BFP4/BFP8 inputs keep matching InDataFormat/OutDataFormat values;
     # the unpacker internally normalizes the datum into the BF16 source-register
