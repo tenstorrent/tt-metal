@@ -111,5 +111,9 @@ Defaults:
   query row's softmax reads only its own row, so traces are bit-identical to unchunked ones (checked at isl 8192 on
   Gemma-4, gpt-oss and Xing4.0, and by every selftest with chunking forced). It does not cover N^2 work outside the
   attention function, such as DSA indexers.
+- A script's `prefix` (literal text, special tokens included) is prefilled before the token cache, recorded as
+  `prefix_ids` in `metadata.json`. Instruct checkpoints set it to their chat template up to the assistant turn, so the
+  text reads as the model's own reply: raw wikitext is far out of distribution for them (Gemma-4-26B-A4B-it: ppl ~400
+  raw, ~22 framed, at 4k tokens). `--prefix ''` turns it off.
 - MoE routing near the top-k cut is sensitive to precision (about 1% of expert picks change between bf16 and fp32 on
   Gemma-4-26B). Compare routing and indexer top-k as sets, with a tolerance.

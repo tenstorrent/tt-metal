@@ -73,6 +73,9 @@ NOTES = {
 
 class Gemma4Golden(LayerwiseGolden):
     hf_repo = "google/gemma-4-31B-it"
+    # The text as the model's own reply (chat template up to the model turn, empty thought channel). Wikitext ppl on
+    # 26B-A4B-it (first 8192 tokens): ~450 raw, ~14k after <bos> alone, 16.5 framed like this.
+    prefix = "<bos><|turn>user\nContinue the following text.<turn|>\n<|turn>model\n<|channel>thought\n<channel|>"
     recipe = Recipe(
         sublayers=("self_attn.o_proj", "mlp"),
         config=(

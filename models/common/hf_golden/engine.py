@@ -188,6 +188,11 @@ class LayerwiseGolden:
     # kernel applies sets both to "eager": transformers' sdpa path can drop them without an error.
     attn: str = "sdpa"
     attn_choices: tuple[str, ...] = ("sdpa", "eager")
+    # Literal text (special tokens included) prefilled before the token cache: the prefill is prefix + the first
+    # isl - len(prefix) cached tokens. Instruct models score raw text far out of distribution (Gemma-4-IT: wikitext ppl
+    # in the hundreds) unless it reads as their own reply, so their scripts set the chat template up to the assistant
+    # turn. A literal, not apply_chat_template: templates can stamp in today's date. The token cache never holds it.
+    prefix: str = ""
 
     # ---- what a subclass overrides ------------------------------------------------------------------------------
 
@@ -303,6 +308,7 @@ class LayerwiseGolden:
         ap.add_argument(
             "--attn-chunk", type=int, default=0, help="attention on this many query rows at a time (0: all at once)"
         )
+        ap.add_argument("--prefix", default=self.prefix, help="text prefilled before the token cache ('' for none)")
         ap.add_argument("--device", default="auto", help="auto (cuda if visible, else cpu), cpu, cuda, cuda:N")
         ap.add_argument("--compute-dtype", default="bfloat16", choices=("bfloat16", "float32"))
         ap.add_argument("--store-dtype", default="bfloat16", choices=("bfloat16", "float32"))
@@ -346,6 +352,13 @@ class LayerwiseGolden:
         tok_path = token_cache(args.hf_repo, args.root, args.text or args.root / TEXT, **hub)
         token_ids = load_file(str(tok_path))["token_ids"]
         assert args.isl <= token_ids.numel(), f"isl {args.isl} > {token_ids.numel()} tokens in {tok_path}"
+        prefix_ids = []
+        if args.prefix:
+            from transformers import AutoTokenizer
+
+            prefix_ids = AutoTokenizer.from_pretrained(args.hf_repo, **hub)(args.prefix, add_special_tokens=False)
+            prefix_ids = prefix_ids["input_ids"]
+            token_ids = torch.cat([torch.tensor(prefix_ids, dtype=token_ids.dtype), token_ids])
         input_ids = token_ids[: args.isl].long().unsqueeze(0).to(device)
         position_ids = torch.arange(args.isl, device=device).unsqueeze(0)
         with safe_open(str(tok_path), "pt") as f:
@@ -448,6 +461,9 @@ class LayerwiseGolden:
             "golden_schema": GOLDEN_SCHEMA,
             "token_cache": f"../{tok_path.name}",
             "n_tokens": args.isl,
+            # The prefill is prefix_ids + the first n_tokens - len(prefix_ids) ids of the token cache.
+            "prefix": args.prefix,
+            "prefix_ids": prefix_ids,
             "source": tok_meta["source"],
             "source_sha256": tok_meta["source_sha256"],
             "hf_repo": args.hf_repo,
@@ -573,6 +589,7 @@ class LayerwiseGolden:
 
             run = argparse.Namespace(**{**vars(args), "hf_repo": str(ckpt), "isl": isl, "root": Path(tmp)})
             run.tmp, run.num_layers, run.sublayers, run.compute_dtype = Path(tmp), None, True, compute
+            run.prefix = ""  # the tiny checkpoint has no tokenizer
             # Streamed with chunking, compared with an unchunked whole-model forward: this tests chunking too.
             with ChunkedAttention(args.attn_chunk) as self.attn_chunker:
                 trace = self.generate(run)

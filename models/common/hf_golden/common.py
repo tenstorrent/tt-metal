@@ -38,7 +38,9 @@ ISL_CHUNK_SIZE = 5120  # spec chunk_size; a chunked grade additionally needs thi
 SHARED_HF_CACHE = os.environ.get("HF_GOLDEN_SHARED_CACHE", "/mnt/models/huggingface/hub")
 
 COMMON_NOTES = {
-    "model.embed_tokens.output": "Token embeddings of the first n_tokens ids of the token cache (no BOS added).",
+    "model.embed_tokens.output": (
+        "Token embeddings of the prefill: metadata prefix_ids (if any), then the first ids of the token cache."
+    ),
     "model.layers.{i}.output": "Decoder layer output, residual included: the next layer's input.",
     "model.last_hidden_state": "Final norm applied to the last layer's output.",
     "logits": "lm_head over the last position only (plus final_logit_softcapping where the model has it), fp32.",
