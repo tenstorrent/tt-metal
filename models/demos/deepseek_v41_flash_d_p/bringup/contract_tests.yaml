@@ -1,0 +1,26 @@
+# Serving-contract tests (SC.1), from serving_contract.md (tt-d-gen @ a286b622). gates: the step whose gate runs the
+# test (a component step name, or adapter for K.1); kind: runner_smoke marks the runner smoke (records smoke_runner_ok).
+# All run with scripts/run_safe_pytest.sh on the spec's mesh with its 2D fabric, at chunk 2048 / max_seq 4096 (the s4096
+# golden: every position dumped).
+tests:
+- test: models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py
+  checks: device model at the server's starts (cold mid-record end, 64- and 32-aligned follow-ups off the SP period, pulled-back last chunk), layer 0 from the server's ids with PAD_ID; every served cache of the gate's block type vs golden, rows below start untouched, pad rows zero, layer-0 rewrite same bytes
+  section: Attention and cache writes
+  gates: attention
+- test: models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+  checks: every served cache bf16 ROW_MAJOR ND-sharded [1,1,32/r,width] ROUND_ROBIN_1D over all DRAM banks; exported table read by tables.py, configs and coverage, records 64-byte aligned, inside their bank's allocation, no overlap on a chip and bank
+  section: KV cache
+  gates: adapter
+- test: models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+  checks: adapter runtime fed the server's H2D payload, 2 slots interleaved with a follow-up; host-sink acks one per layer in order, the layer's records final and vs golden at the ack, pad rows zero; reused prefix bytes kept, last block PCC 0.99
+  section: Acks
+  gates: adapter
+- test: models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+  checks: real prefill runner, tt-d-gen engine (or producer fallback), mock migration, D2H acks, 2 interleaved slots, multi-turn, mid-chunk ends, near-max prompt pulled back; every served cache through the table vs golden with tables.py and kv_dump_compare
+  section: Adapter and table
+  gates: adapter
+- test: models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+  checks: real runner prefills the padded smoke prompt; the KV below the migration boundary read through the table is the stand-in decode's prefix on the device model; tail recompute + greedy answer contains "Paris" (whole model only; skips in a partial run)
+  section: Adapter and table
+  gates: adapter
+  kind: runner_smoke

@@ -7,3 +7,10 @@
 | Checkpoint access without loading shards: index + safetensors header + memory map; fp8 32x32 block and fp4 (packed e2m1, ue8m0 per 32) dequant; engram row lookup | `models/demos/deepseek_v41_flash_d_p/reference/weights.py` (`Checkpoint`, `fp8_block_dequant`, `fp4_dequant`, `EngramTable`) |
 | Engram n-gram hashing on the host, chunked (carried 3-token tail), bit-equal to the checkpoint's `inference/engram.py` | `models/demos/deepseek_v41_flash_d_p/reference/ngram.py:EngramHasher` |
 | CPU reference: CSA2 attention (window ring, compressor, indexer with candidate pool, shared KV / top-k across layers), single-pass mHC, MoE, chunked | `models/demos/deepseek_v41_flash_d_p/reference/ds41_ref.py` (`Config` layer roles / `sources`, `State`, `block_steps`, `DS41Reference`) |
+
+| Need | Where it is |
+|---|---|
+| How tt-d-gen drives this model (input layout, served caches, starts, acks, adapter API, table) | `models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md` (tt-d-gen @ a286b622) |
+| tt-d-gen's prefill rules in Python (chunk plan, pull-back, follow-up start, reshuffle, interleave) and its KV checks loaded from the checkout | `models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/server_rules.py` |
+| Served cache geometry (configs, rows per record, golden rows per config), table rules, table read-back, adapter build | `models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/caches.py` |
+| Device-model serving entry points the part tests call (`embed/from_host(start=)`, `layer(end=)`, `state.served`) | `models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/parts.py` |
