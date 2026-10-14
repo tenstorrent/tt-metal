@@ -210,9 +210,12 @@ void wait_for_go_message() {
     tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
 #endif
     uint32_t go_message_index = mailboxes->go_message_index;
+    // Read once: callers wait inside a program, before its done, so nothing writes go_processed during the wait (the
+    // core advances it after the program; the host rewrites it only in a reset, after every program completes).
+    const uint8_t go_processed = mailboxes->go_processed;
 
     // GO is active while the counter is ahead of what this core has processed.
-    while (mailboxes->go_messages[go_message_index].go_count == mailboxes->go_processed) {
+    while (mailboxes->go_messages[go_message_index].go_count == go_processed) {
         invalidate_l1_cache();
     }
 }

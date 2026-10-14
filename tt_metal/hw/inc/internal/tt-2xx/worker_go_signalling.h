@@ -138,7 +138,9 @@ inline uint32_t prepare_worker_completion_signal(
     if (wait_for_go) {
         WAYPOINT("FGW");
         // GO-counter: wait for this slot's go_count to advance past go_processed (the FDS interrupt advances it).
-        while (mailboxes->go_messages[go_message_index].go_count == mailboxes->go_processed);
+        // go_processed is read once: nothing writes it while this launch waits for its go.
+        const uint8_t go_processed = mailboxes->go_processed;
+        while (mailboxes->go_messages[go_message_index].go_count == go_processed);
         WAYPOINT("FGD");
     }
 
