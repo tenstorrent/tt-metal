@@ -72,8 +72,14 @@ fi
 # rather than silently compiling the helper as a no-op.
 if command -v c++ >/dev/null 2>&1; then
     if c++ -std=c++17 -DTT_LLK_REQUIRE_RAW_LREG_METADATA \
-        -fsyntax-only "$source_file" > /dev/null 2>&1; then
+        -fsyntax-only "$source_file" > "$output/host-required.log" 2>&1; then
         echo "required raw-LREG metadata unexpectedly accepted by host C++" >&2
+        exit 1
+    fi
+    # The fixture also calls target-only builtins, so any failure is not enough.
+    if ! grep -q 'raw-LREG effect metadata required' "$output/host-required.log"; then
+        cat "$output/host-required.log" >&2
+        echo "host rejection did not come from the required-effect guard" >&2
         exit 1
     fi
     echo "PASS: unsupported host compiler rejects required metadata"
