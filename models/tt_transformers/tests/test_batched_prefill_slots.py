@@ -25,6 +25,7 @@ from models.tt_transformers.tt.generator import (
     batched_prefill_padded_batch,
     gather_batched_prefill_samples,
     prepare_prefill_page_tables_per_layer,
+    validate_compact_prefill_model,
 )
 
 
@@ -138,13 +139,13 @@ def test_layer_pages_follow_prefill_rows_and_mask_unowned_tail(rows, batch):
     table = torch.tensor([[11, 12, 13, 99], [21, 22, 98, 97], [31, 32, 33, 96]], dtype=torch.int32)
     saved = table.clone()
     result = prepare_prefill_page_tables_per_layer(
-        [table, table, table, None], [0, 1, 2], rows, batch, [129, 65, 128], [64, 64, 128, 64]
+        [table, table, table, None], [0, 1, 2], rows, batch, [129, 65, 128], [64, 64, 128, 64], 1024
     )
     assert result[0] is result[1]
     assert result[2] is not result[0]
     assert result[3] is None
-    assert result[0][rows].tolist() == [[11, 12, 13], [21, 22, -1], [31, 32, -1]]
-    assert result[2][rows].tolist() == [[11, 12], [21, -1], [31, -1]]
+    assert result[0][rows, :3].tolist() == [[11, 12, 13], [21, 22, -1], [31, 32, -1]]
+    assert result[2][rows, :2].tolist() == [[11, 12], [21, -1], [31, -1]]
     padding = [i for i in range(batch) if i not in rows]
     assert (result[0][padding] == -1).all()
     torch.testing.assert_close(table, saved)
@@ -152,14 +153,17 @@ def test_layer_pages_follow_prefill_rows_and_mask_unowned_tail(rows, batch):
 
 def test_sequential_layer_pages_select_request_not_physical_slot():
     table = torch.tensor([[11, 12, 99], [21, 98, 97]], dtype=torch.int32)
-    result = prepare_prefill_page_tables_per_layer([table], [1], [0], 1, [80, 32], [64])
-    assert result[0].tolist() == [[21]]
+    result = prepare_prefill_page_tables_per_layer([table], [1], [0], 1, [80, 32], [64], 128)
+    assert result[0].tolist() == [[21, -1]]
 
 
+@pytest.mark.parametrize("prompt_len,padded_len", [(40, 128), (65, 128), (200, 1024)])
 @pytest.mark.parametrize("compact", [False, True])
 @pytest.mark.parametrize("sample", [False, True], ids=["host_logits", "device_sampling_contract"])
 @pytest.mark.parametrize("existing_decode_state", [False, True])
-def test_prefill_routes_tokens_pages_and_output_by_the_same_rows(monkeypatch, compact, sample, existing_decode_state):
+def test_prefill_routes_tokens_pages_and_output_by_the_same_rows(
+    monkeypatch, compact, sample, existing_decode_state, prompt_len, padded_len
+):
     from models.tt_transformers.tt import generator as generator_module
 
     generator = object.__new__(Generator)
@@ -169,7 +173,7 @@ def test_prefill_routes_tokens_pages_and_output_by_the_same_rows(monkeypatch, co
     generator.model_args = [
         SimpleNamespace(
             max_batch_size=32,
-            max_prefill_chunk_size=8192,
+            max_prefill_chunk_size=32768,
             vocab_size=1,
             batched_prefill_compact_rows=compact,
             can_enable_trace=lambda *args: False,
@@ -217,14 +221,16 @@ def test_prefill_routes_tokens_pages_and_output_by_the_same_rows(monkeypatch, co
     generator.prefill_forward_single_user_text = forward
     monkeypatch.setattr(generator_module.ttnn, "reshape", torch.reshape)
     monkeypatch.setattr(generator_module.ttnn, "to_layout", lambda tensor, *args, **kwargs: tensor)
-    tokens = torch.tensor([[11] * 65, [22] * 65, [33] * 65])
-    pages = torch.tensor([[10, 11, 99], [20, 21, 98], [30, 31, 97]], dtype=torch.int32)
+    tokens = torch.tensor([[11] * prompt_len, [22] * prompt_len, [33] * prompt_len])
+    owned_blocks = (prompt_len + 63) // 64
+    owned_pages = [[base + j for j in range(owned_blocks)] for base in (10, 20, 30)]
+    pages = torch.tensor([row + [99] for row in owned_pages], dtype=torch.int32)
     cache = [[(SimpleNamespace(shape=(100, 1, 64, 128)), None)]]
     output = generator._prefill_forward_text_impl(
         tokens,
         page_table=pages,
         kv_cache=cache,
-        prompt_lens=[65, 65, 65],
+        prompt_lens=[prompt_len] * 3,
         empty_slots=[31, 4, 17],
         enable_trace=False,
         warmup_prefill=False,
@@ -236,17 +242,20 @@ def test_prefill_routes_tokens_pages_and_output_by_the_same_rows(monkeypatch, co
     if sample:
         assert output[0].flatten().tolist() == [111, 122, 133]
         state = sampler.apply_prefill_state.call_args.kwargs
-        assert state["prompt_tokens"][[31, 4, 17], 64].tolist() == [11, 22, 33]
+        assert state["prompt_tokens"][[31, 4, 17], prompt_len - 1].tolist() == [11, 22, 33]
         # The sampler contract stores inverse temperatures.
         assert [state["sampling_params"].temperature[i] for i in [31, 4, 17]] == pytest.approx([10, 5, 10 / 3])
     else:
         assert output.flatten().tolist() == [11, 22, 33]
     packed, args = observed[0]
     rows = [0, 1, 2] if compact else [31, 4, 17]
-    assert packed.shape == (4 if compact else 32, 128)
-    assert packed[rows, 64].tolist() == [11, 22, 33]
+    assert packed.shape == (4 if compact else 32, padded_len)
+    assert packed[rows, prompt_len - 1].tolist() == [11, 22, 33]
     assert args["user_id"] == rows
-    assert args["page_tables_per_layer"][0][rows].tolist() == [[10, 11], [20, 21], [30, 31]]
+    prepared = args["page_tables_per_layer"][0]
+    assert prepared.shape[1] * 64 >= packed.shape[1]
+    assert prepared[rows, :owned_blocks].tolist() == owned_pages
+    assert (prepared[:, owned_blocks:] == -1).all()
     # The version-1 decode contract takes explicit reload commands. Prefill
     # must neither infer a later reload nor overwrite existing decode state.
     if existing_decode_state:
@@ -269,3 +278,48 @@ def test_single_user_forward_passes_explicit_layer_tables():
         torch.zeros(1, 128), None, 0, 64, model_id=0, page_tables_per_layer=tables
     )
     assert model.ttnn_prefill_forward.call_args.kwargs["page_tables_per_layer"] is tables
+
+
+@pytest.mark.parametrize("prompt_len,padded_len", [(40, 128), (200, 1024)])
+@pytest.mark.parametrize("block_size", [64, 128])
+def test_layer_page_width_covers_kernel_padding_without_exposing_stale_pages(prompt_len, padded_len, block_size):
+    owned = (prompt_len + block_size - 1) // block_size
+    table = torch.tensor([list(range(10, 10 + owned)) + [999]], dtype=torch.int32)
+    result = prepare_prefill_page_tables_per_layer([table], [0], [3], 4, [prompt_len], [block_size], padded_len)[0]
+    assert result.shape == (4, (padded_len + block_size - 1) // block_size)
+    assert result[3, :owned].tolist() == list(range(10, 10 + owned))
+    assert (result[3, owned:] == -1).all()
+    assert (result[:3] == -1).all()
+    assert 999 not in result
+
+
+def test_compact_opt_in_rejects_row_sharded_cache_at_startup():
+    with pytest.raises(ValueError, match="row-sharded"):  # allow-pytest.raises: host-only startup validation
+        Generator([SimpleNamespace(users_row_sharded=True)], [SimpleNamespace(batched_prefill_compact_rows=True)], None)
+
+
+@pytest.mark.parametrize("extract", [None, lambda hidden, **kwargs: hidden])
+def test_compact_device_sampling_requires_explicit_slot_map_at_startup(extract):
+    model = SimpleNamespace(_supports_on_device_sampling=True, extract_last_tokens_batched_prefill=extract)
+    with pytest.raises(ValueError, match="explicit slot_map"):  # allow-pytest.raises: host-only startup validation
+        Generator([model], [SimpleNamespace(batched_prefill_compact_rows=True)], None)
+
+
+def test_compact_slot_map_capability_and_default_path():
+    model = SimpleNamespace(
+        _supports_on_device_sampling=True, extract_last_tokens_batched_prefill=lambda hidden, slot_map=None: hidden
+    )
+    validate_compact_prefill_model(model, SimpleNamespace(batched_prefill_compact_rows=True))
+    validate_compact_prefill_model(SimpleNamespace(users_row_sharded=True), SimpleNamespace())
+
+
+def test_layer_page_width_is_stable_inside_a_padded_trace_bucket():
+    table = torch.arange(16, dtype=torch.int32).reshape(1, 16)
+    prepared = [
+        prepare_prefill_page_tables_per_layer([table], [0], [0], 1, [prompt], [64], 1024)[0]
+        for prompt in (129, 200, 1023)
+    ]
+    assert [tuple(p.shape) for p in prepared] == [(1, 16)] * 3
+    assert (prepared[0][0, 3:] == -1).all()
+    assert (prepared[1][0, 4:] == -1).all()
+    assert prepared[2].tolist() == table.tolist()
