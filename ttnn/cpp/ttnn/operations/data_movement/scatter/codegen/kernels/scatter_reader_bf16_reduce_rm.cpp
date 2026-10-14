@@ -72,9 +72,8 @@ void kernel_main() {
         volatile tt_l1_ptr uint16_t* output = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(out_cb.get_write_ptr());
 
         if constexpr (packed_bf16_io) {
-            // Every admitted page is 32-byte aligned, hence contains an even
-            // number of BF16 values.  Load two lanes per L1 transaction while
-            // retaining the same lane order and scalar conversion semantics.
+            // Requires an even input_stick_elems, which the host must gate before enabling
+            // packed_bf16_io. Two lanes per L1 transaction, same lane order and scalar conversion.
             const volatile tt_l1_ptr uint32_t* input_packed =
                 reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(input);
             for (uint32_t i = 0; i < input_stick_elems; i += 2) {

@@ -164,10 +164,6 @@ void kernel_main() {
                             continue;
                         }
                         const uint32_t row_base = face_i_base + k * face_size;  // i*512 + k*16
-                        const uint32_t valid_cols =
-                            (j == tile_faces - 1 && valid_w < tile_width)
-                                ? (valid_w > face_size ? valid_w - face_size : 0)
-                                : (j == 0 ? (valid_w >= face_size ? face_size : valid_w) : face_size);
                         for (uint32_t l = 0; l < face_size; l++) {
                             const uint32_t col_in_tile = j * face_size + l;
                             if (col_in_tile >= valid_w) {
