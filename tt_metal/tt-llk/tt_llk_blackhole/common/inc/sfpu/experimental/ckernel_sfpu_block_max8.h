@@ -73,65 +73,49 @@ inline sfpi::vFloat load_masked(std::uint32_t band, std::uint32_t valid_scores)
 }
 
 /**
- * @brief Retain the pairwise maximum in EVEN and use ODD as scratch afterward.
- *
- * SFPSWAP writes the maximum to its first source register and the minimum
- * to its second. Blackhole auto-stalls if the next SFPU instruction is not
- * SFPNOP. Keeping the NOP takes two cycles instead of three; it is a scheduling
- * optimization, not a correctness requirement for this non-macro sequence.
- * See the Blackhole ISA SFPSWAP instruction-scheduling section:
- * https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPSWAP.md#instruction-scheduling
- * @tparam EVEN: Working LREG receiving the maximum.
- * @tparam ODD: Scratch LREG receiving the minimum.
- */
-template <std::uint32_t EVEN, std::uint32_t ODD>
-inline void max_pair()
-{
-    TTI_SFPSWAP(0, EVEN, ODD, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP;
-}
-
-/**
  * @brief Apply pairwise max to LREG pairs 0/1, 2/3, 4/5, and 6/7.
  *
  * These pairs represent two four-row bands from each of the left and right faces.
+ * SFPSWAP leaves maxima in the even registers and minima in the odd scratch
+ * registers. Each swap is followed immediately by SFPNOP: Blackhole auto-stalls
+ * if another SFPU instruction follows, even for independent registers. Keeping
+ * each NOP takes two cycles instead of three; it is a scheduling optimization,
+ * not a correctness requirement for this non-macro sequence.
+ * https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPSWAP.md#instruction-scheduling
  */
 inline void max_four_pairs()
 {
-    max_pair<0, 1>();
-    max_pair<2, 3>();
-    max_pair<4, 5>();
-    max_pair<6, 7>();
-}
-
-/**
- * @brief Rotate SRC right by one instance into DST without mixing physical lanes.
- *
- * The source may equal the destination. Blackhole auto-stalls after SHFLROR1
- * if another SFPU instruction follows. Keeping SFPNOP takes two cycles instead
- * of three, as described in the Blackhole ISA instruction-scheduling section:
- * https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPSHFT2.md#instruction-scheduling
- * @tparam SRC: Source LREG.
- * @tparam DST: Destination LREG.
- */
-template <std::uint32_t SRC, std::uint32_t DST>
-inline void shuffle_right_one()
-{
-    TTI_SFPSHFT2(0, SRC, DST, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPSWAP(0, 0, 1, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPNOP;
+    TTI_SFPSWAP(0, 2, 3, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPNOP;
+    TTI_SFPSWAP(0, 4, 5, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPNOP;
+    TTI_SFPSWAP(0, 6, 7, p_sfpswap::ALL_ROWS_MAX);
     TTI_SFPNOP;
 }
 
 /**
  * @brief Rotate all four independent reductions into their odd-numbered scratch LREGs.
+ *
+ * Each SHFLROR1 rotates right by one instance without mixing physical lanes.
+ * Each shuffle is followed immediately by SFPNOP: Blackhole auto-stalls if
+ * another SFPU instruction follows. Keeping each NOP takes two cycles instead
+ * of three, as described in the Blackhole ISA instruction-scheduling section:
+ * https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPSHFT2.md#instruction-scheduling
  * @tparam FROM_MAX Select even-numbered maxima as sources; otherwise rotate scratch in place.
  */
 template <bool FROM_MAX>
 inline void shuffle_four_pairs()
 {
-    shuffle_right_one<FROM_MAX ? 0 : 1, 1>();
-    shuffle_right_one<FROM_MAX ? 2 : 3, 3>();
-    shuffle_right_one<FROM_MAX ? 4 : 5, 5>();
-    shuffle_right_one<FROM_MAX ? 6 : 7, 7>();
+    TTI_SFPSHFT2(0, FROM_MAX ? 0 : 1, 1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPNOP;
+    TTI_SFPSHFT2(0, FROM_MAX ? 2 : 3, 3, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPNOP;
+    TTI_SFPSHFT2(0, FROM_MAX ? 4 : 5, 5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPNOP;
+    TTI_SFPSHFT2(0, FROM_MAX ? 6 : 7, 7, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+    TTI_SFPNOP;
 }
 
 /**

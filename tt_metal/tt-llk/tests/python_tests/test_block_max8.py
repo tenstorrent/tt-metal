@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Direct SFPU coverage with eight occupied DST slots and alternating DST halves."""
 
-from dataclasses import dataclass
-
 import pytest
 import torch
 from tt_llk_harness import (
@@ -18,25 +16,6 @@ from tt_llk_harness import (
     params,
     tilize_block,
 )
-
-
-@dataclass
-class ValidScores(params.RuntimeParameter):
-    """Pass the valid prefix and optional DST sign-bit probe to the driver."""
-
-    valid_scores: int
-    inject_negative_zero: int
-
-    def convert_to_cpp(self):
-        """Provide the equivalent constant for harness template mode."""
-        return (
-            f"constexpr unsigned VALID_SCORES = {self.valid_scores};"
-            f"constexpr unsigned INJECT_NEGATIVE_ZERO = {self.inject_negative_zero};"
-        )
-
-    def convert_to_struct_fields(self):
-        """Serialize the valid prefix and probe flag as unsigned runtime arguments."""
-        return "unsigned VALID_SCORES; unsigned INJECT_NEGATIVE_ZERO;", "II"
 
 
 @blackhole_only
@@ -91,7 +70,7 @@ def test_block_max8(dst_index, valid, pattern):
         runtimes=[
             params.TILE_COUNT(24),
             params.DEST_INDEX(dst_index),
-            ValidScores(valid, int(pattern == "negative_zero")),
+            params.BLOCK_MAX8_PARAMS(valid, int(pattern == "negative_zero")),
         ],
         variant_stimuli=StimuliConfig(
             src,

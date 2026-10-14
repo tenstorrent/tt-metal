@@ -1352,6 +1352,25 @@ class MOE_GATE_NORMALIZE_PARAMS(TemplateParameter):
 # === RUNTIME PARAMETER IMPLEMENTATIONS ===
 
 
+@dataclass
+class BLOCK_MAX8_PARAMS(RuntimeParameter):
+    """Pass the valid prefix and optional DST sign-bit probe to the driver."""
+
+    valid_scores: int
+    inject_negative_zero: int
+
+    def convert_to_cpp(self):
+        """Provide the equivalent constant for harness template mode."""
+        return (
+            f"constexpr unsigned VALID_SCORES = {self.valid_scores};"
+            f"constexpr unsigned INJECT_NEGATIVE_ZERO = {self.inject_negative_zero};"
+        )
+
+    def convert_to_struct_fields(self):
+        """Serialize the valid prefix and probe flag as unsigned runtime arguments."""
+        return "unsigned VALID_SCORES; unsigned INJECT_NEGATIVE_ZERO;", "II"
+
+
 def generate_input_dim(
     srcA: tuple[int],
     srcB: tuple[int],

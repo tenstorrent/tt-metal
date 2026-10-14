@@ -26,7 +26,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_hw_configure_<false>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
-        false, false, DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+        false /* transpose_of_faces */, false /* within_face_16x16_transpose */, DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
     for (std::uint32_t t = 0; t < params.TILE_CNT; ++t)
     {
         _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
@@ -131,7 +131,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_<false, PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_R_DIM * TILE_C_DIM);
+    _llk_pack_hw_configure_<false, PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_R_DIM * TILE_C_DIM /* tile_size */);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, false, PackMode::Default>();
     _llk_pack_init_wrapper_<PackMode::Default, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     for (std::uint32_t base = 0; base < params.TILE_CNT; base += DEST_NUM_TILES_FP16_HALF)
