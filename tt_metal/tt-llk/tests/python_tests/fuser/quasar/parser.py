@@ -555,6 +555,7 @@ class FpuMathSchema(FpuMathSchemaBase):
 class QuasarUnarySfpuMathSchema(UnarySfpuMathSchema):
     _sfpu_cls: ClassVar = UnarySfpu
     _sfpu_ops: ClassVar = UNARY_SFPU_OPS
+    _dropout_ops: ClassVar = {"Dropout"}
 
 
 class QuasarBinarySfpuMathSchema(BinarySfpuMathSchema):

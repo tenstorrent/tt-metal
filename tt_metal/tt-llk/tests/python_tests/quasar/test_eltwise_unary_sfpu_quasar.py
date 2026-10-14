@@ -927,7 +927,7 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    # p = 0 only (golden x * 2.0); the drop path is tested by test_dropout_* below.
+    # p = 0 only (golden x * 2.0); seeding is test_dropout_reseed_quasar, p = 1 the fuser YAMLs.
     OpConfig(MathOperation.Dropout, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     *[OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in UNARY_MAX_MIN_OPS],
@@ -1697,75 +1697,24 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
     )
 
 
-# Dropout drop path: the PRNG mask is unpredictable, so check 0-or-x*scale, the dropped fraction,
-# varying row-pair masks, and same-seed repeatability.
+# Dropout seeding: the PRNG mask is unpredictable, so check 0-or-x*scale, the dropped fraction,
+# varying row-pair masks, and same-seed repeatability. The deterministic endpoints (p = 0 with a
+# real scale, p = 1) are fuser YAMLs: sfpu_dropout_real_scale / sfpu_dropout_drop_all.
 DROPOUT_DETECTOR_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Float32], same=True
 )
-DROPOUT_FP32_FORMATS = input_output_formats([DataFormat.Float32], same=True)
 
 # Nonzero inputs, so a zero output can only mean a drop.
-DROPOUT_MIN_MAGNITUDE = 0.5
-DROPOUT_MAGNITUDE_SPAN = 9.5
-DROPOUT_NEGATIVE_FRACTION = 0.5
-DROPOUT_UNIFORM_SPEC = StimuliSpec.uniform(low=0.0, high=1.0)
+DROPOUT_STIMULI_SPEC = StimuliSpec.uniform(low=0.5, high=10.0)
+
+DROPOUT_HALF_PROBABILITY = DROPOUT_PROBABILITY_MAX // 2
+DROPOUT_HALF_FRACTION_BAND = (0.4, 0.6)
 
 DROPOUT_ROW_PAIR_DATUMS = 32
 # A mask repeating per row pair gives one distinct mask; independent lanes give ~all distinct.
 DROPOUT_MIN_DISTINCT_MASK_FRACTION = 0.9
 
-DROPOUT_P_REAL = 0.3
-DROPOUT_SCALE_REAL = 1.0 / (1.0 - DROPOUT_P_REAL)
-
 DROPOUT_SEED_ALT = 0x1234ABCD
-DROPOUT_SEED_LFSR_LOCKUP = 0xFFFFFFFF
-
-
-# (name, probability operand, expected dropped fraction band, scale, seed)
-DROPOUT_PROBABILITY_CASES = (
-    ("drop_all", DROPOUT_PROBABILITY_MAX, (1.0, 1.0), DROPOUT_SCALE, DROPOUT_SEED),
-    (
-        "drop_half",
-        DROPOUT_PROBABILITY_MAX // 2,
-        (0.4, 0.6),
-        DROPOUT_SCALE,
-        DROPOUT_SEED,
-    ),
-    (
-        "drop_real_scale",
-        int(DROPOUT_P_REAL * DROPOUT_PROBABILITY_MAX),
-        (0.2, 0.4),
-        DROPOUT_SCALE_REAL,
-        DROPOUT_SEED,
-    ),
-    # All ones is the XNOR-LFSR lock-up seed, which init_prng_seed must remap.
-    (
-        "drop_half_lockup_seed",
-        DROPOUT_PROBABILITY_MAX // 2,
-        (0.4, 0.6),
-        DROPOUT_SCALE,
-        DROPOUT_SEED_LFSR_LOCKUP,
-    ),
-)
-# 1 / (1 - p) has a non-zero fp32 low half; only Float32 output keeps it.
-DROPOUT_CASE_FORMATS = {"drop_real_scale": DROPOUT_FP32_FORMATS}
-
-
-def _dropout_stimuli(formats, input_dimensions):
-    src_A, tile_cnt, src_B, _ = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        spec_A=DROPOUT_UNIFORM_SPEC,
-        spec_B=DROPOUT_UNIFORM_SPEC,
-    )
-    magnitudes = (
-        DROPOUT_MIN_MAGNITUDE + src_A.to(torch.float32) * DROPOUT_MAGNITUDE_SPAN
-    )
-    signs = torch.where(src_B.to(torch.float32) < DROPOUT_NEGATIVE_FRACTION, -1.0, 1.0)
-    src_A = (signs * magnitudes).to(format_dict[formats.input_format])
-    return src_A, src_B, tile_cnt
 
 
 def _dropout_config(variant, src_A, src_B, tile_cnt, dropout_params):
@@ -1856,52 +1805,6 @@ def _check_row_pair_masks_vary(name, dropped):
 
 @pytest.mark.quasar
 @parametrize(
-    dropout_case_variant_dims=[
-        (MathOperation.Dropout, case, variant, dims)
-        for case in DROPOUT_PROBABILITY_CASES
-        for variant in generate_quasar_sfpu_format_variants(
-            MathOperation.Dropout,
-            DROPOUT_CASE_FORMATS.get(case[0], DROPOUT_DETECTOR_FORMATS),
-        )
-        for dims in TENSOR_DIMS
-    ],
-)
-def test_dropout_probability_quasar(dropout_case_variant_dims):
-    """Outputs are 0 or x * scale, the dropped fraction is near p, and row-pair masks vary."""
-    (
-        _,
-        (case_name, probability, (min_frac, max_frac), scale, seed),
-        variant,
-        input_dimensions,
-    ) = dropout_case_variant_dims[0]
-    formats = variant.formats
-
-    src_A, src_B, tile_cnt = _dropout_stimuli(formats, input_dimensions)
-    configuration = _dropout_config(
-        variant,
-        src_A,
-        src_B,
-        tile_cnt,
-        SFPU_DROPOUT_PARAMS(
-            dropout_probability=probability, dropout_scale=scale, dropout_seed=seed
-        ),
-    )
-    result = _dropout_result(configuration, variant, src_A)
-
-    dropped = _check_dropout_values(
-        case_name, src_A, result, scale, formats.output_format
-    )
-    dropped_frac = dropped.float().mean().item()
-    assert min_frac <= dropped_frac <= max_frac, (
-        f"{case_name}: dropped fraction {dropped_frac:.4f} outside "
-        f"[{min_frac}, {max_frac}] (probability operand {probability:#x})"
-    )
-    if min_frac < 1.0:
-        _check_row_pair_masks_vary(case_name, dropped)
-
-
-@pytest.mark.quasar
-@parametrize(
     dropout_variant=[
         (MathOperation.Dropout, variant)
         for variant in generate_quasar_sfpu_format_variants(
@@ -1910,12 +1813,18 @@ def test_dropout_probability_quasar(dropout_case_variant_dims):
     ],
 )
 def test_dropout_reseed_quasar(dropout_variant):
-    """Seeds A, A, B: the same seed must repeat the mask exactly, a different seed must change it."""
+    """Seeds A, A, B at p = 1/2: masks look random, the same seed repeats the mask, a different one changes it."""
     _, variant = dropout_variant[0]
     formats = variant.formats
-    probability = DROPOUT_PROBABILITY_MAX // 2
 
-    src_A, src_B, tile_cnt = _dropout_stimuli(formats, TENSOR_DIMS[0])
+    src_A, tile_cnt, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=TENSOR_DIMS[0],
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=TENSOR_DIMS[0],
+        spec_A=DROPOUT_STIMULI_SPEC,
+        spec_B=DROPOUT_STIMULI_SPEC,
+    )
     seeds = (DROPOUT_SEED, DROPOUT_SEED, DROPOUT_SEED_ALT)
     configurations = [
         _dropout_config(
@@ -1923,7 +1832,9 @@ def test_dropout_reseed_quasar(dropout_variant):
             src_A,
             src_B,
             tile_cnt,
-            SFPU_DROPOUT_PARAMS(dropout_probability=probability, dropout_seed=seed),
+            SFPU_DROPOUT_PARAMS(
+                dropout_probability=DROPOUT_HALF_PROBABILITY, dropout_seed=seed
+            ),
         )
         for seed in seeds
     ]
@@ -1941,6 +1852,15 @@ def test_dropout_reseed_quasar(dropout_variant):
         )
         for seed, configuration in zip(seeds, configurations)
     ]
+
+    min_frac, max_frac = DROPOUT_HALF_FRACTION_BAND
+    for seed, mask in zip(seeds, masks):
+        dropped_frac = mask.float().mean().item()
+        assert min_frac <= dropped_frac <= max_frac, (
+            f"seed {seed:#x}: dropped fraction {dropped_frac:.4f} outside "
+            f"[{min_frac}, {max_frac}] at p = 1/2"
+        )
+        _check_row_pair_masks_vary(f"seed {seed:#x}", mask)
 
     same_seed_diff = int((masks[0] != masks[1]).sum())
     assert same_seed_diff == 0, (
