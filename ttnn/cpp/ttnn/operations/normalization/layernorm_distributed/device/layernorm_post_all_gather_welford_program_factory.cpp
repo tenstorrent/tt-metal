@@ -55,7 +55,7 @@ constexpr const char* POSTWF_READER_KERNEL =
     "reader_unary_interleaved_ln_rm_gb_post_allgather.cpp";
 constexpr const char* POSTWF_WRITER_KERNEL =
     "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
-    "writer_unary_interleaved_start_id_blocked.cpp";
+    "writer_unary_interleaved_row_strided_blocked.cpp";
 
 }  // namespace
 
@@ -110,8 +110,71 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
-    uint32_t block_size =
-        fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
+    auto grid_size = device->compute_with_storage_grid_size();
+    uint32_t max_cores_x = grid_size.x;
+    uint32_t max_cores_y = grid_size.y;
+    uint32_t tiles_per_core_y = Wt;
+
+    // Declare all variables that will be used later
+    uint32_t cores_x = 0;
+    uint32_t cores_y = 0;
+    uint32_t tiles_per_core_x = 0;
+    uint32_t num_cores = 0;
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t num_tile_rows_per_core_group_1 = 0;
+    uint32_t num_tile_rows_per_core_group_2 = 0;
+
+    // Determine if we should use 2D kernel layout
+    bool use_2d_kernel = false;
+    if (operation_attributes.use_2d_core_grid.has_value()) {
+        use_2d_kernel = *operation_attributes.use_2d_core_grid;
+    }
+
+    if (use_2d_kernel) {
+        // 2D kernel layout: distribute work across cores in a 2D grid
+        cores_x = std::min(max_cores_x, num_tile_rows);
+        while (num_tile_rows % cores_x != 0 && cores_x > 1) {
+            cores_x--;
+        }
+        tiles_per_core_x = num_tile_rows / cores_x;
+        cores_y = std::min(max_cores_y, Wt);
+        while (Wt % cores_y != 0 && cores_y > 1) {
+            cores_y--;
+        }
+        tiles_per_core_y = Wt / cores_y;
+
+        CoreRange all_cores_range({0, 0}, {cores_x - 1, cores_y - 1});
+        all_cores = CoreRangeSet(std::vector{all_cores_range});
+    } else {
+        auto
+            [num_cores_result,
+             all_cores_result,
+             core_group_1_result,
+             core_group_2_result,
+             num_tile_rows_per_core_group_1_result,
+             num_tile_rows_per_core_group_2_result] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
+
+        num_cores = num_cores_result;
+        all_cores = all_cores_result;
+        core_group_1 = core_group_1_result;
+        core_group_2 = core_group_2_result;
+        num_tile_rows_per_core_group_1 = num_tile_rows_per_core_group_1_result;
+        num_tile_rows_per_core_group_2 = num_tile_rows_per_core_group_2_result;
+
+        log_debug(tt::LogOp, "num_cores: {}", num_cores);
+        log_debug(tt::LogOp, "grid_size: {}", grid_size);
+        log_debug(tt::LogOp, "core_group_1: {}", core_group_1.str());
+        log_debug(tt::LogOp, "num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
+        log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
+        log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
+    }
+
+    // #56908: the 2D path splits the row across cores_y, so every kernel block size must divide the
+    // core's own column slice, not the global width. Mirrors layernorm_post_all_gather_program_factory.
+    uint32_t block_size = fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(tiles_per_core_y, 4)
+                                           : tt::tt_metal::find_max_divisor(tiles_per_core_y, 8);
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.dtype());
@@ -215,66 +278,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         "compute kernel config; otherwise precision is silently lost in the unpacker format "
         "conversion.");
 
-    auto grid_size = device->compute_with_storage_grid_size();
-    uint32_t max_cores_x = grid_size.x;
-    uint32_t max_cores_y = grid_size.y;
-    uint32_t tiles_per_core_y = Wt;
-
-    // Declare all variables that will be used later
-    uint32_t cores_x = 0;
-    uint32_t cores_y = 0;
-    uint32_t tiles_per_core_x = 0;
-    uint32_t num_cores = 0;
-    CoreRangeSet all_cores;
-    CoreRangeSet core_group_1;
-    CoreRangeSet core_group_2;
-    uint32_t num_tile_rows_per_core_group_1 = 0;
-    uint32_t num_tile_rows_per_core_group_2 = 0;
-
-    // Determine if we should use 2D kernel layout
-    bool use_2d_kernel = false;
-    if (operation_attributes.use_2d_core_grid.has_value()) {
-        use_2d_kernel = *operation_attributes.use_2d_core_grid;
-    }
-
-    if (use_2d_kernel) {
-        // 2D kernel layout: distribute work across cores in a 2D grid
-        cores_x = std::min(max_cores_x, num_tile_rows);
-        while (num_tile_rows % cores_x != 0 && cores_x > 1) {
-            cores_x--;
-        }
-        tiles_per_core_x = num_tile_rows / cores_x;
-        cores_y = std::min(max_cores_y, Wt);
-        while (Wt % cores_y != 0 && cores_y > 1) {
-            cores_y--;
-        }
-        tiles_per_core_y = Wt / cores_y;
-
-        CoreRange all_cores_range({0, 0}, {cores_x - 1, cores_y - 1});
-        all_cores = CoreRangeSet(std::vector{all_cores_range});
-    } else {
-        auto
-            [num_cores_result,
-             all_cores_result,
-             core_group_1_result,
-             core_group_2_result,
-             num_tile_rows_per_core_group_1_result,
-             num_tile_rows_per_core_group_2_result] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
-
-        num_cores = num_cores_result;
-        all_cores = all_cores_result;
-        core_group_1 = core_group_1_result;
-        core_group_2 = core_group_2_result;
-        num_tile_rows_per_core_group_1 = num_tile_rows_per_core_group_1_result;
-        num_tile_rows_per_core_group_2 = num_tile_rows_per_core_group_2_result;
-
-        log_debug(tt::LogOp, "num_cores: {}", num_cores);
-        log_debug(tt::LogOp, "grid_size: {}", grid_size);
-        log_debug(tt::LogOp, "core_group_1: {}", core_group_1.str());
-        log_debug(tt::LogOp, "num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
-        log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
-        log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
-    }
 
     uint32_t gamma_stick_size = 0;
     uint32_t gamma_is_row_major = 0;
@@ -388,7 +391,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
              {"gamma_is_row_major", gamma_is_row_major},
              {"beta_is_row_major", beta_is_row_major},
              {"dfb_length", cb_length},
-             {"Wt", Wt},
+             {"Wt", tiles_per_core_y},
              {"row_stride", Wt},
              {"reduce_factor", reduce_factor}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
@@ -417,8 +420,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         .dfb_bindings = {m2::DFBBinding{
             .dfb_spec_name = POSTWF_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = POSTWF_OUTPUT_T, .accessor_name = "dst"}},
-        .compile_time_args = {{"blk", block_size}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
+        .compile_time_args = {{"blk", block_size}, {"row_tiles", tiles_per_core_y}, {"row_stride", Wt}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tile_offset"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
@@ -555,8 +558,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
             for (uint32_t y = 0; y < cores_y; ++y) {
                 CoreCoord core = {x, y};
 
-                uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
-                uint32_t stats_offset = x * stats_tiles_cols;
+                uint32_t tile_offset = (x * tiles_per_core_x * Wt) + (y * tiles_per_core_y);
+                uint32_t stats_offset = x * tiles_per_core_x * stats_tiles_cols;
 
                 log_debug(
                     tt::LogOp,
@@ -576,7 +579,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
                 m2::AddRuntimeArgsForNode(
                     writer_run.runtime_arg_values,
                     core,
-                    {{"num_tiles", tiles_per_core_x * tiles_per_core_y}, {"tile_offset", tile_offset}});
+                    {{"num_rows", tiles_per_core_x}, {"tile_offset", tile_offset}});
             }
         }
     } else {
@@ -609,7 +612,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
             m2::AddRuntimeArgsForNode(
                 writer_run.runtime_arg_values,
                 core,
-                {{"num_tiles", num_tile_rows_per_core * Wt}, {"tile_offset", tile_offset}});
+                {{"num_rows", num_tile_rows_per_core}, {"tile_offset", tile_offset}});
             curr_row += num_tile_rows_per_core;
         }
     }
