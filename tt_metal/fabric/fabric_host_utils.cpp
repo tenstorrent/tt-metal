@@ -71,69 +71,6 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ub
     }
 }
 
-void validate_fabric_configs(
-    const std::vector<MeshFabricConfigObservation>& observations,
-    const std::vector<std::pair<uint32_t, uint32_t>>& intermesh_mesh_pairs,
-    std::size_t mesh_count,
-    const std::string& mesh_graph_path) {
-    std::string observed_values;
-    for (const auto& o : observations) {
-        observed_values += fmt::format(
-            "\n  mesh_id={}, mesh_host_rank={}, rank={}, fabric_config={}",
-            *o.mesh_id,
-            o.mesh_host_rank,
-            o.rank,
-            enchantum::to_string(o.fabric_config));
-    }
-
-    // Every rank that owns a given mesh must report the same config; different meshes may differ.
-    std::map<MeshId, FabricConfig> per_mesh_config;
-    for (const auto& o : observations) {
-        const auto [it, inserted] = per_mesh_config.try_emplace(o.mesh_id, o.fabric_config);
-        TT_FATAL(
-            inserted || it->second == o.fabric_config,
-            "FabricConfig must match across all ranks of a mesh, but mesh {} has ranks reporting both {} and {}. "
-            "MGD path: {}. Observed:{}",
-            *o.mesh_id,
-            enchantum::to_string(it->second),
-            enchantum::to_string(o.fabric_config),
-            mesh_graph_path,
-            observed_values);
-    }
-
-    // A 1D config cannot span more than one mesh, and cannot be mixed with 2D.
-    const auto is_1d = [](FabricConfig c) { return c == FabricConfig::FABRIC_1D || c == FabricConfig::FABRIC_1D_RING; };
-    const bool any_1d = std::any_of(
-        per_mesh_config.begin(), per_mesh_config.end(), [&is_1d](const auto& kv) { return is_1d(kv.second); });
-    TT_FATAL(
-        !any_1d || mesh_count <= 1,
-        "A 1D FabricConfig cannot be used with more than one mesh (mesh_count={}), and 1D configs cannot be "
-        "mixed with 2D configs. MGD path: {}. Observed:{}",
-        mesh_count,
-        mesh_graph_path,
-        observed_values);
-
-    // Two meshes joined by an intermesh link must share a config (per-seam reconciliation of different
-    // configs is not supported yet, issue #56561). Different 2D configs on unconnected meshes are fine.
-    for (const auto& [a, b] : intermesh_mesh_pairs) {
-        const auto ai = per_mesh_config.find(MeshId{a});
-        const auto bi = per_mesh_config.find(MeshId{b});
-        if (ai == per_mesh_config.end() || bi == per_mesh_config.end()) {
-            continue;
-        }
-        TT_FATAL(
-            ai->second == bi->second,
-            "Meshes joined by an intermesh link must use the same FabricConfig (per-seam reconciliation of "
-            "different configs is not supported yet, issue #56561): mesh {} is {} but connected mesh {} is {}. "
-            "MGD path: {}.",
-            a,
-            enchantum::to_string(ai->second),
-            b,
-            enchantum::to_string(bi->second),
-            mesh_graph_path);
-    }
-}
-
 bool requires_more_connectivity(FabricType requested_type, FabricType available_type, const MeshShape& mesh_shape) {
     for (uint32_t axis = 0; axis < 2; ++axis) {
         if (has_genuine_torus_axis(requested_type, mesh_shape, axis) &&

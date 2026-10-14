@@ -2620,6 +2620,142 @@ TEST(MeshGraphDescriptorTests, PlainFabric2DDowngradesExpressMgdToMesh) {
     EXPECT_EQ(m0[0].at(1).port_direction, tt::tt_fabric::RoutingDirection::E);
 }
 
+// Per-mesh FabricConfig: a two-mesh line MGD (4x8 RING,LINE connected to 4x2 LINE,LINE). Each mesh
+// reports its own resolved config; declared fields win over a process-wide override; absent fields
+// derive from dim_types; and one global torus config is rejected per-mesh on the LINE,LINE mesh.
+TEST(MeshGraphDescriptorTests, PerMeshFabricConfigFromMgd) {
+    // Build the two-mesh MGD with optional per-mesh fabric_config fields and an optional process-wide
+    // override, returning {ring-mesh config, line-mesh config}.
+    const auto resolve = [](const std::string& ring_field,
+                            const std::string& line_field,
+                            std::optional<tt::tt_fabric::FabricConfig> code_override) {
+        const std::string text_proto =
+            "mesh_descriptors { name: \"R\" arch: BLACKHOLE "
+            "device_topology { dims: [ 4, 8 ] dim_types: [ RING, LINE ] } host_topology { dims: [ 4, 4 ] } "
+            "channels { count: 2 policy: RELAXED } " +
+            ring_field +
+            " } "
+            "mesh_descriptors { name: \"L\" arch: BLACKHOLE "
+            "device_topology { dims: [ 4, 2 ] dim_types: [ LINE, LINE ] } host_topology { dims: [ 1, 1 ] } "
+            "channels { count: 2 policy: RELAXED } " +
+            line_field +
+            " } "
+            "graph_descriptors { name: \"G0\" type: \"FABRIC\" "
+            "instances { mesh { mesh_descriptor: \"R\" mesh_id: 0 } } "
+            "instances { mesh { mesh_descriptor: \"L\" mesh_id: 1 } } "
+            "connections { nodes { mesh { mesh_descriptor: \"R\" mesh_id: 0 } } "
+            "nodes { mesh { mesh_descriptor: \"L\" mesh_id: 1 } } channels { count: 4 policy: RELAXED } } } "
+            "top_level_instance { graph { graph_descriptor: \"G0\" graph_id: 0 } }";
+        const auto path = std::filesystem::temp_directory_path() / "test_per_mesh_fabric_config.textproto";
+        {
+            std::ofstream file(path);
+            file << text_proto;
+        }
+        tt::tt_fabric::MeshGraph mesh_graph =
+            code_override.has_value()
+                ? tt::tt_fabric::MeshGraph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path.string(), *code_override)
+                : tt::tt_fabric::MeshGraph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path.string());
+        const std::pair<tt::tt_fabric::FabricConfig, tt::tt_fabric::FabricConfig> cfgs{
+            mesh_graph.get_fabric_config(MeshId{0}), mesh_graph.get_fabric_config(MeshId{1})};
+        std::filesystem::remove(path);
+        return cfgs;
+    };
+    using tt::tt_fabric::FabricConfig;
+
+    // Declared per mesh: different 2D configs across the two connected meshes build cleanly.
+    const auto declared = resolve("fabric_config: FABRIC_2D_TORUS_Y", "fabric_config: FABRIC_2D", std::nullopt);
+    EXPECT_EQ(declared.first, FabricConfig::FABRIC_2D_TORUS_Y);
+    EXPECT_EQ(declared.second, FabricConfig::FABRIC_2D);
+
+    // Derived default (no fields): RING,LINE -> FABRIC_2D_TORUS_Y, LINE,LINE -> FABRIC_2D.
+    const auto derived = resolve("", "", std::nullopt);
+    EXPECT_EQ(derived.first, FabricConfig::FABRIC_2D_TORUS_Y);
+    EXPECT_EQ(derived.second, FabricConfig::FABRIC_2D);
+
+    // The declared field is the source of truth: it wins over a conflicting process-wide override.
+    const auto overridden =
+        resolve("fabric_config: FABRIC_2D_TORUS_Y", "fabric_config: FABRIC_2D", FabricConfig::FABRIC_2D);
+    EXPECT_EQ(overridden.first, FabricConfig::FABRIC_2D_TORUS_Y);
+    EXPECT_EQ(overridden.second, FabricConfig::FABRIC_2D);
+
+    // Negative: one global TORUS_Y override is rejected per-mesh on the LINE,LINE mesh (provides MESH).
+    EXPECT_ANY_THROW(resolve("", "", FabricConfig::FABRIC_2D_TORUS_Y));
+}
+
+// 1D fabric config rules: a 1D line mesh defaults to FABRIC_1D and a 1D ring axis to FABRIC_1D_RING;
+// a process-wide (code) override supplies the config when the MGD declares none, and the MGD's own
+// fabric_config is the source of truth that overrides a conflicting code override. (T3K cluster so the
+// 1D configs map to MESH and no is_ubb_galaxy torus expansion interferes.)
+TEST(MeshGraphDescriptorTests, FabricConfig1DRulesAndCodeOverride) {
+    const auto resolved = [](const std::string& dim_types,
+                             const std::string& declared_field,
+                             std::optional<tt::tt_fabric::FabricConfig> code_override) {
+        const std::string text_proto =
+            "mesh_descriptors { name: \"M0\" arch: WORMHOLE_B0 "
+            "device_topology { dims: [ 1, 8 ] dim_types: [ " +
+            dim_types +
+            " ] } "
+            "host_topology { dims: [ 1, 1 ] } channels { count: 1 } " +
+            declared_field +
+            " } "
+            "graph_descriptors { name: \"G0\" type: \"FABRIC\" "
+            "instances { mesh { mesh_descriptor: \"M0\" mesh_id: 0 } } } "
+            "top_level_instance { graph { graph_descriptor: \"G0\" graph_id: 0 } }";
+        const auto path = std::filesystem::temp_directory_path() / "test_fabric_1d_rules.textproto";
+        {
+            std::ofstream file(path);
+            file << text_proto;
+        }
+        tt::tt_fabric::MeshGraph mesh_graph =
+            code_override.has_value()
+                ? tt::tt_fabric::MeshGraph(tt::tt_metal::ClusterType::T3K, path.string(), *code_override)
+                : tt::tt_fabric::MeshGraph(tt::tt_metal::ClusterType::T3K, path.string());
+        const auto cfg = mesh_graph.get_fabric_config(MeshId{0});
+        std::filesystem::remove(path);
+        return cfg;
+    };
+    using tt::tt_fabric::FabricConfig;
+
+    // 1D defaults derived from dim_types: line -> FABRIC_1D, ring axis -> FABRIC_1D_RING.
+    EXPECT_EQ(resolved("LINE, LINE", "", std::nullopt), FabricConfig::FABRIC_1D);
+    EXPECT_EQ(resolved("LINE, RING", "", std::nullopt), FabricConfig::FABRIC_1D_RING);
+
+    // Set through code: with no MGD field, the process-wide override is the source of the config.
+    EXPECT_EQ(resolved("LINE, LINE", "", FabricConfig::FABRIC_1D_RING), FabricConfig::FABRIC_1D_RING);
+
+    // The MGD's fabric_config is the source of truth: it overrides a conflicting code override.
+    EXPECT_EQ(
+        resolved("LINE, RING", "fabric_config: FABRIC_1D", FabricConfig::FABRIC_1D_RING), FabricConfig::FABRIC_1D);
+}
+
+// A 1D fabric config is single-mesh only: it must be rejected on a multi-mesh MGD. Forcing FABRIC_1D
+// process-wide onto a 2-mesh MGD (FABRIC_1D maps to MESH, so it clears the per-mesh topology check)
+// isolates the 1D-multi-mesh guard.
+TEST(MeshGraphDescriptorTests, OneDFabricRejectedForMultiMesh) {
+    const std::string text_proto =
+        "mesh_descriptors { name: \"M\" arch: WORMHOLE_B0 device_topology { dims: [ 2, 2 ] } "
+        "host_topology { dims: [ 1, 1 ] } channels { count: 1 } } "
+        "graph_descriptors { name: \"G0\" type: \"FABRIC\" "
+        "instances { mesh { mesh_descriptor: \"M\" mesh_id: 0 } } "
+        "instances { mesh { mesh_descriptor: \"M\" mesh_id: 1 } } "
+        "connections { nodes { mesh { mesh_descriptor: \"M\" mesh_id: 0 } } "
+        "nodes { mesh { mesh_descriptor: \"M\" mesh_id: 1 } } channels { count: 1 } } } "
+        "top_level_instance { graph { graph_descriptor: \"G0\" graph_id: 0 } }";
+    const auto path = std::filesystem::temp_directory_path() / "test_1d_multimesh.textproto";
+    {
+        std::ofstream file(path);
+        file << text_proto;
+    }
+    try {
+        tt::tt_fabric::MeshGraph(tt::tt_metal::ClusterType::T3K, path.string(), tt::tt_fabric::FabricConfig::FABRIC_1D);
+        std::filesystem::remove(path);
+        FAIL() << "expected a 1D FabricConfig on a 2-mesh MGD to be rejected";
+    } catch (const std::exception& e) {
+        std::filesystem::remove(path);
+        EXPECT_NE(std::string(e.what()).find("1D fabric is single-mesh only"), std::string::npos) << e.what();
+    }
+}
+
 // express_links (two ROW patterns) expand into 48 Z edges on the 32x4 [RING, RING] descriptor.
 TEST(MeshGraphDescriptorTests, ExpressLinks32x4) {
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");

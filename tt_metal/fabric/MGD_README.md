@@ -44,6 +44,43 @@ link on a config-torused direction could face a peer that labels the axis
 differently and hang (issue #54650). An axis the MGD itself declares as `RING`
 keeps its boundary ports.
 
+### Per-mesh fabric config
+
+Each mesh may declare its own `fabric_config` in its `MeshDescriptor`, so one MGD
+can mix routing configs across meshes (e.g. a `RING,LINE` mesh on
+`FABRIC_2D_TORUS_Y` next to a `LINE,LINE` mesh on `FABRIC_2D`):
+
+```proto
+mesh_descriptors {
+  name: "ring"
+  device_topology { dims: [ 4, 8 ] dim_types: [ RING, LINE ] }
+  fabric_config: FABRIC_2D_TORUS_Y
+}
+mesh_descriptors {
+  name: "line"
+  device_topology { dims: [ 4, 2 ] dim_types: [ LINE, LINE ] }
+  fabric_config: FABRIC_2D
+}
+```
+
+Resolution is **per mesh**, in precedence order:
+
+1. the mesh's declared `fabric_config` field (if set),
+2. the process-wide override (`set_fabric_config`, for back-compat), else
+3. a default derived from `device_topology.dim_types`.
+
+The derived default is `FABRIC_1D` for a 1D mesh (`FABRIC_1D_RING` when that axis
+is `RING`), and for a 2D mesh `FABRIC_2D` or the matching `FABRIC_2D_TORUS_X/Y/XY`
+per its ring axes. A declared config is validated against **that mesh's own**
+topology and may only restrict connectivity (e.g. `torus → mesh`), never request
+more than the topology provides — so forcing one global torus config onto a mesh
+whose dims are all `LINE` is rejected, while declaring it only on the ring meshes
+is accepted.
+
+Valid `fabric_config` values: `FABRIC_1D`, `FABRIC_1D_RING`, `FABRIC_2D`,
+`FABRIC_2D_TORUS_X`, `FABRIC_2D_TORUS_Y`, `FABRIC_2D_TORUS_XY` (omit for the
+derived default).
+
 
 ## Minimal workflow
 > This is currently TBD

@@ -34,27 +34,6 @@ bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, bool is_ubb_galaxy);
 
-// One rank's view of a mesh's FabricConfig, gathered across ranks for validation. Trivially copyable so it
-// can be exchanged as raw bytes between ranks.
-struct MeshFabricConfigObservation {
-    MeshId mesh_id;
-    uint32_t rank;
-    uint32_t mesh_host_rank;
-    FabricConfig fabric_config;
-};
-
-// Validate the gathered per-mesh FabricConfigs (pure; no collectives -- unit-testable). Rules:
-//   - every rank that owns a given mesh must report the same config,
-//   - a 1D config may not be used when more than one mesh is present (and cannot be mixed with 2D),
-//   - two meshes joined by an intermesh link must share a config (different 2D configs across
-//     unconnected meshes are allowed).
-// Throws (TT_FATAL) on any violation; mesh_graph_path is only used for error context.
-void validate_fabric_configs(
-    const std::vector<MeshFabricConfigObservation>& observations,
-    const std::vector<std::pair<uint32_t, uint32_t>>& intermesh_mesh_pairs,
-    std::size_t mesh_count,
-    const std::string& mesh_graph_path);
-
 // Returns whether a declared torus axis realizes a distinct wrap edge. Use bare
 // has_flag only for declared intent, never to decide realized routing topology.
 inline bool has_genuine_torus_axis(FabricType fabric_type, const MeshShape& mesh_shape, uint32_t axis) {

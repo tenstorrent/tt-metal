@@ -232,6 +232,31 @@ TEST_F(ControlPlaneFixture, TestGalaxyLayoutCheck) {
     expect_galaxy_rank_group_checks(control_plane);
 }
 
+// Per-mesh FabricConfig declared in the llama line MGD: verifies the host topology matches runtime AND
+// that each mesh resolved to its own declared config -- the 4x8 RING,LINE meshes to FABRIC_2D_TORUS_Y
+// and the 4x2 LINE,LINE meshes to FABRIC_2D. Run on the SC4 single-pod llama line entry.
+TEST_F(ControlPlaneFixture, TestLlamaLinePerMeshFabricConfig) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        fabric_config_for_active_mgd(), tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    expect_mesh_graph_host_topology_matches_runtime(control_plane);
+
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto mesh_ids = mesh_graph.get_mesh_ids();
+    EXPECT_EQ(mesh_ids.size(), 4u);
+    for (const auto mesh_id : mesh_ids) {
+        // 4x8 meshes have 32 chips and run TORUS_Y; 4x2 meshes have 8 chips and run plain FABRIC_2D.
+        const auto num_chips = mesh_graph.get_chip_ids(mesh_id).size();
+        const auto expected =
+            num_chips == 32 ? tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y : tt::tt_fabric::FabricConfig::FABRIC_2D;
+        EXPECT_EQ(mesh_graph.get_fabric_config(mesh_id), expected)
+            << "mesh " << *mesh_id << " (" << num_chips << " chips)";
+    }
+}
+
 // Galaxy corner folding: mesh endpoints (first/last logical chips) must map to tray-corner ASICs.
 TEST_F(ControlPlaneFixture, TestGalaxyCornerPins) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();

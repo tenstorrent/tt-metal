@@ -155,6 +155,10 @@ public:
     // Get compute only mesh IDs (excludes switches)
     std::vector<MeshId> get_mesh_ids() const;
 
+    // Resolved FabricConfig for a mesh: the MGD's declared mesh fabric_config, else the process-wide
+    // override, else the config derived from the mesh's dim_types. Meshes in one MGD may differ.
+    FabricConfig get_fabric_config(MeshId mesh_id) const;
+
     // Get the chip ids for a given mesh_id
     // If host_rank is provided, return the chip ids for the submesh for that host rank
     // Otherwise, return the chip ids for the entire mesh
@@ -276,6 +280,8 @@ private:
     std::map<MeshId, MeshContainer<ChipId>> switch_to_chip_ids_;
     std::unordered_map<MeshId, std::vector<MeshId>> switch_to_connected_meshes_;
     std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
+    // Resolved FabricConfig per mesh (MGD-declared, process-wide override, or dim_types default).
+    std::unordered_map<MeshId, FabricConfig> mesh_fabric_config_;
     bool inter_mesh_relaxed_policy_ = false;  // Default to STRICT (false = not relaxed)
     // Set true in initialize_from_mgd when policy is read from the descriptor (vs implicit default)
     bool inter_mesh_policy_specified_ = false;
