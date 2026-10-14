@@ -200,6 +200,7 @@ target_link_libraries(
     PRIVATE
         x280_state
         gtest_main
+        TT::Metalium::HostDevCommon
 )
 set_target_properties(
     x280_runtime_host_tests

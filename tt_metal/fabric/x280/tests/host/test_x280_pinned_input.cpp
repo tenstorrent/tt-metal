@@ -5,6 +5,7 @@
 #include "rt/x280_pinned_input.h"
 
 #include <gtest/gtest.h>
+#include <hostdevcommon/fabric_common.h>
 
 #include <array>
 #include <cstddef>
@@ -12,6 +13,9 @@
 #include <limits>
 
 namespace {
+
+// The routing image the pinned input holds is tt-metal's own routing table.
+static_assert(X280_PINNED_INPUT_ROUTING_BYTES == sizeof(tt::tt_fabric::routing_l1_info_t));
 
 TEST(X280PinnedInput, FixedRegionConstantsDescribeTheCompleteInputLayout) {
     EXPECT_EQ(X280_PINNED_INPUT_BASE, UINT64_C(0x0A000000));
