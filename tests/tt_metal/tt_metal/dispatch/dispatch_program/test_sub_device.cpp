@@ -53,6 +53,17 @@ namespace tt::tt_metal {
 constexpr uint32_t k_local_l1_size = 3200;
 const std::string k_coordinates_kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/read_my_coordinates.cpp";
 
+static tt_metal::Program create_blank_program(const CoreRange& cores) {
+    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        CoreRangeSet(cores),
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    return program;
+}
+
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     auto mesh_device = devices_[0];
     CoreRangeSet sharded_cores_1 = CoreRange({0, 0}, {2, 2});
@@ -638,6 +649,26 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixTestSubDeviceCQOwnershipAf
         EXPECT_EQ(counter[0], expected_runs) << "core " << core.str();
     }
     mesh_device->release_mesh_trace(trace_id);
+}
+
+// The first enqueue on a CQ that takes over a sub-device points the sub-device's workers at that CQ for their done
+// signals, even when the enqueue sends them no go (an empty program). Otherwise the CQ's next program reports done to
+// the previous owner and the CQ's finish never completes.
+TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestCQOwnershipTakenByEmptyWorkload) {
+    auto mesh_device = device_;
+    auto& cq0 = mesh_device->mesh_command_queue(0);
+    auto& cq1 = mesh_device->mesh_command_queue(1);
+
+    distributed::MeshWorkload blank_workload;
+    blank_workload.add_program(device_range_, create_blank_program(CoreRange({0, 0}, {0, 0})));
+    distributed::MeshWorkload empty_workload;
+    empty_workload.add_program(device_range_, tt_metal::CreateProgram());
+
+    distributed::EnqueueMeshWorkload(cq0, blank_workload, false);
+    distributed::Finish(cq0);
+    distributed::EnqueueMeshWorkload(cq1, empty_workload, false);
+    distributed::EnqueueMeshWorkload(cq1, blank_workload, false);
+    distributed::Finish(cq1);
 }
 
 // Single CQ: switching sub-device managers right behind a non-blocking trace replay must not disturb the replay. The

@@ -539,8 +539,11 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         const uint8_t offset = static_cast<uint8_t>(
             dispatch_mem_map.get_dispatch_message_update_offset(*sub_device_id) +
             dispatch_mem_map.get_completion_counter_offset(static_cast<uint8_t>(this->id_)));
-        const uint8_t multicast_go_offset =
-            mcast_go_signals ? static_cast<uint8_t>(*sub_device_id) : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET;
+        // The address belongs to the sub-device's workers, not this workload: it must reach them even when this
+        // workload sends them no go (e.g. an empty program), since the next go on this CQ will not resend it.
+        const uint8_t multicast_go_offset = mesh_device_->impl().has_noc_mcast_txns(sub_device_id)
+                                                ? static_cast<uint8_t>(*sub_device_id)
+                                                : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET;
         for (auto* device : mesh_device_->get_devices()) {
             auto& mirror = device->sysmem_manager().worker_go_mirror(*sub_device_id);
             if (mirror.noc_addr_cq_id == this->id_) {
@@ -1454,8 +1457,9 @@ void FDMeshCommandQueue::submit_replay_buffer(
     {
         const auto& dispatch_mem_map = MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map();
         for (auto sub_device_id : sub_device_ids) {
-            const auto& desc = worker_descriptors.at(sub_device_id);
-            const bool mcast = desc.num_traced_programs_needing_go_signal_multicast > 0;
+            // Sent to the sub-device's workers whether or not this trace multicasts to them (see
+            // enqueue_mesh_workload).
+            const bool mcast = mesh_device_->impl().has_noc_mcast_txns(sub_device_id);
             const uint8_t offset = static_cast<uint8_t>(
                 dispatch_mem_map.get_dispatch_message_update_offset(*sub_device_id) +
                 dispatch_mem_map.get_completion_counter_offset(static_cast<uint8_t>(this->id_)));
@@ -1503,15 +1507,16 @@ void FDMeshCommandQueue::submit_replay_buffer(
         config_buffer_mgr_,
         expected_num_workers_completed_);
 
-    // Mirror the dispatcher's per-sub-device go_count for the gos this replay issued: one REPLAY_TRACE reset go plus
-    // the trace's captured program gos. Exactness only affects the reseed baseline on a *subsequent* CQ-ownership
-    // change after a replay (a rare path); the common replay-on-owning-CQ case never reads it.
+    // Mirror the dispatcher's per-sub-device go_count for the gos this replay issued. Only multicast gos advance it:
+    // the trace's multicast program gos plus the REPLAY_TRACE reset go, which is multicast only when the trace has
+    // multicast programs. Exactness only affects the reseed baseline on a *subsequent* CQ-ownership change after a
+    // replay (a rare path); the common replay-on-owning-CQ case never reads it.
     for (auto sub_device_id : sub_device_ids) {
-        const auto& desc = worker_descriptors.at(sub_device_id);
         const uint32_t program_gos =
-            desc.num_traced_programs_needing_go_signal_multicast > desc.num_traced_programs_needing_go_signal_unicast
-                ? desc.num_traced_programs_needing_go_signal_multicast
-                : desc.num_traced_programs_needing_go_signal_unicast;
+            worker_descriptors.at(sub_device_id).num_traced_programs_needing_go_signal_multicast;
+        if (program_gos == 0) {
+            continue;
+        }
         for (auto* device : mesh_device_->get_devices()) {
             auto& mirror = device->sysmem_manager().worker_go_mirror(*sub_device_id);
             mirror.go_count = static_cast<uint8_t>(mirror.go_count + 1u + program_gos);
