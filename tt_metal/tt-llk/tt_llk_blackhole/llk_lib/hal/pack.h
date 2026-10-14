@@ -328,7 +328,7 @@ inline __attribute__((always_inline)) void run()
 template <typename Operation>
 inline __attribute__((always_inline)) void run(const Operation operation)
 {
-    ckernel::instrn_buffer[0] = operation.get_operation();
+    TT_INSN(operation.get_operation());
 }
 
 } // namespace hal::pack
