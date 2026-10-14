@@ -157,6 +157,9 @@ if(ENABLE_BUILD_TIME_TRACE)
     endif()
 endif()
 
+# Tracy call-stack sampling walks frame pointers; keep them in all targets, not only TracyClient's (tt-umd#3594).
+add_compile_options($<$<BOOL:${ENABLE_TRACY}>:-fno-omit-frame-pointer>)
+
 # Top-level target to build all generated files
 # Useful for eg: ensuring all files exist before linting
 add_custom_target(all_generated_files)
