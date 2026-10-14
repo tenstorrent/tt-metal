@@ -19,8 +19,9 @@ The perf test times every program replayed from a trace, as the model runs it. E
 chip's program in turn and, on 8x4, issues the overlap slower than the device runs it, so a ring's chips
 start hundreds of microseconds apart and the overlap waits on its late neighbours.
 
-TtMoe runs this overlap in every traced Blackhole prefill, so CI runs the 8x4 accuracy cases on a BH Galaxy
-(Disaggregated prefill op unit tests); the perf cases, the 8x1 cases and dg0-only are run by hand.
+TtMoe runs this overlap in every traced Blackhole prefill, so CI runs the accuracy cases, 8x4 on a BH Galaxy
+and 8x1 on a LoudBox (Disaggregated prefill op unit tests). The perf cases, the 8x1 Galaxy submesh and dg0-only
+are run by hand, so CI never collects them.
 """
 
 import heapq
@@ -586,6 +587,16 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
     )
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    return on_ci and params["variant"] is not None
+
+
+def _ci_unsupported_perf_combos(**params):
+    return params["is_ci_env"] or params["is_ci_v2_env"]
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
 @pytest.mark.parametrize(
     "mesh_device, device_params, threshold_id, model_id, variant",
@@ -652,6 +663,7 @@ def _replay_us(mesh_device, trace_id, iters):
     return (time.perf_counter() - start) / iters * 1e6
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_perf_combos)
 @pytest.mark.requires_host_iommu
 @pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
 @pytest.mark.parametrize(
