@@ -148,8 +148,8 @@ constexpr uintptr_t prefetch_q_view_end = prefetch_q_view_base + prefetch_q_size
 #if defined(PREFETCH_Q_CACHED)
 static_assert(sizeof(prefetch_q_entry_type) == 4, "Cached fetch queue entries carry a phase bit in a 4-byte entry");
 static_assert(
-    prefetch_q_base % L2_CACHE_LINE_SIZE == 0 &&
-        (prefetch_q_end + L2_CACHE_LINE_SIZE - 1) / L2_CACHE_LINE_SIZE * L2_CACHE_LINE_SIZE <= cmddat_q_base,
+    prefetch_q_base % L2_CACHE_LINE_SIZE == 0 && cmddat_q_base % L2_CACHE_LINE_SIZE == 0 &&
+        cmddat_q_base >= prefetch_q_end,
     "Fetch queue lines are invalidated without writeback, so they must not hold anything else");
 // Phase the current lap's entries carry. Slots still holding the previous lap's phase are not ready yet.
 static uint32_t prefetch_q_expected_phase = 1U;
