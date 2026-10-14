@@ -317,6 +317,8 @@ def decode_contract_generator():
         model=[model],
         data_parallel=1,
         mode=Mode.DECODE,
+        _pending_deferred_decode_sampling=None,
+        _deferred_decode_sampling_failed=False,
         _decode_forward_trace_text=Mock(return_value=object()),
         _decode_forward_no_trace_text=Mock(return_value=object()),
         sample_decode_on_device=Mock(side_effect=lambda logits, **kwargs: logits),
