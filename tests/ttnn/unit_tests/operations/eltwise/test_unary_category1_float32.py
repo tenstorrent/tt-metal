@@ -10,6 +10,7 @@ from tests.ttnn.utils_for_testing import (
     assert_equal,
     assert_with_ulp,
     assert_allclose,
+    flush_subnormal_values_to_zero,
 )
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_float32_bits,
@@ -792,9 +793,6 @@ def test_exp_special_values(device):
 
     result = ttnn.to_torch(ttnn.exp(tt_in))
 
-    assert torch.equal(torch.isnan(result), torch.isnan(golden))
-    assert torch.equal(torch.isposinf(result), torch.isposinf(golden))
-    assert torch.equal(torch.isneginf(result), torch.isneginf(golden))
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
 
@@ -818,6 +816,82 @@ def test_exp2_allclose(device):
     result = ttnn.to_torch(tt_result)
 
     assert_allclose(actual_result=result, expected_result=golden, atol=8.4e-39, rtol=0)
+
+
+def test_exp2_full_mantissa(device):
+    """exp2 on float32 inputs off the bfloat16 lattice, up to the overflow edge.
+
+    | Inputs                                       | Check   |
+    |----------------------------------------------|---------|
+    | 4096 evenly spaced values in each of         | ULP ≤ 1 |
+    | [-126, 127], [-5, 5] and [-0.5, 0.5]         |         |
+    | edge points up to the last finite input      | ULP ≤ 1 |
+    | (largest float32 below 128)                  |         |
+
+    test_exp_ops only sees bfloat16 values (lower 16 mantissa bits zero), so it
+    never checks full-mantissa rounding or (127, 128).
+    """
+    low, high = -126.0, 127.0
+    last_finite = torch.nextafter(torch.tensor(128.0), torch.tensor(0.0)).item()
+    edge_points = torch.tensor(
+        [low, -10.0, -1.0, -0.75, -0.5, -0.25, 0.25, 0.5, 0.75, 1.0, 10.0, high, 127.5, last_finite],
+        dtype=torch.float32,
+    )
+    input_tensor = torch.cat(
+        [
+            torch.linspace(low, high, 4096, dtype=torch.float32),
+            torch.linspace(-5.0, 5.0, 4096, dtype=torch.float32),
+            torch.linspace(-0.5, 0.5, 4096, dtype=torch.float32),
+            edge_points,
+        ]
+    ).unique()
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = golden_function(input_tensor, device=device)
+
+    result = ttnn.to_torch(ttnn.exp2(tt_in))
+
+    assert torch.isfinite(golden).all(), "edge points must stay below exp2 overflow"
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+def test_exp2_special_values(device):
+    """exp2 on the inputs the bfloat16 sweeps replace with 0, plus both saturation ends.
+
+    | Input                         | Expected                                  |
+    |-------------------------------|-------------------------------------------|
+    | -inf, -149                    | 0                                         |
+    | -127                          | 0 (golden 2^-127 is subnormal; device FTZ)|
+    | -126                          | 2^-126, smallest normal (ULP ≤ 1)         |
+    | ±0 and bfloat16 subnormals    | 1                                         |
+    | ±0.25, 1, 127                 | ULP ≤ 1                                   |
+    | 128, +inf                     | +inf                                      |
+    | NaN, negative NaN             | NaN                                       |
+    """
+    positive_nan = torch.tensor([float("nan")], dtype=torch.float32)
+    subnormals = torch.tensor([1e-40, -1e-40, 1.1e-38, -1.1e-38], dtype=torch.float32)
+    input_tensor = torch.cat(
+        [
+            torch.tensor(
+                [-float("inf"), -149.0, -127.0, -126.0, -0.25, -0.0, 0.0, 0.25, 1.0, 127.0, 128.0, float("inf")],
+                dtype=torch.float32,
+            ),
+            positive_nan,
+            -positive_nan,
+            subnormals,
+        ]
+    )
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = flush_subnormal_values_to_zero(golden_function(input_tensor, device=device))
+
+    result = ttnn.to_torch(ttnn.exp2(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
