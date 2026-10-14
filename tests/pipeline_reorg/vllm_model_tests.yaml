@@ -26,6 +26,12 @@
 #     guaranteed to be split across engine steps. Must equal the
 #     --max-num-batched-tokens passed in additional-server-args.
 #   chunked-prefill-test-timeout: per-step timeout for that step (minutes, default 15).
+#   server-default-top-k: top_k for requests that do not set one, passed to the server
+#     as --override-generation-config. Set it to the device sampler's top-k limit (32)
+#     when the entry samples on device, the model's default temperature is above 0,
+#     and its generation_config.json top_k is unset or above that limit. Without it
+#     those requests (all of vllm bench serve) sample on host, or are silently capped
+#     on device for model classes that declare no max_device_top_k.
 #
 # For max allowed timeout refer to .github/time_budget.yaml
 
@@ -38,6 +44,7 @@
   mesh-device: T3K
   arch: arch-wormhole_b0
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "l1_small_size": 4096}'
+  server-default-top-k: 32
   additional-server-args: "--async-scheduling"
   tt-llama-text-ver: tt_transformers
   multimodal: true
@@ -57,6 +64,7 @@
   mesh-device: "(4, 8)"
   arch: arch-wormhole_b0
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D_RING", "l1_small_size": 4096}'
+  server-default-top-k: 32
   additional-server-args: "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling"
   tt_mm_throttle_perf: 5
   tt-llama-text-ver: tt_transformers
@@ -98,6 +106,7 @@
   mesh-device: P150x4
   arch: arch-blackhole
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  server-default-top-k: 32
   additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
   multimodal: false
   skus:
@@ -124,6 +133,7 @@
   mesh-device: P150x8
   arch: arch-blackhole
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  server-default-top-k: 32
   additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
   multimodal: false
   skus:
@@ -143,6 +153,7 @@
   mesh-device: P150x8
   arch: arch-blackhole
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 960000000, "l1_small_size": 24576}'
+  server-default-top-k: 32
   additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 16384 --long_prefill_token_threshold 4096 --async-scheduling"
   additional-benchmark-args: "--random-input-len 40960 --random-output-len 128 --num-prompts 32 --max-concurrency 32"
   extra-env: "GEMMA4_HYBRID_KV_CACHE_GROUPS=1 GEMMA4_PREFIX_CACHING=1 GEMMA4_KV_BFP8=1 GEMMA4_BOUNDED_SLIDING_KV_CACHE=0 GEMMA4_CHUNKED_PREFILL_TRACE=0 GEMMA4_MAX_TOKENS_ALL_USERS=1523712 GEMMA4_DECODE_WARMUP_BATCHES=1,4,8,32 GEMMA4_CCL_TOPOLOGY=linear GEMMA4_PAGE_BLOCK_SIZE=64"
@@ -264,6 +275,7 @@
   mesh-device: P150x4
   arch: arch-blackhole
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 300000000}'
+  server-default-top-k: 32
   additional-server-args: "--max_model_len 131072 --max_num_seqs 1 --async-scheduling"
   multimodal: false
   skus:
@@ -318,6 +330,7 @@
   mesh-device: T3K
   arch: arch-wormhole_b0
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 80000000}'
+  server-default-top-k: 32
   additional-server-args: "--max_model_len 16384 --max_num_seqs 1 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048"
   additional-benchmark-args: "--num-prompts 16"
   multimodal: false
@@ -337,6 +350,7 @@
   mesh-device: P150x4
   arch: arch-blackhole
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  server-default-top-k: 32
   additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
   multimodal: false
   skus:
@@ -398,6 +412,7 @@
   multimodal: false
   tt-llama-text-ver: tt_transformers
   tt-config: '{"sample_on_device_mode": "all", "l1_small_size": 16384}'
+  server-default-top-k: 32
   additional-server-args: "--max_num_seqs 1 --async-scheduling"
   structured-output: true
   # The structured output run issues 32 x 1024-token requests against a server
@@ -423,6 +438,7 @@
   multimodal: false
   tt-llama-text-ver: tt_transformers
   tt-config: '{"fabric_config": "FABRIC_1D_RING", "sample_on_device_mode": "all", "trace_region_size": 100000000, "l1_small_size": 16384}'
+  server-default-top-k: 32
   tt_mm_throttle_perf: 2
   additional-server-args: "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling"
   structured-output: true
@@ -448,6 +464,7 @@
   arch: arch-wormhole_b0
   tt-llama-text-ver: tt_transformers
   tt-config: '{"fabric_config": "FABRIC_1D", "sample_on_device_mode": "all", "trace_region_size": 85000000}'
+  server-default-top-k: 32
   additional-server-args: "--async-scheduling"
   structured-output: true
   sampling-tests: true
@@ -545,6 +562,7 @@
   # also reserves a traced resumed prefill per traced sequence length at warmup,
   # which the 50 MB default does not cover.
   tt-config: '{"fabric_config": "FABRIC_1D", "sample_on_device_mode": "all", "trace_region_size": 85000000}'
+  server-default-top-k: 32
   multimodal: false
   additional-server-args: "--enable-chunked-prefill --max-num-batched-tokens 2048 --max_model_len 32768 --async-scheduling"
   # Prompts long enough to be split, at a concurrency that makes continuations
@@ -572,6 +590,7 @@
   # is too small fails at server startup rather than mid-run, so this is loud if
   # it is wrong.
   tt-config: '{"fabric_config": "FABRIC_1D_RING", "sample_on_device_mode": "all", "trace_region_size": 85000000}'
+  server-default-top-k: 32
   tt-llama-text-ver: tt_transformers
   additional-server-args: "--data_parallel_size 4 --async-scheduling"
   structured-output: true
@@ -593,6 +612,7 @@
   arch: arch-wormhole_b0
   tt-llama-text-ver: llama3_70b_galaxy
   tt-config: '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 220000000}'
+  server-default-top-k: 32
   additional-server-args: "--data_parallel_size 4 --max_num_seqs 8 --async-scheduling"
   additional-benchmark-args: "--random-prefix-len 256"
   sampling-tests: true
