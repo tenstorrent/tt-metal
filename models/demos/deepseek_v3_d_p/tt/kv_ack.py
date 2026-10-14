@@ -45,6 +45,7 @@ def zero_pad_and_ack(
     metadata_msg,
     on_layer_complete,
     trace_controller,
+    tp_axis: Optional[int] = None,
 ) -> None:
     """Zero this chunk's pad window in the KV cache and tell migration the layer is done.
 
@@ -92,6 +93,7 @@ def zero_pad_and_ack(
                     layer_num,
                     seq_len_local * sp_factor,
                     sp_axis,
+                    tp_axis=tp_axis,
                 )
             else:
                 ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
@@ -102,6 +104,7 @@ def zero_pad_and_ack(
                     actual_end,
                     seq_len_local * sp_factor,
                     sp_axis,
+                    tp_axis=tp_axis,
                 )
         _t_zero = time.perf_counter() if _ACK_TIMING else 0.0
         if d2h_service is not None:
