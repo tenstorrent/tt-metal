@@ -76,6 +76,18 @@ def test_block_output_adapters_do_not_inherit_contract_sampling_limits(adapter):
         assert "supports_device_penalties" not in cls.model_capabilities
 
 
+def _plugin_sampling_router():
+    """The plugin's ``SamplingInputBatch`` and ``TTModelRunner``, or a skip.
+
+    The routing under test is plugin code. The tt-metal unit-test image has
+    only the conftest's ``vllm_tt_plugin`` stub, so these tests run where the
+    plugin is installed or on PYTHONPATH.
+    """
+    input_batch = pytest.importorskip("vllm_tt_plugin.input_batch")
+    model_runner = pytest.importorskip("vllm_tt_plugin.model_runner")
+    return input_batch.SamplingInputBatch, model_runner.TTModelRunner
+
+
 @pytest.mark.parametrize(
     ("temperature", "top_k", "device_sampling"),
     [
@@ -87,8 +99,7 @@ def test_block_output_adapters_do_not_inherit_contract_sampling_limits(adapter):
     ],
 )
 def test_contract_sampled_top_k_uses_host_when_the_device_cannot_honor_it(adapter, temperature, top_k, device_sampling):
-    from vllm_tt_plugin.input_batch import SamplingInputBatch
-    from vllm_tt_plugin.model_runner import TTModelRunner
+    SamplingInputBatch, TTModelRunner = _plugin_sampling_router()
 
     sampling = SamplingInputBatch(1)
     sampling.temperature[0] = temperature
@@ -112,8 +123,7 @@ def test_contract_sampled_top_k_uses_host_when_the_device_cannot_honor_it(adapte
 
 
 def test_contract_penalty_request_uses_host_sampler(adapter):
-    from vllm_tt_plugin.input_batch import SamplingInputBatch
-    from vllm_tt_plugin.model_runner import TTModelRunner
+    SamplingInputBatch, TTModelRunner = _plugin_sampling_router()
 
     sampling = SamplingInputBatch(1)
     sampling.temperature[0] = 0.7
