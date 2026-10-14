@@ -37,6 +37,7 @@ class DeepSeekV4ProConfig:
     NUM_LIMITED_GROUPS = 1
     # V4 replaces V3/Kimi's sigmoid router affinity with sqrt(softplus(.)).
     SCORE_FUNC = "sqrtsoftplus"
+    GATE_FP32_LOGITS = True
 
     # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
     # selected-weight distribution rather than slot alignment; 384 experts, top-6, sqrtsoftplus floors at

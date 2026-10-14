@@ -383,6 +383,8 @@ class TtMoEGateConfig:
     n_limited_groups: int = DeepSeekV3Config.NUM_LIMITED_GROUPS  # = topk_groups
     route_scale: float = DeepSeekV3Config.ROUTE_SCALE  # PREVIOUS VALUE: 1.0 @ddjekic to check
     score_func: str = "sigmoid"
+    # Gate matmul output and TP all-reduce in fp32, so the top-k sees logits that were never rounded to bf16.
+    fp32_logits: bool = False
 
     # grid_config
     core_grid: ttnn.CoreRangeSet = field(
@@ -429,6 +431,7 @@ class TtMoEGateConfig:
         # Merged under **overrides so an explicit kwarg still wins.
         model_defaults = {
             "score_func": getattr(model_cfg, "SCORE_FUNC", cls.score_func),
+            "fp32_logits": getattr(model_cfg, "GATE_FP32_LOGITS", cls.fp32_logits),
             # Serves as both the default depth and the ceiling an explicit sp_dim cannot exceed.
             "sp_dim": getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", cls.sp_dim),
             "max_sp_dim": getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
@@ -845,6 +848,7 @@ class TtMoEGatePrefill(LightweightModule):
             compute_kernel_config=self.config.mm_configs["COMPUTE_CONFIG"],
             program_config=program_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.float32 if self.config.fp32_logits else None,
         )
         tp_axis = self.config.ccl_config["TP_AXIS"]
         if self.mesh_device.shape[tp_axis] > 1:
@@ -1111,7 +1115,7 @@ class TtMoEGatePrefill(LightweightModule):
                 self.build_padding_config(actual_isl, padding_side, actual_start) if actual_isl is not None else None
             )
 
-        logits_f32 = ttnn.typecast(logits, ttnn.float32)
+        logits_f32 = logits if logits.dtype == ttnn.float32 else ttnn.typecast(logits, ttnn.float32)
         input_ids_dev = self._input_ids_to_device(input_ids)
         ttnn_scores, ttnn_top_k_experts_indices = ttnn.experimental.deepseek_prefill.moe_hash_gate(
             logits_f32,
@@ -1123,7 +1127,8 @@ class TtMoEGatePrefill(LightweightModule):
             score_func=self.config.score_func,
             padding_config=padding_config,
         )
-        ttnn.deallocate(logits_f32)
+        if logits_f32 is not logits:
+            ttnn.deallocate(logits_f32)
         ttnn.deallocate(input_ids_dev)
         # padding_config is memoized + owned by build_padding_config (reused across forwards/replays). Do
         # NOT deallocate it here even on the owns_padding_config path — freeing it breaks the next cache hit.
