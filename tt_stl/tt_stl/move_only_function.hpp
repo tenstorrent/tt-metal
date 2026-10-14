@@ -100,16 +100,10 @@ class move_only_function<R(Args...)> {
         void (*destroy)(void* storage) noexcept;
     };
 
-    // The table pointer's low bits record what can be done without it:
-    //   kBytewiseRelocate  moving is a memcpy of the buffer -- trivial inline targets
-    //   kNoDestroy         destroying does nothing          -- trivially destructible inline targets
-    //   kHeapPointer       moving copies one pointer        -- every heap target
-    // A heap target is moved by copying only its pointer, not the whole buffer: the pointer was just
-    // written as one 8-byte store, and reading it back as 24 bytes defeats store-to-load forwarding,
-    // which measured at about 10 ns per move.
-    static constexpr std::uintptr_t kBytewiseRelocate = 1;
-    static constexpr std::uintptr_t kNoDestroy = 2;
-    static constexpr std::uintptr_t kHeapPointer = 4;
+    // The table pointer's low bits record what can be done without the table.
+    static constexpr std::uintptr_t kBytewiseRelocate = 1;  // memcpy move: trivial inline targets
+    static constexpr std::uintptr_t kNoDestroy = 2;         // no-op destroy: trivially destructible inline targets
+    static constexpr std::uintptr_t kHeapPointer = 4;       // pointer-copy move: every heap target
     static constexpr std::uintptr_t kTagMask = kBytewiseRelocate | kNoDestroy | kHeapPointer;
     static_assert(alignof(VTable) > kTagMask, "the tag bits need zero bits in the table address");
 
@@ -280,6 +274,8 @@ private:
         if (tag_ & kBytewiseRelocate) {
             __builtin_memcpy(buffer_, other.buffer_, detail::kMoveOnlyFunctionInlineSize);
         } else if (tag_ & kHeapPointer) {
+            // Only the pointer: it was just written as one 8-byte store, and reading it back as 24 bytes
+            // defeats store-to-load forwarding, which measured at about 10 ns per move.
             __builtin_memcpy(buffer_, other.buffer_, sizeof(void*));
         } else {
             table()->relocate(buffer_, other.buffer_);
