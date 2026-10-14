@@ -112,6 +112,7 @@ BAD = {  # name -> (entries, expected message)
     "gap_in_run": ([PrefillEntry(0, 0, C), PrefillEntry(0, 2 * C, 3 * C), EMPTY, EMPTY], "does not continue"),
     "empty_not_tail": ([PrefillEntry(0, 0, C), EMPTY, PrefillEntry(1, 0, C), EMPTY], "after an empty one"),
     "all_empty": ([EMPTY] * 4, "at least one non-empty entry"),
+    "negative_start": ([PrefillEntry(0, -32, 32), EMPTY, EMPTY, EMPTY], "negative start"),
     "misaligned_start": ([PrefillEntry(0, 100, 600), EMPTY, EMPTY, EMPTY], "multiple of 32"),
     "more_than_a_chunk": ([PrefillEntry(0, 0, C + 32), EMPTY, EMPTY, EMPTY], "more than one"),
     "cache_overflow": ([PrefillEntry(0, 7 * C + 32, 7 * C + 64), EMPTY, EMPTY, EMPTY], "exceeds the per-user cache"),

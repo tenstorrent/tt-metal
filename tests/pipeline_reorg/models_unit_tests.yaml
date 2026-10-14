@@ -808,7 +808,7 @@
     bh_galaxy:
       # ~1750 s measured: the test_ep_moe_vs_ref cases take ~140-280 s each (host-side random-weight
       # build + bf8 convert) and test_attention_packed_vs_alone ~85 s.
-      timeout: 40
+      timeout: 38
       tier: 1
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models

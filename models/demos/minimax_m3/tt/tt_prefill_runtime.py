@@ -112,8 +112,8 @@ class TtPrefillRuntime:
             config.max_seq_len % config.chunk_size == 0
         ), f"max_seq_len ({config.max_seq_len}) must be a multiple of chunk_size ({config.chunk_size})"
         assert (
-            config.forward_tokens % config.chunk_size == 0
-        ), f"forward_tokens ({config.forward_tokens}) must be a multiple of chunk_size ({config.chunk_size})"
+            config.forward_tokens >= config.chunk_size and config.forward_tokens % config.chunk_size == 0
+        ), f"forward_tokens ({config.forward_tokens}) must be a positive multiple of chunk_size ({config.chunk_size})"
         # The KV cache, its slot addressing and gather_layer are all sized by config.num_layers, while
         # the model builds one layer per entry of layer_indices. If those disagree, a layer addresses
         # past the per-user cache stride and silently corrupts another slot.

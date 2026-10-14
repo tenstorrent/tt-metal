@@ -37,6 +37,7 @@ def validate_entries(entries, *, chunk_size: int, forward_chunks: int, num_users
             continue
         assert prev is None or not prev.is_empty, f"{e}: non-empty entry after an empty one"
         assert 0 <= e.slot < num_users, f"{e}: slot out of range [0, {num_users})"
+        assert e.start >= 0, f"{e}: negative start"
         assert e.start % 32 == 0, f"{e}: start must be a multiple of 32 (the KV-cache writer's tile grid)"
         assert e.start < e.end <= e.start + chunk_size, f"{e}: more than one {chunk_size}-token chunk"
         assert e.start + chunk_size <= max_seq_len, f"{e}: chunk exceeds the per-user cache {max_seq_len}"
