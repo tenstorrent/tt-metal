@@ -56,7 +56,7 @@ TEST_F(MeshDispatchFixture, CreateMultipleGlobalSemaphoresOnSameCore) {
     std::vector<CoreRangeSet> cores{
         CoreRange({0, 0}, {1, 1}),
         CoreRange({0, 0}, {2, 2}),
-        CoreRange({3, 3}, {5, 6}),
+        CoreRange({3, 1}, {5, 3}),
     };
     std::vector<std::vector<CoreCoord>> cores_vecs;
     cores_vecs.reserve(cores.size());
