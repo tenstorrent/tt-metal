@@ -49,45 +49,6 @@ struct SiLUBackwardKernels {
     tt::tt_metal::KernelHandle compute_group_2;
 };
 
-void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const SiLUBackwardKernels& kernels,
-    const tt::tt_metal::Buffer* input_buffer,
-    const tt::tt_metal::Buffer* dLdout_buffer,
-    const tt::tt_metal::Buffer* da_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_rows_per_core_group_1,
-    uint32_t num_rows_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2) {
-    for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        // Determine how many rows this core will process
-        uint32_t num_rows_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_2;
-        } else {
-            TT_FATAL(false, "Core not in specified core ranges");
-        }
-
-        // Reader kernel: (input_addr, dLdout_addr, num_rows, offset)
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {input_buffer->address(), dLdout_buffer->address(), num_rows_per_core, num_rows_written});
-
-        // Writer kernel: (da_addr, num_rows, offset)
-        SetRuntimeArgs(program, kernels.writer, core, {da_buffer->address(), num_rows_per_core, num_rows_written});
-
-        num_rows_written += num_rows_per_core;
-    }
-}
-
 SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     // -------------------------------------------------------------------------
@@ -205,18 +166,24 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
-    assign_per_core_runtime_args(
-        program,
-        kernels,
-        input_buffer,
-        dLdout_buffer,
-        dL_da_buffer,
+    for_each_core_with_work(
         num_cores,
         num_cores_y,
+        core_group_1,
+        core_group_2,
         num_rows_per_core_group_1,
         num_rows_per_core_group_2,
-        core_group_1,
-        core_group_2);
+        [&](const CoreWork& work) {
+            const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
+            // Reader kernel: (input_addr, dLdout_addr, num_rows, offset)
+            SetRuntimeArgs(
+                program,
+                kernels.reader,
+                core,
+                {input_buffer->address(), dLdout_buffer->address(), num_rows, start_row});
+            // Writer kernel: (da_addr, num_rows, offset)
+            SetRuntimeArgs(program, kernels.writer, core, {dL_da_buffer->address(), num_rows, start_row});
+        });
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured program & relevant shared variables
@@ -255,9 +222,7 @@ void SiLUBackwardProgramFactory::override_runtime_arguments(
     auto& reader_runtime_args = GetRuntimeArgs(program, silu_bw_reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, silu_bw_writer_kernel_id);
 
-    for (uint32_t i = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
+    for_each_core(num_cores, num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
         // Update input buffers for the reader kernel
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
@@ -270,7 +235,7 @@ void SiLUBackwardProgramFactory::override_runtime_arguments(
             auto& runtime_args = writer_runtime_args[core.x][core.y];
             runtime_args[kDaBufferIdx] = da_buffer->address();
         }
-    }
+    });
 }
 
 }  // namespace ttml::metal::ops::silu_bw::device
