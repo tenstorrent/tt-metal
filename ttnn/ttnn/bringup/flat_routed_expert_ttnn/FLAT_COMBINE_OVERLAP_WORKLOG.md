@@ -1187,6 +1187,28 @@ from their bank). In the real op it does not matter the same way: NH 2 is flat a
 63.1 / 77.6 / 101.2 vs 46.3 / 51.9 / 57.4 / 62.4 / 77.3 / 101.0) - at small / mid M x is extra DRAM bytes next to
 the weights at ~85% utilization, at large M it hides under compute (820 vs 946).
 
+**x reader build-up (K3, 2026-10-14; probes `07204e33c04`).** `MIMO_FL_XSOLO=N`: x resident for the consumers, N
+relays only read their share of one copy of x (real indexed pattern), timed per relay by an `XRD_SOLO` zone (M 2048,
+176 MB per call). Reference: the NoC estimator test 812 on this box (one core, interleaved, 64 x 1 KB per barrier)
+gives 39.8 / 40.1 GB/s on NOC0 / NOC1 (2 KB 66, 256 per barrier 48 / 78) - but its buffer is 8 pages, one per bank,
+re-read every time. One reader, M 5120, NOC0: real pattern 26.3 GB/s; consecutive rows 29.5; no per-sub-block index
+read 30.2; only 8 rows (the estimator's case) 34.6; + 128 reads per barrier 37.8. NOC1 instead: -4%.
+
+| readers | 1 KB NOC1 | 1 KB NOC0 | 7 KB NOC1 | 7 KB NOC0 |
+|---|---|---|---|---|
+| 1 | 25.4 | 26.3 | 44.1 | 54.9 |
+| 2 (other column / same column) | 43.6 | | | 85.2 / 72.6 |
+| 4 (two per column) | 76.5 | 95.5 | 92.9 | 108.5 |
+| 8 (NH 3, four per column) | 129.5 | | 119.9 | |
+
+(aggregate GB/s). 1 KB reads are capped per core at ~25 GB/s; 7 KB reads double one reader but the readers then share a
+~100-110 GB/s limit (all relays sit in columns 2 and 12; a shared column costs another ~15%). In the full op x only
+costs what `XRD_SKIP=0` saves (M 64 / 128 / 192 / 256: 3.3 / 6.2 / 7.4 / 8.0 µs/expert). Full op, µs/expert, M 64 /
+128 / 192 / 256 / 384: base 46.4 / 51.8 / 57.7 / 62.2 / 77.4; X1 44.2 / 49.4 / 58.9 / 74.5 / 105.5; X2 44.1 / 51.3 /
+68.7 / 87.9 / 125.1; XFWD 44.2 / 53.0 / 73.1 / 93.3 / 135.1; reads NOC0 + multicast NOC1 (DRISC_XNOC) 47.9 / 65.4 /
+86.6 / 105.3 / 147.1. x read once wins ~2.3 µs at M <= 128 (half the x bytes next to DRAM-bound weights), then one
+primary's tilize + double multicast is the limit.
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
