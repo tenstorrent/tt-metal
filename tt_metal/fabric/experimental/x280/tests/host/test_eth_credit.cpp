@@ -80,6 +80,7 @@ Config MakeConfig(uint32_t P, uint32_t n_link, uint32_t n_deliver, uint32_t payl
 // Absolute addresses of one tile's 6P hot control units, in unit order.
 std::vector<uint32_t> hot_unit_addresses(const ChipLayout& l) {
     std::vector<uint32_t> out;
+    out.reserve(l.eth.hot_units);
     for (uint32_t i = 0; i < l.eth.hot_units; ++i) {
         out.push_back(l.eth_ctrl_base + i * EC_UNIT_BYTES);
     }
@@ -119,7 +120,8 @@ TEST(EthCreditHeader, EachAccessorTouchesOnlyItsOwnBytes) {
     std::memset(&h, 0, sizeof(h));
     ec_header_set_seq(&h, 0x11223344u);
     for (uint32_t i = 0; i < 96u; ++i) {
-        const uint8_t want = i == 8u ? 0x44u : i == 9u ? 0x33u : i == 10u ? 0x22u : i == 11u ? 0x11u : 0u;
+        constexpr uint8_t kSeq[] = {0x44u, 0x33u, 0x22u, 0x11u};
+        const uint8_t want = i >= 8u && i < 12u ? kSeq[i - 8u] : 0u;
         EXPECT_EQ(b[i], want) << "seq write, byte " << i;
     }
     EXPECT_EQ(ec_header_seq(&h), 0x11223344u);
@@ -127,7 +129,8 @@ TEST(EthCreditHeader, EachAccessorTouchesOnlyItsOwnBytes) {
     std::memset(&h, 0, sizeof(h));
     fs_set_payload_size_bytes(&h, 0xBEEFu);
     for (uint32_t i = 0; i < 96u; ++i) {
-        const uint8_t want = i == 40u ? 0xEFu : i == 41u ? 0xBEu : 0u;
+        constexpr uint8_t kSize[] = {0xEFu, 0xBEu};
+        const uint8_t want = i == 40u || i == 41u ? kSize[i - 40u] : 0u;
         EXPECT_EQ(b[i], want) << "payload_size_bytes write, byte " << i;
     }
     EXPECT_EQ(fs_payload_size_bytes(&h), 0xBEEFu);
@@ -388,12 +391,18 @@ TEST(EthCreditPointers, AgreeWithAnUnboundedModelAcrossManyWraps) {
             const uint32_t roll = rng() % 4u;
             if (roll < 2u) {
                 const uint32_t credit = static_cast<uint32_t>(n - used);
-                const uint32_t k = roll == 0u ? credit : (credit == 0u ? 0u : rng() % (credit + 1u));
+                uint32_t k = credit;
+                if (roll != 0u) {
+                    k = credit == 0u ? 0u : rng() % (credit + 1u);
+                }
                 wr = ec_ptr_advance(wr, k, n);
                 W += k;
             } else {
                 const uint32_t avail = static_cast<uint32_t>(used);
-                const uint32_t k = roll == 2u ? avail : (avail == 0u ? 0u : rng() % (avail + 1u));
+                uint32_t k = avail;
+                if (roll != 2u) {
+                    k = avail == 0u ? 0u : rng() % (avail + 1u);
+                }
                 rd = ec_ptr_advance(rd, k, n);
                 R += k;
             }
@@ -1052,7 +1061,13 @@ TEST(EthCreditAdmission, PlacementMissingACoordinateIsRefused) {
         SCOPED_TRACE(bit);
         Config cfg = MakeConfig(2u, 8u, 8u, 256u, 1u, Direction::Both);
         ChipPlacement& pl = cfg.chips[1];
-        (bit == 0u ? pl.x280_noc0 : bit == 1u ? pl.x280_noc1 : pl.eth).reset();
+        if (bit == 0u) {
+            pl.x280_noc0.reset();
+        } else if (bit == 1u) {
+            pl.x280_noc1.reset();
+        } else {
+            pl.eth.reset();
+        }
         const Admission adm = admit(cfg, RealisticCapacity());
         ASSERT_FALSE(adm.ok());
         EXPECT_EQ(adm.check.code, EC_CHECK_COORD);
@@ -1409,6 +1424,7 @@ TEST(EthCreditTailMarker, DistinctAcrossForwardersAndManyRingWrapsAndNeverAllZer
     // more N_LINK wraps back) or of another forwarder; neither may match. The
     // range covers several wraps of the deepest ring, plus the top of uint32.
     std::vector<uint32_t> ordinals;
+    ordinals.reserve(4u * EC_MAX_DEPTH + 3u + 64u);
     for (uint32_t o = 0; o < 4u * EC_MAX_DEPTH + 3u; ++o) {
         ordinals.push_back(o);
     }
@@ -1808,7 +1824,12 @@ TEST(EthCreditArgChecksPrefix, EachBadFieldWrongRoleOrShapeIsRefusedByBothRoles)
         for (int field = 0; field < 5; ++field) {
             ec_shape_t other = f.cfg.shape;
             uint32_t* v[] = {&other.P, &other.n_link, &other.n_deliver, &other.slot_size, &other.batch};
-            *v[field] = field == 0 ? 3u : field == 4 ? 1u : field == 3 ? other.slot_size + 16u : *v[field] * 2u;
+            switch (field) {
+                case 0: *v[field] = 3u; break;
+                case 3: *v[field] = other.slot_size + 16u; break;
+                case 4: *v[field] = 1u; break;
+                default: *v[field] *= 2u; break;
+            }
             EXPECT_TRUE(IsCheck(ec_check_e0_args(&a.e0, &other, &f.b), EC_CHECK_BAD_PARAM, EC_CONSTRAINT_ARGS))
                 << "E0 against expected shape field " << field << ", chip " << c;
             EXPECT_TRUE(IsCheck(ec_check_e1_args(&a.e1, &other, &f.b), EC_CHECK_BAD_PARAM, EC_CONSTRAINT_ARGS))
