@@ -142,7 +142,7 @@ void kernel_main() {
                 const uint64_t src = gu_src + gu_iss * gu_bytes;
 #endif
                 noc_async_read_set_trid(1 + gu_iss % gu_depth);
-#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
+#if !defined(SE_W_NOREAD) && !defined(SE_GU_NOREAD)  // (perf probe: gate/up weights not read, garbage)
                 noc_async_read(src, gu_l1 + (gu_iss % gu_slots) * gu_bytes, gu_bytes);
 #endif
                 ++gu_iss;
@@ -163,7 +163,7 @@ void kernel_main() {
                 const uint64_t src = d_src + d_iss * d_bytes;
 #endif
                 noc_async_read_set_trid(8 + d_iss % d_depth);
-#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
+#if !defined(SE_W_NOREAD) && !defined(SE_DN_NOREAD)  // (perf probe: down weights not read, garbage)
                 noc_async_read(src, d_dst, d_bytes);
 #endif
                 ++d_iss;
@@ -195,14 +195,14 @@ void kernel_main() {
         }
 #endif
         if (rd_gu) {
-#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
+#if !defined(SE_W_NOREAD) && !defined(SE_GU_NOREAD)  // (perf probe: gate/up weights not read, garbage)
             noc_async_read(gu_src, get_write_ptr(gu_cb), gu_bytes);
 #endif
             gu_src += gu_bytes;
         }
         if (rd_d) {
 #ifndef SE9_SKIP_DW  // perf experiment only: down weights not read (garbage)
-#ifndef SE_W_NOREAD  // (perf probe: weights not read, garbage)
+#if !defined(SE_W_NOREAD) && !defined(SE_DN_NOREAD)  // (perf probe: down weights not read, garbage)
             noc_async_read(d_src, get_write_ptr(d_cb), d_bytes);
 #endif
 #endif

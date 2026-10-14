@@ -52,6 +52,11 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #endif
 
+// (perf probe SE_NO_MATH: no matmul - every CB handshake, unpack-side pops and pack stay; garbage outputs)
+#ifdef SE_NO_MATH
+#define matmul_block(...) ((void)0)
+#endif
+
 constexpr uint32_t x_cb = tt::CBIndex::c_0;
 constexpr uint32_t in1_cb = tt::CBIndex::c_1;
 constexpr uint32_t h_all_cb = tt::CBIndex::c_2;

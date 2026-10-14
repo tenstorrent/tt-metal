@@ -56,7 +56,20 @@ struct SeYRmWriter {
         const uint32_t n = left < 32 ? left : 32;
         const uint32_t row0 = dyn.off[ia] + row_base;
         const uint32_t trid = trid0 + issued % rows;
-#ifndef SE_YRM_NOWRITE  // (perf probe: no y writes)
+#if defined(SE_YRM_SELF)  // (perf probe: y rows written onto themselves in this core's L1 - no DRAM / mesh traffic,
+                          // the writes still issue and retire)
+        for (uint32_t i = 0; i < n; ++i) {
+            noc_async_write_one_packet_with_trid(
+                src + i * seg,
+                get_noc_addr(my_x[noc_index], my_y[noc_index], src + i * seg),
+                seg,
+                trid,
+                write_cmd_buf,
+                noc_index,
+                yvc);
+        }
+        (void)row0;
+#elif !defined(SE_YRM_NOWRITE)  // (perf probe: no y writes)
         for (uint32_t i = 0; i < n; ++i) {
             noc_async_write_one_packet_with_trid(
                 src + i * seg, get_noc_addr(row0 + i, yg, col_off), seg, trid, write_cmd_buf, noc_index, yvc);

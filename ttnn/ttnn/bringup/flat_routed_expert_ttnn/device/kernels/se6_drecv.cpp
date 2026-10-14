@@ -163,6 +163,9 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* dw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_words);
     const bool head = pxy == 0;
     auto write_trid = [](uint32_t src, uint64_t dst, uint32_t bytes, uint32_t trid) {
+#ifdef SE_H_NODATA  // (perf probe: the h pieces are not forwarded down the chain - the counters still move)
+        return;
+#endif
         for (uint32_t o = 0; o < bytes; o += NOC_MAX_BURST_SIZE) {
             const uint32_t n = bytes - o < NOC_MAX_BURST_SIZE ? bytes - o : NOC_MAX_BURST_SIZE;
             noc_async_write_one_packet_with_trid(src + o, dst + o, n, trid, write_cmd_buf, noc_index, h_vc);
@@ -172,8 +175,14 @@ void kernel_main() {
     uint32_t h_pub = 0, h_cons = 0, h_iss = 0, h_fwd = 0, h_rep = 0, h_done = 0;
     uint32_t out_done = 0, go_sent = 0, done_sent = 0;
     bool y_pending = false;
+#ifdef SE_NO_MATH
+    // (no math: y no longer waits for h, so stay until every h buffer is published to the unpacker)
+    constexpr bool all_h = true;
+#else
+    constexpr bool all_h = false;
+#endif
     while (out_done < num_v || done_sent < num_v || (sxy_e && h_fwd < num_v * h_pieces) ||
-           (is_coord && go_sent + 1 < num_v)) {
+           (is_coord && go_sent + 1 < num_v) || (all_h && h_pub < num_v)) {
         invalidate_l1_cache();
         if (head) {  // h(v) is complete once all slices of it are in its buffer
             while (h_done < num_v && *gath[h_done % hbuf] >= n_slices * (h_done / hbuf + 1)) {
