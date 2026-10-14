@@ -153,14 +153,14 @@ DispatchMemMap::DispatchMemMap(
     uint32_t prefetch_dispatch_unreserved_base =
         device_cq_addrs_[ttsl::as_underlying_type<CommandQueueDeviceAddrType>(CommandQueueDeviceAddrType::UNRESERVED)];
     // The prefetcher drops fetch queue lines from its cache without writeback, so no line may also hold cmddat_q or
-    // other data. Other CQs on the core sit a whole number of 4 KB dispatch pages further on, so checking CQ0 covers
-    // them.
+    // other data. cmddat_q starts at the next pcie_alignment boundary, so a partial last line only holds padding.
+    // Other CQs on the core sit a whole number of 4 KB dispatch pages further on, so checking CQ0 covers them.
     TT_FATAL(
         !prefetch_q_cached_ || (prefetch_dispatch_unreserved_base % PREFETCH_Q_CACHE_LINE_BYTES == 0 &&
-                                settings.prefetch_q_size_ % PREFETCH_Q_CACHE_LINE_BYTES == 0),
-        "Fetch queue at {} with size {} B does not fill whole {} B cache lines",
+                                pcie_alignment % PREFETCH_Q_CACHE_LINE_BYTES == 0),
+        "Fetch queue at {} with {} B PCIe alignment can share a {} B cache line with other data",
         prefetch_dispatch_unreserved_base,
-        settings.prefetch_q_size_,
+        pcie_alignment,
         PREFETCH_Q_CACHE_LINE_BYTES);
     cmddat_q_base_ = align(prefetch_dispatch_unreserved_base + settings.prefetch_q_size_, pcie_alignment);
     scratch_db_base_ = align(cmddat_q_base_ + settings.prefetch_cmddat_q_size_, pcie_alignment);
