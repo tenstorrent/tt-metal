@@ -13,6 +13,7 @@ Also tests the LRU eviction, generation counter, and program key
 cache mechanisms added for cache hardening.
 """
 
+import pytest
 import torch
 import ttnn
 from collections import OrderedDict
@@ -544,10 +545,12 @@ class TestUpdateAPI:
         q.update(input_tensor=new_tensor)
         assert q.input_tensors[0] is new_tensor
 
-    def test_update_error_unknown_name(self, device, expect_error):
+    def test_update_error_unknown_name(self, device):
         """update(bad_name=t) raises ValueError with valid names listed."""
         q, _, _ = _make_branches(device)
-        with expect_error(ValueError, "Unknown input name"):
+        with pytest.raises(  # allow-pytest.raises: host-side ValueError, not a device error
+            ValueError, match="Unknown input name"
+        ):
             q.update(nonexistent=q.input_tensors[0])
 
     def test_update_multiple_positional(self, device):
@@ -569,11 +572,13 @@ class TestUpdateAPI:
         assert q.input_tensors[0] is new_0
         assert q.input_tensors[1] is new_1
 
-    def test_update_error_mixed_args(self, device, expect_error):
+    def test_update_error_mixed_args(self, device):
         """update(t, input_tensor=t) raises ValueError."""
         q, _, _ = _make_branches(device)
         t = q.input_tensors[0]
-        with expect_error(ValueError, "positional OR keyword"):
+        with pytest.raises(  # allow-pytest.raises: host-side ValueError, not a device error
+            ValueError, match="positional OR keyword"
+        ):
             q.update(t, input_tensor=t)
 
 
@@ -645,12 +650,14 @@ class TestNamedKwargs:
         assert outer.kv is kv
         assert outer.stem is q2
 
-    def test_duplicate_name_raises(self, device, expect_error):
+    def test_duplicate_name_raises(self, device):
         """Duplicate names across nesting levels raise ValueError."""
         q, kv, _ = _make_branches(device)
         q2, _, _ = _make_branches(device, seed=99)
         inner = Parallel(q=q, kv=kv)
-        with expect_error(ValueError, "Duplicate descriptor name"):
+        with pytest.raises(  # allow-pytest.raises: host-side ValueError, not a device error
+            ValueError, match="Duplicate descriptor name"
+        ):
             Sequential(q=q2, branches=inner)  # "q" collides
 
 
