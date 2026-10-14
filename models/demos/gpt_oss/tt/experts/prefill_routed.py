@@ -330,7 +330,8 @@ class RoutedPrefillExperts:
         # alignment pads of E_local regions sum to a multiple of 32 below 32*E_local); one spare tile follows.
         spare = k * C + ttnn.TILE_SIZE * (self.experts_per_chip - 1)
         rows = spare + ttnn.TILE_SIZE
-        pair_token = torch.arange(k * C, dtype=torch.int32).div(k, rounding_mode="floor").reshape(1, k * C)
+        # Scatter order is slot-major (pair r = slot * C + token), so the token of pair r is r mod C.
+        pair_token = torch.arange(k * C, dtype=torch.int32).remainder(C).reshape(1, k * C)
         consts = {
             "rows": rows,
             "spare": spare,
@@ -368,7 +369,8 @@ class RoutedPrefillExperts:
         return consts
 
     def _pair_positions(self, indices, region_offsets, consts):
-        """Dispatch-buffer row of every (token, slot) pair, [1, k*C] uint32 ROW_MAJOR (pair r = k*token + slot).
+        """Dispatch-buffer row of every (token, slot) pair, uint32 ROW_MAJOR, in two orders: token-major [C, k] (the
+        combine gather index) and slot-major [1, k*C] (pair r = slot * C + token, the scatter index).
 
         Local pair (t, j) of expert e: region_offsets[e] + #pairs of e from tokens < t (a token's k experts are
         distinct, so this is the pair's rank within e's region). Non-local pairs: the spare tile. All arithmetic is
@@ -412,12 +414,18 @@ class RoutedPrefillExperts:
             ttnn.deallocate(miss)
             cols.append(p)
         ttnn.deallocate(base)
-        pos = ttnn.concat(cols, dim=-1)  # [C, k]
+        pos = ttnn.concat(cols, dim=-1)  # [C, k] fp32 TILE
         for c in cols:
             ttnn.deallocate(c)
         pos = ttnn.typecast(pos, ttnn.uint32)
-        pos = ttnn.to_layout(pos, ttnn.ROW_MAJOR_LAYOUT)
-        return ttnn.reshape(pos, (1, k * C))
+        # Slot-major copy via a tile transpose: [k, C] row-major is k long rows, so the flatten to [1, k*C] is cheap
+        # (the token-major [C, k] -> [1, k*C] reshape copies C 16-byte rows and cost 3.3 ms per layer at 8K).
+        pos_t = ttnn.transpose(pos, -2, -1)  # [k, C]
+        pos_sm = ttnn.reshape(ttnn.to_layout(pos_t, ttnn.ROW_MAJOR_LAYOUT), (1, k * C))
+        ttnn.deallocate(pos_t)
+        pos_tm = ttnn.to_layout(pos, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(pos)
+        return pos_tm, pos_sm
 
     def _chunk(self, x, indices, weights):
         """Partial MoE output of this device's experts for one chunk.
@@ -442,11 +450,12 @@ class RoutedPrefillExperts:
         # Buffer row of every (token, slot) pair: its expert's region start + its rank among that expert's pairs
         # (token order); pairs whose expert is on another device point at the spare tile past all regions.
         consts = self._chunk_constants(C)
-        pos = self._pair_positions(indices, region_offsets, consts)  # [1, k*C] uint32 RM, r = k*t + slot
+        pos_tm, pos_sm = self._pair_positions(indices, region_offsets, consts)  # [C, k] and [1, k*C] uint32 RM
 
         # Dispatch: buffer row -> source token (scatter of the pair's token index to its row), then gather the rows.
         # Rows no pair writes (region padding, the spare tile) read token 0: finite and never consumed.
-        tok_of_row = ttnn.scatter(consts["row_init"], -1, pos, consts["pair_token"])
+        tok_of_row = ttnn.scatter(consts["row_init"], -1, pos_sm, consts["pair_token"])
+        ttnn.deallocate(pos_sm)
         tok_of_row = ttnn.to_layout(tok_of_row, ttnn.ROW_MAJOR_LAYOUT)
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
         x_rm = ttnn.reshape(x_rm, (C, H))
@@ -478,9 +487,9 @@ class RoutedPrefillExperts:
         out_rm = ttnn.to_layout(expert_out, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
         if out_rm is not expert_out:
             ttnn.deallocate(expert_out)
-        combined = ttnn.embedding(pos, out_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
+        combined = ttnn.embedding(pos_tm, out_rm, layout=ttnn.ROW_MAJOR_LAYOUT)  # [C, k, H]
         ttnn.deallocate(out_rm)
-        ttnn.deallocate(pos)
+        ttnn.deallocate(pos_tm)
         combined = ttnn.reshape(combined, (1, 1, C, k, H))
 
         out = ttnn.experimental.deepseek_prefill.post_combine_reduce(

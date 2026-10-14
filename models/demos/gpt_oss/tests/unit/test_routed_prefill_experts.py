@@ -355,8 +355,12 @@ def test_routed_pair_positions_exact(mesh_device, device_params, seq_len, routed
         tt_idx = _to_tt(idx.to(torch.int32), mesh_device, ttnn.uint16)
         _, counts, region_offsets = routed._routing(tt_idx)
         consts = routed._chunk_constants(seq_len)
-        pos = routed._pair_positions(tt_idx, region_offsets, consts)
-        pos_d = [ttnn.to_torch(t).reshape(-1).to(torch.int64) for t in ttnn.get_device_tensors(pos)]
+        pos_tm, pos_sm = routed._pair_positions(tt_idx, region_offsets, consts)
+        pos_d = [ttnn.to_torch(t).reshape(-1).to(torch.int64) for t in ttnn.get_device_tensors(pos_tm)]
+        # slot-major [1, k*S] -> token-major order
+        pos_sm_d = [
+            ttnn.to_torch(t).reshape(k, seq_len).t().reshape(-1).to(torch.int64) for t in ttnn.get_device_tensors(pos_sm)
+        ]
         reg_d = [ttnn.to_torch(t).reshape(-1)[:E].to(torch.int64) for t in ttnn.get_device_tensors(region_offsets)]
         cnt_d = [ttnn.to_torch(t).reshape(-1)[:E].to(torch.int64) for t in ttnn.get_device_tensors(counts)]
         onehot = torch.nn.functional.one_hot(idx, E).sum(dim=1)  # [S, E]
@@ -368,8 +372,9 @@ def test_routed_pair_positions_exact(mesh_device, device_params, seq_len, routed
                 reg_d[d][idx] + torch.gather(rank, 1, idx),
                 torch.full_like(idx, consts["spare"]),
             ).reshape(-1)
-            mism = int((pos_d[d][: k * seq_len] != ref).sum())
-            assert mism == 0, f"{name} S={seq_len} device {d}: {mism} pair positions differ from the reference"
+            for order, got in (("token-major", pos_d[d]), ("slot-major", pos_sm_d[d])):
+                mism = int((got != ref).sum())
+                assert mism == 0, f"{name} S={seq_len} device {d}: {mism} {order} pair positions differ from the reference"
             own = list(range(d * epc, (d + 1) * epc))
             ends = [int(reg_d[d][e] + cnt_d[d][e]) for e in own]
             starts = [int(reg_d[d][e]) for e in own]
