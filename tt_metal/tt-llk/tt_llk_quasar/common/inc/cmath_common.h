@@ -12,113 +12,66 @@ namespace ckernel::math
 {
 
 /**
- * @brief Return the phase count before removing format-redundant phases.
- * @tparam fidelity: Requested approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
+ * @brief Return the FPU phase count of a fidelity.
+ * @param fidelity: Approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
  */
-template <MathFidelity fidelity>
-constexpr std::uint32_t math_fidelity_phases()
+constexpr std::uint32_t math_fidelity_phase_count(const MathFidelity fidelity)
 {
-    static_assert(
-        fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2 || fidelity == MathFidelity::HiFi3 || fidelity == MathFidelity::HiFi4,
-        "Invalid math fidelity");
     return fidelity == MathFidelity::LoFi ? 1 : to_underlying(fidelity);
-}
-
-/**
- * @brief Check whether a fidelity request is valid for these source register formats.
- *
- * The request is valid when both formats can run on the FPU and the final phase adds precision for them.
- *
- * @param fidelity: Requested approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
- * @param src_a_format: Effective SrcA register format.
- * @param src_b_format: Effective SrcB register format.
- * @note Accepted pairs: two floats (Float16/Tf32/Float32, Float16_b, MxFp4_2x_A/MxFp4_2x_B) or two integers (Int8/UInt8/Int8_2x/UInt8_2x,
- *       LoFi only). Any other format or a mixed int/float pair is rejected at every fidelity.
- * @note Pass register formats, not L1 MX formats; unpacked MX normally uses Float16_b.
- */
-constexpr bool is_math_fidelity_supported(const MathFidelity fidelity, const DataFormat src_a_format, const DataFormat src_b_format)
-{
-    const auto has_low_mantissa = [](const DataFormat format)
-    { return format == DataFormat::Float16 || format == DataFormat::Tf32 || format == DataFormat::Float32; };
-    const auto is_float = [&](const DataFormat format)
-    { return has_low_mantissa(format) || format == DataFormat::Float16_b || format == DataFormat::MxFp4_2x_A || format == DataFormat::MxFp4_2x_B; };
-    const auto is_integer = [](const DataFormat format)
-    { return format == DataFormat::Int8 || format == DataFormat::UInt8 || format == DataFormat::Int8_2x || format == DataFormat::UInt8_2x; };
-
-    if (is_integer(src_a_format) && is_integer(src_b_format))
-    {
-        return fidelity == MathFidelity::LoFi;
-    }
-    if (!is_float(src_a_format) || !is_float(src_b_format))
-    {
-        return false;
-    }
-
-    switch (fidelity)
-    {
-        case MathFidelity::LoFi:
-            return true;
-        case MathFidelity::HiFi2:
-            return has_low_mantissa(src_a_format);
-        case MathFidelity::HiFi3:
-            return has_low_mantissa(src_b_format);
-        case MathFidelity::HiFi4:
-            return has_low_mantissa(src_a_format) && has_low_mantissa(src_b_format);
-        default:
-            return false;
-    }
-}
-
-/**
- * @brief Assert that the format/fidelity combination is supported and nonredundant.
- * @tparam fidelity: Requested approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
- * @param src_a_format: Effective SrcA register format.
- * @param src_b_format: Effective SrcB register format.
- * @note Reinitialize the operation whenever either effective source format changes.
- */
-template <MathFidelity fidelity>
-inline void validate_math_fidelity(const DataFormat src_a_format, const DataFormat src_b_format)
-{
-    static_assert(math_fidelity_phases<fidelity>() >= 1);
-    LLK_ASSERT(is_math_fidelity_supported(fidelity, src_a_format, src_b_format), "Unsupported or redundant math fidelity for source register formats");
 }
 
 /**
  * @brief Fidelity phases an op issues for its source formats.
  *
  * phase_count is the number of FPU passes. phase_increment is the fidelity counter step between them:
- * 0 for LoFi, 1 for consecutive phases, 2 when a narrow SrcA skips phase 1 under HiFi3.
+ * 0 for LoFi, 1 for consecutive phases, 2 when a narrow SrcA skips phase 1.
  */
 struct MathFidelitySchedule
 {
     std::uint8_t phase_count;
     std::uint8_t phase_increment;
-
-    constexpr bool operator==(const MathFidelitySchedule& other) const
-    {
-        return phase_count == other.phase_count && phase_increment == other.phase_increment;
-    }
 };
 
 /**
  * @brief Resolve the issued phase count and counter increment for the source formats.
+ *
+ * Phase 1 needs low SrcA mantissa bits, phase 2 low SrcB bits, phase 3 both. Phases the formats cannot use are dropped.
+ *
  * @tparam fidelity: Requested approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
  * @param src_a_format: Effective SrcA register format.
  * @param src_b_format: Effective SrcB register format.
- * @note Validate the format/fidelity combination with @ref validate_math_fidelity before use.
+ * @note Only Float16, Tf32 and Float32 carry low mantissa bits. Pass register formats, not L1 MX formats; unpacked MX normally uses Float16_b.
  */
 template <MathFidelity fidelity>
 constexpr MathFidelitySchedule math_fidelity_schedule(const DataFormat src_a_format, const DataFormat src_b_format)
 {
-    if constexpr (fidelity == MathFidelity::HiFi3)
+    static_assert(
+        fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2 || fidelity == MathFidelity::HiFi3 || fidelity == MathFidelity::HiFi4,
+        "Invalid math fidelity");
+    constexpr std::uint32_t requested_phases = math_fidelity_phase_count(fidelity);
+
+    const auto has_low_mantissa = [](const DataFormat format)
+    { return format == DataFormat::Float16 || format == DataFormat::Tf32 || format == DataFormat::Float32; };
+
+    const bool wide_a = has_low_mantissa(src_a_format);
+    const bool wide_b = has_low_mantissa(src_b_format);
+
+    std::uint8_t phases = 1;
+    if (wide_a && requested_phases > 1)
     {
-        // A narrow SrcA contributes only phases 0 and 2.
-        if (!is_math_fidelity_supported(MathFidelity::HiFi2, src_a_format, src_b_format))
-        {
-            return {2, 2};
-        }
+        phases++;
     }
-    return {math_fidelity_phases<fidelity>(), fidelity == MathFidelity::LoFi ? std::uint8_t {0} : std::uint8_t {1}};
+    if (wide_b && requested_phases > 2)
+    {
+        phases++;
+    }
+    if (wide_a && wide_b && requested_phases > 3)
+    {
+        phases++;
+    }
+    // A narrow SrcA has no phase 1, so its second phase is phase 2.
+    const std::uint8_t increment = phases == 1 ? 0 : (wide_a ? 1 : 2);
+    return {phases, increment};
 }
 
 /**
@@ -132,31 +85,16 @@ constexpr DataFormat dest_src_format(const DataFormat dest_format)
     return EN_32BIT_DEST ? DataFormat::Tf32 : dest_format;
 }
 
-// Each mask lists allowed requests in LoFi, HiFi2, HiFi3, HiFi4 order.
-constexpr unsigned fidelity_mask(const DataFormat src_a, const DataFormat src_b)
-{
-    return is_math_fidelity_supported(MathFidelity::LoFi, src_a, src_b) | (is_math_fidelity_supported(MathFidelity::HiFi2, src_a, src_b) << 1) |
-           (is_math_fidelity_supported(MathFidelity::HiFi3, src_a, src_b) << 2) | (is_math_fidelity_supported(MathFidelity::HiFi4, src_a, src_b) << 3);
-}
-
-static_assert(math_fidelity_phases<MathFidelity::LoFi>() == 1);
-static_assert(math_fidelity_phases<MathFidelity::HiFi2>() == 2);
-static_assert(math_fidelity_phases<MathFidelity::HiFi3>() == 3);
-static_assert(math_fidelity_phases<MathFidelity::HiFi4>() == 4);
-static_assert(fidelity_mask(DataFormat::Float16_b, DataFormat::Float16_b) == 0b0001);
-static_assert(fidelity_mask(DataFormat::Tf32, DataFormat::Float16_b) == 0b0011);
-static_assert(fidelity_mask(DataFormat::Float16_b, DataFormat::Tf32) == 0b0101);
-static_assert(fidelity_mask(DataFormat::Tf32, DataFormat::Tf32) == 0b1111);
-static_assert(fidelity_mask(DataFormat::MxFp4_2x_A, DataFormat::MxFp4_2x_B) == 0b0001);
-static_assert(fidelity_mask(DataFormat::Int8, DataFormat::Int8) == 0b0001);
-static_assert(fidelity_mask(DataFormat::Int8, DataFormat::Float16) == 0);
-static_assert(fidelity_mask(DataFormat::MxFp4, DataFormat::MxFp4) == 0);
-
-static_assert(math_fidelity_schedule<MathFidelity::LoFi>(DataFormat::Float16_b, DataFormat::Tf32) == MathFidelitySchedule {1, 0});
-static_assert(math_fidelity_schedule<MathFidelity::HiFi2>(DataFormat::Tf32, DataFormat::Float16_b) == MathFidelitySchedule {2, 1});
-static_assert(math_fidelity_schedule<MathFidelity::HiFi3>(DataFormat::Tf32, DataFormat::Tf32) == MathFidelitySchedule {3, 1});
-static_assert(math_fidelity_schedule<MathFidelity::HiFi3>(DataFormat::Float16_b, DataFormat::Tf32) == MathFidelitySchedule {2, 2});
-static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Tf32, DataFormat::Tf32) == MathFidelitySchedule {4, 1});
+// Phases the formats cannot use are dropped from the request.
+static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Tf32, DataFormat::Tf32).phase_count == 4);
+static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Tf32, DataFormat::Float16_b).phase_count == 2);
+static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Float16_b, DataFormat::Tf32).phase_count == 2);
+static_assert(math_fidelity_schedule<MathFidelity::HiFi2>(DataFormat::Float16_b, DataFormat::Tf32).phase_count == 1);
+static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Float16_b, DataFormat::Float16_b).phase_count == 1);
+static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Int8, DataFormat::Int8).phase_count == 1);
+// A narrow SrcA steps over phase 1; a single phase does not step.
+static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Float16_b, DataFormat::Tf32).phase_increment == 2);
+static_assert(math_fidelity_schedule<MathFidelity::HiFi4>(DataFormat::Float16_b, DataFormat::Float16_b).phase_increment == 0);
 
 // Rows one FPU instruction covers: 8 on the base Quasar part, 4 on the narrow one.
 constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS;

@@ -36,8 +36,10 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const MathFidelitySch
                                              ? p_elwise::SRCB_BCAST_COL
                                              : ((BROADCAST_TYPE == BroadcastType::ROW) ? p_elwise::SRCB_BCAST_ROW : p_elwise::SRCB_BCAST_ALL);
 
-    constexpr bool high_fidelity = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
-    static_assert(!(high_fidelity && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
+    static_assert(
+        MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi || ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWMUL,
+        "Math fidelity larger than LoFi only works with Eltwise MUL");
+    const bool high_fidelity = fidelity.phase_count > 1;
     // The address-advancing op is a later fidelity phase when HiFi, so it accumulates.
     // LoFi accumulates only when the caller asked to fold tiles into dest.
     const std::uint32_t advancing_acc = (high_fidelity || acc_to_dest) ? 1u : 0u;
@@ -51,7 +53,7 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const MathFidelitySch
 
     const std::uint32_t replay_buf_len = fidelity.phase_count - 1;
 
-    if constexpr (high_fidelity)
+    if (high_fidelity)
     {
         load_replay_buf(
             0,
@@ -104,16 +106,15 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const MathFidelitySch
  * @brief Sets up addrmods for elementwise binary broadcast operations.
  *
  * @tparam BROADCAST_TYPE: Sets the broadcast type (must not be NONE for this op), values = <COL/ROW/SCALAR>
- * @tparam MATH_FIDELITY_TYPE: Requested multiplication fidelity, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param fidelity: Resolved source-format phase schedule.
  */
-template <BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
+template <BroadcastType BROADCAST_TYPE>
 inline void _llk_math_eltwise_binary_broadcast_addrmod_(const MathFidelitySchedule fidelity)
 {
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
 
     constexpr std::uint8_t num_srb_rows_inc = (BROADCAST_TYPE == BroadcastType::COL) ? ELTWISE_MATH_ROWS : 0;
-    constexpr bool math_fidelity_enable     = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
+    const bool math_fidelity_enable         = fidelity.phase_count > 1;
 
     // For ELWADD/SUB/MUL, can increment source and dest registers
     addr_mod_t {
@@ -135,7 +136,7 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_(const MathFidelitySchedu
             .set(ADDR_MOD_2);
     }
 
-    if constexpr (math_fidelity_enable)
+    if (math_fidelity_enable)
     {
         addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = fidelity.phase_increment, .clr = 0}}.set(ADDR_MOD_3);
     }
@@ -180,7 +181,7 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_(const MathFidelitySchedu
  * @note On the unpack thread, pair with @ref _llk_unpack_binary_broadcast_operands_init_ (T0) with matching BROADCAST_TYPE; on the pack thread, pair with
  *       @ref _llk_pack_init_ (T2).
  * @note @ref _llk_math_eltwise_binary_broadcast_ runs the configured op with matching template args.
- * @note Pass the source register formats: for ELWMUL, init asserts that the fidelity adds precision for them and skips phases they
+ * @note Pass the source register formats: for ELWMUL, init lowers the fidelity to the highest one they can use and skips phases they
  *       cannot use. Run init again whenever either format changes.
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
@@ -191,12 +192,8 @@ inline void _llk_math_eltwise_binary_broadcast_init_(
         tensor_shape.total_num_faces() != NUM_FACES || tensor_shape.face_r_dim == MAX_FACE_R_DIM,
         "Eltwise binary broadcast four-face tiles require 16-row faces");
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_binary_broadcast_init_", tensor_shape);
-    if constexpr (ELTWISE_BINARY_TYPE == EltwiseBinaryType::ELWMUL)
-    {
-        validate_math_fidelity<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
-    }
     const auto fidelity = math_fidelity_schedule<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
-    _llk_math_eltwise_binary_broadcast_addrmod_<BROADCAST_TYPE, MATH_FIDELITY_TYPE>(fidelity);
+    _llk_math_eltwise_binary_broadcast_addrmod_<BROADCAST_TYPE>(fidelity);
     _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE, MATH_FIDELITY_TYPE>(fidelity, tensor_shape, acc_to_dest);
 
     // Each dest tile uses its total face rows, but takes at least one full face.

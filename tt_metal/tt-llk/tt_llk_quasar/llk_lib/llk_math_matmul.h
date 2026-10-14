@@ -629,7 +629,7 @@ inline void _llk_math_matmul_di_mop_config_(const MathFidelitySchedule fidelity,
  * @param src_a_shape: Input 1/SrcA tile shape.
  * @note On the unpack thread, pair with @ref _llk_unpack_matmul_init_ (T0); on the pack thread, pair with @ref _llk_pack_init_ (T2).
  * @note @ref _llk_math_matmul_tile_ or @ref _llk_math_matmul_block_ runs the configured matmul with matching template args.
- * @note Pass the source register formats: init asserts that the fidelity adds precision for them and skips phases they cannot use.
+ * @note Pass the source register formats: init lowers the fidelity to the highest one they can use and skips phases they cannot use.
  *       Run init again whenever either format changes.
  */
 
@@ -642,7 +642,6 @@ inline void _llk_math_matmul_init_(
     const TensorShape src_b_shape = DEFAULT_TENSOR_SHAPE,
     const TensorShape src_a_shape = DEFAULT_TENSOR_SHAPE)
 {
-    validate_math_fidelity<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
     const auto fidelity = math_fidelity_schedule<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
     if constexpr (ENABLE_DIRECT_INDEXING || ENABLE_2X_FORMAT)
     {

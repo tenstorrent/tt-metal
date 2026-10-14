@@ -523,7 +523,7 @@ inline void _llk_math_reduce_addrmod_(const MathFidelitySchedule fidelity, const
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @note On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (T0); on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
  * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
- * @note Pass the source register formats: for SUM/AVG, init asserts that the fidelity adds precision for them and skips phases they
+ * @note Pass the source register formats: for SUM/AVG, init lowers the fidelity to the highest one they can use and skips phases they
  *       cannot use. Run init again whenever either format changes.
  * @note PoolType::MIN is rejected here. Nothing reduces without this init, so that closes the whole
  *       FPU path to it.
@@ -533,10 +533,6 @@ inline void _llk_math_reduce_init_(const DataFormat src_a_format, const DataForm
 {
     constexpr MathFidelity FIDELITY = POOL_TYPE == PoolType::MAX ? MathFidelity::LoFi : MATH_FIDELITY_TYPE;
     static_assert(!is_int_fpu_en || FIDELITY == MathFidelity::LoFi, "Integer reduction requires LoFi");
-    if constexpr (POOL_TYPE == PoolType::SUM || POOL_TYPE == PoolType::AVG)
-    {
-        validate_math_fidelity<FIDELITY>(src_a_format, src_b_format);
-    }
     // There is no min-pool instruction - the FPU has GMPOOL (max) and GAPOOL (average/sum) - so MIN
     // would not fail here, it would quietly average, and the unpacker would pad with zero where a
     // min reduce needs +inf. PoolType::MIN exists for the SFPU reduce, which implements it.

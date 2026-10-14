@@ -39,7 +39,7 @@ using namespace ckernel::math;
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
 inline void _llk_math_matmul_run_no_mop_(const MathFidelitySchedule fidelity, const bool reuse_a)
 {
-    constexpr std::uint32_t max_phases     = math_fidelity_phases<MATH_FIDELITY_TYPE>();
+    constexpr std::uint32_t max_phases     = math_fidelity_phase_count(MATH_FIDELITY_TYPE);
     constexpr std::uint32_t replay_buf_len = _llk_math_matmul_replay_buf_len_<ENABLE_2X_FORMAT>();
 
     constexpr std::uint8_t fidelity_phase_completion_addr_mod = ADDR_MOD_4;
@@ -86,7 +86,7 @@ inline void _llk_math_matmul_run_no_mop_(const MathFidelitySchedule fidelity, co
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  * @note On the unpack thread, pair with @ref _llk_unpack_matmul_init_ (T0); on the pack thread, with @ref _llk_pack_init_ (T2).
  * @note @ref _llk_math_matmul_block_no_mop_ runs the configured matmul with matching template args and source formats.
- * @note Pass the source register formats: init asserts that the fidelity adds precision for them and skips phases they cannot use.
+ * @note Pass the source register formats: init lowers the fidelity to the highest one they can use and skips phases they cannot use.
  *       Run init again whenever either format changes.
  * @note Reload before every matmul that is interleaved with another replay-using op: every Quasar LLK
  *       records its replay buffer at slot 0, so an intervening op overwrites this one's image. Unlike the
@@ -96,7 +96,6 @@ inline void _llk_math_matmul_run_no_mop_(const MathFidelitySchedule fidelity, co
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
 inline void _llk_math_matmul_init_no_mop_(const DataFormat src_a_format, const DataFormat src_b_format, std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
-    validate_math_fidelity<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
     const auto fidelity = math_fidelity_schedule<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
     _llk_math_matmul_addrmod_<ENABLE_2X_FORMAT>(fidelity, ct_dim, rt_dim);
     _llk_math_matmul_load_replay_<ENABLE_2X_FORMAT>();
@@ -128,7 +127,6 @@ inline void _llk_math_matmul_init_no_mop_(const DataFormat src_a_format, const D
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_2X_FORMAT = false>
 inline void _llk_math_matmul_block_no_mop_(const DataFormat src_a_format, const DataFormat src_b_format, std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
-    validate_math_fidelity<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
     const auto fidelity = math_fidelity_schedule<MATH_FIDELITY_TYPE>(src_a_format, src_b_format);
     // Matmul Block, reset the dest addr to 0 for fused kernels
     _set_dst_write_addr_<DstTileShape::Tile32x32>(0);
