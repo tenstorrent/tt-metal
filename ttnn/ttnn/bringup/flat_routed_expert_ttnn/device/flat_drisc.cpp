@@ -88,9 +88,10 @@ uint32_t free_tile(IDevice* device, uint32_t bank) {
 }
 }  // namespace
 
-// MIMO_FL_DRISC_TILES: 2 (default) - both Metal tiles of a bank, a slot each (tile 1, its bank's NOC1 endpoint, sends on
-// NOC0); 1 - the bank's tile that is no endpoint sends both slots, one per NoC (capped at ~21 GB/s: small M is slow)
-uint32_t flat_drisc_tiles() { return env_or("MIMO_FL_DRISC_TILES", 2); }
+// MIMO_FL_DRISC_TILES: 1 (default) - the bank's tile that is no endpoint (its slot on NOC1, as the Tensix forwarders; a
+// second slot per tile would go on NOC0, but one tile sends ~21-28 GB/s: with MIMO_FL_DRISC_SLOTS 8 the other slots keep
+// Tensix readers); 2 - both Metal tiles of a bank, a slot each (tile 1, its bank's NOC1 endpoint, sends on NOC0)
+uint32_t flat_drisc_tiles() { return env_or("MIMO_FL_DRISC_TILES", 1); }
 
 CoreCoord flat_drisc_logical(IDevice* device, uint32_t r, uint32_t banks) {
     return flat_drisc_tiles() == 1 ? CoreCoord(r % banks, free_tile(device, r % banks))
@@ -116,10 +117,10 @@ CoreCoord flat_drisc_physical(IDevice* device, uint32_t r, uint32_t banks) {
 }
 
 uint32_t flat_drisc_noc(IDevice* device, uint32_t r, uint32_t banks) {
-    // one tile per bank: its first slot on NOC0, the second on NOC1; two tiles: the non-endpoint tile's slot on NOC1
+    // one tile per bank: its first slot on NOC1, the second on NOC0; two tiles: the non-endpoint tile's slot on NOC1
     // (M 256 / 512 55.0 / 81.5 -> 50.6 / 77.2 us / expert); MIMO_FL_DRISC_NOC1=0: all on NOC0
-    if (flat_drisc_tiles() == 1) {
-        return env_or("MIMO_FL_DRISC_NOC1", 1) ? r / banks : 0;
+    if (flat_drisc_tiles() == 1) {  // job 0 on NOC1 (a hybrid's only DRISC job: all weights on NOC1, as the forwarders)
+        return env_or("MIMO_FL_DRISC_NOC1", 1) ? (r / banks == 0 ? 1 : 0) : 0;
     }
     if (!env_or("MIMO_FL_DRISC_NOC1", 1)) {  // (default: tile 2's half of the weights off the x multicast's NOC0)
         return 0;
