@@ -45,9 +45,6 @@ class KolibriForCausalLM:
     def initialize_vllm_model(
         cls, hf_config, mesh_device, max_batch_size, max_seq_len=CONTEXT, tt_data_parallel=1, optimizations=None
     ):
-        from .benchmark_timing import install
-
-        install()
         if tt_data_parallel != 1 or mesh_device.get_num_devices() != 4:
             raise ValueError("Kolibri requires the authorized TP4 mesh")
         obj = cls()
@@ -140,10 +137,6 @@ class KolibriForCausalLM:
         if not g.prepared:
             started = time.monotonic()
             g.prepare()
-            if os.environ.get("KOLIBRI_VLLM_STARTUP_CONTROL"):
-                from ..tests.vllm_startup_control import run
-
-                run(g)
             self.event(
                 "prepared",
                 elapsed=time.monotonic() - started,

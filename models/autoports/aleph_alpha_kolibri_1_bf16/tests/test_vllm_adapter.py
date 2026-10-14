@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Small adapter proof with explicit external cache and poisoned stale inputs."""
+"""vLLM adapter on QB2 (1x4 Blackhole): with an externally allocated KV cache, a resident-input
+decode (inputs poisoned, reload_inputs=False) must reproduce the full-reload greedy sequence and
+logits exactly, and a real input change must move the logits. Needs the checkpoint (HF_MODEL or
+the HF cache)."""
 
-import json
-import os
-from pathlib import Path
 from types import SimpleNamespace
 
 import torch
@@ -12,7 +12,7 @@ import ttnn
 from models.autoports.aleph_alpha_kolibri_1_bf16.tt.generator_vllm import KolibriForCausalLM
 
 
-def run():
+def test_adapter_resident_decode_matches_reload():
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=100000000)
     adapter = None
@@ -31,7 +31,6 @@ def run():
         result = []
         sequences = []
         logits_runs = []
-        seed_checks = []
         for poison in (False, True):
             tables[0][0, 5] = 5
             tables[4][0, 5] = 517
@@ -81,7 +80,6 @@ def run():
                     ttnn.event_synchronize(event)
                 seq.append(int(adapter.process_decode_output_host(host, is_tokens=True)[0, 0]))
                 if step == 0:
-                    seed_checks.append(seed_row())
                     assert seed_row() == 14, seed_row()
                 if step in (0, 31, 69):
                     logits_checks.append(adapter.generator.read_logits()[0, 0, 0].clone())
@@ -100,24 +98,7 @@ def run():
         )
         sensitivity = float((adapter.generator.read_logits()[0, 0, 0] - logits_runs[1][-1]).abs().max())
         assert sensitivity > 0.1, sensitivity
-        result = dict(
-            status="pass",
-            logit_max_differences=differences,
-            poison_sensitivity=sensitivity,
-            sequences=sequences,
-            counters=dict(adapter.generator.counters),
-            traces=adapter.generator.traces,
-            cache_owned_by_generator=adapter.generator.owns_cache,
-            first_decode_next_seeds=seed_checks,
-            limitation="Direct stale-input proof; allocator-driven growth and overlap remain server gates",
-        )
-        Path(os.environ["KOLIBRI_ADAPTER_PROBE_RESULT"]).write_text(json.dumps(result, indent=2, default=str) + "\n")
-        print("ADAPTER_STALE_INPUT_PASS", flush=True)
     finally:
         if adapter is not None and adapter.generator is not None:
             adapter.generator.close()
         ttnn.close_mesh_device(mesh)
-
-
-if __name__ == "__main__":
-    run()
