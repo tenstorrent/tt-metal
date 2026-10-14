@@ -80,6 +80,15 @@ _SHARD_SHAPE_RE = re.compile(r"shape=\[(\d+), *(\d+)\]")
 _SHARD_ORIENT_RE = re.compile(r"orientation=ShardOrientation::(\w+)")
 _CONFIG_RE = re.compile(r"^(?P<kind>[A-Z]\w*(?:ProgramConfig|Config))\((?P<body>.*)\)$")
 _TENSOR_ID_RE = re.compile(r"tensor_id=(\d+)")
+# What follows a tensor summary's `storage_type=`. A host tensor still prints a (default,
+# DRAM-interleaved) MemoryConfig, so without this a host argument is indistinguishable from a
+# device one -- and the difference matters: conv2d treats a host weight as raw [O, I, kH, kW]
+# data to prepare, and a device weight as one that already was.
+_HOST_STORAGE = "StorageType.HOST"
+# ttnn.UnaryWithParam's repr; `params` is printed only when non-empty.
+_UNARY_WITH_PARAM_RE = re.compile(
+    r"UnaryWithParam\(op_type=UnaryOpType::(?P<op>\w+)(?:, params=\[(?P<params>[^\]]*)\])?\)"
+)
 # ttnn.Tile's repr, e.g. gpt-oss's sparse_matmul(output_tile=ttnn.Tile([32, 32])).
 _TILE_RE = re.compile(r"^Tile with shape: \[(?P<h>\d+), (?P<w>\d+)\]$")
 # An unquoted string argument: the capture prints a str's value, not its repr.
@@ -197,6 +206,39 @@ def _shape(text: str):
     return [int(v) for v in text.split(",") if v.strip()]
 
 
+def _tensor_spec(m, text: str):
+    """Spec for one matched tensor summary; None when its MemoryConfig does not parse.
+
+    ``host`` is present only for a host tensor, so a device tensor's spec -- and with it every
+    case generated from a capture that has no host arguments -- is unchanged by the field.
+    """
+    mem = parse_memory_config(m.group("mem"))
+    if mem is None:
+        return None
+    spec = {
+        "k": "t",
+        "shape": _shape(m.group("shape")),
+        "dtype": m.group("dtype"),
+        "layout": m.group("layout"),
+        "mem": mem,
+    }
+    if text.startswith(_HOST_STORAGE, m.end()):
+        spec["host"] = True
+    return spec
+
+
+def parse_unary_with_param(text: str):
+    """``UnaryWithParam(op_type=UnaryOpType::RELU)`` -> {"op": "RELU", "params": []}; None otherwise."""
+    m = _UNARY_WITH_PARAM_RE.fullmatch(text.strip())
+    if not m:
+        return None
+    try:
+        params = [float(p) for p in (m.group("params") or "").split(",") if p.strip()]
+    except ValueError:
+        return None
+    return {"op": m.group("op"), "params": params}
+
+
 def parse_config(text: str):
     """MatmulMultiCoreReuseMultiCast…(in0_block_w=2,…) -> {"kind":…, "fields": {…}}."""
     m = _CONFIG_RE.match(text.strip())
@@ -225,6 +267,8 @@ def parse_config(text: str):
         grid = _GRID_RE.match(raw)
         if grid:  # compute_with_storage_grid_size=8-4
             fields[key] = [int(grid.group(1)), int(grid.group(2))]
+        elif raw.startswith("UnaryWithParam("):  # Conv2dConfig.activation
+            fields[key] = parse_unary_with_param(raw) or raw
         elif raw == "std::nullopt":
             fields[key] = None
         elif raw in ("true", "false"):
@@ -241,18 +285,10 @@ def parse_argument(text: str):
     """One captured argument repr -> a spec dict understood by graph_case."""
     m = _TENSOR_RE.match(text)
     if m:
-        mem = parse_memory_config(m.group("mem"))
-        if mem is None:
-            # The repr carries a MemoryConfig we could not read; running the case with
-            # a default placement would not be the captured call (see parse_memory_config).
-            return {"k": "skip", "repr": text}
-        return {
-            "k": "t",
-            "shape": _shape(m.group("shape")),
-            "dtype": m.group("dtype"),
-            "layout": m.group("layout"),
-            "mem": mem,
-        }
+        spec = _tensor_spec(m, text)
+        # None: the repr carries a MemoryConfig we could not read; running the case with
+        # a default placement would not be the captured call (see parse_memory_config).
+        return spec or {"k": "skip", "repr": text}
 
     if text.startswith("[ttnn.Tensor(") or text.startswith("(ttnn.Tensor("):
         # Every element must be accounted for: a scan over a list whose element repr
@@ -266,20 +302,9 @@ def parse_argument(text: str):
         expected = text.count("ttnn.Tensor(")
         summaries = list(_TENSOR_SUMMARY_RE.finditer(text))
         if len(summaries) == expected:
-            tensors = []
-            for m in summaries:
-                mem = parse_memory_config(m.group("mem"))
-                if mem is None:
-                    return {"k": "skip", "repr": text}
-                tensors.append(
-                    {
-                        "k": "t",
-                        "shape": _shape(m.group("shape")),
-                        "dtype": m.group("dtype"),
-                        "layout": m.group("layout"),
-                        "mem": mem,
-                    }
-                )
+            tensors = [_tensor_spec(m, text) for m in summaries]
+            if any(t is None for t in tensors):
+                return {"k": "skip", "repr": text}
             return {"k": "tlist", "tensors": tensors}
         found = _TENSOR_IN_LIST_RE.findall(text)
         if not found or len(found) != expected:
@@ -309,6 +334,14 @@ def parse_argument(text: str):
         return {"k": "tile", "shape": [int(tile.group("h")), int(tile.group("w"))]}
     if text.startswith("[UnaryOpType."):
         return {"k": "acts", "v": re.findall(r"UnaryOpType\.(\w+)", text)}
+    if text.startswith("[UnaryWithParam(") or text.startswith("UnaryWithParam("):
+        # ttnn.add(..., activations=[ttnn.UnaryWithParam(RELU)]) -- the bottleneck residual's
+        # fused relu. Every element has to parse, or the case would run with fewer activations.
+        body = text[1:-1] if text.startswith("[") else text
+        found = [parse_unary_with_param(m.group(0)) for m in _UNARY_WITH_PARAM_RE.finditer(body)]
+        if not found or len(found) != body.count("UnaryWithParam(") or None in found:
+            return {"k": "skip", "repr": text}
+        return {"k": "uwp", "v": found, "list": text.startswith("[")}
     if text.startswith("slice(") or text.startswith("(slice("):
         keys = re.findall(r"slice\(([^)]*)\)", text)
         parsed = []
@@ -382,7 +415,10 @@ SKIP_OPS = {
 # only an object address for them — keeping them would make every layer's call look
 # distinct while carrying no reconstructible information. The op falls back to its
 # own default (documented in README.md / graph_case.py).
-DROP_KWARGS = {"compute_kernel_config"}
+DROP_KWARGS = {
+    "compute_kernel_config",
+    "compute_config",  # the conv / pool spelling of the same kwarg
+}
 
 # The captured name doubles as the callable expression (``ttnn.Tensor.__getitem__``
 # is bound in ttnn/__init__.py:478, so even that one needs no wrapper). Ops whose
@@ -441,9 +477,12 @@ def canonical(spec) -> str:
 
 def case_id(index: int, case: dict) -> str:
     """Short, greppable id: leading shape + dtype + memory layout of input 0."""
-    first = next((a for a in case["args"] if a["k"] == "t"), None)
+    # Positional arguments first; then keyword ones, in call order, for ops passed entirely by
+    # keyword -- ttnn.conv2d(input_tensor=…, weight_tensor=…) would otherwise get a bare index.
+    operands = list(case["args"]) + list(case["kwargs"].values())
+    first = next((a for a in operands if a["k"] == "t"), None)
     if first is None:
-        first = next((t for a in case["args"] if a["k"] == "tlist" for t in a["tensors"]), None)
+        first = next((t for a in operands if a["k"] == "tlist" for t in a["tensors"]), None)
     if first is None:
         return f"{index:02d}"
 
@@ -568,7 +607,7 @@ _HEADER = '''# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # GENERATED FILE - do not edit by hand.
 # Regenerate with:
 #   python {generator} \\
-#       --capture {capture} --out {out}
+#       --capture {capture} --out {out}{extra_args}
 # Source capture: {capture}
 # ---------------------------------------------------------------------------
 """
@@ -750,7 +789,9 @@ def runtime_module(out_dir: Path, explicit: str | None = None) -> str:
     raise SystemExit(f"cannot derive an import path for --out {out_dir} (no repo root above it); pass --runtime-module")
 
 
-def write_op_file(out_dir: Path, capture: Path, op: str, cases, raw_count, dropped, dropped_kwargs, module: str):
+def write_op_file(
+    out_dir: Path, capture: Path, op: str, cases, raw_count, dropped, dropped_kwargs, module: str, extra_args: str = ""
+):
     for i, case in enumerate(cases):
         case["id"] = case_id(i, case)
 
@@ -759,6 +800,7 @@ def write_op_file(out_dir: Path, capture: Path, op: str, cases, raw_count, dropp
         generator=repo_relative(Path(__file__)),
         capture=capture,
         out=out_dir,
+        extra_args=extra_args,
         runtime_module=module,
         op=op,
         summary=summarize(op, cases, raw_count, dropped, dropped_kwargs),
@@ -795,6 +837,10 @@ def main():
         print(f"  NOTE {args.out}/graph_case.py does not exist — copy it there and point its op_utils import at")
         print("       this model's tests/ops/op_utils.py (assert_pcc / from_tt / the mesh fixture)")
 
+    # Echoed into each file's "Regenerate with" line, so following it reproduces this suite:
+    # dropping a non-default cap would silently regenerate fewer cases.
+    extra_args = f" --max-cases {args.max_cases}" if args.max_cases != ap.get_default("max_cases") else ""
+
     written = []
     for op, cases in per_op.items():
         cases, dropped = drop_unreconstructible(cases, op)
@@ -808,7 +854,9 @@ def main():
         if not cases:
             print(f"  SKIP {op}: no reconstructible cases ({len(dropped)} dropped)")
             continue
-        path = write_op_file(args.out, args.capture, op, cases, raw_counts[op], dropped, dropped_kwargs[op], module)
+        path = write_op_file(
+            args.out, args.capture, op, cases, raw_counts[op], dropped, dropped_kwargs[op], module, extra_args
+        )
         written.append(path)
         note = f"  ({len(dropped)} case(s) not reconstructible)" if dropped else ""
         print(f"  wrote {path.name:<52} {len(cases):>3} cases{note}")
