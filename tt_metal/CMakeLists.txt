@@ -180,9 +180,9 @@ include_directories(
 # ---------------------------------------------------------------------------
 # TT::Metalium::Types — runtime-free value types shared by libtt_metal and TT::FabricTopologyUtils: MeshShape /
 # MeshCoordinate and ShapeBase (common/), FabricNodeId & friends and PhysicalNodeId (fabric/). Each owning directory
-# adds its sources with target_sources; the headers are in tt_metal's api file set. tt_metal links the objects
-# directly so libtt_metal.so exports every symbol exactly once, and the topology library links the target so an
-# external consumer gets libtt-metalium-types.a through the exported interface.
+# adds its sources with target_sources; the headers are in tt_metal's api file set. tt_metal and the topology
+# library both link it: libtt_metal.so carries one copy, and an external consumer gets libtt-metalium-types.a through
+# the exported interface.
 # ---------------------------------------------------------------------------
 add_library(tt_metalium_types STATIC)
 add_library(TT::Metalium::Types ALIAS tt_metalium_types)

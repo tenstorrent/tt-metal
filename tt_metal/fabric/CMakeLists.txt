@@ -60,8 +60,9 @@ endforeach()
 
 # ---------------------------------------------------------------------------
 # TT::FabricTopologyUtils — runtime-free topology library: MGD + PSD + PGD (proto + class), the topology solver, the
-# topology mapper utils and the offline FSD->PSD builder. It links no tt_metal runtime target. fabric links it so its objects also land in libtt_metal.so for in-tree consumers; external consumers
-# (e.g. Fabric Manager) can link TT::FabricTopologyUtils from the installed tt-metalium package without libtt_metal.
+# topology mapper utils and the offline FSD->PSD builder. It links no tt_metal runtime target. fabric links it, so it
+# is part of libtt_metal.so for in-tree consumers; external consumers (e.g. Fabric Manager) link
+# TT::FabricTopologyUtils from the installed tt-metalium package without libtt_metal.
 # ---------------------------------------------------------------------------
 add_library(
     tt_fabric_topology_utils
