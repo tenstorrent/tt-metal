@@ -231,25 +231,14 @@ void kernel_main() {
         CircularBuffer cb(cb_id);
         CircularBuffer cb_pad(a->cb_pad);
 
-        // Fill pad tile in scratch CB. The bound and the fill value are hoisted because the volatile store may
-        // alias the L1 runtime args `a` points at: left in the loop, the compiler reloads both and repeats the
-        // divide every iteration, ~20 cycles per store instead of ~4, which dominates the kernel.
-        {
-            CoreLocalMem<volatile uint32_t> ptr(cb_pad.get_write_ptr());
-            const uint32_t fill_words = a->tile_bytes / sizeof(uint32_t);
-            const uint32_t fill_value = a->packed_pad_val;
-            for (uint32_t i = 0; i < fill_words; ++i) {
-                ptr[i] = fill_value;
-            }
-#if !defined(ARCH_QUASAR)
-            // The NoC self-reads below source this tile, but the RISC and the
-            // NoC are separate L1 clients and a store can retire before it
-            // lands. A blocking load of the last store drains every earlier
-            // one; Wormhole matches by start address only, so it names that
-            // store exactly.
-            (void)ckernel::load_blocking(&ptr[fill_words - 1]);
-#endif
-        }
+        // Hoisted because the volatile fill stores may alias the L1 runtime args `a` points at, which would
+        // force a reload of both every iteration. The self-read is clamped to the destination CB slot, like
+        // source_read_size; the fill covers exactly the bytes the self-read sources.
+        const uint32_t pad_bytes = a->tile_bytes < cb_page_size ? a->tile_bytes : cb_page_size;
+        const uint32_t fill_words = pad_bytes / sizeof(uint32_t);
+        const uint32_t fill_value = a->packed_pad_val;
+        // Filled on the first pad page so cores whose range holds only data pages skip the fill.
+        bool pad_filled = false;
         const uint32_t pad_l1 = cb_pad.get_read_ptr();
         UnicastEndpoint self_ep;
         const uint32_t my_noc_x = my_x[noc.get_noc_id()];
@@ -285,10 +274,25 @@ void kernel_main() {
                     noc.async_read(
                         s, cb, source_read_size, {.page_id = src_page, .offset_bytes = 0}, {.offset_bytes = l1_offset});
                 } else {
+                    if (!pad_filled) {
+                        CoreLocalMem<volatile uint32_t> ptr(cb_pad.get_write_ptr());
+                        for (uint32_t i = 0; i < fill_words; ++i) {
+                            ptr[i] = fill_value;
+                        }
+#if !defined(ARCH_QUASAR)
+                        // The NoC self-read below sources this tile, but the RISC and the
+                        // NoC are separate L1 clients and a store can retire before it
+                        // lands. A blocking load of the last store drains every earlier
+                        // one; Wormhole matches by start address only, so it names that
+                        // store exactly.
+                        (void)ckernel::load_blocking(&ptr[fill_words - 1]);
+#endif
+                        pad_filled = true;
+                    }
                     noc.async_read(
                         self_ep,
                         cb,
-                        a->tile_bytes,
+                        pad_bytes,
                         {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = pad_l1},
                         {.offset_bytes = l1_offset});
                 }
