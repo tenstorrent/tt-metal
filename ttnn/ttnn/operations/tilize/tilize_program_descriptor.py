@@ -23,6 +23,7 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 # --- CB slots (semantic names) ---------------------------------------------
 CB_RM_STICKS = 0  # reader -> compute: RM stick segments, tile-sized pages
 CB_RM_STICKS_TAIL = 1  # same, for the ragged last column block (own ring quantum)
+CB_STICK_STAGING = 2  # reader-private scratch: bank-grouped sticks of one tile-row
 CB_TILES_OUT = 16  # compute -> writer: tiled output pages
 CB_TILES_OUT_TAIL = 17  # same, for the ragged last column block
 
@@ -32,6 +33,8 @@ OUT_DEPTH_TILE_ROWS = 2  # cb_tiles_out window, in tile-rows (double buffer)
 L1_BLOCK_BUDGET_BYTES = 512 * 1024  # per-core budget for one column block's CB windows
 FAST_TILIZE_MAX_WIDTH_TILES = 255  # fast-tilize LLK legality: block width < 256
 LOW_L1_BLOCK_WIDTH_TILES = 8  # low_l1: dimension-independent block width
+# Bank-coalesced reads: one wide read per DRAM bank per tile-row (whole-stick blocks only).
+COALESCE_BANK_READS = True
 # block_height_tiles: None => the core's whole row assignment (Phase 0: one row block).
 BLOCK_HEIGHT_TILES = None
 
@@ -130,6 +133,18 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False):
     )
     has_tail = last_block_width_tiles != block_width_tiles
 
+    # Bank-coalesced reads need the block to be the whole stick (contiguous in its bank) and
+    # an interleaved source (round-robin page -> bank).
+    in_mem = input_tensor.memory_config()
+    num_banks = ttnn.get_memory_view(device, in_mem.buffer_type).num_banks
+    coalesce = (
+        COALESCE_BANK_READS
+        and num_col_blocks == 1
+        and in_mem.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+        and tile_h > 1
+    )
+    staging_bytes = num_banks * math.ceil(tile_h / num_banks) * stick_page_bytes
+
     # --- Circular buffers ----------------------------------------------------
     out_tile = ttnn.Tile([tile_h, TILE_WIDTH])
     cbs = [
@@ -150,6 +165,8 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False):
             out_tile,
         ),
     ]
+    if coalesce:
+        cbs.append(_cb(CB_STICK_STAGING, 1, staging_bytes, input_tensor.dtype, all_cores))
     if has_tail:
         # The ragged last column block gets its own ring so every ring is filled in
         # one quantum (no contiguous block can straddle the ring end).
@@ -186,6 +203,9 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False):
         tile_rows_per_image,
         stick_page_bytes,
         *col_geometry,
+        int(coalesce),
+        num_banks,
+        CB_STICK_STAGING,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -204,7 +224,11 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False):
         writer_rt[core.x][core.y] = [out_addr, *rect]
         compute_rt[core.x][core.y] = [core_rows_tiles, block_height_tiles]
 
+    import os
+
+    _abl = [(d, "1") for d in os.environ.get("TILIZE_ABLATE", "").split(",") if d]
     reader = ttnn.KernelDescriptor(
+        defines=_abl,
         kernel_source=str(KERNEL_DIR / "tilize_reader.cpp"),
         core_ranges=all_cores,
         compile_time_args=reader_ct,
@@ -212,6 +236,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False):
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
+        defines=_abl,
         kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct,

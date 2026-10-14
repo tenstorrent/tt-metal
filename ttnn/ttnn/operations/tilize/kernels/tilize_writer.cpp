@@ -43,7 +43,9 @@ void kernel_main() {
                 cb_wait_front(cb_id, width_tiles);
                 uint32_t l1_read_addr = get_read_ptr(cb_id);
                 for (uint32_t c = 0; c < width_tiles; ++c) {
+#ifndef ABLATE_WRITES
                     noc_async_write(l1_read_addr, out_acc.get_noc_addr(first_tile + c), out_page_bytes);
+#endif
                     l1_read_addr += out_page_bytes;
                 }
                 noc_async_write_barrier();

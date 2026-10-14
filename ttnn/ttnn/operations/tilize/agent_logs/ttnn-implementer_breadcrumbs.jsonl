@@ -1,2 +1,3 @@
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/tilize/ (acceptance + knobs), --dev and non-dev","ts":"2026-10-14T13:22:43+00:00"}
 {"event":"test_run","status":"pass","test":"eval/golden_tests/tilize/test_golden.py","details":"8 supported cells pass; 56 fp8_e4m3 cells fail inside from_torch (harness input creation, before op call)","ts":"2026-10-14T13:22:43+00:00"}
+{"event":"perf","lever":"bank-coalesced stick reads","before_ns":{"16384x64":31435,"16384x32":30174,"32768x64":63198},"after_ns":{"16384x64":14890,"16384x32":12023,"32768x64":25901},"arch":"blackhole p150b 110 cores","note":"ablation: reads dominant (stub reads 31.4->8.5us)","ts":"2026-10-14T13:27:30+00:00"}

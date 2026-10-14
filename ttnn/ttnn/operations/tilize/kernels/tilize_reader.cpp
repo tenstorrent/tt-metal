@@ -26,7 +26,14 @@ void kernel_main() {
     constexpr uint32_t last_block_width_tiles = get_compile_time_arg_val(8);
     constexpr uint32_t num_col_blocks = get_compile_time_arg_val(9);
     constexpr bool has_tail = get_compile_time_arg_val(10) != 0;
-    constexpr auto in_args = TensorAccessorArgs<11>();
+    // Bank-coalesced stick reads (only when one column block spans the whole stick):
+    // interleaved page p lives in bank p % num_banks at offset (p / num_banks) * page, so the
+    // sticks of one bank inside a tile-row are contiguous there and come in ONE wide read into a
+    // reader-private staging buffer; local L1 copies then restore row order for the tilize.
+    constexpr bool coalesce_bank_reads = get_compile_time_arg_val(11) != 0;
+    constexpr uint32_t num_banks = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_stick_staging = get_compile_time_arg_val(13);
+    constexpr auto in_args = TensorAccessorArgs<14>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start_tile = get_arg_val<uint32_t>(1);
@@ -55,9 +62,38 @@ void kernel_main() {
 
                 cb_reserve_back(cb_id, width_tiles);
                 uint32_t l1_write_addr = get_write_ptr(cb_id);
-                for (uint32_t i = 0; i < tile_h; ++i) {
-                    noc_async_read(in_acc.get_noc_addr(first_stick + i, seg_offset_bytes), l1_write_addr, seg_bytes);
-                    l1_write_addr += seg_bytes;
+                if constexpr (coalesce_bank_reads) {
+                    // Groups: stick first_stick + g + m * num_banks, m = 0..count_g-1, all in one bank.
+                    constexpr uint32_t num_groups = tile_h < num_banks ? tile_h : num_banks;
+                    constexpr uint32_t max_per_group = (tile_h + num_banks - 1) / num_banks;
+                    const uint32_t staging = get_write_ptr(cb_stick_staging);
+                    for (uint32_t g = 0; g < num_groups; ++g) {
+                        const uint32_t count = (tile_h - g + num_banks - 1) / num_banks;
+#ifndef ABLATE_READS
+                        noc_async_read(
+                            in_acc.get_noc_addr(first_stick + g),
+                            staging + g * max_per_group * stick_page_bytes,
+                            count * stick_page_bytes);
+#endif
+                    }
+                    noc_async_read_barrier();
+                    for (uint32_t i = 0; i < tile_h; ++i) {
+                        const uint32_t g = i % num_banks;
+                        const uint32_t m = i / num_banks;
+                        noc_async_read(
+                            get_noc_addr(staging + (g * max_per_group + m) * stick_page_bytes),
+                            l1_write_addr,
+                            seg_bytes);
+                        l1_write_addr += seg_bytes;
+                    }
+                } else {
+                    for (uint32_t i = 0; i < tile_h; ++i) {
+#ifndef ABLATE_READS
+                        noc_async_read(
+                            in_acc.get_noc_addr(first_stick + i, seg_offset_bytes), l1_write_addr, seg_bytes);
+#endif
+                        l1_write_addr += seg_bytes;
+                    }
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_id, width_tiles);
