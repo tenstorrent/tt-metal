@@ -180,10 +180,6 @@ MGD_BLITZ_112="${MGD_SUBTORUS}/subtorus_sc28_4x2_pipeline_112stage_ring_mesh_gra
 MGD_BLITZ_128="${MGD_SUBTORUS}/subtorus_sc32_4x2_pipeline_128stage_ring_mesh_graph_descriptor.textproto"
 MGD_BLITZ_144="${MGD_SUBTORUS}/subtorus_sc36_4x2_pipeline_144stage_ring_mesh_graph_descriptor.textproto"
 
-# TestGalaxyLayoutCheck also asserts the inter-mesh floor: every MGD-requested inter-mesh connection
-# resolves to AT LEAST one physical connection (guards the RELAXED zero-link tolerance, issue #56762,
-# from masking dropped connections on cabled mocks). Checked inside that test rather than as a test of
-# its own, since each ControlPlaneFixture test is another full control-plane init.
 GTEST_GALAXY_LAYOUT_CHECK="ControlPlaneFixture.TestGalaxyLayoutCheck"
 GTEST_GALAXY_CORNER_PINS="ControlPlaneFixture.TestGalaxyCornerPins"
 GTEST_PIPELINE_BUILDER_CHECK="ControlPlaneFixture.TestPipelineBuilderCheck"
@@ -461,10 +457,10 @@ run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_des
 run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_assign_z_direction_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.T3K2x2AssignZDirectionFabric2DSanity"
 run_test tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/dual_bh_galaxy_torus_xy_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/blackhole/dual_glx_2.5d_torus/dual_glx_2.5d_torus_cluster_desc_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.BHDualGalaxyFabricConfigMismatchAcrossRanksFatal"
 
-# assign_z conflict: two boundaries contend for one chip's single Z lane (hard rank binding pins placement).
-# STRICT: a zero-resolved connection must fail init. RELAXED: init succeeds, both boundaries resolve zero
-# (logical-only, #56762).
+# Negative test: two assign_z boundaries contend for one chip's Z lane -> control-plane init must fail
+# (validated on every rank). Hard rank binding (4x 1x2 meshes, TT_VISIBLE_DEVICES 0..3) pins placement.
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml tt-run --rank-binding tests/tt_metal/distributed/config/t3k_assign_z_conflict_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.T3KAssignZConflictStrictFatal"
+# Same conflict under a RELAXED policy: init succeeds, both boundaries resolve zero (#56762).
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml tt-run --rank-binding tests/tt_metal/distributed/config/t3k_assign_z_conflict_relaxed_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.T3KAssignZConflictLosingBoundaryResolvesZero"
 
 # Big mesh 2x4 T3K Multi-host
@@ -723,12 +719,8 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${FSD
 FSD_QUAD_HOST_STRICT_INTERMESH_MGD="${MGD_CUSTOM}/fsd_quad_host_strict_intermesh_mesh_graph_descriptor.textproto"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${FSD_QUAD_HOST_STRICT_INTERMESH_MGD}" --mock-cluster-rank-binding "${FSD_MISSING_LINKS_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.StrictIntermeshAllowsAnUnusedHoleWhenBothDescriptorsCoverTheCount"
 
-# RELAXED connection the factory never cabled (issue #56762): the diagonal MGD adds mesh 0 <-> mesh 2 to the
-# pod ring, a boundary with no factory cable and no live cable. Placement finishes through the zero-link rung,
-# pairing binds nothing across it, LinkHealth files nothing for it, and the missing_links captures' four
-# missing factory cables are still filed as before.
-FSD_QUAD_HOST_DIAGONAL_MGD="${MGD_CUSTOM}/fsd_quad_host_diagonal_mesh_graph_descriptor.textproto"
-run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${FSD_QUAD_HOST_DIAGONAL_MGD}" --mock-cluster-rank-binding "${FSD_MISSING_LINKS_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.RelaxedConnectionWithNoFactoryCableIsLogicalOnly"
+# RELAXED connection the factory never cabled (mesh 0 <-> mesh 2 across the pod ring): zero-link, nothing filed (#56762).
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fsd_quad_host_diagonal_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${FSD_MISSING_LINKS_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.RelaxedConnectionWithNoFactoryCableIsLogicalOnly"
 
 # Aisle C host against the aisle D FSD: no common host, refused at ingest.
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=$FSD_AISLEC_DIR/SC16_32x4_revC_aisleC_cluster_desc/SC16_32x4_revC_aisleC_cluster_desc_bh-glx-110-c01u02_rank_38.yaml TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=$FSD_SUBTORUS_POD_DIR/SC16_32x4_revC_subtorus_aisleD_factory_system_descriptor.textproto TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.AnIncompatibleDescriptorFailsAtIngest"
@@ -781,9 +773,7 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/dual_bh_galaxy_4x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestGalaxyLayoutCheck:ControlPlaneFixture.TestGalaxyCornerPins
 # Dual 4x16 quad-galaxy intermesh (M0 1x8 + M1 2x16 hosts, 4 intermesh links)
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_single_pod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
-# 64-rank superpod mocks: rank 0 maps all 64 meshes before broadcasting (~35 s on the cpu_medium runner),
-# past the CI-wide TT_METAL_OPERATION_TIMEOUT_SECONDS=20 the other ranks wait with ("Timeout while waiting
-# for chip info header from rank 0"). Raised to 120 s on every superpod command, as for other heavy mocks.
+# 64-rank superpod: rank 0 needs ~35 s to map before broadcasting, past the CI-wide 20 s operation timeout.
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=120 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
 # Llama 8b pod MGDs on the full 16-host SP4 system.
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/llama_8b_1x2_pod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
@@ -1131,14 +1121,8 @@ run_test tt-run --mock-cluster-rank-binding "${MOCK_GALAXY_QUAD_2X4_FOUR_RANK_CL
 # Multi-MGD subcontext (-M / --mesh-graph-descriptor-mapping): bh_6u (non-torus) mock cluster, one MGD per sub-context.
 run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/bh_6u_cluster_desc.yaml --mesh-graph-descriptor-mapping tests/tt_metal/distributed/config/mock_galaxy_single_host_subcontext_mesh_graph_descriptor_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="MpiSubContext.*"
 
-# RELAXED zero-link tolerance (issue #56762) on a synthetic DISCONNECTED cluster: two SAME-revision
-# (revC subtorus) quads from DIFFERENT systems (SC36 revC aisleD + SC24 revC virtu) with zero
-# ethernet links between them, and a 2-mesh MGD with a RELAXED inter-mesh connection. Mapping +
-# control-plane init must succeed with the connection resolving to ZERO links. Runs ONLY
-# TestDisconnectedQuadsZeroIntermeshResolved: this is the one mock where zero resolved connections
-# is the asserted outcome (so TestGalaxyLayoutCheck, which asserts the inter-mesh floor, is NOT run), and
-# LayoutCheck/CornerPins are omitted because the two quads have different physical shapes (their
-# fixed tray/asic-position invariants do not apply to a heterogeneous mock).
+# RELAXED zero-link tolerance (#56762): two revC subtorus quads from different systems, no links between them;
+# the RELAXED connection must resolve to zero links. LayoutCheck/CornerPins do not apply to this heterogeneous mock.
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/disconnected_sc36_quads_2bigmesh_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding tests/tt_metal/tt_fabric/mock_cluster_mappings/disconnected_sc36_quads_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestDisconnectedQuadsZeroIntermeshResolved"
 
 fi # bh-misc
