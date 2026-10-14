@@ -121,14 +121,17 @@ void kernel_main() {
         const uint32_t ob = b;
 #endif
 #ifdef XMC_HELPER
+#ifndef XMC_PRIM_ONLY
+#define XMC_PRIM_ONLY 0  // (perf probe MIMO_FL_XPRIM_ONLY: the primary reads and tilizes every super-block)
+#endif
         // Super-blocks b with b % (1 + NH) = h + 1 were read and tilized by helper h (se13_xhelp.cpp) into landing
         // ring h here (RT 14 helper 0 xy, 17.. helpers 1.. xy, 15 landing address (ring h follows ring h - 1), 16
         // landing slots; DATA sem se_help_sem(h) here counts arrivals, CREDIT sem 5 on the helper counts freed slots).
         constexpr uint32_t hs = 1 + SE_XNH;
 #ifdef SE_SMALL_T
-        const bool from_helper = own && ob % hs != 0 && !dyn.small;  // small-M role split: the primary tilized all
+        const bool from_helper = !XMC_PRIM_ONLY && own && ob % hs != 0 && !dyn.small;  // small-M role split: the primary tilized all
 #else
-        const bool from_helper = own && ob % hs != 0;
+        const bool from_helper = !XMC_PRIM_ONLY && own && ob % hs != 0;
 #endif
         const uint32_t hh = ob % hs - 1, hb = ob / hs;
         uint32_t src;
