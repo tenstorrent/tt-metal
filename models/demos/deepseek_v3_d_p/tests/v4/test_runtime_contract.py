@@ -75,6 +75,7 @@ def test_every_forward_call_binds_to_the_transformer():
     [
         ({"mtp_union": object()}, ValueError, "no MTP predictor"),
         ({"input_is_embedded": True}, ValueError, "no MTP predictor"),
+        ({"mtp_geometry": object()}, ValueError, "no MTP predictor"),
         ({"kvpe_cache": object()}, ValueError, "owns its state"),
         ({"metadata": object()}, NotImplementedError, "no traced path"),
         ({"d2h_service": object()}, NotImplementedError, "host layer acks"),
@@ -102,11 +103,13 @@ def test_forward_rejects_a_chunk_that_does_not_continue_the_state(expect_error):
         (dict(mtp_levels=0, use_trace=True, num_users=1, dflash_enabled=False), "eager-only"),
         (dict(mtp_levels=0, use_trace=False, num_users=2, dflash_enabled=False), "single-user"),
         (dict(mtp_levels=0, use_trace=False, num_users=1, dflash_enabled=True), "no DFlash"),
+        (dict(mtp_levels=0, use_trace=False, num_users=1, dflash_enabled=False, is_last_rank=False), "single-rank"),
+        (dict(mtp_levels=0, use_trace=False, num_users=1, dflash_enabled=False, is_first_rank=False), "single-rank"),
     ],
 )
 def test_runtime_rejects_unsupported_config_before_the_shared_build(monkeypatch, expect_error, config, message):
     runtime = object.__new__(TtV4Runtime)
-    runtime.config = SimpleNamespace(**config)
+    runtime.config = SimpleNamespace(**{"is_first_rank": True, "is_last_rank": True, **config})
     parent_build = create_autospec(TtPrefillRuntime._build_model)
     monkeypatch.setattr(TtPrefillRuntime, "_build_model", parent_build)
     with expect_error(ValueError, message):

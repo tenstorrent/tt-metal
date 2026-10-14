@@ -28,9 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
-from models.demos.deepseek_v3_d_p.tt.v4.block import TtV4Block
-
-_HASH_GATE_MODES = (GateComputeMode.HASH_HOST, GateComputeMode.HASH_DEVICE)
+from models.demos.deepseek_v3_d_p.tt.v4.block import _HASH_GATE_MODES, TtV4Block
 
 
 class TtV4Transformer(LightweightModule):
@@ -99,7 +97,7 @@ class TtV4Transformer(LightweightModule):
             )
         if kv_only_last_layer:
             raise ValueError("DeepSeek-V4 has no KV-only layer: the attention state is the whole sublayer's output")
-        # Each attention state is one user's (TtHCA / TtSWA assert batch 1).
+        # Each attention state is one user's (every V4 attention asserts batch 1).
         if slot_num != 1:
             raise ValueError(f"DeepSeek-V4 attention state is single-user; got slot_num={slot_num}")
         if padding_side != "right":
@@ -242,6 +240,7 @@ class TtV4Transformer(LightweightModule):
         on_mtp_complete=None,
         input_is_embedded: bool = False,
         provided_levels: int = 0,
+        mtp_geometry=None,
     ):
         """Run one chunk through this rank's layers.
 
@@ -257,7 +256,13 @@ class TtV4Transformer(LightweightModule):
         Returns ``norm(hc_head(h))`` ``[1, 1, S/sp, hidden/tp]`` bf16 on the last rank, else the packed
         streams for the next rank.
         """
-        if mtp_union is not None or on_mtp_complete is not None or input_is_embedded or provided_levels:
+        if (
+            mtp_union is not None
+            or on_mtp_complete is not None
+            or mtp_geometry is not None
+            or input_is_embedded
+            or provided_levels
+        ):
             raise ValueError(
                 "DeepSeek-V4 prefill has no MTP predictor; MTP forward arguments must be left at their defaults"
             )

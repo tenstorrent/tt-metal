@@ -57,8 +57,10 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
         return None
 
     def checkpoint_path(self) -> Path:
+        from models.demos.deepseek_v3_d_p.tt.v4.weights import CHECKPOINT_INDEX
+
         path = Path(os.environ.get("PREFILL_HF_MODEL") or self.hf_model_default)
-        if not (path / "model.safetensors.index.json").is_file():
+        if not (path / CHECKPOINT_INDEX).is_file():
             raise FileNotFoundError(f"no DeepSeek-V4 checkpoint index at {path}; set PREFILL_HF_MODEL")
         return path
 
