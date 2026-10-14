@@ -304,6 +304,11 @@ Tensor swiglu(const Tensor& input_a, std::int32_t dim, const std::optional<Memor
     }
 
     std::vector<Tensor> ab = detail::split_tensor_for_glu(input_a, dim, output_mem_config);
+    // silu_glu's own SFPU kernel computes this product as one program (activations/products/silu_glu.json).
+    if (ab[0].dtype() == DataType::BFLOAT16 && ab[1].dtype() == DataType::BFLOAT16 &&
+        (ab[0].device()->arch() == tt::ARCH::BLACKHOLE)) {
+        return ttnn::silu_glu(ab[1], ab[0], output_mem_config);
+    }
 
     Tensor swish_b = ttnn::swish(ab[1], output_mem_config);
     Tensor swiglu_result = ttnn::multiply(ab[0], swish_b, std::nullopt, output_mem_config);

@@ -1354,3 +1354,14 @@ def _golden_function_logical_right_shift(input_tensor_a, shift_amt, *args, **kwa
 ttnn.attach_golden_function(ttnn.logical_right_shift, golden_function=_golden_function_logical_right_shift)
 
 __all__ = []
+
+
+def _golden_function_silu_glu(gate, up, *args, **kwargs):
+    import torch
+
+    a, b = gate.to(torch.float64), up.to(torch.float64)
+    # Generated from activations/products/silu_glu.json: each leaf exact in float64, returned in fp32.
+    return ((a / (1 + torch.exp(-a))) * (b)).to(torch.float32)
+
+
+ttnn.attach_golden_function(ttnn.silu_glu, golden_function=_golden_function_silu_glu)

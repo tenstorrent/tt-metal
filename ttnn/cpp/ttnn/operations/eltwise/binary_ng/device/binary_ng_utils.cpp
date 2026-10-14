@@ -419,6 +419,13 @@ OpConfig::OpConfig(
             postprocess = unary::UnaryOpType::SQRT;
             break;
         case BinaryOpType::ISCLOSE: binary_op = SfpuBinaryOp::ISCLOSE; break;
+        case BinaryOpType::SILU_GLU:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::SILU_GLU;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -592,6 +599,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"where_tile_init();", fmt::format("where_tile<DataFormat::{}>", data_format)};
         }
         case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
+        case SILU_GLU: return {"silu_glu_tile_init();", "silu_glu_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -609,6 +617,12 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
     auto&& [tile_init, tile_fn] = get_sfpu_init_fn(std::get<SfpuBinaryOp>(binary_op), dtype);
     defines["BINARY_SFPU_INIT"] = std::move(tile_init);
     defines["BINARY_SFPU_OP"] = std::move(tile_fn);
+    // A fused activation's compute API is included through its split-include macro, so the binary SFPU
+    // kernels compile it only for the op that calls it.
+    switch (std::get<SfpuBinaryOp>(binary_op)) {
+        case SfpuBinaryOp::SILU_GLU: defines["SFPU_OP_SILU_GLU_INCLUDE"] = "1"; break;
+        default: break;
+    }
     return defines;
 }
 

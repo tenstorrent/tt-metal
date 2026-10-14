@@ -4145,8 +4145,20 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuIntSumAdd: self._int_sum_add,
                 MathOperation.SfpuClampedSiluGlu: self._clamped_silu_glu,
                 MathOperation.SfpuSituGlu: self._situ_glu,
+                MathOperation.SfpuSiluGlu: self._silu_glu,
             }
         )
+
+    def _silu_glu(self, t1, t2):
+        # The exact product of activations/products/silu_glu.json's leaves in float64,
+        # each at its input as the SFPU reads it (a subnormal as 0).
+        a, b = (
+            torch.tensor(
+                0.0 if abs(float(t)) < 2.0**-126 else float(t), dtype=torch.float64
+            )
+            for t in (t1, t2)
+        )
+        return float((a / (1 + torch.exp(-a))) * (b))
 
     def __call__(
         self,

@@ -1419,4 +1419,52 @@ Tensor clamped_silu_glu(
         std::nullopt);
 }
 
+Tensor silu_glu(
+    const Tensor& gate,
+    const Tensor& up,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    using operations::unary::EltwiseUnaryWithParam;
+    using operations::unary::UnaryOpType;
+
+    TT_FATAL(
+        !(sub_core_grids.has_value() && sub_device_id.has_value()),
+        "silu_glu: pass sub_core_grids or sub_device_id, not both");
+    // One binary_ng program whose only arithmetic is silu_glu_tile, this op's own SFPU kernel, for BF16
+    // operands on a board that has it, at the parameters it is compiled for; every other call keeps the composite.
+    if (gate.device() != nullptr && gate.device()->arch() == tt::ARCH::BLACKHOLE &&
+        gate.dtype() == DataType::BFLOAT16 && up.dtype() == DataType::BFLOAT16) {
+        return ttnn::detail::invoke_binary_ng(
+            gate,
+            up,
+            binary::BinaryOpType::SILU_GLU,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            {},
+            {},
+            {},
+            std::nullopt,
+            sub_core_grids,
+            sub_device_id);
+    }
+
+    // One multiply whose operands carry each leaf's unary pre-activation.
+    const auto gate_activations = std::array{EltwiseUnaryWithParam{UnaryOpType::SILU}};
+    const auto up_activations = std::array<EltwiseUnaryWithParam, 0>{};
+    return ttnn::multiply(
+        gate,
+        up,
+        std::nullopt,
+        output_mem_config,
+        std::nullopt,
+        {},
+        gate_activations,
+        up_activations,
+        std::nullopt,
+        sub_core_grids,
+        sub_device_id);
+}
+
 }  // namespace ttnn

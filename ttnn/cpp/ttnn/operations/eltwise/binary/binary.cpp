@@ -1386,6 +1386,50 @@ Tensor multiply(
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    {
+        // silu_glu's own SFPU kernel computes this product as one program (activations/products/silu_glu.json): BF16
+        // operands and output on a board that has the kernel, no output tensor, post-activation or fast mode.
+        using operations::unary::UnaryOpType;
+        if (lhs.device() != nullptr && (lhs.device()->arch() == tt::ARCH::BLACKHOLE) &&
+            lhs.dtype() == DataType::BFLOAT16 && rhs.dtype() == DataType::BFLOAT16 &&
+            output_dtype.value_or(DataType::BFLOAT16) == DataType::BFLOAT16 && !output.has_value() &&
+            post_activations.empty() && !fast_and_approximate_mode.value_or(false)) {
+            if ((lhs_activations.size() == 1 && lhs_activations[0].type() == UnaryOpType::SILU &&
+                 !lhs_activations[0].has_parameter()) &&
+                rhs_activations.empty()) {
+                return ttnn::detail::invoke_binary_ng(
+                    lhs,
+                    rhs,
+                    operations::binary::BinaryOpType::SILU_GLU,
+                    output_dtype,
+                    memory_config,
+                    std::nullopt,
+                    {},
+                    {},
+                    {},
+                    std::nullopt,
+                    sub_core_grids,
+                    sub_device_id);
+            }
+            if ((rhs_activations.size() == 1 && rhs_activations[0].type() == UnaryOpType::SILU &&
+                 !rhs_activations[0].has_parameter()) &&
+                lhs_activations.empty()) {
+                return ttnn::detail::invoke_binary_ng(
+                    rhs,
+                    lhs,
+                    operations::binary::BinaryOpType::SILU_GLU,
+                    output_dtype,
+                    memory_config,
+                    std::nullopt,
+                    {},
+                    {},
+                    {},
+                    std::nullopt,
+                    sub_core_grids,
+                    sub_device_id);
+            }
+        }
+    }
     bool is_block_fmt_inp = (is_block_float(lhs.dtype()) || is_block_float(rhs.dtype()));
     bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
     return ttnn::detail::invoke_binary_ng(
