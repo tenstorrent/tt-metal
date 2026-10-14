@@ -5,6 +5,7 @@
 #include "unary_op_utils.hpp"
 
 #include <optional>
+#include <string_view>
 #include <type_traits>
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/types.hpp"
@@ -128,6 +129,22 @@ const char* bitwise_shift_data_format_str(UnaryOpType op_type, std::optional<Dat
         return "UInt16";
     }
     TT_THROW("Unsupported input dtype for bitwise/shift op_type {}: expected Int32, UInt32, or UInt16.", op_type);
+}
+
+// The ordered int32 compare kernels are signed. Flipping the sign bit of both the value and the scalar maps
+// uint32 order onto int32 order, and the compare overwrites the biased word with its 1/0 result.
+std::pair<std::string, std::string> uint32_ordered_compare(
+    std::string_view compare, const std::string& idst, uint32_t scalar_bits) {
+    constexpr uint32_t sign_bit = 0x80000000u;
+    return {
+        "bitwise_xor_tile_init();",
+        fmt::format(
+            "bitwise_xor_tile<DataFormat::UInt32>({0}, {1:#x}u); unary_{2}_tile_init(); unary_{2}_tile_int32({0}, "
+            "{3}u);",
+            idst,
+            sign_bit,
+            compare,
+            scalar_bits ^ sign_bit)};
 }
 
 template <typename T>
@@ -499,7 +516,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::UNARY_GT:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+            if (input_dtype == DataType::UINT32) {
+                return uint32_ordered_compare("gt", idst, std::bit_cast<uint32_t>(param0_raw));
+            }
+            if (input_dtype == DataType::INT32) {
                 return {
                     "unary_gt_tile_init();",
                     fmt::format("unary_gt_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
@@ -511,7 +531,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::UNARY_LT:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+            if (input_dtype == DataType::UINT32) {
+                return uint32_ordered_compare("lt", idst, std::bit_cast<uint32_t>(param0_raw));
+            }
+            if (input_dtype == DataType::INT32) {
                 return {
                     "unary_lt_tile_init();",
                     fmt::format("unary_lt_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
@@ -523,7 +546,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::UNARY_GE:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+            if (input_dtype == DataType::UINT32) {
+                return uint32_ordered_compare("ge", idst, std::bit_cast<uint32_t>(param0_raw));
+            }
+            if (input_dtype == DataType::INT32) {
                 return {
                     "unary_ge_tile_init();",
                     fmt::format("unary_ge_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
@@ -535,7 +561,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::UNARY_LE:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+            if (input_dtype == DataType::UINT32) {
+                return uint32_ordered_compare("le", idst, std::bit_cast<uint32_t>(param0_raw));
+            }
+            if (input_dtype == DataType::INT32) {
                 return {
                     "unary_le_tile_init();",
                     fmt::format("unary_le_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
@@ -1181,6 +1210,11 @@ std::map<std::string, std::string> get_block_defines(
 // update split eltwise ops include macros
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines) {
     defines[get_macro_definition(op_type)] = "1";
+    // The uint32 forms of the ordered compares bias their operand with bitwise_xor_tile.
+    if (op_type == UnaryOpType::UNARY_GT || op_type == UnaryOpType::UNARY_LT || op_type == UnaryOpType::UNARY_GE ||
+        op_type == UnaryOpType::UNARY_LE) {
+        defines[get_macro_definition(UnaryOpType::BITWISE_XOR)] = "1";
+    }
 }
 
 void add_input_dtype_defines(DataType dtype, std::map<std::string, std::string>& defines) {
