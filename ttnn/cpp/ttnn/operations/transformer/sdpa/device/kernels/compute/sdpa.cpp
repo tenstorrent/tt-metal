@@ -49,6 +49,9 @@ void kernel_main() {
     // Compute is mode-agnostic: windowed causal lives entirely in that range and the generated mask.
     constexpr auto windowed_mode = static_cast<WindowedMode>(get_compile_time_arg_val(28));
     constexpr bool use_windowed_narrowing = is_windowed_mode(windowed_mode);
+    // Single-K-chunk row sums on the math thread (math_thread_row_sums). Host-gated: it also sizes the recip
+    // scratch CB for a whole normalize row group, so the kernel must not take the path on its own.
+    constexpr bool sum_rows_from_scores = get_compile_time_arg_val(29) == 1;
 
     const uint32_t num_phases = get_arg_val<uint32_t>(0);
     const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(1);
@@ -68,7 +71,7 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = 29;
+    constexpr uint32_t cb_arg_offset = 30;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -179,7 +182,8 @@ void kernel_main() {
             cb_attention_sink,
             use_provided_mask,
             use_windowed_narrowing,
-            cb_windowed_k_range>(
+            cb_windowed_k_range,
+            sum_rows_from_scores>(
             global_q_count,
             k_num_chunks,
             cb_out_im_A,
