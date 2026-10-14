@@ -61,6 +61,10 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     const uint32_t num_weight_tiles = num_heads / tt::constants::TILE_WIDTH;
     const bool has_valid_length = tensor_args.valid_length_tensor.has_value();
     const bool has_new_kv_row = tensor_args.new_kv_row.has_value();
+    const bool has_num_keys = tensor_args.num_keys_tensor.has_value();
+    const bool is_candidate_source = args.candidate_topk_blocks > 0;
+    const bool is_partial = args.num_parts > 1;
+    const bool has_row_table = tensor_args.row_table.has_value();
     const uint32_t page_block_size = tensor_args.key_cache.logical_shape()[-2];
     const uint32_t chunks_per_block = page_block_size / tt::constants::TILE_HEIGHT;
 
@@ -101,6 +105,12 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     const TensorParamName SCORES{"scores"};
     const TensorParamName NEW_KV_ROW{"new_kv_row"};
     const TensorParamName NEW_KV_ROW_INDEX{"new_kv_row_index"};
+    const TensorParamName NUM_KEYS{"num_keys"};
+    const TensorParamName CANDIDATE_BLOCKS{"candidate_blocks"};
+    const TensorParamName POOL_COUNT{"pool_count"};
+    const TensorParamName PART_INDEX{"part_index"};
+    const TensorParamName ROW_TABLE{"row_table"};
+    const DFBSpecName ROW_TBL_DFB{"row_tbl"};
 
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
@@ -282,6 +292,17 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
         reader_tensor_bindings.push_back(
             TensorBinding{.tensor_parameter_name = VALID_LENGTH, .accessor_name = "valid_length"});
     }
+    if (has_num_keys) {
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = NUM_KEYS, .spec = tensor_args.num_keys_tensor->tensor_spec()});
+        reader_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = NUM_KEYS, .accessor_name = "num_keys"});
+    }
+    if (is_partial) {
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = PART_INDEX, .spec = tensor_args.part_index_tensor->tensor_spec()});
+        reader_tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = PART_INDEX, .accessor_name = "part_index"});
+    }
 
     Group<TensorBinding> writer_tensor_bindings = {
         TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
@@ -302,11 +323,66 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
             TensorBinding{.tensor_parameter_name = NEW_KV_ROW_INDEX, .accessor_name = "new_kv_row_index"});
         writer_compiler_options.defines.emplace("HAS_NEW_KV_ROW", "1");
     }
+    if (is_candidate_source) {
+        // Core 0 assembles the candidate list, then pool_count 64 B past it, in its kv_wr stage.
+        const uint32_t stage_bytes = kKvStageRows * tensor_args.kv_cache.buffer()->page_size();
+        const uint32_t list_bytes =
+            tt::round_up(args.candidate_topk_blocks * static_cast<uint32_t>(sizeof(uint32_t)), 64u);
+        TT_FATAL(
+            list_bytes + sizeof(uint32_t) <= stage_bytes,
+            "fused_lightning_select_kv: {} candidate blocks do not fit the {} B kv staging buffer",
+            args.candidate_topk_blocks,
+            stage_bytes);
+        tensor_parameters.push_back(TensorParameter{.unique_id = CANDIDATE_BLOCKS, .spec = output.at(2).tensor_spec()});
+        tensor_parameters.push_back(TensorParameter{.unique_id = POOL_COUNT, .spec = output.at(3).tensor_spec()});
+        writer_tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = CANDIDATE_BLOCKS, .accessor_name = "candidate_blocks"});
+        writer_tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = POOL_COUNT, .accessor_name = "pool_count"});
+        writer_compiler_options.defines.emplace("CANDIDATE_SOURCE", "1");
+    }
+    if (is_partial) {
+        // Core 0 assembles the candidates in its kv_wr stage.
+        const uint32_t stage_bytes = kKvStageRows * tensor_args.kv_cache.buffer()->page_size();
+        TT_FATAL(
+            kv_output.buffer()->page_size() <= stage_bytes,
+            "fused_lightning_select_kv: {} candidates do not fit the {} B kv staging buffer",
+            args.k,
+            stage_bytes);
+        writer_compiler_options.defines.emplace("PARTIAL_OUTPUT", "1");
+    }
+    // The writer reads its keys' rows into row_tbl, one uint32 per key.
+    std::vector<DataflowBufferSpec> extra_dfbs;
+    std::vector<DFBBinding> extra_writer_dfb_bindings;
+    if (has_row_table) {
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = ROW_TABLE, .spec = tensor_args.row_table->tensor_spec()});
+        writer_tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = ROW_TABLE, .accessor_name = "row_table"});
+        writer_compiler_options.defines.emplace("ROW_TABLE", "1");
+        extra_dfbs.push_back(DataflowBufferSpec{
+            .unique_id = ROW_TBL_DFB,
+            .entry_size = tt::round_up(
+                std::max(max_blocks_per_core, 1u) * page_block_size * static_cast<uint32_t>(sizeof(uint32_t)), 16u),
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::UInt32,
+        });
+        extra_writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = ROW_TBL_DFB, .accessor_name = "row_tbl", .endpoint_type = DFBEndpointType::PRODUCER});
+        extra_writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = ROW_TBL_DFB, .accessor_name = "row_tbl", .endpoint_type = DFBEndpointType::CONSUMER});
+    }
 
     // ---- Kernels ----
     KernelSpec::CompilerOptions reader_compiler_options;
+    if (is_partial) {
+        reader_compiler_options.defines.emplace("PARTIAL_OUTPUT", "1");
+    }
     if (has_valid_length) {
         reader_compiler_options.defines.emplace("HAS_VALID_LENGTH", "1");
+    }
+    if (has_num_keys) {
+        reader_compiler_options.defines.emplace("HAS_NUM_KEYS", "1");
     }
     if (!tensor_args.key_cache.memory_config().nd_shard_spec().has_value()) {
         reader_compiler_options.defines.emplace("KEY_CACHE_INTERLEAVED", "1");
@@ -342,12 +418,13 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
              {"num_weight_tiles", num_weight_tiles},
              {"page_block_size", page_block_size},
              {"num_tiles_per_block_of_key", num_tiles_per_block_of_key},
-             {"kv_stage_rows", kKvStageRows}},
+             {"kv_stage_rows", kKvStageRows},
+             {"num_parts", args.num_parts}},
         .runtime_arg_schema = {.runtime_arg_names = {"core_index", "num_cores"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    const KernelSpec writer{
+    KernelSpec writer{
         .unique_id = WRITER,
         .source = kWriterSource,
         .compiler_options = std::move(writer_compiler_options),
@@ -416,7 +493,10 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
              {"hist_slices_per_owner", hist_slices_per_owner},
              {"num_select_words", kTopkSelectWords},
              {"kv_stage_rows", kKvStageRows},
-             {"output_row_offset", args.output_row_offset}},
+             {"output_row_offset", args.output_row_offset},
+             {"candidate_topk_blocks", args.candidate_topk_blocks},
+             {"candidate_block_size", args.candidate_block_size},
+             {"num_parts", args.num_parts}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"core_index", "num_cores"},
              .common_runtime_arg_names =
@@ -431,6 +511,8 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
         // NoC (x, y) of every core, in core_index order.
         .advanced_options = {.num_common_runtime_varargs = 2 * cores_in_grid},
     };
+    writer.dfb_bindings.insert(
+        writer.dfb_bindings.end(), extra_writer_dfb_bindings.begin(), extra_writer_dfb_bindings.end());
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), args.compute_kernel_config);
@@ -506,6 +588,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
         .work_units = {WorkUnitSpec{
             .name = "fused_lightning_select_kv", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}},
     };
+    spec.dataflow_buffers.insert(spec.dataflow_buffers.end(), extra_dfbs.begin(), extra_dfbs.end());
 
     const auto cores = corerange_to_cores(all_cores, std::nullopt, /*row_wise=*/true);
     const uint32_t num_cores = cores.size();
@@ -560,6 +643,19 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     if (has_new_kv_row) {
         run_args.tensor_args.emplace(NEW_KV_ROW, std::cref(tensor_args.new_kv_row->mesh_tensor()));
         run_args.tensor_args.emplace(NEW_KV_ROW_INDEX, std::cref(tensor_args.new_kv_row_index->mesh_tensor()));
+    }
+    if (has_num_keys) {
+        run_args.tensor_args.emplace(NUM_KEYS, std::cref(tensor_args.num_keys_tensor->mesh_tensor()));
+    }
+    if (is_candidate_source) {
+        run_args.tensor_args.emplace(CANDIDATE_BLOCKS, std::cref(output.at(2).mesh_tensor()));
+        run_args.tensor_args.emplace(POOL_COUNT, std::cref(output.at(3).mesh_tensor()));
+    }
+    if (is_partial) {
+        run_args.tensor_args.emplace(PART_INDEX, std::cref(tensor_args.part_index_tensor->mesh_tensor()));
+    }
+    if (has_row_table) {
+        run_args.tensor_args.emplace(ROW_TABLE, std::cref(tensor_args.row_table->mesh_tensor()));
     }
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};

@@ -38,6 +38,7 @@ void bind_tilize(nb::module_& mod) {
             use_low_perf (bool, optional): Whether to run on one core with one-tile buffers, which uses the least L1. It applies to ROW_MAJOR inputs other than ``UINT8`` on Blackhole. Defaults to `False`. A sharded input needs `False`.
             tile (ttnn.Tile, optional): Tile shape of the output. It must be 32 wide, with a height of 32, 16, 8, 4, 2 or 1. ``BFLOAT8_B`` and ``BFLOAT4_B`` outputs need a height of 32. Defaults to `ttnn.Tile((32, 32))`.
             sub_core_grids (ttnn.CoreRangeSet, optional): Cores to run the operation on. Defaults to `None`, which lets the operation choose its cores. With a grid of one core, the operation runs on that core and needs an interleaved or HEIGHT_SHARDED input, and on Blackhole an input other than ``UINT8``.
+            output_tensor (ttnn.Tensor, optional): Preallocated TILE output to write into. Its memory config and dtype are the defaults for `memory_config` and `dtype`, and its spec must match the result. Input rank must be <= 4. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor, in TILE layout.
@@ -78,6 +79,7 @@ void bind_tilize(nb::module_& mod) {
         nb::arg("use_multicore") = true,
         nb::arg("use_low_perf") = false,
         nb::arg("tile") = tt::tt_metal::Tile(),  // default to 32x32 tile
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 }  // namespace ttnn::operations::data_movement::detail
