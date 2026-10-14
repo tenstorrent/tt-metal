@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 #include "api/debug/assert.h"
@@ -31,14 +33,31 @@ namespace trace_metadata {
 // `dst_l1_addr` is deliberately the caller's choice: which CB's L1 may be borrowed as scratch, and at
 // which offset, is kernel-specific -- these small reads only land correctly at a CB page base on some
 // platforms -- so the caller passes an address it has reasoned about rather than this helper guessing.
+//
+// Lanes: read_metadata_vector_u32 reads the first N elements (one uint32 per lane in page 0) in one DMA;
+// dst_l1_addr must hold N words. The scalar read is its N = 1 case.
+template <typename NocT, typename AccessorArgsT, size_t N>
+inline void read_metadata_vector_u32(
+    NocT& noc,
+    const AccessorArgsT& accessor_args,
+    uint32_t tensor_addr,
+    uint32_t dst_l1_addr,
+    std::array<uint32_t, N>& out) {
+    const auto accessor = TensorAccessor(accessor_args, tensor_addr);
+    noc.async_read(accessor, CoreLocalMem<uint8_t>(dst_l1_addr), N * sizeof(uint32_t), {.page_id = 0}, {});
+    noc.async_read_barrier();
+    invalidate_l1_cache();
+    for (uint32_t i = 0; i < N; ++i) {
+        out[i] = CoreLocalMem<volatile uint32_t>(dst_l1_addr)[i];
+    }
+}
+
 template <typename NocT, typename AccessorArgsT>
 inline uint32_t read_metadata_scalar_u32(
     NocT& noc, const AccessorArgsT& accessor_args, uint32_t tensor_addr, uint32_t dst_l1_addr) {
-    const auto accessor = TensorAccessor(accessor_args, tensor_addr);
-    noc.async_read(accessor, CoreLocalMem<uint8_t>(dst_l1_addr), sizeof(uint32_t), {.page_id = 0}, {});
-    noc.async_read_barrier();
-    invalidate_l1_cache();
-    return CoreLocalMem<volatile uint32_t>(dst_l1_addr)[0];
+    std::array<uint32_t, 1> value;
+    read_metadata_vector_u32(noc, accessor_args, tensor_addr, dst_l1_addr, value);
+    return value[0];
 }
 
 inline uint32_t bounded_cache_batch_idx(
