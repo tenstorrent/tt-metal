@@ -46,7 +46,7 @@ public:
     [[nodiscard]] std::vector<IDevice*> get_devices(const MeshCoordinateRange& range) const;
     [[deprecated(
         "Deprecated, retrieving physical devices can fail in distributed contexts. Iterate over MeshCoordinates "
-        "instead. This will be removed after 2026-11-13.")]] [[nodiscard]] std::vector<IDevice*>
+        "instead. This will be removed after 2026-11-16.")]] [[nodiscard]] std::vector<IDevice*>
     get_devices() const;
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids(const MeshCoordinateRange& range) const;
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids() const;
@@ -71,11 +71,11 @@ public:
 
     [[deprecated(
         "Deprecated, retrieving physical devices can fail in distributed contexts. Iterate over MeshCoordinates "
-        "instead. This will be removed after 2026-11-13.")]]
+        "instead. This will be removed after 2026-11-16.")]]
     std::vector<MaybeRemote<IDevice*>>::const_iterator begin() const;
     [[deprecated(
         "Deprecated, retrieving physical devices can fail in distributed contexts. Iterate over MeshCoordinates "
-        "instead. This will be removed after 2026-11-13.")]]
+        "instead. This will be removed after 2026-11-16.")]]
     std::vector<MaybeRemote<IDevice*>>::const_iterator end() const;
 
     // Throws if no device corresponds to `device_id`.
@@ -109,7 +109,7 @@ public:
     [[nodiscard]] std::vector<IDevice*> get_ring_devices() const;
     [[deprecated(
         "Deprecated, use get_line_coordinates or get_line_fabric_node_ids instead. This will be removed after "
-        "2026-11-13.")]] [[nodiscard]] std::vector<IDevice*>
+        "2026-11-16.")]] [[nodiscard]] std::vector<IDevice*>
     get_line_devices() const;
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_ring_fabric_node_ids() const;
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_line_fabric_node_ids() const;
