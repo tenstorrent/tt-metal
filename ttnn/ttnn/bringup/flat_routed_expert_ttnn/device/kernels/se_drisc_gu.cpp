@@ -15,13 +15,12 @@
 // refills. A receiver counts its grants in a semaphore of its own (zero at each launch); the sender reads the counters
 // when it runs out of grants. The jobs advance round-robin.
 //
-// RT: 0 working base (se_drisc.hpp layout), 1 working region bytes, 2 NJ, 3.. NJ x the job's NoC
+// RT: 0 working base (se_drisc.hpp layout), 1 working region bytes, 2 NJ, 3.. NJ x the job's NoC, then the MPFE ports of
+//     this tile and of the bank's NOC0 / NOC1 endpoints
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/gddr_dma.h"
-#ifdef SE_DRISC_MPFE
 #include "experimental/gddr_mc.h"
-#endif
 #include "se_drisc.hpp"
 
 // the weight writes' unicast VC (as se10_fwd.cpp: off the default write VC the h / y traffic shares); SE_FWD_VC
@@ -44,7 +43,7 @@ void kernel_main() {
     const uint32_t base = get_arg_val<uint32_t>(0), region = get_arg_val<uint32_t>(1), nj = get_arg_val<uint32_t>(2);
     auto word = [&](uint32_t off) { return reinterpret_cast<volatile uint32_t*>(base + off); };
     for (uint32_t o = 0; o < se_drisc_desc(0); o += 4) {
-        if (o != SE_DRISC_STOP) {
+        if (o != SE_DRISC_STOP && (o < SE_DRISC_DONE + 4 || o > SE_DRISC_DONE + 12)) {
             *word(o) = 0;
         }
     }
@@ -53,15 +52,25 @@ void kernel_main() {
             noc_local_state_init(get_arg_val<uint32_t>(3 + k));  // (the kernel start set up its own NoC only)
         }
     }
+    for (uint32_t port = 1; port <= 3; ++port) {  // (debug: the controller's MPFE weights as found, P1..P3)
+        *word(SE_DRISC_DONE + 4 * port) = gddr_mc_read_mpfe_weight(port);
+    }
     *word(SE_DRISC_READY) = SE_DRISC_READY_MAGIC;
-#ifdef SE_DRISC_MPFE  // GDDR arbitration weight of this tile's port (persists until reset; restored on exit)
-    const uint32_t mpfe_port = SE_DRISC_MPFE_PORT, mpfe_old = gddr_mc_read_mpfe_weight(mpfe_port);
-    gddr_mc_write_mpfe_weight(mpfe_port, SE_DRISC_MPFE);
-#ifdef SE_DRISC_MPFE_ORD
-    const uint32_t ord_old = gddr_mc_read_mpfe_weight(SE_DRISC_MPFE_ORD_PORT);
-    gddr_mc_write_mpfe_weight(SE_DRISC_MPFE_ORD_PORT, SE_DRISC_MPFE_ORD);
-#endif
-#endif
+    // GDDR MPFE weights (the job descriptor's word, per call): this tile's port, the bank's NOC0 / NOC1 endpoints'
+    // ports (RT 3 + NJ ..); the weights as found are restored when the call asks for none and on exit (they persist
+    // until a reset)
+    const uint32_t mp_port[3] = {
+        get_arg_val<uint32_t>(3 + nj), get_arg_val<uint32_t>(4 + nj), get_arg_val<uint32_t>(5 + nj)};
+    uint32_t mp_orig[3], mp_applied = 0;
+    for (uint32_t q = 0; q < 3; ++q) {
+        mp_orig[q] = gddr_mc_read_mpfe_weight(mp_port[q]);
+    }
+    auto mpfe = [&](uint32_t w) {
+        for (uint32_t q = 0; q < 3; ++q) {
+            gddr_mc_write_mpfe_weight(mp_port[q], w ? (w >> (4 * q)) & 7 : mp_orig[q]);
+        }
+        mp_applied = w;
+    };
 #ifndef SE_DRISC_BURST
 #define SE_DRISC_BURST 255
 #endif
@@ -124,6 +133,9 @@ void kernel_main() {
             st[0] = seen;
             st[1] = J.units;
             st[5] = n_load;
+        }
+        if (const uint32_t w = word(se_drisc_desc(0))[SD_MPFE]; w != mp_applied) {
+            mpfe(w);
         }
         uint32_t it = 0;
         while (left && !stop) {
@@ -227,11 +239,8 @@ void kernel_main() {
     if constexpr (SE_DRISC_BURST != 0) {
         experimental::dma_restore_default_transfer_attrs();
     }
-#ifdef SE_DRISC_MPFE
-    gddr_mc_write_mpfe_weight(mpfe_port, mpfe_old);
-#ifdef SE_DRISC_MPFE_ORD
-    gddr_mc_write_mpfe_weight(SE_DRISC_MPFE_ORD_PORT, ord_old);
-#endif
-#endif
+    if (mp_applied) {
+        mpfe(0);
+    }
     *word(SE_DRISC_READY) = 0;
 }
