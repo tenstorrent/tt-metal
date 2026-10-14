@@ -16,6 +16,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_AFFINE_SUMMARY_DTYPE,
     KDA_CHUNK_SIZE,
+    KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE,
     KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
     KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
     KDA_LOCAL_PREFIX_MEMORY_CONFIG,
@@ -250,7 +251,11 @@ def distributed_prefix(
     applies them with FP32 accumulation. Return the local entry state and the replicated final
     carry on each independent TP line.
     """
-    output_memory = KDA_OUTPUT_MEMORY_CONFIG
+    device = packed.device()
+    _, batch_heads, key_dim, row_width = tuple(packed.shape)
+    gathered_bytes = tuple(device.shape)[sequence_parallel_axis] * batch_heads * key_dim * row_width * 2
+    state_bytes = batch_heads * key_dim * (row_width - key_dim) * 4
+    output_memory = l1_when_it_fits(device, gathered_bytes + 2 * state_bytes, KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE)
     gathered = ttnn.all_gather(
         packed,
         dim=0,
