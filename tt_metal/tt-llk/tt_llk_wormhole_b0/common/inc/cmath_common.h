@@ -54,7 +54,7 @@ static std::uint32_t src_zero_flag_srca_fmt = 0xff; // cached operand formats fe
 static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
 
 // The one writer. Loop and reconfig sites call its out-of-line copy so the STALLWAIT + RMW exist in a single
-// copy there (code size: a matmul kernel otherwise overflows its slot); op inits inline it (_update_src_zero_flag_).
+// copy there (code size: a matmul kernel otherwise overflows its slot); inits write inline (ZeroFlagAt).
 // Keep the STALLWAIT on Wormhole: an FPU instruction reads the live flag while it waits to enter the FPU
 // (e.g. for its Src operands), so a write must not land until MATH has drained. (Blackhole latches the
 // flag per instruction at issue and needs no stall.)
@@ -70,8 +70,17 @@ inline __attribute__((noinline)) void _apply_src_zero_flag_outline_(const std::u
     _apply_src_zero_flag_(value);
 }
 
-// Op inits (at_init) write inline: init runs once from a cold icache, and a call adds the callee's cold lines to its
-// straight path. LLK_ZEROFLAG_OUTLINE kernels keep the call there too, for code size.
+// Where a flag check runs. Init runs once from a cold icache, so each init site keeps its usual outcome on the straight
+// path: no call to a cold callee and no taken branch over the write.
+enum class ZeroFlagAt
+{
+    loop,        // loops and format reconfigs: a change calls the out-of-line writer
+    init_write,  // hw_configure: sets the kernel's flag, inline on the straight path
+    init_holds,  // op inits after hw_configure: the flag usually holds the value, so the inline write is off the straight path
+    init_either, // copy and transpose inits: inline, the RMW word built ahead of the check so that it skips 3 instructions
+};
+
+// Inits write inline; LLK_ZEROFLAG_OUTLINE kernels keep the call there too, for code size.
 template <bool at_init>
 inline __attribute__((always_inline)) void _update_src_zero_flag_(const std::uint32_t value)
 {
@@ -85,18 +94,59 @@ inline __attribute__((always_inline)) void _update_src_zero_flag_(const std::uin
     _apply_src_zero_flag_outline_(value);
 }
 
+// The RMWCIB0 word cfg_reg_rmw_tensix issues for a field inside its register's low byte.
+template <std::uint32_t CfgAddr32, std::uint32_t Shamt, std::uint32_t Mask>
+inline std::uint32_t cfg_reg_rmw_tensix_word(const std::uint32_t val)
+{
+    static_assert(Mask != 0 && (Mask & ~0xffu) == 0, "one RMWCIB0 byte");
+    return TT_OP_RMWCIB0(Mask, (val << Shamt) & 0xff, CfgAddr32);
+}
+
+// The init_holds and init_either checks (the others keep the check in the configurators below).
+template <ZeroFlagAt at>
+inline __attribute__((always_inline)) void _set_src_zero_flag_at_init_(const std::uint32_t value)
+{
+    if constexpr (at == ZeroFlagAt::init_holds)
+    {
+        if (__builtin_expect(src_zero_flag_hw != value, 0))
+        {
+            _apply_src_zero_flag_(value);
+        }
+    }
+    else
+    {
+        static_assert(at == ZeroFlagAt::init_either);
+        const std::uint32_t held = src_zero_flag_hw;
+        std::uint32_t rmw        = cfg_reg_rmw_tensix_word<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(value);
+        asm volatile("" : "+r"(rmw) : "r"(held)); // keeps the load and the word ahead of the check
+        if (held != value)
+        {
+            src_zero_flag_hw = value;
+            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+            TT_INSN(rmw);
+        }
+    }
+}
+
 // Set the flag to `disable`; skip if it already holds that value. The check is inlined at every call
 // site so hot loops (whose operand formats change but map to the same flag value) stay call-free; only
 // a genuine value change pays the out-of-line write.
-template <bool at_init = false>
+template <ZeroFlagAt at = ZeroFlagAt::loop>
 inline void _configure_src_zero_flag_(const bool disable)
 {
     const std::uint32_t value = disable ? 1u : 0u;
+#if !defined(LLK_ZEROFLAG_OUTLINE)
+    if constexpr (at == ZeroFlagAt::init_holds || at == ZeroFlagAt::init_either)
+    {
+        _set_src_zero_flag_at_init_<at>(value);
+        return;
+    }
+#endif
     if (src_zero_flag_hw == value)
     {
         return;
     }
-    _update_src_zero_flag_<at_init>(value);
+    _update_src_zero_flag_<at != ZeroFlagAt::loop>(value);
 }
 
 // A kernel tight on program-config space (e.g. ring-joint SDPA, which reconfigs ~30x) can
@@ -117,22 +167,29 @@ inline void _configure_src_zero_flag_(const bool disable)
 // whether the resulting flag value changed).
 // TODO(tt-metal#53652): the flag must be CLEARED for all FPU compute; once that lands this collapses to
 // _configure_src_zero_flag_(false) and requires_disabled_src_zero_flag() / the format cache are dropped.
-template <bool at_init = false>
+template <ZeroFlagAt at = ZeroFlagAt::loop>
 inline LLK_ZEROFLAG_DEFAULT_ATTR void _configure_default_zero_flag_state_()
 {
     const std::uint32_t value = requires_disabled_src_zero_flag(src_zero_flag_srca_fmt, src_zero_flag_srcb_fmt) ? 1u : 0u;
+#if !defined(LLK_ZEROFLAG_OUTLINE)
+    if constexpr (at == ZeroFlagAt::init_holds || at == ZeroFlagAt::init_either)
+    {
+        _set_src_zero_flag_at_init_<at>(value);
+        return;
+    }
+#endif
     if (src_zero_flag_hw == value)
     {
         return;
     }
-    _update_src_zero_flag_<at_init>(value);
+    _update_src_zero_flag_<at != ZeroFlagAt::loop>(value);
 }
 
 // Data-movement ops keep the flag set so values pass through faithfully (bf16 -0.0, 16b/32b ints).
-template <bool at_init = false>
+template <ZeroFlagAt at = ZeroFlagAt::loop>
 inline void _configure_preserve_zero_flag_state_()
 {
-    _configure_src_zero_flag_<at_init>(true);
+    _configure_src_zero_flag_<at>(true);
 }
 
 // Datacopy zero-flag, chosen by the source (SrcA) format. Default is preserve (keep) so bf16 -0.0 and
@@ -144,7 +201,7 @@ inline void _configure_copy_zero_flag_state_(const std::uint32_t src_dst_format)
     const std::uint32_t fmt = src_dst_format & 0x1F;
     // Wormhole fp8 is Lf8 (e5m2) only; Fp8_e4m3 is a Blackhole-only DataFormat.
     const bool flush_fp8 = (fmt == static_cast<std::uint32_t>(DataFormat::Lf8));
-    _configure_src_zero_flag_(!flush_fp8);
+    _configure_src_zero_flag_<ZeroFlagAt::init_either>(!flush_fp8); // copy_init: once or more in a kernel's init
 }
 
 // After a raw cfg write that bypassed the setter, mark the tracked value unknown so the next
