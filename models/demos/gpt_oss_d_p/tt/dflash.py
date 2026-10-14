@@ -105,13 +105,12 @@ class DFlashPrefillConfig:
             target_layer_ids=actual_ids,
         )
         # Fail at startup, rather than after a 36-layer prefill, if weights are absent or malformed.
-        validate_fc_weight(load_dflash_fc_weight(cfg), cfg)
+        # Only the safetensors header is read here; the runtime loads the tensor once.
+        _check_fc_shape(_fc_header_shape(cfg), cfg)
         return cfg
 
 
-def load_dflash_fc_weight(config: DFlashPrefillConfig) -> torch.Tensor:
-    """Load only ``fc.weight`` from the explicitly selected checkpoint."""
-
+def _fc_header_shape(config: DFlashPrefillConfig) -> tuple[int, ...]:
     from safetensors import safe_open
 
     weights_file = config.checkpoint_path / "model.safetensors"
@@ -120,16 +119,30 @@ def load_dflash_fc_weight(config: DFlashPrefillConfig) -> torch.Tensor:
     with safe_open(str(weights_file), framework="pt", device="cpu") as handle:
         if config.fc_key not in handle.keys():
             raise KeyError(f"DFlash checkpoint {weights_file} is missing key {config.fc_key!r}")
-        return handle.get_tensor(config.fc_key)
+        return tuple(handle.get_slice(config.fc_key).get_shape())
+
+
+def load_dflash_fc_weight(config: DFlashPrefillConfig) -> torch.Tensor:
+    """Load only ``fc.weight`` from the explicitly selected checkpoint."""
+
+    from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
+
+    fc_weight = load_drafter_state_dict(str(config.checkpoint_path), build_kv_tail=False)[config.fc_key]
+    validate_fc_weight(fc_weight, config)
+    return fc_weight
+
+
+def _check_fc_shape(shape: tuple[int, ...], config: DFlashPrefillConfig) -> None:
+    expected = (config.hidden_size, len(config.target_layer_ids) * config.hidden_size)
+    if tuple(shape) != expected:
+        raise ValueError(
+            f"DFlash {config.fc_key} has shape {tuple(shape)}, expected {expected} "
+            "([out=hidden, in=num_features*hidden])"
+        )
 
 
 def validate_fc_weight(fc_weight: torch.Tensor, config: DFlashPrefillConfig) -> None:
-    expected = (config.hidden_size, len(config.target_layer_ids) * config.hidden_size)
-    if fc_weight.ndim != 2 or tuple(fc_weight.shape) != expected:
-        raise ValueError(
-            f"DFlash {config.fc_key} has shape {tuple(fc_weight.shape)}, expected {expected} "
-            "([out=hidden, in=num_features*hidden])"
-        )
+    _check_fc_shape(tuple(fc_weight.shape), config)
 
 
 def slice_dflash_fc_weight(
