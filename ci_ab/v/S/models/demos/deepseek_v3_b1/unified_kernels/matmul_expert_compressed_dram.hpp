@@ -337,7 +337,7 @@ struct MatmulExpertCompressedDRAM {
             constexpr uint32_t max_page_size = CTArgs::noc_max_page_size;
             constexpr uint32_t num_active_experts = CTArgs::num_active_experts;
             constexpr uint32_t num_buffers = 6;
-            constexpr uint32_t extra_blocks_in_flight = 4;
+            constexpr uint32_t extra_blocks_in_flight = 3;
             constexpr uint32_t max_subblock_bytes = CTArgs::cb_in1_size_bytes / num_buffers;
             constexpr uint32_t BLOCK_SIZE_UNIT = 64;
 

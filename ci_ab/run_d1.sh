@@ -26,8 +26,10 @@ step() {
   cp $S/v/$src/$F $R/$F; for d in $DEST; do cp $S/v/$src/$F $d; done
   local out=$O/${arm}_$r; rm -rf $out /tmp/ttc_cur; mkdir -p $out
   local t0=$(date +%s)
-  MEXP_SPLIT=$([[ $src == S || $src == PS ]] && echo 2 || echo 1) TT_METAL_CACHE=/tmp/ttc_cur IDS_FILE=$S/ids.txt timeout -s INT -k 60 1500 python3 -m tracy -p -r --no-web-server $extra -o $out -m ci_ab.tools.run_nodes > $out.log 2>&1
-  echo "== $arm r$r rc=$? $(( $(date +%s) - t0 )) s: $(grep -aE '[0-9]+ (passed|failed)' $out.log | tail -1)"
+  MEXP_SPLIT=$([[ $src == S || $src == PS ]] && echo 2 || echo 1) TT_METAL_CACHE=/tmp/ttc_cur IDS_FILE=$S/ids.txt timeout -s INT -k 60 600 python3 -m tracy -p -r --no-web-server $extra -o $out -m ci_ab.tools.run_nodes > $out.log 2>&1
+  local rc=$?
+  echo "== $arm r$r rc=$rc $(( $(date +%s) - t0 )) s: $(grep -aE '[0-9]+ (passed|failed)' $out.log | tail -1)"
+  [[ $rc == 124 ]] && { echo "== TIMEOUT in $arm, stopping"; grep -a -m5 -iE "timeout|hang|error" $out.log | cut -c1-200; exit 1; }
   grep -aqE "passed|failed" $out.log || { echo NO_PYTEST_OUTPUT; tail -c 3000 $out.log; }
   [[ $arm == H && $r == 1 ]] && { grep -aE "^(FAILED|ERROR)" $out.log | head -8; grep -a "tile counts" $out.log | sed "s/.*tile counts: //" | sort | uniq -c | head -12; }
   [[ $arm == P && $r == 1 ]] && grep -aE "^(FAILED|ERROR)" $out.log | cut -c1-200 | head -4
@@ -42,9 +44,9 @@ h() { echo "${EH[$1]}" | sed 's/^ELF [A-Z0-9]* //'; }
 t0of() { echo "${EH[$1]}" | grep -o 'trisc0:[^ ]*'; }
 if [[ -z $(t0of H1) || $(t0of H1) == $(t0of P1) || $(h H1) != $(h H21) ]]; then echo "== GUARD FAIL: H $(h H1) P $(h P1) H2 $(h H21)"; exit 1; fi
 echo "== GUARD ok: trisc0 H $(t0of H1) P $(t0of P1); H == H2"
-step S 1; step PS 1
 step ZA 1 --enable-sum-profiling
 step ZB 1 --enable-sum-profiling
 step C 1 --profiler-capture-perf-counters=fpu,pack,unpack,instrn
+step H 2; step S 1; step PS 1; step S2 1; step H2 2
 cp $S/v/H/$F $R/$F; for d in $DEST; do cp $S/v/H/$F $d; done
 echo "== DONE $(date -u +%T)"
