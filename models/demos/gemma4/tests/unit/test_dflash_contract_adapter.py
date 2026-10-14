@@ -568,8 +568,21 @@ def test_draftless_host_verify_does_not_bootstrap_an_argmax_session(model, expec
     assert model._spec_pending is pending and not model._spec_active
 
 
+@pytest.mark.parametrize(
+    "message, step_kwargs",
+    [
+        (
+            "cannot return requested logprobs",
+            lambda: dict(sampling_params=_sampling(1, enable_log_probs=True, num_logprobs=0)),
+        ),
+        ("cannot apply a grammar bitmask", lambda: dict(grammar_bitmask=torch.full((1, 19), -1, dtype=torch.int32))),
+    ],
+    ids=["logprobs", "grammar"],
+)
 @pytest.mark.parametrize("retained", [False, True])
-def test_verify_rejects_logprobs_before_mutating_the_session(model, expect_error, retained):
+def test_verify_rejects_unsupported_outputs_before_mutating_the_session(
+    model, expect_error, retained, message, step_kwargs
+):
     if retained:
         _start_solo(model)
         tokens, positions, valid = [150, 201, 202, 203, 204, 205], list(range(3, 9)), 5
@@ -579,15 +592,8 @@ def test_verify_rejects_logprobs_before_mutating_the_session(model, expect_error
     proposal = model._dflash_retained
     pending = model._spec_pending
     events = list(model.events)
-    with expect_error(ValueError, "cannot return requested logprobs"):
-        _verify(
-            model,
-            [tokens],
-            [positions],
-            [valid],
-            keys=[10],
-            sampling_params=_sampling(1, enable_log_probs=True, num_logprobs=0),
-        )
+    with expect_error(ValueError, message):
+        _verify(model, [tokens], [positions], [valid], keys=[10], **step_kwargs())
     assert model.events == events
     assert model._spec_pending is pending and model._dflash_retained is proposal
     assert proposal is None or not proposal.consumed
@@ -695,7 +701,7 @@ def test_a_draftless_verify_without_the_owner_keeps_its_outstanding_proposal(mod
 
 def test_drafter_history_does_not_override_the_reload_commands(model):
     commands = dict(
-        reload_inputs=False, reload_page_table=True, reload_sampling_params=False, reset_sampling_state=False
+        reload_inputs=True, reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False
     )
     _start_solo(model)
     _verify(
@@ -710,24 +716,56 @@ def test_drafter_history_does_not_override_the_reload_commands(model):
     assert model.decode_commands == [commands]
     _ordinary(model, [251, 600], [6, 10], [10, 20], result="device", **commands)
     assert model.decode_commands == [commands, commands]
-    _ordinary(model, [7, 8], [7, 11], [10, 20], result="device")
-    assert model.reloads == [False, False, True]
+    _ordinary(model, [7, 8], [7, 11], [10, 20], result="device", reload_inputs=False)
+    assert model.reloads == [True, True, False]
 
 
-def test_decline_does_not_override_the_reload_command(model):
+def _decline_after_a_verify(model):
+    """The drafter answers the first ordinary step and a verify, then the next proposal declines."""
     _start_solo(model)
     _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
     model.model_args[0].max_seq_len = 11
     _propose(model, [[201, 202, 251, -1, -1, -1]], [[4, 5, 6, -1, -1, -1]], counts=[3])
-    _ordinary(model, [251], [6], [10], result="device", reload_inputs=False)
-    _ordinary(model, [9], [7], [10], result="device")
-    assert model.reloads == [False, True]
+    return [251], [6], [10]
 
 
-def test_plain_decode_forwards_the_reload_command(model):
+def _peer_joins_an_outstanding_proposal(model):
+    """The drafted row is answered from its proposal and runs the peer's plain decode at position -1."""
+    _start_solo(model)
+    _verify(
+        model,
+        [[150, 201, 202, 203, 204, 205], [40, 0, 0, 0, 0, 0]],
+        [list(range(3, 9)), [9, 10, 11, 12, 13, 14]],
+        [5, 0],
+        keys=[10, 20],
+        result=DeviceResult(_tensor([0, 600])),
+    )
+    return [251, 600], [6, 10], [10, 20]
+
+
+@pytest.mark.parametrize(
+    "history", [_decline_after_a_verify, _peer_joins_an_outstanding_proposal], ids=["decline", "peer-joined"]
+)
+def test_a_plain_decode_after_a_drafter_served_step_refuses_resident_inputs(model, expect_error, history):
+    """A drafter-served row never updated the plain decode's resident token and
+    position. Without reload_inputs the plain decode would start from the stale
+    token, so the step raises before the device runs; a reloading decode clears it."""
+    anchors, positions, keys = history(model)
+    decodes = _names(model, "decode")
+    with expect_error(RuntimeError, "reload_inputs=False"):
+        _ordinary(model, anchors, positions, keys, result="device", reload_inputs=False)
+    assert _names(model, "decode") == decodes
+    out = _ordinary(model, anchors, positions, keys)
+    assert out == "device"
+    _ordinary(model, [a + 1 for a in anchors], [p + 1 for p in positions], keys, result="device", reload_inputs=False)
+    assert model.reloads[-2:] == [True, False]
+
+
+@pytest.mark.parametrize("reload_inputs", [True, False])
+def test_plain_decode_forwards_the_reload_command(model, reload_inputs):
     _prefill(model, prompt_len=2, key=10, rows=2)
-    _ordinary(model, [3, 4], [2, 2], [10, 12], result="device")
-    assert model.reloads == [True]
+    _ordinary(model, [3, 4], [2, 2], [10, 12], result="device", reload_inputs=reload_inputs)
+    assert model.reloads == [reload_inputs]
 
 
 def test_release_logs_committed_tokens_per_step_for_the_session(model, adapter, monkeypatch):
@@ -766,6 +804,25 @@ def test_a_solo_row_that_does_not_sample_greedily_runs_the_plain_decode(model, v
     assert _names(model, "decode") == [("decode", [3], [2])]
     assert _names(model, "bootstrap") == [] and model._spec_decoder.replays == 0
     assert model._spec_pending is None and all(tap.releases == 1 for tap in taps)
+
+
+@pytest.mark.parametrize("active", [False, True], ids=["pending-prefill", "active-session"])
+def test_a_greedy_solo_row_under_a_grammar_bitmask_runs_the_plain_decode(model, active):
+    """The fused replay's argmax never sees the bitmask, so a greedy row under
+    one takes the plain decode and leaves speculation."""
+    if active:
+        _start_solo(model)
+        token, position = 150, 3
+    else:
+        _prefill(model, prompt_len=2, key=10)
+        token, position = 3, 2
+    replays = model._spec_decoder.replays
+    bitmask = torch.full((1, 19), -1, dtype=torch.int32)
+    out = _ordinary(model, [token], [position], [10], result="device", grammar_bitmask=bitmask)
+    assert out == "device"
+    assert _names(model, "decode") == [("decode", [token], [position])]
+    assert model._spec_decoder.replays == replays
+    assert model._spec_pending is None and not model._spec_active
 
 
 def test_a_sampled_solo_row_is_never_proposed_for(model):

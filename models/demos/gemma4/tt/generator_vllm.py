@@ -4082,8 +4082,9 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         # Keep penalty processing on vLLM's per-request host sampling path
         # when contract verification mixes greedy and sampled rows.
         "supports_device_penalties": False,
-        # TTAsyncDecodeController.plan_decode_reload requires reload_inputs=True
-        # when supports_async_decode is False, including after fused output.
+        # TTAsyncDecodeController.plan_decode_reload sends reload_inputs=True
+        # when supports_async_decode is False, including after fused output, and
+        # _dflash_plain_decode refuses a decode after fused output without it.
         # Keep async decode disabled until the runner tracks fused input residency.
         "supports_async_decode": False,
         "supports_async_spec_decode": False,
@@ -4146,6 +4147,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         self._dflash_live_owner = None
         self._dflash_owner_tables = None
         self._dflash_last_pt = None
+        self._dflash_resident_inputs_stale = False
         self._dflash_steps = 0
         self._dflash_committed = 0
         self._dflash_ring = self._dflash_ring_geometry()
@@ -4299,17 +4301,19 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         return bool(log_probs)
 
     @classmethod
-    def _dflash_row_can_use_argmax(cls, sampling_params, row):
+    def _dflash_row_can_use_argmax(cls, sampling_params, row, grammar_bitmask=None):
         """Whether target argmax IDs satisfy ``row``'s sampling and output requirements.
 
         The drafter session answers with the fused replay's argmax ids, so
-        only such a row may take it. A penalty changes the logits before the
-        argmax; top_k and top_p need no check, because they only narrow a
-        distribution that temperature 0 has already collapsed to one token.
-        Requested logprobs need the ordinary sampler's metadata as well as IDs.
-        Each field is one value for every row or a per-row sequence.
+        only such a row may take it. A penalty or a grammar bitmask changes
+        the logits before the argmax; any bitmask rules the row out, without
+        reading which rows it restricts. top_k and top_p need no check,
+        because they only narrow a distribution that temperature 0 has
+        already collapsed to one token. Requested logprobs need the ordinary
+        sampler's metadata as well as IDs. Each sampling field is one value
+        for every row or a per-row sequence.
         """
-        if cls._dflash_row_requests_logprobs(sampling_params, row):
+        if grammar_bitmask is not None or cls._dflash_row_requests_logprobs(sampling_params, row):
             return False
         for name, neutral in (
             ("temperature", 0.0),
@@ -4346,8 +4350,14 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
             pass
 
     def _dflash_note_step(self, kwargs, page_tables_per_layer):
-        """Record the owner's tables from this step for the next page-table refresh."""
+        """Record a step the drafter session answered.
+
+        Keeps the owner's tables for the next page-table refresh. The answered
+        row skipped the plain decode, so that decode's device-resident token
+        and position for the row are stale (``_dflash_plain_decode``).
+        """
         self._dflash_owner_tables = (kwargs.get("page_table"), page_tables_per_layer, kwargs.get("kv_cache"))
+        self._dflash_resident_inputs_stale = True
 
     # -- prefill: capture taps, accumulate over scheduler chunks --------------
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
@@ -4568,6 +4578,11 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
                 "Route host-sampled requests through ordinary decode with a plugin that "
                 "supports sampled-step fallback, or disable speculative decoding."
             )
+        if kwargs.get("grammar_bitmask") is not None:
+            raise ValueError(
+                "Gemma4 dFlash argmax verification cannot apply a grammar bitmask. "
+                "Disable speculative decoding for structured-output requests."
+            )
         if any(self._dflash_row_requests_logprobs(sampling, row) for row in live):
             raise ValueError(
                 "Gemma4 dFlash argmax verification cannot return requested logprobs. "
@@ -4586,7 +4601,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         """
 
         def plain():
-            return Gemma4ForCausalLM.decode_forward(self, *args, page_tables_per_layer=page_tables_per_layer, **kwargs)
+            return self._dflash_plain_decode(args, kwargs, page_tables_per_layer)
 
         if len(live) != 1:
             self._dflash_leave_speculation("several live rows", [self._dflash_slot_of(r, kwargs) for r in live])
@@ -4597,7 +4612,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
             # Host sampling reads logits; the fused replay yields ids only.
             self._dflash_leave_row(self._dflash_slot_of(row, kwargs), "host sampling")
             return plain()
-        if not self._dflash_row_can_use_argmax(sampling, row):
+        if not self._dflash_row_can_use_argmax(sampling, row, kwargs.get("grammar_bitmask")):
             self._dflash_leave_row(
                 self._dflash_slot_of(row, kwargs), "argmax IDs cannot satisfy the row's sampling output"
             )
@@ -4735,8 +4750,9 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         tokens the device never evaluated. Rows without drafts take column 0
         from device sampling in plain decode. A solo row can use the session
         when ``_dflash_row_can_use_argmax`` accepts its sampling and output
-        requirements. ``decode_forward`` rejects host sampling and logprobs
-        before this function can consume a retained proposal.
+        requirements. ``decode_forward`` rejects host sampling, grammar
+        bitmasks and logprobs before this function can consume a retained
+        proposal.
         """
         from vllm_tt_plugin.spec_decode import PLACEHOLDER_TOKEN_ID, VerifyOutput
 
@@ -4884,6 +4900,26 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
             parts.append(model.process_output_decode(tensor, per, S=1, is_tokens=is_tokens))
         return parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)
 
+    def _dflash_plain_decode(self, args, kwargs, page_tables_per_layer, leaves_inputs_stale=False):
+        """Run the plain decode; refuse resident inputs a drafter-served step left stale.
+
+        The traced decode keeps each row's token and position on the device and
+        reads them from the host only under ``reload_inputs``. A row answered
+        from the drafter session, or run at position -1 beside a peer
+        (``leaves_inputs_stale``), left them behind. This class declares no
+        async decode, so the runner reloads on every decode; a caller that does
+        not gets an error here instead of a decode from the wrong token.
+        """
+        if self._dflash_resident_inputs_stale and not kwargs["reload_inputs"]:
+            raise RuntimeError(
+                "Gemma4DFlash speculative contract: a drafter-served step left the plain decode's "
+                "device-resident tokens and positions stale, and this decode was sent "
+                "reload_inputs=False. supports_async_decode is False, so every decode must reload its inputs."
+            )
+        tt_out = Gemma4ForCausalLM.decode_forward(self, *args, page_tables_per_layer=page_tables_per_layer, **kwargs)
+        self._dflash_resident_inputs_stale = leaves_inputs_stale
+        return tt_out
+
     def _dflash_plain_ids(self, args, kwargs, page_tables_per_layer, rows, exclude_row=None):
         """Each row's next-token id from the plain decode, int32 ``[rows]``.
 
@@ -4892,7 +4928,9 @@ class Gemma4DFlashContractForCausalLM(Gemma4DFlashBase):
         sampling; ordinary host sampling keeps its logits outside this path.
         """
         args, kwargs = self._dflash_column_zero(args, kwargs, rows, exclude_row)
-        tt_out = Gemma4ForCausalLM.decode_forward(self, *args, page_tables_per_layer=page_tables_per_layer, **kwargs)
+        tt_out = self._dflash_plain_decode(
+            args, kwargs, page_tables_per_layer, leaves_inputs_stale=exclude_row is not None
+        )
         if self._dflash_is_host(tt_out):
             host = tt_out[0] if isinstance(tt_out, tuple) else tt_out
         else:
