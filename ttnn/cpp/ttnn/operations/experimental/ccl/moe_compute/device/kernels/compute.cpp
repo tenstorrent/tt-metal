@@ -19,12 +19,18 @@
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
+#include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/swiglu_clamp_sfpu.h"
 #include "ckernel_sfpu_silu.h"
 #include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "ckernel_sfpu_gelu.h"
 #endif
+
+// SILU_CLAMPED: the clamp limit of silu(min(gate, L)) * clamp(up, -L, L), a float passed as bits by the host
+struct SwigluClampConfig {
+    static constexpr float limit = __builtin_bit_cast(float, get_named_compile_time_arg_val("swiglu_limit_bits"));
+};
 
 namespace detail {
 
@@ -89,6 +95,18 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         3 /*DST_IN1*/,
         2 /*DST_OUT*/,
         ::ckernel::VectorMode::RC)));
+};
+
+template <>
+inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU_CLAMPED>() {
+    pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>();
+};
+
+template <>
+inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU_CLAMPED>() {
+    PACK((llk_math_eltwise_binary_sfpu_swiglu_clamp<DST_ACCUM_MODE, SwigluClampConfig>(0, 1)));
+    PACK((llk_math_eltwise_binary_sfpu_swiglu_clamp<DST_ACCUM_MODE, SwigluClampConfig>(2, 3)));
+    pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>();
 };
 
 template <>

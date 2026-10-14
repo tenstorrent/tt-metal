@@ -4,6 +4,8 @@
 
 #include "ttnn/operations/experimental/ccl/moe_compute/moe_core_placement.hpp"
 #include "kernels/moe_ring_common.h"
+#include <bit>
+
 #include "moe_compute_device_operation.hpp"
 #include "moe_compute_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -425,7 +427,8 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type,
     const bool compute_only,
     const std::optional<uint32_t>& bh_ring_size,
-    const std::optional<uint32_t>& num_shared_experts_per_device) {
+    const std::optional<uint32_t>& num_shared_experts_per_device,
+    float swiglu_limit) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
 
     const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
@@ -584,7 +587,12 @@ std::vector<ttnn::Tensor> moe_compute(
                                                : experimental::prim::MoEComputePath::FullCcl),
             .bh_ring_size = ring_n,
             .combine_params = combine_params,
-            .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU)},
+            .activation_type = (swiglu_limit > 0.0f &&
+                                activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU) ==
+                                    experimental::prim::detail::MoEActivationFunction::SILU)
+                                   ? experimental::prim::detail::MoEActivationFunction::SILU_CLAMPED
+                                   : activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU),
+            .swiglu_limit_bits = std::bit_cast<uint32_t>(swiglu_limit)},
         OperationType::tensor_args_t{
             .tilize_input_tensor = tilize_input_tensor,
             .tilize_expert_indices_tensor = tilize_expert_indices_tensor,

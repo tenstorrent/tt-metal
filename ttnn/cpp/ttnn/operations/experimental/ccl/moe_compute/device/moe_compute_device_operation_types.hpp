@@ -56,6 +56,9 @@ struct MoEComputeParams {
     ttnn::experimental::prim::detail::MoEActivationFunction activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction::SILU;  // Default to SILU
 
+    // bits of the float limit of the SILU_CLAMPED activation (silu(min(gate, L)) * clamp(up, -L, L)); 0 = unused
+    uint32_t swiglu_limit_bits = 0;
+
     // Same value as combine_params->axis (single source of truth when combine_params is set).
     // ComputeOnly path returns nullopt; Full-path call-sites must unwrap with .value().
     std::optional<uint32_t> cluster_axis() const {
@@ -65,7 +68,7 @@ struct MoEComputeParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.reserve(11);
+        attrs.reserve(12);
         attrs.emplace_back("layer_id", layer_id);
         attrs.emplace_back("output_height_shard_dim", output_height_shard_dim);
         attrs.emplace_back("intermediate_size", intermediate_size);
@@ -77,6 +80,7 @@ struct MoEComputeParams {
         attrs.emplace_back("bh_ring_size", bh_ring_size);
         attrs.emplace_back("combine_params", combine_params);
         attrs.emplace_back("activation_type", static_cast<uint32_t>(activation_type));
+        attrs.emplace_back("swiglu_limit_bits", swiglu_limit_bits);
         return attrs;
     }
 };

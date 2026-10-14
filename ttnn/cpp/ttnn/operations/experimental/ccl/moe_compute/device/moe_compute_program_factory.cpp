@@ -1249,6 +1249,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"w0_w1_pages_per_ring_core_total", w0_w1_pages_per_ring_core_total},
         {"w2_pages_per_ring_core_total", w2_pages_per_ring_core_total},
         {"activation_function", static_cast<uint32_t>(activation_type)},
+        {"swiglu_limit_bits", args.swiglu_limit_bits},
         {"metadata_ready_semaphore_id", metadata_ready_semaphore_id},
         {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},
         {"matmul_chunk_available_semaphore_id", matmul_chunk_available_semaphore_id},
