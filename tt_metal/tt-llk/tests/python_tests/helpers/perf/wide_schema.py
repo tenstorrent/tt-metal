@@ -146,6 +146,8 @@ DB_SCHEMA = [
     Column("ternary_scalar_bits", "int64", True, "configuration"),
     Column("throttle_level", "int64", True, "configuration"),
     Column("tilize", "string", True, "configuration"),
+    Column("top32_perf_datum_bytes", "int64", True, "configuration"),
+    Column("top32_perf_row_elements", "int64", True, "configuration"),
     Column("unpack_full_transpose", "bool", True, "configuration"),
     Column("unpack_transpose_faces", "string", True, "configuration"),
     Column("unpack_transpose_within_face", "string", True, "configuration"),
