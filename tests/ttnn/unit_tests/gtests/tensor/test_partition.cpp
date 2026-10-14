@@ -16,6 +16,8 @@
 #include <xtensor/utils/xtensor_simd.hpp>
 #include <xtensor/utils/xutils.hpp>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <bit>
 #include <cstring>
@@ -746,6 +748,7 @@ template <typename T>
 void check_concat_payloads(
     const std::vector<size_t>& shape, const ttsl::SmallVector<int>& counts, const ttsl::SmallVector<int>& axes) {
     using namespace ttnn::experimental::xtensor;
+    using PayloadBytes = std::array<std::byte, sizeof(T)>;
     const size_t volume = std::accumulate(shape.begin(), shape.end(), size_t{1}, std::multiplies<size_t>());
     const size_t pieces = std::accumulate(counts.begin(), counts.end(), size_t{1}, std::multiplies<size_t>());
     std::vector<size_t> output_shape = shape;
@@ -799,7 +802,10 @@ void check_concat_payloads(
             for (size_t d = 0; d < shape.size(); ++d) {
                 source = source * shape[d] + coords[d];
             }
-            ASSERT_EQ(std::memcmp(&output.data()[linear], &saved_buffers[piece][guard + source], sizeof(T)), 0)
+            // Compare representations so NaN payloads and signed zero must survive unchanged.
+            ASSERT_EQ(
+                std::bit_cast<PayloadBytes>(output.data()[linear]),
+                std::bit_cast<PayloadBytes>(saved_buffers[piece][guard + source]))
                 << "linear=" << linear << " piece=" << piece << " source=" << source;
         }
     };
