@@ -98,13 +98,18 @@ def read(paths: list[Path]) -> RawRun:
         if not isinstance(rows, list):
             raise ContractError(f"{path} has no 'benchmarks' list")
         _read_rows(rows, run, path)
+    if run.aggregated and len(paths) > 1:
+        # A combined min, median or max cannot be rebuilt from per-process aggregates.
+        raise ContractError("aggregate-only output cannot be merged across separate processes")
+    for case, per_metric in run.aggregated.items():
+        _require_all_metrics(case, per_metric, run)
     return run
 
 
-def unreported_metrics(run: RawRun) -> list[str]:
-    """Declared metrics that no case reported. Each case may report only some of them."""
-    reported = {m for per_case in (*run.samples.values(), *run.aggregated.values()) for m in per_case}
-    return sorted(set(run.metrics) - reported)
+def _require_all_metrics(case: str, reported, run: RawRun) -> None:
+    missing = sorted(set(run.metrics) - set(reported))
+    if missing:
+        raise ContractError(f"case {case!r} does not report declared metrics {missing}")
 
 
 def _read_rows(rows: list, run: RawRun, path: Path) -> None:
@@ -121,15 +126,11 @@ def _read_rows(rows: list, run: RawRun, path: Path) -> None:
             continue
         if run_type != "iteration":
             continue
-        reported = False
+        _require_all_metrics(case, row, run)
         for metric in run.metrics:
-            if metric in row:
-                if not _valid(row[metric]):
-                    raise ContractError(f"case {case!r} has invalid {metric}: {row[metric]!r}")
-                run.samples.setdefault(case, {}).setdefault(metric, []).append(float(row[metric]))
-                reported = True
-        if not reported:
-            raise ContractError(f"case {case!r} reports none of the declared metrics {sorted(run.metrics)}")
+            if not _valid(row[metric]):
+                raise ContractError(f"case {case!r} has invalid {metric}: {row[metric]!r}")
+            run.samples.setdefault(case, {}).setdefault(metric, []).append(float(row[metric]))
         _read_case_context(row, case, run)
 
 
