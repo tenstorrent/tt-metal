@@ -389,9 +389,12 @@ models/demos/molmo2/
 
 ## Known Limitations
 
-0. **Slice 0 of the test Galaxy (tray 3 chip 4) hangs on long prefills** (34k-token video, 20-image prompt); slices 1-3 run
-   everything, see BRINGUP_LOG Session 11. Decode is ~19 tok/s (earlier T3K reference ~35 tok/s):
-   `verification/latency_comparison.md`. Request lengths up to the model's 36,864-token context work on healthy slices.
+0. **Long all-core prefills need the Wormhole di/dt matmul throttle: set `TT_MM_THROTTLE_PERF=3`** (the Molmo2 tt-inference-server
+   specs and `serve/launch_4x_galaxy_t3k.sh` do). Without it a random core on a random chip stalls (device timeout) under sustained
+   34k-token-video / 20-image prefills: seen on Device 4 (7 of 9 full-model runs), Device 23 and once on slice 2. With level 3: 12/12
+   25k-token stress prefills on the worst chip and 24/24 heavy requests on a single DP=4 instance, 0 timeouts (level 1 still hung, level 5
+   works but costs ~45% suite wall time; level 3 ~12%). Decode is ~19-20 tok/s (earlier T3K reference ~35):
+   `verification/latency_comparison.md`. Request lengths up to the model's 36,864-token context work.
 
 1. **Batch size = 1** — multi-user concurrent inference not yet implemented
    (`forward_decode_step` decodes KV-cache slot 0; the demo runs users back to back).

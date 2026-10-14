@@ -42,8 +42,7 @@ slices 1, 2, 3; **slice 0 (tray 3 chip 4) hangs under the full model workload �
 
 ## Session 12 — 2026-10-14 (after Galaxy power cycle)
 
-**Status**: all checks below pass on slices 1-3 and through the tt-inference-server flow; slice 0 (tray 3 chip 4) still hangs in the
-per-slice configuration (survives a power cycle).
+**Status**: all checks below pass, including on slice 0 once TT_MM_THROTTLE_PERF=3 is set (the hang was di/dt, see below).
 **Block Hash**: fc756c8fe30
 
 - Demo fix verified on device: 6/6 cases at ~20 tok/s; 384-frame video (S=34455) + 2048-token budget gives a coherent 562-token answer
@@ -54,8 +53,13 @@ per-slice configuration (survives a power cycle).
   Teacher-forced 95.8% mean (diagnostic only).
 - tt-inference-server: Molmo2 specs + launchers; run.py end to end: per-slice 97/100; single-instance DP=4: 97/100 after fixing slot
   routing, slot_remap and per-row multimodal kwargs in generator_vllm.
-- Slice 0 hang (per-slice t3k config): same chip (mesh node N5 / Device 4) after the power cycle, 5 clean 25k prefills then a Matmul stall.
-  Not reproduced in the DP=4 whole-Galaxy instance in 5 long (34k) prefills (not enough to conclude).
+- **Hang resolved (revises Session 11's "hardware suspect")**: it is the Wormhole di/dt problem, not a bad chip. Evidence: the same
+  single-core stall signature (LayerNorm [1,4,S,128] on one core / Matmul column, rest of the mesh waiting in all-gather) later appeared
+  on Device 23 of the whole-Galaxy DP=4 instance (device timeout in a 23k-token 20-image prefill, ~10 heavy prefills in), and ttnn's own
+  compute_throttle_utils documents di/dt hangs for matmuls on >48 cores on WH_B0 (other Galaxy specs set TT_MM_THROTTLE_PERF).
+  Slice 0 stress (25k prefill x12): unthrottled hangs in 0-5 iterations (7/9 runs), level 1 hung on the first prefill, level 3 12/12,
+  level 5 12/12. DP=4 instance with level 3: suite 97/100 (245 s vs 219 s unthrottled, +12%), 24/24 heavy requests, 0 timeouts.
+  Default is now TT_MM_THROTTLE_PERF=3 in the specs and serve/launch_4x_galaxy_t3k.sh.
 
 ## Session 1 — 2026-04-29
 

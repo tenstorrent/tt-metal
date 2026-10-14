@@ -51,6 +51,8 @@ for sl in $SLICES; do
     (
         export VIRTUAL_ENV="$VLLM_ENV" PATH="$VLLM_ENV/bin:$PATH" VLLM_USE_V1=1
         export PYTHONPATH="$TT_METAL_HOME" ARCH_NAME=wormhole_b0 MESH_DEVICE=T3K HF_HUB_OFFLINE=1
+        # di/dt mitigation: long all-core prefills otherwise stall a random core on a random chip (device timeout).
+        export TT_MM_THROTTLE_PERF="${TT_MM_THROTTLE_PERF:-3}"
         export TT_VISIBLE_DEVICES="$devices"
         # One Inspector RPC port per server so `tools/tt-triage.py` can be pointed at the right one:
         #   TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS=127.0.0.1:$((INSPECTOR_PORT_BASE + slice)) python tools/tt-triage.py

@@ -60,6 +60,7 @@ Raw per-request results of run 2: `results_galaxy_slices_main_2026-10-14.jsonl`.
   the two "sequential" rows are the clean single-server passes.
 * The new numbers are from Galaxy slices (8 Wormhole chips each), the old Docker numbers from a T3K; both are 8-chip
   Wormhole meshes, but not the same host.
-* Slice 0 of this Galaxy hangs on long prefills (see BRINGUP_LOG, Session 11): requests up to ~5k tokens were fine,
-  a 34k-token video stalled it. It still hangs after a full host power cycle (5 clean prefills, then a stall on the same
-  chip, mesh node N5 / Device 4), so it is not a transient state.
+* Long all-core prefills stalled a random core on a random chip (worst on Galaxy slice 0 / Device 4) until the Wormhole di/dt
+  matmul throttle `TT_MM_THROTTLE_PERF=3` was set (see BRINGUP_LOG, Session 12). All latency rows above were measured
+  **unthrottled** on requests that did not trigger the stall; level 3 costs ~12% on the single-instance DP=4 suite
+  (245 s vs 219 s wall, mean 9.1 s vs 8.2 s per request with 4 in flight), level 5 ~45%.
