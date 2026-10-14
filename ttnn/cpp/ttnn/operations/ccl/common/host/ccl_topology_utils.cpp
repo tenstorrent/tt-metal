@@ -233,6 +233,28 @@ std::optional<TensorTopology> scatter_output_topology(
         // over those coordinates. A reduction summed every device's tensor into that piece, so nothing stays sharded
         // on another dim; a partition keeps each device's other-dim piece next to the new one, and no label can state
         // both.
+        //
+        // The collapsed label has one placement for the whole mesh, so it can only say "scatter_dim is split N ways
+        // in ring order, every other dim is whole". A partition of a tensor still sharded on another dim along a
+        // non-trivial axis produces outputs that label cannot describe. 2x4 mesh, input [Shard{2}, Replicate],
+        // whole-mesh mesh_partition of dim 3 (ring rank i = r * 4 + c keeps piece i of 8 of its own tensor):
+        //
+        //         c=0          c=1          c=2          c=3
+        //   r=0   d2 half 0    d2 half 0    d2 half 0    d2 half 0
+        //         d3 piece 0   d3 piece 1   d3 piece 2   d3 piece 3
+        //   r=1   d2 half 1    d2 half 1    d2 half 1    d2 half 1
+        //         d3 piece 4   d3 piece 5   d3 piece 6   d3 piece 7
+        //
+        //   {8},[Shard{3}]        says dim 2 is whole on every device: false, the rows hold different halves
+        //   [Shard{2}, Shard{3}]  says device (r, c) holds dim-3 piece c of 4, the same on both rows: false
+        //
+        // No label describes it, so it is refused. A Shard of scatter_dim itself passes: each device keeps a
+        // sub-piece of the piece it already held, and the outputs are N distinct pieces of that dim with every other
+        // dim whole, which is what the collapsed label states (a label says how the outputs assemble, not that they
+        // tile the input). A Shard on a size-1 axis holds the whole extent and passes too. A reduction never reaches
+        // this check: the sum is one tensor whose other dims are whole on every device. With a cluster_axis the
+        // output stays N-D and the other dim's Shard keeps its own axis, so only the whole-mesh collapse loses it.
+        // mesh_partition's own hook applies the same restriction (shards_another_dim_on_a_nontrivial_axis).
         const auto& axis_shape = in.distribution_shape();
         if (kind == ScatterKind::Partition) {
             for (size_t axis = 0; axis < expanded->size(); ++axis) {
