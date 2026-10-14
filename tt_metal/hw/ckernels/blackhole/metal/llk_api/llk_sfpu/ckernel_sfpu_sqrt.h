@@ -235,31 +235,14 @@ sfpi_inline void _calculate_sqrt_body_accurate_x2_(LoadX0 load_x0, LoadX1 load_x
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en, bool RECIPROCAL, bool FAST_APPROX>
 inline void _calculate_sqrt_internal_() {
-    if constexpr (APPROXIMATION_MODE || (ITERATIONS % 2) != 0) {
 #pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat tmp = _calculate_sqrt_body_<APPROXIMATION_MODE, RECIPROCAL, FAST_APPROX>(sfpi::dst_reg[0]);
-            if constexpr (!fp32_dest_acc_en) {
-                tmp = sfpi::convert<sfpi::vFloat16b>(tmp, sfpi::RoundMode::Nearest);
-            }
-            sfpi::dst_reg[0] = tmp;
-            sfpi::dst_reg++;
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat tmp = _calculate_sqrt_body_<APPROXIMATION_MODE, RECIPROCAL, FAST_APPROX>(sfpi::dst_reg[0]);
+        if constexpr (!fp32_dest_acc_en) {
+            tmp = sfpi::convert<sfpi::vFloat16b>(tmp, sfpi::RoundMode::Nearest);
         }
-    } else {
-#pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d += 2) {
-            sfpi::vFloat y0;
-            sfpi::vFloat y1;
-            _calculate_sqrt_body_accurate_x2_<RECIPROCAL, FAST_APPROX>(
-                [] { return sfpi::vFloat(sfpi::dst_reg[0]); }, [] { return sfpi::vFloat(sfpi::dst_reg[1]); }, y0, y1);
-            if constexpr (!fp32_dest_acc_en) {
-                y0 = sfpi::convert<sfpi::vFloat16b>(y0, sfpi::RoundMode::Nearest);
-                y1 = sfpi::convert<sfpi::vFloat16b>(y1, sfpi::RoundMode::Nearest);
-            }
-            sfpi::dst_reg[0] = y0;
-            sfpi::dst_reg[1] = y1;
-            sfpi::dst_reg += 2;
-        }
+        sfpi::dst_reg[0] = tmp;
+        sfpi::dst_reg++;
     }
 }
 
