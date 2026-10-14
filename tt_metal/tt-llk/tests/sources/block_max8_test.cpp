@@ -39,23 +39,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpu/experimental/ckernel_sfpu_block_max8.h"
-
-/**
- * @brief Inject negative zero directly into DST to isolate SFPU bit preservation.
- *
- * The input unpack/datacopy path may canonicalize zero signs. This test-only
- * prelude supplies exact negative-zero bits to every score before masking and
- * pooling. The unary dispatcher has already selected the target DST tile.
- */
-inline void fill_negative_zero()
-{
-    sfpi::vFloat negative_zero = sfpi::as<sfpi::vFloat>(sfpi::vUInt(0x80000000u));
-    for (std::uint32_t row = 0; row < TILE_NUM_FACES * FACE_R_DIM; row += 4)
-    {
-        sfpi::dst_reg[row / 2]     = negative_zero;
-        sfpi::dst_reg[row / 2 + 1] = negative_zero;
-    }
-}
+#include "sfpu/experimental/ckernel_sfpu_fill_negative_zero.h"
 
 /**
  * @brief Make a preserved negative-zero bit pattern observable through the packer.
@@ -104,7 +88,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         if (params.INJECT_NEGATIVE_ZERO)
         {
-            _llk_math_eltwise_unary_sfpu_params_(fill_negative_zero, params.DST_INDEX, VectorMode::RC_custom);
+            _llk_math_eltwise_unary_sfpu_params_(sfpu::_calculate_fill_negative_zero_, params.DST_INDEX, VectorMode::RC_custom);
         }
         _llk_math_eltwise_unary_sfpu_params_(sfpu::_calculate_block_max8_, params.DST_INDEX, VectorMode::RC_custom, params.VALID_SCORES);
         if (params.INJECT_NEGATIVE_ZERO)
