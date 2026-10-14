@@ -48,6 +48,7 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const std::optional<GlobalSemaphore>& fwd_arrived_semaphore,
     const std::optional<GlobalSemaphore>& final_arrived_semaphore,
     const std::optional<GlobalSemaphore>& expert_go_semaphore,
+    const std::optional<GlobalSemaphore>& launch_credit_semaphore,
     const std::optional<ttnn::Tensor>& forwarding_buffer) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
@@ -140,8 +141,7 @@ ttnn::Tensor hybrid_routed_expert_moe(
             tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{grid.x - 1, grid.y - 1}));
         const auto free_l1 = device->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
         const uint32_t arena_bytes =
-            std::min<uint32_t>(
-                hybrid_l1_arena_bytes(device), static_cast<uint32_t>(free_l1.largest_free_block_bytes)) &
+            std::min<uint32_t>(hybrid_l1_arena_bytes(device), static_cast<uint32_t>(free_l1.largest_free_block_bytes)) &
             ~static_cast<uint32_t>(63);
         const uint32_t cols = arena_bytes / 2;
         l1_arena = ttnn::empty(
@@ -195,9 +195,11 @@ ttnn::Tensor hybrid_routed_expert_moe(
             .fwd_arrived = fwd_arrived_semaphore,
             .final_arrived = final_arrived_semaphore,
             .expert_go = expert_go_semaphore,
+            .launch_credit = launch_credit_semaphore,
             .fwd_arrived_addr = semaphore_addr(fwd_arrived_semaphore),
             .final_arrived_addr = semaphore_addr(final_arrived_semaphore),
             .expert_go_addr = semaphore_addr(expert_go_semaphore),
+            .launch_credit_addr = semaphore_addr(launch_credit_semaphore),
             .l1_arena_addr =
                 overlap_combine && l1_arena.has_value() ? static_cast<uint32_t>(l1_arena->buffer()->address()) : 0u},
         OperationType::tensor_args_t{

@@ -330,7 +330,7 @@ class TtMoe(LightweightModule):
                 the routed expert then combine. Also needs a threshold that leaves the unified half
                 some experts. Even when enabled, a forward only overlaps while a trace controller is
                 attached (set_trace_controller): eager it runs the routed expert then combine, since the
-                overlapped program is host-bound when dispatched op by op. Its three global semaphores live in the mesh's TT_CCL; everything else it
+                overlapped program is host-bound when dispatched op by op. Its four global semaphores live in the mesh's TT_CCL; everything else it
                 places in L1 is freed when the op returns.
             overlap_routed_expert_with_combine_eager: overlap an untraced forward too, when the overlap is on.
                 Host-bound, so only for measuring device time.

@@ -31,15 +31,20 @@ struct SenderCtArgs {
     uint32_t fwd_sem_addr;
     uint32_t final_sem_addr;
     uint32_t first_packet_bytes;
+    uint32_t credit_noc_x;  // the downstream chip's stream core that sends back to this chip
+    uint32_t credit_noc_y;
+    uint32_t launch_credit_addr;
 
 #ifndef KERNEL_BUILD
     // `downstream` is the worker serving this stream on the next chip: the sender bumps its
-    // forwarded-token-count semaphore through the fabric packet header, which is why every worker placement
-    // on the mesh is decided before any kernel is built.
+    // forwarded-token-count semaphore through the fabric packet header. `returning` is the worker on that chip
+    // whose sender writes back to this chip: the sender grants it the launch credit. That is why every worker
+    // placement on the mesh is decided before any kernel is built.
     SenderCtArgs(
         const op::CombineFabric2dInputs& tensor_args,
         const op::StreamPlacement& self,
         const op::StreamPlacement& downstream,
+        const op::StreamPlacement& returning,
         const op::L1Layout& l1,
         const op::KernelPlan& plan) :
         num_l1_slots(NUM_L1_SLOTS),
@@ -58,7 +63,10 @@ struct SenderCtArgs {
         fwd_sem_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
         fwd_sem_addr(plan.fwd_arrived_addr),
         final_sem_addr(plan.final_arrived_addr),
-        first_packet_bytes(cmbf2d::first_packet_bytes(token_size_bytes)) {}
+        first_packet_bytes(cmbf2d::first_packet_bytes(token_size_bytes)),
+        credit_noc_x(static_cast<uint32_t>(returning.worker_virtual.x)),
+        credit_noc_y(static_cast<uint32_t>(returning.worker_virtual.y)),
+        launch_credit_addr(plan.launch_credit_addr) {}
 
     std::vector<uint32_t> to_ct_word_arr() const {
         return {
@@ -78,7 +86,10 @@ struct SenderCtArgs {
             fwd_sem_noc_y,
             fwd_sem_addr,
             final_sem_addr,
-            first_packet_bytes};
+            first_packet_bytes,
+            credit_noc_x,
+            credit_noc_y,
+            launch_credit_addr};
     }
 #else
     constexpr SenderCtArgs() :
@@ -98,7 +109,10 @@ struct SenderCtArgs {
         fwd_sem_noc_y(get_compile_time_arg_val(13)),
         fwd_sem_addr(get_compile_time_arg_val(14)),
         final_sem_addr(get_compile_time_arg_val(15)),
-        first_packet_bytes(get_compile_time_arg_val(16)) {}
+        first_packet_bytes(get_compile_time_arg_val(16)),
+        credit_noc_x(get_compile_time_arg_val(17)),
+        credit_noc_y(get_compile_time_arg_val(18)),
+        launch_credit_addr(get_compile_time_arg_val(19)) {}
 
     // What a ring-counter slot names depends on where the counters live. Overlapped, they are program
     // semaphores the framework re-initialises every launch; alone, they are hand-placed L1 this kernel

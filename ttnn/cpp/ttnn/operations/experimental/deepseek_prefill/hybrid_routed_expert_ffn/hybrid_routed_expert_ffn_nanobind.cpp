@@ -34,9 +34,9 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         combine bfloat8_b tiles, as the two ops do back to back), and expert_offsets,
         replicated_global_expert_idx_table (the full table on every device), expert_region_offsets,
         combine_axis, combine_num_links, num_experts_per_tok and seq_len_per_chip are combine's.
-        The overlap also needs fwd_arrived_semaphore, final_arrived_semaphore and expert_go_semaphore:
-        global semaphores created once, initialised to zero, and passed on every call, since
-        neighbouring chips bump them across launches. Everything else it places in L1 is freed when
+        The overlap also needs fwd_arrived_semaphore, final_arrived_semaphore, expert_go_semaphore and
+        launch_credit_semaphore: global semaphores created once, initialised to zero, and passed on
+        every call, since neighbouring chips bump them across launches. Everything else it places in L1 is freed when
         the call returns. forwarding_buffer is combine's DRAM staging buffer from
         hybrid_routed_expert_moe_forwarding_buffer; omitted, combine allocates its own at the first
         call and keeps it for the program's lifetime.
@@ -67,6 +67,7 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         nb::arg("fwd_arrived_semaphore") = nb::none(),
         nb::arg("final_arrived_semaphore") = nb::none(),
         nb::arg("expert_go_semaphore") = nb::none(),
+        nb::arg("launch_credit_semaphore") = nb::none(),
         nb::arg("forwarding_buffer") = nb::none());
 
     ttnn::bind_function<"hybrid_routed_expert_moe_forwarding_buffer", "ttnn.experimental.deepseek_prefill.">(

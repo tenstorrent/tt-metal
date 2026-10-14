@@ -198,18 +198,23 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
 // of each run and so run far apart, and a shared count would let the leading one's credit release a slot the
 // trailing one is still reading.
 //
-// `fwd_arrived` and `final_arrived` alone stay GlobalSemaphores. The upstream chip bumps them, and chips start
-// at different times: a program semaphore is re-initialised when THIS chip loads the program, which would
-// erase a bump from an upstream chip that started first. They sit at a uniform address across the mesh so the
+// `fwd_arrived`, `final_arrived` and `launch_credit` alone stay GlobalSemaphores. A neighbouring chip bumps them,
+// and chips start at different times: a program semaphore is re-initialised when THIS chip loads the program,
+// which would erase a bump from a neighbour that started first. They sit at a uniform address across the mesh so the
 // upstream sender knows where they live, and the reader subtracts what each launch accounted for rather than
 // zeroing them, since the upstream chip may already be bumping for the next launch.
 //
 // `final_arrived` counts the tokens the upstream chip writes straight into this chip's output. Nothing else on
 // this chip sees those land, so without it this chip's program can finish -- and the next op on it read the
 // output -- while a neighbour is still delivering. The reader waits for the count it expects before exiting.
+//
+// `launch_credit` is granted by the downstream chip's sender on the stream back toward us when that chip starts a
+// launch, and our sender takes one, by subtracting, before its first send: nothing it writes reaches the
+// downstream chip before that chip is in the same launch, where its readers are done with the previous one.
 struct RingSemaphores {
     tt::tt_metal::GlobalSemaphore fwd_arrived;
     tt::tt_metal::GlobalSemaphore final_arrived;
+    tt::tt_metal::GlobalSemaphore launch_credit;
     uint32_t untilizers_per_group = 0;
     uint32_t num_links = 0;
 
@@ -225,7 +230,8 @@ struct RingSemaphores {
     uint32_t num_program_semaphores() const { return ready() + 2; }
 
     uint32_t lowest_address() const {
-        return static_cast<uint32_t>(std::min(fwd_arrived.address(), final_arrived.address()));
+        return static_cast<uint32_t>(
+            std::min({fwd_arrived.address(), final_arrived.address(), launch_credit.address()}));
     }
 };
 
@@ -233,16 +239,14 @@ struct RingSemaphores {
 constexpr uint32_t kSemaphoresPerCore = 16;
 
 RingSemaphores allocate_ring_semaphores(
-    ttnn::MeshDevice* mesh,
-    uint32_t num_links,
-    uint32_t untilizers_per_group,
-    const CombineL1& provided) {
+    ttnn::MeshDevice* mesh, uint32_t num_links, uint32_t untilizers_per_group, const CombineL1& provided) {
     // Allocated on the full worker grid so the address is uniform across the mesh. One semaphore of each kind
     // serves every stream: each stream is drained by a different worker core, so the per-core copy at this
     // uniform L1 offset already separates them, and the sender simply targets the right core.
     TT_FATAL(
-        (provided.fwd_arrived == nullptr) == (provided.final_arrived == nullptr),
-        "combine_fabric2d: fwd_arrived and final_arrived must be provided together or not at all");
+        (provided.fwd_arrived == nullptr) == (provided.final_arrived == nullptr) &&
+            (provided.fwd_arrived == nullptr) == (provided.launch_credit == nullptr),
+        "combine_fabric2d: fwd_arrived, final_arrived and launch_credit must be provided together or not at all");
     const auto grid = mesh->compute_with_storage_grid_size();
     const CoreRangeSet all_workers(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
     auto make_or_take = [&](const tt::tt_metal::GlobalSemaphore* sem) {
@@ -252,7 +256,11 @@ RingSemaphores allocate_ring_semaphores(
         return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
     };
     RingSemaphores sems{
-        make_or_take(provided.fwd_arrived), make_or_take(provided.final_arrived), untilizers_per_group, num_links};
+        make_or_take(provided.fwd_arrived),
+        make_or_take(provided.final_arrived),
+        make_or_take(provided.launch_credit),
+        untilizers_per_group,
+        num_links};
     TT_FATAL(
         sems.num_program_semaphores() <= kSemaphoresPerCore,
         "combine_fabric2d: {} program semaphores per combine core exceed the {} a core has ({} untilizers per "
@@ -323,6 +331,7 @@ KernelPlan make_kernel_plan(
     plan.ring_freed_slot = RingSemaphores::FREED;
     plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
     plan.final_arrived_addr = static_cast<uint32_t>(sems.final_arrived.address());
+    plan.launch_credit_addr = static_cast<uint32_t>(sems.launch_credit.address());
     // Which of the `num_routed_experts` columns this chip hosts. The dispatch group is this device's position
     // on the OTHER mesh axis; with one group per column of a 2D mesh that is just the other coordinate. Same
     // derivation as the production reader's compile-time `offset`.
@@ -470,6 +479,13 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         KernelPlan plan = chip_plan;
         plan.stream = stream;
         const auto& downstream = placement.at(self.downstream_coord).streams.at(stream);
+        // The downstream chip's stream back toward us: its sender writes to this chip, so it is the one our
+        // launch credit releases.
+        const auto& returning = placement.at(self.downstream_coord).streams.at(reverse_stream(stream));
+        TT_FATAL(
+            returning.downstream_coord == coord,
+            "combine_fabric2d: stream {} on the downstream chip does not send back to this chip",
+            reverse_stream(stream));
         const auto& work = work_by_stream.at(stream);
 
         tt::tt_metal::KernelDescriptor snd;
@@ -478,7 +494,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             "sender_combine_fabric2d.cpp";
         snd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         snd.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
-        snd.compile_time_args = cmbf2d::SenderCtArgs(tensor_args, self, downstream, l1, plan).to_ct_word_arr();
+        snd.compile_time_args =
+            cmbf2d::SenderCtArgs(tensor_args, self, downstream, returning, l1, plan).to_ct_word_arr();
         snd.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
@@ -635,8 +652,7 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
     validate_allocations(operation_attributes, tensor_args, tensor_return_value);
 
     const uint32_t per_group = untilizers_per_group();
-    const auto sems =
-        allocate_ring_semaphores(mesh_device, operation_attributes.num_links, per_group, l1_resources);
+    const auto sems = allocate_ring_semaphores(mesh_device, operation_attributes.num_links, per_group, l1_resources);
     const auto l1 = compute_l1_layout(
         mesh_device,
         tensor_args,
@@ -672,6 +688,7 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
     workload_descriptor.semaphores.push_back(sems.fwd_arrived);
     workload_descriptor.semaphores.push_back(sems.final_arrived);
+    workload_descriptor.semaphores.push_back(sems.launch_credit);
     if (fwd.owner != nullptr) {
         workload_descriptor.buffers.push_back({fwd.owner, fwd.buffer});
     }

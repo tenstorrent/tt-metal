@@ -109,7 +109,7 @@ struct L1Layout {
     // An untilizer core's layout, which starts over at the allocator base: it shares no memory with the
     // cores above, and the base is where the framework puts its first circular buffer.
     // Zero where there are no untilizer cores, which is where there is nothing to untilize.
-    uint32_t unt_ring = 0;     // the batch ring, which IS cb_out
+    uint32_t unt_ring = 0;  // the batch ring, which IS cb_out
     uint32_t unt_control = 0;
     // Overlapped only: the collector's per-step count array, at the base of a core that holds nothing else.
     uint32_t collector_counts = 0;  // its own copy of the control tables, past every circular buffer
@@ -136,6 +136,7 @@ struct KernelPlan {
     uint32_t ring_freed_slot = 0;
     uint32_t fwd_arrived_addr = 0;
     uint32_t final_arrived_addr = 0;
+    uint32_t launch_credit_addr = 0;
     // Overlapped only: this ring's first row of global_expert_idx_table.
     uint32_t expert_table_page_base = 0;
 };

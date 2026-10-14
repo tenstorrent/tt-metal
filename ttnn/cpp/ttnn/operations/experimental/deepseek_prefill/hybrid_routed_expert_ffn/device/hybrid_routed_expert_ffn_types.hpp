@@ -321,17 +321,20 @@ struct HybridRoutedExpertFfnParams {
     uint32_t num_experts_per_tok = 0;
     uint32_t seq_len_per_chip = 0;
 
-    // The overlap's counters: combine's per-stream receive counts and the routed expert's start signal. They
-    // must outlive every launch -- an upstream chip may bump one for the next launch before this chip starts it
-    // -- so the caller owns them and passes the same three every call.
+    // The overlap's counters: combine's per-stream receive counts, the routed expert's start signal, and the
+    // credit a chip grants its upstream neighbour when it starts a launch. They must outlive every launch -- a
+    // neighbouring chip may bump one for the next launch before this chip starts it -- so the caller owns them and
+    // passes the same four every call.
     std::optional<GlobalSemaphore> fwd_arrived;
     std::optional<GlobalSemaphore> final_arrived;
     std::optional<GlobalSemaphore> expert_go;
-    // Every address combine bakes into its compile-time arguments: the three semaphores and the per-call L1
+    std::optional<GlobalSemaphore> launch_credit;
+    // Every address combine bakes into its compile-time arguments: the four semaphores and the per-call L1
     // arena its layout is placed in. Hashed, so a cached program is only ever reused over the same layout.
     uint32_t fwd_arrived_addr = 0;
     uint32_t final_arrived_addr = 0;
     uint32_t expert_go_addr = 0;
+    uint32_t launch_credit_addr = 0;
     uint32_t l1_arena_addr = 0;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
@@ -350,6 +353,7 @@ struct HybridRoutedExpertFfnParams {
         "fwd_arrived_addr",
         "final_arrived_addr",
         "expert_go_addr",
+        "launch_credit_addr",
         "l1_arena_addr");
 
     auto attribute_values() const {
@@ -369,6 +373,7 @@ struct HybridRoutedExpertFfnParams {
             fwd_arrived_addr,
             final_arrived_addr,
             expert_go_addr,
+            launch_credit_addr,
             l1_arena_addr);
     }
 };
