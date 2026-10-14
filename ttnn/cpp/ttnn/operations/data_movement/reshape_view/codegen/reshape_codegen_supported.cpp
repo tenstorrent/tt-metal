@@ -79,6 +79,8 @@ const char* scope_violation(
     return nullptr;
 }
 
+// Gates on the smallest plan, not the full one: the program factory shrinks the plan to what live L1 holds, so the
+// call is in scope whenever any plan fits the static window.
 const char* static_fit_violation(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
@@ -87,10 +89,11 @@ const char* static_fit_violation(
     const uint32_t tile_bytes =
         input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
     const uint64_t budget = static_l1_budget(input, output_spec(input, logical_output_shape, output_mem_config));
-    if (tile_rows_l1_bytes(choice.layout, tile_bytes) > budget) {
-        return "tile-row buffers do not fit the static L1 budget";
+    const auto fits = [&](const TileRowsChoice& c) { return tile_rows_l1_bytes(c, tile_bytes) <= budget; };
+    if (fits(choice) || plan_tile_rows_fitting(input.logical_shape(), logical_output_shape, fits)) {
+        return nullptr;
     }
-    return nullptr;
+    return "tile-row buffers do not fit the static L1 budget even at the smallest plan";
 }
 
 constexpr const char* kPlanCapsViolation = "tile-row plan exceeds its size caps";

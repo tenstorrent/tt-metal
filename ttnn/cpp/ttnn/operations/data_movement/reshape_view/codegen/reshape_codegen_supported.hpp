@@ -22,8 +22,9 @@ const char* call_contract_violation(
     const ttnn::Shape& padded_shape,
     const std::optional<ttnn::PadValue>& pad_value);
 
-// Why the codegen program cannot run this call, or nullptr. Budgets against static_l1_budget only, never live free
-// L1: the op allocates its output between routing and validation, so a live read could disagree with itself.
+// Why the codegen program cannot run this call, or nullptr. Budgets the smallest plan against static_l1_budget only,
+// never live free L1: the op allocates its output between routing and validation, so a live read could disagree with
+// itself. Live L1 picks the plan at program creation (live_tile_rows_choice).
 const char* unsupported_reason(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,

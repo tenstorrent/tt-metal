@@ -17,6 +17,7 @@
 #include <tt-metalium/workload_descriptor.hpp>
 #include <tt_stl/assert.hpp>
 
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_plan.hpp"
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_tile_rows_plan.hpp"
 
@@ -52,6 +53,7 @@ CBDescriptor make_cb(
 
 ProgramDescriptor build_tile_rows(
     const rcg::TileRowsLayout& layout,
+    uint32_t staged_batches,
     uint32_t tile_bytes,
     const Tensor& input,
     Buffer* plan_buf,
@@ -65,7 +67,7 @@ ProgramDescriptor build_tile_rows(
         split_work_to_cores(grid, layout.num_batches, false);
 
     desc.cbs.push_back(make_cb(kCbPlan, tt::DataFormat::UInt32, layout.page_bytes(), 2, all_cores));
-    desc.cbs.push_back(make_cb(kCbStaged, fmt, tile_bytes, 2 * layout.in_slots, all_cores));
+    desc.cbs.push_back(make_cb(kCbStaged, fmt, tile_bytes, staged_batches * layout.in_slots, all_cores));
     desc.cbs.push_back(make_cb(kCbRing, fmt, tile_bytes, rcg::kTileRowsWriteGroup, all_cores));
     desc.cbs.push_back(make_cb(kCbZero, fmt, tile_bytes, 1, all_cores));
 
@@ -157,7 +159,13 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileRowsProgramFactory::create_wo
     const uint32_t tile_bytes =
         input.tensor_spec().tile().get_tile_size(datatype_to_dataformat_converter(input.dtype()));
 
-    auto plan = rcg::build_tile_rows_plan(in_shape, out_shape, operation_attributes.plan.tile_rows);
+    const auto chosen = rcg::live_tile_rows_choice(input, out_shape, operation_attributes.plan.tile_rows);
+    TT_FATAL(
+        chosen.has_value(),
+        "ReshapeCodegen: no tile-row plan fits the {} B of L1 free per core below the lowest L1 allocation; free L1 "
+        "tensors or use the native reshape",
+        ttnn::operations::data_movement::get_max_l1_space(input));
+    auto plan = rcg::build_tile_rows_plan(in_shape, out_shape, *chosen);
     const rcg::TileRowsLayout layout = plan.layout;
     TT_FATAL(
         tensor_return_value.buffer()->num_pages() == layout.num_output_pages,
@@ -168,7 +176,8 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileRowsProgramFactory::create_wo
     const auto plan_owner = upload_table(std::move(plan.table), layout.num_batches, layout.page_words, input);
     return table_workload(
         plan_owner,
-        build_tile_rows(layout, tile_bytes, input, plan_owner->buffer(), tensor_return_value, grid),
+        build_tile_rows(
+            layout, chosen->staged_batches, tile_bytes, input, plan_owner->buffer(), tensor_return_value, grid),
         tensor_coords);
 }
 

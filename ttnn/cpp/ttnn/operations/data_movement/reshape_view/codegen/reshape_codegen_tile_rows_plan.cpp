@@ -24,8 +24,8 @@ namespace tile_rows_planner {
 
 constexpr uint64_t kTileDim = 32;
 constexpr uint64_t kFaceRows = 16;
-// One output tile can need 32 source tiles, so 32 is the smallest source cap.
-constexpr uint32_t kMaxIn = 32;
+// Source caps tried, largest first, when the full plan does not fit.
+constexpr std::array<uint32_t, 6> kMaxInSteps = {kTileRowsMaxIn, 16, 8, 4, 2, 1};
 // Smaller output batches until there are enough batches to spread over cores; small batches re-read shared
 // sources, so stop at 8.
 constexpr std::array<uint32_t, 3> kMaxOutSteps = {32, 16, 8};
@@ -177,8 +177,9 @@ PlanInputs prepare(const Shape3& in, const Shape3& out) {
     return p;
 }
 
-// Greedy batches of output tiles in source order; each holds at most max_out tiles and kMaxIn distinct sources.
-std::vector<Batch> make_batches(const PlanInputs& p, uint32_t max_out) {
+// Greedy batches of output tiles in source order; each holds at most max_out tiles and at most max_in distinct
+// sources, unless one output tile alone needs more.
+std::vector<Batch> make_batches(const PlanInputs& p, uint32_t max_out, uint32_t max_in) {
     const auto& begin = p.tiles.source_begin;
     const auto& all_sources = p.tiles.sources;
     std::vector<Batch> batches;
@@ -188,7 +189,7 @@ std::vector<Batch> make_batches(const PlanInputs& p, uint32_t max_out) {
         const auto last = all_sources.begin() + begin[out_page + 1];
         std::vector<uint32_t> merged;
         std::set_union(current.ins.begin(), current.ins.end(), first, last, std::back_inserter(merged));
-        if (!current.outs.empty() && (current.outs.size() == max_out || merged.size() > kMaxIn)) {
+        if (!current.outs.empty() && (current.outs.size() == max_out || merged.size() > max_in)) {
             batches.push_back(std::move(current));
             current = Batch{};
             merged.assign(first, last);
@@ -239,19 +240,20 @@ std::optional<std::pair<Shape3, Shape3>> permutation_shapes(const ttnn::Shape& i
 }  // namespace tile_rows_planner
 
 struct TileRowsSchedule {
-    tile_rows_planner::PlanInputs inputs;
+    // Shared by the plans one shape pair gets under different source caps.
+    std::shared_ptr<const tile_rows_planner::PlanInputs> inputs;
     std::vector<tile_rows_planner::Batch> batches;
 };
 
 namespace tile_rows_planner {
 
-std::optional<TileRowsChoice> choose(const Shape3& in, const Shape3& out) {
+std::optional<TileRowsChoice> choose(std::shared_ptr<const PlanInputs> inputs, uint32_t max_in) {
     auto schedule = std::make_shared<TileRowsSchedule>();
-    schedule->inputs = prepare(in, out);
-    const PlanInputs& p = schedule->inputs;
+    schedule->inputs = std::move(inputs);
+    const PlanInputs& p = *schedule->inputs;
     TileRowsChoice choice;
     for (const uint32_t max_out : kMaxOutSteps) {
-        schedule->batches = make_batches(p, max_out);
+        schedule->batches = make_batches(p, max_out, max_in);
         uint64_t batch_reads = 0;
         for (const auto& b : schedule->batches) {
             batch_reads += b.ins.size();
@@ -259,6 +261,7 @@ std::optional<TileRowsChoice> choose(const Shape3& in, const Shape3& out) {
         choice = TileRowsChoice{
             .layout = layout_of(p, schedule->batches),
             .max_out = max_out,
+            .max_in = max_in,
             .runs = p.runs,
             .native_reads = p.native_reads,
             .batch_reads = batch_reads};
@@ -276,21 +279,26 @@ std::optional<TileRowsChoice> choose(const Shape3& in, const Shape3& out) {
 }
 
 // Process-wide: routing asks on every call, before any device or program cache is involved, and the answer
-// depends only on the shapes and the DRAM alignment. Entries drop their schedule to stay small.
-std::optional<TileRowsChoice> memoized_choice(const Shape3& in, const Shape3& out) {
-    using Key = std::array<uint64_t, 7>;
+// depends only on the shapes, the source cap and the DRAM alignment. Entries drop their schedule to stay small.
+// `prepared` carries the per-shape walk across calls for the same shapes; it is filled only on a miss.
+std::optional<TileRowsChoice> memoized_choice(
+    const Shape3& in, const Shape3& out, uint32_t max_in, std::shared_ptr<const PlanInputs>& prepared) {
+    using Key = std::array<uint64_t, 8>;
     static std::mutex mutex;
     static std::map<Key, std::optional<TileRowsChoice>> memo;
     static std::deque<Key> insertion_order;
 
-    const Key key{in.c, in.h, in.w, out.c, out.h, out.w, page_align_words()};
+    const Key key{in.c, in.h, in.w, out.c, out.h, out.w, max_in, page_align_words()};
     {
         std::lock_guard lock(mutex);
         if (auto it = memo.find(key); it != memo.end()) {
             return it->second;
         }
     }
-    auto choice = choose(in, out);
+    if (!prepared) {
+        prepared = std::make_shared<const PlanInputs>(prepare(in, out));
+    }
+    auto choice = choose(prepared, max_in);
     auto entry = choice;
     if (entry) {
         entry->schedule.reset();
@@ -312,13 +320,38 @@ bool is_tile_row_permutation(const ttnn::Shape& in_shape, const ttnn::Shape& out
     return tile_rows_planner::permutation_shapes(in_shape, out_shape).has_value();
 }
 
-std::optional<TileRowsChoice> plan_tile_rows(const ttnn::Shape& in_shape, const ttnn::Shape& out_shape) {
+std::optional<TileRowsChoice> plan_tile_rows(
+    const ttnn::Shape& in_shape, const ttnn::Shape& out_shape, uint32_t max_in) {
     using namespace tile_rows_planner;
     const auto shapes = permutation_shapes(in_shape, out_shape);
     if (!shapes || exceeds_caps(shapes->second)) {
         return std::nullopt;
     }
-    return memoized_choice(shapes->first, shapes->second);
+    std::shared_ptr<const PlanInputs> prepared;
+    return memoized_choice(shapes->first, shapes->second, max_in, prepared);
+}
+
+std::optional<TileRowsChoice> plan_tile_rows_fitting(
+    const ttnn::Shape& in_shape, const ttnn::Shape& out_shape, const std::function<bool(const TileRowsChoice&)>& fits) {
+    using namespace tile_rows_planner;
+    const auto shapes = permutation_shapes(in_shape, out_shape);
+    if (!shapes || exceeds_caps(shapes->second)) {
+        return std::nullopt;
+    }
+    std::shared_ptr<const PlanInputs> prepared;
+    for (const uint32_t staged_batches : {kTileRowsStagedBatches, 1u}) {
+        for (const uint32_t max_in : kMaxInSteps) {
+            auto choice = memoized_choice(shapes->first, shapes->second, max_in, prepared);
+            if (!choice) {
+                continue;
+            }
+            choice->staged_batches = staged_batches;
+            if (fits(*choice)) {
+                return choice;
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 TileRowsPlan build_tile_rows_plan(
@@ -329,11 +362,11 @@ TileRowsPlan build_tile_rows_plan(
         const auto shapes = permutation_shapes(in_shape, out_shape);
         TT_FATAL(shapes.has_value(), "Reshape is not a tile-row permutation");
         auto planned = std::make_shared<TileRowsSchedule>();
-        planned->inputs = prepare(shapes->first, shapes->second);
-        planned->batches = make_batches(planned->inputs, choice.max_out);
+        planned->inputs = std::make_shared<const PlanInputs>(prepare(shapes->first, shapes->second));
+        planned->batches = make_batches(*planned->inputs, choice.max_out, choice.max_in);
         schedule = std::move(planned);
     }
-    const PlanInputs& p = schedule->inputs;
+    const PlanInputs& p = *schedule->inputs;
     const auto& batches = schedule->batches;
     const TileFacts& tiles = p.tiles;
 
@@ -369,10 +402,13 @@ TileRowsPlan build_tile_rows_plan(
     return plan;
 }
 
-uint64_t tile_rows_l1_bytes(const TileRowsLayout& layout, uint32_t tile_bytes) {
-    // Plan CB double-buffers one page, the input CB two batches of slots, plus the write ring and a zero tile.
+uint64_t tile_rows_l1_bytes(const TileRowsChoice& choice, uint32_t tile_bytes) {
+    // Plan CB double-buffers one page, the input CB holds staged_batches batches of slots, plus the write ring and a
+    // zero tile.
+    const TileRowsLayout& layout = choice.layout;
     return 2ull * layout.page_bytes() +
-           (2ull * layout.in_slots + kTileRowsWriteGroup + 1) * static_cast<uint64_t>(tile_bytes);
+           (static_cast<uint64_t>(choice.staged_batches) * layout.in_slots + kTileRowsWriteGroup + 1) *
+               static_cast<uint64_t>(tile_bytes);
 }
 
 }  // namespace ttnn::operations::data_movement::reshape_codegen
