@@ -204,7 +204,8 @@ def check_plan(
         length = -(-min(seq, st.get("window") or seq) // div) if per_token else 1
         groups[f"state: {st.get('what', 'state')} layers {st['layers']}"] = len(layers_st) * b_tok * length * users
         covered += layers_st
-    missing_state = sorted(set(spec.layers() if sel is None else sel) - set(covered))
+    stateful = {i for i in (spec.layers() if sel is None else sel) if spec.state_names(i)}  # F65: readers keep none
+    missing_state = sorted(stateful - set(covered))
     if missing_state:
         errs.append(f"no state entry covers layers {missing_state}")
     for k, v in (plan.get("extra_gb_per_chip") or {}).items():

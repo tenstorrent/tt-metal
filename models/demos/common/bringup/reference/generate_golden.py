@@ -104,6 +104,14 @@ def main(argv=None):
     dumped = list(range(n_chunks)) if rung.get("full_dumps") else [n_chunks - 1]
     print(f"reference loaded in {time.time() - t0:.0f}s; seq={seq} chunk={chunk}; storing layers {selected}")
 
+    # F65: a layer that reads other layers' state needs them in the golden, and their fixed-size state as of the end
+    # of every dumped chunk (its tests load it there)
+    sources = {}
+    for i in selected:
+        for j in spec.state_sources(i):
+            if j not in selected or j >= i:
+                raise SystemExit(f"layer {i} reads layer {j}'s state: select layer {j} too (and it must come first)")
+            sources[j] = True
     state = ref.new_state(seq)
     fixed = spec.state_fixed
     tail_at = None
@@ -128,7 +136,7 @@ def main(argv=None):
     for c in range(n_chunks):
         per_layer, model_t = defaultdict(dict), {}
         dump = c in dumped
-        if fixed and dump:
+        if fixed and dump and c * chunk not in snapshots:
             snapshot(c * chunk)
             snapshots.append(c * chunk)
         if tail_at is not None and c == n_chunks - 1:
@@ -147,6 +155,10 @@ def main(argv=None):
         tc = time.time()
         _, logits = ref.forward_chunk(tokens[s : s + chunk], s, state, rec, logits_last_n=chunk if full_stack else 0)
         chunk_times.append(time.time() - tc)
+        end = s + chunk
+        if fixed and dump and sources and end < seq and end not in snapshots:
+            snapshot(end)
+            snapshots.append(end)
         model_t["tokens"] = tokens[s : s + chunk].to(torch.int32).contiguous()
         if full_stack:
             logits = logits.float()
