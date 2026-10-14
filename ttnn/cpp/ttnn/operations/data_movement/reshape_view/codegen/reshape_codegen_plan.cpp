@@ -195,23 +195,22 @@ std::optional<TilePlan> fit_tile(TilePlan plan, uint64_t l1_budget) {
     // tilizes Wt_out tiles in one write and the writer reads a batch from one offset, so its depth is a multiple of
     // both. The batched writer holds one batch while it waits for the next, so compute still needs Wt_out free slots
     // while fewer than two batches are pushed: depth >= 2 * batch + Wt_out - 1. The unbatched writer waits only on an
-    // empty CB. Deeper out CBs, up to a chunk, only overlap compute with the writer.
-    const uint64_t budget_tiles = l1_budget / plan.tile_bytes;
-    if (budget_tiles <= 2ull * plan.in_tiles) {
-        return std::nullopt;
-    }
-    const uint64_t out_room = budget_tiles - 2ull * plan.in_tiles;
+    // empty CB. Each batch offers two depths, a whole chunk's output and its minimum, so small moves of the L1
+    // frontier keep the same program and its cache key.
+    const uint64_t chunk_bytes = 2 * cb_footprint(static_cast<uint64_t>(plan.in_tiles) * plan.tile_bytes);
     for (const uint32_t batch : kLcmWriteBatches) {
         const uint64_t unit = std::lcm(plan.wt_out, batch);
         const uint64_t needed = batch == 1 ? plan.wt_out : 2ull * batch + plan.wt_out - 1;
-        if (tt::round_up(needed, unit) > out_room) {
-            continue;
+        for (const uint64_t depth :
+             {tt::round_up(std::max<uint64_t>(plan.out_tiles, needed), unit), tt::round_up(needed, unit)}) {
+            const uint64_t bytes = chunk_bytes + cb_footprint(depth * plan.tile_bytes);
+            if (bytes <= l1_budget) {
+                plan.out_cb_depth = static_cast<uint32_t>(depth);
+                plan.write_batch = batch;
+                plan.l1_bytes = bytes;
+                return plan;
+            }
         }
-        const uint64_t wanted = tt::round_up(std::max<uint64_t>(plan.out_tiles, needed), unit);
-        plan.out_cb_depth = static_cast<uint32_t>(std::min(wanted, out_room / unit * unit));
-        plan.write_batch = batch;
-        plan.l1_bytes = static_cast<uint64_t>(2 * plan.in_tiles + plan.out_cb_depth) * plan.tile_bytes;
-        return plan;
     }
     return std::nullopt;
 }
