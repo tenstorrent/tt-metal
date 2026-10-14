@@ -480,18 +480,14 @@ public:
     bool exclude_mapping(const AssignedMeshes& assigned);
 
     /**
-     * @brief Zero-link fallback (issue #56762): allow re-solving with inter-mesh seams SOFT.
+     * @brief Zero-link fallback (issue #56762): allow the SOFT-seam rungs of the solve ladder.
      *
      * The master solve normally requires physical links for every mesh-level edge. When allowed (effective
-     * RELAXED inter-mesh policy), next() switches to soft seams as soon as the hard solve is UNSAT at the
-     * current candidate pool, instead of growing the pool: realized edges are maximized best-effort and a
-     * seating with zero-link (logical-only) connections is accepted. Everything else stays hard.
+     * RELAXED inter-mesh policy), next() may also try soft seams at the current candidate pool before growing
+     * it: realized edges are maximized best-effort and a seating with zero-link (logical-only) connections is
+     * accepted. Everything else stays hard. See the ladder in next().
      */
     void set_zero_link_fallback_allowed(bool allowed) { zero_link_allowed_ = allowed; }
-    // Engage the fallback now (used by next(), and by callers once the hard seatings are exhausted).
-    // Returns false if already engaged, not ready, or there are no mesh-level edges to relax.
-    bool enable_zero_link_tolerance();
-    bool zero_link_tolerance() const { return zero_link_tolerance_; }
 
 private:
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor_ = nullptr;
@@ -503,8 +499,8 @@ private:
     std::map<MeshId, ConnectionValidationMode> sat_intra_mesh_mode_by_mesh_;
     bool relaxed_inter_mesh_policy_ = false;
     bool unique_shapes_ = false;
-    bool zero_link_allowed_ = false;    // see set_zero_link_fallback_allowed()
-    bool zero_link_tolerance_ = false;  // see enable_zero_link_tolerance()
+    bool zero_link_allowed_ = false;  // see set_zero_link_fallback_allowed()
+    bool soft_seams_used_ = false;    // a soft-seam rung produced a seating (stats / diagnostics)
 
     std::unique_ptr<std::map<MeshId, std::shared_ptr<CandidatePool>>> pools_;
     MappingConstraints<MeshId, const Candidate*> constraints_;
@@ -519,31 +515,38 @@ private:
     std::vector<std::pair<MeshId, std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>> extra_required_;
     std::vector<std::map<MeshId, std::unordered_set<tt::tt_metal::experimental::PhysicalNodeId>>> yielded_footprints_;
 
-    // Live SAT session. next() is another model from it when the mode and host cap still match.
-    // The placement session resets it when the pools grow; next() rebuilds only then, or when the cap changes.
+    // One rung of the solve ladder in next(): which relaxations are on and the SAT conflict budget to use.
+    struct SolveRung {
+        bool drop_host_cap;  // host-count cap not enforced
+        bool soft_seams;     // inter-mesh edges may be zero-link (allow_unmatched_target_edges)
+        int conflict_cap;    // per-solve CaDiCaL conflict budget (primary solve and soft-seam maximization probes)
+        const char* name;
+    };
+
+    // Live SAT session. next() is another model from it while the rung (validation mode, host cap, seam
+    // softness, conflict budget) is unchanged; it is rebuilt when the pools grow or the rung changes.
     struct MasterSolve {
         explicit MasterSolve(SatPlacementEnumerationSession* owner) : owner_(owner) {}
 
         void reset() { session.reset(); }
 
-        // True when this session was encoded for this validation mode, host-cap setting and seam softness.
-        bool matches(bool relaxed_mode, bool drop_cap, bool zero_link_mode) const {
-            return session != nullptr && relaxed == relaxed_mode && drop_host_cap == drop_cap &&
-                   zero_link == zero_link_mode;
+        bool matches(bool relaxed_mode, const SolveRung& rung) const {
+            return session != nullptr && relaxed == relaxed_mode && drop_host_cap == rung.drop_host_cap &&
+                   soft_seams == rung.soft_seams && conflict_cap == rung.conflict_cap;
         }
 
-        // Rebuild the session for this mode, host cap and seam softness. False when the seat constraints
-        // cannot be built.
-        bool restart(bool relaxed_mode, bool drop_cap, bool zero_link_mode);
+        // Rebuild the session for this validation mode and rung. False when the seat constraints cannot be built.
+        bool restart(bool relaxed_mode, const SolveRung& rung);
 
-        // Another model from the live session. Restarts only when there is no session or the mode or host cap differs.
-        MappingResult<MeshId, const Candidate*> next(bool drop_cap);
+        // Another model from the live session for this rung (restarts only when the rung or pools changed).
+        MappingResult<MeshId, const Candidate*> next(const SolveRung& rung);
 
         void block_assigned(const AssignedMeshes& assigned);
 
         bool relaxed = false;
         bool drop_host_cap = false;
-        bool zero_link = false;  // seams encoded SOFT (allow_unmatched_target_edges)
+        bool soft_seams = false;
+        int conflict_cap = 0;
 
     private:
         SatPlacementEnumerationSession* owner_ = nullptr;

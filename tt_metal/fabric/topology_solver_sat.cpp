@@ -33,11 +33,9 @@ namespace tt::tt_fabric::detail {
 // walk at minutes, not tens of minutes.
 static constexpr int kDefaultConflictCap = 300'000;
 
-// Per-threshold conflict budget for the RELAXED zero-link realized-edge maximization loop (issue
-// #56762). Distinct objective from the host-group-cap search though the value currently matches:
-// if a threshold solve exceeds this, the loop keeps the best (valid, sub-maximal) mapping found so
-// far and warns. Kept as its own constant so the two loops can diverge without silent coupling.
-static constexpr int kZeroLinkMaximizeConflictBudget = 300'000;
+// The RELAXED zero-link realized-edge maximization (issue #56762) gives every threshold probe the
+// session's per-solve conflict budget (set_conflict_cap); a probe that exceeds it is treated as UNSAT
+// and the loop keeps the best (valid, sub-maximal) mapping found so far.
 // The maximization binary-searches the (monotone) realized-edge thresholds, so a pass takes O(log E) solves,
 // plus at most this many budget-exhausted (undecided) solves before it settles for the best model found.
 static constexpr int kZeroLinkMaximizeMaxUndecidedSolves = 2;
@@ -2016,7 +2014,7 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
                 }
                 s.solver.assume(threshold_lit);
                 ++s.solve_calls;
-                return s.solver.solve_limited(kZeroLinkMaximizeConflictBudget);
+                return s.solver.solve_limited(s.conflict_cap);
             };
             if (symmetry_hint_usable) {
                 if (attempt(/*with_symmetry_hint=*/true) == TopologySatSolver::kSat) {

@@ -1770,17 +1770,6 @@ std::vector<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
     while (true) {
         AssignedMeshes seating = placement_session_->next();
         if (seating.empty()) {
-            // Zero-link fallback (#56762): hard-seam placement exhausted with no complete mapping -> retry
-            // once with inter-mesh seams SOFT. Kept behind exhaustion so cabled systems keep the fast hard
-            // path; gated on the effective inter-mesh mode (config override, else MGD), STRICT never relaxes.
-            if (emitted_ == 0 && inter_mesh_validation_mode_ == ConnectionValidationMode::RELAXED &&
-                placement_session_->enable_zero_link_tolerance()) {
-                log_warning(
-                    tt::LogFabric,
-                    "Multi-mesh mapping: no placement realizes every inter-mesh connection; retrying with RELAXED "
-                    "zero-link tolerance (some connections may be logical-only)");
-                continue;
-            }
             return give_up();
         }
 
