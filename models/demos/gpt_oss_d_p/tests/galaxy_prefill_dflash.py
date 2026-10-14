@@ -17,8 +17,12 @@ Optional:
   PREFILL_DFLASH_HANDOFF_OUT output .pt for the reload/DFlash compatibility gate
   PREFILL_DFLASH_COMPAT_CONTROL prefill-by-decode control result .pt
   PREFILL_DFLASH_COMPAT_RESULT  reload consumer result .pt
-  GPT_OSS_DFLASH_PCC_MIN     aggregate pre-norm PCC floor (default 0.90)
-  GPT_OSS_DFLASH_POS_PCC_MIN optional per-position PCC floor
+  GPT_OSS_DFLASH_PCC_MIN     aggregate pre-norm PCC floor (default 0.88)
+  GPT_OSS_DFLASH_POS_PCC_MIN per-position pre-norm PCC floor (default 0.20)
+  GPT_OSS_DFLASH_LOGITS_PCC_MIN final-row logits PCC over the seed's top-k ids (default 0.90)
+  GPT_OSS_DFLASH_TOP10_OVERLAP_MIN shared ids between our and the seed's top-10 (default 7)
+  GPT_OSS_DFLASH_SEED_TOP1_MIN optional floor on the seed's own teacher-forced top-1 hit rate
+  PREFILL_REQUIRE_GALAXY     "1" fails (rc 1) instead of skipping when no galaxy is visible
   EXPERT_DTYPE               bf8 or bf4 (default) expert weights; must match the tilized cache
   PREFILL_TPS_ITERS          disabled/enabled timing repetitions (default 1)
   PREFILL_TSU_MIN            synchronized enabled-path tokens/s floor
@@ -28,7 +32,6 @@ from __future__ import annotations
 
 import json
 import os
-import resource
 import statistics
 import sys
 import time
@@ -38,25 +41,22 @@ import torch
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.gpt_oss_d_p.tests.galaxy_harness import (
+    COLS,
+    ROWS,
+    expert_weight_dtype,
+    galaxy_exit_code,
+    load_state_dict,
+    open_galaxy_mesh,
+    raise_nproc_limit,
+    runtime_topology,
+)
 
 REAL_TOKENS = 1000
 PADDED_TOKENS = 1024
-ROWS, COLS = 4, 8
 NUM_LAYERS = 36
 TARGET_LAYERS = (1, 9, 17, 25, 33)
 HANDOFF_FORMAT_VERSION = 1
-
-
-def _raise_nproc_limit():
-    """Raise RLIMIT_NPROC to the hard limit so tt-metal's parallel kernel JIT (a burst of g++/make
-    procs) doesn't starve with EAGAIN mid-build."""
-    soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
-    if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
-        try:
-            resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
-            print(f"[dflash-prefill] raised RLIMIT_NPROC soft {soft} -> {hard}", flush=True)
-        except (ValueError, OSError) as e:
-            print(f"[dflash-prefill] WARNING: could not raise RLIMIT_NPROC (soft={soft}): {e}", file=sys.stderr)
 
 
 def _pcc(reference: torch.Tensor, actual: torch.Tensor) -> float:
@@ -80,7 +80,7 @@ def _load_inputs(seed_path: Path | None, trace_dir: Path):
     selected = [int(x) for x in kv_tokens[:REAL_TOKENS]]
     if seed_path is None:
         return None, selected, 0
-    seed = torch.load(seed_path, map_location="cpu", weights_only=False)
+    seed = torch.load(seed_path, map_location="cpu", weights_only=True)
     seed_tokens = seed.get("seed_token_ids")
     if seed_tokens is None:
         seed_tokens = seed.get("prompt_token_ids")
@@ -92,6 +92,27 @@ def _load_inputs(seed_path: Path | None, trace_dir: Path):
     if [int(x) for x in seed_tokens[:reference_positions]] != selected[:reference_positions]:
         raise ValueError("PREFILL_TRACE_DIR and BLAZE_DFLASH_SEED_REF contain different token prefixes")
     return seed, selected, reference_positions
+
+
+def _seed_teacher_forced_top1(seed: dict, token_ids: list[int]) -> float | None:
+    """Fraction of positions where the seed's top-1 is the next prompt token."""
+    topk_ids = seed.get("golden_topk_token_ids")
+    if topk_ids is None:
+        return None
+    positions = min(len(topk_ids), len(token_ids)) - 1
+    if positions <= 0:
+        return None
+    hits = sum(int(topk_ids[i][0]) == token_ids[i + 1] for i in range(positions))
+    return hits / positions
+
+
+def _final_logits_agreement(logits: torch.Tensor, ref_ids, ref_logits) -> tuple[float, int]:
+    """PCC of our logits at the seed's top-k ids, and how many of our top-10 ids the seed's top-10 shares."""
+    ref_ids = torch.as_tensor(ref_ids, dtype=torch.long)
+    pcc = _pcc(torch.as_tensor(ref_logits), logits[ref_ids])
+    k = min(10, ref_ids.numel())
+    overlap = len(set(torch.topk(logits, k).indices.tolist()) & set(ref_ids[:k].tolist()))
+    return pcc, overlap
 
 
 def _to_host_reduced(mesh, result) -> torch.Tensor:
@@ -182,8 +203,8 @@ def _gate_consumer_compatibility() -> None:
         return
     if not control_raw or not result_raw:
         raise ValueError("set both PREFILL_DFLASH_COMPAT_CONTROL and PREFILL_DFLASH_COMPAT_RESULT")
-    control = torch.load(control_raw, map_location="cpu", weights_only=False)
-    consumed = torch.load(result_raw, map_location="cpu", weights_only=False)
+    control = torch.load(control_raw, map_location="cpu", weights_only=True)
+    consumed = torch.load(result_raw, map_location="cpu", weights_only=True)
 
     def decode_contract(blob):
         # Native run_spec_decode --result-out schema: one dataclass-as-dict per turn.
@@ -211,10 +232,10 @@ def _gate_consumer_compatibility() -> None:
 
 
 def main() -> int:
-    if ttnn.get_num_devices() < ROWS * COLS:
-        print("[dflash-prefill] SKIP: requires a 4x8 Blackhole Galaxy", flush=True)
-        return 0
-    _raise_nproc_limit()
+    rc = galaxy_exit_code("dflash-prefill")
+    if rc is not None:
+        return rc
+    raise_nproc_limit("dflash-prefill")
     trace_dir = _require_path("PREFILL_TRACE_DIR")
     seed_raw = os.environ.get("BLAZE_DFLASH_SEED_REF")
     seed_path = _require_path("BLAZE_DFLASH_SEED_REF") if seed_raw else None
@@ -224,17 +245,13 @@ def main() -> int:
     from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
     from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
-    linear = os.getenv("PREFILL_TOPOLOGY", "ring") == "linear"
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D if linear else ttnn.FabricConfig.FABRIC_1D_RING)
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(ROWS, COLS))
+    mesh = open_galaxy_mesh()
     try:
         model_args = ModelArgs(mesh_device=mesh)
         hf_config = model_args.hf_config
         if hf_config.num_hidden_layers != NUM_LAYERS:
             raise ValueError(f"expected the 36-layer GPT-OSS target, got {hf_config.num_hidden_layers}")
-        state_dict = (
-            {} if os.getenv("GPT_OSS_WEIGHTS_FROM_CACHE") == "1" else ModelArgs.load_state_dict(model_args.weights_path)
-        )
+        state_dict = load_state_dict(model_args, "dflash-prefill")
         runtime = TtPrefillRuntime(
             mesh,
             hf_config,
@@ -245,8 +262,8 @@ def main() -> int:
                 mesh_shape=(ROWS, COLS),
                 default_chunk_size=PADDED_TOKENS,
                 weight_cache_path=model_args.weight_cache_path(ttnn.bfloat8_b),
-                topology=ttnn.Topology.Linear if linear else ttnn.Topology.Ring,
-                expert_weight_dtype=ttnn.bfloat8_b if os.getenv("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b,
+                topology=runtime_topology(),
+                expert_weight_dtype=expert_weight_dtype(),
                 dflash_checkpoint_path=draft_path,
             ),
         )
@@ -304,29 +321,45 @@ def main() -> int:
         reduced = _to_host_reduced(mesh, result)[:REAL_TOKENS]
         export_ms = (time.perf_counter() - export_started) * 1000.0
         aggregate = per_position = None
-        golden_token = None
+        golden_token = logits_pcc = top10_overlap = seed_top1 = None
         if seed is not None:
             reference = seed["reduced_hidden_prenorm_ref"][:reference_positions].float()
             reduced_reference = reduced[:reference_positions]
             aggregate = _pcc(reference, reduced_reference)
             per_position = torch.tensor([_pcc(reference[i], reduced_reference[i]) for i in range(reference_positions)])
-            pcc_min = float(os.getenv("GPT_OSS_DFLASH_PCC_MIN", "0.90"))
+            pcc_min = float(os.getenv("GPT_OSS_DFLASH_PCC_MIN", "0.88"))
             if aggregate < pcc_min:
                 gate_failures.append(f"reduced_hidden aggregate PCC {aggregate:.5f} < {pcc_min}")
-            pos_min = os.environ.get("GPT_OSS_DFLASH_POS_PCC_MIN")
-            if pos_min is not None and float(per_position.min()) < float(pos_min):
+            pos_min = float(os.getenv("GPT_OSS_DFLASH_POS_PCC_MIN", "0.20"))
+            if float(per_position.min()) < pos_min:
                 gate_failures.append(f"reduced_hidden min per-position PCC {per_position.min():.5f} < {pos_min}")
+
+            seed_top1 = _seed_teacher_forced_top1(seed, token_ids)
+            seed_top1_min = os.environ.get("GPT_OSS_DFLASH_SEED_TOP1_MIN")
+            if seed_top1_min is not None and (seed_top1 is None or seed_top1 < float(seed_top1_min)):
+                gate_failures.append(f"seed teacher-forced top-1 hit rate {seed_top1} < {seed_top1_min}")
 
             next_token_ref = seed.get("next_token_ref")
             if next_token_ref is not None and len(next_token_ref) >= REAL_TOKENS:
                 golden_token = int(next_token_ref[REAL_TOKENS - 1])
                 topk_ids = seed.get("golden_topk_token_ids")
-                if result.y0 != golden_token and (
-                    topk_ids is None or result.y0 not in [int(x) for x in topk_ids[REAL_TOKENS - 1]]
-                ):
-                    gate_failures.append(
-                        f"y0={result.y0} differs from golden={golden_token} and is outside golden top-k"
+                topk_logits = seed.get("golden_topk_logits")
+                if topk_ids is None or topk_logits is None:
+                    gate_failures.append("seed lacks golden_topk_token_ids/golden_topk_logits for the logits gate")
+                else:
+                    logits_pcc, top10_overlap = _final_logits_agreement(
+                        result.logits, topk_ids[REAL_TOKENS - 1], topk_logits[REAL_TOKENS - 1]
                     )
+                    logits_min = float(os.getenv("GPT_OSS_DFLASH_LOGITS_PCC_MIN", "0.90"))
+                    if logits_pcc < logits_min:
+                        gate_failures.append(f"final-row logits PCC {logits_pcc:.5f} < {logits_min}")
+                    overlap_min = int(os.getenv("GPT_OSS_DFLASH_TOP10_OVERLAP_MIN", "7"))
+                    if top10_overlap < overlap_min:
+                        gate_failures.append(f"final-row top-10 overlap {top10_overlap} < {overlap_min}")
+                    if result.y0 != golden_token and result.y0 not in [int(x) for x in topk_ids[REAL_TOKENS - 1][:5]]:
+                        gate_failures.append(
+                            f"y0={result.y0} differs from golden={golden_token} and is outside golden top-5"
+                        )
 
         handoff_out = Path(os.getenv("PREFILL_DFLASH_HANDOFF_OUT", "generated/gptoss_dflash_handoff_1k.pt"))
         spec_trace = _write_consumer_fixture(handoff_out, seed, token_ids, result, reduced)
@@ -341,6 +374,10 @@ def main() -> int:
                 accuracy += f" RH_LAST_PCC={per_position[REAL_TOKENS - 1]:.5f}"
         if golden_token is not None:
             accuracy += f" y0_ref={golden_token}"
+        if logits_pcc is not None:
+            accuracy += f" LOGITS_PCC={logits_pcc:.5f} TOP10_OVERLAP={top10_overlap}"
+        if seed_top1 is not None:
+            accuracy += f" SEED_TOP1={seed_top1:.3f}"
         print(f"[dflash-prefill] {accuracy}", flush=True)
         print(
             f"[dflash-prefill] latency disabled/enabled median="

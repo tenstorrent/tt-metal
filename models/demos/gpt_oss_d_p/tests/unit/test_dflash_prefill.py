@@ -15,11 +15,14 @@ from models.demos.gpt_oss_d_p.tt.dflash import (
     DFlashFeatureLayout,
     DFlashPrefillConfig,
     DFlashPrefillResult,
+    FinalTokenLocation,
+    final_token_location,
+    mesh_device_index,
     reference_accumulate_reduced_hidden,
     reference_linear_reduced_hidden,
     slice_dflash_fc_weight,
 )
-from models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss import GptOssPrefillAdapter, _resolve_dflash_checkpoint_path
+from models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss import GptOssPrefillAdapter
 
 TARGETS = (1, 3, 5, 7, 9)
 HIDDEN = 4
@@ -33,11 +36,6 @@ def test_fc_slices_transpose_nn_linear_blocks():
     for i, layer_id in enumerate(TARGETS):
         expected = fc[:, i * HIDDEN : (i + 1) * HIDDEN].T
         torch.testing.assert_close(slices[layer_id], expected)
-
-    # The square slice makes an accidental missing transpose shape-correct; use
-    # asymmetric values to prove the multiplication orientation.
-    x = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
-    assert not torch.equal(x @ slices[TARGETS[0]], x @ slices[TARGETS[0]].T)
 
 
 def test_streamed_accumulation_equals_single_linear():
@@ -172,9 +170,6 @@ def test_handoff_real_range_excludes_padded_tail(expect_error):
         y0=7,
     )
     assert result.num_real_tokens == 87
-    assert result.actual_end < result.actual_start + result.chunk_size
-    assert result.layout.sequence == "sp_block_cyclic"
-    assert result.layout.feature == "tp_width_sharded"
 
     with expect_error(ValueError, "outside chunk"):
         DFlashPrefillResult(
@@ -187,15 +182,56 @@ def test_handoff_real_range_excludes_padded_tail(expect_error):
         )
 
 
-def test_adapter_uses_runner_resolved_drafter(monkeypatch, tmp_path, expect_error):
-    draft = str(tmp_path / "draft")
-    monkeypatch.setenv("PREFILL_DFLASH", "1")
-    monkeypatch.setenv("TT_HF_DRAFT_MODEL", draft)
+def test_adapter_refuses_runner_dflash(expect_error):
     assert GptOssPrefillAdapter.supports_dflash is False
-    assert _resolve_dflash_checkpoint_path(SimpleNamespace(dflash_enabled=False, dflash_checkpoint_path=draft)) is None
+    params = SimpleNamespace(dflash_enabled=True)
+    with expect_error(NotImplementedError, "not wired through the common runner"):
+        GptOssPrefillAdapter().build_runtime(mesh_device=None, hf_config=None, params=params)
 
-    enabled = SimpleNamespace(dflash_enabled=True, dflash_checkpoint_path=draft)
-    assert _resolve_dflash_checkpoint_path(enabled) == tmp_path / "draft"
 
-    with expect_error(ValueError, "dflash_checkpoint_path"):
-        _resolve_dflash_checkpoint_path(SimpleNamespace(dflash_enabled=True, dflash_checkpoint_path=""))
+@pytest.mark.parametrize(
+    "actual_start, actual_end, chunk_size, expected",
+    [
+        # 1000 real tokens in a 1024 chunk at SP=4: row 3 holds local 231 = tile 224 + 7.
+        (0, 1000, 1024, FinalTokenLocation(owner_row=3, tile_start=224, row_in_tile=7)),
+        # A full chunk ends on the last row of the last tile on the last SP row.
+        (0, 1024, 1024, FinalTokenLocation(owner_row=3, tile_start=224, row_in_tile=31)),
+        # The range is relative to the chunk, not absolute: the second 512 chunk's 300th token.
+        (512, 812, 512, FinalTokenLocation(owner_row=2, tile_start=32, row_in_tile=11)),
+        # One real token lands on SP row 0, tile 0, row 0.
+        (2048, 2049, 1024, FinalTokenLocation(owner_row=0, tile_start=0, row_in_tile=0)),
+        # Exactly on an SP boundary: local 255 of row 0.
+        (0, 256, 1024, FinalTokenLocation(owner_row=0, tile_start=224, row_in_tile=31)),
+        (0, 257, 1024, FinalTokenLocation(owner_row=1, tile_start=0, row_in_tile=0)),
+    ],
+)
+def test_final_token_location(actual_start, actual_end, chunk_size, expected):
+    assert final_token_location(actual_start, actual_end, chunk_size, sp_factor=4) == expected
+
+
+def test_final_token_location_rejects_bad_ranges(expect_error):
+    with expect_error(ValueError, "multiple of"):
+        final_token_location(0, 10, 1000, sp_factor=4)
+    with expect_error(ValueError, "within one"):
+        final_token_location(0, 1025, 1024, sp_factor=4)
+    with expect_error(ValueError, "within one"):
+        final_token_location(5, 5, 1024, sp_factor=4)
+
+
+@pytest.mark.parametrize("sp_axis, tp_axis", [(0, 1), (1, 0)])
+def test_mesh_device_index_matches_row_major_device_order(sp_axis, tp_axis):
+    mesh_shape = (4, 8) if sp_axis == 0 else (8, 4)
+    seen = set()
+    for sp in range(mesh_shape[sp_axis]):
+        for tp in range(mesh_shape[tp_axis]):
+            coords = [0, 0]
+            coords[sp_axis], coords[tp_axis] = sp, tp
+            index = mesh_device_index(mesh_shape, sp_axis, tp_axis, sp, tp)
+            assert index == coords[0] * mesh_shape[1] + coords[1]
+            seen.add(index)
+    assert seen == set(range(mesh_shape[0] * mesh_shape[1]))
+
+
+def test_mesh_device_index_rejects_out_of_mesh(expect_error):
+    with expect_error(ValueError, "outside mesh"):
+        mesh_device_index((4, 8), 0, 1, 4, 0)

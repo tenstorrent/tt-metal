@@ -32,7 +32,8 @@ work can resume as-is.
 | Chunked prefill, full 36-layer model, real weights | merged; every chunk goes through the cache-backed ring SDPA |
 | Variable chunk sizes (one runtime serving several sizes) | merged |
 | Bounded sliding-window KV cache (circular window for the 18 sliding layers) | merged, opt-in (`GPT_OSS_BOUNDED_SLIDING_KV=1`) |
-| Per-layer KV-PCC validation vs a CPU golden, in one galaxy CI job (runner e2e, 5k@1k harness, variable-chunk smoke) | merged |
+| Per-layer KV-PCC validation vs a CPU golden, in one galaxy CI job (runner e2e, 5k@1k harness, DFlash 1k, variable-chunk smoke) | merged |
+| True-prefill DFlash feature handoff (standalone runtime; not wired through the common runner) | [`DFLASH_PREFILL.md`](DFLASH_PREFILL.md) |
 | GPT-OSS through the common prefill runner (producer/runner e2e), with its galaxy CI section | merged, [#56519](https://github.com/tenstorrent/tt-metal/pull/56519) |
 | Trace capture of the prefill chunk | planned, [#56661](https://github.com/tenstorrent/tt-metal/issues/56661) (stage one [#56660](https://github.com/tenstorrent/tt-metal/issues/56660), stage two [#56115](https://github.com/tenstorrent/tt-metal/issues/56115)) |
 | Bounded sliding cache as the default, KV migration of a bounded cache | planned, [#55646](https://github.com/tenstorrent/tt-metal/issues/55646) |
@@ -51,8 +52,9 @@ work can resume as-is.
   `PREFILL_FABRIC_MODE=1d_ring`; the runner section of the CI job exports `2d_torus_xy` instead.
   Both provide that ring. Accepted values live in `models/demos/common/prefill/runners/runner_utils.py`.
 - **Precision**: activations bf16. MoE expert weights `bfloat4_b` by default or `bfloat8_b` with
-  `EXPERT_DTYPE=bf8`, which the CI job and every number quoted here use, on both the harness and the
-  common-runner path. KV cache `bfloat8_b`; the chunked
+  `EXPERT_DTYPE=bf8`, which the runner, 5k@1k harness and variable-chunk CI sections and every
+  number quoted here use. The DFlash section runs `bfloat4_b`, matching the P/D DFlash producer.
+  KV cache `bfloat8_b`; the chunked
   ring path requires it (`KV_CACHE_DTYPE=bf16` is accepted only by one-shot prefill). The checkpoint
   ships the experts MXFP4-quantized; `ModelArgs.load_state_dict` dequantizes them to bf16 on the
   host (`tests/unit/test_mxfp4_loader.py` pins that path).
@@ -204,15 +206,18 @@ Unit tests: `pytest models/demos/gpt_oss_d_p/tests/unit` (the CPU-only ones run 
 | `tests/unit/test_bounded_kv_math.py` | CPU | layer map, sliding capacity, circular positions |
 | `tests/unit/test_variable_chunk_config.py` | CPU | chunk-size resolution |
 | `tests/unit/test_mxfp4_loader.py` | CPU | MXFP4 expert dequantization |
+| `tests/unit/test_dflash_prefill.py` | CPU | DFlash checkpoint contract, FC slicing, final-token location, adapter refusal |
+| `tests/unit/test_dflash_device.py` | 1 card (one case needs a 2×2 mesh) | DFlash accumulator vs torch, 360-wide shards, two chunks vs one shot |
 | `tests/test_kv_cache_table.py` | 2×4 Blackhole mesh | KV chunk address table vs the allocated caches |
 | `tests/galaxy_prefill_kv_pcc.py` | galaxy | full model, real weights, throughput + per-layer PCC |
+| `tests/galaxy_prefill_dflash.py` | galaxy | full model at 1k, target KV + DFlash features + final logits vs the HF seed, handoff fixture |
 | `tests/variable_chunk_smoke.py` | galaxy | one runtime prefilling the same tokens as a 1k and an 8k chunk (no PCC) |
 
 Galaxy CI (`tests/pipeline_reorg/blaze_models_prefill_tests.yaml`, "Blaze Models Prefill tests") runs
-one job, `(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k + chunked prefill KV accuracy longbook 5k@1k + variable-chunk smoke 1k vs 8k`
-(`-f test-type=gpt_oss_prefill_suite`), with three time-bounded sections on one allocation: the
-producer/runner e2e through the common runner, the harness with the PCC gate at 5k@1k, then the
-variable-chunk smoke. The job stops at the first failed section. Op-level coverage for the sliding ring read lives in
+one job, `(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k + chunked prefill KV accuracy longbook 5k@1k + DFlash true-prefill accuracy and perf 1k + variable-chunk smoke 1k vs 8k`
+(`-f test-type=gpt_oss_prefill_suite`), with four time-bounded sections on one allocation: the
+producer/runner e2e through the common runner, the harness with the PCC gate at 5k@1k, the DFlash
+true-prefill gate at 1k, then the variable-chunk smoke. The job stops at the first failed section. Op-level coverage for the sliding ring read lives in
 `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py` (production and circular-cache accuracy,
 metadata-path rejection) and the header gtest
 `tests/ttnn/unit_tests/gtests/sdpa/test_sliding_window_work_plan.cpp`.
@@ -244,10 +249,13 @@ tt/moe/                      router.py, tt_gpt_oss_moe.py (EP composition), weig
 tt/mlp.py, tt/rms_norm.py, tt/rope.py, tt/ccl.py
 tt/config.py                 MeshConfig (TP axis -> SP/EP axes)
 tt/model_config.py           ModelArgs: HF config, weight loading incl. MXFP4 dequantization, tensor-cache naming
+tt/dflash.py                 DFlash checkpoint contract, on-device feature accumulator, handoff result
 tt/runners/adapters/gpt_oss.py   common/prefill adapter;  tt/runners/kv_chunk_table.py  migration table
 reference/                   CPU golden (HF model + memory tiling)
 scripts/                     golden generation and verification
-tests/                       unit tests, KV table device test, galaxy harness, variable-chunk smoke
+tests/                       unit tests, KV table device test, galaxy harnesses (KV PCC, DFlash) and their
+                             shared setup (galaxy_harness.py), variable-chunk smoke
+DFLASH_PREFILL.md            the DFlash handoff contract and its tests
 utils/                       state-dict helpers
 ```
 
@@ -269,7 +277,10 @@ directory is `models/demos/gpt_oss/configs/gpt-oss-120b`, borrowed from the Worm
 | `PREFILL_NUM_USERS` | harness | cache slots; every slot prefills the prompt and is checked |
 | `PREFILL_TPS_ITERS` | harness | repetitions for the throughput number |
 | `PREFILL_TRACE_DIR` | harness, runtime, runner and producer | golden trace directory (prompt + per-layer K/V) |
-| `GPT_OSS_KV_PCC_MIN` | harness | fail below this min per-layer PCC (0.85 in CI) |
+| `GPT_OSS_KV_PCC_MIN` | harness, DFlash harness | fail below this min per-layer PCC (0.85 in CI) |
+| `PREFILL_REQUIRE_GALAXY=1` | harness, DFlash harness | fail instead of skipping when no galaxy is visible (set in CI) |
+| `TT_HF_DRAFT_MODEL`, `BLAZE_DFLASH_SEED_REF` | DFlash harness | DFlash drafter checkpoint; independent HF seed reference |
+| `GPT_OSS_DFLASH_*_MIN`, `PREFILL_DFLASH_*` | DFlash harness | DFlash gates and fixture outputs, listed in [`DFLASH_PREFILL.md`](DFLASH_PREFILL.md) |
 | `GPT_OSS_BOUNDED_SLIDING_KV=1` | harness, adapter | bounded circular cache for the sliding layers |
 | `PREFILL_TOPOLOGY` (`ring`, `linear`) | harness, adapter | CCL topology |
 | `GPT_OSS_KV_DUMP`, `GPT_OSS_KV_DUMP_DIR` | runtime | bring-up diagnostics: per-layer tensor dumps and a per-position K RoPE probe |

@@ -1,7 +1,23 @@
 # GPT-OSS true-prefill DFlash handoff
 
-This path replaces target prefill-by-decode for DFlash feature generation. It
-is opt-in and does not change ordinary GPT-OSS prefill.
+DFlash is the speculative-decoding drafter used with GPT-OSS-120B. A small
+drafter model proposes several tokens at once and the full ("target") model
+verifies them. The drafter does not read the target's tokens directly. It is
+conditioned on a feature vector per position, built from the outputs of five
+target layers. Before decoding can start, every prompt position needs that
+feature, and the drafter's own KV cache is primed from it.
+
+Before this change the features came from **prefill-by-decode**: the prompt was
+pushed through the decode pipeline one step at a time just to collect the
+target-layer activations, which is slow for long prompts. **True prefill**
+computes the same features inside the ordinary chunked prefill pass, so a
+prefill Galaxy can hand them to the decode machines with the target KV. This is
+opt-in and does not change ordinary GPT-OSS prefill.
+
+Terms used below: *proof rungs* are the test levels, from CPU-only contracts to
+the full model on a Galaxy. *TSU* is tokens per second per user during decode.
+*AIME* is the math benchmark used as the end-to-end quality gate. *SC1* and
+*SC4* are the one-Galaxy and four-Galaxy CI machine types.
 
 ## Producer contract
 
@@ -23,7 +39,8 @@ The result is pre-norm. The producer must not apply the drafter's
 - `chunk_size` so a consumer can reject padded rows;
 - device-resident `reduced_hidden`, sequence-sharded block-cyclically over SP
   and feature-width-sharded over TP;
-- host fp32 logits and greedy `y0` for the final real prompt token;
+- on the final chunk, host fp32 logits and greedy `y0` for the last real prompt
+  token (None on earlier chunks);
 - enqueue timing hooks for each target FC and the final head.
 
 The result owns its device tensor after return. A `dflash_sink` takes that
@@ -32,17 +49,23 @@ the declared real range may be migrated or used to prime the drafter.
 
 ## Enablement
 
-The common adapter resolves deployment configuration:
+The model and runtime read no environment variables. Set
+`TtPrefillRuntimeConfig.dflash_checkpoint_path` to the drafter checkpoint and
+call `TtPrefillRuntime.prefill_chunk` directly:
 
-```bash
-PREFILL_DFLASH=1
-TT_HF_DRAFT_MODEL=/path/to/gpt-oss-120b-DFlash
-```
+- one-shot prompt: `dflash_handoff=True` (or `dflash_sink=...`);
+- chunked prompt: request the handoff on **every** chunk, because each chunk's
+  features are only computed when requested, and pass `dflash_final_chunk=False`
+  on all but the last. Only the last chunk then pays for the LM head, the logits
+  readback and the host argmax.
 
-The path is passed as `TtPrefillRuntimeConfig.dflash_checkpoint_path`; model
-code does not read environment variables. A caller requests the handoff on the
-final prompt chunk with `dflash_handoff=True` or `dflash_sink=...`. Default
-`prefill_chunk` return behavior is unchanged.
+Default `prefill_chunk` return behavior is unchanged.
+
+The common prefill runner is not wired for GPT-OSS DFlash yet: it requires
+trace capture and never passes `dflash_handoff`/`dflash_sink`.
+`GptOssPrefillAdapter.supports_dflash` stays `False`, and the adapter raises
+`NotImplementedError` if the runner asks for DFlash (`PREFILL_DFLASH=1` with
+`DFLASH_HF_MODEL`).
 
 The current producer requires one runtime to own all 36 target layers. Passing
 partial FC sums between pipeline ranks is intentionally left to the P/D owner;
@@ -50,37 +73,53 @@ the runtime fails instead of publishing an incomplete feature.
 
 ## Proof rungs
 
-CPU contract:
+CPU contract (checkpoint metadata, FC slicing, final-token location, adapter refusal):
 
 ```bash
 pytest models/demos/gpt_oss_d_p/tests/unit/test_dflash_prefill.py
 ```
 
-Synthetic SP×TP device accumulation:
+Device accumulation (single card; the SP×TP case needs a 2×2 mesh and skips otherwise):
 
 ```bash
 pytest models/demos/gpt_oss_d_p/tests/unit/test_dflash_device.py
 ```
 
-Real 36-layer 1k Galaxy proof:
+Real 36-layer 1k Galaxy proof, with the same weights cache and settings as the CI section:
 
 ```bash
-PREFILL_TRACE_DIR=/path/to/matching/kv_golden \
-BLAZE_DFLASH_SEED_REF=/path/to/seed.pt \
-TT_HF_DRAFT_MODEL=/path/to/gpt-oss-120b-DFlash \
-HF_MODEL=/path/to/gpt-oss-120b \
-python models/demos/gpt_oss_d_p/tests/galaxy_prefill_dflash.py
+export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
+export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
+export GPT_OSS_WEIGHTS_FROM_CACHE=1 EXPERT_DTYPE=bf4
+export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
+export BLAZE_DFLASH_SEED_REF=/mnt/models/blaze/openai/gpt-oss-120b/cache/dflash/seed_1016.pt
+export TT_HF_DRAFT_MODEL=/path/to/gpt-oss-120b-DFlash
+# Linear needs no mesh descriptor. For ring, unset this and export
+# TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
+export PREFILL_TOPOLOGY=linear
+mpirun --pernode --tag-output bash -lc 'python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_dflash.py'
 ```
 
-The Galaxy rung preserves the existing target-KV PCC gate, checks aggregate
-and per-position pre-norm feature PCC, checks final `y0`/top-k, reports
-disabled/enabled latency and export cost, and writes a consumer fixture.
-Use a 1k-position seed to gate the complete feature trajectory and final token.
-`PREFILL_TPS_ITERS=N` reports the synchronized enabled-path median. Set
-`PREFILL_TSU_MIN` only when running an explicitly calibrated performance gate;
-the shared CI leg reports throughput like the existing GPT-OSS prefill tests.
-`GPT_OSS_KV_PCC_MIN` and `GPT_OSS_DFLASH_PCC_MIN` set the corresponding
-correctness floors; all failures are reported together.
+The Galaxy rung keeps the existing target-KV PCC gate, checks the pre-norm
+features and the final-row logits against the independent seed, reports
+disabled/enabled latency and export cost, and writes a consumer fixture. All
+failures are reported together. Floors (CI sets the same values explicitly):
+
+| variable | default | gate |
+|---|---|---|
+| `GPT_OSS_KV_PCC_MIN` | unset | min per-layer target KV PCC (0.85 in CI) |
+| `GPT_OSS_DFLASH_PCC_MIN` | 0.88 | aggregate pre-norm feature PCC |
+| `GPT_OSS_DFLASH_POS_PCC_MIN` | 0.20 | worst single-position feature PCC |
+| `GPT_OSS_DFLASH_LOGITS_PCC_MIN` | 0.90 | final-row logits PCC over the seed's top-64 ids |
+| `GPT_OSS_DFLASH_TOP10_OVERLAP_MIN` | 7 | ids shared by our and the seed's top-10 |
+| `GPT_OSS_DFLASH_SEED_TOP1_MIN` | unset | seed sanity: its teacher-forced top-1 hit rate on the prompt |
+| `PREFILL_TSU_MIN` | unset | synchronized enabled-path prefill tokens/s |
+
+`y0` must also equal the seed's top-1 or lie in its top-5. The seed's
+teacher-forced top-1 hit rate is always printed (`SEED_TOP1`). Use a 1k-position
+seed to gate the complete feature trajectory and final token.
+`PREFILL_TPS_ITERS=N` reports the synchronized enabled-path median.
+`PREFILL_REQUIRE_GALAXY=1` makes a missing Galaxy fail instead of skip.
 
 The reload owner feeds that fixture through bulk drafter-KV priming. Set
 `PREFILL_DFLASH_COMPAT_CONTROL` to the current prefill-by-decode result and
@@ -95,12 +134,14 @@ error cannot validate itself.
 
 ## Kimi-equivalent CI gates
 
-The pre-P/D ladder now mirrors Kimi's test semantics:
+The pre-P/D ladder mirrors Kimi's test semantics:
 
 1. `gpt_oss_dflash_prefill` in the tt-metal Blaze prefill matrix runs the real
-   36-layer producer on SC1, gates target KV and independent-HF features, emits
-   the versioned handoff, and reports DFlash-disabled/enabled prefill latency.
-   It sets no `PREFILL_TSU_MIN`, so throughput is reported, not gated.
+   36-layer producer on SC1, gates target KV, independent-HF features and
+   final-row logits, emits the versioned handoff, and reports DFlash-disabled/
+   enabled prefill latency. It sets no `PREFILL_TSU_MIN`, so throughput is
+   reported, not gated. It runs one 1k chunk on linear topology, so the ring
+   path and `actual_start > 0` are not covered for the features.
 2. The outer Blaze `gpt-oss / dflash-prefill` Galaxy leg consumes a staged
    true-prefill trace. It feeds identical fc-only features to HF and TT DFlash,
    reconstructs the block-offset/circular device caches, and requires K and V
@@ -137,10 +178,8 @@ CPU-only cache-addressing and malformed-capture checks live in
 ## Downstream dependencies
 
 This change does not implement generic P/D transport or reload consumption.
-The common prefill runner does not publish the handoff yet either:
-`GptOssPrefillAdapter.supports_dflash` stays `False`, so the runner never
-enables DFlash for GPT-OSS. Producers call `TtPrefillRuntime.prefill_chunk`
-with `dflash_handoff` or `dflash_sink` directly. Those stacks must:
+Producers call `TtPrefillRuntime.prefill_chunk` with `dflash_handoff` or
+`dflash_sink` directly. Those stacks must:
 
 1. migrate target KV with the FC-target-aware migration layout;
 2. transport the typed feature/y0 handoff without treating padded rows as real;

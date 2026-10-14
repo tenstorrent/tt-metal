@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -227,7 +227,8 @@ class DFlashPrefillResult:
     ``reduced_hidden`` remains device-resident and includes the chunk's padded
     storage rows.  ``actual_start``/``actual_end`` are the authoritative
     half-open range of real rows; consumers must not migrate the padded tail.
-    ``logits`` is the host fp32 vector for the final real token.
+    ``logits`` is the host fp32 vector for the request's final real token; it
+    and ``y0`` are None on earlier chunks, which only carry features.
     """
 
     slot_id: int
@@ -256,7 +257,46 @@ class DFlashPrefillResult:
         return self.actual_end - self.actual_start
 
 
-DFlashHandoffSink = Callable[[DFlashPrefillResult], None]
+@dataclass(frozen=True)
+class FinalTokenLocation:
+    """Where a chunk's final real token lives after SP sharding.
+
+    ``tile_start`` is the tile-aligned row on ``owner_row`` passed to the LM-head
+    slice; ``row_in_tile`` selects the token inside that tile.
+    """
+
+    owner_row: int
+    tile_start: int
+    row_in_tile: int
+
+
+def final_token_location(
+    actual_start: int, actual_end: int, chunk_size: int, sp_factor: int, tile_size: int = 32
+) -> FinalTokenLocation:
+    if chunk_size % (sp_factor * tile_size) != 0:
+        raise ValueError(f"chunk_size={chunk_size} must be a multiple of sp_factor * tile_size={sp_factor * tile_size}")
+    if not (0 <= actual_start < actual_end <= actual_start + chunk_size):
+        raise ValueError(f"[{actual_start}, {actual_end}) is not a non-empty range within one {chunk_size} chunk")
+    relative_last = actual_end - actual_start - 1
+    seq_local = chunk_size // sp_factor
+    local_last = relative_last % seq_local
+    tile_start = (local_last // tile_size) * tile_size
+    return FinalTokenLocation(
+        owner_row=relative_last // seq_local,
+        tile_start=tile_start,
+        row_in_tile=local_last - tile_start,
+    )
+
+
+def mesh_device_index(mesh_shape: Sequence[int], sp_axis: int, tp_axis: int, sp_coord: int, tp_coord: int) -> int:
+    """Row-major index into ``ttnn.get_device_tensors`` for one (SP, TP) coordinate."""
+
+    coordinates = [0, 0]
+    coordinates[sp_axis] = sp_coord
+    coordinates[tp_axis] = tp_coord
+    if not (0 <= coordinates[0] < mesh_shape[0] and 0 <= coordinates[1] < mesh_shape[1]):
+        raise ValueError(f"coordinate {tuple(coordinates)} is outside mesh {tuple(mesh_shape)}")
+    return coordinates[0] * mesh_shape[1] + coordinates[1]
 
 
 class TtDFlashFeatureAccumulator:
@@ -333,9 +373,6 @@ class TtDFlashFeatureAccumulator:
         self._accumulator = None
         self._tapped = []
         self.fc_enqueue_ms = {}
-
-    def is_target_layer(self, global_layer_idx: int) -> bool:
-        return global_layer_idx in self.fc_slices
 
     def tap(self, moe_output, global_layer_idx: int) -> None:
         """Project a pre-residual MoE output and add it to the running feature."""

@@ -26,16 +26,6 @@ from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, P
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 
 
-def _resolve_dflash_checkpoint_path(params: PrefillRunParams) -> Optional[Path]:
-    """Use the drafter the common runner resolved; the adapter never re-reads the environment."""
-
-    if not params.dflash_enabled:
-        return None
-    if not params.dflash_checkpoint_path:
-        raise ValueError("dflash_enabled requires a resolved dflash_checkpoint_path (DFLASH_HF_MODEL)")
-    return Path(params.dflash_checkpoint_path)
-
-
 @dataclass
 class GptOssKvCaches(KvCaches):
     """Concrete KvCaches for GPT-OSS: a list holding the single GptOssKVCache (k+v struct),
@@ -141,6 +131,12 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         """Build the GPT-OSS model + runtime for this rank. The runtime is stateless w.r.t. the KV
         cache (owns_kv_cache=False): the engine allocated it via allocate_kv_cache and passes it into
         each call."""
+        if params.dflash_enabled:
+            # The runner's DFlash path needs trace capture and passes no dflash_handoff/dflash_sink.
+            raise NotImplementedError(
+                "GPT-OSS DFlash prefill is not wired through the common runner; set "
+                "TtPrefillRuntimeConfig.dflash_checkpoint_path and call prefill_chunk(dflash_handoff=True)"
+            )
         import ttnn
         from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
         from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
@@ -167,7 +163,6 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             # Same knob as allocate_kv_cache, so the runtime's gating (migration / cache-read
             # asserts) agrees with the engine-owned cache it is handed.
             bounded_sliding_kv_cache=_bounded_sliding_kv_cache_enabled(),
-            dflash_checkpoint_path=_resolve_dflash_checkpoint_path(params),
         )
 
         if os.getenv("GPT_OSS_WEIGHTS_FROM_CACHE") == "1":

@@ -1340,9 +1340,10 @@
 # pytest; the GPT-OSS analog of the MiniMax-M3 KV-accuracy stage above) at the small variable-chunk
 # size (PREFILL_CHUNK_SIZE=1024 -> 5 chunks over the 5k golden). Auto-SKIP (rc 0) off-galaxy or when
 # PREFILL_TRACE_DIR is unset.
-# [3/4] true-prefill DFlash: all 36 target layers run at 1k, target KV and independent-HF
-# reduced-hidden are checked, a versioned consumer handoff is emitted, and synchronized prefill
-# throughput is reported (not gated).
+# [3/4] true-prefill DFlash: all 36 target layers run at 1k, target KV, independent-HF reduced-hidden
+# (aggregate and per-position) and final-row logits are checked, a versioned consumer handoff is
+# emitted, and synchronized prefill throughput is reported (not gated). It runs bf4 experts on linear
+# topology as one 1k chunk, so the ring path and actual_start > 0 are not covered for DFlash features.
 # GPT_OSS_KV_PCC_MIN=0.85 is a floor under the measured ~0.92 min KV PCC (ring chunked and
 # 1k-chunk configs, EXPERT_DTYPE=bf8), keeping headroom for bf8/golden noise.
 # [4/4] variable-chunk smoke (models/demos/gpt_oss_d_p/tests/variable_chunk_smoke.py): one
@@ -1361,7 +1362,7 @@
 # fabric_profile torus_xy: every chunk drives the SP ring cache-read (FABRIC_1D_RING), which
 # needs the certified TorusXY wraparound links the impl workflow provides.
 #
-# Per-section bounds (timeout -k 2m, a timeout counts as FAIL and the next section still runs):
+# Per-section bounds (timeout -k 2m; a timeout counts as FAIL and stops the suite):
 #   [1/4] 35 min: producer/runner e2e through the common prefill runner (the production path):
 #         11 x 5120-token chunks for one user, producer KV PCC over the 5k golden prefix. Runner ready
 #         measured 14-29 min (tilized-cache read over NFS + JIT); chunks + PCC readback ~1 min.
@@ -1369,7 +1370,8 @@
 #   [2/4] 20 min: standalone harness, cache load + JIT + prefill + PCC readback (5 ring chunks).
 #   [3/4] 25 min: cache load + JIT + three full-prefill timing iterations and DFlash readback.
 #   [4/4] 20 min: one runtime build + 6 short prefills, no golden readback; cache read + JIT dominate.
-#   [3/4] and [4/4] measured 6.5 and 7.7 min on SC1; a cold tilized-cache BUILD exceeds these bounds.
+#   [3/4] and [4/4] measured 6.5 and 7.7 min on SC1 with a warm page cache. A cold pod's cache read
+#   alone has taken 14-29 min, so [2/4]-[4/4] can time out there; a cold tilized-cache BUILD always does.
 - name: "(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k + chunked prefill KV accuracy longbook 5k@1k + DFlash true-prefill accuracy and perf 1k + variable-chunk smoke 1k vs 8k"
   fabric_profile: torus_xy
   cmd: |
@@ -1385,8 +1387,7 @@
       export PREFILL_TP=8
       export PREFILL_NUM_LAYERS=36
       export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
-      # The mounted path is the tilized-cache root and its config.json is not an HF AutoConfig.
-      export PREFILL_HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b
+      export PREFILL_HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
       export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
       export PREFILL_TTNN_CACHE=/mnt/models/blaze/openai/gpt-oss-120b
       export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
@@ -1418,6 +1419,7 @@
       export PREFILL_CHUNK_SIZE=1024
       export PREFILL_TPS_ITERS=1
       export GPT_OSS_KV_PCC_MIN=0.85
+      export PREFILL_REQUIRE_GALAXY=1
       timeout -k 2m 20m mpirun --pernode --tag-output bash -lc '
         python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py
       '
@@ -1427,8 +1429,7 @@
       export LOGURU_LEVEL=INFO
       export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
       export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-      # ModelArgs needs config.json even when all TT weights come from TT_CACHE_PATH.
-      export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b
+      export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
       export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
       export TT_HF_DRAFT_MODEL=/mnt/models/blaze/openai/gpt-oss-120b-DFlash
       export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
@@ -1440,9 +1441,14 @@
       export PREFILL_TOPOLOGY=linear
       export PREFILL_TPS_ITERS=3
       export GPT_OSS_KV_PCC_MIN=0.85
-      # Measured 0.896 aggregate reduced-hidden PCC vs the independent HF seed (bf4 experts, linear).
-      # This floor catches a broken tap/FC path; drafter K/V PCC >= 0.999 is gated by the Blaze consumer.
+      export PREFILL_REQUIRE_GALAXY=1
+      # Measured vs the independent HF seed: reduced-hidden PCC 0.896 aggregate and 0.248 min per
+      # position (bf4 experts, linear); final-row logits PCC 0.959 over the seed's top-64 and top-10
+      # overlap 9 on the recorded 1k handoffs.
       export GPT_OSS_DFLASH_PCC_MIN=0.88
+      export GPT_OSS_DFLASH_POS_PCC_MIN=0.20
+      export GPT_OSS_DFLASH_LOGITS_PCC_MIN=0.90
+      export GPT_OSS_DFLASH_TOP10_OVERLAP_MIN=7
       timeout -k 2m 25m mpirun --pernode --tag-output bash -lc '
         python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_dflash.py
       '

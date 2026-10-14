@@ -334,6 +334,7 @@ class TtPrefillRuntime:
             if warm_dflash:
                 # Compile warmup has no handoff consumer.
                 ttnn.deallocate(warm_result.reduced_hidden)
+            del warm_result
             if ring:
                 # actual_start>0 drives the ring cache-read; it reads the prefix we just wrote at [0, chunk).
                 self.prefill_chunk(
@@ -364,6 +365,7 @@ class TtPrefillRuntime:
         record_dev=None,  # accepted for the common-runner contract; the D1H record path is unused here
         dflash_handoff: bool = False,
         dflash_sink=None,
+        dflash_final_chunk: bool = True,
     ) -> Any:
         """Prefill ONE chunk into user ``slot_id``'s slice of the KV cache (self-owned or the engine's
         ``kv_caches``). Returns None (skip_lm_head) — the populated cache is the output.
@@ -381,7 +383,9 @@ class TtPrefillRuntime:
 
         ``dflash_handoff`` returns a ``DFlashPrefillResult`` whose device ``reduced_hidden`` the caller
         owns. ``dflash_sink`` instead receives that result and returns None; the sink then owns
-        ``reduced_hidden`` and must deallocate it, even if it raises.
+        ``reduced_hidden`` and must deallocate it, even if it raises. A chunked request asks for the
+        handoff on every chunk, since each chunk's features are only computed when requested, and
+        passes ``dflash_final_chunk=False`` on all but the last so only it runs the LM head and y0.
         """
         if d2h_service is not None:
             raise NotImplementedError(
@@ -434,20 +438,20 @@ class TtPrefillRuntime:
         if wants_dflash and not self.config.is_last_rank:
             raise RuntimeError("DFlash handoff can only be published by the final prefill rank")
 
-        # SP maps each chunk to contiguous row blocks. Slice only the tile
-        # containing the final real token; after the TP logits matmul, select
-        # its owning SP row and exact row within that tile on host.
+        wants_logits = wants_dflash and dflash_final_chunk
+        # SP maps each chunk to contiguous row blocks. The model slices the tile holding the
+        # final real token; its SP row and row within the tile are then selected on host.
         model_last_token = get_last_token
-        owner_row = final_in_tile = None
-        if wants_dflash:
-            relative_last = actual_end - actual_start - 1
-            seq_local = chunk_size // self.config.sp_factor
-            owner_row = relative_last // seq_local
-            local_last = relative_last % seq_local
-            model_last_token = (local_last // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-            final_in_tile = local_last - model_last_token
+        final = None
+        if wants_logits:
+            from .dflash import final_token_location
 
-        enqueue_started = time.perf_counter()
+            final = final_token_location(
+                actual_start, actual_end, chunk_size, self.config.sp_factor, tile_size=ttnn.TILE_SIZE
+            )
+            model_last_token = final.tile_start
+
+        enqueue_started = time.perf_counter() if wants_dflash else None
         out = self.model.prefill_forward(
             x_embd,
             rot_mats_global=self.rope_indexed[chunk_size],  # per-size indexed rope (persistent; not deallocated)
@@ -455,54 +459,57 @@ class TtPrefillRuntime:
             cached_len=actual_start,
             user_id=slot_id,
             get_last_token=model_last_token,
-            skip_lm_head=False if wants_dflash else skip_lm_head,
+            skip_lm_head=not wants_logits if wants_dflash else skip_lm_head,
             indexed_rope=True,
             on_layer_complete=on_layer_complete,
             dflash_accumulator=self.dflash_accumulator if wants_dflash else None,
         )
-        enqueue_ms = (time.perf_counter() - enqueue_started) * 1000.0
         if wants_dflash:
-            from .dflash import DFlashFeatureLayout, DFlashPrefillResult
+            from .dflash import DFlashFeatureLayout, DFlashPrefillResult, mesh_device_index
 
-            logits_tt, reduced_hidden = out
-            assert owner_row is not None and final_in_tile is not None
+            enqueue_ms = (time.perf_counter() - enqueue_started) * 1000.0
+            head_out, reduced_hidden = out
             try:
-                # Reduce the BF8 tile to the final token's BF16 row on device; host-side
-                # BF8 tile unpacking of all 32 rows dominates the handoff otherwise.
-                logits_bf16 = ttnn.typecast(logits_tt, ttnn.bfloat16)
-                ttnn.deallocate(logits_tt)
-                logits_rm = ttnn.to_layout(logits_bf16, ttnn.ROW_MAJOR_LAYOUT)
-                ttnn.deallocate(logits_bf16)
-                logits_tt = ttnn.slice(
-                    logits_rm, (0, 0, final_in_tile, 0), (1, 1, final_in_tile + 1, logits_rm.shape[-1])
-                )
-                ttnn.deallocate(logits_rm)
-                shards = ttnn.get_device_tensors(logits_tt)
-                mesh_cols = self.config.mesh_shape[1]
-
-                def shard_index(tp_coordinate: int) -> int:
-                    coordinates = [0, 0]
-                    coordinates[self.config.sp_axis] = owner_row
-                    coordinates[self.config.tp_axis] = tp_coordinate
-                    return coordinates[0] * mesh_cols + coordinates[1]
-
-                # Queue every TP shard's D2H first, then materialize them. Calling
-                # to_torch directly in the comprehension serializes eight blocking
-                # transfers even though the shards live on independent devices.
-                host_shards = [
-                    ttnn.from_device(shards[shard_index(tp_coordinate)], blocking=False)
-                    for tp_coordinate in range(self.config.tp_factor)
-                ]
-                ttnn.synchronize_device(self.mesh_device)
-                logits = torch.cat([ttnn.to_torch(shard) for shard in host_shards], dim=-1)
-                logits = logits[..., 0, : self.model.vocab_size].reshape(-1).float()
-                y0 = int(torch.argmax(logits).item())
-                ttnn.deallocate(logits_tt)
+                logits = y0 = None
+                if not wants_logits:
+                    if head_out is not None:
+                        ttnn.deallocate(head_out)
+                else:
+                    # A BF16 row-major tile reads back without host BF8 unpacking. The row inside
+                    # the tile is picked on host so no per-request slice offset reaches the device.
+                    logits_bf16 = ttnn.typecast(head_out, ttnn.bfloat16)
+                    ttnn.deallocate(head_out)
+                    logits_rm = ttnn.to_layout(logits_bf16, ttnn.ROW_MAJOR_LAYOUT)
+                    ttnn.deallocate(logits_bf16)
+                    shards = ttnn.get_device_tensors(logits_rm)
+                    # Queue every TP shard's D2H first, then materialize them. Calling
+                    # to_torch directly in the comprehension serializes eight blocking
+                    # transfers even though the shards live on independent devices.
+                    host_shards = [
+                        ttnn.from_device(
+                            shards[
+                                mesh_device_index(
+                                    self.config.mesh_shape,
+                                    self.config.sp_axis,
+                                    self.config.tp_axis,
+                                    final.owner_row,
+                                    tp_coordinate,
+                                )
+                            ],
+                            blocking=False,
+                        )
+                        for tp_coordinate in range(self.config.tp_factor)
+                    ]
+                    ttnn.synchronize_device(self.mesh_device)
+                    logits = torch.cat([ttnn.to_torch(shard) for shard in host_shards], dim=-1)
+                    logits = logits[..., final.row_in_tile, : self.model.vocab_size].reshape(-1).float()
+                    y0 = int(torch.argmax(logits).item())
+                    ttnn.deallocate(logits_rm)
                 timings = {
                     f"fc_layer_{layer_id}_enqueue": duration
                     for layer_id, duration in self.dflash_accumulator.fc_enqueue_ms.items()
                 }
-                timings["head_and_feature_enqueue"] = enqueue_ms
+                timings["head_and_feature_enqueue" if wants_logits else "feature_enqueue"] = enqueue_ms
                 result = DFlashPrefillResult(
                     slot_id=slot_id,
                     actual_start=actual_start,
