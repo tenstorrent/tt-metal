@@ -35,6 +35,14 @@ FAST_TILIZE_MAX_WIDTH_TILES = 255  # fast-tilize LLK legality: block width < 256
 LOW_L1_BLOCK_WIDTH_TILES = 8  # low_l1: dimension-independent block width
 # Bank-coalesced reads: one wide read per DRAM bank per tile-row (whole-stick blocks only).
 COALESCE_BANK_READS = True
+# Coalescing trades 32 small DRAM reads for num_banks wide reads + 32 local copies per tile-row;
+# it pays under grid-wide DRAM contention (BH: 110 cores 2x faster) and loses ~0.15us on a
+# handful of cores (BH: 4-8 cores). Enable only when cores_used >= this * num_banks.
+COALESCE_MIN_CORES_PER_BANK = 2
+# Rotate each core's bank walk so the grid's requests spread over all banks at once.
+BANK_STAGGER = True
+# Staging slot budget for the coalesced reader (two slots); sets staging_tile_rows per chunk.
+STAGING_SLOT_BUDGET_BYTES = 16 * 1024
 # block_height_tiles: None => the core's whole row assignment (Phase 0: one row block).
 BLOCK_HEIGHT_TILES = None
 
@@ -142,8 +150,13 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False):
         and num_col_blocks == 1
         and in_mem.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
         and tile_h > 1
+        and image_height_sticks % tile_h == 0
+        and len(assignment) >= COALESCE_MIN_CORES_PER_BANK * num_banks
     )
-    staging_bytes = num_banks * math.ceil(tile_h / num_banks) * stick_page_bytes
+    max_core_rows = max(rows for _, _, rows in assignment)
+    staging_tile_rows = max(1, min(max_core_rows, STAGING_SLOT_BUDGET_BYTES // (tile_h * stick_page_bytes)))
+    staging_slot_bytes = num_banks * math.ceil(staging_tile_rows * tile_h / num_banks) * stick_page_bytes
+    staging_bytes = 2 * staging_slot_bytes
 
     # --- Circular buffers ----------------------------------------------------
     out_tile = ttnn.Tile([tile_h, TILE_WIDTH])
@@ -206,6 +219,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False):
         int(coalesce),
         num_banks,
         CB_STICK_STAGING,
+        staging_tile_rows,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -217,18 +231,19 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False):
     reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     in_addr = input_tensor.buffer_address()
     out_addr = output_tensor.buffer_address()
-    for core, row_start_tile, core_rows_tiles in assignment:
+    # Bank stagger (coalesced reader): core k starts its bank walk at bank k % groups, where
+    # groups = min(num_banks, sticks in the smallest chunk) so the offset is always in range.
+    min_chunk_sticks = min(min(rows for _, _, rows in assignment), staging_tile_rows) * tile_h
+    stagger_groups = min(num_banks, min_chunk_sticks)
+    for core_idx, (core, row_start_tile, core_rows_tiles) in enumerate(assignment):
         block_height_tiles = core_rows_tiles if BLOCK_HEIGHT_TILES is None else min(BLOCK_HEIGHT_TILES, core_rows_tiles)
         rect = [row_start_tile, core_rows_tiles, col_start_tile, block_height_tiles]
-        reader_rt[core.x][core.y] = [in_addr, *rect]
+        stagger = (core_idx % stagger_groups) if (BANK_STAGGER and coalesce) else 0
+        reader_rt[core.x][core.y] = [in_addr, *rect, stagger]
         writer_rt[core.x][core.y] = [out_addr, *rect]
         compute_rt[core.x][core.y] = [core_rows_tiles, block_height_tiles]
 
-    import os
-
-    _abl = [(d, "1") for d in os.environ.get("TILIZE_ABLATE", "").split(",") if d]
     reader = ttnn.KernelDescriptor(
-        defines=_abl,
         kernel_source=str(KERNEL_DIR / "tilize_reader.cpp"),
         core_ranges=all_cores,
         compile_time_args=reader_ct,
@@ -236,7 +251,6 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False):
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
-        defines=_abl,
         kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct,

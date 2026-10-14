@@ -4,7 +4,7 @@
 // tilize writer (BRISC / NoC1) — block operation `store_tiles_block`.
 //
 // Mirrors the reader's block walk. Per tile-row: wait `width` tiles, issue `width` tile-page
-// writes (all in flight), one barrier, pop `width`. out_tile_id = r * tensor_cols_tiles + c.
+// writes, flush (L1 slot reusable), pop `width`; one write barrier at the end. out_tile_id = r * tensor_cols_tiles + c.
 
 #include <cstdint>
 
@@ -43,14 +43,15 @@ void kernel_main() {
                 cb_wait_front(cb_id, width_tiles);
                 uint32_t l1_read_addr = get_read_ptr(cb_id);
                 for (uint32_t c = 0; c < width_tiles; ++c) {
-#ifndef ABLATE_WRITES
                     noc_async_write(l1_read_addr, out_acc.get_noc_addr(first_tile + c), out_page_bytes);
-#endif
                     l1_read_addr += out_page_bytes;
                 }
-                noc_async_write_barrier();
+                // Flushed = data has left L1, so the slot may be recycled; acks are collected once
+                // at the end, keeping writes of consecutive tile-rows in flight together.
+                noc_async_writes_flushed();
                 cb_pop_front(cb_id, width_tiles);
             }
         }
     }
+    noc_async_write_barrier();
 }
