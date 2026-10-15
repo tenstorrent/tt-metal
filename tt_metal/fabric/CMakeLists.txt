@@ -119,5 +119,5 @@ install(
 )
 
 if(TT_METAL_BUILD_X280)
-    add_subdirectory(x280)
+    add_subdirectory(experimental/x280)
 endif()
