@@ -43,17 +43,23 @@ __attribute__((noinline)) void calculate_gelu_fresh_cpp()
         // x^2 feeds two of the three computed regions; state it once at the
         // top (all lanes) so neither predicate arm recomputes it.
         const sfpi::vFloat x2 = x * x;
-        // Identity region (x >= 2.78125) as the all-lane default.
+        // Identity region (x >= 2.78125) as the all-lane default.  The
+        // regions nest (x <= GELU_SAT < -3.125 < 2.78125), so each narrower
+        // one simply overwrites the wider one in turn.
         sfpi::vFloat r = x;
-        v_if (x <= GELU_SAT)
+        v_if (x < 2.78125f)
         {
-            // SFPU compares order NaNs by sign-magnitude, so a negative NaN
-            // lands here (a positive one fails every region and keeps r = x).
-            // SFPABS keeps a NaN's sign, so this min is +0 for every other
-            // lane and returns that NaN unchanged.
-            r = sfpi::min(sfpi::abs(x), 0.0f);
+            sfpi::vFloat odd = P13;
+            odd              = odd * x2 + P11;
+            odd              = odd * x2 + P9;
+            odd              = odd * x2 + P7;
+            odd              = odd * x2 + P5;
+            odd              = odd * x2 + P3;
+            odd              = odd * x2 + P1;
+            r                = x * (P0 + x * odd);
         }
-        v_elseif (x < -3.125f)
+        v_endif;
+        v_if (x < -3.125f)
         {
             // H = exp(-x^2/2) * corr_H(x), snapped to the 2^-25 grid.
             const sfpi::vFloat xlog2   = x2 * NEG_HALF_ONE_LN2 + 127.0f;
@@ -67,16 +73,14 @@ __attribute__((noinline)) void calculate_gelu_fresh_cpp()
             const sfpi::vFloat Hs = (H + ROUND_TO_GRID) - ROUND_TO_GRID;
             r                     = x * Hs;
         }
-        v_elseif (x < 2.78125f)
+        v_endif;
+        v_if (x <= GELU_SAT)
         {
-            sfpi::vFloat odd = P13;
-            odd                   = odd * x2 + P11;
-            odd                   = odd * x2 + P9;
-            odd                   = odd * x2 + P7;
-            odd                   = odd * x2 + P5;
-            odd                   = odd * x2 + P3;
-            odd                   = odd * x2 + P1;
-            r                     = x * (P0 + x * odd);
+            // SFPU compares order NaNs by sign-magnitude, so a negative NaN
+            // lands in every region and ends here (a positive one fails every
+            // region and keeps r = x).  SFPABS keeps a NaN's sign, so this min
+            // is +0 for every other lane and returns that NaN unchanged.
+            r = sfpi::min(sfpi::abs(x), 0.0f);
         }
         v_endif;
         sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
