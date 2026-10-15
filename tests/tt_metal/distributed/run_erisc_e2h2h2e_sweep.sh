@@ -19,6 +19,9 @@ RING=${RING:-0}
 if [ "$RING" = 1 ]; then
     MGD=tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_1x4_ring.textproto
     MESH1=0  # one mesh: both ranks join it
+    # The ring's defaults differ from the dual mesh's and are not interchangeable: R0/R1 must match
+    # the placer's host split, and the bridged channel must cross it. See the descriptor's header.
+    : "${R0:=0,3}" "${R1:=1,2}" "${CHANS:=4 5}" "${CHIP:=1}"
 else
     MGD=tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_qb_dual_1x2_intermesh.textproto
     MESH1=1

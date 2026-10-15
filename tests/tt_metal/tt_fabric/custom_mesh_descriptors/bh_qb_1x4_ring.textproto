@@ -4,6 +4,14 @@
 #
 # The box is physically a 4-cycle -- 0-2, 2-1, 1-3, 3-0, four links per edge, and NO 0-1 or 2-3.
 # So the mesh's logical order must follow that cycle, and FABRIC_1D_RING closes it.
+#
+# R0/R1 MUST MATCH THE PLACER. The cycle admits two host partitions and nothing here pins which
+# the solver picks; a rank whose chips straddle them is refused by TopologyMapper::get_local_host_rank.
+# Measured on bh-qbae-12 2026-10-15: R0=0,3 R1=1,2 -- rank 0 gets nodes 0:0 0:1, rank 1 gets 0:2 0:3.
+#
+# The bridged channel must CROSS that boundary, so it belongs on node 0:1. From there channels
+# 4-7 reach 0:2 and 8-11 loop back to 0:0 -- the latter leave rank 1 with no far chip. So
+# CHIP=1 CHANS=4 (or 5/6/7), not the CHANS=9 the dual-mesh descriptor uses.
 
 mesh_descriptors {
   name: "M1x4"
