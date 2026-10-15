@@ -4,7 +4,7 @@
 
 // clang-format off
 // RUN: %split-file %s %t
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/invalid-descriptor.cpp 2>&1 | FileCheck %s --check-prefix=INVALID_DESCRIPTOR
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/invalid-counter-result.cpp 2>&1 | FileCheck %s --check-prefix=INVALID_COUNTER_RESULT
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/misaligned-masked-write.cpp 2>&1 | FileCheck %s --check-prefix=MISALIGNED_MASKED_WRITE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/invalid-counter.cpp 2>&1 | FileCheck %s --check-prefix=INVALID_COUNTER
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/runtime-counter-data.cpp 2>&1 | FileCheck %s --check-prefix=RUNTIME_COUNTER_DATA
@@ -20,19 +20,20 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/runtime-masked-write-data.cpp 2>&1 | FileCheck %s --check-prefix=RUNTIME_MASKED_WRITE_DATA
 // clang-format on
 
-//--- invalid-descriptor.cpp
+//--- invalid-counter-result.cpp
 #include <cstdint>
 
 #include "hal/atomic.h"
 
 namespace atomic = hal::atomic;
 
-void invalid_descriptor()
+void invalid_counter_result()
 {
-    atomic::run<atomic::FetchIncrement {hal::gpr<1>(), hal::gpr<2>(), std::uint8_t {4}, std::uint8_t {32}}>();
+    constexpr atomic::Counter<32, 1> counter {hal::gpr<1>()};
+    atomic::fetch_add<counter>(hal::gpr<64>());
 }
 
-// INVALID_DESCRIPTOR: error: static assertion failed: invalid atomic descriptor
+// INVALID_COUNTER_RESULT: error: static assertion failed: invalid atomic descriptor
 
 //--- misaligned-masked-write.cpp
 #include "hal/atomic.h"
@@ -81,11 +82,11 @@ void runtime_counter_data(const std::uint32_t index)
 
 namespace atomic = hal::atomic;
 
-constexpr atomic::Fifo<16, 3> fifo {hal::gpr<3>()};
+constexpr auto fifo = atomic::fifo<16>(hal::gpr<3>());
 
 void invalid_fifo()
 {
-    atomic::pop_slots<fifo>(hal::gpr<4>());
+    atomic::pop<fifo>(hal::gpr<4>());
 }
 
 // INVALID_FIFO: error: static assertion failed: invalid atomic FIFO identity
@@ -95,11 +96,11 @@ void invalid_fifo()
 
 namespace atomic = hal::atomic;
 
-constexpr atomic::Fifo<3, 3> fifo {hal::gpr<3>()};
+constexpr auto fifo = atomic::fifo<3>(hal::gpr<3>());
 
 void fifo_increment_too_wide()
 {
-    atomic::push_slots<fifo, 16>(hal::gpr<4>());
+    atomic::push<fifo, 16>(hal::gpr<4>());
 }
 
 // FIFO_INCREMENT_TOO_WIDE: error: static assertion failed: FIFO increment logarithm must be in [0, 15]
@@ -111,11 +112,11 @@ void fifo_increment_too_wide()
 
 namespace atomic = hal::atomic;
 
-constexpr atomic::Fifo<3, 3> fifo {hal::gpr<3>()};
+constexpr auto fifo = atomic::fifo<3>(hal::gpr<3>());
 
 void runtime_fifo_pop_result(const std::uint32_t index)
 {
-    atomic::pop_slots<fifo>(hal::gpr(index));
+    atomic::pop<fifo>(hal::gpr(index));
 }
 
 // RUNTIME_FIFO_POP_RESULT: error: static assertion failed: immediate FIFO pop requires hal::gpr<Index>()
@@ -127,11 +128,11 @@ void runtime_fifo_pop_result(const std::uint32_t index)
 
 namespace atomic = hal::atomic;
 
-constexpr atomic::Fifo<3, 3> fifo {hal::gpr<3>()};
+constexpr auto fifo = atomic::fifo<3>(hal::gpr<3>());
 
 void runtime_fifo_push_result(const std::uint32_t index)
 {
-    atomic::push_slots<fifo>(hal::gpr(index));
+    atomic::push<fifo>(hal::gpr(index));
 }
 
 // RUNTIME_FIFO_PUSH_RESULT: error: static assertion failed: immediate FIFO push requires hal::gpr<Index>()
@@ -143,7 +144,7 @@ void runtime_fifo_push_result(const std::uint32_t index)
 
 namespace atomic = hal::atomic;
 
-constexpr atomic::Fifo<3, 3> fifo {hal::gpr<3>()};
+constexpr auto fifo = atomic::fifo<3>(hal::gpr<3>());
 
 void runtime_fifo_wait_result(const std::uint32_t index)
 {

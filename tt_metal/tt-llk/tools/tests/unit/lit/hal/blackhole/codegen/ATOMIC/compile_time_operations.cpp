@@ -13,23 +13,27 @@ namespace atomic = hal::atomic;
 
 constexpr atomic::Counter<32, 1> counter_word3 {hal::gpr<1>(), 3};
 constexpr atomic::Counter<1, 63> counter_bit {hal::gpr<63>()};
-constexpr atomic::Fifo<3, 3> fifo8 {hal::gpr<3>()};
-constexpr atomic::Fifo<0, 0> fifo1 {hal::gpr<0>()};
-constexpr atomic::Fifo<15, 5> fifo32k {hal::gpr<5>()};
+constexpr auto fifo8      = atomic::fifo<3>(hal::gpr<3>());
+constexpr auto fifo1      = atomic::fifo<0>(hal::gpr<0>());
+constexpr auto fifo32k    = atomic::fifo<15>(hal::gpr<5>());
 constexpr auto lock_word2 = atomic::Lock {hal::gpr<7>(), 2};
 constexpr auto lock_word0 = atomic::Lock {hal::gpr<63>()};
 
 // Wrap fields are encoded as width - 1 for ATINCGET and capacity_log2 + 1 (mod 16)
 // for ATINCGETPTR; ATCAS prints the set value before the compare value.
-extern "C" __attribute__((noinline, used)) void run_descriptors()
+extern "C" __attribute__((noinline, used)) void descriptor_operations()
 {
-    atomic::run<atomic::FetchIncrement {hal::gpr<1>(), hal::gpr<2>(), std::uint8_t {3}, std::uint8_t {16}}>();
-    atomic::run<atomic::FifoAcquire {hal::gpr<3>(), hal::gpr<4>(), atomic::FifoPointer::Write, std::uint8_t {3}, std::uint8_t {2}, false}>();
-    atomic::run<atomic::CompareSet {hal::gpr<7>(), std::uint8_t {2}, std::uint8_t {5}, std::uint8_t {9}}>();
-    atomic::run<atomic::MaskedWrite {hal::gpr<8>(), hal::gpr<12>(), std::uint8_t {0xa5}}>();
+    constexpr auto fetch       = atomic::FetchIncrement {hal::gpr<1>(), hal::gpr<2>(), std::uint8_t {3}, std::uint8_t {16}};
+    constexpr auto acquire     = atomic::FifoAcquire {hal::gpr<3>(), hal::gpr<4>(), atomic::FifoPointer::Write, std::uint8_t {3}, std::uint8_t {2}, false};
+    constexpr auto compare_set = atomic::CompareSet {hal::gpr<7>(), std::uint8_t {2}, std::uint8_t {5}, std::uint8_t {9}};
+    constexpr auto write       = atomic::MaskedWrite {hal::gpr<8>(), hal::gpr<12>(), std::uint8_t {0xa5}};
+    TTI_INSN(fetch.operation());
+    TTI_INSN(acquire.operation());
+    TTI_INSN(compare_set.operation());
+    TTI_INSN(write.operation());
 }
 
-// CHECK-LABEL: <run_descriptors>:
+// CHECK-LABEL: <descriptor_operations>:
 // CHECK-NEXT: ttatincget 0,15,3,2,1
 // CHECK-NEXT: ttatincgetptr 0,0,2,4,1,4,3
 // CHECK-NEXT: ttatcas 0,9,5,2,0,7
@@ -49,11 +53,11 @@ extern "C" __attribute__((noinline, used)) void counter_fetch_add()
 
 extern "C" __attribute__((noinline, used)) void fifo_pop_push()
 {
-    atomic::pop_slots<fifo8>(hal::gpr<4>());
-    atomic::pop_slots<fifo8, 2>(hal::gpr<4>());
-    atomic::push_slots<fifo8>(hal::gpr<6>());
-    atomic::push_slots<fifo8, 2>(hal::gpr<6>());
-    atomic::pop_slots<fifo32k, 15>(hal::gpr<0>());
+    atomic::pop<fifo8>(hal::gpr<4>());
+    atomic::pop<fifo8, 2>(hal::gpr<4>());
+    atomic::push<fifo8>(hal::gpr<6>());
+    atomic::push<fifo8, 2>(hal::gpr<6>());
+    atomic::pop<fifo32k, 15>(hal::gpr<0>());
 }
 
 // CHECK-LABEL: <fifo_pop_push>:

@@ -20,19 +20,14 @@ constexpr atomic::Counter<16, AddressIndex> counter16(const hal::Gpr<AddressInde
     return {address, word};
 }
 
-template <std::uint32_t AddressIndex>
-constexpr atomic::Fifo<8, AddressIndex> fifo256(const hal::Gpr<AddressIndex> address)
-{
-    return {address};
-}
-
 // ATINCGET 0x61: wrap 7 << 14 | word 1 << 12 | data 2 << 6 | address.
-extern "C" __attribute__((noinline, used)) void run_runtime_fetch_increment(std::uint32_t address)
+extern "C" __attribute__((noinline, used)) void runtime_fetch_increment_descriptor(std::uint32_t address)
 {
-    atomic::run(atomic::FetchIncrement {hal::gpr(address), hal::gpr<2>(), std::uint8_t {1}, std::uint8_t {8}});
+    const auto descriptor = atomic::FetchIncrement {hal::gpr(address), hal::gpr<2>(), std::uint8_t {1}, std::uint8_t {8}};
+    TT_INSN(descriptor.operation());
 }
 
-// CHECK-LABEL: <run_runtime_fetch_increment>:
+// CHECK-LABEL: <runtime_fetch_increment_descriptor>:
 // CHECK-NEXT: li [[LIMIT:a[0-7]]],63
 // CHECK-NEXT: bltu [[LIMIT]],a0,[[FAIL:[0-9a-f]+]]
 // CHECK: lui [[OP:a[0-7]]],0x6101d
@@ -68,7 +63,7 @@ extern "C" __attribute__((noinline, used)) void counter_runtime_word(std::uint8_
 // ATINCGETPTR 0x62: increment << 18 | wrap 9 << 14 | read | result 4 << 6 | address 3.
 extern "C" __attribute__((noinline, used)) void fifo_runtime_increment(std::uint8_t increment_log2)
 {
-    atomic::pop_slots(fifo256(hal::gpr<3>()), hal::gpr<4>(), increment_log2);
+    atomic::pop(atomic::fifo<8>(hal::gpr<3>()), hal::gpr<4>(), increment_log2);
 }
 
 // CHECK-LABEL: <fifo_runtime_increment>:
@@ -88,7 +83,7 @@ extern "C" __attribute__((noinline, used)) void fifo_runtime_increment(std::uint
 // ATINCGETPTR 0x62: wrap 9 << 14 | write 1 << 12 | result 4 << 6 | address.
 extern "C" __attribute__((noinline, used)) void fifo_runtime_push_default(std::uint32_t address)
 {
-    atomic::push_slots(fifo256(hal::gpr(address)), hal::gpr<4>());
+    atomic::push(atomic::fifo<8>(hal::gpr(address)), hal::gpr<4>());
 }
 
 // CHECK-LABEL: <fifo_runtime_push_default>:
@@ -107,7 +102,7 @@ extern "C" __attribute__((noinline, used)) void fifo_runtime_push_default(std::u
 // ATINCGETPTR 0x62: no-increment 1 << 22 | wrap 9 << 14 | write 1 << 12 | result << 6 | address 3.
 extern "C" __attribute__((noinline, used)) void fifo_runtime_wait_full(std::uint32_t result)
 {
-    atomic::wait_while<atomic::FifoState::Full>(fifo256(hal::gpr<3>()), hal::gpr(result));
+    atomic::wait_while<atomic::FifoState::Full>(atomic::fifo<8>(hal::gpr<3>()), hal::gpr(result));
 }
 
 // CHECK-LABEL: <fifo_runtime_wait_full>:

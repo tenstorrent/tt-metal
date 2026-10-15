@@ -11,7 +11,7 @@
 namespace atomic = hal::atomic;
 
 constexpr atomic::Counter<32, 1> counter_word3 {hal::gpr<1>(), 3};
-constexpr atomic::Fifo<15, 3> fifo32k {hal::gpr<3>()};
+constexpr auto fifo32k    = atomic::fifo<15>(hal::gpr<3>());
 constexpr auto lock_word3 = atomic::Lock {hal::gpr<63>(), 3};
 
 static_assert(atomic::is_valid(counter_word3));
@@ -19,7 +19,7 @@ static_assert(atomic::is_valid(atomic::Counter<1, 63> {hal::gpr<63>()}));
 static_assert(atomic::is_valid(fifo32k));
 static_assert(atomic::is_valid(lock_word3));
 static_assert(atomic::is_valid(counter_word3.fetch_add(hal::gpr<2>())));
-static_assert(atomic::is_valid(fifo32k.pop_slots<15>(hal::gpr<4>())));
+static_assert(atomic::is_valid(fifo32k.pop<15>(hal::gpr<4>())));
 static_assert(atomic::is_valid(fifo32k.wait_while<atomic::FifoState::Full>(hal::gpr<4>())));
 static_assert(atomic::is_valid(lock_word3.compare_set<15, 15>()));
 static_assert(atomic::is_valid(atomic::MaskedWrite {hal::gpr<63>(), hal::gpr<60>(), std::uint8_t {0xff}}));
@@ -28,8 +28,8 @@ static_assert(!atomic::is_valid(atomic::Counter<0, 0> {hal::gpr<0>()}));
 static_assert(!atomic::is_valid(atomic::Counter<33, 0> {hal::gpr<0>()}));
 static_assert(!atomic::is_valid(atomic::Counter<32, 0> {hal::gpr<0>(), 4}));
 static_assert(!atomic::is_valid(atomic::Counter<32, 64> {hal::gpr<64>()}));
-static_assert(!atomic::is_valid(atomic::Fifo<16, 0> {hal::gpr<0>()}));
-static_assert(!atomic::is_valid(atomic::Fifo<1, 64> {hal::gpr<64>()}));
+static_assert(!atomic::is_valid(atomic::fifo<16>(hal::gpr<0>())));
+static_assert(!atomic::is_valid(atomic::fifo<1>(hal::gpr<64>())));
 static_assert(!atomic::is_valid(atomic::Lock {hal::gpr<0>(), 4}));
 static_assert(!atomic::is_valid(atomic::Lock {hal::gpr<64>()}));
 
