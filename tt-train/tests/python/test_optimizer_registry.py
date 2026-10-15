@@ -173,9 +173,29 @@ def test_param_groups_rejected_for_python_optimizer(expect_error):
         ttml.optimizers.create_optimizer({"type": "PyOptNoDecay", "param_groups": NO_DECAY_GROUPS}, params)
 
 
+@pytest.mark.parametrize("optimizer_type", ["AdamW", "AdamWFullPrecision", "SGD", "MuonComposite"])
+@pytest.mark.parametrize("value", [True, False])
+def test_removed_weight_decay_skip_1d_is_rejected(expect_error, optimizer_type, value):
+    """yaml-cpp ignores unknown keys, so without an explicit check an old config would load and silently start
+    decaying the 1-D params it used to exempt. Any value is rejected, so stale configs get cleaned up."""
+    params = ttml.NamedParameters()
+    with expect_error(RuntimeError, "weight_decay_skip_1d was removed"):
+        ttml.optimizers.create_optimizer({"type": optimizer_type, "weight_decay_skip_1d": value}, params)
+
+
+def test_removed_weight_decay_skip_1d_is_rejected_for_python_optimizer(expect_error):
+    """Python-registered optimizers bypass OptimizerRegistry::create, so the binding rejects the key too."""
+    PyOptimizer = _make_python_optimizer_class()
+    ttml.optimizers.register_optimizer("PyOptSkip1d", lambda config, params: PyOptimizer(params))
+
+    params = ttml.NamedParameters()
+    with expect_error(RuntimeError, "weight_decay_skip_1d was removed"):
+        ttml.optimizers.create_optimizer({"type": "PyOptSkip1d", "weight_decay_skip_1d": True}, params)
+
+
 def test_adamw_config_param_groups_from_python(expect_error):
     defaults = ttml.optimizers.AdamWConfig.make(1e-3, 0.9, 0.999, 1e-8, 0.1)
-    with expect_error(ValueError, "Param group 0 lists unknown param 'missing'"):
+    with expect_error(ValueError, "Param group 1 lists unknown param 'missing'"):
         ttml.optimizers.AdamW(
             ttml.NamedParameters(), defaults, param_groups=[{"params": ["missing"], "weight_decay": 0.0}]
         )
@@ -190,9 +210,8 @@ def test_muon_with_adamw_resolves_param_groups_in_both_sections(expect_error):
         "adamw": {"lr": 1e-3, "param_groups": [{"modules": ["gamma"], "weight_decay": 0.0}]},
     }
     opt = MuonWithAdamW(config, ttml.NamedParameters())
-    # No params match, so each inner optimizer holds just the configured group (with its overrides).
-    assert opt.muon_optimizer().get_group_lrs() == pytest.approx([0.04])
-    assert opt.adamw_optimizer().get_param_groups()[0]["weight_decay"] == 0.0
+    assert opt.muon_optimizer().get_group_lrs() == pytest.approx([0.02, 0.04])
+    assert opt.adamw_optimizer().get_param_groups()[1]["weight_decay"] == 0.0
 
     # Options an inner optimizer does not have are rejected rather than ignored.
     with expect_error(ValueError, "Unknown param group option 'weight_decay'"):
@@ -274,7 +293,7 @@ def test_registry_resolves_param_groups_from_modules(expect_error):
     assert opt.get_group_lrs() == pytest.approx([0.01, 0.01, 0.02])
 
     # A group whose modules match nothing (here a typo) is an error, not a silently empty group.
-    with expect_error(RuntimeError, r"Param group 0 \(modules: gama\) matches no parameters"):
+    with expect_error(RuntimeError, r"Param group 1 \(modules: gama\) matches no parameters"):
         ttml.optimizers.create_optimizer({"type": "AdamW", "param_groups": [{"modules": ["gama"]}]}, params)
 
 

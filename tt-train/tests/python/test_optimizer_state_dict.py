@@ -320,23 +320,22 @@ def test_adamw_param_groups_roundtrip_through_python():
     defaults = ttml.optimizers.AdamWConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.1)
     opt = ttml.optimizers.AdamW(params, defaults, param_groups=[{"params": [name], "lr": 2e-3, "weight_decay": 0.0}])
 
-    (group,) = opt.get_param_groups()
+    ungrouped, group = opt.get_param_groups()
+    assert ungrouped["params"] == []
     assert group["params"] == [name]
     assert group["lr"] == pytest.approx(2e-3)
     assert group["weight_decay"] == 0.0
     assert group["beta1"] == pytest.approx(0.9)
     assert opt.get_defaults()["weight_decay"] == pytest.approx(0.1)
 
-    opt.set_param_group_option(0, "weight_decay", 0.05)
-    assert opt.get_param_groups()[0]["weight_decay"] == pytest.approx(0.05)
+    opt.set_param_group_option(1, "weight_decay", 0.05)
+    assert opt.get_param_groups()[1]["weight_decay"] == pytest.approx(0.05)
 
 
 def test_adamw_group_options_get_and_set_every_group(expect_error):
     """``get_group_options`` / ``set_group_options`` read and write one option across all param groups."""
     defaults = ttml.optimizers.AdamWConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.1)
-    opt = ttml.optimizers.AdamW(
-        ttml.NamedParameters(), defaults, param_groups=[{"params": []}, {"params": [], "weight_decay": 0.0}]
-    )
+    opt = ttml.optimizers.AdamW(ttml.NamedParameters(), defaults, param_groups=[{"params": [], "weight_decay": 0.0}])
     assert opt.get_group_options("weight_decay") == pytest.approx([0.1, 0.0])
 
     opt.set_group_options("weight_decay", [0.05, 0.01])
@@ -373,7 +372,7 @@ _GROUPED_OPTIMIZERS = {
 def test_param_groups_roundtrip_for_every_optimizer_with_param_groups(optimizer_name):
     """Every optimizer with param groups restores its options and initial LRs from its state dict."""
     make = _GROUPED_OPTIMIZERS[optimizer_name]
-    groups = [{"params": [], "lr": 1e-3}, {"params": [], "lr": 2e-3}]
+    groups = [{"params": [], "lr": 2e-3}]
     src = make(groups)
     assert src.get_group_lrs() == pytest.approx([1e-3, 2e-3])
     assert src.get_initial_group_lrs() == pytest.approx([1e-3, 2e-3])  # recorded, as a scheduler attaching would

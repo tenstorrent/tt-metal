@@ -179,11 +179,12 @@ void OptimizerBase::set_param_group_option(size_t group_idx, const std::string& 
 
 void OptimizerBase::init_param_groups(ParamGroupOptions defaults, std::vector<ParamGroup> groups) {
     std::unordered_set<std::string> grouped;
-    for (size_t group_idx = 0; group_idx < groups.size(); ++group_idx) {
-        auto& group = groups[group_idx];
+    // group 0 is the ungrouped one, so the listed groups start at 1
+    for (size_t idx = 0; idx < groups.size(); ++idx) {
+        auto& group = groups[idx];
         for (const auto& [key, value] : group.options) {
             if (!defaults.contains(key)) {
-                throw unknown_option_error(key, defaults, fmt::format(" in group {}", group_idx));
+                throw unknown_option_error(key, defaults, fmt::format(" in group {}", idx + 1));
             }
         }
         for (const auto& [key, value] : defaults) {
@@ -191,7 +192,7 @@ void OptimizerBase::init_param_groups(ParamGroupOptions defaults, std::vector<Pa
         }
         for (const auto& name : group.params) {
             if (!m_parameters.contains(name)) {
-                throw std::invalid_argument(fmt::format("Param group {} lists unknown param '{}'", group_idx, name));
+                throw std::invalid_argument(fmt::format("Param group {} lists unknown param '{}'", idx + 1, name));
             }
             if (!grouped.insert(name).second) {
                 throw std::invalid_argument(fmt::format("Param '{}' is listed in more than one param group", name));
@@ -206,9 +207,7 @@ void OptimizerBase::init_param_groups(ParamGroupOptions defaults, std::vector<Pa
         }
     }
 
-    if (!ungrouped.empty() || groups.empty()) {
-        groups.insert(groups.begin(), ParamGroup{.params = std::move(ungrouped), .options = defaults});
-    }
+    groups.insert(groups.begin(), ParamGroup{.params = std::move(ungrouped), .options = defaults});
 
     m_defaults = std::move(defaults);
     m_param_groups = std::move(groups);

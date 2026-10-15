@@ -50,7 +50,8 @@ public:
     }
 };
 
-// Optimizer with one param group per entry of `lrs` (and no params): each group only carries an "lr".
+// Optimizer with one param group per entry of `lrs` (and no params): each group only carries an "lr". The first LR is
+// the default, so it lands in the always-present group 0 and the rest follow in order.
 class GroupedMockOptimizer : public OptimizerBase {
 public:
     [[nodiscard]] std::string get_name() const override {
@@ -59,9 +60,9 @@ public:
     explicit GroupedMockOptimizer(const std::vector<float> &lrs) :
         OptimizerBase(ttml::serialization::NamedParameters{}) {
         std::vector<ParamGroup> groups;
-        groups.reserve(lrs.size());
-        for (const float lr : lrs) {
-            groups.push_back({.params = {}, .options = {{"lr", lr}}});
+        groups.reserve(lrs.size() - 1);
+        for (auto it = std::next(lrs.begin()); it != lrs.end(); ++it) {
+            groups.push_back({.params = {}, .options = {{"lr", *it}}});
         }
         init_param_groups({{"lr", lrs.front()}}, std::move(groups));
     }

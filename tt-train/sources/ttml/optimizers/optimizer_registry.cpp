@@ -81,7 +81,7 @@ std::vector<ParamGroup> resolve_param_groups(const YAML::Node& config, const ser
                 throw std::runtime_error(fmt::format(
                     "Param group {} (modules: {}) matches no parameters; check the module names, and that an earlier "
                     "group does not already claim all of them",
-                    group_idx,
+                    group_idx + 1,  // group 0 is the ungrouped one, so the listed groups start at 1
                     fmt::join(groups_config[group_idx]["modules"].as<std::vector<std::string>>(), ", ")));
             }
         }
@@ -189,6 +189,11 @@ std::unique_ptr<OptimizerBase> OptimizerRegistry::create(
     auto it = m_creators.find(type);
     if (it == m_creators.end()) {
         throw std::runtime_error("Unknown optimizer type: " + type);
+    }
+    if (config["weight_decay_skip_1d"]) {
+        throw std::runtime_error(
+            "weight_decay_skip_1d was removed, use a param group with weight_decay: 0.0 instead "
+            "(see tt-train/configs/README.md)");
     }
 
     return it->second(config, std::move(params));

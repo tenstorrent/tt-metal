@@ -1441,8 +1441,9 @@ GROUP_LRS = [0.1, 0.01]
 
 
 def _make_grouped_opt(lrs=GROUP_LRS):
+    """Group 0 takes the default LR, so it carries lrs[0] and the listed groups the rest."""
     cfg = ttml.optimizers.AdamWConfig.make(lr=lrs[0], beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0)
-    groups = [{"params": [], "lr": lr} for lr in lrs]
+    groups = [{"params": [], "lr": lr} for lr in lrs[1:]]
     return ttml.optimizers.AdamW(ttml.NamedParameters(), cfg, param_groups=groups)
 
 

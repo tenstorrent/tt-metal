@@ -200,8 +200,14 @@ void py_module(nb::module_& m) {
         [py_registry](nb::dict config, serialization::NamedParameters params) -> nb::object {
             auto type = nb::cast<std::string>(config.attr("get")("type", "AdamW"));
             if (py_registry.contains(type.c_str())) {
-                // Python-registered optimizers bypass OptimizerRegistry::create and have no param groups,
-                // so reject the key or it silently does nothing.
+                // Python-registered optimizers bypass OptimizerRegistry::create, so repeat its
+                // weight_decay_skip_1d guard or the removed key silently does nothing.
+                if (config.contains("weight_decay_skip_1d")) {
+                    throw std::runtime_error(
+                        "weight_decay_skip_1d was removed, use a param group with weight_decay: 0.0 instead "
+                        "(see tt-train/configs/README.md)");
+                }
+                // They also have no param groups, so reject the key or it silently does nothing.
                 if (config.contains("param_groups")) {
                     throw std::runtime_error("param_groups is not supported by optimizer type: " + type);
                 }

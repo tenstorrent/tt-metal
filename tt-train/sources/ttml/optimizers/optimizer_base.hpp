@@ -86,8 +86,8 @@ protected:
     [[nodiscard]] static std::string param_group_key(size_t group_idx, const std::string& key);
 
     // Fills every group's missing options from defaults and validates the groups: each option must
-    // be one of the default options' keys, and each param must exist and belong to at most one group. Params
-    // in no group are collected into a leading group that uses the defaults.
+    // be one of the default options' keys, and each param must exist and belong to at most one group. Group 0 always
+    // holds the params in no group (possibly none) with the defaults.
     void init_param_groups(ParamGroupOptions defaults, std::vector<ParamGroup> groups);
 
     std::vector<ParamGroup> m_param_groups;
