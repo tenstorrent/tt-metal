@@ -699,7 +699,8 @@ jobs:
       # llk-perf-merge-gate jobs to optional-jobs in Merge Gate Status.
       fail_on_regression: false
       # The only LLK perf gate that posts to the regressions channel, and only a regression or a skip.
-      slack: true
+      # A manual Merge Gate run on a dev branch does not post.
+      slack: ${{ github.event_name == 'merge_group' }}
       slack_on_pass: false
     secrets: inherit
 
