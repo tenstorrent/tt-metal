@@ -137,6 +137,7 @@ bool interleaved_banks_walkable(distributed::MeshDevice& device, BufferType type
         return true;
     }
     std::vector<CoreCoord> bank_cores;
+    bank_cores.reserve(num_banks);
     for (uint32_t bank = 0; bank < num_banks; ++bank) {
         bank_cores.push_back(device.worker_core_from_logical_core(allocator.get_logical_core_from_bank_id(bank)));
     }
