@@ -593,10 +593,7 @@ inline void run_axis(x280::harness::session::Fixture& f, const x280::harness::Ru
     if (!v.empty()) {
         cfg.K = static_cast<uint32_t>(hart_::parse_u64_strict(v, "PACKET_INJECTION_K", UINT32_MAX));
     }
-    v = hart_::env_str("PACKET_INJECTION_INFLIGHT");
-    if (!v.empty()) {
-        cfg.inflight = static_cast<uint32_t>(hart_::parse_u64_strict(v, "PACKET_INJECTION_INFLIGHT", UINT32_MAX));
-    }
+    read_inflight_env(cfg);
     std::optional<uint64_t> explicit_w;
     v = hart_::env_str("PACKET_INJECTION_W");
     if (!v.empty()) {

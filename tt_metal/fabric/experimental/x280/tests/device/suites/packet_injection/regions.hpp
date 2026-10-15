@@ -22,6 +22,7 @@
 
 #include "kernels/packet_injection/packet_injection_abi.h"
 #include "rt/x280_noc_map.h"
+#include "harness/artifacts/artifacts.hpp"
 #include "harness/measurement/measurement.hpp"
 #include "harness/output/output.hpp"
 #include "harness/regions/release_group.hpp"
@@ -89,6 +90,20 @@ struct Config {
     uint64_t phase_timeout_ms = 60000;
     uint64_t host_timeout_ms = 600000;
 };
+
+/**
+ * Sets cfg.inflight from PACKET_INJECTION_INFLIGHT when that variable is set
+ * and non-empty; throws std::invalid_argument for a value that is not a
+ * decimal fitting uint32_t. Whether the value is admissible is checked at
+ * admission (AdmissionCheck::Inflight).
+ */
+inline void read_inflight_env(Config& cfg) {
+    const std::string v = x280::harness::artifacts::env_str("PACKET_INJECTION_INFLIGHT");
+    if (!v.empty()) {
+        cfg.inflight = static_cast<uint32_t>(
+            x280::harness::artifacts::parse_u64_strict(v, "PACKET_INJECTION_INFLIGHT", UINT32_MAX));
+    }
+}
 
 /**
  * Workers in a run: one per tile for BriscOnly and Ethernet, two for Paired,
