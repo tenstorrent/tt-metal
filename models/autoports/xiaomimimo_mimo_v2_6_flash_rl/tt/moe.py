@@ -3,9 +3,11 @@
 
 """MiMo routed MoE (256 experts, top-8, sigmoid ``noaux_tc``), tensor-parallel over one Galaxy row.
 
-Routing runs replicated on every chip with ``moe_grouped_topk`` (single-group path: fp32 sigmoid,
-+bias for selection only, gather the unbiased scores, normalize with eps 1e-20), then the top-8
-weights are scattered into a dense ``[T, 256]`` routing matrix.
+Routing runs replicated on every chip, in fp32 end to end: router logits (HiFi4, fp32 out), sigmoid,
++bias for selection only, fp32 top-8, gather the unbiased scores, normalize with eps 1e-20, then
+scatter into a dense ``[T, 256]`` routing matrix. MiMo's biased scores sit in [0.5, 1.5] with a
+median 8th-vs-9th gap of ~1.6e-3, so a bf16 top-k flips experts: ``moe_grouped_topk`` fed exact
+fp32 logits matched the reference top-8 set on only 80% of real layer-5 tokens, this path on 100%.
 
 Experts are TP-sharded on the intermediate dim: each chip holds every expert's 256-wide slice of
 ``moe_intermediate_size`` (2048). Tokens are grouped 32 per tile row; ``sparse_matmul`` computes
@@ -47,26 +49,15 @@ class TtMiMoMoE:
 
         rep = plan.replicate()
         self.w_router = as_weight(w_router, plan, rep, ttnn.bfloat16, cache_name(cache_dir, prefix, "router"))
-        self.bias_row = as_weight(
-            bias, plan, rep, ttnn.float32, cache_name(cache_dir, prefix, "score_bias"), layout=ttnn.ROW_MAJOR_LAYOUT
-        )
+        self.score_bias = as_weight(bias, plan, rep, ttnn.float32, cache_name(cache_dir, prefix, "score_bias"))
         self.w_gate = as_weight(w_gate, plan, plan.shard(-1), expert_dtype, cache_name(cache_dir, prefix, "w_gate"))
         self.w_up = as_weight(w_up, plan, plan.shard(-1), expert_dtype, cache_name(cache_dir, prefix, "w_up"))
         self.w_down = as_weight(w_down, plan, plan.shard(-2), expert_dtype, cache_name(cache_dir, prefix, "w_down"))
-        self._bias_wide = {}
 
         self.router_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=True)
         self.expert_config = compute_config(ttnn.MathFidelity.HiFi2, fp32_acc=True)
         self.gate_up_program = mcast_1d_config((4, 2), TILE, self.inter_local, self.hidden, in0_block_w=4)
         self.down_program = mcast_1d_config((8, 4), TILE, self.hidden, self.inter_local, in0_block_w=4)
-
-    def _bias_for(self, num_tokens):
-        """moe_grouped_topk needs the bias at the same logical shape as the scores: [1, 1, T, E]."""
-        if num_tokens not in self._bias_wide:
-            wide = ttnn.repeat(self.bias_row, ttnn.Shape((1, 1, num_tokens, 1)))
-            self._bias_wide[num_tokens] = ttnn.to_layout(wide, ttnn.TILE_LAYOUT)
-            wide.deallocate(True)
-        return self._bias_wide[num_tokens]
 
     def route(self, x, token_mask=None):
         """x [1, 1, T, hidden] -> dense routing weights [1, 1, T, E] (bf16; zero off the top-8)."""
@@ -78,16 +69,23 @@ class TtMiMoMoE:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.router_config,
         )
-        weights, indices = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
-            logits,
-            self._bias_for(num_tokens),
-            n_groups=1,
-            summed_experts_per_group=1,
-            topk_groups=1,
-            n_activated_experts=self.cfg.num_experts_per_tok,
-            route_scale=self.cfg.routed_scaling_factor,
-            epsilon=1e-20,
-        )
+        scores = ttnn.sigmoid(logits)
+        logits.deallocate(True)
+        biased = ttnn.add(scores, self.score_bias)
+        _, indices = ttnn.topk(biased, k=self.cfg.num_experts_per_tok, dim=-1, largest=True, sorted=True)
+        biased.deallocate(True)
+        weights = ttnn.gather(scores, dim=-1, index=indices)
+        scores.deallocate(True)
+        if self.cfg.norm_topk_prob:
+            denom = ttnn.add(ttnn.sum(weights, dim=-1, keepdim=True), 1e-20)
+            normed = ttnn.div(weights, denom)
+            weights.deallocate(True)
+            denom.deallocate(True)
+            weights = normed
+        if self.cfg.routed_scaling_factor != 1.0:
+            weights = ttnn.mul(weights, self.cfg.routed_scaling_factor)
+        weights_bf16 = ttnn.typecast(weights, ttnn.bfloat16)
+        weights.deallocate(True)
         zeros = ttnn.zeros(
             ttnn.Shape((1, 1, num_tokens, self.num_experts)),
             dtype=ttnn.bfloat16,
@@ -95,8 +93,8 @@ class TtMiMoMoE:
             device=self.plan.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        dense = ttnn.scatter(zeros, dim=-1, index=indices, src=weights)
-        for t in (logits, weights, indices, zeros):
+        dense = ttnn.scatter(zeros, dim=-1, index=indices, src=weights_bf16)
+        for t in (weights_bf16, indices, zeros):
             t.deallocate(True)
         if token_mask is not None:
             masked = ttnn.mul(dense, token_mask)
