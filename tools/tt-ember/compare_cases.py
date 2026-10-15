@@ -8,7 +8,7 @@ multiple named runs (use cases), grouped by grid (core combination), using each 
 program_intervals.csv (produced by parser.py / auto.py).
 
 Usage:
-    python3 compare_runs2.py -i <dir_with_run_subdirs> -c <cases.txt>
+    python3 compare_cases.py -i <dir_with_run_subdirs> -c <cases.txt>
 
 <cases.txt> format (one "Case N: subdir_name" or "Case N: subdir_name : Legend label" per
 line):
