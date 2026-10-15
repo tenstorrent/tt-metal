@@ -209,6 +209,13 @@ bool native_rm_fits_l1(
     return kernels * per_kernel <= static_budget;
 }
 
+// Wormhole thresholds, fitted from the same forced sweeps run on Wormhole. Its DRAM reads stay transaction-bound up to
+// 2 KB pieces, its L1 merges lose to native from 1 KB, and a single-kernel split with at most one source stick per
+// core leaves the port's pipeline unfilled, so native wins from 20 B.
+constexpr uint32_t kWhMinDramMergePiece = 2048;
+constexpr uint32_t kWhMinL1MergePiece = 1024;
+constexpr uint32_t kWhMinUnderfilledSplitPiece = 20;
+
 // Whether an rm_native_faster verdict may be taken once the static fit is known. Native's scratch must fit, and the
 // stick program rm_native_faster was measured against must fit the static L1 window. When only the slab program
 // fits, it reads a batch of windows behind one barrier, as for widths that do not divide.
@@ -222,10 +229,10 @@ bool demotion_applies(
 }
 
 // Whether native's kernel measures faster than the ROW_MAJOR program the gate admits. Thresholds fitted on Blackhole
-// from forced port-vs-native sweeps of same-placement copies. Widths that do not divide are never demoted: native
-// waits on a read barrier per input page, the slab program reads every window of a batch of slabs behind one barrier.
-// Mixed DRAM/L1 placement is not demoted either: the output's alignment is not an attribute of the input, and the
-// rule was fitted on same-placement copies only.
+// from forced port-vs-native sweeps of same-placement copies, with the Wormhole thresholds above. Widths that do not
+// divide are never demoted: native waits on a read barrier per input page, the slab program reads every window of a
+// batch of slabs behind one barrier. Mixed DRAM/L1 placement is not demoted either: the output's alignment is not an
+// attribute of the input, and the rule was fitted on same-placement copies only.
 bool rm_native_faster(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
@@ -244,15 +251,23 @@ bool rm_native_faster(
     }
     const uint32_t alignment = input.buffer()->alignment();
     const bool merge = new_stick > old_stick;
+    const bool wormhole = input.device()->arch() == tt::ARCH::WORMHOLE_B0;
     if (old_stick % alignment == 0 && new_stick % alignment == 0) {
         // Splits keep every short write in flight; native waits on each one. From 256 B a DRAM read is no longer
         // transaction-bound and the port's single read NOC caps it.
         if (input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM) {
-            return merge && piece >= 256;
+            return merge && piece >= (wormhole ? kWhMinDramMergePiece : 256);
+        }
+        if (wormhole) {
+            return merge && piece >= kWhMinL1MergePiece;
         }
         return merge && coalesced_l1_merge_native_faster(piece, new_stick);
     }
     const uint64_t num_old_sticks = input.logical_shape().volume() / input.logical_shape()[-1];
+    if (wormhole && !merge && !native_runs_two_kernels(new_stick, output_mem_config) && piece % 4 == 0 &&
+        piece >= kWhMinUnderfilledSplitPiece && num_old_sticks <= num_cores) {
+        return true;
+    }
     return staged_native_faster(
         piece, new_stick, std::max(old_stick, new_stick) / piece, num_old_sticks, num_cores, output_mem_config, merge);
 }
