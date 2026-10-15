@@ -109,6 +109,11 @@ METAL_PLACEMENT = ("x280->peer", "peer->x280")
 PI_PLACEMENT_HEADS = placement_heads(
     ("worker_index", "chip_id"), ("x280_noc", "noc0"), ("worker->x280", "x280->worker")
 )
+EC_PLACEMENT_HEADS = placement_heads(
+    ("tx_chip", "rx_chip", "p"),
+    ("tx_x280_noc0", "tx_erisc_noc0", "rx_erisc_noc0", "rx_x280_noc0"),
+    ("x280->e0", "e0->x280", "e1->x280", "x280->e1"),
+)
 HEADS = {
     "p2p_latency x280_same_tile placement": placement_heads(("participant", "chip_id"), ("x280_noc",), ()),
     "p2p_latency x280_peer_tile placement": placement_heads(
@@ -125,11 +130,9 @@ HEADS = {
     ),
     "packet_injection tensix_to_x280 placement": PI_PLACEMENT_HEADS,
     "packet_injection erisc_to_x280_header placement": PI_PLACEMENT_HEADS,
-    "eth_credit eth_credit placement": placement_heads(
-        ("tx_chip", "rx_chip", "p"),
-        ("tx_x280_noc0", "tx_erisc_noc0", "rx_erisc_noc0", "rx_x280_noc0"),
-        ("x280->e0", "e0->x280", "e1->x280", "x280->e1"),
-    ),
+    "eth_credit eth_credit placement": EC_PLACEMENT_HEADS,
+    "eth_credit eth_credit_leg placement": EC_PLACEMENT_HEADS,
+    "eth_credit eth_credit_round_trip placement": EC_PLACEMENT_HEADS,
     "p2p_latency x280_same_tile": P2P_HEADS,
     "p2p_latency x280_peer_tile": P2P_HEADS | {"hw", "peer", "hops a->b", "hops b->a", "lap hops"},
     "p2p_latency tensix_peer_tile": P2P_HEADS,

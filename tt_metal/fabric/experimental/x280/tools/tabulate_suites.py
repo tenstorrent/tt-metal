@@ -777,6 +777,12 @@ class Placement(NamedTuple):
     legs: tuple
 
 
+def core_xy(record, prefix):
+    """The NoC0 coordinate `record`'s `prefix`_x and `prefix`_y fields hold, or None when it lacks either."""
+    x, y = record.get(prefix + "_x"), record.get(prefix + "_y")
+    return None if x is None or y is None else (x, y)
+
+
 def placement_table(member, rows, spec):
     """`member`'s placement as a Tabulated titled "<member> placement"; None when no record
     matching `spec.select` carries any of its cores' coordinates.
@@ -786,23 +792,19 @@ def placement_table(member, rows, spec):
     coordinate or NoC a record does not carry leaves its cells blank.
     """
 
-    def xy(record, prefix):
-        x, y = record.get(prefix + "_x"), record.get(prefix + "_y")
-        return None if x is None or y is None else (x, y)
-
     lines = {}
     for row in rows:
         record = row.record
-        if unmet(record, spec.select) or all(xy(record, core) is None for core in spec.cores):
+        if unmet(record, spec.select) or all(core_xy(record, core) is None for core in spec.cores):
             continue
         line = [record.get(key) for key in spec.keys]
-        line += ["(%d, %d)" % xy(record, core) if xy(record, core) else None for core in spec.cores]
+        line += ["(%d, %d)" % core_xy(record, core) if core_xy(record, core) else None for core in spec.cores]
         for leg in spec.legs:
             noc = record.get(leg.noc)
             if leg.recorded:
                 line += [noc] + [record.get(field) for field in leg.recorded]
                 continue
-            src, dst = xy(record, leg.src), xy(record, leg.dst)
+            src, dst = core_xy(record, leg.src), core_xy(record, leg.dst)
             known = src is not None and dst is not None and noc is not None
             line += [noc, hops(src, dst, noc) if known else None, hops(dst, src, noc) if known else None]
         key = tuple(cell(v) for v in line)
@@ -864,90 +866,65 @@ PLACEMENT = {
         ),
     ),
 }
+# The legs alone and the round trips place their cores as the whole path does.
+PLACEMENT["eth_credit eth_credit_leg"] = PLACEMENT["eth_credit eth_credit"]
+PLACEMENT["eth_credit eth_credit_round_trip"] = PLACEMENT["eth_credit eth_credit"]
 
 
 # eth_credit's credit round trip as built, set against an on-paper estimate: the NoC
 # traversals on its loop and a processing allowance per stage that handles the packet or its
-# credit. The hop loop runs W2 into E0, W5 out of E1 and its acknowledgement, which E1 waits
-# for before W6 and R2, and R3 out of E0; the consume loop adds W6 into the receiving
-# forwarder and its R1 back. A traversal of h router links costs ~5 + 9h + ~5 NoC cycles
+# credit. The hop loop runs W2 into E0 (x280->e0), W5 out of E1 (e1->x280) and its
+# acknowledgement, which E1 waits for before W6 and R2, and R3 out of E0 (e0->x280); the
+# consume loop adds W6 into the receiving forwarder (e1->x280) and its R1 back (x280->e1). A traversal of h router links costs ~5 + 9h + ~5 NoC cycles
 # (BlackholeA0/NoC/README.md, Performance) at its chip's AICLK, the NoC's clock domain
 # (BlackholeA0/PCIExpressTile/README.md). The hop loop's stages are E0 and E1 twice each at
 # their chips' AICLK and the sending forwarder at the X280 PLL; the consume loop adds E1 once
 # more and the receiving forwarder. The two Ethernet crossings are in neither term.
-EC_RT_HOP_TRAVERSALS = (
-    ("tx_x280_noc0", "tx_erisc_noc0", "tx_x280_noc", "tx_erisc_clock"),
-    ("rx_erisc_noc0", "rx_x280_noc0", "rx_erisc_noc", "rx_erisc_clock"),
-    ("rx_x280_noc0", "rx_erisc_noc0", "rx_erisc_noc", "rx_erisc_clock"),
-    ("tx_erisc_noc0", "tx_x280_noc0", "tx_erisc_noc", "tx_erisc_clock"),
-)
-EC_RT_TRAVERSALS = {
-    "hop": EC_RT_HOP_TRAVERSALS,
-    "consume": EC_RT_HOP_TRAVERSALS
-    + (
-        ("rx_erisc_noc0", "rx_x280_noc0", "rx_erisc_noc", "rx_erisc_clock"),
-        ("rx_x280_noc0", "rx_erisc_noc0", "rx_x280_noc", "rx_erisc_clock"),
-    ),
-}
-# Per loop: (ERISC stages per chip's clock evidence, X280 stages).
-EC_RT_STAGES = {
-    "hop": ((("tx_erisc_clock", 2), ("rx_erisc_clock", 2)), 1),
-    "consume": ((("tx_erisc_clock", 2), ("rx_erisc_clock", 3)), 2),
-}
+# Per loop: its NoC traversals, each an eth_credit placement leg (PLACEMENT) and whether it is
+# that leg's acknowledgement; and its stages, ERISC per chip side and X280.
+EC_LEGS = {leg.name: leg for leg in PLACEMENT["eth_credit eth_credit"].legs}
+EC_RT_HOP = (("x280->e0", False), ("e1->x280", False), ("e1->x280", True), ("e0->x280", False))
+EC_RT_TRAVERSALS = {"hop": EC_RT_HOP, "consume": EC_RT_HOP + (("e1->x280", False), ("x280->e1", False))}
+EC_RT_STAGES = {"hop": ({"tx": 2, "rx": 2}, 1), "consume": ({"tx": 2, "rx": 3}, 2)}
 
 
-def ec_rt_loop(row):
-    """The record's loop, as a key of EC_RT_TRAVERSALS."""
-    loop = lookup(row.record, ("loop",))
+def ec_round_trip_estimate(row):
+    """The on-paper terms of a round-trip row's loop: (router links, their NoC ns, the ns of one
+    processing cycle summed over every stage). The ns are None when a chip's ERISC clock evidence
+    offers no conversion; each chip's AICLK is its evidence's rate as conversion() reads it.
+
+    Raises ParseError for an unknown loop or a traversal endpoint the record does not place.
+    """
+    record = row.record
+    loop = lookup(record, ("loop",))
     if loop not in EC_RT_TRAVERSALS:
         raise ParseError("unknown round-trip loop %r" % (loop,))
-    return loop
-
-
-def ec_core(row, prefix):
-    """The NoC0 coordinate a record's `prefix`_x and `prefix`_y fields hold."""
-    return (lookup(row.record, (prefix + "_x",)), lookup(row.record, (prefix + "_y",)))
-
-
-def ec_aiclk(row, key):
-    """The rate the ERISC clock evidence at `key` validates, or None when it fails a check."""
-    try:
-        hz, warnings = validate_clock(lookup(row.record, (key,)))
-    except ValueError as error:
-        raise ParseError("%s: %s" % (key, error))
-    return None if warnings else hz
-
-
-def ec_rt_hops(row):
-    """Router links over the round trip's NoC traversals."""
-    return sum(
-        hops(ec_core(row, src), ec_core(row, dst), lookup(row.record, (noc,)))
-        for src, dst, noc, _ in EC_RT_TRAVERSALS[ec_rt_loop(row)]
-    )
-
-
-def ec_rt_noc_ns(row):
-    """The round trip's NoC traversals in ns; None when a chip's AICLK did not validate."""
-    total = 0.0
-    for src, dst, noc, clock in EC_RT_TRAVERSALS[ec_rt_loop(row)]:
-        hz = ec_aiclk(row, clock)
-        if hz is None:
-            return None
-        total += (10 + 9 * hops(ec_core(row, src), ec_core(row, dst), lookup(row.record, (noc,)))) * 1e9 / hz
-    return total
+    aiclk = {side: conversion(record, side + "_erisc_clock")[0] for side in ("tx", "rx")}
+    links, noc_ns = 0, 0.0
+    for name, ack in EC_RT_TRAVERSALS[loop]:
+        leg = EC_LEGS[name]
+        src, dst = core_xy(record, leg.src), core_xy(record, leg.dst)
+        if src is None or dst is None:
+            raise ParseError("round trip %s has no %s" % (name, leg.src if src is None else leg.dst))
+        noc = lookup(record, (leg.noc,))
+        h = hops(dst, src, noc) if ack else hops(src, dst, noc)
+        links += h
+        hz = aiclk[leg.src[:2]]
+        noc_ns = None if hz is None or noc_ns is None else noc_ns + (10 + 9 * h) * 1e9 / hz
+    erisc, x280 = EC_RT_STAGES[loop]
+    stage_ns = None
+    if all(aiclk.values()):
+        stage_ns = sum(count * 1e9 / aiclk[side] for side, count in erisc.items())
+        stage_ns += x280 * 1e9 / (lookup(record, ("x280_pll_mhz",)) * 1e6)
+    return links, noc_ns, stage_ns
 
 
 def ec_rt_estimate(cycles):
     """The on-paper round trip in ns with `cycles` of processing per stage."""
 
     def value(row):
-        noc = ec_rt_noc_ns(row)
-        if noc is None:
-            return None
-        erisc, x280 = EC_RT_STAGES[ec_rt_loop(row)]
-        stages = sum(count * 1e9 / ec_aiclk(row, clock) for clock, count in erisc)
-        stages += x280 * 1e9 / (lookup(row.record, ("x280_pll_mhz",)) * 1e6)
-        return noc + cycles * stages
+        _, noc_ns, stage_ns = ec_round_trip_estimate(row)
+        return None if noc_ns is None or stage_ns is None else noc_ns + cycles * stage_ns
 
     return value
 
@@ -973,8 +950,8 @@ EC_ROUND_TRIP_TABLES = (
             Column("round trips", field("round_trips")),
             Column("ticks", EC_RT_TICKS),
             Column("mean ns", EC_RT_MEAN_NS),
-            Column("NoC hops", ec_rt_hops),
-            Column("NoC ns", ec_rt_noc_ns),
+            Column("NoC hops", lambda row: ec_round_trip_estimate(row)[0]),
+            Column("NoC ns", lambda row: ec_round_trip_estimate(row)[1]),
             Column("estimate 30 ns", ec_rt_estimate(30)),
             Column("estimate 80 ns", ec_rt_estimate(80)),
         ),
@@ -1714,8 +1691,9 @@ def validate_campaign_records(config, rows):
         check(row)
 
 
-def conversion(record):
-    """The rate a record's ticks convert at, why they stay raw, and why the rate is unvalidated.
+def conversion(record, key="clock"):
+    """The rate the ticks of `record`'s clock evidence at `key` convert at, why they stay raw,
+    and why the rate is unvalidated.
 
     (conversion_hz, None, None) when the clock validates; (measured Hz, None,
     the failed checks) when well-formed evidence fails them; (None, the reason,
@@ -1724,12 +1702,12 @@ def conversion(record):
     if record.get("measurement_schema") != 2:
         return None, "measurement schema %r offers no conversion" % record.get("measurement_schema"), None
     try:
-        measured, warnings = validate_clock(record.get("clock"))
+        measured, warnings = validate_clock(record.get(key))
     except ValueError as error:
         return None, str(error), None
     if warnings:
         return measured, None, "; ".join(warnings)
-    return record["clock"]["conversion_hz"], None, None
+    return record[key]["conversion_hz"], None, None
 
 
 def read_attempt(config, paths):
