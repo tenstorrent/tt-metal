@@ -24,9 +24,11 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_TOKENS,
     MlaKvCacheFormat,
+    allocate_mla_kvpe_cache,
     create_kv_chunk_address_table_block_cyclic,
     init_kvpe_cache,
     init_mla_kv_cache,
+    is_tp_deduped_kv_cache,
     populate_kv_chunk_address_table_block_cyclic,
     populate_kv_chunk_address_table_dflash,
 )
@@ -264,6 +266,128 @@ def test_kimi_kv_cache_mock(
                 chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
                 expected_chunk = reference_bf8[batch_idx : batch_idx + 1, :, position:pos_end, :]
                 assert_equal(chunk_torch, expected_chunk)
+
+
+# sp x tp -- Kimi-K2.7 KV chunk address table through the RUNNER's path, TP-replicated and TP-deduped
+# (PREFILL_TP_SHARD_KV=1). Unlike test_kimi_kv_cache_mock, the cache comes from the runner's allocator
+# (allocate_mla_kvpe_cache) and the table from the runner's builder (build_and_serialize_kv_chunk_table),
+# which DERIVES the dedup from the cache's declared topology -- so this also proves the derivation picks
+# the layout the allocation stamped. Serialization is intercepted to keep the built table in memory.
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(8, 4)],
+    ids=["8x4"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [torus_xy_device_params()],
+    ids=["torus-xy"],
+    indirect=True,
+)
+@pytest.mark.parametrize("seq_len", [5 * 1024, 25 * 1024], ids=["seq5k", "seq25k"])
+@pytest.mark.parametrize("num_users", [1, 2], ids=["1user", "2users"])
+@pytest.mark.parametrize("num_layers", [2], ids=["2layers"])
+@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.timeout(0)
+def test_kimi_runner_kv_cache_table(
+    mesh_device, seq_len, num_users, num_layers, tp_shard_kv, device_params, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from models.demos.deepseek_v3_d_p.tt.runners import kv_chunk_table
+    from models.demos.deepseek_v3_d_p.utils.test_utils import preload_cache, tp_stripe_major_cache
+
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = tuple(mesh_device.shape)
+    sp, tp = mesh_shape
+    stripes = sp * tp if tp_shard_kv else sp
+    hf_config = SimpleNamespace(kv_lora_rank=512, qk_rope_head_dim=64)  # Kimi-K2.7 / DeepSeek MLA geometry
+    kvpe_dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
+    num_slots = num_users * num_layers
+
+    kvpe_cache = allocate_mla_kvpe_cache(
+        mesh_device=mesh_device,
+        hf_config=hf_config,
+        max_seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_layers=num_layers,
+        num_users=num_users,
+        tp_axis=tp_axis if tp_shard_kv else None,
+    )
+    assert is_tp_deduped_kv_cache(kvpe_cache.storage, mesh_shape) == tp_shard_kv
+
+    # Fill with the block-cyclic layout the write op produces: shard row r of `stripes` holds natural
+    # position p[r]. Deduped, the stripes are linear chips s*tp + t, re-laid TP-major for the mapper.
+    torch.manual_seed(42)
+    reference = torch.randn(num_slots, 1, seq_len, kvpe_dim).to(torch.bfloat16)
+    rows = reference[:, 0, blockcyclic_positions(stripes, PREFILL_CHUNK_TOKENS, seq_len), :]  # [slots, seq, D]
+    if tp_shard_kv:
+        host = torch.stack([tp_stripe_major_cache(rows[b], sp, tp) for b in range(num_slots)])
+        shard_dims = [None, None]
+        shard_dims[sp_axis], shard_dims[tp_axis] = -2, 1
+    else:
+        host = rows.unsqueeze(1)
+        shard_dims = [None, None]
+        shard_dims[sp_axis] = -2
+    preload_cache(
+        ttnn.from_torch(
+            host,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
+        ),
+        kvpe_cache.storage,
+    )
+    ttnn.synchronize_device(mesh_device)
+    assert is_tp_deduped_kv_cache(kvpe_cache.storage, mesh_shape) == tp_shard_kv
+
+    built = {}
+
+    def _keep_table(*, table_builder, num_layers, max_seq_len, num_users, chunk_n_tokens, chunk_size_bytes, path):
+        cfg = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
+        cfg.num_layers = num_layers
+        cfg.max_sequence_length = max_seq_len
+        cfg.num_slots = num_users
+        cfg.chunk_n_tokens = chunk_n_tokens
+        cfg.chunk_size_bytes = chunk_size_bytes
+        built["table"] = table_builder(config=cfg, chunk_size_bytes=chunk_size_bytes, num_users=num_users)
+        return path
+
+    monkeypatch.setattr(kv_chunk_table, "serialize_kv_chunk_table", _keep_table)
+    kv_chunk_table.build_and_serialize_kv_chunk_table(
+        mesh_device=mesh_device,
+        kvpe_cache=kvpe_cache,
+        seq_len=seq_len,
+        num_layers=num_layers,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_users=num_users,
+        chunk_size_global=PREFILL_CHUNK_TOKENS,
+        path="unused",
+    )
+    lookup_table = built["table"]
+
+    reference_bf8 = ttnn.to_torch(ttnn.from_torch(reference, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).to(
+        torch.bfloat16
+    )
+    chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_dim]
+    for slot in range(num_users):
+        for layer in range(num_layers):
+            batch_idx = slot * num_layers + layer
+            for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+                raw_bytes = lookup_table.read_device_chunk(layer=layer, position=position, slot=slot)
+                chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
+                chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
+                assert_equal(chunk_torch, reference_bf8[batch_idx : batch_idx + 1, :, position:pos_end, :])
+    logger.info(
+        f"[kimi] runner KV table ({'TP-deduped' if tp_shard_kv else 'TP-replicated'}) readback verified over "
+        f"{num_users} user(s) x {num_layers} layer(s) x {seq_len} tokens"
+    )
 
 
 # sp x tp
@@ -666,8 +790,8 @@ def test_glm53_tp_sharded_kv_cache_mock(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
 
-    # create_kv_chunk_address_table_block_cyclic has no tp_axis (and always builds a stage_layout, which the
-    # TP-sharded path rejects), so build the table and populate it directly.
+    # Populated directly through the lower-level entry point; test_kimi_runner_kv_cache_table covers the
+    # create / runner-builder path with tp_axis.
     CHUNK_SIZE_BYTES = 19584  # [1, 1, 32, 576] bfp8
     # Compacted: publish on a GLOBAL layer axis strictly wider than the cache's dense rows, mapped
     # non-contiguously (dense d -> global 2*d + 1), exactly what the merged builder does for a compacted
