@@ -136,6 +136,20 @@ class MiniMaxM3Golden(LayerwiseGolden):
     hf_repo = "MiniMaxAI/MiniMax-M3"
     checkpoint_prefix = "language_model.model."  # the VLM stores the text backbone under language_model.model
     lm_head_prefix = "language_model.lm_head."
+    # The text as the model's own reply: the chat template (its default system prompt, thinking_mode="disabled") up
+    # to the ai turn after an empty </mm:think>, with the user turn naming the WikiText format as for gpt-oss.
+    prefix = (
+        "]~!b[]~b]system\nYour model version is MiniMax-M3, developed by MiniMax. Knowledge cutoff: January 2026. "
+        "Founded in early 2022, MiniMax is a global AI foundation model company committed to advancing the frontiers "
+        "of AI towards AGI.\n\n<thinking_instructions>\nYou have a thinking capability that allows you to reason step "
+        "by step before responding. When thinking is enabled, wrap your reasoning in <mm:think></mm:think> tags "
+        "before your response. When thinking is disabled, begin your response directly after the </mm:think> prefix. "
+        "When thinking is adaptive, decide on your own whether to think for the current turn.\nCurrent thinking mode: "
+        "disabled. Do not output any thinking process.\n</thinking_instructions>[e~[\n]~b]developer\nYou are a "
+        "helpful assistant.[e~[\n]~b]user\nContinue this WikiText-2 dump verbatim: a sequence of Wikipedia articles, "
+        "one after another, each starting with a = Title = line, in raw formatting ( @-@ , = = headings = = )."
+        "[e~[\n]~b]ai\n</mm:think>"
+    )
     recipe = Recipe(
         modules=("self_attn.indexer", "mlp.gate"),
         sublayers=("self_attn", "mlp", "mlp.shared_experts", "mlp.experts"),
