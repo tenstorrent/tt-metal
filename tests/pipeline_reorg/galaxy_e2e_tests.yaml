@@ -67,14 +67,15 @@
   team: scaleout
   budget_type: e2e
 
-# Per-mesh fabric config repro (#60499): a 4-stage ring on one galaxy where alternating stages declare a
-# different 2D torus axis in the MGD -- TORUS_Y (2x2 RING,LINE) and TORUS_X (2x2 LINE,RING). Reuses the
-# generic multi-mesh sanity config (topology-agnostic; the MGD fixes the per-mesh configs). Checks that
-# two meshes running DIFFERENT torus configs coexist and route inter-mesh without hanging/starving.
+# Per-mesh fabric config repro (#60499): two inter-mesh-connected meshes on one galaxy declaring DIFFERENT
+# 2D torus axes in the MGD -- M_Y (2x2 RING,LINE -> TORUS_Y) and M_X (2x4 LINE,RING -> TORUS_X). The fabric
+# is opened as a TORUS_XY envelope (test_fabric_per_mesh_torus_sanity.yaml) so deadlock-avoidance /
+# bubble-flow-control cover both axes and protect each mesh's own ring, while the MGD's per-mesh
+# fabric_config keeps each mesh's connectivity to its single wrap. Checks the fabric does not hang/starve.
 - id: galaxy-fabric-per-mesh-torus-yx
   name: Galaxy Fabric per-mesh TORUS_Y + TORUS_X multi-mesh sanity
   cmd: |
-    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor {mgd} --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor {mgd} --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_per_mesh_torus_sanity.yaml
   skus:
     bh_galaxy:
       timeout: 15
