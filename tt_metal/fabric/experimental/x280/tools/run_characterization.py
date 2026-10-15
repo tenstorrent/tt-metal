@@ -69,10 +69,14 @@ def validate_test_report(path, expected):
 
 
 def record_host_label(campaign, label):
-    """Record the campaign's host label on first use; raise ValueError naming both when it differs."""
+    """Record the campaign's host label on first use; raise ValueError naming both when it differs,
+    and when an existing host.json is not a JSON object holding a string host_label."""
     path = campaign / "host.json"
     if path.exists():
-        recorded = json.loads(path.read_text())["host_label"]
+        recorded = json.loads(path.read_text())
+        if not isinstance(recorded, dict) or not isinstance(recorded.get("host_label"), str):
+            raise ValueError(f"{path} does not record a host_label")
+        recorded = recorded["host_label"]
         if recorded != label:
             raise ValueError(f"campaign was collected on host {recorded!r}, not {label!r}")
         return

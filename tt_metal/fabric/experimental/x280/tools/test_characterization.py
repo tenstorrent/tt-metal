@@ -704,6 +704,13 @@ class AttemptLogging(unittest.TestCase):
         attempt = next((self.root / "attempts").iterdir())
         self.assertEqual(json.loads((attempt / "attempt.json").read_text())["host_label"], "host-a")
 
+    def test_a_malformed_host_record_is_refused_as_a_value_error(self):
+        for content in ("not json", "[]", "{}", '{"host_label": 7}'):
+            with self.subTest(content=content):
+                (self.root / "host.json").write_text(content)
+                with self.assertRaises(ValueError):
+                    record_host_label(self.root, "host-a")
+
     def test_one_record_and_one_hash_list_round_trip(self):
         self.assertTrue(run_one(self.manifest, self.config, {}, self.root, self.engine))
         attempt = next((self.root / "attempts").iterdir())
