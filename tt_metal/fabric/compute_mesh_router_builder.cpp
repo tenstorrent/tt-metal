@@ -961,6 +961,16 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             named_ct_args["ENABLE_SPEEDY_VC0"] = 0u;
             named_ct_args["DISABLE_RX_CH0_FORWARDING"] = 0u;
             named_ct_args["E2H_BRIDGE_NO_FAR_RECEIVER"] = rtopts.get_e2h_bridge_no_far_receiver() ? 1u : 0u;
+            // Bubble flow control needs BOTH of these, and blocked_rx rises either way -- so a run
+            // cannot tell the bubble predicate from ordinary flow control without seeing them.
+            const auto arg = [&](const char* k) { return named_ct_args.contains(k) ? named_ct_args.at(k) : 0u; };
+            log_warning(
+                tt::LogFabric,
+                "E2H bridge eth_chan={}: deadlock_avoidance={} sender_ch0_injection={} intermesh={}. Test only.",
+                eth_chan,
+                arg("ENABLE_DEADLOCK_AVOIDANCE"),
+                arg("SENDER_CH_0_IS_INJECTION"),
+                arg("IS_INTERMESH_ROUTER"));
         }
 
         // Determine processor

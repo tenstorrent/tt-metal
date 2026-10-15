@@ -42,6 +42,17 @@ struct BridgePlacement {
 // includes live in one TU instead of spreading to every caller.
 const FabricEriscDatamoverConfig& router_config(const ControlPlane& cp);
 
+// Fabric has two credit transports and a host returning credit must write the one the router reads.
+// True means stream registers (increment-encoded deltas), false means counters (running totals).
+bool sender_credits_use_streams(const ControlPlane& cp, std::uint32_t mesh_id, std::uint32_t vc, std::uint32_t index);
+
+// The register id behind sender_credits_use_streams; 0 when that transport is not in use. Never
+// hard-code a stream id -- they are assigned, and a wrong one writes credit into another counter.
+std::uint32_t sender_pkts_completed_stream(
+    const ControlPlane& cp, std::uint32_t mesh_id, std::uint32_t vc, std::uint32_t index);
+std::uint32_t sender_pkts_acked_stream(
+    const ControlPlane& cp, std::uint32_t mesh_id, std::uint32_t vc, std::uint32_t index);
+
 // Reads a live config; does not own it and must not outlive it.
 class EriscBridgePlacement {
 public:

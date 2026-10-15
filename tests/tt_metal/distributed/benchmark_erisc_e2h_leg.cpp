@@ -36,6 +36,7 @@
 #include "tests/tt_metal/distributed/erisc_bridge_bench_producer.hpp"
 #include "tt_metal/distributed/erisc_bridge_placement.hpp"
 #include "tt_metal/distributed/erisc_bridge_region.hpp"
+#include "tt_metal/distributed/erisc_e2h_credit_return.hpp"
 #include "tt_metal/distributed/erisc_e2h_leg.hpp"
 
 using namespace tt::tt_metal;
@@ -48,6 +49,7 @@ namespace {
 
 std::uint32_t g_chan = 0;  // the bridged eth channel, from TT_BRIDGE_E2H_FORCE_CHAN
 bool g_stalled = false;    // a stalled producer never finishes, so close() would wait forever
+bool g_return_credits = false;  // TT_BRIDGE_E2H_RETURN_CREDITS: host completes what the bridge took
 
 std::uint32_t env_u32(const char* n, std::uint32_t d) {
     const char* v = std::getenv(n);
@@ -70,6 +72,7 @@ struct Bound {
     tt::tt_fabric::FabricNodeId dst_node{tt::tt_fabric::MeshId{0}, 0};
     CoreCoord eth_logical{0, 0};
     std::uint32_t status_addr = 0;
+    std::vector<eb::E2HCreditReturn> credit;  // one per serviced channel; empty unless returning
     std::string err;
 };
 
@@ -172,6 +175,47 @@ bool bind_leg(const std::shared_ptr<MeshDevice>& mesh, const E2HLeg::Config& cfg
     out.alias = eb::BridgeArenaAlias::map(out.region, slots, out.err);
     if (!out.alias || !out.region.provision(mesh, MeshCoordinate(0, 0), out.err)) {
         return false;
+    }
+    // The host is the only thing that can complete a frame the bridge took, so without this the
+    // sender halts at credit_ceiling_frames() and the bubble predicate never gates anything.
+    if (g_return_credits) {
+        const auto& rc = eb::router_config(cp);
+        const auto comp_base = static_cast<std::uint32_t>(rc.to_sender_channel_remote_completion_counters_base_addr);
+        const auto ack_base = static_cast<std::uint32_t>(rc.to_sender_channel_remote_ack_counters_base_addr);
+        const auto mesh_id = static_cast<std::uint32_t>(*out.src_node.mesh_id);
+        out.credit.resize(nchan);
+        for (std::uint32_t i = 0; i < nchan; ++i) {
+            auto& c = out.credit[i];
+            c.active = true;
+            c.env = &env;
+            c.dev = dev;
+            c.hal = &env.get_hal();
+            c.eth = out.eth_logical;
+            // Which transport is fabric's choice, not ours, and writing the wrong one is silent.
+            c.use_streams = eb::sender_credits_use_streams(cp, mesh_id, 0, i);
+            const auto off = i * static_cast<std::uint32_t>(sizeof(std::uint32_t));
+            c.completions.addr = comp_base + off;
+            c.acks.addr = ack_base + off;
+            c.completions.stream = eb::sender_pkts_completed_stream(cp, mesh_id, 0, i);
+            c.acks.stream = eb::sender_pkts_acked_stream(cp, mesh_id, 0, i);
+            for (auto* l : {&c.completions, &c.acks}) {
+                if (c.use_streams ? l->stream == 0 : l->addr == off) {
+                    out.err = "credit return: sender channel " + std::to_string(i) + " has no " +
+                              (c.use_streams ? "stream register" : "counter address") + " for its credits";
+                    return false;
+                }
+                // Continue the router's own total: it keeps what it has processed across cases,
+                // and restarting at 0 underflows its unsigned difference.
+                if (!c.use_streams && !eb::read_bytes_from_l1(
+                                          env, dev, out.eth_logical, l->addr, &l->total, sizeof(l->total),
+                                          tt::CoreType::ETH)) {
+                    out.err = "credit return: could not read a credit counter for channel " + std::to_string(i);
+                    return false;
+                }
+                l->injected = l->total;
+                l->seeded = l->total;
+            }
+        }
     }
     E2HLeg::Config bound = cfg;
     bound.alias_region_base = out.region.base();
@@ -281,6 +325,7 @@ BENCHMARK_DEFINE_F(E2HLegFixture, Bridge)(benchmark::State& state) {
 
     const auto kStall = std::chrono::seconds(2);  // resets on progress, so a stuck run reports fast
     std::string stall_why;
+    std::string credit_err;
     for (auto _ : state) {
         auto give_up = std::chrono::steady_clock::now() + kStall;
         while (drained < want) {
@@ -350,6 +395,16 @@ BENCHMARK_DEFINE_F(E2HLegFixture, Bridge)(benchmark::State& state) {
             for (std::uint32_t a = 0; a < nchan; ++a) {
                 leg.retire(a, took_in[a]);
             }
+            // Fabric's own credit, after retire and for the same reason: the sender must not refill
+            // a page the host has not finished reading.
+            for (std::size_t a = 0; a < b.credit.size(); ++a) {
+                if (!b.credit[a].give(took_in[a], credit_err)) {
+                    break;
+                }
+            }
+            if (!credit_err.empty()) {
+                break;
+            }
         }
     }
 
@@ -391,11 +446,23 @@ BENCHMARK_DEFINE_F(E2HLegFixture, Bridge)(benchmark::State& state) {
         state.counters["router_blocked_nodata"] = static_cast<double>(st1.blocked_nodata);
         state.counters["router_free_slots"] = static_cast<double>(st1.free_slots);
     }
+    state.counters["credit_return"] = b.credit.empty() ? 0.0 : 1.0;
+    if (!b.credit.empty()) {
+        double returned = 0.0;
+        for (const auto& c : b.credit) {
+            returned += static_cast<double>(c.completions.total - c.completions.seeded);
+        }
+        state.counters["credits_returned"] = returned;
+        state.counters["credit_streams"] = b.credit.front().use_streams ? 1.0 : 0.0;
+    }
     state.counters["payload_off_w"] = pay_off_known ? static_cast<double>(pay_off_w) : -1.0;
     state.counters["want"] = static_cast<double>(want);
     state.counters["unarmed"] = static_cast<double>(leg.unarmed());
     state.counters["verified"] = verify_ ? 1.0 : 0.0;
     bb::emit_health(state, verify_fail, /*credit_stalls=*/leg.unarmed(), leg.out_of_order());
+    if (stall_why.empty() && !credit_err.empty()) {
+        stall_why = credit_err + router_counters(env, dev, b);
+    }
     if (!stall_why.empty()) {  // a partial run must not read as a pass; its producer never finishes
         state.SkipWithError(stall_why);
         g_stalled = true;
@@ -432,9 +499,18 @@ int main(int argc, char** argv) {
     auto& rt = tt::tt_metal::MetalContext::instance().rtoptions();
     rt.set_e2h_bridge_enable(true);
     rt.set_e2h_bridge_force_chan(g_chan);
-    rt.set_e2h_bridge_no_far_receiver(true);  // the host is the terminus; no completion can return
+    // Self-retire manufactures the credit locally, pinning num_free_slots and making the bubble
+    // predicate vacuous. Returning real credit from the host needs it off.
+    g_return_credits = env_u32("TT_BRIDGE_E2H_RETURN_CREDITS", 0) != 0;
+    // Settable on its own so the control case exists: neither self-retire nor host credit, which
+    // must halt at credit_ceiling_frames() and proves the credits are what carry a passing run.
+    rt.set_e2h_bridge_no_far_receiver(env_u32("TT_BRIDGE_E2H_SELF_RETIRE", g_return_credits ? 0 : 1) != 0);
 
-    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    // Bubble flow control needs deadlock avoidance, which the builder enables only on a Ring/Torus
+    // intra-mesh router -- so a ring descriptor AND this config, or it stays off and proves nothing.
+    tt::tt_fabric::SetFabricConfig(
+        env_u32("TT_BRIDGE_E2H_RING", 0) != 0 ? tt::tt_fabric::FabricConfig::FABRIC_1D_RING
+                                              : tt::tt_fabric::FabricConfig::FABRIC_1D);
     bb::the_mesh() = MeshDevice::create(MeshDeviceConfig(std::nullopt));
     benchmark::Initialize(&argc, argv);
     benchmark::RunSpecifiedBenchmarks();
