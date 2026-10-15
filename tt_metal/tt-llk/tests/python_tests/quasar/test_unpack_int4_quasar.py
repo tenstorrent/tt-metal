@@ -13,6 +13,7 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
+    BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
@@ -20,16 +21,18 @@ from helpers.llk_params import (
     PerfRunType,
     format_dict,
 )
-from helpers.param_config import parametrize
+from helpers.param_config import get_num_blocks_and_num_tiles_in_block, parametrize
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
+    NUM_BLOCKS,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    NUM_TILES_IN_BLOCK,
     RELU_CONFIG,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -97,6 +100,15 @@ def test_unpack_int4_quasar(formats_dest_acc, dest_sync, input_dimensions):
         tile_shape=tile_shape,
     )
 
+    num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync,
+        dest_acc,
+        formats,
+        input_dimensions,
+        tile_dimensions,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
     relu_config = PackGolden.generate_relu_config(
         PackerReluType.NoRelu,
         relu_threshold=0.0,
@@ -118,6 +130,8 @@ def test_unpack_int4_quasar(formats_dest_acc, dest_sync, input_dimensions):
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
             LOOP_FACTOR(1),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(tiles_in_block),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
