@@ -820,23 +820,22 @@ def _config_params(configs, cases):
     ]
 
 
-# Same shape as _ARM_SRC: a fixed child script, parameters as JSON in the environment. ARM_EXPECT names
-# the factory every op in the child must have bound: "qsr" for native, "dfb" for the fallback. The
-# strategy "l1" or "dram" places a tensor interleaved, and then the shard shape and range are None. The
-# strategies "dram_height", "dram_width" and "dram_block" shard it over all DRAM banks, and then the range
-# is None. A shard entry may carry a sixth element, a dict of options: "out" gives the output its own
-# placement (otherwise it takes the inputs'), "b" does the same for b, "output_tensor" supplies a
-# preallocated output with its own placement, "in_place" adds b into a with add_, "grid" (x0, y0, x1, y1)
-# runs the op on that sub-core grid, and "op" runs "subtract", "multiply", "divide" or "multiply_fast" (multiply in fast
-# and approximate mode) instead of add. "out" may also be None, so that the op derives the output's memory config,
-# or "height_specless", an L1 height-sharded config without a shard spec, which the op completes; then
-# "resolved_out" names the placement the output must take. A placement in an option may add a fourth element,
-# "col", for column-major shard order. An entry's tensors stay alive to the end when a later entry repeats its spec, so
-# the repeat lands at new addresses and must hit the program cache; the other entries' tensors are freed, so
-# that many cases fit in L1 one after another. With
-# ARM_EXPECT_NEOS or ARM_EXPECT_DMS (and the device profiler on), every core must show that many Neos
-# running the compute, or DM cores running a reader or writer thread; ARM_EXPECT_CORES names how many
-# cores must report.
+# Same shape as _ARM_SRC: a fixed child script, parameters as JSON in the environment. ARM_EXPECT names the factory
+# every op in the child must have bound: "qsr" for native, "dfb" for the fallback. The strategy "l1" or "dram" places a
+# tensor interleaved, and then the shard shape and range are None. The strategies "dram_height", "dram_width" and
+# "dram_block" shard it over all DRAM banks, and then the range is None. A shard entry may carry a sixth element, a dict
+# of options: "out" gives the output its own placement (otherwise it takes the inputs'), "b" does the same for b,
+# "output_tensor" supplies a preallocated output with its own placement, "in_place" adds b into a with add_, "grid" (x0,
+# y0, x1, y1) runs the op on that sub-core grid, "op" runs "subtract", "multiply", "divide" or "multiply_fast" (multiply
+# in fast and approximate mode) instead of add, and "act" chains SQUARE on a ("lhs"), on b ("rhs"), on both ("both") or
+# on the result ("post"), a lone RELU on the result ("relu"), RELU on a ("relu_lhs"), or SQUARE on a and RELU on the
+# result ("relu_chain"). "out" may also be None, so that the op derives the output's memory config, or
+# "height_specless", an L1 height-sharded config without a shard spec, which the op completes; then "resolved_out" names
+# the placement the output must take. A placement in an option may add a fourth element, "col", for column-major shard
+# order. An entry's tensors stay alive to the end when a later entry repeats its spec, so the repeat lands at new
+# addresses and must hit the program cache; the other entries' tensors are freed, so that many cases fit in L1 one after
+# another. With ARM_EXPECT_NEOS or ARM_EXPECT_DMS (and the device profiler on), every core must show that many Neos
+# running the compute, or DM cores running a reader or writer thread; ARM_EXPECT_CORES names how many cores must report.
 _SHARD_ARM_SRC = """
 import collections, csv, json, os, pathlib, sys
 import torch, ttnn
@@ -882,6 +881,36 @@ OPS = {"add": (ttnn.experimental.quasar.add, {}, torch.add, round_to_bf16),
        "multiply_fast": (ttnn.experimental.quasar.multiply, {"fast_and_approximate_mode": True}, torch.multiply,
                          round_to_bf16),
        "divide": (ttnn.experimental.quasar.divide, {}, torch.divide, round_to_bf16_zero_positive)}
+
+
+def square(x):
+    # SQUARE runs on the SFPU on both kernels, and truncates as the SFPU multiply does.
+    return truncate_to_bf16(x * x).float()
+
+
+def relu(x):
+    # RELU on the SFPU gives +0.0 for a negative input.
+    return torch.where(x > 0, x, torch.zeros_like(x))
+
+
+# act -> (the op's activation arguments, the output from the operands, the exact op and its rounding). SQUARE
+# chains on a, on b, on both or on the result; a lone RELU on the result runs in the packer, on the rounded result.
+# RELU on a, and RELU on the result beside a chain, run on the SFPU.
+SQUARE, RELU = ttnn.UnaryWithParam(ttnn.UnaryOpType.SQUARE), ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+ACTS = {None: ({}, lambda a, b, exact, rounding: rounding(exact(a, b))),
+        "lhs": ({"input_tensor_a_activations": [SQUARE]},
+                lambda a, b, exact, rounding: rounding(exact(square(a), b))),
+        "rhs": ({"input_tensor_b_activations": [SQUARE]},
+                lambda a, b, exact, rounding: rounding(exact(a, square(b)))),
+        "both": ({"input_tensor_a_activations": [SQUARE], "input_tensor_b_activations": [SQUARE]},
+                 lambda a, b, exact, rounding: rounding(exact(square(a), square(b)))),
+        "post": ({"activations": [SQUARE]},
+                 lambda a, b, exact, rounding: square(rounding(exact(a, b)).float()).to(torch.bfloat16)),
+        "relu": ({"activations": [RELU]}, lambda a, b, exact, rounding: torch.relu(rounding(exact(a, b)))),
+        "relu_lhs": ({"input_tensor_a_activations": [RELU]},
+                     lambda a, b, exact, rounding: rounding(exact(relu(a), b))),
+        "relu_chain": ({"input_tensor_a_activations": [SQUARE], "activations": [RELU]},
+                       lambda a, b, exact, rounding: relu(rounding(exact(square(a), b)).float()).to(torch.bfloat16))}
 profile_csv = root / "generated" / "profiler" / ".logs" / "profile_log_device.csv"
 if (EXPECT_NEOS or EXPECT_DMS) and profile_csv.exists():
     profile_csv.unlink()
@@ -928,15 +957,16 @@ try:
         ta = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), memory_config=mem, **cfg)
         tb = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), memory_config=b_mem, **cfg)
         op_fn, op_extra, exact, rounding = OPS[opts.get("op", "add")]
-        golden = rounding(exact(ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float()))
+        act_kwargs, model = ACTS[opts.get("act")]
+        golden = model(ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float(), exact, rounding)
         cached = device.num_program_cache_entries()
         op_kwargs = {}
         if "grid" in opts:
             x0, y0, x1, y1 = opts["grid"]
             op_kwargs["sub_core_grids"] = ttnn.CoreRangeSet({ttnn.CoreRange((x0, y0), (x1, y1))})
         if opts.get("in_place"):
-            if opts.get("op", "add") != "add":
-                failures.append("{}: in place runs add only".format(name))
+            if opts.get("op", "add") != "add" or act_kwargs:
+                failures.append("{}: in place runs add only, with no activation".format(name))
             out = ttnn.experimental.quasar.add_(ta, tb)
         else:
             if "output_tensor" in opts:
@@ -944,7 +974,7 @@ try:
                     torch.zeros(shape), memory_config=memory_config(*opts["output_tensor"]), **cfg)
             if out_mem is not None:
                 op_kwargs["memory_config"] = out_mem
-            out = op_fn(ta, tb, dtype=ttnn.bfloat16, **op_extra, **op_kwargs)
+            out = op_fn(ta, tb, dtype=ttnn.bfloat16, **op_extra, **act_kwargs, **op_kwargs)
         if "resolved_out" in opts and out.memory_config() != memory_config(*opts["resolved_out"]):
             failures.append("{}: the output took {}".format(name, out.memory_config()))
         spec = json.dumps(entry[1:])
@@ -1784,6 +1814,64 @@ def test_native_other_ops_on_the_tail_rings_are_bit_exact(name, knobs):
     _check_arm(p, f"subtract, multiply and divide on the tail rings, {name}")
 
 
+# Activations: SQUARE on a, on b or on the result; a lone RELU on the result, which the packer applies; and RELU on a,
+# or on the result beside a chain, which runs on the SFPU. Each runs on the FPU kernel (add) and on the SFPU kernel
+# (multiply), in one mix of each kind of borrowing: nothing borrowed, beside DRAM with partial tiles; all three
+# borrowed; the inputs borrowed beside an output that moves; the output borrowed beside inputs that move. SQUARE on both
+# inputs runs two self-loop rings on each Neo. block_6's shards hold 6 tiles, which 4 does not divide. The tail rings
+# carry no activation, so at the rule's compute count block_6 takes the NoC path.
+# SQUARE and RELU have exact models. GELU and TANH do not, and on craq-sim they change the SFPU results of the later
+# programs in the same process, on both factories.
+_ACTIVATIONS = ("lhs", "rhs", "post", "relu", "relu_lhs", "relu_chain")
+_ACT_MIXES = ("I.I.I_partial", "B.B.B_partial", "B32.B32.I", "I.I.W32")
+_BLOCK_6 = next(entry for entry in _SMALL_SHARDS if entry[0] == "block_6")
+
+
+def _with_act(entry, act):
+    """A _SHARD_ARM_SRC entry that chains the activation `act`, named after it."""
+    opts = entry[5] if len(entry) > 5 else {}
+    return (f"{entry[0]}/{act}", *entry[1:5], {**opts, "act": act})
+
+
+_ACT_CASES = (
+    [
+        (_with_act(_with_op(entry, op), act), path, split)
+        for op in ("add", "multiply")
+        for act in _ACTIVATIONS
+        for entry, path, split in _MIXED_CASES
+        if entry[0] in _ACT_MIXES
+    ]
+    + [
+        (_with_act(_with_op(entry, op), "both"), path, split)
+        for op in ("add", "multiply")
+        for entry, path, split in _MIXED_CASES
+        if entry[0] == "B.B.B_partial"
+    ]
+    + [
+        (_with_act(_with_op(_BLOCK_6, op), act), _NOC_L1, _noc_split(_tensor_tiles(_BLOCK_6)))
+        for op in ("add", "multiply")
+        for act in ("lhs", "relu")
+    ]
+)
+
+# The activations change only the compute side: one compute thread at the rule's batch, four at batch 1, and the
+# rule, whose batch above ring stride 1 leaves the predicted tiles wrong.
+_ACT_CONFIGS = {name: _MIXED_CONFIGS[name] for name in ("R1C1W1", "rule-n1", "rule")}
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("name, knobs", _config_params(_ACT_CONFIGS, _ACT_CASES))
+def test_native_activations_match_the_prediction(name, knobs):
+    """Activations on a, on b and on the result must run native and give the predicted output.
+
+    The oracle applies each activation as the kernels do: SQUARE truncates its fp32 result to bf16, and RELU clips
+    the rounded result. A self-loop ring too small for its compute threads fails the program, and a tail ring
+    beside an activation fails to compile.
+    """
+    p = _run_shard_arm([case[0] for case in _ACT_CASES], expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"activations, {name}", expect_wrong=_expect_wrong(_ACT_CASES, knobs))
+
+
 # One case per child, as above, and one case of each kind of anchor and walk. The thread counts tell the
 # programs apart where the clusters do not, as both bind the same kernel sources.
 _MIXED_ROUTED = (
@@ -2023,6 +2111,12 @@ def test_native_prediction_tables_cover_their_cases():
     missing_ops = set(_OP_MIXES) - {case[0][0].split("/")[0] for case in _OP_CASES}
     assert not missing_ops, f"these op mixes are not in the mixed table: {missing_ops}"
     cases += [case for case in _OP_CASES if case not in op_padded]
+    # The activation table reuses mixed placements without pad slots, and block_6 on the NoC path.
+    missing_acts = set(_ACT_MIXES) - {case[0][0].split("/")[0] for case in _ACT_CASES}
+    assert not missing_acts, f"these activation mixes are not in the mixed table: {missing_acts}"
+    padded_acts = set(_ACT_MIXES) & _MIXED_PAD_SLOTS
+    assert not padded_acts, f"these activation mixes have pad slots: {padded_acts}"
+    cases += _ACT_CASES
     # In place, a wrong-tile prediction is not verified above a batch of 1: a batch may read other threads'
     # slots, which in place hold their results, not their inputs.
     in_place = [case for case in _MIXED_CASES if len(case[0]) > 5 and case[0][5].get("in_place")]

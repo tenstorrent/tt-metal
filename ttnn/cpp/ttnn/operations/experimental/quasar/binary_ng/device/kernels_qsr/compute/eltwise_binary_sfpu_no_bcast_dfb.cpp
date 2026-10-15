@@ -166,7 +166,7 @@ void kernel_main() {
 #endif
 #if TAIL_TILES
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST) or defined(PACK_RELU)
-#error "the tail rings carry no activation chain or fused RELU, and the native gate admits neither"
+#error "the tail rings carry no activation chain or fused RELU: the factory runs no tail beside one"
 #endif
     // A borrowed shard's tiles past the largest multiple of C: one tail entry per compute thread. A thread
     // past TAIL_TILES computes on padding, which the writer drops.

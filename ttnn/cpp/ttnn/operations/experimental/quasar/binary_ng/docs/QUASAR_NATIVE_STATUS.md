@@ -17,6 +17,78 @@ simulator (~15 s/run, deterministic) with no transfer latency and no contention 
 happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
 less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
 
+# ► Week of 2026-10-12, part 2 — F7: activations run native, on both kernels
+
+## 1. TL;DR
+
+- **The native gate admits activations on a, on b and on the result**, in every layout mix the native path takes,
+  on the FPU and the SFPU kernel. The Metal 2.0 factory already ran them.
+- **Three changes make them correct beside C compute threads.**
+  - The FPU preprocess helper takes the kernel's DataflowBuffer objects, as main's does since #60207. An object
+    that a call builds drains when the call returns.
+  - Each Neo fills and empties its own tile counter of an activation ring, so the ring holds one compute batch
+    per compute thread. A ring of one batch at C = 4 is a host `TT_FATAL`.
+  - The tail rings carry no activation. Beside one, an anchor that borrows all three operands must divide by the
+    compute count, as a slice must, else the op takes the NoC path. The factory reads the activation from the
+    compute defines, as the kernels' tail blocks do.
+- **Exact oracles, measured on craq-sim** (32 of 32 cases, 0 elements differ): SQUARE truncates its fp32 result to
+  bf16 on both kernels, the op keeps its own rounding, and a lone post RELU, which the packer applies, clips the
+  rounded result.
+- **RELU on the SFPU**, on a or b or on the result beside a chain, gives +0.0 for every negative
+  input: 13 of 13 cases exact, on add, multiply and divide. It executes SFPGT, so it runs from craq-sim
+  `b9d8e2f4` on; on `ad401613` the new RELU cases abort the process.
+- **GELU and TANH have no exact model.** Their native outputs equal the Metal 2.0 factory's bit for bit.
+- **Verified** on craq-sim `b9d8e2f4`: the native module 156 passed, 1 skipped, 7 strict expected failures with
+  exact tile counts; 1 / 164 native off; 84 of 84 suite cases at the rule with compute batch 1 and at `1,1,1`,
+  post RELU and lhs RELU now native; the bf16 activation-format cases 88 of 88 at both settings; the 16 GELU, TANH,
+  SQUARE and SIGMOID suite cases and the 2 SiLU SwiGLU cases, one process each at both settings: 36 of 36 runs, each
+  on `kernels_qsr` only; clang-tidy 0 findings on the two files.
+- **Found** (reported, not investigated):
+  - GELU or TANH change the SFPU results of the later programs in the same process, on both factories. Likely
+    cause, by code reading: GELU's fast init loads its lookup table into LREG9, which the SFPU multiply, divide and
+    SQUARE add as their zero, and no init restores it. That would be an LLK hazard, which silicon shows too.
+  - This base's fallback hangs on a lone post RELU beside L1-interleaved operands, and beside `I.I.W32`, with
+    main's fixed `kernels_dfb` copied in. The native factory runs both.
+  - Killed simulator runs had filled `/dev/shm` with 671 segments since July.
+
+---
+
+## 2. Changes
+
+- **Gate** (`matches_quasar_native_slice`): the activation refusal is gone. Divide in fast and approximate mode,
+  a reciprocal pass on b before an FPU multiply, stays refused: it is not validated natively.
+- **Factory**: `TailRings` in `select_borrow_anchor`; the activation flag from the compute defines, which now come
+  before the anchor; the activation rings, and the subtile-broadcast rings that native does not run yet, hold one
+  compute batch per compute thread.
+- **Kernels**: `kernels_qsr/compute/eltwise_utils_dfb.hpp` is main's helper; the FPU kernel builds the pre objects
+  that a chain reads. The tail blocks' `#error` names the factory rule.
+- **Tests**: an `act` option in the arm child, with the measured models; 54 cases in three configurations, among
+  them SQUARE on both inputs (two activation rings on each Neo), RELU on a and RELU beside a chain, which run on
+  the SFPU, and a 6-tile shard that takes the NoC path.
+- **Docs**: design §3 (what native accepts), §6.1 (the oracles), §8 (F7 done; milestone 2 except F5).
+
+---
+
+## 3. Verification
+
+- **The differential**, at compute batch 1: 54 of 54 native outputs equal the Metal 2.0 factory's bit for bit:
+  SQUARE, RELU, GELU, TANH and a GELU→SQUARE chain; add and multiply; DRAM, L1 slices, block shards, and 6-tile
+  shards on the NoC path. Two more cases hang on the fallback (above).
+- **The batched output**, under the rule: the wrong tiles equal the batch model, with activations as without. The
+  strict expected failures check each count: 192 of the 256 tiles of a shard mix, on both kernels.
+- **Each part has a test that fails without it**, one build each:
+  - the gate's refusal restored: `expected every op on kernels_qsr, bound qsr=0 dfb=39`;
+  - one-batch activation rings: `TT_FATAL: Num entries in DFB 1 must be divisible by max of num producers and
+    consumers 4`;
+  - tail rings beside an activation: the kernel's `#error` stops the compute build.
+- **RELU on the SFPU** needs the newer simulator: the `relu_lhs` and `relu_chain` cases abort on `ad401613` (SFPGT
+  `0x97001021`) and pass on `b9d8e2f4`.
+- **The review** (code-review-tt): approved after two rounds. It moved the activation flag to the compute defines
+  and added the case with SQUARE on both inputs; with the rule's batch that case gives the predicted 192 wrong
+  tiles on both kernels.
+
+---
+
 # ► Week of 2026-10-12 — F2: subtract, multiply and divide run native, on a native SFPU kernel
 
 ## 1. TL;DR

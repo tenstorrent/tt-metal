@@ -362,6 +362,10 @@ m2::DataflowBufferSpec make_dfb(
 // not borrowed moves in the anchor's tile order.
 enum class AnchorKind { kNone, kShard, kSlice };
 
+// Whether a program may send a borrowed shard's last tiles through the tail rings. The tail rings carry no
+// activation chain, so a program with activations runs none.
+enum class TailRings { kAllowed, kNone };
+
 struct BorrowAnchor {
     AnchorKind kind = AnchorKind::kNone;
     std::array<bool, 3> borrowed{};  // a, b, c
@@ -521,12 +525,17 @@ uint32_t legacy_cluster_count(const Tensor& a, const Tensor& b, const Tensor& c,
 // The anchor that borrows the most operands, among the anchors on at least as many clusters as the legacy binary_ng
 // uses (legacy_cluster_count). On a tie, the one that borrows the output, then the one on more clusters, then the
 // earlier candidate: the output's shard config, a's, b's, the banks. A borrowed ring must divide by its max(producers,
-// consumers); with all three borrowed, a shard's tail tiles go through the tail rings instead, and a slice has no tail
-// rings. A pad slot is computed and never read back; an operand that moves skips it. A program-cache hit keeps this
-// decision. It reads only the hashed specs and worker grid, the tuning, and the bank layout of the device, which never
-// changes after the device opens.
+// consumers); with all three borrowed, a shard's tail tiles go through the tail rings instead where `tail_rings`
+// allows them, and a slice has no tail rings. A pad slot is computed and never read back; an operand that moves skips
+// it. A program-cache hit keeps this decision. It reads only the hashed specs, activations and worker grid, the tuning,
+// and the bank layout of the device, which never changes after the device opens.
 BorrowAnchor select_borrow_anchor(
-    const Tensor& a, const Tensor& b, const Tensor& c, const CoreRangeSet& worker_grid, const NativeTuning& tuning) {
+    const Tensor& a,
+    const Tensor& b,
+    const Tensor& c,
+    const CoreRangeSet& worker_grid,
+    const NativeTuning& tuning,
+    TailRings tail_rings) {
     const std::array<const Tensor*, 3> operands{&a, &b, &c};
     const uint32_t compute_threads = native_compute_threads(tuning);
     const uint32_t min_clusters = legacy_cluster_count(a, b, c, worker_grid);
@@ -537,7 +546,8 @@ BorrowAnchor select_borrow_anchor(
         const bool inputs_move = !anchor.borrowed[0] || !anchor.borrowed[1];
         const bool output_moves = !anchor.borrowed[2];
         if (!inputs_move && !output_moves) {
-            return anchor.kind == AnchorKind::kShard || anchor.tiles % compute_threads == 0;
+            const bool tails_take_the_rest = anchor.kind == AnchorKind::kShard && tail_rings == TailRings::kAllowed;
+            return tails_take_the_rest || anchor.tiles % compute_threads == 0;
         }
         const NativeConfig config = resolve_native_config(tuning, {.inputs = inputs_move, .output = output_moves});
         const uint32_t input_ring = std::max(config.reader_threads, compute_threads);
@@ -644,57 +654,6 @@ ProgramArtifacts create_no_bcast_artifacts(
         a_buffer != nullptr && (is_scalar || b_buffer != nullptr) && c_buffer != nullptr,
         "binary_ng Quasar-native no-bcast factory requires allocated device buffers");
 
-    // --- Borrow vs NoC routing: the anchor (select_borrow_anchor) borrows what sits in its placement, and every
-    // other operand moves through its own sharding-aware TensorAccessor in the anchor's tile order, or, without
-    // an anchor, over a linear page-id walk, which is correct for any mix. ---
-    const BorrowAnchor anchor = select_borrow_anchor(a, *b_opt, c, op.worker_grid, t);
-    const bool a_borrowed = anchor.borrowed[0];
-    const bool b_borrowed = anchor.borrowed[1];
-    const bool c_borrowed = anchor.borrowed[2];
-    const bool borrow_all = a_borrowed && b_borrowed && c_borrowed;
-    // Tiles of every core under the anchor, pad slots included: a shard, or a bank's slice.
-    const uint32_t borrowed_tiles = anchor.tiles;
-    const uint32_t c_num_tiles = c.physical_volume() / c.tensor_spec().tile().get_tile_hw();
-
-    // The values this program runs with. Where both inputs are borrowed the reader runs one thread, and where
-    // the output is borrowed the writer does; a borrowed ring's stride is then max(R, C) or max(C, W), which the
-    // anchor's tile count divides. The rule does not batch beside a DRAM operand.
-    const auto in_dram = [](const Tensor& tensor) { return tensor.memory_config().buffer_type() == BufferType::DRAM; };
-    const bool any_dram = in_dram(a) || (!is_scalar && in_dram(*b_opt)) || in_dram(c);
-    const NativeConfig cfg = resolve_native_config(
-        t, {.inputs = !a_borrowed || !b_borrowed, .output = !c_borrowed, .dram = any_dram, .sfpu = is_sfpu});
-    const uint32_t reader_threads = cfg.reader_threads;
-    const uint32_t writer_threads = cfg.writer_threads;
-    // A borrowed ring must divide by the compute count, so, until the DFB can give each tile counter its own
-    // capacity, the tiles past its largest multiple go through three owned tail rings of one entry per compute
-    // thread. A shard smaller than the count has no borrowed ring: all of it uses the tail rings. The tail rings
-    // run only with all three operands borrowed; otherwise the anchor is borrowed only when the count divides.
-    // The tail rings are temporary. When the DFB gives each tile counter its own capacity, remove them: the tail DFBs,
-    // TAIL_TILES, HAS_MAIN_RING and the tail blocks of the reader, the writer and both compute kernels. The reader's
-    // publish and the compute already take uneven shares. The divisibility checks in select_borrow_anchor come from the
-    // same DFB rule.
-    const uint32_t tail_tiles = borrow_all ? borrowed_tiles % compute_threads : 0u;
-    const bool has_main_ring = !borrow_all || borrowed_tiles > tail_tiles;
-    if (anchor.kind != AnchorKind::kNone) {
-        log_debug(
-            tt::LogOp,
-            "binary_ng Quasar-native: the {} anchor borrows a={} b={} c={}, {} tiles per core on {} cores, R={} C={} "
-            "W={}, {} in the tail rings",
-            anchor.kind == AnchorKind::kShard ? "shard" : "slice",
-            a_borrowed,
-            b_borrowed,
-            c_borrowed,
-            borrowed_tiles,
-            anchor.cores.size(),
-            reader_threads,
-            compute_threads,
-            writer_threads,
-            tail_tiles);
-    }
-
-    // HAS_SHARDING mirrors the descriptor's define for a borrowed shard; kernels_qsr/ does not read it.
-    const bool has_sharding = anchor.kind == AnchorKind::kShard;
-
     // --- Dtypes / data formats / tile sizes (mirrors the descriptor factory). For a scalar there is no
     // `b`, so b_dtype is derived exactly as the descriptor does (binary_ng_program_factory.cpp): the
     // scalar is packed as bf16 for block-float a, else the sfpu path keeps a_dtype, else bf16. b_tile
@@ -792,6 +751,63 @@ ProgramArtifacts create_no_bcast_artifacts(
     const bool has_rhs_act = !compute_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty();
     const bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
+
+    // --- Borrow vs NoC routing: the anchor (select_borrow_anchor) borrows what sits in its placement, and every
+    // other operand moves through its own sharding-aware TensorAccessor in the anchor's tile order, or, without
+    // an anchor, over a linear page-id walk, which is correct for any mix. ---
+    // An activation as the compute kernels' tail blocks see it: a chain on a, on b or on the result, or PACK_RELU.
+    const bool has_activations = has_lhs_act || has_rhs_act ||
+                                 !compute_defines["PROCESS_POST_ACTIVATIONS(i)"].empty() ||
+                                 compute_defines.contains("PACK_RELU");
+    const BorrowAnchor anchor =
+        select_borrow_anchor(a, *b_opt, c, op.worker_grid, t, has_activations ? TailRings::kNone : TailRings::kAllowed);
+    const bool a_borrowed = anchor.borrowed[0];
+    const bool b_borrowed = anchor.borrowed[1];
+    const bool c_borrowed = anchor.borrowed[2];
+    const bool borrow_all = a_borrowed && b_borrowed && c_borrowed;
+    // Tiles of every core under the anchor, pad slots included: a shard, or a bank's slice.
+    const uint32_t borrowed_tiles = anchor.tiles;
+    const uint32_t c_num_tiles = c.physical_volume() / c.tensor_spec().tile().get_tile_hw();
+
+    // The values this program runs with. Where both inputs are borrowed the reader runs one thread, and where
+    // the output is borrowed the writer does; a borrowed ring's stride is then max(R, C) or max(C, W), which the
+    // anchor's tile count divides. The rule does not batch beside a DRAM operand.
+    const auto in_dram = [](const Tensor& tensor) { return tensor.memory_config().buffer_type() == BufferType::DRAM; };
+    const bool any_dram = in_dram(a) || (!is_scalar && in_dram(*b_opt)) || in_dram(c);
+    const NativeConfig cfg = resolve_native_config(
+        t, {.inputs = !a_borrowed || !b_borrowed, .output = !c_borrowed, .dram = any_dram, .sfpu = is_sfpu});
+    const uint32_t reader_threads = cfg.reader_threads;
+    const uint32_t writer_threads = cfg.writer_threads;
+    // A borrowed ring must divide by the compute count, so, until the DFB can give each tile counter its own
+    // capacity, the tiles past its largest multiple go through three owned tail rings of one entry per compute
+    // thread. A shard smaller than the count has no borrowed ring: all of it uses the tail rings. The tail rings
+    // run only with all three operands borrowed and no activation; otherwise the anchor is borrowed only when the
+    // count divides.
+    // The tail rings are temporary. When the DFB gives each tile counter its own capacity, remove them: the tail DFBs,
+    // TAIL_TILES, HAS_MAIN_RING and the tail blocks of the reader, the writer and both compute kernels. The reader's
+    // publish and the compute already take uneven shares. The divisibility checks in select_borrow_anchor come from the
+    // same DFB rule.
+    const uint32_t tail_tiles = borrow_all ? borrowed_tiles % compute_threads : 0u;
+    const bool has_main_ring = !borrow_all || borrowed_tiles > tail_tiles;
+    if (anchor.kind != AnchorKind::kNone) {
+        log_debug(
+            tt::LogOp,
+            "binary_ng Quasar-native: the {} anchor borrows a={} b={} c={}, {} tiles per core on {} cores, R={} C={} "
+            "W={}, {} in the tail rings",
+            anchor.kind == AnchorKind::kShard ? "shard" : "slice",
+            a_borrowed,
+            b_borrowed,
+            c_borrowed,
+            borrowed_tiles,
+            anchor.cores.size(),
+            reader_threads,
+            compute_threads,
+            writer_threads,
+            tail_tiles);
+    }
+
+    // HAS_SHARDING mirrors the descriptor's define for a borrowed shard; kernels_qsr/ does not read it.
+    const bool has_sharding = anchor.kind == AnchorKind::kShard;
 
     // --- num_tiles_per_cycle: tiles per tile_regs_acquire, which the DST capacity bounds; the rule's 8 is all
     // of it in bf16. Neither batch has to divide a thread's share: the kernels run a short last batch. A
@@ -992,15 +1008,14 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     const tt::DataFormat a_inter_df = is_sfpu ? a_df : (op_has_exp ? tt::DataFormat::Float16_b : a_df);
     const tt::DataFormat b_inter_df = is_sfpu ? b_df : (op_has_exp ? tt::DataFormat::Float16_b : b_df);
-    // post_lhs/post_rhs intermediate rings (c_3/c_4): num_tiles_per_cycle entries, matching the
-    // descriptor factory's intermediate CBs. Allocated only when that operand has an activation chain.
-    // The compute kernel both produces (PREPROCESS) and consumes (binary op) these in strict program
-    // order on a single thread, so one chunk's worth of entries is sufficient.
+    // post_lhs/post_rhs intermediate rings (c_3/c_4), allocated only when that operand has an activation chain.
+    // Each compute thread produces (PREPROCESS) and consumes (binary op) its own tile counter of the ring, in
+    // program order, so the ring holds one batch per compute thread.
     if (has_lhs_act) {
         dfbs.push_back(make_dfb(
             POST_LHS,
             static_cast<uint32_t>(a_tile.get_tile_size(a_inter_df)),
-            num_tiles_per_cycle,
+            compute_threads * num_tiles_per_cycle,
             a_inter_df,
             a_tile,
             std::nullopt));
@@ -1009,24 +1024,23 @@ ProgramArtifacts create_no_bcast_artifacts(
         dfbs.push_back(make_dfb(
             POST_RHS,
             static_cast<uint32_t>(b_tile.get_tile_size(b_inter_df)),
-            num_tiles_per_cycle,
+            compute_threads * num_tiles_per_cycle,
             b_inter_df,
             b_tile,
             std::nullopt));
     }
 
-    // llk_post intermediate DFB for the subtile broadcast (c_5 for LHS bcast, c_6 for RHS bcast): the
-    // compute both produces (unary_bcast<ROW|COL|SCALAR> -> pack) and consumes (binary op) it in program
-    // order on one thread, so num_tiles_per_cycle entries suffice -- the same self-loop precedent as the
-    // POST_LHS/POST_RHS activation DFBs. (COL reuses the single expanded tile across a tile-row, SCALAR
-    // across the whole (N,C) slab: produced once, read freq times, popped once -- still one live entry.)
-    // Format is the broadcast operand's own format (bf16 on this path; op_has_exp never reaches the LLK
-    // bcast path). Allocated only for the operand being broadcast.
+    // llk_post intermediate DFB for the subtile broadcast (c_5 for LHS bcast, c_6 for RHS bcast): each compute
+    // thread produces (unary_bcast<ROW|COL|SCALAR> -> pack) and consumes (binary op) its own tile counter of it in
+    // program order, so the ring holds one batch per compute thread, as the POST_LHS/POST_RHS rings do. (COL reuses
+    // the single expanded tile across a tile-row, SCALAR across the whole (N,C) slab: produced once, read freq
+    // times, popped once -- still one live entry.) Format is the broadcast operand's own format (bf16 on this path;
+    // op_has_exp never reaches the LLK bcast path). Allocated only for the operand being broadcast.
     if (bcast_lhs) {
         dfbs.push_back(make_dfb(
             LLK_POST_LHS,
             static_cast<uint32_t>(a_tile.get_tile_size(a_inter_df)),
-            num_tiles_per_cycle,
+            compute_threads * num_tiles_per_cycle,
             a_inter_df,
             a_tile,
             std::nullopt));
@@ -1035,7 +1049,7 @@ ProgramArtifacts create_no_bcast_artifacts(
         dfbs.push_back(make_dfb(
             LLK_POST_RHS,
             static_cast<uint32_t>(b_tile.get_tile_size(b_inter_df)),
-            num_tiles_per_cycle,
+            compute_threads * num_tiles_per_cycle,
             b_inter_df,
             b_tile,
             std::nullopt));

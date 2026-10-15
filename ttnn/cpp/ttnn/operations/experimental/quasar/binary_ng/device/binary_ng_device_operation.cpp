@@ -675,13 +675,8 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (attributes.is_sfpu && op_type != BinaryOpType::MUL && op_type != BinaryOpType::DIV) {
         return false;
     }
-    // Divide in fast and approximate mode is a reciprocal pass on b before an FPU multiply: an activation chain.
+    // Divide in fast and approximate mode, a reciprocal pass on b before an FPU multiply, is not validated on Quasar.
     if (!attributes.is_sfpu && op_type == BinaryOpType::DIV) {
-        return false;
-    }
-    // Each activation adds a self-loop DFB whose multi-thread behaviour is unproven.
-    if (!attributes.lhs_activations.empty() || !attributes.rhs_activations.empty() ||
-        !attributes.post_activations.empty()) {
         return false;
     }
     // Attributes, not tensor.layout(): output_layout has no tensor when none was supplied.
