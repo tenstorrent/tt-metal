@@ -363,12 +363,13 @@ pipeline inputs and the admitted PacketInjection profile. Epoch changes and
 recovery are explicit operator actions; the runner never resets a device.
 
 `tools/run_characterization.py` accepts explicit `--id` selections, build/firmware/
-Metal paths, visible device and campaign directory. The manifest contains only
+Metal paths, visible device, campaign directory and, to collect, a `--host-label`
+naming the host. The label is recorded in the campaign's `host.json` and in every
+attempt record, and a campaign refuses a second label. The manifest contains only
 inputs consumed by execution or validation:
 
 | Field | Consumer |
 |---|---|
-| `host` | Rejects execution on another host |
 | `common_environment` | Settings shared by the selected commands |
 | `configurations` | Fixed list of selectable cases; frozen with each campaign |
 | Case `id` | Selection and coverage identity |

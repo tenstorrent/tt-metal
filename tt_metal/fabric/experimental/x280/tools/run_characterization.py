@@ -16,7 +16,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import socket
 import subprocess
 import tempfile
 from string import Template
@@ -62,12 +61,25 @@ def validate_test_report(path, expected):
         raise ValueError("gtest failed, skipped or did not complete")
 
 
-def run_one(manifest, config, values, campaign, engine):
+def record_host_label(campaign, label):
+    """Record the campaign's host label on first use; raise ValueError naming both when it differs."""
+    path = campaign / "host.json"
+    if path.exists():
+        recorded = json.loads(path.read_text())["host_label"]
+        if recorded != label:
+            raise ValueError(f"campaign was collected on host {recorded!r}, not {label!r}")
+        return
+    with path.open("x") as output:
+        output.write(json.dumps({"host_label": label}, indent=2) + "\n")
+
+
+def run_one(manifest, config, values, campaign, engine, host_label=None):
     """Retain one attempt and validate its exact record set; never reset hardware."""
     attempt = Path(tempfile.mkdtemp(prefix=config["id"] + ".", dir=campaign / "attempts"))
     values = dict(values, CAMPAIGN=str(attempt))
     record = {
         "configuration": config["id"],
+        "host_label": host_label,
         "status": "running",
         "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
@@ -119,11 +131,12 @@ def main():
     parser.add_argument("--metal-src", type=Path, required=True)
     parser.add_argument("--device", required=True)
     parser.add_argument("--id", action="append", required=True)
+    parser.add_argument("--host-label", help="names the collecting host in the campaign record; required to collect")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
-    if set(manifest) != {"host", "common_environment", "configurations"}:
-        parser.error("manifest requires only host, common_environment and configurations")
+    if set(manifest) != {"common_environment", "configurations"}:
+        parser.error("manifest requires only common_environment and configurations")
     for config in manifest["configurations"]:
         if set(config) != {"id", "member", "argv", "environment"}:
             parser.error("each configuration requires only id, member, argv and environment")
@@ -158,8 +171,8 @@ def main():
                 )
             )
         return 0
-    if socket.getfqdn() != manifest["host"]:
-        parser.error("campaign is restricted to the authorized host")
+    if not args.host_label:
+        parser.error("--host-label is required to collect a campaign")
     if subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=engine).returncode:
         parser.error("commit producer changes before collection")
     untracked = subprocess.check_output(
@@ -175,9 +188,13 @@ def main():
     if not frozen.exists():
         with frozen.open("x") as output:
             output.write(json.dumps(manifest, indent=2) + "\n")
+    try:
+        record_host_label(campaign, args.host_label)
+    except ValueError as error:
+        parser.error(f"{error}; choose a new campaign directory")
     (campaign / "attempts").mkdir(exist_ok=True)
     for config in selected:
-        if not run_one(manifest, config, values, campaign, engine):
+        if not run_one(manifest, config, values, campaign, engine, args.host_label):
             return 1
     return 0
 

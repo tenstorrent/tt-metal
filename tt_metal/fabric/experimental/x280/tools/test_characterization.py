@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from run_characterization import command_for, run_one, validate_test_report, write_attempt
+from run_characterization import command_for, record_host_label, run_one, validate_test_report, write_attempt
 from tabulate_suites import (
     WARMUP_SOURCE,
     ParseError,
@@ -687,6 +687,15 @@ class AttemptLogging(unittest.TestCase):
             "configurations": [self.config],
         }
         (self.root / "manifest.json").write_text(json.dumps(self.manifest))
+
+    def test_a_campaign_keeps_the_host_label_it_was_started_with(self):
+        record_host_label(self.root, "host-a")
+        record_host_label(self.root, "host-a")
+        with self.assertRaisesRegex(ValueError, "collected on host 'host-a', not 'host-b'"):
+            record_host_label(self.root, "host-b")
+        self.assertTrue(run_one(self.manifest, self.config, {}, self.root, self.engine, "host-a"))
+        attempt = next((self.root / "attempts").iterdir())
+        self.assertEqual(json.loads((attempt / "attempt.json").read_text())["host_label"], "host-a")
 
     def test_one_record_and_one_hash_list_round_trip(self):
         self.assertTrue(run_one(self.manifest, self.config, {}, self.root, self.engine))

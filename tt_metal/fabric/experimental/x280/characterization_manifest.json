@@ -1,5 +1,4 @@
 {
-  "host": "x280-characterization-host",
   "common_environment": {
     "TT_VISIBLE_DEVICES": "${DEVICE}",
     "TT_METAL_RUNTIME_ROOT": "${METAL_SRC}",
