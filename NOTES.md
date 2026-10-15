@@ -14,3 +14,5 @@
 - Next: check logs (noise_seed=20000 only in gen #2), quote Stage 2 denoise for gen #1/#2, copy mp4s to
   g15blx02, run ltx_eval video --vbench-ref, look at stills; if ok, ttp push to ltx-rt (ff only).
 - Cleanup at end: ~/fasth3/t511 and /var/tmp/fasth3/t511 on blx03.
+- 2026-10-15 04:13 PDT: queued; runner restarted pid 49491 (blx03 rebooted ~03:51 PDT), t503-ab-r1/-r2 ahead
+  (they stop early on t503's last_fail guard). ttp checks started in run 1958 (checks.out/.rc there).
