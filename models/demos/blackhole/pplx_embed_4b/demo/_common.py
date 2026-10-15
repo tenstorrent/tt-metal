@@ -433,7 +433,7 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
         else:
             os.environ.setdefault("QWEN_SDPA_GRID", "12,10")
         os.environ.setdefault("QWEN_SDPA_K_CHUNK", "512")
-    # SDPA writes its output straight in the [B, 1, S, H*d] layout (output_heads_concat=True, a tile-id
+    # SDPA writes its output straight in the [B, 1, S, H*d] layout (output_concat_heads=True, a tile-id
     # remap in the SDPA writer), so the concat-heads pass (142 MB per layer at bs32) is skipped. Bit-identical
     # to concat_heads(SDPA). Cold e2e: bs8 117.7 -> 115.4, bs16 226.2 -> 221.9, bs32 433.8 -> 430.1;
     # sustained bs32 445.8 -> 440.3. bs1 keeps the model-local concat op (4 us). Opt out: QWEN_SDPA_CONCAT_OUT=0.
@@ -513,14 +513,16 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
             and (os.getenv("TT_PREFILL_QKV_L1") != "1" or os.getenv("QWEN_FUSED_ADD_NORM_PREALLOC") == "1")
         ):
             os.environ.setdefault("QWEN_FUSED_ADD_NORM_SUM1_L1", "1")
-    # Batched ISL 512 SDPA with reuse_kv: each core reads a KV head's K/V once instead of once per Q chunk (at q512 the
+    # Batched ISL 512 SDPA with K/V retention (automatic in SDPA with one K chunk; originally the reuse_kv flag): each
+    # core reads a KV head's K/V once instead of once per Q chunk (at q512 the
     # 4 Q heads sharing a KV head each re-read it: 142 MB per call at bs16, DRAM-bound and contention-limited), and the
     # reuse calls take q128 (2048 units at bs16 balance 120 cores). Standalone per call, model config -> reuse q128:
-    # bs8 247.5 -> 233.9 us (12x8), bs16 515 -> 355 (12x10), bs32 911.6 -> 620.5 (12x10). Opt out: QWEN_SDPA_REUSE_KV=0.
+    # bs8 247.5 -> 233.9 us (12x8), bs16 515 -> 355 (12x10), bs32 911.6 -> 620.5 (12x10). QWEN_SDPA_REUSE_KV=0 keeps
+    # the model's q chunk (retention itself is not switchable).
     if batch_size in (8, 16, 32) and seq_len == 512 and os.getenv("QWEN_SDPA_REUSE_KV", "1") == "1":
         os.environ.setdefault("QWEN_SDPA_REUSE_KV", "1")
         os.environ.setdefault("QWEN_SDPA_REUSE_Q_CHUNK", "128")
-    # bs8 / bs16 (ISL 512): the heads op writes K / V to L1 interleaved (Q stays in DRAM), so reuse_kv SDPA reads them
+    # bs8 / bs16 (ISL 512): the heads op writes K / V to L1 interleaved (Q stays in DRAM), so the retaining SDPA reads them
     # from L1. Standalone SDPA per call: bs8 237.0 -> 201.2 us, bs16 355.8 -> 308.7 (bench_sdpa_bs16_ablate.py <bs> l1;
     # Q or the output in L1 add little on top). sustained_run.sh, 3 alternating rounds, cold / sustained (chips 0 / 1): bs8
     # 78.3 / 97.2 -> 77.0 / 97.2 ms (the settled clock drops ~20 MHz), bs16 145.6 / 192.6 -> 144.5 / 191.5 ms; STS-B
@@ -549,10 +551,11 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
         os.environ.setdefault("QWEN_BS1_NORM_SHARDED_OUT", "1")
     if batch_size == 1 and os.getenv("QWEN_SDPA_BS1_Q256", "1") == "1":
         os.environ.setdefault("QWEN_SDPA_Q_CHUNK", "256")
-        # bs1 GQA packing (SDPA pack_gqa_heads): each KV head's K/V streams once down one 8-core chain instead
+        # bs1 GQA packing (originally SDPA's pack_gqa_heads flag, now its automatic Q-head crossing, which a q chunk
+        # that does not divide S turns on): each KV head's K/V streams once down one 8-core chain instead
         # of once per Q head, and one 512-token K chunk then beats two of 256. SDPA 49.7 -> 35.9 us/call in-model;
         # e2e 17.19 -> 16.70 ms (-2.8%, 3 alternating 30-it A/B pairs, chip 0); fixed-512 STS-B 0.8121 -> 0.8133.
-        # Opt out: QWEN_SDPA_GQA_PACK=0 (k 256 then; packed with k 256 is bit-identical to unpacked).
+        # Opt out: QWEN_SDPA_GQA_PACK=0 (q256 / k256 then, which divides S, so no crossing).
         if os.getenv("QWEN_SDPA_GQA_PACK", "1") == "1":
             os.environ.setdefault("QWEN_SDPA_GQA_PACK", "1")
             os.environ.setdefault("QWEN_SDPA_K_CHUNK", "512")

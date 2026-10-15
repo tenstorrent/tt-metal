@@ -28,7 +28,8 @@ def pc(grid=(12, 10), q=512, k=512, approx=True):
     )
 
 
-# (name, placement of q / kv / out, program config[, pack_gqa_heads])
+# (name, placement of q / kv / out, program config[, pack_gqa_heads, reuse_kv]). Since the rebase onto
+# amorrison/sdpa-gqa-kv-sharing both flags are automatic in SDPA (Q-head crossing, K/V retention) and ignored here.
 ARMS = [
     ("model config (12x10 q512/k512)", (DRAM, DRAM, DRAM), pc()),
     ("reuse_kv, 12x10 q128", (DRAM, DRAM, DRAM), pc(q=128), False, True),
@@ -66,9 +67,7 @@ try:
     torch.manual_seed(0)
     q_h, k_h, v_h = (torch.randn(BATCH, n, 512, 128) for n in (32, 8, 8))
     ref = None
-    for name, (qm, kvm, om), cfg, *flags in ARMS:
-        pack = bool(flags and flags[0])
-        reuse = bool(len(flags) > 1 and flags[1])
+    for name, (qm, kvm, om), cfg, *_flags in ARMS:
         try:
             q = ttnn.from_torch(q_h, dtype=B8, layout=ttnn.TILE_LAYOUT, device=D, memory_config=qm)
             k = ttnn.from_torch(k_h, dtype=B8, layout=ttnn.TILE_LAYOUT, device=D, memory_config=kvm)
@@ -84,9 +83,7 @@ try:
                     program_config=cfg,
                     compute_kernel_config=CK,
                     memory_config=om,
-                    output_heads_concat=True,
-                    pack_gqa_heads=pack,
-                    reuse_kv=reuse,
+                    output_concat_heads=True,
                 )
 
             out = ttnn.to_torch(run()).float()

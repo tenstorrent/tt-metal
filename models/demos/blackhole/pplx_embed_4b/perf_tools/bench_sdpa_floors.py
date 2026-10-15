@@ -84,8 +84,7 @@ def main():
                         program_config=cfg,
                         compute_kernel_config=CK,
                         memory_config=om,
-                        output_heads_concat=True,
-                        reuse_kv=True,
+                        output_concat_heads=True,
                     )
                     ttnn.deallocate(run())
                     ts = [traced(run, n=1) for _ in range(7)]

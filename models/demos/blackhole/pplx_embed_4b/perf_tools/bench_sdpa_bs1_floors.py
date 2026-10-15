@@ -1,5 +1,5 @@
 # bs1 SDPA at the model's call (profile attributes at 3164ba1): Q [1, 32, 512, 128], K / V [1, 8, 512, 128] bfp8 in L1
-# interleaved, pack_gqa_heads, output_heads_concat, q192 / k512 on 11x8 (88 cores), LoFi, exp approx, scale 1/sqrt(128).
+# interleaved, GQA Q-head crossing (automatic at q192), output_concat_heads, q192 / k512 on 11x8 (88 cores), LoFi, exp approx, scale 1/sqrt(128).
 # Run once per kernel tree of sdpa_kernel_variants.py (base / conly / dmonly / dmread / dmwrite / zones ...):
 #   cd <dir without a ttnn/ tree>; TT_METAL_KERNEL_PATH=<out>/<variant> TT_METAL_CACHE=<out>/cache_<variant> \
 #     TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_DIR=<prof> python bench_sdpa_bs1_floors.py
@@ -47,8 +47,7 @@ def main():
             program_config=pc,
             compute_kernel_config=ck,
             memory_config=L1,
-            pack_gqa_heads=True,
-            output_heads_concat=True,
+            output_concat_heads=True,
         )
         o = ttnn.to_torch(fn()).float().reshape(1, 512, 32, 128).transpose(1, 2)
         qq, kk, vv = (ttnn.to_torch(t).float() for t in (q, k, v))

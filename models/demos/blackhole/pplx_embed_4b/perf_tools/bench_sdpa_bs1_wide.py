@@ -61,8 +61,7 @@ try:
             program_config=pcfg,
             compute_kernel_config=CK,
             memory_config=L1,
-            pack_gqa_heads=True,
-            output_heads_concat=concat,
+            output_concat_heads=concat,
         )
 
     ref_fn = run(8, 8, 256, 512)

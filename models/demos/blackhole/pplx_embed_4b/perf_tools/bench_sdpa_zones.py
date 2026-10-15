@@ -90,8 +90,7 @@ def main():
                     program_config=cfg,
                     compute_kernel_config=CK,
                     memory_config=DRAM,
-                    output_heads_concat=True,
-                    reuse_kv=True,
+                    output_concat_heads=True,
                 )
             )
         ttnn.synchronize_device(D)

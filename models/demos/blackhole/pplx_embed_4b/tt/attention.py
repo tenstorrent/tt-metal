@@ -212,7 +212,7 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
     """Return a wrapper that forces ``is_causal=False`` and injects the padding mask.
 
     ``concat_out`` (QWEN_SDPA_CONCAT_OUT=1, batched prefill only): ask SDPA for its output in the
-    ``[B, 1, S, H*d]`` layout (``output_heads_concat=True``), which is what ``nlp_concat_heads`` would
+    ``[B, 1, S, H*d]`` layout (``output_concat_heads=True``), which is what ``nlp_concat_heads`` would
     produce, so that pass (142 MB per layer at bs32) is skipped. The concat wrapper recognises the tensor.
     """
 
@@ -222,13 +222,12 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
     # bs1 as well (QWEN_SDPA_CONCAT_OUT_BS1=1): the q256 8x8 SDPA drains faster into [1, 1, S, H*d]
     # (standalone 57.3 -> 54.1 us) and the 4.6 us model-local concat op disappears.
     concat_out_bs1 = os.getenv("QWEN_SDPA_CONCAT_OUT_BS1", "1") == "1"
-    # bs1 (QWEN_SDPA_GQA_PACK=1): SDPA's pack_gqa_heads schedules the 4 Q heads sharing a KV head as one head
-    # of 4*S rows, so each KV head's K/V streams once down one 8-core chain instead of once per Q head.
-    # Unmasked non-causal calls only (the serving pad mask takes the unpacked call).
+    # bs1 (QWEN_SDPA_GQA_PACK=1): unmasked non-causal calls take their own q chunk and grid
+    # (QWEN_SDPA_GQA_PACK_Q_CHUNK, QWEN_SDPA_GQA_PACK_GRID=x,y). SDPA crosses query heads on its own when the q chunk
+    # does not divide S (GQA Q-head crossing): a chunk runs on into the next Q head of its KV head's group, so at bs1
+    # q192 on 11x8 gives each KV head 11 chunks of its 64 row tiles, one per core of one grid row (88 cores, 6 row
+    # tiles each vs 8 on 8x8), and the K/V chains are keyed by KV head. The serving pad mask keeps the model's config.
     gqa_pack = os.getenv("QWEN_SDPA_GQA_PACK", "0") == "1"
-    # Packed calls take their own q chunk and grid (QWEN_SDPA_GQA_PACK_Q_CHUNK, QWEN_SDPA_GQA_PACK_GRID=x,y): at bs1,
-    # q192 on 11x8 gives each KV head 11 chunks of its 64 packed row tiles, one per core of one grid row (88 cores,
-    # 6 row tiles each vs 8 on 8x8). Unpacked calls keep the model's config.
     pack_q_chunk = int(os.getenv("QWEN_SDPA_GQA_PACK_Q_CHUNK", "0"))
     pack_grid = tuple(int(x) for x in os.getenv("QWEN_SDPA_GQA_PACK_GRID", "0,0").split(","))
     pack_cfgs = {}
@@ -247,10 +246,10 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
             )
         return pack_cfgs[key]
 
-    # Batched (QWEN_SDPA_REUSE_KV=1): SDPA's reuse_kv keeps K/V in a core's CBs across its consecutive Q chunks of the
-    # same (batch, KV head) instead of re-reading them per chunk (non-causal, unmasked, one K chunk). With K/V no
-    # longer re-read per chunk, finer Q chunks balance the grid for free: those calls take QWEN_SDPA_REUSE_Q_CHUNK
-    # (the grid stays). Masked / causal calls keep the model's config (a small q chunk without reuse is slower).
+    # Batched (QWEN_SDPA_REUSE_KV=1): with one K chunk SDPA keeps K/V in a core's CBs across its consecutive Q chunks
+    # of the same (batch, KV head) instead of re-reading them per chunk (automatic K/V retention). With K/V no longer
+    # re-read per chunk, finer Q chunks balance the grid for free: unmasked non-causal one-K-chunk calls take
+    # QWEN_SDPA_REUSE_Q_CHUNK (the grid stays). Masked / causal calls keep the model's config.
     reuse_kv = os.getenv("QWEN_SDPA_REUSE_KV", "0") == "1"
     reuse_q_chunk = int(os.getenv("QWEN_SDPA_REUSE_Q_CHUNK", "0"))
     reuse_cfgs = {}
@@ -288,7 +287,6 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
             # the op needs a tile-aligned Q sequence to view the group's heads as one
             and int(q.shape[2]) % 32 == 0
         ):
-            kwargs["pack_gqa_heads"] = True
             kwargs["program_config"] = packed_program_config(kwargs.get("program_config"))
         pc = kwargs.get("program_config")
         if (
@@ -300,10 +298,9 @@ def _wrap_sdpa_bidirectional(original_fn, concat_out=False):
             and pc is not None
             and pc.k_chunk_size >= int(k.shape[2])  # one K chunk
         ):
-            kwargs["reuse_kv"] = True
             kwargs["program_config"] = reuse_program_config(pc)
         if concat_out and q is not None and (int(q.shape[0]) > 1 or concat_out_bs1):
-            kwargs["output_heads_concat"] = True
+            kwargs["output_concat_heads"] = True
             out = original_fn(*args, **kwargs)
             _SDPA_CONCAT_OUT_IDS.add(id(out))
             return out

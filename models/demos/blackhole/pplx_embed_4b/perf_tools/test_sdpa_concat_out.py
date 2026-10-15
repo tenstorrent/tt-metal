@@ -1,4 +1,4 @@
-# SDPA output_heads_concat: bit-identical to concat_heads(SDPA) at bs1/bs8 model shapes + timing of the op alone
+# SDPA output_concat_heads: bit-identical to concat_heads(SDPA) at bs1/bs8 model shapes + timing of the op alone
 import os
 import sys
 
@@ -41,7 +41,7 @@ try:
             program_config=pc,
             compute_kernel_config=ckc,
             memory_config=mc,
-            output_heads_concat=True,
+            output_concat_heads=True,
         )
         o = f_std()
         ref = ttnn.experimental.nlp_concat_heads(o, memory_config=mc)
@@ -64,7 +64,7 @@ try:
 
         us_both = traced(std_plus_concat, n=2)
         print(
-            f"[bs{BS}] SDPA {us_std:8.1f} us | SDPA+concat_heads {us_both:8.1f} | SDPA(output_heads_concat) {us_cat:8.1f} us  -> saves {us_both-us_cat:7.1f} us/call",
+            f"[bs{BS}] SDPA {us_std:8.1f} us | SDPA+concat_heads {us_both:8.1f} | SDPA(output_concat_heads) {us_cat:8.1f} us  -> saves {us_both-us_cat:7.1f} us/call",
             flush=True,
         )
         [ttnn.deallocate(t) for t in (q, k, v)]
