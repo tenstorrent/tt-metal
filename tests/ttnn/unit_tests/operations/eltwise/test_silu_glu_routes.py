@@ -163,17 +163,19 @@ def test_swiglu_runs_silu_glu(device, dim):
 
 @pytest.mark.skipif(is_slow_dispatch(), reason="sub-device managers are unsupported with slow dispatch")
 @pytest.mark.parametrize("dim", [-1])
-def test_swiglu_runs_with_sub_devices_loaded(device, dim):
-    """ttnn.swiglu takes no core restriction: with two sub-devices loaded it still runs, on sub-device 0's cores as
-    its composite does, and BF16 halves still give ttnn.silu_glu's bits from one SILU_GLU program."""
+def test_swiglu_keeps_its_composite_with_sub_devices_loaded(device, dim):
+    """With two sub-devices loaded ttnn.swiglu keeps its unary and multiply, as on main, and launches no SILU_GLU
+    program. Sub-device 0 holds every column but the last, so the split's and the unary's few cores (column-major
+    from (0, 0)) and binary_ng's sub-device-0 cores all lie in it, as the composite needs."""
     _skip_unless_routed(device)
     x = _operands((1, 1, 64, 128))
-    gate, up = x[..., 64:], x[..., :64]
-    expected = ttnn.to_torch(ttnn.silu_glu(_on_device(gate, device), _on_device(up, device)))
+    expected = ttnn.to_torch(
+        ttnn.multiply(_on_device(x[..., :64], device), ttnn.swish(_on_device(x[..., 64:], device)))
+    )
     grid = device.compute_with_storage_grid_size()
-    first = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, 0))})
-    rest = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
-    manager = device.create_sub_device_manager([ttnn.SubDevice([first]), ttnn.SubDevice([rest])], 0)
+    first = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 2, grid.y - 1))})
+    last = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(grid.x - 1, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    manager = device.create_sub_device_manager([ttnn.SubDevice([first]), ttnn.SubDevice([last])], 0)
     device.load_sub_device_manager(manager)
     try:
         out, _, arguments = _device_operations(lambda: ttnn.swiglu(_on_device(x, device), dim))
@@ -181,5 +183,5 @@ def test_swiglu_runs_with_sub_devices_loaded(device, dim):
     finally:
         device.clear_loaded_sub_device_manager()
         device.remove_sub_device_manager(manager)
-    assert OP_TYPE in arguments
+    assert OP_TYPE not in arguments
     assert torch.equal(out.view(torch.int16), expected.view(torch.int16))
