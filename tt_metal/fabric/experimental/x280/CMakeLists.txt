@@ -848,4 +848,37 @@ _x280_device_test(x280_eth_credit
     SLOW_DISPATCH
 )
 
+# ---------------------------------------------------------------------------
+# Results tooling: the record round trip, the tabulator and campaign-runner tests, and the
+# STOP-poll check of every image that links the active harness.
+# ---------------------------------------------------------------------------
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+# The round trip renders every family's records and validates them with the live tabulator and the
+# manifest in this source tree.
+target_sources(x280_bench_host_tests PRIVATE tests/host/test_record_round_trip.cpp)
+target_compile_definitions(x280_bench_host_tests PRIVATE X280_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(
+    NAME x280_record_round_trip
+    COMMAND
+        x280_bench_host_tests --gtest_filter=RecordRoundTrip.*
+)
+set_tests_properties(
+    x280_record_round_trip
+    PROPERTIES
+        PASS_REGULAR_EXPRESSION
+            "\\[  PASSED  \\] [1-9]"
+)
+add_test(
+    NAME x280_characterization
+    COMMAND
+        ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_characterization.py
+)
+get_property(_x280_active_sources GLOBAL PROPERTY X280_ACTIVE_IMAGE_SOURCES)
+list(REMOVE_DUPLICATES _x280_active_sources)
+add_test(
+    NAME x280_stop_poll
+    COMMAND
+        ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_stop_poll.py ${_x280_active_sources}
+)
+
 add_custom_target(x280_abi_headers ALL DEPENDS ${_x280_header_stamps})

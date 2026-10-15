@@ -120,7 +120,9 @@ to x280_images. An image links the active lifecycle harness and ld/x280.ld (.tex
 DEFINES, INCLUDES (directories relative to this tree's root) and COMPILE_OPTIONS apply to this
 image's sources only; C++ sources also get -std=c++17 -fno-exceptions -fno-rtti. LINK_OPTIONS
 apply to this image's link; LINK_PINNED_INPUT also links the pinned-input operations
-(src/x280_pinned_input.c as a library), compiled once with the plain image flags.
+(src/x280_pinned_input.c as a library), compiled once with the plain image flags. The sources of
+an image linking the active harness are appended to the global property X280_ACTIVE_IMAGE_SOURCES,
+which the STOP-poll check scans.
 #]]
 function(x280_add_image)
     cmake_parse_arguments(
@@ -150,6 +152,15 @@ function(x280_add_image)
     set(objects "")
     foreach(source IN LISTS ARG_SOURCES)
         cmake_path(ABSOLUTE_PATH source BASE_DIRECTORY "${CMAKE_CURRENT_FUNCTION_LIST_DIR}")
+        if(NOT ARG_LIM_IDLE)
+            set_property(
+                GLOBAL
+                APPEND
+                PROPERTY
+                    X280_ACTIVE_IMAGE_SOURCES
+                        "${source}"
+            )
+        endif()
         cmake_path(GET source STEM stem)
         set(object "${_x280_obj_dir}/${ARG_NAME}/${stem}.o")
         set(flags ${X280_CFLAGS})
