@@ -91,8 +91,8 @@ snippet), ``p`` pauses the scroll,
   history) rewinds the session and re-prefills from the request, so a client that
   keeps its own full history always stays consistent with the server.
 * ``max_tokens`` caps the reply (default: the engine-wide ``--max-new-tokens``);
-  ``temperature`` / ``top_p`` sample from the per-step logits (default greedy
-  argmax). ``thinking: true`` and ``reasoning_effort`` are DeepSeek-V4 extensions
+  ``temperature`` / ``top_p`` sample from the per-step logits (default: the
+  server's ``--temperature``, unset = greedy argmax). ``thinking: true`` and ``reasoning_effort`` are DeepSeek-V4 extensions
   that switch that session to the thinking template. ``reasoning_effort`` is
   ``low``, ``medium``, ``high``, or ``max`` (``medium`` uses the same template
   as ``high``). In thinking mode the reply
@@ -482,8 +482,15 @@ def _make_sampler(temperature, top_p):
     ~15ms once ``top_p`` sorts it, against a ~10ms decode step: the scheduler
     thread would spend more time sampling than the device spends decoding.
     """
-    temperature = float(temperature) if temperature is not None else 0.0
-    top_p = float(top_p) if top_p is not None else None
+    try:
+        temperature = float(temperature) if temperature is not None else 0.0
+        top_p = float(top_p) if top_p is not None else None
+    except (TypeError, ValueError):
+        raise RequestError(400, "temperature and top_p must be numbers")
+    if not temperature >= 0:
+        raise RequestError(400, "temperature must be a non-negative number")
+    if top_p is not None and not 0 < top_p <= 1:
+        raise RequestError(400, "top_p must be in (0, 1]")
     if temperature <= 0 and top_p is None:
         return None
 
@@ -1866,9 +1873,11 @@ class GenerationServer:
         prefill_chunk: int = 16,
         prefiller: _Prefiller | None = None,
         decode_ahead: bool = True,
+        temperature: float | None = None,
     ):
         self.engine = engine
         self.model_id = model_id
+        self.temperature = temperature  # for requests that send no ``temperature``
         self.max_body_bytes = max_body_bytes
         self.prefiller = prefiller
         self.pool = _SlotPool(engine)
@@ -1967,7 +1976,10 @@ class GenerationServer:
             if max_tokens < 1:
                 raise RequestError(400, "max_tokens must be a positive integer")
 
-        sampler = _make_sampler(body.get("temperature"), body.get("top_p"))
+        temperature = body.get("temperature")
+        if temperature is None:
+            temperature = self.temperature
+        sampler = _make_sampler(temperature, body.get("top_p"))
         # A slot is claimed per turn, not per user, so two requests run concurrently even
         # when they carry the same ``user`` (or none). Held until the reply is complete:
         # the turn decodes into this slot's KV session.
@@ -2480,6 +2492,13 @@ def build_parser(argv: list[str] | None = None, description: str = __doc__):
         help="largest accepted request body in bytes (default: 16 MiB)",
     )
     p.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="sampling temperature for requests that send none (default: greedy argmax); "
+        "a request's own temperature overrides it, and 0 asks for greedy",
+    )
+    p.add_argument(
         "--debug",
         action="store_true",
         help="log every scheduler event: admissions, slot assignments, KV page allocations, "
@@ -2532,6 +2551,8 @@ def check_args(p: argparse.ArgumentParser, args: argparse.Namespace, sys_cfg) ->
         p.error(f"--prefill-max-len must be 0 (the whole context) or at least {ALIGNMENT}")
     if args.quiet and args.debug:
         p.error("--quiet and --debug ask for opposite things")
+    if args.temperature is not None and not args.temperature >= 0:
+        p.error("--temperature must be non-negative")
     return args
 
 
@@ -2609,6 +2630,7 @@ def serve(args: argparse.Namespace, engine_cls=ChatEngine, prefiller_cls=_Prefil
                 args.prefill_chunk,
                 prefiller=prefiller,
                 decode_ahead=args.decode_ahead,
+                temperature=args.temperature,
             )
             # The scheduler is the only thread that touches the device from here on; the
             # traces it replays were captured by the warmup above, which a pipelined

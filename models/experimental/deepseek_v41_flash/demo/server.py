@@ -18,7 +18,7 @@ What V4.1 imposes on the serving side:
 * One user. V4.1 decode seats a single session (the select op decodes one user and there is no page-table swap), so
   ``--num-users`` is 1 and requests take turns on it; a request that does not continue the stored conversation
   re-prefills it.
-* Context. ``--max-context`` is 262144 tokens by default (prompt + reply). Past
+* Context. ``--max-context`` is 524288 tokens by default (prompt + reply). Past
   ``candidate_topk_blocks * candidate_block_size`` (16384) compressed entries the select is two-level, in the
   traced prefill and in decode, so a prompt prefills up to ``--prefill-max-len`` (by default the whole context, at
   most 262144 tokens, see :class:`_V41Prefiller`) and decode replays the rest.
@@ -66,9 +66,10 @@ from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
 _NUM_STAGES = 8  # one 1 x 4 TP4 stage per Galaxy row: V4.1's 40 layers, five on each
-# Default --max-context, and --prefill-max-len when a larger context is asked for: the longest traced prefill whose
-# last position tier compiled on every stage (a 524288-token tier ran out of DRAM).
-_MAX_CONTEXT = 262144
+_MAX_CONTEXT = 524288  # default --max-context (prompt + reply)
+# Default --prefill-max-len when a larger context is asked for: the longest traced prefill whose last position tier
+# compiled on every stage (a 524288-token tier ran out of DRAM).
+_MAX_PREFILL_LEN = 262144
 
 
 class V41ChatEngine(ChatEngine):
@@ -158,17 +159,17 @@ class _V41Prefiller(_Prefiller):
     The prefill selects two-level past ``candidate_topk_blocks * candidate_block_size`` compressed entries, as
     decode does. Its attention stays dense, so every per-layer mask and score tensor of the last position tier
     spans the whole ``--prefill-max-len``; with decode's caches resident, a 512K-token tier runs out of DRAM.
-    Unset, ``--prefill-max-len`` is therefore the context capped at ``_MAX_CONTEXT``, and decode replays the rest of
-    a longer prompt; an explicit value is used as given.
+    Unset, ``--prefill-max-len`` is therefore the context capped at ``_MAX_PREFILL_LEN``, and decode replays the rest
+    of a longer prompt; an explicit value is used as given.
     """
 
     def __init__(self, engine: V41ChatEngine, args, prefetcher: contextlib.ExitStack):
-        if not args.prefill_max_len and engine.max_seq > _MAX_CONTEXT:
+        if not args.prefill_max_len and engine.max_seq > _MAX_PREFILL_LEN:
             logger.info(
-                f"traced prefill sized for {_MAX_CONTEXT} tokens (dense attention past that does not fit beside "
+                f"traced prefill sized for {_MAX_PREFILL_LEN} tokens (dense attention past that does not fit beside "
                 f"decode's {engine.max_seq}-token caches); decode replays the rest of a longer prompt"
             )
-            args.prefill_max_len = _MAX_CONTEXT
+            args.prefill_max_len = _MAX_PREFILL_LEN
         super().__init__(engine, args, prefetcher)
 
     def _build_model(self, engine: V41ChatEngine):
