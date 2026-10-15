@@ -62,7 +62,7 @@ struct UntilizerCtArgs {
         const ttnn::MeshCoordinate& coord,
         const std::vector<op::Assignment>& work,
         const op::UntilizerPlan& plan) :
-        token_size_bytes(op::token_size_bytes(tensor_args)),
+        token_size_bytes(op::token_size_bytes(args, tensor_args)),
         num_routed_experts(op::num_routed_experts(tensor_args)),
         experts_per_chip(args.experts_per_chip),
         my_expert_base(plan.my_expert_base),
@@ -77,7 +77,7 @@ struct UntilizerCtArgs {
         produced_slot(plan.produced_slot),
         tiles_per_row(op::tiles_per_token_row(tensor_args)),
         tile_bytes(op::tile_size_bytes(tensor_args)),
-        block_tiles(op::untilize_block_tiles(tensor_args)),
+        block_tiles(op::untilize_block_tiles(args, tensor_args)),
         expert_threshold(args.hybrid_token_threshold),
         expert_table_page_base(plan.expert_table_page_base),
         ready_sem(plan.ready_sem),

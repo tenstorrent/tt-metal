@@ -37,18 +37,26 @@ inline uint32_t ring_extent(const CombineFabric2dParams& args) {
 }
 
 // The format every token moves in, from the untilized rows through the ring and the fabric to the output, so
-// also the output's dtype. A BFLOAT8_B dispatched buffer is unpacked to it by the untilize, so only the tile
-// read from DRAM is bfp8.
-constexpr tt::tt_metal::DataType TOKEN_DTYPE = tt::tt_metal::DataType::BFLOAT16;
+// also the output's dtype: BFLOAT16, or FP8_E4M3 when fp8_scale_block is set. A BFLOAT8_B dispatched buffer is
+// unpacked by the untilize, so only the tile read from DRAM is bfp8.
+inline tt::tt_metal::DataType token_dtype(const CombineFabric2dParams& args) {
+    return args.fp8_scale_block != 0 ? tt::tt_metal::DataType::FP8_E4M3 : tt::tt_metal::DataType::BFLOAT16;
+}
 
-inline tt::DataFormat token_data_format() { return tt::tt_metal::datatype_to_dataformat_converter(TOKEN_DTYPE); }
+inline tt::DataFormat token_data_format(const CombineFabric2dParams& args) {
+    return tt::tt_metal::datatype_to_dataformat_converter(token_dtype(args));
+}
 
-// One token's row of the embedding. Its width is read off the tensor's SHAPE, not its page: a ROW_MAJOR
-// dispatched buffer pages by exactly one token, a TILE one does not. Its bytes are TOKEN_DTYPE's whatever the
-// dispatched dtype.
-inline uint32_t token_size_bytes(const CombineFabric2dInputs& tensor_args) {
-    return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]) *
-           tt::datum_size(token_data_format());
+// One token's row as it crosses the wire. Its width is read off the tensor's SHAPE, not its page: a ROW_MAJOR
+// dispatched buffer pages by exactly one token, a TILE one does not. Its bytes are token_dtype's whatever the
+// dispatched dtype, followed for fp8 by one fp32 scale per scale block.
+inline uint32_t token_size_bytes(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
+    const uint32_t emb = static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]);
+    const uint32_t values = emb * tt::datum_size(token_data_format(args));
+    if (args.fp8_scale_block != 0) {
+        return values + emb / args.fp8_scale_block * static_cast<uint32_t>(sizeof(float));
+    }
+    return values;
 }
 
 // The dispatched buffer's format as the untilize's input CB declares it: BFLOAT16 or BFLOAT8_B.
@@ -85,7 +93,15 @@ constexpr uint32_t BATCH_COUNT_PAGE_BYTES = 32 * 32 * sizeof(uint16_t);
 // off the dense path.
 constexpr uint32_t UNTILIZE_MAX_BLOCK_TILES = 8;
 
-inline uint32_t untilize_block_tiles(const CombineFabric2dInputs& tensor_args) {
+// Tiles of one fp8 scale block, the unit the quantizing untilize works in.
+constexpr uint32_t FP8_SCALE_BLOCK_TILES = 4;
+
+inline uint32_t untilize_block_tiles(const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
+    if (args.fp8_scale_block != 0) {
+        // Whole scale blocks, so no block's amax needs a tile from the next one.
+        return tiles_per_token_row(tensor_args) % (2 * FP8_SCALE_BLOCK_TILES) == 0 ? 2 * FP8_SCALE_BLOCK_TILES
+                                                                                   : FP8_SCALE_BLOCK_TILES;
+    }
     for (uint32_t block = UNTILIZE_MAX_BLOCK_TILES; block > 1; block--) {
         if (tiles_per_token_row(tensor_args) % block == 0) {
             return block;
@@ -234,6 +250,10 @@ constexpr uint32_t UNT_RING_BATCHES = 2;
 constexpr uint32_t UNT_CB_OUT = 0;
 constexpr uint32_t UNT_CB_IN = 1;
 constexpr uint32_t UNT_CB_BATCHES = 2;
+// fp8 tokens only: the 1/scale tile the compute kernel quantizes a scale block with, and a copy of it the
+// dataflow kernel turns into the scales at the end of each row.
+constexpr uint32_t UNT_CB_INV_SCALE = 3;
+constexpr uint32_t UNT_CB_SCALE = 4;
 // Words per entry in a handshake block: [noc_x, noc_y, counter_slot].
 constexpr uint32_t UNT_PEER_WORDS = 3;
 

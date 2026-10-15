@@ -41,13 +41,14 @@ struct SenderCtArgs {
     // `plan.launch_credit_core`, the worker on that chip whose sender writes back to this chip. That is why
     // every worker placement on the mesh is decided before any kernel is built.
     SenderCtArgs(
+        const op::CombineFabric2dParams& args,
         const op::CombineFabric2dInputs& tensor_args,
         const op::StreamPlacement& self,
         const op::StreamPlacement& downstream,
         const op::L1Layout& l1,
         const op::KernelPlan& plan) :
         num_l1_slots(NUM_L1_SLOTS),
-        token_size_bytes(op::token_size_bytes(tensor_args)),
+        token_size_bytes(op::token_size_bytes(args, tensor_args)),
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
         peer_chip_id(static_cast<uint32_t>(self.downstream_node.chip_id)),
         peer_mesh_id(*self.downstream_node.mesh_id),

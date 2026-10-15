@@ -226,15 +226,16 @@ class TT_CCL:
         return self.combine_overlap_semaphores
 
     def get_combine_forwarding_buffer(
-        self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links
+        self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fp8_scale_block=0
     ):
         """combine_fabric2d's DRAM forwarding buffer for hybrid_routed_expert_moe overlapped with combine.
 
         One per shape, shared by every MoE layer, which run one after another. Call it before the first overlapped
         forward: left to the op, it is allocated while that forward's dispatch buffer and outputs are live and stays
-        pinned there, splitting the DRAM each later layer's dispatch buffer needs in one piece.
+        pinned there, splitting the DRAM each later layer's dispatch buffer needs in one piece. `fp8_scale_block` is
+        the overlapped call's combine_fp8_scale_block: fp8 tokens are narrower.
         """
-        key = (emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links)
+        key = (emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fp8_scale_block)
         buffer = self.combine_forwarding_buffers.get(key)
         if buffer is None:
             buffer = ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe_forwarding_buffer(
@@ -245,6 +246,7 @@ class TT_CCL:
                 seq_len_per_chip=seq_len_per_chip,
                 combine_axis=0,
                 combine_num_links=num_links,
+                fp8_scale_block=fp8_scale_block,
             )
             self.combine_forwarding_buffers[key] = buffer
         return buffer

@@ -83,7 +83,7 @@ struct ReaderCtArgs {
         const op::KernelPlan& plan,
         const op::ReaderUntilizers& untilizers) :
         num_l1_slots(NUM_L1_SLOTS),
-        token_size_bytes(op::token_size_bytes(tensor_args)),
+        token_size_bytes(op::token_size_bytes(args, tensor_args)),
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
         batch(BATCH),
         ring_addr(l1.ring),

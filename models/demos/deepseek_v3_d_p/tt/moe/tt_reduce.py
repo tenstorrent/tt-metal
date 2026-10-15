@@ -81,6 +81,7 @@ class TtReduceModule(LightweightModule):
         weights: Optional[ttnn.Tensor] = None,
         indices: Optional[ttnn.Tensor] = None,
         expert_dispatch_table: Optional[ttnn.Tensor] = None,
+        fp8_scale_block_w: int = 0,
     ) -> ttnn.Tensor:
         """
         Reduce combine output by summing topk and reduce-scattering.
@@ -95,6 +96,9 @@ class TtReduceModule(LightweightModule):
                 Shape: [dispatch_group_size, seq_len, topk]
             expert_dispatch_table: Dispatch table mapping expert ID to chip ID, INT32.
                 Shape: [num_routed_experts] (sharded per dispatch group)
+            fp8_scale_block_w: 0 for a BFLOAT16 combine_output. For an FP8_E4M3 one, whose rows are
+                [emb_dim e4m3 | emb_dim / fp8_scale_block_w fp32 scales], the elements per scale; the
+                weighted sum dequantizes them.
 
         Returns:
             output: Per-chip tensor of shape [seq_len, emb_dim / num_chips_in_axis]
@@ -121,6 +125,7 @@ class TtReduceModule(LightweightModule):
                 expert_dispatch_table,
                 expert_dim=self.topk_dim,
                 output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                fp8_scale_block_w=fp8_scale_block_w,
             )
         else:
             logger.warning("TtReduceModule: weights not provided, using unweighted sum")

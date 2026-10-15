@@ -456,7 +456,7 @@ def check_round_trip(
     indirect=["mesh_device", "device_params"],
 )
 # Combine gets the buffer as bf16 TILE or ROW_MAJOR. In the model it gets the routed expert's bfloat8_b
-# TILE output, which only the PCC tests in test_ttnn_moe.py cover.
+# TILE output, which the PCC tests in test_ttnn_moe.py and test_combine_fabric2d.py's fp8 cases cover.
 # Exclusions: ROW_MAJOR and padding run on the 8x4 mesh only, to keep them out of the LoudBox CI job, and
 # never together. 30% padding on SP=8 leaves one chip partly padded and two fully padded.
 @pytest.mark.parametrize(

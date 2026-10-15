@@ -54,7 +54,7 @@ def fabric2d_payload_size(model_cfg) -> int:
 def check_fabric2d_setup(mesh_device, cluster_axis: int, emb_dim: int, num_experts_per_tok: int | None = None) -> None:
     """Raise ValueError if dispatch_fabric2d / combine_fabric2d cannot run on this mesh and fabric.
 
-    Both ops send bf16 tokens one hop at a time around a ring on `cluster_axis`. Both check the ring
+    Both ops send tokens (bf16, or packed fp8 rows) one hop at a time around a ring on `cluster_axis`. Both check the ring
     size and the packet size when they launch. dispatch_fabric2d also checks that the axis wraps;
     combine_fabric2d does not, so this is its only ring check.
 
