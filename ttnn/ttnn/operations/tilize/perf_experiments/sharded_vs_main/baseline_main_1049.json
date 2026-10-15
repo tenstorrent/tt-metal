@@ -1,0 +1,2498 @@
+{
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape1-tensor_shape3-None]": {
+  "main_ns": 5640.7407,
+  "run1061_ns": 2097.7778,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape4-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 2204.4443,
+  "run1061_ns": 1985.1852,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape1-tensor_shape3-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 5433.3335,
+  "run1061_ns": 1273.3334,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.COL_MAJOR-ShardOrientation.ROW_MAJOR-10.2-tensor_shape3-input_shard_shape3-output_padded_shape3-output_shard_shape3-shard_core_grid3]": {
+  "main_ns": 11240.0,
+  "run1061_ns": 9159.259,
+  "main_cores": 12,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.BFLOAT16-tensor_shape8-grid_shape8]": {
+  "main_ns": 1177.037,
+  "run1061_ns": 1343.7037,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_run_tilize_with_val_padding_test[input_shapes0-tilize_with_val_padding_args0]": {
+  "main_ns": 3836.2964,
+  "run1061_ns": 2785.926,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape5-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 3453.3333,
+  "run1061_ns": 1798.5186,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape5-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 6186.6665,
+  "run1061_ns": 2410.3704,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape3-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 2281.4814,
+  "run1061_ns": 1996.2963,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.FLOAT32-tensor_shape3-grid_shape3]": {
+  "main_ns": 1157.7778,
+  "run1061_ns": 1243.7037,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape2-tensor_shape1-None]": {
+  "main_ns": 8642.963,
+  "run1061_ns": 2849.6296,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape3-tensor_shape2-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 2949.6296,
+  "run1061_ns": 2022.2222,
+  "main_cores": 103,
+  "slow": false
+ },
+ "test_tilize_sharded_fp32_llk_acc[bf16_in_bfp8_out-TensorMemoryLayout.HEIGHT_SHARDED-tensor_shape0-grid_shape0]": {
+  "main_ns": 1172.5927,
+  "run1061_ns": 1142.2222,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape4-tensor_shape0-None]": {
+  "main_ns": 27673.334,
+  "run1061_ns": 5014.074,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_width_sharded_to_interleaved[tilize]": {
+  "main_ns": 7295.5557,
+  "run1061_ns": 1532.5927,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape5-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 9893.333,
+  "run1061_ns": 3278.5186,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape0-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 1485.1852,
+  "run1061_ns": 1895.5555,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_block_sharded_shapes[DataType.BFLOAT16-tensor_shape1-grid_shape1]": {
+  "main_ns": 1024.4445,
+  "run1061_ns": 1257.7778,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_with_val_padding_nd_sharded_to_legacy_sharded[ShardOrientation.ROW_MAJOR-ShardOrientation.ROW_MAJOR-10.2-tensor_shape0-input_shard_shape0-output_padded_shape0-shard_core_grid0-TensorMemoryLayout.HEIGHT_SHARDED-output_shard_shape_legacy0]": {
+  "main_ns": 3220.7407,
+  "run1061_ns": 2984.4443,
+  "main_cores": 6,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape5-tensor_shape0-None]": {
+  "main_ns": 104736.3,
+  "run1061_ns": 5972.593,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_test[tilize_args0-input_shapes0]": {
+  "main_ns": 2487.4075,
+  "run1061_ns": 2071.8518,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded_to_interleaved[ShardOrientation.ROW_MAJOR-0.0-tensor_shape0-input_shard_shape0-output_padded_shape0-shard_core_grid0]": {
+  "main_ns": 3974.074,
+  "run1061_ns": 3696.2964,
+  "main_cores": 6,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape5-tensor_shape1-None]": {
+  "main_ns": 27283.703,
+  "run1061_ns": 3586.6667,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape0-tensor_shape1-None]": {
+  "main_ns": 17453.334,
+  "run1061_ns": 4073.3333,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape2-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 2057.7778,
+  "run1061_ns": 2040.0,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_col_major_orientation[TensorMemoryLayout.BLOCK_SHARDED-tensor_shape2-shard_shape2-grid_shape2]": {
+  "main_ns": 998.5185,
+  "run1061_ns": 1263.7037,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_with_val_padding_scalar[DataType.FLOAT32-1.5-0.0]": {
+  "main_ns": 3499.2593,
+  "run1061_ns": 2244.4443,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_col_major_orientation[TensorMemoryLayout.WIDTH_SHARDED-tensor_shape1-shard_shape1-grid_shape1]": {
+  "main_ns": 982.2222,
+  "run1061_ns": 1182.963,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_with_val_padding_model_traced_sample": {
+  "main_ns": 4470.3706,
+  "run1061_ns": 2224.4443,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape0-tensor_shape1-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 24012.592,
+  "run1061_ns": 1151.8518,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.BFLOAT16-tensor_shape6-grid_shape6]": {
+  "main_ns": 856.2963,
+  "run1061_ns": 1088.8889,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape0-tensor_shape0-None]": {
+  "main_ns": 6628.148,
+  "run1061_ns": 4460.0,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.UINT8-tensor_shape9-grid_shape9]": {
+  "main_ns": 1357.7778,
+  "run1061_ns": 1565.9259,
+  "main_cores": 16,
+  "slow": true
+ },
+ "test_tilize_width_sharded_shapes[DataType.FLOAT32-tensor_shape0-2]": {
+  "main_ns": 868.8889,
+  "run1061_ns": 1008.14813,
+  "main_cores": 2,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape0-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 2202.2222,
+  "run1061_ns": 3073.3333,
+  "main_cores": 64,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape2-tensor_shape2-None]": {
+  "main_ns": 4831.852,
+  "run1061_ns": 1980.7407,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_width_sharded_shapes[DataType.BFLOAT16-tensor_shape0-2]": {
+  "main_ns": 811.1111,
+  "run1061_ns": 1034.0741,
+  "main_cores": 2,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape5-tensor_shape2-None]": {
+  "main_ns": 27440.0,
+  "run1061_ns": 2374.8147,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape1-tensor_shape2-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 1973.3334,
+  "run1061_ns": 1236.2963,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.BFLOAT16-tensor_shape9-grid_shape9]": {
+  "main_ns": 1264.4445,
+  "run1061_ns": 1514.8148,
+  "main_cores": 16,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape1-tensor_shape0-None]": {
+  "main_ns": 9051.111,
+  "run1061_ns": 4551.1113,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape0-tensor_shape0-None]": {
+  "main_ns": 4536.2964,
+  "run1061_ns": 2529.6296,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape3-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 2296.2964,
+  "run1061_ns": 2016.2963,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape0-tensor_shape3-None]": {
+  "main_ns": 3268.889,
+  "run1061_ns": 2079.2593,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_width_sharded_dram_input_45331[shard_shape0]": {
+  "main_ns": 1910327.4,
+  "run1061_ns": 693928.1,
+  "main_cores": 110,
+  "slow": false
+ },
+ "test_tilize_uint8[shape0]": {
+  "main_ns": 14200.0,
+  "run1061_ns": 2558.5186,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape3-tensor_shape0-None]": {
+  "main_ns": 14841.481,
+  "run1061_ns": 4414.074,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape4-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 5359.2593,
+  "run1061_ns": 2535.5557,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape3-tensor_shape1-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 6915.5557,
+  "run1061_ns": 1762.2222,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape0-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 2111.111,
+  "run1061_ns": 2891.8518,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_fp8_input[small-out_bfp4]": {
+  "main_ns": 2311.8518,
+  "run1061_ns": 3858.5186,
+  "main_cores": 2,
+  "slow": true
+ },
+ "test_tilize_width_sharded_shapes[DataType.BFLOAT16-tensor_shape5-4]": {
+  "main_ns": 1065.1852,
+  "run1061_ns": 1293.3334,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape4-tensor_shape0-None]": {
+  "main_ns": 6495.5557,
+  "run1061_ns": 3088.1482,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape1-tensor_shape0-None]": {
+  "main_ns": 17394.074,
+  "run1061_ns": 4320.0,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape1-tensor_shape0-None]": {
+  "main_ns": 2316.2964,
+  "run1061_ns": 2588.889,
+  "main_cores": 16,
+  "slow": true
+ },
+ "test_tilize_block_sharded_shapes[DataType.FLOAT32-tensor_shape2-grid_shape2]": {
+  "main_ns": 1160.7407,
+  "run1061_ns": 1285.9259,
+  "main_cores": 16,
+  "slow": true
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.ROW_MAJOR-ShardOrientation.ROW_MAJOR-10.2-tensor_shape2-input_shard_shape2-output_padded_shape2-output_shard_shape2-shard_core_grid2]": {
+  "main_ns": 6826.6665,
+  "run1061_ns": 9554.074,
+  "main_cores": 16,
+  "slow": true
+ },
+ "test_tilize_width_sharded_shapes[DataType.FLOAT32-tensor_shape3-8]": {
+  "main_ns": 1522.2222,
+  "run1061_ns": 1649.6296,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_dram_backed_sharded_input[height_sharded_dram]": {
+  "main_ns": 9610.37,
+  "run1061_ns": 16277.777,
+  "main_cores": 64,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape2-tensor_shape0-None]": {
+  "main_ns": 10828.148,
+  "run1061_ns": 3294.074,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.BLOCK_SHARDED-shard_core_grid0-tensor_shape0-shard_shape0-DataType.BFLOAT16]": {
+  "main_ns": 10255.556,
+  "run1061_ns": 6544.4443,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape1-tensor_shape3-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 4705.926,
+  "run1061_ns": 1277.7778,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape4-tensor_shape2-None]": {
+  "main_ns": 7869.6294,
+  "run1061_ns": 2229.6296,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape1-tensor_shape1-None]": {
+  "main_ns": 17786.666,
+  "run1061_ns": 3148.1482,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape1-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 2629.6296,
+  "run1061_ns": 2874.074,
+  "main_cores": 64,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape2-tensor_shape0-None]": {
+  "main_ns": 7785.185,
+  "run1061_ns": 2939.2593,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.FLOAT32-tensor_shape9-grid_shape9]": {
+  "main_ns": 2162.963,
+  "run1061_ns": 2459.2593,
+  "main_cores": 16,
+  "slow": true
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape2-tensor_shape1-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 10554.814,
+  "run1061_ns": 1428.1482,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape2-tensor_shape3-None]": {
+  "main_ns": 4310.3706,
+  "run1061_ns": 1660.7407,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape2-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 3562.963,
+  "run1061_ns": 2932.5925,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape5-tensor_shape3-None]": {
+  "main_ns": 14068.148,
+  "run1061_ns": 1785.9259,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape3-tensor_shape0-None]": {
+  "main_ns": 2618.5186,
+  "run1061_ns": 2506.6667,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape4-tensor_shape1-None]": {
+  "main_ns": 8340.0,
+  "run1061_ns": 3156.2964,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape0-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 1560.0,
+  "run1061_ns": 2136.2964,
+  "main_cores": 64,
+  "slow": true
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape4-tensor_shape3-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 4029.6296,
+  "run1061_ns": 2577.037,
+  "main_cores": 86,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.COL_MAJOR-ShardOrientation.ROW_MAJOR-0.0-tensor_shape1-input_shard_shape1-output_padded_shape1-output_shard_shape1-shard_core_grid1]": {
+  "main_ns": 11216.296,
+  "run1061_ns": 9168.889,
+  "main_cores": 12,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_interleaved_to_legacy_sharded[ShardOrientation.ROW_MAJOR-10.2-tensor_shape1-output_padded_shape1-TensorMemoryLayout.WIDTH_SHARDED-output_shard_shape1-output_shard_core_grid1]": {
+  "main_ns": 3574.8147,
+  "run1061_ns": 2657.7778,
+  "main_cores": 12,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape0-tensor_shape1-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 25660.0,
+  "run1061_ns": 1108.8889,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape1-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 3420.0,
+  "run1061_ns": 3737.037,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_program_cache_addr_change[interleaved_dram_multicore]": {
+  "main_ns": 9830.37,
+  "run1061_ns": 8600.741,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_from_torch_conversion_deep_seek_mc_large_number_of_pages_per_row[Layout.TILE-torch_dtype0-DataType.BFLOAT4_B-shape0]": {
+  "main_ns": 360871.84,
+  "run1061_ns": 394289.62,
+  "main_cores": 75,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape1-tensor_shape1-None]": {
+  "main_ns": 9100.0,
+  "run1061_ns": 2650.3704,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape3-tensor_shape0-None]": {
+  "main_ns": 2134.8147,
+  "run1061_ns": 2003.7037,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape3-tensor_shape0-None]": {
+  "main_ns": 8393.333,
+  "run1061_ns": 4586.6665,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.BLOCK_SHARDED-shard_core_grid0-tensor_shape2-shard_shape2-DataType.BFLOAT16]": {
+  "main_ns": 10854.074,
+  "run1061_ns": 10909.63,
+  "main_cores": 28,
+  "slow": true
+ },
+ "test_tilize_with_val_padding_scalar[DataType.BFLOAT16-1.5-0.0]": {
+  "main_ns": 2352.5925,
+  "run1061_ns": 2075.5557,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape5-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 3434.8147,
+  "run1061_ns": 1940.7407,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.HEIGHT_SHARDED-shard_core_grid0-tensor_shape2-shard_shape2-DataType.BFLOAT16]": {
+  "main_ns": 10782.223,
+  "run1061_ns": 10931.852,
+  "main_cores": 28,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape5-tensor_shape3-None]": {
+  "main_ns": 7945.185,
+  "run1061_ns": 1558.5186,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape2-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 1585.1852,
+  "run1061_ns": 1861.4814,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_height_sharded_to_interleaved[tensor_shape4-4]": {
+  "main_ns": 2096.2964,
+  "run1061_ns": 2060.0,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape2-tensor_shape0-None]": {
+  "main_ns": 6114.815,
+  "run1061_ns": 3203.7036,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.ROW_MAJOR-ShardOrientation.ROW_MAJOR-10.2-tensor_shape0-input_shard_shape0-output_padded_shape0-output_shard_shape0-shard_core_grid0]": {
+  "main_ns": 4004.4443,
+  "run1061_ns": 3677.037,
+  "main_cores": 6,
+  "slow": false
+ },
+ "test_tilize_width_sharded_shapes[DataType.BFLOAT16-tensor_shape1-4]": {
+  "main_ns": 794.8148,
+  "run1061_ns": 1024.4445,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.WIDTH_SHARDED-shard_core_grid0-tensor_shape1-shard_shape1-DataType.BFLOAT16]": {
+  "main_ns": 10245.926,
+  "run1061_ns": 6463.7036,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.ROW_MAJOR-ShardOrientation.ROW_MAJOR-10.2-tensor_shape3-input_shard_shape3-output_padded_shape3-output_shard_shape3-shard_core_grid3]": {
+  "main_ns": 11190.37,
+  "run1061_ns": 9168.148,
+  "main_cores": 12,
+  "slow": false
+ },
+ "test_tilize_fp8_input[small-out_fp32]": {
+  "main_ns": 2582.2222,
+  "run1061_ns": 2225.926,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_sharded_fp32_llk_acc[fp32_in_fp32_out-TensorMemoryLayout.BLOCK_SHARDED-tensor_shape2-grid_shape2]": {
+  "main_ns": 1121.4814,
+  "run1061_ns": 1308.8889,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape4-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 9658.519,
+  "run1061_ns": 4146.6665,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_interleaved_to_nd_sharded[ShardOrientation.ROW_MAJOR-0.0-tensor_shape1-output_padded_shape1-output_shard_shape1-shard_core_grid1]": {
+  "main_ns": 7377.778,
+  "run1061_ns": 4140.0,
+  "main_cores": 12,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape0-tensor_shape3-None]": {
+  "main_ns": 4645.185,
+  "run1061_ns": 1734.8148,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape4-tensor_shape1-None]": {
+  "main_ns": 5944.4443,
+  "run1061_ns": 2435.5557,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.FLOAT32-tensor_shape1-grid_shape1]": {
+  "main_ns": 1150.3704,
+  "run1061_ns": 1254.8148,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_width_sharded_shapes[DataType.BFLOAT16-tensor_shape8-8]": {
+  "main_ns": 1258.5186,
+  "run1061_ns": 1468.8889,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape3-tensor_shape3-None]": {
+  "main_ns": 10452.593,
+  "run1061_ns": 2014.8148,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_legacy_sharded_to_interleaved[2-standard_shard_core_grid0-block_shard_core_grid0-ShardOrientation.ROW_MAJOR-TensorMemoryLayout.WIDTH_SHARDED-10.2-tensor_shape0-output_padded_shape0]": {
+  "main_ns": 5998.5186,
+  "run1061_ns": 6198.5186,
+  "main_cores": 12,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape5-tensor_shape0-None]": {
+  "main_ns": 27542.223,
+  "run1061_ns": 5703.7036,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_program_cache_addr_change[sharded_width_l1]": {
+  "main_ns": 3720.7407,
+  "run1061_ns": 4611.1113,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape0-tensor_shape1-None]": {
+  "main_ns": 11530.37,
+  "run1061_ns": 4445.926,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_with_zero_padding_model_traced_sample": {
+  "main_ns": 2708.1482,
+  "run1061_ns": 2217.7778,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape5-tensor_shape2-None]": {
+  "main_ns": 7954.074,
+  "run1061_ns": 2477.7778,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_scalar[DataType.FLOAT32-1.5-42.0]": {
+  "main_ns": 3536.2964,
+  "run1061_ns": 2271.8518,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape2-tensor_shape3-None]": {
+  "main_ns": 5846.6665,
+  "run1061_ns": 1877.7778,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.UINT8-tensor_shape10-grid_shape10]": {
+  "main_ns": 1045.9259,
+  "run1061_ns": 1276.2963,
+  "main_cores": 16,
+  "slow": true
+ },
+ "test_tilize_with_val_padding_interleaved_to_legacy_sharded[ShardOrientation.ROW_MAJOR-10.2-tensor_shape0-output_padded_shape0-TensorMemoryLayout.HEIGHT_SHARDED-output_shard_shape0-output_shard_core_grid0]": {
+  "main_ns": 3459.2593,
+  "run1061_ns": 2512.5925,
+  "main_cores": 12,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape3-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 3200.7407,
+  "run1061_ns": 2260.0,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape4-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 9692.593,
+  "run1061_ns": 4252.593,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape5-tensor_shape2-None]": {
+  "main_ns": 14299.259,
+  "run1061_ns": 2477.7778,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape0-tensor_shape1-None]": {
+  "main_ns": 30404.445,
+  "run1061_ns": 4545.185,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape3-tensor_shape0-None]": {
+  "main_ns": 28368.148,
+  "run1061_ns": 5005.185,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape0-tensor_shape0-None]": {
+  "main_ns": 11725.926,
+  "run1061_ns": 4502.963,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape4-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 5334.815,
+  "run1061_ns": 2631.111,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape3-tensor_shape2-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 2810.3704,
+  "run1061_ns": 1728.1482,
+  "main_cores": 103,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape2-tensor_shape3-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 3331.111,
+  "run1061_ns": 1511.1111,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_with_zero_padding_test[tilize_with_zero_padding_args0-input_shapes0]": {
+  "main_ns": 2717.037,
+  "run1061_ns": 2182.2222,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.COL_MAJOR-ShardOrientation.ROW_MAJOR-10.2-tensor_shape4-input_shard_shape4-output_padded_shape4-output_shard_shape4-shard_core_grid4]": {
+  "main_ns": 17347.408,
+  "run1061_ns": 18118.518,
+  "main_cores": 60,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape0-tensor_shape2-None]": {
+  "main_ns": 15343.704,
+  "run1061_ns": 2759.2593,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape2-tensor_shape0-None]": {
+  "main_ns": 2734.074,
+  "run1061_ns": 2788.1482,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_uint8[shape2]": {
+  "main_ns": 14591.111,
+  "run1061_ns": 2611.111,
+  "main_cores": 33,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape4-tensor_shape2-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 4246.6665,
+  "run1061_ns": 2477.037,
+  "main_cores": 103,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape5-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 6270.3706,
+  "run1061_ns": 2520.0,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape3-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 1734.0741,
+  "run1061_ns": 1897.7778,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape0-tensor_shape3-None]": {
+  "main_ns": 6146.6665,
+  "run1061_ns": 2098.5186,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape5-tensor_shape3-None]": {
+  "main_ns": 4656.2964,
+  "run1061_ns": 1656.2963,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.FLOAT32-tensor_shape7-grid_shape7]": {
+  "main_ns": 1497.7778,
+  "run1061_ns": 1665.1852,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape3-tensor_shape3-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 4348.148,
+  "run1061_ns": 2152.5925,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded_to_interleaved[ShardOrientation.ROW_MAJOR-10.2-tensor_shape1-input_shard_shape1-output_padded_shape1-shard_core_grid1]": {
+  "main_ns": 10768.148,
+  "run1061_ns": 8834.814,
+  "main_cores": 12,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.FLOAT32-tensor_shape5-grid_shape5]": {
+  "main_ns": 977.7778,
+  "run1061_ns": 1088.1482,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape0-tensor_shape3-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 8317.037,
+  "run1061_ns": 1214.8148,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_width_sharded_shapes[DataType.BFLOAT16-tensor_shape4-4]": {
+  "main_ns": 883.7037,
+  "run1061_ns": 1141.4814,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_block_sharded_shapes[DataType.BFLOAT16-tensor_shape3-grid_shape3]": {
+  "main_ns": 1045.9259,
+  "run1061_ns": 1265.9259,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape4-tensor_shape1-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 6968.148,
+  "run1061_ns": 3177.7778,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape1-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 2557.037,
+  "run1061_ns": 2767.4075,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape2-tensor_shape2-None]": {
+  "main_ns": 8105.926,
+  "run1061_ns": 2699.2593,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape1-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 1988.8889,
+  "run1061_ns": 2052.5925,
+  "main_cores": 64,
+  "slow": true
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape2-tensor_shape2-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 2362.963,
+  "run1061_ns": 1450.3704,
+  "main_cores": 86,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape5-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 4417.778,
+  "run1061_ns": 1954.8148,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_scalar[DataType.UINT32-7-42]": {
+  "main_ns": 3537.037,
+  "run1061_ns": 2246.6667,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_height_sharded_to_interleaved[tensor_shape3-2]": {
+  "main_ns": 1591.8518,
+  "run1061_ns": 1596.2963,
+  "main_cores": 2,
+  "slow": true
+ },
+ "test_tilize_width_sharded_shapes[DataType.FLOAT32-tensor_shape7-8]": {
+  "main_ns": 1149.6296,
+  "run1061_ns": 1263.7037,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape2-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 3028.889,
+  "run1061_ns": 2248.1482,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_height_sharded_to_interleaved[tensor_shape0-4]": {
+  "main_ns": 1323.7037,
+  "run1061_ns": 1488.1482,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape3-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 6111.1113,
+  "run1061_ns": 3949.6296,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape0-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 1535.5555,
+  "run1061_ns": 2031.8518,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape1-tensor_shape1-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 14179.259,
+  "run1061_ns": 1200.0,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_run_tilize_with_val_padding_test[input_shapes2-tilize_with_val_padding_args2]": {
+  "main_ns": 3786.6667,
+  "run1061_ns": 2837.037,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_height_sharded_to_interleaved[tensor_shape1-8]": {
+  "main_ns": 1562.2222,
+  "run1061_ns": 1872.5927,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_block_sharded_shapes[DataType.UINT8-tensor_shape4-grid_shape4]": {
+  "main_ns": 906.6667,
+  "run1061_ns": 1129.6296,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_with_val_padding_scalar[DataType.INT32-7-0_1]": {
+  "main_ns": 3494.074,
+  "run1061_ns": 2268.1482,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape0-tensor_shape3-None]": {
+  "main_ns": 3676.2964,
+  "run1061_ns": 1762.963,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape0-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 1817.7778,
+  "run1061_ns": 2377.037,
+  "main_cores": 64,
+  "slow": true
+ },
+ "test_tilize_with_val_padding_nd_sharded_to_legacy_sharded[ShardOrientation.ROW_MAJOR-ShardOrientation.ROW_MAJOR-10.2-tensor_shape1-input_shard_shape1-output_padded_shape1-shard_core_grid1-TensorMemoryLayout.WIDTH_SHARDED-output_shard_shape_legacy1]": {
+  "main_ns": 3360.7407,
+  "run1061_ns": 2840.0,
+  "main_cores": 6,
+  "slow": false
+ },
+ "test_tilize_fp8_input[wide-out_fp32]": {
+  "main_ns": 20577.777,
+  "run1061_ns": 15567.407,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape4-tensor_shape3-None]": {
+  "main_ns": 16892.592,
+  "run1061_ns": 2103.7036,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_test[tilize_args0-input_shapes2]": {
+  "main_ns": 1272008.9,
+  "run1061_ns": 9640.741,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape2-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 3020.0,
+  "run1061_ns": 2279.2593,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape4-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 3611.111,
+  "run1061_ns": 2280.7407,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape1-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 1483.7037,
+  "run1061_ns": 1888.1482,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape4-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 3573.3333,
+  "run1061_ns": 2174.8147,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded_to_legacy_sharded[ShardOrientation.ROW_MAJOR-ShardOrientation.ROW_MAJOR-10.2-tensor_shape2-input_shard_shape2-output_padded_shape2-shard_core_grid2-TensorMemoryLayout.BLOCK_SHARDED-output_shard_shape_legacy2]": {
+  "main_ns": 3258.5186,
+  "run1061_ns": 2999.2593,
+  "main_cores": 6,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape4-tensor_shape1-None]": {
+  "main_ns": 14694.814,
+  "run1061_ns": 3099.2593,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape4-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 2144.4443,
+  "run1061_ns": 1894.0741,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape0-tensor_shape3-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 7345.926,
+  "run1061_ns": 1195.5555,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_uint8[shape4]": {
+  "main_ns": 27332.592,
+  "run1061_ns": 3018.5186,
+  "main_cores": 34,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.ROW_MAJOR-ShardOrientation.ROW_MAJOR-10.2-tensor_shape4-input_shard_shape4-output_padded_shape4-output_shard_shape4-shard_core_grid4]": {
+  "main_ns": 18353.334,
+  "run1061_ns": 19654.074,
+  "main_cores": 60,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape3-tensor_shape3-None]": {
+  "main_ns": 4435.5557,
+  "run1061_ns": 1769.6296,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape4-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 2648.1482,
+  "run1061_ns": 1955.5555,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape3-tensor_shape2-None]": {
+  "main_ns": 7970.3706,
+  "run1061_ns": 1958.5186,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape5-tensor_shape3-None]": {
+  "main_ns": 27222.963,
+  "run1061_ns": 2373.3333,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape1-tensor_shape2-None]": {
+  "main_ns": 3749.6296,
+  "run1061_ns": 2232.5925,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape5-tensor_shape0-None]": {
+  "main_ns": 14674.074,
+  "run1061_ns": 3751.111,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape5-tensor_shape1-None]": {
+  "main_ns": 53680.0,
+  "run1061_ns": 3641.4814,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape1-tensor_shape2-None]": {
+  "main_ns": 6108.148,
+  "run1061_ns": 2336.2964,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_scalar[DataType.UINT32-7-0]": {
+  "main_ns": 3543.7036,
+  "run1061_ns": 2274.074,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.FLOAT32-tensor_shape4-grid_shape4]": {
+  "main_ns": 1147.4073,
+  "run1061_ns": 1254.8148,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.COL_MAJOR-ShardOrientation.ROW_MAJOR-10.2-tensor_shape0-input_shard_shape0-output_padded_shape0-output_shard_shape0-shard_core_grid0]": {
+  "main_ns": 4002.963,
+  "run1061_ns": 3591.8518,
+  "main_cores": 6,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape2-tensor_shape3-None]": {
+  "main_ns": 7185.926,
+  "run1061_ns": 1995.5555,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape0-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 3015.5557,
+  "run1061_ns": 3720.7407,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_sharded_fp32_llk_acc[fp32_in_fp32_out-TensorMemoryLayout.WIDTH_SHARDED-tensor_shape1-grid_shape1]": {
+  "main_ns": 840.0,
+  "run1061_ns": 1022.96295,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape2-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 2006.6666,
+  "run1061_ns": 1911.8518,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.ROW_MAJOR-ShardOrientation.ROW_MAJOR-0.0-tensor_shape0-input_shard_shape0-output_padded_shape0-output_shard_shape0-shard_core_grid0]": {
+  "main_ns": 3997.037,
+  "run1061_ns": 3592.5925,
+  "main_cores": 6,
+  "slow": false
+ },
+ "test_tilize_row_major_to_width_sharded[shard_core_grid0-shard_shape0-tensor_shape0-DataType.BFLOAT16]": {
+  "main_ns": 782248.1,
+  "run1061_ns": 40611.85,
+  "main_cores": 103,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape5-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 9833.333,
+  "run1061_ns": 3212.5925,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape0-tensor_shape1-None]": {
+  "main_ns": 6480.0,
+  "run1061_ns": 3257.037,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_test[tilize_args0-input_shapes1]": {
+  "main_ns": 49316.297,
+  "run1061_ns": 6440.0,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape3-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 1802.2222,
+  "run1061_ns": 1985.1852,
+  "main_cores": 64,
+  "slow": true
+ },
+ "test_tilize_fp8_input[wide-out_bfp4]": {
+  "main_ns": 7188.148,
+  "run1061_ns": 17874.074,
+  "main_cores": 64,
+  "slow": true
+ },
+ "test_tilize_with_val_padding_legacy_sharded_to_nd_sharded[2-standard_shard_core_grid0-block_shard_core_grid0-ShardOrientation.ROW_MAJOR-TensorMemoryLayout.WIDTH_SHARDED-10.2-tensor_shape0-output_padded_shape0-output_shard_shape0-shard_core_grid0]": {
+  "main_ns": 6320.7407,
+  "run1061_ns": 6388.8887,
+  "main_cores": 12,
+  "slow": true
+ },
+ "test_tilize_width_sharded_shapes[DataType.FLOAT32-tensor_shape2-4]": {
+  "main_ns": 1190.3704,
+  "run1061_ns": 1288.8889,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape0-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 1742.2222,
+  "run1061_ns": 2326.6667,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape2-tensor_shape2-None]": {
+  "main_ns": 4444.4443,
+  "run1061_ns": 2011.1111,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.ROW_MAJOR-ShardOrientation.ROW_MAJOR-0.0-tensor_shape2-input_shard_shape2-output_padded_shape2-output_shard_shape2-shard_core_grid2]": {
+  "main_ns": 6857.778,
+  "run1061_ns": 9537.037,
+  "main_cores": 16,
+  "slow": true
+ },
+ "test_tilize_with_zero_padding_test[tilize_with_zero_padding_args0-input_shapes1]": {
+  "main_ns": 7340.0,
+  "run1061_ns": 5454.815,
+  "main_cores": 30,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape1-tensor_shape0-None]": {
+  "main_ns": 6297.778,
+  "run1061_ns": 4741.4814,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape4-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 2681.4814,
+  "run1061_ns": 1938.5186,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape3-tensor_shape2-None]": {
+  "main_ns": 4217.037,
+  "run1061_ns": 1841.4814,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape0-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 1460.0,
+  "run1061_ns": 2021.4814,
+  "main_cores": 64,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape2-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 3571.111,
+  "run1061_ns": 2842.963,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_sharded_fp32_llk_acc[bf16_in_bfp8_out-TensorMemoryLayout.BLOCK_SHARDED-tensor_shape2-grid_shape2]": {
+  "main_ns": 1253.3334,
+  "run1061_ns": 1182.2222,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape1-tensor_shape0-None]": {
+  "main_ns": 3288.1482,
+  "run1061_ns": 3797.7778,
+  "main_cores": 16,
+  "slow": true
+ },
+ "test_tilize_block_sharded_shapes[DataType.BFLOAT16-tensor_shape7-grid_shape7]": {
+  "main_ns": 1068.1482,
+  "run1061_ns": 1233.3334,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_with_val_padding_scalar[DataType.INT32-7-0_0]": {
+  "main_ns": 3535.5557,
+  "run1061_ns": 2282.2222,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape4-tensor_shape2-None]": {
+  "main_ns": 4743.7036,
+  "run1061_ns": 2213.3333,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape2-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 2078.5186,
+  "run1061_ns": 1982.2222,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape3-tensor_shape1-None]": {
+  "main_ns": 8240.741,
+  "run1061_ns": 2894.8147,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape5-tensor_shape0-None]": {
+  "main_ns": 52788.15,
+  "run1061_ns": 5809.6294,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.ROW_MAJOR-ShardOrientation.ROW_MAJOR-10.2-tensor_shape1-input_shard_shape1-output_padded_shape1-output_shard_shape1-shard_core_grid1]": {
+  "main_ns": 11196.296,
+  "run1061_ns": 9177.777,
+  "main_cores": 12,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape4-tensor_shape3-None]": {
+  "main_ns": 3434.074,
+  "run1061_ns": 1707.4073,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.COL_MAJOR-ShardOrientation.ROW_MAJOR-0.0-tensor_shape3-input_shard_shape3-output_padded_shape3-output_shard_shape3-shard_core_grid3]": {
+  "main_ns": 11245.186,
+  "run1061_ns": 9141.481,
+  "main_cores": 12,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape3-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 2223.7036,
+  "run1061_ns": 1987.4073,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape2-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 1603.7037,
+  "run1061_ns": 1989.6296,
+  "main_cores": 64,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape5-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 6200.7407,
+  "run1061_ns": 2439.2593,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape4-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 5433.3335,
+  "run1061_ns": 2613.3333,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape4-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 2150.3704,
+  "run1061_ns": 1842.963,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape3-tensor_shape3-None]": {
+  "main_ns": 3446.6667,
+  "run1061_ns": 1575.5555,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_uint8[shape3]": {
+  "main_ns": 15163.704,
+  "run1061_ns": 2184.4443,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape2-tensor_shape3-None]": {
+  "main_ns": 3411.111,
+  "run1061_ns": 1522.2222,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape3-tensor_shape3-None]": {
+  "main_ns": 4646.6665,
+  "run1061_ns": 1621.4814,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape2-tensor_shape2-None]": {
+  "main_ns": 3543.7036,
+  "run1061_ns": 2265.1853,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape4-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 3554.074,
+  "run1061_ns": 2154.8147,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape4-tensor_shape2-None]": {
+  "main_ns": 27134.074,
+  "run1061_ns": 2914.074,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape5-tensor_shape3-None]": {
+  "main_ns": 30211.111,
+  "run1061_ns": 2385.926,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape0-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 3021.4814,
+  "run1061_ns": 3756.2964,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape5-tensor_shape1-None]": {
+  "main_ns": 101988.89,
+  "run1061_ns": 3577.7778,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_height_sharded_to_interleaved[tensor_shape2-2]": {
+  "main_ns": 1297.7778,
+  "run1061_ns": 1484.4445,
+  "main_cores": 2,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape2-tensor_shape3-None]": {
+  "main_ns": 4722.222,
+  "run1061_ns": 1951.8518,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape1-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 3405.1853,
+  "run1061_ns": 3866.6667,
+  "main_cores": 64,
+  "slow": true
+ },
+ "test_tilize_width_sharded_shapes[DataType.BFLOAT16-tensor_shape6-4]": {
+  "main_ns": 1145.1852,
+  "run1061_ns": 1370.3704,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_fp8_input[wide-out_bfp8]": {
+  "main_ns": 8053.3335,
+  "run1061_ns": 6842.963,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.BFLOAT16-tensor_shape0-grid_shape0]": {
+  "main_ns": 791.85187,
+  "run1061_ns": 1022.2222,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape4-tensor_shape1-None]": {
+  "main_ns": 52662.965,
+  "run1061_ns": 2942.963,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_width_sharded_shapes[DataType.BFLOAT16-tensor_shape7-8]": {
+  "main_ns": 918.5185,
+  "run1061_ns": 1105.1852,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape2-tensor_shape1-None]": {
+  "main_ns": 15149.63,
+  "run1061_ns": 2662.963,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape4-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 2717.7778,
+  "run1061_ns": 2051.8518,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape3-tensor_shape0-None]": {
+  "main_ns": 6140.0,
+  "run1061_ns": 2713.3333,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_col_major_orientation[TensorMemoryLayout.HEIGHT_SHARDED-tensor_shape0-shard_shape0-grid_shape0]": {
+  "main_ns": 1013.3333,
+  "run1061_ns": 1235.5555,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape4-tensor_shape3-None]": {
+  "main_ns": 4598.5186,
+  "run1061_ns": 1488.1482,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape4-tensor_shape0-None]": {
+  "main_ns": 3697.7778,
+  "run1061_ns": 2726.6667,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape1-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 2579.2593,
+  "run1061_ns": 2734.8147,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_with_val_padding_nd_sharded_to_interleaved[ShardOrientation.ROW_MAJOR-10.2-tensor_shape0-input_shard_shape0-output_padded_shape0-shard_core_grid0]": {
+  "main_ns": 3974.074,
+  "run1061_ns": 3671.111,
+  "main_cores": 6,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape1-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 3370.3704,
+  "run1061_ns": 3780.7407,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape5-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 4316.2964,
+  "run1061_ns": 1962.2222,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.ROW_MAJOR-ShardOrientation.ROW_MAJOR-0.0-tensor_shape1-input_shard_shape1-output_padded_shape1-output_shard_shape1-shard_core_grid1]": {
+  "main_ns": 11213.333,
+  "run1061_ns": 9154.814,
+  "main_cores": 12,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape1-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 2240.0,
+  "run1061_ns": 2303.7036,
+  "main_cores": 64,
+  "slow": true
+ },
+ "test_tilize_block_sharded_shapes[DataType.UINT8-tensor_shape3-grid_shape3]": {
+  "main_ns": 842.96295,
+  "run1061_ns": 1088.8889,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_with_val_padding_legacy_sharded_to_interleaved[2-standard_shard_core_grid0-block_shard_core_grid0-ShardOrientation.ROW_MAJOR-TensorMemoryLayout.HEIGHT_SHARDED-10.2-tensor_shape0-output_padded_shape0]": {
+  "main_ns": 5813.3335,
+  "run1061_ns": 6168.148,
+  "main_cores": 12,
+  "slow": true
+ },
+ "test_tilize_fp8_input[wide-out_bf16]": {
+  "main_ns": 11291.111,
+  "run1061_ns": 9099.259,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_program_cache_addr_change[single_core]": {
+  "main_ns": 10488.889,
+  "run1061_ns": 8205.186,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.FLOAT32-tensor_shape10-grid_shape10]": {
+  "main_ns": 1514.0741,
+  "run1061_ns": 1717.037,
+  "main_cores": 16,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape3-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 5218.5186,
+  "run1061_ns": 2977.037,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_scalar[DataType.FLOAT32-1.5--32.5]": {
+  "main_ns": 3500.7407,
+  "run1061_ns": 2270.3704,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape2-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 1573.3334,
+  "run1061_ns": 1860.0,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape4-tensor_shape0-None]": {
+  "main_ns": 53952.594,
+  "run1061_ns": 5095.5557,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape2-tensor_shape0-None]": {
+  "main_ns": 8571.852,
+  "run1061_ns": 4279.2593,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape1-tensor_shape1-None]": {
+  "main_ns": 11291.852,
+  "run1061_ns": 3134.074,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape4-tensor_shape3-None]": {
+  "main_ns": 7748.148,
+  "run1061_ns": 1662.2222,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape2-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 4320.7407,
+  "run1061_ns": 3896.2964,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape3-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 6093.3335,
+  "run1061_ns": 3982.963,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.FLOAT32-tensor_shape8-grid_shape8]": {
+  "main_ns": 1527.4073,
+  "run1061_ns": 1697.037,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_width_sharded_shapes[DataType.BFLOAT16-tensor_shape2-4]": {
+  "main_ns": 1063.7037,
+  "run1061_ns": 1287.4073,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape4-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 9712.593,
+  "run1061_ns": 4115.5557,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape3-tensor_shape1-None]": {
+  "main_ns": 27627.408,
+  "run1061_ns": 2816.2964,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_width_sharded_shapes[DataType.FLOAT32-tensor_shape6-4]": {
+  "main_ns": 1477.037,
+  "run1061_ns": 1674.8148,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape1-tensor_shape2-None]": {
+  "main_ns": 4574.815,
+  "run1061_ns": 2494.074,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_interleaved_to_nd_sharded[ShardOrientation.COL_MAJOR-10.2-tensor_shape0-output_padded_shape0-output_shard_shape0-shard_core_grid0]": {
+  "main_ns": 3837.7778,
+  "run1061_ns": 2544.4443,
+  "main_cores": 6,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape0-tensor_shape0-None]": {
+  "main_ns": 30333.334,
+  "run1061_ns": 6269.6294,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape0-tensor_shape2-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 2200.0,
+  "run1061_ns": 1094.8148,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape0-tensor_shape2-None]": {
+  "main_ns": 4682.963,
+  "run1061_ns": 2550.3704,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.UINT8-tensor_shape2-grid_shape2]": {
+  "main_ns": 894.8148,
+  "run1061_ns": 1132.5927,
+  "main_cores": 16,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape2-tensor_shape0-None]": {
+  "main_ns": 15365.186,
+  "run1061_ns": 4958.5186,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape1-tensor_shape2-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 2281.4814,
+  "run1061_ns": 1205.1852,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.WIDTH_SHARDED-shard_core_grid0-tensor_shape0-shard_shape0-DataType.BFLOAT16]": {
+  "main_ns": 10337.777,
+  "run1061_ns": 6440.7407,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape5-tensor_shape1-None]": {
+  "main_ns": 8387.407,
+  "run1061_ns": 2719.2593,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.FLOAT32-tensor_shape0-grid_shape0]": {
+  "main_ns": 805.9259,
+  "run1061_ns": 992.5926,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_block_sharded_shapes[DataType.FLOAT32-tensor_shape6-grid_shape6]": {
+  "main_ns": 975.55554,
+  "run1061_ns": 1074.0741,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_fp8_input[small-out_bf16]": {
+  "main_ns": 2376.2964,
+  "run1061_ns": 2115.5557,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.UINT8-tensor_shape1-grid_shape1]": {
+  "main_ns": 879.2593,
+  "run1061_ns": 1151.1111,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape2-tensor_shape1-None]": {
+  "main_ns": 6062.963,
+  "run1061_ns": 3160.7407,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape1-tensor_shape0-None]": {
+  "main_ns": 8113.3335,
+  "run1061_ns": 3630.3704,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape3-tensor_shape1-None]": {
+  "main_ns": 6121.4814,
+  "run1061_ns": 2547.4075,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.WIDTH_SHARDED-shard_core_grid0-tensor_shape2-shard_shape2-DataType.BFLOAT16]": {
+  "main_ns": 11034.074,
+  "run1061_ns": 11389.63,
+  "main_cores": 28,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape4-tensor_shape2-None]": {
+  "main_ns": 14485.926,
+  "run1061_ns": 2124.4443,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape3-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 5199.2593,
+  "run1061_ns": 2912.5925,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape3-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 3191.8518,
+  "run1061_ns": 2143.7036,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape3-tensor_shape1-None]": {
+  "main_ns": 7503.7036,
+  "run1061_ns": 2455.5557,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape2-tensor_shape1-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 9281.481,
+  "run1061_ns": 1366.6666,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape1-tensor_shape2-None]": {
+  "main_ns": 9259.259,
+  "run1061_ns": 2393.3333,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_width_sharded_shapes[DataType.FLOAT32-tensor_shape1-4]": {
+  "main_ns": 838.5185,
+  "run1061_ns": 1028.8889,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape0-tensor_shape3-None]": {
+  "main_ns": 9045.926,
+  "run1061_ns": 2737.037,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape3-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 3070.3704,
+  "run1061_ns": 2196.2964,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape4-tensor_shape1-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 5308.148,
+  "run1061_ns": 2492.5925,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape4-tensor_shape0-None]": {
+  "main_ns": 2873.3333,
+  "run1061_ns": 2100.0,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape3-tensor_shape2-None]": {
+  "main_ns": 3562.963,
+  "run1061_ns": 1882.2222,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_width_sharded_to_interleaved[to_layout]": {
+  "main_ns": 7255.5557,
+  "run1061_ns": 1475.5555,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape3-tensor_shape1-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 8133.3335,
+  "run1061_ns": 2028.8889,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.UINT8-tensor_shape6-grid_shape6]": {
+  "main_ns": 844.44446,
+  "run1061_ns": 1037.037,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape4-tensor_shape3-None]": {
+  "main_ns": 14605.186,
+  "run1061_ns": 2074.8147,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape4-tensor_shape3-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 4884.4443,
+  "run1061_ns": 3251.8518,
+  "main_cores": 86,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape0-tensor_shape2-None]": {
+  "main_ns": 9420.741,
+  "run1061_ns": 2788.889,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.COL_MAJOR-ShardOrientation.ROW_MAJOR-0.0-tensor_shape2-input_shard_shape2-output_padded_shape2-output_shard_shape2-shard_core_grid2]": {
+  "main_ns": 6854.074,
+  "run1061_ns": 9534.814,
+  "main_cores": 16,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape2-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 4299.2593,
+  "run1061_ns": 3812.5925,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.BLOCK_SHARDED-shard_core_grid0-tensor_shape1-shard_shape1-DataType.BFLOAT16]": {
+  "main_ns": 10288.148,
+  "run1061_ns": 6533.3335,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape3-tensor_shape0-None]": {
+  "main_ns": 7819.2593,
+  "run1061_ns": 3185.926,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape5-tensor_shape0-None]": {
+  "main_ns": 8994.814,
+  "run1061_ns": 3248.1482,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape1-tensor_shape0-None]": {
+  "main_ns": 11180.741,
+  "run1061_ns": 3431.111,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_fp32_lossless_via_to_layout": {
+  "main_ns": 2714.8147,
+  "run1061_ns": 2196.2964,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_scalar[DataType.INT32-7--32]": {
+  "main_ns": 3483.7036,
+  "run1061_ns": 2216.2964,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_legacy_sharded_to_interleaved[2-standard_shard_core_grid0-block_shard_core_grid0-ShardOrientation.ROW_MAJOR-TensorMemoryLayout.BLOCK_SHARDED-10.2-tensor_shape0-output_padded_shape0]": {
+  "main_ns": 5668.8887,
+  "run1061_ns": 10901.481,
+  "main_cores": 12,
+  "slow": true
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.COL_MAJOR-ShardOrientation.ROW_MAJOR-10.2-tensor_shape1-input_shard_shape1-output_padded_shape1-output_shard_shape1-shard_core_grid1]": {
+  "main_ns": 11193.333,
+  "run1061_ns": 9184.444,
+  "main_cores": 12,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_scalar[DataType.BFLOAT16-1.5--32.5]": {
+  "main_ns": 2370.3704,
+  "run1061_ns": 2089.6296,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape2-tensor_shape0-None]": {
+  "main_ns": 2261.4814,
+  "run1061_ns": 2083.7036,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.COL_MAJOR-ShardOrientation.ROW_MAJOR-0.0-tensor_shape0-input_shard_shape0-output_padded_shape0-output_shard_shape0-shard_core_grid0]": {
+  "main_ns": 3980.0,
+  "run1061_ns": 3593.3333,
+  "main_cores": 6,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.UINT8-tensor_shape5-grid_shape5]": {
+  "main_ns": 817.7778,
+  "run1061_ns": 1040.0,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape0-tensor_shape0-None]": {
+  "main_ns": 17505.926,
+  "run1061_ns": 4608.8887,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape1-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 2185.1853,
+  "run1061_ns": 2203.7036,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_width_sharded_shapes[DataType.FLOAT32-tensor_shape8-8]": {
+  "main_ns": 2168.889,
+  "run1061_ns": 2445.1853,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape0-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 1789.6296,
+  "run1061_ns": 2283.7036,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_sharded_fp32_llk_acc[bf16_in_bfp8_out-TensorMemoryLayout.WIDTH_SHARDED-tensor_shape1-grid_shape1]": {
+  "main_ns": 800.0,
+  "run1061_ns": 1000.0,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.HEIGHT_SHARDED-shard_core_grid0-tensor_shape0-shard_shape0-DataType.BFLOAT16]": {
+  "main_ns": 10262.963,
+  "run1061_ns": 6524.4443,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_interleaved_to_nd_sharded[ShardOrientation.COL_MAJOR-10.2-tensor_shape1-output_padded_shape1-output_shard_shape1-shard_core_grid1]": {
+  "main_ns": 7361.4814,
+  "run1061_ns": 4192.593,
+  "main_cores": 12,
+  "slow": false
+ },
+ "test_tilize_width_sharded_shapes[DataType.FLOAT32-tensor_shape4-4]": {
+  "main_ns": 956.2963,
+  "run1061_ns": 1048.1482,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape0-tensor_shape0-None]": {
+  "main_ns": 2785.1853,
+  "run1061_ns": 2082.2222,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape0-tensor_shape2-None]": {
+  "main_ns": 6419.2593,
+  "run1061_ns": 3164.4443,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape3-tensor_shape3-None]": {
+  "main_ns": 7822.222,
+  "run1061_ns": 1962.963,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.ROW_MAJOR-ShardOrientation.ROW_MAJOR-0.0-tensor_shape4-input_shard_shape4-output_padded_shape4-output_shard_shape4-shard_core_grid4]": {
+  "main_ns": 18355.555,
+  "run1061_ns": 19717.777,
+  "main_cores": 60,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape3-tensor_shape2-None]": {
+  "main_ns": 14444.444,
+  "run1061_ns": 2768.889,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape3-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 1754.0741,
+  "run1061_ns": 1857.7778,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape4-tensor_shape1-None]": {
+  "main_ns": 27969.629,
+  "run1061_ns": 3223.7036,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape2-tensor_shape1-None]": {
+  "main_ns": 7615.5557,
+  "run1061_ns": 2653.3333,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_run_tilize_with_val_padding_test[input_shapes3-tilize_with_val_padding_args3]": {
+  "main_ns": 3905.1853,
+  "run1061_ns": 3390.3704,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_interleaved_to_nd_sharded[ShardOrientation.COL_MAJOR-0.0-tensor_shape0-output_padded_shape0-output_shard_shape0-shard_core_grid0]": {
+  "main_ns": 3835.5557,
+  "run1061_ns": 2482.2222,
+  "main_cores": 6,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape0-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 1461.4814,
+  "run1061_ns": 1859.2593,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape0-tensor_shape0-None]": {
+  "main_ns": 8085.185,
+  "run1061_ns": 5601.4814,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape0-tensor_shape2-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 1836.2963,
+  "run1061_ns": 1131.8518,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_fp8_input[small-out_bfp8]": {
+  "main_ns": 2357.7778,
+  "run1061_ns": 2068.889,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape0-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 1535.5555,
+  "run1061_ns": 2001.4814,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape5-tensor_shape1-None]": {
+  "main_ns": 14685.186,
+  "run1061_ns": 3562.2222,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_uint8[shape1]": {
+  "main_ns": 14384.444,
+  "run1061_ns": 2571.111,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape1-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 2180.0,
+  "run1061_ns": 2229.6296,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape0-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 2197.037,
+  "run1061_ns": 2916.2964,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.COL_MAJOR-ShardOrientation.ROW_MAJOR-10.2-tensor_shape2-input_shard_shape2-output_padded_shape2-output_shard_shape2-shard_core_grid2]": {
+  "main_ns": 6870.3706,
+  "run1061_ns": 9504.444,
+  "main_cores": 16,
+  "slow": true
+ },
+ "test_tilize_block_sharded_shapes[DataType.BFLOAT16-tensor_shape4-grid_shape4]": {
+  "main_ns": 972.5926,
+  "run1061_ns": 1217.7778,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape5-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 9800.741,
+  "run1061_ns": 3215.5557,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape0-tensor_shape1-None]": {
+  "main_ns": 8025.926,
+  "run1061_ns": 3372.5925,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape3-tensor_shape1-None]": {
+  "main_ns": 15028.148,
+  "run1061_ns": 2972.5925,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_width_sharded_shapes[DataType.FLOAT32-tensor_shape5-4]": {
+  "main_ns": 1320.0,
+  "run1061_ns": 1440.7407,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape1-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 1477.7778,
+  "run1061_ns": 1857.037,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape1-tensor_shape3-None]": {
+  "main_ns": 9133.333,
+  "run1061_ns": 2226.6667,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape0-tensor_shape2-None]": {
+  "main_ns": 3800.7407,
+  "run1061_ns": 2175.5557,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape3-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 6093.3335,
+  "run1061_ns": 3908.1482,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape5-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 2988.889,
+  "run1061_ns": 1912.5927,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_interleaved_to_nd_sharded[ShardOrientation.ROW_MAJOR-10.2-tensor_shape1-output_padded_shape1-output_shard_shape1-shard_core_grid1]": {
+  "main_ns": 7345.185,
+  "run1061_ns": 4170.3706,
+  "main_cores": 12,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape5-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 2945.926,
+  "run1061_ns": 1741.4814,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_sharded_fp32_llk_acc[fp32_in_fp32_out-TensorMemoryLayout.HEIGHT_SHARDED-tensor_shape0-grid_shape0]": {
+  "main_ns": 909.62964,
+  "run1061_ns": 1129.6296,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_with_val_padding_interleaved_to_nd_sharded[ShardOrientation.COL_MAJOR-0.0-tensor_shape1-output_padded_shape1-output_shard_shape1-shard_core_grid1]": {
+  "main_ns": 7312.593,
+  "run1061_ns": 4178.5186,
+  "main_cores": 12,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape1-tensor_shape3-None]": {
+  "main_ns": 6200.0,
+  "run1061_ns": 1810.3704,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_interleaved_to_nd_sharded[ShardOrientation.ROW_MAJOR-10.2-tensor_shape0-output_padded_shape0-output_shard_shape0-shard_core_grid0]": {
+  "main_ns": 3827.4075,
+  "run1061_ns": 2521.4814,
+  "main_cores": 6,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape1-tensor_shape3-None]": {
+  "main_ns": 4528.148,
+  "run1061_ns": 1622.2222,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape3-tensor_shape2-None]": {
+  "main_ns": 4682.963,
+  "run1061_ns": 2139.2593,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape1-tensor_shape1-None]": {
+  "main_ns": 8068.8887,
+  "run1061_ns": 3582.963,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape3-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 5222.963,
+  "run1061_ns": 2880.0,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_with_zero_padding_test[tilize_with_zero_padding_args0-input_shapes2]": {
+  "main_ns": 46029.63,
+  "run1061_ns": 9129.63,
+  "main_cores": 56,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape1-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 1939.2593,
+  "run1061_ns": 1906.6666,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded_to_interleaved[ShardOrientation.ROW_MAJOR-0.0-tensor_shape1-input_shard_shape1-output_padded_shape1-shard_core_grid1]": {
+  "main_ns": 11191.111,
+  "run1061_ns": 8835.556,
+  "main_cores": 12,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape4-tensor_shape0-None]": {
+  "main_ns": 14606.667,
+  "run1061_ns": 4854.815,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_legacy_sharded_to_nd_sharded[2-standard_shard_core_grid0-block_shard_core_grid0-ShardOrientation.ROW_MAJOR-TensorMemoryLayout.BLOCK_SHARDED-10.2-tensor_shape0-output_padded_shape0-output_shard_shape0-shard_core_grid0]": {
+  "main_ns": 6045.185,
+  "run1061_ns": 11122.223,
+  "main_cores": 12,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape5-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 2947.4075,
+  "run1061_ns": 1765.1852,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.BFLOAT16-tensor_shape5-grid_shape5]": {
+  "main_ns": 1016.2963,
+  "run1061_ns": 1147.4073,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.HEIGHT_SHARDED-shard_core_grid0-tensor_shape1-shard_shape1-DataType.BFLOAT16]": {
+  "main_ns": 10180.0,
+  "run1061_ns": 6519.2593,
+  "main_cores": 16,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.UINT8-tensor_shape8-grid_shape8]": {
+  "main_ns": 1039.2593,
+  "run1061_ns": 1310.3704,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_block_sharded_shapes[DataType.BFLOAT16-tensor_shape10-grid_shape10]": {
+  "main_ns": 1057.037,
+  "run1061_ns": 1266.6666,
+  "main_cores": 16,
+  "slow": true
+ },
+ "test_run_tilize_with_val_padding_test[input_shapes1-tilize_with_val_padding_args1]": {
+  "main_ns": 3877.7778,
+  "run1061_ns": 3380.0,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape2-tensor_shape1-None]": {
+  "main_ns": 10697.777,
+  "run1061_ns": 2685.1853,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape5-tensor_shape2-None]": {
+  "main_ns": 52365.926,
+  "run1061_ns": 3536.2964,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape5-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 4413.3335,
+  "run1061_ns": 2096.2964,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape1-tensor_shape1-None]": {
+  "main_ns": 6370.3706,
+  "run1061_ns": 2997.037,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape4-tensor_shape2-None]": {
+  "main_ns": 3455.5557,
+  "run1061_ns": 1824.4445,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_scalar[DataType.BFLOAT16-1.5-42.0]": {
+  "main_ns": 2342.2222,
+  "run1061_ns": 2104.4443,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_dram_backed_sharded_input[width_sharded_dram]": {
+  "main_ns": 9134.814,
+  "run1061_ns": 3287.4075,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape2-tensor_shape2-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 2208.889,
+  "run1061_ns": 1374.0741,
+  "main_cores": 86,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape1-tensor_shape3-None]": {
+  "main_ns": 3564.4443,
+  "run1061_ns": 1687.4073,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape2-tensor_shape2-None]": {
+  "main_ns": 5895.5557,
+  "run1061_ns": 2001.4814,
+  "main_cores": 8,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.BFLOAT16-tile_shape3-tensor_shape3-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 3662.963,
+  "run1061_ns": 1837.037,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape1-tensor_shape2-None]": {
+  "main_ns": 4997.778,
+  "run1061_ns": 2622.2222,
+  "main_cores": 2,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape2-input_tile_shape1-tensor_shape5-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 1930.3704,
+  "run1061_ns": 1938.5186,
+  "main_cores": 32,
+  "slow": true
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape2-tensor_shape3-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 3623.7036,
+  "run1061_ns": 1518.5186,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.UINT8-tensor_shape7-grid_shape7]": {
+  "main_ns": 1060.0,
+  "run1061_ns": 1255.5555,
+  "main_cores": 8,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape2-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 4294.815,
+  "run1061_ns": 3821.4814,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.UINT8-tensor_shape0-grid_shape0]": {
+  "main_ns": 748.14813,
+  "run1061_ns": 1030.3704,
+  "main_cores": 4,
+  "slow": true
+ },
+ "test_tilize_model_traced_sample": {
+  "main_ns": 2036.2963,
+  "run1061_ns": 2035.5555,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape0-input_tile_shape1-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 1500.7407,
+  "run1061_ns": 1987.4073,
+  "main_cores": 64,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape2-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 3073.3333,
+  "run1061_ns": 2401.4814,
+  "main_cores": 64,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_scalar[DataType.FLOAT32-1.5--0.0]": {
+  "main_ns": 3546.6667,
+  "run1061_ns": 2303.7036,
+  "main_cores": 1,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_legacy_sharded_to_nd_sharded[2-standard_shard_core_grid0-block_shard_core_grid0-ShardOrientation.ROW_MAJOR-TensorMemoryLayout.HEIGHT_SHARDED-10.2-tensor_shape0-output_padded_shape0-output_shard_shape0-shard_core_grid0]": {
+  "main_ns": 6156.2964,
+  "run1061_ns": 6291.852,
+  "main_cores": 12,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape5-tensor_shape2-None]": {
+  "main_ns": 4921.4814,
+  "run1061_ns": 1973.3334,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape1-input_tile_shape5-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 3414.074,
+  "run1061_ns": 1830.3704,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape3-input_tile_shape4-tensor_shape0-None]": {
+  "main_ns": 8465.186,
+  "run1061_ns": 3234.8147,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_block_sharded_shapes[DataType.BFLOAT16-tensor_shape2-grid_shape2]": {
+  "main_ns": 1036.2963,
+  "run1061_ns": 1231.1111,
+  "main_cores": 16,
+  "slow": true
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape1-tensor_shape1-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 15658.519,
+  "run1061_ns": 1150.3704,
+  "main_cores": 4,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_interleaved_to_nd_sharded[ShardOrientation.ROW_MAJOR-0.0-tensor_shape0-output_padded_shape0-output_shard_shape0-shard_core_grid0]": {
+  "main_ns": 3843.7036,
+  "run1061_ns": 2520.7407,
+  "main_cores": 6,
+  "slow": false
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape4-input_tile_shape2-tensor_shape4-TensorMemoryLayout.WIDTH_SHARDED]": {
+  "main_ns": 3520.0,
+  "run1061_ns": 2814.074,
+  "main_cores": 32,
+  "slow": false
+ },
+ "test_tilize_row_major_to_tiny_tile[DataType.FLOAT32-tile_shape4-tensor_shape2-TensorMemoryLayout.HEIGHT_SHARDED]": {
+  "main_ns": 4477.778,
+  "run1061_ns": 3134.074,
+  "main_cores": 103,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.ROW_MAJOR-ShardOrientation.ROW_MAJOR-0.0-tensor_shape3-input_shard_shape3-output_padded_shape3-output_shard_shape3-shard_core_grid3]": {
+  "main_ns": 11202.963,
+  "run1061_ns": 9171.852,
+  "main_cores": 12,
+  "slow": false
+ },
+ "test_tilize_with_val_padding_nd_sharded[ShardOrientation.COL_MAJOR-ShardOrientation.ROW_MAJOR-0.0-tensor_shape4-input_shard_shape4-output_padded_shape4-output_shard_shape4-shard_core_grid4]": {
+  "main_ns": 17231.852,
+  "run1061_ns": 18061.482,
+  "main_cores": 60,
+  "slow": true
+ },
+ "test_tilize_retile[DataType.BFLOAT16-output_tile_shape5-input_tile_shape0-tensor_shape6-TensorMemoryLayout.BLOCK_SHARDED]": {
+  "main_ns": 3054.074,
+  "run1061_ns": 3818.5186,
+  "main_cores": 64,
+  "slow": true
+ },
+ "test_tilize_width_sharded_shapes[DataType.BFLOAT16-tensor_shape3-8]": {
+  "main_ns": 1188.8889,
+  "run1061_ns": 1380.0,
+  "main_cores": 8,
+  "slow": true
+ }
+}

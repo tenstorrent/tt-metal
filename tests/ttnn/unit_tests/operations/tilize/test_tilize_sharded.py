@@ -43,8 +43,14 @@ def _residency(input_tensor, mem_config):
     out_spec = op_module._output_spec(list(input_tensor.shape), input_tensor.dtype, mem_config, ttnn.Tile([32, 32]))
     out = ttnn.allocate_tensor_on_device(out_spec, input_tensor.device())
     desc = pd.create_program_descriptor(input_tensor, out)
-    readers = [k for k in desc.kernels if str(k.kernel_source).endswith("tilize_reader.cpp")]
-    writers = [k for k in desc.kernels if str(k.kernel_source).endswith("tilize_writer.cpp")]
+    # The resident side gets its own minimal kernel (tilize_{reader,writer}_resident.cpp, same
+    # compile-time args), so match both kernel files of each role.
+    readers = [
+        k for k in desc.kernels if str(k.kernel_source).endswith(("tilize_reader.cpp", "tilize_reader_resident.cpp"))
+    ]
+    writers = [
+        k for k in desc.kernels if str(k.kernel_source).endswith(("tilize_writer.cpp", "tilize_writer_resident.cpp"))
+    ]
     return (
         {int(k.compile_time_args[READER_RESIDENT_ARG]) for k in readers},
         {int(k.compile_time_args[WRITER_RESIDENT_ARG]) for k in writers},

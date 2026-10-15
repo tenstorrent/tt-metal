@@ -21,15 +21,18 @@ import ttnn
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
 # --- CB slots (semantic names) ---------------------------------------------
+# Densely numbered, most common first: kernel launch sets up every CB slot up to the highest index
+# used, which is fixed per-launch cost on each RISC (16 -> 1 for the output: ~50 ns NCRISC on a
+# one-tile sharded core, BH, measured). The common pair is 0/1; the rest only exist on their paths.
 CB_RM_STICKS = 0  # reader -> compute: RM stick segments, tile-sized pages
-CB_RM_STICKS_TAIL = 1  # same, for the ragged last column block (own ring quantum)
-CB_STICK_STAGING = 2  # reader-private scratch: bank-grouped sticks (coalesced) / input tiles (retile)
-CB_PAD_FILL = 3  # reader-private: one stick segment of the pad value (source of local fill copies)
-CB_COPY_JOB = 4  # reader -> writer: split-reorder copy job per tile-row {dst, slot base, first stick}
-CB_COPY_DONE = 5  # writer -> reader: split-reorder ack per tile-row (token page)
-CB_BFP4_ROUNDED = 6  # compute-internal (bfloat4_b output): RM stick pages rounded to the bfp4 grid, bf16
-CB_TILES_OUT = 16  # compute -> writer: tiled output pages
-CB_TILES_OUT_TAIL = 17  # same, for the ragged last column block
+CB_TILES_OUT = 1  # compute -> writer: tiled output pages
+CB_RM_STICKS_TAIL = 2  # same as CB_RM_STICKS, for the ragged last column block (own ring quantum)
+CB_TILES_OUT_TAIL = 3  # same as CB_TILES_OUT, for the ragged last column block
+CB_STICK_STAGING = 4  # reader-private scratch: bank-grouped sticks (coalesced) / input tiles (retile)
+CB_PAD_FILL = 5  # reader-private: one stick segment of the pad value (source of local fill copies)
+CB_COPY_JOB = 6  # reader -> writer: split-reorder copy job per tile-row {dst, slot base, first stick}
+CB_COPY_DONE = 7  # writer -> reader: split-reorder ack per tile-row (token page)
+CB_BFP4_ROUNDED = 8  # compute-internal (bfloat4_b output): RM stick pages rounded to the bfp4 grid, bf16
 
 # --- Block knobs (single source of truth) -----------------------------------
 IN_DEPTH_TILE_ROWS = 2  # cb_rm_sticks window, in tile-rows (double buffer)
@@ -243,6 +246,19 @@ def _rect_assignment(device, tensor_rows_tiles, tensor_cols_tiles, col_unit_tile
         for ci, (col_start, cols) in enumerate(col_ranges):
             assignment.append((cores[ri * cores_c + ci], row_start, rows, col_start, cols))
     return all_cores, assignment, cores_c
+
+
+def _source_count(device, tensor):
+    """How many memories the reader's sources are spread over: the banks of an interleaved buffer,
+    or the cores holding a sharded one's shards. The 2-D split keys its narrow-column-cut limit on
+    this, so a sharded input on a few cores is not hammered by grid-many small-segment readers
+    ([4,100,160] padded, 2-core nd input: 80 cores 9.5 us -> row split, BH, measured)."""
+    mem = tensor.memory_config()
+    if mem.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED and mem.buffer_type == ttnn.BufferType.L1:
+        spec = mem.nd_shard_spec if mem.nd_shard_spec is not None else mem.shard_spec
+        if spec is not None:
+            return spec.grid.num_cores()
+    return ttnn.get_memory_view(device, mem.buffer_type).num_banks
 
 
 def _flat_2d(shape):
@@ -490,7 +506,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             tensor_cols_tiles,
             align_unit_tiles,
             align_unit_tiles * seg_unit_bytes,
-            ttnn.get_memory_view(device, input_tensor.memory_config().buffer_type).num_banks,
+            _source_count(device, input_tensor),
         )
     else:
         assignment = (in_shards if in_resident else out_shards)[0]
@@ -778,13 +794,20 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
                     stagger = (k % stagger_groups) if BANK_STAGGER else 0
                 else:  # segment reader: rotate the start stick of each tile-row
                     stagger = (k % tile_h) if SEGMENT_BANK_STAGGER else 0
-                reader_rt[core.x][core.y] = [in_addr, *rect, stagger, fill_word]
-                writer_rt[core.x][core.y] = [out_addr, *rect]
+                # Resident-side kernels read only core_rows_tiles: send just that (every runtime-arg
+                # word is dispatch payload per core, fixed cost on small sharded launches).
+                reader_rt[core.x][core.y] = (
+                    [core_rows_tiles] if in_resident and not retile else [in_addr, *rect, stagger, fill_word]
+                )
+                writer_rt[core.x][core.y] = [core_rows_tiles] if out_resident else [out_addr, *rect]
                 compute_rt[core.x][core.y] = [core_rows_tiles, block_height_tiles]
 
             kernels.append(
                 ttnn.KernelDescriptor(
-                    kernel_source=str(KERNEL_DIR / "tilize_reader.cpp"),
+                    kernel_source=str(
+                        KERNEL_DIR
+                        / ("tilize_reader_resident.cpp" if in_resident and not retile else "tilize_reader.cpp")
+                    ),
                     core_ranges=sub_cores,
                     compile_time_args=reader_ct,
                     runtime_args=reader_rt,
@@ -794,7 +817,9 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             )
             kernels.append(
                 ttnn.KernelDescriptor(
-                    kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
+                    kernel_source=str(
+                        KERNEL_DIR / ("tilize_writer_resident.cpp" if out_resident else "tilize_writer.cpp")
+                    ),
                     core_ranges=sub_cores,
                     compile_time_args=writer_ct,
                     runtime_args=writer_rt,
@@ -804,7 +829,14 @@ def create_program_descriptor(input_tensor, output_tensor, *, low_l1=False, padd
             )
             kernels.append(
                 ttnn.KernelDescriptor(
-                    kernel_source=str(KERNEL_DIR / "tilize_compute.cpp"),
+                    kernel_source=str(
+                        KERNEL_DIR
+                        / (
+                            "tilize_compute_single_block.cpp"
+                            if num_col_blocks == 1 and not has_tail and not bfp4_round and not rft
+                            else "tilize_compute.cpp"
+                        )
+                    ),
                     core_ranges=sub_cores,
                     compile_time_args=compute_ct,
                     runtime_args=compute_rt,

@@ -195,7 +195,11 @@ struct Bfp4Round : compute_kernel_lib::UnaryOp<Bfp4Round, compute_kernel_lib::Ds
     }
 };
 
-template <uint32_t block_width_tiles, uint32_t cb_in, uint32_t cb_out>
+// `reconfigure`: only when the tilize source format differs from the one compute_kernel_hw_startup
+// configured (the bfp4 round pass: unary leaves the unpacker on cb_in, the tilize reads the bf16
+// cb_bfp4_rounded). Every other source (cb_rm_sticks / its tail) has the startup format, and the
+// reconfigure is pure fixed cost: ~150-200 ns per launch on small sharded shards (BH, measured).
+template <uint32_t block_width_tiles, uint32_t cb_in, uint32_t cb_out, bool reconfigure>
 ALWI void tilize_block(uint32_t rows) {
     using namespace compute_kernel_lib::tilize_config;
     compute_kernel_lib::tilize<
@@ -204,7 +208,8 @@ ALWI void tilize_block(uint32_t rows) {
         cb_out,
         InitUninitMode::InitAndUninit,
         WaitMode::WaitBlock,
-        ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+        reconfigure ? ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure
+                    : ReconfigureRegisterDatatypeMode::NoReconfigure,
         Fp32Mode::Lossless>(rows);
 }
 
@@ -221,7 +226,7 @@ ALWI void tilize_rows(uint32_t rows) {
     if constexpr (!bfp4_round) {
         // Occupancy: the helper waits on cb_in / reserves cb_out per tile-row inside this zone.
         MaybeDeviceZoneScope("compute_tilize");
-        tilize_block<block_width_tiles, cb_in, cb_out>(rows);
+        tilize_block<block_width_tiles, cb_in, cb_out, false>(rows);
     } else {
         using namespace compute_kernel_lib;
         for (uint32_t r = 0; r < rows; r += round_tile_rows) {
@@ -232,7 +237,7 @@ ALWI void tilize_rows(uint32_t rows) {
             }
             {
                 MaybeDeviceZoneScope("compute_tilize");
-                tilize_block<block_width_tiles, cb_bfp4_rounded, cb_out>(n);
+                tilize_block<block_width_tiles, cb_bfp4_rounded, cb_out, true>(n);
             }
         }
     }

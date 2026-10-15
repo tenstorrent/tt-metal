@@ -618,6 +618,67 @@ void kernel_main() {
                         }
                         g = (g + 1 == groups) ? 0 : g + 1;
                     }
+                } else if constexpr (!in_interleaved) {
+                    // Sharded source: a full page-id -> address decode costs ~260 cycles per read
+                    // (BH, measured: it bounded padded ND-sharded inputs at 16.5k cycles/tile-row).
+                    // Consecutive sticks of one shard sit one aligned page apart, so decode once per
+                    // shard row-run and step the address; walk each input page (stick piece) of the
+                    // segment in turn so one running address suffices.
+                    MaybeDeviceZoneScope("reader_issue");
+                    // Generic lambda: the accessor's shard spec only exists for sharded inputs, and
+                    // kernel_main is not a template, so the body must be a dependent context.
+                    auto issue = [&](const auto& acc) {
+                        if constexpr (!in_interleaved) {
+                            // The spec may collapse the page grid: [.., rows, pieces] or, with one page
+                            // per stick, a flat [sticks]. Either way the row axis counts sticks and is
+                            // where shard row-runs break; any other layout decodes every stick.
+                            const auto& ds = acc.dspec();
+                            const uint32_t rank = ds.rank();
+                            const bool rows_pieces = rank >= 2 && ds.tensor_shape()[rank - 1] == in_pages_per_stick;
+                            const bool flat = rank == 1 && in_pages_per_stick == 1;
+                            const uint32_t row_dim = rows_pieces ? rank - 2 : 0;
+                            const uint32_t rows_in_dim = ds.tensor_shape()[row_dim];
+                            const uint32_t shard_rows = (rows_pieces || flat) ? ds.shard_shape()[row_dim] : 1;
+                            const uint32_t page_step = ds.shard_strides()[row_dim] * acc.get_aligned_page_size();
+                            // Same per-core stagger as the decode-per-stick path below: each core starts
+                            // its row walk at a different stick (width-sharded DRAM 3.34 -> 3.60 us
+                            // without it, BH, measured). A wrap or a shard row boundary re-decodes.
+                            const uint32_t start = bank_stagger_offset < valid_sticks ? bank_stagger_offset : 0;
+                            uint32_t seg_done = 0;
+                            while (seg_done < data_bytes && valid_sticks > 0) {
+                                const uint32_t offset = seg_offset_bytes + seg_done;
+                                const uint32_t piece = offset / in_page_data_bytes;
+                                const uint32_t in_page = offset - piece * in_page_data_bytes;
+                                const uint32_t remaining = data_bytes - seg_done;
+                                const uint32_t n =
+                                    in_page_data_bytes - in_page < remaining ? in_page_data_bytes - in_page : remaining;
+                                uint32_t k = start;
+                                uint32_t c = 0;
+                                uint32_t r = 0;
+                                uint64_t a = 0;
+                                for (uint32_t j = 0; j < valid_sticks; ++j) {
+                                    if (j == 0 || k == 0 || r == 0) {
+                                        a = acc.get_noc_addr((first_stick + k) * in_pages_per_stick + piece, in_page);
+                                        c = (first_stick + k) % rows_in_dim;
+                                        r = c % shard_rows;
+                                    }
+                                    noc_async_read(a, read_base + k * read_stride + seg_done, n);
+                                    a += page_step;
+                                    if (++c == rows_in_dim) {
+                                        c = 0;
+                                        r = 0;
+                                    } else if (++r == shard_rows) {
+                                        r = 0;
+                                    }
+                                    if (++k == valid_sticks) {
+                                        k = 0;
+                                    }
+                                }
+                                seg_done += n;
+                            }
+                        }
+                    };
+                    issue(in_acc);
                 } else {
                     MaybeDeviceZoneScope("reader_issue");
                     uint32_t i = bank_stagger_offset < valid_sticks ? bank_stagger_offset : 0;
