@@ -36,6 +36,7 @@ void kernel_main() {
     constexpr uint32_t stripe_tiles = get_compile_time_arg_val(18);
     constexpr uint32_t piece_tiles = get_compile_time_arg_val(19);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(20);
+    constexpr bool transpose_b = get_compile_time_arg_val(21) == 1;
 
     uint32_t argidx = 0;
     const uint32_t in1_addr = get_arg_val<uint32_t>(argidx++);
@@ -55,7 +56,7 @@ void kernel_main() {
         stripe_order[i] = get_arg_val<uint32_t>(argidx++);
     }
 
-    constexpr auto in1_args = TensorAccessorArgs<21>();
+    constexpr auto in1_args = TensorAccessorArgs<22>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr);
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr, out_tile_size);
@@ -102,8 +103,15 @@ void kernel_main() {
                 uint32_t in1_start_address = cb_in1.get_write_ptr();
                 if constexpr (is_injector_core) {
                     if (any_real) {
-                        read_in1_block_columns<K_block_tiles, N_block_tiles>(
-                            in1_reader, cb_in1_id, in1_tile_size, K_tiles, k_block * K_block_tiles, cols, width);
+                        read_in1_block_columns<K_block_tiles, N_block_tiles, transpose_b>(
+                            in1_reader,
+                            cb_in1_id,
+                            in1_tile_size,
+                            K_tiles,
+                            N_tiles,
+                            k_block * K_block_tiles,
+                            cols,
+                            width);
                     }
                 } else {
                     in1_receiver_semaphore.set(INVALID);

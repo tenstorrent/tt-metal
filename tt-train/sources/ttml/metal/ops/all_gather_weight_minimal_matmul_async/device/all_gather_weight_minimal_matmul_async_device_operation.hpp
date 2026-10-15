@@ -37,5 +37,6 @@ ttnn::Tensor ttml_all_gather_weight_minimal_matmul_async(
     const std::optional<const experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    bool transpose_b);
 }

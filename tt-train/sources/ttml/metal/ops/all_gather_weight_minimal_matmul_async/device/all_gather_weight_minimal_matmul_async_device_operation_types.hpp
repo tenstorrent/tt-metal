@@ -22,6 +22,7 @@ struct AllGatherWeightMinimalMatmulAsyncParams {
     uint32_t ring_size = 1;
     uint32_t ring_index = 0;
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
+    bool transpose_b = true;
 };
 
 struct AllGatherWeightMinimalMatmulAsyncInputs {

@@ -55,7 +55,7 @@ void kernel_main() {
         stripe_order[i] = get_arg_val<uint32_t>(argidx++);
     }
 
-    constexpr auto in0_args = TensorAccessorArgs<21>();
+    constexpr auto in0_args = TensorAccessorArgs<22>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr);
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr, out_tile_size);

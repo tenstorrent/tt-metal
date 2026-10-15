@@ -90,9 +90,10 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create(
     auto intermediate_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     auto intermediate_tile_size = tt::tile_size(intermediate_data_format);
 
+    const bool transpose_b = operation_attributes.transpose_b;
     const uint32_t K = input_tensor.padded_shape()[-1];
     const uint32_t M = input_tensor.physical_volume() / K;
-    const uint32_t N = weight_tensor.padded_shape()[-2];
+    const uint32_t N = weight_tensor.padded_shape()[transpose_b ? -2 : -1];
     const uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
     const uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
     const uint32_t N_tiles = N / tt::constants::TILE_WIDTH;
@@ -219,6 +220,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create(
             layout.stripe_tiles,
             layout.piece_tiles,
             subblock_w,
+            static_cast<uint32_t>(transpose_b),
         };
         tt::tt_metal::TensorAccessorArgs(*own_input.buffer()).append_to(args);
         tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
@@ -317,7 +319,8 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create(
                  subblock_h,
                  subblock_w,
                  layout.piece_tiles,
-                 layout.ring_size},
+                 layout.ring_size,
+                 static_cast<uint32_t>(transpose_b)},
             .defines = compute_defines});
 
     const uint32_t k_blocks_per_core =

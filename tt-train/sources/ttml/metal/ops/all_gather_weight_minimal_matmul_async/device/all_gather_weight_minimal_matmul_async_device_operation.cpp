@@ -66,17 +66,20 @@ void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache
             w_shape[i],
             w_shape);
     }
+    const int n_dim = attrs.transpose_b ? -2 : -1;
+    const int k_dim = attrs.transpose_b ? -1 : -2;
     TT_FATAL(
-        x_shape[-1] == w_shape[-1],
-        "inner dimensions must match: input K={} vs weight [N, K] K={}",
+        x_shape[-1] == w_shape[k_dim],
+        "inner dimensions must match: input K={} vs weight K={} (transpose_b={})",
         x_shape[-1],
-        w_shape[-1]);
+        w_shape[k_dim],
+        attrs.transpose_b);
     TT_FATAL(
-        x_shape[-2] > 0 && x_shape[-1] > 0 && w_shape[-2] > 0,
+        x_shape[-2] > 0 && x_shape[-1] > 0 && w_shape[n_dim] > 0,
         "Matmul dims must be positive, got M={}, K={}, N={}.",
         x_shape[-2],
         x_shape[-1],
-        w_shape[-2]);
+        w_shape[n_dim]);
 
     TT_FATAL(attrs.ring_size >= 1, "ring_size must be >= 1, got {}.", attrs.ring_size);
     TT_FATAL(
@@ -88,11 +91,11 @@ void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache
         attrs.topology == ttnn::ccl::Topology::Ring || attrs.topology == ttnn::ccl::Topology::Linear,
         "Unsupported topology {}: the op supports Ring and Linear.",
         attrs.topology);
-    const uint32_t N_tiles = w.padded_shape()[-2] / TILE_HEIGHT;
+    const uint32_t N_tiles = w.padded_shape()[n_dim] / TILE_WIDTH;
     TT_FATAL(
-        w_shape[-2] % TILE_HEIGHT == 0 && N_tiles % attrs.ring_size == 0,
+        w_shape[n_dim] % TILE_WIDTH == 0 && N_tiles % attrs.ring_size == 0,
         "weight N={} must be a multiple of 32 * ring_size ({}) so every device owns a tile-aligned stripe",
-        w_shape[-2],
+        w_shape[n_dim],
         attrs.ring_size);
 
     if (attrs.config.has_value()) {
@@ -148,7 +151,7 @@ AllGatherWeightMinimalMatmulAsyncDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& x = tensor_args.input_tensor;
     ttnn::Shape output_shape(x.logical_shape());
-    output_shape[-1] = tensor_args.weight_tensor.logical_shape()[-2];
+    output_shape[-1] = tensor_args.weight_tensor.logical_shape()[attrs.transpose_b ? -2 : -1];
     const auto& memory_config = attrs.output_mem_config.value_or(x.memory_config());
     const auto dtype = attrs.output_dtype.value_or(x.dtype());
     return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
@@ -171,7 +174,8 @@ ttnn::Tensor ttml_all_gather_weight_minimal_matmul_async(
     const std::optional<const experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    bool transpose_b) {
     using OperationType =
         ttml::metal::ops::all_gather_weight_minimal_matmul_async::AllGatherWeightMinimalMatmulAsyncDeviceOperation;
     const auto arch = input_tensor.device()->arch();
@@ -186,7 +190,8 @@ ttnn::Tensor ttml_all_gather_weight_minimal_matmul_async(
             .compute_kernel_config = kernel_config_val,
             .ring_size = ring_size,
             .ring_index = ring_index,
-            .topology = topology},
+            .topology = topology,
+            .transpose_b = transpose_b},
         OperationType::tensor_args_t{.input_tensor = input_tensor, .weight_tensor = weight_tensor});
 }
 }  // namespace ttnn::prim

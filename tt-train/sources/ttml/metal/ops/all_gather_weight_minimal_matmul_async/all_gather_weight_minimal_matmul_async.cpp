@@ -16,7 +16,8 @@ ttnn::Tensor all_gather_weight_minimal_matmul_async(
     const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DataType> dtype,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    bool transpose_b) {
     return ttnn::prim::ttml_all_gather_weight_minimal_matmul_async(
         input_tensor,
         weight_tensor,
@@ -26,6 +27,7 @@ ttnn::Tensor all_gather_weight_minimal_matmul_async(
         config,
         memory_config,
         dtype,
-        compute_kernel_config);
+        compute_kernel_config,
+        transpose_b);
 }
 }  // namespace ttml::metal

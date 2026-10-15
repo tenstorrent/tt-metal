@@ -9,6 +9,15 @@
 
 constexpr uint32_t kPaddingColumn = 0xFFFFFFFFu;
 
+template <bool transpose_b>
+inline uint32_t weight_page(uint32_t n, uint32_t k, uint32_t K_tiles, uint32_t n_cols) {
+    if constexpr (transpose_b) {
+        return (n * K_tiles) + k;
+    } else {
+        return (k * n_cols) + n;
+    }
+}
+
 struct BlockSpan {
     uint32_t v_start = 0;
     uint32_t width = 0;

@@ -37,12 +37,13 @@ inline bool block_columns(
     return any_real;
 }
 
-template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename Accessor>
+template <uint32_t K_block_tiles, uint32_t N_block_tiles, bool transpose_b, typename Accessor>
 inline void read_in1_block_columns(
     const Accessor& reader,
     uint32_t cb_id,
     uint32_t tile_bytes,
     uint32_t K_tiles,
+    uint32_t N_tiles,
     uint32_t k_start,
     const uint32_t* cols,
     uint32_t width) {
@@ -58,7 +59,11 @@ inline void read_in1_block_columns(
             }
             if (k < K_tiles) {
                 noc.async_read(
-                    reader, CoreLocalMem<uint32_t>(ptr), tile_bytes, {.page_id = (cols[j] * K_tiles) + k}, {});
+                    reader,
+                    CoreLocalMem<uint32_t>(ptr),
+                    tile_bytes,
+                    {.page_id = weight_page<transpose_b>(cols[j], k, K_tiles, N_tiles)},
+                    {});
             } else {
                 fill_zeros_async(noc, cb, tile_bytes, ptr - base);
             }

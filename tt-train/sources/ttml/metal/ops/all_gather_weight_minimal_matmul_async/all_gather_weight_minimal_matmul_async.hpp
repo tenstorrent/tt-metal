@@ -20,5 +20,6 @@ ttnn::Tensor all_gather_weight_minimal_matmul_async(
     const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     std::optional<const ttnn::DataType> dtype = std::nullopt,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    bool transpose_b = true);
 }

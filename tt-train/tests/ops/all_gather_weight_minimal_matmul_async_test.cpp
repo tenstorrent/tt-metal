@@ -137,13 +137,14 @@ struct RunArgs {
     bool fp32_acc = true;
     std::optional<Block> block;
     std::optional<tt::tt_metal::CoreCoord> core_grid;
+    bool transpose_b = true;
 };
 
 void run_striped_linear(uint32_t M, uint32_t K, uint32_t N, const RunArgs& args) {
     auto* device = &ttml::autograd::ctx().get_device();
     const Problem& p = problem(M, K, N);
-    const auto& w_data = p.w_nk;
-    const ttnn::Shape w_shape({N, K});
+    const auto& w_data = args.transpose_b ? p.w_nk : p.w_kn;
+    const ttnn::Shape w_shape = args.transpose_b ? ttnn::Shape({N, K}) : ttnn::Shape({K, N});
     const auto x = args.fp32 ? ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(p.x, ttnn::Shape({M, K}), device)
                              : ttml::core::from_vector(p.x, ttnn::Shape({M, K}), device);
     const auto w = args.fp32 ? ttml::core::from_vector<float, ttnn::DataType::FLOAT32>(w_data, w_shape, device)
@@ -162,7 +163,16 @@ void run_striped_linear(uint32_t M, uint32_t K, uint32_t N, const RunArgs& args)
             .compute_with_storage_grid_size = args.core_grid.value_or(device->compute_with_storage_grid_size())};
     }
     const auto y = ttml::metal::all_gather_weight_minimal_matmul_async(
-        x, w, args.ring_size, args.ring_index, args.topology, config, std::nullopt, std::nullopt, compute_config);
+        x,
+        w,
+        args.ring_size,
+        args.ring_index,
+        args.topology,
+        config,
+        std::nullopt,
+        std::nullopt,
+        compute_config,
+        args.transpose_b);
     ASSERT_EQ(y.logical_shape(), ttnn::Shape({M, N}));
     expect_close(p.y, ttml::core::to_vector(y));
 }
@@ -173,8 +183,12 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, FsdpShapes) {
         {{2048, 4096, 11008}, {2048, 11008, 4096}, {2048, 4096, 4096}, {2048, 4096, 8192}}};
     for (const auto& [M, K, N] : shapes) {
         for (uint32_t ring_index = 0; ring_index < 4; ++ring_index) {
-            SCOPED_TRACE(testing::Message() << M << "x" << K << "x" << N << " ring_index=" << ring_index);
-            run_striped_linear(M, K, N, {.ring_index = ring_index});
+            for (const bool transpose_b : {true, false}) {
+                SCOPED_TRACE(
+                    testing::Message() << M << "x" << K << "x" << N << " ring_index=" << ring_index
+                                       << " transpose_b=" << transpose_b);
+                run_striped_linear(M, K, N, {.ring_index = ring_index, .transpose_b = transpose_b});
+            }
         }
     }
 }
@@ -205,8 +219,16 @@ TEST_F(AllGatherWeightMinimalMatmulAsyncTest, UnevenPieces) {
         {64, 2, {2, 2, 2, 1, 1}},
     }};
     for (const auto& [N, ring_size, block] : cases) {
-        SCOPED_TRACE(testing::Message() << "N=" << N << " ring_size=" << ring_size << " N_block=" << block.N_block);
-        run_striped_linear(512, 512, N, {.ring_size = ring_size, .ring_index = ring_size - 1, .block = block});
+        for (const bool transpose_b : {true, false}) {
+            SCOPED_TRACE(
+                testing::Message() << "N=" << N << " ring_size=" << ring_size << " N_block=" << block.N_block
+                                   << " transpose_b=" << transpose_b);
+            run_striped_linear(
+                512,
+                512,
+                N,
+                {.ring_size = ring_size, .ring_index = ring_size - 1, .block = block, .transpose_b = transpose_b});
+        }
     }
 }
 

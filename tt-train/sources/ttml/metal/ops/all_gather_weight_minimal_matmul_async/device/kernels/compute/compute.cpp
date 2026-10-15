@@ -86,7 +86,7 @@ void kernel_main() {
     constexpr uint32_t subblock_w = get_compile_time_arg_val(7);
     constexpr uint32_t piece_tiles = get_compile_time_arg_val(8);
     constexpr uint32_t ring_size = get_compile_time_arg_val(9);
-    constexpr bool transpose_b = true;
+    constexpr bool transpose_b = get_compile_time_arg_val(10) == 1;
     using Blocks = StripeBlocks<N_block_tiles, piece_tiles, ring_size, subblock_w>;
 
     uint32_t argidx = 0;
