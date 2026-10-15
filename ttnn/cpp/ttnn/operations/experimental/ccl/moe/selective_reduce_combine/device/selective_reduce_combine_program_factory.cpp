@@ -11,6 +11,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
@@ -199,49 +200,6 @@ struct MuxCorePlacement {
     uint32_t link = 0;
 };
 
-// Lowest id free on every core in the range; probe one core with find_available_semaphore_id.
-uint32_t allocate_worker_semaphore(
-    tt::tt_metal::ProgramDescriptor& desc, const CoreRangeSet& core_ranges, uint32_t initial_value) {
-    const auto cores = corerange_to_cores(core_ranges);
-    TT_FATAL(!cores.empty(), "Expecting a non-empty CoreRangeSet!");
-    const auto first_free = desc.find_available_semaphore_id(cores.front(), tt::CoreType::WORKER);
-    constexpr uint32_t kMaxSemaphores = 16;
-    auto used_on_core = [&](uint32_t sem_id, const CoreCoord& core) {
-        for (const auto& sem : desc.semaphores) {
-            if (sem.core_type == tt::CoreType::WORKER && sem.id == sem_id && sem.core_ranges.contains(core)) {
-                return true;
-            }
-        }
-        return false;
-    };
-    std::optional<uint32_t> id;
-    for (uint32_t candidate = first_free.value_or(0); candidate < kMaxSemaphores; ++candidate) {
-        bool used = false;
-        for (const auto& core : cores) {
-            if (used_on_core(candidate, core)) {
-                used = true;
-                break;
-            }
-        }
-        if (!used) {
-            id = candidate;
-            break;
-        }
-    }
-    TT_FATAL(
-        id.has_value(),
-        "Unable to initialize semaphore on CoreRangeSet {}: all {} IDs are in use",
-        core_ranges.str(),
-        kMaxSemaphores);
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = *id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges,
-        .initial_value = initial_value,
-    });
-    return *id;
-}
-
 // Plans Fabric Mux V2 cores without pushing kernels. Kernels are added later, after the writer, so the
 // writer index stays reader+1 (each mux core contributes a forwarder and a manager).
 auto plan_mux_workers(
@@ -355,7 +313,7 @@ auto plan_mux_workers(
         mux_neigbor_core_maps.push_back(mux_neigbor_core_map);
     }
 
-    return std::make_tuple(std::move(mux_config), std::move(mux_neigbor_core_maps), std::move(placements));
+    return std::make_tuple(mux_config, std::move(mux_neigbor_core_maps), std::move(placements));
 }
 
 void add_mux_worker_kernels(
@@ -416,8 +374,8 @@ tt::tt_metal::WorkloadDescriptor UnifiedSelectReduce::create_workload_descriptor
     for (const auto& coord : tensor_coords.coords()) {
         tt::tt_metal::ProgramDescriptor desc;
         const uint32_t metadata_sync_semaphore_id =
-            detail::allocate_worker_semaphore(desc, CoreRangeSet(worker_core_range_set.bounding_box()), 1);
-        const uint32_t compute_sync_semaphore_id = detail::allocate_worker_semaphore(desc, worker_core_range_set, 0);
+            desc.add_semaphore(CoreRangeSet(worker_core_range_set.bounding_box()), 1);
+        const uint32_t compute_sync_semaphore_id = desc.add_semaphore(worker_core_range_set, 0);
         append_selective_reduce_combine_to_descriptor(
             desc,
             operation_attributes,
@@ -877,15 +835,15 @@ void append_selective_reduce_combine_to_descriptor(
 
     // Intra-link barrier: worker 0 of each link is the link sync core. With Mux V2 there is no termination
     // master: the mux terminates by itself after its last client closes.
-    const auto link_sync_semaphore_id = detail::allocate_worker_semaphore(desc, needed_worker_core_range_set, 0);
+    const auto link_sync_semaphore_id = desc.add_semaphore(needed_worker_core_range_set, 0);
 
     // V2 client semaphores (flow control + teardown), one pair per direction, shared ids across worker cores.
     std::vector<tt::tt_fabric::FabricMuxV2Config::ClientSemaphores> client_semaphores;
     client_semaphores.reserve(neighbors.size());
     for (std::size_t d = 0; d < neighbors.size(); ++d) {
         client_semaphores.push_back(tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{
-            .flow_control_sem_id = detail::allocate_worker_semaphore(desc, needed_worker_core_range_set, 0),
-            .teardown_sem_id = detail::allocate_worker_semaphore(desc, needed_worker_core_range_set, 0),
+            .flow_control_sem_id = desc.add_semaphore(needed_worker_core_range_set, 0),
+            .teardown_sem_id = desc.add_semaphore(needed_worker_core_range_set, 0),
         });
     }
 

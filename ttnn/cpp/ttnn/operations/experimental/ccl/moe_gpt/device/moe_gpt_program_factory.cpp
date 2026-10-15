@@ -54,49 +54,6 @@ using tt::tt_metal::CoreRangeSet;
 
 namespace {
 
-// Lowest id free on every core in the range, matching ProgramImpl::create_semaphore.
-uint32_t add_worker_semaphore(
-    tt::tt_metal::ProgramDescriptor& desc, const CoreRangeSet& core_ranges, uint32_t initial_value) {
-    const auto cores = corerange_to_cores(core_ranges);
-    TT_FATAL(!cores.empty(), "Cannot allocate a semaphore on an empty core range");
-    const auto first_free = desc.find_available_semaphore_id(cores.front(), tt::CoreType::WORKER);
-    constexpr uint32_t kMaxSemaphores = 16;
-    auto used_on_core = [&](uint32_t sem_id, const CoreCoord& core) {
-        for (const auto& sem : desc.semaphores) {
-            if (sem.core_type == tt::CoreType::WORKER && sem.id == sem_id && sem.core_ranges.contains(core)) {
-                return true;
-            }
-        }
-        return false;
-    };
-    std::optional<uint32_t> sem_id;
-    for (uint32_t candidate = first_free.value_or(0); candidate < kMaxSemaphores; ++candidate) {
-        bool used = false;
-        for (const auto& core : cores) {
-            if (used_on_core(candidate, core)) {
-                used = true;
-                break;
-            }
-        }
-        if (!used) {
-            sem_id = candidate;
-            break;
-        }
-    }
-    TT_FATAL(
-        sem_id.has_value(),
-        "Unable to initialize semaphore on CoreRangeSet {}: all {} IDs are in use",
-        core_ranges.str(),
-        kMaxSemaphores);
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = *sem_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges,
-        .initial_value = initial_value,
-    });
-    return *sem_id;
-}
-
 tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
@@ -314,14 +271,14 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
         CoreRangeSet early_tilize_set(early_tilize_cores);
         CoreRangeSet early_merged = early_tilize_set.merge(all_cores);
         constexpr uint32_t INVALID_SEM = 0;
-        fused_metadata_ready_sem = add_worker_semaphore(desc, early_merged, INVALID_SEM);
-        fused_chunk_available_sem = add_worker_semaphore(desc, early_merged, INVALID_SEM);
-        fused_chunk_ready_sem = add_worker_semaphore(desc, early_merged, INVALID_SEM);
+        fused_metadata_ready_sem = desc.add_semaphore(early_merged, INVALID_SEM);
+        fused_chunk_available_sem = desc.add_semaphore(early_merged, INVALID_SEM);
+        fused_chunk_ready_sem = desc.add_semaphore(early_merged, INVALID_SEM);
 
         // Per-expert token count semaphores (full 32-bit counts, no bit-packing limit)
-        metadata_count_sem_base = add_worker_semaphore(desc, early_merged, INVALID_SEM);
+        metadata_count_sem_base = desc.add_semaphore(early_merged, INVALID_SEM);
         for (uint32_t e = 1; e < num_experts; e++) {
-            add_worker_semaphore(desc, early_merged, INVALID_SEM);
+            desc.add_semaphore(early_merged, INVALID_SEM);
         }
 
         named_compile_time_args.emplace_back("metadata_ready_semaphore_id", fused_metadata_ready_sem);
@@ -388,11 +345,11 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
     });
     const size_t compute_kernel_id = 3;
 
-    const uint32_t ring_semaphore_id = add_worker_semaphore(desc, all_cores, 0);
+    const uint32_t ring_semaphore_id = desc.add_semaphore(all_cores, 0);
 
     // Create combine semaphore after ring semaphore so it gets a higher
     // semaphore ID, avoiding conflicts with dispatch infrastructure on combine cores
-    const uint32_t combine_semaphore_id = add_worker_semaphore(desc, combine_core_range_set, 0);
+    const uint32_t combine_semaphore_id = desc.add_semaphore(combine_core_range_set, 0);
 
     std::vector<uint32_t> ring_pos2bank_id(num_cores);
     std::iota(ring_pos2bank_id.begin(), ring_pos2bank_id.end(), 0);
@@ -613,10 +570,10 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
         // --- Semaphores ---
         constexpr uint32_t INVALID = 0;
 
-        auto tilize_partial_metadata_ready_semaphore_id = add_worker_semaphore(desc, tilize_core_range_set, INVALID);
-        auto tilize_chunk_ready_semaphore_id = add_worker_semaphore(desc, tilize_core_range_set, INVALID);
-        auto previous_chunk_sent_semaphore_id = add_worker_semaphore(desc, tilize_core_range_set, INVALID);
-        auto initial_gather_semaphore_id = add_worker_semaphore(desc, tilize_core_range_set, INVALID);
+        auto tilize_partial_metadata_ready_semaphore_id = desc.add_semaphore(tilize_core_range_set, INVALID);
+        auto tilize_chunk_ready_semaphore_id = desc.add_semaphore(tilize_core_range_set, INVALID);
+        auto previous_chunk_sent_semaphore_id = desc.add_semaphore(tilize_core_range_set, INVALID);
+        auto initial_gather_semaphore_id = desc.add_semaphore(tilize_core_range_set, INVALID);
 
         // Tilize+Matmul shared semaphores (created early before matmul kernel creation)
         const CoreRangeSet tilize_matmul_core_range_set = tilize_core_range_set.merge(all_cores);
