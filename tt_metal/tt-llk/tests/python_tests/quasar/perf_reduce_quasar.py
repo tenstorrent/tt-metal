@@ -16,7 +16,6 @@ from quasar.test_reduce_quasar import (
     REDUCE_FORMATS,
     reduce_dest_acc_modes,
     reduce_dest_sync_modes,
-    reduce_implied_math_formats,
     reduce_pool_type_and_math_fidelity_combinations,
     reduce_tile_dimensions,
 )
@@ -38,9 +37,6 @@ from quasar.test_reduce_quasar import (
         formats, is_perf=True
     ),
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=True),
-    implied_math_format=lambda formats: reduce_implied_math_formats(
-        formats, is_perf=True
-    ),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
@@ -53,7 +49,6 @@ def test_perf_reduce_quasar(
     reduce_dim,
     pool_type_and_math_fidelity,
     dest_sync_mode,
-    implied_math_format,
     run_types,
     loop_factor,
     is_perf,
@@ -65,7 +60,6 @@ def test_perf_reduce_quasar(
         reduce_dim,
         pool_type_and_math_fidelity,
         dest_sync_mode,
-        implied_math_format,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,
