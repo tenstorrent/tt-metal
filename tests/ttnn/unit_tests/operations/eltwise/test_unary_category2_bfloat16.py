@@ -347,9 +347,7 @@ def test_tanhshrink(device):
 #
 # The packer serves sharded tensors only, so the inputs are height-sharded. The reference is torch
 # on the operand as BF16 DEST holds it, stored as a BF16 tile holds the result. The ops are exact,
-# so every output must equal it bit for bit. Each op logs one ULP line: the largest ULP error
-# against the reference and the outputs of another class, for the packer and for the SFPU kernel it
-# replaces, run on the same input as a chain of the op and IDENTITY (see the device-perf test).
+# so every output must equal it bit for bit.
 PACK_RELU_SMALLEST_NORMAL = 2.0**-126
 # The 256 x 256 input, one row of tiles per core.
 PACK_RELU_SHARDED = ttnn.create_sharded_memory_config(
@@ -416,50 +414,11 @@ PACK_RELU_OPS = {
     ),
 }
 
-# op: TT-NN's SFPU kernel for the op, which the packer replaces.
-PACK_RELU_OLD = {
-    "relu": lambda x: ttnn.unary_chain(
-        x, [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), ttnn.UnaryWithParam(ttnn.UnaryOpType.IDENTITY)]
-    ),
-    "relu_min": lambda x: ttnn.unary_chain(
-        x, [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU_MIN, 0.0), ttnn.UnaryWithParam(ttnn.UnaryOpType.IDENTITY)]
-    ),
-    "threshold": lambda x: ttnn.unary_chain(
-        x, [ttnn.UnaryWithParam(ttnn.UnaryOpType.THRESHOLD, 0.0, 0.0), ttnn.UnaryWithParam(ttnn.UnaryOpType.IDENTITY)]
-    ),
-    "relu6": lambda x: ttnn.unary_chain(
-        x, [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6), ttnn.UnaryWithParam(ttnn.UnaryOpType.IDENTITY)]
-    ),
-    "relu_max": lambda x: ttnn.unary_chain(
-        x, [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU_MAX, 6.0), ttnn.UnaryWithParam(ttnn.UnaryOpType.IDENTITY)]
-    ),
-}
-
 
 def _pack_relu_transport(t, source, pairs):
     for raw, held in pairs:
         t = torch.where(PACK_RELU_CLASSES[raw](source), torch.full_like(t, PACK_RELU_VALUES[held]), t)
     return t
-
-
-def _pack_relu_stored_classes(t):
-    """0 +inf (or NaN), 1 -inf, 2 zero of either sign, 3 finite nonzero."""
-    t = t.to(torch.float64)
-    classes = torch.full(t.shape, 3, dtype=torch.int8)
-    classes[t == 0] = 2
-    classes[(t == float("inf")) | torch.isnan(t)] = 0
-    classes[t == float("-inf")] = 1
-    return classes
-
-
-def _pack_relu_versus(expected, output):
-    """The largest ULP error against ``expected`` over outputs of its class, and the outputs of another class."""
-    e, o = expected.to(torch.float64), output.to(torch.float64)
-    same = _pack_relu_stored_classes(e) == _pack_relu_stored_classes(o)
-    finite = same & torch.isfinite(e) & (e != 0)
-    exponent = torch.floor(torch.log2(torch.where(finite, e.abs(), torch.ones_like(e))))
-    ulp = torch.where(finite, (e - o).abs() / 2.0 ** (exponent.clamp(min=-126) - 7), torch.zeros_like(e))
-    return ulp.max().item(), int((~same).sum())
 
 
 @pytest.mark.parametrize("op", list(PACK_RELU_OPS))
@@ -473,14 +432,6 @@ def test_pack_relu_exhaustive_bfloat16(op, device):
         x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=PACK_RELU_SHARDED
     )
     actual = ttnn.to_torch(run(tt_x))
-    stock = ttnn.to_torch(PACK_RELU_OLD[op](tt_x))
-
-    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
-    (ours, ours_classes), (old, old_classes) = _pack_relu_versus(expected, actual), _pack_relu_versus(expected, stock)
-    print(
-        f"ULP {op} {board} ours={ours:.3f} stock={old:.3f} "
-        f"ours_class_mismatches={ours_classes} stock_class_mismatches={old_classes}"
-    )
     mismatch = actual.view(torch.int16) != expected.view(torch.int16)
     assert not mismatch.any(), (
         f"{op}: {mismatch.sum().item()} mismatches, first at x={x[mismatch][0].item()}: "
