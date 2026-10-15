@@ -21,17 +21,27 @@ notes:
   why_closed: CLI test
 - id: OV-3
   tasks:
-  - S.swa.*
-  - C.swa.*
-  status: open
+  - '*'
+  status: closed
   t: '2026-10-15T15:57:55'
   text: 'Owner decision (spec rule ''Accuracy is judged against the noise floor''): the exact paths are too slow to keep
     as defaults (ATTN_IN_MM=exact: 32 masked matmul copies, ~25x; WINDOW_SDPA=exact: tt/window_exact.py, 64 ms per layer).
-    Make the fast paths the defaults in tt/settings.py: ATTN_IN_MM = the plain fp32-accumulating matmul, WINDOW_SDPA = ttnn.bringup.sparse_sdpa(high_precision=True,
-    attention_sink=...). Keep the exact paths as settings (not the default), with the owner decision noted in settings.py.
-    The swap tests'' block-out limit is now the precision model''s noise floor x 2 (framework F72), not 1 %: re-run the
-    S.swa.05 and S.swa.06 gate commands with the fast defaults and report their metrics (swap_*_out_rel and swap_*_out_rel_limit)
-    in your answer. If a check still fails with the fast path, say so with the numbers (answer disagree); do not add a new
-    exact kernel.'
+    Whatever task you are on, do this first: make the fast paths the defaults in tt/settings.py: ATTN_IN_MM = the plain
+    fp32-accumulating matmul, WINDOW_SDPA = ttnn.bringup.sparse_sdpa(high_precision=True, attention_sink=...). Keep the
+    exact paths as settings (not the default), with the owner decision noted in settings.py. The swap tests'' block-out
+    limit is now the precision model''s noise floor x 2 (framework F72), not 1 %: re-run the S.swa.05 and S.swa.06 gate
+    commands with the fast defaults and report their metrics (swap_*_out_rel and swap_*_out_rel_limit) in your answer. If
+    a check still fails with the fast path, say so with the numbers (answer disagree); do not add a new exact kernel.'
   roles:
   - implement
+  closed: '2026-10-15T16:19:25'
+  why_closed: fast paths are the defaults (C.swa.ffn_collapse); its disagreement (the 2 % swap step cap, DS41-20) fixed
+    in framework F73
+- id: OV-4
+  tasks:
+  - '*'
+  status: open
+  t: '2026-10-15T16:19:25'
+  text: 'DS41-20 is fixed in the framework (F73): a swapped step''s limit is now 2 x its own component error (no 2 % cap).
+    Update DS41-20 to say so (or remove it if nothing model-specific remains) the next time you touch known_issues.md; answer
+    n/a if your task does not touch it.'
