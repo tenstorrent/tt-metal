@@ -44,6 +44,85 @@ introduced — today they are uniform because all meshes share packet geometry.
 
 ---
 
+## ✅ RESULTS — fix, hardware validation, invariants, and robustness
+
+### The fix that landed (minimal)
+- **`ControlPlane::adopt_local_mesh_fabric_config`** (`control_plane.cpp`): each process (tt-run launches
+  one MPI rank per mesh, each with its own `TT_MESH_ID`, so one process = one mesh) resolves its config
+  from the MGD — `MeshGraph::get_fabric_config`: **MGD per-mesh `fabric_config` > SetFabricConfig override
+  > dim_types default** — and **warns clearly if the config was set in two places** (MGD wins).
+- **`MetalEnvImpl::get_fabric_config()` delegates to the control plane's resolved config**
+  (`metal_env.cpp`): exactly **one fabric config per process**, pulled from one place from the start — no
+  partial-init-with-the-override-then-overridden. Every consumer (firmware initializer, device setup,
+  test harness) sees the same resolved config.
+- Exploratory per-mesh lookups in `need_deadlock_avoidance_support` (#3) / `is_bubble_flow_control_enabled`
+  (#5) and the global-topology upgrade (#6-interim) were **reverted** — unnecessary once each process
+  builds for its own resolved config.
+
+### Root cause of the original hang (and why the delegate fix)
+The test opened `topology: Mesh` (→ `SetFabricConfig(FABRIC_2D)`); `adopt` switched the
+control-plane/routers to the MGD's `TORUS_X`, but the **env/firmware kept `FABRIC_2D`** → the device
+fabric was brought up Mesh-flavored under torus routers → M_X's genuine ring deadlocked. Proven on a
+single mesh: **direct `topology: TorusX` passes, `topology: Mesh`+adopt hangs** — the only difference was
+the env config value. The delegate fix makes the whole process consistent.
+
+### Hardware validation (BH galaxy `bh-glx-110`, `test_tt_fabric` neighbor-exchange, `TT_METAL_OPERATION_TIMEOUT_SECONDS=0`)
+| Config | Opened as | Result |
+|--------|-----------|--------|
+| 3-mesh **M_Y=TORUS_Y + M_X=TORUS_X + M_Y=TORUS_Y** | `topology: Torus` | ✅ intra+inter, 2 executed 0 failed (all ranks), exit 0 |
+| 4-config **TORUS_XY + TORUS_X + TORUS_Y + FABRIC_2D** (incl. **mesh↔torus** boundaries) | `topology: Torus` | ✅ 2 executed 0 failed (all 4 ranks), exit 0 |
+| **2×4 mesh split across 2 processes** (TORUS_X) + TORUS_Y mesh | `topology: Torus` | ✅ 2 executed 0 failed, exit 0 |
+| single M_X 2×4 TORUS_X, **direct** `topology: TorusX` | TORUS_X | ✅ pass |
+| single M_X 2×4 TORUS_X, `topology: Mesh`+adopt (pre-delegate-fix) | Mesh→adopt | ❌ hung (the bug) |
+
+The warning fires as designed, e.g. *"Fabric config set in two places: SetFabricConfig requested
+FABRIC_2D_TORUS_XY, but the MGD declares FABRIC_2D_TORUS_Y for mesh 2 … MGD takes precedence."*
+
+### The `topology: Mesh` sanity cases are a TEST-HARNESS mismatch, not a fabric bug
+`test_tt_fabric` computes `is_torus_2d_unicast` from the **yaml** `topology` (`tt_fabric_test_device_setup.cpp:482`),
+so `topology: Mesh` routes packets **mesh-style into a torus fabric** → deadlock. A per-mesh-**torus** MGD
+must be exercised with **torus** test cases (which pass and genuinely test per-mesh configs). This is why
+the original `galaxy-fabric-per-mesh-torus-yx` on the common (Mesh-first) sanity config hung.
+
+### Why heterogeneous 2D combos are robust — the boundary deep-dive
+- **Buffer-slot counts** (`fabric_static_sized_channels_allocator.cpp:351+`): the slot-option tables are
+  keyed by **(arch, VC-presence)**, NOT by mesh-vs-torus — all are generic-2D "mesh" tables. So
+  **FABRIC_2D and torus get identical slot counts** given the same VC config / buffer size / arch → no
+  slot mismatch across a mesh↔torus inter-mesh link. (This is why the teammate's #2 concern does not
+  materialize for 2D.)
+- **Max payload / packet-header size**: derived from `is_2D_routing_enabled` (true for *every* 2D config)
+  + the process-global `max_packet_payload_size_bytes` override → **same for all 2D meshes** → matches
+  across any 2D↔2D link by construction. (Differs only for 1D↔2D, which can't occur — see below.)
+- **Inter-mesh EDMs disable deadlock avoidance** (#56515, `erisc_datamover_builder.cpp:1076`), decoupling
+  cross-end credit coupling at the boundary.
+
+### Invariants — what MUST be true for heterogeneous multi-mesh
+1. **Inter-mesh-linked meshes must have the same routing dimensionality (2D).** All 2D configs
+   (FABRIC_2D, TORUS_XY/X/Y) share payload/header/slot geometry → freely combinable across meshes.
+2. **1D configs are single-mesh-only** — a 1D config has different packet geometry and cannot be
+   inter-mesh-linked to a 2D one (and the existing 1D-multimesh rule in `mesh_graph.cpp` already forbids a
+   1D config on an MGD with >1 compute mesh).
+3. **Payload/header size and buffer-slot counts** must match across a link — satisfied for all 2D by
+   construction (above).
+
+### Implications — what can / cannot be done for multimesh
+- ✅ **Any mix of the 2D configs** across meshes: FABRIC_2D, TORUS_XY, TORUS_X, TORUS_Y — proven.
+- ✅ A **single mesh spanning multiple processes** (host_topology > 1×1) with per-mesh config differences
+  (both ranks of the split mesh adopt the same config) — proven (2×4-split test).
+- ❌ A **1D config in a multi-mesh fabric** — rejected.
+
+### Validation added
+- **`MeshGraph::validate_inter_mesh_fabric_config_compatibility()`** (`mesh_graph.cpp`): for every declared
+  inter-mesh link, asserts the two meshes' resolved configs have the **same routing dimensionality**
+  (errors out on a 1D↔2D link instead of corrupting; allows all 2D↔2D incl. mesh↔torus). CPU-level, runs
+  at MGD build; no regression (74/74 MeshGraph tests pass).
+- Plus the existing **1D-multimesh rule** and the new **"config set in two places" warning**.
+- A thorough audit of *all other* per-process values that feed an inter-mesh boundary (VC config #13,
+  ROUTING_MODE, packet header, credit/stream addresses, MAX_NUM_VCS) is in progress to confirm none can
+  reachably mismatch (or to find + guard any that can); results appended below when complete.
+
+---
+
 ## 0. TL;DR (original framing — see RESOLUTION above for the correction)
 
 We added **per-mesh FabricConfig** (#56561): an MGD can declare a different `fabric_config` per

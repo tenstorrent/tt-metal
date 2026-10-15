@@ -769,6 +769,53 @@ void MeshGraph::initialize_from_mgd(
             }
         }
     }
+
+    // All per-mesh configs and inter-mesh connectivity are resolved; reject inter-mesh links whose two
+    // ends would need incompatible channel geometry.
+    this->validate_inter_mesh_fabric_config_compatibility();
+}
+
+void MeshGraph::validate_inter_mesh_fabric_config_compatibility() const {
+    // Two meshes joined by an inter-mesh link exchange packets across the boundary, so they must share the
+    // same channel geometry -- max payload size and packet-header size. Both are determined by a mesh's
+    // routing DIMENSIONALITY: 2D (FABRIC_2D, FABRIC_2D_TORUS_X/Y/XY) all resolve to the same payload/header
+    // geometry, so different 2D topologies interoperate across an inter-mesh link -- mesh<->torus and
+    // different torus axes included (validated on BH galaxy: TORUS_XY + TORUS_X + TORUS_Y + FABRIC_2D route
+    // intra- and inter-mesh with 0 failures; buffer-slot counts and the intermesh VC contract follow the
+    // same dimensionality and inter-mesh EDMs disable deadlock avoidance, see #56515). A 1D config has a
+    // different packet geometry and cannot be inter-mesh-linked to a 2D one; 1D is single-mesh-only anyway
+    // (the 1D-multimesh rule above). This rejects any residual mismatch explicitly instead of corrupting.
+    auto is_2d = [](FabricConfig cfg) {
+        return cfg == FabricConfig::FABRIC_2D || cfg == FabricConfig::FABRIC_2D_TORUS_X ||
+               cfg == FabricConfig::FABRIC_2D_TORUS_Y || cfg == FabricConfig::FABRIC_2D_TORUS_XY;
+    };
+    auto check_pair = [&](uint32_t src, uint32_t dst) {
+        const auto src_it = this->mesh_fabric_config_.find(MeshId{src});
+        const auto dst_it = this->mesh_fabric_config_.find(MeshId{dst});
+        if (src_it == this->mesh_fabric_config_.end() || dst_it == this->mesh_fabric_config_.end()) {
+            return;  // e.g. a switch instance, which carries no fabric config
+        }
+        TT_FATAL(
+            is_2d(src_it->second) == is_2d(dst_it->second),
+            "Inter-mesh link between mesh M{} (FabricConfig {}) and mesh M{} (FabricConfig {}) joins meshes of "
+            "different routing dimensionality (1D vs 2D). The two ends of an inter-mesh channel must share the "
+            "same packet geometry (payload/header size), so a 1D mesh cannot be inter-mesh-linked to a 2D mesh. "
+            "All 2D configs (FABRIC_2D, FABRIC_2D_TORUS_X/Y/XY) are mutually compatible.",
+            src,
+            enchantum::to_string(src_it->second),
+            dst,
+            enchantum::to_string(dst_it->second));
+    };
+    for (const auto& [src, dst_map] : this->requested_intermesh_connections_) {
+        for (const auto& [dst, count] : dst_map) {
+            check_pair(src, dst);
+        }
+    }
+    for (const auto& [src, dst_map] : this->requested_intermesh_ports_) {
+        for (const auto& [dst, ports] : dst_map) {
+            check_pair(src, dst);
+        }
+    }
 }
 
 void MeshGraph::load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections) {
