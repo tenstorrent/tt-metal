@@ -304,10 +304,21 @@ Tensor swiglu(const Tensor& input_a, std::int32_t dim, const std::optional<Memor
     }
 
     std::vector<Tensor> ab = detail::split_tensor_for_glu(input_a, dim, output_mem_config);
-    // silu_glu's own SFPU kernel computes this product as one program (activations/products/silu_glu.json).
+    // silu_glu's own SFPU kernel computes this product as one program (activations/products/silu_glu.json), on
+    // binary_ng's default cores, as the unary and multiply below run.
     if (ab[0].dtype() == DataType::BFLOAT16 && ab[1].dtype() == DataType::BFLOAT16 &&
         (ab[0].device()->arch() == tt::ARCH::BLACKHOLE)) {
-        return ttnn::silu_glu(ab[1], ab[0], output_mem_config);
+        return ttnn::detail::invoke_binary_ng(
+            ab[1],
+            ab[0],
+            ttnn::operations::binary::BinaryOpType::SILU_GLU,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            {},
+            {},
+            {},
+            std::nullopt);
     }
 
     Tensor swish_b = ttnn::swish(ab[1], output_mem_config);

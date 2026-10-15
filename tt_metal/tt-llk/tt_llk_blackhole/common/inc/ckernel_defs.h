@@ -370,8 +370,10 @@ enum class BinaryOp : std::uint8_t
     // tt-llk test helpers (sfpu_operations.h), `unused` in the tt-metal Compute API.
     LOGADDEXP  = 45,
     LOGADDEXP2 = 46,
+    // geglu_tanh has a Blackhole kernel only: the harness dispatches it on Blackhole.
+    GEGLU_TANH = 48,
     // silu_glu has a Blackhole kernel only: the harness dispatches it on Blackhole.
-    SILU_GLU = 47,
+    SILU_GLU = 49,
 };
 
 enum class PackMode : std::uint8_t

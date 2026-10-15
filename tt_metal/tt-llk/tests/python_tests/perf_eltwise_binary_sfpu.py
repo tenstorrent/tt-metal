@@ -309,6 +309,34 @@ def test_perf_eltwise_binary_sfpu_logsigmoid(
 @skip_for_quasar
 @skip_for_wormhole
 @parametrize(
+    **_distinct_dest_acc(_func.GEGLU_TANH_SWEEP),
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_geglu_tanh(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_geglu_tanh(
+        formats,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(
     **_distinct_dest_acc(_func.SILU_GLU_SWEEP),
     **_PERF_AXES,
 )

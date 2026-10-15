@@ -1356,6 +1356,17 @@ ttnn.attach_golden_function(ttnn.logical_right_shift, golden_function=_golden_fu
 __all__ = []
 
 
+def _golden_function_geglu_tanh(gate, up, *args, **kwargs):
+    import torch
+
+    a, b = gate.to(torch.float64), up.to(torch.float64)
+    # Generated from activations/products/geglu_tanh.json: each leaf exact in float64, returned in fp32.
+    return ((a / (1 + torch.exp(-(1.5957691216057308 * a + 0.07135481627260025 * a**3)))) * (b)).to(torch.float32)
+
+
+ttnn.attach_golden_function(ttnn.geglu_tanh, golden_function=_golden_function_geglu_tanh)
+
+
 def _golden_function_silu_glu(gate, up, *args, **kwargs):
     import torch
 

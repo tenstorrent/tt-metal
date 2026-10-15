@@ -2452,10 +2452,64 @@ void py_module(nb::module_& mod) {
         detail::kLogicalRightShiftDtypes,
         detail::kSameDtypeRequiredFootnote);
 
+    ttnn::bind_function<"geglu_tanh">(
+        mod,
+        R"doc(
+        GeGLU with the tanh GELU: gelu_tanh(gate) * up, gelu_tanh(x) = x sigmoid(2 sqrt(2/pi) (x + 0.044715 x^3)) (Gemma 4's MLP: ttnn.multiply(gate, up, input_tensor_a_activations=[GELU_TANH])). The gate leaf is the identity with the logistic factor of that odd cubic; the up leaf is the identity. No clamps.
+
+        Takes gate and up as two tensors, already split. ``ttnn.geglu(x, dim, variant=ttnn.GeluVariant.Tanh)`` instead
+        splits one tensor x along dim and computes this product of its halves, with gate the second half and up the
+        first, as its own composite.
+
+        .. math::
+            \mathrm{geglu\_tanh}(gate, up) = gate\_leaf(gate) \cdot up\_leaf(up)
+
+        with :math:`gate\_leaf(x) = x/(1+exp(-(1.5957691216057308*x+0.07135481627260025*x^3)))` and :math:`up\_leaf(x) = x`.
+
+        Args:
+            gate (ttnn.Tensor): the gate input tensor.
+            up (ttnn.Tensor): the up input tensor.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): the cores to run on. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub-device whose worker cores to run on, as an alternative to
+                spelling them out in :attr:`sub_core_grids`. Mutually exclusive with it. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
+                 - TILE, ROW_MAJOR
+
+            On Blackhole, BFLOAT16 operands run as one program on the op's own SFPU kernel, BF16-accurate (below
+            1 ULP of the exact product); every other call is one multiply with each operand's activation. With
+            more than one sub-device loaded, pass :attr:`sub_core_grids` or :attr:`sub_device_id`.
+        )doc",
+        &ttnn::geglu_tanh,
+        nb::arg("gate"),
+        nb::arg("up"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("sub_device_id") = nb::none());
+
     ttnn::bind_function<"silu_glu">(
         mod,
         R"doc(
         SwiGLU: silu(gate) * up, the Llama/Qwen MLP activation. The gate leaf is the identity with the logistic factor; the up leaf is the identity. No clamps.
+
+        Takes gate and up as two tensors, already split. ``ttnn.swiglu(x, dim)`` instead splits one tensor x along dim
+        and computes this product of its halves, with gate the second half and up the first; for BFLOAT16 x on Blackhole
+        it runs this op on them.
 
         .. math::
             \mathrm{silu\_glu}(gate, up) = gate\_leaf(gate) \cdot up\_leaf(up)
@@ -2484,7 +2538,7 @@ void py_module(nb::module_& mod) {
                * - Dtypes
                  - Layouts
                * - BFLOAT16, BFLOAT8_B, FLOAT32
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             On Blackhole, BFLOAT16 operands run as one program on the op's own SFPU kernel, BF16-accurate (below
             1 ULP of the exact product); every other call is one multiply with each operand's activation. With

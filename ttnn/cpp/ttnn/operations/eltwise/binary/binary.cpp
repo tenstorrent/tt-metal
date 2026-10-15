@@ -1376,12 +1376,31 @@ Tensor divide_(
 }
 namespace {
 
-enum class SiluGluOperands { NONE, IN_ORDER, SWAPPED };
+// A fused SFPU op computes multiply(gate, up) as one binary_ng program when the gate operand carries exactly the
+// unary activation of its row and up carries none. Each row is one op's kernel on one board; the ops are generated
+// by tt-polynomial-fitter (activations/products/<op>.json).
+struct FusedActivationRoute {
+    operations::unary::UnaryOpType gate_activation;
+    operations::binary::BinaryOpType op;
+    tt::ARCH arch;
+};
 
-// silu_glu's own SFPU kernel (activations/products/silu_glu.json) computes multiply(gate, up) as one
-// program when the operands carry exactly its leaves' pre-activations: BF16 operands and output on a board that has
-// the kernel, with no output tensor, post-activation or fast mode. Which operand is gate, if either.
-SiluGluOperands silu_glu_operands(
+constexpr std::array fused_activation_routes{
+    FusedActivationRoute{
+        operations::unary::UnaryOpType::GELU_TANH, operations::binary::BinaryOpType::GEGLU_TANH, tt::ARCH::BLACKHOLE},
+    FusedActivationRoute{
+        operations::unary::UnaryOpType::SILU, operations::binary::BinaryOpType::SILU_GLU, tt::ARCH::BLACKHOLE},
+};
+
+struct FusedActivationOperands {
+    operations::binary::BinaryOpType op;
+    bool lhs_is_gate;
+};
+
+// The fused op that computes multiply(lhs, rhs), and which operand is its gate: BF16 operands and output, no output
+// tensor, post-activation or fast mode, and one operand carrying exactly one parameterless activation that a row
+// names for this board while the other carries none.
+std::optional<FusedActivationOperands> fused_activation_operands(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype,
@@ -1391,25 +1410,36 @@ SiluGluOperands silu_glu_operands(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& fast_and_approximate_mode) {
-    using operations::unary::UnaryOpType;
-    using enum SiluGluOperands;
-    if (lhs.device() == nullptr || !(lhs.device()->arch() == tt::ARCH::BLACKHOLE) ||
-        lhs.dtype() != DataType::BFLOAT16 || rhs.dtype() != DataType::BFLOAT16 ||
+    if (lhs.device() == nullptr || lhs.dtype() != DataType::BFLOAT16 || rhs.dtype() != DataType::BFLOAT16 ||
         output_dtype.value_or(DataType::BFLOAT16) != DataType::BFLOAT16 || output.has_value() ||
         !post_activations.empty() || fast_and_approximate_mode.value_or(false)) {
-        return NONE;
+        return std::nullopt;
     }
-    if (lhs_activations.size() == 1 && lhs_activations[0].type() == UnaryOpType::SILU &&
-        !lhs_activations[0].has_parameter() && rhs_activations.empty()) {
-        return IN_ORDER;
+    const auto arch = lhs.device()->arch();
+    const auto routed = [arch](
+                            ttsl::Span<const operations::unary::EltwiseUnaryWithParam> gate,
+                            ttsl::Span<const operations::unary::EltwiseUnaryWithParam> up)
+        -> std::optional<operations::binary::BinaryOpType> {
+        if (gate.size() != 1 || gate[0].has_parameter() || !up.empty()) {
+            return std::nullopt;
+        }
+        for (const auto& route : fused_activation_routes) {
+            if (route.gate_activation == gate[0].type() && route.arch == arch) {
+                return route.op;
+            }
+        }
+        return std::nullopt;
+    };
+    if (const auto op = routed(lhs_activations, rhs_activations)) {
+        return FusedActivationOperands{*op, true};
     }
     // Operand A sets the output's placement when memory_config is unset, so the swapped order needs equal ones.
-    if (rhs_activations.size() == 1 && rhs_activations[0].type() == UnaryOpType::SILU &&
-        !rhs_activations[0].has_parameter() && lhs_activations.empty() &&
-        (memory_config.has_value() || lhs.memory_config() == rhs.memory_config())) {
-        return SWAPPED;
+    if (memory_config.has_value() || lhs.memory_config() == rhs.memory_config()) {
+        if (const auto op = routed(rhs_activations, lhs_activations)) {
+            return FusedActivationOperands{*op, false};
+        }
     }
-    return NONE;
+    return std::nullopt;
 }
 
 }  // namespace
@@ -1426,7 +1456,7 @@ Tensor multiply(
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    if (const auto operands = silu_glu_operands(
+    if (const auto fused = fused_activation_operands(
             lhs,
             rhs,
             output_dtype,
@@ -1435,13 +1465,11 @@ Tensor multiply(
             post_activations,
             lhs_activations,
             rhs_activations,
-            fast_and_approximate_mode);
-        operands != SiluGluOperands::NONE) {
-        const bool in_order = operands == SiluGluOperands::IN_ORDER;
+            fast_and_approximate_mode)) {
         return ttnn::detail::invoke_binary_ng(
-            in_order ? lhs : rhs,
-            in_order ? rhs : lhs,
-            operations::binary::BinaryOpType::SILU_GLU,
+            fused->lhs_is_gate ? lhs : rhs,
+            fused->lhs_is_gate ? rhs : lhs,
+            fused->op,
             output_dtype,
             memory_config,
             std::nullopt,
