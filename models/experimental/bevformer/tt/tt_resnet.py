@@ -265,10 +265,11 @@ class TtBottleneck:
 
 
 class TtResNet:
-    """Bottleneck ResNet built from ``conv_args`` and ``conv_pth``.
+    """Bottleneck ResNet built from ``create_resnet_parameters``' ``params``.
 
-    ``create_resnet_parameters`` records those from one forward of the reference model: the conv
-    shapes and strides, the max pool, each layer's block count and which blocks are DCNv2.
+    ``params.conv_args`` holds what one forward of the reference model records: the conv shapes and
+    strides, the max pool, each layer's block count and which blocks are DCNv2. ``params.tt_kwargs``
+    holds the memory and precision arguments below, the ones the weights were prepared for.
 
     ``out_indices``, ``dram_activation_stages`` and ``block_sharded_downsample_stages``
     index the four ResNet layers (0 is layer1). ``dram_activation_stages`` lists the layers
@@ -279,37 +280,19 @@ class TtResNet:
     conv is block sharded, and ``fp32_acc_stages`` the layers whose convs accumulate in an fp32
     destination register (see TtBottleneck). ``stem_act_block_h`` and ``conv2_act_block_h`` are
     the stem conv's and the non-DCN conv2s' act_block_h overrides, None for conv2d's own, and
-    ``weights_dtype`` the convs' weight dtype. The defaults keep everything in L1 at bfloat16
-    accumulation; ``model_config.tt_resnet_kwargs`` gives BEVFormer-base's values, and
-    ``model_config.RESNET_KWARGS["out_indices"]`` its ``out_indices``.
+    ``weights_dtype`` the convs' weight dtype. ``model_config.tt_resnet_kwargs`` gives
+    BEVFormer-base's values, and ``model_config.RESNET_KWARGS["out_indices"]`` its ``out_indices``.
     """
 
     num_layers = 4
 
-    def __init__(
-        self,
-        conv_args,
-        conv_pth,
-        device,
-        out_indices=(0, 1, 2, 3),
-        dram_activation_stages=(),
-        dram_conv_slices=None,
-        block_sharded_downsample_stages=(),
-        fp32_acc_stages=(),
-        stem_act_block_h=None,
-        conv2_act_block_h=None,
-        weights_dtype=ttnn.bfloat8_b,
-    ):
+    def __init__(self, params, device, out_indices=(0, 1, 2, 3)):
+        conv_args, conv_pth = params.conv_args, params["res_model"]
+        stage_config = dict(params.tt_kwargs)
+        stem_act_block_h = stage_config.pop("stem_act_block_h")
+        weights_dtype = stage_config["weights_dtype"]
         self.out_indices = out_indices
         self.maxpool_args = conv_args.maxpool
-        stage_config = dict(
-            dram_activation_stages=dram_activation_stages,
-            dram_conv_slices=dram_conv_slices,
-            block_sharded_downsample_stages=block_sharded_downsample_stages,
-            fp32_acc_stages=fp32_acc_stages,
-            conv2_act_block_h=conv2_act_block_h,
-            weights_dtype=weights_dtype,
-        )
 
         self.conv1 = TtnnConv2D(
             conv_args.conv1,

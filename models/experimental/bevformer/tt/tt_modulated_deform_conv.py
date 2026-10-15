@@ -26,9 +26,10 @@ Math (per output (h_o, w_o), output channel c_out):
 `ttnn.grid_sample` expects:
   - input NHWC, shape (N, H_in, W_in, C)
   - grid (N, H_out, W_out, 2) in (x, y) order normalized to [-1, 1]
-  - mode="bilinear", align_corners=False. The base grid and the offset scales
-    use the align_corners=False normalization, gy = (2*sy + 1)/H - 1; switching
-    to align_corners=True needs (H - 1) in both formulas.
+  - mode="bilinear", align_corners=False. The base grid here and the offset
+    scale in ``model_preprocessing._dcn_parameters`` use the align_corners=False
+    normalization, gy = (2*sy + 1)/H - 1; switching to align_corners=True needs
+    (H - 1) in both formulas.
 
 The offsets reach this module in grid_sample's (x, y) channel order and in its [-1, 1]
 units: ``model_preprocessing`` folds both the reorder from DCNv2's (y, x)
