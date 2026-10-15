@@ -6,14 +6,11 @@
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "api/dataflow/dataflow_api.h"
-#else
-// Host build (unit tests): the includer may supply these first, e.g. a throwing ASSERT.
-#ifndef FORCE_INLINE
-#define FORCE_INLINE inline __attribute__((always_inline))
-#endif
-#ifndef ASSERT
-#define ASSERT(condition, ...) ((void)0)
-#endif
+#elif !defined(FORCE_INLINE) || !defined(ASSERT)
+// Host build (unit tests): include tests/ttnn/unit_tests/gtests/accessor/host_kernel_shim.hpp first (with
+// HOST_KERNEL_SHIM_KEEP_MACROS). No fallbacks here, so the shim's throwing ASSERT can never be shadowed by a
+// no-op one that an earlier include defined.
+#error "host build: define FORCE_INLINE and ASSERT (include host_kernel_shim.hpp) before this header"
 #endif
 
 #include <cstdint>
@@ -256,4 +253,78 @@ FORCE_INLINE uint32_t page_of(uint32_t chunk) {
 template <uint32_t chunks_per_page, uint32_t chunk_size>
 FORCE_INLINE uint32_t byte_off_of(uint32_t chunk) {
     return (chunk % chunks_per_page) * chunk_size;
+}
+
+////////////////////////////////////////////////////////////////
+// Run loops, shared by all four kernels. Each consumes `left` chunks of `walk` as runs, hands every
+// run to `f`, and returns the L1 address past the last run (CB slots are packed: chunk k of an entry
+// sits at k * chunk_size).
+//
+// `addr` is only used by the debug ASSERT that a run is one linear stretch of memory; with asserts
+// compiled out it is never called.
+////////////////////////////////////////////////////////////////
+
+// Output side: runs of this device's stripe in the output tensor, clipped at the row edge.
+// f(l1, page, off, run) -- `page`/`off` locate the run's first chunk in the output.
+// addr(page, off) -> uint64_t NoC address of that chunk (debug only).
+// Used by every writer-side loop (unicast/multicast writer, multicast reader's send) and by the
+// unicast reader's relay, which reads back what upstream delivered into our output.
+template <
+    uint32_t chunks_per_page,
+    uint32_t chunk_size,
+    uint32_t chunks_per_stripe,
+    uint32_t num_devices,
+    typename Accessor,
+    typename AddrFn,
+    typename F>
+FORCE_INLINE uint32_t emit_runs(
+    TiledWalk& walk,
+    const StripeMap<chunks_per_stripe, num_devices>& map,
+    const Accessor& acc,
+    RunSource src,
+    uint32_t l1_addr,
+    uint32_t left,
+    AddrFn addr,
+    F f) {
+    [[maybe_unused]] auto run_addr = [&](uint32_t chunk) {
+        const uint32_t global = map.at(chunk).global;
+        return addr(page_of<chunks_per_page>(global), byte_off_of<chunks_per_page, chunk_size>(global));
+    };
+    while (left > 0) {
+        const auto pos = map.at(walk.chunk());
+        const uint32_t page = page_of<chunks_per_page>(pos.global);
+        const uint32_t off = byte_off_of<chunks_per_page, chunk_size>(pos.global);
+        const uint32_t run = next_run<chunks_per_page>(walk, acc, src, pos.global, pos.row_end, left);
+        ASSERT(run_is_linear(walk, run, chunk_size, addr(page, off), run_addr));
+        f(l1_addr, page, off, run);
+        l1_addr += run * chunk_size;
+        left -= run;
+        walk.advance(run);
+    }
+    return l1_addr;
+}
+
+// Input side: runs of this device's own input, chunk ids [.., end_chunk).
+// addr(chunk) -> uint64_t NoC address of an input chunk; f(src, l1, run) reads `run` chunks from `src`.
+template <uint32_t split_factor, uint32_t chunk_size, typename Accessor, typename AddrFn, typename F>
+FORCE_INLINE uint32_t read_input_runs(
+    TiledWalk& walk,
+    const Accessor& acc,
+    RunSource src,
+    uint32_t end_chunk,
+    uint32_t l1_addr,
+    uint32_t left,
+    AddrFn addr,
+    F f) {
+    while (left > 0) {
+        const uint32_t chunk = walk.chunk();
+        const uint32_t run = next_run<split_factor>(walk, acc, src, chunk, end_chunk, left);
+        const uint64_t src_addr = addr(chunk);
+        ASSERT(run_is_linear(walk, run, chunk_size, src_addr, addr));
+        f(src_addr, l1_addr, run);
+        l1_addr += run * chunk_size;
+        left -= run;
+        walk.advance(run);
+    }
+    return l1_addr;
 }

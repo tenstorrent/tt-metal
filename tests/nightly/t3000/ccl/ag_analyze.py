@@ -4,8 +4,12 @@
 Everything (configs, iteration counts, device count) is derived from the CSV itself.
 
 Method, per config:
-  * config key  = topology|layout|dtype|memory|output shape|dim|links|op, all parsed from
-    the INPUT_0_* columns, ATTRIBUTES and OP CODE.
+  * config key  = topology|layout|dtype|memory|output shape|dim|links|op|pkt<packet_size>[|tuning],
+    all parsed from the INPUT_0_* columns, ATTRIBUTES and OP CODE. `tuning` is the op's
+    TT_AG_TUNING test-hook struct (ATTRIBUTES 'tuning'), printed in TT_AG_TUNING syntax with only
+    the non-default keys ('-' = all defaults). So rows that differ in packet size or tuning never
+    pool. The `config` column shows the key without the pkt/tuning parts; they get their own
+    `pkt` and `tuning` columns.
   * iteration   = rank of a row within (config, device), ordered by GLOBAL CALL COUNT and
     then METAL TRACE REPLAY SESSION ID (all replays of one trace share a call count; the
     trace-capture placeholder has no session id and sorts first).
@@ -13,19 +17,27 @@ Method, per config:
     are dropped, counting the NaN-duration placeholder that trace capture leaves. NaN rows
     are then dropped.
   * per iteration take the MAX duration over devices (slowest device); report the median
-    over iterations, spread = (max-min)/median, and n.
+    over iterations, spread = (max-min)/median, n, and a bootstrap 95% CI of the median.
+    A config with <= --warmup invocations keeps all of them (nothing to drop) and is warned about.
   * efficiency  = median(PM IDEAL [ns]) / median duration.
   * eff50%      = the same, but with the roofline recomputed by ideal_us() (a Python port of
     AllGatherDeviceOperation::create_op_performance_model) at 50 GB/s per link direction instead
     of the 25 GB/s the C++ assumes on BH. --link-gbps G (not 25) renames it eff@G%. The port is
     checked against PM IDEAL for every config and the max relative error is printed.
 Durations > --desync-ns (default 1e8 ns) are treated as Blackhole wall-clock desync
-artifacts: counted, warned about, and excluded.
+artifacts: counted, warned about, and the WHOLE iteration (every device's row for that config
+and iteration) is excluded, so the per-iteration max is never taken over a partial device set.
+
+--compare joins A and B rows on the full key; a config (key minus pkt/tuning) that occurs once on
+each side is joined on that instead, so a packet-size or tuning A/B still lines up (the differing
+ATTRIBUTES are listed in a NOTE). verdict = "noise" when |delta| < --min-delta (default 5%; the CI
+only captures within-run variation, run-to-run drift is larger) OR the two bootstrap 95% CIs of the
+median overlap, else "B faster" / "B slower".
 
 Usage:
   ag_analyze.py [REPORT_DIR_OR_CSV ...] [--warmup N] [--devices N] [--csv OUT]
                 [--link-gbps G] [--aiclk-mhz F] [--num-cores C]
-  ag_analyze.py --compare A B            (A/B: dirs or CSVs)
+  ag_analyze.py --compare A B [--bootstrap N] [--min-delta PCT]   (A/B: dirs or CSVs)
 """
 
 from __future__ import annotations
@@ -36,6 +48,7 @@ import re
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 DUR = "DEVICE KERNEL DURATION [ns]"
@@ -70,7 +83,55 @@ OUT_COLUMNS = [
     "key", "topology", "layout", "dtype", "shape", "dim", "op", "out_bytes",
     "n", "median_us", "spread_pct", "ideal_us", "eff_pct", "us_per_mb",
     "model_us", "ideal_alt_us", "eff_alt_pct",
+    "config", "packet_size", "tuning", "ci_lo_us", "ci_hi_us",
 ]  # fmt: skip
+
+# ----------------------------------------------------------------------------- tuning hook
+# ATTRIBUTES prints AllGatherParams::tuning via ttsl reflection, e.g.
+#   Tuning(force_factory=AllGatherAlgorithm::Unicast;rotation=RotationMode::None;...;packet_size_override=std::nullopt)
+# (possibly namespace-qualified; the profiler turns ',' into ';'). Field -> TT_AG_TUNING key, in
+# Tuning::attribute_names order (ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_tuning.hpp).
+TUNING_FIELDS = {
+    "force_factory": "factory", "rotation": "rotation", "entry_policy": "entry", "padded_slot": "padded_slot",
+    "run_cap_bytes": "run_cap", "workers_per_dir": "workers", "signals_per_stripe": "signals",
+    "mcast_cb_depth": "mcast_cb_depth", "packet_size_override": "packet",
+}  # fmt: skip
+# unset optionals, rotation None, entry Legacy, padded_slot 0
+TUNING_DEFAULTS = {"nullopt", "none", "legacy", "0", "false"}
+
+
+def compact_tuning(raw: str | None) -> str:
+    """Reflection string of Tuning -> non-default keys in TT_AG_TUNING syntax ('' = all defaults).
+
+    Unparseable input is returned raw (with ';' put back to ',') rather than dropped, so it still
+    separates configs."""
+    if not raw or raw in ("std::nullopt", "nan"):
+        return ""
+    m = re.search(r"\((.*)\)\s*$", raw.strip())
+    pairs = re.findall(r"(\w+)=([^;,()]*)", m.group(1)) if m else []
+    if not pairs or any(k not in TUNING_FIELDS for k, _ in pairs):
+        return raw.replace(";", ",")
+    out = []
+    for k, v in pairs:
+        v = v.strip().split("::")[-1]
+        v = re.sub(r"(?<!^)(?=[A-Z])", "_", v).lower()  # AbsoluteDirStagger -> absolute_dir_stagger
+        v = {"true": "1"}.get(v, v)
+        if v not in TUNING_DEFAULTS:
+            out.append(f"{TUNING_FIELDS[k]}={v}")
+    return ",".join(out)
+
+
+def bootstrap_median_ci(x, n_boot: int, alpha: float = 0.05, seed: int = 0) -> tuple[float, float]:
+    """Percentile-bootstrap (1-alpha) CI of the median of x. Fixed seed -> reproducible verdicts."""
+    x = np.asarray(x, dtype=float)
+    if len(x) < 2 or n_boot <= 0:
+        m = float(np.median(x)) if len(x) else float("nan")
+        return m, m
+    rng = np.random.default_rng(seed)
+    meds = np.median(x[rng.integers(0, len(x), size=(n_boot, len(x)))], axis=1)
+    lo, hi = np.quantile(meds, [alpha / 2, 1 - alpha / 2])
+    return float(lo), float(hi)
+
 
 # ----------------------------------------------------------------------------- roofline model
 # Port of AllGatherDeviceOperation::create_op_performance_model
@@ -350,12 +411,16 @@ def describe_row(row: pd.Series, attrs: dict[str, str], devices_flag: int | None
     shape_s = "[" + ",".join(map(str, out_shape)) + "]" if out_shape else "?"
     dim_s = f"dim{dim}" if dim is not None else "dim?"
     links_s = f"L{links}" if links is not None else "L?"
-    key = "|".join([topo, lay, dt, mem, shape_s, dim_s, links_s, op])
+    config = "|".join([topo, lay, dt, mem, shape_s, dim_s, links_s, op])
+    packet = to_int(attrs.get("packet_size"))
+    tuning = compact_tuning(attrs.get("tuning"))
+    key = config + (f"|pkt{packet}" if packet is not None else "") + (f"|{tuning}" if tuning else "")
     # everything in ATTRIBUTES except output_spec, to flag non-key differences in A/B mode
     sig = {k: v for k, v in attrs.items() if k != "output_spec"}
     return dict(
-        key=key, topology=topo, layout=lay, dtype=dt, mem=mem, shape=shape_s, dim=dim, op=op,
-        links=links, num_devices=ndev, out_bytes=out_bytes, attr_sig=tuple(sorted(sig.items())), model=model,
+        key=key, config=config, packet_size=packet, tuning=tuning, topology=topo, layout=lay, dtype=dt, mem=mem,
+        shape=shape_s, dim=dim, op=op, links=links, num_devices=ndev, out_bytes=out_bytes,
+        attr_sig=tuple(sorted(sig.items())), model=model,
     )  # fmt: skip
 
 
@@ -363,7 +428,12 @@ def describe_row(row: pd.Series, attrs: dict[str, str], devices_flag: int | None
 
 
 def analyze(
-    csv_path: Path, warmup: int, devices_flag: int | None, desync_ns: float, model_opts: dict | None = None
+    csv_path: Path,
+    warmup: int,
+    devices_flag: int | None,
+    desync_ns: float,
+    model_opts: dict | None = None,
+    n_boot: int = 2000,
 ) -> pd.DataFrame:
     """model_opts: link_gbps (None = C++ value), alt_gbps, aiclk_mhz, num_cores (None = from CSV)."""
     mo = {**dict(link_gbps=None, alt_gbps=None, aiclk_mhz=DEFAULT_AICLK_MHZ, num_cores=None), **(model_opts or {})}
@@ -406,18 +476,30 @@ def analyze(
     ag["_inv"] = ag.groupby(["key", DEV]).cumcount()
     inv_per = ag.groupby(["key", DEV])["_inv"].transform("size")
     drop_warm = (ag["_inv"] < warmup) & (inv_per > warmup)
+    if warmup > 0:
+        short = inv_per[inv_per <= warmup].groupby(ag["key"]).max()  # invocations per device, short configs only
+        for k, n_inv in short.items():
+            warn(
+                f"{csv_path.name}: {k}: only {int(n_inv)} invocation(s) per device <= --warmup {warmup}; "
+                f"warmup NOT dropped, stats include compile/capture runs"
+            )
     meas = ag[~drop_warm & ag["_dur"].notna()].copy()
 
-    bad = meas["_dur"] > desync_ns
-    if bad.any():
-        per = meas[bad].groupby("key").size()
+    # desync: drop the whole iteration (every device's row for that config + invocation index), so the
+    # per-iteration max is never taken over a partial device set
+    bad_row = meas["_dur"] > desync_ns
+    if bad_row.any():
+        bad_it = meas.loc[bad_row, ["key", "_inv"]].drop_duplicates()
+        bad = pd.MultiIndex.from_frame(meas[["key", "_inv"]]).isin(pd.MultiIndex.from_frame(bad_it))
+        per = bad_it.groupby("key").size()
         print("!" * 78, file=sys.stderr)
         warn(
-            f"{csv_path.name}: {int(bad.sum())} duration(s) > {desync_ns:.0e} ns -- likely BH wall-clock "
-            f"desync; EXCLUDED from stats. Per config: " + ", ".join(f"{k}={v}" for k, v in per.items())
+            f"{csv_path.name}: {int(bad_row.sum())} duration(s) > {desync_ns:.0e} ns -- likely BH wall-clock "
+            f"desync; {len(bad_it)} whole iteration(s) ({int(bad.sum())} rows, all devices) EXCLUDED from stats. "
+            f"Iterations per config: " + ", ".join(f"{k}={v}" for k, v in per.items())
         )
         print("!" * 78, file=sys.stderr)
-    meas = meas[~bad]
+        meas = meas[~bad]
     # a NaN placeholder outside the warmup window is unexpected; mention it
     late_nan = ag[~drop_warm & ag["_dur"].isna()]
     if len(late_nan):
@@ -438,6 +520,7 @@ def analyze(
             warn(f"{key}: device count per iteration varies ({sorted(ndev_iter.unique())})")
         med = float(per_iter.median())
         spread = (per_iter.max() - per_iter.min()) / med * 100 if med > 0 else float("nan")
+        ci_lo, ci_hi = bootstrap_median_ci(per_iter.to_numpy(), n_boot)
         ideal = float(g["_ideal"].median()) if g["_ideal"].notna().any() else float("nan")
         if g["_ideal"].nunique() > 1:
             warn(f"{key}: PM IDEAL not constant ({g['_ideal'].min():.0f}..{g['_ideal'].max():.0f} ns); using median")
@@ -471,6 +554,8 @@ def analyze(
                 us_per_mb=(med / 1e3) / (ob / 1e6) if ob else float("nan"),
                 model_us=model_us, ideal_alt_us=alt_us,
                 eff_alt_pct=alt_us * 1e3 / med * 100 if alt_us > 0 and med > 0 else float("nan"),
+                config=d["config"] + (re.search(r"#\d+$", key).group(0) if re.search(r"#\d+$", key) else ""),
+                packet_size=d["packet_size"], tuning=d["tuning"], ci_lo_us=ci_lo / 1e3, ci_hi_us=ci_hi / 1e3,
                 devices=int(g[DEV].nunique()), attr_sig=d["attr_sig"],
             )
         )  # fmt: skip
@@ -499,28 +584,49 @@ def f(v, spec: str) -> str:
     return "-" if v is None or (isinstance(v, float) and math.isnan(v)) else format(v, spec)
 
 
+def ci_pct(lo, hi, med) -> float:
+    """Half-width of a CI as % of the median."""
+    return (hi - lo) / 2 / med * 100 if med and med > 0 else float("nan")
+
+
+def pkt_s(v) -> str:
+    return "-" if v is None or (isinstance(v, float) and math.isnan(v)) else str(int(v))
+
+
 def print_table(res: pd.DataFrame, alt_label: str = "eff50%") -> None:
-    kw = max(len("config"), res["key"].str.len().max())
+    kw = max(len("config"), res["config"].str.len().max())
     aw = max(7, len(alt_label))
     hdr = (
         f"{'config':<{kw}}  {'out':>8}  {'n':>3}  {'median_us':>10}  {'spread%':>7}  {'ideal_us':>9}  {'eff%':>6}  "
-        f"{alt_label:>{aw}}  {'us/MB':>7}"
+        f"{alt_label:>{aw}}  {'us/MB':>7}  {'ci95%':>6}  {'pkt':>5}  tuning"
     )
     print(hdr)
     print("-" * len(hdr))
     for r in res.itertuples():
         print(
-            f"{r.key:<{kw}}  {fmt_bytes(r.out_bytes):>8}  {r.n:>3}  {f(r.median_us, '10.2f')}  "
+            f"{r.config:<{kw}}  {fmt_bytes(r.out_bytes):>8}  {r.n:>3}  {f(r.median_us, '10.2f')}  "
             f"{f(r.spread_pct, '7.1f')}  {f(r.ideal_us, '9.2f')}  {f(r.eff_pct, '6.1f')}  "
-            f"{f(r.eff_alt_pct, f'{aw}.1f')}  {f(r.us_per_mb, '7.2f')}"
+            f"{f(r.eff_alt_pct, f'{aw}.1f')}  {f(r.us_per_mb, '7.2f')}  "
+            f"{f(ci_pct(r.ci_lo_us, r.ci_hi_us, r.median_us), '6.1f')}  {pkt_s(r.packet_size):>5}  {r.tuning or '-'}"
         )
 
 
-def print_compare(a: pd.DataFrame, b: pd.DataFrame, la: str, lb: str) -> None:
-    m = a.merge(b, on="key", how="outer", suffixes=("_a", "_b"), indicator=True)
+def join_keys(a: pd.DataFrame, b: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Add `jkey`: `config` where it is unique on both sides (so a packet/tuning A/B lines up), else `key`."""
+    ca, cb = a["config"].value_counts(), b["config"].value_counts()
+    uniq = lambda c: ca.get(c, 0) <= 1 and cb.get(c, 0) <= 1
+    a = a.assign(jkey=[c if uniq(c) else k for c, k in zip(a["config"], a["key"])])
+    b = b.assign(jkey=[c if uniq(c) else k for c, k in zip(b["config"], b["key"])])
+    return a, b
+
+
+def print_compare(a: pd.DataFrame, b: pd.DataFrame, la: str, lb: str, min_delta: float = 5.0) -> None:
+    a, b = join_keys(a, b)
+    m = a.merge(b, on="jkey", how="outer", suffixes=("_a", "_b"), indicator=True)
+    m["key"] = m["jkey"]
     both = m[m["_merge"] == "both"].copy()
-    only_a = m.loc[m["_merge"] == "left_only", "key"].tolist()
-    only_b = m.loc[m["_merge"] == "right_only", "key"].tolist()
+    only_a = m.loc[m["_merge"] == "left_only", "key_a"].tolist()
+    only_b = m.loc[m["_merge"] == "right_only", "key_b"].tolist()
     print(f"A = {la}\nB = {lb}")
     if both.empty:
         print("\nno configs in common.")
@@ -529,20 +635,24 @@ def print_compare(a: pd.DataFrame, b: pd.DataFrame, la: str, lb: str) -> None:
         kw = max(len("config"), both["key"].str.len().max())
         hdr = (
             f"{'config':<{kw}}  {'out':>8}  {'nA':>3} {'nB':>3}  {'A_us':>9}  {'B_us':>9}  {'delta%':>7}  "
-            f"{'sprA%':>6}  {'sprB%':>6}  {'effA%':>6}  {'effB%':>6}  verdict"
+            f"{'sprA%':>6}  {'sprB%':>6}  {'ciA%':>5}  {'ciB%':>5}  {'effA%':>6}  {'effB%':>6}  verdict"
         )
         print(hdr)
         print("-" * len(hdr))
         for r in both.itertuples():
             delta = (r.median_us_b - r.median_us_a) / r.median_us_a * 100
-            noise = abs(delta) < max(r.spread_pct_a, r.spread_pct_b)
+            # noise if below the run-to-run floor, or if the bootstrap 95% CIs of the two medians overlap
+            ci_overlap = r.ci_lo_us_a <= r.ci_hi_us_b and r.ci_lo_us_b <= r.ci_hi_us_a
+            noise = abs(delta) < min_delta or ci_overlap
             verdict = "noise" if noise else ("B faster" if delta < 0 else "B slower")
             print(
                 f"{r.key:<{kw}}  {fmt_bytes(r.out_bytes_a):>8}  {int(r.n_a):>3} {int(r.n_b):>3}  {r.median_us_a:9.2f}  "
                 f"{r.median_us_b:9.2f}  {delta:+7.1f}  {f(r.spread_pct_a, '6.1f')}  {f(r.spread_pct_b, '6.1f')}  "
+                f"{f(ci_pct(r.ci_lo_us_a, r.ci_hi_us_a, r.median_us_a), '5.1f')}  "
+                f"{f(ci_pct(r.ci_lo_us_b, r.ci_hi_us_b, r.median_us_b), '5.1f')}  "
                 f"{f(r.eff_pct_a, '6.1f')}  {f(r.eff_pct_b, '6.1f')}  {verdict}"
             )
-        # differences in ATTRIBUTES that are not part of the key (e.g. packet_size)
+        # differences in ATTRIBUTES between joined rows (packet_size / tuning when joined on config)
         diffs = {}
         for r in both.itertuples():
             da, db = dict(r.attr_sig_a), dict(r.attr_sig_b)
@@ -550,7 +660,7 @@ def print_compare(a: pd.DataFrame, b: pd.DataFrame, la: str, lb: str) -> None:
                 if da.get(k) != db.get(k):
                     diffs.setdefault(k, set()).add((da.get(k), db.get(k)))
         if diffs:
-            print("\nNOTE: joined configs differ in ATTRIBUTES fields outside the key:")
+            print("\nNOTE: joined configs differ in ATTRIBUTES fields:")
             for k, vals in diffs.items():
                 print(f"  {k}: " + ", ".join(f"A={va} B={vb}" for va, vb in sorted(vals, key=str)))
     for lbl, keys in (("A", only_a), ("B", only_b)):
@@ -568,6 +678,14 @@ def main() -> int:
     p.add_argument("--devices", type=int, default=None, help="num devices if ATTRIBUTES lacks it")
     p.add_argument("--desync-ns", type=float, default=1e8, help="durations above this are excluded (default 1e8)")
     p.add_argument("--csv", metavar="PATH", help="write the per-config table to PATH")
+    p.add_argument(
+        "--min-delta", type=float, default=5.0, metavar="PCT",
+        help="--compare: |delta%%| below this is 'noise' regardless of the CIs (default 5.0)",
+    )  # fmt: skip
+    p.add_argument(
+        "--bootstrap", type=int, default=2000, metavar="N",
+        help="bootstrap resamples for the 95%% CI of the median (default 2000; 0 = CI collapses to the median)",
+    )  # fmt: skip
     p.add_argument(
         "--link-gbps", type=float, default=25.0,
         help="fabric GB/s per link direction (default 25 = the C++ BH constant, reproduces PM IDEAL). "
@@ -591,7 +709,9 @@ def main() -> int:
     model_opts = dict(link_gbps=None, alt_gbps=alt_gbps, aiclk_mhz=args.aiclk_mhz, num_cores=args.num_cores)
     csv_names = {"ideal_alt_us": f"ideal{alt_tag}_us", "eff_alt_pct": f"eff{alt_tag}_pct"}
 
-    run = lambda path: analyze(resolve_csv(path), args.warmup, args.devices, args.desync_ns, model_opts)
+    run = lambda path: analyze(
+        resolve_csv(path), args.warmup, args.devices, args.desync_ns, model_opts, n_boot=args.bootstrap
+    )
 
     if args.compare:
         if args.inputs:
@@ -601,9 +721,11 @@ def main() -> int:
             print("error: zero AllGather rows on one side", file=sys.stderr)
             return 1
         print()
-        print_compare(ra, rb, args.compare[0], args.compare[1])
+        print_compare(ra, rb, args.compare[0], args.compare[1], args.min_delta)
         if args.csv:
-            m = ra[OUT_COLUMNS].merge(rb[OUT_COLUMNS], on="key", how="outer", suffixes=("_a", "_b"))
+            ja, jb = join_keys(ra[OUT_COLUMNS], rb[OUT_COLUMNS])
+            m = ja.merge(jb, on="jkey", how="outer", suffixes=("_a", "_b"))
+            m.insert(0, "key", m.pop("jkey"))  # the join key, as before (config when that is unambiguous)
             m.rename(columns={f"{k}{s}": f"{v}{s}" for k, v in csv_names.items() for s in ("_a", "_b")}).to_csv(
                 args.csv, index=False
             )
@@ -622,7 +744,9 @@ def main() -> int:
     res = pd.concat(frames, ignore_index=True)
     multi = len(frames) > 1
     if multi:
-        res["key"] = res["source"].map(lambda s: Path(s).parent.name) + ":" + res["key"]
+        src_tag = res["source"].map(lambda s: Path(s).parent.name) + ":"
+        res["key"] = src_tag + res["key"]
+        res["config"] = src_tag + res["config"]
         res = res.sort_values(["out_bytes", "topology", "key"]).reset_index(drop=True)
     print()
     print_table(res, alt_label)

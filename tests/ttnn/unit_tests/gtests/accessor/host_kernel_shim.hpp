@@ -18,6 +18,10 @@
 //
 // ASSERT throws std::out_of_range, so a test can EXPECT_THROW on a violated kernel precondition.
 //
+// Include order: this shim must come before any host-safe kernel header (e.g. gather_walk.hpp,
+// gather_packer.hpp). Those headers do not define fallback FORCE_INLINE / ASSERT on the host; they #error if
+// the shim (or an equivalent) has not defined them first.
+//
 // NOC_MAX_BURST_SIZE: a kernel build gets it from the arch's noc_parameters.h. Here it defaults to the
 // Blackhole value; define HOST_KERNEL_SHIM_NOC_MAX_BURST_SIZE (or NOC_MAX_BURST_SIZE itself) before the
 // include to model another arch. The per-arch figures are also exposed as constexprs below so one TU can
@@ -37,9 +41,11 @@ inline constexpr uint32_t kNocMaxBurstSizeWormhole = 8192;    // 256-bit NoC
 
 #ifndef HOST_KERNEL_SHIM_NOC_MAX_BURST_SIZE
 #define HOST_KERNEL_SHIM_NOC_MAX_BURST_SIZE 16384
+#define HOST_KERNEL_SHIM_DEFINED_BURST_KNOB
 #endif
 #ifndef NOC_MAX_BURST_SIZE
 #define NOC_MAX_BURST_SIZE HOST_KERNEL_SHIM_NOC_MAX_BURST_SIZE
+#define HOST_KERNEL_SHIM_DEFINED_NOC_MAX_BURST_SIZE
 #endif
 
 // NOLINTBEGIN(bugprone-macro-parentheses)
@@ -109,6 +115,17 @@ namespace noc_address_backend {
 #undef DYNAMIC_NOC_X
 #undef DYNAMIC_NOC_Y
 #undef NOC_XY_ADDR
+#undef NOC_UNICAST_ADDR_X
+#undef NOC_UNICAST_ADDR_Y
+// Only what this shim defined; an includer's own definition is left alone.
+#ifdef HOST_KERNEL_SHIM_DEFINED_NOC_MAX_BURST_SIZE
+#undef NOC_MAX_BURST_SIZE
+#undef HOST_KERNEL_SHIM_DEFINED_NOC_MAX_BURST_SIZE
+#endif
+#ifdef HOST_KERNEL_SHIM_DEFINED_BURST_KNOB
+#undef HOST_KERNEL_SHIM_NOC_MAX_BURST_SIZE
+#undef HOST_KERNEL_SHIM_DEFINED_BURST_KNOB
+#endif
 #endif
 
 // NOLINTEND(bugprone-macro-parentheses)

@@ -13,9 +13,9 @@
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/tensor/tensor.hpp"
+#include "all_gather_tuning.hpp"  // EntryPolicy
 
-// NOTE: deliberately does not include all_gather_device_operation_types.hpp, so that header can include
-// all_gather_tuning.hpp (which needs EntryPolicy from here) without a cycle.
+// Internal to the all_gather op: include from .cpp files only (it is not an installed header).
 
 ////////////////////////////////////////////////////////////////
 // Host-side all_gather geometry, computed once and shared by select_program_factory and both program
@@ -40,8 +40,7 @@ namespace ttnn::operations::ccl {
 enum class CopyMode : uint8_t { Matched, Concat, Split };
 
 // [first, end) of `num_units` divided into `num_slices` parts, the first `num_units % num_slices` parts one
-// unit longer. Identical arithmetic to the unicast factory's slice split (all_gather_unicast_factory.cpp
-// 566-570) and the multicast factory's per-link split (all_gather_multicast_factory.cpp 426-429).
+// unit longer.
 struct UnitRange {
     uint32_t first = 0;
     uint32_t end = 0;
@@ -81,8 +80,7 @@ struct GatherGeometry {
 
     // --- Predicates ---
     // The output's aligned page is exactly tiled by chunks. This is the kernels' `packed` (gather_walk.hpp
-    // walk_plan) and the predicate both select_program_factory (device_operation.cpp:325) and the unicast relay
-    // TT_FATAL (unicast_factory.cpp:198) check today.
+    // walk_plan) and the predicate both select_program_factory and require_relay_packed() check today.
     bool out_packed = false;
     // The TRUE precondition for unicast's relay read-back: out_packed, AND the read of a chunk out of the output
     // is NoC-read aligned. out_packed alone is insufficient: in Concat the chunk is the *input's* aligned page,
@@ -92,17 +90,16 @@ struct GatherGeometry {
     // multiple of 16 B (the L1 alignment, or for Split enforced by use_composite_all_gather).
     bool relay_ok = false;
 
-    // Built from the real output buffer: the factories' derivation (unicast 182-214 + 223-249, multicast
-    // 242-261 + 269-294), same arithmetic, same TT_FATAL messages.
+    // Built from the real output buffer (the program factories).
     static GatherGeometry make(const Tensor& input, const Tensor& output, int32_t dim_from_end, uint32_t num_devices);
-    // Built from the output spec, before any output buffer exists: select_program_factory's derivation
-    // (device_operation.cpp 316-326). Equal to the Tensor overload whenever the output buffer was created from
-    // this spec; a persistent output with different sharding can differ (see WIRING.md).
+    // Built from the output spec, before any output buffer exists (select_program_factory). Equal to the Tensor
+    // overload whenever the output buffer was created from this spec; a persistent output with a different
+    // memory config can differ.
     static GatherGeometry make(
         const Tensor& input, const tt::tt_metal::TensorSpec& output_spec, int32_t dim_from_end, uint32_t num_devices);
 
-    // Unicast-only: today's relay TT_FATAL (unicast_factory.cpp 198-206), message unchanged. Checks out_packed,
-    // NOT relay_ok, so wiring it in changes nothing; switching to relay_ok is a separate, behaviour-changing fix.
+    // Unicast-only relay precondition. Checks out_packed, NOT relay_ok; switching to relay_ok is a separate,
+    // behaviour-changing fix.
     void require_relay_packed() const;
 
     // Slice `slice_idx` of `num_slices`. The split is over *input pages*, then scaled by in_chunks_per_page, so
@@ -115,10 +112,10 @@ struct GatherGeometry {
     }
 };
 
-// Packed bytes of the gathered output crossing one link (device_operation.cpp 261-262, unicast 268-269).
+// Packed bytes of the gathered output crossing one link.
 uint64_t per_link_bytes(const tt::tt_metal::TensorSpec& output_spec, uint32_t num_links);
 
-// Host mirror of TensorAccessor::contiguous_page_stride() (tt_metal/hw/inc/api/tensor/tensor_accessor.h:142,499):
+// Host mirror of TensorAccessor::contiguous_page_stride() (tt_metal/hw/inc/api/tensor/tensor_accessor.h):
 //   interleaved -> bank count (the kernel's NUM_DRAM_BANKS / NUM_L1_BANKS JIT define)
 //   sharded     -> tensor_strides[contiguous_dim()] over the dspec the kernel receives.
 uint32_t contiguous_page_stride(const tt::tt_metal::Buffer& buffer);
@@ -130,14 +127,7 @@ struct HostRunSource {
 };
 HostRunSource run_source(bool packed, uint32_t chunks_per_page, uint32_t page_stride, uint32_t stride);
 
-// How a CB entry is sized.
-//   Legacy       -- today: a whole number of packet loads, rounded to whole pages (chunks_per_group), times
-//                   packets_per_cb_entry, clamped by L1 (unicast 428-447, multicast 340-358).
-//   ScatterAware -- one transfer's worth, but no more than NOC_SCATTER_WRITE_MAX_CHUNKS of the shortest output
-//                   run fit: min(xfer, 4 * min_output_run).
-enum class EntryPolicy : uint8_t { Legacy, ScatterAware };
-
-// Mirror of NOC_SCATTER_WRITE_MAX_CHUNKS (tt_metal/fabric/fabric_edm_packet_header.hpp:196); the .cpp
+// Mirror of NOC_SCATTER_WRITE_MAX_CHUNKS (tt_metal/fabric/fabric_edm_packet_header.hpp); the .cpp
 // static_asserts the two agree when that header is reachable.
 inline constexpr uint32_t kNocScatterWriteMaxChunks = 4;
 
@@ -151,7 +141,7 @@ struct WalkGeometry {
     uint32_t xfer_max = 1;         // chunks_per_transfer(packet, chunk, run_cap) -- the kernels' xfer_max
     uint32_t xfer = 1;             // walk_plan's xfer: xfer_max if out_packed, else 1
     HostRunSource out_runs;        // walk_plan's `out`
-    HostRunSource in_runs;         // reader's `in_src` (unicast_reader.cpp 75-79, multicast_reader.cpp 189-193)
+    HostRunSource in_runs;         // the readers' `in_src`
     uint32_t min_output_run = 1;   // shortest run the output can offer (ScatterAware sizing)
     uint32_t chunks_per_entry = 1;
     uint32_t cb_entry_bytes = 0;  // cb_page_size in the factories
@@ -171,8 +161,8 @@ struct WalkGeometry {
         uint32_t max_l1_space);
 };
 
-// Worker cores the op may use: subdevice's TENSIX cores, intersected with sub_core_grid (unicast 38-42,
-// multicast 25-29). Pass AllGatherParams::subdevice_id / ::sub_core_grid.
+// Worker cores the op may use: subdevice's TENSIX cores, intersected with sub_core_grid. Pass
+// AllGatherParams::subdevice_id / ::sub_core_grid.
 struct AvailableCores {
     tt::tt_metal::SubDeviceId subdevice_id;
     CoreRangeSet cores;
@@ -182,16 +172,11 @@ AvailableCores available_worker_cores(
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<CoreRangeSet>& sub_core_grid);
 
-// Owns the op's global semaphores; keep it (or copies of its elements) in shared_variables_t so the L1 stays
-// allocated for the cached program's lifetime.
-struct GatherSemaphores {
-    std::vector<tt::tt_metal::GlobalSemaphore> sems;
-    const tt::tt_metal::GlobalSemaphore& operator[](size_t i) const { return sems.at(i); }
-    size_t size() const { return sems.size(); }
-};
-// `n` semaphores, initial value 0, in L1_SMALL when the device has an L1_SMALL region (else L1, with today's
-// warning), created in order, then Synchronize over `subdevice_id` (unicast 52-66, multicast 36-48).
-GatherSemaphores allocate_gather_semaphores(
+// Creates `n` global semaphores, initial value 0, in L1_SMALL when the device has an L1_SMALL region (else L1,
+// with a warning), in order -- then runs a blocking Synchronize over `subdevice_id`, so every device holds them
+// before any program that uses them is enqueued. Keep the semaphores (or copies) in shared_variables_t so the
+// L1 stays allocated for the cached program's lifetime.
+std::vector<tt::tt_metal::GlobalSemaphore> create_semaphores_and_sync(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const CoreRangeSet& cores,
     tt::tt_metal::SubDeviceId subdevice_id,

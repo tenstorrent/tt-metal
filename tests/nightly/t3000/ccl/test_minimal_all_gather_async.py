@@ -197,7 +197,6 @@ def run_all_gather_impl(
     use_broadcast=False,
     use_blaze=False,
     use_explicit_subdevice_id=True,
-    knobs=None,
 ):
     use_sub_devices = False
     torch.manual_seed(0)
@@ -208,7 +207,7 @@ def run_all_gather_impl(
     replicate = mesh_shape[cluster_axis] if cluster_axis is not None else num_devices
 
     # Skip unsupported cases
-    (is_known_failure, message) = is_unsupported_case(
+    is_known_failure, message = is_unsupported_case(
         ag_output_shape,
         dim,
         mem_config_ag,
@@ -760,14 +759,29 @@ def test_ag_page_size(
 # TUNING SCAFFOLD (temporary): env-driven knob sweep, so one build + one pytest
 # process covers many (shape, knob-tuple) cells.
 #
-#   AG_SHAPES  comma-separated ids from _SHAPES below         (default "512K,2M,25M")
-#   AG_KNOBS   semicolon-separated 8-tuples, e.g. "0,0,0,0,0,0,0,1;2,0,0,0,0,0,0,1"
-#              index: 0 wpd 1 pkts/cb 2 run_cap+1 3 mux_slots 4 cb_depth
-#                     5 read_ahead 6 signals/stripe 7 factory(1=uni,2=mcast)
-#   AG_TOPO    ring | linear | both                           (default "ring")
-#   AG_ITERS   profiled iterations                            (default 20)
+#   AG_SHAPES      comma-separated ids from _SHAPES below     (default "512K,2M,25M")
+#   AG_KNOBS       ';'-separated TT_AG_TUNING strings, one test case each (default "" =
+#                  one case with the op's defaults). An empty entry (or "default") is the
+#                  defaults case. Each entry is "key=value,key=value" with the keys of
+#                  ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_tuning.hpp:
+#                    factory=multicast|unicast  rotation=none|absolute|absolute_dir_stagger
+#                    entry=legacy|scatter_aware  padded_slot=0|1  run_cap=<bytes>
+#                    workers=<n>  signals=<n>  mcast_cb_depth=<n>  packet=<bytes>
+#                  e.g. AG_KNOBS="factory=unicast;factory=unicast,rotation=absolute;"
+#   AG_KNOBS_FILE  path to a file with one tuning string per line ('#' comments and blank
+#                  lines ignored; write "default" for the defaults case). Its entries are
+#                  appended to AG_KNOBS's when both are set.
+#   AG_TOPO        ring | linear | both                       (default "ring")
+#   AG_ITERS       profiled iterations                        (default 20)
+#   AG_PACKET      fabric router max packet payload bytes     (default 15232)
+#   AG_CHECK       1 = functional path (no trace, PCC checked) instead of perf
+#
+# The op reads TT_AG_TUNING on every call and the parsed struct is part of the program-cache
+# hash, so test_ag_knobs sets it for the whole case (compile run, trace capture, replays,
+# readback) and restores the previous value afterwards.
 ####################################################################################
 
+import contextlib as _contextlib
 import os as _os
 
 # id -> (output_shape, dim, layout)
@@ -868,9 +882,85 @@ _SHAPES = {
 }
 
 _AG_SHAPE_IDS = [s for s in _os.environ.get("AG_SHAPES", "512K,2M,25M").split(",") if s]
-_AG_KNOBS = [
-    tuple(int(v) for v in spec.split(",")) for spec in _os.environ.get("AG_KNOBS", "0,0,0,0,0,0,0,1").split(";") if spec
-]
+# Mirror of Tuning::parse (all_gather_tuning.cpp), so a typo fails at collection time instead of
+# after the mesh is opened. Order = Tuning::attribute_names, so equal tunings get equal strings.
+_AG_TUNING_KEYS = {
+    "factory": ("multicast", "unicast"),
+    "rotation": ("none", "absolute", "absolute_dir_stagger"),
+    "entry": ("legacy", "scatter_aware"),
+    "padded_slot": ("0", "1", "true", "false"),
+    "run_cap": None,
+    "workers": None,
+    "signals": None,
+    "mcast_cb_depth": None,
+    "packet": None,
+}
+
+
+def _canonical_ag_tuning(spec):
+    """'rotation = absolute, factory=unicast' -> 'factory=unicast,rotation=absolute'; '' / 'default' -> ''."""
+    spec = spec.strip()
+    if spec.lower() == "default":
+        return ""
+    kv = {}
+    for item in spec.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError(f"AG_KNOBS: '{item}' in '{spec}' is not key=value")
+        k, v = (s.strip() for s in item.split("=", 1))
+        if k not in _AG_TUNING_KEYS:
+            raise ValueError(f"AG_KNOBS: unknown key '{k}' in '{spec}' (known: {', '.join(_AG_TUNING_KEYS)})")
+        allowed = _AG_TUNING_KEYS[k]
+        if (allowed is not None and v not in allowed) or (allowed is None and not v.isdigit()):
+            raise ValueError(f"AG_KNOBS: {k}={v} in '{spec}' (want {'|'.join(allowed) if allowed else '<uint>'})")
+        if k in kv:
+            raise ValueError(f"AG_KNOBS: key '{k}' repeated in '{spec}'")
+        kv[k] = v
+    return ",".join(f"{k}={kv[k]}" for k in _AG_TUNING_KEYS if k in kv)
+
+
+def _ag_tuning_id(spec):
+    """Test-id form of a canonical tuning string: 'factory=unicast,run_cap=0' -> 't_factory-unicast+run_cap-0'."""
+    return "t_" + (spec.replace("=", "-").replace(",", "+") if spec else "default")
+
+
+def _load_ag_knobs():
+    entries = []
+    if "AG_KNOBS" in _os.environ or "AG_KNOBS_FILE" not in _os.environ:
+        entries += _os.environ.get("AG_KNOBS", "").split(";")
+    knobs_file = _os.environ.get("AG_KNOBS_FILE")
+    if knobs_file:
+        with open(knobs_file) as fh:
+            lines = [ln.split("#", 1)[0].strip() for ln in fh]
+        entries += [ln for ln in lines if ln]
+    out = []
+    for e in entries:
+        c = _canonical_ag_tuning(e)
+        if c not in out:
+            out.append(c)
+    return out
+
+
+@_contextlib.contextmanager
+def _ag_tuning_env(spec):
+    """Set TT_AG_TUNING to spec ('' -> unset) for the duration, then restore the previous value."""
+    prev = _os.environ.get("TT_AG_TUNING")
+    if spec:
+        _os.environ["TT_AG_TUNING"] = spec
+    else:
+        _os.environ.pop("TT_AG_TUNING", None)
+    try:
+        yield
+    finally:
+        if prev is None:
+            _os.environ.pop("TT_AG_TUNING", None)
+        else:
+            _os.environ["TT_AG_TUNING"] = prev
+
+
+_AG_KNOBS = _load_ag_knobs()
 _AG_ITERS = int(_os.environ.get("AG_ITERS", "20"))
 _AG_TOPO = _os.environ.get("AG_TOPO", "ring")
 _AG_PACKET = int(_os.environ.get("AG_PACKET", "15232"))
@@ -898,40 +988,41 @@ _AG_TOPO_IDS = ["ring", "linear"] if _AG_TOPO == "both" else [_AG_TOPO]
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("shape_id", _AG_SHAPE_IDS)
-@pytest.mark.parametrize("knobs", _AG_KNOBS, ids=lambda k: "k" + "_".join(str(v) for v in k))
+@pytest.mark.parametrize("ag_tuning", _AG_KNOBS, ids=_ag_tuning_id)
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [_TOPOS[t] for t in _AG_TOPO_IDS],
     indirect=["device_params"],
     ids=_AG_TOPO_IDS,
 )
-def test_ag_knobs(mesh_device, shape_id, knobs, device_params, all_gather_topology):
+def test_ag_knobs(mesh_device, shape_id, ag_tuning, device_params, all_gather_topology):
     ag_output_shape, dim, layout = _SHAPES[shape_id]
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     # AG_CHECK=1 swaps the perf loop for the functional path (no trace, device skew injected,
     # PCC compared) so the same shape/knob matrix can be used to check correctness.
     check = _os.environ.get("AG_CHECK") == "1"
 
-    run_all_gather_impl(
-        mesh_device,
-        mesh_device.get_num_devices(),
-        ag_output_shape,
-        dim,
-        2,  # num_links (ignored by the blaze path; it auto-detects)
-        ttnn.bfloat16,
-        layout,
-        mem_config,
-        mem_config,
-        all_gather_topology=all_gather_topology,
-        enable_trace=not check,
-        num_iters=1 if check else _AG_ITERS,
-        use_barrier=False,
-        use_persistent_buffers=True,
-        use_semaphore_free_all_gather_impl=False,
-        skip_check=not check,
-        use_blaze=True,
-        knobs=knobs,
-    )
+    logger.info(f"TT_AG_TUNING={ag_tuning!r} ({'defaults' if not ag_tuning else 'override'})")
+    with _ag_tuning_env(ag_tuning):
+        run_all_gather_impl(
+            mesh_device,
+            mesh_device.get_num_devices(),
+            ag_output_shape,
+            dim,
+            2,  # num_links (ignored by the blaze path; it auto-detects)
+            ttnn.bfloat16,
+            layout,
+            mem_config,
+            mem_config,
+            all_gather_topology=all_gather_topology,
+            enable_trace=not check,
+            num_iters=1 if check else _AG_ITERS,
+            use_barrier=False,
+            use_persistent_buffers=True,
+            use_semaphore_free_all_gather_impl=False,
+            skip_check=not check,
+            use_blaze=True,
+        )
 
 
 ####################################################################################

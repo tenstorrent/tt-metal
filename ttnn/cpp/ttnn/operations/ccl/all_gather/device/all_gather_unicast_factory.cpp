@@ -38,25 +38,12 @@ AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_
     auto* mesh_device = tensor_args.input_tensor.device();
     const auto avail =
         available_worker_cores(mesh_device, operation_attributes.subdevice_id, operation_attributes.sub_core_grid);
-    {
-        // SHADOW COMPARE — remove after review: the pre-wiring worker-core derivation.
-        auto old_subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-        auto old_available_cores =
-            mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, old_subdevice_id);
-        if (operation_attributes.sub_core_grid.has_value()) {
-            old_available_cores = old_available_cores.intersection(operation_attributes.sub_core_grid.value());
-        }
-        TT_FATAL(
-            old_subdevice_id == avail.subdevice_id && old_available_cores == avail.cores,
-            "shadow: available worker cores differ");
-    }
 
-    // Kernel needs to wait to receive all remote data before exiting, and in some cases needs to wait
-    // for all remote devices to be ready before beginning operation (see allocate_gather_semaphores).
-    // Two semaphores, created in this order:
+    // Kernel needs to wait to receive all remote data before exiting, and needs to wait for all remote devices
+    // to be ready before beginning operation. Two semaphores, created in this order:
     // - barrier_sem: one-shot init handshake ("I'm alive") to the neighbor.
     // - data_valid_sem: chunks upstream has relayed into our output (relay gate + completion).
-    const auto sems = allocate_gather_semaphores(mesh_device, avail.cores, avail.subdevice_id, 2);
+    const auto sems = create_semaphores_and_sync(mesh_device, avail.cores, avail.subdevice_id, 2);
     const auto& barrier_sem = sems[0];
     const auto& data_valid_sem = sems[1];
 
@@ -130,11 +117,10 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Even-sized ring: for load balancing, the antipode device receives the antipode stripe as halves from both
     // forward and backward directions.
     const bool ring_even_split = is_ring && (num_devices % 2 == 0);
-    // We use an init barrier to wait for remote output tensors to be allocated.
-    // But we cannot skip init_barrier when persistent output buffer is used since:
-    // - The persistent output buffer is also an input source (store-and-forward in the relay iterations).
-    // - The persistent output buffer may be reused across multiple invocations of this CCL.
-    const bool do_init_barrier = true;
+
+    // The kernels always run an init barrier, waiting for the remote output tensors to be allocated. It cannot
+    // be skipped even for a persistent output buffer: that buffer is also an input source (store-and-forward in
+    // the relay iterations), and may be reused across invocations of this CCL.
 
     const uint32_t packet_size = operation_attributes.packet_size;
     const auto arch = input_tensor.device()->arch();
@@ -142,10 +128,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     ////////////////////////////////////////////////////////////////
     // Page indexing
     //
-    // Glossary (shared with the kernels):
-    //   input/output page -- one page of the input/output tensor buffer.
-    //   chunk             -- the transfer unit, min(input page, output page). An input page is
-    //                        split_factor chunks; an output page is output_chunks_per_page chunks.
+    // Glossary (shared with the kernels; page, chunk, stripe and the copy modes are in all_gather_geometry.hpp):
     //   chunk id          -- a chunk's index in this device's contribution.
     //   global            -- a chunk's index in the output tensor. Rows are strided: between them the
     //                        output holds the other devices' stripes.
@@ -157,13 +140,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     //                        long yet consecutive runs sit in different banks.
     //   run               -- one tile column: chunks contiguous at the destination, sent as one transfer.
     //   segment           -- one scatter-list entry in a packet.
-    //   stripe            -- the chunks this device contributes per row of the output.
-    //
-    // Three copy modes, picked by input vs output page sizes:
-    //   matched (in == out): 1 chunk per input page, output_chunks_per_page = 1.
-    //   concat  (out > in) : 1 chunk per input page, output_chunks_per_page > 1; each
-    //                        chunk lands at a byte offset within a shared output page.
-    //   split   (in > out) : split_factor chunks per input page, output_chunks_per_page = 1.
     //
     // Host supplies geometry and each worker's slice. The walk order is two numbers the kernels derive
     // themselves -- stride from TensorAccessor, xfer from the packet size -- so no layout is
@@ -175,81 +151,10 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     const uint32_t split_factor = geom.in_chunks_per_page;
     const uint32_t output_chunk_size = geom.chunk_size;
     const uint32_t output_chunks_per_page = geom.out_chunks_per_page;
-    const uint32_t num_input_pages = geom.num_input_pages;
     const uint32_t num_output_chunks = geom.num_chunks;
     const uint32_t output_chunks_per_stripe = geom.chunks_per_stripe;
 
-    // Relay reads our own output back into the CB, which is packed at chunk stride, so the output's
-    // aligned page must be exactly tiled by chunks.
     geom.require_relay_packed();
-
-    // TODO: fix the messaging in below function
-    ::ttnn::ccl::validate_packet_size(arch, packet_size, output_chunk_size);
-
-    {
-        // SHADOW COMPARE — remove after review: the pre-wiring derivation, value for value.
-        const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-        const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
-        const uint32_t output_unaligned_page_size = output_tensor.buffer()->page_size();
-        const bool is_split = input_unaligned_page_size > output_unaligned_page_size;
-        const uint32_t old_output_chunk_size = is_split ? output_unaligned_page_size : input_page_size;
-        const uint32_t old_output_chunks_per_page =
-            is_split ? 1u : output_unaligned_page_size / input_unaligned_page_size;
-        const uint32_t old_split_factor = is_split ? input_unaligned_page_size / output_unaligned_page_size : 1u;
-        const bool old_packed =
-            output_tensor.buffer()->aligned_page_size() == old_output_chunks_per_page * old_output_chunk_size;
-        const uint32_t old_num_input_pages = input_tensor.buffer()->num_pages();
-        const uint32_t old_num_output_chunks = old_num_input_pages * old_split_factor;
-
-        const auto& input_shape = input_tensor.padded_shape();
-        const auto tile_spec =
-            input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
-        uint32_t input_pages_per_stripe = 1;
-        for (int32_t i = operation_attributes.dim_from_end; i < 0; i++) {
-            uint32_t extent;
-            if (i == -1) {
-                if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
-                    extent = input_shape[i] / tile_spec.get_width();
-                } else {
-                    extent = (input_shape[i] * input_tensor.element_size()) / input_unaligned_page_size;
-                }
-            } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == -2) {
-                extent = input_shape[i] / tile_spec.get_height();
-            } else {
-                extent = input_shape[i];
-            }
-            input_pages_per_stripe *= extent;
-        }
-        const uint32_t old_output_chunks_per_stripe = input_pages_per_stripe * old_split_factor;
-
-        TT_FATAL(old_split_factor == split_factor, "shadow: split_factor {} != {}", old_split_factor, split_factor);
-        TT_FATAL(
-            old_output_chunk_size == output_chunk_size,
-            "shadow: chunk {} != {}",
-            old_output_chunk_size,
-            output_chunk_size);
-        TT_FATAL(
-            old_output_chunks_per_page == output_chunks_per_page,
-            "shadow: output_chunks_per_page {} != {}",
-            old_output_chunks_per_page,
-            output_chunks_per_page);
-        TT_FATAL(
-            old_output_chunks_per_stripe == output_chunks_per_stripe,
-            "shadow: chunks_per_stripe {} != {}",
-            old_output_chunks_per_stripe,
-            output_chunks_per_stripe);
-        TT_FATAL(
-            old_num_input_pages == num_input_pages,
-            "shadow: num_input_pages {} != {}",
-            old_num_input_pages,
-            num_input_pages);
-        TT_FATAL(
-            old_num_output_chunks == num_output_chunks,
-            "shadow: num_chunks {} != {}",
-            old_num_output_chunks,
-            num_output_chunks);
-        TT_FATAL(old_packed == geom.out_packed, "shadow: packed {} != {}", old_packed, geom.out_packed);
-    }
 
     ////////////////////////////////////////////////////////////////
     // Core selection
@@ -269,16 +174,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // the core grid later forces links down (which warns) the choices below stay the ones for the
     // wider config.
     const uint64_t per_link_bytes = ::ttnn::operations::ccl::per_link_bytes(output_tensor.tensor_spec(), num_links);
-    {
-        // SHADOW COMPARE — remove after review.
-        const uint64_t old_per_link_bytes =
-            output_tensor.tensor_spec().compute_packed_buffer_size_bytes() / std::max(1u, num_links);
-        TT_FATAL(
-            old_per_link_bytes == per_link_bytes,
-            "shadow: per_link_bytes {} != {}",
-            old_per_link_bytes,
-            per_link_bytes);
-    }
 
     // --- Per-arch tuning ---
     uint32_t workers_per_dir = 1;  // >1 needs a fabric mux core per direction per link
@@ -365,9 +260,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         // re-measured since, so treat it as the weaker half of this rule.
         const bool cap_pays = num_links >= 4 && total_output_bytes >= 8u * 1024u * 1024u;
         run_cap_bytes = cap_pays ? (16384u / std::max(1u, num_links)) : 0u;
-        // mux_slots_per_channel: one slot wins only on an even split, and loses more when the split is
-        // uneven than it wins there, so the even case is not worth special-casing.
-        mux_slots_per_channel = 2;
+        // mux_slots_per_channel stays 2: one slot wins only on an even split, and loses more when the split
+        // is uneven than it wins there, so the even case is not worth special-casing.
     }
 
     // Shrink core usage to fit available core grid. Shrink workers_per_link first, and then shrink num_links.
@@ -453,22 +347,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         cb_depth,
         max_l1_space);
     const uint32_t cb_page_size = walk.cb_entry_bytes;
-    {
-        // SHADOW COMPARE — remove after review: the pre-wiring CB sizing (minus its warning).
-        const uint32_t chunks_per_group = std::max(split_factor, output_chunks_per_page);
-        uint32_t chunks_per_packet = std::max(1u, packet_size / output_chunk_size);
-        chunks_per_packet = std::max(chunks_per_group, (chunks_per_packet / chunks_per_group) * chunks_per_group);
-        uint32_t old_cb_page_size = chunks_per_packet * output_chunk_size;
-        const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * old_cb_page_size), 1u, packets_per_cb_entry);
-        old_cb_page_size *= multiplier;
-        TT_FATAL(old_cb_page_size == cb_page_size, "shadow: cb_page_size {} != {}", old_cb_page_size, cb_page_size);
-        TT_FATAL(
-            old_cb_page_size / output_chunk_size == walk.chunks_per_entry,
-            "shadow: chunks_per_cb_entry {} != {}",
-            old_cb_page_size / output_chunk_size,
-            walk.chunks_per_entry);
-        TT_FATAL(walk.cb_depth == cb_depth, "shadow: cb_depth {} != {}", cb_depth, walk.cb_depth);
-    }
     log_debug(
         tt::LogOp,
         "all_gather unicast walk: stride {} xfer {} (max {}) in_runs sub_page {} cross_page {}",
@@ -493,11 +371,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // them lands on 3-4 signals instead.
     const uint32_t total_slices = num_links * workers_per_dir;
     const uint32_t outputs_per_cb_page = std::max(1u, walk.chunks_per_entry);
-    TT_FATAL(  // SHADOW COMPARE — remove after review.
-        outputs_per_cb_page == std::max(1u, cb_page_size / output_chunk_size),
-        "shadow: outputs_per_cb_page {} != {}",
-        outputs_per_cb_page,
-        std::max(1u, cb_page_size / output_chunk_size));
     const uint32_t chunks_per_slice = std::max(1u, num_output_chunks / total_slices);
     const uint32_t cb_pages_per_stripe = std::max(1u, tt::div_up(chunks_per_slice, outputs_per_cb_page));
     constexpr uint32_t signals_per_stripe = 2;
@@ -513,7 +386,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         num_devices,               // device count (stripe indexing)
         cb0_id,                    // cb id
         cb_page_size,              // cb entry size
-        do_init_barrier,           // wait for remote output allocation before relaying
         packet_size,               // packet_size (sets the transfer size, hence the walk order)
         run_cap_bytes,             // longest run the walk may emit; 0 = no cap
     };
@@ -529,7 +401,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         cb0_id,                    // cb id
         cb_page_size,              // cb entry size
         packet_size,               // packet_size
-        do_init_barrier,           // send init handshake before relaying
         data_valid_granularity,    // signal data_valid once per this many CB pages
         run_cap_bytes,             // longest run the walk may emit; 0 = no cap
     };
@@ -604,26 +475,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
             const Slice slice = geom.slice_of(slice_idx, total_slices);
             const uint32_t local_output_start = slice.first_chunk;
             const uint32_t num_worker_output_chunks = slice.num_chunks;
-            {
-                // SHADOW COMPARE — remove after review.
-                const uint32_t input_pages_per_slice = num_input_pages / total_slices;
-                const uint32_t remainder = num_input_pages % total_slices;
-                const uint32_t input_tile_id_start =
-                    (slice_idx * input_pages_per_slice) + std::min(slice_idx, remainder);
-                const uint32_t input_tile_id_end =
-                    ((slice_idx + 1) * input_pages_per_slice) + std::min(slice_idx + 1, remainder);
-                const uint32_t old_start = input_tile_id_start * split_factor;
-                const uint32_t old_count = (input_tile_id_end * split_factor) - old_start;
-                TT_FATAL(
-                    old_start == local_output_start && old_count == num_worker_output_chunks,
-                    "shadow: slice {}/{} old ({}, {}) != new ({}, {})",
-                    slice_idx,
-                    total_slices,
-                    old_start,
-                    old_count,
-                    local_output_start,
-                    num_worker_output_chunks);
-            }
             const uint32_t half = num_worker_output_chunks / 2;
 
             // Both directions (dir: 0 = forward, 1 = backward). mirror_core is this core's coords, reused as the
@@ -644,7 +495,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                 const bool do_local_write = is_forward ? (fwd_iters > 0) : (fwd_iters == 0);
 
                 // data_valid sem is granularly incremented when downstream needs to relay the stripe.
-                // data_valid sem is incremented just once when downstream is a sink (doesn't need to relay).
+                // data_valid sem is incremented just once when downstream is a sink (doesn't need to relay):
+                // a mid-stripe signal there costs ~2% on an 8-device line (measured), and nothing reads it early.
                 uint32_t num_granular = 0;
                 if (num_iters > 0) {
                     const uint32_t downstream_iters =

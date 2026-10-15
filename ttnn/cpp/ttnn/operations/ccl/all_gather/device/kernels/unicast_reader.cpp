@@ -31,16 +31,13 @@ void kernel_main() {
     constexpr uint32_t num_devices = get_compile_time_arg_val(4);
     constexpr uint32_t cb0_id = get_compile_time_arg_val(5);
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(6);
-    constexpr bool do_init_barrier = get_compile_time_arg_val(7) != 0;
-    constexpr uint32_t packet_size = get_compile_time_arg_val(8);
-    constexpr uint32_t run_cap_bytes = get_compile_time_arg_val(9);  // longest run the walk may emit; 0 = no cap
-    constexpr auto input_tensor_args = TensorAccessorArgs<10>();
+    constexpr uint32_t packet_size = get_compile_time_arg_val(7);
+    constexpr uint32_t run_cap_bytes = get_compile_time_arg_val(8);  // longest run the walk may emit; 0 = no cap
+    constexpr auto input_tensor_args = TensorAccessorArgs<9>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t chunks_per_cb_entry = cb_page_size / output_chunk_size;
     constexpr uint32_t xfer_max = chunks_per_transfer(packet_size, output_chunk_size, run_cap_bytes);
-    // A chunk bigger than a burst cannot be one NOC command, so it takes the generic path.
-    constexpr bool one_command = output_chunk_size <= NOC_MAX_BURST_SIZE;
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
@@ -56,7 +53,7 @@ void kernel_main() {
     const uint32_t slice_chunks = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t final_skip = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t final_take = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);  // used only if do_init_barrier
+    const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const address_t data_valid_sem = get_arg_val<uint32_t>(arg_idx++);
 
     auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
@@ -86,27 +83,8 @@ void kernel_main() {
         return input_tensor_accessor.get_noc_addr(
             page_of<split_factor>(chunk), byte_off_of<split_factor, output_chunk_size>(chunk), noc.get_noc_id());
     };
-    auto output_addr = [&](uint32_t global) {
-        return output_tensor_accessor.get_noc_addr(
-            page_of<output_chunks_per_page>(global),
-            byte_off_of<output_chunks_per_page, output_chunk_size>(global),
-            noc.get_noc_id());
-    };
-    auto run_addr = [&](uint32_t chunk) { return output_addr(map.at(chunk).global); };
-
-    auto read_run = [&](uint64_t src, uint32_t l1_write_addr, uint32_t chunks) {
-        if constexpr (one_command) {
-            noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-                tensor_accessor::Page(src, 0),
-                CoreLocalMem<uint32_t>(l1_write_addr),
-                chunks * output_chunk_size,
-                {},
-                {},
-                {});
-        } else {
-            noc.async_read(
-                tensor_accessor::Page(src, 0), CoreLocalMem<uint32_t>(l1_write_addr), output_chunk_size, {}, {}, {});
-        }
+    auto output_addr = [&](uint32_t page, uint32_t off) {
+        return output_tensor_accessor.get_noc_addr(page, off, noc.get_noc_id());
     };
 
     ///////////////////////////////////////////////////
@@ -115,12 +93,10 @@ void kernel_main() {
 
     // Startup barrier: wait for downstream remote device to be ready.
     // A sink direction (num_iters == 0) has no upstream here and is never signalled, so it must not wait.
-    if constexpr (do_init_barrier) {
-        if (num_iters > 0) {
-            auto* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
-            noc_semaphore_wait_min(barrier_ptr, 1);
-            noc_semaphore_set(barrier_ptr, 0);
-        }
+    if (num_iters > 0) {
+        auto* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
+        noc_semaphore_wait_min(barrier_ptr, 1);
+        noc_semaphore_set(barrier_ptr, 0);
     }
 
     uint32_t stripe = initial_stripe;
@@ -143,27 +119,30 @@ void kernel_main() {
             }
 
             cb.reserve_back(1);
-            uint32_t l1_write_addr = cb.get_write_ptr();
-            for (uint32_t left = batch; left > 0;) {
-                const uint32_t chunk = walk.chunk();
-                uint64_t src;
-                uint32_t run;
-                if (from_input) {
-                    src = input_addr(chunk);
-                    run = next_run<split_factor>(walk, input_tensor_accessor, in_src, chunk, input_end_chunk, left);
-                    ASSERT(run_is_linear(walk, run, output_chunk_size, src, input_addr));
-                } else {
-                    // What upstream relayed into our output.
-                    const auto pos = map.at(chunk);
-                    src = output_addr(pos.global);
-                    run = next_run<output_chunks_per_page>(
-                        walk, output_tensor_accessor, plan.out, pos.global, pos.row_end, left);
-                    ASSERT(run_is_linear(walk, run, output_chunk_size, src, run_addr));
-                }
-                read_run(src, l1_write_addr, run);
-                l1_write_addr += run * output_chunk_size;
-                left -= run;
-                walk.advance(run);
+            const uint32_t l1_write_addr = cb.get_write_ptr();
+            if (from_input) {
+                read_input_runs<split_factor, output_chunk_size>(
+                    walk,
+                    input_tensor_accessor,
+                    in_src,
+                    input_end_chunk,
+                    l1_write_addr,
+                    batch,
+                    input_addr,
+                    [&](uint64_t src, uint32_t l1, uint32_t run) { read_run<output_chunk_size>(noc, src, l1, run); });
+            } else {
+                // What upstream relayed into our output.
+                emit_runs<output_chunks_per_page, output_chunk_size>(
+                    walk,
+                    map,
+                    output_tensor_accessor,
+                    plan.out,
+                    l1_write_addr,
+                    batch,
+                    output_addr,
+                    [&](uint32_t l1, uint32_t page, uint32_t off, uint32_t run) {
+                        read_run<output_chunk_size>(noc, output_addr(page, off), l1, run);
+                    });
             }
             noc.async_read_barrier();
             cb.push_back(1);

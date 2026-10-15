@@ -24,8 +24,12 @@
 //   packet           <bytes>                          packet size override
 //
 // Unknown keys and malformed values TT_THROW, so a typo cannot silently run the default.
+// Keys parsed but not yet consumed by the op are rejected by require_only_wired_keys(), so setting one cannot
+// silently run the default either.
 // The struct is part of AllGatherParams' attribute list, hence part of the program-cache hash: two runs with
 // different overrides never share a cached program.
+//
+// Self-contained (std only): AllGatherParams, an installed header, includes this one.
 ////////////////////////////////////////////////////////////////
 
 #include <cstdint>
@@ -33,9 +37,14 @@
 #include <string_view>
 #include <tuple>
 
-#include "all_gather_geometry.hpp"  // EntryPolicy
-
 namespace ttnn::operations::ccl {
+
+// How a CB entry is sized (WalkGeometry::make).
+//   Legacy       -- a whole number of packet loads, rounded to whole pages (chunks_per_group), times
+//                   packets_per_cb_entry, clamped by L1.
+//   ScatterAware -- one transfer's worth, but no more than NOC_SCATTER_WRITE_MAX_CHUNKS of the shortest output
+//                   run: min(xfer, 4 * min_output_run).
+enum class EntryPolicy : uint8_t { Legacy, ScatterAware };
 
 enum class AllGatherAlgorithm : uint8_t { Multicast, Unicast };
 enum class RotationMode : uint8_t { None, Absolute, AbsoluteDirStagger };
@@ -57,6 +66,9 @@ struct Tuning {
 
     static Tuning from_env();
     static Tuning parse(std::string_view spec);  // from_env() minus the getenv, for tests
+
+    // TT_FATALs naming the first key that is set but not consumed by the op yet (only `factory` is wired).
+    void require_only_wired_keys() const;
 
     bool operator==(const Tuning&) const = default;
 

@@ -41,7 +41,7 @@ GatherGeometry make_gather_geometry_impl(
     g.out_read_alignment =
         out_is_dram ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
 
-    // --- Copy mode --- (unicast 182-193, multicast 242-253; device_operation 316-322 for the spec flavour)
+    // --- Copy mode ---
     // The kernel always reads whole *aligned* input pages into L1 (required by the input's NoC read alignment,
     // DRAM or L1) but writes at output *content* (unaligned) granularity -- which is why chunk sizing differs by
     // copy mode.
@@ -60,11 +60,11 @@ GatherGeometry make_gather_geometry_impl(
         g.out_chunks_per_page == 1 || g.in_aligned_page == g.in_page,
         "concat requires an unpadded input page");  // so slots align to content
 
-    // --- Predicates --- (unicast 198-199, device_operation 325)
+    // --- Predicates ---
     g.out_packed = g.out_aligned_page == g.out_chunks_per_page * g.chunk_size;
     g.relay_ok = g.out_packed && (!g.out_is_dram || g.chunk_size % g.out_read_alignment == 0);
 
-    // --- Chunk count --- (unicast 208-214, multicast 255-261)
+    // --- Chunk count ---
     g.num_input_pages = in_buf.num_pages();
     g.num_chunks = g.num_input_pages * g.in_chunks_per_page;
     TT_FATAL(
@@ -73,7 +73,7 @@ GatherGeometry make_gather_geometry_impl(
         g.num_input_pages,
         g.in_chunks_per_page);
 
-    // --- Stripe geometry --- (unicast 223-249, multicast 269-294)
+    // --- Stripe geometry ---
     // input_pages_per_stripe = num input pages along [gather dim .. last dim] this device contributes per
     // stripe. For a last-dim RM gather this is the *page* count, which handles sharded RM input (> 1 input page
     // per row).
@@ -120,7 +120,7 @@ GatherGeometry GatherGeometry::make(
 
 GatherGeometry GatherGeometry::make(
     const Tensor& input, const tt::tt_metal::TensorSpec& output_spec, int32_t dim_from_end, uint32_t num_devices) {
-    // device_operation.cpp 317-325: content page from the spec, aligned with the hal alignment of its memory --
+    // Content page from the spec, aligned with the hal alignment of its memory --
     // the same value Buffer::aligned_page_size() gives once the buffer exists (allocator alignment == hal's).
     const uint32_t out_page = output_spec.compute_page_size_bytes();
     const bool out_is_dram = output_spec.memory_config().is_dram();
@@ -155,7 +155,7 @@ UnitRange split_evenly(uint32_t num_units, uint32_t slice_idx, uint32_t num_slic
 }
 
 Slice GatherGeometry::slice_of(uint32_t slice_idx, uint32_t num_slices) const {
-    // unicast 566-576 / multicast 426-436: split input pages, then scale by split_factor (1 unless Split).
+    // Split input pages, then scale by split_factor (1 unless Split).
     const auto pages = split_evenly(num_input_pages, slice_idx, num_slices);
     const uint32_t first_chunk = pages.first * in_chunks_per_page;
     const uint32_t end_chunk = pages.end * in_chunks_per_page;
@@ -181,13 +181,13 @@ uint32_t contiguous_page_stride(const tt::tt_metal::Buffer& buffer) {
         // buffer.allocator(), which may be a sub-device allocator with fewer L1 banks.
         return buffer.device()->allocator()->get_num_banks(buffer.buffer_type());
     }
-    // Sharded: the dspec is already rank-squeezed at construction (buffer_distribution_spec.cpp:126,146), and
+    // Sharded: the dspec is already rank-squeezed at construction (BufferDistributionSpec), and
     // TensorAccessorArgs sends exactly these shapes, so the kernel sees the same ones.
     const auto& tensor_shape = dspec->tensor_shape_in_pages();
     const auto& shard_shape = dspec->shard_shape_in_pages();
     const int rank = static_cast<int>(tensor_shape.rank());
     TT_FATAL(rank > 0 && shard_shape.rank() == tensor_shape.rank(), "dspec shapes must share a nonzero rank");
-    // contiguous_dim(): innermost dim the shard spans more than one page of (tensor_accessor.h:415).
+    // contiguous_dim(): innermost dim the shard spans more than one page of (TensorAccessor::contiguous_dim).
     int d = rank - 1;
     for (int i = rank - 1; i >= 0; --i) {
         if (shard_shape[i] > 1) {
@@ -241,7 +241,7 @@ WalkGeometry WalkGeometry::make(
     w.xfer_max = chunks_per_transfer(packet_size, geom.chunk_size, run_cap_bytes);
     w.xfer = geom.out_packed ? w.xfer_max : 1u;
     w.out_runs = run_source(geom.out_packed, geom.out_chunks_per_page, w.out_page_stride, w.stride);
-    // Reader's input source (unicast_reader.cpp 75-79, multicast_reader.cpp 189-193). The kernel compares the
+    // The readers' input source (`in_src` in unicast_reader.cpp / multicast_reader.cpp). The kernel compares the
     // accessor's aligned page size, which TensorAccessorArgs sets to Buffer::aligned_page_size().
     w.in_runs = run_source(
         geom.in_aligned_page == geom.in_chunks_per_page * geom.chunk_size,
@@ -259,7 +259,6 @@ WalkGeometry WalkGeometry::make(
     }
 
     if (policy == EntryPolicy::Legacy) {
-        // unicast 432-447 / multicast 344-358, unchanged.
         // A CB entry holds a whole number of packet loads, and of input pages (split) or output pages (concat), so
         // the entry boundary never cuts a page; one of those two counts is always 1. A packet can still end early:
         // broken contiguity can fill its scatter chunks before its payload.
@@ -301,7 +300,7 @@ AvailableCores available_worker_cores(
     return {resolved, cores};
 }
 
-GatherSemaphores allocate_gather_semaphores(
+std::vector<tt::tt_metal::GlobalSemaphore> create_semaphores_and_sync(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const CoreRangeSet& cores,
     tt::tt_metal::SubDeviceId subdevice_id,
@@ -310,18 +309,18 @@ GatherSemaphores allocate_gather_semaphores(
     // remote devices to be ready before beginning operation. Since Fabric doesn't provide such capability within
     // kernels, we need to manually sync using global semaphores.
     // Allocate the semaphores in L1_SMALL to avoid fragmenting the larger L1 memory pool.
-    const bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
-    const auto sem_buffer_type = l1_small_size ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
+    const bool has_l1_small = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL) > 0;
+    const auto sem_buffer_type = has_l1_small ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
     if (sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
         log_warning(
             tt::LogOp,
             "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op "
             "allocations. Configure an L1_SMALL region to mitigate this.");
     }
-    GatherSemaphores out;
-    out.sems.reserve(n);
+    std::vector<tt::tt_metal::GlobalSemaphore> out;
+    out.reserve(n);
     for (uint32_t i = 0; i < n; ++i) {
-        out.sems.push_back(ttnn::global_semaphore::create_global_semaphore(mesh_device, cores, 0, sem_buffer_type));
+        out.push_back(ttnn::global_semaphore::create_global_semaphore(mesh_device, cores, 0, sem_buffer_type));
     }
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
     ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};

@@ -108,6 +108,21 @@ Tuning Tuning::parse(std::string_view spec) {
     return t;
 }
 
+void Tuning::require_only_wired_keys() const {
+    const Tuning defaults;
+    auto check = [](bool is_default, std::string_view key) {
+        TT_FATAL(is_default, "TT_AG_TUNING: key '{}' is parsed but not wired into all_gather yet", key);
+    };
+    check(rotation == defaults.rotation, "rotation");
+    check(entry_policy == defaults.entry_policy, "entry");
+    check(padded_slot == defaults.padded_slot, "padded_slot");
+    check(!run_cap_bytes.has_value(), "run_cap");
+    check(!workers_per_dir.has_value(), "workers");
+    check(!signals_per_stripe.has_value(), "signals");
+    check(!mcast_cb_depth.has_value(), "mcast_cb_depth");
+    check(!packet_size_override.has_value(), "packet");
+}
+
 Tuning Tuning::from_env() {
     const char* env = std::getenv("TT_AG_TUNING");  // NOLINT(concurrency-mt-unsafe) - test hook
     return env == nullptr ? Tuning{} : parse(env);

@@ -25,22 +25,10 @@ AllGatherMulticastFactory::cached_mesh_workload_t AllGatherMulticastFactory::cre
     auto* mesh_device = tensor_args.input_tensor.device();
     const auto avail =
         available_worker_cores(mesh_device, operation_attributes.subdevice_id, operation_attributes.sub_core_grid);
-    {
-        // SHADOW COMPARE — remove after review: the pre-wiring worker-core derivation.
-        auto old_subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-        auto old_available_cores =
-            mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, old_subdevice_id);
-        if (operation_attributes.sub_core_grid.has_value()) {
-            old_available_cores = old_available_cores.intersection(operation_attributes.sub_core_grid.value());
-        }
-        TT_FATAL(
-            old_subdevice_id == avail.subdevice_id && old_available_cores == avail.cores,
-            "shadow: available worker cores differ");
-    }
 
-    // Kernel needs to wait to receive all remote data before exiting, and in some cases needs to wait
-    // for all remote devices to be ready before beginning operation (see allocate_gather_semaphores).
-    const auto sems = allocate_gather_semaphores(mesh_device, avail.cores, avail.subdevice_id, 1);
+    // Kernel needs to wait to receive all remote data before exiting, and needs to wait for all remote devices
+    // to be ready before beginning operation.
+    const auto sems = create_semaphores_and_sync(mesh_device, avail.cores, avail.subdevice_id, 1);
     const auto& barrier_sem = sems[0];
 
     for (const auto& coord : tensor_coords.coords()) {
@@ -153,11 +141,9 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // Enabled if any axis is an even-sized ring.
     const bool load_balance_across_alt_routes = ew_load_balance || ns_load_balance;
 
-    // We use an init barrier to wait for remote output tensors to be allocated.
-    // But we cannot skip init_barrier when persistent output buffer is used since:
-    // - The persistent output buffer may be reused across multiple invocations of this CCL.
-    // - The caller may write into the persistent output buffer between invocations.
-    const bool do_init_barrier = true;
+    // The kernels always run an init barrier, waiting for the remote output tensors to be allocated. It cannot
+    // be skipped even for a persistent output buffer: that buffer may be reused across invocations of this CCL,
+    // and the caller may write into it between invocations.
 
     const uint32_t packet_size = operation_attributes.packet_size;
 
@@ -173,23 +159,19 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     const uint32_t links1 = operation_attributes.axis_num_links[1];
     uint32_t min_num_links = std::min(links0 > 0 ? links0 : links1, links1 > 0 ? links1 : links0);
 
-    // Get worker cores
-    uint32_t num_workers_per_link = 1;
-    // Shrink core usage to fit available core grid.
-    if (min_num_links * num_workers_per_link > num_available_cores) {
-        const uint32_t fitted_links = num_available_cores / num_workers_per_link;
+    // One worker core per link. Shrink the link count to fit the available core grid.
+    constexpr uint32_t num_workers_per_link = 1;
+    if (min_num_links > num_available_cores) {
         TT_FATAL(
-            fitted_links > 0,
-            "all_gather needs at least {} worker core(s) but only {} are available; provide a larger sub_core_grid.",
-            num_workers_per_link,
-            num_available_cores);
+            num_available_cores > 0,
+            "all_gather needs at least 1 worker core but none are available; provide a larger sub_core_grid.");
         log_warning(
             tt::LogOp,
             "Using {} out of {} Fabric links due to limited {} worker cores. This may lead to performance loss.",
-            fitted_links,
+            num_available_cores,
             min_num_links,
             num_available_cores);
-        min_num_links = fitted_links;
+        min_num_links = num_available_cores;
     }
     auto [worker_core_range, worker_cores] = ttnn::ccl::choose_worker_cores(
         min_num_links,
@@ -208,21 +190,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         worker_cores.size());
 
     ////////////////////////////////////////////////////////////////
-    // Page indexing
-    //
-    // Glossary:
-    //   input page     -- one page of the input tensor.
-    //   output page    -- one page of the output tensor (the real buffer page).
-    //   chunk          -- the transfer unit, min(input_page, output_page). An input
-    //                     page = split_factor chunks; an output page = output_chunks_per_page
-    //                     chunks.
-    //   stripe         -- the chunks this device contributes per row of the output.
-    //
-    // Three copy modes, picked by input vs output page sizes:
-    //   matched (in == out): 1 chunk per input page, output_chunks_per_page = 1.
-    //   concat  (out > in) : 1 chunk per input page, output_chunks_per_page > 1; each
-    //                        chunk lands at a byte offset within a shared output page.
-    //   split   (in > out) : split_factor chunks per input page, output_chunks_per_page = 1.
+    // Page indexing (glossary and copy modes: all_gather_geometry.hpp)
     //
     // Host supplies geometry and each worker's slice. The kernels derive the walk order
     // themselves from TensorAccessor and the packet size (see kernels/gather_walk.hpp), so no
@@ -237,75 +205,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     const uint32_t split_factor = geom.in_chunks_per_page;
     const uint32_t output_chunk_size = geom.chunk_size;
     const uint32_t output_chunks_per_page = geom.out_chunks_per_page;
-    const uint32_t num_input_pages = geom.num_input_pages;
     const uint32_t output_chunks_per_stripe = geom.chunks_per_stripe;
-
-    ::ttnn::ccl::validate_packet_size(arch, packet_size, output_chunk_size);
-
-    {
-        // SHADOW COMPARE — remove after review: the pre-wiring derivation, value for value.
-        const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-        const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
-        const uint32_t output_unaligned_page_size = output_tensor.buffer()->page_size();
-        const bool is_split = input_unaligned_page_size > output_unaligned_page_size;
-        const uint32_t old_output_chunk_size = is_split ? output_unaligned_page_size : input_page_size;
-        const uint32_t old_output_chunks_per_page =
-            is_split ? 1u : output_unaligned_page_size / input_unaligned_page_size;
-        const uint32_t old_split_factor = is_split ? input_unaligned_page_size / output_unaligned_page_size : 1u;
-        const bool old_packed =
-            output_tensor.buffer()->aligned_page_size() == old_output_chunks_per_page * old_output_chunk_size;
-        const uint32_t old_num_input_pages = input_tensor.buffer()->num_pages();
-        const uint32_t old_num_output_chunks = old_num_input_pages * old_split_factor;
-
-        const auto& input_shape = input_tensor.padded_shape();
-        const auto tile_spec =
-            input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
-        uint32_t input_pages_per_stripe = 1;
-        for (int32_t i = operation_attributes.dim_from_end; i < 0; i++) {
-            uint32_t extent;
-            if (i == -1) {
-                if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
-                    extent = input_shape[i] / tile_spec.get_width();
-                } else {
-                    extent = (input_shape[i] * input_tensor.element_size()) / input_unaligned_page_size;
-                }
-            } else if (input_tensor.layout() == ttnn::TILE_LAYOUT && i == -2) {
-                extent = input_shape[i] / tile_spec.get_height();
-            } else {
-                extent = input_shape[i];
-            }
-            input_pages_per_stripe *= extent;
-        }
-        const uint32_t old_output_chunks_per_stripe = input_pages_per_stripe * old_split_factor;
-
-        TT_FATAL(old_split_factor == split_factor, "shadow: split_factor {} != {}", old_split_factor, split_factor);
-        TT_FATAL(
-            old_output_chunk_size == output_chunk_size,
-            "shadow: chunk {} != {}",
-            old_output_chunk_size,
-            output_chunk_size);
-        TT_FATAL(
-            old_output_chunks_per_page == output_chunks_per_page,
-            "shadow: output_chunks_per_page {} != {}",
-            old_output_chunks_per_page,
-            output_chunks_per_page);
-        TT_FATAL(
-            old_output_chunks_per_stripe == output_chunks_per_stripe,
-            "shadow: chunks_per_stripe {} != {}",
-            old_output_chunks_per_stripe,
-            output_chunks_per_stripe);
-        TT_FATAL(
-            old_num_input_pages == num_input_pages,
-            "shadow: num_input_pages {} != {}",
-            old_num_input_pages,
-            num_input_pages);
-        TT_FATAL(
-            old_num_output_chunks == geom.num_chunks,
-            "shadow: num_chunks {} != {}",
-            old_num_output_chunks,
-            geom.num_chunks);
-        TT_FATAL(old_packed == geom.out_packed, "shadow: packed {} != {}", old_packed, geom.out_packed);
-    }
 
     ////////////////////////////////////////////////////////////////
     // Circular Buffer and Kernel creation
@@ -318,15 +218,15 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     uint32_t packets_per_cb_entry = 1;
     uint32_t run_cap_bytes = 0;
     if (arch == tt::ARCH::WORMHOLE_B0) {
-        // Depth is also the reader's in-flight trid count, but deeper is perf-neutral here, so keep the L1.
-        cb_depth = 2;
-        // Packing several packets per entry amortises the reader/sender CB handshake, which is what the
-        // store-and-forward writer wants -- but here the reader sends the packets itself, off transaction
-        // ids and with no per-entry flush to stall on, so a one-packet entry just pipelines finer and wins
-        // on a line and on small row-major pages.
-        packets_per_cb_entry = 1;
-        // No run cap: the best run length lands at the hardware ceiling (7616 B), so any value settable
-        // here is already above it and would only cost payload.
+        // The defaults above are WH's calibrated values:
+        // - cb_depth 2: depth is also the reader's in-flight trid count, but deeper is perf-neutral here, so
+        //   keep the L1.
+        // - packets_per_cb_entry 1: packing several packets per entry amortises the reader/sender CB
+        //   handshake, which is what the store-and-forward writer wants -- but here the reader sends the
+        //   packets itself, off transaction ids and with no per-entry flush to stall on, so a one-packet entry
+        //   just pipelines finer and wins on a line and on small row-major pages.
+        // - No run cap: the best run length lands at the hardware ceiling (7616 B), so any value settable
+        //   here is already above it and would only cost payload.
     } else if (arch == tt::ARCH::BLACKHOLE) {
         // Calibrated at 8 devices x 2 links, and at 1, 2 and 4 links. cb_depth and the run cap were both
         // already at their optimum -- every other value measured fell inside the run-to-run spread.
@@ -366,22 +266,6 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         cb_depth,
         max_l1_space);
     const uint32_t cb_page_size = walk.cb_entry_bytes;
-    {
-        // SHADOW COMPARE — remove after review: the pre-wiring CB sizing (minus its warning).
-        const uint32_t chunks_per_group = std::max(split_factor, output_chunks_per_page);
-        uint32_t chunks_per_packet = std::max(1u, packet_size / output_chunk_size);
-        chunks_per_packet = std::max(chunks_per_group, (chunks_per_packet / chunks_per_group) * chunks_per_group);
-        uint32_t old_cb_page_size = chunks_per_packet * output_chunk_size;
-        const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * old_cb_page_size), 1u, packets_per_cb_entry);
-        old_cb_page_size *= multiplier;
-        TT_FATAL(old_cb_page_size == cb_page_size, "shadow: cb_page_size {} != {}", old_cb_page_size, cb_page_size);
-        TT_FATAL(
-            old_cb_page_size / output_chunk_size == walk.chunks_per_entry,
-            "shadow: chunks_per_cb_entry {} != {}",
-            old_cb_page_size / output_chunk_size,
-            walk.chunks_per_entry);
-        TT_FATAL(walk.cb_depth == cb_depth, "shadow: cb_depth {} != {}", cb_depth, walk.cb_depth);
-    }
     log_debug(
         tt::LogOp,
         "all_gather multicast walk: stride {} xfer {} (max {}) in_runs sub_page {} cross_page {}",
@@ -413,7 +297,6 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         packet_size,                     // packet_size (sets the transfer size, hence the walk order)
         load_balance_across_alt_routes,  // load_balance_across_alt_routes
         (e_hops > 0) + (s_hops > 0),     // num_connections
-        do_init_barrier,                 // do_init_barrier
         run_cap_bytes,                   // longest run the walk may emit; 0 = no cap
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
@@ -430,7 +313,6 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         packet_size,                     // packet_size (sets the transfer size, hence the walk order)
         load_balance_across_alt_routes,  // load_balance_across_alt_routes
         (w_hops > 0) + (n_hops > 0),     // num_connections
-        do_init_barrier,                 // do_init_barrier
         run_cap_bytes,                   // longest run the walk may emit; 0 = no cap
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
@@ -460,24 +342,6 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         const Slice slice = geom.slice_of(link, min_num_links);
         const uint32_t local_output_start = slice.first_chunk;
         const uint32_t num_worker_output_chunks = slice.num_chunks;
-        {
-            // SHADOW COMPARE — remove after review.
-            const uint32_t input_pages_per_link = num_input_pages / min_num_links;
-            const uint32_t remainder = num_input_pages % min_num_links;
-            const uint32_t input_tile_id_start = (link * input_pages_per_link) + std::min(link, remainder);
-            const uint32_t input_tile_id_end = ((link + 1) * input_pages_per_link) + std::min(link + 1, remainder);
-            const uint32_t old_start = input_tile_id_start * split_factor;
-            const uint32_t old_count = (input_tile_id_end * split_factor) - old_start;
-            TT_FATAL(
-                old_start == local_output_start && old_count == num_worker_output_chunks,
-                "shadow: slice {}/{} old ({}, {}) != new ({}, {})",
-                link,
-                min_num_links,
-                old_start,
-                old_count,
-                local_output_start,
-                num_worker_output_chunks);
-        }
 
         // Per-link barrier fan-in = N-1 in every case. Every other chip sends me one atomic_inc:
         //   1D: e_hops + w_hops (or n_hops + s_hops) along the active axis = axis_size - 1.
