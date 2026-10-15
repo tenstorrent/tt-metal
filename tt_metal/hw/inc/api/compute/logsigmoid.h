@@ -59,6 +59,8 @@ ALWI void logsigmoid_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
  * BF16 data, with one pass of a generated SFPU kernel. The DEST register buffer must be in acquired
  * state via *acquire_dst* call. This call is blocking and is only available on the compute engine.
  *
+ * It computes ttnn.log_sigmoid of the tile's own values in this one call. `logsigmoid_tile`, above, is a step of TT-NN's own log_sigmoid kernel, which takes other operands and is unchanged.
+ *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |

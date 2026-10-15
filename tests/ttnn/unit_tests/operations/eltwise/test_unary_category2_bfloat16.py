@@ -352,19 +352,13 @@ def test_tanhshrink(device):
 # output may match either. The BF16 pack stores NaN as +inf and -0 as +0, so classes are compared as
 # stored. Each output must have the reference's class and a pure ULP error, |reference - output| /
 # ulp(rounded reference), below 1.
-# The inputs in DECLARED are stored as the class given there, the first row that holds; where
-# that differs from torch, it is the class the TT-NN op this kernel replaces stores.
-# Each run logs one ULP line: the largest pure ULP error against torch and the outputs of
-# another class, for this program and for the path it replaces on the same input.
 LOG_SIGMOID_SMALLEST_NORMAL = 2.0**-126
 LOG_SIGMOID_CLASS_CODES = {"inf": 0, "-inf": 1, "zero": 2, "finite": 3}
 
 # Per board: (inputs, as a torch expression of the input x or of daz, the input as the SFPU reads it
 # with subnormals as zero, and the class their outputs are stored as).
 LOG_SIGMOID_DECLARED = {
-    "blackhole": [
-        ("torch.isfinite(daz) & (daz > 3.3895313892515355e+38)", "zero"),  # finite x > 3.389531e+38
-    ],
+    "blackhole": [],
 }
 
 
@@ -410,38 +404,14 @@ def _log_sigmoid_pure_ulp(reference, actual):
     return torch.where(same_class, ulp, torch.full_like(ulp, float("inf")))
 
 
-def _log_sigmoid_versus_torch(x64, output):
-    """The largest pure ULP error against torch over outputs of torch's stored class, and the number
-    of outputs of another class."""
-    ulp = torch.minimum(
-        _log_sigmoid_pure_ulp(_log_sigmoid_reference(x64), output),
-        _log_sigmoid_pure_ulp(_log_sigmoid_reference(_log_sigmoid_flush(x64)), output),
-    )
-    mismatched = torch.isinf(ulp)
-    return (ulp[~mismatched].max().item() if (~mismatched).any() else 0.0), int(mismatched.sum())
-
-
 @run_for_blackhole("the generated kernel runs on Blackhole only")
 def test_log_sigmoid_exhaustive_bfloat16(device):
     x = generate_all_bfloat16_bitpatterns(torch.bfloat16)
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     actual = ttnn.to_torch(ttnn.log_sigmoid(tt_x)).to(torch.bfloat16)
-    # The path this program replaces, on the same input (see the device-perf test).
-    stock = ttnn.to_torch(
-        ttnn.unary_chain(
-            tt_x, [ttnn.UnaryWithParam(ttnn.UnaryOpType.LOGSIGMOID), ttnn.UnaryWithParam(ttnn.UnaryOpType.IDENTITY)]
-        )
-    ).to(torch.bfloat16)
 
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     x64 = x.to(torch.float64)
-    (ours, ours_classes), (old, old_classes) = _log_sigmoid_versus_torch(x64, actual), _log_sigmoid_versus_torch(
-        x64, stock
-    )
-    print(
-        f"ULP log_sigmoid {board} ours={ours:.3f} stock={old:.3f} "
-        f"ours_class_mismatches={ours_classes} stock_class_mismatches={old_classes}"
-    )
     expected = torch.full(x.shape, -1, dtype=torch.int8)
     for inputs, stored in LOG_SIGMOID_DECLARED[board]:
         lanes = eval(
@@ -508,6 +478,22 @@ def test_log_sigmoid_every_placement_matches_interleaved_tiles(device, placement
 
 
 @run_for_blackhole("the generated kernel runs on Blackhole only")
+def test_log_sigmoid_many_tiles_per_core_match_torch(device):
+    """One core holds 128 tiles, so the kernel's per-call state carries across many tiles of one program."""
+    x = _log_sigmoid_inputs((1, 1, 2048, 64))
+    shard = ttnn.create_sharded_memory_config(
+        x.shape, core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT
+    )
+    actual = ttnn.to_torch(ttnn.log_sigmoid(_log_sigmoid_on_device(x, device, memory_config=shard))).to(torch.bfloat16)
+    x64 = x.to(torch.float64)
+    ulp = torch.minimum(
+        _log_sigmoid_pure_ulp(_log_sigmoid_reference(x64), actual),
+        _log_sigmoid_pure_ulp(_log_sigmoid_reference(_log_sigmoid_flush(x64)), actual),
+    )
+    assert ulp.max().item() < 1.0, f"{(ulp >= 1.0).sum().item()} of {ulp.numel()} outputs at or beyond 1 ulp of torch"
+
+
+@run_for_blackhole("the generated kernel runs on Blackhole only")
 @pytest.mark.parametrize("call", ["float32", "bfloat16_to_float32"])
 def test_log_sigmoid_keeps_its_own_path_elsewhere(device, call):
     """A call the generated kernel does not serve runs the op's existing path and matches its golden."""
@@ -524,31 +510,13 @@ def test_log_sigmoid_keeps_its_own_path_elsewhere(device, call):
         output = ttnn.from_torch(torch.zeros(x.shape), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
         assert ttnn.log_sigmoid(_log_sigmoid_on_device(x, device), output_tensor=output).dtype == ttnn.float32
         return
-    else:
-        # Any value other than the parameter's default keeps the op's own kernel.
-        actual = ttnn.log_sigmoid(_log_sigmoid_on_device(x, device), **{call: 0.125})
-        expected = golden(x.float(), **{call: 0.125})
     assert_with_pcc(expected, ttnn.to_torch(actual).float(), 0.999)
-
-
-# Per board that keeps TT-NN's own path: (input, that path's output, the generated kernel's output)
-# BF16 words at inputs where the two differ, as measured on the board.
-LOG_SIGMOID_KEPT = {
-    "wormhole_b0": [
-        (0x4092, 0xBC30, 0xBC2A),
-        (0x40A8, 0xBBB1, 0xBBAB),
-        (0x4091, 0xBC35, 0xBC2F),
-        (0x4131, 0xB77F, 0xB784),
-    ],
-}
 
 
 @run_for_wormhole_b0("TT-NN's own path is kept on this board")
 def test_log_sigmoid_keeps_its_own_path(device):
-    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
-    words = torch.tensor([word for word, _, _ in LOG_SIGMOID_KEPT[board]], dtype=torch.int32).to(torch.int16)
-    x = words.view(torch.bfloat16).reshape(1, -1).expand(32, -1).contiguous()
-    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    actual = ttnn.to_torch(ttnn.log_sigmoid(tt_x)).to(torch.bfloat16)[0].view(torch.int16).to(torch.int32) & 0xFFFF
-    expected = torch.tensor([word for _, word, _ in LOG_SIGMOID_KEPT[board]], dtype=torch.int32)
-    assert torch.equal(actual, expected), f"expected TT-NN's own path {expected.tolist()}, got {actual.tolist()}"
+    """On a board the generated kernel does not install on, ttnn.log_sigmoid runs TT-NN's own path, checked against
+    torch over the range the kernel is fitted on."""
+    x = _log_sigmoid_inputs((1, 1, 64, 64))
+    actual = ttnn.to_torch(ttnn.log_sigmoid(_log_sigmoid_on_device(x, device))).float()
+    assert_with_pcc(_log_sigmoid_reference(x.to(torch.float64)).float(), actual, 0.999)

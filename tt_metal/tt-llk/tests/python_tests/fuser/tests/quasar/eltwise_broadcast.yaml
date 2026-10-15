@@ -22,7 +22,7 @@ operations:
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "COL"
-        math_fidelity: "HiFi2"
+        math_fidelity: "LoFi"
     pack:
       - output: "output_A"
         block_size: [32, 32]

@@ -52,6 +52,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::LEAKY_RELU:
         case UnaryOpType::ELU:
         case UnaryOpType::GELU:
+        case UnaryOpType::GELU_TANH:
         case UnaryOpType::RSQRT:
         case UnaryOpType::SQRT:
         case UnaryOpType::HEAVISIDE:
@@ -126,6 +127,10 @@ std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
 void add_input_dtype_defines(DataType dtype, std::map<std::string, std::string>& defines);
 
 std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<DataType> input_dtype = std::nullopt);
+
+// True when op_type is compiled by a kernel of its own rather than the generic eltwise_sfpu_metal2.cpp chain
+// kernel. Such an op is not emitted into SFPU_OP_CHAIN_0, so it cannot share a chain with other ops.
+bool uses_dedicated_compute_kernel(UnaryOpType op_type, std::optional<DataType> input_dtype = std::nullopt);
 
 uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype);
 uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType dtype);

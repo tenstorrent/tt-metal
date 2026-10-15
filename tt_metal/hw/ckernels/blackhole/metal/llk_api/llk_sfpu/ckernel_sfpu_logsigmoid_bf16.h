@@ -22,7 +22,7 @@ struct LogsigmoidBf16Config {
     static constexpr bool kSquareDecay = false;
 };
 }  // namespace ckernel::sfpu
-#include "ckernel_sfpu_bf16_abs_exp_correction.h"
+#include "ckernel_sfpu_logsigmoid_bf16_abs_exp_correction.h"
 
 namespace ckernel::sfpu {
 
