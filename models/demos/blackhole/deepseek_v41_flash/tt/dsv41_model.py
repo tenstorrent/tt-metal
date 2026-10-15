@@ -979,7 +979,8 @@ class Model:
         buffer after the traces are captured (the first version sliced at value dependent offsets: each new prompt length created programs whose buffers were allocated under live traces,
         found by TT_METAL_TRACE_ALLOC_TRACKING; ``warm_key_export`` compiles the few programs before the captures).
         """
-        IDIM, NA, UD, KL = ix.keys.shape[3], k_cache.shape[2], k_cache.shape[0], ix.keys.shape[2]
+        kfull = ix.keys_full()  # column-sharded indexer: the FIFO gathered back to a replicated slab (freed below)
+        IDIM, NA, UD, KL = kfull.shape[3], k_cache.shape[2], k_cache.shape[0], kfull.shape[2]
         st = self._export_state(NA, UD)
         idx = torch.zeros(1, NA, dtype=torch.int32)
         idx[0, :n] = torch.arange(off, off + n, dtype=torch.int32)
@@ -1006,7 +1007,7 @@ class Model:
         )
         tmp = []
         fifo = ttnn.slice(
-            ix.keys, [i_src, 0, 0, 0], [i_src + 1, 1, KL, IDIM]
+            kfull, [i_src, 0, 0, 0], [i_src + 1, 1, KL, IDIM]
         )  # (a full-extent slice may alias ix.keys: never freed, see below)
         tmp.append(fifo)
         table = ttnn.to_layout(fifo, ttnn.ROW_MAJOR_LAYOUT)
@@ -1025,7 +1026,7 @@ class Model:
         out = new_all if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(new_all, k_cache.dtype)
         tmp.append(out)
         ttnn.copy(out, k_cache)
-        protect = {ix.keys.buffer_unique_id(), k_cache.buffer_unique_id()}
+        protect = {kfull.buffer_unique_id(), k_cache.buffer_unique_id()}
         seen = set(protect)
         for t in tmp:
             if not t.is_allocated():
@@ -1035,6 +1036,8 @@ class Model:
                 continue
             seen.add(uid)
             ttnn.deallocate(t)
+        if kfull is not ix.keys:
+            ttnn.deallocate(kfull)
 
     def selftest_key_export(self):
         """Device self-test of ``_export_user_keys`` on the idle model: random content in the prefill key FIFO of the first key-owner layer, an export of FIFO[off, off + n) into user ``u`` of
@@ -1051,6 +1054,8 @@ class Model:
                 break
         else:
             return "no key owner"
+        if ix.sh is not None:
+            return "column-sharded prefill indexer: self-test skipped"
         rows, cols = self.rows, self.cols
         Up, KL, IDIM = ix.keys.shape[0], ix.keys.shape[2], ix.keys.shape[3]
         k = dec.k_cache
