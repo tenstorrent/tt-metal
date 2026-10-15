@@ -586,35 +586,39 @@ private:
         }
     }
 
-    uint32_t ordered_produced_load(uint32_t worker_index) {
+    /** Fenced load of worker `worker_index`'s word in the per-worker LIM array at `base`. */
+    static uint32_t ordered_counter_load(uint64_t base, uint32_t worker_index, uint64_t stride) {
         Transport::fence_load();
-        const volatile uint32_t* p =
-            (volatile const uint32_t*)(uintptr_t)(arena_base_ + layout_.produced_offset +
-                                                  (uint64_t)worker_index * sizeof(pi_counter_slot_t));
-        return *p;
+        return *(const volatile uint32_t*)(uintptr_t)(base + (uint64_t)worker_index * stride);
+    }
+
+    uint32_t ordered_produced_load(uint32_t worker_index) {
+        return ordered_counter_load(arena_base_ + layout_.produced_offset, worker_index, sizeof(pi_counter_slot_t));
     }
 
     uint32_t ordered_ready_load(uint32_t worker_index) {
-        Transport::fence_load();
-        const volatile uint32_t* p =
-            (volatile const uint32_t*)(uintptr_t)(arena_base_ + layout_.ready_offset +
-                                                  (uint64_t)worker_index * sizeof(pi_ready_slot_t));
-        return *p;
+        return ordered_counter_load(arena_base_ + layout_.ready_offset, worker_index, sizeof(pi_ready_slot_t));
+    }
+
+    /** The worker's credit word through its tile's window, or nullptr when that window is unverified. */
+    volatile uint32_t* credit_register(uint32_t worker_index, uint32_t tile) const {
+        if (tile >= tiles_configured_) {
+            return nullptr;
+        }
+        uint32_t tlb_idx = X280_TLB_PACKET_INJECTION_CREDIT_BASE + tile;
+        uint64_t win_addr = (uint64_t)(uintptr_t)Transport::window_base(tlb_idx);
+        return (volatile uint32_t*)(uintptr_t)(win_addr + pi_worker_l1_base(&layout_, worker_index) +
+                                               PI_L1_CONSUMED_OFFSET);
     }
 
     void return_credit(uint32_t worker_index, uint32_t tile) {
         if (slots_[worker_index].consumed == slots_[worker_index].credited) {
             return;
         }
-        if (tile >= tiles_configured_) {
+        volatile uint32_t* credit_reg = credit_register(worker_index, tile);
+        if (credit_reg == nullptr) {
             return;
         }
-
-        uint32_t tlb_idx = X280_TLB_PACKET_INJECTION_CREDIT_BASE + tile;
-        uint64_t win_addr = (uint64_t)(uintptr_t)Transport::window_base(tlb_idx);
-        volatile uint32_t* credit_reg =
-            (volatile uint32_t*)(uintptr_t)(win_addr + pi_worker_l1_base(&layout_, worker_index) +
-                                            PI_L1_CONSUMED_OFFSET);
 
         Transport::mode1_credit_store(credit_reg, slots_[worker_index].consumed);
         slots_[worker_index].credited = slots_[worker_index].consumed;
@@ -655,32 +659,69 @@ private:
     template <bool Measured>
     pi_error_t consume_phase(uint64_t limit) {
         phase_start_mtime_ = Transport::mtime();
-        safety_work_ = 0u;
 
-        while (remaining_total_ != 0) {
-            for (uint32_t w = 0; w < P_; ++w) {
-                pi_error_t err = amortized_safety_check(true, w);
+        // The timed-loop rule (transport_bandwidth_frontend_cxx.hpp): the phase
+        // works on register copies of the consumer's state, which lives on the
+        // uncached LIM stack and arena, and stores them back before anything
+        // reads them through the object.
+        const uint32_t P = P_;
+        const uint32_t K = K_;
+        const uint32_t C = C_;
+        const uint32_t S = S_;
+        const uint32_t poll_cadence = args_.poll_cadence;
+        pi_consumer_slot_t* const slots = slots_;
+        const uint64_t produced_base = arena_base_ + layout_.produced_offset;
+        const uint64_t rings_base = arena_base_ + layout_.rings_offset;
+        const uint64_t ring_stride = layout_.ring_stride;
+        uint64_t remaining = remaining_total_;
+        uint64_t measured_done = total_measured_done_;
+        uint64_t empty_visits = empty_visits_;
+        uint32_t safety_work = 0u;
+        auto store_back = [&] {
+            remaining_total_ = remaining;
+            total_measured_done_ = measured_done;
+            empty_visits_ = empty_visits;
+            safety_work_ = safety_work;
+        };
+        // amortized_safety_check() on the register counter.
+        auto poll = [&](uint32_t w) {
+            if (++safety_work < poll_cadence) {
+                return PI_ERROR_NONE;
+            }
+            safety_work = 0u;
+            return safety_check(true, w);
+        };
+
+        while (remaining != 0) {
+            for (uint32_t w = 0; w < P; ++w) {
+                pi_error_t err = poll(w);
                 if (err != PI_ERROR_NONE) {
+                    store_back();
                     return err;
                 }
 
-                if (slots_[w].phase_done == limit) {
+                pi_consumer_slot_t& state = slots[w];
+                uint64_t phase_done = state.phase_done;
+                if (phase_done == limit) {
                     continue;
                 }
 
-                uint32_t snapshot = ordered_produced_load(w);
+                uint32_t snapshot = ordered_counter_load(produced_base, w, sizeof(pi_counter_slot_t));
+                uint32_t consumed = state.consumed;
                 uint32_t available;
-                if (!credit_pair_ok(snapshot, slots_[w].consumed, UINT32_MAX, S_, &available)) {
+                if (!credit_pair_ok(snapshot, consumed, UINT32_MAX, S, &available)) {
+                    store_back();
                     first_failed_worker_ = w;
                     return PI_ERROR_COUNTER_DISTANCE;
                 }
-                if ((uint64_t)available > limit - slots_[w].phase_done) {
+                if ((uint64_t)available > limit - phase_done) {
+                    store_back();
                     first_failed_worker_ = w;
                     return PI_ERROR_PHASE_OVERRUN;
                 }
                 if (available == 0u) {
                     if (Measured) {
-                        empty_visits_ += 1;
+                        empty_visits += 1;
                     }
                     continue;
                 }
@@ -693,7 +734,7 @@ private:
                 // visit; the producer has already settled arrival order.
                 Transport::fence_load();
 
-                uint32_t visit_count = available < K_ ? available : K_;
+                uint32_t visit_count = available < K ? available : K;
                 const uint32_t tile = pi_worker_tile_index(&layout_, w);
 
                 uint64_t timer_low_addr = 0;
@@ -701,6 +742,7 @@ private:
                 if constexpr (Mode == 1) {
                     err = ensure_timer_window(tile);
                     if (err != PI_ERROR_NONE) {
+                        store_back();
                         first_failed_worker_ = w;
                         return err;
                     }
@@ -709,10 +751,17 @@ private:
                     worker_samples = pinned_samples_ + (uint64_t)w * N_;
                 }
 
-                uint64_t ring_base = arena_base_ + layout_.rings_offset + (uint64_t)w * layout_.ring_stride;
+                const uint64_t ring_base = rings_base + (uint64_t)w * ring_stride;
+                volatile uint32_t* const credit_reg = credit_register(w, tile);
+                uint32_t credited = state.credited;
+                auto store_slot = [&] {
+                    state.consumed = consumed;
+                    state.credited = credited;
+                    state.phase_done = phase_done;
+                };
 
                 for (uint32_t i = 0; i < visit_count; ++i) {
-                    uint32_t slot_idx = slots_[w].consumed & (S_ - 1u);
+                    uint32_t slot_idx = consumed & (S - 1u);
                     const pi_slot_t* slot =
                         (const pi_slot_t*)(uintptr_t)(ring_base + (uint64_t)slot_idx * PI_SLOT_BYTES);
 
@@ -722,48 +771,60 @@ private:
                     uint8_t b1 = p[84];
                     uint8_t b2 = p[85];
                     uint8_t b3 = p[86];
-                    (void)b0;
-                    (void)b1;
-                    (void)b2;
-                    (void)b3;
-                    __asm__ volatile("" ::: "memory");
+                    __asm__ volatile("" ::"r"(b0), "r"(b1), "r"(b2), "r"(b3));
 
                     if constexpr (Mode == 1) {
                         uint64_t start = slot->start;
                         uint64_t end = 0;
                         if (!tensix_live_timer_read((uintptr_t)timer_low_addr, PI_TIMER_MAX_ATTEMPTS, &end)) {
+                            store_slot();
+                            store_back();
                             first_failed_worker_ = w;
                             return PI_ERROR_TIMER_RETRY_EXHAUSTED;
                         }
                         uint64_t d = 0;
                         if (!measurement_delta(start, end, &d)) {
+                            store_slot();
+                            store_back();
                             first_failed_worker_ = w;
                             return PI_ERROR_TIMER_DELTA;
                         }
                         if (Measured) {
-                            worker_samples[slots_[w].phase_done] = d;
+                            worker_samples[phase_done] = d;
                         }
                     }
 
-                    slots_[w].consumed = (uint32_t)(slots_[w].consumed + 1u);
-                    slots_[w].phase_done += 1;
-                    remaining_total_ -= 1;
+                    consumed = (uint32_t)(consumed + 1u);
+                    phase_done += 1;
+                    remaining -= 1;
                     if (Measured) {
-                        total_measured_done_ += 1;
+                        measured_done += 1;
                     }
 
-                    if (pi_counter_distance(slots_[w].consumed, slots_[w].credited) == C_) {
-                        return_credit(w, tile);
+                    // return_credit() on the register copies. Marked likely:
+                    // GCC otherwise treats the branch as cold and spills
+                    // credit_reg to the stack, one LIM load per credit.
+                    if (__builtin_expect(pi_counter_distance(consumed, credited) == C && credit_reg != nullptr, 1)) {
+                        Transport::mode1_credit_store(credit_reg, consumed);
+                        credited = consumed;
                     }
 
-                    err = amortized_safety_check(true, w);
+                    err = poll(w);
                     if (err != PI_ERROR_NONE) {
+                        store_slot();
+                        store_back();
                         return err;
                     }
                 }
-                return_credit(w, tile);
+                // return_credit() on the register copies.
+                if (consumed != credited && credit_reg != nullptr) {
+                    Transport::mode1_credit_store(credit_reg, consumed);
+                    credited = consumed;
+                }
+                store_slot();
             }
         }
+        store_back();
 
         for (uint32_t w = 0; w < P_; ++w) {
             if (slots_[w].phase_done != limit) {
@@ -833,7 +894,11 @@ private:
             return PI_ERROR_NONE;
         }
         safety_work_ = 0u;
+        return safety_check(check_peers, blocked_on);
+    }
 
+    /** amortized_safety_check()'s checks, done on every call; same attribution contract. */
+    pi_error_t safety_check(bool check_peers, uint32_t blocked_on) {
         if (Transport::check_stop(hartid_, run_value_)) {
             first_failed_worker_ = blocked_on;
             return PI_ERROR_STOPPED;
