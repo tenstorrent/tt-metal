@@ -458,6 +458,31 @@ def save_kernel_intervals_csv(kernel_intervals: List[Dict[str, object]], csv_pat
 _KERNEL_CORE_MULTIPLIER = {"READER": 1, "COMPUTE": 3, "WRITER": 1}
 
 
+def check_marker_counts(markers: List[DeviceMarker], intervals: List[ProgramInterval]) -> bool:
+    """Markers are assigned to runs by count, in cycle order, so every run must have recorded
+    exactly cores * (1 or 3) start and end markers per kernel. If any were lost, every later
+    run's numbers would land on the wrong grid; return False (and say so) in that case."""
+    have: Dict[str, int] = defaultdict(int)
+    for m in markers:
+        if RE_KERNEL_ZONE.match(m.zone_name):
+            have[m.zone_name] += 1
+    ok = True
+    for kernel_name, multiplier in _KERNEL_CORE_MULTIPLIER.items():
+        expected = sum(run.cores for run in intervals) * multiplier
+        for edge in ("START", "END"):
+            zone = f"{kernel_name}_KERNEL_{edge}"
+            if have[zone] != expected:
+                print(f"WARNING: {zone}: {have[zone]} markers, expected {expected}", file=sys.stderr)
+                ok = False
+    if not ok:
+        print(
+            "WARNING: device markers do not match the runs in the program log; the per-run kernel "
+            "analysis may assign markers to the wrong grid.",
+            file=sys.stderr,
+        )
+    return ok
+
+
 def compute_run_windows(
     markers: List[DeviceMarker],
     intervals: List[ProgramInterval],
@@ -531,7 +556,9 @@ def compute_kernel_utilization_rows(
     """
     Build one row per (grid run, kernel, core, RISC) with that core's own kernel lifetime
     (start/end, converted to host wall-clock time) and its wait/active/overhead breakdown:
-      wait_s / wait_pct       -- blocked on the circular buffer (see kernel READMEs)
+      wait_s / wait_pct       -- blocked waiting on the other kernels: circular buffers for the
+                                 reader, writer and TRISC0, DEST for TRISC1 and TRISC2 (see
+                                 docs/device-side-instrumentation.md)
       active_s / active_pct   -- actual NoC transfer (reader/writer) or matmul/pack (compute)
       overhead_s / overhead_pct -- everything else (index arithmetic, tile-register handshake,
                                    CB bookkeeping)
@@ -763,7 +790,7 @@ def plot_kernel_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: in
     active_label = {"READER": "Transfer", "COMPUTE": "Compute", "WRITER": "Transfer"}
     blocked_on = {
         "READER": "input CB full",
-        "COMPUTE": "waiting on input tiles",
+        "COMPUTE": "input tiles",  # TRISC0; TRISC1 and TRISC2 are overridden below
         "WRITER": "output tile not ready",
     }
 
@@ -794,7 +821,12 @@ def plot_kernel_utilization(agg: List[Dict[str, object]], fig_dir: Path, dpi: in
         fig, ax = plt.subplots(figsize=(12, 6))
         ax.bar(x, active_pct, label=active_label[kernel], color="tab:green")
         ax.bar(x, overhead_pct, bottom=overhead_base, label="Overhead (index/CB bookkeeping)", color="tab:olive")
-        ax.bar(x, wait_pct, bottom=wait_base, label=f"Wait ({blocked_on[kernel]})", color="tab:red")
+        # Each TRISC waits in a different call: TRISC0 on input tiles (cb_wait_front), TRISC1 for
+        # DEST to be free (tile_regs_acquire), TRISC2 for math and output CB space.
+        waits_for = {"TRISC_1": "DEST free", "TRISC_2": "math done / output CB space"}.get(risc, blocked_on[kernel])
+        if kernel != "COMPUTE":
+            waits_for = blocked_on[kernel]
+        ax.bar(x, wait_pct, bottom=wait_base, label=f"Wait ({waits_for})", color="tab:red")
 
         ax.set_xticks(x)
         ax.set_xticklabels(grids, rotation=45, ha="right")
@@ -1109,8 +1141,10 @@ def compute_pause_base_currents(
     pause_sample_counts: List[int] = []
 
     for i in range(len(intervals) - 1):
-        prev_end = intervals[i].end_time - trim_delta
-        next_start = intervals[i + 1].start_time + trim_delta
+        # Shrink the pause by the trim on both sides, away from the runs, so no sample from
+        # either neighbouring run counts toward the idle baseline.
+        prev_end = intervals[i].end_time + trim_delta
+        next_start = intervals[i + 1].start_time - trim_delta
 
         if next_start <= prev_end:
             pause_base_currents.append(float("nan"))
@@ -1302,6 +1336,12 @@ def compute_interval_metrics(
     )
 
     results = attach_dynamic_baseline(results, pause_base_currents)
+    if len(intervals) < 2:
+        print(
+            "WARNING: only one run in the program log, so there is no idle pause to measure the base "
+            "current in; base and dynamic columns are NaN. Run at least two grids.",
+            file=sys.stderr,
+        )
 
     # base_current_a now comes from a single reference pause (the one right after the first
     # interval -- see attach_dynamic_baseline), so that is the only pause any row's baseline
@@ -1366,7 +1406,7 @@ def print_interval_report(results: List[Dict[str, object]], trim_ms: float) -> N
         )
 
     print(f"\nTrim applied to each side: {trim_ms:.3f} ms", file=sys.stderr)
-    print("Base current is estimated from pause intervals between adjacent runs.", file=sys.stderr)
+    print("Base current is the mean current in the pause after the first run, used for every run.", file=sys.stderr)
 
 
 def save_interval_csv(results: List[Dict[str, object]], csv_path: Path) -> None:
@@ -2000,6 +2040,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"Copied device profiler csv to: {copied_device_csv}", file=sys.stderr)
 
             device_markers = load_device_kernel_markers(args.device_profiler_csv)
+            check_marker_counts(device_markers, intervals)
             kernel_intervals = compute_kernel_intervals(device_markers, intervals)
 
             if not kernel_intervals:

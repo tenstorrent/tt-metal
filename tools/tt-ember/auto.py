@@ -56,25 +56,28 @@ def shell_join(args: List[str]) -> str:
     return " ".join(shlex.quote(a) for a in args)
 
 
-def stop_process(proc: subprocess.Popen, timeout_s: float = 10.0) -> None:
-    if proc.poll() is not None:
-        return
-
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
+def stop_processes(procs: List[Optional[subprocess.Popen]], timeout_s: float = 10.0) -> None:
+    """SIGTERM every still-running process group at once, wait, then SIGKILL what is left.
+    Signalling all of them first means a caller that kills auto.py shortly after (as a sweep
+    script does on Ctrl+C) still finds telemetry already told to stop."""
+    running = [p for p in procs if p is not None and p.poll() is None]
+    for proc in running:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
 
     deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            return
+    while time.time() < deadline and any(p.poll() is None for p in running):
         time.sleep(0.1)
 
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
+    for proc in running:
+        if proc.poll() is None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
 
 
 def wait_for_file_to_appear(path: Path, timeout_s: float = 5.0) -> bool:
@@ -103,7 +106,7 @@ def build_bash_command(
 ) -> List[str]:
     return [
         "bash",
-        "-lc",
+        "-c",
         BASH_WRAPPER,
         "bash",
         str(activate_script),
@@ -312,7 +315,7 @@ def run_workflow(
             time.sleep(10.0)
 
             log("Stopping telemetry...")
-            stop_process(telemetry_proc, timeout_s=10.0)
+            stop_processes([telemetry_proc])
 
             if not wait_for_file_to_appear(paths.telemetry_file, timeout_s=5.0):
                 log("ERROR: Telemetry output file was not created.")
@@ -363,13 +366,25 @@ def run_workflow(
             return 130
 
         finally:
-            if app_proc is not None and app_proc.poll() is None:
-                stop_process(app_proc, timeout_s=5.0)
-            if telemetry_proc is not None and telemetry_proc.poll() is None:
-                stop_process(telemetry_proc, timeout_s=10.0)
+            stop_processes([app_proc, telemetry_proc])
+
+
+def positive_int(text: str) -> int:
+    value = int(text)
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"must be positive, got {value}")
+    return value
+
+
+def raise_keyboard_interrupt(_signum, _frame):
+    raise KeyboardInterrupt
 
 
 def main() -> int:
+    # Treat SIGTERM like Ctrl+C, so the cleanup in run_workflow's finally block still stops
+    # telemetry and the app.
+    signal.signal(signal.SIGTERM, raise_keyboard_interrupt)
+
     parser = argparse.ArgumentParser(
         description="Run telemetry, run TT-Metal app, save summary output, and invoke parser."
     )
@@ -382,7 +397,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--telemetry-freq",
-        type=int,
+        type=positive_int,
         default=50,
         help="Telemetry sampling frequency in Hz; converted to the polling period the telemetry tool expects. Default: 50",
     )
@@ -441,8 +456,11 @@ def main() -> int:
     parser.add_argument(
         "--device-id",
         type=int,
-        default=None,
-        help="Optional device-id passed to the parser.",
+        default=0,
+        help=(
+            "Device whose telemetry the parser uses. Default: 0, the device long_matmul runs on; "
+            "without it the parser would mix every chip's samples on a multi-chip board."
+        ),
     )
     parser.add_argument(
         "--trim-ms",
@@ -497,20 +515,30 @@ def main() -> int:
             "Path to tt-metal's device profiler CSV (generated/profiler/.logs/"
             "profile_log_device.csv). Deleted before the app runs (if it already exists) "
             "so it only contains this run's data, then passed to the parser afterwards. "
-            "Default: <app-workdir>/generated/profiler/.logs/profile_log_device.csv"
+            "Default: $TT_METAL_PROFILER_DIR/.logs/profile_log_device.csv, or "
+            "<tt-metal-root>/generated/profiler/.logs/profile_log_device.csv (where tt-metal writes it)"
         ),
     )
 
     args = parser.parse_args()
 
+    # --app-args takes everything after it, so an auto.py option written after it would silently
+    # become an app argument. Refuse that instead.
+    misplaced = [a for a in args.app_args if a.split("=", 1)[0] in parser._option_string_actions]
+    if misplaced:
+        parser.error(f"--app-args must come last; these auto.py options follow it: {' '.join(misplaced)}")
+
     tt_metal_root = args.tt_metal_root.expanduser().resolve()
     telemetry_workdir = args.telemetry_workdir.expanduser().resolve() if args.telemetry_workdir else tt_metal_root
     app_workdir = args.app_workdir.expanduser().resolve() if args.app_workdir else tt_metal_root
 
+    profiler_dir = os.environ.get("TT_METAL_PROFILER_DIR")
     device_profiler_csv = (
         args.device_profiler_csv.expanduser().resolve()
         if args.device_profiler_csv
-        else app_workdir / "generated" / "profiler" / ".logs" / "profile_log_device.csv"
+        else (Path(profiler_dir) if profiler_dir else tt_metal_root / "generated" / "profiler")
+        / ".logs"
+        / "profile_log_device.csv"
     )
 
     app_args = list(args.app_args)

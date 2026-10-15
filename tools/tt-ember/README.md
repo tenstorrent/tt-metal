@@ -57,6 +57,9 @@ $TT_METAL_HOME/build_Release/tools/umd/telemetry
 $TT_METAL_HOME/build_Release/programming_examples/metal_example_long_matmul
 ```
 
+`./build_metal.sh --build-programming-examples` builds both. Run the scripts below from
+`$TT_METAL_HOME/tools/tt-ember`.
+
 ## Quick Start
 
 Run one full measurement — telemetry capture, application, and analysis — in a single command:
@@ -89,7 +92,7 @@ Manages the full measurement lifecycle: starts the telemetry binary as a backgro
 
 ### `parser.py` — Analysis Engine
 
-Can be run standalone against a previously captured telemetry log. Parses raw voltage, current, and power samples, bins them into time slots, computes per-interval metrics, writes a 30-column CSV, and produces 15 matplotlib figures.
+Can be run standalone against a previously captured telemetry log. Parses raw voltage, current, and power samples, bins them into time slots, computes per-interval metrics, writes a 30-column CSV, and produces 15 matplotlib figures (with `--program-log`; without it, only `telemetry_overview.png`).
 
 ```bash
 python3 parser.py \
@@ -104,7 +107,7 @@ python3 parser.py \
 
 ### `run_all.py` — Sweep Orchestrator
 
-Runs a predefined sequence of measurements by invoking `auto.py` once per configuration. Before each run it issues a hardware reset via `tt-smi -r` and waits for the device to re-initialize, ensuring a clean thermal and electrical baseline. Stops immediately if any reset or run fails.
+Runs a predefined sequence of measurements by invoking `auto.py` once per configuration. Before each run it issues a hardware reset via `tt-smi -r` and waits for the device to re-initialize, ensuring a clean thermal and electrical baseline. Stops immediately if any reset or run fails. Runs that already have a `program_intervals.csv` are skipped, so an interrupted sweep resumes; when a group is complete it runs `compare_runs.py` into `comparison_prefill/` and `comparison_fixed_tpc/`.
 
 ```bash
 python3 run_all.py \
@@ -125,7 +128,7 @@ Scans an output root directory for all `program_intervals.csv` files produced by
 python3 compare_runs.py --out-root ./out --output-dir ./out/comparison
 
 # Compare only specific runs
-python3 compare_runs.py --out-root ./out --filter prefill_2048 fixed_power_sweep --output-dir ./out/comparison
+python3 compare_runs.py --out-root ./out --filter prefill_ fixed_tpc_ --output-dir ./out/comparison
 ```
 
 ### `compare_runs2.py` — Named Use-Case Comparison
@@ -192,18 +195,23 @@ python3 run_power_cases.py \
 
 Notes:
 - `--app-args` must be last (same `argparse.REMAINDER` caveat as `auto.py`/`run_all.py`).
-- Defaults to `POWER_CASE` values `5 1 2 4`: case 1 (everything active) and the three cases
-  that each idle one kernel against it. Pass `--power-cases 0 1 2 3 4 5` to also include case 0
-  (write amplification off) and case 3 (reader **and** compute idle).
-- `--ops` repeats the sweep for every `LONG_MATMUL_OP` value, into `<output-root>/<op>/`, and
-  adds cross-op charts when more than one op is given.
-- A case is skipped if `<output-root>/<subdir-for-that-case>` already exists; pass `--force` to
-  re-run it anyway.
+- Runs every `--ops` value (default: all seven) times every `--power-cases` value (default
+  `5 1 2 4`: case 1, everything active, and the three cases that each idle one kernel against
+  it), so 28 runs by default; pass `--ops matmul` for a single sweep. Runs go into
+  `<output-root>/<op>/<case>/`. Pass `--power-cases 0 1 2 3 4 5` to also include case 0 (write
+  amplification off) and case 3 (reader **and** compute idle).
+- For each op it writes `<output-root>/<op>/power_cases.txt` (name set by `--cases-file-name`)
+  and runs `compare_runs2.py -i <output-root>/<op>`, plus `energy_by_engine_stacked.png`,
+  `energy_per_flop_by_engine.png` and `energy_per_flop_per_core.png`. With more than one op it
+  also writes `<output-root>/power_cases_cross_op.txt` and cross-op charts in
+  `<output-root>/compare_runs_out/`. The cross-op pJ/FLOP charts divide every op by matmul's
+  `2*M*N*K`, so they compare energy at equal data movement. With `fixed_blocks_per_core` set the
+  pJ/FLOP charts are skipped, since the FLOP count then depends on the grid.
+- A run is skipped if `<output-root>/<op>/<case>/program_intervals.csv` already exists; pass
+  `--force` to re-run it anyway.
 - Pass `--dry-run` to print every `tt-smi -r` / `auto.py` / `compare_runs2.py` command that
-  would run, without touching the hardware — useful for checking the plan before committing to
-  a multi-hour sweep.
-- Writes `<output-root>/power_cases.txt` (overridable with `--cases-file-name`), then calls
-  `compare_runs2.py -i <output-root> -c <output-root>/power_cases.txt`.
+  would run, without touching the hardware or writing anything — useful for checking the plan
+  before committing to a multi-hour sweep.
 - To recreate the published results, `export LONG_MATMUL_MODE=legacy` first; every run inherits
   it. The default (`updated`) changes how cases 1–5 load the writer; see `long_matmul`'s README.
 
@@ -216,8 +224,8 @@ Each run produces a self-contained subdirectory:
 
 ```
 output_root/subdir/
-  telemetry.txt                    raw telemetry log (input copy)
-  summary.txt                      application stdout (input copy)
+  telemetry.txt                    raw telemetry log
+  summary.txt                      application stdout
   launcher.log                     auto.py orchestration log
   program_intervals.csv            per-interval metrics (30 columns)
   Figures/
@@ -236,6 +244,10 @@ output_root/subdir/
     base_current.png
     charge_total_vs_compute_avg.png
     charge_total_vs_compute_peak.png
+  profile_log_device.csv           (profiler runs only) copy of the device profiler CSV
+  kernel_intervals.csv             (profiler runs only)
+  kernel_utilization.csv           (profiler runs only)
+  FiguresNew/                      (profiler runs only) see docs/device-side-instrumentation.md
 ```
 
 ## The Benchmark Application
@@ -258,7 +270,7 @@ The optional fifth argument, **`fixed_blocks_per_core`**, selects the operating 
 
 ### Synchronization
 
-The correlation between power measurements and program intervals relies entirely on wall-clock timestamp alignment. The telemetry binary runs continuously, writing timestamped samples to `telemetry.txt`. The application writes start and end timestamps for each grid configuration to its stdout, captured as `summary.txt`. Both use the same system clock. `parser.py` performs a post-hoc join: for each program interval it selects all telemetry samples whose timestamps fall within `[start_time, end_time]`. A configurable trim margin (default 6 ms) is applied inward from both edges to discard the ramping-in and ramping-out transients, retaining only the steady-state active phase.
+The correlation between power measurements and program intervals relies entirely on wall-clock timestamp alignment. The telemetry binary runs continuously, writing timestamped samples to `telemetry.txt`. The application writes start and end timestamps for each grid configuration to its stdout, captured as `summary.txt`. Both use the same system clock. `parser.py` performs a post-hoc join: for each program interval it selects all telemetry samples whose timestamps fall within `[start_time, end_time]`. A configurable trim margin (`--trim-ms`, default 6 ms) is applied inward from both edges to discard the ramping-in and ramping-out transients, and then up to `--settle-max-ms` (default 25 ms, at most 10% of the window) of start-up spike is dropped, as reported in `settle_trim_ms`. Always pass `--app-args M N K iterations` to the app: with no arguments `long_matmul` does a one-grid smoke run, which has no idle pause to measure the base current in.
 
 ### Metric Definitions
 
@@ -270,7 +282,7 @@ The correlation between power measurements and program intervals relies entirely
 
 **Dynamic average current** (`dynamic_avg_current_a`) and **dynamic peak current** (`dynamic_peak_current_a`) subtract the base current from their raw counterparts, isolating the current attributable exclusively to computation. A floor of zero is enforced against measurement noise.
 
-**Total charge** (`charge_avg_mah`, `charge_peak_mah`) integrates average and peak current over the window duration, converted to milliampere-hours. These capture the full device consumption including baseline. **Dynamic charge** (`dynamic_charge_avg_mah`, `dynamic_charge_peak_mah`) applies the same integration to the baseline-subtracted currents, representing charge consumed purely by the computation. The figure `q_compute_vs_cores` plots dynamic peak charge across the grid sweep against an ideal linear scaling reference — deviation from the reference indicates super- or sub-linear scaling, pointing to bandwidth saturation, interconnect contention, or thermal throttling.
+**Total charge** (`charge_avg_mah`, `charge_peak_mah`) integrates average and peak current over the window duration, converted to milliampere-hours. These capture the full device consumption including baseline. **Dynamic charge** (`dynamic_charge_avg_mah`, `dynamic_charge_peak_mah`) applies the same integration to the baseline-subtracted currents, representing charge consumed purely by the computation. The figure `q_compute_vs_cores` plots dynamic peak charge across the grid sweep against an ideal linear scaling reference. The reference assumes work grows with the core count, so it only applies in fixed-per-core mode; there, deviation from it points to bandwidth saturation, interconnect contention, or thermal throttling.
 
 **Energy** is computed by two independent methods. TDP-based energy (`energy_j_tdp`, `energy_mwh_tdp`) uses the power value reported directly by the hardware sensor. V×I energy (`energy_j_vi`, `energy_mwh_vi`) computes instantaneous power from measured voltage and current per sample. The TDP signal is internally filtered and may be quantized by firmware; V×I is physically more precise but more susceptible to combined sensor noise. A consistent gap between the two across grid sizes can indicate a calibration offset in one of the sensors.
 
