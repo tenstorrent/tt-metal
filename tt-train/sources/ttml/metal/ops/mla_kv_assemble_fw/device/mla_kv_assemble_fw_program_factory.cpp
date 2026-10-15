@@ -62,74 +62,6 @@ struct MLAKVAssembleFwKernels {
     tt::tt_metal::KernelHandle writer;
 };
 
-static void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const MLAKVAssembleFwKernels& kernels,
-    const tt::tt_metal::Buffer* kv_up_buffer,
-    const tt::tt_metal::Buffer* k_pe_buffer,
-    const tt::tt_metal::Buffer* k_buffer,
-    const tt::tt_metal::Buffer* v_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_blocks_per_core_group_1,
-    uint32_t num_blocks_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2,
-    uint32_t Ts,
-    uint32_t kv_up_tiles_per_block,
-    uint32_t kpe_tiles_per_block,
-    uint32_t Th,
-    uint32_t Tv,
-    uint32_t k_HtWt,
-    uint32_t v_HtWt,
-    uint32_t n_heads) {
-    for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; ++i) {
-        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        uint32_t num_blocks_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_blocks_per_core = num_blocks_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_blocks_per_core = num_blocks_per_core_group_2;
-        } else {
-            TT_FATAL(false, "MLAKVAssembleFw: core not in any work group");
-        }
-
-        // Block index = b * Ts + sb. Inputs kv_up, k_pe are flat across blocks.
-        const uint32_t kv_up_tile_id_start = num_blocks_written * kv_up_tiles_per_block;
-        const uint32_t k_pe_tile_id_start = num_blocks_written * kpe_tiles_per_block;
-
-        // Outputs are head-major: tile_id(b, h, sb, w) = b*H*HtWt + h*HtWt + sb*Wt + w.
-        const uint32_t b_start = num_blocks_written / Ts;
-        const uint32_t sb_start = num_blocks_written % Ts;
-        const uint32_t k_tile_id_start = b_start * n_heads * k_HtWt + sb_start * Th;
-        const uint32_t v_tile_id_start = b_start * n_heads * v_HtWt + sb_start * Tv;
-
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {kv_up_buffer->address(),
-             k_pe_buffer->address(),
-             num_blocks_per_core,
-             kv_up_tile_id_start,
-             k_pe_tile_id_start});
-
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {k_buffer->address(),
-             v_buffer->address(),
-             num_blocks_per_core,
-             sb_start,
-             k_tile_id_start,
-             v_tile_id_start});
-
-        num_blocks_written += num_blocks_per_core;
-    }
-}
-
 MLAKVAssembleFwProgramFactory::cached_program_t MLAKVAssembleFwProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& kv_up = tensor_args.kv_up;
@@ -207,27 +139,34 @@ MLAKVAssembleFwProgramFactory::cached_program_t MLAKVAssembleFwProgramFactory::c
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // ── Runtime args ──
-    assign_per_core_runtime_args(
-        program,
-        kernels,
-        kv_up_buffer,
-        k_pe_buffer,
-        k_buffer,
-        v_buffer,
+    for_each_core_with_work(
         num_cores,
         num_cores_y,
-        num_blocks_per_core_group_1,
-        num_blocks_per_core_group_2,
         core_group_1,
         core_group_2,
-        Ts,
-        kv_up_tiles_per_block,
-        kpe_tiles_per_block,
-        Th,
-        Tv,
-        k_HtWt,
-        v_HtWt,
-        H);
+        num_blocks_per_core_group_1,
+        num_blocks_per_core_group_2,
+        [&](const CoreWork& work) {
+            const auto& [core, core_index, num_blocks, start_block, in_group_1] = work;
+            // Block index = b * Ts + sb. Inputs kv_up, k_pe are flat across blocks.
+            const uint32_t kv_up_tile_id_start = start_block * kv_up_tiles_per_block;
+            const uint32_t k_pe_tile_id_start = start_block * kpe_tiles_per_block;
+            // Outputs are head-major: tile_id(b, h, sb, w) = b*H*HtWt + h*HtWt + sb*Wt + w.
+            const uint32_t b_start = start_block / Ts;
+            const uint32_t sb_start = start_block % Ts;
+            const uint32_t k_tile_id_start = b_start * H * k_HtWt + sb_start * Th;
+            const uint32_t v_tile_id_start = b_start * H * v_HtWt + sb_start * Tv;
+            SetRuntimeArgs(
+                program,
+                kernels.reader,
+                core,
+                {kv_up_buffer->address(), k_pe_buffer->address(), num_blocks, kv_up_tile_id_start, k_pe_tile_id_start});
+            SetRuntimeArgs(
+                program,
+                kernels.writer,
+                core,
+                {k_buffer->address(), v_buffer->address(), num_blocks, sb_start, k_tile_id_start, v_tile_id_start});
+        });
 
     return cached_program_t{
         std::move(program),
@@ -253,8 +192,7 @@ void MLAKVAssembleFwProgramFactory::override_runtime_arguments(
     auto& reader_runtime_args = GetRuntimeArgs(program, shared.reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, shared.writer_kernel_id);
 
-    for (uint32_t i = 0; i < shared.num_cores; ++i) {
-        const tt::tt_metal::CoreCoord core = {i / shared.num_cores_y, i % shared.num_cores_y};
+    for_each_core(shared.num_cores, shared.num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
         {
             auto& ra = reader_runtime_args[core.x][core.y];
             ra[kReaderArgKvUpAddr] = kv_up_buffer->address();
@@ -265,7 +203,7 @@ void MLAKVAssembleFwProgramFactory::override_runtime_arguments(
             ra[kWriterArgKAddr] = k_buffer->address();
             ra[kWriterArgVAddr] = v_buffer->address();
         }
-    }
+    });
 }
 
 }  // namespace ttml::metal::ops::mla_kv_assemble_fw::device
