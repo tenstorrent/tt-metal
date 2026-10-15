@@ -109,3 +109,11 @@ Every intervention by the supervising session: time, task, trigger, classificati
 - 18:40 C.swa.experts PASS (48ecee42266): model-side loop (tt/experts.py), packed fp4 decoded to bf16 every chunk (EXPERTS_IMPL=loop, ~4 ms per matrix: the plan's interim, rule-5 departure until the fork decodes in-op); fp32 routing weight carried through dispatch as 3 bf16 pieces. vs CPU rel 0.0022 (limit 0.015). Accepted as the plan's interim; the in-op decode must come before any perf number counts.
 - 19:27 layer 0 (swa) fully on device: S.swa.15 PASS (ee442a47dd7). C.swa_engram.engram_rows PASS (1f9ad1c0bec): host hash + lookup in begin_chunk, tables np.memmap (never loaded), only the chunk's rows sent; follows rule 5's host-input exception. Accepted.
 - 20:13 the orchestrator crashed: the supervisor's own git commit (links.yaml) held index.lock while the gate committed C.swa_engram.q_a (supervisor error). F74: framework git retries on the lock; publish time moved to the run dir; the overseer does not touch git during a run. Resumed.
+- 21:55 OWNER: 'the deployment box is ONLY for computing the scale factor; once computed EVERYTHING goes scaled: goldens, model (fewer experts, fewer heads), smaller chunk.' No real-size track on a smaller box. The supervisor had built F64 with both (real-size tests + a scaled run) and listed it in the intake questions without calling it out: supervisor's error. Pausing to make scaled-only the framework behaviour (F75) and re-point this run.
+- 22:25 F75 applied (c06b93b7766): this run is now the scaled model only. Spec: no separate scaled section; target
+  and ladder (s4096 / last / s55296 at 2048) are this box's units. tasks.yaml regenerated (old copy
+  runs/run1/tasks_before_F75.yaml, old state state_before_F75.json): SG.1 -> G.s4096 / G.s55296 (scaled) -> every
+  device step; R.* / PL.1 read the real checkpoint. Kept: R.*, B.1, SC.1, PL.0, PL.1, SG.1. Reset: G.*, and all 60
+  C / S tasks of layers 0 and 1 (re-run and re-frozen on the scaled model; their real-size passes stay in git
+  history only). Real-size goldens deleted; the scaled s55296 golden (from SG.1) is reused. Intake and plan
+  re-approved (delegated).
