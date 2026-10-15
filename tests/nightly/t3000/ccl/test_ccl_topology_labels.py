@@ -609,10 +609,11 @@ def test_all_reduce_async_whole_mesh_overload(mesh_device, sharded, rs_ag_branch
 
 
 def _reduce_scatter(tensor, mesh_device, dim, cluster_axis):
-    """ttnn.reduce_scatter with the Linear topology, which keeps it off the one-shot direct op (a 1b-B op, not
-    labelled here). A tile-aligned per-device output takes the prim (ccl/reduce_scatter) path; a non-aligned one
-    (test_reduce_scatter_composite_*) the composite split / pad / concat / prim / slice route, which ends in the
-    same prim. `dim` may be negative: the wrapper normalises it before the prim sees it."""
+    """ttnn.reduce_scatter with the Linear topology, which keeps it off the one-shot reduce_scatter_minimal_direct
+    op (an experimental op, labelled in #59589 rather than here). A tile-aligned per-device output takes the prim
+    (ccl/reduce_scatter) path; a non-aligned one (test_reduce_scatter_composite_*) the composite split / pad / concat
+    / prim / slice route, which ends in the same prim. `dim` may be negative: the wrapper normalises it before the
+    prim sees it."""
     return ttnn.reduce_scatter(tensor, dim=dim, cluster_axis=cluster_axis, topology=ttnn.Topology.Linear)
 
 
