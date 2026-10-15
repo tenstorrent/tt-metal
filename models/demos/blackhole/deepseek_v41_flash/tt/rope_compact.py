@@ -9,10 +9,10 @@ positions of a step with one ``ttnn.concat`` against a constant row block. The r
 
 DSV41_ROPE_COMPACT=0 restores the full tables (read when a step state is built).
 
-DSV41_ROPE_SHARD (auto = from 524288 positions on; 1 / 0 force) additionally shards the [P, 128] (cos | sin) table by position over the 8 mesh columns (each chip keeps P / 8 rows, 0.09 KiB per position and kind): a step looks its positions
+DSV41_ROPE_SHARD (auto = from 262144 positions on; 1 / 0 force) additionally shards the [P, 128] (cos | sin) table by position over the 8 mesh columns (each chip keeps P / 8 rows, 0.09 KiB per position and kind): a step looks its positions
 up in the local block (indices outside it are masked to zero), one all-gather over the columns brings the 8 partial rows together and a sum over them (7 exact zeros + the value) restores the row,
 bit-identical to the replicated table. It costs ~25 small ops and one all-gather per layer kind per step (measured in tests/test_rope_compact.py), so the default `auto` only shards where the replicated
-0.75 KiB per position starts to matter (>= 524288 positions).
+0.75 KiB per position starts to matter (>= 262144 positions).
 """
 
 import os
@@ -30,7 +30,7 @@ def compact_enabled():
     return os.environ.get("DSV41_ROPE_COMPACT", "1") == "1"
 
 
-SHARD_AUTO_POSITIONS = 524288  # DSV41_ROPE_SHARD=auto shards the tables from this many positions on (0.75 -> 0.09 GiB at 1M for ~0.4 ms per decode step)
+SHARD_AUTO_POSITIONS = 262144  # DSV41_ROPE_SHARD=auto shards the tables from this many positions on (0.75 -> 0.09 GiB at 1M for ~0.4 ms per decode step)
 
 
 def shard_enabled(max_pos=0):
