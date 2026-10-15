@@ -46,7 +46,13 @@ TABLE = {
         "the wo_b partial-sum exchange over axis 1 ([S/SP, H] fp32): gather_add = all_gather + SFPU ttnn.add, then "
         "the chip's hidden slice (exact fp32, K-30); reduce_scatter = one CCL whose FPU add reads fp32 at about TF32",
     ),
-    # ---- mHC (tt/mhc.py)
+    # ---- mHC (tt/mhc.py, tt/residual.py)
+    "RESIDUAL_MIX": Setting(
+        "fused",
+        ("fused", "addcmul"),
+        "the mHC residual post * y + comb^T x (tt/residual.py): fused = ttnn.bringup.mhc_post in one program; addcmul "
+        "= per output stream multiply + 4 x addcmul; both fp32 on the SFPU",
+    ),
     "HC_TP_SUM": Setting(
         "gather_add",
         ("gather_add", "all_reduce"),
