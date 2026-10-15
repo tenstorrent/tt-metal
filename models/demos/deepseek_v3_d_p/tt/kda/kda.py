@@ -28,7 +28,8 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     l1_when_it_fits,
     tuned_projection_matmul_configs,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
+from models.demos.deepseek_v3_d_p.tt.kda.final_carry_program import FinalCarryProgram
+from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence, PendingFinalCarry
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -292,6 +293,15 @@ class ttKDA:
             value_dim=self.config.head_v_dim,
             # The bounded gate's lower-bound scale is applied by chunk preparation.
             gate_scale=config.gate_lower_bound if self._bounded_gate else 1.0,
+            # The fused output projection carries the final carry's copy or multicast on its idle cores.
+            defer_final_carry=self.fused_output_reduce_scatter,
+        )
+        self._final_carry = (
+            FinalCarryProgram(
+                mesh_device, self.sequence_parallel_axis, tt_ccl.get_num_links(self.sequence_parallel_axis)
+            )
+            if self.fused_output_reduce_scatter
+            else None
         )
         self.output_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -450,23 +460,51 @@ class ttKDA:
             gate_column_offset=output_gate_offset,
         )
 
+    def _project_output_and_final_carry(
+        self,
+        output: ttnn.Tensor,
+        carry: PendingFinalCarry,
+        actual_start: ttnn.Tensor,
+        actual_end: ttnn.Tensor | None,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Fused output projection and TP reduce-scatter, carrying the final carry's program on its idle cores."""
+        final_state = self._final_carry.allocate_output(carry.prefix_final)
+        cluster_axis = self._tp_cluster_axis
+        projected = matmul_reduce_scatter(
+            output,
+            self.weights.output_projection,
+            cluster_axis=cluster_axis,
+            scatter_dim=-1,
+            topology=self.tp_ccl_topology,
+            num_links=self.tt_ccl.get_num_links(cluster_axis),
+            compute_kernel_config=self.fused_output_compute_config,
+            extra_program=lambda coord, cores: self._final_carry.program(
+                coord,
+                cores,
+                rank_final=carry.rank_final,
+                prefix_final=carry.prefix_final,
+                output=final_state,
+                actual_start=actual_start,
+                actual_end=actual_end,
+                local_rows=carry.local_rows,
+            ),
+            extra_tensors=[
+                t
+                for t in (carry.rank_final, carry.prefix_final, actual_start, actual_end, final_state)
+                if t is not None
+            ],
+        )
+        final_state = ttnn.reshape(
+            final_state, (1, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim)
+        )
+        return projected, final_state
+
     def _project_output(
         self,
         output: ttnn.Tensor,
     ) -> ttnn.Tensor:
         """Project normalized heads and perform the required TP reduction."""
         weights = self.weights
-        if self.fused_output_reduce_scatter:
-            cluster_axis = self._tp_cluster_axis
-            return matmul_reduce_scatter(
-                output,
-                weights.output_projection,
-                cluster_axis=cluster_axis,
-                scatter_dim=-1,
-                topology=self.tp_ccl_topology,
-                num_links=self.tt_ccl.get_num_links(cluster_axis),
-                compute_kernel_config=self.fused_output_compute_config,
-            )
         output = ttnn.linear(
             output,
             weights.output_projection,
@@ -552,5 +590,10 @@ class ttKDA:
         output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset)
         # The norm read the output gate, the projection's last columns in use.
         ttnn.deallocate(inputs.projected)
-        output = self._project_output(output)
-        return output, KdaState(recurrent=result.final_state, convolution=new_convolution)
+        if isinstance(result.final_state, PendingFinalCarry):
+            output, final_state = self._project_output_and_final_carry(
+                output, result.final_state, actual_start, actual_end
+            )
+        else:
+            output, final_state = self._project_output(output), result.final_state
+        return output, KdaState(recurrent=final_state, convolution=new_convolution)

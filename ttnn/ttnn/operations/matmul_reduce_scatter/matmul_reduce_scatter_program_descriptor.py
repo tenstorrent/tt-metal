@@ -411,10 +411,7 @@ def _eth_placer(mesh_device):
     (fabric_all_gather's placement helpers, without its probe dispatch -- the channel is known on the host)."""
     if XPORT_PLACEMENT != "eth" or os.environ.get("TT_METAL_EMULE_MODE"):
         return None
-    try:
-        from ttnn.operations.examples.fabric_all_gather import program_descriptor_with_inline_kernels as fag
-    except Exception:  # pragma: no cover - example module unavailable
-        return None
+    from . import eth_placement as fag
 
     def place(coord, chan, taken, allowed):
         eth_list = fag._chip_maps(mesh_device, coord)[0]

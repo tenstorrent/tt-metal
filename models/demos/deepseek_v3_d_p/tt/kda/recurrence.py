@@ -94,7 +94,16 @@ class _PreparedChunks:
 @dataclass(frozen=True)
 class RecurrenceResult:
     output: ttnn.Tensor
-    final_state: ttnn.Tensor
+    final_state: "ttnn.Tensor | PendingFinalCarry"
+
+
+@dataclass(frozen=True)
+class PendingFinalCarry:
+    """select_final_carry's inputs, for a caller that runs the final carry inside a later program."""
+
+    rank_final: ttnn.Tensor
+    prefix_final: ttnn.Tensor
+    local_rows: int
 
 
 @dataclass(frozen=True)
@@ -446,6 +455,7 @@ def _scan_sp_grouped_chunks(
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
     gather_buffer: ttnn.Tensor | None = None,
+    defer_final_carry: bool = False,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
@@ -521,10 +531,13 @@ def _scan_sp_grouped_chunks(
     output = ttnn.reshape(
         scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
     )
+    rank_final = ttnn.reshape(scan.final_state, (geometry.batch_heads, groups, geometry.key_dim, geometry.value_dim))
+    if defer_final_carry:
+        return RecurrenceResult(output, PendingFinalCarry(rank_final, prefix_final_state, geometry.local_rows))
     # The device chooses the completed tail when split, or the prefix's final state when unsplit, at runtime: only
     # the owner of a separated tail sends its last group's state over the fabric.
     final_state = ttnn.experimental.kda.select_final_carry(
-        ttnn.reshape(scan.final_state, (geometry.batch_heads, groups, geometry.key_dim, geometry.value_dim)),
+        rank_final,
         prefix_final_state,
         actual_start=actual_start,
         actual_end=actual_end,
@@ -550,7 +563,10 @@ class KDARecurrence:
         value_dim: int,
         batch: int = 1,
         gate_scale: float = 1.0,
+        defer_final_carry: bool = False,
     ) -> None:
+        # Sequence-parallel only: return the final carry's inputs (PendingFinalCarry) for the caller to run.
+        self._defer_final_carry = defer_final_carry
         # Preparation multiplies the gate by gate_scale before its cumulative sum.
         self._gate_scale = gate_scale
         preparation = ttnn.init_device_compute_kernel_config(
@@ -693,6 +709,8 @@ class KDARecurrence:
     @staticmethod
     def _finish(scan: RecurrenceResult, geometry: _RecurrenceGeometry) -> RecurrenceResult:
         output = ttnn.reshape(scan.output, (geometry.batch_heads, geometry.local_rows, geometry.value_dim))
+        if isinstance(scan.final_state, PendingFinalCarry):
+            return RecurrenceResult(output, scan.final_state)
         final_state = ttnn.reshape(
             scan.final_state, (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim)
         )
@@ -793,4 +811,5 @@ class KDARecurrence:
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
             gather_buffer=self._gather_buffer,
+            defer_final_carry=self._defer_final_carry,
         )

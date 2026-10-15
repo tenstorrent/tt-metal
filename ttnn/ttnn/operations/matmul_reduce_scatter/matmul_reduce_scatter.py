@@ -357,7 +357,11 @@ def matmul_reduce_scatter(
     num_links=None,
     compute_kernel_config=None,
     memory_config=None,
+    extra_program=None,
+    extra_tensors=(),
 ):
+    """extra_program(coord, free_cores) -> ProgramDescriptor | None merges another program onto the cores this op
+    leaves idle on each device (the descriptors' core ranges must not overlap); extra_tensors are its I/O tensors."""
     validate(
         input_tensor, weight, cluster_axis=cluster_axis, scatter_dim=scatter_dim, topology=topology, num_links=num_links
     )
@@ -429,4 +433,28 @@ def matmul_reduce_scatter(
         compute_config=cfg,
         ring=plan["ring"],
     )
-    return ttnn.generic_op([input_tensor, weight, plan["relay_scratch"], handoff_l1, output], desc)
+    if extra_program is not None:
+        desc = _merge_extra_programs(mesh_device, desc, extra_program)
+    # generic_op returns the last I/O tensor, so the projection output stays last.
+    return ttnn.generic_op([input_tensor, weight, plan["relay_scratch"], handoff_l1, *extra_tensors, output], desc)
+
+
+def _merge_extra_programs(mesh_device, desc, extra_program):
+    """A new MeshProgramDescriptor (item assignment appends rather than replaces)."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    merged = ttnn.MeshProgramDescriptor()
+    rows, cols = tuple(mesh_device.shape)
+    for r in range(rows):
+        for c in range(cols):
+            key = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))
+            program = desc[key]
+            used = set()
+            for kernel in program.kernels:
+                for core_range in kernel.core_ranges.ranges():
+                    for x in range(core_range.start.x, core_range.end.x + 1):
+                        for y in range(core_range.start.y, core_range.end.y + 1):
+                            used.add((x, y))
+            free = [ttnn.CoreCoord(x, y) for x in range(grid.x) for y in range(grid.y) if (x, y) not in used]
+            extra = extra_program((r, c), free)
+            merged[key] = program if extra is None else ttnn.merge_program_descriptors([program, extra])
+    return merged
