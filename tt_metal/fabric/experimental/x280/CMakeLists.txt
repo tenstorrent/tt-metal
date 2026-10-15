@@ -484,7 +484,12 @@ set_target_properties(
 )
 # The image-lookup rule is tested on the path alone; no image is opened.
 target_compile_definitions(x280_bench_host_tests PRIVATE X280_IMAGE_DIR="${X280_IMAGE_DIR}")
-add_test(NAME x280_bench_host_tests COMMAND x280_bench_host_tests)
+# RecordRoundTrip runs in its own CTest, x280_record_round_trip.
+add_test(
+    NAME x280_bench_host_tests
+    COMMAND
+        x280_bench_host_tests --gtest_filter=-RecordRoundTrip.*
+)
 
 # Harness device tests; most need hardware. test_fabric_shadow_layout.cpp is static
 # assertions only.
