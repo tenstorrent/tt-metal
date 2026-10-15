@@ -727,12 +727,21 @@ def scope_file(
         for key, entry in new_index.items():
             if key in already:
                 continue
+            try:
+                workdir = entry_workdir(entry, path)
+            except GateError:
+                # Same "skip if unedited" rule as the parse above: this entry's
+                # workdir is broken pre-existing data in a yaml the PR never
+                # touched, not something the PR introduced.
+                if edited:
+                    raise
+                continue
             hits = sources_touching(
                 entry.get("cmd") or "",
                 tracked or set(),
                 dirs or set(),
                 changed_src,
-                entry_workdir(entry, path),
+                workdir,
                 gitlinks or frozenset(),
             )
             if hits:
@@ -754,7 +763,7 @@ def scope_file(
         team = entry.get("team")
         workdir = entry_workdir(entry, path)
         check_llk_perf_env(entry, path)
-        llk = workdir == LLK_WORKDIR
+        llk = workdir == LLK_WORKDIR or workdir.startswith(LLK_WORKDIR + "/")
         for sku in runnable:
             run_legs.append(
                 {
