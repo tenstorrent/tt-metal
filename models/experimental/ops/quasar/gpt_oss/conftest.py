@@ -102,6 +102,44 @@ def quasar_block_float_to_bf16(monkeypatch, quasar_host_cast_fp32_to_bf16):
     monkeypatch.setattr(ModelArgs, "weight_cache_path", _weight_cache_path)
 
 
+@pytest.fixture(autouse=True)
+def quasar_ops(monkeypatch):
+    """On Quasar, route the mainline ops that Quasar cannot run to their ttnn.experimental.quasar versions.
+
+    The program factories of these mainline ops build DataMovementKernel kernels, which Quasar does not
+    support. The Quasar versions take the same arguments: the binary ops accept a scalar second input and
+    output_tensor, and the SDPA ops accept attention_sink. All Quasar op routing is done here, so the
+    model code keeps calling the mainline ops, as in models/demos/gpt_oss.
+    """
+    if not is_quasar():
+        return
+
+    quasar_ops = ttnn.experimental.quasar
+    routes = (
+        # (module the model calls, op name there, Quasar module, Quasar op name)
+        (ttnn, "add", quasar_ops, "add"),
+        (ttnn, "mul", quasar_ops, "multiply"),
+        (ttnn, "multiply", quasar_ops, "multiply"),
+        (ttnn, "subtract", quasar_ops, "subtract"),
+        (ttnn, "sub", quasar_ops, "subtract"),
+        (ttnn.transformer, "scaled_dot_product_attention", quasar_ops.transformer, "scaled_dot_product_attention"),
+        (
+            ttnn.transformer,
+            "scaled_dot_product_attention_decode",
+            quasar_ops.transformer,
+            "scaled_dot_product_attention_decode",
+        ),
+        (
+            ttnn.transformer,
+            "paged_scaled_dot_product_attention_decode",
+            quasar_ops.transformer,
+            "paged_scaled_dot_product_attention_decode",
+        ),
+    )
+    for module, name, quasar_module, quasar_name in routes:
+        monkeypatch.setattr(module, name, getattr(quasar_module, quasar_name))
+
+
 def pytest_addoption(parser):
     parser.addoption("--skip-model-load", action="store_true", default=False, help="Skip loading the model state dict")
 
