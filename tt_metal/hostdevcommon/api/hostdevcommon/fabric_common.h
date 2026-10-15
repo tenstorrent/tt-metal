@@ -1039,6 +1039,6 @@ static constexpr uint32_t FABRIC_CONNECTION_OBJECT_SIZE = 128;
 #define FABRIC_COUNTER_BASE MEM_FABRIC_COUNTER_BASE
 #endif
 
-#include "fabric/hw/inc/fabric_direction_table_interface.h"
-#include "fabric/hw/inc/fabric_routing_path_interface.h"
+#include "hostdev/fabric_direction_table_interface.h"
+#include "hostdev/fabric_routing_path_interface.h"
 #endif

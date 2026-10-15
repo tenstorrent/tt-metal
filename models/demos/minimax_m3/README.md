@@ -20,7 +20,7 @@ Config: [`configs/MiniMax-M3/config.json`](configs/MiniMax-M3/config.json).
 
 - **Sequence-parallel prefill** (SP=8) over the mesh rows, **tensor-parallel** (TP=4) over the columns, **expert-parallel** (EP=32) MoE.
 - **Dense attention:** `ring_joint` SDPA (first-chunk + block-cyclic SP-sharded KV-cache read).
-- **Sparse attention (MSA):** `indexer_score_msa` → top-k blocks → `sparse_sdpa_msa`, token-level causal mask, per-device causality via mesh-coord `cluster_axis`. On-device indexed RoPE (whole-cache block-cyclic cos/sin built once).
+- **Sparse attention (MSA):** `indexer_score_msa` → top-k blocks → `sparse_sdpa_msa` (per-core L1 block cache, auto-sized), token-level causal mask, per-device causality via mesh-coord `cluster_axis`. On-device indexed RoPE (whole-cache block-cyclic cos/sin built once).
 - **MoE:** DeepSeek EP dispatch/combine + the fused `unified_routed_expert_ffn` kernel with M3's clamped swigluoai activation (`RoutedExpertActivation.SwiGluOai`).
 - **KV cache:** SP-sharded, block-cyclic; chunked prefill reads the accumulated prefix on-device.
 
@@ -106,7 +106,7 @@ the `prefill_chunk` alignment assert on M3.
 |---|---|---|
 | `PREFILL_TRACE_DIR` | unset (required in single-run) | Golden trace dir (`metadata.json` with `token_ids`, plus `kv_cache/` for the PCC check). In multi-run mode it only seeds the initial capacity and the default `PREFILL_GOLDEN_ROOT`. |
 | `PREFILL_CHUNKED` | `0` | `1` = chunked prefill (exercises the cache-read path); `0` = one-shot. |
-| `PREFILL_CHUNK_SIZE` | `5120` | Tokens per chunk (>= 2048 so the first MSA chunk has 16 blocks). |
+| `PREFILL_CHUNK_SIZE` | `5120` | Tokens per chunk: whole 128-token MSA blocks per SP rank (a multiple of 1024 at SP=8). |
 | `PREFILL_NUM_LAYERS` | all 60 | Build / run only the first N layers (sets `M3_LOAD_NLAYERS`). |
 | `PREFILL_TPS_ITERS` | `1` | Timed whole-sequence repetitions. |
 | `PREFILL_SKIP_PCC` | unset | `1` = perf only, skip the per-layer KV PCC (synthetic traces carry no golden). |
