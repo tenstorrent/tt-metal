@@ -4,8 +4,6 @@
 
 """TP collectives for Muse-Glimmer (1 x TP mesh, cluster_axis=1)."""
 
-import os
-
 from loguru import logger
 
 import ttnn
@@ -16,20 +14,12 @@ def is_blackhole_device(mesh_device) -> bool:
 
 
 def default_topology(tp: int):
-    """Ring if tp >= 8 else Linear; MUSE_CCL_TOPOLOGY=ring|linear overrides."""
-    override = os.environ.get("MUSE_CCL_TOPOLOGY", "").strip().lower()
-    if override in ("ring", "r"):
-        return ttnn.Topology.Ring
-    if override in ("linear", "line", "l"):
-        return ttnn.Topology.Linear
+    """Ring if tp >= 8 else Linear."""
     return ttnn.Topology.Ring if tp >= 8 else ttnn.Topology.Linear
 
 
 def default_num_links(mesh_device) -> int:
-    """MUSE_CCL_NUM_LINKS overrides; else 2 on Blackhole, 1 otherwise."""
-    env = os.environ.get("MUSE_CCL_NUM_LINKS")
-    if env is not None:
-        return max(1, int(env))
+    """2 links on Blackhole, 1 otherwise."""
     return 2 if is_blackhole_device(mesh_device) else 1
 
 
@@ -37,16 +27,14 @@ def fabric_config_for(tp: int):
     """Fabric config to set BEFORE opening the mesh (None when tp == 1)."""
     if tp <= 1:
         return None
-    if os.environ.get("MUSE_FABRIC", "").strip().lower() == "ring":
-        return ttnn.FabricConfig.FABRIC_1D_RING
     return ttnn.FabricConfig.FABRIC_1D
 
 
 class MuseCCL:
     """Synchronous all_reduce / all_gather along mesh axis 1.
 
-    ``topology``/``num_links`` are not passed to the synchronous ops: the fabric config selects ring vs
-    linear (MUSE_FABRIC). They are kept for logging and the sampling all-gather.
+    ``topology``/``num_links`` are not passed to the synchronous ops: the fabric config (FABRIC_1D) decides the
+    routing. They are kept for logging and the sampling all-gather.
     """
 
     def __init__(self, mesh_device, topology=None, num_links=None):

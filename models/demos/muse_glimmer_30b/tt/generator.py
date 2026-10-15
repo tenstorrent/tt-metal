@@ -4,7 +4,6 @@
 
 """Host-side generation driver for Muse-Glimmer-30B: data-parallel replicas, paged KV, traced decode."""
 
-import os
 import time
 
 import torch
@@ -38,9 +37,7 @@ class MuseGlimmerGenerator:
             )
             self.decode_inputs.append(m.allocate_decode_inputs(self.B, self.n_blocks))
         self.trace_ids = [None] * self.dp
-        self.device_sampling = os.environ.get("MUSE_DEVICE_SAMPLING", "1").strip() != "0" and all(
-            getattr(m, "sampling", None) is not None for m in models
-        )
+        self.device_sampling = all(getattr(m, "sampling", None) is not None for m in models)
         self.page_table_dirty = True  # device page-table copy is stale (first step / after prefill)
         self.last_step_breakdown = {}
         self.trace_outputs = [None] * self.dp

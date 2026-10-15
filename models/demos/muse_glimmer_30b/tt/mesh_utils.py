@@ -74,9 +74,8 @@ def dp_submeshes(mesh_device, dp: int, tp: int) -> list:
 
 
 def device_params(trace_region_size=None) -> dict:
-    ring = os.environ.get("MUSE_FABRIC", "").strip().lower() in ("ring", "1d_ring")
     params = {
-        "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if ring else ttnn.FabricConfig.FABRIC_1D,
+        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         "num_command_queues": 1,
         "l1_small_size": 24576,
         "trace_region_size": 256_000_000 if trace_region_size is None else trace_region_size,

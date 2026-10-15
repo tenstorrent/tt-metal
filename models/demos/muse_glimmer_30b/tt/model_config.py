@@ -246,7 +246,7 @@ class MuseGlimmerModelArgs:
         return self.layer_rope_theta[i] != 0
 
     def weight_cache_dir(self) -> pathlib.Path:
-        base = self.cache_dir or os.environ.get("MUSE_TT_CACHE") or f"{self.ckpt_dir}/tt_cache"
+        base = self.cache_dir or os.environ.get("TT_CACHE_PATH") or f"{self.ckpt_dir}/tt_cache"
         path = pathlib.Path(base) / f"tp{self.tp}"
         try:
             path.mkdir(parents=True, exist_ok=True)

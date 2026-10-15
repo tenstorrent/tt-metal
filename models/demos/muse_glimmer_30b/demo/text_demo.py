@@ -4,8 +4,7 @@
 
 """Muse-Glimmer-30B text demo: data-parallel replicas of a 1 x TP model, paged KV, traced decode.
 
-Env knobs: MESH_DEVICE (optional), MUSE_DP, MUSE_TP, MUSE_BATCH, MUSE_MAX_NEW_TOKENS, MUSE_SAMPLING=topp, MUSE_NUM_LAYERS,
-MUSE_FABRIC=ring, MUSE_TRACE_REGION_SIZE, MUSE_DEVICE_SAMPLING (0 = host sampling), HF_MODEL.
+Env: MESH_DEVICE (optional), HF_MODEL. Select a configuration with ``-k`` on the parametrize ids.
 """
 
 import json
@@ -24,45 +23,42 @@ from models.demos.muse_glimmer_30b.tt.tokenizer_utils import decode, encode_chat
 _PROMPTS_FILE = os.path.join(os.path.dirname(__file__), "sample_prompts.json")
 
 
-def _env_int(name, default):
-    v = os.environ.get(name)
-    return int(v) if v else default
+_MAX_NEW_TOKENS = 128
+_MAX_SEQ_LEN = 4096
+_TOP_P = {"temperature": 1.0, "top_p": 0.95, "top_k": 32}
 
 
-@pytest.mark.parametrize(
-    "device_params", [device_params(_env_int("MUSE_TRACE_REGION_SIZE", 200_000_000))], indirect=True
-)
+@pytest.mark.parametrize("device_params", [device_params()], indirect=True)
 @(
     pytest.mark.parametrize("mesh_device", [system_mesh_shape_from_env()], indirect=True)
     if system_mesh_shape_from_env() is not None
     else (lambda f: f)
 )
 @pytest.mark.parametrize(
-    "data_parallel, tp, batch_size_per_replica, max_new_tokens, max_seq_len, sampling_mode, num_layers",
+    "data_parallel, tp, batch_size_per_replica, sampling",
     [
-        (
-            _env_int("MUSE_DP", None),  # None -> 8 (tp4) / 4 (tp8) on a 32-device mesh, else 1
-            _env_int("MUSE_TP", None),  # None -> 4 (8 if MUSE_DP==4 on a 32-device mesh)
-            _env_int("MUSE_BATCH", 32),
-            _env_int("MUSE_MAX_NEW_TOKENS", 128),
-            4096,
-            os.environ.get("MUSE_SAMPLING", "greedy").strip().lower(),
-            _env_int("MUSE_NUM_LAYERS", None),
-        )
+        (1, 4, 1, None),
+        (1, 4, 32, None),
+        (1, 8, 1, None),
+        (1, 8, 32, None),
+        (8, 4, 32, None),
+        (4, 8, 32, None),
+        (1, 4, 32, _TOP_P),
     ],
-    ids=["muse_glimmer_demo"],
+    ids=[
+        "dp1-tp4-b1-greedy",
+        "dp1-tp4-b32-greedy",
+        "dp1-tp8-b1-greedy",
+        "dp1-tp8-b32-greedy",
+        "dp8-tp4-b32-greedy",
+        "dp4-tp8-b32-greedy",
+        "dp1-tp4-b32-topp",
+    ],
 )
-def test_muse_glimmer_demo(
-    mesh_device, data_parallel, tp, batch_size_per_replica, max_new_tokens, max_seq_len, sampling_mode, num_layers
-):
+def test_muse_glimmer_demo(mesh_device, data_parallel, tp, batch_size_per_replica, sampling):
     n_dev = mesh_device.get_num_devices()
-    if tp is None:
-        tp = 8 if (n_dev == 32 and data_parallel == 4) else 4
-    if data_parallel is None:
-        data_parallel = (8 if tp == 4 else 4) if n_dev == 32 else 1
-    assert data_parallel * tp <= n_dev, f"dp={data_parallel} x tp={tp} exceeds {n_dev} devices"
-    if n_dev == 32:
-        assert (data_parallel, tp) in ((8, 4), (4, 8), (1, 4), (1, 8)), f"unsupported dp={data_parallel} tp={tp}"
+    if data_parallel * tp > n_dev:
+        pytest.skip(f"dp={data_parallel} x tp={tp} needs more devices than the {n_dev} available")
 
     submeshes = dp_submeshes(mesh_device, data_parallel, tp)
 
@@ -71,7 +67,7 @@ def test_muse_glimmer_demo(
     for i, sm in enumerate(submeshes):
         t0 = time.time()
         args = MuseGlimmerModelArgs.from_checkpoint(
-            ckpt, mesh_device=sm, max_batch_size=batch_size_per_replica, max_seq_len=max_seq_len, num_layers=num_layers
+            ckpt, mesh_device=sm, max_batch_size=batch_size_per_replica, max_seq_len=_MAX_SEQ_LEN
         )
         models.append(MuseGlimmerModel(args, sm))
         logger.info(f"Replica {i + 1}/{len(submeshes)} loaded in {time.time() - t0:.1f}s")
@@ -85,12 +81,9 @@ def test_muse_glimmer_demo(
     texts = [texts[i % len(texts)] for i in range(gb)]
     prompts = [encode_chat(tokenizer, t) for t in texts]
 
-    sampling = None
-    if sampling_mode == "topp":
-        sampling = {"temperature": 1.0, "top_p": 0.95, "top_k": 64}
     stop_ids = list(models[0].args.eos_token_ids)
 
-    result = gen.generate(prompts, max_new_tokens, sampling=sampling, stop_token_ids=stop_ids, seed=0)
+    result = gen.generate(prompts, _MAX_NEW_TOKENS, sampling=sampling, stop_token_ids=stop_ids, seed=0)
 
     for text, toks in zip(texts, result["tokens"]):
         shown = text if len(text) <= 100 else text[:100] + "..."

@@ -27,7 +27,7 @@ The implementation builds on the attention helpers of `models/demos/gemma4` (pag
 | Blackhole Galaxy | 8 | 1x8 submesh | TP8, DP1 | 1 | 30.3 | 30.3 | 1.00 s |
 | Blackhole Galaxy | 8 | 1x8 submesh | TP8, DP1 | 32 | 29.5 | 918 | - |
 
-Measured on a Blackhole Galaxy submesh with DP1, 128 new tokens, `MUSE_ATTN_FIDELITY=hifi2`, `MUSE_MLP_FIDELITY=lofi`. The QB2 rows are measured on a 1x4 submesh of a Blackhole Galaxy, which runs the same TP4 code path. Replica submeshes are created with `models.tt_transformers.tt.generator.create_submeshes`.
+Measured on a Blackhole Galaxy submesh with DP1, 128 new tokens. The QB2 rows are measured on a 1x4 submesh of a Blackhole Galaxy, which runs the same TP4 code path. Replica submeshes are created with `models.tt_transformers.tt.generator.create_submeshes`.
 
 Accuracy (teacher forcing against the reference, TP4, 52 layers): top-1 0.977, top-5 1.0.
 
@@ -54,42 +54,31 @@ One model replica runs on a `1 x TP` mesh (TP in {1, 2, 4, 8}). The residual str
    huggingface-cli download meta-models/Muse-Glimmer-30B --local-dir <dir>
    export HF_MODEL=<dir>      # default: /mnt/tt-data/Muse-Glimmer-30B
    ```
-2. Weight cache: converted TT weights are cached in `<ckpt>/tt_cache/tp{TP}` (override the base dir with `MUSE_TT_CACHE`; if not writable, falls back to `$TT_METAL_HOME/generated/muse_glimmer_tt_cache/tp{TP}`). The first load is slow; later loads and other DP replicas reuse the cache.
+2. Weight cache: converted TT weights are cached in `<ckpt>/tt_cache/tp{TP}` (override the base dir with `TT_CACHE_PATH`; if not writable, falls back to `$TT_METAL_HOME/generated/muse_glimmer_tt_cache/tp{TP}`). The first load is slow; later loads and other DP replicas reuse the cache.
 3. `transformers` in the Python env does **not** need `muse_glimmer` support. The torch reference (`reference/model.py`) is pure torch, and the tokenizer is loaded from `tokenizer.json` + `chat_template.jinja`.
 
 ## Running the demo
 
+Configurations are pytest ids; select one with `-k`: `dp1-tp4-b1-greedy`, `dp1-tp4-b32-greedy`, `dp1-tp8-b1-greedy`, `dp1-tp8-b32-greedy`, `dp8-tp4-b32-greedy`, `dp4-tp8-b32-greedy`, `dp1-tp4-b32-topp` (top-p sampling: temperature 1.0, top-p 0.95, top-k 32; the others are greedy). Configurations that need more devices than the opened mesh are skipped.
+
 ```bash
 # QB2 (1x4, TP4, DP1)
-MESH_DEVICE=P300x2 pytest models/demos/muse_glimmer_30b/demo/text_demo.py -sv
+MESH_DEVICE=P300x2 pytest models/demos/muse_glimmer_30b/demo/text_demo.py -k "dp1-tp4-b1-greedy"
 
 # Blackhole Galaxy, DP8 x TP4
-MESH_DEVICE=BHGLX MUSE_DP=8 pytest models/demos/muse_glimmer_30b/demo/text_demo.py -sv
+MESH_DEVICE=BHGLX pytest models/demos/muse_glimmer_30b/demo/text_demo.py -sv -k "dp8-tp4-b32-greedy"
 
 # Blackhole Galaxy, DP4 x TP8
-MESH_DEVICE=BHGLX MUSE_DP=4 MUSE_TP=8 pytest models/demos/muse_glimmer_30b/demo/text_demo.py -sv
+MESH_DEVICE=BHGLX pytest models/demos/muse_glimmer_30b/demo/text_demo.py -sv -k "dp4-tp8-b32-greedy"
 ```
 
-The demo runs chat-templated prompts from `demo/sample_prompts.json` (cycled to fill the global batch), with paged KV and traced decode, and logs TTFT and tok/s/user.
+The demo runs chat-templated prompts from `demo/sample_prompts.json` (cycled to fill the global batch), with paged KV and traced decode, and logs TTFT and tok/s/user. It generates 128 new tokens. Sampling runs on device whenever TP>1 (greedy = force-argmax, top-k capped at 32; only a `[32]` token tensor is read back from device 0) and on the host otherwise.
 
 | Env var | Meaning | Default |
 |---|---|---|
 | `MESH_DEVICE` | Optional. `P300x2`/`P150x4`/`QB2` (1x4), `P150x8` (1x8), `BHGLX`/`GLX` (8x4), or `RxC`. When unset, the root fixture opens the full system mesh (also correct on a Galaxy) | unset: full system mesh |
-| `MUSE_TP` | Tensor-parallel width per replica | 4 (8 if `MUSE_DP=4` on 32 devices) |
-| `MUSE_DP` | Data-parallel replicas (4 or 8 on 32 devices; must be 1 otherwise) | 8 (TP4) / 4 (TP8) on 32 devices, else 1 |
-| `MUSE_ATTN_FIDELITY` | Decode (M<=32) matmul fidelity for attention QKVG/O: `hifi2` (HiFi2 + fp32 acc) or `lofi` (no config, LoFi) | hifi2 |
-| `MUSE_MLP_FIDELITY` | Same for MLP gate/up/down (separate DRAM-sharded gate and up weights) | lofi |
-| `MUSE_MM_FIDELITY` | Legacy: if set (`lofi`/`default`/`hifi2`), overrides both of the above (logs a warning) | unset |
-| `MUSE_BATCH` | Batch per replica (<= 32) | 32 |
-| `MUSE_MAX_NEW_TOKENS` | Tokens to generate | 128 |
-| `MUSE_SAMPLING` | `greedy` or `topp` (temperature 1.0, top-p 0.95, top-k 64) | greedy |
-| `MUSE_NUM_LAYERS` | Truncate the model to N layers (debug) | all 52 |
-| `MUSE_FABRIC` | `ring` selects FABRIC_1D_RING instead of FABRIC_1D | FABRIC_1D |
-| `MUSE_TRACE_REGION_SIZE` | Trace region size in bytes (`device_params()` default 256000000 when unset) | 200000000 (demo) |
-| `MUSE_DEVICE_SAMPLING` | `0` disables on-device sampling (full-logits host readback + host sampling); default on for TP>1 (greedy = force-argmax, top-k capped at 32); only a `[32]` token tensor is read back from device 0 | 1 |
-| `MUSE_TT_CACHE` | Weight cache base directory | `<ckpt>/tt_cache` |
 | `HF_MODEL` | Checkpoint directory | `/mnt/tt-data/Muse-Glimmer-30B` |
-| `MUSE_CCL_TOPOLOGY`, `MUSE_CCL_NUM_LINKS` | Read in `tt/ccl.py` for topology/link-count selection; the CCL calls themselves are the default synchronous `ttnn.all_reduce` / `ttnn.all_gather`, so treat these as informational | Ring if TP>=8 else Linear; 2 links |
+| `TT_CACHE_PATH` | Weight cache base directory | `<ckpt>/tt_cache` |
 
 The demo uses `max_seq_len=4096`.
 

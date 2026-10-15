@@ -7,10 +7,7 @@
 Op sequences adapted from models/demos/gemma4/tt/attention/{decode,prefill}.py.
 """
 
-import os
-
 import torch
-from loguru import logger
 
 import ttnn
 from models.demos.gemma4.tt.attention.operations import (
@@ -27,34 +24,17 @@ from models.demos.muse_glimmer_30b.tt.rms_norm import per_head_rms_norm
 from models.demos.muse_glimmer_30b.tt.weight_packing import pack_o, pack_qkvg
 
 
-def decode_fidelity(group: str) -> str:
-    """Resolve the decode matmul fidelity ("lofi" | "hifi2") for group "attn" or "mlp"."""
-    legacy = os.environ.get("MUSE_MM_FIDELITY")
-    if legacy:
-        legacy = legacy.lower()
-        legacy = {"default": "lofi"}.get(legacy, legacy)
-        assert legacy in ("lofi", "hifi2"), f"MUSE_MM_FIDELITY must be lofi|default|hifi2, got {legacy}"
-        logger.warning(f"MUSE_MM_FIDELITY={legacy} set: overriding MUSE_ATTN_FIDELITY/MUSE_MLP_FIDELITY")
-        return legacy
-    env, default = ("MUSE_ATTN_FIDELITY", "hifi2") if group == "attn" else ("MUSE_MLP_FIDELITY", "lofi")
-    fid = os.environ.get(env, default).lower()
-    assert fid in ("lofi", "hifi2"), f"{env} must be lofi|hifi2, got {fid}"
-    return fid
-
-
 def dram_sharded_enabled(k: int, n: int, dtype) -> bool:
-    """DRAM-width-sharded decode matmul is used when MUSE_DRAM_SHARDED != "0" (default on) and shapes qualify."""
-    return os.environ.get("MUSE_DRAM_SHARDED", "1") != "0" and can_dram_shard(k, n, dtype)
+    """DRAM-width-sharded decode matmul is used whenever the shapes qualify."""
+    return can_dram_shard(k, n, dtype)
 
 
 class MuseLinear:
     """Per-rank weight [k, n] served by DramShardedLinear (decode + prefill) when eligible, else ttnn.linear.
 
-    Decode compute config (group "attn" -> env MUSE_ATTN_FIDELITY, default hifi2; group "mlp" -> env
-    MUSE_MLP_FIDELITY, default lofi; MUSE_MM_FIDELITY, if set, overrides both):
-      * DRAM-sharded decode (M <= 32): "lofi" -> None (gemma4 behaviour: LoFi, no fp32 acc); "hifi2" -> HiFi2 config.
-      * DRAM-sharded prefill (M > 32) and the non-sharded fallback: always the validated HiFi2/fp32-acc config
-        ("default" there keeps the validated config).
+    Decode compute config (group "attn" -> HiFi2 config; group "mlp" -> None, i.e. LoFi without fp32 acc):
+      * DRAM-sharded decode (M <= 32): the group's decode config.
+      * DRAM-sharded prefill (M > 32) and the non-sharded fallback: the HiFi2/fp32-acc config.
     Output is DRAM interleaved in all paths.
     """
 
@@ -63,7 +43,7 @@ class MuseLinear:
     ):
         self.k, self.n = k, n
         self.hifi_cfg = matmul_compute_config(mesh_device)
-        self.decode_cfg = None if decode_fidelity(group) == "lofi" else self.hifi_cfg
+        self.decode_cfg = self.hifi_cfg if group == "attn" else None
         self.sharded = dram_sharded_enabled(k, n, dtype) if sharded is None else sharded
         mapper = shard_mapper(mesh_device, shard_dim)
         if self.sharded:

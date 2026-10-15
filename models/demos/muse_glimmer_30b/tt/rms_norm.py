@@ -4,8 +4,6 @@
 
 """RMSNorm (interleaved, with a width-sharded decode path) and weightless per-head RMSNorm."""
 
-import os
-
 import torch
 
 import ttnn
@@ -46,7 +44,7 @@ class RMSNorm:
 
     Prefill (rows > 32) uses the interleaved path with a TILE gamma. Decode (1..32 rows, 4-D,
     interleaved input) uses a width-sharded path (ported from gemma4 tt/rms_norm.py) with a
-    ROW_MAJOR gamma [1,1,dim//32,32]; set MUSE_SHARDED_NORM=0 to disable. The sharded path
+    ROW_MAJOR gamma [1,1,dim//32,32]. The sharded path
     returns DRAM interleaved [1,1,rows,dim], same as the interleaved path.
     """
 
@@ -127,12 +125,7 @@ class RMSNorm:
         return self._sharded_cfgs[key]
 
     def _use_sharded(self, x):
-        return (
-            os.environ.get("MUSE_SHARDED_NORM", "1") != "0"
-            and len(x.shape) == 4
-            and 1 <= x.shape[-2] <= TILE
-            and not x.is_sharded()
-        )
+        return len(x.shape) == 4 and 1 <= x.shape[-2] <= TILE and not x.is_sharded()
 
     def _forward_sharded(self, x, memory_config):
         rows, dim = x.shape[-2], x.shape[-1]
@@ -142,11 +135,10 @@ class RMSNorm:
         if self.weight_rm is None and self.weight is None:
             # weightless norm: unit gamma so the sharded path can be used
             self.weight_rm = self._make_rm_gamma(torch.ones(dim))
-        # Default kernel config (None) is the fast path; MUSE_NORM_HIFI4=1 selects HiFi4 + fp32 acc.
-        ckc = self.compute_kernel_config if os.environ.get("MUSE_NORM_HIFI4") == "1" else None
+        # Default kernel config (None) is the fast path for the sharded decode norm.
         x_sh = ttnn.to_memory_config(x, cfg[0])
         y = ttnn.rms_norm(
-            x_sh, epsilon=self.eps, weight=self.weight_rm, program_config=cfg[1], compute_kernel_config=ckc
+            x_sh, epsilon=self.eps, weight=self.weight_rm, program_config=cfg[1], compute_kernel_config=None
         )
         out = ttnn.sharded_to_interleaved(y, memory_config or ttnn.DRAM_MEMORY_CONFIG)
         x_sh.deallocate(True)

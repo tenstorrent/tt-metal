@@ -164,7 +164,7 @@ def test_model_full_depth_smoke(mesh_device, tp):
     print(f"TIMING model_load={time.time() - t0:.1f}s")
 
     ids = _chat_prompt_ids()
-    n_new = int(os.environ.get("MUSE_SMOKE_NEW_TOKENS", 80))
+    n_new = 80
     pt = _page_table(args, 1)
     pt_tt = _page_table_tt(pt, sub)
 

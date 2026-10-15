@@ -5,7 +5,6 @@
 """Muse-Glimmer-30B full text model on a 1 x TP mesh: embedding, decoder stack, final norm, softcapped lm_head."""
 
 import gc
-import os
 import time
 
 import torch
@@ -76,8 +75,7 @@ class MuseGlimmerModel:
         gc.collect()
         self.kv_caches = [allocate_kv_cache(args, mesh_device, kv_num_blocks) for _ in self.layers]
         self.sampling = None
-        if os.environ.get("MUSE_DEVICE_SAMPLING", "1").strip() != "0":
-            self._init_device_sampling()
+        self._init_device_sampling()
 
     def _init_device_sampling(self):
         """Build a SamplingGenerator (gemma4-style). tp == 1 is not supported (single-device vocab-split path)."""
