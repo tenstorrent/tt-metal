@@ -250,6 +250,7 @@ class V41PrefillBlock(LightweightModule):
         # different entry counts (the default slot 0 made every slot share one mask)
         kw = dict(slot=slot) if isinstance(self.attn, (V41CSA, V41CSAConsumer)) else {}
         self.states[slot] = self.attn.alloc_state(max_seq_len, chunk_tokens=chunk_tokens, **kw)
+        self.states[slot].slot = int(slot)  # every kind: the block picks this slot's attention islands by it
         if self.state is None:
             self.state = self.states[slot]
         return self.states[slot]
@@ -398,10 +399,21 @@ class V41PrefillBlock(LightweightModule):
         attn = self.attn
         # the CSA sources and their consumers only: V41SWA inherits TtHCA's traceable() (True by default) and its A2 builds
         # V4-Flash's contract export ring -- layers 0 / 1 (~65 ms of a chunk, DS41F-0037 10-11 profile) stay eager for now
-        if not isinstance(attn, (V41CSA, V41CSAConsumer)) or not attn.traceable():
+        # DS41F-0068: the CSA sources and their consumers, and (PREFILL_V41_A3_SWA) the sliding-window layers 0 / 1 -- V41SWA runs
+        # TtHCA's A1 (stems) and a V4.1 A2 (window SDPA + o-proj, no V4-Flash contract export ring)
+        kind = (
+            "src"
+            if isinstance(attn, V41CSA)
+            else "con"
+            if isinstance(attn, V41CSAConsumer)
+            else "swa"
+            if isinstance(attn, V41SWA)
+            else None
+        )
+        if kind is None or not attn.traceable():
             return
-        is_source = isinstance(attn, V41CSA)
-        rate = attn.compressor.compress_rate
+        is_source = kind == "src"
+        rate = attn.compressor.compress_rate if attn.compressor is not None else 1
         S_l = int(h.shape[2])
         if is_source:
             attn._a3_states, attn._a3_out = {}, {}
@@ -410,13 +422,13 @@ class V41PrefillBlock(LightweightModule):
             # sit at the capacity (an entries write past the cache). The request's reset puts the counters and the score mask back.
             saved = (state.kv_actual, state.entry_count, getattr(state, "mask_zeroed_upto", None))
             state.kv_actual, state.entry_count = int(chunk_tokens), int(chunk_tokens) // rate
+            kw = {}
             if is_source:
                 state.mask_zeroed_upto = 0
-                kw = {}
-            else:
+            elif kind == "con":
                 src_state, src_out = attn.source._a3_states[slot], attn.source._a3_out[slot]
                 kw = dict(src_idx=src_out[1], src_state=src_state)
-            glue_kw = {} if is_source else dict(src_state=kw["src_state"])
+            glue_kw = dict(src_state=kw["src_state"]) if "src_state" in kw else {}
             # eager warm (compiles every program, buckets included) BEFORE any capture of this phase
             attn.prepare_chunk(state, chunk_tokens)
             warm = attn.forward_pre(h, state, chunk_tokens)
@@ -428,7 +440,8 @@ class V41PrefillBlock(LightweightModule):
                     copy_into(dst, t)
                     ttnn.deallocate(t)
             for t in a2_warm + list(warm):
-                ttnn.deallocate(t)
+                if t is not None:  # the SWA phases carry None for entries / mask
+                    ttnn.deallocate(t)
             attn.prepare_chunk(state, chunk_tokens)
             A1 = TraceIsland(
                 self.mesh_device,
@@ -501,9 +514,7 @@ class V41PrefillBlock(LightweightModule):
         attn, state = self.attn, self.state
         attn.prepare_chunk(state, real_len)
         outs = A1.replay()
-        attn.glue_chunk(
-            state, outs, real_len, None, **({} if isinstance(attn, V41CSA) else dict(src_state=kw["src_state"]))
-        )
+        attn.glue_chunk(state, outs, real_len, None, **(dict(src_state=kw["src_state"]) if "src_state" in kw else {}))
         a2 = A2.replay()
         attn.epilogue_chunk(state, outs, a2, None, real_len)
         return a2[0]

@@ -650,6 +650,39 @@ def _source_alloc_state(self, max_seq_len: int, batch: int = 1, chunk_tokens: in
 
 
 V41CSA.alloc_state = _source_alloc_state
+
+
+# ---- DS41F-0068: path A3 for the sliding-window layers 0 / 1 (PREFILL_V41_A3_SWA) -----------------------------------------------
+# TtHCA's protocol with no compressor: prepare_chunk pushes the rope base, A1 = q / window-KV stems, no glue; A2 = the window
+# SDPA over [carry | chunk] + o-proj (V4-Flash's A2 also builds the contract export ring, which V4.1 does not use: kv_export.py
+# reads the carry); the epilogue takes the carry at the real length (a ragged final chunk) and advances the counter.
+A3_SWA = os.environ.get("PREFILL_V41_A3_SWA", "1") == "1"
+
+
+def _swa_traceable(self) -> bool:
+    return A3 and A3_SWA
+
+
+def _swa_forward_attn(self, hidden_states, outs, state, real_len: int, chunk0: bool = False, **_kw):
+    assert not chunk0, "V4.1 runs chunk 0 eagerly"
+    q, sliding_kv, _e, _m, cos, sin = outs
+    attn, next_carry, sliding_kv_g = self._attention(
+        q, sliding_kv, None, None, cos, sin, carry=state.sliding_carry, kv_actual=1, real_len=real_len
+    )
+    return self._o_proj(attn), next_carry, sliding_kv_g
+
+
+def _swa_epilogue_chunk(self, state, outs, a2, export, real_len: int) -> None:
+    assert export is None, "V4.1 exports from the states after the chunk (kv_export.py)"
+    _a3_carry(self, state, a2[2], a2[1], real_len)
+    state.kv_actual += int(real_len)
+
+
+V41SWA.traceable = _swa_traceable
+V41SWA.forward_attn = _swa_forward_attn
+V41SWA.epilogue_chunk = _swa_epilogue_chunk
+V41SWA.supports_chunk0_island = False
+V41SWA.capacity_buckets = lambda self, state, seq_local: []
 V41CSA.traceable = _source_traceable
 V41CSA.prepare_chunk = _source_prepare_chunk
 V41CSA.forward_attn = _source_forward_attn
