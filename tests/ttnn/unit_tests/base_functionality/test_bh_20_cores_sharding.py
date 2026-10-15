@@ -4,7 +4,7 @@
 
 import pytest
 import torch
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 

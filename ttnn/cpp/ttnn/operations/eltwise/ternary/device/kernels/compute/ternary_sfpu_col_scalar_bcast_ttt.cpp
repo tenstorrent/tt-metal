@@ -54,13 +54,17 @@ ALWI void process_tile(
 
         tile_regs_acquire();
 
-        // Copy all 3 inputs to destination registers
+        // Copy all 3 inputs to destination registers.
+        // copy_init does not reconfigure the unpacker data format, and the operands may differ in dtype.
+        reconfig_data_format_srca(false_dfb.get_id(), predicate_dfb.get_id());
         copy_init(predicate_dfb.get_id());
         copy_tile(predicate_dfb.get_id(), 0, 0);  // predicate to reg 0, 3, 6, ...
 
+        reconfig_data_format_srca(predicate_dfb.get_id(), true_dfb.get_id());
         copy_init(true_dfb.get_id());
         copy_tile(true_dfb.get_id(), 0, 1);  // true to reg 1, 4, 7, ...
 
+        reconfig_data_format_srca(true_dfb.get_id(), false_dfb.get_id());
         copy_init(false_dfb.get_id());
         copy_tile(false_dfb.get_id(), 0, 2);  // false to reg 2, 5, 8, ...
 

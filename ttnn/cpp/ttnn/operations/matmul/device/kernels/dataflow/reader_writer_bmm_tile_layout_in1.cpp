@@ -182,6 +182,9 @@ void kernel_main() {
 #endif  // not defined IN1_SHARDED or not defined OUT_SHARDED
 
 #ifdef OUT_SHARDED
-    dfb_out.wait_front(batch * out_num_subblocks_h * out_num_subblocks_w * out_subblock_w * out_subblock_h);
+    const uint32_t out_num_tiles = batch * out_num_subblocks_h * out_num_subblocks_w * out_subblock_w * out_subblock_h;
+    dfb_out.wait_front(out_num_tiles);
+    // Pop the same number of tiles that were waited for.
+    dfb_out.pop_front(out_num_tiles);
 #endif  // OUT_SHARDED
 }
