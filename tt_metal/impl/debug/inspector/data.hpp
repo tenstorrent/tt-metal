@@ -65,6 +65,7 @@ private:
     std::mutex programs_mutex;
     std::mutex mesh_buffers_mutex;
     std::mutex mesh_devices_mutex;
+    // Serializes writes to the mesh workloads log (mesh_workloads_log.yaml)
     std::mutex mesh_workloads_mutex;
     std::mutex runtime_entries_mutex;
     // mutex to protect dispatch core info
@@ -81,7 +82,6 @@ private:
     std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data;
     std::unordered_map<const distributed::MeshBuffer*, inspector::MeshSocketData> mesh_sockets_data;
     std::unordered_map<const distributed::MeshBuffer*, inspector::GlobalSemaphoreData> global_semaphores_data;
-    std::unordered_map<uint64_t, inspector::MeshWorkloadData> mesh_workloads_data;
     static constexpr size_t kRuntimeEntriesCapacity = 8192;
     std::array<inspector::MeshWorkloadRuntimeEntry, kRuntimeEntriesCapacity> runtime_entries{};
     size_t runtime_entries_write_pos{0};

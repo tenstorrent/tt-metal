@@ -80,9 +80,9 @@ std::optional<MeshCoordinateRange> find_intersection(
 
 }  // namespace
 
-MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) { Inspector::mesh_workload_created(this); }
+MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {}
 
-MeshWorkloadImpl::~MeshWorkloadImpl() { Inspector::mesh_workload_destroyed(this); }
+MeshWorkloadImpl::~MeshWorkloadImpl() = default;
 
 MeshWorkloadImpl::FinalizedMetadata& MeshWorkloadImpl::get_finalized_metadata() {
     TT_ASSERT(finalized_metadata_.has_value());

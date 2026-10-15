@@ -255,7 +255,8 @@ interface Inspector {
     # Get mesh devices currently alive
     getMeshDevices @1 () -> (meshDevices :List(MeshDeviceData));
 
-    # Get mesh workloads currently alive
+    # Deprecated: Inspector no longer tracks mesh workloads, always returns an empty list.
+    # Kept (instead of removed) because capnp ordinals must stay sequential.
     getMeshWorkloads @2 () -> (meshWorkloads :List(MeshWorkloadData));
 
     # Get list of local devices that are being used by this Metal runtime

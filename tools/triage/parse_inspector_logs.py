@@ -338,35 +338,28 @@ def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, M
         startup = get_startup_data(log_directory)
 
     mesh_workloads: dict[int, MeshWorkloadData] = {}
-    for entry in data:
-        if "mesh_workload_created" in entry:
-            info = entry["mesh_workload_created"]
-            mesh_workload_id = int(info.get("mesh_workload_id"))
+
+    # Workloads are not logged on creation/destruction, they appear on their first add_program/set_program_binary_status.
+    def get_or_create_workload(mesh_workload_id: int) -> MeshWorkloadData:
+        if mesh_workload_id not in mesh_workloads:
             mesh_workloads[mesh_workload_id] = MeshWorkloadData(
                 meshWorkloadId=mesh_workload_id,
                 programs=[],
                 binary_status_per_mesh_device={},
             )
-            if startup is not None:
-                startup.print_log(int(info.get("timestamp_ns")), f"Mesh workload {mesh_workload_id} created")
-        elif "mesh_workload_destroyed" in entry:
-            info = entry["mesh_workload_destroyed"]
-            mesh_workload_id = int(info.get("mesh_workload_id"))
-            if mesh_workload_id in mesh_workloads:
-                del mesh_workloads[mesh_workload_id]
-            if startup is not None:
-                startup.print_log(int(info.get("timestamp_ns")), f"Mesh workload {mesh_workload_id} destroyed")
-        elif "mesh_workload_add_program" in entry:
+        return mesh_workloads[mesh_workload_id]
+
+    for entry in data:
+        if "mesh_workload_add_program" in entry:
             info = entry["mesh_workload_add_program"]
             mesh_workload_id = int(info.get("mesh_workload_id"))
             program_id = int(info.get("program_id"))
             coordinates = [
                 MeshCoordinate(coordinates=[int(c) for c in coord]) for coord in info.get("coordinates", [[]])
             ]
-            if mesh_workload_id in mesh_workloads:
-                mesh_workloads[mesh_workload_id].programs.append(
-                    MeshWorkloadProgramData(programId=program_id, coordinates=coordinates)
-                )
+            get_or_create_workload(mesh_workload_id).programs.append(
+                MeshWorkloadProgramData(programId=program_id, coordinates=coordinates)
+            )
             if startup is not None:
                 startup.print_log(
                     int(info.get("timestamp_ns")),
@@ -376,8 +369,7 @@ def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, M
             info = entry["mesh_workload_set_program_binary_status"]
             mesh_workload_id = int(info.get("mesh_workload_id"))
             mesh_id = int(info.get("mesh_id"))
-            if mesh_workload_id in mesh_workloads:
-                mesh_workloads[mesh_workload_id].binary_status_per_mesh_device[mesh_id] = info.get("status")
+            get_or_create_workload(mesh_workload_id).binary_status_per_mesh_device[mesh_id] = info.get("status")
             if startup is not None:
                 startup.print_log(
                     int(info.get("timestamp_ns")),
