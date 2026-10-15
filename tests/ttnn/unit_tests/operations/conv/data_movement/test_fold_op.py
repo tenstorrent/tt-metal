@@ -495,3 +495,40 @@ def test_fold_tile_partial_tile_width_rejected(device, expect_error):
     ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     with expect_error(RuntimeError, "stride_w|logical W"):
         ttnn.fold(ttnn_in, 32, 32)
+
+
+# fold of an fp32 TILE height-sharded tensor with padding routes through halo's pack_untilize.
+# That kernel left unpack_to_dest_mode unset, so a Float32 input unpacked via SrcA as Tf32 and lost
+# 13 mantissa bits on a copy-only op (relative error 2^-11). The DRAM parametrization above cannot
+# reach it: it skips TILE with padding, so nothing drove an fp32 tiled input into halo.
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_fold_sharded_tile_padded_is_bit_exact(device, input_dtype):
+    torch.manual_seed(0)
+    n, h, w, c = 1, 32, 32, 32
+    stride_h = stride_w = 2
+    padding = [1, 1, 1, 1]
+
+    torch_dtype = torch.float32 if input_dtype == ttnn.float32 else torch.bfloat16
+    torch_input_nhwc = torch.rand((n, h, w, c), dtype=torch_dtype)
+    torch_output = fold_torch(torch_input_nhwc, stride_h, stride_w, padding=padding)
+
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    shard_height = (n * h * w) // 4
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [shard_height, c], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tt_input = ttnn.from_torch(
+        torch_input_nhwc, input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+
+    tt_output = ttnn.to_torch(ttnn.fold(tt_input, stride_h=stride_h, stride_w=stride_w, padding=padding)).reshape(
+        torch_output.shape
+    )
+
+    # Copy-only op: the reference and the device output share the input dtype, so exact equality.
+    assert torch.equal(torch_output, tt_output), (
+        f"not bit-exact for {input_dtype}: max abs diff " f"{(torch_output - tt_output).abs().max().item():.3e}"
+    )

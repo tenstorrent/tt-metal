@@ -208,10 +208,25 @@ ProgramDescriptor build_halo_program(
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc.core_ranges = all_cores;
         compute_desc.compile_time_args = compute_ct_args;
+        // A Float32 input has to unpack straight to Dest. Through SrcA it is narrowed to Tf32 and
+        // loses 13 mantissa bits, which shows on this copy-only path: fold of an fp32 TILE
+        // height-sharded tensor came back with a relative error of 2^-11.
+        //
+        // Both flags follow the input format rather than the caller's compute_kernel_config,
+        // because that config does not always track the dtype halo actually untilizes. conv2d
+        // sets fp32_dest_acc only when the activation and the weights are both fp32
+        // (conv2d_utils.cpp), so fp32 activations with bf16 weights reach here with it false.
+        const bool is_fp32 = in_df == tt::DataFormat::Float32;
+        std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        if (is_fp32) {
+            unpack_to_dest_mode[cb_indices.src_cb_id] = UnpackToDestMode::UnpackToDestFp32;
+        }
+
         compute_desc.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .fp32_dest_acc_en = fp32_dest_acc_en || is_fp32,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
             .math_approx_mode = math_approx_mode,
         };
 
