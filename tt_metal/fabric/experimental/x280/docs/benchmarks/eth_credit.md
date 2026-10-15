@@ -721,9 +721,11 @@ The E0/E1 kernels are built by the Metal JIT at launch. `x280_eth_credit_jit`
 does for an active ERISC: tt-metal's `active_erisck.cc` wrapper around the
 kernel source, the JIT's flags and include roots, and the kernel's own directory
 as its only extra root, for ERISC0 (NoC 0) and ERISC1 (NoC 1) at three shapes
-and every bring-up mode. When a Metal runtime cache holds active-ERISC firmware
-built from the same tt-metal tree, each object is also linked against it;
-otherwise the check says "compile only".
+and every bring-up mode. When Metal's runtime cache (`TT_METAL_CACHE`, else
+`~/.cache`) holds active-ERISC firmware built from this checkout, each object is
+also linked against it; the check reports E0 and E1 separately as "linked" or
+"compile only". A cache entry matches by checkout path, not revision, so a link
+result counts only after a Metal program has run from this build.
 
 ## Hardware facts
 

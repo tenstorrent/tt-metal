@@ -11,9 +11,12 @@
 # EthernetConfig carries no compiler_include_paths.
 #
 # Each shape and bring-up mode below is compiled for ERISC0 (NoC 0) and ERISC1
-# (NoC 1). When a Metal runtime cache holds the weakened active-ERISC firmware
-# built from this same tt-metal tree, each object is also linked against it;
-# otherwise the link is skipped and the script says so.
+# (NoC 1). When a Metal runtime cache holds weakened active-ERISC firmware built
+# from this tt-metal checkout, each object is also linked against it; otherwise
+# the link is skipped and the script says so, per firmware half. A cache entry
+# matches by its checkout path, which does not prove it was built from the
+# checkout's current revision: a link result is evidence only after a Metal
+# program has run from this build, which refreshes the firmware.
 #
 # Usage: eth_credit_jit_check.sh <SFPI g++> <tt-metal dir> <x280 dir> <scratch dir>
 set -euo pipefail
@@ -25,17 +28,27 @@ OUT=${4:?scratch dir}
 [[ -x "$GXX" ]] || { echo "FAIL: no JIT compiler at $GXX" >&2; exit 1; }
 mkdir -p "$OUT"
 
-# The firmware a kernel links against: a cache entry whose dependency hashes
-# name this tt-metal tree.
+# Metal's JIT cache root: $TT_METAL_CACHE/tt-metal-cache when set, else
+# ~/.cache/tt-metal-cache (rtoptions.cpp, jit_build/build.cpp).
+if [[ -n "${TT_METAL_CACHE:-}" ]]; then
+    CACHE_ROOT=${TT_METAL_CACHE%/}/tt-metal-cache
+else
+    CACHE_ROOT=${HOME}/.cache/tt-metal-cache
+fi
+
+# The firmware a kernel links against: the newest cache entry whose dependency
+# hashes name this tt-metal checkout.
 find_weakened() {
-    local name=$1 dir
-    for dir in "${HOME}"/.cache/tt-metal-cache/*/firmware/"$name"; do
-        [[ -f "$dir/${name}_weakened.elf" ]] || continue
-        if grep -qs "${TTM}tt_metal/hw/firmware" "$dir"/*.dephash; then
-            echo "$dir/${name}_weakened.elf"
-            return
+    local name=$1 dir elf best=""
+    for dir in "$CACHE_ROOT"/*/firmware/"$name"; do
+        elf="$dir/${name}_weakened.elf"
+        [[ -f "$elf" ]] || continue
+        grep -qs "${TTM}tt_metal/hw/firmware" "$dir"/*.dephash || continue
+        if [[ -z "$best" || "$elf" -nt "$best" ]]; then
+            best=$elf
         fi
     done
+    echo "$best"
 }
 
 COMMON="-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one
@@ -65,11 +78,16 @@ for d in . .. "" ttnn ttnn/cpp tt_metal/hw/inc tt_metal/tt-llk/common tt_metal/t
 done
 INC+=" -I${X280}/kernels/eth_credit"   # the kernel source directory, appended last as the JIT does
 
-WEAK0=$(find_weakened active_erisc || true)
-WEAK1=$(find_weakened subordinate_active_erisc || true)
-if [[ -z "$WEAK0" || -z "$WEAK1" ]]; then
-    echo "NOTE: no Metal runtime cache for ${TTM}; compiling without linking"
-fi
+WEAK0=$(find_weakened active_erisc)
+WEAK1=$(find_weakened subordinate_active_erisc)
+for half in "E0:active_erisc:$WEAK0" "E1:subordinate_active_erisc:$WEAK1"; do
+    IFS=: read -r role name elf <<< "$half"
+    if [[ -n "$elf" ]]; then
+        echo "NOTE: $role links against $elf"
+    else
+        echo "NOTE: no $name firmware for ${TTM} under $CACHE_ROOT; $role compiles without linking"
+    fi
+done
 
 SHAPES=(
     "-DEC_P=2 -DEC_N_LINK=8 -DEC_N_DELIVER=8 -DEC_SLOT_SIZE=4192 -DEC_BATCH=2"
@@ -105,4 +123,4 @@ for shape in "${SHAPES[@]}"; do
     for mode in "${E0_MODES[@]}"; do build e0 0 kernel_main_aerisc.ld "$WEAK0" "$shape" "$mode"; done
     for mode in "${E1_MODES[@]}"; do build e1 1 kernel_subordinate_aerisc.ld "$WEAK1" "$shape" "$mode"; done
 done
-echo "PASS: $built eth_credit ERISC builds$([[ -n "$WEAK0" ]] && echo ", linked" || echo ", compile only")"
+echo "PASS: $built eth_credit ERISC builds; E0 $([[ -n "$WEAK0" ]] && echo linked || echo "compile only"), E1 $([[ -n "$WEAK1" ]] && echo linked || echo "compile only")"
