@@ -37,6 +37,9 @@ class GPTOSSAttentionProgramConfig(ProgramConfig):
         (4096, 128, 128),
     )
 
+    # Prefill SDPA (QK^T and PV matmuls) at HiFi2 on Blackhole; decode SDPA stays at math_fidelity (HiFi4).
+    prefill_sdpa_math_fidelity: str | None = "HiFi2"
+
     # Matmul configs - None = auto-optimize (recommended)
     decode_qkv_cores: tuple[int, int] | None = None
     decode_out_cores: tuple[int, int] | None = None

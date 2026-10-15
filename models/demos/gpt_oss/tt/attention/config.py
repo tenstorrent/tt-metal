@@ -58,6 +58,8 @@ class ProgramConfig:
     math_approx_mode: bool = False
     fp32_dest_acc_en: bool = False
     packer_l1_acc: bool = False
+    # Prefill SDPA math fidelity on Blackhole; None uses math_fidelity (decode SDPA always uses math_fidelity).
+    prefill_sdpa_math_fidelity: str | None = None
 
     # Matmul program config parameters (optional - None means no program config)
     # Decode QKV projection
@@ -112,6 +114,11 @@ class ProgramConfig:
         valid_fidelities = ["LoFi", "HiFi2", "HiFi3", "HiFi4"]
         if self.math_fidelity not in valid_fidelities:
             raise ValueError(f"math_fidelity must be one of {valid_fidelities}, got {self.math_fidelity}")
+        if self.prefill_sdpa_math_fidelity is not None and self.prefill_sdpa_math_fidelity not in valid_fidelities:
+            raise ValueError(
+                f"prefill_sdpa_math_fidelity must be None or one of {valid_fidelities}, "
+                f"got {self.prefill_sdpa_math_fidelity}"
+            )
 
     def get_decode_sdpa_config(self, mesh_device) -> ttnn.SDPAProgramConfig:
         """Get SDPA config for decode mode"""
@@ -149,10 +156,17 @@ class ProgramConfig:
             k_chunk_size=k_chunk,
         )
 
-    def get_compute_kernel_config(self) -> ttnn.WormholeComputeKernelConfig:
-        """Get compute kernel config"""
+    def get_prefill_sdpa_compute_kernel_config(self, mesh_device) -> ttnn.WormholeComputeKernelConfig:
+        """Compute kernel config of the prefill SDPA: prefill_sdpa_math_fidelity on Blackhole, else as decode"""
+        fidelity = self.math_fidelity
+        if self.prefill_sdpa_math_fidelity is not None and ttnn.device.is_blackhole(mesh_device):
+            fidelity = self.prefill_sdpa_math_fidelity
+        return self.get_compute_kernel_config(fidelity)
+
+    def get_compute_kernel_config(self, math_fidelity: str | None = None) -> ttnn.WormholeComputeKernelConfig:
+        """Get compute kernel config (math_fidelity overrides the configured fidelity)"""
         return ttnn.WormholeComputeKernelConfig(
-            math_fidelity=getattr(ttnn.MathFidelity, self.math_fidelity),
+            math_fidelity=getattr(ttnn.MathFidelity, math_fidelity or self.math_fidelity),
             math_approx_mode=self.math_approx_mode,
             fp32_dest_acc_en=self.fp32_dest_acc_en,
             packer_l1_acc=self.packer_l1_acc,
