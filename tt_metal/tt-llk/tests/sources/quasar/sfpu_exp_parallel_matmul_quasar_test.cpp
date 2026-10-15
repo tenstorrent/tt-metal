@@ -110,7 +110,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
-        _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
+        _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(
+            static_cast<DataFormat>(IMPLIED_MATH_FORMAT ? formats.unpack_B_dst : formats.math),
+            static_cast<DataFormat>(IMPLIED_MATH_FORMAT ? formats.unpack_A_dst : formats.math),
+            CT_DIM,
+            RT_DIM);
         PROFILER_SYNC();
     }
     {
