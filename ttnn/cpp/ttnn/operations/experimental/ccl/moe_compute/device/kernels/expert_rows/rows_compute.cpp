@@ -411,10 +411,17 @@ void kernel_main() {
             phase2_chunked(m);
         }
     };
-    phase1_job(0);
-    for (uint32_t j = 1; j < nj; ++j) {
-        phase1_job(j);
-        phase2_job(j - 1);
+    // Keep one callsite per phase so the large inlined compute bodies are not duplicated.
+    // The order remains P1(0), P1(1), P2(0), ..., P1(nj-1), P2(nj-2), P2(nj-1).
+    for (uint32_t j = 0;; ++j) {
+        if (j < nj) {
+            phase1_job(j);
+        }
+        if (j > 0) {
+            phase2_job(j - 1);
+        }
+        if (j == nj) {
+            break;
+        }
     }
-    phase2_job(nj - 1);
 }
