@@ -8,12 +8,11 @@ import torch
 import ttnn
 from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
-    assert_centers_close,
-    assert_channels_close,
-    assert_pcc,
     assert_topk_close,
     build_reference_head,
+    check_head_outputs,
     random_bev,
+    to_device,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_head_parameters
 from models.experimental.bevformer.tt.tt_head import TtBEVFormerHead
@@ -43,22 +42,8 @@ def _models(bev_shape, device):
     return torch_model, TtBEVFormerHead(create_head_parameters(torch_model, device), device)
 
 
-def _to_device(tensor, device):
-    return ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-
 def _check(torch_outputs, tt_outputs):
-    tt_outputs = tuple(ttnn.to_torch(t).float() for t in tt_outputs)
-    # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.
-    for name, tensor in zip(("class logits", "box predictions"), tt_outputs):
-        assert torch.isfinite(tensor).all(), f"non-finite values in the head {name}"
-    assert_centers_close(torch_outputs[1], tt_outputs[1])
-    # Over all layers, then the last alone, which the coder reads and where bfloat16 error has built up most.
-    for layers in (slice(None), -1):
-        assert_pcc(torch_outputs[0][layers], tt_outputs[0][layers], 0.99)
-        # Channel by channel: a joint PCC would be the centers' alone, as x and y span 102.4 m
-        # against z's 8 m and the other channels' O(1).
-        assert_channels_close(torch_outputs[1][layers], tt_outputs[1][layers])
+    check_head_outputs(torch_outputs, tuple(ttnn.to_torch(t).float() for t in tt_outputs))
 
 
 @torch.no_grad()
@@ -67,7 +52,7 @@ def _check(torch_outputs, tt_outputs):
 def test_head(device, reset_seeds, name, bev_shape, batch_size, traced):
     torch_model, tt_model = _models(bev_shape, device)
     bev_embed = _bev_embed(bev_shape, batch_size, seed=0)
-    tt_bev_embed = _to_device(bev_embed, device)
+    tt_bev_embed = to_device(bev_embed, device)
 
     # The first run compiles; a second one must only hit the program cache.
     tt_model(tt_bev_embed)
@@ -103,7 +88,7 @@ def test_head_detections(device, reset_seeds):
     torch_model, tt_model = _models(bev_shape, device)
     bev_embed = _bev_embed(bev_shape, batch_size, seed=0)
     cls_scores, bbox_preds = torch_model(bev_embed)
-    tt_cls_scores, tt_bbox_preds = tt_model(_to_device(bev_embed, device))
+    tt_cls_scores, tt_bbox_preds = tt_model(to_device(bev_embed, device))
     tt_topk = tuple(ttnn.to_torch(t) for t in TtNMSFreeCoder(device).topk(tt_cls_scores[-1], tt_bbox_preds[-1]))
     assert_topk_close(
         cls_scores[-1], bbox_preds[-1], ttnn.to_torch(tt_cls_scores[-1]), ttnn.to_torch(tt_bbox_preds[-1]), tt_topk

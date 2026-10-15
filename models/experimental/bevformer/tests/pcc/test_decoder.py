@@ -4,19 +4,17 @@
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
 from models.experimental.bevformer.model_config import GRID_DTYPE
 from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
-    assert_channels_close,
-    assert_pcc,
     build_reference_decoder,
     build_reg_branches,
-    layer_metrics,
+    check_decoder_outputs,
     random_decoder_inputs,
     reference_box_codes,
+    to_device,
 )
 from models.experimental.bevformer.tt.model_preprocessing import (
     create_decoder_parameters,
@@ -40,10 +38,6 @@ CASES = [
 SEQUENCE_FIRST_INPUTS = ("query", "value", "query_pos")
 
 
-def _to_device(tensor, device, dtype=ttnn.bfloat16):
-    return ttnn.from_torch(tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-
-
 def _input_dtype(name):
     """The decoder requires ``GRID_DTYPE`` (float32) reference points; the rest is bfloat16."""
     return GRID_DTYPE if name == "reference_points" else ttnn.bfloat16
@@ -60,18 +54,7 @@ def _check(torch_outputs, tt_outputs, input_reference_points, bev_shape, batch_f
     tt_outputs = tuple(ttnn.to_torch(t).float() for t in tt_outputs)
     if batch_first:
         tt_outputs = (tt_outputs[0].permute(0, 2, 1, 3), *tt_outputs[1:])
-    # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.
-    for name, tensor in zip(("output", "reference points", "box codes"), tt_outputs):
-        assert torch.isfinite(tensor).all(), f"non-finite values in the decoder {name}"
-    for layer, metrics in enumerate(
-        layer_metrics(torch_outputs[:2], tt_outputs[:2], input_reference_points, bev_shape)
-    ):
-        logger.info(f"layer {layer}: " + ", ".join(f"{key} {value:.5f}" for key, value in metrics.items()))
-    # Per layer: the first layers' accuracy would hide a failing last layer in the stack.
-    for expected, actual in zip(torch_outputs[:2], tt_outputs[:2], strict=True):
-        for expected_layer, actual_layer in zip(expected, actual, strict=True):
-            assert_pcc(expected_layer, actual_layer, 0.99)
-    assert_channels_close(torch_outputs[2], tt_outputs[2])
+    check_decoder_outputs(torch_outputs, tt_outputs, input_reference_points, bev_shape)
 
 
 @torch.no_grad()
@@ -95,7 +78,7 @@ def test_decoder(device, reset_seeds, name, bev_shape, batch_size, traced, batch
 
     inputs = random_decoder_inputs(bev_shape, batch_size, seed=0)
     tt_inputs = {
-        key: _to_device(_host_input(key, tensor, batch_first), device, _input_dtype(key))
+        key: to_device(_host_input(key, tensor, batch_first), device, _input_dtype(key))
         for key, tensor in inputs.items()
     }
 

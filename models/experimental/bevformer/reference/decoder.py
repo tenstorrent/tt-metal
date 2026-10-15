@@ -54,6 +54,7 @@ from models.experimental.bevformer.model_config import (
     DECODER_NUM_POINTS,
     EMBED_DIMS,
     FEEDFORWARD_CHANNELS,
+    INVERSE_SIGMOID_EPS,
     NUM_HEADS,
     DeformableAttentionConfig,
 )
@@ -61,7 +62,7 @@ from models.experimental.bevformer.reference.encoder import FFN
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
 
 
-def inverse_sigmoid(x, eps=1e-5):
+def inverse_sigmoid(x, eps=INVERSE_SIGMOID_EPS):
     """mmdetection's ``inverse_sigmoid``: ``log(x / (1 - x))`` with ``x`` and ``1 - x`` clamped
     to at least ``eps``, so points on the [0, 1] border give finite logits."""
     x = x.clamp(min=0, max=1)

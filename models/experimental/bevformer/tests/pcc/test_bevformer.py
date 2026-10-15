@@ -20,11 +20,9 @@ import ttnn
 from models.experimental.bevformer.reference.bevformer import build_bevformer_base, load_bevformer_checkpoint
 from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
-    assert_channels_close,
-    assert_pcc,
-    assert_topk_close,
+    assert_finite,
     build_reference_bevformer,
-    center_channels,
+    check_detector_outputs,
     frame_metas,
     random_image_batch,
     to_conv_layout,
@@ -74,35 +72,19 @@ def test_bevformer(device, reset_seeds):
         *_, tt_prev = tt_outputs
         tt_detections = tt_model.detect(*tt_outputs[:2])
 
-        tt_bev = ttnn.to_torch(tt_prev).float().reshape(torch_prev.shape)
-        tt_cls_scores, tt_bbox_preds = (ttnn.to_torch(t).float() for t in tt_outputs[:2])
-        for name, tensor in (("BEV", tt_bev), ("class logits", tt_cls_scores), ("boxes", tt_bbox_preds)):
-            # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.
-            assert torch.isfinite(tensor).all(), f"frame {i}: non-finite values in the {name}"
         logger.info(f"frame {i}")
-        center_error = (bbox_preds[-1][..., center_channels()] - tt_bbox_preds[-1][..., center_channels()]).abs()
-        logger.info(f"last layer's box center error: mean {center_error.mean():.4f} m, max {center_error.max():.4f} m")
-        assert_pcc(torch_prev, tt_bev, PCC_THRESHOLD)
-        # The last decoder layer's, which the coder reads.
-        assert_pcc(cls_scores[-1], tt_cls_scores[-1], PCC_THRESHOLD)
-        assert_channels_close(bbox_preds[-1], tt_bbox_preds[-1], PCC_THRESHOLD)
-
-        # The 3D boxes: the detections on device against the reference's, then the host compaction.
+        # The outputs and the detections on device against the reference's, then the host compaction.
         scores, labels, query_index, boxes, valid = tt_detections
-        tt_topk_host = tuple(ttnn.to_torch(t) for t in (scores, labels, query_index, boxes))
-        assert_topk_close(
-            cls_scores[-1],
-            bbox_preds[-1],
-            tt_cls_scores[-1],
-            tt_bbox_preds[-1],
-            tt_topk_host,
-            PCC_THRESHOLD,
-            bottom_center=True,
+        tt_bev, tt_cls_scores, tt_bbox_preds = (ttnn.to_torch(t).float() for t in (tt_prev, *tt_outputs[:2]))
+        tt_topk = tuple(ttnn.to_torch(t) for t in (scores, labels, query_index, boxes))
+        check_detector_outputs(
+            (cls_scores, bbox_preds, torch_prev), (tt_cls_scores, tt_bbox_preds, tt_bev, tt_topk), PCC_THRESHOLD
         )
         for (tt_boxes, _, _), (ref_boxes, _, _) in zip(
             tt_model.get_bboxes(scores, labels, boxes, valid),
             torch_model.get_bboxes(cls_scores, bbox_preds),
             strict=True,
         ):
-            assert tt_boxes.shape[-1] == ref_boxes.shape[-1] and torch.isfinite(tt_boxes).all()
+            assert tt_boxes.shape[-1] == ref_boxes.shape[-1]
+            assert_finite("the 3D boxes", tt_boxes)
             logger.info(f"3D boxes in range: {len(tt_boxes)} on device, {len(ref_boxes)} in the reference")
