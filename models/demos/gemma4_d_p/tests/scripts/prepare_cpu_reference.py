@@ -15,8 +15,8 @@ from pathlib import Path
 import torch
 from loguru import logger
 
+from models.demos.gemma4_d_p.tests.scripts.likelihood import HIDDEN_SAMPLES, next_tokens, save_samples
 from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4PrefillAdapter
-from models.demos.gemma4_d_p.tt.runners.likelihood import HIDDEN_SAMPLES, next_tokens, save_samples
 
 
 @torch.no_grad()
