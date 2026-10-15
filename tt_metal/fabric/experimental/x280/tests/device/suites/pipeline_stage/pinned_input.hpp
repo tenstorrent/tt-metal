@@ -160,7 +160,8 @@ public:
         state_ = State::Prepared;
     }
 
-    /** Tears down a prepared epoch through its own unit mesh; records a failure on the suite if it cannot. */
+    /** Tears down a prepared epoch through a unit mesh on the prepared tile's chip; records a failure on the
+     * suite if it cannot. */
     static void teardown() {
         if (state_ != State::Prepared) {
             return;
@@ -168,7 +169,7 @@ public:
         ::testing::AssertionResult result = ::testing::AssertionSuccess();
         try {
             namespace ttmd = tt::tt_metal::distributed;
-            auto mesh = ttmd::MeshDevice::create_unit_mesh(0);
+            auto mesh = ttmd::MeshDevice::create_unit_mesh(tile_.chip_id);
             auto opened = x280::X280Runtime::open(
                 mesh, x280::harness::session::runtime_open_config({.prepared_suite_requested = true}));
             if (!opened.runtime) {
