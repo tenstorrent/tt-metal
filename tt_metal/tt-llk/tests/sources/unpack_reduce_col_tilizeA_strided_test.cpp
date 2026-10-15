@@ -2,12 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fused tilize + column reduce, as used by compute_pool_2d.cpp on Wormhole and Blackhole.
-//
-// Operand A is a row-major block of TILE_CNT tiles. The unpacker tilizes it with
-// _llk_unpack_tilizeA_B_, reloading the single SrcB scaler tile for every face and clearing SrcA
-// to -inf (Max) or zero (Average) before each face. Math column-reduces every tile into its own
-// dest slot and pack writes the TILE_CNT reduced tiles out.
+// Fused tilize plus column reduce for compute_pool_2d on Wormhole and Blackhole.
 
 #include <cstdint>
 
@@ -35,9 +30,9 @@ static constexpr DstSync DST_SYNC = DstSync::SyncHalf;
 #define TILIZE_REDUCE_TENSOR_SHAPE_QUALIFIER const
 #endif
 
-constexpr ckernel::TensorShape make_tilize_reduce_tensor_shape(int num_faces_r_dim, int num_faces_c_dim)
+constexpr ckernel::TensorShape make_tilize_reduce_tensor_shape(std::uint32_t face_r_dim, int num_faces_r_dim, int num_faces_c_dim)
 {
-    return {FACE_R_DIM, FACE_C_DIM, static_cast<std::uint8_t>(num_faces_r_dim), static_cast<std::uint8_t>(num_faces_c_dim)};
+    return {static_cast<std::uint8_t>(face_r_dim), FACE_C_DIM, static_cast<std::uint8_t>(num_faces_r_dim), static_cast<std::uint8_t>(num_faces_c_dim)};
 }
 
 #ifdef LLK_TRISC_UNPACK
@@ -47,6 +42,7 @@ constexpr ckernel::TensorShape make_tilize_reduce_tensor_shape(int num_faces_r_d
 #include "llk_unpack_tilize.h"
 
 constexpr bool NEGINF_SRCA       = POOL_TYPE == PoolType::MAX;
+constexpr bool ZERO_SRCA         = false;
 constexpr bool ZERO_SRCA_REDUCE  = POOL_TYPE == PoolType::AVG;
 constexpr std::uint32_t RELOAD_B = true;
 
@@ -60,13 +56,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT           = params.TILE_CNT;
     const std::uint32_t TILE_SIZE_UNPACK_A = params.TILE_SIZE_UNPACK_A;
     const std::uint32_t TILE_SIZE_UNPACK_B = params.TILE_SIZE_UNPACK_B;
+    const std::uint32_t TEST_FACE_R_DIM    = params.TEST_FACE_R_DIM;
     const int num_faces_r_dim_A            = params.num_faces_r_dim_A;
     const int num_faces_c_dim_A            = params.num_faces_c_dim_A;
     const Operand& buffer_A                = params.buffer_A;
     const Operand& buffer_B                = params.buffer_B;
 #endif
-    TILIZE_REDUCE_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape = make_tilize_reduce_tensor_shape(num_faces_r_dim_A, num_faces_c_dim_A);
-    const std::uint32_t num_faces                                          = tensor_shape.total_num_faces();
+    TILIZE_REDUCE_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
+        make_tilize_reduce_tensor_shape(TEST_FACE_R_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
 
     {
         START_PERF_MEASURE("INIT")
@@ -81,7 +79,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
-        _llk_unpack_tilizeA_B_init_wrapper_<NEGINF_SRCA, RELOAD_B, false /* zero_srcA */, ZERO_SRCA_REDUCE>(
+        _llk_unpack_tilizeA_B_init_wrapper_<NEGINF_SRCA, RELOAD_B, ZERO_SRCA, ZERO_SRCA_REDUCE>(
             formats.unpack_A_src, formats.unpack_A_dst, TILE_CNT, num_faces, tensor_shape.face_r_dim);
         PROFILER_SYNC();
     }
@@ -93,7 +91,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Both architectures set one SrcA and one SrcB dvalid per face.
-            _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR * TILE_CNT * num_faces);
+            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT * num_faces);
         }
         else
         {
@@ -101,7 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
-                    _llk_unpack_tilizeA_B_wrapper_<NEGINF_SRCA, RELOAD_B, false /* zero_srcA */, ZERO_SRCA_REDUCE>(
+                    _llk_unpack_tilizeA_B_wrapper_<NEGINF_SRCA, RELOAD_B, ZERO_SRCA, ZERO_SRCA_REDUCE>(
                         formats.unpack_A_src, tensor_shape.face_r_dim, L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]), tile, TILE_CNT, num_faces);
                 }
             }
@@ -124,13 +122,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT    = params.TILE_CNT;
-    const int num_faces_r_dim_A     = params.num_faces_r_dim_A;
-    const int num_faces_c_dim_A     = params.num_faces_c_dim_A;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const int num_faces_r_dim_A         = params.num_faces_r_dim_A;
+    const int num_faces_c_dim_A         = params.num_faces_c_dim_A;
 #endif
-    TILIZE_REDUCE_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape = make_tilize_reduce_tensor_shape(num_faces_r_dim_A, num_faces_c_dim_A);
-    const std::uint32_t num_faces                                          = tensor_shape.total_num_faces();
+    TILIZE_REDUCE_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
+        make_tilize_reduce_tensor_shape(TEST_FACE_R_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
 
     {
         START_PERF_MEASURE("INIT")
@@ -144,9 +144,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT * num_faces);
+            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * TILE_CNT * num_faces);
         }
         else
         {
@@ -159,6 +159,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
+                    LLK_ASSERT((tile < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "tile exceeds max dest tiles");
                     _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, false /* is_int_fpu_en */>(tile, tensor_shape);
                 }
                 if constexpr (sync_with_pack)
@@ -184,17 +185,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT    = params.TILE_CNT;
-    const int num_faces_r_dim_A     = params.num_faces_r_dim_A;
-    const int num_faces_c_dim_A     = params.num_faces_c_dim_A;
-    const Operand& buffer_Res       = params.buffer_Res;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const int num_faces_r_dim_A         = params.num_faces_r_dim_A;
+    const int num_faces_c_dim_A         = params.num_faces_c_dim_A;
+    const Operand& buffer_Res           = params.buffer_Res;
 #endif
-    TILIZE_REDUCE_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape = make_tilize_reduce_tensor_shape(num_faces_r_dim_A, num_faces_c_dim_A);
+    TILIZE_REDUCE_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
+        make_tilize_reduce_tensor_shape(TEST_FACE_R_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
 
     const std::uint32_t tile_size = tensor_shape.total_tensor_size();
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
-    constexpr bool partial_face   = false;
+    const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
     constexpr bool narrow_tile    = false;
 
     {
@@ -214,7 +217,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION;
+            constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 if constexpr (sync_with_math)
@@ -223,6 +226,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
+                    LLK_ASSERT((tile < get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "tile exceeds max dest tiles");
                     _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>(tile, L1_ADDRESS(buffer_Res[tile]));
                 }
                 if constexpr (sync_with_math)

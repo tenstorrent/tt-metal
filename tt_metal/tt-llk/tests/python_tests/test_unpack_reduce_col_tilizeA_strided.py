@@ -1,17 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Fused tilize + column reduce on Wormhole and Blackhole.
+"""Fused tilize plus column reduce on Wormhole and Blackhole."""
 
-Pairs with ``quasar/test_unpack_reduce_col_tilizeA_strided_quasar.py`` and mirrors
-``compute_pool_2d.cpp``: a row-major block of ``max_tiles_per_iter`` tiles is tilized by
-``_llk_unpack_tilizeA_B_`` against a single reloaded scaler tile, with SrcA cleared to -inf for
-Max and to zero (``zero_srcA_reduce``) for Average. Each tile is then column-reduced into its own
-dest slot. ``num_faces=2`` is the 16x32 tile pool_2d uses for windows of at most 16 sticks.
-"""
-
+import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ReduceGolden, TilizeGolden, get_golden_generator
 from helpers.llk_params import (
@@ -26,20 +20,19 @@ from helpers.llk_params import (
 from helpers.param_config import parametrize
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    TEST_FACE_DIMS,
     TILE_COUNT,
 )
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, MAX_FACE_R_DIM
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
-
-TILE_C_DIM = 32
-FACE_R_DIM = 16
 
 UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS = [
     InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
@@ -48,10 +41,12 @@ UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS = [
 ]
 UNPACK_REDUCE_COL_TILIZEA_STRIDED_POOL_TYPES = [ReducePool.Max, ReducePool.Average]
 UNPACK_REDUCE_COL_TILIZEA_STRIDED_NUM_FACES = [2, 4]
+# num_faces=4 is a full 32-row tile. [16, 32] is one face-row, so partial heights stay on num_faces=2.
+UNPACK_REDUCE_COL_TILIZEA_STRIDED_PARTIAL_FACE_R_DIMS = [8, 4]
 
 
 def unpack_reduce_col_tilizeA_strided_dest_acc(formats):
-    """Float32 input needs a 32-bit dest; bf16 runs both, like large-kernel average pool."""
+    """Sweep Float32 input only with a 32-bit dest. That is a coverage choice; bf16 runs both modes."""
     if formats.input_format == DataFormat.Float32:
         return [DestAccumulation.Yes]
     return [DestAccumulation.No, DestAccumulation.Yes]
@@ -64,6 +59,12 @@ def unpack_reduce_col_tilizeA_strided_max_tiles_per_iter(dest_acc):
     return [4, 8]
 
 
+def unpack_reduce_col_tilizeA_strided_face_r_dim(num_faces):
+    if num_faces == 2:
+        return [MAX_FACE_R_DIM, *UNPACK_REDUCE_COL_TILIZEA_STRIDED_PARTIAL_FACE_R_DIMS]
+    return [MAX_FACE_R_DIM]
+
+
 def _math_fidelity(pool_type):
     return MathFidelity.LoFi if pool_type == ReducePool.Max else MathFidelity.HiFi4
 
@@ -73,6 +74,7 @@ def _math_fidelity(pool_type):
     dest_acc=unpack_reduce_col_tilizeA_strided_dest_acc,
     max_tiles_per_iter=unpack_reduce_col_tilizeA_strided_max_tiles_per_iter,
     num_faces=UNPACK_REDUCE_COL_TILIZEA_STRIDED_NUM_FACES,
+    face_r_dim=unpack_reduce_col_tilizeA_strided_face_r_dim,
     pool_type=UNPACK_REDUCE_COL_TILIZEA_STRIDED_POOL_TYPES,
 )
 def test_unpack_reduce_col_tilizeA_strided(
@@ -81,26 +83,47 @@ def test_unpack_reduce_col_tilizeA_strided(
     max_tiles_per_iter,
     num_faces,
     pool_type,
+    face_r_dim,
     *,
     is_perf=False,
     perf_report=None,
     run_types=None,
     loop_factor=1,
 ):
-    num_faces_r_dim = num_faces // 2
-    tile_dimensions = [FACE_R_DIM * num_faces_r_dim, TILE_C_DIM]
-    tile_shape = construct_tile_shape(tile_dimensions)
-    input_dimensions = [tile_dimensions[0], max_tiles_per_iter * TILE_C_DIM]
+    if (
+        formats.input_format == DataFormat.Float32
+        and get_chip_architecture() == ChipArchitecture.BLACKHOLE
+    ):
+        pytest.skip(
+            "Blackhole _llk_unpack_tilizeA_B_init_ sets the SrcA Y stride with "
+            "SCALE_DATUM_SIZE(unpack_dst_format, FACE_C_DIM) in llk_unpack_tilize.h, "
+            "which has no Tf32 case (16 bytes instead of 64). Skip until that stride is "
+            "FACE_C_DIM * datum_size_in_bytes(unpack_dst_format)."
+        )
 
+    num_faces_r_dim = num_faces // 2
+    tile_dimensions = [face_r_dim * num_faces_r_dim, DEFAULT_TILE_C_DIM]
+    tile_shape = construct_tile_shape(tile_dimensions)
+    input_dimensions = [tile_dimensions[0], max_tiles_per_iter * DEFAULT_TILE_C_DIM]
+
+    # Negative Max values lose to a zeroed unwritten row, so a skipped -inf clear fails.
+    spec_A = (
+        StimuliSpec.uniform(low=-1.1, high=-0.1)
+        if pool_type == ReducePool.Max
+        else None
+    )
     src_A, tile_cnt_A, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=tile_dimensions,
+        spec_A=spec_A,
         tile_dimensions=tile_dimensions,
     )
+    # Only face 0 holds the scaler. Average uses SrcB, so a missed reload scales later faces by 0.
     scaler = 1 / tile_dimensions[0] if pool_type == ReducePool.Average else 1
-    src_B = torch.full((tile_shape.total_tile_size(),), scaler)
+    src_B = torch.zeros(tile_shape.total_tile_size())
+    src_B[: tile_shape.face_r_dim * tile_shape.face_c_dim] = scaler
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -111,8 +134,9 @@ def test_unpack_reduce_col_tilizeA_strided(
     ]
     runtimes = [
         TILE_COUNT(tile_cnt_A),
-        NUM_FACES_R_DIM(num_faces_r_dim),
+        NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
         NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
+        TEST_FACE_DIMS(face_r_dim=face_r_dim),
         LOOP_FACTOR(loop_factor),
     ]
     configuration = create_test_or_perf_config(
@@ -133,7 +157,7 @@ def test_unpack_reduce_col_tilizeA_strided(
                 tile_count_B=1,
                 tile_count_res=tile_cnt_A,
                 num_faces=num_faces,
-                face_r_dim=FACE_R_DIM,
+                face_r_dim=face_r_dim,
                 tile_dimensions=tile_dimensions,
                 use_dense_tile_dimensions=True,
             ),

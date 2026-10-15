@@ -63,7 +63,7 @@ inline void _llk_unpack_tilizeA_B_init_wrapper_(
 }
 
 // Wormhole bakes neginf_srcA / reload_srcB / zero_srcA_reduce into the MOP at init; only zero_srcA is an execute template.
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
+template <bool /*neginf_srcA*/ = false, std::uint32_t /*reload_srcB*/ = false, bool zero_srcA = false, bool /*zero_srcA_reduce*/ = false>
 inline void _llk_unpack_tilizeA_B_wrapper_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t face_r_dim,
