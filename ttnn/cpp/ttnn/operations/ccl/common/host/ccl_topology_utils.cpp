@@ -199,6 +199,48 @@ std::optional<TopologyPlacements> uncollapse_placements(
 // Shared by both families: all_gather_output_topology below is its first caller.
 namespace {
 
+// mesh_partition's rule 0 (#58915) for the whole family. The devices an op reaches are the mesh's, not the label's:
+// a cluster-axis op spans the mesh's full extent along that axis and a whole-mesh op every device, so a label that
+// covers fewer devices along the axis addressed -- a (1, 4) row block on a 2x4 along axis 0, or over the whole
+// mesh -- is refused: the devices the label does not describe take part (a sum with them, a gather of them, a
+// partition that numbers them) and no label over the block can say what they hold. A block is gathered or
+// scattered within itself only along an axis it spans fully (the row along axis 1). The reason, or nullopt when the
+// label covers what the op reaches. A collapsed label has no axis to compare; uncollapse_placements already
+// requires it to cover the whole mesh, so only N-D labels are judged per axis here.
+std::optional<std::string> coverage_gap(
+    const TensorTopology& in, const MeshShape& mesh_shape, std::optional<uint32_t> axis, std::string_view what) {
+    const auto& label_shape = in.distribution_shape();
+    if (!axis.has_value()) {
+        if (label_shape.mesh_size() != mesh_shape.mesh_size()) {
+            return fmt::format(
+                "a whole-mesh {} spans the {} devices of mesh {} but the label {} covers {}: the devices the label "
+                "does "
+                "not describe take part, and no label over the block can say what they hold",
+                what,
+                mesh_shape.mesh_size(),
+                mesh_shape,
+                describe(in),
+                label_shape.mesh_size());
+        }
+        return std::nullopt;
+    }
+    if (label_shape.dims() != mesh_shape.dims()) {
+        return std::nullopt;
+    }
+    const auto a = static_cast<int32_t>(*axis);
+    if (label_shape[a] != mesh_shape[a]) {
+        return fmt::format(
+            "{} along mesh axis {} spans {} devices but the label {} covers {} along that axis: the groups reach "
+            "devices the label does not describe",
+            what,
+            *axis,
+            mesh_shape[a],
+            describe(in),
+            label_shape[a]);
+    }
+    return std::nullopt;
+}
+
 // Decides whether `out` (one placement per axis of `axis_shape`) is expressible. A size-1 axis that shards a dim
 // another axis also shards holds the whole extent of that dim, so it reads Replicate. After that, no tensor dim
 // sharded on more than one axis: it is the N-D label as is. A dim sharded on more than one axis is only expressible
@@ -287,7 +329,11 @@ std::optional<TensorTopology> all_gather_output_topology(
     const TopologyPlacement replicate = Replicate{};
     if (!cluster_axis.has_value()) {
         // Whole-mesh gather: every device ends up with every piece, whatever the label's rank. The ring order is the
-        // label's own coordinate order, so the distribution shape and coordinates are kept.
+        // label's own coordinate order, so the distribution shape and coordinates are kept -- provided the label
+        // covers every device the ring reaches.
+        if (const auto gap = coverage_gap(in, mesh_shape, std::nullopt, "collective"); gap.has_value()) {
+            return fail(*gap, Family::Gather);
+        }
         TopologyPlacements out(in.placements().size(), replicate);
         return TensorTopology(in.distribution_shape(), std::move(out), in.mesh_coords());
     }
@@ -300,6 +346,10 @@ std::optional<TensorTopology> all_gather_output_topology(
     auto expanded = uncollapse_placements(in, mesh_shape, &reason);
     if (!expanded.has_value()) {
         return fail(reason, Family::Gather);
+    }
+
+    if (const auto gap = coverage_gap(in, mesh_shape, axis, "a collective"); gap.has_value()) {
+        return fail(*gap, Family::Gather);
     }
 
     const bool collapsed = is_collapsed(in, mesh_shape);
@@ -422,6 +472,9 @@ std::optional<TensorTopology> scatter_output_topology(
                     label_shape.dims()),
                 Family::Scatter);
         }
+        if (const auto gap = coverage_gap(in, mesh_shape, std::nullopt, op); gap.has_value()) {
+            return fail(*gap, Family::Scatter);
+        }
         // Every device holds a distinct piece of `scatter_dim`, in the label's coordinate order: the collapsed label
         // over those coordinates. A reduction summed every device's tensor into that piece, so nothing stays sharded
         // on another dim; a partition keeps each device's other-dim piece next to the new one, and no label can state
@@ -478,6 +531,9 @@ std::optional<TensorTopology> scatter_output_topology(
     auto expanded = uncollapse_placements(in, mesh_shape, &reason);
     if (!expanded.has_value()) {
         return fail(reason, Family::Scatter);
+    }
+    if (const auto gap = coverage_gap(in, mesh_shape, axis, op); gap.has_value()) {
+        return fail(*gap, Family::Scatter);
     }
     if (collapsed && single_non_trivial_axis(mesh_shape) == axis) {
         // The collapsed axis is the scattered axis (cluster_axis 1 on a 1xN line): keep the collapsed spelling.

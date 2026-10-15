@@ -29,6 +29,12 @@
 // placement per mesh axis first, apply the op's edit on `cluster_axis`, then decide whether the result is still
 // expressible per axis or has to collapse back to a 1-D label.
 //
+// Coverage: the devices an op reaches are the mesh's, not the label's. A cluster-axis op spans the mesh's full extent
+// along that axis and a whole-mesh op every device, so a label that covers fewer devices along the axis addressed (a
+// (1, 4) row block on a 2x4 along axis 0, or over the whole mesh) is refused: the devices the label does not describe
+// take part and no label over the block can say what they hold. A block is gathered or scattered within itself only
+// along an axis it spans fully (the row along axis 1). This is mesh_partition's rule 0 (#58915) for the whole family.
+//
 // Failure handling: a label the helper cannot honour (a collapsed label that does not cover the mesh in row-major
 // order, an N-D label whose axes do not align with the mesh axes, a gather that would interleave shards, a result no
 // label can express) is a TT_FATAL when `ttnn::CONFIG.strict_ccl_topology` is set, and otherwise a log line (once per

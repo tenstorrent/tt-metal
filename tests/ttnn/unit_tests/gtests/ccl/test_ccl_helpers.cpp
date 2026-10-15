@@ -1264,15 +1264,22 @@ TEST(CclTopologyUtils, ReduceScatterWholeMeshIsTheCollapsedLabelOverTheInputCoor
             << mesh;
     }
 
-    // A tensor on one row of a 2x4 mesh (an N-D mapper with an offset): the ring is its four devices, in order, and
-    // the label carries those coordinates.
+    // A tensor on one row of a 2x4 mesh (an N-D mapper with an offset): a whole-mesh scatter spans every device of
+    // the mesh, four of which the label does not describe, so it is refused (a tensor that really lives on four
+    // devices is one on a 1x4 sub-mesh device, whose own shape is what its hooks pass).
     const MeshShape mesh(2, 4);
     const std::vector<MeshCoordinate> second_row{
         MeshCoordinate(1, 0), MeshCoordinate(1, 1), MeshCoordinate(1, 2), MeshCoordinate(1, 3)};
-    EXPECT_EQ(
-        topo::reduce_scatter_output_topology(
-            nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoReplicate{}}, second_row), std::nullopt, mesh, kRank, 3),
-        TensorTopology(MeshShape(4), {TopoShard{3}}, second_row));
+    EXPECT_NE(
+        message_of([&] {
+            topo::reduce_scatter_output_topology(
+                nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoReplicate{}}, second_row),
+                std::nullopt,
+                mesh,
+                kRank,
+                3);
+        }).find("covers"),
+        std::string::npos);
 
     // Another dim sharded on a non-trivial axis: the whole-mesh reduction sums every device's tensor into the piece
     // each receives, so the dim-2 pieces are consumed and the collapsed label is honest (the old hook emitted
@@ -1409,6 +1416,51 @@ TEST(CclTopologyUtils, WholeMeshScatterOfARowMajorReshapeIsExact) {
         EXPECT_FALSE(topo::mesh_partition_output_topology(other_dim, std::nullopt, mesh, kRank, 3).has_value())
             << reshape;
     }
+}
+
+TEST(CclTopologyUtils, OpsRefuseALabelThatDoesNotCoverTheDevicesTheyReach) {
+    // mesh_partition's rule 0 (#58915) for the whole family: a (1, 4) row block on a 2x4 is addressed along axis 1,
+    // which it spans, but not along axis 0 (extent 1 of 2: the groups pair each of its devices with one the label
+    // does not describe) nor over the whole mesh (eight devices, four described). Both the host form of the label
+    // (the block's own coordinates) and the device form (the storage's, every device) are judged by the shape.
+    const MeshShape mesh(2, 4);
+    const auto all = row_major_coords(mesh);
+    std::vector<MeshCoordinate> row0(all.begin(), all.begin() + 4);
+    StrictCclTopologyScope warn_only(false);
+    for (const auto& coords : {row0, all}) {
+        const auto row = nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoReplicate{}}, coords);
+        // The spanned axis: labelled within the block, coordinates kept.
+        EXPECT_EQ(
+            topo::reduce_scatter_output_topology(row, 1, mesh, kRank, 3),
+            nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoShard{3}}, coords));
+        EXPECT_EQ(
+            topo::mesh_partition_output_topology(row, 1, mesh, kRank, 3),
+            nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoShard{3}}, coords));
+        EXPECT_EQ(
+            topo::all_gather_output_topology(row, 1, mesh, kRank, 3),
+            nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoReplicate{}}, coords));
+        // The axis the block does not span, and the whole mesh: refused for every family.
+        for (const auto& axis : {std::optional<uint32_t>{0}, std::optional<uint32_t>{}}) {
+            EXPECT_FALSE(topo::reduce_scatter_output_topology(row, axis, mesh, kRank, 3).has_value());
+            EXPECT_FALSE(topo::mesh_partition_output_topology(row, axis, mesh, kRank, 3).has_value());
+            EXPECT_FALSE(topo::all_to_all_output_topology(row, axis, mesh, kRank, 3).has_value());
+            EXPECT_FALSE(topo::all_gather_output_topology(row, axis, mesh, kRank, 3).has_value());
+            EXPECT_FALSE(topo::all_broadcast_output_topology(row, axis, mesh, kRank).has_value());
+            EXPECT_FALSE(topo::all_reduce_output_topology(row, axis, mesh, kRank).has_value());
+        }
+    }
+    // A 2x2 block at an offset spans axis 0 but not axis 1.
+    const std::vector<MeshCoordinate> block{
+        MeshCoordinate(0, 2), MeshCoordinate(0, 3), MeshCoordinate(1, 2), MeshCoordinate(1, 3)};
+    const auto square = nd_label(MeshShape(2, 2), {TopoReplicate{}, TopoShard{2}}, block);
+    EXPECT_EQ(
+        topo::mesh_partition_output_topology(square, 0, mesh, kRank, 3),
+        nd_label(MeshShape(2, 2), {TopoShard{3}, TopoShard{2}}, block));
+    EXPECT_FALSE(topo::mesh_partition_output_topology(square, 1, mesh, kRank, 3).has_value());
+    StrictCclTopologyScope strict(true);
+    EXPECT_NE(
+        message_of([&] { topo::all_gather_output_topology(square, 1, mesh, kRank, 3); }).find("covers"),
+        std::string::npos);
 }
 
 TEST(CclTopologyUtils, CallerRelabelsScopeSilencesRefusalsForIntermediates) {
