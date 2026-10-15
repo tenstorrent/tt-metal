@@ -388,6 +388,9 @@ def update_programs_with_mesh_workloads(
     mesh_devices_map = {device.meshId: device for device in mesh_devices}
     for mesh_workload in mesh_workloads:
         for mesh_id, binary_status in mesh_workload.binary_status_per_mesh_device.items():
+            mesh_device = mesh_devices_map.get(mesh_id)
+            if mesh_device is None:
+                continue  # Mesh device was destroyed, its binary status no longer applies
             # Values originate from untyped yaml, so the "NotSet" sentinel is possible at runtime
             # even though it is outside the declared BinaryStatus literal.
             if str(binary_status) != "NotSet":
@@ -397,7 +400,7 @@ def update_programs_with_mesh_workloads(
                         continue  # Skip if the program is not found
                     program = programs[program_id]
                     for coordinate in program_data.coordinates:
-                        device_id = mesh_devices_map[mesh_id].get_device_id(coordinate)
+                        device_id = mesh_device.get_device_id(coordinate)
                         program.binary_status_per_device[device_id] = binary_status
 
 
