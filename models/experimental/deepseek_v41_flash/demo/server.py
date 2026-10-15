@@ -7,10 +7,9 @@ The V4.1 twin of ``models/experimental/deepseek_v4_flash/demo/server.py``, which
 endpoints, OpenAI request and response shapes, tool calling, thinking mode, scheduler, live console and traced
 prefill (read that docstring) -- on the V4.1 decode model and :class:`DeepSeekV41PrefillModel` instead:
 
-* the engine (:class:`V41ChatEngine`) builds :class:`DeepSeekV41Model` and its ``lm_head``; with the prefill model
-  on, its layers sit on the traced prefill's placement
-  (:func:`~models.experimental.deepseek_v41_flash.tt.prefill.model.plan_prefill_placement`), which the two models
-  share, as in ``tests/prefill/test_prefill_decode_demo.py``;
+* the engine (:class:`V41ChatEngine`) builds :class:`DeepSeekV41Model` and its ``lm_head``; its layers are split
+  evenly over the stages in contiguous runs (five per stage on eight stages), a placement the prefill model shares,
+  as in ``tests/prefill/test_prefill_decode_demo.py``;
 * the prefill (:class:`_V41Prefiller`) is :meth:`DeepSeekV41Model.build_prefill` (sharing the routed experts,
   embedding, ``lm_head``, sockets and the Engram host lookup) with no CSA position bias to commit.
 
@@ -19,8 +18,10 @@ What V4.1 imposes on the serving side:
 * One user. V4.1 decode seats a single session (the select op decodes one user and there is no page-table swap), so
   ``--num-users`` is 1 and requests take turns on it; a request that does not continue the stored conversation
   re-prefills it.
-* Context. A layer attends over at most ``candidate_topk_blocks * candidate_block_size`` (16384) compressed entries
-  until the candidate pre-filter is ported, so ``--max-context`` is capped there (prompt + reply).
+* Context. ``--max-context`` is 262144 tokens by default (prompt + reply). Past
+  ``candidate_topk_blocks * candidate_block_size`` (16384) compressed entries the select is two-level, in the
+  traced prefill and in decode, so a prompt prefills up to ``--prefill-max-len`` (by default the whole context, at
+  most 262144 tokens, see :class:`_V41Prefiller`) and decode replays the rest.
 * Engram layers 1 and 14 read host n-gram tables (~101 GB each); the model refuses to build without that RAM free.
 
 Run it (ttnn venv, from the repo root; 32-chip Galaxy for the prefill model)::
@@ -56,26 +57,26 @@ from models.experimental.deepseek_v41_flash.tests.prefill.test_full_model_prefil
 )
 from models.experimental.deepseek_v41_flash.tt.config import DEFAULT_MODEL_DIR, dequantized, load_config
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
-from models.experimental.deepseek_v41_flash.tt.prefill.model import plan_prefill_placement
 from models.experimental.deepseek_v4_flash.demo.chat_cli import ChatEngine, UserSession
 from models.experimental.deepseek_v4_flash.demo.server import _Prefiller, build_parser, check_args, serve
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
+from models.experimental.deepseek_v4_flash.tt.model import plan_layer_placement
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
-_NUM_STAGES = 8  # one 1 x 4 TP4 stage per Galaxy row: V4.1's 40 layers leave no row idle
-# candidate_topk_blocks * candidate_block_size of the checkpoint: the compressed entries a layer attends over.
-_MAX_CONTEXT = 16384
-_MAX_NEW_TOKENS = 2560
+_NUM_STAGES = 8  # one 1 x 4 TP4 stage per Galaxy row: V4.1's 40 layers, five on each
+# Default --max-context, and --prefill-max-len when a larger context is asked for: the longest traced prefill whose
+# last position tier compiled on every stage (a 524288-token tier ran out of DRAM).
+_MAX_CONTEXT = 262144
 
 
 class V41ChatEngine(ChatEngine):
     """:class:`ChatEngine` on :class:`DeepSeekV41Model`: the same users, decode and warmup over V4.1's model.
 
     Only construction differs: the V4.1 config and ``lm_head``, the context capped by the compressed-KV limit, the
-    EOS from the tokenizer (the V4.1 config has none), and, when ``args.prefill`` is set, the decode layers on the
-    traced prefill's placement over ``args.submeshes``.
+    EOS from the tokenizer (the V4.1 config has none), and the layers split evenly over the stages in contiguous runs,
+    whatever the profile's pipeline group size, so the traced prefill can share them.
     """
 
     def __init__(self, mesh_device, args, prefetcher: contextlib.ExitStack):
@@ -114,7 +115,7 @@ class V41ChatEngine(ChatEngine):
             num_stages=num_stages,
             submeshes=getattr(args, "submeshes", None),
             use_prefetcher=getattr(args, "use_prefetcher", None),
-            layer_submesh_ids=plan_prefill_placement(config, num_layers, num_stages) if args.prefill else None,
+            layer_submesh_ids=plan_layer_placement(num_layers, num_stages, 1),
         )
         self.lm_head = Linear(
             dequantized(loader, "lm_head.weight", translate=True),
@@ -152,7 +153,23 @@ class V41ChatEngine(ChatEngine):
 
 
 class _V41Prefiller(_Prefiller):
-    """:class:`_Prefiller` with V4.1's prefill model, which has no CSA position bias for the commit."""
+    """:class:`_Prefiller` with V4.1's prefill model, which has no CSA position bias for the commit.
+
+    The prefill selects two-level past ``candidate_topk_blocks * candidate_block_size`` compressed entries, as
+    decode does. Its attention stays dense, so every per-layer mask and score tensor of the last position tier
+    spans the whole ``--prefill-max-len``; with decode's caches resident, a 512K-token tier runs out of DRAM.
+    Unset, ``--prefill-max-len`` is therefore the context capped at ``_MAX_CONTEXT``, and decode replays the rest of
+    a longer prompt; an explicit value is used as given.
+    """
+
+    def __init__(self, engine: V41ChatEngine, args, prefetcher: contextlib.ExitStack):
+        if not args.prefill_max_len and engine.max_seq > _MAX_CONTEXT:
+            logger.info(
+                f"traced prefill sized for {_MAX_CONTEXT} tokens (dense attention past that does not fit beside "
+                f"decode's {engine.max_seq}-token caches); decode replays the rest of a longer prompt"
+            )
+            args.prefill_max_len = _MAX_CONTEXT
+        super().__init__(engine, args, prefetcher)
 
     def _build_model(self, engine: V41ChatEngine):
         return engine.model.build_prefill(
@@ -180,15 +197,15 @@ def parse_args(argv: list[str] | None = None):
         num_users=1,
         max_context=_MAX_CONTEXT,
         total_context=None,
-        max_new_tokens=_MAX_NEW_TOKENS,
+        # None means "no reply cap": a request runs until EOS or the context is full.
+        # ``--max-new-tokens N`` still caps a reply at N.
+        max_new_tokens=None,
     )
     args = p.parse_args(argv)
     if args.num_users != 1:
         p.error("V4.1 decode seats one session: --num-users must be 1")
-    if args.max_context > _MAX_CONTEXT:
-        p.error(f"--max-context {args.max_context} is past V4.1's {_MAX_CONTEXT}-token compressed-KV context")
-    if args.max_new_tokens >= args.max_context:
-        p.error(f"--max-new-tokens {args.max_new_tokens} leaves no room for a prompt in {args.max_context} tokens")
+    if args.max_new_tokens is None:
+        args.max_new_tokens = args.max_context
     return check_args(p, args, sys_cfg)
 
 

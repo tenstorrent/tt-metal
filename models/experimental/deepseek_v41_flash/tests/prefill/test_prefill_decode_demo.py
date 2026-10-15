@@ -22,13 +22,13 @@ ring, and each compressed group's ``comp_kv`` / ``idx_key_cache`` on every stage
 
 What differs from V4:
 
-* Placement. Traced prefill starts a stage only at an index source
-  (:func:`~models.experimental.deepseek_v41_flash.tt.prefill.model.plan_prefill_placement`), and the prefill layers
-  share the decode layers' routed experts, so the decode model is built on that placement too (up to 8 layers on the
-  busiest of the eight ``1 x 4`` stages instead of 5).
-* Context. A layer attends over at most ``candidate_topk_blocks * candidate_block_size`` (16384) compressed entries
-  until the candidate pre-filter is ported, in prefill and decode alike, so prompt + new tokens must fit 16384; a
-  LongBench question that does not is skipped.
+* Placement. The prefill layers share the decode layers' routed experts, so both models use one placement: the layers
+  split evenly into contiguous runs (V4's ``plan_layer_placement`` with a pipeline group size of 1), five on each of
+  the eight ``1 x 4`` stages. Traced prefill sends a selection on when a stage edge splits an index group.
+* Context. Prompt + new tokens must fit ``DEEPSEEK_V4_E2E_CONTEXT`` (16384 + ``DEEPSEEK_V4_MAX_NEW_TOKENS``); a
+  LongBench question that does not is skipped. Past ``candidate_topk_blocks * candidate_block_size`` (16384) compressed entries prefill and decode both
+  select two-level, so a larger context with ``DEEPSEEK_V4_E2E_COMPARE=1`` checks the two-level prefill against
+  decode.
 * The CSA lightning-indexer and overlap state of V4 do not exist: V4.1's index sources always select, from the index
   keys the commit writes.
 * Engram layers 1 and 14 read host n-gram tables (~101 GB each, skipped when that RAM is not free). Prefill and decode
@@ -45,18 +45,19 @@ The known-correct questions::
     DEEPSEEK_V4_CACHE_DIR=/path/to/cache pytest -s \\
       models/experimental/deepseek_v41_flash/tests/prefill/test_prefill_decode_demo.py::test_prefill_decode_longbench_known_correct
 
-A quick bring-up (layers 0-2: a window layer, an Engram layer and a ratio-2 kv + index source, on two stages)::
+A quick bring-up (layers 0-2: a window layer, an Engram layer and a ratio-2 kv + index source, one per stage)::
 
     DEEPSEEK_V4_DECODE_LAYERS=3 DEEPSEEK_V4_MAX_NEW_TOKENS=32 DEEPSEEK_V4_CACHE_DIR=/path/to/cache pytest -s \\
       models/experimental/deepseek_v41_flash/tests/prefill/test_prefill_decode_demo.py::test_prefill_decode_text
 
-Knobs (environment), as in the V4 demo: ``DEEPSEEK_V4_MAX_NEW_TOKENS`` (2560), ``DEEPSEEK_V4_E2E_CHUNK`` (1024 = prefill
+Knobs (environment), as in the V4 demo: ``DEEPSEEK_V4_MAX_NEW_TOKENS`` (16384), ``DEEPSEEK_V4_E2E_CHUNK`` (1024 = prefill
 chunk), ``DEEPSEEK_V4_E2E_TEXT``, ``DEEPSEEK_V4_DECODE_LAYERS``, ``DEEPSEEK_V4_E2E_MAX_INPUT``,
 ``DEEPSEEK_V4_MAX_INPUT_PREFILL_CHUNKS``, ``DEEPSEEK_V4_E2E_COMPARE`` (1: also run each prompt through decode only,
 before its prefill, and compare the next-token logits -- the check that the commit is right),
 ``DEEPSEEK_V4_PREFILL_TIER_FACTOR``, ``DEEPSEEK_V4_PREFILL_MAX_LEN``, ``DEEPSEEK_V4_TRACE_REGION_SIZE``,
 ``DEEPSEEK_V4_L1_SMALL_SIZE``, ``DEEPSEEK_V4_PREFETCHER``, ``DEEPSEEK_V4_GCB_HEADROOM``, ``DEEPSEEK_V4_LONGBENCH``,
-``DEEPSEEK_V4_DEMO_COUNT``, ``DEEPSEEK_V4_LONGBENCH_INDICES``.
+``DEEPSEEK_V4_DEMO_COUNT``, ``DEEPSEEK_V4_LONGBENCH_INDICES``, and ``DEEPSEEK_V4_E2E_CONTEXT`` (16384 +
+``DEEPSEEK_V4_MAX_NEW_TOKENS``, prompt + new tokens).
 """
 
 from __future__ import annotations
@@ -92,7 +93,7 @@ from models.experimental.deepseek_v41_flash.tests.prefill.test_full_model_prefil
 from models.experimental.deepseek_v41_flash.tt.config import CACHE_DIR, DEFAULT_MODEL_DIR, load_config
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import engram_table_nbytes
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
-from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel, plan_prefill_placement
+from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
 from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill_demo import _Progress, _env_int
 from models.experimental.deepseek_v4_flash.tests.prefill.test_prefill_decode_demo import (
     _DECODE_REPLAY_AHEAD,
@@ -108,6 +109,7 @@ from models.experimental.deepseek_v4_flash.tests.prefill.test_prefill_decode_dem
     _print_correctness,
     _summary,
 )
+from models.experimental.deepseek_v4_flash.tt.model import plan_layer_placement
 from models.experimental.deepseek_v4_flash.tt.prefill.attention import ALIGNMENT, PrefillAttentionState
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config, set_active_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
@@ -215,7 +217,7 @@ def _run(
     AutoTokenizer,
     make_prompts: Callable[..., list[_Prompt]],
 ) -> list[_Result]:
-    max_new = _env_int("DEEPSEEK_V4_MAX_NEW_TOKENS", 2560)
+    max_new = _env_int("DEEPSEEK_V4_MAX_NEW_TOKENS", 16384)
     chunk_size = _env_int("DEEPSEEK_V4_E2E_CHUNK", 1024)
     compare = os.environ.get("DEEPSEEK_V4_E2E_COMPARE", "0") == "1"
     if chunk_size <= 0 or chunk_size % ALIGNMENT:
@@ -234,8 +236,9 @@ def _run(
             pytest.skip(f"Engram tables for layers {engram_ids} need {need / 1e9:.0f} GB of free memory with headroom")
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     eos = {tokenizer.eos_token_id} if tokenizer.eos_token_id is not None else set()
-    # Prompt + new tokens: the compressed entries a layer may attend over until the candidate pre-filter is ported.
-    context_limit = config.candidate_topk_blocks * config.candidate_block_size
+    context_limit = _env_int(
+        "DEEPSEEK_V4_E2E_CONTEXT", config.candidate_topk_blocks * config.candidate_block_size + max_new
+    )
     if max_new >= context_limit:
         raise ValueError(f"DEEPSEEK_V4_MAX_NEW_TOKENS={max_new} leaves no room for a prompt in {context_limit} tokens")
     prompts = make_prompts(tokenizer, context_limit - max_new)
@@ -280,7 +283,7 @@ def _run(
     submeshes = [
         mesh_device.create_submesh(ttnn.MeshShape(1, _TP_SIZE), ttnn.MeshCoordinate(i, 0)) for i in range(_NUM_STAGES)
     ]
-    placement = plan_prefill_placement(config, num_layers, _NUM_STAGES)
+    placement = plan_layer_placement(num_layers, _NUM_STAGES, 1)
     spans = []
     for k in dict.fromkeys(placement):
         owned = [li for li, stage in enumerate(placement) if stage == k]
