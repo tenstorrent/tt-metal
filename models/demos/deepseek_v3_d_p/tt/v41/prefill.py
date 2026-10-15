@@ -229,7 +229,6 @@ class V41Prefill:
         return self._embed
 
     def _streams(self, ids: list[int]) -> list:
-        h = torch.zeros(1, 1, self.chunk, self.cfg.dim, dtype=torch.bfloat16)
         emb = self._embedding()
         t = torch.tensor(ids, dtype=torch.long)
         vl = t >= emb.shape[0]  # ViT V2 E1: image-span VIRTUAL ids (vocab + k) embed as the request's span row k
@@ -239,7 +238,13 @@ class V41Prefill:
             k = t[vl] - emb.shape[0]
             assert int(k.max()) < self._image_rows.shape[0], (int(k.max()), tuple(self._image_rows.shape))
             rows[vl] = self._image_rows[k].to(torch.bfloat16)
-        h[0, 0, : len(ids)] = rows
+        if len(ids) == self.chunk and rows.is_contiguous():
+            h = rows.view(
+                1, 1, self.chunk, self.cfg.dim
+            )  # DS41F-0068: a full chunk needs no zero-filled copy (84 MB twice)
+        else:
+            h = torch.zeros(1, 1, self.chunk, self.cfg.dim, dtype=torch.bfloat16)
+            h[0, 0, : len(ids)] = rows
         if EMBED_PARTITION:
             # DS41F-0068: S-sharded + TP-replicated upload (contiguous host slices: ~25 ms for the 8192-row chunk, vs ~104 ms for
             # the D-over-TP mapper's strided copies, MEASURED ut/a3/upload_bench.py), then each chip keeps its D / tp on device
