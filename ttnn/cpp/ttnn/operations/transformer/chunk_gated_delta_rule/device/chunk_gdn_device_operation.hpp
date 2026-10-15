@@ -48,6 +48,7 @@ struct ChunkGdnParams {
     ChunkGdnImpl impl = ChunkGdnImpl::Fused;
     uint32_t BH = 0;           // heads this program computes
     uint32_t head_offset = 0;  // first of them in the [rows, ...] tensors (Fused only; Mono requires 0)
+    uint32_t rows = 0;         // heads in the inputs (and the preallocated outputs); head_offset + BH <= rows
     uint32_t num_chunks = 0;
     uint32_t chunk_size = 0;
     uint32_t key_dim = 0;
@@ -109,20 +110,22 @@ struct ChunkGdnParams {
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
+// rows = heads in the tensors (params.rows); the program computes BH of them from head_offset. On a flat path
+// rows = B * HV, T = NC * C.
 struct ChunkGdnInputs {
-    Tensor q;        // [BH, NC, C, K] bf16 (or FLAT [B, T, Hk*K] bf16 when params.qk_flat)
-    Tensor k;        // [BH, NC, C, K] bf16 (or FLAT, as q)
-    Tensor v;        // [BH, NC, C, V] bf16 (or FLAT [B, T, HV*V] bf16 when params.v_flat)
-    Tensor g;        // [B, T, HV] fp32 or bf16, token-major as the model produces it (B * HV == BH)
+    Tensor q;        // [rows, NC, C, K] bf16 (or FLAT [B, T, Hk*K] bf16 when params.qk_flat)
+    Tensor k;        // [rows, NC, C, K] bf16 (or FLAT, as q)
+    Tensor v;        // [rows, NC, C, V] bf16 (or FLAT [B, T, HV*V] bf16 when params.v_flat)
+    Tensor g;        // [B, T, HV] fp32 or bf16, token-major as the model produces it (B * HV == rows)
     Tensor beta;     // [B, T, HV] fp32 or bf16, as g
     Tensor eye_c;    // [1,1,C,C] fp32
     Tensor tril_c;   // [1,1,C,C] fp32
     Tensor ones_c;   // [1,1,C,C] fp32
     Tensor masks_c;  // [1,1,32,96] fp32 — three 32x32 WY-inverse quadrant masks (Qtl|Qbr|Q10); Fused only
-    Tensor
-        initial_state;  // [BH, K, V] fp32, REQUIRED: both programs read it unconditionally (zeros for a fresh sequence)
-    // Fused only, both or neither: outputs o [rows, NC, C, V] fp32 and final_state [rows, K, V] fp32 with
-    // rows >= head_offset + BH that the program writes its head range into. Absent: [BH, ...] outputs are allocated.
+    Tensor initial_state;  // [rows, K, V] fp32, REQUIRED: both programs read it unconditionally (zeros for a fresh
+                           // sequence)
+    // Fused only, both or neither: outputs o [rows, NC, C, V] fp32 and final_state [rows, K, V] fp32 that the
+    // program writes its head range into. Absent: [BH, ...] outputs are allocated.
     std::optional<Tensor> o_out;
     std::optional<Tensor> final_state_out;
 };

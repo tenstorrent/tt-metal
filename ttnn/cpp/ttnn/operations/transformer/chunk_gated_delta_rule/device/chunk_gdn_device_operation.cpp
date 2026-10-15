@@ -27,9 +27,10 @@ void check_gdn_tensor(const Tensor& t, const char* name, DataType dt) {
     TT_FATAL(t.buffer() != nullptr, "chunk_gdn: {} must be on device", name);
 }
 
-// A gate, g or beta: the token-major [B, T, HV] tensor the model produces, fp32 or bf16, TILE, with num_chunks
-// chunks of chunk_size tokens (the reader zeroes the rows past T). B * HV is the inputs' head count.
-void check_gdn_gate(const Tensor& t, const char* name, uint32_t HV, uint32_t num_chunks, uint32_t chunk_size) {
+// A gate, g or beta: the token-major [B, T, HV] tensor the model produces, fp32 or bf16, TILE, with B * HV == rows
+// heads and num_chunks chunks of chunk_size tokens (the reader zeroes the rows past T).
+void check_gdn_gate(
+    const Tensor& t, const char* name, uint32_t rows, uint32_t HV, uint32_t num_chunks, uint32_t chunk_size) {
     TT_FATAL(t.layout() == Layout::TILE, "chunk_gdn: {} must be TILE layout", name);
     TT_FATAL(
         t.dtype() == DataType::FLOAT32 || t.dtype() == DataType::BFLOAT16, "chunk_gdn: {} must be fp32 or bf16", name);
@@ -38,12 +39,18 @@ void check_gdn_gate(const Tensor& t, const char* name, uint32_t HV, uint32_t num
     TT_FATAL(s.rank() == 3, "chunk_gdn: {} must be [B, T, HV] (got rank {})", name, s.rank());
     TT_FATAL(HV > 0 && s[2] == HV, "chunk_gdn: {} has {} heads per row, expected HV = {}", name, s[2], HV);
     TT_FATAL(
+        s[0] * HV == rows, "chunk_gdn: {} is [{}, {}, {}], expected B * HV == rows = {}", name, s[0], s[1], s[2], rows);
+    TT_FATAL(
         (s[1] + chunk_size - 1) / chunk_size == num_chunks,
         "chunk_gdn: {} has T = {} tokens, expected {} chunks of {}",
         name,
         s[1],
         num_chunks,
         chunk_size);
+}
+void check_gdn_shape(const Tensor& t, const char* name, const ttnn::Shape& expected) {
+    TT_FATAL(
+        t.logical_shape() == expected, "chunk_gdn: {} has shape {}, expected {}", name, t.logical_shape(), expected);
 }
 }  // namespace
 
@@ -60,52 +67,69 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
     using namespace tt::constants;
     // Input contract shared by both factories: the mono kernel and the fused producers read the same
     // head-major tensors (identical to the phased PREP prim's contract, whose reader/compute the fused
-    // producer runs unchanged; the flat forms are the prep reader's and therefore Fused-only).
+    // producer runs unchanged; the flat forms are the prep reader's and therefore Fused-only). The launcher
+    // derives rows (heads in the tensors) once from the path's flags; every tensor is held to its path's shape
+    // and the head range [head_offset, head_offset + BH) to that one rows.
+    TT_FATAL(attrs.BH >= 1, "chunk_gdn: BH must be >= 1");
+    TT_FATAL(attrs.rows >= 1, "chunk_gdn: rows must be >= 1");
+    validate_gdn_chunk_size(attrs.chunk_size);
+    TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
+    TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
+    const uint32_t rows = attrs.rows, NC = attrs.num_chunks, C = attrs.chunk_size;
+    const uint32_t K = attrs.key_dim, V = attrs.val_dim;
+    // Flat tensors are token-major [B, T, heads * D] with B * HV == rows and T == NC * C.
+    auto flat_batch = [&](const char* what) {
+        TT_FATAL(
+            attrs.HV > 0 && rows % attrs.HV == 0, "chunk_gdn: {} needs rows ({}) = B * HV ({})", what, rows, attrs.HV);
+        return rows / attrs.HV;
+    };
     check_gdn_tensor(in.q, "q", DataType::BFLOAT16);
     check_gdn_tensor(in.k, "k", DataType::BFLOAT16);
-    check_gdn_tensor(in.v, "v", DataType::BFLOAT16);  // flat [B,T,HV*V] when attrs.v_flat; else [BH,NC,C,V]
-    if (attrs.v_flat) {
-        TT_FATAL(attrs.HV > 0, "v_flat requires HV > 0");
-        const auto& vs = in.v.logical_shape();
-        TT_FATAL(vs.rank() == 3, "v_flat expects a flat [B,T,HV*V] v (got rank {})", vs.rank());
-        TT_FATAL(vs[2] == attrs.HV * attrs.val_dim, "v_flat width {} != HV*V ({}*{})", vs[2], attrs.HV, attrs.val_dim);
-    }
+    check_gdn_tensor(in.v, "v", DataType::BFLOAT16);
     if (attrs.qk_flat) {
-        TT_FATAL(attrs.Hk > 0, "qk_flat requires Hk > 0");
-        const auto& qsf = in.q.logical_shape();
-        TT_FATAL(qsf.rank() == 3, "qk_flat expects a flat [B,T,Hk*K] q (got rank {})", qsf.rank());
         TT_FATAL(
-            qsf[2] == attrs.Hk * attrs.key_dim, "qk_flat width {} != Hk*K ({}*{})", qsf[2], attrs.Hk, attrs.key_dim);
+            attrs.Hk > 0 && attrs.HV % attrs.Hk == 0,
+            "chunk_gdn: qk_flat needs Hk ({}) dividing HV ({})",
+            attrs.Hk,
+            attrs.HV);
         TT_FATAL(attrs.qk_norm, "qk_flat requires qk_norm (flat q/k are unnormalized; norm is in-kernel)");
+        const uint32_t B = flat_batch("qk_flat");
+        check_gdn_shape(in.q, "q", ttnn::Shape({B, NC * C, attrs.Hk * K}));
+        check_gdn_shape(in.k, "k", ttnn::Shape({B, NC * C, attrs.Hk * K}));
+    } else {
+        check_gdn_shape(in.q, "q", ttnn::Shape({rows, NC, C, K}));
+        check_gdn_shape(in.k, "k", ttnn::Shape({rows, NC, C, K}));
     }
-    check_gdn_gate(in.g, "g", attrs.HV, attrs.num_chunks, attrs.chunk_size);
-    check_gdn_gate(in.beta, "beta", attrs.HV, attrs.num_chunks, attrs.chunk_size);
+    if (attrs.v_flat) {
+        const uint32_t B = flat_batch("v_flat");
+        check_gdn_shape(in.v, "v", ttnn::Shape({B, NC * C, attrs.HV * V}));
+    } else {
+        check_gdn_shape(in.v, "v", ttnn::Shape({rows, NC, C, V}));
+    }
+    // The gates are token-major on both paths: [B, T, HV] with B * HV == rows and ceil(T / C) == NC.
+    check_gdn_gate(in.g, "g", rows, attrs.HV, NC, C);
+    check_gdn_gate(in.beta, "beta", rows, attrs.HV, NC, C);
     // The factory reads both gates with g's T: a beta of the same chunk count but fewer tokens reads past its end.
     TT_FATAL(
         in.g.logical_shape()[1] == in.beta.logical_shape()[1],
         "chunk_gdn: g has T = {} tokens and beta T = {}; the gates must have the same T",
         in.g.logical_shape()[1],
         in.beta.logical_shape()[1]);
-    TT_FATAL(
-        in.g.logical_shape()[0] == in.beta.logical_shape()[0],
-        "chunk_gdn: g has B = {} and beta B = {}; the gates must have the same batch",
-        in.g.logical_shape()[0],
-        in.beta.logical_shape()[0]);
     check_gdn_tensor(in.eye_c, "eye_c", DataType::FLOAT32);
     check_gdn_tensor(in.tril_c, "tril_c", DataType::FLOAT32);
     check_gdn_tensor(in.ones_c, "ones_c", DataType::FLOAT32);
     check_gdn_tensor(in.masks_c, "masks_c", DataType::FLOAT32);
+    check_gdn_shape(in.eye_c, "eye_c", ttnn::Shape({1, 1, C, C}));
+    check_gdn_shape(in.tril_c, "tril_c", ttnn::Shape({1, 1, C, C}));
+    check_gdn_shape(in.ones_c, "ones_c", ttnn::Shape({1, 1, C, C}));
+    check_gdn_shape(in.masks_c, "masks_c", ttnn::Shape({1, 1, TILE_HEIGHT, 3 * TILE_WIDTH}));
     // Required: the mono reader and the fused receivers stream S from this buffer unconditionally (no
     // in-kernel zeroing); the public op builds a zero state when its own initial_state is omitted.
     check_gdn_tensor(in.initial_state, "initial_state", DataType::FLOAT32);
-    validate_gdn_chunk_size(attrs.chunk_size);
-    TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
-    TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
+    check_gdn_shape(in.initial_state, "initial_state", ttnn::Shape({rows, K, V}));
     validate_gdn_tinv(attrs.tinv, attrs.chunk_size, in.q);
-    // The head range [head_offset, head_offset + BH) must lie inside the inputs — the gates' B * HV heads (token-major
-    // on both input paths) and initial_state's — and inside the preallocated outputs, which come as a pair.
-    TT_FATAL(attrs.BH >= 1, "chunk_gdn: BH must be >= 1");
-    const uint32_t rows = in.g.logical_shape()[0] * attrs.HV;
+    // The head range [head_offset, head_offset + BH) must lie inside the rows of the inputs and of the preallocated
+    // outputs, which come as a pair.
     TT_FATAL(
         attrs.head_offset + attrs.BH <= rows,
         "chunk_gdn: heads [{}, {}) exceed the {} heads of the inputs",
@@ -113,38 +137,14 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
         attrs.head_offset + attrs.BH,
         rows);
     TT_FATAL(
-        attrs.head_offset + attrs.BH <= in.initial_state.logical_shape()[0],
-        "chunk_gdn: heads [{}, {}) exceed the {} heads of initial_state",
-        attrs.head_offset,
-        attrs.head_offset + attrs.BH,
-        in.initial_state.logical_shape()[0]);
-    TT_FATAL(
         in.o_out.has_value() == in.final_state_out.has_value(),
         "chunk_gdn: o_out and final_state_out must be given together");
     if (in.o_out.has_value()) {
         TT_FATAL(attrs.impl == ChunkGdnImpl::Fused, "chunk_gdn: preallocated outputs are for the fused program only");
         check_gdn_tensor(*in.o_out, "o_out", DataType::FLOAT32);
         check_gdn_tensor(*in.final_state_out, "final_state_out", DataType::FLOAT32);
-        const auto& os = in.o_out->logical_shape();
-        const auto& fs = in.final_state_out->logical_shape();
-        TT_FATAL(
-            os.rank() == 4 && os[0] >= attrs.head_offset + attrs.BH && os[1] == attrs.num_chunks &&
-                os[2] == attrs.chunk_size && os[3] == attrs.val_dim,
-            "chunk_gdn: o_out {} does not hold heads [{}, {}) of [*, {}, {}, {}]",
-            os,
-            attrs.head_offset,
-            attrs.head_offset + attrs.BH,
-            attrs.num_chunks,
-            attrs.chunk_size,
-            attrs.val_dim);
-        TT_FATAL(
-            fs.rank() == 3 && fs[0] >= attrs.head_offset + attrs.BH && fs[1] == attrs.key_dim && fs[2] == attrs.val_dim,
-            "chunk_gdn: final_state_out {} does not hold heads [{}, {}) of [*, {}, {}]",
-            fs,
-            attrs.head_offset,
-            attrs.head_offset + attrs.BH,
-            attrs.key_dim,
-            attrs.val_dim);
+        check_gdn_shape(*in.o_out, "o_out", ttnn::Shape({rows, NC, C, V}));
+        check_gdn_shape(*in.final_state_out, "final_state_out", ttnn::Shape({rows, K, V}));
         TT_FATAL(
             in.o_out->memory_config() == attrs.output_mem_config &&
                 in.final_state_out->memory_config() == attrs.output_mem_config,
@@ -882,6 +882,7 @@ std::vector<Tensor> chunk_gdn(
         .impl = ChunkGdnImpl::Mono,
         .BH = BH,
         .head_offset = head_offset,
+        .rows = rows,
         .num_chunks = num_chunks,
         .chunk_size = chunk_size,
         .key_dim = key_dim,
