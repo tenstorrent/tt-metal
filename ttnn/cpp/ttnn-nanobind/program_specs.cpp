@@ -529,7 +529,6 @@ void py_module_types(nb::module_& mod) {
                     .name = std::move(name),
                     .kernels = std::move(kernels),
                     .dataflow_buffers = std::move(dataflow_buffers),
-                    .cross_node_dataflow_buffers = {},
                     .semaphores = std::move(semaphores),
                     .scratchpads = std::move(scratchpads),
                     .tensor_parameters = std::move(tensor_parameters),
