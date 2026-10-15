@@ -443,6 +443,28 @@ class MigrationDriver:
         layer_ranges = [(int(l), int(l) + 1) for l in self.layers] if self.layers else [(0, self.num_layers)]
         if self.layers:
             logger.info(f"[migration_driver] migrating layer subset {self.layers} (one migrate per layer)")
+        streamed = getattr(self, "streamed", None) or {}
+        if streamed:
+            # PREFILL_MIGRATION_STREAM (tt-blaze DS41F-0071): the rows below each group's bound already moved while the prefill
+            # ran (_stream_drain); what is left is every layer's window ring / first rows [0, ROW_BASE) and each group's tail
+            assert not self.layers, "streamed migration and PREFILL_MIGRATION_LAYERS do not combine"
+            migrated = 0
+            for src_slot, dst_slot, real_len in triples:
+                end = self._pos_end_rows(real_len)
+                plan = [(0, self.num_layers, 0, min(end, STREAM_ROW_BASE))]
+                for (l0, l1), b in streamed.get(src_slot, {}).items():
+                    if b < end:
+                        plan.append((l0, l1, b, end))
+                t0 = time.perf_counter()
+                for l0, l1, a, b in plan:
+                    self.migrate_range(src_slot, dst_slot, l0, l1, a, b)
+                self.last_migrate_ms = (time.perf_counter() - t0) * 1e3
+                logger.success(
+                    f"[migration_driver] MIGRATE slot {src_slot} -> {dst_slot} complete (streamed; final pass {len(plan)} "
+                    f"range(s) in {self.last_migrate_ms:.1f} ms: {plan})"
+                )
+                migrated += 1
+            return migrated
         migrated = 0
         # DS4F-0269: the uuid must be unique for the LIFE of the client, not per run(): with one uuid per round the next
         # round's wait_complete consumed the previous round's late MIGRATION_COMPLETE and returned in 0 ms while the KV was
@@ -479,6 +501,33 @@ class MigrationDriver:
             migrated += 1
         logger.info(f"[migration_driver] migrations complete: {migrated} pair(s)")
         return migrated
+
+    def migrate_range(
+        self, src_slot: int, dst_slot: int, layer_start: int, layer_end: int, pos_start: int, pos_end: int
+    ) -> float:
+        """One migrate of rows [pos_start, pos_end) of layers [layer_start, layer_end), blocking; returns its ms."""
+        if not hasattr(self, "_next_uuid"):
+            self._next_uuid = 1
+        uuid = self._next_uuid
+        self._next_uuid += 1
+        t0 = time.perf_counter()
+        token = self.client.migrate(
+            uuid=uuid,
+            remote_endpoint_id=self.dest_endpoint_id,
+            src_slot=src_slot,
+            dst_slot=dst_slot,
+            layer_start=int(layer_start),
+            layer_end_exclusive=int(layer_end),
+            pos_start=int(pos_start),
+            pos_end_exclusive=int(pos_end),
+        )
+        self.client.wait_complete(token, self.timeout_ms)
+        ms = (time.perf_counter() - t0) * 1e3
+        logger.info(
+            f"[migration_driver] migrate slot {src_slot} -> {dst_slot} layers=[{layer_start},{layer_end}) "
+            f"rows=[{pos_start},{pos_end}) in {ms:.1f} ms"
+        )
+        return ms
 
     @staticmethod
     def _pos_end_rows(real_len: int) -> int:
@@ -1379,6 +1428,61 @@ def _wait_consumer_ack(done_file: str, timeout_s: float) -> None:
     logger.info(f"[migration_driver] consumer acknowledged after {time.perf_counter() - t0:.1f}s")
 
 
+# tt-blaze DS41F-0071: PREFILL_MIGRATION_STREAM=1 migrates the KV rows the prefill has FINISHED while it is still running (the
+# Python client has no burst API; this issues ordinary range migrates between ack drains). The engine applies ONE row range to
+# every config of a layer range, so a range is safe only if it is complete in every config those layers hold. For DeepSeek-
+# V4.1 (kv_export.py): csa_unified rows [0, 256) are the window ring (rewritten every chunk), row 256 + w entry w; index_k
+# row w entry w; layers [0, SPLIT) read the ratio-DIV sources, layers [SPLIT, N) layer 20's ratio-1 entries. With `done`
+# finished tokens: layers [0, SPLIT) are complete on rows [256, done / DIV) (index_k binds), layers [SPLIT, N) on rows
+# [256, done). The final pass (MigrationDriver._issue) moves rows [0, 256) of every layer and each group's tail.
+STREAM = os.environ.get("PREFILL_MIGRATION_STREAM", "0") == "1"
+STREAM_ROW_BASE = int(os.environ.get("PREFILL_MIGRATION_ROW_BASE", "0") or 0)
+STREAM_SPLIT = int(os.environ.get("PREFILL_MIGRATION_STREAM_SPLIT", "20"))
+STREAM_DIV = int(os.environ.get("PREFILL_MIGRATION_STREAM_DIV", "2"))
+STREAM_CHUNKS = int(os.environ.get("PREFILL_MIGRATION_STREAM_CHUNKS", "4"))  # finished chunks between early passes
+STREAM_QUANTUM = 128  # rows: a multiple of the tables' 32-row chunks
+
+
+def _stream_drain(driver, producer, ack_channel, stats, pushes, num_slots):
+    """Drain the runner's layer-acks like ``_drain_layer_acks`` and, every STREAM_CHUNKS finished chunks, migrate the rows
+    those chunks completed. Returns {src_slot: {(layer_start, layer_end): rows migrated below}} for the final pass."""
+    assert STREAM_ROW_BASE > 0, "PREFILL_MIGRATION_STREAM needs PREFILL_MIGRATION_ROW_BASE (the window rows)"
+    triples = driver._resolve_pairs(stats, num_slots=num_slots)
+    if len(triples) != 1:
+        logger.warning(f"[migration_driver] stream: {len(triples)} pairs -- streaming handles one; draining as usual")
+        producer._drain_layer_acks(ack_channel, producer.NUM_LAYERS * stats.total_pushes)
+        return None
+    src, dst, _ = triples[0]
+    ends = [e for (s_, _a, e) in pushes if s_ == src]
+    n_layers = int(driver.num_layers)
+    groups = {(0, STREAM_SPLIT): STREAM_DIV, (STREAM_SPLIT, n_layers): 1}
+    bound = {g: STREAM_ROW_BASE for g in groups}
+    expected = producer.NUM_LAYERS * stats.total_pushes
+    drained, last_pass, t_start, early_ms = 0, 0, time.perf_counter(), 0.0
+    while drained < expected:
+        got = ack_channel.try_consume_all()
+        drained += got
+        done_chunks = min(drained // producer.NUM_LAYERS, len(ends))
+        if done_chunks - last_pass >= STREAM_CHUNKS and done_chunks < len(ends):
+            done = ends[done_chunks - 1]
+            for g, div in groups.items():
+                b = (done // div) // STREAM_QUANTUM * STREAM_QUANTUM
+                if b > bound[g]:
+                    early_ms += driver.migrate_range(src, dst, g[0], g[1], bound[g], b)
+                    bound[g] = b
+            last_pass = done_chunks
+        elif not got:
+            time.sleep(0.002)
+        if time.perf_counter() - t_start > 3600:
+            logger.warning(f"[migration_driver] stream: timed out at {drained}/{expected} acks")
+            break
+    logger.info(
+        f"[migration_driver] stream: drained {drained}/{expected} layer acks in {time.perf_counter() - t_start:.2f}s; "
+        f"early migrates {early_ms:.0f} ms total, bounds {bound}"
+    )
+    return {src: dict(bound)}
+
+
 def _run_one_request_set(
     args, cfg, *, producer_ns, driver, service, ack_channel, kv_table, payload_bytes, mr_rank, world_size
 ):
@@ -1402,13 +1506,26 @@ def _run_one_request_set(
         )
         return (time.perf_counter() - push_start) * 1000.0
 
+    pushes = []  # (slot, start, end) in push order: PREFILL_MIGRATION_STREAM maps drained acks to finished tokens
+
+    _push = push_chunk
+
+    def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int) -> float:  # noqa: F811
+        pushes.append((int(slot_id), int(actual_start), int(actual_end)))
+        return _push(slot_id, chunk_idx, actual_start, actual_end)
+
     stats = producer.run_schedule(cfg, push_fn=push_chunk)
     service.barrier()
     logger.info(
         f"[migration_driver] prefill done wall={stats.wall_s:.1f}s pushes={stats.total_pushes} "
         f"requests={stats.completed}"
     )
-    producer._drain_layer_acks(ack_channel, producer.NUM_LAYERS * stats.total_pushes)
+    driver.streamed = None
+    if STREAM and world_size == 1 and ack_channel is not None and len(stats.resident) == 1:
+        num_slots = kv_table.config().num_slots if kv_table is not None else None
+        driver.streamed = _stream_drain(driver, producer, ack_channel, stats, pushes, num_slots)
+    else:
+        producer._drain_layer_acks(ack_channel, producer.NUM_LAYERS * stats.total_pushes)
 
     # Multi-rank GO#1: every layer of every chunk is now written across every stage's DRAM, so release the
     # validators to PCC their own hosts' layers. Broadcast BEFORE this rank's own read-back so the reads
