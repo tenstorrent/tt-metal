@@ -85,9 +85,9 @@ def drain_core(mesh) -> ttnn.CoreCoord:
     """moe_compute's tilize drain core (the routing shards' core) with the model's arguments (``moe.py``: one
     token-parallel core, the auto output width shard, the hidden size)."""
 
-    from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
+    from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim
 
-    width_shard = auto_output_width_shard_dim(HIDDEN, matmul_ring_size=effective_matmul_ring_size(mesh))
+    width_shard = auto_output_width_shard_dim(HIDDEN)
     return ttnn.experimental.get_moe_tilize_drain_core(mesh, 1, width_shard, HIDDEN)
 
 

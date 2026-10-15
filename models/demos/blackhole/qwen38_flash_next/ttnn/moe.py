@@ -629,7 +629,7 @@ class Qwen38TTNNMoE:
             packer_l1_acc=False,
         )
         ring_size = effective_matmul_ring_size(mesh_device)
-        output_width_shard_dim = auto_output_width_shard_dim(HIDDEN_SIZE, matmul_ring_size=ring_size)
+        output_width_shard_dim = auto_output_width_shard_dim(HIDDEN_SIZE)
         self.output_height_shard_dim = moe_compute_output_height_shard_dim(
             self.routed_tokens, matmul_ring_size=ring_size
         )
