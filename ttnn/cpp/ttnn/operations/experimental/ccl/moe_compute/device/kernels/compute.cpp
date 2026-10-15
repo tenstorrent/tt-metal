@@ -117,14 +117,12 @@ struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::S
     }
 };
 
-#ifdef TRISC_PACK
 // silu(min(gate, limit)) * clamp(up, -limit, limit)
 struct ClampedSiluConfig {
     static constexpr float alpha = 1.0f;
     static constexpr float clamp_limit =
         __builtin_bit_cast(float, get_named_compile_time_arg_val("activation_limit_bits"));
 };
-#endif
 
 template <uint32_t kPairs>
 struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::CLAMPED_SILU, kPairs> {

@@ -63,8 +63,8 @@ struct MoEComputeParams {
     ttnn::experimental::prim::detail::MoEActivationFunction activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction::SILU;  // Default to SILU
 
-    // CLAMPED_SILU only: silu(min(gate, limit)) * clamp(up, -limit, limit). Zero for other activations.
-    float activation_limit = 0.0f;
+    // CLAMPED_SILU only: silu(min(gate, limit)) * clamp(up, -limit, limit).
+    std::optional<float> activation_limit;
 
     // Expert matmuls and activation. math_approx_mode and dst_full_sync_en stay fixed by the kernel.
     tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::LoFi;

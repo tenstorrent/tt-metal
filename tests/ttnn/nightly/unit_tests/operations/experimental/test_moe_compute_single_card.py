@@ -1621,7 +1621,7 @@ def _clamp_boundary_weights(layers, experts, hidden, intermediate):
 @pytest.mark.parametrize("tokens", [1, 4])
 @pytest.mark.parametrize("activation_limit", [0.125, 10.0])
 def test_moe_compute_single_card_clamped_silu(mesh_device, mesh_shape, tokens, activation_limit):
-    """CLAMPED_SILU in FullLocal with exact weights; the small limit clips both gate and up."""
+    """CLAMPED_SILU in SingleDevice with exact weights; the small limit clips both gate and up."""
     hidden_size = 4096
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
