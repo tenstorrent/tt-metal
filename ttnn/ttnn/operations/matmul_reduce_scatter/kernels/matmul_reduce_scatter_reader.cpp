@@ -86,16 +86,12 @@ void kernel_main() {
     const uint32_t n_valid = get_arg_val<uint32_t>(arg++);
     const uint32_t arr_fwd_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t arr_bwd_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t total_fwd = get_arg_val<uint32_t>(arg++);  // increments my own counters receive (groups I lead)
+    const uint32_t total_fwd = get_arg_val<uint32_t>(arg++);  // arrival increments my counters receive this call
     const uint32_t total_bwd = get_arg_val<uint32_t>(arg++);
-    const uint32_t observations = get_arg_val<uint32_t>(arg++);  // member acks of my counters before I re-arm
-    // per entry: [block | arrival_mask << 16 | lag << 20, leader_fwd, leader_bwd]; leader = x | y << 8 | thr << 16:
-    // the arrival has landed once that core's counter (incremented once per group of cores) reaches thr
+    // per entry: [block | arrival_mask << 16 | lag << 20, thr_fwd | thr_bwd << 16]; an arrival has landed once my
+    // counter of its direction reaches its threshold (one fused increment per (core, unit), in the upstream's order)
     const uint32_t entries_idx = arg;
-    constexpr uint32_t ENTRY_WORDS = 3;
-    constexpr uint32_t POLL_TRID = 0xF;  // read transaction id of the leader-counter polls (prefetches use 1..8)
-    const uint32_t poll_scratch = get_semaphore(2);
-    const uint32_t observed_addr = get_semaphore(3);  // same id on every matmul core
+    constexpr uint32_t ENTRY_WORDS = 2;
 
     const auto a_acc = TensorAccessor(a_args, a_addr, a_tile_bytes);
     const auto w_acc = TensorAccessor(w_args, w_addr, w_tile_bytes);
@@ -293,39 +289,19 @@ void kernel_main() {
         w_slot = w_slot + 1 == w_cap_windows ? 0 : w_slot + 1;
     };
 
-    // wait until the leader's arrival counter (same address on every core) covers `thr`: a local wait when this core
-    // leads its group, else poll the leader's counter over the NoC
-    auto wait_leader = [&](uint32_t lead, uint32_t counter_addr) {
-        const uint32_t x = lead & 0xFF, y = (lead >> 8) & 0xFF, thr = lead >> 16;
-        if (x == my_x[noc_index] && y == my_y[noc_index]) {
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counter_addr), thr);
-            return;
-        }
-        volatile tt_l1_ptr uint32_t* scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll_scratch);
-        const uint64_t src = get_noc_addr(x, y, counter_addr);
-        while (true) {
-            noc_async_read_set_trid(POLL_TRID);
-            noc_async_read(src, poll_scratch, sizeof(uint32_t));
-            noc_async_read_barrier_with_trid(POLL_TRID);
-            if (*scratch >= thr) {
-                break;
-            }
-        }
-        noc_semaphore_inc(
-            get_noc_addr(x, y, observed_addr), 1);  // the leader may re-arm only after every member saw it
-    };
-    // land_arrivals_block: the zone slot(s) of this entry are credited once their group's counter covers them.
+    // land_arrivals_block: the zone slot(s) of this entry are credited once the counter covers them.
     auto land_arrivals_block = [&](uint32_t entry_idx) {
         const uint32_t word0 = get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * entry_idx);
+        const uint32_t word1 = get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * entry_idx + 1);
         const uint32_t mask = (word0 >> 16) & 0x3;
         MRS_ZONE("ARR_WAIT");
         if (mask & 1) {
-            wait_leader(get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * entry_idx + 1), arr_fwd_addr);
+            noc_semaphore_wait_min(arr_fwd, word1 & 0xFFFF);
             cb_reserve_back(cb_arrivals_fwd, P);
             cb_push_back(cb_arrivals_fwd, P);
         }
         if (mask & 2) {
-            wait_leader(get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * entry_idx + 2), arr_bwd_addr);
+            noc_semaphore_wait_min(arr_bwd, word1 >> 16);
             cb_reserve_back(cb_arrivals_bwd, P);
             cb_push_back(cb_arrivals_bwd, P);
         }
@@ -353,9 +329,7 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();  // the last multicasts have landed before this kernel retires
-    // Re-arm the global arrival counters for the next call (decrement what arrived, never store 0) once every group
-    // member has observed them.
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(observed_addr), observations);
+    // Re-arm the global arrival counters for the next call (decrement what arrived, never store 0).
     if (total_fwd > 0) {
         noc_semaphore_wait_min(arr_fwd, total_fwd);
         noc_semaphore_inc(get_noc_addr(arr_fwd_addr), 0u - total_fwd);

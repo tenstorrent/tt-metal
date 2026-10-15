@@ -49,8 +49,6 @@ DEPTH_HANDOFF = 2  # finished slots (a port gathers entry e while compute finish
 PREFER_PORT_ROW_STRIP = True  # ports in logical row 0, right under the Ethernet row (focus case: 150-160 us with
 # the column strip -> 137-145 us with the row strip, despite 14 vs 12 tiles per core: the transport tail shrinks)
 PORT_PLACEMENT = "eth"  # "eth": each port nearest its link's Ethernet core | "spread": evenly along the strip
-INC_GROUP = 1  # cores per fused arrival increment: a unit's walk is cut into groups of this many cores; the group's
-# last core carries the fused increment of its own counter (the group leader), members poll the leader's counter
 PORT_GROUP = 4  # chunks per port batch (cb_port_chunks holds 2 batches); <= 8 (header pool)
 ENTRIES_PER_BLOCK = 1  # entries per scatter block (overlap lamp; only 1 is built)
 KB_MIN_RESIDENT = 8  # smallest K-block the resident regime accepts (min(Kt, this))
@@ -667,8 +665,7 @@ def create_mesh_program_descriptor(ctx):
         G,
     ]
     writer_ct = [CB_FINISHED, P, core_n, out_nt, DEPTH_HANDOFF, STAGE_TILE_BYTES, G] + o_ct
-    inc_group = int(os.environ.get("MRS_INC_GROUP", INC_GROUP))  # env: perf experiments only
-    port_ct = [CB_PORT_CHUNKS, P, chunk_tiles, PORT_GROUP, STAGE_TILE_BYTES, DEPTH_HANDOFF, inc_group]
+    port_ct = [CB_PORT_CHUNKS, P, chunk_tiles, PORT_GROUP, STAGE_TILE_BYTES, DEPTH_HANDOFF]
 
     src = ttnn.KernelDescriptor.SourceType.FILE_PATH
     # Perf-only ablation switches (debug scaffolding; output is wrong by design when set): MRS_ABLATE=compute,dram
@@ -697,25 +694,6 @@ def create_mesh_program_descriptor(ctx):
             out.append((e, b, mask, h1_first, ks))
         return out
 
-    # arrival groups: for every arrival (receiving position q, core k, direction d, block b) the leader core whose
-    # counter covers it and the leader-counter threshold, counted in the upstream port's send order
-    leader_of, led_total, observed = {}, {}, {}
-    for p in range(G):
-        for d in _DIRS:
-            if not ring and not (0 <= (p + 1 if d == "fwd" else p - 1) < G):
-                continue
-            q = (p + 1) % G if d == "fwd" else (p - 1) % G
-            for l in range(L):
-                for _, b, _, _, ks in unit_walks(ctx["sched"][p], d, l):
-                    for g0 in range(0, len(ks), inc_group):
-                        members = ks[g0 : g0 + inc_group]
-                        lead = members[-1]
-                        led_total[(q, lead, d)] = led_total.get((q, lead, d), 0) + 1
-                        for k in members:
-                            leader_of[(q, k, d, b)] = (lead, led_total[(q, lead, d)])
-                        # members ack each observation to the leader, which re-arms only after all of them
-                        observed[(q, lead)] = observed.get((q, lead), 0) + len(members) - 1
-
     mesh_desc = ttnn.MeshProgramDescriptor()
     for grp in ctx["groups"]:
         for p, coord in enumerate(grp):
@@ -734,8 +712,6 @@ def create_mesh_program_descriptor(ctx):
             program.semaphores = [
                 ttnn.SemaphoreDescriptor(id=0, core_ranges=all_crs, initial_value=0),  # consumed_fwd
                 ttnn.SemaphoreDescriptor(id=1, core_ranges=all_crs, initial_value=0),  # consumed_bwd
-                ttnn.SemaphoreDescriptor(id=2, core_ranges=all_crs, initial_value=0),  # poll scratch (leader counter)
-                ttnn.SemaphoreDescriptor(id=3, core_ranges=all_crs, initial_value=0),  # member observations (leader)
             ]
 
             # ---- matmul cores: runtime args ----
@@ -753,14 +729,8 @@ def create_mesh_program_descriptor(ctx):
                         mask = 1 if r[0] == "fwd" else 2
                     elif r[0] == "fin":
                         mask = (1 if b in arrivals[(h, "fwd")] else 0) | (2 if b in arrivals[(h, "bwd")] else 0)
-                    lead_words = []
-                    for d, bit in (("fwd", 1), ("bwd", 2)):
-                        if mask & bit:
-                            lk, thr = leader_of[(p, k, d, b)]
-                            lv = virt(mm_cores[lk][2])
-                            lead_words.append(lv.x | (lv.y << 8) | (thr << 16))
-                        else:
-                            lead_words.append(0)
+                    thr_f = thresholds[(h, "fwd")].get(b, 0) if mask & 1 else 0
+                    thr_b = thresholds[(h, "bwd")].get(b, 0) if mask & 2 else 0
                     # lag (finish behind the next entry's matmul) only when an arrival is produced at the same or a
                     # later position of the upstream's walk; an arrival produced earlier has (most likely) landed
                     e_idx = len(roles_k)
@@ -769,7 +739,7 @@ def create_mesh_program_descriptor(ctx):
                         sc["produced_at"][(h, d)][b] >= e_idx for d, bit in (("fwd", 1), ("bwd", 2)) if mask & bit
                     )
                     lag = int(lag and e_idx + 1 < len(entries))
-                    ent_words += [b | (mask << 16) | (lag << 20)] + lead_words
+                    ent_words += [b | (mask << 16) | (lag << 20), thr_f | (thr_b << 16)]
                     roles_k.append([ROLE_COPY, ROLE_ADD_FWD, ROLE_ADD_BWD, ROLE_ADD_BOTH][mask] | (lag << 8))
                     kinds_k.append(KIND_FIN if r[0] == "fin" else (KIND_FWD if r[0] == "fwd" else KIND_BWD))
                 r_rt[core.x][core.y] = [
@@ -781,9 +751,8 @@ def create_mesh_program_descriptor(ctx):
                     n_valid,
                     arr_fwd_addr,
                     arr_bwd_addr,
-                    led_total.get((p, k, "fwd"), 0),  # increments my own counters receive (I lead those groups)
-                    led_total.get((p, k, "bwd"), 0),
-                    observed.get((p, k), 0),  # member observations of my counters to wait for before re-arming
+                    len(arrivals[(h, "fwd")]),  # arrival increments my counters receive this call
+                    len(arrivals[(h, "bwd")]),
                 ] + ent_words
                 c_rt[core.x][core.y] = roles_k
                 pf = port_vcore.get(("fwd", l)) if peers["fwd"] is not None else None
