@@ -53,9 +53,9 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
     [
         pytest.param(
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4-2link and layer3 and gate_device and no_ref and isl_1280'",
-            8_414_334,  # Re-cut 2026-09-27 on the CI LoudBox (bh_loudbox, 8xP150), run 36356781842.
-            # One sample. ND-sharded routed-expert weights carry the delta: the op reads 2,573,812 ns
-            # against 2,997,396 ns on main run 36360866118, and the remainder moves by under 0.2%.
+            8_055_490,  # Re-cut 2026-10-15: mean of 22 CI LoudBox (bh_loudbox, 8xP150) runs,
+            # 37705811976 through 38733452366 (8,008,078-8,138,591 ns, sd 0.4%). Main stepped down
+            # between ca3797a3df8 and 496333d8fac, the same step as the moe 8x1 slot.
             # Keep cutting this gate on the CI runner -- bh-lb-15 read the old value 23% high.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe_fabric2d",
