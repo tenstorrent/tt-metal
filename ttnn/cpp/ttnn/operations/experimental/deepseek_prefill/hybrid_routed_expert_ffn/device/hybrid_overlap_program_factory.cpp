@@ -44,7 +44,7 @@ combine::CombineFabric2dInputs combine_inputs(const HybridRoutedExpertFfnInputs&
         .expert_token_counts = t.counts,
         .expert_region_offsets = t.expert_region_offsets.value(),
         .expert_offsets = t.expert_offsets.value(),
-        .global_expert_idx_table = t.replicated_global_expert_idx_table.value(),
+        .global_expert_idx_table = t.replicated_global_expert_idx_table,
     };
 }
 
@@ -55,7 +55,7 @@ namespace {
 // The reader is the merged one when the fused pass runs and the unified half's own when it does not (threshold 0),
 // as for the writer in expert_done_writer_count; both are the unified reader that consumes these arguments.
 void append_far_run(tt::tt_metal::ProgramDescriptor& desc, tt::tt_metal::Buffer* expert_offsets, uint32_t dg_far) {
-    auto reader = std::find_if(desc.kernels.begin(), desc.kernels.end(), [](const auto& k) {
+    auto* reader = std::find_if(desc.kernels.begin(), desc.kernels.end(), [](const auto& k) {
         return k.kernel_source.ends_with("hybrid_reader.cpp") ||
                k.kernel_source.ends_with("unified_routed_expert_ffn_reader.cpp");
     });

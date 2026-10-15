@@ -3165,7 +3165,7 @@ uint32_t expert_done_writer_count(const tt::tt_metal::ProgramDescriptor& desc) {
 }
 
 void append_expert_done_signal(tt::tt_metal::ProgramDescriptor& desc, const ExpertDoneSignal& signal) {
-    auto writer = find_writer(desc);
+    auto* writer = find_writer(desc);
 
     // One base for every core, so it can be a define: the widest core's list decides it.
     uint32_t base = 0;
