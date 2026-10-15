@@ -13,6 +13,7 @@ from ttnn.operations.matmul_reduce_scatter import matmul_local_program, matmul_r
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
+from models.demos.deepseek_v3_d_p.tt.kda.column_copy_program import copy_columns_program
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
     KDA_DECAY_L1_BYTES_PER_CORE,
@@ -273,13 +274,21 @@ class ttKDA:
             math_fidelity=program_config.input_projection_math_fidelity, fp32_dest_acc_en=True
         )
         self.output_gate_weight = None
+        # Output-gate columns the input projection keeps: the first heads, as many as fit in the per-core width the
+        # projection is tiled to anyway (K3 at 640 rows: 300 tiles over 12 core columns of 26 leave 12 tiles idle).
+        self.input_projection_gate_columns = 0
         if self.overlap_output_gate:
             fused = self.weights.input_projection
             hidden, width = tuple(fused.shape)[-2:]
             gate_start = self._convolution_width + self.config.head_k_dim
             gate_end = gate_start + self.config.v_dim
-            self.output_gate_weight = ttnn.slice(fused, [0, gate_start], [hidden, gate_end])
-            leading = ttnn.slice(fused, [0, 0], [hidden, gate_start])
+            self.input_projection_gate_columns = (
+                self._idle_projection_heads(mesh_device, program_config, width - self.config.v_dim)
+                * self.config.head_v_dim
+            )
+            kept_end = gate_start + self.input_projection_gate_columns
+            self.output_gate_weight = ttnn.slice(fused, [0, kept_end], [hidden, gate_end])
+            leading = ttnn.slice(fused, [0, 0], [hidden, kept_end])
             trailing = ttnn.slice(fused, [0, gate_end], [hidden, width])
             # Both pieces are whole tiles of the fused weight; concat widens to BF16, and casting back requantizes
             # each tile with its original block exponents, so the projection weight is unchanged.
@@ -287,7 +296,10 @@ class ttKDA:
             object.__setattr__(self.weights, "input_projection", ttnn.typecast(joined, fused.dtype))
             for tensor in (joined, leading, trailing, fused):
                 ttnn.deallocate(tensor)
-            self.recurrence.place_ring_relay(self._output_gate_idle_cores(mesh_device, hidden))
+            idle = self._output_gate_idle_cores(mesh_device, hidden)
+            self.recurrence.place_ring_relay(idle)
+            # The kept heads' gate columns are copied into the gate's output by the cores the relay leaves over.
+            self._gate_copy_cores = idle[self.recurrence.ring_relay_core_count :]
         self.input_projection_program_config, self.output_projection_program_config = (
             tuned_projection_matmul_configs(
                 mesh_device.compute_with_storage_grid_size(),
@@ -337,6 +349,26 @@ class ttKDA:
             math_fidelity=program_config.output_projection_math_fidelity, fp32_dest_acc_en=True
         )
         self._history_exchange = _HistoryExchange.shared(mesh_device, self._convolution_width)
+
+    def _idle_projection_heads(self, mesh_device, program_config, base_width: int) -> int:
+        """Output-gate heads that fit in the input projection's per-core width without widening it."""
+        if not program_config.tuned_projection_matmuls:
+            return 0
+        grid = mesh_device.compute_with_storage_grid_size()
+        out_k, out_n = tuple(self.weights.output_projection.shape)[-2:]
+        per_core = lambda width: tuned_projection_matmul_configs(grid, self.active_seq_len_local, width, out_k, out_n)[
+            0
+        ]
+        base = per_core(base_width)
+        if base is None:
+            return 0
+        heads = 0
+        while heads < self.config.num_heads:
+            wider = per_core(base_width + (heads + 1) * self.config.head_v_dim)
+            if wider is None or wider.per_core_N != base.per_core_N:
+                break
+            heads += 1
+        return heads
 
     def _output_gate_idle_cores(self, mesh_device: ttnn.MeshDevice, hidden: int) -> list[ttnn.CoreCoord]:
         """Worker cores the output gate's matmul leaves idle (the same on every device), for the ring relay."""
@@ -454,8 +486,8 @@ class ttKDA:
             compute_kernel_config=self.input_projection_compute_config,
         )
         auxiliary_start = self._convolution_width
-        # Without the output gate's columns (overlap_output_gate) beta follows the decay rank directly.
-        gate_width = 0 if self.overlap_output_gate else config.v_dim
+        # With overlap_output_gate the projection keeps only the first heads' output-gate columns.
+        gate_width = self.input_projection_gate_columns if self.overlap_output_gate else config.v_dim
         return _ProjectedInputs(
             projected=projected,
             decay_rank_offset=auxiliary_start,
@@ -634,6 +666,7 @@ class ttKDA:
             def companion():
                 # Built when the relay dispatches, so its output (in L1 like the fused projection it replaces) is not
                 # live during chunk preparation.
+                kept = self.input_projection_gate_columns
                 io, program, output_gate = matmul_local_program(
                     hidden_states,
                     self.output_gate_weight,
@@ -643,8 +676,20 @@ class ttKDA:
                         if self.input_projection_program_config is None
                         else ttnn.L1_MEMORY_CONFIG
                     ),
+                    output_width=self.config.v_dim,
+                    output_column_offset=kept,
                 )
                 output_gates.append(output_gate)
+                if kept:
+                    program = copy_columns_program(
+                        program,
+                        source=inputs.projected,
+                        source_column=inputs.output_gate_offset,
+                        destination=output_gate,
+                        columns=kept,
+                        cores=self._gate_copy_cores,
+                    )
+                    io = io[:-1] + [inputs.projected, io[-1]]
                 return io, program
 
         result = self.recurrence(

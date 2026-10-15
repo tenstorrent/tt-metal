@@ -495,7 +495,8 @@ def compute_rect(pl: Placement, blk: Blocking):
 
 
 def _cset(cores):
-    return ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+    # Merged into rectangles: dispatch writes a kernel's binaries and configuration once per range.
+    return ttnn.CoreRangeSet([]).merge(ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]))
 
 
 def _cb(index, num_pages, page_bytes, dtype, core_ranges):
@@ -541,9 +542,11 @@ def create_mesh_program_descriptor(
     num_links,
     compute_config,
     ring=False,
+    output_columns=None,
 ):
     """groups: {coord: (p, prev_coord|None, next_coord|None)} (ring: wrap neighbours included);
-    links: {(coord, peer): [link ids]}; ring: Topology.Ring schedule (design R3)."""
+    links: {(coord, peer): [link ids]}; ring: Topology.Ring schedule (design R3). output_columns: a local matmul's
+    (first output tile column, output width in tiles) when it fills part of a wider output."""
     sem_arr_fwd, sem_arr_bwd, sem_ready_fence, sem_block_ready = sems[:4]
     sem_block_ack = sems[4:7]  # one ack counter per consumer kind: fwd ports, bwd ports, finals
     G = blk.G
@@ -574,6 +577,7 @@ def create_mesh_program_descriptor(
     # stores its block straight to the output, so it needs no final cores.
     direct = cluster_axis is None
     assert not direct or (G == 1 and W == 1), "a local matmul computes one unwaved block per core"
+    out_col0, out_width = output_columns if output_columns is not None else (0, blk.blk_n_tiles)
     a_pages = cm * blk.Kt if blk.a_resident else OPERAND_DEPTH * cm * blk.k_block_tiles
     w_pages = blk.Kt * cn if blk.w_resident else OPERAND_DEPTH * blk.k_block_tiles * cn
     um, un = blk.unit_m_tiles, blk.unit_n_tiles
@@ -609,7 +613,9 @@ def create_mesh_program_descriptor(
     # row, W injectors the other); "diag" = the sender advances one core per line (A: m-line ml injects from n-line
     # (ml + A_INJ_START) mod n_lines; W: n-line nl from m-line (nl + W_INJ_START) mod m_lines), so no two injectors of
     # an operand share a grid row or column and their DRAM reads never converge on one NoC row / column.
-    diag = os.environ.get("MMRS_INJ", "diag") == "diag"
+    # A local matmul takes "first": its non-injector cores then form whole rectangles, which dispatch writes in a
+    # few multicasts (diagonal injectors split them into one range per core: ~16 us more dispatch on the K3 gate).
+    diag = os.environ.get("MMRS_INJ", "first" if direct else "diag") == "diag"
     a_inj_start, w_inj_start = 0, (1 if diag else 0)
     a_sender_nl = lambda ml: (a_inj_start + ml) % blk.n_lines if diag else 0
     w_sender_ml = lambda nl: (w_inj_start + nl) % blk.m_lines if diag else 0
@@ -672,7 +678,7 @@ def create_mesh_program_descriptor(
                     + order_rt
                     + consumers
                     + (
-                        [out_addr, row0, col0, min(cm, um - row0), min(cn, un - col0), blk.blk_n_tiles, cn]
+                        [out_addr, row0, out_col0 + col0, min(cm, um - row0), min(cn, un - col0), out_width, cn]
                         if direct
                         else []
                     )

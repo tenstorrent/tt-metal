@@ -479,13 +479,23 @@ def _merge_extra_programs(mesh_device, desc, extra_program):
     return merged
 
 
-def matmul_local_program(input_tensor, weight, *, compute_kernel_config=None, num_links=None, memory_config=None):
+def matmul_local_program(
+    input_tensor,
+    weight,
+    *,
+    compute_kernel_config=None,
+    num_links=None,
+    memory_config=None,
+    output_width=None,
+    output_column_offset=0,
+):
     """A @ W on every device independently (no reduction), with this op's matmul and its finals storing the result.
 
     Returns (io_tensors, mesh program descriptor, output) instead of dispatching, so a caller can merge other programs
     onto the cores it leaves idle (ttnn.merge_program_descriptors) and dispatch once with ttnn.generic_op; the output
     is the last of io_tensors. A and W must be DRAM-interleaved TILE tensors; A rank 2-4 with leading dims 1. The output
-    is interleaved in `memory_config` (DRAM by default)."""
+    is interleaved in `memory_config` (DRAM by default). With `output_width` the output is [M, output_width] and the
+    product fills its columns [output_column_offset, output_column_offset + N); the others are left for the caller."""
     a_shape, w_shape = list(input_tensor.shape), list(weight.shape)
     if not 2 <= len(a_shape) <= 4 or any(d != 1 for d in a_shape[:-2]) or len(w_shape) != 2:
         raise ValueError(f"matmul_local_program: A {a_shape} must be rank 2-4 with leading dims 1, W rank 2")
@@ -496,9 +506,13 @@ def matmul_local_program(input_tensor, weight, *, compute_kernel_config=None, nu
     mesh_device = input_tensor.device()
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
     M, K, N = a_shape[-2], a_shape[-1], w_shape[-1]
-    # The finals store whole blocks, so the output's padded extent is the block (here M x N, one group).
+    width = N if output_width is None else output_width
+    if output_column_offset % 32 or width % 32 or output_column_offset + N > width:
+        raise ValueError(
+            f"matmul_local_program: columns [{output_column_offset}, +{N}) do not fit a {width}-wide output"
+        )
     output = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(a_shape[:-2] + [M, N]),
+        ttnn.Shape(a_shape[:-2] + [M, width]),
         ttnn.bfloat16,
         ttnn.TILE_LAYOUT,
         mesh_device,
@@ -544,5 +558,6 @@ def matmul_local_program(input_tensor, weight, *, compute_kernel_config=None, nu
         num_links=plan["num_links"],
         compute_config=cfg,
         ring=False,
+        output_columns=(output_column_offset // 32, width // 32),
     )
     return [input_tensor, weight, plan["relay_scratch"], handoff_l1, output], desc, output

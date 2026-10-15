@@ -12,8 +12,10 @@ its own core and the heads stream through the ring one behind another.
 Per device:
   * head cores (one per head): read A_p and B_p (BF16, this rank's packed summary), take E_p (the initial state on the
     first rank, else the predecessor's landed state), compute A_p E_p + B_p in FP32 and hand it to a sender;
-  * sender cores (one per link): forward each finished head's state into the successor's landing buffer for that head
-    over the fabric, then release the head core. The last rank sends to the first rank's final-state landing.
+  * sender cores (one per link): read each finished head's state out of its head core (the next head's while the
+    current one's packets go out), release the head core and forward the state into the successor's landing buffer for
+    that head over the fabric. The last rank sends to the first rank's final-state landing. The link's throughput
+    (about 4 us per 64 KiB state) and the per-hop compute bound the relay.
 Landing buffers and the hand-off are L1 tensors sharded over the head cores, so their addresses agree on every device.
 
 Successive calls are not fenced against each other: a rank writes into its successor's landing only after that call has
@@ -105,69 +107,44 @@ _HEAD_COMPUTE = r"""
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 
-// E_out = A E_in + B for one head, as chain_affine_transforms computes a step: the K-sum accumulates in DST and is
-// packed in FP32, then unpacked losslessly to DST and B added there on the SFPU (an FPU add would truncate the FP32
-// product in a source register).
+// E_out = A E_in + B for one head, accumulated in the FP32 DST at the affine prefix's fidelity.
 void kernel_main() {
     constexpr uint32_t cb_a = get_compile_time_arg_val(0);
     constexpr uint32_t cb_b = get_compile_time_arg_val(1);
     constexpr uint32_t cb_ein = get_compile_time_arg_val(2);
     constexpr uint32_t cb_eout = get_compile_time_arg_val(3);
     constexpr uint32_t kt = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_prod = get_compile_time_arg_val(5);
     constexpr uint32_t state_tiles = kt * kt;
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_a, cb_ein, cb_prod);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_a, cb_ein, cb_eout);
     cb_wait_front(cb_a, state_tiles);
     cb_wait_front(cb_ein, state_tiles);
-    cb_reserve_back(cb_prod, state_tiles);
-    reconfig_data_format<SrcOrder::Reverse>(cb_a, cb_ein);
-    matmul_block_init(cb_a, cb_ein, false, kt, 1, kt);
+    cb_wait_front(cb_b, state_tiles);
+    cb_reserve_back(cb_eout, state_tiles);
+    // Per output tile row: B (BF16, exact in the FP32 DST) is copied into DST first and the K-sum accumulates on top
+    // of it, so the state never leaves DST between the product and the add.
     for (uint32_t row = 0; row < kt; ++row) {
         tile_regs_acquire();
+        reconfig_data_format_srca(cb_b);
+        copy_init(cb_b);
+        for (uint32_t c = 0; c < kt; ++c) {
+            copy_tile(cb_b, row * kt + c, c);
+        }
+        reconfig_data_format<SrcOrder::Reverse>(cb_a, cb_ein);
+        matmul_block_init(cb_a, cb_ein, false, kt, 1, kt);
         for (uint32_t k = 0; k < kt; ++k) {
             matmul_block(cb_a, cb_ein, row * kt + k, k * kt, 0, false, kt, 1, kt);
         }
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t c = 0; c < kt; ++c) {
-            pack_tile(c, cb_prod, row * kt + c);
-        }
-        tile_regs_release();
-    }
-    cb_push_back(cb_prod, state_tiles);
-    cb_pop_front(cb_a, state_tiles);
-    cb_pop_front(cb_ein, state_tiles);
-
-    cb_wait_front(cb_prod, state_tiles);
-    cb_wait_front(cb_b, state_tiles);
-    cb_reserve_back(cb_eout, state_tiles);
-    constexpr uint32_t pair_tiles = 2;  // product and B interleave in the four FP32 DST tiles
-    for (uint32_t first = 0; first < state_tiles; first += pair_tiles) {
-        tile_regs_acquire();
-        reconfig_data_format_srca(cb_prod);
-        copy_init(cb_prod);
-        for (uint32_t i = 0; i < pair_tiles; ++i) {
-            copy_tile(cb_prod, first + i, 2 * i);
-        }
-        reconfig_data_format_srca(cb_prod, cb_b);
-        copy_init(cb_b);
-        for (uint32_t i = 0; i < pair_tiles; ++i) {
-            copy_tile(cb_b, first + i, 2 * i + 1);
-        }
-        add_binary_tile_init();
-        for (uint32_t i = 0; i < pair_tiles; ++i) {
-            add_binary_tile(2 * i, 2 * i + 1, 2 * i);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < pair_tiles; ++i) {
-            pack_tile(2 * i, cb_eout, first + i);
+            pack_tile(c, cb_eout, row * kt + c);
         }
         tile_regs_release();
     }
     cb_push_back(cb_eout, state_tiles);
-    cb_pop_front(cb_prod, state_tiles);
+    cb_pop_front(cb_a, state_tiles);
+    cb_pop_front(cb_ein, state_tiles);
     cb_pop_front(cb_b, state_tiles);
 }
 """
@@ -303,35 +280,54 @@ void kernel_main() {
     const uint32_t landed_sem = last ? final_sem : arrival_sem;
 
     auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[2];
-    for (uint32_t h = 0; h < 2; ++h) {
-        hdrs[h] = PacketHeaderPool::allocate_header();
-        route_one_hop(hdrs[h], dst_chip_id, dst_mesh_id);
+    // One header per packet of a head, so a head's packets go out back to back.
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[chunks];
+    for (uint32_t c = 0; c < chunks; ++c) {
+        hdrs[c] = PacketHeaderPool::allocate_header();
+        route_one_hop(hdrs[c], dst_chip_id, dst_mesh_id);
     }
     conn.open();
-    volatile tt_l1_ptr uint32_t* probe = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
-    uint32_t slot = 0;
+    // Two whole-state buffers: head k+1 is read out of its head core while head k's packets go out. The head's
+    // finished flag is read past them.
+    volatile tt_l1_ptr uint32_t* probe = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + 2 * state_bytes);
+    const auto head_xy = [&](uint32_t k) { return get_arg_val<uint32_t>(heads_idx + k); };
+    const auto is_done = [&](uint32_t k) {
+        const uint32_t xy = head_xy(k);
+        noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, done_sem), reinterpret_cast<uint32_t>(probe), 4);
+        noc_async_read_barrier();
+        return probe[0] != 0;
+    };
+    // Read head k's state into buffer k % 2 (heads finish in any order; wait for this one).
+    const auto fetch = [&](uint32_t k) {
+        while (!is_done(k)) {
+        }
+        const uint32_t xy = head_xy(k);
+        noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, eout_addr), stage + (k & 1) * state_bytes, state_bytes);
+    };
+    // The state has left the head core: release it.
+    const auto release = [&](uint32_t k) {
+        const uint32_t xy = head_xy(k);
+        noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, ack_sem), 1);
+    };
+    fetch(0);
+    noc_async_read_barrier();
+    release(0);
     for (uint32_t k = 0; k < num_heads; ++k) {
-        const uint32_t xy = get_arg_val<uint32_t>(heads_idx + k);
+        const uint32_t xy = head_xy(k);
         const uint32_t hx = xy & 0xFFFF;
         const uint32_t hy = xy >> 16;
-        // Heads finish in any order; wait for this one's flag (read over the NoC into the staging buffer).
-        do {
-            noc_async_read(get_noc_addr(hx, hy, done_sem), stage, sizeof(uint32_t));
-            noc_async_read_barrier();
-        } while (probe[0] == 0);
-        const auto chunk_size = [&](uint32_t c) {
-            const uint32_t offset = c * chunk_bytes;
-            return offset + chunk_bytes <= state_bytes ? chunk_bytes : state_bytes - offset;
-        };
-        noc_async_read(get_noc_addr(hx, hy, eout_addr), stage + slot * chunk_bytes, chunk_size(0));
-        noc_async_read_barrier();
+        // Prefetch the next head now if it is already finished; its buffer's packets left with the last flush.
+        bool prefetched = false;
+        if (k + 1 < num_heads && is_done(k + 1)) {
+            fetch(k + 1);
+            prefetched = true;
+        }
+        const uint32_t buffer = stage + (k & 1) * state_bytes;
         for (uint32_t c = 0; c < chunks; ++c) {
             const uint32_t offset = c * chunk_bytes;
-            const uint32_t bytes = chunk_size(c);
-            const uint32_t src = stage + slot * chunk_bytes;
+            const uint32_t bytes = offset + chunk_bytes <= state_bytes ? chunk_bytes : state_bytes - offset;
             const uint64_t dst = get_noc_addr(hx, hy, landing + offset);
-            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[slot];
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[c];
             if (c + 1 == chunks) {
                 hdr->to_noc_fused_unicast_write_atomic_inc(
                     NocUnicastAtomicIncFusedCommandHeader{dst, get_noc_addr(hx, hy, landed_sem), 1, true}, bytes);
@@ -339,19 +335,17 @@ void kernel_main() {
                 hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, bytes);
             }
             conn.wait_for_empty_write_slot();
-            conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
-            slot ^= 1;
-            if (c + 1 < chunks) {
-                // Read the next chunk while this one is on its way; the other slot's packet has left L1 first.
-                noc_async_writes_flushed();
-                noc_async_read(get_noc_addr(hx, hy, eout_addr + offset + chunk_bytes), stage + slot * chunk_bytes,
-                               chunk_size(c + 1));
-                noc_async_read_barrier();
-            }
+            conn.send_current_slot_non_blocking(buffer + offset, bytes, reinterpret_cast<uint32_t>(hdr));
         }
+        // The headers and this buffer are reused once every packet has left L1.
         noc_async_writes_flushed();
-        // Every chunk of this head has been read out of the head core: release it.
-        noc_semaphore_inc(get_noc_addr(hx, hy, ack_sem), 1);
+        if (k + 1 < num_heads) {
+            if (!prefetched) {
+                fetch(k + 1);
+            }
+            noc_async_read_barrier();
+            release(k + 1);
+        }
     }
     conn.close();
     noc_async_atomic_barrier();
@@ -359,7 +353,7 @@ void kernel_main() {
 """
 )
 
-_CB_A, _CB_B, _CB_EIN, _CB_EOUT, _CB_CHRON, _CB_STAGE, _CB_PROD = 0, 1, 2, 3, 4, 5, 6
+_CB_A, _CB_B, _CB_EIN, _CB_EOUT, _CB_CHRON, _CB_STAGE = 0, 1, 2, 3, 4, 5
 
 
 class RingRelayPrefix:
@@ -409,8 +403,10 @@ class RingRelayPrefix:
             raise ValueError(f"ring relay prefix needs {batch_heads + num_links} cores, has {len(cores)}")
         self.head_cores = cores[:batch_heads]
         self.sender_cores = cores[batch_heads : batch_heads + num_links]
-        self.head_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.head_cores])
-        self.sender_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.sender_cores])
+        # Merged into rectangles, which dispatch writes in one multicast each.
+        merge = lambda cores: ttnn.CoreRangeSet([]).merge(ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]))
+        self.head_set = merge(self.head_cores)
+        self.sender_set = merge(self.sender_cores)
         rows = self.kt * 32
         shard = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -425,11 +421,8 @@ class RingRelayPrefix:
         self.final_landing = alloc()
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         self.sems = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(4)]
-        # The chain's numerics: matmul at the affine-prefix fidelity, the product unpacked losslessly to DST.
+        # The matmul runs at the affine prefix's fidelity, accumulating in an FP32 DST.
         self.compute_config = ttnn.ComputeConfigDescriptor(math_fidelity=math_fidelity, fp32_dest_acc_en=True)
-        modes = [ttnn.UnpackToDestMode.Default] * 64
-        modes[_CB_PROD] = ttnn.UnpackToDestMode.UnpackToDestFp32
-        self.compute_config.unpack_to_dest_mode = modes
         ttnn.synchronize_device(mesh_device)
 
     def __call__(self, packed, initial_state, actual_start, companion=None):
@@ -485,13 +478,6 @@ class RingRelayPrefix:
                     ttnn.cb_descriptor_from_sharded_tensor(_CB_EIN, self.ein_landing),
                     ttnn.cb_descriptor_from_sharded_tensor(_CB_EOUT, self.eout),
                     ttnn.CBDescriptor(
-                        total_size=state_tiles * 4096,
-                        core_ranges=self.head_set,
-                        format_descriptors=[
-                            ttnn.CBFormatDescriptor(buffer_index=_CB_PROD, data_format=ttnn.float32, page_size=4096)
-                        ],
-                    ),
-                    ttnn.CBDescriptor(
                         total_size=64,
                         core_ranges=self.head_set,
                         format_descriptors=[
@@ -499,11 +485,11 @@ class RingRelayPrefix:
                         ],
                     ),
                     ttnn.CBDescriptor(
-                        total_size=2 * chunk_bytes,
+                        total_size=2 * state_tiles * 4096 + 64,
                         core_ranges=self.sender_set,
                         format_descriptors=[
                             ttnn.CBFormatDescriptor(
-                                buffer_index=_CB_STAGE, data_format=ttnn.float32, page_size=2 * chunk_bytes
+                                buffer_index=_CB_STAGE, data_format=ttnn.float32, page_size=2 * state_tiles * 4096 + 64
                             )
                         ],
                     ),
@@ -559,7 +545,7 @@ class RingRelayPrefix:
                         kernel_source=_HEAD_COMPUTE,
                         source_type=src,
                         core_ranges=self.head_set,
-                        compile_time_args=[_CB_A, _CB_B, _CB_EIN, _CB_EOUT, kt, _CB_PROD],
+                        compile_time_args=[_CB_A, _CB_B, _CB_EIN, _CB_EOUT, kt],
                         runtime_args=ttnn.RuntimeArgs(),
                         config=self.compute_config,
                     ),
@@ -569,7 +555,11 @@ class RingRelayPrefix:
                         core_ranges=self.sender_set,
                         compile_time_args=sender_ct,
                         runtime_args=ttnn.RuntimeArgs(),
-                        config=ttnn.WriterConfigDescriptor(),
+                        # NoC 0, away from the head writers' DRAM copies (the writer default, NoC 1): the
+                        # merged output-gate matmul shares the NoCs, and the relay's hops are latency bound.
+                        config=ttnn.DataMovementConfigDescriptor(
+                            processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0
+                        ),
                     ),
                 ]
                 for l, score in enumerate(self.sender_cores):

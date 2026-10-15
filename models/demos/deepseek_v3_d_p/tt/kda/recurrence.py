@@ -847,6 +847,12 @@ class KDARecurrence:
         self._ring_relay()
 
     @property
+    def ring_relay_core_count(self) -> int:
+        """Cores the ring relay takes from those given to place_ring_relay (one per head and one per link)."""
+        args = self._ring_relay_args
+        return 0 if args is None else args["batch_heads"] + args["num_links"]
+
+    @property
     def uses_ring_relay(self) -> bool:
         return self._ring_relay_args is not None
 
