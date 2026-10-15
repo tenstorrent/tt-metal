@@ -175,10 +175,11 @@ coordinate the descriptor does not resolve), and the NoC each core issues its
 writes on. A core is named by `output::append_placement()` as
 `<prefix>_logical_x/y`, `<prefix>_virtual_x/y`, `<prefix>_noc0_x/y` and
 `<prefix>_noc`: a Metal p2p peer as `tensix`, `erisc` or `drisc`; a
-packet_injection worker unprefixed; the eth_credit throughput record's
-sending E0 and receiving E1 as `tx_erisc` and `rx_erisc` and each chip's X280
-as `tx_x280` and `rx_x280`; the eth_credit link record's Ethernet tile as
-`erisc`. The X280 tile of a p2p or packet_injection record is `chip_id`,
+packet_injection worker unprefixed; the eth_credit throughput and round-trip
+records' sending E0 and receiving E1 as `tx_erisc` and `rx_erisc` and each
+chip's X280 as `tx_x280` and `rx_x280`; the eth_credit link record's Ethernet
+tile as `erisc`; an eth_credit kernel record's core, and each core an
+attribution record names, as `erisc` (E0, E1) or `x280` (a forwarder). The X280 tile of a p2p or packet_injection record is `chip_id`,
 `x280_hw_index`, `x280_noc_x/y` (NoC0) and `x280_noc`
 (`output::append_x280_placement()`); x280_peer_tile adds
 `peer_x280_noc_x/y`. The tabulator's `<member> placement` table derives each

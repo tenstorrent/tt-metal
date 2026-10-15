@@ -424,22 +424,22 @@ inline Attribution attribute(const Case& c, const RunResult& r) {
     Attribution a;
     for (uint32_t i = 0; i < ec::kChips; ++i) {
         const ChipResult& cr = r.chips[i];
-        const auto add = [&](const KernelResult& k, uint32_t kernel_id) {
+        const auto add = [&](const KernelResult& k, uint32_t kernel_id, const hout::CorePlacement& at) {
             if (!k.launched) {
                 return;
             }
             const ec_result_t& b = k.block;
-            const Culprit culprit{cr.chip, kernel_id, b.status.code, b.status.detail};
+            const Culprit culprit{cr.chip, kernel_id, b.status.code, b.status.detail, at};
             if (b.magic != EC_RESULT_MAGIC) {
                 a.missing.push_back(culprit);
             } else if (b.status.state == EC_STATE_FAILED) {
                 (b.status.code == EC_ERROR_STALL_TIMEOUT ? a.stalled : a.origins).push_back(culprit);
             }
         };
-        add(cr.e0, EC_KERNEL_ID(EC_ROLE_E0, 0u, i));
-        add(cr.e1, EC_KERNEL_ID(EC_ROLE_E1, 0u, i));
+        add(cr.e0, EC_KERNEL_ID(EC_ROLE_E0, 0u, i), erisc_placement(cr, static_cast<uint32_t>(kE0Noc)));
+        add(cr.e1, EC_KERNEL_ID(EC_ROLE_E1, 0u, i), erisc_placement(cr, static_cast<uint32_t>(kE1Noc)));
         for (uint32_t p = 0; p < c.shape.P; ++p) {
-            add(cr.fwd[p], EC_KERNEL_ID(EC_ROLE_X280_FWD, p, i));
+            add(cr.fwd[p], EC_KERNEL_ID(EC_ROLE_X280_FWD, p, i), x280_placement(cr));
         }
     }
     return a;
@@ -490,16 +490,21 @@ inline Undrained classify_drain(const Case& c, const RunResult& r) {
 
 /**
  * Writes one `eth_credit_kernel` JSONL record for a launched kernel's result
- * block: its identity and terminal status, packets per p, every kept stall
+ * block: its identity, where it ran (`at`) and terminal status, packets per p, every kept stall
  * and cost site, its own-clock window, and failure detail. A kernel that was
  * not launched writes nothing; one that left no result writes its magic.
  */
 inline void write_kernel_jsonl(
-    const x280::harness::RunSpec& spec, const Case& c, int chip, const char* role, const KernelResult& k) {
+    const x280::harness::RunSpec& spec,
+    const Case& c,
+    int chip,
+    const char* role,
+    const hout::CorePlacement& at,
+    const KernelResult& k) {
     if (!k.launched) {
         return;
     }
-    hout::write_jsonl(spec.suite_label, hout::record(kernel_record(c.name, chip, role, k.block)));
+    hout::write_jsonl(spec.suite_label, hout::record(kernel_record(c.name, chip, role, at, k.block)));
 }
 
 /**
@@ -831,10 +836,10 @@ inline RunResult run_case(x280::harness::session::Fixture& f, const x280::harnes
                 .aiclk_hz = cr.aiclk_hz,
                 .erisc_clock = cr.e0.launched || cr.e1.launched ? &cr.erisc_clock : nullptr,
             })));
-        write_kernel_jsonl(spec, c, cr.chip, "E0", cr.e0);
-        write_kernel_jsonl(spec, c, cr.chip, "E1", cr.e1);
+        write_kernel_jsonl(spec, c, cr.chip, "E0", erisc_placement(cr, static_cast<uint32_t>(kE0Noc)), cr.e0);
+        write_kernel_jsonl(spec, c, cr.chip, "E1", erisc_placement(cr, static_cast<uint32_t>(kE1Noc)), cr.e1);
         for (uint32_t p = 0; p < c.shape.P; ++p) {
-            write_kernel_jsonl(spec, c, cr.chip, "FWD", cr.fwd[p]);
+            write_kernel_jsonl(spec, c, cr.chip, "FWD", x280_placement(cr), cr.fwd[p]);
         }
     }
     return out;

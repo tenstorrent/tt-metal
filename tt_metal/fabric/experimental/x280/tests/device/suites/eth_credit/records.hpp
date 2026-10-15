@@ -11,6 +11,7 @@
 #include "kernels/eth_credit/eth_credit_abi.h"
 
 #include <cstdint>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -28,22 +29,32 @@ inline const char* error_name(uint32_t code) {
     return "?";
 }
 
-/** One kernel the host names in its reading of a failed run. */
+/** One kernel the host names in its reading of a failed run, and its core. */
 struct Culprit {
     int chip = -1;
     uint32_t kernel_id = 0;
     uint32_t code = EC_ERROR_NONE;
     uint32_t detail = 0;
+    x280::harness::output::CorePlacement at{};
 };
 
+/** The placement-field prefix of a kernel of `role` (ec_role_t): its Ethernet tile or X280 tile. */
+inline const char* placement_prefix(uint32_t role) { return role == EC_ROLE_X280_FWD ? "x280" : "erisc"; }
+
 // One kernel's result block as its eth_credit_kernel record reports it, the
-// way the kernel wrote it: identity always, and the status, packet counts,
-// kept stall sites, window and failure detail only when it wrote the magic.
+// way the kernel wrote it: identity and where it ran (`at`, prefixed x280 for
+// role FWD, else erisc) always, and the status, packet counts, kept stall sites,
+// window and failure detail only when it wrote the magic.
 inline x280::harness::output::RecordSpec kernel_record(
-    const char* case_name, int chip, const char* role, const ec_result_t& r) {
+    const char* case_name,
+    int chip,
+    const char* role,
+    const x280::harness::output::CorePlacement& at,
+    const ec_result_t& r) {
     namespace hout = x280::harness::output;
     std::vector<hout::Field> fields{
         {"case", case_name}, {"chip", chip}, {"role", role}, {"magic", r.magic}, {"kernel_id", r.kernel_id}};
+    hout::append_placement(fields, std::string_view(role) == "FWD" ? "x280" : "erisc", at);
     if (r.magic == EC_RESULT_MAGIC) {
         std::vector<hout::Value> packets_in;
         std::vector<hout::Value> packets_out;
@@ -84,7 +95,7 @@ inline x280::harness::output::RecordSpec kernel_record(
 }
 
 // A run's eth_credit_attribution record: the host's origin, stalled and
-// missing kernels.
+// missing kernels, each with where it ran.
 inline x280::harness::output::RecordSpec attribution_record(
     const char* case_name,
     const std::vector<Culprit>& origins,
@@ -94,8 +105,10 @@ inline x280::harness::output::RecordSpec attribution_record(
     const auto list = [](const std::vector<Culprit>& ks) {
         std::vector<hout::Value> culprits;
         for (const auto& k : ks) {
-            culprits.push_back(hout::Value::object(
-                {{"chip", k.chip}, {"kernel_id", k.kernel_id}, {"code", error_name(k.code)}, {"detail", k.detail}}));
+            std::vector<hout::Field> culprit{
+                {"chip", k.chip}, {"kernel_id", k.kernel_id}, {"code", error_name(k.code)}, {"detail", k.detail}};
+            hout::append_placement(culprit, placement_prefix(ec_kernel_role(k.kernel_id)), k.at);
+            culprits.push_back(hout::Value::object(std::move(culprit)));
         }
         return hout::Value::array(std::move(culprits));
     };
