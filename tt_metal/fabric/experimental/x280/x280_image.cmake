@@ -113,6 +113,14 @@ _x280_compile(
     ${X280_CFLAGS}
     -DX280_PINNED_INPUT_BUILD_LIBRARY=1
 )
+# x280_add_image records an object's source for the STOP-poll check and refuses an object
+# without one.
+set_property(
+    GLOBAL
+    PROPERTY
+        "X280_SOURCE_OF:${_x280_pinned_input_library}"
+            "${CMAKE_CURRENT_LIST_DIR}/src/x280_pinned_input.c"
+)
 
 #[[
 x280_add_image(NAME <stem> SOURCES <source>... [LIM_IDLE] [OBJECTS <object>...] [DEFINES <macro>...]
@@ -123,9 +131,10 @@ to x280_images. An image links the active lifecycle harness and ld/x280.ld (.tex
 0x08001000), or with LIM_IDLE the per-hart entry and ld/x280-lim-idle.ld (.text at 0x08000000).
 DEFINES and INCLUDES (directories relative to this tree's root) apply to this image's sources only; C++ sources also get -std=c++17 -fno-exceptions -fno-rtti. LINK_OPTIONS
 apply to this image's link. OBJECTS are prebuilt objects linked after the image's own, such as
-${_x280_pinned_input_library}, the pinned-input operations compiled once with the plain image flags. The sources of
-an image linking the active harness are appended to the global property X280_ACTIVE_IMAGE_SOURCES,
-which the STOP-poll check scans.
+${_x280_pinned_input_library}, the pinned-input operations compiled once with the plain image flags; each
+must have its source recorded in the global property X280_SOURCE_OF:<object>. The sources of an
+image linking the active harness, its objects' included, are appended to the global property
+X280_ACTIVE_IMAGE_SOURCES, which the STOP-poll check scans.
 #]]
 function(x280_add_image)
     cmake_parse_arguments(PARSE_ARGV 0 ARG "LIM_IDLE" "NAME" "SOURCES;OBJECTS;DEFINES;INCLUDES;LINK_OPTIONS")
@@ -162,7 +171,22 @@ function(x280_add_image)
         _x280_compile("${object}" "${source}" ${X280_CFLAGS} ${ARG_INCLUDES} ${ARG_DEFINES})
         list(APPEND objects "${object}")
     endforeach()
-    list(APPEND objects ${ARG_OBJECTS})
+    foreach(object IN LISTS ARG_OBJECTS)
+        get_property(source GLOBAL PROPERTY "X280_SOURCE_OF:${object}")
+        if(NOT source)
+            message(FATAL_ERROR "x280_add_image(${ARG_NAME}): OBJECTS entry ${object} has no recorded source")
+        endif()
+        if(NOT ARG_LIM_IDLE)
+            set_property(
+                GLOBAL
+                APPEND
+                PROPERTY
+                    X280_ACTIVE_IMAGE_SOURCES
+                        "${source}"
+            )
+        endif()
+        list(APPEND objects "${object}")
+    endforeach()
 
     set(elf "${X280_IMAGE_DIR}/${ARG_NAME}.elf")
     set(bin "${X280_IMAGE_DIR}/${ARG_NAME}.bin")

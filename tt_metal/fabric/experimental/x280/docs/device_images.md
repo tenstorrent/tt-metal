@@ -225,8 +225,9 @@ C++, or as C++ only for the templates.
 `x280_stop_poll` scans every source an active image links and fails on any
 unbounded `fence ir, ir` wait that cannot reach `x280_hart_stop_requested`. The
 scan needs no toolchain and no hardware. Its source list is what
-`x280_add_image` records for every image linking the active harness, so no
-image can link the harness without being scanned.
+`x280_add_image` records for every image linking the active harness, including
+the source behind each prebuilt object it links, so no image can link the harness
+without being scanned.
 
 A wait that genuinely must not poll STOP carries
 `/* STOP-POLL-EXEMPT(released-by=<agent>): <justification> */` immediately
