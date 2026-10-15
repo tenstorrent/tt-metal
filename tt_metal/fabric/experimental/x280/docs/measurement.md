@@ -411,6 +411,14 @@ the others are open.
   older value, and otherwise stalls a full ring until a timeout. Stores to
   different addresses through the window have no commit order, so STOP is not
   ordered behind a credit, which it does not need.
+- Item 22, assumed and not confirmed: a posted store through a window reaches
+  the destination it was issued to even if the window's slot is reprogrammed
+  before the store leaves. eth_credit's forwarder posts its last W2 and R1
+  through its counter windows (item 21), and `finish()` then clears those
+  windows (`clear_windows()`, `kernels/eth_credit/x280_fwd.hpp`) with no step
+  between that waits for the stores. `L2CPUTile/TLBWindows.md` does not say when
+  a posted write's x, y and address are taken from the slot. A read through the
+  window is no such step: it can pass a posted write (item 20).
 
 Item 16 (`PI_ASSUMED_LOCAL_TIMER_ORDER`, high/low/high Tensix timer reads) is
 documented (`TensixTile/DebugTimestamper.md`). Item 17, successive writes from
