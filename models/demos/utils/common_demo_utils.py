@@ -465,7 +465,9 @@ def get_label(image_path):
 
 def get_batch(data_loader, resolution=224):
     loaded_images = next(data_loader)
-    images = None
+    
+    # 1. OPTIMIZATION: Start with a fast Python list to store image arrays
+    images = []
     labels = []
     transform = transforms.Compose(
         [
@@ -483,12 +485,13 @@ def get_batch(data_loader, resolution=224):
         if img.mode == "L":
             img = img.convert(mode="RGB")
         img = transform(img)
-        img = torch.unsqueeze(img, 0)
-
-        if images is None:
-            images = img
-        else:
-            images = torch.cat((images, img), dim=0)
+        
+        # 2. OPTIMIZATION: Instantly append the image tensor to the list (Zero memory copies)
+        image_list.append(img)
+        
+    # 3. OPTIMIZATION: Stack the entire list into one continuous block of memory exactly ONCE
+    # This completely eliminates the slow O(n^2) memory re-allocation loop.
+    image = torch.stack(image_list, dim=0)
     return images, labels
 
 
