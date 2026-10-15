@@ -528,7 +528,7 @@ x280_add_image(
 )
 _x280_check_headers(
     DIRS kernels/shared kernels/transport_bandwidth kernels/transport_bandwidth/backends
-    C_AND_CXX transport_bandwidth_common.h tensix_to_x280.h x280_to_tensix.h
+    C_AND_CXX transport_bandwidth_common.h tensix_to_x280.h x280_to_tensix.h rt/x280_vec_m1.h
     CXX transport_bandwidth_frontend_cxx.hpp
 )
 target_sources(x280_bench_host_tests PRIVATE tests/host/test_transport_bandwidth.cpp)
