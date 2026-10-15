@@ -970,3 +970,12 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - The /bringup intake asks for the serving chunk and shows the per-row numbers; every ladder rung runs at this box's
   chunk (default three rungs); goldens only for this box's rungs (another box's come from its own run).
 - Selftests: the proxy's context keeps the tokens per row, a bigger box keeps the chunk; the max_chunk check.
+
+## F68 (2026-10-15): the framework pins the environment to its own checkout
+
+- core/checkout_env.py `pin()`: TT_METAL_HOME, PYTHONPATH, TT_METAL_CACHE (<root>/built) and PYTHON_ENV_DIR to the
+  checkout the framework runs from; called by `orchestrator run|resume` and the CLI's gate / rerun / sweep / compare,
+  so every gate, agent and test inherits them (eval/run_eval.py does the same per clone). Why: ~/.bashrc exported the
+  primary tree's values to every shell, so DeepSeek-V4.1's run in tt-metal2 shared the primary tree's JIT kernel cache
+  (entries recompile on a tree mismatch, but two trees write the same entries) and profiler paths.
+- Selftests: test_checkout_env.py.

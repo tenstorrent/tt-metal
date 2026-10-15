@@ -432,6 +432,10 @@ def build_parser(extra=None) -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     a = build_parser().parse_args(argv)
+    if a.command in ("gate", "rerun", "sweep", "compare"):  # F68: device-running commands use this checkout's env
+        from models.demos.common.bringup.core import checkout_env
+
+        checkout_env.pin()
     return COMMANDS[a.command][0](a)
 
 
