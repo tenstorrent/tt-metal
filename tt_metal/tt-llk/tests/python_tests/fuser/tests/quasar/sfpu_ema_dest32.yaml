@@ -1,0 +1,34 @@
+# ema, carry reset per tile; two stacked tiles check the restart. Finite stimuli only (no inf/NaN/-0).
+# Float32 is in the _unpack_to_dest file: datacopy narrows it to TF32, past tolerance near zero.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [64, 32]
+    format: [Float16_b, Float16]
+    stimuli:
+      include:
+        - [-1000.0, -10.5]
+        - [-9.5, -0.01]
+        - [0.01, 9.5]
+        - [10.5, 1000.0]
+        - -10.0
+        - -1.0
+        - 0.0
+        - 1.0
+        - 10.0
+  - name: "sfpu_out"
+    dims: [64, 32]
+    format: Float32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [64, 32]}
+      - type: "UnarySfpu"
+        operation: [Ema]
+        approximation_mode: false
+        iterations: 32
+        block_size: [64, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [64, 32]}

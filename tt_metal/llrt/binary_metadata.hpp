@@ -8,6 +8,8 @@
 #include <set>
 #include <string_view>
 
+#include "hostdev/buf_rw_common.h"
+
 namespace ll_api {
 
 class ElfFile;
@@ -20,22 +22,25 @@ class ElfFile;
 // optimizer needs. Eventually the compiler emits these records; for now inline-asm annotations do (and,
 // deliberately, the raw/un-analyzable NoC paths emit OPAQUE).
 //
-// OPAQUE is 0 so that a zero-filled / truncated / missing record degrades to the conservative
-// "un-analyzable" state rather than being mistaken for a plain read.
-enum class BufRwKind : uint32_t {
-    Opaque = 0,  // raw/un-analyzable access: a detector must KEEP the barrier regardless of reads/writes
-    Read = 1,    // reads the bound object at `slot`
-    Write = 2,   // writes the bound object at `slot`
-};
+// The record kinds (tt_buf_rw::kOpaque/kRead/kWrite) and the OPAQUE sentinel slot
+// (tt_buf_rw::kOpaqueSlot) live in hostdev/buf_rw_common.h, shared directly with the device-side
+// emitter (api/dataflow/buf_rw_note.h, which reopens that namespace) rather than duplicated here.
+//
+// kOpaque is 0 so that a zero-filled record degrades to the conservative "un-analyzable" state
+// rather than being mistaken for a plain read; malformed record sizes are rejected separately by
+// the parser (parse_buf_rw, binary_metadata.cpp). Neither covers a record that was never emitted at
+// all: an un-instrumented call site produces no bytes here, so a genuinely missing note is invisible
+// to this parser and does NOT set opaque. Omission is a correctness bug in the emitting API, not
+// something this format can detect -- see api/dataflow/dataflow_api.h's note_opaque() coverage.
+//
 // The device emitter's on-ELF record: two little-endian u32s. `slot` identifies the bound object -- for
 // now a tensor binding (KernelSpec tensor_bindings order), later possibly a buffer/shard/etc.; it is a
-// sentinel (kBufRwOpaqueSlot) for OPAQUE.
+// sentinel (tt_buf_rw::kOpaqueSlot) for OPAQUE.
 struct BufRwRecord {
     uint32_t slot;
     uint32_t kind;
 };
 inline constexpr std::string_view kBufRwSectionName = ".tt.BUF_RW";
-inline constexpr uint32_t kBufRwOpaqueSlot = 0xFFFFFFFFu;
 
 // Decoded per-object R/W sets (each entry a bound-object slot). `opaque` set => at least one un-analyzable
 // access was seen, so a detector must treat the binary conservatively (keep the op boundary) even if
@@ -47,8 +52,7 @@ struct BufRwInfo {
 };
 
 // All host-side metadata harvested from one binary's ELF. Deliberately a bundle (not just BufRwInfo) so
-// other per-ELF metadata gathered at load time -- e.g. profiler zone names (.tt_zone_meta), today
-// re-opened separately by ZoneMetaRegistry -- can fold in here later and share the loader's one open.
+// other per-ELF metadata gathered at load time can fold in here and share the loader's one open.
 struct BinaryMetadata {
     BufRwInfo buf_rw;
 };
