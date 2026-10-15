@@ -40,11 +40,11 @@ DEVICE_PARAMS = {"trace_region_size": 150000000}
 # restores the single-queue blocking path (read at import time).
 DEVICE_PARAMS_5B = device_params_for_trace_mode(DEVICE_PARAMS)
 
-# Sprint-7 measurement knob (levers 4.5 item 5): WAN5B_FABRIC_8K=1 runs the 5B perf tests with the
-# 8 KiB fabric packet payload the 14B BH ring perf case uses (`ring_params_8k_req_exact_devices`)
-# instead of the default router config. Zero model code; read at collection time.
+# The 5B perf tests use the 8 KiB fabric packet payload the 14B BH ring perf case uses
+# (`ring_params_8k_req_exact_devices`); WAN5B_FABRIC_8K=0 restores the default router config.
+# Zero model code; read at collection time.
 _RING_PARAMS_5B = (
-    ring_params_8k_req_exact_devices if os.environ.get("WAN5B_FABRIC_8K") == "1" else ring_params_req_exact_devices
+    ring_params_req_exact_devices if os.environ.get("WAN5B_FABRIC_8K") == "0" else ring_params_8k_req_exact_devices
 )
 
 # BH 4x8 linear topology is expected to be slower than ring; relax assert/CI targets by this factor.
