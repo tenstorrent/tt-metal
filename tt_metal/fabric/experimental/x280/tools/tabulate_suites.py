@@ -631,6 +631,37 @@ EC_TABLES = (
         ),
     ),
 )
+# The Ethernet hop alone: E1 stamps the same window on its ERISC wall clock, and
+# a request's useful bytes are its payload. The 400G per-link rate in packets
+# is 50 GB/s over the payload.
+EC_HOP_TABLES = (
+    Table(
+        "",
+        {("receive_window", "interval_error"): {None}},
+        (
+            ident("case"),
+            ident("P"),
+            ident("N_LINK"),
+            ident("SLOT_SIZE", "slot B"),
+            ident("payload_bytes_per_request", "payload B"),
+            ident("BATCH"),
+            ident("tx_chip", "tx"),
+            ident("rx_chip", "rx"),
+            Column("packets", field("packets")),
+            Column("k1", field("first_batch_packets")),
+            Column("wall ticks", EC_WALL),
+            Column("ns", EC_NS),
+            Column("window packets", EC_PACKETS),
+            Column("ns/packet", ratio(EC_NS, EC_PACKETS)),
+            Column("Mpkt/s", ratio(product(EC_PACKETS, constant(1000)), EC_NS)),
+            Column(
+                "payload GB/s", ratio(product(EC_PACKETS, field("receive_window", "useful_bytes_per_request")), EC_NS)
+            ),
+            Column("slot GB/s", ratio(product(EC_PACKETS, field("receive_window", "slot_bytes_per_request")), EC_NS)),
+            Column("400G Mpkt/s", ratio(constant(50000), field("payload_bytes_per_request"))),
+        ),
+    ),
+)
 # Its diagnostic records: recognised, tabulated by no table.
 EC_DIAGNOSTIC = (Table("", {}),)
 
@@ -666,6 +697,7 @@ MEMBERS = {
     "packet_injection erisc_to_x280_header": pi_tables(PI_WORKER, published=True),
     "core_sync x280_director_characterization": CS_TABLES,
     "eth_credit eth_credit": EC_TABLES,
+    "eth_credit eth_credit_hop": EC_HOP_TABLES,
     "eth_credit eth_credit_kernel": EC_DIAGNOSTIC,
     "eth_credit eth_credit_attribution": EC_DIAGNOSTIC,
     "eth_credit eth_credit_link": EC_DIAGNOSTIC,
@@ -1175,10 +1207,10 @@ def validate_campaign_records(config, rows):
         if aggregates:
             validate_packet_aggregate(aggregates[0])
     elif family == "eth_credit":
-        windows = [r for r in rows if r["member"] == "eth_credit"]
+        windows = [r for r in rows if r["member"] in ("eth_credit", "eth_credit_hop")]
         if not windows:
             raise ValueError(f"{config['id']}: no eth_credit throughput record")
-        # The forwarder's first stamp follows a batch of 1..BATCH packets; zero
+        # The receiver's first stamp follows a batch of 1..BATCH packets; zero
         # means the field was never written, which would overstate the rate.
         for row in windows:
             if row["receive_window"]["interval_error"] is not None or not 1 <= row["first_batch_packets"] <= min(

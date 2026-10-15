@@ -111,9 +111,12 @@ public:
         r_->stalls[index].ticks = ec_stall_add(r_->stalls[index].ticks, start, end);
     }
 
-    void stamp(uint64_t t) {
+    /** Stamps the window at `t`, after a batch of `batch_packets`; the first
+     * stamp keeps that count as first_batch_packets. */
+    void stamp(uint64_t t, uint32_t batch_packets) {
         if (r_->first_ts == 0u) {
             r_->first_ts = t;
+            r_->first_batch_packets = batch_packets;
         }
         r_->last_ts = t;
     }

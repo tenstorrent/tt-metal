@@ -570,4 +570,28 @@ TEST_P(EthCreditHw, ThroughputBySlotBatchAndP) {
     }
 }
 
+// The Ethernet hop alone, E0 -> TT-link -> E1 with no X280 in the data path:
+// packet rate on E1's wall clock across slot size and batch, against the 400G
+// per-link packet rate (50 GB/s over the payload: 12.2 Mpkt/s at 4 KiB, 24.4
+// at 2 KiB), which the tabulator sets beside it.
+TEST_P(EthCreditHw, EthernetHopBySlotAndBatch) {
+    for (const uint32_t payload : {64u, 1024u, 2048u, 4096u, 8192u, 16384u}) {
+        for (const uint32_t batch : {1u, 2u, 4u, 8u}) {
+            suite::Case c{
+                .name = "ethernet_hop_sweep",
+                .shape = {1u, 8u, 8u, Slot(payload), batch},
+                .direction = ec::Direction::AToB,
+                .packets = each(1u, 20000u)};
+            c.stage.e0_source_self = true;
+            c.stage.e1_sink_local = true;
+            const auto r = run(c);
+            ASSERT_TRUE(r.launched);
+            suite::expect_all_done(r);
+            EXPECT_EQ(r.chips[0].e0.block.packets_out[0], 20000u);
+            EXPECT_EQ(r.chips[1].e1.block.packets_in[0], 20000u);
+            suite::record_throughput(spec(), fixture(), c, r, 0u);
+        }
+    }
+}
+
 INSTANTIATE_TEST_SUITE_P(EthCredit, EthCreditHw, ::testing::Values(0));

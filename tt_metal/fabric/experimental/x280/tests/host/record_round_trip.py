@@ -153,6 +153,26 @@ HEADS = {
         "raw range ticks",
         "clock",
     },
+    "eth_credit eth_credit_hop": {
+        "case",
+        "P",
+        "N_LINK",
+        "slot B",
+        "payload B",
+        "BATCH",
+        "tx",
+        "rx",
+        "packets",
+        "k1",
+        "wall ticks",
+        "ns",
+        "window packets",
+        "ns/packet",
+        "Mpkt/s",
+        "payload GB/s",
+        "slot GB/s",
+        "400G Mpkt/s",
+    },
     "eth_credit eth_credit": {
         "case",
         "P",
@@ -315,6 +335,15 @@ EXPECTED = {
     },
     # 20000 packets, 4 in the first batch, over mtime 1000..3000000 at 50 MHz:
     # 19996 packets in 59.98 ms, 96 useful and 4192 slot bytes each.
+    # The same window at E1 on a 1 GHz ERISC wall clock: 4096 payload bytes each.
+    ("eth_credit eth_credit_hop", 0): {
+        "wall ticks": "2999000",
+        "ns/packet": "149.980",
+        "Mpkt/s": "6.668",
+        "payload GB/s": "27.310",
+        "slot GB/s": "27.950",
+        "400G Mpkt/s": "12.207",
+    },
     ("eth_credit eth_credit", 0): {
         "k1": "4",
         "wall ticks": "2999000",

@@ -464,6 +464,13 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
             .shape = {1u, 8u, 8u, 4192u, 4u}};
         const char* ec_id = "eth_credit.throughput";
         write(ec_id, x280::suites::eth_credit::throughput_record(window, forwarder, erisc_clock, erisc_clock));
+        // The same window at E1, the Ethernet hop alone, on its ERISC wall clock.
+        auto hop = window;
+        hop.case_name = "ethernet_hop_sweep";
+        hop.receiver = x280::suites::eth_credit::Receiver::E1;
+        write(
+            "eth_credit.ethernet_hop",
+            x280::suites::eth_credit::throughput_record(hop, forwarder, erisc_clock, erisc_clock));
         ec_result_t kernel{};
         kernel.magic = EC_RESULT_MAGIC;
         kernel.status.state = EC_STATE_DONE;
@@ -479,5 +486,5 @@ TEST_F(RecordRoundTrip, EveryMembersRecordsPassTheLiveTabulator) {
                  .erisc_clock = &erisc_clock}));
     }
 
-    validate(18);
+    validate(19);
 }

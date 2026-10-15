@@ -151,7 +151,11 @@ inline x280::harness::output::RecordSpec link_record(const LinkState& link) {
     return {.suite = "eth_credit", .member = "eth_credit_link", .fields = std::move(fields)};
 }
 
-// One completed direction's receiving forwarder `p` and where it ran.
+// Which kernel's window a throughput record reports: the receiving forwarder
+// (eth_credit), or E1 sinking locally, the Ethernet hop alone (eth_credit_hop).
+enum class Receiver { Forwarder, E1 };
+
+// One completed direction's receiver for `p` and where it ran.
 struct ReceiveWindow {
     const char* case_name = "";
     uint32_t p = 0;
@@ -163,17 +167,23 @@ struct ReceiveWindow {
     uint32_t x280_pll_mhz = 0;
     ec_shape_t shape{};
     bool bidirectional = false;
+    Receiver receiver = Receiver::Forwarder;
 };
 
 /**
- * The eth_credit record of receiving forwarder `window.p`: identity, the
- * shape, its packet count, the packets it had received when it stamped the
- * window's start (`first_batch_packets`) and raw receive window over its own
- * mtime (record_throughput states what the window covers), on the fixed mtime
- * clock, with both chips' ERISC clock evidence. A request's useful bytes are
- * the EC_HEADER_BYTES header that reaches the X280, its slot bytes what
- * crossed the link, and `payload_bytes_per_request` the rest of the slot. The
- * run has no warm-up.
+ * The throughput record of `window.p` at `window.receiver`, whose result block
+ * is `forwarder`: identity, the shape, its packet count, the packets it had
+ * received when it stamped the window's start (`first_batch_packets`) and raw
+ * receive window over its own clock (record_throughput states what the window
+ * covers), with both chips' ERISC clock evidence. A request's slot bytes are
+ * what crossed the link and `payload_bytes_per_request` the slot less the
+ * header.
+ *
+ * A forwarder's record is eth_credit, on the fixed mtime clock, and a
+ * request's useful bytes are the EC_HEADER_BYTES header that reaches the X280.
+ * E1's is eth_credit_hop, on its ERISC wall clock converted by
+ * `rx_erisc_clock`, and a request's useful bytes are its payload. The run has
+ * no warm-up.
  */
 inline x280::harness::output::RecordSpec throughput_record(
     const ReceiveWindow& window,
@@ -182,9 +192,11 @@ inline x280::harness::output::RecordSpec throughput_record(
     const x280::harness::measurement::AiclkRunEvidence& rx_erisc_clock) {
     namespace hout = x280::harness::output;
     const uint32_t packets = forwarder.packets_in[window.p];
+    const bool at_e1 = window.receiver == Receiver::E1;
+    using Clock = decltype(x280::harness::output::RecordSpec::clock);
     return {
         .suite = "eth_credit",
-        .member = "eth_credit",
+        .member = at_e1 ? "eth_credit_hop" : "eth_credit",
         .fields =
             {
                 {"case", window.case_name},
@@ -209,14 +221,14 @@ inline x280::harness::output::RecordSpec throughput_record(
                      .start_ticks = forwarder.first_ts,
                      .end_ticks = forwarder.last_ts,
                      .completed = forwarder.status.state == EC_STATE_DONE,
-                     .useful_bytes_per_request = EC_HEADER_BYTES,
+                     .useful_bytes_per_request = at_e1 ? window.shape.slot_size - EC_HEADER_BYTES : EC_HEADER_BYTES,
                      .slot_bytes_per_request = window.shape.slot_size,
                  })},
                 {"tx_erisc_clock", hout::Value::clock(tx_erisc_clock)},
                 {"rx_erisc_clock", hout::Value::clock(rx_erisc_clock)},
             },
         .warmup = hout::NoWarmup{},
-        .clock = hout::kX280MtimeClock,
+        .clock = at_e1 ? Clock{rx_erisc_clock} : Clock{hout::kX280MtimeClock},
     };
 }
 

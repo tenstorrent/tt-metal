@@ -677,6 +677,11 @@ the `packet_injection` host does.
   records `packets` = n and `first_batch_packets` = k1, and the offline tool
   derives n − k1. A request's useful bytes are the 96-byte header that reaches
   the X280, and the record names the payload bytes separately.
+- The Ethernet hop alone (`EC_E0_SOURCE_SELF`, `EC_E1_SINK_LOCAL`): the same
+  (n − k1)/(`last_ts` − `first_ts`) on E1's ERISC wall clock, which E1 stamps
+  per batch and whose k1 it records, written as an `eth_credit_hop` record
+  converted at E1's chip's AICLK evidence. A request's useful bytes are its
+  payload. The X280 forwarders take part in the pre-run barrier only.
 - Per kernel, on its own clock: stall counts and stall time per stall site, and
   per-packet service time, written as one `eth_credit_kernel` JSONL record per
   launched kernel: case, chip, role, kernel id, state, code, detail, packets in
@@ -721,6 +726,7 @@ must fail:
 | `FullPathForcedWrap`, `FourForwarders`, `BothDirections` | the full path with forced wrap of `N_LINK` and `N_DELIVER`, P forwarders, and both directions, validated by per-hop count conservation and per-`p` sequence checks |
 | `EriscWallClockTicksAtProgrammedAiclk` | the ERISC clock evidence over 100k packets |
 | `ThroughputBySlotBatchAndP` | the throughput sweep over slot size, `BATCH` and P |
+| `EthernetHopBySlotAndBatch` | the Ethernet hop alone (`EC_E0_SOURCE_SELF`, `EC_E1_SINK_LOCAL`) over payloads 64 B to 16 KiB and `BATCH` 1 to 8 at P = 1, `N_LINK` = 8: packet rate on E1's clock, against the 400G per-link rate the tabulator sets beside it |
 
 The E0/E1 kernels are built by the Metal JIT at launch. `x280_eth_credit_jit`
 (`tools/eth_credit_jit_check.sh`) compiles them without a device the way the JIT
@@ -876,8 +882,9 @@ with its result block: status, packets per `p`, every stall and cost site's
 count and ticks, and failure detail. The console prints raw packet counts and
 ticks and, for a failed run, the attribution line and every chip's kernel
 results; rates come from the tabulator. The manifest's `eth_credit.throughput`
-configuration runs `ThroughputBySlotBatchAndP` with every card visible
-(`TT_VISIBLE_DEVICES` unset), for the reason below. The design is above.
+and `eth_credit.ethernet_hop` configurations run `ThroughputBySlotBatchAndP` and
+`EthernetHopBySlotAndBatch` with every card visible (`TT_VISIBLE_DEVICES` unset),
+for the reason below. The design is above.
 
 ```bash
 env -u TT_VISIBLE_DEVICES TT_METAL_RUNTIME_ROOT="$PWD" ./build/test/tt_metal/x280/x280_eth_credit

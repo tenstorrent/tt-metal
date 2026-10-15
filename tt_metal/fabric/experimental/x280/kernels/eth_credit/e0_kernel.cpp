@@ -326,7 +326,7 @@ private:
             forwarded_[p] += k;
         }
         result_.packets_out(p, forwarded_[p]);
-        result_.stamp(now());
+        result_.stamp(now(), k);
         *progressed = 1u;
         return true;
     }
