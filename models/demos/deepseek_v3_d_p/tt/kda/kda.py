@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import torch
+from ttnn.operations.matmul_reduce_scatter import matmul_reduce_scatter
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
@@ -205,12 +206,22 @@ class ttKDA:
         self.qkv_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * self._convolution_width * 2, KDA_QKV_L1_BYTES_PER_CORE
         )
+        # The fused output projection and reduce-scatter reads its input from DRAM; it needs a TP ring or line.
+        self.fused_output_reduce_scatter = (
+            program_config.fused_output_reduce_scatter
+            and self.tensor_parallel_size > 1
+            and self._tp_cluster_axis is not None
+        )
         # The output projection takes no output dtype, so its partial sums keep the norm output's.
         output_element_bytes = 4 if self.gated_rms_output_dtype == ttnn.float32 else 2
-        self.norm_output_memory_config = l1_when_it_fits(
-            mesh_device,
-            self.active_seq_len_local * self.config.v_dim * output_element_bytes,
-            KDA_NORM_OUTPUT_L1_BYTES_PER_CORE,
+        self.norm_output_memory_config = (
+            ttnn.DRAM_MEMORY_CONFIG
+            if self.fused_output_reduce_scatter
+            else l1_when_it_fits(
+                mesh_device,
+                self.active_seq_len_local * self.config.v_dim * output_element_bytes,
+                KDA_NORM_OUTPUT_L1_BYTES_PER_CORE,
+            )
         )
         # The partial sums only feed the reduce-scatter; a single TP rank returns the projection itself.
         self.partial_output_memory_config = (
@@ -287,6 +298,9 @@ class ttKDA:
             math_fidelity=program_config.output_projection_math_fidelity,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
+        )
+        self.fused_output_compute_config = ttnn.ComputeConfigDescriptor(
+            math_fidelity=program_config.output_projection_math_fidelity, fp32_dest_acc_en=True
         )
         self._history_exchange = _HistoryExchange.shared(mesh_device, self._convolution_width)
 
@@ -442,6 +456,17 @@ class ttKDA:
     ) -> ttnn.Tensor:
         """Project normalized heads and perform the required TP reduction."""
         weights = self.weights
+        if self.fused_output_reduce_scatter:
+            cluster_axis = self._tp_cluster_axis
+            return matmul_reduce_scatter(
+                output,
+                weights.output_projection,
+                cluster_axis=cluster_axis,
+                scatter_dim=-1,
+                topology=self.tp_ccl_topology,
+                num_links=self.tt_ccl.get_num_links(cluster_axis),
+                compute_kernel_config=self.fused_output_compute_config,
+            )
         output = ttnn.linear(
             output,
             weights.output_projection,

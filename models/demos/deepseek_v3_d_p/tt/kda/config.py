@@ -109,6 +109,10 @@ class KDAProgramConfig:
     # Use the projection matmul schedules tuned at _TUNED_PROJECTION_ROWS; False keeps the
     # auto-selected ttnn.linear configs.
     tuned_projection_matmuls: bool = False
+    # Fuse the output projection with the TP reduce-scatter (ttnn.operations.matmul_reduce_scatter): finished
+    # scatter blocks travel the TP ring while later blocks are still being computed. False keeps ttnn.linear followed
+    # by reduce_scatter_minimal_async.
+    fused_output_reduce_scatter: bool = False
 
     def __post_init__(self) -> None:
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
@@ -207,6 +211,8 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         projection_dtype=KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+        # Galaxy SP8xTP4 at T=5120: the fused output projection and TP reduce-scatter.
+        fused_output_reduce_scatter=active_seq_len_local == _TUNED_PROJECTION_ROWS,
     )
 
 
