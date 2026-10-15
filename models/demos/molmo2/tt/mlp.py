@@ -20,8 +20,11 @@ Key difference from standard LLaMA SwiGLU:
     w3 (value) = ff_proj[:12288, :]  → multiply with silu output
 """
 
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.molmo2.tt.dram_sharded import DramShardedLinear
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 
@@ -100,12 +103,55 @@ class TtMolmo2TextMLP(LightweightModule):
         ff_out = state_dict[f"{layer_name}.ff_out.weight"]  # [4096, 12288]
         self.w2 = _row(ff_out, "w2_down_row")
 
+        # Decode copies: DRAM-sharded weights (separate from the interleaved prefill weights).
+        self.dram_sharded = os.environ.get("MOLMO2_DRAM_SHARDED", "1") == "1"
+        if self.dram_sharded:
+            hidden = configuration.dim
+            ff_local = self.intermediate_size // self.num_devices
+
+            def _ds(w, k, n, dims, name):
+                return DramShardedLinear(
+                    mesh_device,
+                    w.T.unsqueeze(0).unsqueeze(0),
+                    k,
+                    n,
+                    ttnn.bfloat8_b,
+                    self.compute_kernel_config_hifi2,
+                    ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=configuration.cluster_shape),
+                    cache_file_name=cache_name(name),
+                )
+
+            self.w1_ds = _ds(w_gate, hidden, ff_local, w1_dims, "w1_gate_col_ds")
+            self.w3_ds = _ds(w_value, hidden, ff_local, w1_dims, "w3_value_col_ds")
+            self.w2_ds = _ds(ff_out, ff_local, hidden, w2_dims, "w2_down_row_ds")
+
+    def _forward_decode_sharded(self, x):
+        """Decode with DRAM-sharded w1/w3/w2: w1/w3 outputs and the w2 input share one L1 width-sharding."""
+        w1_out = self.w1_ds(x)
+        w3_out = self.w3_ds(x)
+        ttnn.deallocate(x)
+        w2_in = ttnn.mul(
+            w1_out,
+            w3_out,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            dtype=ttnn.bfloat16,
+            memory_config=w1_out.memory_config(),
+        )
+        ttnn.deallocate(w1_out)
+        ttnn.deallocate(w3_out)
+        w2_out = self.w2_ds(w2_in)
+        ttnn.deallocate(w2_in)
+        w2_out = ttnn.to_memory_config(w2_out, ttnn.DRAM_MEMORY_CONFIG)
+        return self._all_reduce(w2_out)
+
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         """Column-parallel SwiGLU + row-parallel w2 + async AllReduce.
 
         AllReduce = reduce_scatter_minimal_async + tt_all_gather(cluster_axis=None).
         Both CCL async ops replay correctly in TTNN decode traces (unlike ttnn.all_reduce).
         """
+        if mode == Mode.DECODE and self.dram_sharded:
+            return self._forward_decode_sharded(x)
         seq_len = x.shape[-2]
         prefill_chunk = 1024
         chunked = mode == Mode.PREFILL and seq_len >= prefill_chunk and seq_len % prefill_chunk == 0
@@ -152,6 +198,9 @@ class TtMolmo2TextMLP(LightweightModule):
         )
         ttnn.deallocate(w2_in)
 
+        return self._all_reduce(w2_out)
+
+    def _all_reduce(self, w2_out):
         # AllReduce via two trace-safe CCL async ops (matches LLaMA decode trace pattern):
         #   Step 1 — reduce_scatter: sums 8 partial [S,dim] outputs, scatters → [S, dim/8] per device
         #   Step 2 — all_gather:     reassembles → [S, dim] replicated on each device

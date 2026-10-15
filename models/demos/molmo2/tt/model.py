@@ -18,6 +18,7 @@ T3K parallelization:
   - ViT, pooling, projector, embedding, lm_head: replicated
 """
 
+import contextlib
 import math
 import os
 
@@ -63,6 +64,19 @@ from models.demos.molmo2.tt.mlp import TtMolmo2TextMLP
 from models.demos.molmo2.tt.prefill_mask import build_causal_mask, build_molmo2_prefill_mask
 from models.demos.molmo2.tt.vision_encoder import TtMolmo2ViTEncoder
 from models.tt_transformers.tt.common import Mode, precompute_freqs
+
+
+@contextlib.contextmanager
+def _decode_matmul_throttle_off():
+    saved = os.environ.get("TT_MM_THROTTLE_PERF")
+    if saved is None or os.environ.get("MOLMO2_DECODE_THROTTLE") == "1":
+        yield
+        return
+    del os.environ["TT_MM_THROTTLE_PERF"]
+    try:
+        yield
+    finally:
+        os.environ["TT_MM_THROTTLE_PERF"] = saved
 
 
 class TtMolmo2DecoderBlock(LightweightModule):
@@ -700,18 +714,22 @@ class TtMolmo2Model(LightweightModule):
             ttnn.deallocate(logits)
             return row_major
 
-        # ---- Warm-up (compile) pass — not traced ----
-        logits_warmup = _forward_decode(tt["tok_id"], tt["cur_pos"], tt["cos"], tt["sin"])
-        ttnn.deallocate(logits_warmup)
+        # Decode matmuls are DRAM-bound on <=64 cores, so the di/dt matmul throttle (needed for long all-core prefills,
+        # see TT_MM_THROTTLE_PERF) only slows them (~3 ms/step). The env var is read when each op is created, so the
+        # decode program set is built without it; set MOLMO2_DECODE_THROTTLE=1 to keep it.
+        with _decode_matmul_throttle_off():
+            # ---- Warm-up (compile) pass — not traced ----
+            logits_warmup = _forward_decode(tt["tok_id"], tt["cur_pos"], tt["cos"], tt["sin"])
+            ttnn.deallocate(logits_warmup)
 
-        # ---- Trace capture (all ops including embedding inside the trace) ----
-        tok = trace_capture_run_begin()
-        try:
-            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-            trace_logits = _forward_decode(tt["tok_id"], tt["cur_pos"], tt["cos"], tt["sin"])
-            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-        finally:
-            trace_capture_run_end(tok)
+            # ---- Trace capture (all ops including embedding inside the trace) ----
+            tok = trace_capture_run_begin()
+            try:
+                trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+                trace_logits = _forward_decode(tt["tok_id"], tt["cur_pos"], tt["cos"], tt["sin"])
+                ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            finally:
+                trace_capture_run_end(tok)
 
         return trace_id, trace_logits
 

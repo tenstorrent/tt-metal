@@ -496,11 +496,27 @@ Done: vocab-parallel lm_head + row-major logits; 16-core decode RMSNorm; bf8 wqk
 bucketed pooling; fine prefill buckets.
 
 Remaining, in order:
-1. DRAM-sharded decode matmuls (wqkv, wo, w1/w3/w2) - separate DRAM-sharded weight copies for decode, L1 width-sharded
-   activations, MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig. Target 5-8 ms/step.
+1. DONE (Session 16) DRAM-sharded decode matmuls (wqkv, wo, w1/w3/w2) + decode built without the di/dt throttle.
 2. Row-parallel wo (currently replicated 4096x4096 on every chip).
 3. CCL tuning (~4.5 ms/step) and on-device argmax/sampling for greedy decoding.
 4. Text prefill (~0.49 s left): on-device causal mask (~55 ms), drop embedding-injection copy (~42 ms).
 5. Chunked prefill and batch>1 paged KV (concurrency in the DP=4 server).
 Outstanding checklist items: Tracy profile of every sub-block, profile xlsx (run_block_profiles.sh), formal bottleneck write-up.
 Each step must keep PCC > 0.99, HF teacher-forced agreement, and the 105-suite at >= 98/100 with 0 timeouts.
+
+## Session 16 — 2026-10-15 (optimization plan step 1)
+
+- `tt/dram_sharded.py` (`DramShardedLinear`): decode-only copies of wqkv, wo, w1, w3, w2 stored DRAM-width-sharded
+  (bf8_b), L1 width-sharded activations, `MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`; prefill keeps the
+  interleaved weights. w1/w3 outputs and the w2 input share one sharding (no reshard). Disable: `MOLMO2_DRAM_SHARDED=0`.
+- The matmul throttle `TT_MM_THROTTLE_PERF=3` (needed only for long all-core prefills) cost ~3 ms/step in decode; it is
+  read at op-creation time, so the decode warm-up + trace capture run with it removed (`_decode_matmul_throttle_off`
+  in `tt/model.py`; `MOLMO2_DECODE_THROTTLE=1` keeps it). Prefill is still throttled.
+- Decode step (bench_decode, one 1x8 slice): 26.5 -> 24.9 ms (MLP sharded) -> 22.9 ms (+wqkv/wo; per-op kernel total
+  21.8 ms, matmuls 11.8 ms, wo still ~129 us/layer = ~138 GB/s) -> **21.0 ms = 47.7 tok/s** (throttle off in decode).
+- Validation: PCC tests (adapter, text decoder, tp_mlp) 11 passed; HF teacher-forced unchanged (text 100%, image 97%,
+  video 100%, two-images 97%; 30-video suite 95.9% (was 95.8%); 34k-token long video per-100-token [0.94,0.95,0.86,0.95]
+  traced).
+- Server (4 slices): 105-suite 98/100, 0 errors, 54 s wall; single server sequential: mean **1.82 s** / median 1.23 /
+  p90 3.83 (GPU baseline 3.61 s mean); 8/8 concurrent heavy requests (34k video 56 s, 20 images 25 s) OK, 0 timeouts.
+- Next: step 2, row-parallel `wo` (wo is now the largest single matmul: 16 MB/chip replicated).

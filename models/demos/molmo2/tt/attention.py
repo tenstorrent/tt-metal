@@ -20,11 +20,14 @@ Adapted from:
 """
 
 
+import os
+
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.demos.molmo2.tt.dram_sharded import DramShardedLinear
 from models.tt_transformers.tt.common import Mode
 
 
@@ -129,6 +132,30 @@ class TtMolmo2TextAttention(LightweightModule):
             cache_file_name=cache_name("wo_replicated"),
         )
 
+        # Decode copies: DRAM-sharded wqkv / wo (separate from the interleaved prefill weights).
+        self.dram_sharded = os.environ.get("MOLMO2_DRAM_SHARDED", "1") == "1"
+        if self.dram_sharded:
+            self.wqkv_ds = DramShardedLinear(
+                self.mesh_device,
+                qkv_cat,
+                self.hidden_size,
+                qkv_cat.shape[-1] // self.num_devices,
+                ttnn.bfloat8_b,
+                self.compute_kernel_config_hifi2,
+                ttnn.ShardTensor2dMesh(self.mesh_device, dims=(2, 3), mesh_shape=configuration.cluster_shape),
+                cache_file_name=cache_name("wqkv_sharded_2d_ds"),
+            )
+            self.wo_ds = DramShardedLinear(
+                self.mesh_device,
+                pt_wo,
+                self.hidden_size,
+                self.hidden_size,
+                ttnn.bfloat8_b,
+                self.compute_kernel_config_hifi2_fp16,
+                ttnn.ReplicateTensorToMesh(self.mesh_device),
+                cache_file_name=cache_name("wo_replicated_ds"),
+            )
+
         # ------------------------------------------------------------------ #
         # QK-norm (Qwen3-style: applied AFTER nlp_create_qkv_heads)
         # head_dim=128 is tile-aligned; no padding or special handling needed.
@@ -189,13 +216,17 @@ class TtMolmo2TextAttention(LightweightModule):
         else:
             attn_gathered = attn_11SH
 
-        out = ttnn.linear(
-            attn_gathered,
-            self.wo,
-            compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if seq_len == 1 and self.dram_sharded:
+            out = self.wo_ds(attn_gathered, dtype=ttnn.bfloat8_b)
+            out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            out = ttnn.linear(
+                attn_gathered,
+                self.wo,
+                compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         ttnn.deallocate(attn_gathered)
 
         if chunked:
@@ -209,13 +240,17 @@ class TtMolmo2TextAttention(LightweightModule):
     def forward_decode(self, x, current_pos, rot_mats=None, kv_cache=None):
         """x: [1, 1, batch, dim] replicated on all devices."""
         # Column-parallel QKV — each device gets its local heads, no AllReduce
-        xqkv = ttnn.linear(
-            x,
-            self.wqkv,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            dtype=ttnn.bfloat16,
-        )
+        if self.dram_sharded:
+            xqkv = self.wqkv_ds(x)
+            xqkv = ttnn.to_memory_config(xqkv, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            xqkv = ttnn.linear(
+                x,
+                self.wqkv,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                dtype=ttnn.bfloat16,
+            )
         ttnn.deallocate(x)
 
         xqkv = ttnn.reshape(xqkv, (1, 1, self.max_batch_size, xqkv.shape[3]))
