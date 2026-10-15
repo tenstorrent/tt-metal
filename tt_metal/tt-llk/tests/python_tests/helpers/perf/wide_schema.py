@@ -93,6 +93,7 @@ DB_SCHEMA = [
     Column("clamp_negative", "bool", True, "configuration"),
     Column("ct_dim", "int64", True, "configuration"),
     Column("dest_sync", "string", True, "configuration"),
+    Column("csa_row_offset", "int64", True, "configuration"),
     Column("dst_index", "int64", True, "configuration"),
     Column("face_c_dim", "int64", True, "configuration"),
     Column("face_r_dim", "int64", True, "configuration"),
