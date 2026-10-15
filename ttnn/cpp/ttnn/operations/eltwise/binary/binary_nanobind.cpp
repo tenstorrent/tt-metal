@@ -2457,6 +2457,10 @@ void py_module(nb::module_& mod) {
         R"doc(
         GeGLU with the tanh GELU: gelu_tanh(gate) * up, gelu_tanh(x) = x sigmoid(2 sqrt(2/pi) (x + 0.044715 x^3)) (Gemma 4's MLP: ttnn.multiply(gate, up, input_tensor_a_activations=[GELU_TANH])). The gate leaf is the identity with the logistic factor of that odd cubic; the up leaf is the identity. No clamps.
 
+        Takes gate and up as two tensors, already split. ``ttnn.geglu(x, dim, variant=ttnn.GeluVariant.Tanh)`` instead
+        splits one tensor x along dim and computes this product of its halves, with gate the second half and up the
+        first, as its own composite.
+
         .. math::
             \mathrm{geglu\_tanh}(gate, up) = gate\_leaf(gate) \cdot up\_leaf(up)
 
@@ -2484,7 +2488,7 @@ void py_module(nb::module_& mod) {
                * - Dtypes
                  - Layouts
                * - BFLOAT16, BFLOAT8_B, FLOAT32
-                 - TILE
+                 - TILE, ROW_MAJOR
 
             On Blackhole, BFLOAT16 operands run as one program on the op's own SFPU kernel, BF16-accurate (below
             1 ULP of the exact product); every other call is one multiply with each operand's activation. With

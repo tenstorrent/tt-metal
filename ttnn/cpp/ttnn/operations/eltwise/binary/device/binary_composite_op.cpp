@@ -1431,7 +1431,8 @@ Tensor geglu_tanh(
     TT_FATAL(
         !(sub_core_grids.has_value() && sub_device_id.has_value()),
         "geglu_tanh: pass sub_core_grids or sub_device_id, not both");
-    if (!sub_core_grids.has_value() && !sub_device_id.has_value()) {
+    // A host tensor has no device to ask; the multiply below refuses it.
+    if (!sub_core_grids.has_value() && !sub_device_id.has_value() && gate.device() != nullptr) {
         // Unrestricted, binary_ng runs on the worker cores of get_sub_device_ids().front(): the whole grid only
         // while one sub-device is loaded, as situ_glu and clamped_silu_glu require.
         const auto& loaded_sub_devices = gate.device()->get_sub_device_ids();

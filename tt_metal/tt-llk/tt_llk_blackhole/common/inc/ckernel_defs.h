@@ -371,7 +371,7 @@ enum class BinaryOp : std::uint8_t
     LOGADDEXP  = 45,
     LOGADDEXP2 = 46,
     // geglu_tanh has a Blackhole kernel only: the harness dispatches it on Blackhole.
-    GEGLU_TANH = 47,
+    GEGLU_TANH = 48,
 };
 
 enum class PackMode : std::uint8_t

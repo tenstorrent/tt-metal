@@ -91,6 +91,47 @@ def test_multiply_with_the_leaves_activations_runs_geglu_tanh(device, order):
     _assert_close(out, _golden(gate, up))
 
 
+@pytest.mark.parametrize("output", ["l1_width_sharded", "unset"])
+@pytest.mark.parametrize("order", ["gate_first", "up_first"])
+def test_multiply_with_width_sharded_operands_runs_geglu_tanh(device, order, output):
+    """L1 width-sharded operands, and an L1 width-sharded output as deepseek_v3's decode MLP asks for one (or the
+    operands' placement, unset): the routed multiply is one program, in that placement, with ttnn.geglu_tanh's bits."""
+    _skip_unless_routed(device)
+    gate, up = _operands((1, 1, 32, 1024)), _operands((1, 1, 32, 1024)).flip(-1)
+    expected = ttnn.to_torch(ttnn.geglu_tanh(_on_device(gate, device), _on_device(up, device)))
+    sharded = ttnn.create_sharded_memory_config(
+        (32, 128),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    g = ttnn.from_torch(gate, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded)
+    u = ttnn.from_torch(up, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded)
+    kwargs = dict(memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG) if output == "l1_width_sharded" else {}
+    if order == "gate_first":
+        call = lambda: ttnn.multiply(
+            g,
+            u,
+            input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH)],
+            input_tensor_b_activations=[],
+            **kwargs,
+        )
+    else:
+        call = lambda: ttnn.multiply(
+            u,
+            g,
+            input_tensor_a_activations=[],
+            input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH)],
+            **kwargs,
+        )
+    out, operations, arguments = _device_operations(call)
+    assert OP_TYPE in arguments and len(operations) == 1, f"launched {operations}, not one {OP_TYPE} program"
+    assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    assert out.memory_config().buffer_type == ttnn.BufferType.L1
+    assert torch.equal(ttnn.to_torch(out).view(torch.int16), expected.view(torch.int16))
+
+
 @pytest.mark.parametrize("case", ["bfloat8_b_output", "float32_operands", "post_activation"])
 def test_multiply_keeps_binary_ng_elsewhere(device, case):
     """A multiply outside the route's dtype or activations launches no GEGLU_TANH program."""
