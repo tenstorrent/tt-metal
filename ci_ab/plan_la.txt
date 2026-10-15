@@ -1,0 +1,29 @@
+# topk_xl lever A rest (#60291 head 36805d6f18e): A head, B = rotating survivor for every K counted from the last chunk
+# (one-tile chunks in tiles 0/1 and 4/5, K 2048 0/2 and 4/6, no final move). A2/B2 = copies (A/A). ABBA twice;
+# counters on A, B and the B probes (ns no thread-issued swaps, nt no face transposes, nn both, nn0 nn without stage 0); bits A, B.
+r A ids/xls.txt -
+r B ids/xls.txt -
+r B2 ids/xls.txt -
+r A2 ids/xls.txt -
+r A2 ids/xls.txt -
+r B2 ids/xls.txt -
+r B ids/xls.txt -
+r A ids/xls.txt -
+r A ids/xls.txt -
+r B ids/xls.txt -
+r B2 ids/xls.txt -
+r A2 ids/xls.txt -
+r A2 ids/xls.txt -
+r B2 ids/xls.txt -
+r B ids/xls.txt -
+r A ids/xls.txt -
+c A_wc ids/xls.txt - wc
+c B_wc ids/xls.txt - wc
+c Bns_wc ids/xls.txt - wc
+c Bnt_wc ids/xls.txt - wc
+c Bnn_wc ids/xls.txt - wc
+c Bnn0_wc ids/xls.txt - wc
+c A_wc ids/xls.txt - wc
+c B_wc ids/xls.txt - wc
+b A ids/xlt.txt - bits
+b B ids/xlt.txt - bits
