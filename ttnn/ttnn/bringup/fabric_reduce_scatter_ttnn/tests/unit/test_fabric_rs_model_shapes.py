@@ -15,7 +15,7 @@ durations, the busiest chip, median of RS_CALLS calls (the two-stage variant is 
 
 RS_MESH (default 2x4; 2x2 on a QuietBox), RS_TRACE=1 also times a traced replay of each variant (no host dispatch),
 RS_PAYLOAD (router payload bytes, default 8192 as the GLM spec), RS_ROWS (default 5120), RS_LINKS (default 2, the
-model's GLM_MOE_LINKS), RS_CALLS (default 20), RS_VARIANTS (comma list of name prefixes)."""
+model's GLM_MOE_LINKS), RS_CALLS (default 20), RS_LAND_KIB (landing buffer per port, default 256), RS_VARIANTS (comma list of name prefixes)."""
 
 import os
 import statistics
@@ -83,6 +83,17 @@ def test_fabric_rs_model_shapes(mesh_device):
         "mesh ring, final on bwd port": (
             lambda: fabric_reduce_scatter(
                 x, cluster_axis=None, topology=ttnn.Topology.Ring, num_links=LINKS, final="bwd_port"
+            ),
+            ref_mesh,
+        ),
+        "mesh ring, final on bwd port, L1 landing": (
+            lambda: fabric_reduce_scatter(
+                x,
+                cluster_axis=None,
+                topology=ttnn.Topology.Ring,
+                num_links=LINKS,
+                final="bwd_port_l1",
+                land_kib=int(os.environ.get("RS_LAND_KIB", "256")),
             ),
             ref_mesh,
         ),

@@ -9,7 +9,7 @@ reported as unsupported and skipped (RS_STRICT=1 fails instead).
   scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/unit/test_fabric_reduce_scatter_topologies.py -s -rs
 
 RS_MESH=RxC (default 2x4, FABRIC_2D), RS_FABRIC (a FabricConfig name), RS_ROWS (rows per chip of the partial, default
-4096), RS_LINKS (default 2), RS_CALLS (timed calls, default 10), RS_FINAL (cores | bwd_port). An 8-chip ring along axis 0 on a LoudBox:
+4096), RS_LINKS (default 2), RS_CALLS (timed calls, default 10), RS_FINAL (cores | bwd_port | bwd_port_l1). An 8-chip ring along axis 0 on a LoudBox:
 RS_MESH=8x1 RS_FABRIC=FABRIC_2D_TORUS_Y TT_MESH_GRAPH_DESC_PATH=<an 8x1 [RING] descriptor>."""
 
 import os
