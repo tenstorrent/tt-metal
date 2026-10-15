@@ -56,11 +56,11 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const MathFidelitySch
     if (high_fidelity)
     {
         load_replay_buf(
-            0,
+            0 /*start*/,
             replay_buf_len,
-            false,
-            0,
-            0,
+            false /*exec_while_loading*/,
+            0 /*set_mutex*/,
+            0 /*last*/,
             // Lambda function to load reply buffer
             [replay_buf_len, SRCB_BROADCAST_TYPE, acc_to_dest]
             {
