@@ -8,13 +8,18 @@ baseline on the touched files, and keeps the findings that sit on an added line.
 is a drain somebody put in with this merge that orders nothing where it was placed: typically a
 workaround for a non-deterministic failure elsewhere.
 
+An added line is one the range adds net of what it removes: the diff is taken once with rename
+detection and whitespace ignored, a hunk that removes as many drain calls as it adds (a moved or
+re-indented drain) adds none, and a site whose blamed commit is not in the range is dropped.
+
 One issue is opened per merged pull request (or per commit when no pull request is found), listing
-every flagged site, assigned to the author of the pull request, so the workaround is tracked and
-removed (or replaced by the wait the real hazard needs) rather than left in place. A marker in the
-body names the pull request (or the commit); the open issues carrying the label are listed and
-matched on that marker locally, and a match is updated with the current list of sites instead of
-being duplicated. A failed `gh issue create` is retried without the assignee, naming the author in
-the body instead, and a second failure fails the run.
+every flagged site, assigned to the author of the pull request, so the drain is tracked and removed
+(REDUNDANT), replaced by the in-stream wait that does the job (OVERSYNC) or reviewed against its
+callers (ADVISORY) rather than left in place. A marker in the body names the pull request (or the
+commit); the open issues carrying the label are listed and matched on that marker locally, and a
+match is updated with the current list of sites instead of being duplicated. A failed
+`gh issue create` is retried without the assignee, naming the author in the body instead, and a
+second failure fails the run.
 
 Run with --dry-run to print what would be filed.
 """
@@ -27,14 +32,18 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from check_redundant_drain import EXTS, is_quasar, is_skipped_silently  # noqa: E402
+from check_redundant_drain import (  # noqa: E402
+    DRAIN,
+    EXTS,
+    is_quasar,
+    is_skipped_silently,
+)
 
 CHECKER = os.path.join(HERE, "check_redundant_drain.py")
 BASELINE = os.path.join(HERE, "redundant_drain_baseline.txt")
 REPO = os.environ.get("GITHUB_REPOSITORY", "tenstorrent/tt-metal")
 LABEL = "llk-redundant-drain"
 MARKER = "<!-- llk-redundant-drain:{key} -->"
-DRAIN = re.compile(r"\b(?:ckernel::)?(?:tensix_sync|mop_sync)\s*\(\s*\)")
 
 # The programs this script may start. A process is started only for a name in this table, with its
 # arguments as a list and no shell, so nothing here is ever parsed by a shell.
@@ -65,32 +74,53 @@ def commit(ref):
 
 
 def added_drain_lines(base, head):
-    """{file: {line}} of lines in head that this range added and that contain a drain call."""
-    files = [
-        f
-        for f in run("git", ["diff", "--name-only", f"{base}..{head}"]).split()
-        if f.endswith(EXTS) and not is_quasar(f) and not is_skipped_silently(f)
-    ]
-    added = {}
-    for f in files:
-        diff = run("git", ["diff", "-U0", f"{base}..{head}", "--", f], check=False)
-        line = 0
-        for raw in diff.splitlines():
-            m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw)
-            if m:
-                line = int(m.group(1))
-                continue
-            if raw.startswith("+") and not raw.startswith("+++"):
-                if DRAIN.search(raw):
-                    added.setdefault(f, set()).add(line)
-                line += 1
+    """{file: {line}} of lines in head that this range added, net, and that contain a drain call.
+
+    One diff with rename detection and whitespace ignored, so a moved or re-indented file is not
+    wholly new; within a hunk, drain calls on removed lines cancel drain calls on added lines, so
+    a drain that merely changed line or spelling is not added.
+    """
+    diff = run("git", ["diff", "-U0", "-M", "-w", f"{base}..{head}"])
+    added, path, line, hunk_plus, hunk_minus = {}, None, 0, [], 0
+
+    def close_hunk():
+        if path and len(hunk_plus) > hunk_minus:
+            added.setdefault(path, set()).update(hunk_plus)
+
+    for raw in diff.splitlines():
+        if raw.startswith("+++ "):
+            close_hunk()
+            hunk_plus, hunk_minus = [], 0
+            p = raw[4:].strip()
+            p = p[2:] if p.startswith("b/") else p
+            path = (
+                p
+                if p.endswith(EXTS) and not is_quasar(p) and not is_skipped_silently(p)
+                else None
+            )
+            continue
+        if raw.startswith("--- ") or path is None:
+            continue
+        m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw)
+        if m:
+            close_hunk()
+            hunk_plus, hunk_minus = [], 0
+            line = int(m.group(1))
+            continue
+        if raw.startswith("+"):
+            if DRAIN.search(raw):
+                hunk_plus.append(line)
+            line += 1
+        elif raw.startswith("-") and DRAIN.search(raw):
+            hunk_minus += 1
+    close_hunk()
     return added
 
 
 def findings_on(files):
-    out = run(
-        "python", [CHECKER, "--json", "--baseline", BASELINE, *files], check=False
-    )
+    # Checked: the checker exits 0 without --strict, so a non-zero status is a crash, and a crash
+    # must not read as "none flagged".
+    out = run("python", [CHECKER, "--json", "--baseline", BASELINE, *files])
     return [json.loads(l) for l in out.splitlines() if l.startswith("{")]
 
 
@@ -183,25 +213,37 @@ def open_issues():
 
 
 def describe(site):
-    if site["kind"] == "REDUNDANT" and site["drain"] == "mop_sync":
-        return "a `mop_sync()` that a following `tensix_sync()` already covers"
+    d = f"`{site['drain']}()`"
     if site["kind"] == "REDUNDANT":
-        return "a `tensix_sync()` that a following `tensix_sync()` already covers"
+        return f"a {d} that a following `{site.get('covered_by') or 'tensix_sync'}()` already covers: remove it"
+    if site["kind"] == "OVERSYNC":
+        return (
+            f"a {d} whose only effect here is to order the Tensix pushes after it behind in-flight work, "
+            "which a `STALLWAIT` on the conflicting unit does without stalling the RISC: replace it, "
+            "unless a caller relies on it, in which case the caller should drain itself"
+        )
     return (
-        "a `tensix_sync()` after which nothing in the function needs the RISC to wait: "
-        "only Tensix instructions or plain code follow"
+        f"a {d} after which nothing in the function needs the RISC to wait: remove it, or if a "
+        "caller relies on it, move the drain to that caller"
     )
+
+
+VERB = {"REDUNDANT": "Remove", "OVERSYNC": "Replace", "ADVISORY": "Review"}
 
 
 def issue_key(pr, head):
     return f"pr:{pr['number']}" if pr else f"commit:{head[:11]}"
 
 
+def marker_for(pr, head):
+    return MARKER.format(key=issue_key(pr, head))
+
+
 def body_for(sites, pr, head, author_note=""):
     origin = pr["url"] if pr else f"Commit {head[:11]}"
     lines = [
-        MARKER.format(key=issue_key(pr, head)),
-        f"{origin} added {len(sites)} drain(s) that order nothing where they were placed:",
+        marker_for(pr, head),
+        f"{origin} added {len(sites)} drain(s) the redundant-drain checker flags:",
         "",
     ]
     for s in sites:
@@ -211,16 +253,18 @@ def body_for(sites, pr, head, author_note=""):
         )
     lines += [
         "",
-        "A drain blocks the RISC until the Tensix thread is idle. That only orders something when the RISC is about to "
-        "touch state the drained work produces: a mailbox or semaphore, a configuration register through the memory map, "
-        "a GPR, a volatile load or store, a store through a pointer. Tensix instructions pushed after it are ordered behind "
-        "the earlier ones by the thread anyway. A drain placed where nothing of that follows does not fix the hazard it was "
-        "added for; it only changes timing, and it costs a full pipeline drain every time it runs.",
+        "A drain blocks the RISC until the Tensix thread is idle. It is needed when the RISC is about to touch state the "
+        "drained work produces: a mailbox or semaphore, a configuration register through the memory map, a GPR, a volatile "
+        "load or store, a store through a pointer. A Tensix push that writes configuration, a GPR, a semaphore, Dest or a "
+        "mutex is ordered behind in-flight work by a `tensix_sync()` before it, but an in-stream `STALLWAIT` on the "
+        "conflicting unit does the same without stalling the RISC; a `mop_sync()` orders no push at all. A drain followed "
+        "by nothing of that does not fix the hazard it was added for; it only changes timing, and it costs a full pipeline "
+        "drain every time it runs.",
         "",
-        "Please either remove each one, or replace it with the wait the real hazard needs (a `STALLWAIT` on the unit and "
-        "condition that actually conflict, placed where the conflict is), or move the drain to the call site that needs "
-        "it. If a drain was added as a workaround for a failure seen elsewhere, that failure is the thing to root-cause; "
-        "note it here so the drain is not mistaken for a fix.",
+        "If a drain was added as a workaround for a failure seen elsewhere, that failure is the thing to root-cause; note it "
+        "here so the drain is not mistaken for a fix. A site the checker cannot see the caller of may still serve that "
+        "caller: then move the drain to the caller, or keep it and record it in `redundant_drain_baseline.txt` with the "
+        "reason.",
         "",
         "Reported by `tt_metal/tt-llk/infra/check_redundant_drain.py`.",
     ]
@@ -233,13 +277,22 @@ def title_for(sites, pr, head):
     first = f"{os.path.basename(sites[0]['file'])}:{sites[0]['line']}"
     more = f" and {len(sites) - 1} more" if len(sites) > 1 else ""
     origin = f"#{pr['number']}" if pr else f"commit {head[:11]}"
-    return f"[LLK] Remove the drain {origin} added at {first}{more}"
+    verbs = sorted(
+        {VERB.get(s["kind"], "Review") for s in sites}, key=list(VERB.values()).index
+    )
+    verb = (
+        verbs[0]
+        if len(verbs) == 1
+        else " or ".join(v.lower() if i else v for i, v in enumerate(verbs))
+    )
+    noun = "drain" if len(sites) == 1 else "drains"
+    return f"[LLK] {verb} the {noun} {origin} added at {first}{more}"
 
 
 def file_issue(sites, pr, head, existing, dry):
     """Create or update the one issue for this pull request (or commit); returns its number or URL."""
     sites = sorted(sites, key=lambda s: (s["file"], s["line"]))
-    marker = MARKER.format(key=issue_key(pr, head))
+    marker = marker_for(pr, head)
     title = title_for(sites, pr, head)
     body = body_for(sites, pr, head)
     number = next((n for n, b in existing.items() if marker in b), None)
@@ -321,9 +374,12 @@ def main():
         )
         return
 
+    in_range = set(run("git", ["rev-list", f"{args.base}..{args.head}"]).split())
     by_pr = {}
     for site in sites:
         sha = blame_commit(site["file"], site["line"], args.head) or args.head
+        if sha not in in_range:
+            continue  # the line is older than the push: it moved, it was not added
         pr = pull_for(sha)
         key = pr["number"] if pr else sha
         by_pr.setdefault(key, (pr, []))[1].append(site)

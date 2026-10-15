@@ -19,6 +19,7 @@ SITES = [
         "line": 9,
         "kind": "ADVISORY",
         "drain": "tensix_sync",
+        "covered_by": None,
         "reason": "r1",
         "function": "void g()",
     },
@@ -27,6 +28,7 @@ SITES = [
         "line": 5,
         "kind": "REDUNDANT",
         "drain": "mop_sync",
+        "covered_by": "tensix_sync",
         "reason": "r2",
         "function": "void MAIN() {",
     },
@@ -69,8 +71,10 @@ def test_one_issue_per_pull_request_lists_every_site(monkeypatch, capsys):
     assert arg(c[0], "--assignee") == "someone"
     assert (
         arg(c[0], "--title")
-        == "[LLK] Remove the drain #1234 added at k.cpp:5 and 1 more"
+        == "[LLK] Remove or review the drains #1234 added at k.cpp:5 and 1 more"
     )
+    assert "a `mop_sync()` that a following `tensix_sync()` already covers" in body
+    assert "move the drain to that caller" in body
     assert "created https://x/issues/9" in capsys.readouterr().out
 
 
@@ -120,36 +124,49 @@ def test_dry_run_files_nothing(monkeypatch, capsys):
     assert not calls
     out = capsys.readouterr().out
     assert (
-        "would create: [LLK] Remove the drain commit aaaaaaaaaaa added at k.cpp:5 and 1 more"
+        "would create: [LLK] Remove or review the drains commit aaaaaaaaaaa added at k.cpp:5 and 1 more"
         in out
     )
     assert "<!-- llk-redundant-drain:commit:aaaaaaaaaaa -->" in out
 
 
-def end_to_end_plan(checked_out=HEAD):
+DIFF = (
+    "diff --git a/ttnn/k.cpp b/ttnn/k.cpp\n--- a/ttnn/k.cpp\n+++ b/ttnn/k.cpp\n"
+    "@@ -1,0 +5,2 @@\n+    tensix_sync();\n+    TTI_NOP;\n"
+    "@@ -20,1 +22,1 @@\n-    tensix_sync();\n+    ckernel::tensix_sync();\n"
+    "diff --git a/tt_metal/third_party/x.h b/tt_metal/third_party/x.h\n"
+    "--- a/tt_metal/third_party/x.h\n+++ b/tt_metal/third_party/x.h\n"
+    "@@ -1,0 +2,1 @@\n+    tensix_sync();\n"
+    "diff --git a/tt_metal/tt-llk/tt_llk_quasar/q.h b/tt_metal/tt-llk/tt_llk_quasar/q.h\n"
+    "--- a/tt_metal/tt-llk/tt_llk_quasar/q.h\n+++ b/tt_metal/tt-llk/tt_llk_quasar/q.h\n"
+    "@@ -1,0 +2,1 @@\n+    tensix_sync();\n"
+    "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n"
+    "@@ -1,0 +2,1 @@\n+tensix_sync()\n"
+)
+
+
+def end_to_end_plan(checked_out=HEAD, blamed=HEAD):
     def plan(p, a):
         if p == "git" and a[:2] == ["rev-parse", "--verify"]:
             return (0, (checked_out if a[-1] == "HEAD^{commit}" else HEAD) + "\n", "")
-        if p == "git" and a[:2] == ["diff", "--name-only"]:
-            return (
-                0,
-                "ttnn/k.cpp\ntt_metal/third_party/x.h\ntt_metal/tt-llk/tt_llk_quasar/q.h\nREADME.md\n",
-                "",
-            )
         if p == "git" and a[:2] == ["diff", "-U0"]:
-            return (0, "@@ -1,0 +5,2 @@\n+    tensix_sync();\n+    TTI_NOP;\n", "")
+            assert "-M" in a and "-w" in a
+            return (0, DIFF, "")
+        if p == "git" and a[0] == "rev-list":
+            return (0, HEAD + "\n", "")
         if p == "python":
             site = {
                 "file": "ttnn/k.cpp",
                 "line": 5,
                 "kind": "ADVISORY",
                 "drain": "tensix_sync",
+                "covered_by": None,
                 "reason": "r",
                 "function": "void MAIN() {",
             }
             return (0, json.dumps(site) + "\n", "")
         if p == "git" and a[0] == "blame":
-            return (0, f"{HEAD} 1 5 1\nauthor x\n", "")
+            return (0, f"{blamed} 1 5 1\nauthor x\n", "")
         if p == "gh" and a[0] == "api":
             return (
                 0,
@@ -193,6 +210,36 @@ def test_main_filters_files_passes_the_baseline_and_files_once(monkeypatch):
     c = creates(calls)
     assert len(c) == 1 and arg(c[0], "--assignee") == "someone"
     assert "`ttnn/k.cpp:5`" in arg(c[0], "--body")
+
+
+def test_added_lines_are_net_of_removed_and_filtered(monkeypatch):
+    stub(monkeypatch, end_to_end_plan())
+    added = rdi.added_drain_lines("b", "h")
+    assert added == {"ttnn/k.cpp": {5}}  # the respelled drain at line 22 is not added
+
+
+def test_a_site_blamed_outside_the_range_is_dropped(monkeypatch):
+    calls = stub(monkeypatch, end_to_end_plan(blamed="c" * 40))
+    monkeypatch.setattr(
+        sys, "argv", ["redundant_drain_issue.py", "--base", "b", "--head", "h"]
+    )
+    rdi.main()
+    assert not creates(calls)
+
+
+def test_a_checker_crash_fails_the_run(monkeypatch):
+    def plan(p, a):
+        if p == "python":
+            return (1, "", "Traceback")
+        return end_to_end_plan()(p, a)
+
+    stub(monkeypatch, plan)
+    monkeypatch.setattr(
+        sys, "argv", ["redundant_drain_issue.py", "--base", "b", "--head", "h"]
+    )
+    with pytest.raises(SystemExit) as e:  # allow-pytest.raises: no conftest here
+        rdi.main()
+    assert e.value.code == 1
 
 
 def test_main_refuses_a_checkout_that_is_not_at_the_head(monkeypatch, capsys):

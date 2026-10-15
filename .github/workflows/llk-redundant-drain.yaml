@@ -32,9 +32,12 @@ permissions:
   issues: write
   pull-requests: read
 
+# Every push range must be inspected: queue runs instead of letting a newer one replace a
+# pending one.
 concurrency:
   group: llk-redundant-drain
   cancel-in-progress: false
+  queue: max
 
 jobs:
   file-issues:

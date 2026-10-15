@@ -2,6 +2,7 @@
 """Tests for the redundant-drain checker."""
 import contextlib
 import io
+import json
 import os
 import runpy
 import sys
@@ -91,7 +92,7 @@ def test_drain_followed_only_by_tensix_pushes_is_advisory(tmp_path):
         """,
     )
     r = run(f)
-    assert "a.h:4: ADVISORY: tensix_sync() nothing RISC-side follows" in r.stdout
+    assert "a.h:4: OVERSYNC: tensix_sync() orders only the Tensix pushes" in r.stdout
     assert r.returncode == 0
 
 
@@ -184,7 +185,7 @@ def test_helper_in_the_tree_is_classified_by_its_body(tmp_path):
     )
     r = run(f)
     assert "a.h:4:" not in r.stdout
-    assert "a.h:9: ADVISORY" in r.stdout
+    assert "a.h:9: OVERSYNC" in r.stdout  # the helper pushes SETADC: ordered pushes
 
 
 def test_unknown_helper_suppresses_the_finding(tmp_path):
@@ -318,7 +319,7 @@ def test_json_output_and_strict_exit(tmp_path):
 
 
 def test_real_tree_runs_clean_of_errors():
-    """The checker parses every real header; what it finds there is advisory, not asserted."""
+    """The checker parses every real LLK header and reports the summary line for what it finds."""
     llk = os.path.normpath(os.path.join(HERE, "..", ".."))
     r = run(
         "--tree",
@@ -327,7 +328,9 @@ def test_real_tree_runs_clean_of_errors():
         os.path.join(llk, "tt_llk_wormhole_b0"),
     )
     assert r.returncode == 0
-    assert "Traceback" not in r.stderr
+    assert (
+        "llk-redundant-drain:" in r.stdout
+    )  # at least one site is known to be on the trees
 
 
 # ---------------------------------------------------------------------------------------------
@@ -799,10 +802,34 @@ def test_all_scans_the_repository_and_skips_files_without_a_drain(tmp_path):
 
 
 def test_real_repository_runs_clean_of_errors():
-    """Every drain site in the repository is parsed; what is found is advisory, not asserted."""
-    r = run("--all")
+    """Every drain site in the repository is parsed and every finding is well-formed JSON."""
+    r = run("--all", "--json")
     assert r.returncode == 0
-    assert "Traceback" not in r.stderr
+    found = [json.loads(l) for l in r.stdout.splitlines() if l.startswith("{")]
+    assert found, "a scan that sees nothing is not a clean scan"
+    for f in found:
+        assert f["kind"] in ("REDUNDANT", "OVERSYNC", "ADVISORY")
+        assert f["drain"] in ("tensix_sync", "mop_sync")
+        assert len(f["function"]) <= 60
+
+
+def test_every_shipped_baseline_entry_matches_a_real_site():
+    """A baseline entry that matches nothing is a typo that silently stops suppressing."""
+    infra = os.path.normpath(os.path.join(HERE, ".."))
+    r = run("--all", "--json")
+    keys = {
+        f"{f['file']}:{f['function']}"
+        for f in (json.loads(l) for l in r.stdout.splitlines() if l.startswith("{"))
+    }
+    entries = [
+        l.split("#")[0].strip()
+        for l in open(os.path.join(infra, "redundant_drain_baseline.txt"))
+        if l.strip() and not l.lstrip().startswith("#")
+    ]
+    assert entries
+    for e in entries:
+        path, _, head = e.partition(":")
+        assert f"{path}:{head[:60]}" in keys, e
 
 
 # ---------------------------------------------------------------------------------------------
@@ -866,7 +893,7 @@ def test_push_operands_are_inspected(tmp_path):
     assert "push.hpp:4:" not in out  # the operand reads a GPR through the RISC
     assert "push.hpp:9:" not in out  # the operand calls a helper that stores
     assert (
-        "push.hpp:14: ADVISORY" in out
+        "push.hpp:14: OVERSYNC" in out
     )  # a table index and macros are not RISC accesses
 
 
@@ -988,3 +1015,133 @@ def test_shipped_baseline_suppresses_its_site():
         ).stdout
         == ""
     )
+
+
+def test_oversync_is_a_drain_that_only_orders_pushes(tmp_path):
+    f = hdr(
+        tmp_path,
+        "a.h",
+        """
+        inline void a()
+        {
+            tensix_sync();
+            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+            tensix_sync();
+            mailbox_write(MathThreadId, DONE);
+        }
+        inline void b()
+        {
+            mop_sync();
+            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+            tensix_sync();
+            mailbox_write(MathThreadId, DONE);
+        }
+        inline void c()
+        {
+            tensix_sync();
+            TTI_SEMPOST(semaphore::MATH_PACK);
+        }
+        inline void d()
+        {
+            tensix_sync();
+            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
+            TTI_SEMWAIT(p_stall::STALL_MATH, semaphore::MATH_PACK, p_stall::STALL_ON_ZERO);
+        }
+        """,
+    )
+    out = run(f).stdout
+    assert "a.h:4: OVERSYNC" in out  # the first drain orders the config write
+    assert "a.h:6:" not in out
+    assert "a.h:11: REDUNDANT: mop_sync()" in out  # a mop_sync orders no push
+    assert "a.h:18: OVERSYNC" in out  # SEMPOST is an ordered push
+    assert "a.h:23: ADVISORY" in out  # waits need nothing
+
+
+def test_braceless_else_drain_covers_nothing(tmp_path):
+    f = hdr(
+        tmp_path,
+        "a.h",
+        """
+        inline void f(bool x, std::uint32_t *p)
+        {
+            tensix_sync();
+            if (x) TTI_NOP;
+            else tensix_sync();
+            *p = 1;
+        }
+        """,
+    )
+    assert run(f).stdout == ""
+
+
+def test_stores_to_volatile_references_members_and_unknown_names(tmp_path):
+    f = hdr(
+        tmp_path,
+        "a.h",
+        """
+        inline void ref(volatile std::uint32_t &done)
+        {
+            tensix_sync();
+            done = 1;
+        }
+        inline void plainref(std::uint32_t &count)
+        {
+            tensix_sync();
+            count = 1;
+        }
+        inline void local()
+        {
+            std::uint32_t n = 0;
+            tensix_sync();
+            n = 1;
+            n++;
+        }
+        inline void member()
+        {
+            tensix_sync();
+            regs.ctrl = 1;
+        }
+        inline void macro()
+        {
+            tensix_sync();
+            std::uint32_t v = READ_HW_CFG_0_REG_FIELD(0);
+        }
+        inline void pure()
+        {
+            tensix_sync();
+            std::uint32_t v = LO_16(3);
+        }
+        """,
+    )
+    out = run(f).stdout
+    assert "a.h:4:" not in out  # a volatile reference is RISC-side state
+    assert "a.h:9:" not in out  # a reference parameter is a store the caller sees
+    assert "a.h:15: ADVISORY" in out
+    assert "a.h:21:" not in out  # a member of an undeclared name cannot be judged
+    assert "a.h:26:" not in out  # a macro that may read hardware cannot be judged
+    assert "a.h:31: ADVISORY" in out
+
+
+def test_mop_wrapper_covers_a_mop_sync_caller_only(tmp_path):
+    hdr(tmp_path, "helpers.h", "inline void settle_mop() { mop_sync(); }\n")
+    f = hdr(
+        tmp_path,
+        "a.h",
+        """
+        inline void a()
+        {
+            mop_sync();
+            settle_mop();
+            mailbox_write(MathThreadId, DONE);
+        }
+        inline void b()
+        {
+            tensix_sync();
+            settle_mop();
+            mailbox_write(MathThreadId, DONE);
+        }
+        """,
+    )
+    out = run(f).stdout
+    assert "a.h:4: REDUNDANT: mop_sync()" in out
+    assert "a.h:10:" not in out

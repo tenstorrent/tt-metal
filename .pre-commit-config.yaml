@@ -285,6 +285,9 @@ repos:
       # author sees it at commit time; a drain that lands anyway is followed up by the
       # llk-redundant-drain workflow, which files an issue against the merge that added it.
       verbose: true
+      # One batch: the batch holding the checker or the baseline rescans the repository, and
+      # parallel batches would print findings and the summary more than once.
+      require_serial: true
       args: ["--baseline", "tt_metal/tt-llk/infra/redundant_drain_baseline.txt"]
       # The whole repository: LLK trees, ckernels, compute API, firmware and every compute
       # kernel. The script reads only files that call a drain. Quasar's drains are a different

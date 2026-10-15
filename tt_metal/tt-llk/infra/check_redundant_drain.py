@@ -1,22 +1,33 @@
 #!/usr/bin/env python3
-"""Flag a RISC-blocking drain (`tensix_sync()` / `mop_sync()`) that orders nothing.
+"""Flag a RISC-blocking drain (`tensix_sync()` / `mop_sync()`) that orders nothing, or too much.
 
-A drain blocks the RISC until the Tensix thread (or its MOP expander) is idle. That only matters
-when the RISC itself is about to do something that must see the drained state: a mailbox or
-semaphore access, a configuration-register read or write through the memory map, a GPR read, a
-volatile load or store, a store through a pointer. Tensix instructions pushed after a drain are
-ordered behind the earlier ones by the thread anyway, so a drain followed only by Tensix pushes and
-plain code orders nothing, and costs a full pipeline drain every time it runs.
+A drain blocks the RISC until the Tensix thread (or its MOP expander) is idle. What follows it
+decides whether it was needed:
 
-Two findings, per drain, within one function body:
+  * RISC-side work that must see the drained state -- a mailbox or semaphore access, a
+    configuration-register read or write through the memory map, a GPR read, a volatile load or
+    store, a store through a pointer or a reference -- needs the drain. The scan stops there.
+  * A Tensix push that writes configuration, a GPR, a semaphore, Dest (ZEROACC), a mutex, or runs
+    a MOP or a replay, executes in a backend unit that runs concurrently with the units still
+    busy with earlier work. A `tensix_sync()` before it orders it behind that work, but so does an
+    in-stream `STALLWAIT` on the conflicting unit, without stalling the RISC. A `mop_sync()` orders
+    no push at all: the instruction path is a FIFO through the expander, so a push queues behind
+    the MOP's expansion anyway.
+  * A no-op, an in-stream wait (`STALLWAIT`, `SEMWAIT`) and plain code need nothing from a drain.
+
+Three findings, per drain, within one function body:
 
   * REDUNDANT (certain): on every path from the drain, the next thing that could need it is another
     drain that covers it: `mop_sync()` before `tensix_sync()` (thread idle implies the expander is
-    idle), or a `tensix_sync()` before another `tensix_sync()`, with only Tensix pushes or plain
+    idle), or a `tensix_sync()` before another `tensix_sync()`, with only no-ops, waits or plain
     code between them.
-  * ADVISORY: nothing RISC-side follows the drain in this function on any path, only Tensix pushes
-    and plain code up to the function's end. The drain may still serve a caller; if so the caller
-    should drain itself, or the site should be baselined with the reason.
+  * OVERSYNC: nothing RISC-side follows in this function on any path, but Tensix pushes do, and the
+    drain is a `tensix_sync()`: its only effect is to order those pushes behind in-flight work,
+    which a `STALLWAIT` does without stalling the RISC. A caller may still need the drain; if so
+    the caller should drain itself.
+  * ADVISORY: nothing RISC-side and no ordered push follows the drain in this function on any
+    path. The drain may still serve a caller; if so the caller should drain itself, or the site
+    should be baselined with the reason.
 
 The whole repository is in scope: the Blackhole and Wormhole LLK trees, the per-architecture
 `hw/ckernels` wrappers, the compute API, firmware, and every compute kernel under `ttnn`, `models`
@@ -29,13 +40,15 @@ only when every thread, architecture and preprocessor path the drain is compiled
 A drain inside a loop also meets the loop's condition and the body before it on the next
 iteration. A drain inside a conditional block, one called through a helper under a condition, or
 one after a conditional `break`/`continue`/`return`, covers nothing; the condition itself is still
-classified. A Tensix push is Tensix-only when its operands are: a named RISC access, a pointer
-dereference or a helper that touches RISC-side state in an operand counts. Anything
-the checker cannot classify -- a call to a function it cannot find, a preprocessor condition with
-too many unknowns, a statement it does not recognise -- ends the scan with no finding, so a false
-flag needs a misclassification, not a gap in the model. A helper called after the drain is
-classified by its own body, found by name in the architecture's trees, the compute API, and the
-file's own directory.
+classified. A push's operands are inspected: a named RISC access, a pointer dereference or a
+helper that touches RISC state in an operand counts. A store to a name declared `volatile` or as a
+reference is a RISC access; a store to a name the file does not declare, and a macro call that is
+not a Tensix push or a known pure helper, cannot be judged. Anything the checker cannot classify
+-- a call to a function it cannot find, a preprocessor condition with too many unknowns, a
+statement it does not recognise -- ends the scan with no finding, so a false flag needs a
+misclassification, not a gap in the model. A helper called after the drain is classified by its
+own body, found by name in the architecture's trees, the compute API, and the file's own
+directory.
 
 Quasar is skipped: its drains use a different mechanism and are not modelled here.
 
@@ -52,7 +65,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from check_mutex_balance import _signature, functions  # noqa: E402
+from check_mutex_balance import _blank_noncode, _signature, functions  # noqa: E402
 
 DRAIN = re.compile(r"\b(?:ckernel::)?(tensix_sync|mop_sync)\s*\(\s*\)")
 # A statement that is nothing but the drain call, possibly scoped to one thread.
@@ -86,12 +99,34 @@ RISC_ACCESS = re.compile(
 # Inside a Tensix push's operands an index is a constexpr table lookup (the address-mod register
 # tables, replay slots), not a RISC access; a RISC read there is named, or goes through a pointer.
 PUSH_OPERAND_ACCESS = re.compile(_RISC_NAMED)
-# Plain code the drain cannot be for: control-flow heads, declarations and assignments of scalar
-# locals and globals, asserts, RISC `nop`s, template helpers that only compute.
+# A push that needs nothing from a drain: a no-op, or an in-stream wait that is the ordering.
+TRANSPARENT_PUSH = re.compile(
+    r"^\s*(?:ckernel::)?TTI?_(?:NOP|SFPNOP|DMANOP|STALLWAIT|SEMWAIT)\b"
+)
+# Uppercase calls that only compute (and the instruction-word builders); any other macro may hide
+# a RISC access (prints, logs, waypoints, profiler markers) and cannot be judged.
+PURE_MACRO = re.compile(
+    r"^(?:TTI?_\w+|TT_OP_\w+|LO_16|HI_16|LOWER_HALFWORD|UPPER_HALFWORD|LLK_ASSERT|ASSERT|"
+    r"LLK_SAN_FUNCTION|SCALE_DATUM_SIZE|IS_BFP_FORMAT|STATIC_ASSERT)$"
+)
+# A store or update of a plain name (with member selections): what the drain cannot be for when
+# the name is a local or a file-scope variable, a RISC access when it is volatile or a reference.
+ASSIGN = re.compile(
+    r"^\s*(?:\+\+|--)?\s*([A-Za-z_]\w*)(?:\s*\.\s*\w+)*\s*(?:[-+*/|&^]?=(?!=)|\+\+|--)"
+)
+# `Type name` in a declaration: a local, a parameter or a file-scope variable.
+LOCAL_DECL = re.compile(
+    r"(?<![\w.>])(?!(?:return|else|case|throw|new|delete|goto|co_return|typename|using|sizeof|"
+    r"if|while|for|switch|do|namespace|struct|class|enum|union)\b)"
+    r"[A-Za-z_][\w:]*(?:<[^;{}()]*>)?(\s*[*&]+\s*|\s+)([A-Za-z_]\w*)\s*(?=[=;({\[,)]|$)",
+    re.M,
+)
+# Plain code the drain cannot be for: control-flow heads, declarations of scalar locals, asserts,
+# template helpers that only compute.
 PLAIN = re.compile(
     r"^\s*(?:(?:if|else|for|while|do|switch|case|default|return|break|continue|constexpr|static_assert|"
-    r"LLK_ASSERT|asm\s+volatile\s*\(\s*\"nop\"|using|typedef)\b|[A-Za-z_][\w:<>,\s*&]*\s+[A-Za-z_]\w*\s*(?:=|\(|;|\{)|"
-    r"[A-Za-z_][\w:.]*\s*(?:[-+*/|&^]?=|\+\+|--)(?!=)|\{|\}|$)"
+    r"LLK_ASSERT|using|typedef)\b|[A-Za-z_][\w:<>,\s*&]*\s+[A-Za-z_]\w*\s*(?:=|\(|;|\{)|"
+    r"\{|\}|$)"
 )
 # A call to something named; resolved against the index when nothing above matched.
 CALL = re.compile(r"\b(?:ckernel::|[a-z_]+::)*([A-Za-z_]\w*)\s*(?:<[^;{}()]*>)?\s*\(")
@@ -525,6 +560,21 @@ def is_live(item, thread, arch, assign):
     )
 
 
+class Scope:
+    """What a file declares: the names a store can target, and which of them are RISC-side."""
+
+    __slots__ = ("declared", "risc_targets")
+
+    def __init__(self, code):
+        self.declared, self.risc_targets = set(), set()
+        for m in LOCAL_DECL.finditer(code):
+            name = m.group(2)
+            self.declared.add(name)
+            before = code[max(m.start() - 48, 0) : m.start(2)]
+            if "&" in m.group(1) or "volatile" in before:
+                self.risc_targets.add(name)
+
+
 # ---------------------------------------------------------------------------------------------
 # The index of function bodies a called helper is classified from.
 
@@ -554,7 +604,7 @@ def _parse(path):
             name = _function_name(lines, _signature(lines, brace_line), brace_line)
             if name:
                 bodies.setdefault(name, []).append(build(body[1:-1]))
-        _PARSED[path] = (bodies, file_threads(path))
+        _PARSED[path] = (bodies, file_threads(path), Scope(_blank_noncode(src)))
     return _PARSED[path]
 
 
@@ -597,21 +647,25 @@ class Index:
         out = []
         for p in self.paths:
             if name in _read(p):
-                bodies, threads = _parse(p)
-                out += [(b, threads) for b in bodies.get(name, [])]
+                bodies, threads, scope = _parse(p)
+                out += [(b, threads, scope) for b in bodies.get(name, [])]
         return out
 
-    def classify_call(self, name, thread, arch, depth=0):
-        """'tensix', 'risc', 'drain:<name>' or 'unknown' for a call to `name` on this thread."""
-        key = (name, thread, arch)
+    def classify_call(self, name, thread, arch, dkind, depth=0):
+        """The class of a call to `name` on this thread, for a drain of kind `dkind` before it.
+
+        'risc', 'unknown', 'drain:<name>' (every path drains, covering the caller's drain),
+        'push+drain:<name>' (an ordered push, then a drain), 'push' (ordered pushes) or 'tensix'.
+        """
+        key = (name, thread, arch, dkind)
         if key in self.memo:
             return self.memo[key]
         self.memo[key] = "unknown"  # recursion guard
         bodies = self.bodies(name)
         if not bodies or depth > MAX_CALL_DEPTH:
             return "unknown"
-        verdicts = []
-        for (items, groups), threads in bodies:
+        verdicts, pushed = [], False
+        for (items, groups), threads, scope in bodies:
             if thread not in threads:
                 verdicts.append("end")  # not compiled for this thread: nothing
                 continue
@@ -620,9 +674,11 @@ class Index:
                 verdicts.append("unknown")
                 continue
             for assign in assignments(names):
-                verdicts.append(
-                    walk(items, -1, thread, arch, assign, self, depth + 1, None)
+                v, p = walk(
+                    items, -1, thread, arch, assign, self, scope, depth + 1, dkind
                 )
+                verdicts.append(v)
+                pushed = pushed or p
         if "risc" in verdicts:
             v = "risc"
         elif "unknown" in verdicts:
@@ -633,6 +689,10 @@ class Index:
                 if all(x == "drain:tensix_sync" for x in verdicts)
                 else "drain:mop_sync"
             )
+            if pushed:
+                v = "push+" + v
+        elif pushed:
+            v = "push"
         else:
             v = "tensix"
         self.memo[key] = v
@@ -643,8 +703,12 @@ class Index:
 # Classification.
 
 
-def classify_statement(stmt, thread, arch, index, depth=0):
-    """'tensix', 'risc', 'drain:<name>', 'plain' or 'unknown' for one statement."""
+def classify_statement(stmt, thread, arch, index, scope, depth=0, dkind=None):
+    """The class of one statement for a drain of kind `dkind` before it.
+
+    'risc', 'unknown', 'drain:<name>', 'push+drain:<name>', 'push' (a Tensix push the drain may
+    be ordering), 'tensix' (a push that needs nothing) or 'plain'.
+    """
     s = stmt.strip()
     if not s or s in "{}":
         return "plain"
@@ -657,7 +721,7 @@ def classify_statement(stmt, thread, arch, index, depth=0):
             return "plain"
     m = DRAIN.search(s)
     if m:
-        if not re.search(r"\b(?:if|while|for)\b", s[: m.start()]):
+        if not re.search(r"\b(?:if|while|for|else)\b", s[: m.start()]):
             return "drain:" + m.group(1)
         # A one-line conditional drain covers nothing; what its condition does still counts.
         s = DRAIN.sub(" ", s)
@@ -676,40 +740,57 @@ def classify_statement(stmt, thread, arch, index, depth=0):
         )
     worst = None
     for name in names:
-        if name in CONTROL or name.isupper():
+        if name in CONTROL:
             continue
-        v = index.classify_call(name, thread, arch, depth)
+        if name.isupper():
+            if PURE_MACRO.match(name):
+                continue
+            return "unknown"  # a macro that may print, log or touch anything
+        v = index.classify_call(name, thread, arch, dkind, depth)
         if v == "risc":
             return v
-        if v == "unknown" or (v.startswith("drain:") and worst != "unknown"):
+        if v == "unknown":
             worst = v
+        elif worst != "unknown" and v != "tensix":
+            if worst is None or worst == "tensix" or v.startswith("push+"):
+                worst = v
         elif worst is None:
             worst = "tensix"
-    if worst and worst.startswith("drain:") and CONDITIONAL.match(s):
+    if worst and "drain:" in worst and CONDITIONAL.match(s):
         return "plain"  # a helper that drains, called under a condition: covers nothing
-    if worst:
+    if worst and worst != "tensix":
         return worst
     if push:
-        return "tensix"  # a push whose operands are constants, locals or Tensix-only helpers
+        return "tensix" if TRANSPARENT_PUSH.match(s) else "push"
+    a = ASSIGN.match(s)
+    if a:
+        base = a.group(1)
+        if base in scope.risc_targets:
+            return "risc"  # a volatile or a reference: the store is RISC-side work
+        return "plain" if base in scope.declared else "unknown"
+    if worst:
+        return worst
     if PLAIN.match(s):
         return "plain"
     return "unknown"
 
 
-def walk(items, start, thread, arch, assign, index, depth, dkind):
-    """Verdict for every path from items[start] on: 'risc', 'unknown', 'drain:<name>' or 'end'.
+def walk(items, start, thread, arch, assign, index, scope, depth, dkind):
+    """(verdict, pushed) for every path from items[start] on.
 
-    start is the drain's item, or -1 for a helper body. Items on a dead thread or preprocessor
-    branch are skipped. A drain covers only when it is reached on every path: it must sit in no
-    block beyond the drain's own ancestors, after no conditional jump, and not in the replay of a
-    loop body (the part before the drain that the next iteration runs). A `break` leaves the
-    innermost loop (or switch), a `continue` or the end of the loop body replays it and then
-    exits, a `return` ends the path.
+    verdict is 'risc', 'unknown', 'drain:<name>' or 'end'; pushed says whether a Tensix push the
+    drain may be ordering (anything but a no-op or an in-stream wait) was met first, which never
+    happens for a `mop_sync()`. start is the drain's item, or -1 for a helper body. Items on a
+    dead thread or preprocessor branch are skipped. A drain covers only when it is reached on
+    every path: it must sit in no block beyond the drain's own ancestors, after no conditional
+    jump, and not in the replay of a loop body (the head and the part before the drain that the
+    next iteration runs). A `break` leaves the innermost loop (or switch), a `continue` or the
+    end of the loop body replays it and then exits, a `return` ends the path.
     """
     ancestors = set(items[start].encl) if start >= 0 else set()
     live = [it.kind == "pp" or is_live(it, thread, arch, assign) for it in items]
     ranges = [(start + 1, len(items), False)]
-    diverged = False
+    diverged = pushed = False
     while ranges:
         lo, hi, replay = ranges.pop(0)
         i = lo
@@ -738,14 +819,18 @@ def walk(items, start, thread, arch, assign, index, depth, dkind):
                     break
                 i += 1
                 continue
-            v = classify_statement(it.text, thread, arch, index, depth)
+            v = classify_statement(it.text, thread, arch, index, scope, depth, dkind)
             if v in ("risc", "unknown"):
-                return v
+                return v, pushed
+            if v.startswith("push"):
+                if dkind != "mop_sync":
+                    pushed = True
+                v = v[5:] if v.startswith("push+") else "tensix"
             if v.startswith("drain:"):
                 name = v.split(":", 1)[1]
                 covers = name == "tensix_sync" or dkind == "mop_sync"
                 if uncond and not replay and not diverged and covers:
-                    return v
+                    return v, pushed
             jm = JUMP.search(it.text)
             if (
                 jm
@@ -761,7 +846,7 @@ def walk(items, start, thread, arch, assign, index, depth, dkind):
                 if word == "return":
                     break  # this path ends; another range may follow for an outer loop exit
                 if word == "goto":
-                    return "unknown"
+                    return "unknown", pushed
                 target = None
                 for o in reversed(it.encl):
                     if items[o].block == "loop" or (
@@ -784,7 +869,7 @@ def walk(items, start, thread, arch, assign, index, depth, dkind):
             if jm:
                 diverged = True
             i += 1
-    return "end"
+    return "end", pushed
 
 
 # ---------------------------------------------------------------------------------------------
@@ -835,6 +920,7 @@ def scan(path, repo):
     lines = src.split("\n")
     orig = text.split("\n")
     arches, threads, roots = context_for(path, repo)
+    scope = Scope(_blank_noncode(src))
     for brace_line, _, body, _ in functions(src):
         sig = _signature(lines, brace_line)
         head = orig[sig].strip() if sig < len(orig) else lines[sig].strip()
@@ -853,7 +939,7 @@ def scan(path, repo):
             if it.kind != "stmt":
                 continue
             for m in DRAIN.finditer(it.text):
-                if re.search(r"\b(?:if|while|for)\b", it.text[: m.start()]):
+                if re.search(r"\b(?:if|while|for|else)\b", it.text[: m.start()]):
                     continue
                 drain = m.group(1)
                 line = brace_line + 1 + inner[: it.off + m.start()].count("\n")
@@ -867,27 +953,41 @@ def scan(path, repo):
                     for thread in sorted(threads & it.threads):
                         names = path_vars(groups, thread, arch)
                         if names is None:
-                            verdicts.append("unknown")
+                            verdicts.append(("unknown", False))
                             continue
                         for assign in assignments(names):
                             if not is_live(it, thread, arch, assign):
                                 continue
-                            v = None
+                            v, pushed = None, False
                             for frag in rest:
-                                fv = classify_statement(frag, thread, arch, index)
+                                fv = classify_statement(
+                                    frag, thread, arch, index, scope, 0, drain
+                                )
                                 if fv in ("risc", "unknown"):
                                     v = fv
                                     break
+                                if fv.startswith("push"):
+                                    pushed = pushed or drain != "mop_sync"
+                                    fv = fv[5:] if fv.startswith("push+") else "tensix"
                                 if fv.startswith("drain:") and (
                                     fv == "drain:tensix_sync" or drain == "mop_sync"
                                 ):
                                     v = fv
                                     break
                             if v is None:
-                                v = walk(
-                                    items, i, thread, arch, assign, index, 0, drain
+                                v, p = walk(
+                                    items,
+                                    i,
+                                    thread,
+                                    arch,
+                                    assign,
+                                    index,
+                                    scope,
+                                    0,
+                                    drain,
                                 )
-                            verdicts.append(v)
+                                pushed = pushed or p
+                            verdicts.append((v, pushed))
                 yield from _verdict(verdicts, line, drain, head)
 
 
@@ -902,14 +1002,22 @@ def _fragment(text):
 
 
 def _verdict(verdicts, line, drain, head):
-    if not verdicts or any(v in ("risc", "unknown") for v in verdicts):
+    """(line, kind, drain, covered_by, reason, head) when the verdicts agree on a finding."""
+    if not verdicts or any(v in ("risc", "unknown") for v, _ in verdicts):
         return
-    covering = {v.split(":", 1)[1] for v in verdicts if v.startswith("drain:")}
-    if len(covering) == 1 and all(v.startswith("drain:") for v in verdicts):
+    pushed = any(p for _, p in verdicts)
+    covering = {v.split(":", 1)[1] for v, _ in verdicts if v.startswith("drain:")}
+    if (
+        len(covering) == 1
+        and all(v.startswith("drain:") for v, _ in verdicts)
+        and not pushed
+    ):
         nxt = covering.pop()
-        yield line, "REDUNDANT", drain, f"only Tensix pushes or plain code before the {nxt}() that covers it", head
+        yield line, "REDUNDANT", drain, nxt, f"only no-ops, waits or plain code before the {nxt}() that covers it", head
+    elif pushed:
+        yield line, "OVERSYNC", drain, None, "orders only the Tensix pushes that follow behind in-flight work; a STALLWAIT on the conflicting unit does that without stalling the RISC; if a caller needs the drain it should drain itself", head
     else:
-        yield line, "ADVISORY", drain, "nothing RISC-side follows in this function; if a caller needs the drain it should drain itself", head
+        yield line, "ADVISORY", drain, None, "nothing RISC-side follows in this function; if a caller needs the drain it should drain itself", head
 
 
 def relative(path, repo):
@@ -998,7 +1106,8 @@ def main():
     )
     ap.add_argument(
         "--baseline",
-        help="reviewed sites to keep, one `path:line:function # reason` per line",
+        help="reviewed sites to keep, one `<path>:<first 60 characters of the declarator line>  "
+        "# reason` per line, exactly as the text output prints the key",
     )
     ap.add_argument("--json", action="store_true", help="one JSON object per finding")
     ap.add_argument(
@@ -1028,14 +1137,14 @@ def main():
             skipped += 1
             continue
         rel = relative(path, args.repo)
-        for line, kind, drain, reason, head in scan(path, args.repo):
+        for line, kind, drain, covered_by, reason, head in scan(path, args.repo):
             key = f"{rel}:{head[:60]}"
             if key in accepted:
                 continue
-            findings.append((rel, line, kind, drain, reason, head))
+            findings.append((rel, line, kind, drain, covered_by, reason, head))
 
     if args.json:
-        for rel, line, kind, drain, reason, head in findings:
+        for rel, line, kind, drain, covered_by, reason, head in findings:
             print(
                 json.dumps(
                     {
@@ -1043,18 +1152,23 @@ def main():
                         "line": line,
                         "kind": kind,
                         "drain": drain,
+                        "covered_by": covered_by,
                         "reason": reason,
-                        "function": head,
+                        "function": head[:60],
                     }
                 )
             )
     else:
-        for rel, line, kind, drain, reason, head in findings:
-            print(f"{rel}:{line}: {kind}: {drain}() {reason}\n    in {head[:100]}")
+        for rel, line, kind, drain, _c, reason, head in findings:
+            print(f"{rel}:{line}: {kind}: {drain}() {reason}\n    in {head[:60]}")
         if findings:
-            n_red = sum(1 for f in findings if f[2] == "REDUNDANT")
+            n = {
+                k: sum(1 for f in findings if f[2] == k)
+                for k in ("REDUNDANT", "OVERSYNC", "ADVISORY")
+            }
             print(
-                f"llk-redundant-drain: {n_red} redundant, {len(findings) - n_red} advisory drain site(s); see the docstring for what each means"
+                f"llk-redundant-drain: {n['REDUNDANT']} redundant, {n['OVERSYNC']} oversync, "
+                f"{n['ADVISORY']} advisory drain site(s); `in` shows the baseline key; see the docstring for what each means"
             )
         if skipped:
             print(
