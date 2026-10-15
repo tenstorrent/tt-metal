@@ -73,7 +73,7 @@ from string import Template
 import yaml
 
 from models.demos.common.bringup import watch as W
-from models.demos.common.bringup.core import defaults
+from models.demos.common.bringup.core import checkout_env, defaults
 from models.demos.common.bringup.core import freeze as F
 from models.demos.common.bringup.core import metrics as M
 from models.demos.common.bringup.core.gate import (
@@ -1474,6 +1474,8 @@ def main(argv=None) -> int:
         how.add_argument(f"--{d}", dest="decision", action="store_const", const=d, help=f"decide: {d}")
     ap.add_argument("--note", default="", help="decide: stored with the decision")
     a = ap.parse_args(argv)
+    if a.command in ("run", "resume"):
+        checkout_env.pin()  # F68: gates, agents and tests use this checkout's cache, venv and paths
     spec = Spec.load(a.spec)
     orch = Orchestrator(spec, model=a.model)
     if a.command == "decide":
