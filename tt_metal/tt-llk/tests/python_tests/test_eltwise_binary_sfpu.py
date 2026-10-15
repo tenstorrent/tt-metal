@@ -8,7 +8,6 @@ from typing import Dict
 
 import pytest
 import torch
-from conftest import skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture
 from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -460,7 +459,7 @@ def sfpu_binary(
     iterations=32,
     approx_mode=ApproximationMode.No,
     dst_rounding_mode=DstRoundingMode.Default,
-    mul_kernel=SfpuMulImpl.Generic,
+    mul_kernel=SfpuMulImpl.Production,
     check_contract=True,
 ):
     """*unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
@@ -474,6 +473,10 @@ def sfpu_binary(
     # Seed the draw so the stimuli are identical run to run; an unseeded redraw makes a
     # variant near its tolerance fail unreproducibly.
     torch.manual_seed(0)
+
+    # C++ rejects PRODUCTION_MUL for every op except MUL.
+    if mathop != MathOperation.SfpuElwmul:
+        mul_kernel = SfpuMulImpl.Generic
 
     # FP32 destination tiles occupy twice the register space. Keep four full destination
     # blocks for those formats and four blocks of eight tiles for the remaining formats.
@@ -538,8 +541,8 @@ def sfpu_binary(
         )
 
     # The kernel runs with a 32-bit Dest where the hardware needs one -- an exponent-B
-    # input packed to Float16 on every arch but Quasar (`effective_dest_acc`, the rule
-    # TestConfig applies silently), a Float16/Float32 input on Blackhole -- so dest_acc
+    # input packed to Float16 (`effective_dest_acc`, the rule TestConfig applies
+    # silently), a Float16/Float32 input on Blackhole -- so dest_acc
     # is promoted here too. Hoisted above the golden, which models the Dest width from
     # it, and above the contract, whose `dest: "Yes"` rows describe the kernel that ran.
     # Left at No, both would describe a variant that never executed.
@@ -871,8 +874,7 @@ _RNE_ADD_PAIRS = (
     (0x3F00, 0x3F1B),
     (0x3F00, 0x3F27),
 )
-# Finite products that separate the two roundings, then 0 * +inf. Production
-# mul stores that lane as 0; the generic mul leaves a NaN, packed as +inf.
+# Finite products that separate RNE from truncation, then 0 * +inf, stored as +0.
 _PRODUCTION_MUL_PAIRS = (
     (0x0000, 0x7F80),
     (0x3F01, 0x3F42),
@@ -881,7 +883,6 @@ _PRODUCTION_MUL_PAIRS = (
 )
 
 
-@skip_for_quasar
 def test_eltwise_binary_sfpu_bf16_rne_exact():
     """NearestEven ADD on Float16_b with a 16-bit Dest, bit-exact against RNE.
 
@@ -902,7 +903,6 @@ def test_eltwise_binary_sfpu_bf16_rne_exact():
     _assert_bit_exact(res, golden, "NearestEven ADD")
 
 
-@skip_for_quasar
 def test_eltwise_binary_sfpu_mul_production_exact():
     """Production mul is RNE, and 0 * inf stores 0 rather than a NaN."""
     src, a, b = _tile_from_pairs(
@@ -922,15 +922,11 @@ def test_eltwise_binary_sfpu_mul_production_exact():
     zero = (a == 0) | (b == 0)
     if not bool(zero.any()):
         raise AssertionError("production mul stimulus has no zero input")
-    expected = golden.clone()
-    expected[:_ELEMENTS_PER_TILE] = torch.where(
-        zero, torch.zeros((), dtype=expected.dtype), expected[:_ELEMENTS_PER_TILE]
-    )
-    # The stock golden turns 0 * inf into an infinity. A golden that is already
-    # zero on that lane would let the generic kernel pass.
-    if torch.equal(expected, golden):
-        raise AssertionError("0 * inf lane did not change the golden")
-    _assert_bit_exact(res, expected, "production mul")
+    # IEEE 0 * inf is not +0, so a golden that keeps it does not check the store.
+    got_zero = golden[:_ELEMENTS_PER_TILE][zero]
+    if not torch.equal(got_zero, torch.zeros_like(got_zero)):
+        raise AssertionError("golden did not model production 0 * x = +0")
+    _assert_bit_exact(res, golden, "production mul")
 
 
 @parametrize(**DIV_SWEEP)
@@ -1974,8 +1970,7 @@ def _run_sfpu_binary_bcast(
             ITERATIONS(iterations),
             BROADCAST_TYPE(LlkBroadcastType.None_),
             SFPU_BCAST_DIM(bcast_dim),
-            # Defaults only. The bcast kernel does not read them; every row of
-            # the module report has to carry the same columns as sfpu_binary.
+            # Unread by this kernel. Present so the report columns match sfpu_binary.
             SFPU_DST_ROUNDING_MODE(),
             SFPU_MUL_IMPL(),
         ],
@@ -2023,7 +2018,6 @@ def _run_sfpu_binary_bcast(
     assert_against_contract(mathop, formats, dest_acc, golden_tensor, res_tensor)
 
 
-@skip_for_quasar
 @parametrize(**BCAST_SWEEP)
 def test_eltwise_binary_sfpu_bcast(
     formats,

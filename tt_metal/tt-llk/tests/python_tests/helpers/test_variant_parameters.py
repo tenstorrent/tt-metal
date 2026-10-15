@@ -1591,8 +1591,7 @@ class SFPU_DST_ROUNDING_MODE(TemplateParameter):
 
 @dataclass
 class SFPU_MUL_IMPL(TemplateParameter):
-    """WH/BH multiply kernel. Generic keeps the cross-arch join; Production
-    measures calculate_sfpu_binary_mul. Ignored for every op except MUL."""
+    """calculate_sfpu_binary_mul when Production. Legal only for MUL."""
 
     mul_kernel: SfpuMulImpl = SfpuMulImpl.Generic
 

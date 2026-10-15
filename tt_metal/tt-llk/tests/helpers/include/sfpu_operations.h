@@ -1878,11 +1878,9 @@ constexpr SfpuType get_binary_comp_sfpu_type()
  * with a 16-bit Dest. DIV, the integer arms, fp32 Dest, and the production-MUL
  * arm drop it.
  *
- * PRODUCTION_MUL routes MUL to calculate_sfpu_binary_mul, the kernel
- * mul_binary_tile dispatches on Wormhole and Blackhole, and is ignored for
- * every other op. That kernel always applies software RNE and then forces the
- * result to 0 when either input is 0 and Dest is 16-bit. It does not read
- * DST_ROUNDING.
+ * PRODUCTION_MUL routes MUL to calculate_sfpu_binary_mul (mul_binary_tile on
+ * WH/BH). On a 16-bit Dest that kernel applies RNE, then stores +0 when
+ * either input is 0.
  */
 template <
     DstSync DST_SYNC_MODE,
@@ -1907,9 +1905,8 @@ void call_binary_sfpu_operation(
     // matching how every production llk_math_eltwise_binary_sfpu_* wrapper
     // dispatches into _calculate_sfpu_binary_ / _calculate_*_shift_.
     static_assert(ITERATIONS == 8 || ITERATIONS == 32, "Binary SFPU tests support legacy 8/32 iteration values; execution uses 8 rows per face.");
-    // A sweep that published these columns for a kernel that did not apply them
-    // would time the unmodified path. Reject that at compile time.
-    static_assert(!PRODUCTION_MUL || BINOP == BinaryOp::MUL, "PRODUCTION_MUL routes MUL to calculate_sfpu_binary_mul and is ignored for every other op");
+    // Fail when the flag names behavior this op does not apply.
+    static_assert(!PRODUCTION_MUL || BINOP == BinaryOp::MUL, "PRODUCTION_MUL is only valid for MUL");
     static_assert(
         DST_ROUNDING == ckernel::DstRoundingMode::Default ||
             ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !DST_ACCUM_MODE && !PRODUCTION_MUL),
@@ -1966,9 +1963,6 @@ void call_binary_sfpu_operation(
     }
     else if constexpr (BINOP == BinaryOp::MUL && PRODUCTION_MUL)
     {
-        // mul_binary_tile on WH/BH. The generic calculate_sfpu_binary MUL arm
-        // stays available when PRODUCTION_MUL is false so the Quasar join does
-        // not change kernel.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
