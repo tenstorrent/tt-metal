@@ -675,7 +675,6 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(disable_fabric_2_erisc_mode);
     RT(disable_dma_ops);
     RT(disable_sfploadmacro);
-    RT(disable_xip_dump);
     RT(skip_eth_cores_with_retrain);
     RT(use_mesh_graph_descriptor_2_0);
     RT(custom_fabric_mesh_graph_desc_path);

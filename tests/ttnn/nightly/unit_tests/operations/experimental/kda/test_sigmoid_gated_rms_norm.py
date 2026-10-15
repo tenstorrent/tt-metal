@@ -199,6 +199,7 @@ def _run(
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
     output_dtype: ttnn.DataType = ttnn.float32,
+    gate_column_offset: int = 0,
 ) -> ttnn.Tensor:
     return ttnn.experimental.kda.sigmoid_gated_rms_norm(
         input_tt,
@@ -209,6 +210,7 @@ def _run(
         memory_config=memory_config,
         compute_kernel_config=compute_kernel_config,
         output_dtype=output_dtype,
+        gate_column_offset=gate_column_offset,
     )
 
 
@@ -552,6 +554,29 @@ def test_sigmoid_gated_rms_norm_rejects_unsupported_compute_config(
         _run(input_tt, gate_tt, weight_tt, compute_kernel_config=compute_kernel_config)
 
 
+@pytest.mark.parametrize("gate_column_offset", [0, 64], ids=["leading", "offset"])
+def test_sigmoid_gated_rms_norm_gate_column_offset_matches_sliced_gate(
+    device: ttnn.Device, gate_column_offset: int
+) -> None:
+    """Reading the gate columns of a wider tensor in place matches passing those columns alone."""
+    host, (input_tt, gate_tt, weight_tt) = _device_inputs(device, batch=2, seed=4211)
+    gate = host[1]
+    batch, sequence, width = gate.shape
+    generator = torch.Generator().manual_seed(4212)
+    wide = torch.cat(
+        (
+            torch.randn(batch, sequence, gate_column_offset, generator=generator, dtype=torch.bfloat16),
+            gate,
+            torch.randn(batch, sequence, 96, generator=generator, dtype=torch.bfloat16),
+        ),
+        dim=-1,
+    )
+    wide_tt = _to_device(wide, device, dtype=ttnn.bfloat16)
+    expected = _run(input_tt, gate_tt, weight_tt)
+    actual = _run(input_tt, wide_tt, weight_tt, gate_column_offset=gate_column_offset)
+    assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name="gate_column_offset")
+
+
 @pytest.mark.parametrize(
     ("case", "message"),
     [
@@ -560,7 +585,7 @@ def test_sigmoid_gated_rms_norm_rejects_unsupported_compute_config(
         ("gate_dtype", "gate has unsupported dtype"),
         ("weight_dtype", "weight has unsupported dtype"),
         ("input_layout", "input must use TILE layout"),
-        ("gate_shape", "gate must have shape"),
+        ("gate_shape", "columns at gate_column_offset"),
         ("weight_shape", r"weight must be \[V\]"),
         ("sequence_alignment", "sequence must be positive and tile aligned"),
         ("value_alignment", "value_dim must be positive and tile aligned"),
@@ -608,13 +633,15 @@ def test_sigmoid_gated_rms_norm_rejects_invalid_tensors(
 
 
 @pytest.mark.parametrize(
-    ("num_heads", "epsilon", "output_dtype", "message"),
+    ("num_heads", "epsilon", "output_dtype", "gate_column_offset", "message"),
     [
-        (0, 1e-5, ttnn.float32, "num_heads must be positive"),
-        (5, 1e-5, ttnn.float32, "leading dimension must be divisible"),
-        (12, 0.0, ttnn.float32, "epsilon must be finite and positive"),
-        (12, float("nan"), ttnn.float32, "epsilon must be finite and positive"),
-        (12, 1e-5, ttnn.uint32, "output_dtype must be FLOAT32 or BFLOAT16"),
+        (0, 1e-5, ttnn.float32, 0, "num_heads must be positive"),
+        (5, 1e-5, ttnn.float32, 0, "leading dimension must be divisible"),
+        (12, 0.0, ttnn.float32, 0, "epsilon must be finite and positive"),
+        (12, float("nan"), ttnn.float32, 0, "epsilon must be finite and positive"),
+        (12, 1e-5, ttnn.uint32, 0, "output_dtype must be FLOAT32 or BFLOAT16"),
+        (12, 1e-5, ttnn.float32, 16, "gate_column_offset must be tile aligned"),
+        (12, 1e-5, ttnn.float32, 64, "columns at gate_column_offset"),
     ],
 )
 def test_sigmoid_gated_rms_norm_rejects_invalid_options(
@@ -623,11 +650,20 @@ def test_sigmoid_gated_rms_norm_rejects_invalid_options(
     num_heads: int,
     epsilon: float,
     output_dtype: ttnn.DataType,
+    gate_column_offset: int,
     message: str,
 ) -> None:
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(device)
     with expect_error(RuntimeError, message):
-        _run(input_tt, gate_tt, weight_tt, num_heads=num_heads, epsilon=epsilon, output_dtype=output_dtype)
+        _run(
+            input_tt,
+            gate_tt,
+            weight_tt,
+            num_heads=num_heads,
+            epsilon=epsilon,
+            output_dtype=output_dtype,
+            gate_column_offset=gate_column_offset,
+        )
 
 
 def test_sigmoid_gated_rms_norm_rejects_sharded_output(device: ttnn.Device, expect_error: Callable) -> None:

@@ -100,6 +100,23 @@ SDMeshCommandQueue::SDMeshCommandQueue(
     }
 }
 
+SDMeshCommandQueue::~SDMeshCommandQueue() {
+    // Drain workloads enqueued non-blocking before the queue goes away, matching FDMeshCommandQueue's
+    // destructor. Otherwise a program still running at device close is killed mid-flight by the core
+    // reset on the next open, and the Tensix state it leaves behind can hang or corrupt the next
+    // program on the same cores.
+    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    try {
+        std::lock_guard<std::mutex> guard(logical_cores_mutex_);
+        wait_for_cores_idle();
+    } catch (const std::exception& e) {
+        // Destructors must not throw; leave the cores as they are and report it.
+        log_warning(tt::LogMetal, "SDMeshCommandQueue destructor: failed waiting for in-flight programs: {}", e.what());
+    }
+}
+
 std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
     // Slow dispatch never records traces, so no trace is ever in progress. Return nullopt
     // ("not recording") rather than throwing, so callers can query trace state unconditionally
@@ -465,11 +482,7 @@ void SDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId>) {
 void SDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId>) {}
 
 void SDMeshCommandQueue::reset_worker_state(
-    bool,
-    uint32_t,
-    const vector_aligned<uint32_t>&,
-    const std::vector<std::pair<CoreRangeSet, uint32_t>>&,
-    ttsl::Span<const uint32_t>) {}
+    bool, uint32_t, const std::vector<std::pair<CoreRangeSet, uint32_t>>&, ttsl::Span<const uint32_t>) {}
 
 void SDMeshCommandQueue::record_begin(const MeshTraceId&, const std::shared_ptr<MeshTraceDescriptor>&) {
     TT_THROW("Not supported for slow dispatch");

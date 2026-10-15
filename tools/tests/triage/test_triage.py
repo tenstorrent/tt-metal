@@ -536,6 +536,9 @@ class TestTriage:
             values = [struct.unpack("<f", struct.pack("<I", u << 16))[0] for (u,) in struct.iter_unpack("<H", data)]
             assert all(0.0 <= v <= limit for v in values), f"CB{cb} does not hold the input tile"
 
+    def test_dump_fabric_stream_regs(self):
+        self.run_triage_script("dump_fabric_stream_regs.py")
+
     def test_dump_fast_dispatch(self):
         self.run_triage_script("dump_fast_dispatch.py")
 

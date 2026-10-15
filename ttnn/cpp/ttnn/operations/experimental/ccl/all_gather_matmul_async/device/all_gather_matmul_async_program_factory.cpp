@@ -5,7 +5,7 @@
 
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_default_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_program_factory.hpp"
-#include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.hpp"
+#include "ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_mcast_2d.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -79,7 +79,7 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
     std::visit(
         ttsl::overloaded{
             [&](const operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig& config) {
-                auto cached_program = ttnn::prim::matmul_multi_core_reuse_mcast_2d_optimized_helper(
+                auto cached_program = ttnn::prim::ccl_fusion::matmul_multi_core_reuse_mcast_2d_optimized_helper(
                     program,
                     all_gather_output_tensor,
                     weight_tensor,
@@ -240,13 +240,11 @@ void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
 
         std::visit(
             ttsl::overloaded{
-                [&](const ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t&
-                        mm_shared_variables) {
+                [&](const ttnn::prim::ccl_fusion::Mcast2DSharedVariables& mm_shared_variables) {
                     std::vector<Tensor> matmul_output_tensors = {tensor_return_value[1]};
-                    ttnn::prim::MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
+                    ttnn::prim::ccl_fusion::override_mcast_2d_runtime_arguments(
                         program,
                         mm_shared_variables,
-                        operation_attributes.matmul,
                         {{tensor_return_value[0], tensor_args.weight_tensor},
                          {tensor_args.bias},
                          {tensor_return_value[1]}},
