@@ -1271,6 +1271,13 @@ tasks:
     - engram_kv
     - engram_add
     layer: 1
+  frozen:
+    at: '2026-10-15T19:48:31'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_03_engram_add.py: a0dab073a941d26d4386b88c0c180319e17b7d263ca541a98106540bebce2309
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.attn_hc
   title: swa_engram attn_hc (op) on device, layer 1
   step: implement
