@@ -54,3 +54,12 @@ Every intervention by the supervising session: time, task, trigger, classificati
     Galaxy (same override at real size).
   - Scaled run: SG.1 must make the reference read the scaled counts from inference/config.json (scale.py copies only
     top-level files); in the scale role's scope.
+- 07:30 OWNER DECISION: match the reference precision over context length: no bfp8 anywhere; galaxy_4x4 deploys at
+  512K (26.5 of 27.2 GiB per chip; longest exact ~720K), 1M on galaxy_8x4 (18.5 GiB). "Keep the tests light (~50K),
+  plan for the full; full tested later." Applied: spec deploy.seq 524288; plan.yaml galaxy_4x4 bfp8 override removed;
+  plan.md owner-decision note on top (its 1M/bfp8 numbers superseded by the gate's results); serving answers updated.
+- 07:35 SG.1 attempt 1 failed: the scaled ladder (65536, supervisor's spec) is longer than the canonical prompt (56320
+  tokens). Supervisor error; attempt 2 stopped (agent + orchestrator killed, task RUNNING -> resume) before it could
+  work around it. Scaled ladder set to 53248 (13 x 4096) <= the prompt and the owner's ~50K. The agent's attempt-1
+  edits (reference reads the scaled counts from config.json; inference/ dir from the scale marker's source) reviewed
+  and kept. Intake and plan re-approved (delegated).
