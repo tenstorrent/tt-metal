@@ -137,6 +137,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         for model_key in ("kimi27", "glm52"):
             for system in ("sc1", "sc4"):
                 (mgd_dir / f"{model_key}_{system}_mgd.textproto").touch()
+        (mgd_dir / "sc4_mgd.textproto").touch()
         # manifest_env() reads PREFILL_MAX_SEQ_LEN / PREFILL_NUM_USERS straight off these, so the
         # fake tree needs them or the harness dies before it launches anything. Values mirror the
         # real manifests; only their presence and the sc1 override path are under test here.
@@ -146,6 +147,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
             ("kimi27", 256000, 86),
             ("glm52", 1049600, 28),
             ("mistral4", 56320, 1),
+            ("dsv4_flash", 56320, 1),
         ):
             (manifest_dir / f"{model_key}.json").write_text(
                 json.dumps({"env": {"PREFILL_MAX_SEQ_LEN": max_seq_len, "PREFILL_NUM_USERS": num_users}})
@@ -234,6 +236,27 @@ class MultirankPccHarnessTests(unittest.TestCase):
             producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"],
         )
         self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_dsv4_flash_feeds_one_producer_and_gates_on_perf_alone(self):
+        result, records = self.run_harness("dsv4_flash", extra_env={"TEST_TPS": "9000"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        producer = self.one_record(records, "producer")["env"]
+        self.assertEqual(producer["PREFILL_PRODUCER_CHECK_PCC"], "0")
+        self.assertEqual(producer["PREFILL_H2D_CONNECT_TIMEOUT"], "3600")
+        self.assertEqual(producer["TEST_MPI_HOST"], "worker0:1")
+        producer_mpi = [
+            record for record in records if record["kind"] == "mpi" and "prefill_producer" in record["args"][-1]
+        ]
+        self.assertEqual(len(producer_mpi), 1)
+        mpi_args = producer_mpi[0]["args"]
+        self.assertEqual(mpi_args[mpi_args.index("-np") + 1], "1")
+        self.assertIn("PCC GATE SKIPPED", result.stdout)
+        self.assertIn("TPS: 9,000 tok/s @55k", result.stdout)
+
+    def test_dsv4_flash_fails_when_no_throughput_was_measured(self):
+        result, _ = self.run_harness("dsv4_flash")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE FAIL", result.stdout + result.stderr)
 
     def test_existing_models_use_discovery_and_four_hosts(self):
         for model in ("kimi27", "glm52"):

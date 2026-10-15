@@ -1077,6 +1077,37 @@
   sp_config: sc1
 
 
+# 4-galaxy (SC4) prefill runner perf for DeepSeek-V4-Flash: 43 layers as 11/11/11/10, the boundary
+# carrying the four fp32 residual streams. V4 attention keeps its own state and the engine has no KV
+# cache to migrate, so there is no KV-PCC: one producer feeds the trace's 55k tokens and the leg gates
+# on a throughput measurement only (accuracy is the dsv4_transformer_depth leg's). Eager, so its
+# throughput is not comparable to the traced Kimi and GLM legs.
+# Runs only when named: its own test_group keeps it out of the shared SC4 job and the nightly (see the
+# dsv4-sc4 job in blaze-models-prefill-tests.yaml).
+- name: "(DeepSeek-V4-Flash) prefill runner perf 55k@5k, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh dsv4_flash
+  test_type: dsv4_flash_runner_sc4_perf
+  test_tags: [dsv4_flash, runner]
+  test_group: dsv4_runner_sc4
+  skus:
+    bh_sc4:
+      # Not measured yet. Weights load on host from the checkpoint, 11 layers per rank, then 10 warm-up
+      # and 11 measured chunks and the mesh unwind.
+      timeout: 120
+      tier: 2
+      release_ready: false
+  owner_id: U08SXRPCTJ5  # Janko Mitrovic
+  team: models
+  budget_type: demo
+  sp_config: sc4
+
 # ===== Gemma4-31B D_P =================================================================================
 
 # Sanity gate for the standalone disaggregated-prefill implementation: the

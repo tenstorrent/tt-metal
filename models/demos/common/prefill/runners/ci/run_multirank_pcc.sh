@@ -49,6 +49,9 @@ EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${MODEL}"
 SC1_MAX_SEQ_LEN=""
 SC1_NUM_LAYERS=""
 SC1_NUM_USERS=1
+# 0 for a model with no engine-owned KV cache: no chunk table to wait on and nothing for the
+# validators to read, so one producer feeds tokens and the leg gates on perf alone.
+KV_PCC=1
 
 case "${MODEL}" in
   llama31)
@@ -88,6 +91,12 @@ case "${MODEL}" in
     # Deliberately only the first 55k: the K3 golden trace is currently unreliable.
     PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
     ;;
+  dsv4_flash)
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/dsv4_flash_prefill_runner}"
+    MANIFEST="${MANIFEST_DIR}/dsv4_flash.json"
+    KV_PCC=0
+    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
+    ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
     MANIFEST="${MANIFEST_DIR}/mistral4.json"
@@ -115,6 +124,11 @@ case "${MODEL}" in
     exit 2
     ;;
 esac
+
+# Perf is the only gate without KV-PCC, so a run that measured nothing must fail.
+if [ "${KV_PCC}" = 0 ]; then
+  REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-1}"
+fi
 
 # A PP model carries its descriptor in its rank binding, so only the discovery path needs one.
 if [ "${PP_RANKS}" -eq 0 ]; then
@@ -261,6 +275,8 @@ else
   RUNNER_PLACEMENT=""
 fi
 
+LAUNCH_MARK="${MR_DIR}/runner_launched"
+touch "${LAUNCH_MARK}"
 cd "${TTRUN_CWD}"
 setsid python3 "${TTRUN_PY}" \
   --skip-executable-check \
@@ -293,12 +309,22 @@ cd "${TT_METAL_HOME}"
 # shallower models nothing. Keep it below the leg's job timeout, or the container is killed first
 # and this diagnostic never prints.
 TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-3600}"
-for _ in $(seq 1 $((TABLE_WAIT_SECS / 5))); do
-  [ -f "${TABLE_PATH}" ] && break
-  kill -0 "${RUNNER_PID}" 2>/dev/null || { echo "runner exited before publishing the KV table"; wait "${RUNNER_PID}"; exit 1; }
-  sleep 5
-done
-[ -f "${TABLE_PATH}" ] || { echo "KV table not published within ${TABLE_WAIT_SECS}s"; exit 1; }
+if [ "${KV_PCC}" = 1 ]; then
+  for _ in $(seq 1 $((TABLE_WAIT_SECS / 5))); do
+    [ -f "${TABLE_PATH}" ] && break
+    kill -0 "${RUNNER_PID}" 2>/dev/null || { echo "runner exited before publishing the KV table"; wait "${RUNNER_PID}"; exit 1; }
+    sleep 5
+  done
+  [ -f "${TABLE_PATH}" ] || { echo "KV table not published within ${TABLE_WAIT_SECS}s"; exit 1; }
+elif [ "${PP_RANKS}" -eq 0 ]; then
+  # No table is published; the producer's H2D connect waits out bring-up instead, so only this run's
+  # rankfile is needed. TTRUN_CWD persists across runs, so an older rankfile does not count.
+  for _ in $(seq 1 60); do
+    [ -n "$(find "${TTRUN_CWD}"/generated/ttrun -name rankfile -newer "${LAUNCH_MARK}" 2>/dev/null)" ] && break
+    kill -0 "${RUNNER_PID}" 2>/dev/null || { echo "runner exited before tt-run wrote its rankfile"; wait "${RUNNER_PID}"; exit 1; }
+    sleep 5
+  done
+fi
 
 # A PP binding already fixed the rank count and host; only discovery has to parse them back out.
 if [ "${PP_RANKS}" -eq 0 ]; then
@@ -310,9 +336,20 @@ if [ "${PP_RANKS}" -eq 0 ]; then
   EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
 fi
 
+# With KV-PCC every rank's host runs a validator; without it one feeder on rank 0's host is the whole
+# producer, and its H2D connect is what waits for the runner to finish loading.
+PRODUCER_RANKS=${EXPECTED_RANKS}
+PRODUCER_HOSTS=${HOSTS}
+H2D_CONNECT_TIMEOUT=120
+if [ "${KV_PCC}" = 0 ]; then
+  PRODUCER_RANKS=1
+  PRODUCER_HOSTS=${HOSTS%%,*}
+  H2D_CONNECT_TIMEOUT=${TABLE_WAIT_SECS}
+fi
+
 set +e
 "${MPIRUN}" \
-  -np "${EXPECTED_RANKS}" --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
+  -np "${PRODUCER_RANKS}" --host "${PRODUCER_HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
   --output-filename "${RANKLOGS}/producer" \
   --mca btl self,tcp --mca btl_tcp_if_include "${TCP_INTERFACE}" \
   -x PATH -x LD_LIBRARY_PATH \
@@ -327,10 +364,10 @@ set +e
     export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_PCC_SUMMARY_DIR='${PCC_DIR}'; \
-    export PREFILL_PRODUCER_CHECK_PCC=1; \
+    export PREFILL_PRODUCER_CHECK_PCC=${KV_PCC}; \
     export PREFILL_SEND_SHUTDOWN=1; \
     export PREFILL_STANDALONE_CHUNKED_PCC=${PCC_THRESHOLD}; \
-    export PREFILL_H2D_CONNECT_TIMEOUT=120; \
+    export PREFILL_H2D_CONNECT_TIMEOUT=${H2D_CONNECT_TIMEOUT}; \
     ${NUM_LAYERS_ENV} \
     ${PRODUCER_ENV} \
     export LOGURU_LEVEL=INFO; \
@@ -362,7 +399,10 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
 fi
 
 PCC_GATE_RC=0
-python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" "${PRODUCER_USERS}" <<'PY' || PCC_GATE_RC=$?
+if [ "${KV_PCC}" = 0 ]; then
+  echo "PCC GATE SKIPPED: ${MODEL} has no engine-owned KV cache to validate"
+else
+  python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" "${PRODUCER_USERS}" <<'PY' || PCC_GATE_RC=$?
 import glob, json, math, os, sys
 
 pcc_dir, expected, threshold = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
@@ -411,6 +451,7 @@ if bad:
     sys.exit(1)
 print(f"PCC GATE PASS: {len(files)}/{expected} ranks ok, all caches >= threshold")
 PY
+fi
 
 if [ "${PROD_RC}" -ne 0 ]; then
   exit "${PROD_RC}"
