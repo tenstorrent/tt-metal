@@ -131,7 +131,7 @@ _KERNEL = r"""
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/dataflow/circular_buffer.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_sqrt.h"
 #endif
