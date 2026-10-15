@@ -13,8 +13,11 @@ block fewer backward, so the backward port is idle for the last block-time. That
 
 So the backward port can run a final phase after its sends: own partial + forward arrival + backward arrival -> output.
 
-Not a fit (keep today's final cores, selected by an option): odd G (both ports send `(G - 1) / 2`, no idle block-time),
-lines (middle chips' ports are busy to the end), G = 2.
+Not a fit (keep today's final cores, selected by an option): odd G (both ports send `(G - 1) / 2`, no idle block-time).
+
+Lines (and G = 2, always a line) fit too but are not built: a line end's outward port sends nothing all op, and a middle
+chip p's ports finish their G - 1 - p and p relays as (or before) its own block's arrivals stream in, at block-times
+G - p and p + 1, while the op runs G - 1 block-times on the end links.
 
 ## The cost to watch
 
