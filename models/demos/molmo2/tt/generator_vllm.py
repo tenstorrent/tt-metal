@@ -237,11 +237,11 @@ class Molmo2ForConditionalGeneration(WarmupForwardMixin, SupportsMultiModal):
         #     =32768. The "position-agnostic" claim breaks under the server (concurrent
         #     users on one model) — produces garbage decode at S≪32768. Lazy capture
         #     at first request's actual position works.
-        from models.demos.molmo2.tt.model import PREFILL_BUCKETS
+        from models.demos.molmo2.tt.model import WARMUP_BUCKETS
 
         for dp_idx, m in enumerate(models):
-            logger.info(f"[warmup {dp_idx + 1}/{len(models)}] JIT prefill buckets {PREFILL_BUCKETS}")
-            m.warmup_all_buckets(bucket_sizes=PREFILL_BUCKETS, use_trace=False)
+            logger.info(f"[warmup {dp_idx + 1}/{len(models)}] JIT prefill buckets {WARMUP_BUCKETS}")
+            m.warmup_all_buckets(bucket_sizes=WARMUP_BUCKETS, use_trace=False)
             logger.info(f"[warmup {dp_idx + 1}/{len(models)}] vision compile")
             m.warmup_vision_compile()
         logger.info("All replicas warmed up (JIT prefill + vision). Decode trace will capture lazily.")

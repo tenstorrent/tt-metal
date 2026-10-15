@@ -104,7 +104,7 @@ class TtMolmo2TextAttention(LightweightModule):
 
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
-            dtype=self.dtype,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -121,7 +121,7 @@ class TtMolmo2TextAttention(LightweightModule):
 
         self.wo = ttnn.as_tensor(
             pt_wo,
-            dtype=self.dtype,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
