@@ -142,6 +142,7 @@
       timeout: 60
   team: ttnn
   budget_type: sanity
+  llk_sanitizer: true
   owner_id: U085GDCAZTN # Pavle Josipovic
 
 - name: "ttnn pool group"

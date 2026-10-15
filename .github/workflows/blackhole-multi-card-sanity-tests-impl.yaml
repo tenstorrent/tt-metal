@@ -34,6 +34,11 @@ on:
         type: boolean
         default: false
         description: "Enable LLK asserts"
+      enable-llk-sanitizer:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK sanitizer"
       ref:
         required: false
         type: string
@@ -134,6 +139,7 @@ jobs:
           env-from-image: ${{ inputs.prebuilt-image != '' }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+          enable-llk-sanitizer: ${{ inputs.enable-llk-sanitizer || false }}
           # PERF jobs (tracy profiler on) need a wider hang-detection window because
           # the heavy traffic (e.g. layer3 isl_6k4 combine) can stall the NOC for >5s
           # under genuine bandwidth pressure without being deadlocked. Other jobs
