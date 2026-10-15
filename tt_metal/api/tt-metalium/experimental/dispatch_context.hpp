@@ -109,6 +109,11 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program);
 // device; each call overwrites the previous config.
 void ConfigureProgramWithoutLaunch(IDevice* device, Program& program);
 
+// Compile a program's kernels for a device without allocating, configuring or launching it. Builds
+// into the on-disk JIT cache and touches no command-queue state, so distinct programs can compile
+// concurrently. A no-op if the program is already compiled for this device's build key.
+void CompileProgram(IDevice* device, Program& program);
+
 // A relocatable capture of the kernel config a core currently runs. The detailed launch-message
 // layout remains private to Metal; consumers get only the source block's L1 range and an opaque
 // copy of the launch kernel config needed to restore it at another base.
