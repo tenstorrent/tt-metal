@@ -119,8 +119,8 @@ class GLM53Adapter(MLAPrefillAdapter):
 
     @property
     def default_sparse_kv_cache_format(self):
-        """Uncompressed bf16 ROW_MAJOR KVPE cache unless the caller asks for another format (the runner's
-        ``PREFILL_SCALED_FP8_KV_CACHE=1`` selects packed scaled FP8)."""
+        """Uncompressed bf16 ROW_MAJOR KVPE cache unless the caller asks for another format (the runner
+        requests packed scaled FP8 unless ``PREFILL_SCALED_FP8_KV_CACHE=0``)."""
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
         return MlaKvCacheFormat.BF16_RM
