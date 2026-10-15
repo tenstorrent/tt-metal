@@ -72,6 +72,9 @@ void MorehAdamW::step() {
 
         auto gradients = tensor_ptr->get_grad();
 
+        // By value: the ops below relabel their outputs (see optimizers::restore_topology).
+        const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
+
         auto output_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::HALF);
         ttnn::moreh_adamw(
             tensor_ptr->get_value(autograd::PreferredPrecision::HALF),
@@ -95,6 +98,7 @@ void MorehAdamW::step() {
         tensor_ptr->set_value(output_tensor);
         first_moment_ptr->set_value(first_moment);
         second_moment_ptr->set_value(second_moment);
+        restore_topology({tensor_ptr, first_moment_ptr, second_moment_ptr}, topology);
     }
 }
 
@@ -190,6 +194,9 @@ void AdamWComposite::step() {
 
         auto gradients = tensor_ptr->get_grad();
 
+        // By value: the ops below relabel their outputs (see optimizers::restore_topology).
+        const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
+
         if (m_config.weight_decay != 0.0F) {
             auto weight_decay_update = ttnn::multiply(
                 tensor_ptr->get_value(autograd::PreferredPrecision::HALF), m_config.weight_decay * m_config.lr);
@@ -252,6 +259,14 @@ void AdamWComposite::step() {
 
             tensor_ptr->set_value(result);
             kahan_compensation_ptr->set_value(compensation_tensor);
+        }
+
+        restore_topology({tensor_ptr, first_moment_ptr, second_moment_ptr}, topology);
+        if (m_config.amsgrad) {
+            restore_topology({m_max_exp_avg_sq.at(key)}, topology);
+        }
+        if (m_config.kahan_summation) {
+            restore_topology({m_kahan_compensation.at(key)}, topology);
         }
     }
 }
