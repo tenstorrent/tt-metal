@@ -1396,7 +1396,7 @@ class GATHER_COMPRESS_PARAMS(TemplateParameter):
     def convert_to_cpp(self) -> str:
         mode = "COMPRESS" if self.compress else "GATHER"
         return (
-            f"constexpr auto GATHER_COMPRESS_MODE = GatherCompressModeSelect::{mode};\n"
+            f"constexpr auto GATHER_COMPRESS_MODE = ckernel::GatherCompressModeSelect::{mode};\n"
             f"constexpr std::uint32_t GATHER_COMPRESS_ELEM_CNT = {self.elem_cnt};"
         )
 
