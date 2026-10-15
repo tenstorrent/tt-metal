@@ -45,9 +45,10 @@ jobs:
           export LD_LIBRARY_PATH="$PWD/build/lib" PYTHONPATH="$PWD:$PWD/ttnn"
           timeout 600 uv build --wheel --out-dir ../wheelhouse
           sha256sum ../wheelhouse/*.whl > ../evidence/wheel.sha256
-          uv pip install --python /opt/venv/bin/python -e .
-          uv pip install --python /opt/venv/bin/python transformers==5.16.1
-          uv pip freeze --python /opt/venv/bin/python > ../evidence/environment.txt
+          mkdir -p ../runtime-prefix/runtime-evidence
+          export UV_CACHE_DIR="$PWD/../runtime-prefix/uv-cache"
+          timeout 900 bash ../validation/.ci/flash-current-runtime/runtime_setup.sh "$PWD" "$PWD/../runtime-prefix" "$PWD/../validation/.ci/flash-current-runtime" "$(realpath ../wheelhouse/*.whl)"
+          cp -a ../runtime-prefix/runtime-evidence/. ../evidence/
           git diff --exit-code HEAD
       - name: Actual current-source imports and original host controls, no devices
         working-directory: source
@@ -55,8 +56,6 @@ jobs:
           set -euo pipefail
           export TT_METAL_HOME="$PWD" LD_LIBRARY_PATH="$PWD/build/lib" PYTHONPATH="$PWD:$PWD/ttnn"
           export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-          timeout 120 /opt/venv/bin/python ../validation/.ci/flash-current-runtime/model_config.py ../evidence/model-config
-          timeout 600 /opt/venv/bin/python ../validation/.ci/flash-current-runtime/runtime_host.py "$PWD" ../evidence/host
           /opt/venv/bin/python - <<'PY'
           import json
           from pathlib import Path
