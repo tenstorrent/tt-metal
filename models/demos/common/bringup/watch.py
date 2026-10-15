@@ -28,6 +28,7 @@ EVENT, TIMEOUT, NOT_RUNNING = 0, 2, 3
 PATTERN = re.compile(
     r"gate PASS|gate FAIL|HANG|STOPPED|stopped tasks|WAITING FOR A PERSON|paused before|DEFERRED|deferral rejected"
     r"|KNOWLEDGE CONTRADICTED|Traceback|nothing left to run|complete with|ORCHESTRATOR_EXIT|attempt [2-9]\d*:"
+    r"|fix attempt \d+:"  # a scripted step (golden, box, ladder) failed its gate: never routine
 )
 GATES = re.compile(r"gate PASS|gate FAIL")
 PID_FILE = "ORCHESTRATOR.pid"
