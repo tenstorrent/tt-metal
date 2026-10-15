@@ -1588,6 +1588,8 @@ extern volatile std::uint32_t __instrn_buffer[];
 #define TTI_TBUFCMD __instrn_buffer[0] = __builtin_rvtt_tbufcmd()
 #undef TTI_TRNSPSRCB
 #define TTI_TRNSPSRCB __instrn_buffer[0] = __builtin_rvtt_trnspsrcb()
+#undef TTI_RAREB
+#define TTI_RAREB __builtin_rvtt_rareb()
 
 #undef TT_PACR
 #define TT_PACR(CfgContext, RowPadZero, DstAccessMode, AddrMode, AddrCntContext, ZeroWrite, ReadIntfSel, OvrdThreadId, Concat, CtxtCtrl, Flush, Last) \
