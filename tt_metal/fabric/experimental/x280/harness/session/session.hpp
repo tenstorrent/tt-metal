@@ -191,6 +191,23 @@ inline void boot_held_chips(
     }
 }
 
+/**
+ * The runtime configuration `open_or_skip` opens `cfg` with: RequirePrepared, so
+ * a case never primes; and for the prepared suites and the PacketInjection
+ * layout, exactly the 14-way profile, which a chip at another shape refuses.
+ */
+inline x280::RuntimeOpenConfig runtime_open_config(const OpenConfig& cfg) {
+    x280::RuntimeOpenConfig config{
+        .priming_policy = x280::LimEccPrimingPolicy::RequirePrepared,
+        .lim_layout = cfg.lim_layout,
+    };
+    if (cfg.prepared_suite_requested || cfg.lim_layout == x280::LimLayout::PacketInjection) {
+        config.lim_shape = x280::LimShape{.lim_ways = x280::kPreparedLimWays};
+        config.shape_change_policy = x280::LimShapeChangePolicy::RequireExact;
+    }
+    return config;
+}
+
 // The whole SetUp pattern in one call. Emits GTEST_SKIP() / ASSERT_* into
 // the calling test case exactly the way the pre-harness code did. Returns
 // void because GTEST_SKIP() expands to `return void_expr;` and cannot sit
@@ -210,15 +227,7 @@ inline void open_or_skip(Fixture& f, const OpenConfig& cfg) {
             std::nullopt,
             std::vector<tt::ChipId>(cfg.mesh_device_ids.begin(), cfg.mesh_device_ids.end())));
     }
-    x280::RuntimeOpenConfig runtime_config{
-        .priming_policy = x280::LimEccPrimingPolicy::RequirePrepared,
-        .lim_layout = cfg.lim_layout,
-    };
-    if (cfg.prepared_suite_requested || cfg.lim_layout == x280::LimLayout::PacketInjection) {
-        runtime_config.lim_shape = x280::LimShape{.lim_ways = x280::kPreparedLimWays};
-        runtime_config.shape_change_policy = x280::LimShapeChangePolicy::RequireExact;
-    }
-    auto opened = x280::X280Runtime::open(f.mesh, runtime_config);
+    auto opened = x280::X280Runtime::open(f.mesh, runtime_open_config(cfg));
     if (!opened.runtime) {
         std::string why = opened.diagnostic;
         if (opened.requires_reset()) {
