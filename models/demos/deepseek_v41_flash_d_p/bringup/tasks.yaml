@@ -1906,6 +1906,13 @@ tasks:
     - ffn_collapse
     - ffn_norm
     layer: 1
+  frozen:
+    at: '2026-10-15T21:16:32'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_13_ffn_norm.py: 6cb4d1b19f6f91236ddc2b718efd5ce0fd3a12a9c18fad79566036b751efbd0f
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa_engram.router
   title: swa_engram router (router) on device, layer 1
   step: implement
