@@ -641,3 +641,20 @@ def test_v41_candidate_scores(mesh_device, device_params, nk, start):
         diff2 = (dev2[finite2] - ref2[finite2]).abs()
         bound2 = ref2[finite2].abs() * 2**-7 + magnitude2[finite2] * 2**-6 + 1e-6
         assert bool((diff2 <= bound2).all()), float((diff2 / bound2).max())
+    # the index-K as persistent block pages (the decode pool's form), the queried slot's block 0 at a page offset
+    with phase("block pages", what="device candidate scores from block pages at a base"):
+        base_blocks = 3 * 256  # another slot's pages before this one's
+        pages = torch.cat(
+            [torch.randn(base_blocks * 8, 128).to(torch.bfloat16), k, torch.zeros(32, 128).to(torch.bfloat16)]
+        )
+        dev_pages = ttnn.from_torch(
+            pages.reshape(1, 1, -1, 8 * 128),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        dev3 = _per_query(
+            candidate_scores(args[0], args[1], dev_pages, args[3], args[4], start, t_rows, block_base=base_blocks)
+        )
+        assert torch.equal(dev3[0, 0].float(), dev), "the block pages at a base differ from the row-major cache"

@@ -203,22 +203,23 @@ def _largest_divisor(n: int, options=(8, 4, 2, 1)) -> int:
     return next(b for b in options if n % b == 0)
 
 
-def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int):
+def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_base: int = 0):
     """A ratio-1 candidate index source's score over each query's candidate rows only.
 
     ``q`` [1, 1, R, 32 * 128] bf16 row-major (the query's 32 heads, head-major, after RoPE and QDQ), ``w`` [1, 1, R, 32]
-    bf16 row-major (scaled head weights), ``k`` [1, 1, T, 128] bf16 row-major (the index-K cache, T a multiple of 8),
-    ``ids`` [1, 1, R, K] uint32 row-major (candidate block ids, sentinel tail), all DRAM-interleaved; ``pin`` the
-    per-chip ``V41ChunkTables.query_first()`` or a per-row page (``_pin_rows``: ``p_i = start + pin[i]``, every
-    row visible to a sentinel entry); ``start`` the chunk start; ``rows_visible`` the index-K rows any query
-    of the chunk can see (a multiple of 8, at most T). -> bf16 row-major [1, 1, R, K * 8]: element
-    8 r + j of row i is ``sum_h w[i, h] * relu(q[i, h] . k[t])`` for ``t = 8 ids[i, r] + j``, -inf where
-    ``ids[i, r]`` is the sentinel or ``t > p_i`` (the query's position, ``start + query_first + i``), i.e.
-    ``gather_runs(score, ids, 8)`` of the full masked score. The visible index-K is first copied into blocks of 8 rows
-    per page ([rows_visible / 8, 8 * 128]: a whole block is one 2 KB DRAM read; random 256-byte row reads are bound
-    by the DRAM request rate, measured 20 ms vs ~5 ms of bandwidth for 640 x 16,384 rows); then one op
-    (kernels/candscore_*): per query its candidate blocks are gathered and tilized, ``relu(Q @ K^T)`` rounded to bf16
-    per head, and the heads summed by ``W @ S`` in fp32 (HiFi4)."""
+    bf16 row-major (scaled head weights), ``k`` the index-K cache: [1, 1, T, 128] bf16 row-major (T a multiple of
+    8) or already as block pages [1, 1, P, 8 * 128] (the decode pool's ``index_k_blocks``: ``block_base`` the page of
+    the slot's block 0, no copy), ``ids`` [1, 1, R, K] uint32 row-major (candidate block ids, sentinel tail), all
+    DRAM-interleaved; ``pin`` the per-chip ``V41ChunkTables.query_first()`` or a per-row page (``_pin_rows``:
+    ``p_i = start + pin[i]``, every row visible to a sentinel entry); ``start`` the chunk start; ``rows_visible``
+    the index-K rows any query of the chunk can see (a multiple of 8, at most the rows from the slot's block 0).
+    -> bf16 row-major [1, 1, R, K * 8]: element 8 r + j of row i is ``sum_h w[i, h] * relu(q[i, h] . k[t])`` for
+    ``t = 8 ids[i, r] + j``, -inf where ``ids[i, r]`` is the sentinel or ``t > p_i`` (the query's position,
+    ``start + query_first + i``), i.e. ``gather_runs(score, ids, 8)`` of the full masked score. A row-major cache
+    is first copied into blocks of 8 rows per page ([rows_visible / 8, 8 * 128]: a whole block is one 2 KB DRAM
+    read; random 256-byte row reads are bound by the DRAM request rate, measured 20 ms vs ~5 ms of bandwidth for
+    640 x 16,384 rows); then one op (kernels/candscore_*): per query its candidate blocks are gathered and tilized,
+    ``relu(Q @ K^T)`` rounded to bf16 per head, and the heads summed by ``W @ S`` in fp32 (HiFi4)."""
     for t, dtype, what in ((q, ttnn.bfloat16, "query"), (w, ttnn.bfloat16, "weights"), (k, ttnn.bfloat16, "index-K")):
         _check_row_major(t, dtype, f"candidate_scores {what}")
     _check_row_major(ids, ttnn.uint32, "candidate_scores ids")
@@ -226,15 +227,19 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int):
     pin_rows = _pin_rows(pin, rows)
     pin_slot = _round_up(max(32, pin_rows * 4), 64)
     assert q.shape[3] == 32 * 128 and (w.shape[2], w.shape[3]) == (rows, 32) and ids.shape[2] == rows
-    assert k.shape[3] == 128 and rows_visible % CANDSCORE_BLOCK == 0 and rows_visible <= k.shape[2]
+    assert rows_visible % CANDSCORE_BLOCK == 0, rows_visible
     tile_rows = nk * CANDSCORE_BLOCK // 32
     assert tile_rows * 32 == nk * CANDSCORE_BLOCK, f"{nk} candidate blocks do not fill whole tiles"
     batch = _largest_divisor(tile_rows)
     per_read = _largest_divisor(tile_rows, (8, 4, 2, 1))
     nblocks = rows_visible // CANDSCORE_BLOCK
-    if rows_visible < k.shape[2]:
-        k = ttnn.slice(k, [0, 0, 0, 0], [1, 1, rows_visible, 128])
-    k = ttnn.reshape(k, [1, 1, nblocks, CANDSCORE_BLOCK * 128])
+    if k.shape[3] == CANDSCORE_BLOCK * 128:  # block pages already (persistent): no copy
+        assert block_base + nblocks <= k.shape[2], (block_base, nblocks, tuple(k.shape))
+    else:
+        assert k.shape[3] == 128 and block_base == 0 and rows_visible <= k.shape[2], (tuple(k.shape), rows_visible)
+        if rows_visible < k.shape[2]:
+            k = ttnn.slice(k, [0, 0, 0, 0], [1, 1, rows_visible, 128])
+        k = ttnn.reshape(k, [1, 1, nblocks, CANDSCORE_BLOCK * 128])
     device = q.device()
     out = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, 1, rows, nk * CANDSCORE_BLOCK]),
@@ -254,6 +259,7 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int):
             first,
             count,
             nblocks,
+            block_base,
         ]
         writer_args[cx][cy] = [
             ids.buffer_address(),

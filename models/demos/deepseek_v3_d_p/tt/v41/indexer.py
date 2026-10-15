@@ -364,6 +364,42 @@ class TtV41Indexer(LightweightModule):
         _, width = self._width(start, qr.shape[2] * self.sp)
         return candidate_scores(q, w, index_k, ids, tables.query_first(), start, width)
 
+    def decode_query(self, q, w):
+        """The decode tile's query and head weights (``q`` [1, heads, ROWS, 128] and ``w`` [1, 1, ROWS, heads] as
+        the step builds them) in ``candidate_scores``'s row-major forms."""
+        return ttnn.to_layout(ttnn.experimental.nlp_concat_heads(q), ttnn.ROW_MAJOR_LAYOUT), ttnn.to_layout(
+            w, ttnn.ROW_MAJOR_LAYOUT
+        )
+
+    def select_user_in_blocks(self, q_rm, w_rm, blocks, newest, ids, user: int, rows: int, block_base: int, k: int):
+        """A candidate index source's top-k for one user of the decode tile, scoring its candidate rows only
+        (``candidate_scores`` over the pool's block pages) -> [1, 1, 1, k] uint32 row-major row ids (sentinel tail).
+
+        ``q_rm``, ``w_rm``: ``decode_query``; ``blocks``: the pool's block pages; ``newest`` [1, 1, 1, ROWS] the
+        tile's per-row pins; ``ids`` [1, 1, ROWS, K] the blocks the candidate source published against this user's
+        keys (row ``user`` the user's own); ``rows`` the user's rows in the pool (the candidate scorer's visible
+        bound; its pin masks the rows past the user's newest); ``block_base`` the page of the user's block 0. The
+        scorer works a query row per core, so the user's K blocks are split over ROWS rows of K / ROWS blocks of
+        the same query (ROWS cores, a ROWS-th of the traffic of scoring every tile row against this user), and the
+        ROWS x (K / ROWS x 8) scores are one row again for the top-k."""
+        assert self.uses_candidates and self.ratio == 1
+        n, per = ids.shape[2], ids.shape[3] // ids.shape[2]
+        assert per * n == ids.shape[3] and (per * self.config.CANDIDATE_BLOCK_SIZE) % 32 == 0, (tuple(ids.shape), n)
+        row = [0, 0, user, 0]
+        q_u = ttnn.slice(q_rm, row, [1, 1, user + 1, q_rm.shape[3]])
+        w_u = ttnn.slice(w_rm, row, [1, 1, user + 1, w_rm.shape[3]])
+        ids_u = ttnn.slice(ids, row, [1, 1, user + 1, ids.shape[3]])  # [1, 1, 1, K]
+        pin_u = ttnn.slice(newest, [0, 0, 0, user], [1, 1, 1, user + 1])  # [1, 1, 1, 1]
+        q_n, w_n = ttnn.concat([q_u] * n, dim=2), ttnn.concat([w_u] * n, dim=2)
+        pin_n = ttnn.concat([pin_u] * n, dim=3)
+        ids_n = ttnn.reshape(ids_u, [1, 1, n, per])  # row r: blocks [r * per, (r + 1) * per) of the user's
+        scores = candidate_scores(q_n, w_n, blocks, ids_n, pin_n, 0, rows, block_base=block_base)  # [1, 1, n, per*8]
+        rows_u = ttnn.reshape(scores, [1, 1, 1, n * per * self.config.CANDIDATE_BLOCK_SIZE])
+        # the top-k kernels take a tile of rows: the user's row first, the rest -inf (sentinel picks)
+        rows_n = ttnn.pad(rows_u, [(0, 0), (0, 0), (0, n - 1), (0, 0)], float("-inf"))
+        ids_rep = ttnn.concat([ids_u] * n, dim=2)
+        return ttnn.slice(self._topk_in_rows(rows_n, ids_rep, k), [0, 0, 0, 0], [1, 1, 1, k])
+
     def _topk_in_blocks(self, score, ids, k: int):
         """Top-k rows of ``score`` among each query's candidate blocks ``ids`` [1, 1, R, K] uint32 row-major (sentinel
         tail) -> [1, 1, R, k] uint32 row-major row ids (sentinel tail)."""

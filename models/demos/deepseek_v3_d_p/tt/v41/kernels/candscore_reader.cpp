@@ -10,11 +10,13 @@
 // zero) and then, per tile-row of 32 candidate rows (4 blocks of 8 in rank order), the 32 index-K rows as a
 // [32, 128] row-major block: one 2 KB read per block from the blocked index-K (bf16 row-major [T / 8, 8 * 128], one
 // page per block of 8 rows: whole-block reads, as random 256-byte row reads are DRAM-request bound at ~4x the
-// bandwidth time). A sentinel id (>= nblocks) reads block 0 instead (finite values; the writer masks it to -inf).
+// bandwidth time). Block id c is page block_base + c: the pages of one user's slot in a pool of block pages (the
+// decode pool, tt/v41/pool.py index_k_blocks) or 0 for a cache of one sequence. A sentinel id (>= nblocks) reads
+// the slot's block 0 instead (finite values; the writer masks it to -inf).
 //
 // compile_time_args = [cb_qrm, cb_wrm, cb_krm, cb_ids, K, ROWS_PER_READ, TensorAccessorArgs(q)...,
 //                      TensorAccessorArgs(w)..., TensorAccessorArgs(ids)..., TensorAccessorArgs(k_blocks)...]
-// runtime args      = [q_addr, w_addr, ids_addr, k_addr, row_start, row_count, nblocks]
+// runtime args      = [q_addr, w_addr, ids_addr, k_addr, row_start, row_count, nblocks, block_base]
 
 #include <cstdint>
 
@@ -29,6 +31,7 @@ void kernel_main() {
     const uint32_t row_start = get_arg_val<uint32_t>(4);
     const uint32_t row_count = get_arg_val<uint32_t>(5);
     const uint32_t nblocks = get_arg_val<uint32_t>(6);
+    const uint32_t block_base = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_qrm = get_compile_time_arg_val(0);
     constexpr uint32_t cb_wrm = get_compile_time_arg_val(1);
@@ -85,7 +88,7 @@ void kernel_main() {
             uint32_t l1 = krm.get_write_ptr();
             for (uint32_t b = c0 * 4; b < (c0 + ROWS_PER_READ) * 4; ++b) {
                 uint32_t c = id[b];
-                c = c < nblocks ? c : 0;
+                c = block_base + (c < nblocks ? c : 0);
                 noc_async_read(k.get_noc_addr(c, 0), l1, BLOCK_BYTES);
                 l1 += BLOCK_BYTES;
             }

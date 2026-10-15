@@ -614,15 +614,30 @@ class TtV41BatchDecoder(TtV41Decoder):
         k = pool.index_k[source]  # [users, 1, cap + 32, idim], tiled by every write: no conversion of the history
         config = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=min(256, cap + 32), head_group_size=0)
         parts, published = [], {} if indexer.is_candidate_source else None
+        blocks_of = pool.index_k_blocks.get(source)
+        in_blocks = (
+            blocks_of is not None and candidates is not None and any(c.ids is not None for c in candidates.values())
+        )
+        q_rm, w_rm = indexer.decode_query(q, w) if in_blocks else (None, None)
         for u in range(self.users):
-            # every row sees every key (the causal window starts past the slot's rows); the mask then hides the rows
-            # past each user's visible count, and the pad tile. Row u is the user's; the other rows' selections
-            # (and pins) are other users' queries against this user's keys, discarded
+            # Row u is the user's; the other rows' selections (and pins) are other users' queries against this
+            # user's keys, discarded
+            mine = candidates[u] if candidates is not None else None
+            if in_blocks and mine.ids is not None:
+                # a candidate index source over published blocks: score the user's candidate rows only, from the
+                # pool's block pages (the kernel masks the rows past the user's pin)
+                base = u * (cap + 32) // cfg.CANDIDATE_BLOCK_SIZE
+                topk = indexer.select_user_in_blocks(
+                    q_rm, w_rm, blocks_of, pins.newest, mine.ids, u, cap, base, cfg.INDEX_TOPK
+                )
+                parts.append(topk)
+                continue
+            # every row sees every key (the causal window starts past the slot's rows); the mask then hides the
+            # rows past each user's visible count, and the pad tile
             score = ttnn.experimental.indexer_score_dsa(
                 q, k, w, chunk_start_idx=cap, seq_shard_axes=[], program_config=config, cache_batch_idx=u
             )
             score = ttnn.to_layout(ttnn.add(ttnn.to_layout(score, ttnn.TILE_LAYOUT), mask), ttnn.ROW_MAJOR_LAYOUT)
-            mine = candidates[u] if candidates is not None else None
             topk, blocks = indexer.select(score, pins, 0, cfg.INDEX_TOPK, mine)
             if published is not None:
                 published[u] = blocks
