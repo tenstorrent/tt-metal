@@ -168,7 +168,7 @@ jobs:
           shutdown=make_arg_parser(FlexibleArgumentParser()).parse_args(['--model','unused','--shutdown-timeout','60'])
           assert AsyncEngineArgs.from_cli_args(shutdown).shutdown_timeout == 60
           (out/'observer-proof.json').write_text(json.dumps({'shutdown_timeout':60,'original_class_identity':True,'warmup_unarmed':True,'tt_fds':tt_fds(),'observer_sha':hashlib.sha256(Path('/tmp/observer/observer.py').read_bytes()).hexdigest(),'terminal_sha':hashlib.sha256(Path('/tmp/observer/terminal_observer.py').read_bytes()).hexdigest(),'early_sha':hashlib.sha256(Path('/tmp/observer/early_observer.py').read_bytes()).hexdigest(),'middle_sha':hashlib.sha256(Path('/tmp/observer/middle_observer.py').read_bytes()).hexdigest(),'last_sha':hashlib.sha256(Path('/tmp/observer/last_observer.py').read_bytes()).hexdigest()},indent=2))
-          rc = pytest.main(['--noconftest', '-q', '/tmp/observer/test_observer.py', '/tmp/observer/test_rows.py', '/tmp/observer/test_terminal_observer.py', '/tmp/observer/test_terminal_rows.py', '/tmp/observer/test_baseline.py', '/tmp/observer/test_last_observer.py', '/tmp/observer/test_last_rows.py', '/tmp/observer/test_middle_observer.py', '/tmp/observer/test_baseline64.py', '/tmp/observer/test_early_observer.py', '/tmp/observer/test_baseline80.py', '--junitxml='+str(out/'host.xml')])
+          rc = pytest.main(['--noconftest', '-q', 'models/tt_transformers/tests/test_batched_prefill_slots.py', '--junitxml='+str(out/'host.xml')])
           assert _LayerAdapter.__call__.__wrapped__ is observed_model.middle.patch[2]
           observed_model.early.restore()
           assert _LayerAdapter.__call__.__wrapped__ is observed_model.last.patches[0][3]
