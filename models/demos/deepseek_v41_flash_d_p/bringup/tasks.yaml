@@ -329,6 +329,13 @@ tasks:
     - attn_collapse
     - attn_norm
     layer: 0
+  frozen:
+    at: '2026-10-15T12:54:34'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_03_attn_norm.py: 5c3c9f5fb4239ad9fc3b9bf842cef83b9c333acec004d24e926c995cfb601370
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.q_a
   title: swa q_a (op) on device, layer 0
   step: implement
