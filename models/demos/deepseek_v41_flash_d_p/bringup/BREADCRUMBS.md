@@ -524,3 +524,21 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   FAIL block before the real pass is the precompile collect pass (K-52).
 - OV-4: DS41-20 already states the F73 fix; nothing to change.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_rows.py`
+
+## C.swa_engram.engram_kv implement (attempt 1)
+- `tt/engram_kv.py:TtEngramKv`: rows [1, 1, S/SP, 6144] (bf16 from TtEngramRows, fp32 from the harness) ->
+  typecast fp32 -> `tt/quant.fp8_qdq` (DS41-13, bit-exact) -> one `ttnn.linear` with the chip's wkv columns
+  [6144, 5 x H/TP] bf16 (fp8 x ue8m0 dequantized at load, asserted bf16-exact), HiFi4 + fp32 acc, fp32 out. wkv split
+  by output, chip column c = its hidden slice of each of the 5 H-wide blocks (`layout.streams_cols_to_chip_major(...,
+  n=5)`), so engram_add reads keys / value in the residual's hidden split, no exchange. TP read from mesh.shape
+  (H/TP = 2560 on 2x2, 1280 on 4x4 / 8x4 / 2x4: all tile-aligned).
+- fp8 act quant of the rows: identity on the layer-1 golden (host check: act_quant_dequant(rows, 32) == rows, 0 of
+  12.6M values changed, no group with amax < 1e-4). Kept on by default because the auto checks' second inputs are
+  not table rows; setting ENGRAM_KV_QDQ (qdq | skip, max precision qdq) lets the owner drop it as a perf pick.
+- layout.py: `streams_cols_to_chip_major` / `chip_major_to_streams_cols` take `n` (default HC); `blocks_to_host`
+  (harness boundary [S, 5H]). hooks.py: `_engram_kv_host_fn`, `_device_step_fn("engram_kv")`,
+  DEVICE_STEPS["swa_engram"] += engram_kv.
+- Gate: PASS. pcc 0.999999; vs CPU rel 1.0e-4 (limit 0.0033), vs golden 0.0017 (limit 0.0050); second inputs rel
+  <= 1.9e-4; determinism bit-identical. ttnn.linear auto config (K-51 explicit config not tried; perf step).
+- OV-4: DS41-20 already states the F73 fix; known_issues.md not touched.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_kv.py`

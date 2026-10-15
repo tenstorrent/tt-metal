@@ -1,0 +1,54 @@
+{
+ "used": [
+  {
+   "id": "DS41-13",
+   "how": "reused tt/quant.fp8_qdq for the rows' act_quant_dequant(x, 32) (bit-exact), kept on because the second inputs are not table rows",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-53",
+   "how": "ran the gate and the golden host check with PYTHONPATH=$PWD",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-30",
+   "how": "fed bf16 operands (q(rows) and the bf16-exact dequantized wkv) to the FPU matmul, fp32 out; no TP exchange needed",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "n/a",
+   "evidence": "known_issues.md not touched by this task; DS41-20 already reads '(RESOLVED by the framework, F73) ... 2 x (swap_step_calib) the step's own component error, no cap'"
+  }
+ ],
+ "cited_only": [
+  "DS41-20",
+  "K-51"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa_engram.engram_kv",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T19:33:28",
+  "head": "bb166c74168",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa_engram.engram_kv.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/layout.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
