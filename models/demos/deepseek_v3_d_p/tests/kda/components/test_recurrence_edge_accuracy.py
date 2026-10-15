@@ -24,12 +24,12 @@ HEADS, KEY_DIM, VALUE_DIM = 2, 128, 128
 
 # (case, tokens) -> (output, state) worst-head NRMSE thresholds: 1.5x the values measured on main.
 _THRESHOLDS: dict[tuple[str, int], tuple[float, float]] = {
-    ("bounded", 256): (0.019, 0.042),  # measured 1.24e-02, 2.80e-02
-    ("bounded", 2048): (0.02, 0.051),  # measured 1.28e-02, 3.38e-02
-    ("ceiling", 256): (0.019, 0.018),  # measured 1.24e-02, 1.13e-02
-    ("ceiling", 2048): (0.023, 0.016),  # measured 1.53e-02, 1.03e-02
-    ("ceiling_with_long_memory", 256): (0.017, 0.014),  # measured 1.09e-02, 8.77e-03
-    ("ceiling_with_long_memory", 2048): (0.018, 0.015),  # measured 1.19e-02, 9.95e-03
+    ("baseline", 256): (0.019, 0.042),  # measured 1.24e-02, 2.80e-02
+    ("baseline", 2048): (0.02, 0.051),  # measured 1.28e-02, 3.38e-02
+    ("short_memory", 256): (0.019, 0.018),  # measured 1.24e-02, 1.13e-02
+    ("short_memory", 2048): (0.023, 0.016),  # measured 1.53e-02, 1.03e-02
+    ("short_and_long_memory", 256): (0.017, 0.014),  # measured 1.09e-02, 8.77e-03
+    ("short_and_long_memory", 2048): (0.018, 0.015),  # measured 1.19e-02, 9.95e-03
     ("long_memory", 256): (0.019, 0.015),  # measured 1.21e-02, 9.92e-03
     ("long_memory", 2048): (0.023, 0.02),  # measured 1.49e-02, 1.33e-02
     ("repeated_keys", 256): (0.02, 0.043),  # measured 1.32e-02, 2.86e-02
