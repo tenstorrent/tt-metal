@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 
 import torch
 from loguru import logger
@@ -20,6 +21,14 @@ from .fused_decode.terminal import DecodeTerminal, FusedSamplingGenerator
 from .host_readback import DecodeHostReadback, DecodeHostRows
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
+
+# Sequence-parallel prefill (Transformer._forward_layers_and_head, DecoderLayer._prefill_forward_sp): on by default
+# where every layer supports it; GPT_OSS_PREFILL_SP=0 keeps the residual stream replicated.
+PREFILL_SP_ENV = "GPT_OSS_PREFILL_SP"
+# Shortest prefill (tokens) that runs sequence-parallel. Measured vs replicated (TTFT ms, BH 1x4, L11): 128 45.2 -> 45.8,
+# 1K 66.0 -> 65.7, 8K 281.6 -> 270.2, 32K 1247.6 -> 1203.0, 64K 2891.3 -> 2800.2; below 1K the extra partition /
+# gather ops cost more than the S / TP-row norms and adds save.
+PREFILL_SP_MIN_SEQ = 1024
 
 
 def compute_per_device_vocab(vocab_size, num_tp):
@@ -433,6 +442,21 @@ class Model:
                 f"but model has {len(self.layers)} layers"
             )
 
+        # Sequence-parallel prefill (DecoderLayer._prefill_forward_sp): the residual stream stays split over the mesh row
+        # by sequence rows, so the residual adds and RMSNorms run on S / TP rows per device instead of all S rows.
+        sequence_parallel = (
+            not is_decode
+            and os.getenv(PREFILL_SP_ENV, "1") == "1"
+            and hidden_states.shape[-2] >= PREFILL_SP_MIN_SEQ
+            and len(self.layers) > 0
+            and all(layer.prefill_sequence_parallel_supported(hidden_states, batch_size) for layer in self.layers)
+        )
+        if sequence_parallel:
+            sp_axis = self.layers[0].self_attn.mesh_config.tp_axis
+            full = hidden_states
+            hidden_states = ttnn.mesh_partition(full, 2, cluster_axis=sp_axis)
+            full.deallocate(True)
+
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
@@ -446,7 +470,12 @@ class Model:
                 is_decode=is_decode,
                 user_id=user_id,
                 batch_size=batch_size,
+                sequence_parallel=sequence_parallel,
             )
+        if sequence_parallel:
+            hidden_states = self._gather_prefill_rows(hidden_states, get_last_token, sp_axis)
+            if get_last_token != -1:
+                get_last_token = -1  # already the [1, 1, 32, H] tile of the last token
         logits = hidden_states
 
         if get_last_token != -1:
@@ -498,6 +527,30 @@ class Model:
         # which is forbidden during trace capture.
 
         return logits
+
+    @staticmethod
+    def _gather_prefill_rows(rows, get_last_token, cluster_axis):
+        """End of a sequence-parallel prefill: rows is this device's [1, 1, S / N, H] share of the final residual
+        (device d: rows d * S / N onward). get_last_token == -1: all-gather all S rows. Otherwise return the 32-row tile
+        at get_last_token (tile-aligned): every device slices its local rows at get_last_token % (S / N), an all-gather
+        of those tiles gives [1, 1, 32 N, H], and the tile of device get_last_token // (S / N) is the one."""
+        if get_last_token == -1:
+            full = ttnn.all_gather(rows, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            rows.deallocate(True)
+            return full
+        local = rows.shape[-2]
+        assert get_last_token % 32 == 0 and local % 32 == 0, f"get_last_token {get_last_token}, rows {local}"
+        off = get_last_token % local
+        # A slice covering the whole tensor (one tile of rows per device) aliases its input: no slice then.
+        tile = rows if local == 32 else ttnn.slice(rows, (0, 0, off, 0), (1, 1, off + 32, rows.shape[-1]))
+        tiles = ttnn.all_gather(tile, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if tile is not rows:
+            tile.deallocate(True)
+        rows.deallocate(True)
+        d = get_last_token // local
+        out = ttnn.slice(tiles, (0, 0, 32 * d, 0), (1, 1, 32 * d + 32, tiles.shape[-1]))
+        tiles.deallocate(True)
+        return out
 
     def _page_table_mesh_mapper(self, B):
         """Mesh mapper for per-layer page tables, matching the layout that

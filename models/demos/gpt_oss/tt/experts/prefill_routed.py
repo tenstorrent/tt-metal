@@ -854,12 +854,14 @@ class RoutedPrefillExperts:
         ttnn.deallocate(idx_rm)
         return pieces
 
-    def __call__(self, hidden_states, topk_indices, topk_weights):
+    def __call__(self, hidden_states, topk_indices, topk_weights, scatter=False):
         """hidden_states: [1, 1, S, H] replicated; topk_indices / topk_weights: [S, k] (router top-k path).
         topk_indices are slot ids: id v is expert self.expert_order[v] (the HF id itself when expert_order is None),
         as the MLP's routed router emits them (TopKRouter.with_expert_order).
 
-        Returns the MoE output [1, 1, S, H] (bf8), all-reduced over the mesh row like the dense TP path."""
+        Returns the MoE output [1, 1, S, H] (bf8), all-reduced over the mesh row like the dense TP path; with scatter
+        (sequence-parallel prefill, S % (32 * N) == 0) only the reduce-scatter half: [1, 1, S / N, H], device d holding
+        rows d * S / N onward, bit-identical to those rows of the all-reduce."""
         seq_len = hidden_states.shape[-2]
         assert self.supports(
             hidden_states.shape
@@ -888,6 +890,16 @@ class RoutedPrefillExperts:
             out = ttnn.concat(outputs, dim=2)
             for t in outputs:
                 ttnn.deallocate(t)
+        if scatter:
+            reduced = ttnn.reduce_scatter(
+                out,
+                2,
+                cluster_axis=self.mesh_config.tp_axis,
+                num_links=self.ccl_manager.num_links,
+                topology=ttnn.Topology.Ring,
+            )
+            ttnn.deallocate(out)
+            return reduced
         reduced = ttnn.all_reduce(
             out,
             num_links=self.ccl_manager.num_links,

@@ -194,13 +194,26 @@ class MLP:
         if self.routed_prefill is not None and self.routed_prefill.expert_order is not None:
             self.routed_router = self.router.with_expert_order(self.routed_prefill.expert_order)
 
-    def __call__(self, hidden_states, is_decode):
+    def routed_prefill_supports(self, shape):
+        """Whether a prefill input of this shape takes the routed experts (else the dense prefill path)."""
+        return self.routed_prefill is not None and self.routed_prefill.supports(shape)
+
+    def __call__(self, hidden_states, is_decode, sequence_parallel=False):
         """Forward pass: route -> experts
         Args:
             hidden_states: Input tensor [batch, seq_len, hidden_size]
+            sequence_parallel: prefill on the routed path only: return the output reduce-scattered over the
+                sequence ([1, 1, S / N, H] per device) instead of all-reduced
         Returns:
             Expert output tensor [batch, seq_len, hidden_size]
         """
+        if sequence_parallel:
+            assert not is_decode and self.routed_prefill_supports(hidden_states.shape), "SP prefill needs routed MoE"
+            expert_indices, expert_weights = self.routed_router(hidden_states, True)
+            expert_output = self.routed_prefill(hidden_states, expert_indices, expert_weights, scatter=True)
+            ttnn.deallocate(expert_indices)
+            ttnn.deallocate(expert_weights)
+            return expert_output
         if is_decode and self.indexed_decode:
             # Fused decode (fused_decode/stream.py): the router (top-k + softmax fused) and the experts read the flat
             # norm output of the layer boundary; the routed ids / weights live in shared buffers. Returns this
@@ -212,7 +225,7 @@ class MLP:
             return self.experts(
                 x, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=True
             )
-        if not is_decode and self.routed_prefill is not None and self.routed_prefill.supports(hidden_states.shape):
+        if not is_decode and self.routed_prefill_supports(hidden_states.shape):
             expert_indices, expert_weights = self.routed_router(hidden_states, True)
             expert_output = self.routed_prefill(hidden_states, expert_indices, expert_weights)
             ttnn.deallocate(expert_indices)

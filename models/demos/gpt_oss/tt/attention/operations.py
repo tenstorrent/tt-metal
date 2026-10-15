@@ -124,7 +124,7 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype,
 
 
 def apply_output_projection_allreduce_prefill(
-    tensor, weights: AttentionWeights, activation_dtype, mesh_config, ccl_manager, program_config=None
+    tensor, weights: AttentionWeights, activation_dtype, mesh_config, ccl_manager, program_config=None, scatter=False
 ):
     """Prefill o_proj on the unpadded weight, then one TP all_reduce over the full hidden width.
 
@@ -136,8 +136,22 @@ def apply_output_projection_allreduce_prefill(
     (2880 = 90 tiles) does not at TP = 4, so the rows do: S % (32 * TP) == 0, i.e. S % 128 == 0 at TP = 4. Otherwise
     it falls back to the composite all-gather + local sum: still correct, but slower and with a TP-times larger
     intermediate.
+
+    scatter: return only the reduce-scatter half (each device keeps its S / TP rows, the sequence-parallel prefill of
+    DecoderLayer); the same ttnn.reduce_scatter that ttnn.all_reduce runs first, so the rows are bit-identical.
     """
     out = apply_output_projection(tensor, weights, activation_dtype, unpadded=True, program_config=program_config)
+    if scatter:
+        reduced = ttnn.reduce_scatter(
+            out,
+            2,
+            cluster_axis=mesh_config.tp_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            num_links=ccl_manager.num_links,
+            topology=ccl_manager.topology,
+        )
+        out.deallocate(True)
+        return reduced
     reduced = ttnn.all_reduce(
         out,
         num_links=ccl_manager.num_links,

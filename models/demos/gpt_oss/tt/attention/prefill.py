@@ -19,6 +19,19 @@ from .operations import (
 from .weights import AttentionWeights
 
 
+def prefill_sequence_parallel_supported(mesh_config, weights: AttentionWeights, x) -> bool:
+    """Whether the prefill attention of x ([1, 1, S, *]) can end in a reduce-scatter over the sequence: TP > 1 on the
+    unpadded o_proj + all_reduce path (Blackhole; not the fused matmul + reduce-scatter op) and S % (32 * TP) == 0,
+    the condition under which ttnn.all_reduce itself scatters the rows."""
+    tp = mesh_config.tp
+    return (
+        tp > 1
+        and weights.o_proj_prefill is not None
+        and not is_shape_fused_mm_rs_supported(x)
+        and x.padded_shape[-2] % (ttnn.TILE_SIZE * tp) == 0
+    )
+
+
 def prefill_forward(
     hidden_states,
     rope_mats,
@@ -34,9 +47,13 @@ def prefill_forward(
     ccl_manager,
     user_id=0,
     batch_size=1,
+    sequence_parallel=False,
 ):
     """
     Prefill forward pass - optimized for sequence processing (seq_len>1).
+
+    sequence_parallel: return the o_proj partial sums reduce-scattered over the sequence (each device its S / TP
+    rows) instead of all-reduced; needs the unpadded o_proj + all_reduce path (prefill_sequence_parallel_supported).
 
     Args:
         hidden_states: Input tensor [batch, seq_len, hidden_size]
@@ -180,6 +197,10 @@ def prefill_forward(
     # When TP > 1 we use the fused matmul + reduce-scatter op; the trailing
     # all-gather + padding slice stay as separate ops. See
     # apply_output_projection_fused_rs for the per-shape tuned configs.
+    if sequence_parallel:
+        assert prefill_sequence_parallel_supported(
+            mesh_config, weights, tt_sdpa_out
+        ), "sequence-parallel prefill needs the unpadded o_proj + all_reduce path"
     if mesh_config.tp > 1 and is_shape_fused_mm_rs_supported(tt_sdpa_out):
         rs_out = apply_output_projection_fused_rs(tt_sdpa_out, weights, mesh_config, ccl_manager)
         tt_sdpa_out.deallocate(True)
@@ -192,6 +213,7 @@ def prefill_forward(
             mesh_config,
             ccl_manager,
             program_config.get_prefill_proj_config(mesh_device, "o", tt_sdpa_out, weights.o_proj_prefill),
+            scatter=sequence_parallel,
         )
         tt_sdpa_out.deallocate(True)
     else:

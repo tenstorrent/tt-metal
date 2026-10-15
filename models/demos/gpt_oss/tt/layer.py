@@ -6,6 +6,7 @@ from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
 from .attention import Attention, AttentionConfig
+from .attention.prefill import prefill_sequence_parallel_supported
 from .attention_configs import GPTOSSAttentionProgramConfig
 from .fused_decode.boundary import PendingBoundary
 from .fused_decode.config import DECODE_BOUNDARY_FUSE_CONSUMER
@@ -182,6 +183,63 @@ class DecoderLayer:
         x.deallocate(True)
         return rows
 
+    def prefill_sequence_parallel_supported(self, x, batch_size=1):
+        """Whether this layer can run the sequence-parallel prefill (_prefill_forward_sp) for the replicated prefill
+        input x [1, 1, S, H]: one user, a single mesh row, the unpadded o_proj + all_reduce attention path and the
+        routed MoE experts, with S % (32 * TP) == 0 (where both all-reduces scatter rows)."""
+        attn = self.self_attn
+        return (
+            batch_size == 1
+            and self.mesh_device.shape[0] == 1
+            and prefill_sequence_parallel_supported(attn.mesh_config, attn.weights, x)
+            and self.mlp.routed_prefill_supports(x.shape)
+        )
+
+    def _prefill_forward_sp(self, residual, position_embeddings, page_table, kv_cache, user_id):
+        """Sequence-parallel prefill of one layer. residual: this device's S / TP rows of the residual stream
+        ([1, 1, S / TP, H], device d holding rows d * S / TP onward). Returns the next residual rows.
+
+        The replicated path all-reduces the o_proj and MoE partial sums (ttnn.all_reduce = reduce_scatter over the
+        rows + all_gather) and then runs the residual add and the next RMSNorm on all S rows on every device. Here
+        each all-reduce stops after its reduce-scatter, the add and the norm run on the local S / TP rows, and the
+        all-gather moves the normed rows instead (the next projection needs all S rows). The input norm output is
+        bf8 as before (same bytes as the all-reduce's gather); the post-attention norm output is bf16, so that gather
+        moves twice the bytes. Every row goes through the same ops in the same dtypes as the replicated path."""
+        cluster_axis = self.self_attn.mesh_config.tp_axis
+        if residual.shape[-2] * self.self_attn.mesh_config.tp > 32 * 1024:
+            # As in __call__: reallocate the residual to limit DRAM fragmentation on long prefills.
+            residual = ttnn.move(residual)
+        x = self.input_layernorm(residual)
+        x_full = ttnn.all_gather(x, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x.deallocate(True)
+        seqlen = x_full.shape[-2]
+        attn_rows = self.self_attn(
+            x_full,
+            rope_mats=position_embeddings,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            is_decode=False,
+            user_id=user_id,
+            sequence_parallel=True,
+        )
+        # x_full is consumed (deallocated) by the attention's QKV projection.
+        # Post-attention residual add as in __call__: bf16 output up to 32K, bf8 in place above.
+        if seqlen <= 32 * 1024 and attn_rows.dtype == ttnn.bfloat8_b:
+            hidden = ttnn.add(residual, attn_rows, dtype=ttnn.bfloat16)
+            attn_rows.deallocate(True)
+        else:
+            hidden = ttnn.add(residual, attn_rows, output_tensor=attn_rows)
+        residual.deallocate(True)
+        residual = hidden
+        x = self.post_attention_layernorm(residual)
+        x_full = ttnn.all_gather(x, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x.deallocate(True)
+        moe_rows = self.mlp(x_full, is_decode=False, sequence_parallel=True)
+        x_full.deallocate(True)
+        hidden = ttnn.add(residual, moe_rows, output_tensor=moe_rows)
+        residual.deallocate(True)
+        return hidden
+
     def __call__(
         self,
         hidden_states,
@@ -192,9 +250,13 @@ class DecoderLayer:
         is_decode=True,
         user_id=0,
         batch_size=1,
+        sequence_parallel=False,
     ):
         if is_decode and self.fused_decode:
             return self._decode_forward(hidden_states, position_embeddings, position_idx, page_table, kv_cache)
+        if sequence_parallel:
+            assert not is_decode and batch_size == 1
+            return self._prefill_forward_sp(hidden_states, position_embeddings, page_table, kv_cache, user_id)
 
         seqlen = hidden_states.shape[-2]
         if seqlen > 32 * 1024:
