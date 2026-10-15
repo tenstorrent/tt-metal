@@ -35,6 +35,15 @@ def _height_sharded_config(shard_shape, core_grid):
     )
 
 
+def _dram_height_sharded_config(shard_shape, core_grid):
+    # core_grid is in DRAM-bank coordinates, not worker-core coordinates.
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
 def _block_sharded_config(shard_shape, core_grid):
     return ttnn.create_sharded_memory_config(
         shard_shape,
@@ -234,7 +243,9 @@ def _run_mixed(
     return out_tt
 
 
-def _run_scalar(device, op_name, mem_config, dtype_tt, shape, scalar, lhs_act=None, post_act=None, pcc=None):
+def _run_scalar(
+    device, op_name, mem_config, dtype_tt, shape, scalar, lhs_act=None, post_act=None, pcc=None, out_mem=None
+):
     # Tensor-SCALAR sibling of _run: operand A is a tensor, the RHS is a Python number (not a tensor),
     # and the golden uses that same scalar. Same op->torch map, PCC thresholds, and degenerate-constant
     # guard as _run. On Quasar the DFB path is the only path that can run (the descriptor throws as
@@ -257,7 +268,7 @@ def _run_scalar(device, op_name, mem_config, dtype_tt, shape, scalar, lhs_act=No
 
     a_tt = ttnn.from_torch(a, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config)
 
-    kwargs = {"memory_config": mem_config, "dtype": dtype_tt}
+    kwargs = {"memory_config": out_mem if out_mem is not None else mem_config, "dtype": dtype_tt}
     if post_act is not None:
         kwargs["activations"] = _act(post_act)
     if lhs_act is not None:
