@@ -20,7 +20,10 @@
 #include "metadata_scalar_read.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
+// Relative so ksplit's own chunked_prefill_utils.hpp include resolves to the same
+// file as the one above; via the search path it can land on an installed copy
+// (e.g. the wheel's), and #pragma once does not dedupe across the two.
+#include "../ring_joint_ksplit.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
