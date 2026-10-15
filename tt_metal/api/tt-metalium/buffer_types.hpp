@@ -4,7 +4,8 @@
 
 #pragma once
 
-#include <cstdint>
+// Unused here, but device kernels reach this header and may rely on it.
+#include <cstdint>  // IWYU pragma: keep
 
 namespace tt::tt_metal {
 
