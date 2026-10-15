@@ -58,7 +58,7 @@ struct E2HCreditReturn {
 private:
     // Takes the ABSOLUTE grant, not a delta, so withholding is expressible and a retry is exact.
     // Totals advance only on success, so a failed write is retried rather than skipped.
-    bool write(Line& l, std::uint32_t grant, const char* what, std::string& err) {
+    bool write(Line& l, std::uint32_t grant, const char* what, std::string& err) const {
         const std::uint32_t want = l.seeded + grant;
         if (want == l.total) {
             return true;
