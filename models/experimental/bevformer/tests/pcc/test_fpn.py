@@ -5,7 +5,7 @@
 import pytest
 import torch
 
-from models.experimental.bevformer.model_config import FPN_KWARGS, NUM_CAMS, SPATIAL_SHAPES, tt_fpn_kwargs
+from models.experimental.bevformer.model_config import FPN_KWARGS, NUM_CAMS, SPATIAL_SHAPES
 from models.experimental.bevformer.tests.common import (
     BACKBONE_OUTPUT_DTYPES,
     assert_pcc,
@@ -29,13 +29,7 @@ def test_fpn(device, reset_seeds):
     parameters = create_fpn_parameters(torch_model, input_tensors)
     torch_outputs = torch_model(input_tensors)
 
-    tt_model = TtFPN(
-        conv_args=parameters.conv_args,
-        conv_pth=parameters,
-        device=device,
-        input_dtypes=BACKBONE_OUTPUT_DTYPES,
-        **tt_fpn_kwargs(),
-    )
+    tt_model = TtFPN(parameters, device, input_dtypes=BACKBONE_OUTPUT_DTYPES)
     tt_outputs = tt_model(
         [to_conv_layout(tensor, device, dtype) for tensor, dtype in zip(input_tensors, BACKBONE_OUTPUT_DTYPES)]
     )

@@ -13,7 +13,7 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.bevformer.model_config import RESNET_KWARGS, tt_fpn_kwargs, tt_resnet_kwargs
+from models.experimental.bevformer.model_config import RESNET_KWARGS
 from models.experimental.bevformer.tests.common import (
     BACKBONE_OUTPUT_DTYPES,
     assert_pcc,
@@ -44,22 +44,10 @@ def test_backbone_fpn(device, reset_seeds):
     backbone_parameters = create_resnet_parameters(torch_backbone, torch_input)
     fpn_parameters = create_fpn_parameters(torch_fpn, torch_features)
 
-    tt_backbone = TtResNet(
-        backbone_parameters.conv_args,
-        backbone_parameters["res_model"],
-        device,
-        out_indices=RESNET_KWARGS["out_indices"],
-        **tt_resnet_kwargs(),
-    )
+    tt_backbone = TtResNet(backbone_parameters, device, out_indices=RESNET_KWARGS["out_indices"])
     # test_fpn feeds the FPN these dtypes on their own.
     assert tt_backbone.output_dtypes == BACKBONE_OUTPUT_DTYPES
-    tt_fpn = TtFPN(
-        conv_args=fpn_parameters.conv_args,
-        conv_pth=fpn_parameters,
-        device=device,
-        input_dtypes=tt_backbone.output_dtypes,
-        **tt_fpn_kwargs(),
-    )
+    tt_fpn = TtFPN(fpn_parameters, device, input_dtypes=tt_backbone.output_dtypes)
 
     tt_input = to_conv_layout(torch_input, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     tt_features = tt_backbone(tt_input)

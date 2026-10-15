@@ -23,7 +23,9 @@ NUM_BEV_QUEUE = 2
 
 
 class TTTemporalSelfAttention:
-    """Batch-first temporal self-attention over one BEV level."""
+    """Batch-first temporal self-attention over one BEV level. It calls the fused op directly
+    rather than through TTMSDeformableAttention: its Linears read both maps concatenated, and the op
+    samples each map with its own half of their channels."""
 
     def __init__(
         self, params, *, spatial_shapes, embed_dims=EMBED_DIMS, num_heads=NUM_HEADS, num_points=TSA_NUM_POINTS
@@ -39,8 +41,6 @@ class TTTemporalSelfAttention:
         self.embed_dims = embed_dims
         self.num_heads = num_heads
         self.num_points = num_points
-        # The Linears are this module's own, not TTMSDeformableAttention's: they read both maps
-        # concatenated, and the core attention samples each map with its own half of their channels.
         self.spatial_shapes = torch.as_tensor(spatial_shapes)
 
     def __call__(self, query, value=None, query_pos=None, reference_points=None):
