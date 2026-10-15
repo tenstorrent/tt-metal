@@ -1379,7 +1379,11 @@ ttnn::device_operation::CachedProgram<MoEExpertRowsFactory::shared_variables_t> 
             .dst_full_sync_en = false,
             .unpack_to_dest_mode = unpack_to_dest,
             .math_approx_mode = true,
-            .named_compile_args = compute_ct});
+            .named_compile_args = compute_ct,
+            // Multi-row expert kernels can exceed Wormhole's kernel-config text budget at O3.
+            .opt_level = (mesh_device->arch() == tt::ARCH::WORMHOLE_B0 && M > 1)
+                             ? tt::tt_metal::KernelBuildOptLevel::Os
+                             : tt::tt_metal::KernelBuildOptLevel::O3});
 
     // runtime args: per core, plus common args shared by every core of a kernel
     std::vector<uint32_t> reader_common = {static_cast<uint32_t>(sources.size())};
