@@ -25,6 +25,7 @@ from models.experimental.ops.quasar.panoptic_deeplab.tt.model_preprocessing impo
     fuse_conv_bn_parameters,
 )
 from models.experimental.ops.quasar.panoptic_deeplab.tt.model_configs import ModelOptimisations
+from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import block_float_dtype
 
 PDL_L1_SMALL_SIZE = 4 * 1024  # Minimum L1 small size for Panoptic DeepLab
 
@@ -471,8 +472,8 @@ def create_ttnn_model(
     if model_configs is None:
         model_configs = ModelOptimisations(
             device=device,
-            conv_act_dtype=ttnn.bfloat8_b,
-            conv_w_dtype=ttnn.bfloat8_b,
+            conv_act_dtype=block_float_dtype(device),
+            conv_w_dtype=block_float_dtype(device),
         )
         model_configs.setup_resnet_backbone()
         model_configs.setup_aspp()
