@@ -5,7 +5,7 @@ Tensix core: a timed loop that issues the same transfer repeatedly, with no payl
 no application credit and no echo in the timed path. Its design (protocol, validity and byte
 accounting, measurement boundary, the frontend/backend contract, the timed loop and the member
 table) is [design.md § Transport bandwidth](design.md#transport-bandwidth); its results are in
-[results.md](../results.md#transport_bandwidth).
+[results.md](../results.md).
 
 ## Members
 

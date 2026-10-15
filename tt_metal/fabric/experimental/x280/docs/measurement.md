@@ -28,7 +28,7 @@ the 18 `bw.tensix_to_x280` points that extend its transfer-size axis to 128, 320
 384, 512, 1024, 2048, 4096, 8192 and 16384 B under both boundaries, which no
 campaign has yet measured, and the 20 `bw.x280_to_tensix` points that add 4096
 and 65536 B transfers and the `sd` (8 B) and `vse32.v` (64 B) store widths
-under both boundaries, measured in [results.md](results.md#transport_bandwidth). An ERISC point's record count comes from
+under both boundaries. An ERISC point's record count comes from
 its gtest filter, or for `writers_all` from its run record. An
 ERISC point the device cannot host -- more writers than inactive Ethernet cores,
 none at all, or `IDLE_ETH` not enabled -- is an availability skip, and like every
@@ -300,14 +300,14 @@ the others are open.
   (`PI_ASSUMED_BRIDGE_COMPLETION`, the store-to-BRESP TURN). No X280 document
   says the store, rather than a later fence, waits for BRESP. Evidence: the
   X280 TURN falls from 440 to 76 ticks on a tile whose completion blocking a
-  mode-3 store disabled ([results.md](results.md#p2p_latency)).
+  mode-3 store disabled.
 - Item 5, owner decision: `rdcycle` counts the cycles the hart executes and
   does not advance while the hart stalls on memory, a NoC transaction or a
   BRESP, so every X280 CPU-cycle column is executed cycles, not elapsed time;
   elapsed time and timeouts use `mtime`. Evidence: the SiFive X280 MC Manual
   21G3.04.00 §3.10.2.1 ("clock cycles the hart has executed"), and a
   2026-06-25 migration-worker 16 MiB READ on which rdcycle trailed mtime by
-  about 50 ms. The L9b-final store-bound loops still show cpu/wall = 35.000 at
+  about 50 ms. The transport_bandwidth store-bound loops show cpu/wall = 35.000 at
   1750 MHz, so those loops did not stall the hart measurably. The manual's
   §5.13 says the cycle counter advances at `rtc_clock`, which the in-tree PLL
   measurement (rdcycle about 35 times mtime at 1750 MHz) contradicts.
@@ -315,8 +315,7 @@ the others are open.
   X280 PLL (every X280 wall interval and the PLL measurement,
   `PI_ASSUMED_MTIME_HZ`). Manual §5.13.1 defers the `rtc_toggle` rate to an
   X280 MC User Guide. Evidence: a PLL sweep fits X280 TURN as a fixed cycle
-  count plus a clock-independent time in `mtime` ticks
-  ([results.md](results.md#p2p_latency)).
+  count plus a clock-independent time in `mtime` ticks.
 - Item 8, owner assumption: a write in flight through an L2CPU TLB window lands
   at its old target when the window is cleared (core_sync release).
   No L2CPU document states it. Evidence:

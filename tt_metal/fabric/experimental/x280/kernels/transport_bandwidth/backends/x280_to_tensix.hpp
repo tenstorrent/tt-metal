@@ -24,8 +24,7 @@
  * same bracket as a cross-check between two independent clocks. rdcycle
  * does not advance while the hart stalls on memory or a BRESP
  * (docs/measurement.md "Unconfirmed hardware assumptions", item 5); the two
- * counters have counted in lockstep on every run so far (see
- * docs/results.md, transport_bandwidth).
+ * counters have counted in lockstep on every run so far.
  *
  * The host retains secondary_batch_delta as raw CPU cycles. Only mtime
  * supplies elapsed time.

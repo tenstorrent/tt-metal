@@ -1,7 +1,6 @@
 # Packet Injection Characterization
 
-The 2026-09-23 rerun (archived record `benchmarks/campaigns/20260923-measurement-unification/`)
-includes both throughput families and all four latency/backpressure variants.
+The 2026-09-23 rerun includes both throughput families and all four latency/backpressure variants.
 Its worker records retain native CPU measurements where the interval is local.
 Current schema-2 records retain raw wall ticks and per-run AICLK evidence for
 offline conversion. Historical captures below retain their original schemas
@@ -782,21 +781,17 @@ also registers `writers2`, `writers4` and `writers8` at B=1, B=4 and B=8 at
 at the same consumer settings as the one-producer cross-check.
 At S=32 and S=64, `packet.erisc_header.s<S>.c<C>k<K>.<writers>.b<B>` registers
 `writers1` and `writers_all` at B=1 and `writers1` at B=4 for (C, K) in
-{(8, 16), (8, 32), (16, 32), (32, 32)}; the 2026-10-14 whole-suite campaign
-measured them ([results.md](../results.md#packet_injection)).
+{(8, 16), (8, 32), (16, 32), (32, 32)}.
 At the Tensix load knee T=4, `packet.throughput.{brisc,paired}.T4.<setting>`
 registers `c4k8` (C=4, K=8), `c8k16` (C=8, K=16), `s4`, `s8` and `s64` (S=4, 8
 and 64) and `b4` (B=4), each changing that one setting from its `T4` point at
-S=16, B=C=K=1; the 2026-10-14 whole-suite campaign
-measured them ([results.md](../results.md#packet_injection)).
+S=16, B=C=K=1.
 To isolate the (C, K) gain, `packet.throughput.{brisc,paired}.T4.s64.c<C>k<K>`
 registers C in {1, 2, 4, 8, 16} at K=16 and K in {2, 4, 8} at C=1, each
-changing only C and K from its `T4.s64` point at S=64, B=C=K=1; the 2026-10-14 whole-suite campaign
-measured them ([results.md](../results.md#packet_injection)).
+changing only C and K from its `T4.s64` point at S=64, B=C=K=1.
 Across the load sweep, `packet.throughput.paired.T1.c8k16` and
 `packet.throughput.{brisc,paired}.T{2,8}.c8k16` set C=8, K=16 on their `T<n>`
-point at S=16, B=1; the 2026-10-14 whole-suite campaign
-measured them ([results.md](../results.md#packet_injection)).
+point at S=16, B=1.
 
 **Writers.** `select_ethernet_writers()` in `tests/device/suites/packet_injection/regions.hpp`
 sorts the inactive cores by logical (x, y) and takes a prefix, so the one-writer
@@ -911,16 +906,14 @@ ticks, and one writer's wall delta over the aggregate interval implies about
 nine points and reproduced them within 0.09%.
 
 **Scaling campaign (2026-09-30).** Card 0 as above, three runs per point through
-`run_characterization.py`; provenance and raw JSONL are the archived record
-`benchmarks/campaigns/20260929-erisc-header-ingress-scaling/` ([results.md](../results.md#erisc---x280-header-ingress)).
+`run_characterization.py`.
 Rates are X280 `mtime` aggregates, mean [min, max] over the runs; stall
 episodes, counter writes and wall ticks are per writer. W is calibrated per point.
 ERISC ticks are shown raw and convert offline under each run's clean AICLK
 evidence, taken on writer 0's ERISC wall clock.
 Every figure is for inactive idle ERISCs and does not show that an ERISC doing
 live Ethernet receive and router work has the same cycles left. No target is
-asserted. The re-run C=1, K=1 table, the derivations and the Tensix cross-check
-are in [`docs/results.md`](../results.md#erisc---x280-header-ingress).
+asserted.
 
 The consumer-settings sweep (S=16, N=1024, B=1):
 
@@ -1008,8 +1001,6 @@ prototype's `DRAINED` point took 420.17 ERISC wall ticks per header and
 `writers1_b1` (S=16, C=1, K=1) 973.4, so the credit protocol costs 553.2 ticks per
 header there. 992 of 1,024 measured headers entered the credit wait: the writer
 is paced by X280 service and credit return, not by its own publication code.
-Conditions, both intervals and the evidence are in
-[results.md](../results.md#erisc---x280-header-ingress).
 
 ## Running the Benchmark
 

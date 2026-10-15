@@ -1,7 +1,7 @@
 # Cross-Cluster Signalling Characterization
 
-**Status:** Measured on silicon. The numbers and the placement sweep are in
-[`docs/results.md`](../results.md#p2p_latency); running it is below.
+**Status:** Measured on silicon. Results are in [`docs/results.md`](../results.md); running it is
+below.
 
 **Scope:** feasibility benchmark ID 3 (priority P2): hart-to-hart
 signal latency where the two harts sit on different X280 complexes. This is

@@ -487,9 +487,7 @@ measured bracket. It superseded, at its `writers=1,B=1` point, the single-writer
 prototype `transport_bandwidth/erisc_to_x280_header`, which has been removed:
 that member published into successive X280 FIFO slots with a sideband
 `pkt_valid` word and never waited for its consumer. Its per-header cost against
-the unified point, the cost of the credit protocol, and its historical results
-are in
-[`docs/results.md`](../results.md#erisc---x280-header-ingress) and
+the unified point and the cost of the credit protocol are in
 [packet_injection.md](packet_injection.md#credit-protocol-cost).
 
 `p2p_latency` participant entries 3–6 have no numbered counterpart. The IDs

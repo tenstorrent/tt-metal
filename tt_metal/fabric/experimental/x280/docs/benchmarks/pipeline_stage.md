@@ -8,11 +8,9 @@ workload is the MEM-03/LK-03/SZ-01 design: one destination-to-next-hop operation
 over a fixed, suite-prepared input. It supersedes an earlier route-construction and
 compressed-route lookup design, whose measurements no current code reproduces.
 
-Fixed-source silicon evidence for X280 is recorded in
-[`docs/results.md`](../results.md#pipeline_stage).
-X280 micro-benchmark figures move with firmware code layout alone (2026-10-02
-pad probe, [results.md](../results.md#pipeline_stage)), so a
-figure compares only against a run of the same image.
+Results are in [`docs/results.md`](../results.md).
+X280 micro-benchmark figures move with firmware code layout alone (a code-placement
+pad probe), so a figure compares only against a run of the same image.
 
 Host lifecycle, device ownership, shape admission, argument extents, STOP, and
 window cleanup are owned by
@@ -442,7 +440,7 @@ A host build does NOT demonstrate:
 2. Device silicon correctness; or
 3. Measured timing performance on hardware.
 Silicon correctness and timing observations are recorded in
-[`docs/results.md`](../results.md#pipeline_stage).
+[`docs/results.md`](../results.md).
 
 ## Stable references
 

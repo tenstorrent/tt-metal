@@ -10,7 +10,7 @@ transports in `core_sync_transport_{metal,x280}.hpp`); its storage is caller-own
 reinitialized for every invocation. Release destinations come from the host release selector,
 which multicasts to a Tensix selection that fills one logical rectangle and unicasts to every
 other participant ([harness.md](../harness.md), "Core-sync and packet injection share one host
-release selector"). Results are in [results.md](../results.md#core_sync).
+release selector"). Results are in [results.md](../results.md).
 
 ## Executables
 

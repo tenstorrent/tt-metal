@@ -835,7 +835,7 @@ With translation enabled, a NIU translates all four multicast corners before
 choosing the spans (tt-isa-documentation `BlackholeA0/NoC/MemoryMap.md`,
 `NOC_TARG_ADDR`). The L2CPU TLB window documentation does not say whether that
 holds for its windows; the renumbered-column case below observed it on a
-harvested part ([results.md](results.md#core_sync)).
+harvested part.
 
 Every other core-sync case sits at logical x < 6, where virtual and NOC0
 coincide on the parts in use, except
@@ -1157,7 +1157,7 @@ BDF `0000:41:00.0` is node `1`.
 - **Resolve identity by BDF**, via `env -u TT_VISIBLE_DEVICES tt-smi -ls`, when
   a result is going to be attributed to a specific part.
 - **Verify state by measurement, not by inference.** Every single-action probe
-  trial behind the posted-mode finding in [results.md](results.md#p2p_latency) survived this bug precisely
+  trial behind the posted-mode finding survived this bug precisely
   because it measured a clean baseline instead of assuming the preceding reset
   had worked. Prefer a probe
   that proves the precondition over a procedure believed to establish it.
@@ -1367,7 +1367,7 @@ result.
   prepares a selected set of tiles, establishes the safe clock, and releases
   all of them in one write to `L2CPU_RESET`, inside the all-in-reset window the
   per-tile gate proves. Several L2CPUs leaving reset in one write is confirmed
-  on silicon: the `x280_peer_tile` placement sweep in [results.md](results.md#p2p_latency) measures ID 3 across three
+  on silicon: the `x280_peer_tile` placement sweep measured ID 3 across three
   complexes cold-booted as one batch. It is also the sanctioned bringup flow
   rather than a tolerated one, which is what retired this entry as a blocker.
   `tt-bh-linux`, `boot.py:76-85` implements the same algorithm — PLL to 200,
