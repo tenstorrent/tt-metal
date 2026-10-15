@@ -431,14 +431,14 @@ database, generic scheduler or implicit recovery.
 Regenerate into a new report directory:
 
 ```sh
-python3 tt_metal/fabric/x280/tools/tabulate_suites.py --campaign /path/to/campaign --report-dir /new/report
+python3 tt_metal/fabric/experimental/x280/tools/tabulate_suites.py --campaign /path/to/campaign --report-dir /new/report
 ```
 
 The report checks raw hashes and exact configuration populations and emits
 `master_results.jsonl`, `coverage.json`, `campaign.json` and `MASTER_RESULTS.md`.
 `MASTER_RESULTS.md` holds the coverage table and, under "Results", a result table
 per member and record shape, each row linking its raw file. Table mode,
-`python3 tt_metal/fabric/x280/tools/tabulate_suites.py FILE...`, prints the same tables for
+`python3 tt_metal/fabric/experimental/x280/tools/tabulate_suites.py FILE...`, prints the same tables for
 current-format JSONL. Both render the p2p_latency, transport_bandwidth,
 pipeline_stage, packet_injection, core_sync and eth_credit members; eth_credit's
 kernel, attribution and link records are recognised and tabulated by no table.
@@ -476,7 +476,7 @@ table per member and record shape:
 
 ```bash
 # Tabulate suite results to stdout:
-python3 tt_metal/fabric/x280/tools/tabulate_suites.py <path_to_jsonl>
+python3 tt_metal/fabric/experimental/x280/tools/tabulate_suites.py <path_to_jsonl>
 ```
 
 A campaign's report (`--campaign DIR --report-dir NEW`) carries the same tables in

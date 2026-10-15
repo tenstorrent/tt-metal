@@ -159,7 +159,7 @@ def main():
     for config in manifest["configurations"]:
         if set(config) != {"id", "member", "argv", "environment"}:
             parser.error("each configuration requires only id, member, argv and environment")
-    engine = Path(__file__).resolve().parents[4]
+    engine = Path(__file__).resolve().parents[5]
     values = {
         "HOST_BUILD": str(args.host_build.resolve()),
         "FW_BUILD": str(args.fw_build.resolve()),
@@ -195,7 +195,9 @@ def main():
     if subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=engine).returncode:
         parser.error("commit producer changes before collection")
     untracked = subprocess.check_output(
-        ["git", "ls-files", "--others", "--exclude-standard", "tt_metal/fabric/x280"], cwd=engine, text=True
+        ["git", "ls-files", "--others", "--exclude-standard", "tt_metal/fabric/experimental/x280"],
+        cwd=engine,
+        text=True,
     )
     if untracked:
         parser.error("untracked X280 inputs must be committed before collection")
