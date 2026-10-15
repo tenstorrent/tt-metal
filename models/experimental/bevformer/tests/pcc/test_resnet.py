@@ -32,7 +32,9 @@ def reference_and_parameters():
 
 def _layer_kwargs(i):
     """The per-layer arguments TtResNet gives layer ``i`` in this configuration."""
-    return TtResNet.layer_kwargs(i, **tt_resnet_kwargs())
+    config = tt_resnet_kwargs()
+    del config["stem_act_block_h"]
+    return TtResNet.layer_kwargs(i, **config)
 
 
 def _check(torch_output, ttnn_model, ttnn_output):

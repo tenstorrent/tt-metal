@@ -21,24 +21,30 @@ import torch
 
 import ttnn
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
-from models.experimental.bevformer.model_config import CENTERS_FIRST, GRID_DTYPE
+from models.experimental.bevformer.model_config import (
+    CENTERS_FIRST,
+    CONV_WEIGHT_DTYPE,
+    GRID_DTYPE,
+    WEIGHT_DTYPE,
+    tt_fpn_kwargs,
+    tt_resnet_kwargs,
+)
 from models.experimental.bevformer.reference.fpn import FPN
 from models.experimental.bevformer.reference.resnet import ModulatedDeformConv2dPack, ResNet
-from models.experimental.bevformer.tt.tt_modulated_deform_conv import grid_offset_order
-
-
-DEFAULT_DTYPE = ttnn.bfloat16
+from models.experimental.bevformer.tt.tt_common import is_pointwise
+from models.experimental.bevformer.tt.tt_modulated_deform_conv import GRID_SAMPLE_C_CAP, grid_offset_order
+from models.experimental.bevformer.tt.tt_resnet import TtResNet
 
 
 # --- Shared helpers ---------------------------------------------------------------------------
 
 
-def preprocess_linear_weight(weight, *, device, dtype=DEFAULT_DTYPE):
+def preprocess_linear_weight(weight, *, device, dtype=WEIGHT_DTYPE):
     """A Linear's weight transposed to ``(in, out)``, as ``ttnn.linear`` takes it."""
     return ttnn.from_torch(weight.T.contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
-def preprocess_linear_bias(bias, *, device, dtype=DEFAULT_DTYPE):
+def preprocess_linear_bias(bias, *, device, dtype=WEIGHT_DTYPE):
     """A Linear's bias as a ``(1, out)`` row."""
     return ttnn.from_torch(bias.reshape((1, -1)), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -51,7 +57,7 @@ def linear_params(weight, bias, device, dtype):
     )
 
 
-def preprocess_layer_norm_parameters(layer_norm, *, device, dtype=DEFAULT_DTYPE):
+def preprocess_layer_norm_parameters(layer_norm, *, device, dtype=WEIGHT_DTYPE):
     """A LayerNorm's weight and bias, and its ``eps``: ``ttnn.layer_norm`` defaults to 1e-12."""
 
     def upload(tensor):
@@ -64,7 +70,7 @@ def preprocess_layer_norm_parameters(layer_norm, *, device, dtype=DEFAULT_DTYPE)
     )
 
 
-def preprocess_ffn_parameters(ffn, *, device, dtype=DEFAULT_DTYPE):
+def preprocess_ffn_parameters(ffn, *, device, dtype=WEIGHT_DTYPE):
     """The encoder's and decoder's mmcv-style ``FFN``: ``layers`` is
     ``Sequential(Sequential(Linear, ReLU), Linear)``, so the two Linears are ``layers[0][0]`` and
     ``layers[1]``."""
@@ -78,7 +84,7 @@ def preprocess_ffn_parameters(ffn, *, device, dtype=DEFAULT_DTYPE):
 # --- Deformable attention and encoder ---------------------------------------------------------
 
 
-def create_ms_deformable_attention_parameters(torch_model, *, device, dtype=DEFAULT_DTYPE):
+def create_ms_deformable_attention_parameters(torch_model, *, device, dtype=WEIGHT_DTYPE):
     """``reference.ms_deformable_attention.MSDeformableAttention``'s value, offset, attention and
     output Linears, as TTMSDeformableAttention takes them."""
     return SimpleNamespace(
@@ -89,7 +95,7 @@ def create_ms_deformable_attention_parameters(torch_model, *, device, dtype=DEFA
     )
 
 
-def create_spatial_cross_attention_parameters(sca, device, dtype=DEFAULT_DTYPE):
+def create_spatial_cross_attention_parameters(sca, device, dtype=WEIGHT_DTYPE):
     """``reference.spatial_cross_attention.SpatialCrossAttention`` as TTSpatialCrossAttention
     takes it: the merged-slots ``output_proj`` and the nested ``MSDeformableAttention3D``'s
     value, offset and attention Linears (it has no output projection)."""
@@ -105,7 +111,7 @@ def create_spatial_cross_attention_parameters(sca, device, dtype=DEFAULT_DTYPE):
     )
 
 
-def create_temporal_self_attention_parameters(tsa, device, dtype=DEFAULT_DTYPE):
+def create_temporal_self_attention_parameters(tsa, device, dtype=WEIGHT_DTYPE):
     """``reference.temporal_self_attention.TemporalSelfAttention`` as TTTemporalSelfAttention
     takes it. The offset and attention Linears emit channels head-major,
     (head, queue, level, point[, xy]); they are reordered queue-major, so each stacked map's
@@ -126,7 +132,7 @@ def create_temporal_self_attention_parameters(tsa, device, dtype=DEFAULT_DTYPE):
     )
 
 
-def create_bevformer_layer_parameters(layer, device, dtype=DEFAULT_DTYPE):
+def create_bevformer_layer_parameters(layer, device, dtype=WEIGHT_DTYPE):
     """``reference.encoder.BEVFormerLayer`` as TTBEVFormerLayer takes it."""
     return SimpleNamespace(
         tsa=create_temporal_self_attention_parameters(layer.attentions[0], device, dtype),
@@ -136,7 +142,7 @@ def create_bevformer_layer_parameters(layer, device, dtype=DEFAULT_DTYPE):
     )
 
 
-def create_bevformer_encoder_parameters(encoder, device, dtype=DEFAULT_DTYPE):
+def create_bevformer_encoder_parameters(encoder, device, dtype=WEIGHT_DTYPE):
     """``reference.encoder.BEVFormerEncoder`` as TTBEVFormerEncoder takes it: one entry per layer,
     and the encoder's configuration, so the port cannot disagree with the model it was built from."""
     config = SimpleNamespace(
@@ -162,7 +168,7 @@ def create_bevformer_encoder_parameters(encoder, device, dtype=DEFAULT_DTYPE):
 # --- Perception transformer --------------------------------------------------------------------
 
 
-def create_perception_transformer_parameters(transformer, device, dtype=DEFAULT_DTYPE):
+def create_perception_transformer_parameters(transformer, device, dtype=WEIGHT_DTYPE):
     """``reference.perception_transformer.PerceptionTransformer`` as TtPerceptionTransformer takes
     it: the encoder's parameters, the CAN-bus MLP, and per FPN level the camera embeddings plus the
     level's embedding, ``(1, num_cams, 1, C)``."""
@@ -195,8 +201,10 @@ def create_perception_transformer_parameters(transformer, device, dtype=DEFAULT_
 # --- Backbone and FPN -------------------------------------------------------------------------
 
 # Each BatchNorm is folded into the conv before it, and every conv's input shape is recorded from one
-# reference forward. The DCN offset rows are reordered to the (x, y) order the device deformable
-# conv reads.
+# reference forward. The weights stay on the host: conv2d lays them out for its input on the
+# device. A 1x1 conv whose activations are in DRAM runs as a matmul instead and gets a Linear's
+# weight; the DCNs get their device op's matmul weight chunks and an offset conv that emits the
+# offsets in its (x, y) order and grid units.
 
 
 def _fold_batch_norm(weight, bias, bn):
@@ -210,85 +218,118 @@ def _fold_batch_norm(weight, bias, bn):
     return weight * scale.view(-1, 1, 1, 1), bias * scale + shift
 
 
-def _resnet_preprocessor(model, name):
-    """``preprocess_model_parameters``' hook for the ResNet: BatchNorm-folded conv weights, DCN
-    offsets in the device's (x, y) order."""
-    parameters = {}
-
-    if isinstance(model, ResNet):
-        parameters["res_model"] = {}
-
-        weight, bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
-        parameters["res_model"]["conv1"] = {
-            "weight": ttnn.from_torch(weight, dtype=ttnn.float32),
-            "bias": ttnn.from_torch(bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
+def _conv_parameters(weight, bias, as_linear, staging_dtype):
+    """A conv's torch ``weight`` and ``bias`` as TtnnConv2D takes them: in ``staging_dtype`` for
+    conv2d to lay out, or, ``as_linear``, a Linear's ``(in, out)`` weight in
+    ``CONV_WEIGHT_DTYPE`` and ``(1, out)`` bias, laid out for ``ttnn.linear``."""
+    if as_linear:
+        return {
+            "weight": ttnn.from_torch(
+                weight.flatten(1).T.contiguous(), dtype=CONV_WEIGHT_DTYPE, layout=ttnn.TILE_LAYOUT
+            ),
+            "bias": ttnn.from_torch(bias.reshape((1, -1)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
         }
-
-        for layer_idx in range(1, 5):
-            layer = getattr(model, f"layer{layer_idx}")
-            prefix = f"layer{layer_idx}"
-            parameters["res_model"][prefix] = {}
-            for block_idx, block in enumerate(layer):
-                parameters["res_model"][prefix][block_idx] = {}
-
-                for conv_name in ["conv1", "conv2", "conv3"]:
-                    conv = getattr(block, conv_name)
-                    if isinstance(conv, ModulatedDeformConv2dPack):
-                        # The DCN conv consumes torch weights, with its BatchNorm folded in.
-                        bn = getattr(block, f"bn{conv_name[-1]}")
-                        weight, bias = _fold_batch_norm(conv.weight.detach(), conv.bias, bn)
-                        parameters["res_model"][prefix][block_idx][conv_name] = {}
-                        parameters["res_model"][prefix][block_idx][conv_name]["weight"] = weight
-                        parameters["res_model"][prefix][block_idx][conv_name]["bias"] = bias
-                        # The offset rows are reordered to the (x, y) order the device DCN takes;
-                        # moving whole rows is exact.
-                        order = grid_offset_order(conv.kernel_size[0] * conv.kernel_size[1])
-                        offset_weight = conv.conv_offset.weight.detach()
-                        offset_bias = conv.conv_offset.bias.detach()
-                        offset_weight = torch.cat([offset_weight[order], offset_weight[len(order) :]])
-                        offset_bias = torch.cat([offset_bias[order], offset_bias[len(order) :]])
-                        parameters["res_model"][prefix][block_idx][conv_name]["conv_offset"] = {
-                            "weight": ttnn.from_torch(offset_weight, dtype=ttnn.float32),
-                            "bias": ttnn.from_torch(offset_bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
-                        }
-                    else:
-                        bn = getattr(block, f"bn{conv_name[-1]}")
-                        w, b = fold_batch_norm2d_into_conv2d(conv, bn)
-                        parameters["res_model"][prefix][block_idx][conv_name] = {
-                            "weight": ttnn.from_torch(w, dtype=ttnn.float32),
-                            "bias": ttnn.from_torch(b.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
-                        }
-
-                if hasattr(block, "downsample") and block.downsample is not None:
-                    ds = block.downsample
-                    assert (
-                        isinstance(ds, torch.nn.Sequential) and len(ds) == 2
-                    ), f"expected a (conv, norm) downsample, got {ds}"
-                    w, b = fold_batch_norm2d_into_conv2d(ds[0], ds[1])
-                    parameters["res_model"][prefix][block_idx]["downsample"] = {
-                        "weight": ttnn.from_torch(w, dtype=ttnn.float32),
-                        "bias": ttnn.from_torch(b.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
-                    }
-    return parameters
+    return {
+        "weight": ttnn.from_torch(weight, dtype=staging_dtype),
+        "bias": ttnn.from_torch(bias.reshape((1, 1, 1, -1)), dtype=staging_dtype),
+    }
 
 
-def create_resnet_parameters(model: ResNet, input_tensor, device=None):
-    """Preprocess backbone weights and record per-conv shapes from one reference forward.
+def _dcn_parameters(conv, bn, offset_args):
+    """A DCNv2 conv and its offset conv as TtModulatedDeformConv2dPack takes them, ``bn`` folded in.
+
+    The weight becomes the device DCN's matmul weight, one ``(K*K*c_chunk, C_out)`` block per
+    chunk of ``GRID_SAMPLE_C_CAP`` input channels, rows kk-major as grid_sample emits its samples.
+    The offset conv's offset rows are reordered to the device DCN's (x, y) order and scaled by
+    ``2 / [W, H]`` to grid_sample's units; both are exact on the weights and drop a reorder and
+    a multiply from every forward.
+    """
+    if conv.groups != 1 or conv.deform_groups != 1:
+        raise ValueError(f"the device DCN takes groups 1 and deform_groups 1, got {conv.groups}, {conv.deform_groups}")
+    weight, bias = _fold_batch_norm(conv.weight.detach(), conv.bias, bn)
+    c_out, c_in, kernel_h, kernel_w = weight.shape
+    c_chunk = min(c_in, GRID_SAMPLE_C_CAP)
+    if c_in % c_chunk != 0:
+        raise ValueError(f"C_in {c_in} is not a multiple of the grid_sample chunk {c_chunk}")
+    weight_chunks = [
+        ttnn.from_torch(
+            weight[:, start : start + c_chunk].permute(2, 3, 1, 0).reshape(-1, c_out).contiguous(),
+            dtype=WEIGHT_DTYPE,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        for start in range(0, c_in, c_chunk)
+    ]
+
+    order = grid_offset_order(kernel_h * kernel_w)
+    offset_weight = conv.conv_offset.weight.detach()
+    offset_bias = conv.conv_offset.bias.detach()
+    scale = torch.ones(offset_weight.shape[0])
+    scale[: len(order) : 2] = 2.0 / offset_args.input_width
+    scale[1 : len(order) : 2] = 2.0 / offset_args.input_height
+    offset_weight = torch.cat([offset_weight[order], offset_weight[len(order) :]]) * scale.view(-1, 1, 1, 1)
+    offset_bias = torch.cat([offset_bias[order], offset_bias[len(order) :]]) * scale
+    return {
+        "weight_chunks": weight_chunks,
+        "bias": ttnn.from_torch(bias.reshape((1, -1)), dtype=WEIGHT_DTYPE, layout=ttnn.TILE_LAYOUT),
+        "conv_offset": _conv_parameters(offset_weight, offset_bias, False, ttnn.float32),
+    }
+
+
+def _resnet_preprocessor(model, conv_args, dram_activation_stages):
+    """``preprocess_model_parameters``' hook for the ResNet, given its recorded ``conv_args`` and
+    TtResNet's ``dram_activation_stages``."""
+    if not isinstance(model, ResNet):
+        return {}
+
+    def conv_parameters(conv, bn, as_linear):
+        weight, bias = fold_batch_norm2d_into_conv2d(conv, bn)
+        return _conv_parameters(weight, bias, as_linear and is_pointwise(conv), ttnn.float32)
+
+    parameters = {"conv1": conv_parameters(model.conv1, model.bn1, False)}
+    for layer_idx in range(1, 5):
+        prefix = f"layer{layer_idx}"
+        parameters[prefix] = {}
+        for block_idx, block in enumerate(getattr(model, prefix)):
+            dram_convs = TtResNet.block_dram_convs(layer_idx - 1, block_idx, dram_activation_stages)
+            block_parameters = parameters[prefix][block_idx] = {}
+            for conv_name in ["conv1", "conv2", "conv3"]:
+                conv = getattr(block, conv_name)
+                bn = getattr(block, f"bn{conv_name[-1]}")
+                if isinstance(conv, ModulatedDeformConv2dPack):
+                    offset_args = conv_args[prefix][block_idx][conv_name].conv_offset
+                    block_parameters[conv_name] = _dcn_parameters(conv, bn, offset_args)
+                else:
+                    block_parameters[conv_name] = conv_parameters(conv, bn, conv_name in dram_convs)
+
+            ds = getattr(block, "downsample", None)
+            if ds is not None:
+                assert (
+                    isinstance(ds, torch.nn.Sequential) and len(ds) == 2
+                ), f"expected a (conv, norm) downsample, got {ds}"
+                block_parameters["downsample"] = conv_parameters(ds[0], ds[1], "downsample" in dram_convs)
+    return {"res_model": parameters}
+
+
+def create_resnet_parameters(model: ResNet, input_tensor):
+    """Preprocess backbone weights and record per-conv shapes from one reference forward, for
+    ``TtResNet`` built with ``model_config.tt_resnet_kwargs()``.
 
     ``conv_args`` pins every conv's input height, width and batch to ``input_tensor``'s
     shape, so the TT backbone built from these parameters only accepts that shape.
     """
+    conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
+    dram_activation_stages = tt_resnet_kwargs()["dram_activation_stages"]
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=_resnet_preprocessor,
-        device=device,
+        custom_preprocessor=lambda module, name: _resnet_preprocessor(module, conv_args, dram_activation_stages),
     )
-    parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
+    parameters.conv_args = conv_args
     return parameters
 
 
 def create_fpn_parameters(model: FPN, input_tensors):
-    """Preprocess FPN weights and record every conv's geometry and input shape.
+    """Preprocess FPN weights and record every conv's geometry and input shape, for ``TtFPN``
+    built with ``model_config.tt_fpn_kwargs()``.
 
     ``input_tensors`` are the NCHW backbone outputs the FPN will run on. A conv reads the
     level it belongs to, except the extra output convs: the first reads the last level's
@@ -324,22 +365,26 @@ def create_fpn_parameters(model: FPN, input_tensors):
             )
         )
 
-    def conv_weights(conv_module):
+    dram_activation_levels = tt_fpn_kwargs()["dram_activation_levels"]
+
+    def conv_weights(conv_module, dram_activation):
         conv = conv_module.conv
-        return {
-            "conv": {
-                "weight": ttnn.from_torch(conv.weight, dtype=ttnn.bfloat16),
-                "bias": ttnn.from_torch(conv.bias.reshape((1, 1, 1, -1)), dtype=ttnn.bfloat16),
-            }
-        }
+        as_linear = dram_activation and is_pointwise(conv)
+        return {"conv": _conv_parameters(conv.weight.detach(), conv.bias.detach(), as_linear, ttnn.bfloat16)}
 
     def preprocessor(module, name):
         if not isinstance(module, FPN):
             return {}
         return {
             "fpn": {
-                "lateral_convs": {str(i): conv_weights(lateral) for i, lateral in enumerate(module.lateral_convs)},
-                "fpn_convs": {str(i): conv_weights(fpn_conv) for i, fpn_conv in enumerate(module.fpn_convs)},
+                "lateral_convs": {
+                    str(i): conv_weights(lateral, i in dram_activation_levels)
+                    for i, lateral in enumerate(module.lateral_convs)
+                },
+                "fpn_convs": {
+                    str(i): conv_weights(fpn_conv, i < len(level_shapes) and i in dram_activation_levels)
+                    for i, fpn_conv in enumerate(module.fpn_convs)
+                },
             }
         }
 
@@ -393,12 +438,12 @@ def _decoder_layer_parameters(layer, device, dtype):
     )
 
 
-def create_decoder_parameters(torch_model, device, dtype=DEFAULT_DTYPE):
+def create_decoder_parameters(torch_model, device, dtype=WEIGHT_DTYPE):
     """Parameters for ``TtDetectionTransformerDecoder``."""
     return SimpleNamespace(layers=[_decoder_layer_parameters(layer, device, dtype) for layer in torch_model.layers])
 
 
-def create_reg_branch_parameters(reg_branches, device, dtype=DEFAULT_DTYPE):
+def create_reg_branch_parameters(reg_branches, device, dtype=WEIGHT_DTYPE):
     """The three Linears of each ``Linear-ReLU-Linear-ReLU-Linear`` branch.
 
     The decoder runs each branch once per layer: it refines its reference points with the
@@ -434,12 +479,12 @@ def _cls_branch_parameters(branch, device, dtype):
 
 
 @torch.no_grad()
-def create_head_parameters(torch_model, device, dtype=DEFAULT_DTYPE):
-    """Parameters for ``TtBEVFormerHead``. They carry the reference head's BEV shape and
-    ``pc_range``.
+def create_head_parameters(torch_model, device, dtype=WEIGHT_DTYPE):
+    """Parameters for ``TtBEVFormerHead``. They carry the reference head's BEV shape and its
+    ``pc_range`` as the corner ``pc_min`` and size ``pc_size`` the refined points scale to.
 
     The object queries, their positional embeddings and the initial reference points depend
-    on the weights only, so they are computed here, the points in float32 as the decoder
+    on the weights only, so they are computed here, the points in ``GRID_DTYPE`` as the decoder
     takes them. The reg branches run inside the decoder, which returns their box codes.
     """
     query_pos, query = torch.split(torch_model.query_embedding.weight, torch_model.embed_dims, dim=1)
@@ -448,9 +493,12 @@ def create_head_parameters(torch_model, device, dtype=DEFAULT_DTYPE):
     def upload(tensor, tensor_dtype=dtype):
         return ttnn.from_torch(tensor.unsqueeze(0), dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
+    pc_min = torch.tensor(torch_model.pc_range[:3])
+    pc_size = torch.tensor(torch_model.pc_range[3:]) - pc_min
     return SimpleNamespace(
         bev_shape=(torch_model.bev_h, torch_model.bev_w),
-        pc_range=tuple(torch_model.pc_range),
+        pc_min=upload(pc_min.view(1, 1, 3), GRID_DTYPE),
+        pc_size=upload(pc_size.view(1, 1, 3), GRID_DTYPE),
         query=upload(query),
         query_pos=upload(query_pos),
         reference_points=upload(init_reference, GRID_DTYPE),
@@ -464,14 +512,15 @@ def create_head_parameters(torch_model, device, dtype=DEFAULT_DTYPE):
 
 
 @torch.no_grad()
-def create_bevformer_parameters(model, img, device, dtype=DEFAULT_DTYPE):
+def create_bevformer_parameters(model, img, device, dtype=WEIGHT_DTYPE):
     """The detector's parameters for images shaped like ``img`` ``(bs, num_cams, 3, H, W)``: the
     backbone and FPN pin every conv to that shape, so the TT detector only takes it. One reference
     forward of the backbone records the shapes, and the FPN's on its features the levels' ``(h, w)``.
     The BEV queries and their positional encoding are constants of the weights, so they are
-    uploaded here, ``(1, bev_h * bev_w, C)``. The result's ``config`` carries the reference's
-    settings the TT detector is built with, so the two cannot disagree. ``dtype`` is the transformer's
-    and the head's weights'; the backbone's and FPN's precision is ``model_config``'s."""
+    uploaded here, ``(1, bev_h * bev_w, C)``. The result's ``config`` and ``coder`` carry the
+    reference's settings the TT detector and its coder are built with, so the two cannot disagree.
+    ``dtype`` is the transformer's and the head's weights'; the backbone's and FPN's precision is
+    ``model_config``'s."""
     images = img.flatten(0, 1)
     # create_resnet_parameters runs the backbone to record its conv shapes; its features come from
     # that same forward, as a second ResNet101 forward on the CPU takes minutes. The forward runs
@@ -496,6 +545,12 @@ def create_bevformer_parameters(model, img, device, dtype=DEFAULT_DTYPE):
             num_cams=img.shape[1],
             out_indices=tuple(model.img_backbone.out_indices),
             spatial_shapes=tuple(tuple(level.shape[-2:]) for level in levels),
+        ),
+        coder=SimpleNamespace(
+            **{
+                name: getattr(model.bbox_coder, name)
+                for name in ("post_center_range", "max_num", "score_threshold", "num_classes")
+            }
         ),
         backbone=backbone,
         neck=create_fpn_parameters(model.img_neck, features),

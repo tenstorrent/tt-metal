@@ -30,6 +30,7 @@ from models.experimental.bevformer.model_config import (
     BOX_YAW,
     CAN_BUS_DIMS,
     CENTERS_FIRST,
+    CODE_CENTERS,
     CODE_SIZE,
     CODE_XY,
     CODE_Z,
@@ -40,7 +41,7 @@ from models.experimental.bevformer.model_config import (
     FEEDFORWARD_CHANNELS,
     FPN_KWARGS,
     IMAGE_HEIGHT,
-    IMAGE_SIZE_DIVISOR,
+    IMAGE_MEAN_BGR,
     IMAGE_WIDTH,
     NUM_CAMS,
     NUM_CLASSES,
@@ -49,8 +50,11 @@ from models.experimental.bevformer.model_config import (
     NUM_POINTS_IN_PILLAR,
     NUM_QUERY,
     PC_RANGE,
+    RAW_IMAGE_SIZE,
     RESNET_KWARGS,
     SPATIAL_SHAPES,
+    fpn_spatial_shapes,
+    padded_image_size,
 )
 from models.experimental.bevformer.reference.bevformer import BEVFormer, relative_can_bus
 from models.experimental.bevformer.reference.decoder import DetectionTransformerDecoder, inverse_sigmoid, reg_branch
@@ -74,8 +78,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 # Frames follow the reference: lidar x forward, y left, z up; camera x right, y down, z forward.
 # ``point_sampling_3d_2d`` treats row 2 of the composed matrix as depth and normalizes rows 0 and 1
 # by the image width and height, so the matrix is ``K @ [R | -R t]`` with ``K`` in pixels.
-
-NUSCENES_IMAGE_SIZE = (1600, 900)
 
 # The five narrow nuScenes cameras share one nominal intrinsic. Real per-camera
 # calibration differs by well under 1% in focal length and by tens of pixels in
@@ -113,7 +115,7 @@ def _narrow(name: str, yaw_deg: float) -> CameraSpec:
         yaw_deg=yaw_deg,
         focal_px=(NUSCENES_NARROW_FOCAL_PX, NUSCENES_NARROW_FOCAL_PX),
         principal_px=NUSCENES_NARROW_PRINCIPAL_PX,
-        reference_size=NUSCENES_IMAGE_SIZE,
+        reference_size=RAW_IMAGE_SIZE,
     )
 
 
@@ -131,7 +133,7 @@ NUSCENES_CAMERA_RIG: Tuple[CameraSpec, ...] = (
         yaw_deg=180.0,
         focal_px=(NUSCENES_WIDE_FOCAL_PX, NUSCENES_WIDE_FOCAL_PX),
         principal_px=NUSCENES_WIDE_PRINCIPAL_PX,
-        reference_size=NUSCENES_IMAGE_SIZE,
+        reference_size=RAW_IMAGE_SIZE,
     ),
 )
 
@@ -232,12 +234,11 @@ def img_metas_for_dataset(dataset_config, batch_size: int, dtype: torch.dtype = 
     """Build the ``img_metas`` list the encoder expects, with a deterministic rig.
 
     Every batch entry shares the rig, matching a single vehicle's calibration. ``img_shape`` is the
-    padded shape, as upstream's ``PadMultiViewImage`` sets it: the images are padded at the bottom
-    and right to a multiple of ``IMAGE_SIZE_DIVISOR``, and the encoder normalizes the projected
-    points by that shape. ``lidar2img`` stays in the unpadded images' pixels, which the padding
-    does not move.
+    padded shape, as upstream's ``PadMultiViewImage`` sets it (``padded_image_size``), and the
+    encoder normalizes the projected points by that shape. ``lidar2img`` stays in the unpadded
+    images' pixels, which the padding does not move.
     """
-    width, height = (math.ceil(size / IMAGE_SIZE_DIVISOR) * IMAGE_SIZE_DIVISOR for size in dataset_config.input_size)
+    width, height = padded_image_size(*dataset_config.input_size)
     lidar2img = lidar2img_for_dataset(dataset_config, dtype).tolist()
     return [
         {
@@ -275,10 +276,9 @@ class DatasetPreset:
 
     @property
     def spatial_shapes(self):
-        """The preset's feature levels at strides 8, 16, ..., rounded up, each as (h, w), as
-        ``SPATIAL_SHAPES``."""
+        """The preset's feature levels, each as (h, w), as ``SPATIAL_SHAPES``."""
         width, height = self.input_size
-        return [(-(-height // (8 << level)), -(-width // (8 << level))) for level in range(self.num_levels)]
+        return list(fpn_spatial_shapes(height, width, self.num_levels))
 
     @property
     def z_cfg(self):
@@ -288,13 +288,13 @@ class DatasetPreset:
 
 _CARLA_PC_RANGE = (-50.0, -50.0, -5.0, 50.0, 50.0, 3.0)
 _TINY = dict(embed_dims=128, num_heads=4, num_levels=1, num_points=4)
-# The base presets size the deformable attention as the decoder's cross-attention, the plain
-# MSDeformableAttention, does.
+# The base presets: BEVFormer-base's attention sizes over the four camera levels, with the
+# decoder's points per head and level.
 _BASE = dict(embed_dims=EMBED_DIMS, num_heads=NUM_HEADS, num_levels=NUM_LEVELS, num_points=DECODER_NUM_POINTS)
 
 PRESETS = {
     "nuscenes_tiny": DatasetPreset("nuscenes_v1.0_full_640x360", PC_RANGE, NUM_CAMS, (640, 360), **_TINY),
-    "nuscenes_base": DatasetPreset("nuscenes_v1.0_full_1600x900", PC_RANGE, NUM_CAMS, (1600, 900), **_BASE),
+    "nuscenes_base": DatasetPreset("nuscenes_v1.0_full_1600x900", PC_RANGE, NUM_CAMS, RAW_IMAGE_SIZE, **_BASE),
     "carla_tiny": DatasetPreset("carla_v0.9.10_640x480", _CARLA_PC_RANGE, NUM_CAMS, (640, 480), **_TINY),
     "carla_base": DatasetPreset("carla_v0.9.10_1280x960", _CARLA_PC_RANGE, NUM_CAMS, (1280, 960), **_BASE),
 }
@@ -391,10 +391,6 @@ def init_dummy_fpn_weights(torch_model, seed=0):
 # Dtypes TtResNet emits for C3-C5.
 BACKBONE_OUTPUT_DTYPES = [ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16]
 
-
-# BEVFormer-base's image normalization (img_norm_cfg): subtract this BGR mean and divide by
-# std (1, 1, 1), so the images stay in pixel units, not unit scale.
-IMAGE_MEAN_BGR = (103.530, 116.280, 123.675)
 # Random structure at these cell sizes and amplitudes, in pixel units, plus per-pixel noise.
 IMAGE_NOISE_SCALES = ((8, 80.0), (32, 40.0), (128, 20.0))
 IMAGE_PIXEL_NOISE = 8.0
@@ -429,6 +425,15 @@ def assert_pcc(expected, actual, pcc):
     passed, message = assert_with_pcc(expected, actual, pcc)
     logger.info(f"PCC {message} (threshold {pcc})")
     return passed, message
+
+
+def assert_finite(name, tensor):
+    """comp_pcc zeroes NaN and Inf before correlating, so a PCC check needs this one first."""
+    assert torch.isfinite(tensor).all(), f"non-finite values in {name}"
+
+
+def to_device(tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
+    return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
 
 
 def random_image_batch():
@@ -535,7 +540,7 @@ def random_bev(bev_shape, batch_size, generator=None):
 
 def random_encoder_inputs(bev_shape, batch_size=1, seed=0, yaw_step_deg=0.0):
     """Sequence-first BEV queries and positions ``(num_query, bs, C)``, camera features and the
-    cameras' ``img_metas`` (see :func:`img_metas` for ``yaw_step_deg``). The queries and positions are
+    cameras' ``img_metas`` (see :func:`camera_img_metas` for ``yaw_step_deg``). The queries and positions are
     white, as the learned embeddings are."""
     generator = torch.Generator().manual_seed(seed)
     num_query = bev_shape[0] * bev_shape[1]
@@ -543,11 +548,11 @@ def random_encoder_inputs(bev_shape, batch_size=1, seed=0, yaw_step_deg=0.0):
         bev_query=torch.randn(num_query, batch_size, EMBED_DIMS, generator=generator),
         bev_pos=torch.randn(num_query, batch_size, EMBED_DIMS, generator=generator),
         value=random_camera_features(batch_size, generator),
-        img_metas=img_metas(batch_size, yaw_step_deg=yaw_step_deg),
+        img_metas=camera_img_metas(batch_size, yaw_step_deg=yaw_step_deg),
     )
 
 
-def img_metas(batch_size, preset="nuscenes_base", yaw_step_deg=0.0):
+def camera_img_metas(batch_size, preset="nuscenes_base", yaw_step_deg=0.0):
     """``lidar2img`` and ``img_shape`` of a preset's six-camera rig (:func:`img_metas_for_dataset`).
     ``yaw_step_deg`` turns sample ``b``'s rig by ``b * yaw_step_deg`` about the vertical axis, so
     the samples' cameras see different BEV cells."""
@@ -560,12 +565,12 @@ def img_metas(batch_size, preset="nuscenes_base", yaw_step_deg=0.0):
     return metas
 
 
-def pc_range(preset="nuscenes_base"):
+def preset_pc_range(preset="nuscenes_base"):
     """A preset's point-cloud range, the box its camera geometry projects pillars from."""
     return tuple(PRESETS[preset].pc_range)
 
 
-def ego_shift(batch_size):
+def sample_ego_shifts(batch_size):
     """``(bs, 2)`` ego translations in BEV fractions: ``EGO_SHIFT_BEV_FRACTION`` times ``b + 1`` for
     sample ``b``, so a shift taken from the wrong sample shows."""
     return torch.tensor(EGO_SHIFT_BEV_FRACTION) * torch.arange(1, batch_size + 1, dtype=torch.float32)[:, None]
@@ -738,6 +743,21 @@ def assert_channels_close(expected, actual, pcc=0.99):
         assert_pcc(expected[..., channel], actual[..., channel], pcc)
 
 
+def check_decoder_outputs(expected, actual, input_reference_points, bev_shape):
+    """The TT decoder's (layer outputs, refined points, box codes), as sequence-first torch tensors,
+    against the reference's: all finite, the outputs and points layer by layer, as the first layers'
+    accuracy would hide a failing last layer in the stack, and the box codes channel by channel.
+    Logs ``layer_metrics``."""
+    for name, tensor in zip(("output", "reference points", "box codes"), actual):
+        assert_finite(f"the decoder {name}", tensor)
+    for layer, metrics in enumerate(layer_metrics(expected[:2], actual[:2], input_reference_points, bev_shape)):
+        logger.info(f"layer {layer}: " + ", ".join(f"{key} {value:.5f}" for key, value in metrics.items()))
+    for expected_layers, actual_layers in zip(expected[:2], actual[:2], strict=True):
+        for expected_layer, actual_layer in zip(expected_layers, actual_layers, strict=True):
+            assert_pcc(expected_layer, actual_layer, 0.99)
+    assert_channels_close(expected[2], actual[2])
+
+
 # --- Head -------------------------------------------------------------------------------------
 
 
@@ -764,19 +784,32 @@ CENTER_MEAN_ATOL = 0.01
 CENTER_MAX_ATOL = 0.15
 
 
-def center_channels():
-    """Indexes of cx, cy and cz in the box code, which are not contiguous."""
-    channels = list(range(CODE_SIZE))
-    return channels[CODE_XY] + channels[CODE_Z]
+def log_center_error(expected, actual):
+    """Logs and returns the box predictions' center channels' absolute error, in metres."""
+    error = (expected[..., CODE_CENTERS] - actual[..., CODE_CENTERS]).abs()
+    logger.info(f"box center error: mean {error.mean():.4f} m, max {error.max():.4f} m")
+    return error
 
 
 def assert_centers_close(expected, actual):
     """The box predictions' center channels within ``CENTER_MEAN_ATOL`` and ``CENTER_MAX_ATOL``."""
-    centers = center_channels()
-    error = (expected[..., centers] - actual[..., centers]).abs()
-    logger.info(f"box center error: mean {error.mean():.4f} m, max {error.max():.4f} m")
+    error = log_center_error(expected, actual)
     assert error.mean() <= CENTER_MEAN_ATOL, f"mean box center error {error.mean():.4f} m"
     assert error.max() <= CENTER_MAX_ATOL, f"max box center error {error.max():.4f} m"
+
+
+def check_head_outputs(expected, actual):
+    """The TT head's (class logits, box predictions), as torch tensors, against the reference's:
+    finite, the centers within ``assert_centers_close``'s bounds, and the logits and the boxes over
+    all layers, then the last alone, which the coder reads and where the bfloat16 error has built up
+    most. The boxes go channel by channel: a joint PCC would be the centers' alone, as x and y span
+    102.4 m against z's 8 m and the other channels' O(1)."""
+    for name, tensor in zip(("class logits", "box predictions"), actual):
+        assert_finite(f"the head {name}", tensor)
+    assert_centers_close(expected[1], actual[1])
+    for layers in (slice(None), -1):
+        assert_pcc(expected[0][layers], actual[0][layers], 0.99)
+        assert_channels_close(expected[1][layers], actual[1][layers])
 
 
 def assert_boxes_close(expected, actual, pcc=0.99):
@@ -885,6 +918,25 @@ def build_reference_bevformer(bev_shape):
     return model.eval().requires_grad_(False)
 
 
+def check_detector_outputs(expected, actual, pcc):
+    """The TT detector's class logits, box predictions, BEV and ``TtBEVFormer.detect``'s first four
+    outputs, as torch tensors, against the reference's ``(cls_scores, bbox_preds, bev)``: finite, the
+    BEV, the last layer's logits and boxes at ``pcc``, and the detections by ``assert_topk_close``.
+    Logs the box center error, which the trained weights' outputs are not bounded by."""
+    cls_scores, bbox_preds, bev = expected
+    tt_cls_scores, tt_bbox_preds, tt_bev, tt_topk = actual
+    for name, tensor in (("BEV", tt_bev), ("class logits", tt_cls_scores), ("boxes", tt_bbox_preds)):
+        assert_finite(f"the detector's {name}", tensor)
+    log_center_error(bbox_preds[-1], tt_bbox_preds[-1])
+    assert_pcc(bev, tt_bev.reshape(bev.shape), pcc)
+    # The last decoder layer's, which the coder reads.
+    assert_pcc(cls_scores[-1], tt_cls_scores[-1], pcc)
+    assert_channels_close(bbox_preds[-1], tt_bbox_preds[-1], pcc)
+    assert_topk_close(
+        cls_scores[-1], bbox_preds[-1], tt_cls_scores[-1], tt_bbox_preds[-1], tt_topk, pcc, bottom_center=True
+    )
+
+
 def random_fpn_levels(batch_size, generator, spatial_shapes=SPATIAL_SHAPES):
     """Unit-variance FPN-like levels ``(bs, num_cams, C, h, w)``, smooth as the encoder tests'."""
     levels = []
@@ -909,7 +961,7 @@ def frame_metas(batch_size, num_frames, generator, yaw_step_deg=0.0, motion=None
     frames, previous = [], [None] * batch_size
     for i in range(num_frames):
         travelled = sum(motion[:i])
-        metas = img_metas(batch_size, yaw_step_deg=yaw_step_deg)
+        metas = camera_img_metas(batch_size, yaw_step_deg=yaw_step_deg)
         for b, meta in enumerate(metas):
             can_bus = torch.randn(CAN_BUS_DIMS, generator=generator, dtype=torch.float64)
             heading = 0.3 + 0.2 * b + travelled * math.radians(EGO_TURN_DEG) * (b + 1)

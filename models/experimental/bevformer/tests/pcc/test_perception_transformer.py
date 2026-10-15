@@ -9,11 +9,13 @@ import ttnn
 from models.experimental.bevformer.model_config import EMBED_DIMS, ENCODER_NUM_LAYERS, SPATIAL_SHAPES
 from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
+    assert_finite,
     assert_pcc,
     build_reference_transformer,
     fpn_rows,
     frame_metas,
     random_fpn_levels,
+    to_device,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_perception_transformer_parameters
 from models.experimental.bevformer.tt.tt_perception_transformer import TtPerceptionTransformer
@@ -26,10 +28,6 @@ CASES = [
     # once more, which must reuse every program the second compiled.
     ("tiny-bs2", BEV_SHAPES["tiny"], ENCODER_NUM_LAYERS, 2, 40.0, 3),
 ]
-
-
-def _to_device(tensor, device):
-    return ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 
 @torch.no_grad()
@@ -56,9 +54,9 @@ def test_perception_transformer(device, reset_seeds, name, bev_shape, num_layers
         bev_w=bev_w,
         spatial_shapes=SPATIAL_SHAPES,
     )
-    tt_levels = [_to_device(fpn_rows(level), device) for level in levels]
-    tt_queries = _to_device(bev_queries[None], device)
-    tt_pos = _to_device(bev_pos.permute(1, 0, 2), device)
+    tt_levels = [to_device(fpn_rows(level), device) for level in levels]
+    tt_queries = to_device(bev_queries[None], device)
+    tt_pos = to_device(bev_pos.permute(1, 0, 2), device)
 
     torch_prev = tt_prev = frame = None
     num_programs = None
@@ -69,8 +67,7 @@ def test_perception_transformer(device, reset_seeds, name, bev_shape, num_layers
         frame = tt_model.prepare_frame(metas, frame)
         tt_prev = tt_model(tt_levels, tt_queries, tt_pos, frame, prev_bev=tt_prev)
         tt_output = ttnn.to_torch(tt_prev).float().reshape(torch_output.shape)
-        # comp_pcc zeroes NaN and Inf before correlating, so they must be ruled out here.
-        assert torch.isfinite(tt_output).all(), f"non-finite values in frame {i}'s BEV"
+        assert_finite(f"frame {i}'s BEV", tt_output)
         assert_pcc(torch_output, tt_output, 0.999)
         torch_prev = torch_output
         if i == 1:

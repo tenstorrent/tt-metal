@@ -11,36 +11,22 @@ from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDefo
 
 from models.experimental.bevformer.model_config import DeformableAttentionConfig
 
-from models.experimental.bevformer.tests.common import PRESETS
-
-from models.experimental.bevformer.tests.test_utils import (
-    check_with_pcc,
-    check_with_tolerances,
-    print_detailed_comparison,
-)
+from models.experimental.bevformer.tests.common import PRESETS, assert_finite, assert_pcc
 
 from models.experimental.bevformer.tt.model_preprocessing import (
     create_ms_deformable_attention_parameters,
 )
-
-from loguru import logger
-
-# Enable/disable logging output
-ENABLE_LOGGING = True
-
-# Default Test Configuration                                                  #
-PRINT_DETAILED_COMPARISON_FLAG = False
 
 # Module-scoped device: opens once per file instead of once per test case.
 pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
 
 
 @pytest.mark.parametrize(
-    "config_name, batch_size, num_queries, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
+    "config_name, batch_size, num_queries, expected_pcc",
     [
-        ("nuscenes_tiny", 1, 900, 0.999, 0.02, 0.39, 0.36),  # NuScenes tiny model
-        ("nuscenes_base", 1, 10000, 0.999, 0.02, 0.21, 0.23),  # NuScenes base model with larger queries
-        ("carla_base", 1, 12000, 0.999, 0.02, 0.15, 0.18),  # CARLA base model
+        ("nuscenes_tiny", 1, 900, 0.999),
+        ("nuscenes_base", 1, 10000, 0.999),
+        ("carla_base", 1, 12000, 0.999),
     ],
 )
 # The module hands the reference points to the fused op unconverted; the encoder and decoder
@@ -54,9 +40,6 @@ def test_ms_deformable_attention_forward(
     batch_size,
     num_queries,
     expected_pcc,
-    expected_abs_error,
-    expected_rel_error,
-    expected_high_error_ratio,
     seed,
 ):
     """Test TTMSDeformableAttention against PyTorch reference implementation using configurations."""
@@ -135,43 +118,8 @@ def test_ms_deformable_attention_forward(
     )
     tt_model_output = ttnn.to_torch(tt_model_output)
 
-    # --------------------------------------------------------------------------- #
-    # Output Comparison                                                           #
-    # --------------------------------------------------------------------------- #
-
-    # Comprehensive comparison using enhanced test utilities
-    if ENABLE_LOGGING:
-        logger.info(f"Reference model output type: {type(ref_model_output)}, shape: {ref_model_output.shape}")
-    if ENABLE_LOGGING:
-        logger.info(f"TT model output type: {type(tt_model_output)}")
-
-    if PRINT_DETAILED_COMPARISON_FLAG:
-        # Print detailed statistical comparison
-        print_detailed_comparison(
-            ref_model_output,
-            tt_model_output,
-            tensor_name="ms_deformable_attention_output",
-            show_histograms=False,  # Set to True for even more detailed analysis
-        )
-
-    # Comprehensive tolerance checking with multiple criteria
-    check_with_tolerances(
-        ref_model_output,
-        tt_model_output,
-        pcc_threshold=expected_pcc,
-        abs_error_threshold=expected_abs_error,
-        rel_error_threshold=expected_rel_error,
-        max_error_ratio=expected_high_error_ratio,
-        tensor_name="ms_deformable_attention_output",
-    )
-
-    passed, results = check_with_pcc(
-        ref_model_output,
-        tt_model_output,
-        pcc=expected_pcc,
-    )
-
-    assert passed, f"PCC check failed: {results}"
-
-    if ENABLE_LOGGING:
-        logger.info("✅ All tolerance checks passed successfully!")
+    assert (
+        tt_model_output.shape == ref_model_output.shape
+    ), f"{tuple(tt_model_output.shape)} != {tuple(ref_model_output.shape)}"
+    assert_finite("the MSDA output", tt_model_output)
+    assert_pcc(ref_model_output, tt_model_output, expected_pcc)

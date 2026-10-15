@@ -24,7 +24,8 @@ import torch
 
 from models.experimental.bevformer.model_config import (
     BOX_CENTER,
-    BOX_SIZE,
+    BOX_H,
+    BOX_Z,
     CODE_COS,
     CODE_H,
     CODE_SIN,
@@ -81,7 +82,7 @@ def bottom_center(boxes):
     """``(N, 9)`` decoded boxes with cz moved from the box's gravity center to its bottom face, as
     upstream ``BEVFormerHead.get_bboxes`` sets it before building the LiDAR boxes."""
     boxes = boxes.clone()
-    boxes[:, BOX_CENTER.start + 2] -= boxes[:, BOX_SIZE.start + 2] * 0.5
+    boxes[:, BOX_Z] -= boxes[:, BOX_H] * 0.5
     return boxes
 
 

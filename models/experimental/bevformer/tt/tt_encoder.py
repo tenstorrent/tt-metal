@@ -53,12 +53,11 @@ class TTBEVFormerLayer:
         self.params = params
         self.ffn = TtFFN(params.ffn)
         self.temporal_self_attention = TTTemporalSelfAttention(
-            device,
             params.tsa,
+            spatial_shapes=[list(bev_shape)],
             embed_dims=embed_dims,
             num_heads=num_heads,
             num_points=tsa_num_points,
-            spatial_shapes=[list(bev_shape)],
         )
         self.spatial_cross_attention = TTSpatialCrossAttention(
             params.sca,

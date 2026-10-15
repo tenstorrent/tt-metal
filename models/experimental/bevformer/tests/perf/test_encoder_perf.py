@@ -22,21 +22,18 @@ import torch
 import ttnn
 from models.experimental.bevformer.model_config import ENCODER_NUM_LAYERS, GRID_DTYPE, SPATIAL_SHAPES
 from models.experimental.bevformer.tests.common import (
-    signposted_trace,
     BEV_SHAPES,
     assert_pcc,
     build_reference_encoder,
     camera_rows,
-    ego_shift,
+    sample_ego_shifts,
     random_bev,
     random_encoder_inputs,
+    signposted_trace,
+    to_device,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_encoder_parameters
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
-
-
-def _to_device(tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
-    return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
 
 
 @torch.no_grad()
@@ -53,7 +50,7 @@ def test_encoder_perf(device, reset_seeds, num_layers):
     torch_model = build_reference_encoder(num_layers)
     inputs = random_encoder_inputs((bev_h, bev_w), 1)
     prev_bev = random_bev((bev_h, bev_w), 1, torch.Generator().manual_seed(1))
-    shift = ego_shift(1)
+    shift = sample_ego_shifts(1)
 
     def reference(frame_prev_bev, frame_shift):
         return torch_model(
@@ -80,12 +77,12 @@ def test_encoder_perf(device, reset_seeds, num_layers):
     plan = tt_model.prepare_frame(inputs["img_metas"])
     # Uploaded once so the profiled replay measures the encoder, not the transfers.
     tt_inputs = dict(
-        bev_query=_to_device(inputs["bev_query"].permute(1, 0, 2), device),
-        value=_to_device(camera_rows(inputs["value"]), device),
-        bev_pos=_to_device(inputs["bev_pos"].permute(1, 0, 2), device),
+        bev_query=to_device(inputs["bev_query"].permute(1, 0, 2), device),
+        value=to_device(camera_rows(inputs["value"]), device),
+        bev_pos=to_device(inputs["bev_pos"].permute(1, 0, 2), device),
         plan=plan,
-        prev_bev=_to_device(prev_bev.permute(1, 0, 2), device),
-        shift=_to_device(shift.view(1, 1, 1, 2), device, GRID_DTYPE, ttnn.ROW_MAJOR_LAYOUT),
+        prev_bev=to_device(prev_bev.permute(1, 0, 2), device),
+        shift=to_device(shift.view(1, 1, 1, 2), device, GRID_DTYPE, ttnn.ROW_MAJOR_LAYOUT),
     )
 
     def check(expected, tt_output):
