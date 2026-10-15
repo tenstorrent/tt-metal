@@ -1,0 +1,181 @@
+{
+ "metrics": {
+  "auto_ffn_collapse_L00_big_bias": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.0
+  },
+  "auto_ffn_collapse_L00_big_ratio_max": {
+   "t": "2026-10-15T16:14:19",
+   "value": 1.0
+  },
+  "auto_ffn_collapse_L00_big_ratio_min": {
+   "t": "2026-10-15T16:14:19",
+   "value": 1.0
+  },
+  "auto_ffn_collapse_L00_big_rel": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.0
+  },
+  "auto_ffn_collapse_L00_big_rel_limit": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.03
+  },
+  "auto_ffn_collapse_L00_big_row": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.0
+  },
+  "auto_ffn_collapse_L00_layer24_bias": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.0
+  },
+  "auto_ffn_collapse_L00_layer24_ratio_max": {
+   "t": "2026-10-15T16:14:19",
+   "value": 1.0
+  },
+  "auto_ffn_collapse_L00_layer24_ratio_min": {
+   "t": "2026-10-15T16:14:19",
+   "value": 1.0
+  },
+  "auto_ffn_collapse_L00_layer24_rel": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.0
+  },
+  "auto_ffn_collapse_L00_layer24_rel_limit": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.03
+  },
+  "auto_ffn_collapse_L00_layer24_row": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.0
+  },
+  "auto_ffn_collapse_L00_mixed_bias": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.0
+  },
+  "auto_ffn_collapse_L00_mixed_ratio_max": {
+   "t": "2026-10-15T16:14:19",
+   "value": 1.0
+  },
+  "auto_ffn_collapse_L00_mixed_ratio_min": {
+   "t": "2026-10-15T16:14:19",
+   "value": 1.0
+  },
+  "auto_ffn_collapse_L00_mixed_rel": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.0
+  },
+  "auto_ffn_collapse_L00_mixed_rel_limit": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.03
+  },
+  "auto_ffn_collapse_L00_mixed_row": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.0
+  },
+  "auto_ffn_collapse_L00_small_bias": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.0
+  },
+  "auto_ffn_collapse_L00_small_ratio_max": {
+   "t": "2026-10-15T16:14:19",
+   "value": 1.0
+  },
+  "auto_ffn_collapse_L00_small_ratio_min": {
+   "t": "2026-10-15T16:14:19",
+   "value": 1.0
+  },
+  "auto_ffn_collapse_L00_small_rel": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.0
+  },
+  "auto_ffn_collapse_L00_small_rel_limit": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.03
+  },
+  "auto_ffn_collapse_L00_small_row": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.0
+  },
+  "auto_ffn_collapse_L00_vs_cpu_bias": {
+   "t": "2026-10-15T16:14:18",
+   "value": 0.0
+  },
+  "auto_ffn_collapse_L00_vs_cpu_col": {
+   "t": "2026-10-15T16:14:18",
+   "value": 0.0
+  },
+  "auto_ffn_collapse_L00_vs_cpu_col_index": {
+   "t": "2026-10-15T16:14:18",
+   "value": 0
+  },
+  "auto_ffn_collapse_L00_vs_cpu_col_limit": {
+   "t": "2026-10-15T16:14:18",
+   "value": 0.01791144348680973
+  },
+  "auto_ffn_collapse_L00_vs_cpu_ratio_max": {
+   "t": "2026-10-15T16:14:18",
+   "value": 1.0
+  },
+  "auto_ffn_collapse_L00_vs_cpu_ratio_min": {
+   "t": "2026-10-15T16:14:18",
+   "value": 1.0
+  },
+  "auto_ffn_collapse_L00_vs_cpu_rel": {
+   "t": "2026-10-15T16:14:18",
+   "value": 0.0
+  },
+  "auto_ffn_collapse_L00_vs_cpu_rel_limit": {
+   "t": "2026-10-15T16:14:18",
+   "value": 0.004477860871702433
+  },
+  "auto_ffn_collapse_L00_vs_cpu_row": {
+   "t": "2026-10-15T16:14:18",
+   "value": 0.0
+  },
+  "auto_ffn_collapse_L00_vs_golden_bias": {
+   "t": "2026-10-15T16:14:19",
+   "value": 4.267692565917969e-05
+  },
+  "auto_ffn_collapse_L00_vs_golden_col": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.002884830581024289
+  },
+  "auto_ffn_collapse_L00_vs_golden_col_index": {
+   "t": "2026-10-15T16:14:19",
+   "value": 4549
+  },
+  "auto_ffn_collapse_L00_vs_golden_col_limit": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.028071433305740356
+  },
+  "auto_ffn_collapse_L00_vs_golden_ratio_max": {
+   "t": "2026-10-15T16:14:19",
+   "value": 1.0021343231201172
+  },
+  "auto_ffn_collapse_L00_vs_golden_ratio_min": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.9976403117179871
+  },
+  "auto_ffn_collapse_L00_vs_golden_rel": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.0025399976875633
+  },
+  "auto_ffn_collapse_L00_vs_golden_rel_limit": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.007017858559265733
+  },
+  "auto_ffn_collapse_L00_vs_golden_row": {
+   "t": "2026-10-15T16:14:19",
+   "value": 0.003408607095479965
+  },
+  "det_ffn_collapse_L00": {
+   "t": "2026-10-15T16:14:21",
+   "value": 1.0
+  },
+  "pcc_ffn_collapse_L00": {
+   "t": "2026-10-15T16:14:18",
+   "value": 0.9999967716350429
+  }
+ },
+ "task": "C.swa.ffn_collapse"
+}

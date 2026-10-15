@@ -11,9 +11,9 @@ Per chip (r, c) the input is attn_norm's column split [1, 1, S/SP, H/TP] fp32 TI
                                 chip's H/TP columns (H/TP % 32 == 0), bf16 out (exact)
     TtAttnInProj                q(x) @ the chip's K rows of [wq_a | wkv]^T [H/TP, 1280 + 512] (bf16: e4m3 x 2^k is
                                 bf16-exact), HiFi4 + fp32 accumulation, fp32 partial out. The FPU rounds each in-tile
-                                partial dot to ~TF32 (DS41-16), so by default (settings ATTN_IN_MM = exact) the matmul
-                                runs as tt/exact_mm.py:ExactMatmul (one product per tile-dot, fp32 SFPU adds): only the
-                                summation order differs from the reference GEMM. ATTN_IN_MM = fpu: one ttnn.linear
+                                partial dot to ~TF32 (DS41-16). Default (settings ATTN_IN_MM = fpu, owner 2026-10-15):
+                                one ttnn.linear. ATTN_IN_MM = exact (comparison only): tt/exact_mm.py:ExactMatmul (one
+                                product per tile-dot, fp32 SFPU adds; only the summation order differs from the CPU)
     tt/common.py:tp_sum         all_gather over axis 1 + SFPU ttnn.add in mesh-column order (K-30: exact fp32 sum,
                                 bit-identical on every chip of the row; the FPU in reduce_scatter / all_reduce reads fp32
                                 at about TF32) -> [1, 1, S/SP, 1792] fp32, replicated over TP
