@@ -15,6 +15,7 @@
 // the explicit NaN-safe predicate leaves complement lanes bit-untouched.
 
 #include <cstdint>
+#include <limits>
 
 namespace ckernel::sfpu
 {
@@ -27,8 +28,10 @@ __attribute__((noinline)) void calculate_threshold_fresh_cpp(const float thresho
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vFloat input = sfpi::dst_reg[0];
-        // Leave complement lanes untouched, including either-sign NaNs.
-        v_if (!sfpi::is_nan(input) && input <= threshold)
+        // Leave complement lanes untouched, including either-sign NaNs: a NaN
+        // sorts beyond the infinity of its own sign, so only a negative NaN
+        // can pass the sign-magnitude compare and the second test drops it.
+        v_if (input <= threshold && -std::numeric_limits<float>::infinity() <= input)
         {
             sfpi::dst_reg[0] = value;
         }
