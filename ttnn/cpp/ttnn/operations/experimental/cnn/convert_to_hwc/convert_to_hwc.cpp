@@ -5,6 +5,7 @@
 #include "convert_to_hwc.hpp"
 #include "device/convert_to_hwc_device_operation.hpp"
 #include <tt-metalium/math.hpp>
+#include <tt_stl/reflection.hpp>
 
 namespace {
 
@@ -62,6 +63,12 @@ ttnn::Tensor convert_to_hwc(
             output_memory_config = infer_hwc_output_memory_config(input);
         }
     }
+    TT_FATAL(
+        output_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+            output_memory_config.shard_spec().has_value(),
+        "Output memory config must be height sharded with a shard spec, got layout {} (shard spec present: {})",
+        output_memory_config.memory_layout(),
+        output_memory_config.shard_spec().has_value());
     const auto alignment_elements = ttnn::experimental::prim::compute_alignment_requirement_in_elements(input);
     TT_FATAL(alignment_elements != 0, "Number of alignment elements cannot be 0");
     TT_FATAL(
