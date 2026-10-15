@@ -109,3 +109,58 @@ def rope_deinterleaved(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tt
     ttnn.deallocate(head)
     ttnn.deallocate(inter)
     return out
+
+
+def interleave_tail(t: ttnn.Tensor, half: int) -> ttnn.Tensor:
+    """[B, H, R, 2 * half] TILE whose columns are [even | odd] -> the interleaved order (e_0, o_0, e_1, ...): a
+    ROW_MAJOR transpose of [2, half] per row (data movement only, exact). Does not consume ``t``."""
+    b, h, rows = t.shape[0], t.shape[1], t.shape[2]
+    rm = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+    tr = ttnn.transpose(ttnn.reshape(rm, [b * h, rows, 2, half]), -2, -1, memory_config=DRAM)
+    if rm is not t:
+        ttnn.deallocate(rm)
+    out = ttnn.to_layout(ttnn.reshape(tr, [b, h, rows, 2 * half]), ttnn.TILE_LAYOUT, memory_config=DRAM)
+    ttnn.deallocate(tr)
+    return out
+
+
+def rope_heads(
+    x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, inverse: bool = False, interleave: bool = False
+) -> ttnn.Tensor:
+    """RoPE of the last 2 * half columns of x [B, H, R, W] fp32 TILE (every head), held DE-interleaved ([even | odd],
+    ``deinterleave_perm``), by cos / sin [1, 1, R, half] fp32 (broadcast over the heads). The reference's complex
+    product term for term on the SFPU (fp32): forward re = e c - o s, ro = e s + o c; ``inverse`` (rope(...,
+    inverse=True), the conjugate) re = e c + o s, ro = o c - e s. ``interleave``: return the tail in the reference's
+    interleaved order (else [re | ro]). Returns [B, H, R, W] fp32 TILE; does not consume its inputs."""
+    b, h, rows, width = x.shape
+    half = cos.shape[-1]
+    r0 = width - 2 * half
+    xe = ttnn.slice(x, [0, 0, 0, r0], [b, h, rows, r0 + half], memory_config=DRAM)
+    xo = ttnn.slice(x, [0, 0, 0, r0 + half], [b, h, rows, width], memory_config=DRAM)
+
+    def mul(a, c):
+        return ttnn.multiply(a, c, dtype=ttnn.float32, memory_config=DRAM)
+
+    ec, os_, es, oc = mul(xe, cos), mul(xo, sin), mul(xe, sin), mul(xo, cos)
+    if inverse:
+        re = ttnn.add(ec, os_, dtype=ttnn.float32, memory_config=DRAM)
+        ro = ttnn.subtract(oc, es, dtype=ttnn.float32, memory_config=DRAM)
+    else:
+        re = ttnn.subtract(ec, os_, dtype=ttnn.float32, memory_config=DRAM)
+        ro = ttnn.add(es, oc, dtype=ttnn.float32, memory_config=DRAM)
+    for t in (ec, os_, es, oc, xe, xo):
+        ttnn.deallocate(t)
+    tail = ttnn.concat([re, ro], dim=-1, memory_config=DRAM)
+    ttnn.deallocate(re)
+    ttnn.deallocate(ro)
+    if interleave:
+        inter = interleave_tail(tail, half)
+        ttnn.deallocate(tail)
+        tail = inter
+    if r0 == 0:
+        return tail
+    head = ttnn.slice(x, [0, 0, 0, 0], [b, h, rows, r0], memory_config=DRAM)
+    out = ttnn.concat([head, tail], dim=-1, memory_config=DRAM)
+    ttnn.deallocate(head)
+    ttnn.deallocate(tail)
+    return out

@@ -420,8 +420,8 @@ void bind_sdpa(nb::module_& mod) {
             high_precision (bool): bring-up fork option, default False (the source program). True keeps the flash
                 running output and row-sum (L1-accumulated across k_chunks) in Float32 CBs instead of bf16 and
                 computes the softmax exp exactly (the source always uses the fast approximate exp; the scale is then
-                a bf16 immediate, rounded to nearest). Needs fp32_dest_acc_en, bf16 q and kv_format BF16, and no
-                attention_sink.
+                a bf16 immediate, rounded to nearest). Needs fp32_dest_acc_en, bf16 q and kv_format BF16. Takes an
+                attention_sink (its exp uses the same rounded-to-nearest bf16 scale).
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",

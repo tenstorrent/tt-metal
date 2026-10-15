@@ -129,7 +129,6 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
         TT_FATAL(
             q.dtype() == DataType::BFLOAT16 && attrs.kv_format == transformer::bringup::SparseKVFormat::BF16,
             "sparse_sdpa high_precision supports bf16 q and a BF16 kv only");
-        TT_FATAL(!t.attention_sink.has_value(), "sparse_sdpa high_precision does not support attention_sink");
     }
 
     const auto qs = q.logical_shape();
