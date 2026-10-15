@@ -22,8 +22,8 @@
 // A NaN input gives NaN; a result below the smallest normal float is 0.
 //
 // calculate_gelu_tanh (ckernel_sfpu_gelu.h) runs calculate_gelu_tanh_bf16 for BF16 data in DEST and
-// keeps its own body otherwise. It runs under tanh_init<false, true> from gelu_tanh_init, and reads none of
-// its programmable constants.
+// keeps its own body otherwise. gelu_tanh_init writes tanh_init<false, true> for FP32 DEST only: this kernel
+// reads none of its programmable constants.
 
 namespace ckernel::sfpu {
 

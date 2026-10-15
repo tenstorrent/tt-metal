@@ -362,11 +362,11 @@ _GENERATED_GELU_TANH_SPECIAL_RESULTS = {
     "+1": "finite",
     "+200": "finite",
     "+inf": "+inf",
-    "-0": "+0",
+    "-0": "+0",  # torch gives -0; this kernel stores +0
     "-1": "finite",
-    "-100": "+0",
-    "-inf": "nan",
-    "nan": "nan",
+    "-100": "+0",  # torch gives -0; this kernel stores +0
+    "-inf": "nan",  # NaN, as torch gives; the BF16 pack stores a NaN as +inf, which the device reads back
+    "nan": "nan",  # NaN, as torch gives; the BF16 pack stores a NaN as +inf, which the device reads back
 }
 _GENERATED_GELU_TANH_TINY = torch.finfo(torch.float32).tiny  # 2^-126, the smallest normal
 _GENERATED_GELU_TANH_BF16_MAX = torch.finfo(torch.bfloat16).max
