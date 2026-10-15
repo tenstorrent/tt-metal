@@ -159,11 +159,6 @@ public:
     // override, else the config derived from the mesh's dim_types. Meshes in one MGD may differ.
     FabricConfig get_fabric_config(MeshId mesh_id) const;
 
-    // True if any mesh has an EXPLICIT (MGD-declared or process-override) ring/torus FabricConfig. Used to
-    // decide whether the fabric must open in a torus-capable routing mode even when the global opened
-    // config is a plain Mesh, so a per-mesh ring routes correctly. Excludes dim_types-derived defaults.
-    bool has_explicit_ring_or_torus_mesh() const;
-
     // Get the chip ids for a given mesh_id
     // If host_rank is provided, return the chip ids for the submesh for that host rank
     // Otherwise, return the chip ids for the entire mesh
@@ -287,9 +282,6 @@ private:
     std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
     // Resolved FabricConfig per mesh (MGD-declared, process-wide override, or dim_types default).
     std::unordered_map<MeshId, FabricConfig> mesh_fabric_config_;
-    // Whether each mesh's resolved config was EXPLICIT (MGD-declared or process-override) vs a
-    // dim_types-derived default. See has_explicit_ring_or_torus_mesh().
-    std::unordered_map<MeshId, bool> mesh_fabric_config_explicit_;
     bool inter_mesh_relaxed_policy_ = false;  // Default to STRICT (false = not relaxed)
     // Set true in initialize_from_mgd when policy is read from the descriptor (vs implicit default)
     bool inter_mesh_policy_specified_ = false;
