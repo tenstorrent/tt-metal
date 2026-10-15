@@ -63,16 +63,14 @@ def test_model_tp8_dp4(mesh_device):
             users[r * 4 + s] = dict(golden=g, ids=ids, prefill_len=ids.numel() - TEACHER_FORCED)
         users[r * 4 + 2] = dict(golden=None, ids=shared, prefill_len=shared.numel())
 
-    prompts = [users[u]["ids"][: users[u]["prefill_len"]] if u in users else torch.tensor([0]) for u in range(16)]
-    first = gen.prefill(prompts)
+    first = gen.prefill({u: usr["ids"][: usr["prefill_len"]] for u, usr in users.items()})
 
-    top1, pccs, rows = [], [], 0
+    top1, pccs = [], []
     for u, usr in users.items():
         if usr["golden"] is not None:
             ref = golden["logits"][usr["golden"]][usr["prefill_len"] - 1]
             top1.append(int(first[u].argmax()) == int(ref.argmax()))
             pccs.append(pcc(first[u], ref))
-            rows += 1
 
     # ---- teacher-forced decode over the last 4 prompt tokens
     positions = {u: usr["prefill_len"] for u, usr in users.items() if usr["golden"] is not None}

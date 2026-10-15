@@ -84,20 +84,23 @@ class MiMoGalaxyGenerator:
         return user // self.users_per_replica, user % self.users_per_replica
 
     def prefill(self, prompts):
-        """prompts: list of 1D token tensors, one per global user (len <= num_users). Returns last-token logits."""
-        assert len(prompts) <= self.num_users
+        """prompts: dict user -> 1D token tensor (or a list indexed by user). Returns last-token logits, same keys."""
+        as_list = not isinstance(prompts, dict)
+        if as_list:
+            prompts = dict(enumerate(prompts))
+        assert all(0 <= u < self.num_users for u in prompts)
         pending = {}
         # Interleave replicas so all four rows have work in flight.
         for slot in range(self.users_per_replica):
             for r in range(self.dp):
                 user = r * self.users_per_replica + slot
-                if user < len(prompts):
+                if user in prompts:
                     pending[user] = self.models[r].prefill_enqueue(prompts[user], slot)
         logits = {}
         for user, handle in pending.items():
             r, _ = self.locate(user)
             logits[user] = self.models[r].prefill_read(handle)[0]
-        return [logits[u] for u in range(len(prompts))]
+        return [logits[u] for u in range(len(prompts))] if as_list else logits
 
     def decode(self, tokens, positions):
         """tokens, positions: dict user -> int. Users not listed stay idle. Returns dict user -> logits."""
