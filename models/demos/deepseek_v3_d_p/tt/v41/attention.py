@@ -656,7 +656,9 @@ V41CSA.alloc_state = _source_alloc_state
 # TtHCA's protocol with no compressor: prepare_chunk pushes the rope base, A1 = q / window-KV stems, no glue; A2 = the window
 # SDPA over [carry | chunk] + o-proj (V4-Flash's A2 also builds the contract export ring, which V4.1 does not use: kv_export.py
 # reads the carry); the epilogue takes the carry at the real length (a ragged final chunk) and advances the counter.
-A3_SWA = os.environ.get("PREFILL_V41_A3_SWA", "1") == "1"
+A3_SWA = (
+    os.environ.get("PREFILL_V41_A3_SWA", "0") == "1"
+)  # default off: no gain (127k +96, 254k +23 ms per chunk, DS41F-0068)
 
 
 def _swa_traceable(self) -> bool:
