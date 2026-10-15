@@ -1049,3 +1049,20 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   only the links. Why: every gate commit's pre-commit hooks stash unstaged changes, so an uncommitted publish time
   read as the old committed one for seconds (false DASHBOARD STALE twice). The overseer never commits during a run.
 - Selftests: test_publish_time_lives_in_the_run_dir, test_git_commit_waits_out_an_index_lock.
+
+## F75 (2026-10-15): on a smaller box the run IS the scaled model
+
+- Owner: "the deployment box is ONLY for computing the scale factor; once computed EVERYTHING goes scaled: goldens,
+  model (fewer experts, fewer heads), smaller chunk." F64 had built two tracks on a smaller box (real-size tests plus
+  a separate scaled run, SG.1 golden / SL.* / SX.1 / a second fork capture); the overseer proposed it at intake without
+  calling it out. Removed.
+- core/spec.py: `scaling` (partial, fewer chips than the deployment box); once plan.yaml exists the spec IS the
+  scaled view (scaled checkpoint, golden_scaled/<box>, -scaled cache) with no env; BRINGUP_SCALED=0 forces the real
+  checkpoint. The target / ladder are written in this box's units; validate() reports a target chunk that is not the
+  scaled chunk. An old `scaled.ladder` is still read.
+- plan/ledger_gen.py: on a scaled run SG.1 (cut the checkpoint, after PL.1) comes before the goldens, which use it;
+  no SL.* / SX.1 / scaled capture; R.* and PL.1 gates carry BRINGUP_SCALED=0. reference/generate_golden.py: an
+  existing golden that matches the rung is reused (any run), a mismatch stops.
+- Skill: "The rule for a box smaller than the deployment box (read this first)"; roles / agent definition / briefs:
+  every agent on a scaled run is told the run is the scaled model and to read dimensions from its config.
+- Selftests: test_scaled_spec_view, test_ledger_of_a_scaled_run, test_golden_full_layers (reuse).

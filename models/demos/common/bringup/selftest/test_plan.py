@@ -638,31 +638,36 @@ def test_scale_writes_the_reduced_checkpoint(fx, tmp_path, monkeypatch):
 
 
 def test_scaled_spec_view(fx, tmp_path, monkeypatch):
+    """F75: on a smaller box the run IS the scaled model once the plan exists (no env needed); its target and ladder
+    are written in this box's units (the scaled chunk); BRINGUP_SCALED=0 reads the real checkpoint."""
     s, hf, _ = _scaled_setup(fx, tmp_path, monkeypatch)
-    monkeypatch.setenv("BRINGUP_SCALED", "1")
     v = Spec.load(s.path)
-    assert v.scaled and (v.get("target.seq"), v.get("target.chunk")) == (1024, 256)
-    assert [r["name"] for r in v.data["ladder"]] == ["scaled", "scaled_last"] and v.rung("scaled_last")["golden"]
+    assert v.scaled and v.scaling
     assert v.hf_dir == v.scaled_hf_dir and v.golden_root.name == "small" and "golden_scaled" in str(v.golden_root)
     assert v.tt_cache().parent.name == "2x2-scaled" and v.real_hf_dir == hf
-    monkeypatch.delenv("BRINGUP_SCALED")
+    assert any("scaled chunk 256" in e for e in v.validate())  # the fixture's target chunk (64) is not this box's
+    monkeypatch.setenv("BRINGUP_SCALED", "0")
     assert not Spec.load(s.path).scaled and Spec.load(s.path).hf_dir == hf
+    monkeypatch.delenv("BRINGUP_SCALED")
+    (s.bringup_dir / "plan.yaml").unlink()  # before the plan fixes the factors: the real checkpoint
+    assert not Spec.load(s.path).scaled
 
 
-def test_ledger_adds_the_scaled_tasks(fx, tmp_path, monkeypatch):
+def test_ledger_of_a_scaled_run(fx, tmp_path, monkeypatch):
+    """F75: the scaled checkpoint is cut after the plan, the goldens come from it, and every later task runs on it;
+    no separate scaled tasks. The reference checks and the plan check read the real checkpoint."""
     s, _, _ = _scaled_setup(fx, tmp_path, monkeypatch)
     t = {x["id"]: x for x in generate(s, Reference())["tasks"]}
-    assert {"SG.1", "SL.scaled", "SL.scaled_last", "SX.1"} <= set(t)
+    assert not {"SL.scaled", "SL.scaled_last", "SX.1"} & set(t)
     assert t["SG.1"]["deps"] == ["PL.1"] and t["SG.1"]["role"] == "scale" and "plan.scale" in t["SG.1"]["gate"]["cmd"]
-    assert t["SL.scaled"]["deps"][1] == "SG.1" and t["SL.scaled_last"]["deps"] == ["SL.scaled"]
-    assert "BRINGUP_SCALED=1 BRINGUP_RUNG=scaled_last" in t["SL.scaled_last"]["gate"]["cmd"]
-    assert t["X.2"]["deps"] == ["SX.1"] and "--profile SX.1" in t["X.2"]["gate"]["cmd"]
-    o1 = t["O.1"]["gate"]["cmd"]
-    assert o1.count("fork_capture") == 2 and "fork_calls.json results/fork_calls_scaled.json --run-tests" in o1.replace(
-        "models/demos/fixture/bringup/", ""
-    )
-    plain = {x["id"] for x in generate(Spec.load(fx()), Reference())["tasks"]}
-    assert not plain & {"SG.1", "SL.scaled", "SX.1"}
+    goldens = [i for i in t if i.startswith("G.")]
+    assert goldens and t[goldens[0]]["deps"] == ["SG.1"]
+    assert all("BRINGUP_SCALED=0" in t[i]["gate"]["cmd"] for i in ("R.1", "R.2", "R.3", "PL.1"))
+    assert "BRINGUP_SCALED" not in t[goldens[0]]["gate"]["cmd"] and t["X.2"]["deps"] == ["X.1"]
+    early = {x["id"] for x in generate(s, early=True)["tasks"]}
+    assert not any(i.startswith("G.") for i in early)  # no golden before the scaled model exists
+    plain = {x["id"]: x for x in generate(Spec.load(fx()), Reference())["tasks"]}
+    assert "SG.1" not in plain and plain[[i for i in plain if i.startswith("G.")][0]]["deps"] == ["R.3"]
 
 
 def test_fork_cases_merge_captures(tmp_path):
