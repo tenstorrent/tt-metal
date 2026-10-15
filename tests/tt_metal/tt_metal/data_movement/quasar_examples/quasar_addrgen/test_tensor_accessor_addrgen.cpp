@@ -45,7 +45,7 @@
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include "tt_metal/hw/inc/internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_att_config.h"
+#include "tt_metal/llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 #include "tt_metal/tt_metal/api/metal2_host_api/test_helpers.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -115,40 +115,32 @@ std::string iter_mode_name(IterMode m) {
 // TT_METAL_NOC_ATT is set); without it every transfer address is software.
 bool att_enabled() { return std::getenv("TT_METAL_NOC_ATT") != nullptr; }
 
-// Host check: can one BankingConfig walk this device's interleaved `type` banks in page-id order? Needs bank i's ATT
-// selector == bank 0's + i and no per-bank offset. The device code assumes it (the allocator and ATT map guarantee it);
-// interleaved rows skip where it doesn't hold (skip_reason). Only the map this suite targets is known here.
+// Host check: does the HW AddrGen serve this device's interleaved `type` banks? Needs no per-bank offset, and for L1
+// bank i's ATT selector == bank 0's + i (the same check the JIT build makes;
+// quasar_att::worker_banks_form_selector_run). DRAM banks always form a selector run (static_asserted per map in
+// qa_att_windows.hpp). Where it fails, those transfers use software, so interleaved rows that expect the hardware path
+// skip (skip_reason).
 bool interleaved_banks_walkable(distributed::MeshDevice& device, BufferType type) {
     const char* map_name = std::getenv("TT_METAL_NOC_ATT");
-    if (map_name == nullptr || std::string_view(map_name) != "quasar_aether_2x3") {
+    const quasar_att::MapInfo* map_info = map_name != nullptr ? quasar_att::find_map(map_name) : nullptr;
+    if (map_info == nullptr) {
         return false;
     }
-    const noc_att::MapData& map = quasar_aether_2x3_att_config::MAP;
     const auto& allocator = *device.allocator();
-    std::optional<uint32_t> first;
-    for (uint32_t bank = 0; bank < allocator.get_num_banks(type); ++bank) {
-        uint32_t selector = 0;
-        if (type == BufferType::DRAM) {
-            if (bank >= map.dram_selectors.size()) {
-                return false;
-            }
-            selector = map.dram_selectors[bank];
-        } else {
-            const CoreCoord core = device.worker_core_from_logical_core(allocator.get_logical_core_from_bank_id(bank));
-            const noc_att::ResolvedTile tile = noc_att::resolve(map, noc_att::Address::worker(core.x, core.y, 0));
-            if (!tile.valid) {
-                return false;
-            }
-            selector = tile.selector;
-        }
-        if (!first) {
-            first = selector;
-        }
-        if (selector != *first + bank || allocator.get_bank_offset(type, bank) != 0) {
+    const uint32_t num_banks = allocator.get_num_banks(type);
+    for (uint32_t bank = 0; bank < num_banks; ++bank) {
+        if (allocator.get_bank_offset(type, bank) != 0) {
             return false;
         }
     }
-    return true;
+    if (type == BufferType::DRAM) {
+        return true;
+    }
+    std::vector<CoreCoord> bank_cores;
+    for (uint32_t bank = 0; bank < num_banks; ++bank) {
+        bank_cores.push_back(device.worker_core_from_logical_core(allocator.get_logical_core_from_bank_id(bank)));
+    }
+    return quasar_att::worker_banks_form_selector_run(map_info->map, bank_cores);
 }
 
 // Row-major UINT32 tensors throughout: one page is one row (interleaved / HEIGHT) or one
@@ -469,8 +461,16 @@ void expect_buf_rw(
     }
 }
 
+// interleaved_sw: build both kernels as the JIT does for a device whose L1 banks are not one ATT selector run
+// (TT_TA_ADDRGEN_INTERLEAVED_L1_SW): interleaved L1 tensors then use software addresses, everything else still the
+// HW AddrGen.
 void run_case(
-    distributed::MeshDevice& device, const LayoutCase& lc, KernelShape shape, IterMode iter_mode, bool implicit_sync) {
+    distributed::MeshDevice& device,
+    const LayoutCase& lc,
+    KernelShape shape,
+    IterMode iter_mode,
+    bool implicit_sync,
+    bool interleaved_sw = false) {
     const m2::NodeCoord node{0, 0};
     const uint32_t page_size = page_size_bytes(lc);
     const uint32_t pages = num_pages(lc);
@@ -516,6 +516,13 @@ void run_case(
         iter_mode,
         implicit_sync,
         /*disable_addrgen=*/shape == KernelShape::ReadOnly);
+
+    if (interleaved_sw) {
+        for (m2::KernelSpec* kernel : {&producer, &consumer}) {
+            kernel->compiler_options.defines.emplace("TT_TA_ADDRGEN_INTERLEAVED_L1_SW", "1");
+        }
+    }
+    const bool hw_allowed = !(interleaved_sw && !is_sharded(lc) && lc.buffer_type == BufferType::L1);
 
     auto dfb = m2::test_helpers::MakeMinimalDFB("staging", page_size, kNumDfbEntries);
     dfb.data_format_metadata = to_data_format(lc.dtype);
@@ -600,10 +607,11 @@ void run_case(
     std::vector<uint32_t> stats;
     if (producer_is_ta) {
         slow_dispatch::ReadFromL1(device, node, producer_report, kNumStatsWords * sizeof(uint32_t), stats);
-        expect_transfer_stats("reader", stats, pages, iter_mode, /*addrgen_allowed=*/true);
+        expect_transfer_stats("reader", stats, pages, iter_mode, /*addrgen_allowed=*/hw_allowed);
     }
     slow_dispatch::ReadFromL1(device, node, consumer_report, kNumStatsWords * sizeof(uint32_t), stats);
-    expect_transfer_stats("writer", stats, pages, iter_mode, /*addrgen_allowed=*/shape != KernelShape::ReadOnly);
+    expect_transfer_stats(
+        "writer", stats, pages, iter_mode, /*addrgen_allowed=*/hw_allowed && shape != KernelShape::ReadOnly);
 
     expect_buf_rw(
         "producer",
@@ -1230,6 +1238,47 @@ INSTANTIATE_TEST_SUITE_P(
         using namespace unit_tests::dm::ta_addrgen;
         return info.param.layout.name + "_" + shape_name(info.param.shape) + "_" +
                iter_mode_name(info.param.iter_mode) + (info.param.implicit_sync ? "" : "_Explicit");
+    });
+
+// The guard for devices whose L1 banks are not one ascending ATT selector run (e.g. 8x4 with Tensix dispatch, whose
+// compute grid skips a column of the ATT worker grid): the JIT then defines TT_TA_ADDRGEN_INTERLEAVED_L1_SW
+// (build_env_manager.cpp; the detection itself is static_asserted in qa_att_windows.hpp). The 2x3 emulator's banks
+// always form a run, so these rows set the define directly: an interleaved L1 tensor read and written through pages()
+// (the iterator path covers both the hardware-recipe switch and eager page addresses) must use software only, and a
+// sharded tensor in the same build must still use the HW AddrGen.
+class TensorAccessorAddrgenInterleavedSw
+    : public QuasarMeshDeviceSingleCardFixture,
+      public ::testing::WithParamInterface<unit_tests::dm::ta_addrgen::MatrixParam> {};
+
+TEST_P(TensorAccessorAddrgenInterleavedSw, CopiesWithSoftwareAddresses) {
+    using namespace unit_tests::dm::ta_addrgen;
+    const auto& p = GetParam();
+    auto& device = *devices_.at(0);
+    const LayoutCase lc = resolve_grid(device, p.layout);
+    if (const auto reason = skip_reason(device, lc); !reason.empty()) {
+        GTEST_SKIP() << lc.name << ": " << reason;
+    }
+    run_case(device, lc, p.shape, p.iter_mode, p.implicit_sync, /*interleaved_sw=*/true);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    InterleavedSw,
+    TensorAccessorAddrgenInterleavedSw,
+    ::testing::ValuesIn([] {
+        using namespace unit_tests::dm::ta_addrgen;
+        std::vector<MatrixParam> params;
+        for (const LayoutCase& lc : layout_cases()) {
+            if (lc.name == "InterleavedL1") {
+                params.push_back({lc, KernelShape::Copy, IterMode::PagesIterator});
+            } else if (lc.name == "HeightL1") {
+                params.push_back({lc, KernelShape::Copy, IterMode::PageIdLoop});
+            }
+        }
+        return params;
+    }()),
+    [](const ::testing::TestParamInfo<unit_tests::dm::ta_addrgen::MatrixParam>& info) {
+        using namespace unit_tests::dm::ta_addrgen;
+        return info.param.layout.name + "_" + iter_mode_name(info.param.iter_mode);
     });
 
 // ============================================================================

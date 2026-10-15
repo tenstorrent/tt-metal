@@ -82,11 +82,19 @@ inline __attribute__((always_inline)) uint32_t interleaved_bank_selector(uint32_
 
 // Only Metal 2.0 TensorAccessors (built from a binding token) have a hardware recipe. Their binding id is a
 // compile-time constant in their type, which is the sequence's identity. Accessors without one use software.
+//
+// The interleaved recipe also assumes bank b's selector is bank 0's + b (plan_interleaved). For L1 the host checks this
+// per device and defines TT_TA_ADDRGEN_INTERLEAVED_L1_SW where it fails, e.g. when the compute grid is not the whole
+// ATT worker grid (tt_metal/llrt/hal/tt-2xx/quasar/qa_att_windows.hpp); those tensors use software
+// (tensor_accessor::detail::interleaved_uses_software). DRAM banks are each map's logical DRAM channels, a run for
+// every map (checked at compile time there). The sharded recipes check each bank's selector themselves.
 template <typename T, typename = void>
 struct bound_tensor_accessor : std::false_type {};
 template <typename DSpecT>
 struct bound_tensor_accessor<TensorAccessor<DSpecT>, void>
-    : std::bool_constant<DSpecT::binding_id != tensor_accessor::NO_BINDING_ID> {};
+    : std::bool_constant<
+          DSpecT::binding_id != tensor_accessor::NO_BINDING_ID &&
+          !tensor_accessor::detail::interleaved_uses_software<DSpecT>()> {};
 
 template <typename Accessor>
 inline constexpr bool has_hw_recipe = bound_tensor_accessor<Accessor>::value;
@@ -397,8 +405,8 @@ inline void restore_side(const overlay::AddrgenPosition& pos) {
 // programming no longer covers (Seek::run_end):
 //   Interleaved (plan_interleaved): one programming walks the whole tensor. BANK_INNER cycles the bank every page and
 //     the inner loop advances one page per bank wrap, as InterleavedAddrGen computes in software. Assumes the device's
-//     interleaved banks are an ascending stride-1 ATT selector run with no per-bank offset (bank i's selector = bank
-//     0's + i), which the allocator and ATT map guarantee.
+//     interleaved banks are an ascending stride-1 ATT selector run (bank i's selector = bank 0's + i); the host checks
+//     it, and where it fails the tensor has no hardware recipe (bound_tensor_accessor).
 //   Sharded, cross-bank (plan_cross_bank): when the shards along the innermost split dimension sit on banks with
 //     ascending stride-1 selectors at the same bank-local address, one BANK_MIDDLE programming walks a segment in one
 //     shard, the same segment in the next shard's bank, ..., then steps the outer loop to the next row (or, for a

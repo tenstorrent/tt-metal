@@ -66,6 +66,18 @@ inline uint64_t transfer_shard_noc_addr(
 // The address an iterator page holds while its software address is uncomputed (see lazy_page_addr_v).
 inline constexpr uint64_t kLazyNocAddr = ~0ull;
 
+// Whether an interleaved L1 tensor's transfers use software addresses because this device's L1 banks are not one
+// ascending ATT selector run: the host defines TT_TA_ADDRGEN_INTERLEAVED_L1_SW then (build_env_manager.cpp), since the
+// address generator's interleaved recipe assumes bank b's selector is bank 0's + b. DRAM banks always form a run.
+template <typename DSpec>
+constexpr bool interleaved_uses_software() {
+#if defined(TT_TA_ADDRGEN_INTERLEAVED_L1_SW)
+    return DSpec::is_interleaved && !DSpec::is_dram;
+#else
+    return false;
+#endif
+}
+
 // Whether the page iterators may leave a page's software address uncomputed (kLazyNocAddr): when the
 // Quasar address generator serves the accessor's transfers (a bound accessor, in a Quasar DM build with the ATT
 // backend), the transfer doesn't need it, and AccessorPage::noc_addr() computes it if anything asks.
@@ -77,7 +89,7 @@ template <typename Accessor, typename = void>
 inline constexpr bool lazy_page_addr_v = false;
 template <typename Accessor>
 inline constexpr bool lazy_page_addr_v<Accessor, std::void_t<decltype(Accessor::DSpec::binding_id)>> =
-    Accessor::DSpec::binding_id != NO_BINDING_ID;
+    Accessor::DSpec::binding_id != NO_BINDING_ID && !interleaved_uses_software<typename Accessor::DSpec>();
 #else
 template <typename Accessor>
 inline constexpr bool lazy_page_addr_v = false;
