@@ -182,3 +182,51 @@ extern "C" __attribute__((noinline, used)) void masked_store_runtime_mask(std::u
 // CHECK: sw a0,0(
 // CHECK-NEXT: ret
 // CHECK-NOT: ebreak
+
+// Pointer updates accept capacities up to 2^14; capacity 2^15 has a zero-width
+// update mask.
+extern "C" __attribute__((noinline, used)) void fifo_runtime_capacity(std::uint8_t capacity_log2)
+{
+    const auto descriptor = atomic::FifoAcquire {hal::gpr<3>(), hal::gpr<4>(), atomic::FifoPointer::Read, capacity_log2, std::uint8_t {0}, false};
+    TT_INSN(descriptor.operation());
+}
+
+// CHECK-LABEL: <fifo_runtime_capacity>:
+// CHECK: li [[LIMIT:a[0-7]]],14
+// CHECK-NEXT: bltu [[LIMIT]],a0,[[FAIL:[0-9a-f]+]]
+// CHECK: sw
+// CHECK-NEXT: ret
+// CHECK-EMPTY:
+// CHECK-NEXT: [[FAIL]] <
+// CHECK-NEXT: ebreak
+
+// Both value-selected helpers must assert before issuing a capacity-15 update.
+extern "C" __attribute__((noinline, used)) void fifo_capacity15_updates()
+{
+    const auto fifo = atomic::fifo<15>(hal::gpr<3>());
+    atomic::pop(fifo, hal::gpr<4>());
+    atomic::push(fifo, hal::gpr<4>());
+}
+
+// CHECK-LABEL: <fifo_capacity15_updates>:
+// CHECK: ebreak
+// CHECK: sw
+// CHECK: ebreak
+// CHECK: sw
+// CHECK-NEXT: ret
+
+// The same capacity remains supported for read and write readiness probes.
+extern "C" __attribute__((noinline, used)) void fifo_capacity15_waits()
+{
+    const auto fifo = atomic::fifo<15>(hal::gpr<3>());
+    atomic::wait_while<atomic::FifoState::Empty>(fifo, hal::gpr<4>());
+    atomic::wait_while<atomic::FifoState::Full>(fifo, hal::gpr<4>());
+}
+
+// CHECK-LABEL: <fifo_capacity15_waits>:
+// CHECK-NOT: ebreak
+// CHECK: sw
+// CHECK-NOT: ebreak
+// CHECK: sw
+// CHECK-NOT: ebreak
+// CHECK: ret

@@ -18,6 +18,8 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/lock-set-too-wide.cpp 2>&1 | FileCheck %s --check-prefix=LOCK_SET_TOO_WIDE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/runtime-masked-write-address.cpp 2>&1 | FileCheck %s --check-prefix=RUNTIME_MASKED_WRITE_ADDRESS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/runtime-masked-write-data.cpp 2>&1 | FileCheck %s --check-prefix=RUNTIME_MASKED_WRITE_DATA
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/capacity15-pop.cpp 2>&1 | FileCheck %s --check-prefix=CAPACITY15_POP
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/capacity15-push.cpp 2>&1 | FileCheck %s --check-prefix=CAPACITY15_PUSH
 // clang-format on
 
 //--- invalid-counter-result.cpp
@@ -222,3 +224,31 @@ void runtime_masked_write_data(const std::uint32_t index)
 }
 
 // RUNTIME_MASKED_WRITE_DATA: error: static assertion failed: immediate masked write requires hal::gpr<Index>() for its data quad
+
+//--- capacity15-pop.cpp
+#include "hal/atomic.h"
+
+namespace atomic = hal::atomic;
+
+constexpr auto fifo = atomic::fifo<15>(hal::gpr<3>());
+
+void capacity15_pop()
+{
+    atomic::pop<fifo>(hal::gpr<4>());
+}
+
+// CAPACITY15_POP: error: static assertion failed: invalid atomic descriptor
+
+//--- capacity15-push.cpp
+#include "hal/atomic.h"
+
+namespace atomic = hal::atomic;
+
+constexpr auto fifo = atomic::fifo<15>(hal::gpr<3>());
+
+void capacity15_push()
+{
+    atomic::push<fifo>(hal::gpr<4>());
+}
+
+// CAPACITY15_PUSH: error: static assertion failed: invalid atomic descriptor

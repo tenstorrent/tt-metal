@@ -11,6 +11,7 @@
 namespace atomic = hal::atomic;
 
 constexpr atomic::Counter<32, 1> counter_word3 {hal::gpr<1>(), 3};
+constexpr auto fifo16k    = atomic::fifo<14>(hal::gpr<3>());
 constexpr auto fifo32k    = atomic::fifo<15>(hal::gpr<3>());
 constexpr auto lock_word3 = atomic::Lock {hal::gpr<63>(), 3};
 
@@ -19,7 +20,14 @@ static_assert(atomic::is_valid(atomic::Counter<1, 63> {hal::gpr<63>()}));
 static_assert(atomic::is_valid(fifo32k));
 static_assert(atomic::is_valid(lock_word3));
 static_assert(atomic::is_valid(counter_word3.fetch_add(hal::gpr<2>())));
-static_assert(atomic::is_valid(fifo32k.pop<15>(hal::gpr<4>())));
+// Capacity logarithm 15 is valid for waits; its zero-width encoding is unsupported for updates.
+static_assert(atomic::is_valid(fifo16k.pop(hal::gpr<4>())));
+static_assert(atomic::is_valid(fifo16k.push<14>(hal::gpr<4>())));
+static_assert(!atomic::is_valid(fifo32k.pop(hal::gpr<4>())));
+static_assert(!atomic::is_valid(fifo32k.push(hal::gpr<4>())));
+static_assert(!atomic::is_valid(fifo32k.pop<15>(hal::gpr<4>())));
+static_assert(!atomic::is_valid(fifo32k.push<15>(hal::gpr<4>())));
+static_assert(atomic::is_valid(fifo32k.wait_while<atomic::FifoState::Empty>(hal::gpr<4>())));
 static_assert(atomic::is_valid(fifo32k.wait_while<atomic::FifoState::Full>(hal::gpr<4>())));
 static_assert(atomic::is_valid(lock_word3.compare_set<15, 15>()));
 static_assert(atomic::is_valid(atomic::MaskedWrite {hal::gpr<63>(), hal::gpr<60>(), std::uint8_t {0xff}}));

@@ -15,12 +15,14 @@ constexpr atomic::Counter<32, 1> counter_word3 {hal::gpr<1>(), 3};
 constexpr atomic::Counter<1, 63> counter_bit {hal::gpr<63>()};
 constexpr auto fifo8      = atomic::fifo<3>(hal::gpr<3>());
 constexpr auto fifo1      = atomic::fifo<0>(hal::gpr<0>());
+constexpr auto fifo16k    = atomic::fifo<14>(hal::gpr<5>());
 constexpr auto fifo32k    = atomic::fifo<15>(hal::gpr<5>());
 constexpr auto lock_word2 = atomic::Lock {hal::gpr<7>(), 2};
 constexpr auto lock_word0 = atomic::Lock {hal::gpr<63>()};
 
 // Wrap fields are encoded as width - 1 for ATINCGET and capacity_log2 + 1 (mod 16)
-// for ATINCGETPTR; ATCAS prints the set value before the compare value.
+// for ATINCGETPTR (zero is supported only for readiness probes).
+// ATCAS prints the set value before the compare value.
 extern "C" __attribute__((noinline, used)) void descriptor_operations()
 {
     constexpr auto fetch       = atomic::FetchIncrement {hal::gpr<1>(), hal::gpr<2>(), std::uint8_t {3}, std::uint8_t {16}};
@@ -57,7 +59,8 @@ extern "C" __attribute__((noinline, used)) void fifo_pop_push()
     atomic::pop<fifo8, 2>(hal::gpr<4>());
     atomic::push<fifo8>(hal::gpr<6>());
     atomic::push<fifo8, 2>(hal::gpr<6>());
-    atomic::pop<fifo32k, 15>(hal::gpr<0>());
+    atomic::pop<fifo16k, 14>(hal::gpr<0>());
+    atomic::push<fifo16k, 14>(hal::gpr<0>());
 }
 
 // CHECK-LABEL: <fifo_pop_push>:
@@ -65,18 +68,21 @@ extern "C" __attribute__((noinline, used)) void fifo_pop_push()
 // CHECK-NEXT: ttatincgetptr 0,0,2,4,0,4,3
 // CHECK-NEXT: ttatincgetptr 0,0,0,4,1,6,3
 // CHECK-NEXT: ttatincgetptr 0,0,2,4,1,6,3
-// CHECK-NEXT: ttatincgetptr 0,0,15,0,0,0,5
+// CHECK-NEXT: ttatincgetptr 0,0,14,15,0,0,5
+// CHECK-NEXT: ttatincgetptr 0,0,14,15,1,0,5
 // CHECK-NEXT: ret
 
 // Waits set NoIncr and select the read pointer for Empty and the write pointer for Full.
 extern "C" __attribute__((noinline, used)) void fifo_wait_while()
 {
     atomic::wait_while<atomic::FifoState::Empty, fifo1>(hal::gpr<0>());
+    atomic::wait_while<atomic::FifoState::Empty, fifo32k>(hal::gpr<6>());
     atomic::wait_while<atomic::FifoState::Full, fifo32k>(hal::gpr<6>());
 }
 
 // CHECK-LABEL: <fifo_wait_while>:
 // CHECK-NEXT: ttatincgetptr 0,1,0,1,0,0,0
+// CHECK-NEXT: ttatincgetptr 0,1,0,0,0,6,5
 // CHECK-NEXT: ttatincgetptr 0,1,0,0,1,6,5
 // CHECK-NEXT: ret
 
