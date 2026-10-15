@@ -10,6 +10,7 @@
 #include <tt-metalium/distributed.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "tt_metal/llrt/tt_cluster.hpp"
 #include <umd/device/pcie/pci_device.hpp>
 
 #include <cerrno>
@@ -53,16 +54,15 @@ void HDSocketDescriptor::populate_from_owner(
     core_x = core.core_coord.x;
     core_y = core.core_coord.y;
     mesh_coord.assign(core.device_coord.coords().begin(), core.device_coord.coords().end());
-    // Translated only for a Tensix socket: the worker grid cannot translate an ETH core -- it
-    // throws for some and returns a wrong core for the rest.
-    if (core_is_tensix) {
-        auto vc = mesh_device->worker_core_from_logical_core(core.core_coord);
-        virtual_core_x = vc.x;
-        virtual_core_y = vc.y;
-    } else {
-        virtual_core_x = core.core_coord.x;
-        virtual_core_y = core.core_coord.y;
-    }
+    // The worker grid cannot translate an ETH core, so a non-Tensix one goes through the cluster's
+    // physical-to-virtual map instead, exactly as D2HSocket::sender_virtual_core does.
+    const auto vc =
+        core_is_tensix
+            ? mesh_device->worker_core_from_logical_core(core.core_coord)
+            : mesh_device->impl().metal_env().get_cluster().get_virtual_coordinate_from_physical_coordinates(
+                  static_cast<ChipId>(logical_device_id), core.core_coord);
+    virtual_core_x = vc.x;
+    virtual_core_y = vc.y;
     pcie_alignment = mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST);
 }
 

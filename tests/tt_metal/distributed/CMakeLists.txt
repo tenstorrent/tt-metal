@@ -157,6 +157,7 @@ set_target_properties(
 # E2H leg benchmark: no MPI, one device, fabric up. It carries its own main(), so it cannot link
 # benchmark_main.
 add_executable(erisc_e2h_benchmark)
+target_precompile_headers(erisc_e2h_benchmark REUSE_FROM metal_test_pch)
 target_sources(erisc_e2h_benchmark PRIVATE benchmark_erisc_e2h_leg.cpp)
 target_link_libraries(
     erisc_e2h_benchmark
