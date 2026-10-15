@@ -33,7 +33,7 @@ AUXILIARY_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_expli
 POLICIES = ("WaitAndPopPerTile", "BulkWaitBulkPop", "WaitUpfrontNoPop", "NoWaitNoPop")
 INDEXED_POLICIES = ("WaitUpfrontNoPop", "NoWaitNoPop")
 DIMS = ("REDUCE_ROW", "REDUCE_COL", "REDUCE_SCALAR")
-RELOAD_MODES = ("FoldViaAdd", "CopySeedPairs", "CopySeedUniform", "CopySeedSfpuAdd", "CopySeedZeroPair")
+RELOAD_MODES = ("FoldViaAdd", "CopySeedPairs", "CopySeedSfpuAdd")
 
 TILE_TYPE = {"FirstRow": 0, "FirstColumn": 1, "FirstRowPerFaceRow": 2, "Zero": 3}
 
@@ -50,7 +50,7 @@ class ReduceCase:
     cols: int
     batches: int = 1
     pool: str = "SUM"
-    algorithm: str = "ReduceTile"
+    algorithm: str = "Native"
     policy: str = "BulkWaitBulkPop"
     calls: int = 1
     input_dtype: str = "bf16"
@@ -70,7 +70,7 @@ class ReduceCase:
 
     @property
     def additive(self) -> bool:
-        return self.algorithm == "AccumulateViaAdd"
+        return self.algorithm == "TileSum"
 
     @property
     def uses_sfpu(self) -> bool:
@@ -189,7 +189,7 @@ def _algorithm_cases() -> list[ReduceCase]:
             reduce_tile_cols = 8 if dim == "REDUCE_COL" else cols
             cases.append(
                 _case(
-                    f"algorithm-ReduceTile-{pool}-{dim}",
+                    f"algorithm-Native-{pool}-{dim}",
                     dim=dim,
                     rows=rows,
                     cols=reduce_tile_cols,
@@ -201,13 +201,13 @@ def _algorithm_cases() -> list[ReduceCase]:
                 for calls in (1, 2):
                     cases.append(
                         _case(
-                            f"algorithm-AccumulateViaAdd-{pool}-{dim}-{policy}-calls{calls}",
+                            f"algorithm-TileSum-{pool}-{dim}-{policy}-calls{calls}",
                             dim=dim,
                             rows=rows,
                             cols=cols,
                             batches=batches,
                             pool=pool,
-                            algorithm="AccumulateViaAdd",
+                            algorithm="TileSum",
                             policy=policy,
                             calls=calls,
                         )
@@ -217,12 +217,12 @@ def _algorithm_cases() -> list[ReduceCase]:
             rows, cols, batches = _shape_for_dim(dim)
             cases.append(
                 _case(
-                    f"algorithm-AccumulateViaAdd-{dtype}-{dim}",
+                    f"algorithm-TileSum-{dtype}-{dim}",
                     dim=dim,
                     rows=rows,
                     cols=cols,
                     batches=batches,
-                    algorithm="AccumulateViaAdd",
+                    algorithm="TileSum",
                     input_dtype=dtype,
                 )
             )
@@ -272,7 +272,7 @@ def _partial_cases() -> list[ReduceCase]:
                         cols=cols,
                         batches=batches,
                         pool=pool,
-                        algorithm="AccumulateViaAdd",
+                        algorithm="TileSum",
                         policy=policy,
                         partial=7,
                     )
@@ -286,7 +286,7 @@ def _partial_cases() -> list[ReduceCase]:
                         cols=cols,
                         batches=batches,
                         pool=pool,
-                        algorithm="AccumulateViaAdd",
+                        algorithm="TileSum",
                         policy=policy,
                         calls=2,
                         partial=7,
@@ -299,7 +299,7 @@ def _partial_cases() -> list[ReduceCase]:
                     dim=dim,
                     rows=rows,
                     cols=cols,
-                    algorithm="AccumulateViaAdd",
+                    algorithm="TileSum",
                     partial=valid,
                 )
             )
@@ -320,7 +320,7 @@ def _within_tile_cases() -> list[ReduceCase]:
                         cols=cols,
                         batches=batches,
                         pool=pool,
-                        algorithm="AccumulateViaAdd",
+                        algorithm="TileSum",
                         policy=policy,
                         within_tile="Skip",
                     )
@@ -332,7 +332,7 @@ def _within_tile_cases() -> list[ReduceCase]:
                 rows=rows,
                 cols=cols,
                 batches=batches,
-                algorithm="AccumulateViaAdd",
+                algorithm="TileSum",
                 policy="NoWaitNoPop",
                 calls=2,
                 within_tile="Skip",
@@ -354,7 +354,7 @@ def _reload_cases() -> list[ReduceCase]:
                         rows=rows,
                         cols=cols,
                         batches=batches,
-                        algorithm="AccumulateViaAdd",
+                        algorithm="TileSum",
                         policy=policy,
                         calls=3,
                         reload=reload,
@@ -362,15 +362,15 @@ def _reload_cases() -> list[ReduceCase]:
                 )
         cases.append(
             _case(
-                f"reload-CopySeedZeroPair-partial-{dim}",
+                f"reload-CopySeedPairs-partial-{dim}",
                 dim=dim,
                 rows=rows,
                 cols=cols,
                 batches=batches,
-                algorithm="AccumulateViaAdd",
+                algorithm="TileSum",
                 policy="NoWaitNoPop",
                 calls=2,
-                reload="CopySeedZeroPair",
+                reload="CopySeedPairs",
                 partial=9,
             )
         )
@@ -382,7 +382,7 @@ def _reload_cases() -> list[ReduceCase]:
                 dim="REDUCE_ROW",
                 rows=2,
                 cols=cols,
-                algorithm="AccumulateViaAdd",
+                algorithm="TileSum",
                 policy="NoWaitNoPop",
                 calls=2,
                 reload="FoldViaAdd",
@@ -397,7 +397,7 @@ def _chunk_cases() -> list[ReduceCase]:
         for policy in ("WaitAndPopPerTile", "BulkWaitBulkPop", "NoWaitNoPop"):
             cases.append(
                 _case(
-                    f"chunk-ReduceTile-{policy}-chunk{chunk}",
+                    f"chunk-Native-{policy}-chunk{chunk}",
                     dim="REDUCE_COL",
                     rows=3,
                     cols=6,
@@ -408,18 +408,18 @@ def _chunk_cases() -> list[ReduceCase]:
             )
         cases.append(
             _case(
-                f"chunk-AccumulateViaAdd-BulkWaitBulkPop-chunk{chunk}",
+                f"chunk-TileSum-BulkWaitBulkPop-chunk{chunk}",
                 dim="REDUCE_COL",
                 rows=3,
                 cols=6,
                 batches=2,
-                algorithm="AccumulateViaAdd",
+                algorithm="TileSum",
                 output_group=chunk,
             )
         )
     cases.append(
         _case(
-            "chunk-ReduceTile-int32-chunk2",
+            "chunk-Native-int32-chunk2",
             dim="REDUCE_COL",
             rows=3,
             cols=6,
@@ -431,7 +431,7 @@ def _chunk_cases() -> list[ReduceCase]:
     )
     cases.append(
         _case(
-            "chunk-ReduceTile-accumulate-chunk2",
+            "chunk-Native-accumulate-chunk2",
             dim="REDUCE_COL",
             rows=3,
             cols=6,
@@ -445,25 +445,23 @@ def _chunk_cases() -> list[ReduceCase]:
 
 def _auxiliary_offset_cases() -> list[ReduceCase]:
     return [
-        _case("offset-ReduceTile-SUM-REDUCE_ROW", dim="REDUCE_ROW", rows=2, cols=3, auxiliary_offset=2),
+        _case("offset-Native-SUM-REDUCE_ROW", dim="REDUCE_ROW", rows=2, cols=3, auxiliary_offset=2),
+        _case("offset-Native-AVG-REDUCE_SCALAR", dim="REDUCE_SCALAR", rows=2, cols=3, pool="AVG", auxiliary_offset=1),
+        _case("offset-Native-partial-REDUCE_COL", dim="REDUCE_COL", rows=3, cols=2, partial=5, auxiliary_offset=1),
         _case(
-            "offset-ReduceTile-AVG-REDUCE_SCALAR", dim="REDUCE_SCALAR", rows=2, cols=3, pool="AVG", auxiliary_offset=1
-        ),
-        _case("offset-ReduceTile-partial-REDUCE_COL", dim="REDUCE_COL", rows=3, cols=2, partial=5, auxiliary_offset=1),
-        _case(
-            "offset-AccumulateViaAdd-REDUCE_ROW",
+            "offset-TileSum-REDUCE_ROW",
             dim="REDUCE_ROW",
             rows=2,
             cols=5,
-            algorithm="AccumulateViaAdd",
+            algorithm="TileSum",
             auxiliary_offset=1,
         ),
         _case(
-            "offset-AccumulateViaAdd-partial-REDUCE_COL",
+            "offset-TileSum-partial-REDUCE_COL",
             dim="REDUCE_COL",
             rows=5,
             cols=2,
-            algorithm="AccumulateViaAdd",
+            algorithm="TileSum",
             partial=3,
             auxiliary_offset=2,
         ),
@@ -502,7 +500,7 @@ def _no_auxiliary_cases() -> list[ReduceCase]:
 def _stride_cases() -> list[ReduceCase]:
     cases = []
     for dim in ("REDUCE_ROW", "REDUCE_COL"):
-        for algorithm in ("ReduceTile", "AccumulateViaAdd"):
+        for algorithm in ("Native", "TileSum"):
             for policy in INDEXED_POLICIES:
                 cases.append(
                     _case(
@@ -533,7 +531,7 @@ def _regression_cases() -> list[ReduceCase]:
                         rows=rows,
                         cols=cols,
                         calls=3,
-                        algorithm="AccumulateViaAdd",
+                        algorithm="TileSum",
                         policy=policy,
                         partial=7,
                         reload="CopySeedSfpuAdd",
@@ -562,7 +560,7 @@ def _regression_cases() -> list[ReduceCase]:
                     rows=rows,
                     cols=cols,
                     batches=batches,
-                    algorithm="AccumulateViaAdd",
+                    algorithm="TileSum",
                     policy=policy,
                     stream_output=True,
                 )
@@ -576,11 +574,27 @@ def _regression_cases() -> list[ReduceCase]:
                 cols=5,
                 batches=2,
                 calls=2 if policy == "NoWaitNoPop" else 1,
-                algorithm="AccumulateViaAdd",
+                algorithm="TileSum",
                 policy=policy,
                 post_exp=True,
             )
         )
+    # Native runs post_reduce_op only on the call marked Accumulate::at_last. REDUCE_SCALAR is left out: its sum is
+    # large enough that exp(-0.01 * sum) is within atol whether or not earlier calls ran the post-op.
+    for dim in ("REDUCE_ROW", "REDUCE_COL"):
+        rows, cols, batches = _shape_for_dim(dim)
+        for calls in (2, 3):
+            cases.append(
+                _case(
+                    f"post-exp-Native-{dim}-calls{calls}",
+                    dim=dim,
+                    rows=rows,
+                    cols=cols,
+                    batches=batches,
+                    calls=calls,
+                    post_exp=True,
+                )
+            )
     return cases
 
 
@@ -863,7 +877,7 @@ def _skip_reason(device, case: ReduceCase) -> str | None:
     if case.uses_sfpu:
         return "bf16 MIN is not validated on Quasar"
     if case.additive:
-        return "AccumulateViaAdd is not validated on Quasar"
+        return "TileSum is not validated on Quasar"
     if case.pool == "MAX" and case.dim == "REDUCE_ROW" and case.calls > 1:
         return "The MAX row accumulator reload is not supported on Quasar"
     return None

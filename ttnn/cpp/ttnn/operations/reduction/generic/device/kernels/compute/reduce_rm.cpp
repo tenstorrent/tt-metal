@@ -64,7 +64,7 @@ FORCE_INLINE void reduce_block(
             fp32_mode>(
             compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::Accumulate::at(dfb::acc, chunk_idx),
+            compute_kernel_lib::Accumulate::at_last(dfb::acc, chunk_idx),
 #ifdef REDUCE_POST_MUL
             [](uint32_t dst_idx) {
                 const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
