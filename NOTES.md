@@ -27,3 +27,13 @@
   (sizes match MLPerf; new encoder sha ef72...61d1). Fixed stage503.sh (grep >/dev/null).
 - Queued t503-ab-r1 and t503-ab-r2 on blx03's runner by hand (drv503 had exited 4 on the false alarm).
   probe503.sh now checks only runner/done/t503-ab-r2.done.
+
+## 2026-10-15 01:20 PDT (run 1955)
+- Drop: 2026-10-14 19:47:29 UTC, blx03, broker job 250 (ours, t503-ab-r1), chips unknown; blx03 host reboot
+  (chips left PCIe, live LTX jobs 229/236/243 also killed). blx03 rebooted again ~08:13 UTC 10-15; runner died with it.
+- 01:16 PDT: blx03 broker HELD degraded (startup: 1/32 chip off bus, bridge-reset chip 19 failed). blx01 busy with a
+  trays repro (job 722). g15blx02 skipped for this pair.
+- Exabox not used: no fasth3 workspace/build/weights there, and ~/ has 66 GB free vs ~96 GB of weights. Staging + build
+  would take hours; blx03 already has everything staged.
+- Restarted blx03 runner (pid 8491); it will rerun t503-ab-r1 (one drop so far) then r2 when the broker is healthy.
+- Probe now inline ssh (harness flagged the wrapper script as naming no ssh host).
