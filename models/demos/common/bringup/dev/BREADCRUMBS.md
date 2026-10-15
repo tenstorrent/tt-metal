@@ -1018,3 +1018,15 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   ignores dashboard yaml too. Owner: "I want this built into the framework", not a per-session timer.
 - overseer.py CLI: `--tasks` / `--roles` repeat (action=append) instead of a greedy list that swallowed the note text.
 - Selftests: test_links.py.
+
+## F72 (2026-10-15): the swap tail limit is the noise floor, not 1 %
+
+- testing/component.py `_check_tail`: the block-out check after the last swapped step was a fixed swap_out_rel (1 %).
+  It now runs the same CPU tail from the last step's bf16 precision model (component_checks.precision_model, on the
+  step's inputs) and limits the block out at component_calib x max(that error, the bf16 resolution of the output),
+  with no fixed floor or cap; swap_out_rel only when the model cannot run. Metrics `<tag>_model_rel`,
+  `<tag>_rel_limit`.
+- Why (DeepSeek-V4.1 S.swa.06, owner): the fixed 1 % failed a correct device attention (1.6 %; the model's own fp8
+  roundings amplify bf16 differences) and pushed the agents into "exact" kernels (25x matmuls, 64 ms per layer).
+  Owner: "thresholds should be derived from the noise floor of the exact dtype with the CPU op, not fixed."
+- Selftest: test_the_tail_limit_follows_the_precision_model.
