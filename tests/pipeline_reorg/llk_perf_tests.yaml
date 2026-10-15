@@ -22,6 +22,11 @@
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "true"
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
+    PIPELINE: "nightly"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_wormhole group 2/5
   split_group: 2
@@ -35,6 +40,11 @@
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "true"
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
+    PIPELINE: "nightly"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_wormhole group 3/5
   split_group: 3
@@ -48,6 +58,11 @@
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "true"
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
+    PIPELINE: "nightly"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_wormhole group 4/5
   split_group: 4
@@ -61,6 +76,11 @@
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "true"
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
+    PIPELINE: "nightly"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_wormhole group 5/5
   split_group: 5
@@ -74,6 +94,11 @@
       timeout: 150
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "true"
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
+    PIPELINE: "nightly"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 1/5
   split_group: 1
@@ -87,6 +112,11 @@
       timeout: 240
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "true"
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
+    PIPELINE: "nightly"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 2/5
   split_group: 2
@@ -100,6 +130,11 @@
       timeout: 240
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "true"
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
+    PIPELINE: "nightly"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 3/5
   split_group: 3
@@ -113,6 +148,11 @@
       timeout: 240
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "true"
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
+    PIPELINE: "nightly"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 4/5
   split_group: 4
@@ -126,6 +166,11 @@
       timeout: 240
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "true"
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
+    PIPELINE: "nightly"
+    TT_LLK_DISABLE_ASSERTS: "1"
 
 - name: llk_perf_blackhole group 5/5
   split_group: 5
@@ -139,3 +184,8 @@
       timeout: 240
   owner_id: U09UC143684 # Nemanja Divnic
   workdir: tt_metal/tt-llk
+  env:
+    SPEED_OF_LIGHT: "true"
+    LLK_PERF_RUN_TYPES: ""  # blank selects every run type, as the nightly call does
+    PIPELINE: "nightly"
+    TT_LLK_DISABLE_ASSERTS: "1"

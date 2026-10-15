@@ -89,9 +89,16 @@ PYTEST_TIMEOUT_FLAG = re.compile(r"\s+--timeout\s+\d+")
 # packages artifact rather than a build tree.
 PACKAGE_INSTALL_PREFIXES = ("/usr/share/tt-metalium", "/usr/libexec/tt-metalium")
 
-# Where the LLK pipelines run their cmds from (their LLK_PATH). Their entries open
-# with `cd tests/python_tests`, which from the gate's /work would otherwise land in
-# tt-metal's own tests/.
+# The LLK tree, and what every leg running from it needs. Derived from the workdir
+# rather than declared per entry: these never vary, and a yaml added later would
+# forget them. The LLK CI image carries LLK's pinned test deps (pytest-xdist,
+# tt-exalens, torch); the setup installs the pinned SFPI toolchain.
+LLK_WORKDIR = "tt_metal/tt-llk"
+LLK_SETUP_CMD = "cd tests && ./setup_testing_env.sh"
+
+# An undeclared SPEED_OF_LIGHT does not crash these -- the script defaults it, so
+# the leg silently measures the wrong mode. See check_llk_perf_env.
+LLK_PERF_SCRIPT = re.compile(r"run_llk_perf_\w*\.sh")
 
 DEFAULT_TTSIM_SKIP_LIST = "tests/pipeline_reorg/ttsim-skip-list.yaml"
 DEFAULT_SKU_CONFIG = ".github/sku_config.yaml"
@@ -603,6 +610,18 @@ def entry_env(entry, path):
     return "\n".join(f"{key}={value}" for key, value in env.items())
 
 
+def check_llk_perf_env(entry, path):
+    """A perf entry must say which mode it measures; the default would be wrong."""
+    cmd = entry.get("cmd") or ""
+    if not LLK_PERF_SCRIPT.search(cmd):
+        return
+    if "SPEED_OF_LIGHT" not in (entry.get("env") or {}):
+        raise GateError(
+            f"{path}: entry '{entry.get('name')}' runs an LLK perf script but declares no "
+            "SPEED_OF_LIGHT in its env, so it would measure a different mode than its pipeline."
+        )
+
+
 def entry_workdir(entry, path):
     """The directory a leg's cmd runs from, relative to the checkout root.
 
@@ -727,6 +746,8 @@ def scope_file(
 
         team = entry.get("team")
         workdir = entry_workdir(entry, path)
+        check_llk_perf_env(entry, path)
+        llk = workdir == LLK_WORKDIR
         for sku in runnable:
             run_legs.append(
                 {
@@ -740,6 +761,8 @@ def scope_file(
                     "packages": needs_packages(entry),
                     "workdir": workdir,
                     "env": entry_env(entry, path),
+                    "llk_image": llk,
+                    "setup": LLK_SETUP_CMD if llk else "",
                 }
             )
 
@@ -970,6 +993,8 @@ def filter_matrix(scope, matrices, skips):
             row["gate_packages"] = leg["packages"]
             row["gate_workdir"] = leg["workdir"]
             row["gate_env"] = leg["env"]
+            row["gate_llk_image"] = leg["llk_image"]
+            row["gate_setup"] = leg["setup"]
             if str(row.get("sku", "")).startswith("sim_"):
                 stripped = PYTEST_TIMEOUT_FLAG.sub("", row.get("cmd") or "")
                 if stripped != row.get("cmd"):

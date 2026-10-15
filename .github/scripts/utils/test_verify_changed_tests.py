@@ -1716,3 +1716,99 @@ def test_declared_env_matches_the_owning_pipeline(stem: str, spec: tuple):
         f"{stem}.yaml declares {env_key}={declared_value!r}, which {workflow} no longer passes "
         f"(it passes {passed!r}). Update the tests yaml so the gate runs what the pipeline runs."
     )
+
+
+# --- derived LLK image and setup ---------------------------------------------
+
+LLK_DERIVED_YAML = """\
+- name: llk thing
+  cmd: |
+    cd tests/python_tests
+    pytest -q .
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  team: llk
+  owner_id: U030
+  workdir: tt_metal/tt-llk
+
+- name: plain thing
+  cmd: ./build/test/plain
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  team: llk
+  owner_id: U031
+"""
+
+
+def test_llk_workdir_derives_image_and_setup(repo: Repo):
+    """Constant for every LLK leg, so derived from workdir rather than declared on
+    each entry -- a yaml added later would forget the declaration."""
+    repo.write("tests/pipeline_reorg/llk_derived_tests.yaml", LLK_DERIVED_YAML)
+    code, payload, stderr = repo.scope()
+    assert code == 0, stderr
+    legs = {leg["name"]: leg for leg in payload["run_legs"]}
+    assert legs["llk thing"]["llk_image"] is True
+    assert legs["llk thing"]["setup"] == "cd tests && ./setup_testing_env.sh"
+    # An entry without the workdir is untouched.
+    assert legs["plain thing"]["llk_image"] is False
+    assert legs["plain thing"]["setup"] == ""
+
+
+def test_llk_image_and_setup_reach_the_dispatched_row(repo: Repo):
+    repo.write("tests/pipeline_reorg/llk_derived_tests.yaml", LLK_DERIVED_YAML)
+    rows = [
+        matrix_row("llk thing [wh_n150_civ2]", "wh_n150_civ2", arch="wormhole_b0"),
+        matrix_row("plain thing [wh_n150_civ2]", "wh_n150_civ2", arch="wormhole_b0"),
+    ]
+    code, payload, stderr = run_with_matrices(repo, {"llk_derived_tests": rows})
+    assert code == 0, stderr
+    by_name = {r["name"].split(" [")[0]: r for r in payload["legs"]}
+    assert by_name["llk thing"]["gate_llk_image"] is True
+    assert by_name["llk thing"]["gate_setup"].startswith("cd tests &&")
+    assert by_name["plain thing"]["gate_llk_image"] is False
+    assert by_name["plain thing"]["gate_setup"] == ""
+
+
+# --- LLK perf mode lint ------------------------------------------------------
+
+PERF_YAML = """\
+- name: llk perf group
+  cmd: |
+    set -euo pipefail
+    ./tests/run_llk_perf_wormhole.sh 1 5
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  team: llk
+  owner_id: U040
+  workdir: tt_metal/tt-llk
+"""
+
+
+def test_perf_entry_without_speed_of_light_fails_closed(repo: Repo):
+    """The script defaults it to true, so omitting it measures the wrong mode
+    silently rather than crashing -- the gate refuses instead."""
+    repo.write("tests/pipeline_reorg/llk_perf_probe_tests.yaml", PERF_YAML)
+    code, _, stderr = repo.scope()
+    assert code == 1
+    assert "SPEED_OF_LIGHT" in stderr
+
+
+def test_perf_entry_with_speed_of_light_is_accepted(repo: Repo):
+    declared = PERF_YAML.replace(
+        "  workdir: tt_metal/tt-llk\n",
+        '  workdir: tt_metal/tt-llk\n  env:\n    SPEED_OF_LIGHT: "false"\n',
+    )
+    repo.write("tests/pipeline_reorg/llk_perf_probe_tests.yaml", declared)
+    code, payload, stderr = repo.scope()
+    assert code == 0, stderr
+    assert any(leg["name"] == "llk perf group" for leg in payload["run_legs"])
+
+
+def test_the_lint_only_applies_to_perf_scripts(repo: Repo):
+    """A non-perf LLK entry needs no SPEED_OF_LIGHT."""
+    repo.write("tests/pipeline_reorg/llk_derived_tests.yaml", LLK_DERIVED_YAML)
+    code, _, stderr = repo.scope()
+    assert code == 0, stderr
