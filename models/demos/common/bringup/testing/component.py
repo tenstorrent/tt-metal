@@ -348,9 +348,12 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
         return False
     lim = {k: s.threshold(k, v) for k, v in SWAP_STEP_DEFAULTS.items()}
     rel_lim, err = lim["swap_step_rel"], component_error(s, block_type, st.name, layer) if mode == "pcc" else None
-    if err is not None:  # as accurate in the block as in its own gate: an exact (fp32) step gets a tight limit
+    if err is not None:  # as accurate in the block as in its own gate: the step's own noise floor, no fixed cap (F73)
         metrics.record(f"{tag}_component_err", err)
-        rel_lim = min(rel_lim, max(lim["swap_step_floor"], lim["swap_step_calib"] * err))
+        res = (cpu.float().to(torch.bfloat16).float() - cpu.float()).norm().item() / max(
+            cpu.float().norm().item(), 1e-30
+        )
+        rel_lim = lim["swap_step_calib"] * max(err, res)  # an exact step: the bf16 resolution of its output
     metrics.record(f"{tag}_rel_limit", rel_lim)
     e = step_errors(got, cpu)
     for k, v in e.items():

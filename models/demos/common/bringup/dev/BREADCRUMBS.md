@@ -1030,3 +1030,12 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   roundings amplify bf16 differences) and pushed the agents into "exact" kernels (25x matmuls, 64 ms per layer).
   Owner: "thresholds should be derived from the noise floor of the exact dtype with the CPU op, not fixed."
 - Selftest: test_the_tail_limit_follows_the_precision_model.
+
+## F73 (2026-10-15): the swap step limit is the step's noise floor, no fixed cap or floor
+
+- testing/component.py `_check_step`: a swapped step vs the CPU step on the same inputs was limited at
+  min(swap_step_rel 2 %, max(swap_step_floor 0.5 %, 2 x its component error)). Now 2 x max(its component error, the
+  bf16 resolution of its output); swap_step_rel only when the component error is unknown. The worst-row, ratio and
+  bias limits are still fixed (owner's thresholds review pending).
+- Why (DeepSeek-V4.1 S.swa.06, OV-3 answered "disagree" with evidence by C.swa.ffn_collapse's agent, DS41-20): the
+  fast window attention's precision model is 2.2 %, the step measured 2.1 %, the 2 % cap failed it.
