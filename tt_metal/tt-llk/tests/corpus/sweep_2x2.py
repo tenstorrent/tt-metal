@@ -283,7 +283,8 @@ OFF_FLAGS = (
     "-mno-tt-tensix-optimize-counted-row-formation "
     "-mno-tt-tensix-optimize-crosscall-hoist "
     "-mno-tt-tensix-optimize-crossloop-hoist "
-    "-mno-tt-tensix-optimize-init-hoist"
+    "-mno-tt-tensix-optimize-init-hoist "
+    "-mno-tt-tensix-optimize-dst-row-interleave"
 )
 ON_FLAGS = (
     "-mtt-tensix-optimize-latency-schedule "
@@ -409,6 +410,10 @@ ON_FLAGS = (
     "-mtt-tensix-optimize-lut-select-fp16 "
     "-mtt-tensix-optimize-native-compare "
     "-mtt-tensix-optimize-pressure-park "
+    # Row-pair interleave of counted Dst row loops: hides SFPMAD result
+    # latency and halves the per-row loop overhead; refuses on LREG pressure,
+    # Dst aliasing and CC carried across rows.
+    "-mtt-tensix-optimize-dst-row-interleave "
     # PROMOTED 2026-08-26 (knob promotion round 3, lane HQ; the installed
     # pin-32 binary 4943ca7fe176 — conf-only ceremony, sfpi-gcc untouched):
     # the ordering/tier pair joins the reviewed ON set (34 -> 36).
