@@ -32,3 +32,30 @@ def test_watch_wakes_on_a_stale_dashboard(tmp_path):
     out = []
     assert W.watch(tmp_path, timeout=5, poll=0.01, out=out.append, stale=lambda: "DASHBOARD STALE: x") == W.EVENT
     assert out == ["DASHBOARD STALE: x"]
+
+
+def test_publish_time_lives_in_the_run_dir(tmp_path):
+    """F74: a commit's pre-commit stash hid the uncommitted publish time in links.yaml (false DASHBOARD STALE)."""
+    bdir, rdir = tmp_path / "b", tmp_path / "r"
+    (bdir / "dashboard").mkdir(parents=True)
+    rdir.mkdir()
+    (bdir / "dashboard" / "index.html").write_text("x")
+    LK.save(bdir, {"links": {"standard": "https://claude.ai/artifact/A"}})
+    assert LK.stale(bdir, run_dir=rdir, now=time.time() + 3600).startswith("DASHBOARD STALE")
+    LK.mark_published(rdir)
+    assert LK.stale(bdir, run_dir=rdir) is None and "published_at" not in LK.load(bdir)
+
+
+def test_git_commit_waits_out_an_index_lock(tmp_path):
+    import subprocess
+    import threading
+
+    from models.demos.common.bringup.core import gate as G
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "f").write_text("x")
+    lock = tmp_path / ".git" / "index.lock"
+    lock.write_text("")
+    threading.Timer(1.0, lock.unlink).start()  # another process releases its lock a second later
+    r = G._git_retry(["git", "add", "f"], tmp_path, tries=10, wait=0.3)
+    assert r.returncode == 0
