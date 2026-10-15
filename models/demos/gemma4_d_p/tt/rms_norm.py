@@ -29,6 +29,9 @@ def _block_shard_geometry(rows, width):
         return None
     rows_t, block_w = rows // tile, width // tile // grid_x
     block_h = max(min_block_h, ttnn.core.divup(rows_t, _MAX_GRID_Y))
+    if rows_t % block_h:
+        # Any divisor that fits beats the interleaved fallback, which runs one core per tile row.
+        block_h = next(h for h in range(ttnn.core.divup(rows_t, _MAX_GRID_Y), rows_t + 1) if rows_t % h == 0)
     if rows_t % block_h or block_h * block_w > _MAX_BLOCK_TILES:
         return None
     return block_h, block_w, rows_t // block_h, grid_x
