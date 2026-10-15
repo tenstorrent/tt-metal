@@ -791,6 +791,14 @@ tasks:
     kind: router
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-10-15T16:31:10'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_router.py: e5833ea73182d819cb9612b9095d11224571bf0dfd0b137bece4433d25c3b4fd
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa.11
   title: 'swa block with steps 1-11 on device (last: router)'
   step: implement
