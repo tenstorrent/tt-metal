@@ -27,20 +27,12 @@ static constexpr bool IS_SWAPPED_REDUCE_ROW = (REDUCE_DIM == ckernel::ReduceDim:
 #define REDUCE_TENSOR_SHAPE_QUALIFIER const
 #endif
 
-constexpr ckernel::TensorShape make_reduce_tensor_shape(int face_r_dim, int face_c_dim, int num_faces_r_dim, int num_faces_c_dim)
-{
-    return {
-        static_cast<std::uint8_t>(face_r_dim),
-        static_cast<std::uint8_t>(face_c_dim),
-        static_cast<std::uint8_t>(num_faces_r_dim),
-        static_cast<std::uint8_t>(num_faces_c_dim)};
-}
-
 // Swapped 4-face REDUCE_ROW unpacks a whole tile with one UNPACR per operand; every other path posts one per face.
+// Must match full_tile in _llk_unpack_AB_reduce_mop_config_: the isolate-mode dvalid mocks are sized from it.
 inline std::uint32_t reduce_src_dvalids_per_tile(const ckernel::TensorShape& tensor_shape)
 {
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
-    return (IS_SWAPPED_REDUCE_ROW && num_faces == 4) ? 1 : num_faces;
+    return (IS_SWAPPED_REDUCE_ROW && num_faces == ckernel::MAX_NUM_FACES) ? 1 : num_faces;
 }
 
 #ifdef LLK_TRISC_UNPACK
@@ -66,7 +58,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_B                = params.buffer_B;
 #endif
     REDUCE_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
-        make_reduce_tensor_shape(in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
+        ckernel::make_tensor_shape(in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
 
     {
         START_PERF_MEASURE("INIT")
@@ -88,10 +80,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
+            // Nothing to do in this run type.
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR * TILE_CNT * reduce_src_dvalids_per_tile(tensor_shape));
+            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT * reduce_src_dvalids_per_tile(tensor_shape));
         }
         else
         {
@@ -131,7 +124,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_faces_c_dim_A            = params.num_faces_c_dim_A;
 #endif
     REDUCE_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
-        make_reduce_tensor_shape(in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
+        ckernel::make_tensor_shape(in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
     constexpr bool is_int_fpu_en  = false;
     constexpr bool sync_with_pack = PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE;
 
@@ -146,10 +139,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
+            // Nothing to do in this run type.
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT * reduce_src_dvalids_per_tile(tensor_shape));
+            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * TILE_CNT * reduce_src_dvalids_per_tile(tensor_shape));
         }
         else
         {
@@ -159,14 +153,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 std::uint32_t remaining = TILE_CNT;
                 while (remaining != 0)
                 {
-                    const std::uint32_t block_tiles = IS_REDUCE_TO_ONE ? remaining : std::min(remaining, static_cast<std::uint32_t>(NUM_TILES_IN_BLOCK));
+                    const std::uint32_t block_tiles = IS_REDUCE_TO_ONE ? remaining : std::min(remaining, NUM_TILES_IN_BLOCK);
                     if constexpr (sync_with_pack)
                     {
                         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
                     }
                     for (std::uint32_t tile = 0; tile < block_tiles; ++tile)
                     {
-                        _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, is_int_fpu_en>(IS_REDUCE_TO_ONE ? 0 : tile, tensor_shape);
+                        _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, is_int_fpu_en>(
+                            IS_REDUCE_TO_ONE ? 0 : tile /*dst_index*/, tensor_shape);
                     }
                     if constexpr (sync_with_pack)
                     {
@@ -227,12 +222,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
     REDUCE_TENSOR_SHAPE_QUALIFIER ckernel::TensorShape tensor_shape =
-        make_reduce_tensor_shape(in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
+        ckernel::make_tensor_shape(in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
 
     const std::uint32_t tile_size = tensor_shape.total_tensor_size();
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
     const bool narrow_tile        = tensor_shape.num_faces_c_dim == 1;
+    constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION;
 
     {
         START_PERF_MEASURE("INIT")
@@ -248,13 +244,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
+            // Nothing to do in this run type.
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                pack_tiles<PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION>(
-                    static_cast<std::uint32_t>(OUTPUT_TILE_CNT), NUM_TILES_IN_BLOCK, buffer_Res);
+                pack_tiles<sync_with_math>(static_cast<std::uint32_t>(OUTPUT_TILE_CNT), NUM_TILES_IN_BLOCK, buffer_Res);
             }
         }
         PROFILER_SYNC();
