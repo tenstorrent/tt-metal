@@ -345,6 +345,8 @@ IDevice* GetActiveDevice(ChipId device_id) {
 
 namespace experimental {
 
+void CompileProgram(IDevice* device, Program& program) { program.impl().compile(device); }
+
 void ConfigureProgramWithoutLaunch(IDevice* device, Program& program) {
     ZoneScoped;
     // Debug breadcrumbs, one per step: a hang in this path has no Python frame below it, and the
