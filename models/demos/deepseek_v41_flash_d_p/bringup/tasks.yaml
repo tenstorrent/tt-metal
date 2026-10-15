@@ -698,6 +698,13 @@ tasks:
     - ffn_hc
     - ffn_collapse
     layer: 0
+  frozen:
+    at: '2026-10-15T16:19:54'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_09_ffn_collapse.py: dca6012c740aa9be9c3d98e51a0fbf59ae83edb9714e81526294c85a37c1d33d
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: C.swa.ffn_norm
   title: swa ffn_norm (norm) on device, layer 0
   step: implement
