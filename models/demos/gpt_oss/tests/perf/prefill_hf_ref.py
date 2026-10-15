@@ -7,10 +7,13 @@ Runs the HF GPT-OSS model on the frozen real-text prompt (first L tokens) and st
 GOLDENS_DIR/hf_ref_L{L}.pt. Run once; the gate reads the stored vectors.
 
     HF_MODEL=/home/ttuser/models/gpt-oss-20b python models/demos/gpt_oss/tests/perf/prefill_hf_ref.py --lengths 128,1024
+
+--full / --last / --last32 / --v4 store multi-position references for prefill_gate.py --mode v2 / v3 / v4.
 """
 
 import argparse
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -25,6 +28,63 @@ from models.demos.gpt_oss.tests.perf.prefill_common import (  # noqa: E402
     load_or_build_prompt_tokens,
     parse_lengths,
 )
+
+# Gate v4 prompts (prefill_gate.py --mode v4): one 1024-token window of each of these prose Markdown docs, tokenized
+# like the v3 stream (encode, add_special_tokens=False). Each window starts at the doc's first line with >= 20 words
+# (skips titles, tables of contents and front matter) and is frozen in GOLDENS_DIR/hf_v4/prompts_v4.pt, so later edits
+# to the docs never change the gate. No doc is part of the v3 stream; no two windows share an 8-gram (checked).
+V4_DOCS = (
+    "METALIUM_GUIDE.md",
+    "CONTRIBUTING.md",
+    "tech_reports/SubDevices/SubDevices.md",
+    "ttnn/cpp/ttnn/operations/reduction/topk/docs/TopK.md",
+    "tech_reports/op_kernel_dev/accuracy_tips/accuracy_tips.md",
+    "tech_reports/TT-Distributed/MultiHostMeshRuntime.md",
+    "tt_metal/tt-llk/docs/llk/l2/top_level_overview.md",
+    "tech_reports/TT-Fabric/TT-Fabric-Architecture.md",
+)
+V4_PROMPT_LEN = 1024
+V4_MIN_WORDS = 20
+
+
+def _ngrams(ids, n=8):
+    return {tuple(ids[i : i + n]) for i in range(len(ids) - n + 1)}
+
+
+def load_or_build_v4_prompts(tokenizer):
+    """GOLDENS_DIR/hf_v4/prompts_v4.pt: {'tokens': [8, 1024] long, 'docs': [per-doc metadata], ...}."""
+    path = GOLDENS_DIR / "hf_v4" / "prompts_v4.pt"
+    if path.exists():
+        return torch.load(path)
+    root = Path(__file__).resolve().parents[5]
+    v3_stream = _ngrams(load_or_build_prompt_tokens().tolist())
+    prompts, docs = [], []
+    for d in V4_DOCS:
+        text = (root / d).read_text(encoding="utf-8")
+        lines = text.splitlines(keepends=True)
+        start = next(i for i, line in enumerate(lines) if len(re.findall(r"[A-Za-z]+", line)) >= V4_MIN_WORDS)
+        start_char = sum(len(line) for line in lines[:start])
+        ids = tokenizer.encode(text[start_char:], add_special_tokens=False)
+        assert len(ids) >= V4_PROMPT_LEN, (d, len(ids))
+        window = ids[:V4_PROMPT_LEN]
+        prompts.append(torch.tensor(window, dtype=torch.long))
+        docs.append(
+            {
+                "file": d,
+                "start_line": start + 1,
+                "start_char": start_char,
+                "doc_tokens_from_start": len(ids),
+                "v3_stream_8gram_overlap": round(len(_ngrams(window) & v3_stream) / (V4_PROMPT_LEN - 7), 4),
+            }
+        )
+    grams = [_ngrams(p.tolist()) for p in prompts]
+    shared = max(len(grams[i] & grams[j]) for i in range(len(grams)) for j in range(i + 1, len(grams)))
+    assert shared == 0, f"v4 prompt windows share {shared} 8-grams"
+    record = {"tokens": torch.stack(prompts), "docs": docs, "length": V4_PROMPT_LEN, "git": git_info()}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(record, path)
+    print(f"wrote {len(prompts)} v4 prompts -> {path}", flush=True)
+    return record
 
 
 def main():
@@ -50,9 +110,15 @@ def main():
         help="with --full: keep only the last N positions (L-N..L-1; the LM head runs on those rows only) and store "
         "them as GOLDENS_DIR/hf_full/hf_full_L{L}_last{N}.pt (the gate v3 long window, --v3-window L:N)",
     )
+    ap.add_argument(
+        "--v4",
+        action="store_true",
+        help="gate v4: build (once) the 8 independent 1024-token prompts GOLDENS_DIR/hf_v4/prompts_v4.pt from V4_DOCS "
+        "and store fp16 full-vocab logits of all their positions as GOLDENS_DIR/hf_v4/hf_v4_p{i}.pt (--lengths unused)",
+    )
     args = ap.parse_args()
     assert args.last == 0 or args.full, "--last needs --full"
-    lengths = parse_lengths(args.lengths)
+    lengths = [] if args.v4 else parse_lengths(args.lengths)
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -66,6 +132,19 @@ def main():
     model.config._attn_implementation = "eager"
     model.eval()
     print(f"HF model loaded in {time.time() - t0:.0f}s", flush=True)
+
+    if args.v4:
+        v4 = load_or_build_v4_prompts(tokenizer)
+        for i, (toks, doc) in enumerate(zip(v4["tokens"], v4["docs"])):
+            t0 = time.time()
+            with torch.no_grad():
+                out = model(toks.unsqueeze(0), use_cache=False)
+            full = out.logits[0].to(torch.float16)
+            assert full.shape[0] == toks.numel() and torch.isfinite(full).all(), full.shape
+            path = GOLDENS_DIR / "hf_v4" / f"hf_v4_p{i}.pt"
+            record = {"prompt": i, "doc": doc["file"], "tokens": toks.clone(), "logits": full, "dtype": args.dtype}
+            torch.save({**record, "git": git_info()}, path)
+            print(f"v4 p{i} {doc['file']}: forward {time.time() - t0:.0f}s {tuple(full.shape)} -> {path}", flush=True)
 
     for L in lengths:
         t0 = time.time()

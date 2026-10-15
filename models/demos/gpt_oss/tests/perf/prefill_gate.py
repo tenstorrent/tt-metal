@@ -20,6 +20,9 @@ clean tree's distance to the HF reference (see runs/gpt-oss-20b-prefill/baseline
 make a change pass.
 
 --save-goldens writes tt_L{L}.pt from the current tree (clean tree only) instead of comparing.
+
+--mode v2 / v3 / v4: distribution gates for numerics-changing levers (see the V2_* / V3_* / V4_* constants). The keep
+gate is v4: python models/demos/gpt_oss/tests/perf/prefill_gate.py --mode v4 --result <json> [--v4-reference <dense>]
 """
 
 import argparse
@@ -69,6 +72,20 @@ V3_LENGTHS = [128, 1024, 2048]
 # Same acceptance rule. Without the flag v3 is unchanged.
 V3_TOP1_DROP = 0.01
 V3_KL_RATIO = 1.05
+# Gate v4 (--mode v4; spec set by the orchestrator 2026-10-15): v3 scores one prompt (its 128/1K/2K are prefixes of
+# one stream) and its KL moved .175 -> .265 at 1K under a rounding-only change (o_proj bias fusion). v4 scores ALL
+# positions of V4_PROMPTS independent 1024-token real-text prompts (one prose Markdown doc each, no shared 8-gram;
+# GOLDENS_DIR/hf_v4/prompts_v4.pt, made with their HF logits by prefill_hf_ref.py --v4) plus the v3 8K window (last
+# 1024 positions of the 8192-token v3 prompt): 9 cases, 9216 positions. Same metrics as v3. A candidate passes against
+# a dense-tree v4 run (--v4-reference <json>) iff pooled (all 9 cases) top1 >= ref - V4_TOP1_DROP, pooled KL <=
+# V4_KL_RATIO x ref KL, every case's KL <= V4_CASE_KL_RATIO x the same case's ref KL, and no NaN/Inf.
+V4_DIR = "hf_v4"
+V4_PROMPTS = 8
+V4_PROMPT_LEN = 1024
+V4_WINDOW = (8192, 1024)
+V4_TOP1_DROP = 0.01
+V4_KL_RATIO = 1.05
+V4_CASE_KL_RATIO = 1.25
 # ---------------------------------------------------------------------------------------------------------------
 
 REPO = Path(__file__).resolve().parents[5]
@@ -88,6 +105,26 @@ def _check(metrics, min_pcc, min_top5, top1_margin):
         elif not metrics["ref_top1_in_cur_top5"]:
             fails.append(f"near-tie top1 flipped and ref top1 {metrics['ref_top1']} not in current top-5")
     return fails
+
+
+def _score_positions(tt, hf, chunk=256):
+    """Per-position top-1 agreement, top-5 hit (HF argmax in TT top-5) and KL(HF || TT); float32, chunked.
+
+    tt, hf: [positions, vocab] logits (vocab may differ by padding; the common prefix is scored).
+    Returns (top1, top5, kl, has_nan) with one float per position."""
+    import torch
+
+    n = min(tt.shape[-1], hf.shape[-1])
+    top1, top5, kl, nan = [], [], [], False
+    for i in range(0, tt.shape[0], chunk):
+        t, h = tt[i : i + chunk, :n].float(), hf[i : i + chunk, :n].float()
+        nan = nan or not bool(torch.isfinite(t).all())
+        h1 = h.argmax(-1)
+        top1.append(t.argmax(-1) == h1)
+        top5.append((torch.topk(t, 5, dim=-1).indices == h1[:, None]).any(-1))
+        lp_h, lp_t = torch.log_softmax(h, -1), torch.log_softmax(t, -1)
+        kl.append((lp_h.exp() * (lp_h - lp_t)).sum(-1))
+    return torch.cat(top1).float(), torch.cat(top5).float(), torch.cat(kl), nan
 
 
 # The CLI parent only spawns pytest; importing test_factory would query the devices (ttnn.get_num_devices) from the
@@ -424,6 +461,157 @@ if __name__ != "__main__":
             )
         assert not fails, "prefill gate v3 FAIL:\n" + "\n".join(fails)
 
+    @pytest.mark.timeout(4 * 3600)
+    @parametrize_mesh_with_fabric([(1, 4)])
+    def test_prefill_gate_v4(mesh_device, device_params):
+        """Gate v4 (numerics-changing levers): all positions of V4_PROMPTS independent 1K prompts + the 8K window.
+
+        Same hooks as v3 (get_last_token=-1, every LM-head row kept); both are removed in the finally block.
+        """
+        import torch
+        from loguru import logger
+
+        from models.demos.gpt_oss.tests.perf.prefill_common import (
+            GOLDENS_DIR,
+            PREFILL_LENGTHS,
+            build_prefill_generator,
+            env_snapshot,
+            git_info,
+            load_or_build_prompt_tokens,
+            run_prefill,
+        )
+
+        result_path = os.getenv("PREFILL_GATE_RESULT")
+        ref_path = os.getenv("PREFILL_GATE_V4_REF")
+        v4_dir = GOLDENS_DIR / V4_DIR
+        prompts = torch.load(v4_dir / "prompts_v4.pt")
+        assert tuple(prompts["tokens"].shape) == (V4_PROMPTS, V4_PROMPT_LEN), tuple(prompts["tokens"].shape)
+        docs = [d["file"] for d in prompts["docs"]]
+        win_len, win_rows = V4_WINDOW
+        # cases: (label, prompt tokens or None for the v3 stream window, first scored position, HF reference file)
+        cases = [(f"p{i}", prompts["tokens"][i], 0, v4_dir / f"hf_v4_p{i}.pt") for i in range(V4_PROMPTS)]
+        cases.append(
+            (
+                f"{win_len}_last{win_rows}",
+                None,
+                win_len - win_rows,
+                GOLDENS_DIR / "hf_full" / f"hf_full_L{win_len}_last{win_rows}.pt",
+            )
+        )
+        ctx = build_prefill_generator(mesh_device, max(PREFILL_LENGTHS))
+        stream = load_or_build_prompt_tokens(ctx["tokenizer"])
+
+        tt_model = ctx["generator"].model[0]
+        orig_fwd, orig_out = tt_model.ttnn_prefill_forward, tt_model.process_output_prefill
+        captured = {}
+
+        def fwd_all_positions(*a, **kw):
+            assert kw.get("batch_size", 1) == 1 and kw.get("chunk_start_idx") is None, "v4 needs unchunked batch-1"
+            kw["get_last_token"] = -1
+            return orig_fwd(*a, **kw)
+
+        def out_all_positions(tt_out, last_token_idx):
+            full = orig_out(tt_out, slice(None))
+            full = full.reshape(-1, full.shape[-1])
+            captured["full"] = full
+            return full[captured["L"] - 1]
+
+        tt_model.ttnn_prefill_forward = fwd_all_positions
+        tt_model.process_output_prefill = out_all_positions
+        report = {
+            "mode": "v4",
+            "git": git_info(),
+            "env": env_snapshot(),
+            "cases": [c[0] for c in cases],
+            "docs": docs,
+            "lengths": {},
+        }
+        top1s, top5s, kls, nan = [], [], [], False
+        try:
+            for label, toks, first, ref_file in cases:
+                if toks is None:
+                    toks = stream[:win_len]
+                L = toks.numel()
+                captured.clear()
+                captured["L"] = L
+                run_prefill(ctx, toks.unsqueeze(0))
+                tt = captured.pop("full")
+                assert tt.shape[0] == L, f"expected {L} rows, got {tuple(tt.shape)}"
+                ref = torch.load(ref_file)
+                if first:
+                    assert ref["length"] == L and ref["positions"] == [first, L], (ref["positions"], first, L)
+                else:
+                    assert torch.equal(ref["tokens"], toks), f"{ref_file} was made from other tokens"
+                tt, hf = tt[first:], ref["logits"]
+                assert hf.shape[0] == L - first, (tuple(hf.shape), L - first)
+                top1, top5, kl, case_nan = _score_positions(tt, hf)
+                nan = nan or case_nan
+                top1s.append(top1)
+                top5s.append(top5)
+                kls.append(kl)
+                entry = {
+                    "positions": L - first,
+                    "top1": float(top1.mean()),
+                    "top5_hit": float(top5.mean()),
+                    "kl_hf_tt": float(kl.mean()),
+                    "kl_max": float(kl.max()),
+                }
+                if first == 0:
+                    entry["doc"] = docs[int(label[1:])]
+                report["lengths"][label] = entry
+                logger.info(f"[gate v4] {label} {entry}")
+                del tt, hf, ref
+        finally:
+            tt_model.ttnn_prefill_forward, tt_model.process_output_prefill = orig_fwd, orig_out
+
+        def pooled(sel):
+            return {
+                "positions": int(sum(top1s[i].numel() for i in sel)),
+                "top1": float(torch.cat([top1s[i] for i in sel]).mean()),
+                "top5_hit": float(torch.cat([top5s[i] for i in sel]).mean()),
+                "kl_hf_tt": float(torch.cat([kls[i] for i in sel]).mean()),
+            }
+
+        overall = {**pooled(range(len(cases))), "nan": nan}
+        report["overall"] = overall
+        report["overall_prompts"] = pooled(range(V4_PROMPTS))  # the independent 1K prompts alone
+        case_kl = [float(k.mean()) for k in kls]
+        report["prompt_kl_spread"] = {"min": min(case_kl[:V4_PROMPTS]), "max": max(case_kl[:V4_PROMPTS])}
+        fails = ["NaN/Inf in TT logits"] if nan else []
+        if ref_path:
+            ref_report = json.loads(Path(ref_path).read_text())
+            assert (
+                ref_report.get("mode") == "v4" and ref_report["cases"] == report["cases"]
+            ), f"reference {ref_path} is not a v4 run with cases {report['cases']}"
+            assert ref_report["docs"] == docs, "reference was run on other v4 prompts"
+            base = ref_report["overall"]
+            report["reference"] = {"path": ref_path, **base}
+            if overall["top1"] < base["top1"] - V4_TOP1_DROP:
+                fails.append(f"top1 {overall['top1']:.4f} < reference {base['top1']:.4f} - {V4_TOP1_DROP}")
+            if overall["kl_hf_tt"] > V4_KL_RATIO * base["kl_hf_tt"]:
+                fails.append(f"KL {overall['kl_hf_tt']:.5f} > {V4_KL_RATIO} x reference {base['kl_hf_tt']:.5f}")
+            report["case_kl_ratio"] = {}
+            for label, kl_c in zip(report["cases"], case_kl):
+                kl_ref = ref_report["lengths"][label]["kl_hf_tt"]
+                report["case_kl_ratio"][label] = kl_c / kl_ref
+                if kl_c > V4_CASE_KL_RATIO * kl_ref:
+                    fails.append(f"{label} KL {kl_c:.5f} > {V4_CASE_KL_RATIO} x reference {kl_ref:.5f}")
+            ref_pos = Path(ref_path).with_suffix(".positions.pt")
+            if ref_pos.exists():  # informational: paired per-position KL difference vs the reference run
+                d = torch.cat([a - b for a, b in zip(kls, torch.load(ref_pos)["kl"])]).double()
+                se = float(d.std()) / d.numel() ** 0.5
+                report["paired_dkl"] = {"mean": float(d.mean()), "z": float(d.mean()) / se if se > 0 else 0.0}
+        report["fails"] = fails
+        logger.info(f"[gate v4] overall {overall} prompts {report['overall_prompts']} fails={fails}")
+        if result_path:
+            Path(result_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(result_path).write_text(json.dumps(report, indent=2))
+            torch.save(
+                {"cases": report["cases"], "top1": top1s, "top5": top5s, "kl": kls},
+                Path(result_path).with_suffix(".positions.pt"),
+            )
+        assert not fails, "prefill gate v4 FAIL:\n" + "\n".join(fails)
+
 
 def _run(cmd, env, log_name):
     t0 = time.time()
@@ -441,10 +629,14 @@ def main():
     ap.add_argument("--no-unit", action="store_true", help="skip test_modules decoder PCC at 1x4")
     ap.add_argument("--result", default=None, help="JSON report path")
     ap.add_argument(
-        "--mode", default="v1", choices=["v1", "v2", "v3"], help="v1: last-token gate (default); v2/v3: see V2_*/V3_*"
+        "--mode",
+        default="v1",
+        choices=["v1", "v2", "v3", "v4"],
+        help="v1: last-token gate (default); v2/v3/v4: see V2_*/V3_*/V4_*",
     )
     ap.add_argument("--v2-reference", default=None, help="v2: JSON report of the dense reference run to accept against")
     ap.add_argument("--v3-reference", default=None, help="v3: JSON report of the dense reference run to accept against")
+    ap.add_argument("--v4-reference", default=None, help="v4: JSON report of the dense reference run to accept against")
     ap.add_argument(
         "--v3-window",
         default="",
@@ -461,9 +653,9 @@ def main():
     if args.result:
         env["PREFILL_GATE_RESULT"] = str(Path(args.result).resolve())
     py = sys.executable
-    if args.mode in ("v2", "v3"):
+    if args.mode in ("v2", "v3", "v4"):
         m = args.mode
-        reference = args.v2_reference if m == "v2" else args.v3_reference
+        reference = {"v2": args.v2_reference, "v3": args.v3_reference, "v4": args.v4_reference}[m]
         if reference:
             env[f"PREFILL_GATE_{m.upper()}_REF"] = str(Path(reference).resolve())
         rc, dt = _run(
