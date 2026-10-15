@@ -188,3 +188,58 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
 - Perf later: fp8_qdq is ~25 eltwise ops + a TILE reshape per call; a fork of per_token_cast_to_fp8 (block 32, RNE)
   is the alternative (components.yaml header); linear uses the auto config (K-51).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_q_a.py`
+
+## C.swa.kv test review (attempt 1)
+- Previous freeze-without-review failed: the auto sweep let noise1e-2 slip (kv is fp8-quantized: the bf16 precision
+  model already has rel 0.0108, so the calibrated rel limit is 0.0216 and 1 % noise, rel 0.010, passes). DS41-14, K-36.
+- Added to the test (CHECKS="auto" kept): fp8 structural checks on every auto input (golden, layer24, mixed, small,
+  big) vs the CPU step on the same inputs: off-grid fraction == 0 (act_quant_dequant(out, 32) == out) and exact
+  mismatch fraction <= 0.15 (bf16 precision model <= 0.043). Metrics `fp8_kv_L00_<input>_{offgrid,mismatch}`.
+- CPU probe (outside the tree) of structural mistakes vs auto + fp8 checks: RTZ e4m3 (mismatch 0.49), no output
+  quant (off grid 0.94), non-pow2 scale (off grid 1.0), attn_norm not fp8-quantized (mismatch 0.30; auto rel catches
+  only 3/5 inputs), neox / inverse / first-dims / no rope, positions 0 or +1, no kv_norm weight, eps 1e-3: all caught.
+  Block 128 instead of 32 gives identical values on these inputs (not a distinguishable mistake here).
+- BRINGUP_IMPL=mutations runs the test's own sweep (built-in checks + fp8 checks): every standard mistake caught,
+  reference / bf16 controls pass. reference PASS, stub FAIL, mutate:noise1e-2 FAIL. Device gate: NotImplementedError
+  (no kv device module yet; the implement step writes it).
+- For the implementer: the device output must be bit-on the fp8 grid (use tt/quant.py:fp8_qdq, RNE; the stock e4m3
+  packer rounds toward zero and fails the mismatch check), and the test builds the device module twice (auto + fp8).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_kv.py`
+
+## C.swa.kv test review (attempt 2)
+- Attempt 1 failed only on the knowledge check: DS41-12 (supervisor's RESOLVED note, committed) was 614 chars. Shortened
+  the bullet to 448 chars; the resolution and the alternatives moved to `known_issues_detail.md` (section titled like
+  the bullet, as knowledge/check.py:136 requires). `knowledge.check` now clean.
+- Test unchanged from attempt 1 (built-in auto checks + fp8 grid / mismatch checks, DS41-14, K-36). Re-verified:
+  reference PASS (pcc 0.999835, fp8 offgrid 0 / mismatch 0 on all 5 inputs), stub FAIL, mutations PASS (real pass:
+  every mistake caught, noise1e-2 by the fp8 checks; the collect pass's "reference FAIL" lines are the precompile
+  stash, K-52). Device gate: NotImplementedError (no kv device module yet).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_kv.py`
+
+## C.swa.kv implement (attempt 1)
+- `tt/kv.py:TtWindowKv(x attn_norm [1,1,S/SP,H/TP] fp32, start)` -> window KV [1,1,S/SP,512] bf16, rows split over
+  axis 0 (row r = positions [start + r S/SP, ...)), replicated over TP: fp8_qdq -> `TtAttnInProj({"wkv"})` (HiFi4 +
+  fp32 acc, tp_sum exact, K-30) -> slice -> `TtDistributedRmsNorm(split=False)` kv_norm (K-12) -> RoPE -> fp8_qdq.
+  `from_proj(p, start)` takes the shared [wq_a | wkv] projection output (assemble: one exchange for q_a and kv).
+- RoPE (`tt/rope.py`, DS41-15): not rotary_embedding_llama (components.yaml) - its FPU multiplies read fp32 at ~TF32
+  (K-30) and the fp8 q-dq after it amplifies flips (DS41-1). wkv's rope rows and the kv_norm weight are permuted at
+  load to [nope | even | odd] (`deinterleave_perm`), the rotation is fp32 SFPU mul / sub / add on two 32-wide blocks,
+  then a ROW_MAJOR transpose [R,2,32] -> [R,32,2] restores the interleaved order before the quant (its blocks of 32
+  are the reference's). cos / sin: `RopeTable` = the reference's own fp32 table (torch.polar) for [0, max_seq) on
+  device, replicated; per chunk `ttnn.slice` at [start, start + S) + `ttnn.mesh_partition` over SP. No host work.
+  max_seq = the spec's longest ladder / target seq (hooks `_max_seq`; 55296 here, 14 MB per rope type).
+- Probe (2x2, FABRIC_2D, script outside the tree, dir deleted K-56): RM transpose / permute / TILE transpose of
+  [1,R,2,32] fp32 bit-exact; fp32 tensor x tensor mul / sub / add equal torch; slice + mesh_partition gives row r the
+  natural block.
+- `tt/q_a.py:build_q_a` now builds its projection from `tt/kv.py:attn_in_weights` (wkv permuted; q_a slices only
+  wq_a). q_a gate re-run: PASS, identical metrics (pcc 0.999974, rel vs CPU 1.0e-4).
+- hooks.py: `_kv_host_fn` (hidden-split in, row-split TP-replicated out, positions from ctx.start), `_max_seq`,
+  DEVICE_STEPS["swa"] += kv.
+- Gate: pcc 0.999834; vs CPU rel 2.7e-3 (limit 2.2e-2); fp8 checks: off grid 0 on all 5 inputs, mismatch vs CPU
+  0.0084 / 0.0093 / 0.0114 (limit 0.15; from the GEMM's fp32 sum order only: RoPE, norm and quant are exact);
+  A,B,A bit-identical. ~37 s.
+- Not in this step: the served 0_window_kv write (all_gather axis 0, owner-chip slice_write of [actual_start,
+  actual_end), pad zeroing before the ack). The kv step's reference is stateless and the window state is still the
+  CPU ring the CPU attention writes; per-chip write offsets differ for starts not a multiple of W (SPMD ops take one
+  offset), so the write needs the device state / position tables the attention (or contract) step builds.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_kv.py`

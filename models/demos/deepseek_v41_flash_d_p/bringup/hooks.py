@@ -55,7 +55,7 @@ def state_sources(spec, layer):
 # Device steps of the hybrid model, per block type: every step listed passed its component gate on the device.
 # Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "swa": {"attn_hc", "attn_collapse", "attn_norm", "q_a"},
+    "swa": {"attn_hc", "attn_collapse", "attn_norm", "q_a", "kv"},
 }
 
 # mHC coefficient steps (tt/mhc.py:TtHcMixes): packed boundary [S, 4H + 4] (or streams [S, 4H]) in -> [S, 24].
@@ -148,7 +148,38 @@ def _hidden_to_rows_host_fn(mesh, module):
     return fn
 
 
+def _kv_host_fn(mesh, module):
+    """fn(ctx, x_host [S, H]) -> window KV host [S, 512] fp32 (harness boundary: attn_norm rows split over axis 0 and
+    hidden columns over axis 1 in; the output rows split over axis 0, replicated over axis 1, read back from mesh
+    column 0). The positions are [ctx.start, ctx.start + S)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tt.layout import hidden_split_to_device, row_split_to_host
+
+    def fn(ctx, x):
+        xd = hidden_split_to_device(mesh, x)
+        od = module(xd, int(ctx.start))
+        out = row_split_to_host(mesh, od).float()
+        ttnn.deallocate(xd)
+        ttnn.deallocate(od)
+        return out
+
+    fn.module = module
+    return fn
+
+
+def _max_seq(spec):
+    """Positions the load-time tables (RoPE) cover: the longest sequence this run's ladders reach."""
+    seqs = [int(spec.get("target.seq", 0) or 0)]
+    for key in ("ladder", "scaled.ladder"):
+        seqs += [int(r.get("seq", 0) or 0) for r in (spec.get(key) or [])]
+    return max(seqs)
+
+
 def _device_step_fn(mesh, spec, layer, step, ck, cfg):
+    if step == "kv":
+        from models.demos.deepseek_v41_flash_d_p.tt.kv import build_kv
+
+        return _kv_host_fn(mesh, build_kv(mesh, ck, cfg, layer, _max_seq(spec)))
     if step == "q_a":
         from models.demos.deepseek_v41_flash_d_p.tt.q_a import build_q_a
 
