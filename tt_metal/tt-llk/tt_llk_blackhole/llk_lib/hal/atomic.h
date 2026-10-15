@@ -47,7 +47,7 @@ struct FetchIncrement
      * @note Enable LLK assertions to diagnose invalid fields. Disabled assertions leave the
      *       raw TT_OP_ATINCGET encoding path without runtime overhead.
      */
-    constexpr std::uint32_t get_operation() const;
+    constexpr std::uint32_t operation() const;
 };
 
 /**
@@ -72,7 +72,7 @@ struct FifoAcquire
      * @note Enable LLK assertions to diagnose invalid fields. Disabled assertions leave the
      *       raw TT_OP_ATINCGETPTR encoding path without runtime overhead.
      */
-    constexpr std::uint32_t get_operation() const;
+    constexpr std::uint32_t operation() const;
 };
 
 /**
@@ -94,7 +94,7 @@ struct CompareSet
      * @note Enable LLK assertions to diagnose invalid fields. Disabled assertions leave the
      *       raw TT_OP_ATCAS encoding path without runtime overhead.
      */
-    constexpr std::uint32_t get_operation() const;
+    constexpr std::uint32_t operation() const;
 };
 
 /**
@@ -116,7 +116,7 @@ struct MaskedWrite
      * @note Enable LLK assertions to diagnose invalid fields. Disabled assertions leave the
      *       raw TT_OP_ATSWAP encoding path without runtime overhead.
      */
-    constexpr std::uint32_t get_operation() const;
+    constexpr std::uint32_t operation() const;
 };
 
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
@@ -156,6 +156,8 @@ struct Counter
 /**
  * @brief Identify a hardware-managed FIFOControl structure in one 16-byte L1 line.
  *
+ * @note Construct with fifo<CapacityLog2>(hal::gpr<Index>()) to deduce the address GPR index.
+ *
  * @tparam CapacityLog2: Base-two logarithm of FIFO capacity, in [0, 15].
  * @tparam AddressIndex: FIFOControl address GPR type index.
  */
@@ -167,12 +169,12 @@ struct Fifo
     /**
      * @brief Build a blocking read-counter advance descriptor without issuing it.
      *
-     * @tparam IncrementLog2: Base-two logarithm of the pointer increment, in [0, 15].
+     * @tparam IncrementLog2: Base-two logarithm of the pointer increment, in [0, 15]; defaults to zero for one slot.
      * @tparam ResultIndex: Pointer-result GPR type index.
      * @param result: GPR receiving the pre-increment read pointer.
      */
     template <std::uint8_t IncrementLog2 = 0, std::uint32_t ResultIndex>
-    constexpr FifoAcquire<AddressIndex, ResultIndex> pop_slots(hal::Gpr<ResultIndex> result) const;
+    constexpr FifoAcquire<AddressIndex, ResultIndex> pop(hal::Gpr<ResultIndex> result) const;
 
     /**
      * @brief Build a runtime-increment blocking read-counter advance descriptor without issuing it.
@@ -182,17 +184,17 @@ struct Fifo
      * @param increment_log2: Base-two logarithm of the pointer increment, in [0, 15].
      */
     template <std::uint32_t ResultIndex>
-    constexpr FifoAcquire<AddressIndex, ResultIndex> pop_slots(hal::Gpr<ResultIndex> result, std::uint8_t increment_log2) const;
+    constexpr FifoAcquire<AddressIndex, ResultIndex> pop(hal::Gpr<ResultIndex> result, std::uint8_t increment_log2) const;
 
     /**
      * @brief Build a blocking write-counter advance descriptor without issuing it.
      *
-     * @tparam IncrementLog2: Base-two logarithm of the pointer increment, in [0, 15].
+     * @tparam IncrementLog2: Base-two logarithm of the pointer increment, in [0, 15]; defaults to zero for one slot.
      * @tparam ResultIndex: Pointer-result GPR type index.
      * @param result: GPR receiving the pre-increment write pointer.
      */
     template <std::uint8_t IncrementLog2 = 0, std::uint32_t ResultIndex>
-    constexpr FifoAcquire<AddressIndex, ResultIndex> push_slots(hal::Gpr<ResultIndex> result) const;
+    constexpr FifoAcquire<AddressIndex, ResultIndex> push(hal::Gpr<ResultIndex> result) const;
 
     /**
      * @brief Build a runtime-increment blocking write-counter advance descriptor without issuing it.
@@ -202,7 +204,7 @@ struct Fifo
      * @param increment_log2: Base-two logarithm of the pointer increment, in [0, 15].
      */
     template <std::uint32_t ResultIndex>
-    constexpr FifoAcquire<AddressIndex, ResultIndex> push_slots(hal::Gpr<ResultIndex> result, std::uint8_t increment_log2) const;
+    constexpr FifoAcquire<AddressIndex, ResultIndex> push(hal::Gpr<ResultIndex> result, std::uint8_t increment_log2) const;
 
     /**
      * @brief Build a blocking FIFO-state wait descriptor without issuing it.
@@ -214,6 +216,19 @@ struct Fifo
     template <FifoState State, std::uint32_t ResultIndex>
     constexpr FifoAcquire<AddressIndex, ResultIndex> wait_while(hal::Gpr<ResultIndex> result) const;
 };
+
+/**
+ * @brief Identify an existing FIFOControl structure, deducing the address GPR index from its operand.
+ *
+ * @tparam CapacityLog2: Base-two logarithm of FIFO capacity, in [0, 15].
+ * @tparam AddressIndex: Deduced FIFOControl address GPR type index.
+ * @param control_address: GPR containing the FIFOControl line address; no memory or GPR is initialized.
+ */
+template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
+inline constexpr Fifo<CapacityLog2, AddressIndex> fifo(const hal::Gpr<AddressIndex> control_address)
+{
+    return Fifo<CapacityLog2, AddressIndex> {control_address};
+}
 
 /**
  * @brief Identify a lock or flag in one 32-bit word of a 16-byte L1 line.
@@ -258,22 +273,9 @@ namespace detail
 inline constexpr std::uint32_t L1MemoryEncoding = 0;
 
 template <std::uint32_t Index>
-inline constexpr __attribute__((always_inline)) std::uint32_t gpr_index(const hal::Gpr<Index> operand)
-{
-    if constexpr (Index == hal::detail::DynamicGprIndex)
-    {
-        return operand.index;
-    }
-    else
-    {
-        return Index;
-    }
-}
-
-template <std::uint32_t Index>
 constexpr bool is_valid(const hal::Gpr<Index> operand)
 {
-    return gpr_index(operand) < 64u;
+    return operand.index < hal::detail::GprCount;
 }
 
 constexpr bool is_valid(const FifoPointer pointer)
@@ -285,58 +287,7 @@ template <FifoState State>
 constexpr FifoPointer pointer_for()
 {
     static_assert(State == FifoState::Empty || State == FifoState::Full, "FIFO state must be Empty or Full");
-    if constexpr (State == FifoState::Empty)
-    {
-        return FifoPointer::Read;
-    }
-    else
-    {
-        return FifoPointer::Write;
-    }
-}
-
-template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
-constexpr bool is_valid(const FetchIncrement<AddressIndex, DataIndex> operation)
-{
-    return is_valid(operation.address) && is_valid(operation.data) && operation.word_select < 4u && operation.counter_width >= 1u &&
-           operation.counter_width <= 32u;
-}
-
-template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
-constexpr bool is_valid(const FifoAcquire<AddressIndex, DataIndex> operation)
-{
-    return is_valid(operation.address) && is_valid(operation.data) && is_valid(operation.pointer) && operation.capacity_log2 <= 15u &&
-           operation.increment_log2 <= 15u && (!operation.probe_only || operation.increment_log2 == 0u);
-}
-
-template <std::uint32_t AddressIndex>
-constexpr bool is_valid(const CompareSet<AddressIndex> operation)
-{
-    return is_valid(operation.address) && operation.word_select < 4u && operation.compare < 16u && operation.set < 16u;
-}
-
-template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
-constexpr bool is_valid(const MaskedWrite<AddressIndex, DataIndex> operation)
-{
-    return is_valid(operation.address) && is_valid(operation.data) && gpr_index(operation.data) % 4u == 0u;
-}
-
-template <std::uint8_t WidthBits, std::uint32_t AddressIndex>
-constexpr bool is_valid(const Counter<WidthBits, AddressIndex> counter)
-{
-    return WidthBits >= 1u && WidthBits <= 32u && is_valid(counter.address) && counter.word < 4u;
-}
-
-template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
-constexpr bool is_valid(const Fifo<CapacityLog2, AddressIndex> fifo)
-{
-    return CapacityLog2 <= 15u && is_valid(fifo.control_address);
-}
-
-template <std::uint32_t AddressIndex>
-constexpr bool is_valid(const Lock<AddressIndex> lock)
-{
-    return is_valid(lock.address) && lock.word < 4u;
+    return State == FifoState::Empty ? FifoPointer::Read : FifoPointer::Write;
 }
 
 #ifdef ENABLE_LLK_ASSERT
@@ -374,14 +325,14 @@ inline __attribute__((always_inline)) void assert_valid(const MaskedWrite<Addres
 {
     LLK_ASSERT(is_valid(operation.address), "ATSWAP address GPR index must be in [0, 63]");
     LLK_ASSERT(is_valid(operation.data), "ATSWAP data GPR index must be in [0, 63]");
-    LLK_ASSERT(gpr_index(operation.data) % 4u == 0u, "ATSWAP data GPR must be four-aligned");
+    LLK_ASSERT(operation.data.index % 4u == 0u, "ATSWAP data GPR must be four-aligned");
 }
 #endif
 
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
 inline constexpr __attribute__((always_inline)) std::uint32_t encode(const FetchIncrement<AddressIndex, DataIndex> operation)
 {
-    return TT_OP_ATINCGET(L1MemoryEncoding, operation.counter_width - 1u, operation.word_select, gpr_index(operation.data), gpr_index(operation.address));
+    return TT_OP_ATINCGET(L1MemoryEncoding, operation.counter_width - 1u, operation.word_select, operation.data.index, operation.address.index);
 }
 
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
@@ -393,20 +344,32 @@ inline constexpr __attribute__((always_inline)) std::uint32_t encode(const FifoA
         operation.increment_log2,
         (operation.capacity_log2 + 1u) & 0xfu,
         static_cast<std::uint32_t>(operation.pointer),
-        gpr_index(operation.data),
-        gpr_index(operation.address));
+        operation.data.index,
+        operation.address.index);
 }
 
 template <std::uint32_t AddressIndex>
 inline constexpr __attribute__((always_inline)) std::uint32_t encode(const CompareSet<AddressIndex> operation)
 {
-    return TT_OP_ATCAS(L1MemoryEncoding, operation.set, operation.compare, operation.word_select, 0, gpr_index(operation.address));
+    return TT_OP_ATCAS(L1MemoryEncoding, operation.set, operation.compare, operation.word_select, 0, operation.address.index);
 }
 
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
 inline constexpr __attribute__((always_inline)) std::uint32_t encode(const MaskedWrite<AddressIndex, DataIndex> operation)
 {
-    return TT_OP_ATSWAP(L1MemoryEncoding, operation.granule_mask, gpr_index(operation.data), gpr_index(operation.address));
+    return TT_OP_ATSWAP(L1MemoryEncoding, operation.granule_mask, operation.data.index, operation.address.index);
+}
+
+template <typename Descriptor>
+inline constexpr __attribute__((always_inline)) std::uint32_t checked_encode(const Descriptor &descriptor)
+{
+#ifdef ENABLE_LLK_ASSERT
+    if (!__builtin_is_constant_evaluated())
+    {
+        assert_valid(descriptor);
+    }
+#endif
+    return encode(descriptor);
 }
 } // namespace detail
 
@@ -414,97 +377,75 @@ inline constexpr __attribute__((always_inline)) std::uint32_t encode(const Maske
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
 constexpr bool is_valid(const FetchIncrement<AddressIndex, DataIndex> operation)
 {
-    return detail::is_valid(operation);
+    return detail::is_valid(operation.address) && detail::is_valid(operation.data) && operation.word_select < 4u && operation.counter_width >= 1u &&
+           operation.counter_width <= 32u;
 }
 
 /** @brief Return whether a FIFO descriptor can be encoded without truncation. */
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
 constexpr bool is_valid(const FifoAcquire<AddressIndex, DataIndex> operation)
 {
-    return detail::is_valid(operation);
+    return detail::is_valid(operation.address) && detail::is_valid(operation.data) && detail::is_valid(operation.pointer) && operation.capacity_log2 <= 15u &&
+           operation.increment_log2 <= 15u && (!operation.probe_only || operation.increment_log2 == 0u);
 }
 
 /** @brief Return whether a compare-set descriptor can be encoded without truncation. */
 template <std::uint32_t AddressIndex>
 constexpr bool is_valid(const CompareSet<AddressIndex> operation)
 {
-    return detail::is_valid(operation);
+    return detail::is_valid(operation.address) && operation.word_select < 4u && operation.compare < 16u && operation.set < 16u;
 }
 
 /** @brief Return whether a masked-write descriptor can be encoded without truncation. */
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
 constexpr bool is_valid(const MaskedWrite<AddressIndex, DataIndex> operation)
 {
-    return detail::is_valid(operation);
+    return detail::is_valid(operation.address) && detail::is_valid(operation.data) && operation.data.index % 4u == 0u;
 }
 
 /** @brief Return whether a counter identity has a valid layout and address GPR. */
 template <std::uint8_t WidthBits, std::uint32_t AddressIndex>
 constexpr bool is_valid(const Counter<WidthBits, AddressIndex> counter)
 {
-    return detail::is_valid(counter);
+    return WidthBits >= 1u && WidthBits <= 32u && detail::is_valid(counter.address) && counter.word < 4u;
 }
 
 /** @brief Return whether a FIFO identity has a valid capacity and address GPR. */
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
 constexpr bool is_valid(const Fifo<CapacityLog2, AddressIndex> fifo)
 {
-    return detail::is_valid(fifo);
+    return CapacityLog2 <= 15u && detail::is_valid(fifo.control_address);
 }
 
 /** @brief Return whether a lock identity has a valid word and address GPR. */
 template <std::uint32_t AddressIndex>
 constexpr bool is_valid(const Lock<AddressIndex> lock)
 {
-    return detail::is_valid(lock);
+    return detail::is_valid(lock.address) && lock.word < 4u;
 }
 
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t FetchIncrement<AddressIndex, DataIndex>::get_operation() const
+inline constexpr __attribute__((always_inline)) std::uint32_t FetchIncrement<AddressIndex, DataIndex>::operation() const
 {
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-    }
-#endif
-    return detail::encode(*this);
+    return detail::checked_encode(*this);
 }
 
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t FifoAcquire<AddressIndex, DataIndex>::get_operation() const
+inline constexpr __attribute__((always_inline)) std::uint32_t FifoAcquire<AddressIndex, DataIndex>::operation() const
 {
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-    }
-#endif
-    return detail::encode(*this);
+    return detail::checked_encode(*this);
 }
 
 template <std::uint32_t AddressIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t CompareSet<AddressIndex>::get_operation() const
+inline constexpr __attribute__((always_inline)) std::uint32_t CompareSet<AddressIndex>::operation() const
 {
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-    }
-#endif
-    return detail::encode(*this);
+    return detail::checked_encode(*this);
 }
 
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
-inline constexpr __attribute__((always_inline)) std::uint32_t MaskedWrite<AddressIndex, DataIndex>::get_operation() const
+inline constexpr __attribute__((always_inline)) std::uint32_t MaskedWrite<AddressIndex, DataIndex>::operation() const
 {
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-    }
-#endif
-    return detail::encode(*this);
+    return detail::checked_encode(*this);
 }
 
 template <std::uint8_t WidthBits, std::uint32_t AddressIndex>
@@ -517,16 +458,16 @@ inline constexpr __attribute__((always_inline)) FetchIncrement<AddressIndex, Dat
 
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
 template <std::uint8_t IncrementLog2, std::uint32_t ResultIndex>
-inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> Fifo<CapacityLog2, AddressIndex>::pop_slots(
+inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> Fifo<CapacityLog2, AddressIndex>::pop(
     const hal::Gpr<ResultIndex> result) const
 {
     static_assert(IncrementLog2 <= 15u, "FIFO increment logarithm must be in [0, 15]");
-    return FifoAcquire<AddressIndex, ResultIndex> {control_address, result, FifoPointer::Read, CapacityLog2, IncrementLog2, false};
+    return pop(result, IncrementLog2);
 }
 
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
 template <std::uint32_t ResultIndex>
-inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> Fifo<CapacityLog2, AddressIndex>::pop_slots(
+inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> Fifo<CapacityLog2, AddressIndex>::pop(
     const hal::Gpr<ResultIndex> result, const std::uint8_t increment_log2) const
 {
     return FifoAcquire<AddressIndex, ResultIndex> {control_address, result, FifoPointer::Read, CapacityLog2, increment_log2, false};
@@ -534,16 +475,16 @@ inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, Result
 
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
 template <std::uint8_t IncrementLog2, std::uint32_t ResultIndex>
-inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> Fifo<CapacityLog2, AddressIndex>::push_slots(
+inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> Fifo<CapacityLog2, AddressIndex>::push(
     const hal::Gpr<ResultIndex> result) const
 {
     static_assert(IncrementLog2 <= 15u, "FIFO increment logarithm must be in [0, 15]");
-    return FifoAcquire<AddressIndex, ResultIndex> {control_address, result, FifoPointer::Write, CapacityLog2, IncrementLog2, false};
+    return push(result, IncrementLog2);
 }
 
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
 template <std::uint32_t ResultIndex>
-inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> Fifo<CapacityLog2, AddressIndex>::push_slots(
+inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> Fifo<CapacityLog2, AddressIndex>::push(
     const hal::Gpr<ResultIndex> result, const std::uint8_t increment_log2) const
 {
     return FifoAcquire<AddressIndex, ResultIndex> {control_address, result, FifoPointer::Write, CapacityLog2, increment_log2, false};
@@ -560,13 +501,13 @@ inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, Result
 template <std::uint32_t AddressIndex>
 inline constexpr __attribute__((always_inline)) CompareSet<AddressIndex> Lock<AddressIndex>::acquire() const
 {
-    return CompareSet<AddressIndex> {address, word, 0, 1};
+    return compare_set<0, 1>();
 }
 
 template <std::uint32_t AddressIndex>
 inline constexpr __attribute__((always_inline)) CompareSet<AddressIndex> Lock<AddressIndex>::release() const
 {
-    return CompareSet<AddressIndex> {address, word, 1, 0};
+    return compare_set<1, 0>();
 }
 
 template <std::uint32_t AddressIndex>
@@ -575,7 +516,7 @@ inline constexpr __attribute__((always_inline)) CompareSet<AddressIndex> Lock<Ad
 {
     static_assert(Compare < 16u, "ATCAS compare value must fit in four bits");
     static_assert(Set < 16u, "ATCAS set value must fit in four bits");
-    return CompareSet<AddressIndex> {address, word, Compare, Set};
+    return compare_set(Compare, Set);
 }
 
 template <std::uint32_t AddressIndex>
@@ -586,94 +527,22 @@ inline constexpr __attribute__((always_inline)) CompareSet<AddressIndex> Lock<Ad
 }
 
 /**
- * @brief Issue one compile-time atomic descriptor as an immediate instruction.
- *
- * @tparam Operation: Complete constexpr atomic descriptor.
- */
-template <auto Operation>
-inline __attribute__((always_inline)) void run()
-{
-    static_assert(is_valid(Operation), "invalid atomic descriptor");
-    constexpr std::uint32_t operation = Operation.get_operation();
-    TTI_INSN(operation);
-}
-
-/**
- * @brief Encode and issue a value-selected ATINCGET descriptor.
- *
- * @tparam AddressIndex: Address GPR type index.
- * @tparam DataIndex: Addend and result GPR type index.
- * @param operation: Complete fetch-increment descriptor.
- * @note Enable LLK assertions to diagnose invalid fields. Disabled assertions preserve
- *       the raw TT_ATINCGET instruction path.
- */
-template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
-inline __attribute__((always_inline)) void run(const FetchIncrement<AddressIndex, DataIndex> operation)
-{
-    TT_INSN(operation.get_operation());
-}
-
-/**
- * @brief Encode and issue a value-selected ATINCGETPTR descriptor.
- *
- * @tparam AddressIndex: FIFOControl address GPR type index.
- * @tparam DataIndex: Pointer-result GPR type index.
- * @param operation: Complete FIFO descriptor.
- * @note Enable LLK assertions to diagnose invalid fields. Disabled assertions preserve
- *       the raw TT_ATINCGETPTR instruction path.
- */
-template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
-inline __attribute__((always_inline)) void run(const FifoAcquire<AddressIndex, DataIndex> operation)
-{
-    TT_INSN(operation.get_operation());
-}
-
-/**
- * @brief Encode and issue a value-selected ATCAS descriptor.
- *
- * @tparam AddressIndex: Address GPR type index.
- * @param operation: Complete compare-set descriptor.
- * @note Enable LLK assertions to diagnose invalid fields. Disabled assertions preserve
- *       the raw TT_ATCAS instruction path.
- */
-template <std::uint32_t AddressIndex>
-inline __attribute__((always_inline)) void run(const CompareSet<AddressIndex> operation)
-{
-    TT_INSN(operation.get_operation());
-}
-
-/**
- * @brief Encode and issue a value-selected ATSWAP descriptor.
- *
- * @tparam AddressIndex: Address GPR type index.
- * @tparam DataIndex: Four-aligned source-quad base GPR type index.
- * @param operation: Complete masked-write descriptor.
- * @note Enable LLK assertions to diagnose invalid fields. Disabled assertions preserve
- *       the raw TT_ATSWAP instruction path.
- */
-template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
-inline __attribute__((always_inline)) void run(const MaskedWrite<AddressIndex, DataIndex> operation)
-{
-    TT_INSN(operation.get_operation());
-}
-
-/**
  * @brief Issue a compile-time counter fetch-and-add as one immediate ATINCGET.
  *
  * @tparam CounterIdentity: Complete constexpr @ref Counter supplied inside angle brackets.
- * @tparam DataIndex: Addend and result GPR type index.
- * @param data: GPR supplying the addend and receiving the pre-increment value.
+ * @tparam DataIndex: Index of the GPR supplying the addend and receiving the pre-increment value.
  * @note Drain ScalarIdle while blocking the dependent consumer before consuming or
  *       reusing the data GPR.
  */
 template <auto CounterIdentity, std::uint32_t DataIndex>
-inline __attribute__((always_inline)) void fetch_add(const hal::Gpr<DataIndex> data)
+inline __attribute__((always_inline)) void fetch_add(const hal::Gpr<DataIndex>)
 {
     static_assert(DataIndex != hal::detail::DynamicGprIndex, "immediate atomic fetch-add requires hal::gpr<Index>()");
     static_assert(is_valid(CounterIdentity), "invalid atomic counter identity");
-    constexpr auto operation = CounterIdentity.fetch_add(hal::Gpr<DataIndex> {});
-    (void)data;
-    run<operation>();
+    constexpr auto descriptor = CounterIdentity.fetch_add(hal::Gpr<DataIndex> {});
+    static_assert(is_valid(descriptor), "invalid atomic descriptor");
+    constexpr std::uint32_t encoding = descriptor.operation();
+    TTI_INSN(encoding);
 }
 
 /**
@@ -691,7 +560,7 @@ inline __attribute__((always_inline)) void fetch_add(const hal::Gpr<DataIndex> d
 template <std::uint8_t WidthBits, std::uint32_t AddressIndex, std::uint32_t DataIndex>
 inline __attribute__((always_inline)) void fetch_add(const Counter<WidthBits, AddressIndex> counter, const hal::Gpr<DataIndex> data)
 {
-    run(counter.fetch_add(data));
+    TT_INSN(counter.fetch_add(data).operation());
 }
 
 /**
@@ -699,17 +568,17 @@ inline __attribute__((always_inline)) void fetch_add(const Counter<WidthBits, Ad
  *
  * @tparam State: Condition that blocks the operation, values = <Empty/Full>.
  * @tparam FifoIdentity: Complete constexpr @ref Fifo supplied inside angle brackets.
- * @tparam ResultIndex: Pointer-result GPR type index.
- * @param result: GPR receiving the current read pointer for Empty or write pointer for Full.
+ * @tparam ResultIndex: Index of the GPR receiving the current read pointer for Empty or write pointer for Full.
  */
 template <FifoState State, auto FifoIdentity, std::uint32_t ResultIndex>
-inline __attribute__((always_inline)) void wait_while(const hal::Gpr<ResultIndex> result)
+inline __attribute__((always_inline)) void wait_while(const hal::Gpr<ResultIndex>)
 {
     static_assert(ResultIndex != hal::detail::DynamicGprIndex, "immediate FIFO wait requires hal::gpr<Index>()");
     static_assert(is_valid(FifoIdentity), "invalid atomic FIFO identity");
-    constexpr auto operation = FifoIdentity.template wait_while<State>(hal::Gpr<ResultIndex> {});
-    (void)result;
-    run<operation>();
+    constexpr auto descriptor = FifoIdentity.template wait_while<State>(hal::Gpr<ResultIndex> {});
+    static_assert(is_valid(descriptor), "invalid atomic descriptor");
+    constexpr std::uint32_t encoding = descriptor.operation();
+    TTI_INSN(encoding);
 }
 
 /**
@@ -726,7 +595,7 @@ inline __attribute__((always_inline)) void wait_while(const hal::Gpr<ResultIndex
 template <FifoState State, std::uint8_t CapacityLog2, std::uint32_t AddressIndex, std::uint32_t ResultIndex>
 inline __attribute__((always_inline)) void wait_while(const Fifo<CapacityLog2, AddressIndex> fifo, const hal::Gpr<ResultIndex> result)
 {
-    run(fifo.template wait_while<State>(result));
+    TT_INSN(fifo.template wait_while<State>(result).operation());
 }
 
 /**
@@ -736,19 +605,19 @@ inline __attribute__((always_inline)) void wait_while(const Fifo<CapacityLog2, A
  * establish that the complete batch is available.
  *
  * @tparam FifoIdentity: Complete constexpr @ref Fifo supplied inside angle brackets.
- * @tparam IncrementLog2: Base-two logarithm of the read-pointer increment, in [0, 15].
- * @tparam ResultIndex: Pointer-result GPR type index.
- * @param result: GPR receiving the pre-increment read pointer.
+ * @tparam IncrementLog2: Base-two logarithm of the read-pointer increment, in [0, 15]; defaults to zero for one slot.
+ * @tparam ResultIndex: Index of the GPR receiving the pre-increment read pointer.
  * @note Move the payload separately; this operation updates FIFO bookkeeping only.
  */
 template <auto FifoIdentity, std::uint8_t IncrementLog2 = 0, std::uint32_t ResultIndex>
-inline __attribute__((always_inline)) void pop_slots(const hal::Gpr<ResultIndex> result)
+inline __attribute__((always_inline)) void pop(const hal::Gpr<ResultIndex>)
 {
     static_assert(ResultIndex != hal::detail::DynamicGprIndex, "immediate FIFO pop requires hal::gpr<Index>()");
     static_assert(is_valid(FifoIdentity), "invalid atomic FIFO identity");
-    constexpr auto operation = FifoIdentity.template pop_slots<IncrementLog2>(hal::Gpr<ResultIndex> {});
-    (void)result;
-    run<operation>();
+    constexpr auto descriptor = FifoIdentity.template pop<IncrementLog2>(hal::Gpr<ResultIndex> {});
+    static_assert(is_valid(descriptor), "invalid atomic descriptor");
+    constexpr std::uint32_t encoding = descriptor.operation();
+    TTI_INSN(encoding);
 }
 
 /**
@@ -762,15 +631,15 @@ inline __attribute__((always_inline)) void pop_slots(const hal::Gpr<ResultIndex>
  * @tparam ResultIndex: Pointer-result GPR type index.
  * @param fifo: FIFO identity supplying the control line and capacity.
  * @param result: GPR receiving the pre-increment read pointer.
- * @param increment_log2: Base-two logarithm of the read-pointer increment, in [0, 15].
+ * @param increment_log2: Base-two logarithm of the read-pointer increment, in [0, 15]; defaults to zero for one slot.
  * @note Move the payload separately; this operation updates FIFO bookkeeping only.
  * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex, std::uint32_t ResultIndex>
-inline __attribute__((always_inline)) void pop_slots(
+inline __attribute__((always_inline)) void pop(
     const Fifo<CapacityLog2, AddressIndex> fifo, const hal::Gpr<ResultIndex> result, const std::uint8_t increment_log2 = 0)
 {
-    run(fifo.pop_slots(result, increment_log2));
+    TT_INSN(fifo.pop(result, increment_log2).operation());
 }
 
 /**
@@ -780,19 +649,19 @@ inline __attribute__((always_inline)) void pop_slots(
  * establish that the complete batch fits.
  *
  * @tparam FifoIdentity: Complete constexpr @ref Fifo supplied inside angle brackets.
- * @tparam IncrementLog2: Base-two logarithm of the write-pointer increment, in [0, 15].
- * @tparam ResultIndex: Pointer-result GPR type index.
- * @param result: GPR receiving the pre-increment write pointer.
+ * @tparam IncrementLog2: Base-two logarithm of the write-pointer increment, in [0, 15]; defaults to zero for one slot.
+ * @tparam ResultIndex: Index of the GPR receiving the pre-increment write pointer.
  * @note Move the payload separately; this operation updates FIFO bookkeeping only.
  */
 template <auto FifoIdentity, std::uint8_t IncrementLog2 = 0, std::uint32_t ResultIndex>
-inline __attribute__((always_inline)) void push_slots(const hal::Gpr<ResultIndex> result)
+inline __attribute__((always_inline)) void push(const hal::Gpr<ResultIndex>)
 {
     static_assert(ResultIndex != hal::detail::DynamicGprIndex, "immediate FIFO push requires hal::gpr<Index>()");
     static_assert(is_valid(FifoIdentity), "invalid atomic FIFO identity");
-    constexpr auto operation = FifoIdentity.template push_slots<IncrementLog2>(hal::Gpr<ResultIndex> {});
-    (void)result;
-    run<operation>();
+    constexpr auto descriptor = FifoIdentity.template push<IncrementLog2>(hal::Gpr<ResultIndex> {});
+    static_assert(is_valid(descriptor), "invalid atomic descriptor");
+    constexpr std::uint32_t encoding = descriptor.operation();
+    TTI_INSN(encoding);
 }
 
 /**
@@ -806,15 +675,15 @@ inline __attribute__((always_inline)) void push_slots(const hal::Gpr<ResultIndex
  * @tparam ResultIndex: Pointer-result GPR type index.
  * @param fifo: FIFO identity supplying the control line and capacity.
  * @param result: GPR receiving the pre-increment write pointer.
- * @param increment_log2: Base-two logarithm of the write-pointer increment, in [0, 15].
+ * @param increment_log2: Base-two logarithm of the write-pointer increment, in [0, 15]; defaults to zero for one slot.
  * @note Move the payload separately; this operation updates FIFO bookkeeping only.
  * @note Enable LLK assertions to diagnose invalid fields; disabled assertions add no runtime check.
  */
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex, std::uint32_t ResultIndex>
-inline __attribute__((always_inline)) void push_slots(
+inline __attribute__((always_inline)) void push(
     const Fifo<CapacityLog2, AddressIndex> fifo, const hal::Gpr<ResultIndex> result, const std::uint8_t increment_log2 = 0)
 {
-    run(fifo.push_slots(result, increment_log2));
+    TT_INSN(fifo.push(result, increment_log2).operation());
 }
 
 /**
@@ -828,8 +697,10 @@ template <auto LockIdentity, std::uint8_t Compare, std::uint8_t Set>
 inline __attribute__((always_inline)) void compare_set()
 {
     static_assert(is_valid(LockIdentity), "invalid atomic lock identity");
-    constexpr auto operation = LockIdentity.template compare_set<Compare, Set>();
-    run<operation>();
+    constexpr auto descriptor = LockIdentity.template compare_set<Compare, Set>();
+    static_assert(is_valid(descriptor), "invalid atomic descriptor");
+    constexpr std::uint32_t encoding = descriptor.operation();
+    TTI_INSN(encoding);
 }
 
 /**
@@ -844,7 +715,7 @@ inline __attribute__((always_inline)) void compare_set()
 template <std::uint32_t AddressIndex>
 inline __attribute__((always_inline)) void compare_set(const Lock<AddressIndex> lock, const std::uint8_t compare, const std::uint8_t set)
 {
-    run(lock.compare_set(compare, set));
+    TT_INSN(lock.compare_set(compare, set).operation());
 }
 
 /**
@@ -855,9 +726,7 @@ inline __attribute__((always_inline)) void compare_set(const Lock<AddressIndex> 
 template <auto LockIdentity>
 inline __attribute__((always_inline)) void acquire()
 {
-    static_assert(is_valid(LockIdentity), "invalid atomic lock identity");
-    constexpr auto operation = LockIdentity.acquire();
-    run<operation>();
+    compare_set<LockIdentity, 0, 1>();
 }
 
 /**
@@ -870,7 +739,7 @@ inline __attribute__((always_inline)) void acquire()
 template <std::uint32_t AddressIndex>
 inline __attribute__((always_inline)) void acquire(const Lock<AddressIndex> lock)
 {
-    run(lock.acquire());
+    compare_set(lock, 0, 1);
 }
 
 /**
@@ -881,9 +750,7 @@ inline __attribute__((always_inline)) void acquire(const Lock<AddressIndex> lock
 template <auto LockIdentity>
 inline __attribute__((always_inline)) void release()
 {
-    static_assert(is_valid(LockIdentity), "invalid atomic lock identity");
-    constexpr auto operation = LockIdentity.release();
-    run<operation>();
+    compare_set<LockIdentity, 1, 0>();
 }
 
 /**
@@ -896,29 +763,27 @@ inline __attribute__((always_inline)) void release()
 template <std::uint32_t AddressIndex>
 inline __attribute__((always_inline)) void release(const Lock<AddressIndex> lock)
 {
-    run(lock.release());
+    compare_set(lock, 1, 0);
 }
 
 /**
  * @brief Issue a compile-time posted masked line store as one immediate ATSWAP.
  *
  * @tparam GranuleMask: Eight 16-bit line-granule write enables.
- * @tparam AddressIndex: Address GPR type index.
- * @tparam DataIndex: Four-aligned source-quad base GPR type index.
- * @param address: GPR containing the 16-byte L1 line address.
- * @param data: First of four consecutive source GPRs.
+ * @tparam AddressIndex: Index of the GPR containing the 16-byte L1 line address.
+ * @tparam DataIndex: Four-aligned index of the first of four consecutive source GPRs.
  * @note Drain ScalarIdle while blocking the dependent consumer before relying on the
  *       updated memory.
  */
 template <std::uint8_t GranuleMask, std::uint32_t AddressIndex, std::uint32_t DataIndex>
-inline __attribute__((always_inline)) void store_masked(const hal::Gpr<AddressIndex> address, const hal::Gpr<DataIndex> data)
+inline __attribute__((always_inline)) void store_masked(const hal::Gpr<AddressIndex>, const hal::Gpr<DataIndex>)
 {
     static_assert(AddressIndex != hal::detail::DynamicGprIndex, "immediate masked write requires hal::gpr<Index>() for its address");
     static_assert(DataIndex != hal::detail::DynamicGprIndex, "immediate masked write requires hal::gpr<Index>() for its data quad");
-    constexpr MaskedWrite<AddressIndex, DataIndex> operation {hal::Gpr<AddressIndex> {}, hal::Gpr<DataIndex> {}, GranuleMask};
-    (void)address;
-    (void)data;
-    run<operation>();
+    constexpr MaskedWrite<AddressIndex, DataIndex> descriptor {hal::Gpr<AddressIndex> {}, hal::Gpr<DataIndex> {}, GranuleMask};
+    static_assert(is_valid(descriptor), "invalid atomic descriptor");
+    constexpr std::uint32_t encoding = descriptor.operation();
+    TTI_INSN(encoding);
 }
 
 /**
@@ -936,7 +801,8 @@ inline __attribute__((always_inline)) void store_masked(const hal::Gpr<AddressIn
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
 inline __attribute__((always_inline)) void store_masked(const hal::Gpr<AddressIndex> address, const hal::Gpr<DataIndex> data, const std::uint8_t granule_mask)
 {
-    run(MaskedWrite<AddressIndex, DataIndex> {address, data, granule_mask});
+    const MaskedWrite<AddressIndex, DataIndex> descriptor {address, data, granule_mask};
+    TT_INSN(descriptor.operation());
 }
 
 } // namespace hal::atomic
