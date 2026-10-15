@@ -13,7 +13,7 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 INFRA = os.path.normpath(os.path.join(HERE, ".."))
 SCRIPT = os.path.join(INFRA, "check_sticky_cfg_restore.py")
-BASELINE = os.path.join(INFRA, "sticky_cfg_baseline.txt")
+LLK = os.path.normpath(os.path.join(INFRA, ".."))
 FP32 = "ALU_ACC_CTRL_Fp32_enabled"
 ZF = "ALU_ACC_CTRL_Zero_Flag_disabled_src"
 
@@ -369,22 +369,22 @@ def test_bad_table_is_a_hard_error(tmp_path):
         assert "sticky_cfg" not in r.stdout or ".yaml:" in r.stdout
 
 
-def test_shipped_tree_is_clean_against_baseline_and_not_vacuous():
-    r = run(baseline=BASELINE)
+def test_shipped_tree_is_clean_and_scan_is_not_vacuous(tmp_path):
+    r = run()
     assert r.returncode == 0, r.stdout
-    assert "no longer match" not in r.stdout
-    unbaselined = run()
-    assert (
-        unbaselined.returncode == 1
-    ), "whole-tree run found nothing -- the scan did not run"
-    assert unbaselined.stdout.count("[tracked]") == sum(
-        1 for l in open(BASELINE) if l.strip() and not l.startswith("#")
-    )
+    # A clean tree must not be a scan that saw nothing: a shipped header that clears Fp32_enabled
+    # and sets it back passes as is, and fails once every restoring write is dropped from a copy.
+    name = "llk_math_eltwise_unary_datacopy.h"
+    src = open(os.path.join(LLK, "tt_llk_blackhole", "llk_lib", name)).read()
+    assert rmw(FP32, 0) in src and rmw(FP32, 1) in src
+    assert run(hdr(tmp_path, src, name=name)).returncode == 0
+    broken = run(hdr(tmp_path, src.replace(rmw(FP32, 1), ""), name=name))
+    assert broken.returncode == 1 and "[restore]" in broken.stdout
 
 
 def test_stale_baseline_entry_is_reported(tmp_path):
     b = tmp_path / "b.txt"
-    b.write_text(open(BASELINE).read() + f"tt_metal/tt-llk/gone.h:_gone_:{FP32}\n")
+    b.write_text(f"tt_metal/tt-llk/gone.h:_gone_:{FP32}\n")
     r = run(baseline=b)
     assert r.returncode == 0
     assert "no longer match" in r.stdout and "gone.h" in r.stdout

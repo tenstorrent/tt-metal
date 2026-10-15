@@ -12,17 +12,18 @@ The fields and their policy live in sticky_cfg_fields.yaml:
              a function of the same file that calls it.
 
 A write whose value is not a literal cannot be judged and is reported as a note, never a failure.
-Pre-existing findings go in a baseline keyed by path, function and field; overloads and same-named
-functions in one file share a key. A `sites:` entry exempts its function and field under either
-policy, so it is also the place to record a tracked write whose invalidate lives in another file.
+Pre-existing findings can go in a `--baseline` file keyed by path, function and field; overloads and
+same-named functions in one file share a key. The shipped trees have none. A `sites:` entry exempts
+its function and field under either policy, so it is also the place to record a tracked write whose
+invalidate lives in another file.
 The function it names as `restored_by` must be defined in that arch's headers.
 
 Known limit: the restore check is lexical, so a branch that clears a field and a sibling branch that
 sets it back read as restored.
 
 Scope matches the other LLK hooks: run with no files and the whole tree is checked; from the hook,
-only the touched headers are, unless a verdict input (this script, the table, the baseline) is
-touched, in which case the whole tree is.
+only the touched headers are, unless a verdict input (this script, the table) is touched, in
+which case the whole tree is.
 """
 import argparse
 import glob
