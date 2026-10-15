@@ -162,17 +162,19 @@ class TtMiMoAttention:
     def allocate_kv_cache(self, num_blocks, block_size, dtype=ttnn.bfloat8_b):
         """[K, V] caches ``[num_blocks, kv_heads, block_size, dim]`` per chip; V is 128 wide when users are split."""
         v_dim = self.v_head_dim if self.split_users else self.head_dim
-        return [
-            ttnn.as_tensor(
-                torch.zeros(num_blocks, self.nkv_local, block_size, dim),
-                device=self.plan.mesh_device,
-                dtype=dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=self.plan.replicate(),
+        caches = []
+        for dim in (self.head_dim, v_dim):
+            # Allocate and zero on device: at 1M context a host torch.zeros + conversion would move ~GBs per layer.
+            cache = ttnn.allocate_tensor_on_device(
+                ttnn.Shape((num_blocks, self.nkv_local, block_size, dim)),
+                dtype,
+                ttnn.TILE_LAYOUT,
+                self.plan.mesh_device,
+                ttnn.DRAM_MEMORY_CONFIG,
             )
-            for dim in (self.head_dim, v_dim)
-        ]
+            ttnn.fill(cache, 0.0, output_tensor=cache)
+            caches.append(cache)
+        return caches
 
     # ---------------------------------------------------------------- prefill
     def _prefill_sdpa_program(self, seq_len):
