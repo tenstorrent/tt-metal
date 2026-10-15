@@ -20,10 +20,42 @@ ttnn::Tensor per_token_cast_back(
     const std::optional<ttnn::Tensor>& expert_token_counts,
     const std::optional<ttnn::Tensor>& global_expert_idx_table,
     uint32_t experts_per_chip,
-    const std::optional<ttnn::Tensor>& metadata) {
+    const std::optional<ttnn::Tensor>& metadata,
+    uint32_t scale_block_w,
+    bool scales_in_row_tail,
+    bool tile_output,
+    uint32_t row_segments) {
     const auto dtype = output_dtype.value_or(tt::tt_metal::DataType::BFLOAT16);
     const auto mem_config = memory_config.value_or(input_e4m3.memory_config());
 
+    if (scales_in_row_tail) {
+        TT_FATAL(
+            !input_scale.has_value() && !metadata.has_value(),
+            "per_token_cast_back: scales_in_row_tail takes the scales from the input rows (no input_scale / metadata)");
+        if (token_count_aware) {
+            TT_FATAL(
+                expert_region_offsets.has_value() && expert_token_counts.has_value() &&
+                    global_expert_idx_table.has_value(),
+                "per_token_cast_back: token_count_aware=true requires expert_region_offsets, expert_token_counts "
+                "and global_expert_idx_table");
+        }
+        return ttnn::prim::per_token_cast_back(
+            input_e4m3,
+            input_e4m3,
+            dtype,
+            mem_config,
+            narrow_scales_to_bf16,
+            token_count_aware,
+            token_count_aware ? expert_region_offsets : std::nullopt,
+            token_count_aware ? expert_token_counts : std::nullopt,
+            token_count_aware ? global_expert_idx_table : std::nullopt,
+            token_count_aware ? experts_per_chip : 0,
+            /*scales_from_metadata=*/false,
+            scale_block_w,
+            /*scales_in_row_tail=*/true,
+            tile_output,
+            row_segments);
+    }
     if (!token_count_aware) {
         TT_FATAL(
             input_scale.has_value(),
@@ -32,7 +64,20 @@ ttnn::Tensor per_token_cast_back(
             !metadata.has_value() && !expert_region_offsets.has_value() && !expert_token_counts.has_value() &&
                 !global_expert_idx_table.has_value(),
             "per_token_cast_back: metadata / expert_* tensors are only valid when token_count_aware=true");
-        return ttnn::prim::per_token_cast_back(input_e4m3, *input_scale, dtype, mem_config, narrow_scales_to_bf16);
+        return ttnn::prim::per_token_cast_back(
+            input_e4m3,
+            *input_scale,
+            dtype,
+            mem_config,
+            narrow_scales_to_bf16,
+            /*token_count_aware=*/false,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            /*experts_per_chip=*/0,
+            /*scales_from_metadata=*/false,
+            scale_block_w,
+            /*scales_in_row_tail=*/false);
     }
 
     // Token-count-aware path. Exactly one scale source: either a plain fp32 (M, H/128) scale tensor, or
@@ -57,7 +102,9 @@ ttnn::Tensor per_token_cast_back(
         expert_token_counts,
         global_expert_idx_table,
         experts_per_chip,
-        scales_from_metadata);
+        scales_from_metadata,
+        scale_block_w,
+        /*scales_in_row_tail=*/false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::per_token_cast_back

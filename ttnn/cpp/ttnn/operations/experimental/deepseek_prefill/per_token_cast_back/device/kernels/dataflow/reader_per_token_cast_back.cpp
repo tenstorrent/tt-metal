@@ -48,7 +48,7 @@ void kernel_main() {
     constexpr uint32_t cb_scale_bcast_fp32 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_scale_scratch = get_compile_time_arg_val(2);
     constexpr uint32_t input_e4m3_block_bytes = get_compile_time_arg_val(3);    // 128 (1 byte/elem)
-    constexpr uint32_t block_ht = get_compile_time_arg_val(4);                  // BlockHt = 1
+    constexpr uint32_t chunk_scale_blocks = get_compile_time_arg_val(4);        // scales per 128-chunk row
     constexpr uint32_t scale_aligned_page_bytes = get_compile_time_arg_val(5);  // aligned row footprint
     // Tile / face dims from the tensor's tile spec.
     constexpr uint32_t tile_h = get_compile_time_arg_val(6);
@@ -68,9 +68,10 @@ void kernel_main() {
     constexpr uint32_t max_dispatch_buffer_tokens = get_compile_time_arg_val(18);
     constexpr uint32_t ACCESSOR_CT_BASE = 19;
 #else
-    // Plain path: the scale is a FLOAT32 (M, H/128) tensor read from column 0.
-    constexpr uint32_t scale_col_offset = 0;
-    constexpr uint32_t ACCESSOR_CT_BASE = 10;
+    // Plain path: the scale is a FLOAT32 (M, H/scale_block_w) tensor (offset 0), or the packed-row tail of
+    // the e4m3 input itself (offset H/4 words; the scaled FP8 combine output).
+    constexpr uint32_t scale_col_offset = get_compile_time_arg_val(10);
+    constexpr uint32_t ACCESSOR_CT_BASE = 11;
 #endif
     constexpr uint32_t block_w = 128;
     constexpr uint32_t tiles_per_block = block_w / tile_w;
@@ -79,8 +80,6 @@ void kernel_main() {
     constexpr uint32_t FACE_ROWS = tile_h / face_h;                                         // face rows per tile
     constexpr uint32_t FACE_ROW_STRIDE_BYTES = faces_per_row * face_elems * sizeof(float);  // per face row
     constexpr uint32_t FACE_W_BYTES = face_w * sizeof(float);                               // per in-face row
-
-    (void)block_ht;  // kept as a compile-time layout arg for tensor accessor offset stability
 
     constexpr auto input_e4m3_accessor_args = TensorAccessorArgs<ACCESSOR_CT_BASE>();
     constexpr auto scale_args = TensorAccessorArgs<input_e4m3_accessor_args.next_compile_time_args_offset()>();
@@ -214,37 +213,43 @@ void kernel_main() {
                 scale,
                 use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_scale_scratch_obj),
                 scale_aligned_page_bytes,
-                {.page_id = t},
+                {.page_id = t, .offset_bytes = SCALE_READ_OFFSET},
                 {.offset_bytes = (t - block_start_row) * scale_aligned_page_bytes});
         }
         noc.async_read_barrier();
 
-        // --- build the bcast operand: column 0 row r = scale[token_r][block_r] (face-aware walk) ---
+        // --- build the bcast operands: page sb, column 0 row r = scale[token_r][chunk_r * nsb + sb]
+        // (face-aware walk). A 128-chunk carries chunk_scale_blocks scales per row, one page each.
         // (tok_off, block_idx_b) cursor walks the block rows in face order -> no per-row div/mod.
-        cb_scale_bcast_fp32_obj.reserve_back(1);
+        cb_scale_bcast_fp32_obj.reserve_back(chunk_scale_blocks);
         CoreLocalMem<volatile uint32_t> scratch_mem(scratch);
-        CoreLocalMem<volatile uint32_t> page(cb_scale_bcast_fp32_obj.get_write_ptr());
-        uint32_t tok_off = 0;  // (token - block_start_row) * scale_aligned_page_bytes
-        uint32_t block_idx_b = block_start_idx;
-        uint32_t s = 0;
-        uint32_t face_base_off = 0;
-        for (uint32_t fr = 0; fr < FACE_ROWS; ++fr) {
-            uint32_t col0_off = face_base_off;
-            for (uint32_t r = 0; r < face_h; ++r) {
-                if (s < real_in_block) {
-                    page[col0_off >> 2] = scratch_mem[(tok_off >> 2) + scale_col_offset + block_idx_b];
-                    ++block_idx_b;
-                    if (block_idx_b >= blocks_per_row) {
-                        block_idx_b = 0;
-                        tok_off += scale_aligned_page_bytes;
+        const uint32_t bcast_page_words = get_tile_size(cb_scale_bcast_fp32) >> 2;
+        for (uint32_t sb = 0; sb < chunk_scale_blocks; ++sb) {
+            CoreLocalMem<volatile uint32_t> page(cb_scale_bcast_fp32_obj.get_write_ptr());
+            const uint32_t page_base = sb * bcast_page_words;
+            uint32_t tok_off = 0;  // (token - block_start_row) * scale_aligned_page_bytes
+            uint32_t block_idx_b = block_start_idx;
+            uint32_t s = 0;
+            uint32_t face_base_off = 0;
+            for (uint32_t fr = 0; fr < FACE_ROWS; ++fr) {
+                uint32_t col0_off = face_base_off;
+                for (uint32_t r = 0; r < face_h; ++r) {
+                    if (s < real_in_block) {
+                        page[page_base + (col0_off >> 2)] =
+                            scratch_mem[(tok_off >> 2) + scale_col_offset + block_idx_b * chunk_scale_blocks + sb];
+                        ++block_idx_b;
+                        if (block_idx_b >= blocks_per_row) {
+                            block_idx_b = 0;
+                            tok_off += scale_aligned_page_bytes;
+                        }
                     }
+                    col0_off += FACE_W_BYTES;
+                    ++s;
                 }
-                col0_off += FACE_W_BYTES;
-                ++s;
+                face_base_off += FACE_ROW_STRIDE_BYTES;
             }
-            face_base_off += FACE_ROW_STRIDE_BYTES;
         }
-        cb_scale_bcast_fp32_obj.push_back(1);
+        cb_scale_bcast_fp32_obj.push_back(chunk_scale_blocks);
         cb_input_e4m3_obj.push_back(tiles_per_block);
     }
 }

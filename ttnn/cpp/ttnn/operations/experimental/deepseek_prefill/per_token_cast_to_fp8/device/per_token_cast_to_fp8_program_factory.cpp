@@ -4,6 +4,9 @@
 
 #include "per_token_cast_to_fp8_program_factory.hpp"
 
+#include <cmath>
+
+#include <array>
 #include <bit>
 #include <map>
 #include <string>
@@ -71,7 +74,12 @@ KernelIds build_kernels_and_cbs(
     const tt::tt_metal::CoreRangeSet& all_cores,
     uint32_t scale_scratch_bytes,
     bool round_scale_to_power_of_two,
-    const std::map<std::string, std::string>& defines) {
+    uint32_t scale_block_w,
+    bool round_to_nearest_even,
+    const std::map<std::string, std::string>& defines,
+    const PerTokenCastToFp8Params& attrs,
+    const PerTokenCastToFp8Inputs& tensor_args,
+    uint32_t num_cores_total) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -94,13 +102,20 @@ KernelIds build_kernels_and_cbs(
     constexpr uint32_t block_ht = 1;             // BlockHt: one tile-height batch
     const uint32_t tiles_per_block = block_ht * block_wt;
 
-    const uint32_t scale_blocks_per_row = H / fp8::BLOCK_W;  // H / 128
+    // A 128-wide chunk carries chunk_scale_blocks = 128 / scale_block_w scales per row.
+    const uint32_t scale_block_wt = scale_block_w / tile_w;       // tiles per scale block
+    const uint32_t chunk_scale_blocks = block_w / scale_block_w;  // scales per chunk row
+    const uint32_t scale_blocks_per_row = H / scale_block_w;      // scales per row
+    const uint32_t chunks_per_row = H / fp8::BLOCK_W;             // 128-wide chunks per row
     const uint32_t in_elem_bytes = input.element_size();
     const uint32_t input_block_bytes = block_w * in_elem_bytes;      // reader CT[1]; ROW_MAJOR-only
     const uint32_t output_e4m3_block_bytes = block_w;                // one 128-element row, 1 byte/elem
-    const uint32_t in_tile_bytes = tile_h * tile_w * in_elem_bytes;  // cb_in page = one input tile
+    // cb_in page = one input tile (tile_size handles block-float formats such as Bfp8_b).
+    const uint32_t in_tile_bytes = tt::tile_size(datatype_to_dataformat_converter(input.dtype()));
     const uint32_t output_e4m3_page_bytes = tile_h * tile_w;         // cb_output_e4m3 page = one tile
-    const uint32_t scale_aligned_page_bytes = output_scale.buffer()->aligned_page_size();
+    // Packed rows keep the scale staging at a 64-B aligned row stride (the scale tensor is unused).
+    const uint32_t scale_aligned_page_bytes = attrs.pack_scales_in_row ? tt::round_up(scale_blocks_per_row * 4u, 64u)
+                                                                       : output_scale.buffer()->aligned_page_size();
 
     auto* src_buffer = input.buffer();
     auto* dst_e4m3_buffer = output_e4m3.buffer();
@@ -129,21 +144,41 @@ KernelIds build_kernels_and_cbs(
     // cb_in: input, one tile per page; tiles_per_block pages = one 128-wide block, double-buffered.
     // ROW_MAJOR input: the reader fills the block ([tile_h x 128]) contiguously across these pages.
     // TILE input: the reader reads the tiles_per_block tiles individually into these pages.
-    CircularBufferConfig cb_in_cfg = CircularBufferConfig(2 * tiles_per_block * in_tile_bytes, {{cb_in_idx, input_df}})
+    const uint32_t q_unit = defines.contains("Q_UNIT") ? std::stoul(defines.at("Q_UNIT")) : 1u;
+    const uint32_t q_wgroup = defines.contains("Q_WGROUP") ? std::stoul(defines.at("Q_WGROUP")) : 1u;
+    const uint32_t in_block_tiles = q_unit * tiles_per_block;
+    CircularBufferConfig cb_in_cfg = CircularBufferConfig(2 * in_block_tiles * in_tile_bytes, {{cb_in_idx, input_df}})
                                          .set_page_size(cb_in_idx, in_tile_bytes);
     CreateCircularBuffer(program, all_cores, cb_in_cfg);
 
     // cb_tile: input tiles in fp32. ROW_MAJOR: tilized input; TILE: copied input (already tiles).
     make_fp32_tile_cb(cb_tile_idx, tiles_per_block);
-    make_fp32_tile_cb(cb_scaler_idx, 1);                      // reduce scaler (1.0), reader-filled
-    make_fp32_tile_cb(cb_abs_idx, 2 * block_wt);              // abs tiles for one block row
-    make_fp32_tile_cb(cb_scale_tiles_idx, 2 * block_ht);      // col0 = scale
-    make_fp32_tile_cb(cb_inv_scale_tiles_idx, 2 * block_ht);  // col0 = 1/scale
+    make_fp32_tile_cb(cb_scaler_idx, 1);  // reduce scaler (1.0), reader-filled
+    // FAST_1X32: 1/scale tiles are exact powers of two, so bf16 holds them (half the pack / unpack bytes).
+    const bool fast_1x32 = defines.contains("FAST_1X32");
+    auto make_scale_tile_cb = [&](uint32_t cb_idx, uint32_t num_tiles) {
+        if (!fast_1x32) {
+            make_fp32_tile_cb(cb_idx, num_tiles);
+            return;
+        }
+        const uint32_t bytes = tt::tile_size(DataFormat::Float16_b);
+        CircularBufferConfig cfg =
+            CircularBufferConfig(num_tiles * bytes, {{cb_idx, DataFormat::Float16_b}}).set_page_size(cb_idx, bytes);
+        CreateCircularBuffer(program, all_cores, cfg);
+    };
+    if (fast_1x32 && defines.contains("DIRECT_SRC")) {
+        make_scale_tile_cb(cb_abs_idx, std::max(2u, q_unit) * block_wt);  // |x| (exact in bf16); one unit at a time
+    } else {
+        make_fp32_tile_cb(cb_abs_idx, 2 * block_wt);  // abs tiles for one block row
+    }
+    make_scale_tile_cb(cb_scale_tiles_idx, 2 * q_unit * block_ht * chunk_scale_blocks);  // col0 = scale (FAST: 1/scale)
+    make_scale_tile_cb(cb_inv_scale_tiles_idx, std::max(2u, q_unit) * block_ht * chunk_scale_blocks);  // col0 = 1/scale
 
     // cb_output_e4m3: e4m3 output, always row-major, one tile per page, double-buffered.
     // Identical for both input layouts (ROW_MAJOR and TILE).
     CircularBufferConfig cb_output_e4m3_cfg =
-        CircularBufferConfig(2 * tiles_per_block * output_e4m3_page_bytes, {{cb_output_e4m3_idx, fp8_df}})
+        CircularBufferConfig(
+            2 * q_unit * q_wgroup * tiles_per_block * output_e4m3_page_bytes, {{cb_output_e4m3_idx, fp8_df}})
             .set_page_size(cb_output_e4m3_idx, output_e4m3_page_bytes);
     CreateCircularBuffer(program, all_cores, cb_output_e4m3_cfg);
 
@@ -159,6 +194,36 @@ KernelIds build_kernels_and_cbs(
     std::vector<uint32_t> reader_ct_args = {
         cb_in_idx, input_block_bytes, cb_scaler_idx, tile_h, tile_w, face_h, face_w};
     TensorAccessorArgs(src_buffer).append_to(reader_ct_args);
+    if (attrs.token_count_aware) {
+        reader_ct_args.insert(
+            reader_ct_args.end(),
+            {static_cast<uint32_t>(CBIndex::c_8),
+             static_cast<uint32_t>(CBIndex::c_9),
+             static_cast<uint32_t>(CBIndex::c_10),
+             static_cast<uint32_t>(CBIndex::c_11),
+             num_cores_total,
+             attrs.experts_per_chip,
+             M,
+             chunks_per_row / q_unit});  // units per row
+        TensorAccessorArgs(tensor_args.expert_region_offsets->buffer()).append_to(reader_ct_args);
+        TensorAccessorArgs(tensor_args.expert_token_counts->buffer()).append_to(reader_ct_args);
+        TensorAccessorArgs(tensor_args.global_expert_idx_table->buffer()).append_to(reader_ct_args);
+        // Mailbox (reader -> compute num_blocks) and the per-kernel private table scratch.
+        auto small_cb = [&](uint32_t idx, uint32_t bytes, DataFormat df) {
+            CircularBufferConfig cfg = CircularBufferConfig(bytes, {{idx, df}}).set_page_size(idx, bytes);
+            CreateCircularBuffer(program, all_cores, cfg);
+        };
+        small_cb(CBIndex::c_8, 64, DataFormat::UInt32);
+        const std::array<const Tensor*, 3> tabs{
+            &*tensor_args.expert_region_offsets,
+            &*tensor_args.expert_token_counts,
+            &*tensor_args.global_expert_idx_table};
+        for (uint32_t t = 0; t < 3; ++t) {
+            const uint32_t bytes = tabs[t]->buffer()->aligned_page_size();
+            small_cb(CBIndex::c_9 + t, bytes, DataFormat::UInt32);
+            small_cb(CBIndex::c_12 + t, bytes, DataFormat::UInt32);
+        }
+    }
     KernelIds ids;
     ids.reader = CreateKernel(
         program,
@@ -167,7 +232,7 @@ KernelIds build_kernels_and_cbs(
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
+            .noc = NOC::RISCV_0_default,
             .compile_args = reader_ct_args,
             .defines = defines});
 
@@ -182,9 +247,28 @@ KernelIds build_kernels_and_cbs(
         tile_h,
         tile_w,
         face_h,
-        face_w};
+        face_w,
+        chunks_per_row,
+        chunk_scale_blocks,
+        static_cast<uint32_t>(attrs.pack_scales_in_row),
+        H};
     TensorAccessorArgs(dst_e4m3_buffer).append_to(writer_ct_args);
     TensorAccessorArgs(dst_scale_buffer).append_to(writer_ct_args);
+    if (attrs.token_count_aware) {
+        writer_ct_args.insert(
+            writer_ct_args.end(),
+            {static_cast<uint32_t>(CBIndex::c_12),
+             static_cast<uint32_t>(CBIndex::c_13),
+             static_cast<uint32_t>(CBIndex::c_14),
+             num_cores_total,
+             attrs.experts_per_chip,
+             M});
+        TensorAccessorArgs(tensor_args.expert_region_offsets->buffer()).append_to(writer_ct_args);
+        TensorAccessorArgs(tensor_args.expert_token_counts->buffer()).append_to(writer_ct_args);
+        TensorAccessorArgs(tensor_args.global_expert_idx_table->buffer()).append_to(writer_ct_args);
+    }
+    // Reader on NoC 0, writer on NoC 1: at K3 Galaxy load the default assignment congested the top grid rows
+    // (Q2 125 -> 104 us, Q1 33 -> 27 us with the swap).
     ids.writer = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/dataflow/"
@@ -192,7 +276,7 @@ KernelIds build_kernels_and_cbs(
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
+            .noc = NOC::RISCV_1_default,
             .compile_args = writer_ct_args,
             .defines = defines});
 
@@ -212,7 +296,10 @@ KernelIds build_kernels_and_cbs(
         clamp_max_bits,
         inv_448_bits,
         tile_w,
-        static_cast<uint32_t>(round_scale_to_power_of_two)};
+        static_cast<uint32_t>(round_scale_to_power_of_two),
+        scale_block_wt,
+        static_cast<uint32_t>(round_to_nearest_even),
+        static_cast<uint32_t>(CBIndex::c_8)};  // 14: loop-count mailbox (token_count_aware)
     // fp32_dest_acc_en=True is required whenever an 8-bit-float CB (output_e4m3) is on the core (DEST in
     // 32-bit family-agnostic mode); it also gives fp32 precision for the reduce/divide stages.
     ids.compute = CreateKernel(
@@ -220,7 +307,12 @@ KernelIds build_kernels_and_cbs(
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/compute/"
         "compute_per_token_cast_to_fp8.cpp",
         all_cores,
-        ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_ct_args, .defines = defines});
+        ComputeConfig{// x * (1/scale): with a power-of-two scale SrcB carries no low mantissa bits, so HiFi2 is already
+                      // exact and halves the multiply's fidelity phases; arbitrary scales keep HiFi4.
+                      .math_fidelity = round_scale_to_power_of_two ? MathFidelity::HiFi2 : MathFidelity::HiFi4,
+                      .fp32_dest_acc_en = true,
+                      .compile_args = compute_ct_args,
+                      .defines = defines});
 
     return ids;
 }
@@ -233,7 +325,8 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
     const Tensor& input,
     const Tensor& output_e4m3,
     const Tensor& output_scale,
-    bool tile_layout) {
+    bool tile_layout,
+    const PerTokenCastToFp8Inputs& tensor_args) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -241,8 +334,10 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
     const auto [M, H] = fold_M_H(input_shape);  // M = rows, H = width (last dim)
     const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
     const uint32_t tile_h = tile_shape[0];
-    const uint32_t scale_blocks_per_row = H / fp8::BLOCK_W;  // 128-wide column-blocks per row
-    const uint32_t scale_page_bytes = output_scale.buffer()->aligned_page_size();
+    const uint32_t chunks_per_row = H / fp8::BLOCK_W;  // 128-wide column chunks per row (the work unit)
+    // Must match build_kernels_and_cbs' staging stride: packed rows stage at a 64-B aligned scale row.
+    const uint32_t scale_page_bytes = attrs.pack_scales_in_row ? tt::round_up((H / attrs.scale_block_w) * 4u, 64u)
+                                                               : output_scale.buffer()->aligned_page_size();
 
     // Work-split unit, scale-scratch size, and kernel define differ by layout. TILE also needs a bit of
     // extra geometry (computed here) to build its per-core args in the loop below.
@@ -261,9 +356,9 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         rows_per_plane = static_cast<uint32_t>(input_shape[input_shape.size() - 2]);  // R = rows in one [R,H] plane
         const uint32_t num_planes = M / rows_per_plane;        // trailing [R,H] planes (1 for a 2D input)
         row_tiles_per_plane = div_up(rows_per_plane, tile_h);  // tile-rows per plane (R padded up to tile_h)
-        total_units = num_planes * row_tiles_per_plane * scale_blocks_per_row;  // total 128-wide blocks
+        total_units = num_planes * row_tiles_per_plane * chunks_per_row;
         scale_scratch_bytes = tile_h * scale_page_bytes;  // one plane's tile-row = tile_h scale rows
-        defines = {{"INPUT_TILE_LAYOUT", "1"}};
+        defines["INPUT_TILE_LAYOUT"] = "1";
     } else {
         // Split on rows (not tile-rows) so horizontal tensors (small M, large H) use the whole grid; the op is
         // DRAM/NoC-bound, so spreading rows across more cores spreads the data movement. Each core's
@@ -274,9 +369,47 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         scale_scratch_bytes = scale_page_bytes;
     }
 
+    // 1x128 (GLM 5.3) rides the same fast path on bf16 / bf8_b tiles: a 128-wide chunk is one scale block, so the
+    // compute folds the 4 tiles' row maxima in DEST and packs one 1/scale tile per chunk (FAST_BLOCK4).
+    const bool fast_block4 = attrs.scale_block_w == 128 && attrs.round_scale_to_power_of_two && tile_layout &&
+                             input.dtype() != DataType::FLOAT32;
+    if ((attrs.scale_block_w == 32 || fast_block4) && attrs.round_scale_to_power_of_two) {
+        defines["FAST_1X32"] = "1";  // one-pass pow2 scale + 1/scale on column 0, one acquire per phase
+        if (tile_layout && input.dtype() != DataType::FLOAT32) {
+            defines["DIRECT_SRC"] = "1";  // bf16 / bf8_b tiles are exact in SrcA: no fp32 copy
+        }
+        if (fast_block4) {
+            defines["FAST_BLOCK4"] = "1";
+            defines["Q_SFPU_AMAX"] = "1";  // the 4-tile fold only exists in the SFPU amax path
+        }
+        if (tile_layout && attrs.token_count_aware) {
+            // Units of 2 chunks (256 columns) of one tile-row: 256-B row writes, and enough units per core to even
+            // out the work (K3 Q2: 1 chunk 102 us, 2 chunks 91 us, 4 chunks 92 us, 7 chunks 100 us).
+            uint32_t q_unit = 2;
+            // |x| and the row max in DEST (SFPU), skipping the |x| tile's round trip through L1 (Q2 88 -> 81 us).
+            defines["Q_SFPU_AMAX"] = "1";
+            while (chunks_per_row % q_unit != 0) {
+                --q_unit;
+            }
+            defines["Q_UNIT"] = std::to_string(q_unit);
+            // Write groups of 4 units: the compute packs 4 consecutive units of a tile-row side by side and the writer
+            // moves one 1 KB run per row instead of four 256 B ones (K3 Q2 81 -> 71 us; 3: 73, 5: 72, 14: 71).
+            if (defines.contains("DIRECT_SRC")) {  // the grouped pack lives in the direct tiled compute loop
+                defines["Q_WGROUP"] = "4";
+                defines["Q_UPR"] = std::to_string(chunks_per_row / q_unit);
+            }
+        }
+    }
+
     Program program{};
     auto compute_grid = input.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, crs1, crs2, upc1, upc2] = split_work_to_cores(compute_grid, total_units);
+    if (attrs.token_count_aware) {
+        // The host does not know the valid prefix: light up the whole grid; each core sizes its slice on device.
+        num_cores = compute_grid.x * compute_grid.y;
+        all_cores = CoreRangeSet{CoreRange{{0, 0}, {compute_grid.x - 1, compute_grid.y - 1}}};
+        defines["TOKEN_COUNT_AWARE"] = "1";
+    }
 
     const KernelIds k = build_kernels_and_cbs(
         program,
@@ -286,7 +419,12 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         all_cores,
         scale_scratch_bytes,
         attrs.round_scale_to_power_of_two,
-        defines);
+        attrs.scale_block_w,
+        attrs.round_to_nearest_even,
+        defines,
+        attrs,
+        tensor_args,
+        num_cores);
 
     const uint32_t src_addr = input.buffer()->address();
     const uint32_t dst_e4m3_addr = output_e4m3.buffer()->address();
@@ -294,10 +432,62 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
 
     auto all_cores_vec = corerange_to_cores(all_cores, num_cores, true);
     uint32_t offset = 0;  // ROW_MAJOR: first row; TILE: first 128-block. Advances by this core's unit count.
+    // Count-aware work split: core i gets [frac_bounds[i], frac_bounds[i+1]) of the units, in 1/65536 units. Even
+    // shares: the grid-row weighting that paid off while every core read the routing tables itself (Q2 91 -> 88 us)
+    // costs time since those reads are multicast, and no row or per-core weighting beat even shares at K3 load
+    // once the work became NoC-bound (the congestion moves with the load).
+    std::vector<uint32_t> frac_bounds(num_cores + 1, 0);
+    for (uint32_t i = 0; i <= num_cores; ++i) {
+        frac_bounds[i] = static_cast<uint32_t>((65536ull * i) / num_cores);
+    }
+    // Count-aware: core 0's reader multicasts the valid tile-row count to every core's semaphore.
+    const bool mcast_rows = attrs.token_count_aware;
+    const uint32_t rows_sem = mcast_rows ? CreateSemaphore(program, all_cores, 0) : 0;
+    const auto mcast_start = input.device()->worker_core_from_logical_core(all_cores.bounding_box().start_coord);
+    const auto mcast_end = input.device()->worker_core_from_logical_core(all_cores.bounding_box().end_coord);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = all_cores_vec[i];
         const uint32_t core_units = units_for_core_from_split(core, crs1, crs2, upc1, upc2);
         uint32_t num_blocks = 0;
+        if (attrs.token_count_aware) {
+            const uint32_t frac_start = frac_bounds[i], frac_end = frac_bounds[i + 1];
+            std::vector<uint32_t> rargs{
+                src_addr,
+                tensor_args.expert_region_offsets->buffer()->address(),
+                tensor_args.expert_token_counts->buffer()->address(),
+                tensor_args.global_expert_idx_table->buffer()->address(),
+                i,
+                frac_start,
+                frac_end};
+            if (mcast_rows) {
+                rargs.insert(
+                    rargs.end(),
+                    {rows_sem,
+                     static_cast<uint32_t>(mcast_start.x),
+                     static_cast<uint32_t>(mcast_start.y),
+                     static_cast<uint32_t>(mcast_end.x),
+                     static_cast<uint32_t>(mcast_end.y),
+                     num_cores});
+            }
+            SetRuntimeArgs(program, k.reader, core, rargs);
+            std::vector<uint32_t> wargs{
+                dst_e4m3_addr,
+                dst_scale_addr,
+                frac_start,
+                frac_end,
+                rows_per_plane,
+                row_tiles_per_plane,
+                tensor_args.expert_region_offsets->buffer()->address(),
+                tensor_args.expert_token_counts->buffer()->address(),
+                tensor_args.global_expert_idx_table->buffer()->address(),
+                i};
+            if (mcast_rows) {
+                wargs.push_back(rows_sem);
+            }
+            SetRuntimeArgs(program, k.writer, core, wargs);
+            SetRuntimeArgs(program, k.compute, core, {0u});
+            continue;
+        }
         if (tile_layout) {
             num_blocks = core_units;  // the work unit is already a 128-block
             SetRuntimeArgs(program, k.reader, core, {src_addr, offset, num_blocks});
@@ -307,7 +497,7 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
                 core,
                 {dst_e4m3_addr, dst_scale_addr, offset, num_blocks, rows_per_plane, row_tiles_per_plane});
         } else {
-            num_blocks = div_up(core_units * scale_blocks_per_row, tile_h);  // core_units = rows; last may be partial
+            num_blocks = div_up(core_units * chunks_per_row, tile_h);  // core_units = rows; last may be partial
             SetRuntimeArgs(program, k.reader, core, {src_addr, num_blocks, offset, core_units, H});
             SetRuntimeArgs(program, k.writer, core, {dst_e4m3_addr, dst_scale_addr, num_blocks, offset, core_units, H});
         }
@@ -335,6 +525,19 @@ void apply_io_overrides(
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(cached_program.program, shared.writer_kernel_id, core);
         writer_args[0] = dst_e4m3_addr;
         writer_args[1] = dst_scale_addr;
+        // Count-aware reader args: src, region, counts, table, core id, work-split fraction start / end (then the
+        // valid-rows multicast args).
+        if (tensor_args.expert_region_offsets.has_value() && reader_args.size() >= 7) {
+            const uint32_t r = tensor_args.expert_region_offsets->buffer()->address();
+            const uint32_t c = tensor_args.expert_token_counts->buffer()->address();
+            const uint32_t t = tensor_args.global_expert_idx_table->buffer()->address();
+            reader_args[1] = r;
+            reader_args[2] = c;
+            reader_args[3] = t;
+            writer_args[6] = r;
+            writer_args[7] = c;
+            writer_args[8] = t;
+        }
     }
 }
 
@@ -346,7 +549,8 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
     tensor_return_value_t& tensor_return_value) {
     const auto& [output_e4m3, output_scale] = tensor_return_value;
     const bool tile_layout = tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE;
-    return create_program(operation_attributes, tensor_args.input_tensor, output_e4m3, output_scale, tile_layout);
+    return create_program(
+        operation_attributes, tensor_args.input_tensor, output_e4m3, output_scale, tile_layout, tensor_args);
 }
 
 void PerTokenCastToFp8ProgramFactory::override_runtime_arguments(

@@ -129,7 +129,7 @@ def make_indices(num_tokens, num_experts, device, num_routed_experts):
     )
 
 
-def new_implementation(combine_tt, weights_tt, indices_tt, dispatch_table_tt):
+def new_implementation(combine_tt, weights_tt, indices_tt, dispatch_table_tt, fp8_scale_block_w=0):
     """Fused kernel: reads ROW_MAJOR, produces TILE output, skips non-local experts."""
     return ttnn.experimental.deepseek_prefill.post_combine_reduce(
         combine_tt,
@@ -138,6 +138,7 @@ def new_implementation(combine_tt, weights_tt, indices_tt, dispatch_table_tt):
         dispatch_table_tt,
         expert_dim=EXPERT_DIM,
         output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        fp8_scale_block_w=fp8_scale_block_w,
     )
 
 
@@ -400,3 +401,118 @@ def test_multi_chunk_random(device, num_tokens, config):
 
 
 # ============================================================================
+
+
+def test_nan_poisoned_unwritten_slots_k3(device):
+    """Combine leaves slots of non-local experts unwritten (TtMoe runs combine with init_zeros=False), so
+    they may hold any bytes -- with the scaled fp8 combine wire they are dequantized garbage that can be
+    NaN/Inf. Poison them with NaN: the output must stay finite, including the no-local-expert token whose
+    accumulator is initialised from the last (unwritten) slot times a zero weight. Kimi-K3 routed side:
+    3584-wide latent, top-16 of 896."""
+    torch.manual_seed(7)
+    emb_dim, num_routed_experts, topk = 3584, 896, 16
+    indices_torch, indices_tt = make_indices(NUM_TOKENS, topk, device, num_routed_experts=num_routed_experts)
+    # One quarter of the experts local (one LB column); force a few tokens to have no local expert.
+    local = torch.zeros(num_routed_experts, dtype=torch.bool)
+    local[:224] = True
+    no_local_tokens = [0, 17, NUM_TOKENS - 1]
+    for t in no_local_tokens:
+        indices_torch[0, t] = torch.randperm(num_routed_experts - 224)[:topk] + 224
+    indices_tt = ttnn.from_torch(
+        indices_torch,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    table = torch.where(
+        local,
+        torch.zeros(num_routed_experts, dtype=torch.int32),
+        torch.full((num_routed_experts,), -1, dtype=torch.int32),
+    )
+    dispatch_table_tt = ttnn.from_torch(
+        table, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    combine = torch.randn(1, NUM_TOKENS, topk, emb_dim, dtype=torch.bfloat16)
+    weights = torch.rand(1, NUM_TOKENS, topk, 1, dtype=torch.bfloat16)
+    is_local = local[indices_torch[0].long()]  # [tokens, topk]
+    combine[0][~is_local] = float("nan")
+    ref_combine = combine.clone()
+    ref_combine[0][~is_local] = 0.0
+    ref = pytorch_reference(ref_combine, weights)
+
+    result = ttnn.to_torch(
+        new_implementation(to_device(combine, device), to_device(weights, device), indices_tt, dispatch_table_tt)
+    ).float()
+    assert torch.isfinite(result).all(), f"{(~torch.isfinite(result)).sum().item()} non-finite outputs"
+    for t in no_local_tokens:
+        assert torch.all(result[0, t] == 0), f"token {t} has no local expert and must reduce to exactly 0"
+    assert_pcc(result, ref.float(), threshold=PCC_THRESHOLD, label="nan_poisoned_unwritten_slots_k3")
+
+
+@pytest.mark.parametrize("block", [32, 128], ids=["block_w32", "block_w128"])
+@pytest.mark.parametrize("num_tokens", [NUM_TOKENS, 64], ids=["prefill_chunk", "t64"])
+def test_fused_fp8_1x32_dequant_k3(device, num_tokens, block):
+    """1x32 (K3) / 1x128 (GLM 5.3) scaled fp8 combine rows [H e4m3 | H/block fp32 pow2 scales] reduced with the dequant fused in compute
+    (32 tokens' local slots tilized, column-broadcast weight * scale on the FPU). Non-local slots hold NaN bytes,
+    some tokens have no local expert, some only one, a few have many."""
+    torch.manual_seed(13)
+    # K3: 3584 wide, top-16 of 896 (224 local); GLM 5.3: 6144 wide, top-8 of 256 (64 local).
+    H, E, topk, n_local = (3584, 896, 16, 224) if block == 32 else (6144, 256, 8, 64)
+    indices_torch, _ = make_indices(num_tokens, topk, device, num_routed_experts=E)
+    local = torch.zeros(E, dtype=torch.bool)
+    local[:n_local] = True
+    no_local = [0, 5, num_tokens - 1]
+    for t in no_local:
+        indices_torch[0, t] = torch.randperm(E - n_local)[:topk] + n_local
+    for t in [7, 40 % num_tokens]:
+        indices_torch[0, t, :-1] = torch.randperm(E - n_local)[: topk - 1] + n_local
+        indices_torch[0, t, -1] = int(torch.randint(0, n_local, (1,)))
+    indices_torch[0, 9] = torch.randperm(n_local)[:topk]  # every slot local: topk stages for its block
+    indices_tt = ttnn.from_torch(
+        indices_torch,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    table = torch.where(local, torch.zeros(E, dtype=torch.int32), torch.full((E,), -1, dtype=torch.int32))
+    table_tt = ttnn.from_torch(
+        table, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # Block magnitudes spread over 2^-6..2^5 so the per-block scales differ.
+    xb = torch.randn(1, num_tokens, topk, H // block, block) * torch.pow(
+        2.0, torch.randint(-6, 6, (1, num_tokens, topk, H // block, 1)).float()
+    )
+    s = torch.pow(2.0, torch.ceil(torch.log2(xb.abs().amax(-1, keepdim=True).clamp(min=1e-4) / 448.0)))
+    q = (xb / s).to(torch.float8_e4m3fn)
+    deq = (q.float() * s).view(1, num_tokens, topk, H)
+    packed = torch.cat(
+        [q.view(torch.uint8).view(1, num_tokens, topk, H), s.squeeze(-1).contiguous().view(torch.uint8)], dim=-1
+    )
+    is_local = local[indices_torch[0].long()]
+    packed[0][~is_local] = 0x7F
+    weights = torch.rand(1, num_tokens, topk, 1, dtype=torch.bfloat16)
+    packed_tt = ttnn.from_torch(
+        packed.view(torch.float8_e4m3fn).float(),
+        dtype=ttnn.fp8_e4m3,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    fused = ttnn.to_torch(
+        new_implementation(packed_tt, to_device(weights, device), indices_tt, table_tt, fp8_scale_block_w=block)
+    ).float()
+    ref_in = deq.clone()
+    ref_in[0][~is_local] = 0.0
+    truth = (ref_in * weights.float()).sum(dim=EXPERT_DIM)
+    assert tuple(fused.shape) == tuple(truth.shape), f"{fused.shape} vs {truth.shape}"
+    assert torch.isfinite(fused).all(), f"{(~torch.isfinite(fused)).sum().item()} non-finite outputs"
+    for t in no_local:
+        assert torch.all(fused[0, t] == 0), f"token {t} has no local expert and must reduce to exactly 0"
+    for t in [7, 9, 40 % num_tokens]:
+        rel = ((fused[0, t] - truth[0, t]).norm() / truth[0, t].norm()).item()
+        assert rel < 1e-2, f"token {t}: rel err {rel:.3e}"
+    assert_pcc(fused, truth, threshold=0.999, label="fused_fp8_1x32_dequant_k3 vs fp32")

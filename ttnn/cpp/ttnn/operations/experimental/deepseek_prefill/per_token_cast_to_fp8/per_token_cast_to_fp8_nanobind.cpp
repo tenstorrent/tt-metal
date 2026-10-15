@@ -36,6 +36,10 @@ void bind_experimental_per_token_cast_to_fp8_operation(nb::module_& mod) {
                 * :attr:`memory_config`: optional DRAM interleaved output memory config
                   (default: same as input).
                 * :attr:`round_scale_to_power_of_two`: round each scale upward to a power of two.
+                * :attr:`scale_block_w`: elements per scale (32, 64 or 128; default 128). The scale
+                  tensor's last dim is H / scale_block_w. 32 matches MXFP8 block granularity.
+                * :attr:`round_to_nearest_even`: round the scaled values to e4m3 with round-to-nearest-even
+                  (SFPU) before packing, instead of the packer's truncation.
 
             Returns:
                 Tuple (e4m3, scale_fp32). Both are ROW_MAJOR. FP8_E4M3 can only be in ROW_MAJOR layout.
@@ -44,7 +48,16 @@ void bind_experimental_per_token_cast_to_fp8_operation(nb::module_& mod) {
         nb::arg("input_tensor").noconvert(),
         nb::arg("memory_config") = std::nullopt,
         nb::kw_only(),
-        nb::arg("round_scale_to_power_of_two") = false);
+        nb::arg("round_scale_to_power_of_two") = false,
+        nb::arg("scale_block_w") = DEFAULT_SCALE_BLOCK_W,
+        nb::arg("round_to_nearest_even") = false,
+        nb::arg("token_count_aware") = false,
+        nb::arg("expert_region_offsets") = nb::none(),
+        nb::arg("expert_token_counts") = nb::none(),
+        nb::arg("global_expert_idx_table") = nb::none(),
+        nb::arg("experts_per_chip") = 0,
+        nb::arg("pack_scales_in_row") = false,
+        nb::arg("packed_row_align") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::per_token_cast_to_fp8::detail
