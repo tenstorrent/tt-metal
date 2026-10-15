@@ -5,7 +5,8 @@
 
 """Run explicitly selected fixed configurations in an already prepared device epoch.
 
-Preparation, ownership verification and recovery use the existing launch tools.
+Each benchmark boots resident idle and prepares its own inputs; device resets,
+ownership verification and recovery are the operator's.
 A failure stops the sequence; each invocation retains a fresh attempt directory.
 """
 
@@ -126,7 +127,7 @@ def main():
     for config in manifest["configurations"]:
         if set(config) != {"id", "member", "argv", "environment"}:
             parser.error("each configuration requires only id, member, argv and environment")
-    engine = Path(__file__).resolve().parents[2]
+    engine = Path(__file__).resolve().parents[4]
     values = {
         "ENGINE": str(engine),
         "HOST_BUILD": str(args.host_build.resolve()),
@@ -162,9 +163,9 @@ def main():
     if subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=engine).returncode:
         parser.error("commit producer changes before collection")
     untracked = subprocess.check_output(
-        ["git", "ls-files", "--others", "--exclude-standard", "x280"], cwd=engine, text=True
+        ["git", "ls-files", "--others", "--exclude-standard", "tt_metal/fabric/x280"], cwd=engine, text=True
     )
-    if any(not path.startswith("x280/benchmarks/campaigns/") for path in untracked.splitlines()):
+    if any(not path.startswith("tt_metal/fabric/x280/benchmarks/campaigns/") for path in untracked.splitlines()):
         parser.error("untracked X280 inputs must be committed before collection")
     campaign = args.campaign.resolve()
     campaign.mkdir(parents=True, exist_ok=True)
