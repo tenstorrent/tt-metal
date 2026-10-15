@@ -37,10 +37,10 @@ BufRwInfo parse_buf_rw(const ElfFile& elf) {
     for (size_t i = 0; i < n; ++i) {
         BufRwRecord rec{};
         std::memcpy(&rec, bytes.data() + i * sizeof(BufRwRecord), sizeof(rec));
-        switch (static_cast<BufRwKind>(rec.kind)) {
-            case BufRwKind::Read: info.reads.insert(rec.slot); break;
-            case BufRwKind::Write: info.writes.insert(rec.slot); break;
-            case BufRwKind::Opaque:
+        switch (rec.kind) {
+            case tt_buf_rw::kRead: info.reads.insert(rec.slot); break;
+            case tt_buf_rw::kWrite: info.writes.insert(rec.slot); break;
+            case tt_buf_rw::kOpaque:
             default:
                 // OPAQUE (0) or any unrecognized kind -> conservative bail. Making 0 the opaque value
                 // means a zero-filled/truncated record can never masquerade as a plain read.
