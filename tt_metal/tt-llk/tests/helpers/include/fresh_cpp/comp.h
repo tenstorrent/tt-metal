@@ -68,10 +68,12 @@ __attribute__((noinline)) void calculate_comp_fresh_cpp()
         if constexpr (COMP_MODE == SfpuType::not_equal_zero)
         {
             // ne(v, 0) = !(|v| == 0): default 1, both zeros overwrite to 0.
-            sfpi::dst_reg[d] = sfpi::vConst1;
-            v_if (sfpi::abs(v) == 0.0f)
+            // v is nonzero exactly when its magnitude bits have fewer than 32
+            // leading zeros.
+            sfpi::dst_reg[d] = sfpi::vConst0;
+            v_if (sfpi::lz(sfpi::as<sfpi::vUInt>(v), sfpi::LZMode::IgnoreSign) != 32)
             {
-                sfpi::dst_reg[d] = sfpi::vConst0;
+                sfpi::dst_reg[d] = sfpi::vConst1;
             }
             v_endif;
         }
