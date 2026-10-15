@@ -14,14 +14,15 @@
 namespace ttml::metal {
 
 uint32_t qkv_causal_conv1d_silu_chunk_size(uint32_t channels, const ttnn::distributed::MeshDevice& device) {
-    using namespace ops::qkv_causal_conv1d_silu_bw::device;
     constexpr uint32_t tw = tt::constants::TILE_WIDTH;
     constexpr uint32_t max_chunk = 256;
     constexpr auto bf16 = tt::DataFormat::Float16_b;
     const uint64_t available_l1_bytes =
         device.l1_size_per_core() - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     for (uint32_t chunk = std::min(channels, max_chunk); chunk >= tw; chunk -= tw) {
-        if (channels % chunk == 0 && qkv_conv_bw_l1_bytes(chunk / tw, bf16, sizeof(uint16_t)) <= available_l1_bytes) {
+        const uint64_t required_l1_bytes =
+            ops::qkv_causal_conv1d_silu_bw::device::qkv_conv_bw_l1_bytes(chunk / tw, bf16, sizeof(uint16_t));
+        if (channels % chunk == 0 && required_l1_bytes <= available_l1_bytes) {
             return chunk;
         }
     }
