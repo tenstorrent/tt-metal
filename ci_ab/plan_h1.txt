@@ -1,0 +1,23 @@
+# H1: P = #60154 head harness kernel, P2 its copy (A/A), H = identity rows set the unpack format, the AB program and the
+# math format once per launch, H2 its copy; blocks P H H2 P2 P2 H2 H P twice on the gate perf module (all 12 rows, L1_TO_L1
+# and MATH_ISOLATE); then counter builds of P and H on the identity rows, P_wc H_wc H_wc P_wc.
+r P ids/gate.txt -
+r H ids/gate.txt -
+r H2 ids/gate.txt -
+r P2 ids/gate.txt -
+r P2 ids/gate.txt -
+r H2 ids/gate.txt -
+r H ids/gate.txt -
+r P ids/gate.txt -
+r P ids/gate.txt -
+r H ids/gate.txt -
+r H2 ids/gate.txt -
+r P2 ids/gate.txt -
+r P2 ids/gate.txt -
+r H2 ids/gate.txt -
+r H ids/gate.txt -
+r P ids/gate.txt -
+c P_wc ids/gate_id.txt - wc
+c H_wc ids/gate_id.txt - wc
+c H_wc ids/gate_id.txt - wc
+c P_wc ids/gate_id.txt - wc
