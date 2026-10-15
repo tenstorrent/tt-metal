@@ -49,8 +49,14 @@ def pytest_collection_modifyitems(session, config, items):
     print(f"SEL kept {len(keep)} of {len(wanted)} listed", flush=True)
 
 
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_call(item):
-    _cur["node"], _cur["i"] = item.nodeid.split("::")[-1], 0
-    yield
-    _cur["node"] = None
+class _Track:
+    # A hook in a conftest of a subdirectory only sees items below that directory, so it is registered as a plugin object.
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_call(self, item):
+        _cur["node"], _cur["i"] = item.nodeid.split("::")[-1], 0
+        yield
+        _cur["node"] = None
+
+
+def pytest_configure(config):
+    config.pluginmanager.register(_Track(), "bits_track")

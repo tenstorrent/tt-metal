@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Scratch job (split plan, N3 bits), not for merge. Same setup as run_split_elf.sh; only the device bits loop, run with -s so the BITS lines reach the log.
+# Scratch job (split plan, N3 bits), not for merge. Same setup as run_split_elf.sh; only the device bits loop. The BITS hook is a registered plugin object (a conftest hook only sees items below its own directory), -s keeps the lines in the log.
 # ci_e/v/<side>/, a .absent marker for a file the side lacks) go into the checkout and the installed package before its
 # runs, and each run gets a fresh JIT cache. Sides: D0 old #58819 merged with main, D1 its restore merged with main;
 # T0 #59143's restore with the old pool kernels, T1 the restore; P0 main, P1 N3 (main plus the pool and upsample init).
@@ -48,6 +48,11 @@ for s in P0 P1; do
   echo "== BITS $s lines $(wc -l < $OUT/bits_$s.txt)"
 done
 echo "== BITSCMP P0 only $(comm -23 $OUT/bits_P0.txt $OUT/bits_P1.txt | wc -l), P1 only $(comm -13 $OUT/bits_P0.txt $OUT/bits_P1.txt | wc -l), common $(comm -12 $OUT/bits_P0.txt $OUT/bits_P1.txt | wc -l)"
+awk 'function key(l){sub(/ [^ ]+$/,"",l); return l} function hv(l){sub(/^.* /,"",l); return l}
+  NR==FNR{h[key($0)]=hv($0); next}
+  {k=key($0); seen[k]=1; if(k in h){c++; if(h[k]==hv($0)) e++; else {d++; print "DIFF " k " P0 " h[k] " P1 " hv($0)}} else p1++}
+  END{for(k in h) if(!(k in seen)) p0++; print "== BITSKEY common " c+0 ", equal " e+0 ", differ " d+0 ", P0 only " p0+0 ", P1 only " p1+0}' $OUT/bits_P0.txt $OUT/bits_P1.txt
+[[ -s $OUT/bits_P0.txt && -s $OUT/bits_P1.txt ]] || { echo "== BITSCMP VOID: a side printed no BITS lines"; fail=1; }
 echo "-- P0 only"; comm -23 $OUT/bits_P0.txt $OUT/bits_P1.txt | cut -c1-300
 echo "-- P1 only"; comm -13 $OUT/bits_P0.txt $OUT/bits_P1.txt | cut -c1-300
 echo "-- P0 hashes"; cat $OUT/bits_P0.txt | cut -c1-300
