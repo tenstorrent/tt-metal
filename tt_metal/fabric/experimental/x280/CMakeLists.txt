@@ -117,39 +117,41 @@ foreach(_header IN LISTS _x280_asm_headers)
     _x280_check_header(${_header} assembler-with-cpp)
 endforeach()
 
-# src/x280_pinned_input.c refuses to compile without exactly one valid operation define. Each case
-# passes only on its own #error, so a broken compiler invocation does not read as a refusal.
-foreach(
-    _case
-    IN
-    ITEMS
-        "none|define exactly one pinned-input image operation"
-        "X280_PINNED_INPUT_BUILD_PREPARE=0|X280_PINNED_INPUT_BUILD_PREPARE must be 1 when defined"
-        "X280_PINNED_INPUT_BUILD_PREPARE=1,X280_PINNED_INPUT_BUILD_LIBRARY=1|define exactly one pinned-input image operation"
+# _x280_refusal_test(<prefix> <source> COMPILE <command>... CASES <id>|<defines>|<message>...): one CTest
+# <prefix><id> per case, compiling <source> with the case's comma-separated defines (none when empty).
+# Each passes only on its own `#error "<message>"` (a regular expression), so a broken compiler
+# invocation does not read as a refusal.
+function(_x280_refusal_test prefix source)
+    cmake_parse_arguments(PARSE_ARGV 2 ARG "" "" "COMPILE;CASES")
+    foreach(case IN LISTS ARG_CASES)
+        string(REPLACE "|" ";" case "${case}")
+        list(GET case 0 id)
+        list(GET case 1 defines)
+        list(GET case 2 message)
+        string(REPLACE "," ";" defines "${defines}")
+        list(TRANSFORM defines PREPEND "-D")
+        add_test(
+            NAME ${prefix}${id}
+            COMMAND
+                ${ARG_COMPILE} ${defines} ${source}
+        )
+        set_tests_properties(
+            ${prefix}${id}
+            PROPERTIES
+                PASS_REGULAR_EXPRESSION
+                    "#error \"${message}\""
+        )
+    endforeach()
+endfunction()
+
+# src/x280_pinned_input.c refuses to compile without exactly one valid operation define.
+_x280_refusal_test(x280_pinned_input_rejects_ ${CMAKE_CURRENT_SOURCE_DIR}/src/x280_pinned_input.c
+    COMPILE ${X280_GCC} ${X280_CFLAGS} -std=c11 -fsyntax-only
+    CASES
+        "none||define exactly one pinned-input image operation"
+        "X280_PINNED_INPUT_BUILD_PREPARE_0|X280_PINNED_INPUT_BUILD_PREPARE=0|X280_PINNED_INPUT_BUILD_PREPARE must be 1 when defined"
+        "X280_PINNED_INPUT_BUILD_PREPARE_1_X280_PINNED_INPUT_BUILD_LIBRARY_1|X280_PINNED_INPUT_BUILD_PREPARE=1,X280_PINNED_INPUT_BUILD_LIBRARY=1|define exactly one pinned-input image operation"
 )
-    string(REPLACE "|" ";" _case "${_case}")
-    list(GET _case 0 _defines)
-    list(GET _case 1 _expected)
-    string(MAKE_C_IDENTIFIER "${_defines}" _id)
-    if(_defines STREQUAL "none")
-        set(_defines "")
-    else()
-        string(REPLACE "," ";" _defines "${_defines}")
-        list(TRANSFORM _defines PREPEND "-D")
-    endif()
-    add_test(
-        NAME x280_pinned_input_rejects_${_id}
-        COMMAND
-            ${X280_GCC} ${X280_CFLAGS} -std=c11 -fsyntax-only ${_defines}
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/x280_pinned_input.c
-    )
-    set_tests_properties(
-        x280_pinned_input_rejects_${_id}
-        PROPERTIES
-            PASS_REGULAR_EXPRESSION
-                "#error \"${_expected}\""
-    )
-endforeach()
 
 # ---------------------------------------------------------------------------
 # The runtime. x280_state holds the pure classification and validation rules and needs no Metal;
@@ -559,40 +561,18 @@ foreach(_header p2p_latency_x280_noc_args.h metal_peer_args.h)
     _x280_check_header(${_header} c++ ${_x280_p2p_latency_dirs})
 endforeach()
 _x280_check_header(x280_noc.hpp c++ ${_x280_p2p_latency_dirs} ${CMAKE_CURRENT_SOURCE_DIR}/kernels/p2p_latency/backends)
-# The Metal peer kernel selects its core type from exactly one P2P_LATENCY_TARGET_* define. Each
-# case passes only on that #error, so a broken compiler invocation does not read as a refusal.
-foreach(
-    _targets
-    IN
-    ITEMS
-        "none"
-        "TENSIX,IDLE_ERISC"
-        "TENSIX,DRISC"
-        "IDLE_ERISC,DRISC"
-        "TENSIX,IDLE_ERISC,DRISC"
-)
+# The Metal peer kernel selects its core type from exactly one P2P_LATENCY_TARGET_* define.
+set(_cases "none||p2p_latency Metal peer requires exactly one target define")
+foreach(_targets TENSIX,IDLE_ERISC TENSIX,DRISC IDLE_ERISC,DRISC TENSIX,IDLE_ERISC,DRISC)
     string(MAKE_C_IDENTIFIER "${_targets}" _id)
     string(TOLOWER "${_id}" _id)
-    if(_targets STREQUAL "none")
-        set(_defines "")
-    else()
-        string(REPLACE "," ";" _defines "${_targets}")
-        list(TRANSFORM _defines PREPEND "-DP2P_LATENCY_TARGET_")
-        list(TRANSFORM _defines APPEND "=1")
-    endif()
-    add_test(
-        NAME x280_metal_peer_selection_rejects_${_id}
-        COMMAND
-            ${X280_GXX} ${_x280_target_flags} -E -x c++ ${_defines}
-            ${CMAKE_CURRENT_SOURCE_DIR}/kernels/p2p_latency/metal_peer_target.hpp
-    )
-    set_tests_properties(
-        x280_metal_peer_selection_rejects_${_id}
-        PROPERTIES
-            PASS_REGULAR_EXPRESSION
-                "#error \"p2p_latency Metal peer requires exactly one target define\""
-    )
+    string(REPLACE "," "=1,P2P_LATENCY_TARGET_" _defines "P2P_LATENCY_TARGET_${_targets}=1")
+    list(APPEND _cases "${_id}|${_defines}|p2p_latency Metal peer requires exactly one target define")
 endforeach()
+_x280_refusal_test(x280_metal_peer_selection_rejects_ ${CMAKE_CURRENT_SOURCE_DIR}/kernels/p2p_latency/metal_peer_target.hpp
+    COMPILE ${X280_GXX} ${_x280_target_flags} -E -x c++
+    CASES ${_cases}
+)
 target_sources(x280_bench_host_tests PRIVATE tests/host/test_p2p_latency_args.cpp)
 target_include_directories(x280_bench_host_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/kernels/p2p_latency)
 foreach(_member x280_same_tile x280_peer_tile tensix_peer_tile)
@@ -743,43 +723,17 @@ set(_x280_packet_injection_dirs
 _x280_check_header(packet_injection_abi.h c ${_x280_packet_injection_dirs})
 _x280_check_header(packet_injection_abi.h c++ ${_x280_packet_injection_dirs})
 _x280_check_header(packet_injection_slot.hpp c++ ${_x280_packet_injection_dirs})
-# The consumer refuses to compile without one valid mode and creation flag. Each case passes only
-# on its own #error, so a broken compiler invocation does not read as a refusal.
-foreach(
-    _case
-    IN
-    ITEMS
-        "none|PACKET_INJECTION_MODE and PACKET_INJECTION_INCLUDE_CREATION must be explicitly defined"
-        "PACKET_INJECTION_MODE=4,PACKET_INJECTION_INCLUDE_CREATION=0|PACKET_INJECTION_MODE must be 1 \\(LATENCY\\), 2 \\(THROUGHPUT\\), or 3 \\(BACKPRESSURE\\)"
-        "PACKET_INJECTION_MODE=1,PACKET_INJECTION_INCLUDE_CREATION=2|PACKET_INJECTION_INCLUDE_CREATION must be 0 or 1"
-        "PACKET_INJECTION_MODE=2,PACKET_INJECTION_INCLUDE_CREATION=1|Throughput mode requires PACKET_INJECTION_INCLUDE_CREATION=0"
+# The consumer refuses to compile without one valid mode and creation flag.
+_x280_refusal_test(x280_packet_injection_rejects_ ${CMAKE_CURRENT_SOURCE_DIR}/src/packet_injection_x280.cpp
+    COMPILE
+        ${X280_GXX} ${X280_CFLAGS} ${_x280_cxxflags} -I${CMAKE_CURRENT_SOURCE_DIR}/kernels -I${_x280_shared_dir}
+        -I${CMAKE_CURRENT_SOURCE_DIR}/kernels/packet_injection -fsyntax-only
+    CASES
+        "none||PACKET_INJECTION_MODE and PACKET_INJECTION_INCLUDE_CREATION must be explicitly defined"
+        "mode_4_include_creation_0|PACKET_INJECTION_MODE=4,PACKET_INJECTION_INCLUDE_CREATION=0|PACKET_INJECTION_MODE must be 1 \\(LATENCY\\), 2 \\(THROUGHPUT\\), or 3 \\(BACKPRESSURE\\)"
+        "mode_1_include_creation_2|PACKET_INJECTION_MODE=1,PACKET_INJECTION_INCLUDE_CREATION=2|PACKET_INJECTION_INCLUDE_CREATION must be 0 or 1"
+        "mode_2_include_creation_1|PACKET_INJECTION_MODE=2,PACKET_INJECTION_INCLUDE_CREATION=1|Throughput mode requires PACKET_INJECTION_INCLUDE_CREATION=0"
 )
-    string(REPLACE "|" ";" _case "${_case}")
-    list(GET _case 0 _defines)
-    list(GET _case 1 _expected)
-    string(MAKE_C_IDENTIFIER "${_defines}" _id)
-    string(TOLOWER "${_id}" _id)
-    string(REPLACE "packet_injection_" "" _id "${_id}")
-    if(_defines STREQUAL "none")
-        set(_defines "")
-    else()
-        string(REPLACE "," ";" _defines "${_defines}")
-        list(TRANSFORM _defines PREPEND "-D")
-    endif()
-    add_test(
-        NAME x280_packet_injection_rejects_${_id}
-        COMMAND
-            ${X280_GXX} ${X280_CFLAGS} ${_x280_cxxflags} -I${CMAKE_CURRENT_SOURCE_DIR}/kernels -I${_x280_shared_dir}
-            -I${CMAKE_CURRENT_SOURCE_DIR}/kernels/packet_injection -fsyntax-only ${_defines}
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/packet_injection_x280.cpp
-    )
-    set_tests_properties(
-        x280_packet_injection_rejects_${_id}
-        PROPERTIES
-            PASS_REGULAR_EXPRESSION
-                "#error \"${_expected}\""
-    )
-endforeach()
 target_sources(
     x280_bench_host_tests
     PRIVATE
