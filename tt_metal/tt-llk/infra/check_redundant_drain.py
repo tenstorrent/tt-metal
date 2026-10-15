@@ -26,8 +26,11 @@ thread, so the tail after a drain is classified per thread the drain runs on, an
 (a kernel's helpers resolve to that architecture's ckernels and LLK trees). A finding is reported
 only when every thread, architecture and preprocessor path the drain is compiled on agrees.
 
-A drain inside a loop also meets the loop body before it on the next iteration, and a drain inside
-a conditional block, or after a conditional `break`/`continue`/`return`, covers nothing. Anything
+A drain inside a loop also meets the loop's condition and the body before it on the next
+iteration. A drain inside a conditional block, one called through a helper under a condition, or
+one after a conditional `break`/`continue`/`return`, covers nothing; the condition itself is still
+classified. A Tensix push is Tensix-only when its operands are: a named RISC access, a pointer
+dereference or a helper that touches RISC-side state in an operand counts. Anything
 the checker cannot classify -- a call to a function it cannot find, a preprocessor condition with
 too many unknowns, a statement it does not recognise -- ends the scan with no finding, so a false
 flag needs a misclassification, not a gap in the model. A helper called after the drain is
@@ -52,6 +55,10 @@ sys.path.insert(0, HERE)
 from check_mutex_balance import _signature, functions  # noqa: E402
 
 DRAIN = re.compile(r"\b(?:ckernel::)?(tensix_sync|mop_sync)\s*\(\s*\)")
+# A statement that is nothing but the drain call, possibly scoped to one thread.
+DRAIN_ONLY = re.compile(
+    r"(?:(?:UNPACK|MATH|PACK)\s*\(\s*)?(?:ckernel::)?(?:tensix_sync|mop_sync)\s*\(\s*\)\s*\)?\s*;?"
+)
 
 # A statement that pushes a Tensix instruction (or is plain code) and touches nothing the RISC
 # must wait for. `TT_` covers the runtime-encoded pushes, `TTI_` the immediates.
@@ -61,7 +68,7 @@ TENSIX_PUSH = re.compile(
 )
 # A statement the RISC performs against state a drain can order. The names are the LLK's own
 # memory-mapped helpers; the generic forms catch raw volatile accesses and pointer stores.
-RISC_ACCESS = re.compile(
+_RISC_NAMED = (
     r"\b(?:mailbox_(?:write|read|not_empty|fence)|semaphore_(?:read|post|get)|t6_semaphore_\w+|"
     r"reg_(?:read|write)|cfg_(?:read|write|rmw|rmw_gpr)\b|get_cfg(?:16)?_pointer|"
     r"load_blocking|store_blocking|sync_regfile_write|read_(?:pack|unpack)_\w+|dbg_\w+|"
@@ -70,9 +77,15 @@ RISC_ACCESS = re.compile(
     r"csr_(?:read|write)|disable_gathering|enable_gathering|volatile|reinterpret_cast|"
     r"__atomic_\w+|invalidate_l1_cache)\b"
     r"|(?<![\w)\]])\*\s*[A-Za-z_(]"  # a load or store through a pointer
-    r"|\[[^\]]*\]"  # an indexed load or store: an array, a mapped register, a buffer
     r"|->"
 )
+RISC_ACCESS = re.compile(
+    _RISC_NAMED
+    + r"|\[[^\]]*\]"  # an indexed load or store: an array, a mapped register, a buffer
+)
+# Inside a Tensix push's operands an index is a constexpr table lookup (the address-mod register
+# tables, replay slots), not a RISC access; a RISC read there is named, or goes through a pointer.
+PUSH_OPERAND_ACCESS = re.compile(_RISC_NAMED)
 # Plain code the drain cannot be for: control-flow heads, declarations and assignments of scalar
 # locals and globals, asserts, RISC `nop`s, template helpers that only compute.
 PLAIN = re.compile(
@@ -105,6 +118,7 @@ WRAPPER = re.compile(
     r"^\s*(?:ckernel::)?(UNPACK|MATH|PACK)\s*\(\s*(.*)\)\s*;?\s*$", re.S
 )
 JUMP = re.compile(r"\b(return|break|continue|goto)\b")
+CONDITIONAL = re.compile(r"^\s*(?:else\b\s*)?(?:if|while|for|switch|else)\b")
 LOOP_HEAD = re.compile(r"^\s*(?:for|while|do)\b")
 SWITCH_HEAD = re.compile(r"^\s*switch\b")
 PP_LINE = re.compile(r"^\s*#\s*(\w+)\s*(.*)$", re.S)
@@ -643,14 +657,17 @@ def classify_statement(stmt, thread, arch, index, depth=0):
             return "plain"
     m = DRAIN.search(s)
     if m:
-        if re.search(r"\b(?:if|while|for)\b", s[: m.start()]):
-            return "plain"  # a one-line conditional drain: covers nothing, orders nothing here
-        return "drain:" + m.group(1)
-    if TENSIX_PUSH.match(s):
-        return "tensix"
-    if RISC_ACCESS.search(s):
+        if not re.search(r"\b(?:if|while|for)\b", s[: m.start()]):
+            return "drain:" + m.group(1)
+        # A one-line conditional drain covers nothing; what its condition does still counts.
+        s = DRAIN.sub(" ", s)
+    push = bool(TENSIX_PUSH.match(s))
+    if (PUSH_OPERAND_ACCESS if push else RISC_ACCESS).search(s):
         return "risc"
     names = CALL.findall(s)
+    if push:
+        # The push itself is known; only what its operands call is resolved.
+        names = names[1:]
     d = DECL.match(s)
     if d:
         names = [n for n in names if n != d.group(1)]
@@ -668,8 +685,12 @@ def classify_statement(stmt, thread, arch, index, depth=0):
             worst = v
         elif worst is None:
             worst = "tensix"
+    if worst and worst.startswith("drain:") and CONDITIONAL.match(s):
+        return "plain"  # a helper that drains, called under a condition: covers nothing
     if worst:
         return worst
+    if push:
+        return "tensix"  # a push whose operands are constants, locals or Tensix-only helpers
     if PLAIN.match(s):
         return "plain"
     return "unknown"
@@ -703,8 +724,17 @@ def walk(items, start, thread, arch, assign, index, depth, dkind):
                 continue
             if it.kind == "close":
                 if it.mate in ancestors and it.block == "loop" and not replay:
+                    # The loop's condition and update run before the body does again.
+                    head = it.mate - 1
+                    while head >= 0 and items[head].kind == "pp":
+                        head -= 1
+                    lo = (
+                        head
+                        if head >= 0 and items[head].kind == "stmt"
+                        else it.mate + 1
+                    )
                     ranges.insert(0, (i + 1, hi, False))
-                    ranges.insert(0, (it.mate + 1, start, True))
+                    ranges.insert(0, (lo, start, True))
                     break
                 i += 1
                 continue
@@ -815,40 +845,83 @@ def scan(path, repo):
         stmts = [it for it in items if it.kind == "stmt"]
         if (
             len(stmts) == 1
-            and DRAIN.search(stmts[0].text)
+            and DRAIN_ONLY.fullmatch(stmts[0].text.strip())
             and not any(it.kind in ("open", "close") for it in items)
         ):
             continue  # a named wrapper around the drain: callers resolve it as a drain
         for i, it in enumerate(items):
             if it.kind != "stmt":
                 continue
-            m = DRAIN.search(it.text)
-            if not m or re.search(r"\b(?:if|while|for)\b", it.text[: m.start()]):
-                continue
-            drain = m.group(1)
-            line = brace_line + 1 + inner[: it.off + m.start()].count("\n")
-            verdicts = []
-            for arch in arches:
-                index = Index.get(roots[arch])
-                for thread in sorted(threads & it.threads):
-                    names = path_vars(groups, thread, arch)
-                    if names is None:
-                        verdicts.append("unknown")
-                        continue
-                    for assign in assignments(names):
-                        if not is_live(it, thread, arch, assign):
+            for m in DRAIN.finditer(it.text):
+                if re.search(r"\b(?:if|while|for)\b", it.text[: m.start()]):
+                    continue
+                drain = m.group(1)
+                line = brace_line + 1 + inner[: it.off + m.start()].count("\n")
+                # What follows the drain inside its own statement (a braced thread wrapper holds
+                # several) is the first part of its tail.
+                rest = [_fragment(x) for x in it.text[m.end() :].split(";")]
+                rest = [x for x in rest if x]
+                verdicts = []
+                for arch in arches:
+                    index = Index.get(roots[arch])
+                    for thread in sorted(threads & it.threads):
+                        names = path_vars(groups, thread, arch)
+                        if names is None:
+                            verdicts.append("unknown")
                             continue
-                        verdicts.append(
-                            walk(items, i, thread, arch, assign, index, 0, drain)
-                        )
-            if not verdicts or any(v in ("risc", "unknown") for v in verdicts):
-                continue
-            covering = {v.split(":", 1)[1] for v in verdicts if v.startswith("drain:")}
-            if len(covering) == 1 and all(v.startswith("drain:") for v in verdicts):
-                nxt = covering.pop()
-                yield line, "REDUNDANT", drain, f"only Tensix pushes or plain code before the {nxt}() that covers it", head
-            else:
-                yield line, "ADVISORY", drain, "nothing RISC-side follows in this function; if a caller needs the drain it should drain itself", head
+                        for assign in assignments(names):
+                            if not is_live(it, thread, arch, assign):
+                                continue
+                            v = None
+                            for frag in rest:
+                                fv = classify_statement(frag, thread, arch, index)
+                                if fv in ("risc", "unknown"):
+                                    v = fv
+                                    break
+                                if fv.startswith("drain:") and (
+                                    fv == "drain:tensix_sync" or drain == "mop_sync"
+                                ):
+                                    v = fv
+                                    break
+                            if v is None:
+                                v = walk(
+                                    items, i, thread, arch, assign, index, 0, drain
+                                )
+                            verdicts.append(v)
+                yield from _verdict(verdicts, line, drain, head)
+
+
+def _fragment(text):
+    """A statement fragment with the braces and unbalanced parentheses around it removed."""
+    x = text.strip(" \t\n{};")
+    while x.endswith(")") and x.count(")") > x.count("("):
+        x = x[:-1].rstrip()
+    while x.startswith("(") and x.count("(") > x.count(")"):
+        x = x[1:].lstrip()
+    return x
+
+
+def _verdict(verdicts, line, drain, head):
+    if not verdicts or any(v in ("risc", "unknown") for v in verdicts):
+        return
+    covering = {v.split(":", 1)[1] for v in verdicts if v.startswith("drain:")}
+    if len(covering) == 1 and all(v.startswith("drain:") for v in verdicts):
+        nxt = covering.pop()
+        yield line, "REDUNDANT", drain, f"only Tensix pushes or plain code before the {nxt}() that covers it", head
+    else:
+        yield line, "ADVISORY", drain, "nothing RISC-side follows in this function; if a caller needs the drain it should drain itself", head
+
+
+def relative(path, repo):
+    """The path relative to the repository when it is inside it, else to the working directory.
+
+    The baseline keys and the printed paths are then the same from any directory.
+    """
+    root = os.path.abspath(repo) + os.sep
+    full = os.path.abspath(path)
+    if full.startswith(root):
+        return os.path.relpath(full, root).replace(os.sep, "/")
+    return os.path.relpath(full).replace(os.sep, "/")
 
 
 def load_baseline(path):
@@ -861,7 +934,8 @@ def load_baseline(path):
             if not l.strip() or l.lstrip().startswith("#"):
                 continue
             key, _, reason = l.partition("#")
-            accepted[key.strip()] = reason.strip()
+            path, _, head = key.strip().partition(":")
+            accepted[f"{path}:{head[:60]}"] = reason.strip()  # the key the scan prints
     except FileNotFoundError:
         pass
     return accepted
@@ -953,7 +1027,7 @@ def main():
         if is_quasar(path):
             skipped += 1
             continue
-        rel = os.path.relpath(path).replace(os.sep, "/")
+        rel = relative(path, args.repo)
         for line, kind, drain, reason, head in scan(path, args.repo):
             key = f"{rel}:{head[:60]}"
             if key in accepted:

@@ -803,3 +803,188 @@ def test_real_repository_runs_clean_of_errors():
     r = run("--all")
     assert r.returncode == 0
     assert "Traceback" not in r.stderr
+
+
+# ---------------------------------------------------------------------------------------------
+# Review cases: each of these was a false flag before the rule it names.
+
+
+def test_condition_of_a_one_line_conditional_drain_counts(tmp_path):
+    r = repo(tmp_path)
+    h = write(
+        r,
+        "ttnn/op/kernels/compute/pred.hpp",
+        """
+        inline void f(volatile std::uint32_t *p)
+        {
+            tensix_sync();
+            if (p[0]) tensix_sync();
+            tensix_sync();
+            *p = 1;
+        }
+        inline void g(bool x)
+        {
+            tensix_sync();
+            if (x) tensix_sync();
+            tensix_sync();
+            TTI_NOP;
+        }
+        """,
+    )
+    out = run("--repo", r, h).stdout
+    assert "pred.hpp:4:" not in out  # the condition reads p[0] before any later drain
+    assert "pred.hpp:11: REDUNDANT" in out
+    assert "pred.hpp:13: ADVISORY" in out
+
+
+def test_push_operands_are_inspected(tmp_path):
+    r = repo(tmp_path)
+    llk_helpers(r, KERNEL_HELPERS)
+    h = write(
+        r,
+        "ttnn/op/kernels/compute/push.hpp",
+        """
+        inline void f()
+        {
+            tensix_sync();
+            TT_SETDMAREG(0, regfile[0], 0, 0);
+        }
+        inline void g(std::uint32_t *p)
+        {
+            tensix_sync();
+            TT_SETDMAREG(0, llk_pack_store(p), 0, 0);
+        }
+        inline void h(std::uint32_t i)
+        {
+            tensix_sync();
+            TTI_SETC16(addr_mod_src_reg_addr[i], 0);
+            TT_SETDMAREG(0, LOWER_HALFWORD(i), 0, LO_16(p_gpr::TMP0));
+        }
+        """,
+    )
+    out = run("--repo", r, h).stdout
+    assert "push.hpp:4:" not in out  # the operand reads a GPR through the RISC
+    assert "push.hpp:9:" not in out  # the operand calls a helper that stores
+    assert (
+        "push.hpp:14: ADVISORY" in out
+    )  # a table index and macros are not RISC accesses
+
+
+def test_conditional_helper_drain_covers_nothing(tmp_path):
+    r = repo(tmp_path)
+    llk_helpers(r, "inline void settle() { tensix_sync(); }\n")
+    h = write(
+        r,
+        "ttnn/op/kernels/compute/condhelper.hpp",
+        """
+        inline void f(bool x, std::uint32_t *p)
+        {
+            tensix_sync();
+            if (x) settle();
+            *p = 1;
+        }
+        inline void g(bool x)
+        {
+            tensix_sync();
+            if (x) settle();
+            TTI_NOP;
+        }
+        """,
+    )
+    out = run("--repo", r, h).stdout
+    assert "condhelper.hpp:4:" not in out
+    assert "condhelper.hpp:10: ADVISORY" in out
+
+
+def test_loop_condition_and_update_run_again_before_the_drain(tmp_path):
+    r = repo(tmp_path)
+    h = write(
+        r,
+        "ttnn/op/kernels/compute/loophead.hpp",
+        """
+        inline void f(volatile std::uint32_t *p)
+        {
+            while (p[0]) { TTI_NOP; tensix_sync(); }
+        }
+        inline void g(std::uint32_t n)
+        {
+            for (std::uint32_t i = 0; i < n; i++) { TTI_NOP; tensix_sync(); }
+        }
+        inline void h(volatile std::uint32_t *p)
+        {
+            do { TTI_NOP; tensix_sync(); } while (p[0]);
+        }
+        """,
+    )
+    out = run("--repo", r, h).stdout
+    assert (
+        "loophead.hpp:4:" not in out
+    )  # the condition reads p[0] on the next iteration
+    assert "loophead.hpp:8: ADVISORY" in out
+    assert "loophead.hpp:12:" not in out
+
+
+def test_rest_of_a_braced_thread_wrapper_is_the_drain_s_tail(tmp_path):
+    r = repo(tmp_path)
+    h = write(
+        r,
+        "ttnn/op/kernels/compute/braced.hpp",
+        """
+        inline void f()
+        {
+            UNPACK({ tensix_sync(); mailbox_write(MathThreadId, 1); });
+            TTI_NOP;
+        }
+        inline void g()
+        {
+            UNPACK({ tensix_sync(); TTI_NOP; });
+            TTI_NOP;
+        }
+        inline void h()
+        {
+            UNPACK({ mop_sync(); TTI_NOP; tensix_sync(); *p = 1; });
+        }
+        """,
+    )
+    out = run("--repo", r, h).stdout
+    assert "braced.hpp:4:" not in out
+    assert "braced.hpp:9: ADVISORY" in out
+    assert "braced.hpp:14: REDUNDANT: mop_sync()" in out
+    assert (
+        out.count("braced.hpp:14:") == 1
+    )  # the tensix_sync in the same wrapper is required
+
+
+def test_baseline_entry_longer_than_the_key_still_matches(tmp_path):
+    f = hdr(
+        tmp_path,
+        "long.h",
+        """
+        inline void a_function_with_a_rather_long_declarator_line_that_runs_past_sixty_characters()
+        {
+            tensix_sync();
+            TTI_NOP;
+        }
+        """,
+    )
+    rel = os.path.relpath(f).replace(os.sep, "/")
+    b = tmp_path / "baseline.txt"
+    b.write_text(
+        f"{rel}:inline void a_function_with_a_rather_long_declarator_line_that_runs_past_sixty_characters()  # reviewed\n"
+    )
+    assert "ADVISORY" in run(f).stdout
+    assert run(f, "--baseline", b).stdout == ""
+
+
+def test_shipped_baseline_suppresses_its_site():
+    infra = os.path.normpath(os.path.join(HERE, ".."))
+    debug = os.path.join(
+        infra, "..", "tt_llk_blackhole", "common", "inc", "ckernel_debug.h"
+    )
+    assert "ADVISORY" in run(debug).stdout
+    assert (
+        run(
+            debug, "--baseline", os.path.join(infra, "redundant_drain_baseline.txt")
+        ).stdout
+        == ""
+    )
