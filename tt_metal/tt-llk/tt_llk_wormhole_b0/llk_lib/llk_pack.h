@@ -470,6 +470,9 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
     LLK_FID_POINT(); // fidelity experiment hook (ckernel.h), empty unless LLK_FID_T is defined
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
+#if !defined(LLK_NK_NOP_PACK_LOOP) // gate test (do not merge): a real slowdown, 64 RISC NOPs in every _llk_pack_ call
+#define LLK_NK_NOP_PACK_LOOP 64
+#endif
 #if defined(LLK_NK_NOP_PACK_LOOP) // experiment hook (nikola): N NOPs in every _llk_pack_ call, a real code change (faithfulness)
 #define LLK_NK_PL_XSTR_(x) #x
 #define LLK_NK_PL_XSTR(x)  LLK_NK_PL_XSTR_(x)
