@@ -171,13 +171,13 @@ export THP_MEM_ALLOC_ENABLE=1
 pytest 'models/demos/gemma4_d_p/tests/test_prefill_accuracy.py::test_prefill_accuracy[blackhole-256k-8x4]' -sv
 ```
 
-Replace `256k` with `8k`, `16k` or `128k` to select another context. `GEMMA4_TEST_CHUNK_SIZE` selects the chunk size. `GEMMA4_ACCURACY_DATASETS=name,...` limits the run to some datasets; by default it runs all of them. With `PREFILL_SUMMARIES` set, each dataset's `gemma4_slot0.json`, `likelihood.json` and `hidden_samples.safetensors` are written under `$PREFILL_SUMMARIES/gemma4_prefill_accuracy/`.
+Replace `256k` with `8k`, `16k` or `128k` to select another context. `GEMMA4_TEST_CHUNK_SIZE` selects the chunk size. `GEMMA4_ACCURACY_DATASETS=name,...` limits the run to some datasets; by default it runs all of them. `GEMMA4_GPU_TRACE_ROOT` reads the datasets from another copy, for example `/mnt/weka/model-weights/llm/ref-data/gpu_traces/gemma4_d_p`, which is much faster than `/mnt/models`. The final-layer stream is still read through each trace's `source_trace_dir`. With `PREFILL_SUMMARIES` set, each dataset's `gemma4_slot0.json`, `likelihood.json` and `hidden_samples.safetensors` are written under `$PREFILL_SUMMARIES/gemma4_prefill_accuracy/`.
 
 Each dataset in `DATASETS` names a GPU trace prepared with [`prepare_gpu_reference.py`](../tt/runners/prepare_gpu_reference.py), with its own PCC and likelihood limits. Its source capture must also keep the final decoder layer's output stream (`decoder_output_layer_59`), which the likelihood check scores against. A dataset with fewer tokens than the requested context is skipped. Text of a different kind, such as code, has a different likelihood profile, so a new dataset needs limits measured on it.
 
 ### Next-token likelihood
 
-The KV PCC checks what decode will read. The likelihood check tests whether prefill's own predictions changed. The test keeps slot 0's final decoder hidden states at every 16th position and over the whole last chunk, and writes them to `hidden_samples.safetensors`. The [likelihood tool](../tt/runners/likelihood.py) applies the HF model's final norm and tied LM head, with its logit softcap, in fp32 on the host. It scores the result against the same positions of the GPU capture's final-layer stream.
+The KV PCC checks what decode will read. The likelihood check tests whether prefill's own predictions changed. The test keeps slot 0's final decoder hidden states at every 16th position and over the whole last chunk, and writes them to `hidden_samples.safetensors`. The [likelihood tool](../tests/scripts/likelihood.py) applies the HF model's final norm and tied LM head, with its logit softcap, in fp32 on the host. It scores the result against the same positions of the GPU capture's final-layer stream.
 
 The test prints the report and writes it to `likelihood.json`. Each depth bin (0–8K, 8K–64K, 64K–256K) shows:
 
@@ -187,20 +187,20 @@ The test prints the report and writes it to `likelihood.json`. Each depth bin (0
 
 The last prompt position gets its own line, since its logits are a served request's first output token. At 256K that position has no gold token, so only top-1 agreement and KL are reported for it.
 
-Each bin must meet the dataset's `likelihood_limits`. For the Gutenberg trace they sit about 0.01 in top-1 and 0.02–0.05 in ΔNLL and KL from main at chunk 8192, over the 8K, 16K, 128K and 256K contexts, and they fail a known long-context regression. The last position is reported but not gated.
+Each bin must meet the dataset's `likelihood_limits`. For the Gutenberg trace they were set from main at chunks 2048, 4096 and 8192 over the 8K, 16K, 128K and 256K contexts, with room for run-to-run variation, and they fail a known long-context regression. The last position is reported but not gated.
 
 Compare any two runs, for example build A against build B or one chunk size against another. Runs at different chunk sizes are scored on the positions both hold:
 
 ```bash
-python -m models.demos.gemma4_d_p.tt.runners.likelihood RUN_A_DIR RUN_B_DIR
+python -m models.demos.gemma4_d_p.tests.scripts.likelihood RUN_A_DIR RUN_B_DIR
 ```
 
 The first argument, the reference, may instead be a GPU trace directory. The second must be a run, because its saved positions decide which ones are scored. A CPU fp32 reference over the capture's first tokens gives short-context ground truth. It takes about 30 minutes for 32K tokens on a 64-core host and needs about 130 GB of RAM:
 
 ```bash
-python -m models.demos.gemma4_d_p.tt.runners.prepare_cpu_reference /path/to/cpu_fp32_32k --context-len 32768
+python -m models.demos.gemma4_d_p.tests.scripts.prepare_cpu_reference /path/to/cpu_fp32_32k --context-len 32768
 ```
 
-TT prefill is deterministic: the same build run twice gives ΔNLL = 0 everywhere. Any nonzero difference between two builds is therefore a real change.
+Same-build runs are not always bit-identical. With the accurate gate GELU, three 256K runs at chunk 8192 gave identical hidden states and KV. With the fast gate GELU (#59222), one of three diverged from the first chunk, moving ΔNLL by up to 0.03 per bin. Compare builds with that spread in mind, or repeat a run to confirm a small difference.
 
 See [test commands and setup](PREFILL_MIGRATION.md).
