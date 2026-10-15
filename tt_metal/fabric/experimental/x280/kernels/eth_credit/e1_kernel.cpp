@@ -325,6 +325,20 @@ private:
             fail(EC_ERROR_COUNTER_DISTANCE, p);
             return false;
         }
+        /* deliver()'s advance check: R1 is posted, so an older R1 can land
+         * after a newer one, and would otherwise send R2 backwards. */
+        uint32_t advance;
+        if (!credit_pair_ok(
+                frd,
+                frd_seen_[p],
+                ec_ptr_mask(EC_N_DELIVER),
+                ec_ptr_used(deliver_wr_[p], frd_seen_[p], EC_N_DELIVER),
+                &advance)) {
+            result_.failure(p, 0u, 0u, EC_SITE_NONE, frd_seen_[p], frd);
+            fail(EC_ERROR_COUNTER_DISTANCE, p);
+            return false;
+        }
+        frd_seen_[p] = frd;
         const uint32_t consumed = received_[p] - ec_ptr_used(deliver_wr_[p], frd, EC_N_DELIVER);
         if (consumed == credited_[p]) {
             return true;
