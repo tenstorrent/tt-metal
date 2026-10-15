@@ -6,6 +6,7 @@
     python -m models.demos.common.bringup.orchestrator run --spec S [--until ID] [--only ID] [--model M]
     python -m models.demos.common.bringup.orchestrator resume --spec S      # STOPPED tasks become runnable again
     python -m models.demos.common.bringup.orchestrator decide --task P.3 --accept|--reject|--rerun --spec S
+    python -m models.demos.common.bringup.watch --spec S       # the supervisor's wait: returns on the next event
 
 Per task:
   scripted step (goldens, box, integrate, perf; no role)  run the gate; on failure hand the log to a ``fix`` agent
@@ -71,6 +72,7 @@ from string import Template
 
 import yaml
 
+from models.demos.common.bringup import watch as W
 from models.demos.common.bringup.core import defaults
 from models.demos.common.bringup.core import freeze as F
 from models.demos.common.bringup.core import metrics as M
@@ -1489,7 +1491,12 @@ def main(argv=None) -> int:
         for tid, e in led.state().items():
             if isinstance(e, dict) and e.get("status") in ("STOPPED", "RUNNING"):  # RUNNING = an interrupted run
                 led.update(tid, status="TODO", history_add={"t": now(), "status": "RESUMED"})
-    return orch.run(until=a.until, only=a.only)
+    pid_file = orch.run_dir / W.PID_FILE  # the supervisor's watch (watch.py) tells a stopped run from a quiet one
+    pid_file.write_text(f"{os.getpid()} {now()}\n")
+    try:
+        return orch.run(until=a.until, only=a.only)
+    finally:
+        pid_file.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

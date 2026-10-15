@@ -940,3 +940,20 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   forward_chunk sets it itself), and an optional device-model hook `begin_chunk(tokens, start)` that the ladder,
   profile, positions, smoke and op-report loops call before a chunk's first layer (a stack that starts from a golden
   block input never calls `embed`). Fixture `token_layers`; 2 more selftests.
+
+## F66 (2026-10-15): the supervisor always watches; host placement; runner smoke only for whole models
+
+- `watch.py`: `python -m models.demos.common.bringup.watch --spec S` is the supervisor's one wait. It returns on the
+  next event of `runs/<run>/orchestrator.log` (gate result, attempt >= 2, STOPPED, WAITING FOR A PERSON, paused,
+  DEFERRED, KNOWLEDGE CONTRADICTED, traceback, the end; exit 0), after its timeout (exit 2, re-arm), or at once when
+  the orchestrator is not running (exit 3, the log's last event). `run` / `resume` write `runs/<run>/ORCHESTRATOR.pid`
+  and remove it on exit. Why: DeepSeek-V4.1 run1 sat at the plan approval (WAITING FOR A PERSON, orchestrator exited
+  3) for 7 hours because the supervisor's hand-rolled log grep was not re-armed. The /bringup skill (section 4,
+  "Always be watching") makes the watch mandatory: re-armed in the turn that handles its result, never a turn ended
+  with a live run unwatched, run once before answering "status?". Selftests: test_watch.py.
+- Plan placement `host` (plan/memory.py): a tensor used from host memory (DeepSeek-V4.1's engram tables, memory-mapped
+  per chunk) is placed but not counted per chip; needs a `why`; reported as `host_gb`. Before, the only off-device
+  placement was `skip`, which the deployment check rejects on decoder-layer tensors.
+- K.1 requires `smoke_runner_ok` only when the run covers the whole model (as L.smoke): a layer subset cannot answer
+  the runner smoke, which skips itself there.
+- Agent rule 5 (bringup-engineer.md) reworded to "no unnecessary host work": a host input (data the model keeps on the host, keyed only on token ids, e.g. the engram tables) is allowed in begin_chunk, placed `host` in the plan, tagged CPU, host part only; the skill's cheating list names that exception.
