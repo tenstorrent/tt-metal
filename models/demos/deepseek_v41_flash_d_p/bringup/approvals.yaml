@@ -1,8 +1,8 @@
 intake:
   by: dnijemcevic
-  at: '2026-10-15T08:13:29'
+  at: '2026-10-15T15:57:55'
   files:
-    models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml: 903cca66d44f87df6daae929049630bf21294b603219562c8923e11f1d32c09d
+    models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml: fcda948ca5da2ab96a68ca457566a5b770e05d9c8d08f35b9a5f97f55a7c8516
   note: ''
 plan:
   by: dnijemcevic

@@ -3,11 +3,13 @@ notes:
 - id: OV-1
   tasks:
   - '*'
-  status: open
+  status: closed
   t: '2026-10-15T14:46:25'
   text: DS41-12 in bringup/known_issues.md is 614 characters, over the 600 limit, so every gate reports it as a problem;
     it was resolved by the overseer (the scaled ladder is now 55296 / 2048, within the prompt). Shorten it to one line saying
     that, or move the detail to known_issues_detail.md. Answer done when the entry is at most 600 characters.
+  closed: '2026-10-15T15:58:14'
+  why_closed: done in S.swa.06 (352 characters), confirmed by C.swa.attn_residual
 - id: OV-2
   tasks:
   - X.*
@@ -17,3 +19,19 @@ notes:
   text: test of the repeated option, closed at once
   closed: '2026-10-15T15:39:43'
   why_closed: CLI test
+- id: OV-3
+  tasks:
+  - S.swa.*
+  - C.swa.*
+  status: open
+  t: '2026-10-15T15:57:55'
+  text: 'Owner decision (spec rule ''Accuracy is judged against the noise floor''): the exact paths are too slow to keep
+    as defaults (ATTN_IN_MM=exact: 32 masked matmul copies, ~25x; WINDOW_SDPA=exact: tt/window_exact.py, 64 ms per layer).
+    Make the fast paths the defaults in tt/settings.py: ATTN_IN_MM = the plain fp32-accumulating matmul, WINDOW_SDPA = ttnn.bringup.sparse_sdpa(high_precision=True,
+    attention_sink=...). Keep the exact paths as settings (not the default), with the owner decision noted in settings.py.
+    The swap tests'' block-out limit is now the precision model''s noise floor x 2 (framework F72), not 1 %: re-run the
+    S.swa.05 and S.swa.06 gate commands with the fast defaults and report their metrics (swap_*_out_rel and swap_*_out_rel_limit)
+    in your answer. If a check still fails with the fast path, say so with the numbers (answer disagree); do not add a new
+    exact kernel.'
+  roles:
+  - implement
