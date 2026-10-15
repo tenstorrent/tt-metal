@@ -13,6 +13,12 @@
 // helper expresses it.
 
 #include <cstdint>
+#ifdef MRS_ZONES  // perf instrumentation only
+#include <tools/profiler/kernel_profiler.hpp>
+#define MRS_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define MRS_ZONE(name)
+#endif
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
@@ -50,6 +56,7 @@ void kernel_main() {
     uint32_t queue[depth_handoff];
     uint32_t head = 0, outstanding = 0, acked_fwd = 0, acked_bwd = 0;
     auto pop_oldest = [&]() {
+        MRS_ZONE("ACK_WAIT");
         const uint32_t kind = queue[head];
         head = head + 1 == depth_handoff ? 0 : head + 1;
         if (kind == KIND_FWD) {
@@ -62,7 +69,10 @@ void kernel_main() {
     };
 
     for (uint32_t e = 0; e < num_entries; ++e) {
-        cb_wait_front(cb_finished, (outstanding + 1) * P);
+        {
+            MRS_ZONE("FIN_WAIT");
+            cb_wait_front(cb_finished, (outstanding + 1) * P);
+        }
         const uint32_t kind = get_arg_val<uint32_t>(kinds_idx + e);
         const uint32_t slot = finished_base + (e % depth_handoff) * P * tile_bytes;
         if (kind == KIND_FIN) {

@@ -24,6 +24,7 @@ Every knob is defined once below (or derived in choose_grid / choose_k_block) an
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 
 import ttnn
@@ -48,7 +49,12 @@ DEPTH_HANDOFF = 2  # finished slots (a port gathers entry e while compute finish
 PORT_GROUP = 4  # chunks per port batch (cb_port_chunks holds 2 batches); <= 8 (header pool)
 ENTRIES_PER_BLOCK = 1  # entries per scatter block (overlap lamp; only 1 is built)
 KB_MIN_RESIDENT = 8  # smallest K-block the resident regime accepts (min(Kt, this))
+KB_MAX = 16  # largest K-block: the streamed operand needs several K-blocks per entry to overlap read / mcast / math
+# (focus case, diagonal senders: kb 64 -> 212 us, 32 -> 160 us, 16 -> 159 us, 8 -> 164 us on the fastest chip)
 L1_HEADROOM = 64 * 1024  # bytes kept free per core beyond the op's own footprint
+MCAST_SENDER_PLACEMENT = (
+    "diagonal"  # operand senders per line: "uniform" (first core: a column of DRAM readers) | "diagonal"
+)
 DEST_TILES_FP32_FULL_SYNC = 8  # DEST capacity with fp32 accumulation + full sync (subblock area cap)
 
 TILE = 32
@@ -153,7 +159,7 @@ def plan_transport(G, kind):
 # ======================================================================================================================
 
 
-def _subblock(core_m, core_n, cap=DEST_TILES_FP32_FULL_SYNC):
+def _subblock(core_m, core_n, cap=DEST_TILES_FP32_FULL_SYNC, prefer_tall=False):
     best = (1, 1)
     for h in range(1, core_m + 1):
         if core_m % h:
@@ -161,7 +167,8 @@ def _subblock(core_m, core_n, cap=DEST_TILES_FP32_FULL_SYNC):
         for w in range(1, core_n + 1):
             if core_n % w or h * w > cap:
                 continue
-            if h * w > best[0] * best[1] or (h * w == best[0] * best[1] and w > best[1]):
+            tie_better = (h > best[0]) if prefer_tall else (w > best[1])
+            if h * w > best[0] * best[1] or (h * w == best[0] * best[1] and tie_better):
                 best = (h, w)
     return best
 
@@ -207,11 +214,13 @@ def footprint(kb, resident, *, Kt, core_m, core_n, tA, tW, scatter_dim, slots, s
 def choose_k_block(Kt, budget, force_resident, **geo):
     """(resident, kb): resident with the largest kb | Kt, kb >= min(Kt, KB_MIN_RESIDENT), else stream with the largest
     kb | Kt that fits. force_resident (test hook) replaces the residency decision."""
-    divisors = [d for d in range(Kt, 0, -1) if Kt % d == 0]
+    # preference order: the largest divisor <= KB_MAX first, then smaller ones, then (no fit below the cap) larger ones
+    divisors = [d for d in range(min(Kt, KB_MAX), 0, -1) if Kt % d == 0]
+    divisors += [d for d in range(KB_MAX + 1, Kt + 1) if Kt % d == 0]
     if force_resident is not False:
         for kb in divisors:
             if kb < min(Kt, KB_MIN_RESIDENT):
-                break
+                continue
             if footprint(kb, True, Kt=Kt, **geo) <= budget:
                 return True, kb
         if force_resident is True:
@@ -415,6 +424,10 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
         staging_floor_tiles=staging_floor,
     )
     resident, kb = choose_k_block(Kt, _l1_budget(mesh), getattr(hooks, "_FORCE_XBLOCK_RESIDENCY", None), **geo)
+    if os.environ.get("MRS_KB"):  # perf experiments only: cap the K-block (largest divisor of Kt <= MRS_KB)
+        kb = max(d for d in range(1, kb + 1) if Kt % d == 0 and d <= int(os.environ["MRS_KB"]))
+    if os.environ.get("MRS_SB_TALL"):  # perf experiments only: prefer taller subblocks on ties
+        gd["sb"] = _subblock(core_m, core_n, prefer_tall=True)
     hooks._LAST_PLAN = {
         "xblock": "resident" if resident else "stream",
         "schedule": kind,
@@ -586,6 +599,13 @@ def create_mesh_program_descriptor(ctx):
     port_ct = [CB_PORT_CHUNKS, P, chunk_tiles, PORT_GROUP, STAGE_TILE_BYTES, DEPTH_HANDOFF]
 
     src = ttnn.KernelDescriptor.SourceType.FILE_PATH
+    # Perf-only ablation switches (debug scaffolding; output is wrong by design when set): MRS_ABLATE=compute,dram
+    ablate = set(filter(None, os.environ.get("MRS_ABLATE", "").split(",")))
+    ablate_compute = [("SKIP_COMPUTE", "1"), ("CKL_ELTWISE_CHAIN_SKIP_COMPUTE", "1")] if "compute" in ablate else []
+    ablate_reader = [("MRS_SKIP_DRAM", "1")] if "dram" in ablate else []
+    zones = [("MRS_ZONES", "1")] if os.environ.get("MRS_ZONES") else []
+    ablate_compute = ablate_compute + zones
+    ablate_reader = ablate_reader + zones
     dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
         processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
     )
@@ -657,6 +677,7 @@ def create_mesh_program_descriptor(ctx):
                 core_ranges=mm_crs,
                 compile_time_args=reader_ct,
                 runtime_args=r_rt,
+                defines=ablate_reader,
                 config=dm("RISCV_1", NOC0),
             )
             compute = ttnn.KernelDescriptor(
@@ -665,6 +686,7 @@ def create_mesh_program_descriptor(ctx):
                 core_ranges=mm_crs,
                 compile_time_args=compute_ct,
                 runtime_args=c_rt,
+                defines=ablate_compute,
                 config=compute_cfg,
             )
             writer = ttnn.KernelDescriptor(
@@ -673,11 +695,19 @@ def create_mesh_program_descriptor(ctx):
                 core_ranges=mm_crs,
                 compile_time_args=writer_ct,
                 runtime_args=w_rt,
+                defines=zones,
                 config=dm("RISCV_0", NOC1),
             )
             mc_cfg = ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=True)
-            mc_a = ttnn.Mcast1D(mesh, mm_crs, a_shape_1d, ttnn.Mcast1DFixedSenderConfig(), mc_cfg)
-            mc_b = ttnn.Mcast1D(mesh, mm_crs, w_shape_1d, ttnn.Mcast1DFixedSenderConfig(), mc_cfg)
+            placement = os.environ.get("MRS_SENDER_PLACEMENT", MCAST_SENDER_PLACEMENT)
+            snd = ttnn.Mcast1DFixedSenderConfig(
+                starting_sender_index=0,
+                sender_placement=ttnn.Mcast1DSenderPlacement.Diagonal
+                if placement == "diagonal"
+                else ttnn.Mcast1DSenderPlacement.Uniform,
+            )
+            mc_a = ttnn.Mcast1D(mesh, mm_crs, a_shape_1d, snd, mc_cfg)
+            mc_b = ttnn.Mcast1D(mesh, mm_crs, w_shape_1d, snd, mc_cfg)
             kernels = [reader]
             mc_a.attach(program, "a", kernels)
             mc_b.attach(program, "b", kernels)
@@ -705,7 +735,10 @@ def create_mesh_program_descriptor(ctx):
                         continue
                     s0 = down["arrivals"][(0, d)].index(b) if mask & 1 else 0
                     s1 = down["arrivals"][(1, d)].index(b) if mask & 2 else 0
-                    units.append(e | (mask << 8) | (s0 << 16) | (s1 << 24))
+                    # walk a chain-start half (ready right after its matmul) before a relay half (waits for its
+                    # arrival behind the next matmul), so a ready half never queues behind a late one
+                    h1_first = int(mask == 3 and roles[(b, 1)][1] and not roles[(b, 0)][1])
+                    units.append(e | (mask << 8) | (h1_first << 10) | (s0 << 16) | (s1 << 24))
                 consumed_id = 0 if d == "fwd" else 1
                 pr_rt[pcore.x][pcore.y] = [staging_addr, mailbox_addr, consumed_id, len(core_words), len(units)] + (
                     core_words + units
@@ -745,6 +778,7 @@ def create_mesh_program_descriptor(ctx):
                 core_ranges=used_port_crs,
                 compile_time_args=port_ct,
                 runtime_args=pr_rt,
+                defines=zones,
                 config=dm("RISCV_1", NOC0),
             )
             port_sender = ttnn.KernelDescriptor(
@@ -753,6 +787,7 @@ def create_mesh_program_descriptor(ctx):
                 core_ranges=used_port_crs,
                 compile_time_args=port_ct,
                 runtime_args=ps_rt,
+                defines=zones,
                 config=dm("RISCV_0", NOC1),
             )
             program.kernels = [reader, compute, writer, port_reader, port_sender]

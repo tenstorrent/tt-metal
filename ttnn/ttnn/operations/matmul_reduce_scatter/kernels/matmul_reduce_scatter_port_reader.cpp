@@ -14,6 +14,12 @@
 // Raw-API note (design "Helpers considered and rejected"): a pull with per-producer acks; no helper expresses it.
 
 #include <cstdint>
+#ifdef MRS_ZONES  // perf instrumentation only
+#include <tools/profiler/kernel_profiler.hpp>
+#define MRS_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define MRS_ZONE(name)
+#endif
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
@@ -65,10 +71,13 @@ void kernel_main() {
         const uint32_t unit = get_arg_val<uint32_t>(units_idx + u);
         const uint32_t entry = unit & 0xFF;
         const uint32_t half_mask = (unit >> 8) & 0x3;
+        const uint32_t first_half = (unit >> 10) & 0x1;
         const uint32_t slot_off = (entry % depth_handoff) * P * tile_bytes;
-        for (uint32_t i = 0; i < num_cores; ++i) {
+        for (uint32_t walk = 0; walk < 2 * num_cores; ++walk) {  // halves in unit order (first_half first)
+            const uint32_t hh = first_half ^ (walk >= num_cores ? 1u : 0u);
+            const uint32_t i = walk >= num_cores ? walk - num_cores : walk;
             const uint32_t cw = get_arg_val<uint32_t>(cores_idx + i);
-            if (!((half_mask >> ((cw >> 16) & 0xF)) & 1)) {
+            if (!((half_mask >> hh) & 1) || ((cw >> 16) & 0xF) != hh) {
                 continue;
             }
             const uint32_t k = cw >> 20;
@@ -79,7 +88,10 @@ void kernel_main() {
             if (*mbox < target && c > 0) {
                 flush();  // never hold reads / acks while blocking on a producer
             }
-            noc_semaphore_wait_min(mbox, target);
+            {
+                MRS_ZONE("MBOX_WAIT");
+                noc_semaphore_wait_min(mbox, target);
+            }
             const uint64_t src = get_noc_addr(cw & 0xFF, (cw >> 8) & 0xFF, finished_base + slot_off);
             for (uint32_t ci = 0; ci < chunks_per_core; ++ci) {
                 if (c == 0) {

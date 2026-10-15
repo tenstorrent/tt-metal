@@ -14,6 +14,12 @@
 // bytes a remote chip wrote; no helper covers a fabric fused-inc counter with host thresholds.
 
 #include <cstdint>
+#ifdef MRS_ZONES  // perf instrumentation only
+#include <tools/profiler/kernel_profiler.hpp>
+#define MRS_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define MRS_ZONE(name)
+#endif
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
@@ -83,34 +89,43 @@ void kernel_main() {
         const uint32_t w_col_base = block * w_col_per_block + col0;
         for (uint32_t kblk = 0; kblk < num_k_blocks; ++kblk) {
             const uint32_t k0 = kblk * kb;
-            cb_reserve_back(cb_act_k_window, a_window_tiles);
-            cb_reserve_back(cb_weight_k_window, w_window_tiles);
+            {
+                MRS_ZONE("RD_RESV");
+                cb_reserve_back(cb_act_k_window, a_window_tiles);
+                cb_reserve_back(cb_weight_k_window, w_window_tiles);
+            }
             const uint32_t a_dst = get_write_ptr(cb_act_k_window);
             const uint32_t w_dst = get_write_ptr(cb_weight_k_window);
             bool issued = false;
-            if (!recredit_a && a_sender) {
-                for (uint32_t i = 0; i < m_valid; ++i) {
-                    const uint32_t page = (a_row_base + i) * Kt + k0;
+#ifndef MRS_SKIP_DRAM  // perf ablation only
+            {
+                MRS_ZONE("RD_DRAM");
+                if (!recredit_a && a_sender) {
+                    for (uint32_t i = 0; i < m_valid; ++i) {
+                        const uint32_t page = (a_row_base + i) * Kt + k0;
+                        for (uint32_t kk = 0; kk < kb; ++kk) {
+                            noc_async_read(
+                                a_acc.get_noc_addr(page + kk), a_dst + (i * kb + kk) * a_tile_bytes, a_tile_bytes);
+                        }
+                    }
+                    issued = true;
+                }
+                if (!recredit_w && w_sender) {
                     for (uint32_t kk = 0; kk < kb; ++kk) {
-                        noc_async_read(
-                            a_acc.get_noc_addr(page + kk), a_dst + (i * kb + kk) * a_tile_bytes, a_tile_bytes);
+                        const uint32_t page = (k0 + kk) * Nt + w_col_base;
+                        for (uint32_t j = 0; j < n_valid; ++j) {
+                            noc_async_read(
+                                w_acc.get_noc_addr(page + j), w_dst + (kk * core_n + j) * w_tile_bytes, w_tile_bytes);
+                        }
                     }
+                    issued = true;
                 }
-                issued = true;
-            }
-            if (!recredit_w && w_sender) {
-                for (uint32_t kk = 0; kk < kb; ++kk) {
-                    const uint32_t page = (k0 + kk) * Nt + w_col_base;
-                    for (uint32_t j = 0; j < n_valid; ++j) {
-                        noc_async_read(
-                            w_acc.get_noc_addr(page + j), w_dst + (kk * core_n + j) * w_tile_bytes, w_tile_bytes);
-                    }
+                if (issued) {
+                    noc_async_read_barrier();  // one barrier per K-block for both operands
                 }
-                issued = true;
             }
-            if (issued) {
-                noc_async_read_barrier();  // one barrier per K-block for both operands
-            }
+#endif
+            MRS_ZONE("RD_MCAST");
             if (!recredit_a) {
                 if (a_sender) {
                     a_tx->send(a_dst, a_dst, a_window_tiles * a_tile_bytes);
@@ -135,6 +150,7 @@ void kernel_main() {
         const uint32_t word0 = get_arg_val<uint32_t>(entries_idx + 2 * entry_idx);
         const uint32_t word1 = get_arg_val<uint32_t>(entries_idx + 2 * entry_idx + 1);
         const uint32_t mask = word0 >> 16;
+        MRS_ZONE("ARR_WAIT");
         if (mask & 1) {
             noc_semaphore_wait_min(arr_fwd, word1 & 0xFFFF);
             cb_reserve_back(cb_arrivals_fwd, P);

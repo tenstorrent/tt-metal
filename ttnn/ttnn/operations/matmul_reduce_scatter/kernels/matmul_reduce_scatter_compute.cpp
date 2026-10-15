@@ -10,6 +10,12 @@
 // Every cross-device add runs in fp32 DEST; the result is packed to bf16 into cb_finished.
 
 #include <cstdint>
+#ifdef MRS_ZONES  // perf instrumentation only
+#include <tools/profiler/kernel_profiler.hpp>
+#define MRS_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define MRS_ZONE(name)
+#endif
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
@@ -22,6 +28,7 @@ constexpr uint32_t ROLE_COPY = 0, ROLE_ADD_FWD = 1, ROLE_ADD_BWD = 2, ROLE_ADD_B
 
 template <uint32_t cb_hold, uint32_t cb_finished, uint32_t cb_arr_fwd, uint32_t cb_arr_bwd, uint32_t P>
 ALWI void finish_block(uint32_t role) {
+    MRS_ZONE("FIN");
     using namespace ckl;
     constexpr auto shape = IterationShape::tiles(P);
     if (role == ROLE_COPY) {
@@ -63,6 +70,7 @@ void kernel_main() {
     constexpr auto mm_shape = ckl::MatmulBlockShape::of(core_m / sb_h, core_n / sb_w, sb_h, sb_w, kb, num_k_blocks);
 
     auto matmul_block_entry = [&]() {
+        MRS_ZONE("MM");
         hold_buf.reserve_back(P);  // caller-owned pack target: one fp32 slot per entry
         ckl::matmul_block<
             /*transpose=*/false,
