@@ -67,6 +67,7 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.blackhole.qwen36.tt.tp_common import fabric_router_config
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
@@ -126,11 +127,23 @@ _FABRIC_CONFIG = (
     if (_MESH_SHAPE == (4, 8) or os.environ.get("QWEN36_FABRIC_RING") == "1")
     else ttnn.FabricConfig.FABRIC_1D
 )
+
+
+def _fabric_router_params():
+    """Fabric packet payload (tp_common.fabric_router_config: QWEN36_FABRIC_PAYLOAD_BYTES, default 8192)."""
+    router = fabric_router_config()
+    return {"fabric_router_config": router} if router is not None else {}
+
+
 DEVICE_PARAMS = [
     {
         "l1_small_size": 24576,
         "num_command_queues": 2,
-        **({"fabric_config": _FABRIC_CONFIG, "trace_region_size": _TP_TRACE_REGION_SIZE} if _MULTI else {}),
+        **(
+            {"fabric_config": _FABRIC_CONFIG, "trace_region_size": _TP_TRACE_REGION_SIZE, **_fabric_router_params()}
+            if _MULTI
+            else {}
+        ),
     }
 ]
 

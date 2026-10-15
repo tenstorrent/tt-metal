@@ -37,6 +37,22 @@ COMPUTE_LOFI = ttnn.WormholeComputeKernelConfig(
 )
 
 
+FABRIC_PAYLOAD_ENV = "QWEN36_FABRIC_PAYLOAD_BYTES"
+
+
+def fabric_router_config():
+    """QWEN36_FABRIC_PAYLOAD_BYTES (default 8192; 0 = the fabric default of 4352): max fabric packet payload for the
+    multi-device meshes, the value qwen38_27b_qb2 uses. Larger packets cut per-packet overhead in the decode
+    all-reduces: TP=8 decode 20.25 -> 19.87 ms/token at B=1 and 25.31 -> 24.92 at B=32 (15232, the Blackhole maximum,
+    is slower than 8192). Returns a ttnn.FabricRouterConfig for set_fabric_config, or None for the fabric default."""
+    payload = int(os.environ.get(FABRIC_PAYLOAD_ENV, "8192") or 0)
+    if payload <= 0:
+        return None
+    router = ttnn.FabricRouterConfig()
+    router.max_packet_payload_size_bytes = payload
+    return router
+
+
 LMHEAD_CFG_ENV = "QWEN36_LMHEAD_CFG"
 _LMHEAD_LOGGED = False
 

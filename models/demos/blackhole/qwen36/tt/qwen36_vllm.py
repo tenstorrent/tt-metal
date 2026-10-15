@@ -27,6 +27,7 @@ import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
 from models.demos.blackhole.qwen36.tt.model import serve_device_decode_env_enabled
+from models.demos.blackhole.qwen36.tt.tp_common import fabric_router_config
 from models.tt_transformers.tt.generator import Generator
 
 # Sampler top-k limit (models/common/sampling TTSampling.max_top_k default; ttnn.sampling walks k <= 32 candidates).
@@ -83,6 +84,11 @@ def _build_model_capabilities():
             # penalty requests use the host sampler (which reloads every step).
             supports_device_penalties=False,
         )
+    # Fabric packet payload (QWEN36_FABRIC_PAYLOAD_BYTES, default 8192): merged by the plugin into its
+    # set_fabric_config kwargs; launch overrides of the fabric type still win.
+    router = fabric_router_config()
+    if router is not None:
+        caps["fabric_config"] = {"router_config": router}
     return caps
 
 

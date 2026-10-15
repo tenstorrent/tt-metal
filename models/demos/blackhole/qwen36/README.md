@@ -134,7 +134,7 @@ Optional flags:
 export QWEN_SDPA_BF8=1
 ```
 
-Default decode numerics (TP paths, 27B), each with an env var that reverts it:
+Default decode settings (TP paths, 27B), each with an env var that reverts it:
 
 | Default | Revert / alternatives |
 |---|---|
@@ -142,6 +142,7 @@ Default decode numerics (TP paths, 27B), each with an env var that reverts it:
 | exact-fp32 recurrent-state update in that op | `QWEN36_GDN_STEP_FP32_STATE=0` (FPU path) |
 | dense-MLP gate/up weights in BFP8 | `QWEN36_MLP_GATEUP_BFP8=0` (BFP4) |
 | dense-MLP matmuls at HiFi2 | `QWEN36_MLP_FIDELITY=lofi\|hifi3\|hifi4` |
+| 8 KB fabric packet payload on multi-device meshes (demo and vLLM) | `QWEN36_FABRIC_PAYLOAD_BYTES=0` (fabric default, 4352 B) or another size |
 
 With these defaults Qwen3.8-27B served through vLLM (`max_num_seqs` 32) passed AIME 2026, GPQA-Diamond and MMLU-Pro
 (reference score inside the 95% CI), and `accuracy_512` passes; BFP4 MLP-down + attention on top of them failed AIME.
