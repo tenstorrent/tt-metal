@@ -82,3 +82,6 @@ Every intervention by the supervising session: time, task, trigger, classificati
   supervisor had dropped G.s4096's PASS record when regenerating the ledger. Supervisor error: agent and orchestrator
   stopped, G.s4096's PASS record (2026-10-14, 34e5c9ccb0a) and results restored, the fix attempt's report removed.
   DS41-12 (prompt shorter than the 65536 scaled rung) marked resolved (scaled.ladder 55296 / 2048).
+- 09:55 TT_METAL_HOME / PYTHON_ENV_DIR (from ~/.bashrc) point at /localdev/dnijemcevic/tt-metal; harmless for this build (runtime root compiled in as tt-metal2, profiler dir set by run_safe_pytest) but a trap: pause after G.s55296 and relaunch with both pointing at tt-metal2 before any device step.
+- 10:05 shared kernel cache: ~/.bashrc TT_METAL_CACHE=/localdev/dnijemcevic/tt-metal/built is used by both trees; the JIT build key hashes flags, not the source root, so the two checkouts can overwrite each other's firmware / kernels. Relaunch after G.s55296 with TT_METAL_CACHE=tt-metal2/built, TT_METAL_HOME=tt-metal2, PYTHON_ENV_DIR=tt-metal2/python_env.
+- 10:10 correction: the JIT cache validates each target against its include paths and a dependency hash, so cross-tree entries are recompiled, not reused; the separate cache only avoids churn and concurrent writes. Owner may run device code in tt-metal now (this run is CPU-only until the relaunch).
