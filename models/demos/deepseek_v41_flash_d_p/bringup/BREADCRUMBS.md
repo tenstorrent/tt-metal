@@ -367,3 +367,17 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   (its C gate passed but it was never added), ffn_collapse.
 - Gate: PASS. pcc 0.999997; vs CPU rel 0 (bit-exact), vs golden 0.00254 (limit 0.0070); second inputs rel 0.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_collapse.py`
+
+## C.swa.ffn_norm implement (attempt 1)
+- tt/norm.py: `TtDistributedRmsNorm(..., gather=True)` for ffn_norm (build_norm: NORM_WEIGHTS["ffn_norm"] =
+  ffn_norm.weight, GATHERED_NORMS). Same exact fp32 SFPU chain as attn_norm, then one `ttnn.all_gather(dim=3,
+  cluster_axis=1)` of the fp32 output -> [1, 1, S/SP, H] fp32 per chip, replicated over the mesh row (a data move:
+  exact). No gather when TP == 1. `TtDistributedRmsNorm.quant(y)` = tt/quant.fp8_qdq (DS41-13) -> q(x) bf16 for the
+  shared / routed experts; not called in the step (the boundary is the unquantized fp32 rows the router reads); the
+  assembled model computes it once per layer from the gathered rows.
+- hooks.py: `_device_step_fn` "ffn_norm" -> `_hidden_to_rows_host_fn` (hidden-split in, row-split TP-replicated out,
+  read from mesh column 0); DEVICE_STEPS["swa"] += ffn_norm.
+- Gate: PASS. pcc 0.999997; vs CPU rel 7.5e-8 (limit 0.0060); vs golden 0.00234 (limit 0.0083); second inputs rel
+  <= 7.6e-8; A,B,A bit-identical.
+- OV-4: DS41-20 marked resolved by F73 (component.py:350-356: limit = swap_step_calib x component error, no cap).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_ffn_norm.py`
