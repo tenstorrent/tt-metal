@@ -131,6 +131,47 @@ def zeros_rm(md, shape):
     return _PERSIST[key]
 
 
+PIDX_SHARD = os.environ.get(
+    "DSV41_PIDX_SHARD", "auto"
+)  # column-sharded prefill indexer: "0" off, "1" on whenever possible, "auto" from PIDX_SHARD_MIN_L entries
+PIDX_SHARD_MIN_L = int(
+    os.environ.get("DSV41_PIDX_SHARD_MIN_L", "131072")
+)  # (replicated select is faster below ~131072 entries, the sharded one needs 8x less DRAM)
+
+
+def shard_len(L, cols):
+    """Per-column FIFO slots: ceil(L / cols) rounded up to a tile (the FIFO of the sharded indexer is cols * shard_len slots long, the first cols * shard_len - L of them never visible)."""
+    return -(-(-(-L // cols)) // 32) * 32
+
+
+def shard_cols(md, L, C, r):
+    """Number of mesh columns the prefill indexer of ratio ``r`` (L index keys, chunk C) shards its key slab / scores over, 0 = replicated. Needs the local slab
+    L / cols to hold a whole top-512 window and tile-aligned score columns, and the chunk's entries to split evenly over the columns.
+    """
+    cols = int(md.shape[1])
+    if PIDX_SHARD == "0" or cols < 2:
+        return 0
+    Lc, Cc = shard_len(L, cols), C // r
+    if Lc < 2 * TOPK or Cc % cols or Cc < cols:
+        return 0
+    if PIDX_SHARD == "auto" and L < PIDX_SHARD_MIN_L:
+        return 0
+    return cols
+
+
+def _col_sharded(md, host, dtype, layout):
+    """host [cols, ...]: slice c goes to every device of mesh column c (replicated over the mesh rows)."""
+    rows, cols = tuple(md.shape)
+    return ttnn.from_torch(
+        host,
+        device=md,
+        dtype=dtype,
+        layout=layout,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(None, 0), mesh_shape=(rows, cols)),
+    )
+
+
 _SORT_OK = [True]
 
 
@@ -257,17 +298,20 @@ class DSV41PrefillIndexer:
             self.key_owner is None
         ), "export from the key owner (layers 2, 8, 14, 20); layers 24-36 alias layer 20's slab"
         n = ceil32(n_entries)
-        assert n <= k_cache.shape[2] and n <= self.KL
+        keys = self.keys_full()
+        assert n <= k_cache.shape[2] and n <= keys.shape[2]
         # a full-range slice may ALIAS the slab: never deallocate the slice itself (that freed the key FIFO of the owner and crashed the next prefill)
-        src = self.keys if n == self.keys.shape[2] else ttnn.slice(self.keys, [0, 0, 0, 0], [self.U, 1, n, IDIM])
+        src = keys if n == keys.shape[2] else ttnn.slice(keys, [0, 0, 0, 0], [self.U, 1, n, IDIM])
         if k_cache.dtype != ttnn.bfloat16:
             conv = ttnn.typecast(src, k_cache.dtype)
-            if src is not self.keys:
+            if src is not keys:
                 ttnn.deallocate(src)
             src = conv
         ttnn.experimental.slice_write(src, k_cache, [0, 0, 0, 0], [self.U, 1, n, IDIM], [1, 1, 1, 1])
-        if src is not self.keys:
+        if src is not keys:
             ttnn.deallocate(src)
+        if keys is not self.keys:
+            ttnn.deallocate(keys)
 
     # ---- selection ---------------------------------------------------------------------------------------------------------------
     def select(self, pa, h, qr, s0, C):
@@ -389,6 +433,162 @@ class DSV41PrefillIndexer:
             new = gated
         ttnn.copy(new, self.keys)
         ttnn.deallocate(new)
+
+    # ---- column-sharded FIFO (DSV41_PIDX_SHARD) -------------------------------------------------------------------------------------
+    # FIFO slot p lives on mesh column p % cols at local slot p // cols: a chunk's Cc entries (Cc % cols == 0) shift the local FIFO by Cc / cols rows on every column,
+    # so the FIFO update stays column-local. Every column scores its L / cols keys, takes a local top-512 and the 8 x 512 candidates are merged over the columns.
+    sh = None
+
+    def alloc_shard(self, ctx, L, cols, mc, ccl, owner):
+        """sh: per-device constants (built once per ratio on ``ctx``) + the sharded key FIFO of an index-key owner."""
+        r, U, md = self.ratio, self.U, self.md
+        Lc, Cc = shard_len(L, cols), ctx.C // self.ratio
+        dL = cols * Lc - L  # extra (older, never visible) FIFO slots in front
+        reg = ctx.__dict__.setdefault("pidx_sh", {})
+        if (r, L) not in reg:
+            # the score op masks key slots > chunk_start + row and chunk_start must be < T: 32 pad slots after the Lc real ones let chunk_start = Lc keep every real slot visible
+            # to every row; the pad slots get a slot number no query row can see
+            pcol = (
+                torch.arange(Lc, dtype=torch.float32).view(1, -1) * cols
+                + torch.arange(cols, dtype=torch.float32).view(-1, 1)
+                - dL
+            )  # virtual slot of the replicated FIFO (< 0: padding)
+            pcol = torch.cat([pcol, torch.full((cols, 32), 3.0e9)], dim=1)
+            j = torch.arange(Cc // cols)
+            kidx = torch.stack(
+                [(torch.arange(U).view(-1, 1) * Cc + c + cols * j.view(1, -1)).reshape(-1, 1) for c in range(cols)]
+            )  # [cols, U*Cc/cols, 1]: rows of the [U*Cc, 128] key block that column c keeps
+            reg[(r, L)] = {
+                "cols": cols,
+                "Lc": Lc,
+                "Cc8": Cc // cols,
+                "pcol": _col_sharded(md, pcol.reshape(cols, 1, 1, Lc + 32), ttnn.float32, ttnn.TILE_LAYOUT),
+                "pad": ttnn.zeros([U, 1, 32, IDIM], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=md),
+                "kidx": _col_sharded(
+                    md, kidx.reshape(cols * U * (Cc // cols), 1).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+                ),
+                "cid": _col_sharded(
+                    md,
+                    (torch.arange(cols, dtype=torch.float32) - dL).reshape(cols, 1, 1, 1),
+                    ttnn.float32,
+                    ttnn.TILE_LAYOUT,
+                ),
+                "skip": ttnn.from_torch(
+                    torch.full((1, 1, ctx.C, 32), SKIP, dtype=torch.int64).to(torch.int32),
+                    device=md,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+                ),
+            }
+        self.sh = dict(reg[(r, L)], mc=mc, ccl=ccl)
+        self.KL_full = L
+        ctx.pidx_pcol = getattr(ctx, "pidx_pcol", {})
+        ctx.pidx_pcol[r] = self.sh["pcol"]
+        if owner:
+            self.KL = Lc
+            self.keys_rm = ttnn.zeros([U, 1, Lc, IDIM], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=md)
+            self.keys = ttnn.zeros([U, 1, Lc + 32, IDIM], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=md)
+
+    keys_rm = None
+
+    def keys_full(self):
+        """The key FIFO as a replicated tile slab [U,1,L,128] in FIFO slot order (``self.keys`` itself when the indexer is not sharded; otherwise a NEW tensor the caller frees):
+        all_gather of the column slabs, interleaved back (slot cols * q + c - dL)."""
+        sh = self.sh
+        if sh is None:
+            return self.keys
+        U, cols, Lc, mc, ccl = self.U, sh["cols"], sh["Lc"], sh["mc"], sh["ccl"]
+        k = ttnn.to_layout(ttnn.slice(self.keys, [0, 0, 0, 0], [U, 1, Lc, IDIM]), ttnn.ROW_MAJOR_LAYOUT)
+        g = mc.allgather(
+            k, ccl, axis=1, dim=1
+        )  # [U, cols, Lc, 128]: g[:, c, q] = slot cols * q + c (+ the padding offset)
+        g = ttnn.reshape(ttnn.permute(g, (0, 2, 1, 3)), [U, 1, cols * Lc, IDIM])
+        dL = cols * Lc - self.KL_full
+        if dL:
+            g = ttnn.slice(g, [0, 0, dL, 0], [U, 1, cols * Lc, IDIM])
+        return ttnn.to_layout(g, ttnn.TILE_LAYOUT)
+
+    def add_keys_dyn_sharded(self, lat_pre, tab, Cc, ctx=None):
+        d, U, sh = self.dec, self.U, self.sh
+        x = ttnn.reshape(lat_pre, [1, 1, U * Cc, HEAD_DIM])
+        k = ttnn.linear(x, d.wk, compute_kernel_config=self.ckc)
+        k = ttnn.rms_norm(ttnn.typecast(k, ttnn.bfloat16), weight=d.k_norm_w, epsilon=d.k_eps)
+        k = ttnn.reshape(k, [U, 1, Cc, IDIM])
+        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, Cc, HEAD_DIM])
+        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, Cc, HEAD_DIM])
+        k = self._rope(k, (c, s_))
+        if self.fp4_k:
+            k = self._fp4(k)
+        Lc, Cc8 = sh["Lc"], sh["Cc8"]
+        kl = ttnn.embedding(
+            sh["kidx"],
+            ttnn.to_layout(ttnn.reshape(k, [U * Cc, IDIM]), ttnn.ROW_MAJOR_LAYOUT),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )  # [U*Cc8, 1, 128]: this column's rows p % cols == column
+        kl = ttnn.reshape(kl, [U, 1, Cc8, IDIM])
+        if Lc == Cc8:
+            new = kl
+        else:
+            new = ttnn.concat([ttnn.slice(self.keys_rm, [0, 0, Cc8, 0], [U, 1, Lc, IDIM]), kl], dim=2)
+        if getattr(ctx, "umask", None) is not None:
+            gated = gate_user_state(ctx, new, self.keys_rm)
+            if gated is not new:
+                ttnn.deallocate(new)
+            new = gated
+        ttnn.copy(new, self.keys_rm)
+        ttnn.copy(ttnn.to_layout(ttnn.concat([new, sh["pad"]], dim=2), ttnn.TILE_LAYOUT), self.keys)
+        ttnn.deallocate(new)
+
+    def select_dyn_sharded(self, h, qr, tab, vis, C, L):
+        """Same result as ``select_dyn`` (FIFO slots of the top-512 entries, 0xFFFFFFFF where fewer are visible) from the sharded slab; vis [1,1,C,L/cols + 32] (columns = this
+        column's slots + 32 pad slots)."""
+        d, U, sh = self.dec, self.U, self.sh
+        cols, Lc, mc, ccl = sh["cols"], sh["Lc"], sh["mc"], sh["ccl"]
+        w = ttnn.to_layout(ttnn.linear(h, d.wproj, compute_kernel_config=self.ckc), ttnn.ROW_MAJOR_LAYOUT)
+        q = ttnn.to_layout(ttnn.linear(qr, d.wq_b, compute_kernel_config=self.ckc), ttnn.ROW_MAJOR_LAYOUT)
+        qh = ttnn.to_layout(ttnn.permute(ttnn.reshape(q, [U, C, IHEADS, IDIM]), (0, 2, 1, 3)), ttnn.TILE_LAYOUT)
+        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, C, HEAD_DIM])
+        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, C, HEAD_DIM])
+        qh = self._rope(qh, (c, s_))
+        if self.fp4_q:
+            qh = self._fp4(qh)
+        wt = ttnn.to_layout(ttnn.reshape(w, [U, 1, C, IHEADS]), ttnn.TILE_LAYOUT)
+        per_user = []
+        for u in range(U):
+            qu = ttnn.slice(qh, [u, 0, 0, 0], [u + 1, IHEADS, C, IDIM])
+            wu = ttnn.slice(wt, [u, 0, 0, 0], [u + 1, 1, C, IHEADS])
+            sc = ttnn.experimental.indexer_score_dsa(
+                qu, self.slab, wu, chunk_start_idx=Lc, kv_len=Lc + 32, program_config=self.cfg, cache_batch_idx=u
+            )
+            scm = ttnn.where(vis, ttnn.to_layout(sc, ttnn.TILE_LAYOUT), float("-inf"))
+            ids = ttnn.experimental.topk_large_indices(
+                ttnn.to_layout(scm, ttnn.ROW_MAJOR_LAYOUT), k=TOPK, valid_length=Lc + 32
+            )
+            idf = ttnn.to_layout(
+                ttnn.typecast(ids, ttnn.float32), ttnn.TILE_LAYOUT
+            )  # local slots, 0xFFFFFFFF -> ~4.3e9
+            valid = ttnn.lt(idf, float(Lc))
+            idc = ttnn.typecast(ttnn.where(valid, idf, 0.0), ttnn.uint32)
+            vals = ttnn.where(ttnn.typecast(valid, ttnn.bfloat16), ttnn.gather(scm, 3, index=idc), float("-inf"))
+            pg = ttnn.typecast(
+                ttnn.add(ttnn.multiply(idf, float(cols)), sh["cid"]), ttnn.uint32
+            )  # FIFO slot = local * cols + column - dL (cid holds column - dL)
+            cv = mc.allgather(ttnn.to_layout(vals, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3)  # [1,1,C,cols*512]
+            cp = mc.allgather(ttnn.to_layout(pg, ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1, dim=3)
+            pos = ttnn.experimental.topk_large_indices(ttnn.to_layout(cv, ttnn.ROW_MAJOR_LAYOUT), k=TOPK)
+            posf = ttnn.to_layout(ttnn.typecast(pos, ttnn.float32), ttnn.TILE_LAYOUT)
+            posu = ttnn.typecast(
+                ttnn.clamp(posf, max=float(cols * TOPK)), ttnn.uint32
+            )  # a sentinel position selects the 0xFFFFFFFF column
+            cpe = ttnn.concat([ttnn.to_layout(cp, ttnn.TILE_LAYOUT), sh["skip"]], dim=3)
+            fin = ttnn.to_layout(ttnn.gather(cpe, 3, index=posu), ttnn.ROW_MAJOR_LAYOUT)
+            per_user.append(fin)
+            for t_ in (sc, scm, ids, idf, valid, idc, vals, pg, cv, cp, pos, posf, posu, cpe, qu, wu):
+                ttnn.deallocate(t_)
+        ttnn.deallocate(qh)
+        return per_user[0] if U == 1 else ttnn.concat(per_user, dim=0)
 
     def select_dyn(self, h, qr, tab, vis, C, L):
         """ids [U,1,C,512] = FIFO slots of the top-512 entries of every query of the chunk (0xFFFFFFFF where fewer are visible)."""
@@ -597,15 +797,23 @@ class DSV41PrefillSparse:
         self.ctx, self.dyn_on = ctx, L >= TOPK + 32
         if not self.dyn_on:
             return
+        cols = shard_cols(self.md, L, ctx.C, r) if self.indexer is not None else 0
         if self.owner:
             self._free_tables()  # the eager-sized tables (or those of a previous capture) are replaced, never leaked
             self.kvt = PrefillKV(self.md, self.U, L, ctx.C)
-            if self.indexer is not None and self.indexer.key_owner is None:
+            if self.indexer is not None and self.indexer.key_owner is None and not cols:
                 ix = self.indexer
                 ix.KL = L
                 ix.keys = ttnn.zeros([self.U, 1, L, IDIM], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.md)
         else:
             self.kvt = pa.a.source.prefill.sparse.kvt
+        if self.indexer is not None:
+            if not cols:
+                getattr(ctx, "pidx_pcol", {}).pop(r, None)
+            if cols:
+                self.indexer.alloc_shard(ctx, L, cols, pa.a.mesh_config, pa.a.ccl, self.indexer.key_owner is None)
+            else:
+                self.indexer.sh = None
         if not hasattr(ctx, "sp_win"):
             ctx.sp_win, ctx.sp_vis = {}, {}
             ctx.upd_hooks.append(self._upd_hook)
@@ -623,9 +831,14 @@ class DSV41PrefillSparse:
             if self.kvt is not None:
                 self.kvt.free()
             ix = self.indexer
+            if ix is not None:
+                ix.sh = None
             if ix is not None and ix.key_owner is None and ix.keys is not None:
                 ttnn.deallocate(ix.keys)
                 ix.keys = None
+                if ix.keys_rm is not None:
+                    ttnn.deallocate(ix.keys_rm)
+                    ix.keys_rm = None
         self.kvt = None
 
     def free_dyn(self):
@@ -633,6 +846,8 @@ class DSV41PrefillSparse:
         re-creates its tables lazily (``ensure_eager``)."""
         ctx = getattr(self, "ctx", None)
         self._free_tables()
+        if self.indexer is not None:
+            self.indexer.sh = None
         if ctx is not None:
             t = getattr(ctx, "sp_perm", None)
             if t is not None:
@@ -692,7 +907,14 @@ class DSV41PrefillSparse:
         for r in ctx.sp_win:
             if r in ctx.sp_vis:
                 ttnn.deallocate(ctx.sp_vis[r])
-            ctx.sp_vis[r] = visibility_mask(ctx.pcol[r], ctx.off[r], ctx.lim[r], ctx.C, ctx.L[r])
+            sp = getattr(ctx, "pidx_pcol", {}).get(
+                r
+            )  # column-sharded indexer: the visibility of this column's slots only (pcol = their FIFO slot numbers)
+            ctx.sp_vis[r] = (
+                visibility_mask(sp, ctx.off[r], ctx.lim[r], ctx.C, int(sp.shape[-1]))
+                if sp is not None
+                else visibility_mask(ctx.pcol[r], ctx.off[r], ctx.lim[r], ctx.C, ctx.L[r])
+            )
 
     def attend_dyn(self, qh, kv, halo, lat, lat_pre, h, qr):
         pa, ctx, U = self.pa, self.ctx, self.U
@@ -729,12 +951,12 @@ class DSV41PrefillSparse:
         ix = self.indexer
         if ix is not None and ix.key_owner is None:  # key FIFO
             tab = ctx.lat_tabs[r] if r > 1 else ctx.tabs[True]
-            ix.add_keys_dyn(lat_pre, tab, Cc, ctx)
+            (ix.add_keys_dyn_sharded if ix.sh else ix.add_keys_dyn)(lat_pre, tab, Cc, ctx)
         full = self.kvt.rm(ttnn.concat([halo, kv], dim=2))
         ttnn.experimental.slice_write(full, kt, [0, 0, L, 0], [U, 1, L + WINDOW + C, HEAD_DIM], [1, 1, 1, 1])
         ttnn.deallocate(full)
         if ix is not None:
-            self.ids = ix.select_dyn(h, qr, ctx.tabs[True], ctx.sp_vis[r], C, L)
+            self.ids = (ix.select_dyn_sharded if ix.sh else ix.select_dyn)(h, qr, ctx.tabs[True], ctx.sp_vis[r], C, L)
         ids = self.ids if ix is not None else self.idx_src.ids
         win = ctx.sp_win[r]
         zero_heads = zeros_rm(self.md, [1, PAD_HEADS - LOCAL_HEADS, C, HEAD_DIM])
