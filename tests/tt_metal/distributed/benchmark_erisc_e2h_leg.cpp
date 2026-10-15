@@ -192,6 +192,9 @@ bool bind_leg(const std::shared_ptr<MeshDevice>& mesh, const E2HLeg::Config& cfg
             c.hal = &env.get_hal();
             c.eth = out.eth_logical;
             // Which transport is fabric's choice, not ours, and writing the wrong one is silent.
+            // The host stands in for the far receiver, and a real one holds credit while its slots
+            // are occupied. Holding k back leaves the sender k fewer usable slots.
+            c.hold_back = env_u32("TT_BRIDGE_E2H_CREDIT_HOLD", 0);
             c.use_streams = eb::sender_credits_use_streams(cp, mesh_id, 0, i);
             const auto off = i * static_cast<std::uint32_t>(sizeof(std::uint32_t));
             c.completions.addr = comp_base + off;
@@ -454,6 +457,7 @@ BENCHMARK_DEFINE_F(E2HLegFixture, Bridge)(benchmark::State& state) {
         }
         state.counters["credits_returned"] = returned;
         state.counters["credit_streams"] = b.credit.front().use_streams ? 1.0 : 0.0;
+        state.counters["credit_hold"] = static_cast<double>(b.credit.front().hold_back);
     }
     state.counters["payload_off_w"] = pay_off_known ? static_cast<double>(pay_off_w) : -1.0;
     state.counters["want"] = static_cast<double>(want);

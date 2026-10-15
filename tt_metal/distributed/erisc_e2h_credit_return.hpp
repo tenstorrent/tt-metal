@@ -38,19 +38,31 @@ struct E2HCreditReturn {
     Line acks;
     Line completions;
 
-    // ACKS FIRST: the router reads completions then acks and relies on never seeing more
-    // completions than acks, which is also what a real receiver produces -- it acks on arrival.
+    // COMPLETIONS ONLY: a receiver acks on arrival and completes on retire, so holding completions
+    // models an occupied buffer. Holding acks too would starve the worker long before the slots.
+    std::uint32_t hold_back = 0;
+    std::uint64_t taken = 0;  // frames drained; completions granted are this minus hold_back
+
+    // ACKS FIRST, and never fewer than completions: the router reads completions then acks and
+    // relies on never seeing more completions than acks.
     bool give(std::uint32_t frames, std::string& err) {
         if (!active || frames == 0) {
             return true;
         }
-        return write(acks, frames, "ack", err) && write(completions, frames, "completion", err);
+        taken += frames;
+        const auto all = static_cast<std::uint32_t>(taken);
+        const auto freed = taken > hold_back ? static_cast<std::uint32_t>(taken - hold_back) : 0u;
+        return write(acks, all, "ack", err) && write(completions, freed, "completion", err);
     }
 
 private:
-    // Advances the totals only on success, so a failed write is retried rather than skipped.
-    bool write(Line& l, std::uint32_t frames, const char* what, std::string& err) {
-        const std::uint32_t want = l.total + frames;
+    // Takes the ABSOLUTE grant, not a delta, so withholding is expressible and a retry is exact.
+    // Totals advance only on success, so a failed write is retried rather than skipped.
+    bool write(Line& l, std::uint32_t grant, const char* what, std::string& err) {
+        const std::uint32_t want = l.seeded + grant;
+        if (want == l.total) {
+            return true;
+        }
         if (!use_streams) {
             if (!write_bytes_to_l1(*env, dev, eth, l.addr, &want, sizeof(want), tt::CoreType::ETH)) {
                 err = std::string("credit return: ") + what + " counter write failed";
