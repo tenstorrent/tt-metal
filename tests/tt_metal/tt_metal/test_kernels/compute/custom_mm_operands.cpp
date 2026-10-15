@@ -75,7 +75,6 @@ void kernel_main() {
                 custom_mm_block<false>(Activation(a_base), Weight(b_base), 1, 1, 0, 2, producer_ct);
             }
             if constexpr (mode == 2) {
-                // The reuse unpacker processes two K tiles per MOP iteration.
                 // Consume both producer tiles at DEST rows 0 and 32, weighted
                 // by 2*I and I (input indices 2 and 4), into a disjoint accumulator.
                 if (block % 2 == 0) {

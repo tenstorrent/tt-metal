@@ -348,8 +348,12 @@ void compute_sdpa_chunk(
         chunk_size % qk_signal_granularity == 0,
         "compute_sdpa_chunk: chunk_size must be divisible by qk_signal_granularity");
     // OV matmul: kt_dim = chunk_size (Sk_chunk_t). Its reuse-dest unpack runs a MOP over K-tile pairs
-    // plus a replay tail for an odd last tile, so any chunk_size from 1 works.
-    static_assert(chunk_size >= 1, "compute_sdpa_chunk: chunk_size (Sk_chunk_t = OV-matmul kt_dim) must be >= 1");
+    // plus a replay tail for an odd last tile, so odd chunk sizes work. A 1-tile chunk does not: the
+    // chunk computes a wrong running max on device (SdpaChunkSizeCompileLimits pins the rejection).
+    static_assert(
+        chunk_size >= 2,
+        "compute_sdpa_chunk: chunk_size (Sk_chunk_t) must be >= 2; k_chunk_size of 32 gives Sk_chunk_t=1, "
+        "which computes a wrong running max");
     // QK matmul: kt_dim = qk_kt. Kept even and >= 2 (pinned by SdpaChunkMergedKvCompileLimits).
     static_assert(
         qk_kt >= 2 && qk_kt % 2 == 0,
