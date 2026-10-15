@@ -829,8 +829,9 @@ def assert_boxes_close(expected, actual, pcc=0.99):
 # reference's top-k the device selects. The score error is gated at its 99th percentile, with a
 # looser bound on the worst pair: with the BEVFormer-base checkpoint, the second frame's BEV is
 # off most at the grid's edges, where the previous BEV, rotated and shifted by the ego motion,
-# turns to zeros and the self-attention samples across that step; a query there, one in 300, is
-# off by up to 0.11, while the 99th percentile stays at 0.026. Both bounds are about 1.5x those, so a regression in the logits fails here too.
+# turns to zeros and the self-attention samples across that step, so the few queries there
+# score off by several times the rest. The bounds leave headroom over the checkpoint's errors,
+# not so much that a regression in the logits passes.
 SCORE_ERROR_QUANTILE = 0.99
 MAX_SCORE_ERROR = 0.04
 MAX_WORST_SCORE_ERROR = 0.15

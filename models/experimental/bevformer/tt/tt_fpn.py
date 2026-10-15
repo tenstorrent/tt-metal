@@ -54,7 +54,9 @@ class TtConvModule:
 
 
 class TtFPN:
-    """Feature pyramid over the backbone levels.
+    """Feature pyramid over the backbone levels, built from ``create_fpn_parameters``' ``params``,
+    whose ``tt_kwargs`` holds the memory and precision arguments below, the ones the weights were
+    prepared for.
 
     ``input_dtypes`` are the dtypes of the backbone levels the FPN reads, in order.
     ``dram_activation_levels`` lists the pyramid levels whose lateral and output convs
@@ -64,18 +66,14 @@ class TtFPN:
     conv2d's own. ``weights_dtype`` is the convs' weight dtype.
     """
 
-    def __init__(
-        self,
-        conv_args,
-        conv_pth,
-        device,
-        input_dtypes,
-        dram_activation_levels=(),
-        dram_conv_slices=None,
-        block_sharded_levels=(),
-        block_sharded_act_block_h=None,
-        weights_dtype=ttnn.bfloat8_b,
-    ):
+    def __init__(self, params, device, input_dtypes):
+        conv_args, conv_pth = params.conv_args, params
+        config = params.tt_kwargs
+        dram_activation_levels = config["dram_activation_levels"]
+        dram_conv_slices = config["dram_conv_slices"]
+        block_sharded_levels = config["block_sharded_levels"]
+        block_sharded_act_block_h = config["block_sharded_act_block_h"]
+        weights_dtype = config["weights_dtype"]
         assert conv_args.add_extra_convs == "on_output", f"extra convs {conv_args.add_extra_convs!r} are not supported"
         self.lateral_convs = []
         self.fpn_convs = []

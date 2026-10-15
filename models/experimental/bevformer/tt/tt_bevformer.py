@@ -17,7 +17,6 @@ boxes on the host, as no device tensor can hold a data-dependent count (see ``Tt
 
 import ttnn
 
-from models.experimental.bevformer import model_config
 from models.experimental.bevformer.tt.tt_fpn import TtFPN
 from models.experimental.bevformer.tt.tt_head import TtBEVFormerHead
 from models.experimental.bevformer.tt.tt_nms_free_coder import TtNMSFreeCoder
@@ -43,20 +42,8 @@ class TtBEVFormer:
         ), f"the detector's BEV is {config.bev_h}x{config.bev_w}, the head's {tuple(params.head.bev_shape)}"
         self.params = params
         self.batch_size = config.batch_size
-        self.backbone = TtResNet(
-            params.backbone.conv_args,
-            params.backbone["res_model"],
-            device,
-            out_indices=config.out_indices,
-            **model_config.tt_resnet_kwargs(),
-        )
-        self.neck = TtFPN(
-            conv_args=params.neck.conv_args,
-            conv_pth=params.neck,
-            device=device,
-            input_dtypes=self.backbone.output_dtypes,
-            **model_config.tt_fpn_kwargs(),
-        )
+        self.backbone = TtResNet(params.backbone, device, out_indices=config.out_indices)
+        self.neck = TtFPN(params.neck, device, input_dtypes=self.backbone.output_dtypes)
         self.transformer = TtPerceptionTransformer(
             params.transformer, device, bev_h=config.bev_h, bev_w=config.bev_w, spatial_shapes=config.spatial_shapes
         )
