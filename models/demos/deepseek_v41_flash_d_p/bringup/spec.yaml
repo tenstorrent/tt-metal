@@ -4,8 +4,9 @@
 # Planned for a Blackhole Galaxy 4x4 at 512K tokens (1M on the Galaxy 8x4; owner 2026-10-15: reference-exact weights
 # over context length); brought up here in partial mode on the 4-chip QuietBox (mesh 2x2):
 # one layer of each kind (window-only, engram, encoder KV source, encoder reuse, decoder candidate source, decoder
-# reuse, decoder re-index), at real size for accuracy and scaled (heads and experts cut per the plan) for the
-# deployment's per-chip shapes. The full model (289 GB of fp4 experts) needs the Galaxy; a LoudBox holds a subset only.
+# reuse, decoder re-index), as the SCALED model only (owner, F75): heads and experts cut per the plan so each chip holds
+# what a 4x4 chip holds, 2048-token chunks; goldens from the scaled checkpoint. The real checkpoint is read only by the
+# reference checks (R.*) and the plan check (PL.*).
 model: deepseek_v41_flash_d_p                      # slug: package models/demos/<model>, commit tag [<model>][<task>]
 display_name: DeepSeek-V4.1-Flash (layers 0-3, 14, 20, 21, 24)
 hf_id: deepseek-ai/DeepSeek-V4.1-Flash
@@ -47,15 +48,11 @@ boxes:
     device_params: {fabric_config: FABRIC_2D, l1_small_size: 24576}   # owner: always 2D fabric
     test_timeout_s: 3600
 run: {box: quietbox_2x2, mode: partial}
-target: {seq: 55296, chunk: 2048, dtype: bf16}          # this run's context at real size: 27 chunks of this box's 2048
-ladder:                            # every rung at this box's chunk (owner: goldens only for what runs on this box)
+target: {seq: 55296, chunk: 2048, dtype: bf16}          # this run's context: 27 chunks of this box's scaled chunk 2048
+ladder:                            # the scaled model (F75), every rung at this box's chunk; goldens are the scaled model's
   - {name: s4096, seq: 4096, chunk: 2048, full_dumps: true}     # 2 chunks; > the window (128) and the compressed top-k
   - {name: last, seq: 55296, chunk: 2048, golden: s55296, prefix_from_golden: true}   # golden 53k prefix, device 53k->55k
   - {name: s55296, seq: 55296, chunk: 2048}                     # all 27 chunks on device
-scaled:                            # the scaled run: this box's chunk (1024 tokens per row, as on the deployment), ~55K
-  ladder:
-    - {name: scaled, seq: 55296, chunk: 2048}
-    - {name: scaled_last, seq: 55296, chunk: 2048, golden: scaled, prefix_from_golden: true}
 block_types:                       # every layer exactly once; representative = the layer swap tests use
   swa:                             # attention over the 128-token window only (compress ratio 0)
     layers: [0]
