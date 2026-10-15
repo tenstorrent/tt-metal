@@ -487,6 +487,7 @@ void MeshGraph::initialize_from_mgd(
         // Record the resolved per-mesh config (explicit override, or the dim_types-derived default) so the
         // control plane and tests can see each mesh's routing config.
         this->mesh_fabric_config_[mesh_id] = resolved.config;
+        this->mesh_fabric_config_explicit_[mesh_id] = resolved.is_explicit;
 
         // A 1D fabric config is single-mesh only: 1D routing has no inter-mesh story. Reject an
         // explicitly-requested 1D config (declared per-mesh in the MGD or set process-wide) on an MGD with
@@ -872,6 +873,21 @@ MeshCoordinateRange MeshGraph::get_coord_range(MeshId mesh_id, std::optional<Mes
 }
 
 const IntraMeshConnectivity& MeshGraph::get_intra_mesh_connectivity() const { return intra_mesh_connectivity_; }
+bool MeshGraph::has_explicit_ring_or_torus_mesh() const {
+    for (const auto& [mesh_id, cfg] : this->mesh_fabric_config_) {
+        const auto it = this->mesh_fabric_config_explicit_.find(mesh_id);
+        const bool is_explicit = it != this->mesh_fabric_config_explicit_.end() && it->second;
+        if (!is_explicit) {
+            continue;
+        }
+        if (cfg == FabricConfig::FABRIC_1D_RING || cfg == FabricConfig::FABRIC_2D_TORUS_X ||
+            cfg == FabricConfig::FABRIC_2D_TORUS_Y || cfg == FabricConfig::FABRIC_2D_TORUS_XY) {
+            return true;
+        }
+    }
+    return false;
+}
+
 const InterMeshConnectivity& MeshGraph::get_inter_mesh_connectivity() const { return inter_mesh_connectivity_; }
 
 std::vector<SwitchId> MeshGraph::get_switch_ids() const {

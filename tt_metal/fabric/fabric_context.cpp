@@ -245,6 +245,20 @@ FabricContext::FabricContext(
 
     // Step 2: Derive topology (depends on: fabric_config_)
     this->topology_ = FabricContext::get_topology_from_config(fabric_config);
+
+    // Per-mesh FabricConfig: when the fabric is opened under a plain Mesh global config but an MGD
+    // declares an EXPLICIT per-mesh ring/torus (e.g. a TORUS_X mesh linked to a TORUS_Y mesh), the
+    // routers must still run the torus-capable routing mode so each mesh's genuine ring is routed with
+    // wrap/dateline handling -- the global ROUTING_MODE define is shared by every router. Upgrade the
+    // global topology to the Torus superset (Torus routing mode also serves plain-mesh routers, which
+    // simply have no wrap links). The per-mesh connectivity (MeshGraph) still keeps each mesh to its own
+    // single wrap, and per-mesh deadlock avoidance / bubble flow control (need_deadlock_avoidance_support,
+    // is_bubble_flow_control_enabled) give each ring the protection for its own axis. This is the interim
+    // until ROUTING_MODE itself is made per-router (see tt_metal/fabric/PER_MESH_FABRIC_CONFIG.md #6/#8).
+    if (this->topology_ == Topology::Mesh && control_plane.get_mesh_graph().has_explicit_ring_or_torus_mesh()) {
+        this->topology_ = Topology::Torus;
+    }
+
     this->wrap_around_mesh_ = this->check_for_wrap_around_mesh(control_plane);
 
     // Step 3: Compute routing flags (depends on: topology_)
