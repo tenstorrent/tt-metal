@@ -9,10 +9,10 @@ struct LogBf16Config {
     // Fit: degree-4 polynomial on [1, 2], 1 segment, max pure (continuous) ULP 0.64.
     static constexpr uint32_t kCoefficientBits[] = {0x00000000u, 0x3f7fbd33u, 0xbef3a895u, 0x3e6a802fu, 0xbd7180f6u};
     static constexpr uint32_t kScaleBits = 0x3f317218u;
-    static constexpr uint32_t kBodySlots = 22u;
+    static constexpr uint32_t kBodySlots = 23u;
 };
 }  // namespace ckernel::sfpu
-#include "ckernel_sfpu_bf16_log_fused.h"
+#include "ckernel_sfpu_log_bf16_log_fused.h"
 
 namespace ckernel::sfpu {
 

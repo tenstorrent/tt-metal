@@ -133,6 +133,19 @@ _FLUSHES_SUBNORMALS: Dict[torch.dtype, bool] = {
     torch.float16: False,
 }
 
+#: Subnormal *outputs* flushed when a step budget ranks a result, on every format, fp16
+#: included. The metric keeps fp16's subnormal band by default, but the golden keeps IEEE
+#: subnormals the pack path does not reproduce: a near-cancelling ``a - b`` lands there
+#: 140 steps from a correct kernel, and an exact unary op read 512 steps on
+#: Float16_b->Float16 from that band alone. One policy, named once: every step-budget gate
+#: hands it to ``passed_test_kwargs`` -- the binary and ternary gate
+#: (:func:`helpers.sfpu_accuracy_budget.assert_against_contract`), the scalar binop
+#: driver, the unary step-budget drivers, and the exhaustive unary sweep's emit and gate
+#: -- and their rows were measured that way. Also the ``--ulp-report``/``--ulp-measure``
+#: reading of a tolerance cell in ``passed_test``, so that figure is the one its gate
+#: would see if enrolled.
+FLUSH_SUBNORMAL_OUTPUTS = True
+
 # ttnn's sanity ceiling: 2**mantissa_bits is exactly one binade, so a budget past it says
 # the two values are more than a factor of two apart in the normal range -- at which point
 # ULP has stopped being the right metric and the op belongs on the tolerance one.

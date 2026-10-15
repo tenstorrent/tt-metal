@@ -20,7 +20,7 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "chunk_gdn_math.hpp"
 
 namespace {
