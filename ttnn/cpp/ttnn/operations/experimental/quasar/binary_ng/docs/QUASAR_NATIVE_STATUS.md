@@ -17,6 +17,75 @@ simulator (~15 s/run, deterministic) with no transfer latency and no contention 
 happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
 less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
 
+# ► Week of 2026-10-12 — F2: subtract, multiply and divide run native, on a native SFPU kernel
+
+## 1. TL;DR
+
+- **The native gate admits bf16 `subtract`, `multiply` and `divide`** besides `add`, in every layout mix the
+  native path takes. The Metal 2.0 factory already ran them.
+- **`multiply` and `divide` needed a native SFPU kernel.** In this op bf16 `multiply` and `divide` run the SFPU
+  kernel unless fast and approximate mode is on. `kernels_qsr/` gains the SFPU compute kernel and its preprocess
+  helper: the Metal 2.0 ones, with a share per compute thread, the compute batch and the tail rings, as the
+  native FPU kernel has. `divide` in fast and approximate mode is a reciprocal pass on b before an FPU multiply,
+  an activation chain, and stays on the Metal 2.0 factory. F5 is now fp32 only (dchen).
+- **The SFPU rule batch is 4.** The SFPU kernel holds each tile in two DST slots, so 4 tiles fill the DST in
+  bf16. The legacy binary_ng runs it at 2, because 4 fails on Blackhole for a reason not yet known; on craq-sim
+  4 is exact at ring stride 1. A set `TTNN_QSR_TILES_PER_CYCLE` above 4 is refused for it.
+- **craq-sim moved to `b9d8e2f4`**, the tip of its `quasar` branch on 2026-10-14. `divide` executes SFPGT, which
+  the earlier build `ad401613` did not decode, so the whole process aborted there; craq-sim decodes it since its
+  #360. The new divide cases fail on `ad401613` and pass on `b9d8e2f4`.
+- **Exact oracles, measured on craq-sim**: the FPU kernel rounds to nearest even (`subtract`, fast `multiply`);
+  the SFPU multiply truncates the fp32 product to bf16, and a zero product is +0.0; `divide` rounds to nearest
+  even, and a zero quotient is +0.0.
+- **Verified** on craq-sim `b9d8e2f4`, at the SFPU batch of 4, with the activation change on top, which changes no
+  program without an activation: the native module 156 passed, 1 skipped, 7 strict expected failures with exact
+  tile counts; 1 / 164 native off; 84 of 84 suite cases at the rule with compute batch 1 and at `1,1,1`, bf16
+  divide among them; clang-tidy 0 findings.
+- **Found on `ad401613`: four planted +0.0 pairs in one tile hang the SFPU multiply**, on both factories. Single
+  zero operands, and -0.0 operands, run. `b9d8e2f4` runs the pairs too, and every such product is +0.0.
+
+---
+
+## 2. Changes
+
+- **Gate** (`matches_quasar_native_slice`): ADD, SUB, MUL and DIV; the SFPU kernel for MUL and DIV; DIV in fast
+  and approximate mode is refused.
+- **Rule** (`resolve_native_config`): `NativeMoves::sfpu`; the SFPU compute batch is `kNativeSfpuMaxTilesPerCycle`
+  (4). The settings line names it.
+- **Factory**: the host precondition admits the SFPU kernel; a set batch above 4 is refused for it.
+- **Kernels**: `kernels_qsr/compute/eltwise_binary_sfpu_no_bcast_dfb.cpp` and `eltwise_utils_sfpu_dfb.hpp`. The
+  DataflowBuffer objects live in `kernel_main` and are passed by reference, as on main since #60207.
+- **Tests**: an `op` option in the arm child (subtract, multiply, fast multiply, divide), with each kernel's
+  rounding as the oracle; the prediction model gives the SFPU its batch of 4.
+
+---
+
+## 3. Verification
+
+- **The oracles**, on the Metal 2.0 factory with the device's operands, 32 tiles, two seeds: `subtract` and
+  fast `multiply` match round to nearest even on 32768 of 32768 elements, and `multiply` matches truncation on
+  32768 of 32768; the other rule differs on 8811 to 15427 of them. Planted zeros of both signs: every zero
+  product is +0.0, on the native and on the Metal 2.0 factory.
+- **The divide oracle**, native at compute batch 1: round to nearest even on 32768 of 32768 elements, for randn
+  divisors and for divisors of 0.5 to 2; truncation misses half of them. A zero quotient is +0.0: 32768 of 32768
+  with RELU zeros in a and with planted ±0.0 in a.
+- **The new tests**: 8 mixes and `B.B.B_partial` for each op, exact in five configurations; under the rule a
+  strict expected failure with every count as predicted, `B.B.B_partial` included (192 wrong tiles for the
+  SFPU batch of 4 and for the FPU batch of 8; a batch of 2 leaves 128). The tail rings: exact in four
+  configurations; at `1,1,1` `height_5` runs a batch of 4 and a short one. The guard: a set batch of 8 for
+  `multiply` is refused with its own message.
+- **The native module**, on `b9d8e2f4`, at the SFPU batch of 4 and with the activation change on top: 156 passed,
+  1 skipped, 7 strict expected failures; native off 1 passed, 163 skipped. The tests of this change alone: 22
+  passed, 1 strict expected failure. On `ad401613` the divide cases abort the simulator on SFPGT.
+- **The suites** (`no_bcast`, `resnet_add`, `descriptor_cache_hit`, native on): 84 of 84 at the rule with compute
+  batch 1, 84 of 84 at `1,1,1`, the bf16 divide and lhs RELU cases included. fp32 stays deselected: on
+  `b9d8e2f4` it runs but gives a wrong output. The cases that the native gate refuses run on the Metal 2.0
+  factory, which hangs on this base when a core makes several calls, so the suites ran with main's fixed
+  `kernels_dfb` copied in.
+- **clang-tidy**: 0 findings on the factory, the utils and the device operation.
+
+---
+
 # ► Week of 2026-10-05, part 5 — F4 on the new main: rings drain at kernel exit, and a new batch pattern
 
 ## 1. TL;DR

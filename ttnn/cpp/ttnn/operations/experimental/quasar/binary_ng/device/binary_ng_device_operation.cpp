@@ -638,9 +638,9 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
 
 bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // Narrower than matches_metal_v2_slice in op, dtype and broadcast, but it also admits DRAM shards.
-    // kernels_qsr/ holds only the four no-broadcast FPU sources, so every rejection below is also a
-    // precondition of create_no_bcast_artifacts.
+    // Narrower than matches_metal_v2_slice in op, dtype and broadcast, but it also admits DRAM shards. The broadcast
+    // and tensor-scalar rejections are also preconditions of create_no_bcast_artifacts, which asserts them. The others
+    // keep the slice to what has been validated on Quasar.
     const NativeTuning& tuning = native_tuning();
     // Cheapest possible check first: this predicate runs on EVERY dispatch, cache hits included.
     if (!tuning.enabled) {
@@ -661,14 +661,22 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (attributes.is_where_op || attributes.is_quant_op) {
         return false;
     }
-    // Implied by bf16 ADD, but asserted: the gate is the sole guarantor of the factory's precondition.
-    if (attributes.is_sfpu) {
-        return false;
-    }
     if (attributes.subtile_broadcast_type != SubtileBroadcastType::NONE) {
         return false;
     }
-    if (attributes.binary_op_type != BinaryOpType::ADD) {
+    // add and subtract run the FPU kernel. multiply and divide run the SFPU kernel, and multiply runs the FPU kernel
+    // in fast and approximate mode. The SFPU kernel runs no other op here: each needs its own validation on Quasar.
+    const BinaryOpType op_type = attributes.binary_op_type;
+    if (op_type != BinaryOpType::ADD && op_type != BinaryOpType::SUB && op_type != BinaryOpType::MUL &&
+        op_type != BinaryOpType::DIV) {
+        return false;
+    }
+    // Implied by bf16 below, but asserted.
+    if (attributes.is_sfpu && op_type != BinaryOpType::MUL && op_type != BinaryOpType::DIV) {
+        return false;
+    }
+    // Divide in fast and approximate mode is a reciprocal pass on b before an FPU multiply: an activation chain.
+    if (!attributes.is_sfpu && op_type == BinaryOpType::DIV) {
         return false;
     }
     // Each activation adds a self-loop DFB whose multi-thread behaviour is unproven.

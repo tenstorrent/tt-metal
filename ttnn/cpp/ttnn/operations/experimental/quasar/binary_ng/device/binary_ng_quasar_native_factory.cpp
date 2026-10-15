@@ -11,18 +11,9 @@
 // kernel paths point at kernels_qsr/ except kComputeIncludeCommon (a shared third tree); and a local
 // ProgramSpecFactoryConcept static_assert so a declaration slip blames this file.
 //
-// Reachable only via matches_quasar_native_slice (needs TTNN_QSR_NATIVE). Only that slice's four
-// kernels were copied, so the bcast/scalar/SFPU sources named below point at files absent from
-// kernels_qsr/ -- deliberate; see the note above select_dfb_kernel_sources.
-//
-// Source blobs. `git rev-parse HEAD:<path>` is NOT sufficient for the two DM kernels: they carried
-// uncommitted instrumentation in the worktree copied from, so worktree= is authoritative.
-//   binary_ng_metal_v2_factory.cpp        a408b467b0b8f7d171c080e1b05f0ba8b700842c
-//   kernels_dfb/dataflow/reader_no_bcast_dfb.cpp   b83178421a46df8245b488c675859462d7022717 (worktree)
-//   kernels_dfb/dataflow/writer_no_bcast_dfb.cpp   a697a76af899ee405956ee65344a36679b5c1a7a (worktree)
-//   kernels_dfb/compute/eltwise_binary_no_bcast_dfb.cpp  76a1164705d8c6c145b05a284aa66c31991e0b85
-//   kernels_dfb/compute/eltwise_utils_dfb.hpp     ae2189c8429528b4a88c8220afc0e267b8c0d1ac
-// (recorded 2026-08-21 at repo HEAD 0cf20188874)
+// Reachable only via matches_quasar_native_slice (needs TTNN_QSR_NATIVE). Only that slice's kernels were
+// copied (the no-broadcast reader, writer, and FPU and SFPU compute), so the bcast/scalar sources named below
+// point at files absent from kernels_qsr/ -- deliberate; see the note above select_dfb_kernel_sources.
 //
 // --- inherited description of the original follows ---
 //
@@ -216,8 +207,8 @@ struct DfbKernelSources {
     const char* compute = nullptr;
 };
 
-// IMPORTANT for this (native) copy: only the NONE + FPU arm is reachable. matches_quasar_native_slice
-// admits no subtile broadcast and no SFPU op, and only the four no-broadcast FPU kernels were copied
+// IMPORTANT for this (native) copy: only the NONE arm is reachable, with the FPU or the SFPU compute.
+// matches_quasar_native_slice admits no subtile broadcast, and only the no-broadcast kernels were copied
 // into kernels_qsr/, so every literal returned by the other arms names a file that does not exist in
 // that tree. That is DELIBERATE: widening the gate without first copying those kernels then fails loudly
 // at JIT naming exactly the file that was forgotten, instead of silently succeeding on non-native
@@ -623,17 +614,16 @@ ProgramArtifacts create_no_bcast_artifacts(
     TT_FATAL(
         !is_scalar || op.scalar.has_value(),
         "binary_ng Quasar-native no-bcast factory tensor-scalar path requires a scalar value");
-    // The kernels_qsr/ tree holds ONLY the four no-broadcast FPU tensor-tensor sources. Turning the
-    // dangling bcast/scalar/SFPU path literals from a JIT "file not found" into a named host-side
+    // The kernels_qsr/ tree holds ONLY the no-broadcast tensor-tensor sources, with the FPU and the SFPU compute.
+    // Turning the dangling bcast/scalar path literals from a JIT "file not found" into a named host-side
     // precondition: fires before any JIT work and says what to do about it. This mirrors
     // matches_quasar_native_slice, which is the only admitting caller.
     TT_FATAL(
-        op.subtile_broadcast_type == SubtileBroadcastType::NONE && !op.is_sfpu && !is_scalar,
-        "ProgramFactoryQuasarNative supports only the no-broadcast FPU tensor-tensor path; kernels_qsr/ "
-        "holds no bcast/scalar/SFPU sources. Copy them before widening matches_quasar_native_slice. Got "
-        "subtile_broadcast_type={}, is_sfpu={}, is_scalar={}",
+        op.subtile_broadcast_type == SubtileBroadcastType::NONE && !is_scalar,
+        "ProgramFactoryQuasarNative supports only the no-broadcast tensor-tensor path; kernels_qsr/ "
+        "holds no bcast/scalar sources. Copy them before widening matches_quasar_native_slice. Got "
+        "subtile_broadcast_type={}, is_scalar={}",
         static_cast<int>(op.subtile_broadcast_type),
-        op.is_sfpu,
         is_scalar);
     const std::optional<Tensor>& b_opt = tensor_args.input_tensor_b;
 
@@ -671,17 +661,18 @@ ProgramArtifacts create_no_bcast_artifacts(
     // anchor's tile count divides. The rule does not batch beside a DRAM operand.
     const auto in_dram = [](const Tensor& tensor) { return tensor.memory_config().buffer_type() == BufferType::DRAM; };
     const bool any_dram = in_dram(a) || (!is_scalar && in_dram(*b_opt)) || in_dram(c);
-    const NativeConfig cfg =
-        resolve_native_config(t, {.inputs = !a_borrowed || !b_borrowed, .output = !c_borrowed, .dram = any_dram});
+    const NativeConfig cfg = resolve_native_config(
+        t, {.inputs = !a_borrowed || !b_borrowed, .output = !c_borrowed, .dram = any_dram, .sfpu = is_sfpu});
     const uint32_t reader_threads = cfg.reader_threads;
     const uint32_t writer_threads = cfg.writer_threads;
     // A borrowed ring must divide by the compute count, so, until the DFB can give each tile counter its own
     // capacity, the tiles past its largest multiple go through three owned tail rings of one entry per compute
     // thread. A shard smaller than the count has no borrowed ring: all of it uses the tail rings. The tail rings
     // run only with all three operands borrowed; otherwise the anchor is borrowed only when the count divides.
-    // The tail rings are temporary. When the DFB gives each tile counter its own capacity, remove them: the tail
-    // DFBs, TAIL_TILES, HAS_MAIN_RING and the tail blocks of the three kernels. The reader's publish and the compute
-    // already take uneven shares. The divisibility checks in select_borrow_anchor come from the same DFB rule.
+    // The tail rings are temporary. When the DFB gives each tile counter its own capacity, remove them: the tail DFBs,
+    // TAIL_TILES, HAS_MAIN_RING and the tail blocks of the reader, the writer and both compute kernels. The reader's
+    // publish and the compute already take uneven shares. The divisibility checks in select_borrow_anchor come from the
+    // same DFB rule.
     const uint32_t tail_tiles = borrow_all ? borrowed_tiles % compute_threads : 0u;
     const bool has_main_ring = !borrow_all || borrowed_tiles > tail_tiles;
     if (anchor.kind != AnchorKind::kNone) {
@@ -816,6 +807,12 @@ ProgramArtifacts create_no_bcast_artifacts(
     // c_main_tiles of it, and the tail rings the rest.
     const uint32_t c_main_tiles = borrowed_tiles - tail_tiles;
     const uint32_t num_tiles_per_cycle = cfg.tiles_per_cycle;
+    // The SFPU kernel runs at most kNativeSfpuMaxTilesPerCycle tiles per batch, so a larger set batch is refused.
+    TT_FATAL(
+        !is_sfpu || num_tiles_per_cycle <= kNativeSfpuMaxTilesPerCycle,
+        "binary_ng Quasar-native: tiles_per_cycle={} exceeds {}, the most the SFPU kernel runs",
+        describe_native_value(t.tiles_per_cycle, num_tiles_per_cycle),
+        kNativeSfpuMaxTilesPerCycle);
     // Capacity rules for the NoC rings; the borrowed path builds none. reserve_back(n) and wait_front(n)
     // cannot complete if n exceeds a thread's capacity, entries_per_thread, and the ring must hold two batches
     // for double buffering, so check here rather than let the op hang. A batch occupies n consecutive slots

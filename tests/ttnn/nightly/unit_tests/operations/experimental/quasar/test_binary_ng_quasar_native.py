@@ -67,6 +67,8 @@ def _native_enabled():
 # prediction disagrees with the device is how a change on either side shows up.
 _RULE_COMPUTE_THREADS = 4
 _RULE_TILES_PER_CYCLE = 8
+# The SFPU kernel's rule batch is 4: it holds a tile in two DST slots, so 4 tiles fill the DST in bf16.
+_RULE_SFPU_TILES_PER_CYCLE = 4
 _USER_DM_CORES = 6
 
 # The worker clusters of the simulator's 8x4 grid, which every test here assumes.
@@ -81,12 +83,13 @@ _NOC_DRAM = (True, True, True)
 _BORROWED = (False, False, False)
 
 
-def _resolve(knobs, path):
+def _resolve(knobs, path, sfpu=False):
     """(R, C, W, compute batch) of a program run with `knobs`, a mapping of TTNN_QSR_* names to values.
 
     `path` is _NOC_L1, _NOC_DRAM, _BORROWED or one from _path. A borrowed pair of inputs or a borrowed output
-    runs one reader or writer thread whatever is set. Beside a DRAM operand the rule batches nothing. An empty
-    value counts as unset, as in native_tuning().
+    runs one reader or writer thread whatever is set. Beside a DRAM operand the rule batches nothing. `sfpu` is
+    True for an op on the SFPU kernel, whose rule batch is smaller. An empty value counts as unset, as in
+    native_tuning().
     """
     inputs_move, output_moves, dram = path
 
@@ -97,7 +100,7 @@ def _resolve(knobs, path):
     c = knob("TTNN_QSR_COMPUTE_THREADS", _RULE_COMPUTE_THREADS)
     r = knob("TTNN_QSR_READER_THREADS", c) if inputs_move else 1
     w = knob("TTNN_QSR_WRITER_THREADS", min(c, max(1, _USER_DM_CORES - r))) if output_moves else 1
-    rule_batch = 1 if dram else _RULE_TILES_PER_CYCLE
+    rule_batch = 1 if dram else (_RULE_SFPU_TILES_PER_CYCLE if sfpu else _RULE_TILES_PER_CYCLE)
     batch = knob("TTNN_QSR_TILES_PER_CYCLE", rule_batch if r <= c and w <= c else 1)
     return r, c, w, batch
 
@@ -114,7 +117,7 @@ def _route(case, knobs):
     return r + w, len(split)
 
 
-def _batched_wrong_tiles(tiles_per_cluster, knobs, path):
+def _batched_wrong_tiles(tiles_per_cluster, knobs, path, sfpu=False):
     """The output tiles that compute batching leaves wrong.
 
     tiles_per_cluster lists each cluster's tile count. Above output ring stride 1 (stride max(C, W)), only one
@@ -124,7 +127,7 @@ def _batched_wrong_tiles(tiles_per_cluster, knobs, path):
     tiles through the tail rings, which this does not model; test_native_prediction_tables_cover_their_cases
     keeps such shards out of the predicted cases.
     """
-    _, c, w, batch = _resolve(knobs, path)
+    _, c, w, batch = _resolve(knobs, path, sfpu)
     if max(c, w) == 1:
         return 0
     landed = 0
@@ -656,6 +659,13 @@ _GUARD_ARMS = [
         {"TTNN_QSR_READER_THREADS": "6"},
         "R + W must be <= 6 (Quasar has 6 user DM cores), got R=6 (TTNN_QSR_READER_THREADS) + W=1 (rule)",
     ),
+    (
+        # The SFPU kernel runs at most 4 tiles per compute batch, so a set batch of 8 is refused for multiply.
+        "sfpu-batch",
+        {"TTNN_QSR_TILES_PER_CYCLE": "8"},
+        "tiles_per_cycle=8 (TTNN_QSR_TILES_PER_CYCLE) exceeds 4, the most the SFPU kernel runs",
+        [("dram_128/multiply", "dram", None, None, (4 * 32, 32 * 32), {"op": "multiply"})],
+    ),
 ]
 
 
@@ -786,6 +796,11 @@ def _shard_cores(entry):
     return (x1 - x0 + 1) * (y1 - y0 + 1)
 
 
+def _runs_sfpu(entry):
+    """True when the op of a _SHARD_ARM_SRC entry runs the SFPU kernel: multiply out of its fast mode, or divide."""
+    return (entry[5] if len(entry) > 5 else {}).get("op") in ("multiply", "divide")
+
+
 def _expect_wrong(cases, knobs):
     """The prediction of each case that `knobs` leaves wrong: {name: wrong output tiles}.
 
@@ -793,7 +808,7 @@ def _expect_wrong(cases, knobs):
     output; a case with pad slots must predict no wrong tile in any configuration.
     test_native_prediction_tables_cover_their_cases checks both.
     """
-    predicted = {entry[0]: _batched_wrong_tiles(split, knobs, path) for entry, path, split in cases}
+    predicted = {entry[0]: _batched_wrong_tiles(split, knobs, path, _runs_sfpu(entry)) for entry, path, split in cases}
     return {name: wrong for name, wrong in predicted.items() if wrong > 0}
 
 
@@ -811,8 +826,9 @@ def _config_params(configs, cases):
 # strategies "dram_height", "dram_width" and "dram_block" shard it over all DRAM banks, and then the range
 # is None. A shard entry may carry a sixth element, a dict of options: "out" gives the output its own
 # placement (otherwise it takes the inputs'), "b" does the same for b, "output_tensor" supplies a
-# preallocated output with its own placement, "in_place" adds b into a with add_, and "grid" (x0, y0, x1, y1)
-# runs the op on that sub-core grid. "out" may also be None, so that the op derives the output's memory config,
+# preallocated output with its own placement, "in_place" adds b into a with add_, "grid" (x0, y0, x1, y1)
+# runs the op on that sub-core grid, and "op" runs "subtract", "multiply", "divide" or "multiply_fast" (multiply in fast
+# and approximate mode) instead of add. "out" may also be None, so that the op derives the output's memory config,
 # or "height_specless", an L1 height-sharded config without a shard spec, which the op completes; then
 # "resolved_out" names the placement the output must take. A placement in an option may add a fourth element,
 # "col", for column-major shard order. An entry's tensors stay alive to the end when a later entry repeats its spec, so
@@ -839,6 +855,33 @@ DRAM_SHARDED = {"dram_height": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 "dram_width": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 "dram_block": ttnn.TensorMemoryLayout.BLOCK_SHARDED}
 root = pathlib.Path(os.environ.get("TT_METAL_LOGS_PATH") or os.environ.get("TT_METAL_HOME") or os.getcwd())
+
+
+def round_to_bf16(x):
+    return x.to(torch.bfloat16)
+
+
+def truncate_to_bf16(x):
+    # Quasar's SFPU multiply drops the low 16 bits of the fp32 result today, where the Wormhole and Blackhole LLKs
+    # round to nearest even, and a zero product comes out as +0.0: adding 0.0 turns -0.0 into +0.0 and keeps every
+    # other value.
+    return ((x.contiguous().view(torch.int32) & -65536).view(torch.float32) + 0.0).to(torch.bfloat16)
+
+
+def round_to_bf16_zero_positive(x):
+    # Quasar's SFPU divide rounds to nearest even, and a zero quotient comes out as +0.0, as a zero product does.
+    return (x.to(torch.bfloat16).float() + 0.0).to(torch.bfloat16)
+
+
+# op -> (the op, its extra arguments, the exact result, the kernel's rounding of it to bf16). The FPU kernel
+# rounds to nearest even. The SFPU kernel runs multiply out of fast mode, which truncates, and divide, which
+# rounds to nearest even.
+OPS = {"add": (ttnn.experimental.quasar.add, {}, torch.add, round_to_bf16),
+       "subtract": (ttnn.experimental.quasar.subtract, {}, torch.subtract, round_to_bf16),
+       "multiply": (ttnn.experimental.quasar.multiply, {}, torch.multiply, truncate_to_bf16),
+       "multiply_fast": (ttnn.experimental.quasar.multiply, {"fast_and_approximate_mode": True}, torch.multiply,
+                         round_to_bf16),
+       "divide": (ttnn.experimental.quasar.divide, {}, torch.divide, round_to_bf16_zero_positive)}
 profile_csv = root / "generated" / "profiler" / ".logs" / "profile_log_device.csv"
 if (EXPECT_NEOS or EXPECT_DMS) and profile_csv.exists():
     profile_csv.unlink()
@@ -884,13 +927,16 @@ try:
         cfg = dict(dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         ta = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), memory_config=mem, **cfg)
         tb = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), memory_config=b_mem, **cfg)
-        golden = (ttnn.to_torch(ta).float() + ttnn.to_torch(tb).float()).to(torch.bfloat16)
+        op_fn, op_extra, exact, rounding = OPS[opts.get("op", "add")]
+        golden = rounding(exact(ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float()))
         cached = device.num_program_cache_entries()
         op_kwargs = {}
         if "grid" in opts:
             x0, y0, x1, y1 = opts["grid"]
             op_kwargs["sub_core_grids"] = ttnn.CoreRangeSet({ttnn.CoreRange((x0, y0), (x1, y1))})
         if opts.get("in_place"):
+            if opts.get("op", "add") != "add":
+                failures.append("{}: in place runs add only".format(name))
             out = ttnn.experimental.quasar.add_(ta, tb)
         else:
             if "output_tensor" in opts:
@@ -898,7 +944,7 @@ try:
                     torch.zeros(shape), memory_config=memory_config(*opts["output_tensor"]), **cfg)
             if out_mem is not None:
                 op_kwargs["memory_config"] = out_mem
-            out = ttnn.experimental.quasar.add(ta, tb, dtype=ttnn.bfloat16, **op_kwargs)
+            out = op_fn(ta, tb, dtype=ttnn.bfloat16, **op_extra, **op_kwargs)
         if "resolved_out" in opts and out.memory_config() != memory_config(*opts["resolved_out"]):
             failures.append("{}: the output took {}".format(name, out.memory_config()))
         spec = json.dumps(entry[1:])
@@ -1673,6 +1719,71 @@ def test_native_mixed_layouts_match_the_prediction(name, knobs):
     _check_arm(p, f"mixed layouts, {name}", expect_wrong=_expect_wrong(_MIXED_CASES, knobs))
 
 
+# The ops other than add. subtract, and multiply in fast mode, run the FPU kernel, as add does; multiply and divide
+# run the SFPU kernel. Each op runs one mix of each kind: the output's shard walked by the reader, the inputs' shard
+# walked by the writer, the bank walk in the reader and in the writer, pad slots in the reader and in the writer, all
+# three borrowed as slices with partial tiles, all three borrowed as shards with 4 tiles per compute thread, and the
+# NoC path beside DRAM. Under the rule, the shards hold 4 tiles per compute thread, so their wrong-tile counts tell
+# the SFPU batch of 4 from a batch of 2.
+_OTHER_OPS = ("subtract", "multiply", "multiply_fast", "divide")
+_OP_MIXES = (
+    "I.I.W32",
+    "B32.B32.I",
+    "I.I.IL1",
+    "IL1.IL1.H",
+    "I.I.B32u",
+    "B32u.B32u.I",
+    "IL1.IL1.IL1_partial",
+    "B.B.B_partial",
+    "I.I.I_partial",
+)
+
+
+def _with_op(entry, op):
+    """A _SHARD_ARM_SRC entry that runs `op`, named after it."""
+    opts = entry[5] if len(entry) > 5 else {}
+    return (f"{entry[0]}/{op}", *entry[1:5], {**opts, "op": op})
+
+
+_OP_CASES = [
+    (_with_op(entry, op), path, split)
+    for op in _OTHER_OPS
+    for entry, path, split in _MIXED_CASES
+    if entry[0] in _OP_MIXES
+]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("name, knobs", _config_params(_MIXED_CONFIGS, _OP_CASES))
+def test_native_other_ops_match_the_prediction(name, knobs):
+    """subtract, multiply and divide must run native in every kind of mix and give the predicted output.
+
+    The oracle is the exact result as the kernel rounds it: to nearest even on the FPU kernel and for divide, by
+    truncation for the SFPU multiply. A wrong op define or a wrong DST slot fails the comparison, which is exact.
+    """
+    p = _run_shard_arm([case[0] for case in _OP_CASES], expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"subtract, multiply and divide, {name}", expect_wrong=_expect_wrong(_OP_CASES, knobs))
+
+
+# Borrowed shards that 4 does not divide, so that their last tiles go through the tail rings: block_6 has a
+# borrowed part and a tail, height1 only a tail. At 1,1,1 height_5 runs a full SFPU batch and a short one.
+_OP_TAIL_SHARDS = [
+    _with_op(entry, op)
+    for op in _OTHER_OPS
+    for entry in _SMALL_SHARDS
+    if entry[0] in ("block_6", "height1", "height_5")
+]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("name, knobs", list(_BORROWED_CONFIGS_C2.items()), ids=list(_BORROWED_CONFIGS_C2))
+def test_native_other_ops_on_the_tail_rings_are_bit_exact(name, knobs):
+    """subtract, multiply and divide must stay native and exact where a shard's last tiles go through the tail
+    rings."""
+    p = _run_shard_arm(_OP_TAIL_SHARDS, expect="qsr", timeout=900, knobs=knobs)
+    _check_arm(p, f"subtract, multiply and divide on the tail rings, {name}")
+
+
 # One case per child, as above, and one case of each kind of anchor and walk. The thread counts tell the
 # programs apart where the clusters do not, as both bind the same kernel sources.
 _MIXED_ROUTED = (
@@ -1798,6 +1909,7 @@ _DRAM_SHAPE = "an operand is in DRAM"
 _OUTPUT_SHAPE = "the output is borrowed and an input moves"
 _INPUTS_SHAPE = "the inputs are borrowed and the output moves"
 _ALL_SHAPE = "all of them are borrowed"
+_SFPU_SHAPE = "the SFPU kernel runs, all in L1 over the NoC"
 _LOG_CASES = {
     "W1-n1": (
         {"TTNN_QSR_WRITER_THREADS": "1", **_COMPUTE_BATCH_1},
@@ -1814,6 +1926,7 @@ _LOG_CASES = {
             _OUTPUT_SHAPE: ["R=4 (rule) W=1 tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
             _INPUTS_SHAPE: ["R=1 W=1 (TTNN_QSR_WRITER_THREADS) tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
+            _SFPU_SHAPE: ["tiles_per_cycle=1 (TTNN_QSR_TILES_PER_CYCLE)"],
         },
         True,
     ),
@@ -1825,6 +1938,7 @@ _LOG_CASES = {
             _OUTPUT_SHAPE: ["R=1 (rule) W=1 tiles_per_cycle=8 (rule)"],
             _INPUTS_SHAPE: ["R=1 W=1 (rule) tiles_per_cycle=8 (rule)"],
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=8 (rule)"],
+            _SFPU_SHAPE: ["tiles_per_cycle=4 (rule)"],
         },
         True,
     ),
@@ -1841,6 +1955,7 @@ _LOG_CASES = {
             _OUTPUT_SHAPE: ["R=2 (TTNN_QSR_READER_THREADS) W=1 tiles_per_cycle=1 (rule)"],
             _INPUTS_SHAPE: ["R=1 W=1 (rule) tiles_per_cycle=8 (rule)"],
             _ALL_SHAPE: ["R=1 W=1 tiles_per_cycle=8 (rule)"],
+            _SFPU_SHAPE: ["tiles_per_cycle=1 (rule)"],
         },
         False,
     ),
@@ -1901,6 +2016,13 @@ def test_native_prediction_tables_cover_their_cases():
     cases += [case for case in _MIXED_CASES if case not in padded]
     inexact = [case[0][0] for case in padded for knobs in _MIXED_CONFIGS.values() if _expect_wrong([case], knobs)]
     assert not inexact, f"these cases with pad slots have a wrong-tile prediction: {inexact}"
+    # The op table reuses mixed placements, with the SFPU kernel's own batch, so the same rules hold for it.
+    op_padded = [case for case in _OP_CASES if case[0][0].split("/")[0] in _MIXED_PAD_SLOTS]
+    op_inexact = [case[0][0] for case in op_padded for knobs in _MIXED_CONFIGS.values() if _expect_wrong([case], knobs)]
+    assert not op_inexact, f"these op cases with pad slots have a wrong-tile prediction: {op_inexact}"
+    missing_ops = set(_OP_MIXES) - {case[0][0].split("/")[0] for case in _OP_CASES}
+    assert not missing_ops, f"these op mixes are not in the mixed table: {missing_ops}"
+    cases += [case for case in _OP_CASES if case not in op_padded]
     # In place, a wrong-tile prediction is not verified above a batch of 1: a batch may read other threads'
     # slots, which in place hold their results, not their inputs.
     in_place = [case for case in _MIXED_CASES if len(case[0]) > 5 and case[0][5].get("in_place")]
