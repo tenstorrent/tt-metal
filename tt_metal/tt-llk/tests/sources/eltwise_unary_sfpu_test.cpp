@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Shared unary SFPU kernel for functional, perf, and accuracy.
-// Tile loop is TILE_CNT in dest-sized chunks with LOOP_FACTOR and PERF_RUN_TYPE
-// isolate/congestion zones. Functional/accuracy use L1_TO_L1 and LOOP_FACTOR=1.
+// Unary SFPU kernel shared by the functional, perf and accuracy tests.
 
 #include <algorithm>
 #include <cstdint>
@@ -24,7 +22,7 @@
 std::uint32_t unp_cfg_context                          = 0;
 std::uint32_t pack_sync_tile_dst_ptr                   = 0;
 std::uint32_t math_sync_tile_dst_index                 = 0;
-static constexpr std::uint32_t MAX_TILES_DEST          = is_fp32_dest_acc_en ? 4 : 8;
+static constexpr std::uint32_t MAX_TILES_DEST          = ckernel::get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, ckernel::DstTileShape::Tile32x32>();
 static constexpr ckernel::BroadcastType BROADCAST_TYPE = ckernel::BroadcastType::NONE;
 
 #ifdef LLK_TRISC_UNPACK
@@ -57,8 +55,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
 
-        // acc_to_dest must be false to allow unpack_to_dest (the static assert in
-        // llk_unpack_A forbids both together) — matches the functional kernel.
+        // llk_unpack_A forbids acc_to_dest together with unpack_to_dest.
         _llk_unpack_A_init_<BROADCAST_TYPE, false, reuse_dest_type, unpack_to_dest>(
             UNPACK_TRANSPOSE_FACES,
             UNPACK_TRANSPOSE_WITHIN_FACE,
@@ -72,15 +69,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // In case of math isolate, we don't want any software synchronization from unpack to math.
-            // So we just set/clear valid bits here - which is unavoidable hardware synchronization.
-            // When unpack_to_dest is used, we assume the data is immediately ready in destination register.
-            // Otherwise, we assume the data is immediately ready in source A/B registers.
-            if (!unpack_to_dest)
+            // Only the hardware valid handshake; with unpack_to_dest the data is taken as already in Dest.
+            if constexpr (!unpack_to_dest)
             {
-                // Set valid for source A always.
-                // Set valid for source B only if dest_acc is enabled.
-                // Works only when unpacking to dest is not used.
                 _perf_unpack_loop_set_valid<
                     /* src A */ true,
                     /* src B */ is_fp32_dest_acc_en>(
