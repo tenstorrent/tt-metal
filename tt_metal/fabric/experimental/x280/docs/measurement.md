@@ -362,10 +362,9 @@ Metal's unicast writes use; it is not confirmed on silicon.
 Each benchmark prepares its own device state: the harness boots resident idle on
 a chip whose L2CPUs are all held in reset, at the default 15-way LIM or the
 14-way shape the pipeline and PacketInjection members request, and the
-pipeline_stage suite prepares and tears down its pinned input only on a tile its
-own process booted. Resets between them are explicit operator actions: a chip
-left at 14 ways skips the 15-way members, and each pipeline_stage configuration
-needs a reset before it runs. The runner never resets a device.
+pipeline_stage members have the runtime prepare their pinned input once per
+reset. Resets between them are explicit operator actions: a chip left at 14
+ways skips the 15-way members. The runner never resets a device.
 
 `tools/run_characterization.py` accepts explicit `--id` selections, build/firmware/
 Metal paths, visible device, campaign directory and an optional `--host-label`

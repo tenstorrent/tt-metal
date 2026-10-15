@@ -196,10 +196,9 @@ matching input bytes nor mask readback proves fresh cache placement for the
 reserved addresses, so the runtime records preparation in the tile's 64 B
 general-purpose scratch (`0x2001_0100`), which survives Metal and runtime opens
 and is cleared by an ASIC reset (observed; the hardware documentation gives no
-reset value). An empty record shows that `X280Tile::prepare_pinned_input` has
-not run since the reset; it does not show that nothing else cached those
-addresses, which exclusive ownership covers. The pipeline_stage suite prepares
-without the record, below.
+reset value). An empty record shows that no preparation has run since the
+reset; it does not show that nothing else cached those addresses, which
+exclusive ownership covers.
 
 Prime, open and boot as in "Using the X280 runtime", opening with
 `LimEccPrimingPolicy::RequirePrepared` and `LimShape{14}` so shape provisioning
@@ -222,18 +221,9 @@ record. Run the compatible pipeline configurations on the prepared tile.
 Concurrent calls on one tile in one process are serialised; nothing serialises
 across processes.
 
-The pipeline_stage suite does not call `prepare_pinned_input`: it runs the
-prepare and teardown images itself, each as an active image on a tile in
-confirmed healthy resident idle with no other session live, and writes no
-record. In each pipeline executable the first device case prepares the session
-tile, the cases run sequentially on it, and the suite tears down after its last
-case, whatever the cases' outcomes. Because fresh placement cannot be read back,
-the suite prepares only on a tile its own process booted from reset-held; on a
-tile it found already running, every device case skips naming `tt-smi -r`. So
-each pipeline executable runs after an ASIC reset of its device. The images
-default to the build's; `X280_PINNED_INPUT_PREPARE_FW_IMAGE` and
-`X280_PINNED_INPUT_TEARDOWN_FW_IMAGE` name others. Each call site fixes its
-operation, so a default cannot select the opposite one.
+The pipeline_stage suite calls `prepare_pinned_input` before every device case,
+so its executables run in any order and any number of times within one reset
+([pipeline_stage.md](benchmarks/pipeline_stage.md#suite-prepared-input-x280-only)).
 
 ID 7 uses the first 96-byte header in this region at `0x0A000AC0`. Its
 `decide_plain` configuration reseeds that complete header before warmup; it
@@ -255,20 +245,16 @@ Both pipeline executables always require this prepared profile. The latency
 members and both transport-bandwidth executables run at the reset shape, so a
 chip left at 14 LIM ways skips them until an ASIC reset.
 
-The runtime has no teardown: an ASIC reset (`tt-smi -r <device>`) clears the
-pinning, the 14-way partition and the record together. Do not run cache-flush,
-repartition, ECC-priming, or conflicting Zero Device experiments inside this
-prepared sequence.
+There is no teardown: an ASIC reset (`tt-smi -r <device>`) clears the pinning,
+the 14-way partition and the record together. Do not run cache-flush, repartition, ECC-priming, or
+conflicting Zero Device experiments inside this prepared sequence.
 
 A preparation that fails after its image may have run, including a failed
 cleanup or a process crash, leaves the aborted record, and every later
-`prepare_pinned_input` returns `ResetRequired` until an ASIC reset. In the suite,
-a failed preparation or teardown, an unconfirmed cleanup, or a process crash
-aborts the prepared sequence: the failing case fails, every later case of that
-process fails naming the abort, no teardown runs, and the device is reset and
-prepared again before reuse. Closing a benchmark process neither unpins the
-region nor preserves a device lock for the next executable; only the suite's
-teardown or an ASIC reset unpins it.
+`prepare_pinned_input` returns `ResetRequired` until an ASIC reset, so in the
+suite the failing case fails and every later case skips. Closing a benchmark
+process neither unpins the region nor preserves a device lock for the next
+executable.
 
 ## Runtime ownership
 

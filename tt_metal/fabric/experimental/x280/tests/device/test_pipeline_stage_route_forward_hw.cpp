@@ -18,7 +18,7 @@ namespace {
 
 namespace suite = x280::suites::pipeline_stage::route_forward;
 
-class PipelineStageRouteForward : public x280::suites::pipeline_stage::pinned_input::EpochRunner<suite::Axis> {
+class PipelineStageRouteForward : public x280::suites::pipeline_stage::pinned_input::PreparedInputRunner<suite::Axis> {
 protected:
     x280::harness::RunSpec make_spec() override {
         return x280::harness::RunSpec{

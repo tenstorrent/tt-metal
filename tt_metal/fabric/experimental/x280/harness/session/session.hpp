@@ -106,9 +106,6 @@ struct Fixture {
      * the tile whose PLL was set and confirmed on that chip. `tile_id` is
      * chip 0's. */
     std::vector<x280::TileId> chip_tiles;
-    /** The tiles this open booted from reset-held, in tile_ids() order; empty
-     * when every chip already had a tile out of reset. */
-    std::vector<x280::TileId> booted;
 
     uint32_t pll_mhz = 0;
 
@@ -146,13 +143,11 @@ struct Fixture {
  * "firmware-lim-idle.bin"). Reset release is one-way for the chip-reset
  * lifetime and leaves PLL4 at the safe release frequency.
  *
- * Appends each tile of a batch that came up ready to `booted`. Records against
- * the running test: a skip when a tile needs an ASIC reset first, a fatal
- * failure for any other refusal. The caller checks IsSkipped() and
- * HasFatalFailure().
+ * Records against the running test: a skip when a tile needs an ASIC reset
+ * first, a fatal failure for any other refusal. The caller checks
+ * IsSkipped() and HasFatalFailure().
  */
-inline void boot_held_chips(
-    x280::X280Runtime& runtime, const std::vector<x280::TileId>& ids, std::vector<x280::TileId>& booted) {
+inline void boot_held_chips(x280::X280Runtime& runtime, const std::vector<x280::TileId>& ids) {
     std::vector<int> chips;
     for (const auto& id : ids) {
         if (std::find(chips.begin(), chips.end(), id.chip_id) == chips.end()) {
@@ -178,7 +173,6 @@ inline void boot_held_chips(
         request.allow_reset_release = true;
         const auto result = runtime.boot_tiles(request);
         if (result.ready()) {
-            booted.insert(booted.end(), request.tiles.begin(), request.tiles.end());
             continue;
         }
         for (const auto& report : result.tiles) {
@@ -246,7 +240,7 @@ inline void open_or_skip(Fixture& f, const OpenConfig& cfg) {
     if (ids.empty()) {
         GTEST_SKIP() << "no enabled X280 tiles";
     }
-    boot_held_chips(*f.runtime, ids, f.booted);
+    boot_held_chips(*f.runtime, ids);
     if (::testing::Test::IsSkipped() || ::testing::Test::HasFatalFailure()) {
         return;
     }

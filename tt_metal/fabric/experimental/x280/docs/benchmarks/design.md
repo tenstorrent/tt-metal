@@ -121,10 +121,11 @@ configuration. A case may still launch multiple participants when that
 concurrency is part of the experiment.
 
 Platform state explicitly prepared for a compatible sequence may outlive one
-invocation. The fixed pinned pipeline input is such a state: external exclusive
-ownership spans preparation, every sequential case, and final teardown, while
-each case still performs its ordinary STOP and window cleanup. A case does not
-restore the shared cache policy when it closes.
+invocation. The fixed pinned pipeline input is such a state: it is prepared once
+per ASIC-reset lifetime and lasts until the next reset, external exclusive
+ownership spans that lifetime, and each case still performs its ordinary STOP
+and window cleanup. A case does not restore the shared cache policy when it
+closes.
 
 A named sweep expands to an ordered list of exact configurations before the
 runner is called:
@@ -1477,14 +1478,13 @@ It requires the exact 14-LIM-way shape with way 1 pinned and way 0 retained for
 general cache use. All masters keep active replacement bits `01` while the
 compatible sequence runs.
 
-Preparation and final teardown are suite operations outside the case lifetime:
-each pipeline executable prepares before its first device case and tears down
-after its last. Ownership and fresh-placement provenance are prerequisites the
-suite cannot establish; it prepares only on a tile its own process booted from
-reset-held, so each executable runs after an ASIC reset. Between cases
-there is no cache flush, `WAYENABLE` change, mask change, repinning, allocation,
-or restoration. A failed setup, crash, or unconfirmed participant cleanup ends
-the prepared sequence.
+Preparation is a runtime operation outside the case lifetime: every device case
+asks the runtime to prepare, which prepares once per ASIC reset and records it,
+so later cases and executables reuse the region. There is no teardown; the next
+ASIC reset ends the prepared sequence. Ownership is a prerequisite the suite
+cannot establish. Between cases there is no cache flush, `WAYENABLE` change,
+mask change, repinning, allocation, or restoration. A failed preparation
+leaves the record aborted, and every later case skips until a reset.
 
 Both pipeline executables require `LimShape{14}` with `RequireExact`. Latency
 members and both bandwidth executables run at the reset shape.

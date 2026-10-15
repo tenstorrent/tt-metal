@@ -170,27 +170,25 @@ The required prepared profile is:
 | Prepared active mask bits | `0b01` for every master |
 | Population owner | native hart 0, cache master 34 |
 
-Preparation is one operation before the compatible sequence, and teardown is
-one operation after every participant is confirmed idle. Each pipeline
-executable runs both itself (`tests/device/suites/pipeline_stage/pinned_input.hpp`):
-the first device case prepares the session tile, and the suite tears it down
-after its last case, whatever the cases' outcomes.
+Preparation is one operation before the compatible sequence, run by the
+runtime (`X280Tile::prepare_pinned_input`, [runtime.md](../runtime.md#prepared-pipeline-inputs-x280-only)).
+Every device case of both pipeline executables calls it on the session tile
+(`tests/device/suites/pipeline_stage/pinned_input.hpp`): the first call after an
+ASIC reset prepares and records the region in the tile's scratch, and every
+later call, in this or a later executable, returns `AlreadyPrepared`. A case
+skips on `WrongShape` or `ResetRequired` and fails on any other outcome. There
+is no teardown; an ASIC reset clears the region and the record.
 
-Neither operation can establish exclusive ownership or prove fresh line
-placement. The operator must own the device for the executable's run. The
-suite prepares only on a tile its own process booted from reset-held, so the
-reserved addresses cannot have stale copies in another way; on a tile it found
-already running, every device case skips naming `tt-smi -r`. Each pipeline
-executable therefore runs after an ASIC reset.
+Preparation cannot establish exclusive ownership. The operator must own the
+device from preparation until the next reset. The record shows whether
+preparation ran since the reset; it cannot show that nothing else cached the
+reserved addresses.
 
-Preparation and teardown are separate build artifacts compiled from the same
-source. The build supplies exactly one mandatory compile-time operation define
-to each artifact; the source rejects neither or both. Their CLI flags and
-environment overrides (`X280_PINNED_INPUT_{PREPARE,TEARDOWN}_FW_IMAGE`) and
-build defaults are also separate and fixed by the call site, so a default
-cannot select the opposite operation; the selected path is still trusted and
-the host rejects a mismatched operation result. `ninja x280_images` builds
-them.
+The prepare image is compiled with exactly one mandatory operation define; the
+source rejects none or more than one. The suite takes the image from the build
+or from `X280_PINNED_INPUT_PREPARE_FW_IMAGE`; the selected path is still trusted
+and the runtime rejects a mismatched operation result. `ninja x280_images`
+builds it.
 
 Preparation places all 67 cache lines in way 1, then removes way 1 from all 38
 masters' replacement masks. Compatible cases keep those masks fixed. They may
@@ -212,11 +210,8 @@ mask. The refusal publishes `verify_sentinel` as
 `0xB000 | ((code & 0xFF) << 8) | (master_id & 0xFF)`, the full master ID in
 `workload_size`, and the full observed register in `secondary_batch_delta`.
 
-Final teardown re-enables only way 1's replacement bit for every master and
-verifies the admitted baseline. It does not flush the region or change
-`WAYENABLE`; the device remains at 14 LIM ways. A failed preparation, process
-crash, or unconfirmed participant cleanup ends the prepared epoch and requires
-explicit recovery before reuse. Normal case STOP/ACK/IDLE still runs on every
+A failed preparation leaves the record aborted, and the region is unusable
+until an ASIC reset. Normal case STOP/ACK/IDLE still runs on every
 configuration.
 
 ## Arguments

@@ -614,13 +614,12 @@ a mismatch before ECC priming or shape application. It does not pin cache ways
 or establish retained Zero Device storage. Unreadable shape observations are
 refused without attempting PLL recovery.
 
-The pipeline group uses a prepared cache policy within each executable. The
-pipeline_stage suite's preparation places the fixed 4288-byte Zero Device
-region into way 1 and pins it before the first device case; its final teardown
-re-enables that way only after confirmed resident idle, after the last case.
-Both operations require the 14-LIM-way partition and operator-owned exclusive
-use of the device; preparation runs only on a tile the same process booted
-from reset-held, its fresh-placement provenance. See
+The pipeline group uses a prepared cache policy for an ASIC-reset lifetime.
+Before each device case the pipeline_stage suite has the runtime prepare the
+fixed 4288-byte Zero Device region, placing it into way 1 and pinning it; the
+runtime does so once per reset and returns `AlreadyPrepared` afterwards.
+Preparation requires the 14-LIM-way partition and operator-owned exclusive use
+of the device until the next reset. See
 [`runtime.md` / Prepared pipeline inputs](runtime.md#prepared-pipeline-inputs-x280-only).
 
 `RunSpec`'s `session::OpenConfig` marks whether the prepared profile is
@@ -631,9 +630,9 @@ Each case still opens and closes its ordinary
 MeshDevice/runtime and performs normal active-session and NoC-window cleanup.
 Case boundaries do not change cache masks, invalidate the reserved region, or
 release a cached-input lease. Process-local runtime ownership does not span
-executables: external exclusive ownership must cover preparation through final
-teardown. Failed preparation or unconfirmed cleanup aborts the prepared sequence,
-with no automatic cache-state recovery.
+executables: external exclusive ownership must cover preparation through the
+next reset. Failed preparation aborts the prepared sequence until a reset, with
+no automatic cache-state recovery.
 
 The current component reservation requires at least ten LIM ways.
 WayEnable is increase-only, so a shape that expands LIM returns

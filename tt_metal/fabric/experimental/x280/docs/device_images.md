@@ -199,7 +199,7 @@ Built by `ninja -C build x280_images` ([README](../README.md#2-build-boot-and-ru
 |---|---|---|
 | `firmware-lim-idle.bin` | `src/lim_idle.c` | resident idle, the runtime prerequisite |
 | `firmware.bin` | `src/main.c` | active session success image (the sentinel) |
-| `firmware-pinned-input-prepare.bin` | `src/x280_pinned_input.c` | pinned-input preparation, run by `X280Tile::prepare_pinned_input` and by the pipeline_stage suite ([runtime.md](runtime.md#prepared-pipeline-inputs-x280-only)) |
+| `firmware-pinned-input-prepare.bin` | `src/x280_pinned_input.c` | pinned-input preparation, run by `X280Tile::prepare_pinned_input` ([runtime.md](runtime.md#prepared-pipeline-inputs-x280-only)) |
 | `firmware-atomic-bench.bin` | `src/atomic_bench.c` | cross-hart atomics micro-benchmark (§ Cross-hart atomics micro-benchmark); in the active-image contract set |
 | `firmware-active-session-fault.bin` | `src/active_session_fault.c` | traps and CEASEs hart 2, for `x280_active_failure_test` only |
 | `firmware-transport-bandwidth-x280-to-tensix.bin` | `src/transport_bandwidth_x280_to_tensix.cpp` | X280 -> Tensix member of transport_bandwidth, run by `x280_transport_bandwidth_x280_to_tensix`; the Tensix -> X280 member (`x280_transport_bandwidth_tensix_to_x280`) submits no X280 image |

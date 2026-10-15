@@ -698,8 +698,7 @@
         "PIPELINE_STAGE_W": "128",
         "PIPELINE_STAGE_N": "16384",
         "X280_PIPELINE_STAGE_ROUTE_COMPUTE_FW_IMAGE": "${FW_BUILD}/firmware-pipeline-stage-route-compute.bin",
-        "X280_PINNED_INPUT_PREPARE_FW_IMAGE": "${FW_BUILD}/firmware-pinned-input-prepare.bin",
-        "X280_PINNED_INPUT_TEARDOWN_FW_IMAGE": "${FW_BUILD}/firmware-pinned-input-teardown.bin"
+        "X280_PINNED_INPUT_PREPARE_FW_IMAGE": "${FW_BUILD}/firmware-pinned-input-prepare.bin"
       }
     },
     {
@@ -713,8 +712,7 @@
         "PIPELINE_STAGE_W": "128",
         "PIPELINE_STAGE_N": "4096",
         "X280_PIPELINE_STAGE_ROUTE_COMPUTE_FW_IMAGE": "${FW_BUILD}/firmware-pipeline-stage-route-compute.bin",
-        "X280_PINNED_INPUT_PREPARE_FW_IMAGE": "${FW_BUILD}/firmware-pinned-input-prepare.bin",
-        "X280_PINNED_INPUT_TEARDOWN_FW_IMAGE": "${FW_BUILD}/firmware-pinned-input-teardown.bin"
+        "X280_PINNED_INPUT_PREPARE_FW_IMAGE": "${FW_BUILD}/firmware-pinned-input-prepare.bin"
       }
     },
     {
@@ -728,8 +726,7 @@
         "PIPELINE_STAGE_W": "128",
         "PIPELINE_STAGE_N": "16384",
         "X280_PIPELINE_STAGE_ROUTE_FORWARD_FW_IMAGE": "${FW_BUILD}/firmware-pipeline-stage-route-forward.bin",
-        "X280_PINNED_INPUT_PREPARE_FW_IMAGE": "${FW_BUILD}/firmware-pinned-input-prepare.bin",
-        "X280_PINNED_INPUT_TEARDOWN_FW_IMAGE": "${FW_BUILD}/firmware-pinned-input-teardown.bin"
+        "X280_PINNED_INPUT_PREPARE_FW_IMAGE": "${FW_BUILD}/firmware-pinned-input-prepare.bin"
       }
     },
     {
