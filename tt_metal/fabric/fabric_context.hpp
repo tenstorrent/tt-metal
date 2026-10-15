@@ -73,6 +73,12 @@ public:
     tt::tt_fabric::Topology get_fabric_topology() const { return topology_; }
     bool is_2D_routing_enabled() const { return is_2D_routing_enabled_; }
     bool is_bubble_flow_control_enabled() const { return bubble_flow_control_enabled_; }
+    // Per-mesh variant: decide bubble flow control from the node's OWN resolved fabric_config rather
+    // than the single process-wide topology_. A mesh that runs a ring/torus (e.g. a per-mesh TORUS_X
+    // mesh) needs the bubble even when the fabric was opened under a Mesh/global config; the global
+    // bubble_flow_control_enabled_ drops it. For a uniform single-config run this equals the global
+    // value, so behaviour is preserved.
+    bool is_bubble_flow_control_enabled(const FabricNodeId& fabric_node_id) const;
     // Whether a router on this axis needs protected (bubble) flow control compiled in.
     //
     // Express meshes derive it from whether the axis actually carries protected rings, since express
