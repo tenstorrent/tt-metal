@@ -191,15 +191,16 @@ def choose_grid(gx, gy, block_m, block_n, L):
     return best[1]
 
 
-def footprint(kb, resident, *, Kt, core_m, core_n, tA, tW, scatter_dim, slots):
-    """Per matmul core L1 bytes (l1_ledger.md): operand windows + fp32 hold + the staging slice."""
+def footprint(kb, resident, *, Kt, core_m, core_n, tA, tW, scatter_dim, slots, staging_floor_tiles=0):
+    """Per matmul core L1 bytes (l1_ledger.md): operand windows + fp32 hold + the staging slice. The staging tensor is
+    cached grow-only per mesh, so it is counted at max(what this call needs, what is already allocated)."""
     P = core_m * core_n
     rA = resident and scatter_dim == -1
     rW = resident and scatter_dim == -2
     a = tA * (core_m * Kt if rA else DEPTH_IN0 * core_m * kb)
     w = tW * (Kt * core_n if rW else DEPTH_IN1 * kb * core_n)
     hold = HOLD_TILE_BYTES * DEPTH_HOLD * P
-    staging = STAGE_TILE_BYTES * (DEPTH_HANDOFF + slots["fwd"] + slots["bwd"]) * P
+    staging = STAGE_TILE_BYTES * max(staging_floor_tiles, (DEPTH_HANDOFF + slots["fwd"] + slots["bwd"]) * P)
     return a + w + hold + staging
 
 
@@ -296,7 +297,8 @@ def _mesh_resources(mesh, staging_tiles):
 
 
 def _l1_budget(mesh):
-    return int(ttnn.get_max_worker_l1_unreserved_size()) - L1_HEADROOM
+    """L1_bank_size - allocator base - headroom: the allocatable L1 region of a worker core minus L1_HEADROOM."""
+    return int(ttnn._ttnn.reports.get_device_info(mesh).l1_bank_size) - L1_HEADROOM
 
 
 # ======================================================================================================================
@@ -401,7 +403,17 @@ def run(a, w, *, cluster_axis, scatter_dim, topology, num_links, compute_kernel_
     chips_sched, slots = plan_transport(G, kind)
     tA = int(a.buffer_aligned_page_size())
     tW = int(w.buffer_aligned_page_size())
-    geo = dict(core_m=core_m, core_n=core_n, tA=tA, tW=tW, scatter_dim=scatter_dim, slots=slots)
+    cached = _MESH_CACHE.get(id(mesh))
+    staging_floor = cached["staging_tiles"] if cached is not None and cached["mesh"] is mesh else 0
+    geo = dict(
+        core_m=core_m,
+        core_n=core_n,
+        tA=tA,
+        tW=tW,
+        scatter_dim=scatter_dim,
+        slots=slots,
+        staging_floor_tiles=staging_floor,
+    )
     resident, kb = choose_k_block(Kt, _l1_budget(mesh), getattr(hooks, "_FORCE_XBLOCK_RESIDENCY", None), **geo)
     hooks._LAST_PLAN = {
         "xblock": "resident" if resident else "stream",
