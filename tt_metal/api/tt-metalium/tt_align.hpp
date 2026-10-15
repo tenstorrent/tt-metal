@@ -9,9 +9,8 @@
  * @brief Round integer addresses, offsets, and sizes up to power-of-two alignment boundaries.
  */
 
+#include <cassert>
 #include <type_traits>
-
-#include <tt_stl/assert.hpp>
 
 namespace tt {
 
@@ -35,15 +34,14 @@ namespace tt {
  * @return The smallest multiple of alignment greater than or equal to addr, as
  *         std::common_type_t<T1, T2>.
  * @pre The rounded result must be representable in the return type; overflow is not checked.
- * @note TT_ASSERT checks the alignment precondition when DEBUG is defined. Callers must
- *       satisfy it in release builds too. Valid calls can be evaluated at compile time.
+ * @note assert checks the alignment precondition when NDEBUG is not defined. Callers must
+ *       satisfy it when assertions are disabled too. Valid calls can be evaluated at compile time.
  */
 template <typename T1, typename T2>
 constexpr std::common_type_t<T1, T2> align(T1 addr, T2 alignment) {
     static_assert(std::is_integral_v<T1>, "align() requires integral types");
     static_assert(std::is_integral_v<T2>, "align() requires integral types");
-    TT_ASSERT(
-        alignment > 0 && (alignment & (alignment - 1)) == 0, "align() requires a positive power of two alignment");
+    assert(alignment > 0 && (alignment & (alignment - 1)) == 0 && "align() requires a positive power of two alignment");
     using T = std::common_type_t<T1, T2>;
     return ((static_cast<T>(addr) - 1) | (static_cast<T>(alignment) - 1)) + 1;
 }

@@ -4,12 +4,11 @@
 
 #include <tt-metalium/tt_align.hpp>
 
+#include <csignal>
 #include <cstdint>
 #include <limits>
-#include <stdexcept>
 #include <type_traits>
 
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 namespace {
@@ -58,21 +57,22 @@ TEST(Align, SupportsConstantEvaluationAndPreservesReturnType) {
     static_assert(std::is_same_v<decltype(tt::align(1, 16)), int>);
 }
 
-#ifdef DEBUG
-TEST(Align, RejectsNonPowerOfTwoAlignment) {
-    EXPECT_THAT(
-        [] { (void)tt::align(17u, 6u); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("positive power of two")));
+#ifndef NDEBUG
+TEST(AlignDeathTest, RejectsNonPowerOfTwoAlignment) {
+    EXPECT_EXIT((void)tt::align(17u, 6u), ::testing::KilledBySignal(SIGABRT), "positive power of two alignment");
 }
 
-TEST(Align, RejectsZeroAlignment) {
-    EXPECT_THROW((void)tt::align(17u, 0u), std::runtime_error);
-    EXPECT_THROW((void)tt::align(0, 0), std::runtime_error);
+TEST(AlignDeathTest, RejectsZeroAlignment) {
+    EXPECT_EXIT((void)tt::align(17u, 0u), ::testing::KilledBySignal(SIGABRT), "positive power of two alignment");
+    EXPECT_EXIT((void)tt::align(0, 0), ::testing::KilledBySignal(SIGABRT), "positive power of two alignment");
 }
 
-TEST(Align, RejectsNegativeAlignmentBeforeUnsignedConversion) {
-    EXPECT_THROW((void)tt::align(17u, -8), std::runtime_error);
-    EXPECT_THROW((void)tt::align(uint32_t{17}, std::numeric_limits<int32_t>::min()), std::runtime_error);
+TEST(AlignDeathTest, RejectsNegativeAlignmentBeforeUnsignedConversion) {
+    EXPECT_EXIT((void)tt::align(17u, -8), ::testing::KilledBySignal(SIGABRT), "positive power of two alignment");
+    EXPECT_EXIT(
+        (void)tt::align(uint32_t{17}, std::numeric_limits<int32_t>::min()),
+        ::testing::KilledBySignal(SIGABRT),
+        "positive power of two alignment");
 }
 #endif
 
