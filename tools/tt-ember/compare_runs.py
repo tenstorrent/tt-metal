@@ -12,7 +12,7 @@ Usage:
     python3 compare_runs.py --out-root out/ --filter prefill --output-dir out/comparison
 
     # Specific runs
-    python3 compare_runs.py --out-root out/ --filter prefill_2048 fixed_power_sweep
+    python3 compare_runs.py --out-root out/ --filter prefill_ fixed_tpc_
 """
 
 import argparse

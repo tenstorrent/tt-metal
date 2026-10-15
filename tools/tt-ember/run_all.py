@@ -39,9 +39,9 @@ FIXED_TPC_RUNS: List[RunSpec] = [
 def check_pending_runs(all_runs: List[RunSpec], output_root: Path) -> List[RunSpec]:
     pending: List[RunSpec] = []
     for spec in all_runs:
-        run_dir = output_root / spec.subdir
-        if run_dir.exists():
-            print(f"[SKIP] '{spec.subdir}' already exists. Skipping.", flush=True)
+        # Only a run that got as far as program_intervals.csv counts as done.
+        if (output_root / spec.subdir / "program_intervals.csv").is_file():
+            print(f"[SKIP] '{spec.subdir}' already has results. Skipping.", flush=True)
         else:
             pending.append(spec)
     return pending
@@ -54,8 +54,8 @@ def check_pending_comparisons(
 ) -> List[tuple]:
     pending = []
 
-    prefill_complete = all((output_root / s.subdir).exists() for s in prefill_runs)
-    fixed_complete = all((output_root / s.subdir).exists() for s in fixed_runs)
+    prefill_complete = all((output_root / s.subdir / "program_intervals.csv").is_file() for s in prefill_runs)
+    fixed_complete = all((output_root / s.subdir / "program_intervals.csv").is_file() for s in fixed_runs)
 
     comp_prefill_dir = output_root / "comparison_prefill"
     comp_fixed_dir = output_root / "comparison_fixed_tpc"

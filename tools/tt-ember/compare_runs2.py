@@ -14,7 +14,7 @@ Usage:
 line):
     Case 1: compute_idle : Compute disabled
     Case 2: reader_idle2 : Reader Idle
-    Case 3: regular : Writer idle
+    Case 3: writer_idle : Writer idle
     Case 4: writer_amp : W+R+C active
 
 Each "subdir_name" must be a subdirectory of <dir_with_run_subdirs> containing a

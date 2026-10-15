@@ -24,13 +24,13 @@ auto.py (orchestrator)
   └── invokes parser.py, passing --device-profiler-csv if the file exists
 
 parser.py (analysis engine)
-  ├── existing: telemetry.txt + summary.txt -> program_intervals.csv + Figures/*.png
-  └── new: + profile_log_device.csv -> kernel_intervals.csv, kernel_utilization.csv,
-           FiguresNew/*.png
+  ├── telemetry.txt + summary.txt -> program_intervals.csv + Figures/*.png
+  └── with --device-profiler-csv: + profile_log_device.csv -> kernel_intervals.csv,
+      kernel_utilization.csv, FiguresNew/*.png
 ```
 
-Nothing about the *existing* telemetry-only analysis changed — if you don't pass
-`--device-profiler-csv` (or the app didn't produce one), `parser.py` behaves exactly as before.
+Without `--device-profiler-csv` (or when the app didn't produce one), only the telemetry outputs
+are written.
 
 ## 3. Device-side markers (what the kernels emit)
 
@@ -40,7 +40,7 @@ invocation (not per-iteration — see §7 for why):
 | Kernel  | Markers | "Wait" = blocked in... | "Active" = time in... |
 |---------|---------|-------------------------|------------------------|
 | Reader  | `READER_KERNEL_START/END`, `READER_WAIT_CYCLES`, `READER_TRANSFER_CYCLES` | `cb_reserve_back` (input CB full) | `noc_async_read_page` + barrier |
-| Compute | `COMPUTE_KERNEL_START/END`, `COMPUTE_WAIT_CYCLES`, `COMPUTE_COMPUTE_CYCLES` (once **per TRISC** — 3x per core) | TRISC0: `cb_wait_front` (no input yet); TRISC1: `tile_regs_acquire` (DEST still being packed); TRISC2: `tile_regs_wait` + `cb_reserve_back` (math not done, output CB full) | TRISC1: the math loop; TRISC2: `pack_tile`; TRISC0: the unpacker blocking inside `matmul_tiles` / `copy_tile` |
+| Compute | `COMPUTE_KERNEL_START/END`, `COMPUTE_WAIT_CYCLES`, `COMPUTE_COMPUTE_CYCLES` (once **per TRISC** — 3x per core) | TRISC0: `cb_wait_front` (no input yet); TRISC1: `tile_regs_acquire` (DEST still being packed); TRISC2: `tile_regs_wait` + `cb_reserve_back` (math not done, output CB full) | TRISC1: the math loop; TRISC2: `pack_tile`; TRISC0: the unpacker blocking inside `matmul_tiles` / `add_tiles` / `copy_tile` |
 | Writer  | `WRITER_KERNEL_START/END`, `WRITER_WAIT_CYCLES`, `WRITER_TRANSFER_CYCLES` | `cb_wait_front` (no output tile yet) | `noc_async_write_page` + barrier |
 
 Source: `tt_metal/programming_examples/long_matmul/kernels/{dataflow,compute}/*.cpp` and
@@ -49,8 +49,9 @@ Source: `tt_metal/programming_examples/long_matmul/kernels/{dataflow,compute}/*.
 `generated/profiler/.logs/profile_log_device.csv`. The timestamp reads are compiled in only when
 the profiler is on, so power runs without it execute the same instructions.
 
-**Compute runs on 3 separate physical cores** (TRISC0=unpack, TRISC1=math, TRISC2=pack) — the
-*same* C++ source is compiled 3 times, and tt-metal's own profiler tags each marker with which
+**Compute runs on three RISC-V processors in each Tensix core** (TRISC0=unpack, TRISC1=math,
+TRISC2=pack); the reader and writer run on the core's two data-movement RISCs. The *same* compute
+source is compiled 3 times, and tt-metal's own profiler tags each marker with which
 one recorded it (the `RISC processor type` column). Only TRISC1 calls `matmul_tiles`; the three
 roles have very different wait/active profiles and must **not** be averaged together (see §6).
 
@@ -65,11 +66,11 @@ to wall-clock time itself, from each grid's printed start/end times, so
 
 | Argument | Meaning |
 |---|---|
-| `--device-profiler-csv PATH` | Path to `profile_log_device.csv`. When given together with `--program-log`, enables everything in this document. |
-| `--kernel-csv PATH` | Optional override for the *old* collapsed per-kernel CSV output path (default `<output>/<subdir>/kernel_intervals.csv`). |
+| `--device-profiler-csv PATH` | Path to `profile_log_device.csv`. Requires `--program-log`; enables everything in this document. |
+| `--kernel-csv PATH` | Optional override for the collapsed per-kernel CSV output path (default `<output>/<subdir>/kernel_intervals.csv`). |
 
 The other arguments (`-i`, `-o`, `--subdir`, `--program-log`, `--slot-ms`, `--trim-ms`,
-`--device-id`, `--dpi`, `--program-csv`) are the same as for the telemetry-only analysis.
+`--settle-max-ms`, `--device-id`, `--dpi`, `--program-csv`) are the same as for the telemetry-only analysis.
 
 ### 4.2 Outputs
 
@@ -92,7 +93,7 @@ Written to `<output-root>/<subdir>/` alongside the existing `program_intervals.c
   - `compute_unpack_utilization.png`, `compute_math_utilization.png`, `compute_pack_utilization.png` — same, but **one file per TRISC role** (never blended — see §6).
   - `combined_utilization_pct.png` / `combined_utilization_seconds.png` — Reader / Compute(TRISC1-math) / Writer **side by side** on one chart, active+overhead+wait stacked. The seconds version adds a 4th "Run duration" reference bar per grid (§8).
 
-### 4.3 Key functions (if you need to modify this further)
+### 4.3 Key functions
 
 | Function | Purpose |
 |---|---|
@@ -111,8 +112,7 @@ Written to `<output-root>/<subdir>/` alongside the existing `program_intervals.c
 
 ## 6. Why compute has 3 separate charts, and why they can't be summed
 
-`compute.cpp` is compiled once but **runs independently on 3 physical cores**
-(TRISC0/1/2). Each has its own 100% (its own lifetime), and they overlap in wall-clock time
+`compute.cpp` runs independently on the three TRISCs of each core. Each has its own 100% (its own lifetime), and they overlap in wall-clock time
 rather than partitioning it, so their percentages cannot be summed. Measured on Wormhole n150,
 `POWER_CASE=1`, `1024 2048 2048 20`, 1x1 blocking, grids 3x2 to 8x8:
 
@@ -123,7 +123,7 @@ rather than partitioning it, so their percentages cannot be summed. Measured on 
 | TRISC2 (pack) | 87–98 | ~0.1 | Packs FPU results back into the output CB; mostly waits for the writer to free it |
 
 Same logic applies across kernels: reader/compute/writer run **concurrently** on separate
-cores for virtually the entire grid run (tightly coupled via the depth-2 circular buffers), so
+processors for virtually the entire grid run (tightly coupled via the depth-2 circular buffers), so
 their wait/active percentages are each "% of *that kernel's own* lifetime" — not one shared
 100% budget.
 
@@ -147,8 +147,8 @@ exact by construction, since `lifetime_s` (from `KERNEL_START`/`KERNEL_END`) and
 Each TRISC times the blocking calls it actually executes (`cb_wait_front` only runs on TRISC0,
 `tile_regs_acquire` on TRISC1, `tile_regs_wait` and `cb_reserve_back` on TRISC2), so the
 writer's back-pressure shows up as TRISC2 wait rather than overhead. With
-`LONG_MATMUL_DISABLE_COMPUTE=1` (§9) TRISC1 and TRISC2 have no active time, and their
-overhead grows. "Overhead" is a catch-all for "everything not named wait or active," not a
+`LONG_MATMUL_DISABLE_COMPUTE=1` (§9) TRISC1 and TRISC2 have almost no active time (in
+`updated` mode they still compute the first two blocks), and their overhead grows. "Overhead" is a catch-all for "everything not named wait or active," not a
 claim about *why* that time is spent.
 
 Two details worth knowing if you change this code:
@@ -173,8 +173,8 @@ own active+overhead+wait stacks should exceed this reference — if one does, so
 `POWER_CASE`, `LONG_MATMUL_DISABLE_*`, write amplification, output blocking and
 `LONG_MATMUL_OP` change what the kernels *do*; they are documented in
 [`long_matmul`'s README](../../../tt_metal/programming_examples/long_matmul/README.md#power-experiment-knobs).
-With `LONG_MATMUL_DISABLE_COMPUTE=1` the compute kernel's active time drops to zero and its
-overhead grows (see §7).
+With `LONG_MATMUL_DISABLE_COMPUTE=1` the compute kernel's active time drops to near zero (in
+`updated` mode it still computes the first two blocks) and its overhead grows (see §7).
 
 ## 10. Full example: one complete run with everything on
 

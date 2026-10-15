@@ -6,9 +6,8 @@
 """
 Top-level driver for the POWER_CASE power-experiment sweep.
 
-For each requested POWER_CASE value (see the "POWER_CASE Power-Experiment Scenarios" section
-in README.md, and tt_metal/programming_examples/long_matmul/README.md for what each case
-actually disables/amplifies in the kernels), and for each requested --ops entry (which per-tile
+For each requested POWER_CASE value (see tt_metal/programming_examples/long_matmul/README.md for
+what each case disables or amplifies in the kernels), and for each requested --ops entry (which per-tile
 FPU instruction the compute kernel runs, via LONG_MATMUL_OP -- see compute.cpp), this script:
 
   1. Resets the hardware (`tt-smi -r`) and waits for it to re-initialize.
@@ -65,8 +64,7 @@ import numpy as np
 
 RESET_COOLDOWN_S = 10
 
-# POWER_CASE -> (subdir name, legend label). See README.md's "POWER_CASE Power-Experiment
-# Scenarios" section for the full rationale behind each scenario. Case 3 (reader AND compute
+# POWER_CASE -> (subdir name, legend label). See long_matmul's README for what each case does. Case 3 (reader AND compute
 # both idle) is not in the default sweep below -- it's a two-variable case, and the four
 # single-variable ablations already isolate each engine's own contribution to dynamic power.
 # Case 5 (LONG_MATMUL_DISABLE_WRITER) is the writer's idle case, symmetric with case 2 (compute idle)
@@ -91,8 +89,8 @@ POWER_CASE_SPECS: Dict[int, Tuple[str, str]] = {
 # sides, so (case 1 - case X) isolates engine X's own contribution to dynamic power.
 DEFAULT_POWER_CASES: List[int] = [5, 1, 2, 4]
 
-# Which per-tile FPU instruction the compute kernel runs (LONG_MATMUL_OP, see compute.cpp's
-# USE_ADD / USE_SILU / USE_EXP / USE_SIGMOID / USE_GELU / USE_RECIP / MATMUL_FNN_DN). The full
+# Which per-tile instruction the compute kernel runs (LONG_MATMUL_OP, see long_matmul's
+# kernels/compute/compute.cpp). The full
 # POWER_CASE sweep runs once per entry here, into its own <output-root>/<op>/ subtree, so the
 # operations can be compared like-for-like. Each op/case directory is skipped individually if
 # it already exists (see the run loop below), so re-running after adding new ops only measures
@@ -676,7 +674,7 @@ def plot_cross_op_energy_per_flop_by_engine_stacked(
         out_path,
         dpi,
         ylabel="Energy per FLOP [pJ]",
-        title="Energy per FLOP by engine",
+        title="Energy per FLOP by engine (matmul's 2*M*N*K FLOPs for every op)",
         value_unit="pJ/FLOP",
     )
 
@@ -792,7 +790,10 @@ def plot_total_energy_per_flop_by_op(
     ax.set_xticklabels(grids, rotation=45, ha="right")
     ax.set_xlabel("Grid size (core combination)")
     ax.set_ylabel("Total energy per FLOP [pJ]")
-    ax.set_title(f"Total energy per FLOP, per op ({' vs '.join(ops_with_data)}), all-active case")
+    ax.set_title(
+        f"Total energy per FLOP, per op ({' vs '.join(ops_with_data)}), all-active case\n"
+        "every op divided by matmul's 2*M*N*K FLOPs, so this compares energy at equal data movement"
+    )
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
@@ -897,9 +898,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     args = ap.parse_args(argv)
+    # --app-args takes everything after it; refuse options of this script written after it.
+    misplaced = [a for a in args.app_args if a.split("=", 1)[0] in ap._option_string_actions]
+    if misplaced:
+        ap.error(f"--app-args must come last; these options follow it: {' '.join(misplaced)}")
 
     output_root = args.output_root.expanduser().resolve()
-    output_root.mkdir(parents=True, exist_ok=True)
+    if not args.dry_run:
+        output_root.mkdir(parents=True, exist_ok=True)
 
     cases_in_order: List[Tuple[str, str]] = [POWER_CASE_SPECS[i] for i in args.power_cases]
 
@@ -912,7 +918,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --app-args is M N K num_iterations [fixed_blocks_per_core]; the chart is skipped (with a
     # note) if fewer than 4 positional args were given.
     flops: Optional[float] = None
-    if len(args.app_args) >= 4:
+    if len(args.app_args) >= 5 and args.app_args[4] != "0":
+        # Fixed mode: total work grows with the core count, so one FLOP count per run is wrong.
+        print(
+            "[ENERGY/FLOP] note: fixed_blocks_per_core is set, so the FLOP count depends on the grid; "
+            "skipping the energy-per-FLOP charts",
+            flush=True,
+        )
+    elif len(args.app_args) >= 4:
         try:
             M, N, K, iters = (int(args.app_args[i]) for i in range(4))
             flops = 2.0 * M * N * K * iters
@@ -931,7 +944,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     for op in args.ops:
         op_output_root = output_root / op
-        op_output_root.mkdir(parents=True, exist_ok=True)
+        if not args.dry_run:
+            op_output_root.mkdir(parents=True, exist_ok=True)
 
         print(f"\n{'#' * 60}", flush=True)
         print(f" op={op} -> {op_output_root}", flush=True)
@@ -939,8 +953,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         for power_case, (subdir, label) in zip(args.power_cases, cases_in_order):
             run_dir = op_output_root / subdir
-            if run_dir.exists() and not args.force:
-                print(f"\n[SKIP] '{op}/{subdir}' already exists. Skipping (use --force to re-run).", flush=True)
+            # Only a run that got as far as program_intervals.csv counts as done; a run that failed
+            # part way leaves its directory behind and must be redone.
+            if (run_dir / "program_intervals.csv").is_file() and not args.force:
+                print(f"\n[SKIP] '{op}/{subdir}' already has results. Skipping (use --force to re-run).", flush=True)
                 continue
 
             rc = reset_hardware(args.tt_smi, args.dry_run)
@@ -977,7 +993,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return rc
 
         cases_file = op_output_root / args.cases_file_name
-        write_cases_file(cases_file, cases_in_order)
+        if not args.dry_run:
+            write_cases_file(cases_file, cases_in_order)
 
         rc = run_compare(args.compare_script, op_output_root, cases_file, args.dpi, args.dry_run)
         if rc != 0:
