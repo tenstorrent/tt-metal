@@ -27,6 +27,16 @@ _REPLAYS = {"checked": 0, "flagged": 0}
 
 def _report_only(cls, mesh_device, trace_id):
     _REPLAYS["checked"] += 1
+    # Cheap C++ pre-check before the full verify, which pays gc.collect() plus a referrer walk
+    # over every live frame on each flagged replay (~0.6 s/step with the LTX pipeline resident,
+    # job 132384). A replay whose live unsafe ids are all already reported counts as flagged
+    # without the diagnostics. Skipping also skips _ORIG's gc.collect(), so a buffer held only by
+    # a garbage cycle stays alive into the replay and may count as flagged where the post-gc
+    # verify would have passed.
+    live = _tat.get_unsafe_tracked_ids(mesh_device, trace_id)
+    if live and all(str(bid) in _SEEN for bid in live):
+        _REPLAYS["flagged"] += 1
+        return
     try:
         _ORIG(cls, mesh_device, trace_id)
     except RuntimeError as e:
