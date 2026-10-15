@@ -119,39 +119,40 @@ class Spec:
         self.raw = data
         self.data = _resolve(data)
         self.path = Path(path).resolve() if path else None
-        # The scaled run of a partial bring-up on a smaller box (BRINGUP_SCALED=1): the reduced checkpoint, its
-        # goldens and the deployment's context scaled to this box (plan/scale.py)
-        self.scaled = os.environ.get(SCALED_ENV) == "1" and self.has_deploy
+        # F75: a partial bring-up on a box with fewer chips than the deployment box IS the scaled model. The deployment
+        # box only gives the scale factors (the plan's roles, plan/boxes.py); once the plan exists, everything this
+        # box runs is scaled: the reduced checkpoint (plan/scale.py), its goldens, the chunk and context. There is no
+        # real-size track. BRINGUP_SCALED=0 forces the real checkpoint, for the steps that need it: the reference
+        # checks against the model's own code (R.*) and the plan's memory check (PL.*).
+        self.scaled = self.scaling and os.environ.get(SCALED_ENV) != "0" and (self.bringup_dir / "plan.yaml").exists()
         if self.scaled:
             self.data = self._scaled_view()
 
+    @property
+    def scaling(self) -> bool:
+        """A partial run on a box with fewer chips than the deployment box: this box runs the scaled model (F75)."""
+        if not self.has_deploy or self.mode != "partial" or not {self.run_box, self.deploy_box} <= set(self.boxes):
+            return False
+        run, dep = self.boxes[self.run_box]["mesh"], self.boxes[self.deploy_box]["mesh"]
+        return run[0] * run[1] < dep[0] * dep[1]
+
     def _scaled_view(self) -> dict:
+        """The spec as the scaled run sees it: its ladder and target are written in this box's units (the scaled
+        chunk); the chunk must be the deployment's chunk scaled to this box (plan/boxes.py context)."""
         from models.demos.common.bringup.plan.boxes import context
         from models.demos.common.bringup.plan.memory import load_plan
 
-        if self.mode != "partial":
-            raise SpecError("a scaled run is for partial mode (full mode runs the real model)")
         ctx = context(self, load_plan(self), self.run_box)
-        if not ctx["exact"]:
-            raise SpecError(
-                f"the scaled context {ctx} is not whole chunks of whole tiles: set scaled.ladder in the spec"
-            )
         data = dict(self.data)
-        data["target"] = {**(data.get("target") or {}), "seq": ctx["seq"], "chunk": ctx["chunk"]}
-        data["ladder"] = (self.raw.get("scaled") or {}).get("ladder") or [
-            {"name": "scaled", "seq": ctx["seq"], "chunk": ctx["chunk"]},
-            {
-                "name": "scaled_last",
-                "seq": ctx["seq"],
-                "chunk": ctx["chunk"],
-                "golden": "scaled",
-                "prefix_from_golden": True,
-            },
-        ]
-        data["perf"] = {k: v for k, v in (data.get("perf") or {}).items() if k != "rung"}
-        data["tests"] = {
-            k: v for k, v in (data.get("tests") or {}).items() if k not in ("component_rung", "component_chunk")
-        }
+        if (self.raw.get("scaled") or {}).get("ladder"):  # older specs (F64) kept a separate scaled ladder
+            data["ladder"] = self.raw["scaled"]["ladder"]
+        chunk = (data.get("target") or {}).get("chunk")
+        self.scaled_problem = (
+            f"target.chunk {chunk} is not this box's scaled chunk {ctx['chunk']} (the deployment chunk x the sequence "
+            "factor): on a smaller box everything runs scaled; write target and ladder in this box's units"
+            if ctx["exact"] and chunk != ctx["chunk"]
+            else None
+        )
         return data
 
     @classmethod
@@ -422,6 +423,8 @@ class Spec:
     def validate(self) -> list[str]:
         """Schema errors for a model spec (empty list = valid)."""
         errs = self._validate_boxes()
+        if getattr(self, "scaled_problem", None):  # F75: a scaled run is written in this box's units
+            errs.append(self.scaled_problem)
         if errs:
             return errs
         for k, t in REQUIRED.items():

@@ -1,13 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""The reduced checkpoint of a scaled run (F64): the model with fewer heads and experts, so that each chip of a smaller
-box holds what a chip of the deployment box holds.
+"""The scaled model's checkpoint (F64, F75): the model with fewer heads and experts, so that each chip of a smaller box
+holds what a chip of the deployment box holds.
 
     python -m models.demos.common.bringup.plan.scale --spec S
 
-A partial bring-up on a box smaller than the deployment box runs twice: at real size (accuracy) and scaled (the
-deployment's per-chip shapes and code paths, and per-chip performance that carries over). The scale factor of a role
+A partial bring-up on a box smaller than the deployment box runs the scaled model only (F75): its goldens, tests,
+ladder and profile all use this checkpoint; only the reference checks and the plan check read the real one. The
+scale factor of a role
 is the box's chips for that role over the deployment box's (plan/boxes.py, the plan's ``roles``). ``scaling.yaml``
 next to the plan (written with the plan; not part of the approved files, so the scale step may fix it) says how to cut:
 
