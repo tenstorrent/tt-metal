@@ -31,7 +31,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <future>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -1056,14 +1055,26 @@ void verify_stage_gate_lease_mode(
     h.send(/*slot=*/2, GateMode::CloseOnTransit);
     receiver->wait_for_fabric_links();
     sender->wait_for_fabric_links();
-    auto receiver_done = std::async(std::launch::async, [&] { Finish(receiver_cq); });
-    // Runs before receiver_done's destructor: if an assert below fails, let the held transfer
-    // through so the receiver hands its links back and the pending Finish() returns.
+    // Recorded behind the lease wait, so it completes once the receiver hands its links back.
+    // Polled, never waited on, so a receiver that never gives the links back fails the test
+    // instead of hanging it.
+    const auto links_back = receiver_cq.enqueue_record_event_to_host();
+    auto links_back_within = [&](std::chrono::milliseconds timeout) {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (tt::tt_metal::distributed::EventQuery(links_back)) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return tt::tt_metal::distributed::EventQuery(links_back);
+    };
+    // If an assert below fails, let the held transfer through so teardown isn't stuck behind it.
     struct DrainOnExit {
         StageGateHarness& h;
         ~DrainOnExit() { h.drain(); }
     } drain_on_exit{h};
-    EXPECT_EQ(receiver_done.wait_for(kGateHeldWindow), std::future_status::timeout)
+    EXPECT_FALSE(links_back_within(kGateHeldWindow))
         << "receiver handed its link back while its transfer was held at a closed gate";
     for (const auto& coord : h.coords()) {
         EXPECT_EQ(h.released(coord), 0u) << "transfer for a closed gate was released at " << coord;
@@ -1071,7 +1082,7 @@ void verify_stage_gate_lease_mode(
     h.set_gate(2, /*open=*/true);
     ASSERT_TRUE(h.wait_released(1, kGateReleaseTimeout)) << "opening gate 2 did not release the held transfer";
     h.consume();
-    ASSERT_EQ(receiver_done.wait_for(kGateReleaseTimeout), std::future_status::ready)
+    ASSERT_TRUE(links_back_within(kGateReleaseTimeout))
         << "receiver did not hand its link back after the gated transfer was consumed";
     Finish(sender_cq);
     EXPECT_TRUE(h.gate_closed_everywhere(2));
