@@ -405,32 +405,22 @@ std::optional<TensorTopology> scatter_output_topology(
     std::string reason;
 
     if (!cluster_axis.has_value()) {
-        if (collapsed) {
-            // The collapsed form of the partition refusal below: {N}, [Shard{other}] partitioned on scatter_dim
-            // leaves device k with chunk k of the other dim next to piece k of scatter_dim, which no label states. A
-            // reduction consumes the chunks (the sum is one tensor), so only a partition refuses.
-            const auto* held = std::get_if<Shard>(&in.placements().front());
-            if (kind == ScatterKind::Partition && held != nullptr && in.distribution_shape().mesh_size() > 1 &&
-                !placement_shards_tensor_dim(in.placements().front(), *normalized_dim, tensor_rank)) {
-                return fail(
-                    fmt::format(
-                        "a whole-mesh {} of tensor dim {} on a tensor still sharded on dim {} (label {}) is not "
-                        "expressible",
-                        op,
-                        *normalized_dim,
-                        held->dim,
-                        describe(in)),
-                    Family::Scatter);
-            }
-            // Whole-mesh scatter of a 1-D label: piece i lands on ring rank i, which is the label's own order.
-            return TensorTopology(in.distribution_shape(), TopologyPlacements{shard}, in.mesh_coords());
-        }
-        // The input is N-D here, so this expands nothing: it checks that the label's axes are the mesh's (its shape
-        // fits the mesh per axis and its coordinates are a row-major block) and returns the placements as they are,
-        // or refuses a label no per-axis reading describes (one laid out row-major over a mesh its shape did not fit).
-        auto expanded = uncollapse_placements(in, mesh_shape, &reason);
-        if (!expanded.has_value()) {
-            return fail(reason, Family::Scatter);
+        // A whole-mesh scatter gives ring rank i piece i of `scatter_dim`, the ring being the label's coordinate
+        // order (what the pure overload has to assume; the Tensor overloads respell over the storage), so the result
+        // is the collapsed {N}, [Shard{scatter_dim}] over those coordinates whatever the label's rank. The label's
+        // own axes are read as they are: no axis is addressed, so the per-axis alignment uncollapse_placements
+        // insists on is not needed, and a row-major reshape of the whole mesh ({1,8} over a 2x4, a 2-D mapper whose
+        // mesh_shape_override did not fit) is as exact as the collapsed label that enumerates the same devices.
+        const auto& label_shape = in.distribution_shape();
+        const auto& placements = in.placements();
+        if (placements.size() != label_shape.dims()) {
+            return fail(
+                fmt::format(
+                    "tensor topology {} has {} placements for a {}-D distribution shape",
+                    describe(in),
+                    placements.size(),
+                    label_shape.dims()),
+                Family::Scatter);
         }
         // Every device holds a distinct piece of `scatter_dim`, in the label's coordinate order: the collapsed label
         // over those coordinates. A reduction summed every device's tensor into that piece, so nothing stays sharded
@@ -454,22 +444,20 @@ std::optional<TensorTopology> scatter_output_topology(
         // No label describes it, so it is refused. A Shard of scatter_dim itself passes: each device keeps a
         // sub-piece of the piece it already held, and the outputs are N distinct pieces of that dim with every other
         // dim whole, which is what the collapsed label states (a label says how the outputs assemble, not that they
-        // tile the input). A Shard on a size-1 axis holds the whole extent and passes too. A reduction never reaches
-        // this check: the sum is one tensor whose other dims are whole on every device. With a cluster_axis the
-        // output stays N-D and the other dim's Shard keeps its own axis, so only the whole-mesh collapse loses it.
-        // A collapsed {N}, [Shard{other}] input is the same case with one placement and is refused above, before the
-        // collapsed early return. mesh_partition's own hook applies the same restriction
-        // (shards_another_dim_on_a_nontrivial_axis).
-        const auto& axis_shape = in.distribution_shape();
+        // tile the input). A Shard on a size-1 axis holds the whole extent and passes too. A collapsed
+        // {N}, [Shard{other}] is the same case with one placement. A reduction never reaches this check: the sum is
+        // one tensor whose other dims are whole on every device. With a cluster_axis the output stays N-D and the
+        // other dim's Shard keeps its own axis, so only the whole-mesh collapse loses it. mesh_partition's own hook
+        // applies the same restriction (shards_another_dim_on_a_nontrivial_axis).
         if (kind == ScatterKind::Partition) {
-            for (size_t axis = 0; axis < expanded->size(); ++axis) {
-                const auto* other_shard = std::get_if<Shard>(&(*expanded)[axis]);
-                if (other_shard != nullptr && axis_shape[static_cast<int32_t>(axis)] > 1 &&
-                    !placement_shards_tensor_dim((*expanded)[axis], *normalized_dim, tensor_rank)) {
+            for (size_t axis = 0; axis < placements.size(); ++axis) {
+                const auto* other_shard = std::get_if<Shard>(&placements[axis]);
+                if (other_shard != nullptr && label_shape[static_cast<int32_t>(axis)] > 1 &&
+                    !placement_shards_tensor_dim(placements[axis], *normalized_dim, tensor_rank)) {
                     return fail(
                         fmt::format(
-                            "a whole-mesh {} of tensor dim {} on a tensor still sharded on dim {} along mesh axis {} "
-                            "(label {}) is not expressible",
+                            "a whole-mesh {} of tensor dim {} on a tensor still sharded on dim {} along axis {} of its "
+                            "label {} is not expressible",
                             op,
                             *normalized_dim,
                             other_shard->dim,
@@ -480,7 +468,7 @@ std::optional<TensorTopology> scatter_output_topology(
             }
         }
         return TensorTopology(
-            MeshShape(static_cast<uint32_t>(axis_shape.mesh_size())), TopologyPlacements{shard}, in.mesh_coords());
+            MeshShape(static_cast<uint32_t>(label_shape.mesh_size())), TopologyPlacements{shard}, in.mesh_coords());
     }
 
     const uint32_t axis = *cluster_axis;

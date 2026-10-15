@@ -1379,6 +1379,38 @@ TEST(CclTopologyUtils, WholeMeshPartitionOfACollapsedShardOfAnotherDimIsRefused)
     }
 }
 
+TEST(CclTopologyUtils, WholeMeshScatterOfARowMajorReshapeIsExact) {
+    // A 2-D mapper whose mesh_shape_override does not fit the mesh ({1,8} or {4,2} over a 2x4) lays the tensor out
+    // row-major over every device: its axes are not the mesh's, so a cluster-axis op cannot address them and is
+    // refused, but a whole-mesh scatter addresses no axis -- ring rank i gets piece i -- and the collapsed label over
+    // the same coordinates is exact (mesh_partition's rule 0 lets the same case through to its rule 2). A partition
+    // still reads the other-dim restriction off the label's own axes.
+    const MeshShape mesh(2, 4);
+    const auto all = row_major_coords(mesh);
+    StrictCclTopologyScope warn_only(false);
+    for (const auto& reshape : {MeshShape(1, 8), MeshShape(4, 2)}) {
+        const auto same_dim = nd_label(reshape, {TopoReplicate{}, TopoShard{3}}, all);
+        EXPECT_EQ(
+            topo::reduce_scatter_output_topology(same_dim, std::nullopt, mesh, kRank, 3),
+            collapsed_label(mesh, TopoShard{3}))
+            << reshape;
+        EXPECT_EQ(
+            topo::mesh_partition_output_topology(same_dim, std::nullopt, mesh, kRank, 3),
+            collapsed_label(mesh, TopoShard{3}))
+            << reshape;
+        EXPECT_FALSE(topo::reduce_scatter_output_topology(same_dim, 1, mesh, kRank, 3).has_value()) << reshape;
+        EXPECT_FALSE(topo::mesh_partition_output_topology(same_dim, 1, mesh, kRank, 3).has_value()) << reshape;
+
+        const auto other_dim = nd_label(reshape, {TopoReplicate{}, TopoShard{2}}, all);
+        EXPECT_EQ(
+            topo::reduce_scatter_output_topology(other_dim, std::nullopt, mesh, kRank, 3),
+            collapsed_label(mesh, TopoShard{3}))
+            << reshape;
+        EXPECT_FALSE(topo::mesh_partition_output_topology(other_dim, std::nullopt, mesh, kRank, 3).has_value())
+            << reshape;
+    }
+}
+
 TEST(CclTopologyUtils, CallerRelabelsScopeSilencesRefusalsForIntermediates) {
     // all_reduce_async labels its result from its own input and runs reduce_scatter / all_gather on intermediates
     // nobody reads; inside the scope their refusals are nullopt without a log or a TT_FATAL, honest labels are
