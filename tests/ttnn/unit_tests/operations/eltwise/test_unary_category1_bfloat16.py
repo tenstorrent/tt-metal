@@ -580,6 +580,35 @@ def test_exp2_allclose(device):
     assert_allclose(actual_result=result, expected_result=golden, atol=8.5e-39, rtol=0)
 
 
+def test_exp2_special_values(device):
+    """exp2 saturation and infinity handling, which the bfloat16 sweeps replace with 0 (see #44507).
+
+    | Input                    | Expected                                   |
+    |--------------------------|--------------------------------------------|
+    | -inf                     | 0                                          |
+    | -127                     | 0 (golden 2^-127 is subnormal; device FTZ) |
+    | -126                     | 2^-126, smallest normal (ULP ≤ 1)          |
+    | 0, ±1, ±10, 127          | ULP ≤ 1                                    |
+    | 128, +inf                | +inf                                       |
+
+    NaN is excluded: ttnn.bfloat16 host-side packing turns NaN into +inf before
+    the tensor reaches the device, so NaN propagation can't be tested at this dtype.
+    """
+    input_tensor = torch.tensor(
+        [0.0, 1.0, -1.0, 10.0, -10.0, 127.0, -126.0, float("inf"), -float("inf"), 128.0, -127.0],
+        dtype=torch.bfloat16,
+    )
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = flush_subnormal_values_to_zero(golden_function(input_tensor, device=device))
+
+    result = ttnn.to_torch(ttnn.exp2(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
+
+
 @pytest.mark.parametrize(
     "low, high, expected_atol, expected_rtol",
     [
@@ -921,24 +950,43 @@ def test_multigammaln_every_placement_matches_interleaved_tiles(device, placemen
 
 
 @run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
+def test_multigammaln_many_tiles_per_core_match_torch(device):
+    """One core holds 128 tiles, so the kernel's per-call state carries across many tiles of one program."""
+    x = _multigammaln_inputs((1, 1, 2048, 64))
+    shard = ttnn.create_sharded_memory_config(
+        x.shape, core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT
+    )
+    actual = ttnn.to_torch(ttnn.multigammaln(_multigammaln_on_device(x, device, memory_config=shard))).to(
+        torch.bfloat16
+    )
+    x64 = x.to(torch.float64)
+    ulp = torch.minimum(
+        _multigammaln_pure_ulp(_multigammaln_reference(x64), actual),
+        _multigammaln_pure_ulp(_multigammaln_reference(_multigammaln_flush(x64)), actual),
+    )
+    assert ulp.max().item() < 1.0, f"{(ulp >= 1.0).sum().item()} of {ulp.numel()} outputs at or beyond 1 ulp of torch"
+
+
+@run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
 @pytest.mark.parametrize("call", ["float32"])
 def test_multigammaln_keeps_its_own_path_elsewhere(device, call):
     """A call the generated kernel does not serve runs the op's existing path and matches its golden."""
     x = _multigammaln_inputs((1, 1, 64, 64))
     golden = ttnn.get_golden_function(ttnn.multigammaln)
-    if call == "float32":
-        actual = ttnn.multigammaln(
-            ttnn.from_torch(x.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-        )
-        expected = golden(x.float())
-    elif call == "bfloat16_to_float32":
-        # Only the route is checked: the generated kernel does not compile with FP32 DEST, so any
-        # result shows that the op's own kernel ran.
-        output = ttnn.from_torch(torch.zeros(x.shape), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-        assert ttnn.multigammaln(_multigammaln_on_device(x, device), output_tensor=output).dtype == ttnn.float32
-        return
-    else:
-        # Any value other than the parameter's default keeps the op's own kernel.
-        actual = ttnn.multigammaln(_multigammaln_on_device(x, device), **{call: 0.125})
-        expected = golden(x.float(), **{call: 0.125})
+    actual = ttnn.multigammaln(ttnn.from_torch(x.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device))
+    expected = golden(x.float())
     assert_with_pcc(expected, ttnn.to_torch(actual).float(), 0.999)
+
+
+@run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
+@pytest.mark.parametrize("call", ["float32", "chain"])
+def test_multigammaln_refuses_calls_its_kernel_does_not_serve(device, call, expect_error):
+    """UnaryOpType.MULTIGAMMALN has no kernel of its own: outside a lone op on BF16 data the unary program refuses it."""
+    x = _multigammaln_inputs((1, 1, 32, 32))
+    ops = [ttnn.UnaryWithParam(ttnn.UnaryOpType.MULTIGAMMALN)]
+    if call == "float32":
+        tt_x = ttnn.from_torch(x.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    else:
+        tt_x, ops = _multigammaln_on_device(x, device), ops + [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]
+    with expect_error(RuntimeError, "MULTIGAMMALN runs only"):
+        ttnn.unary_chain(tt_x, ops)

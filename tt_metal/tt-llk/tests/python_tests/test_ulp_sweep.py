@@ -21,11 +21,10 @@ from helpers.ulp_sweep import (
     EMIT_HEADROOM,
     MEASURED,
     _known_lanes,
+    _normal_input,
     export_measured,
     finish_emit,
-    flushed_inputs,
     golden_input,
-    known_nonfinite_lanes,
     measurable_mask,
     merge_measured,
     nonfinite_failures,
@@ -94,6 +93,10 @@ def _rows(path):
     ]
 
 
+def _key_line(path, op):
+    return next(l for l in path.read_text().splitlines() if l.startswith(f"{op}:"))
+
+
 def test_only_the_cells_this_run_measured_are_replaced(table):
     """`MEASURED`, not the static SWEEP_FORMATS cross-product. A `-k` run, an interrupt
     or a driver skip must leave every cell it did not measure alone rather than render a
@@ -103,11 +106,127 @@ def test_only_the_cells_this_run_measured_are_replaced(table):
 
     rows = _rows(table)
     assert "{in: Float16, out: Float16, max_ulp: 6}" in rows[0]  # 5 * 1.1, rounded up
-    assert "max 5 ULP, today" in rows[0]
+    assert "max 5 ULP" in rows[0]
+    # The run identity is on the op's key line, once, not repeated on every row.
+    key_line = _key_line(table, "Gelu")
+    assert "measured by: today, except where a row says otherwise" in key_line
+    assert "header provenance, ungeneratable" in key_line  # and what it already said
+    assert "today" not in rows[0]
     assert not any("max_ulp: 7" in row for row in rows)  # the superseded cell is gone
-    # The same op's other (in, out) cell, and the op this run never measured: untouched.
+    # The same op's other (in, out) cell: kept.
     assert any("{in: Float16_b, out: Float32, max_ulp: 9}" in row for row in rows)
+    # The op this run never measured: untouched, key line and row alike.
+    assert _key_line(table, "Log1p") == "Log1p:"
     assert "{in: Float16, out: Float16_b, metric: tolerance}" in rows[-1]
+
+
+def test_a_second_regeneration_replaces_the_run_identity(table):
+    """The key line carries which sweep the rows below came from, so a re-emit has to
+    replace it. Appending would accumulate one stale run identity per regeneration, and
+    the oldest would read as current."""
+    record("Gelu", _CELL, 5)
+    write_table(table, "sweep A, wormhole, 2026-09-23")
+    MEASURED.clear()
+    record("Gelu", _CELL, 5)
+    write_table(table, "sweep B, wormhole, 2026-09-24")
+
+    key_line = _key_line(table, "Gelu")
+    assert key_line.count("measured by:") == 1
+    assert "sweep B, wormhole, 2026-09-24" in key_line
+    assert "sweep A" not in key_line
+    assert "header provenance, ungeneratable" in key_line  # and the original survives
+
+
+def test_a_row_a_narrower_re_emit_did_not_supersede_keeps_its_own_run(table):
+    """Emit one `(in, out)` pair, then a different one. The second run replaces the key
+    line's clause with its own, so the first pair's rows -- which named no run, the key
+    line did -- would be credited to a sweep that never measured them. They take the
+    outgoing identity with them instead; a bare, hand-authored row takes the key line's
+    header, which is what it was written against."""
+    table.write_text(
+        "Gelu:  # 0 ULP, 16 variants, 2026-09-18\n" "  - {out: Float32, max_ulp: 0}\n",
+        encoding="utf-8",
+    )
+    _record_full_grid("Gelu", "Float16", "Float16", 5)
+    write_table(table, "sweep A, wormhole, 2026-09-23")
+    MEASURED.clear()
+    _record_full_grid("Gelu", "Float16_b", "Float16_b", 1)
+    write_table(table, "sweep B, wormhole, 2026-09-24")
+
+    assert "measured by: sweep B, wormhole, 2026-09-24" in _key_line(table, "Gelu")
+    rows = _rows(table)
+    first = next(r for r in rows if "in: Float16, out: Float16," in r)
+    assert first.endswith("# max 5 ULP, sweep A, wormhole, 2026-09-23")
+    bare = next(r for r in rows if r.startswith("- {out: Float32"))
+    assert bare.endswith("# 0 ULP, 16 variants, 2026-09-18")
+    second = next(r for r in rows if "in: Float16_b, out: Float16_b" in r)
+    assert "2026" not in second  # this run's rows name it through the key line
+
+
+def test_a_re_emit_credits_no_run_with_a_hand_written_note_or_an_arch_row(table):
+    """Only a note `_render` writes is an earlier emit's figure. A hand-written one --
+    "fp32 output, not swept", or Frac's sampled `max 384 ULP, 40 variants / ...`, which
+    starts like an emitted note -- names no run on the key line, and an `arch:` row is
+    one no Wormhole run measured; crediting either to the outgoing clause made the
+    provenance audit read a sample as exhaustive."""
+    table.write_text(
+        "Gelu:\n"
+        "  - {in: Float16_b, out: Float32, max_ulp: 9}  # fp32 output, not swept\n"
+        "  - {out: Float16, metric: tolerance}  # max 384 ULP, 40 variants / 737k lanes\n"
+        "  - {in: Float16_b, out: Float16_b, arch: BLACKHOLE, max_ulp: 44}  # bh\n",
+        encoding="utf-8",
+    )
+    for in_fmt, run in (
+        ("Float16", "sweep A, wormhole, 2026-09-23"),
+        ("Float16_b", "sweep B, wormhole, 2026-09-24"),
+    ):
+        MEASURED.clear()
+        _record_full_grid("Gelu", in_fmt, in_fmt, 1)
+        write_table(table, run)
+    rows = _rows(table)
+    assert any(r.endswith("# fp32 output, not swept") for r in rows)
+    assert any(r.endswith("# max 384 ULP, 40 variants / 737k lanes") for r in rows)
+    assert any(r.endswith("max_ulp: 44}  # bh") for r in rows)
+    # And the first run's emitted rows still go with it.
+    first = next(r for r in rows if "in: Float16, out: Float16," in r)
+    assert first.endswith("# max 1 ULP, sweep A, wormhole, 2026-09-23")
+
+
+def test_a_demotion_names_the_budget_it_would_have_needed(table):
+    """A cell demotes only once its *measurement* is past the ceiling (one inside it
+    enrols, capped), and the row names both numbers so the claim is checkable against
+    `usable_budget_ceiling`. Handing back the measurement as the budget read "budget
+    100" for a budget of 110."""
+    from helpers.ulp_sweep import _verdict
+
+    assert _verdict(100, "Float16_b") == ("tolerance", 110)
+    _record_full_grid("Gelu", "Float16_b", "Float16_b", 100)
+    _record_full_grid("Gelu", "Float16_b", "Bfp8_b", 3)
+    write_table(table, "today")
+    rows = _rows(table)
+    assert any(
+        "Float16_b, out: Float16_b, metric: tolerance}  # max 100 ULP, budget 110 > "
+        "ceiling 6" in r
+        for r in rows
+    )
+    assert any(
+        "out: Bfp8_b, metric: tolerance}  # max 3 ULP, block-quantized" in r
+        for r in rows
+    )
+
+
+def test_a_strided_zero_is_floored_to_one_and_an_exhaustive_one_is_not():
+    """The sweep enumerates every 16-bit value, so a 0 there is the op being exactly
+    rounded. The Float32 walk visits 65,280 of 2**32, and a finite sample cannot assert
+    exactness: Rsqrt's Float32 -> Float32 cell had been written as 0 from it."""
+    from helpers.ulp_sweep import _verdict
+
+    assert _verdict(0, "Float32", "Float16_b") == ("ulp", 0)
+    assert _verdict(0, "Float32", "Float32") == ("ulp", 1)
+    assert _verdict(0, "Float16_b", "Float32") == ("ulp", 1)
+    assert _verdict(3, "Float32", "Float32") == ("ulp", 4)  # only the zero moves
+    # An exact op's 0 is its construction's, not the sample's.
+    assert _verdict(0, "Float32", "Float32", exact=True) == ("ulp", 0)
 
 
 def test_a_row_for_another_architecture_survives_a_regeneration(table):
@@ -177,7 +296,8 @@ def test_a_pinned_declared_tolerance_on_an_unmeasured_cell_does_not_block_the_op
 
 
 def test_a_measurement_with_nowhere_to_go_is_refused_after_writing_the_rest(table):
-    """The key line is passed through verbatim so a header comment survives, so a new
+    """The emitter keeps a key line's name and header comment and only adds or replaces
+    its `measured by:` clause -- it never writes a key line -- so a new
     op's block has to be hand-authored first. Dropping the measurement in silence is
     what left 17 ops' sampled rows in place looking measured.
 
@@ -217,16 +337,29 @@ def test_an_incomplete_grid_is_refused_rather_than_collapsed(table):
         write_table(table, "today")
 
 
-def test_the_emitted_budget_uses_the_declared_headroom():
-    """The factor was hardcoded beside the constant, so tuning it did nothing."""
+def test_the_emitted_budget_uses_the_declared_headroom(monkeypatch):
+    """The factor was hardcoded beside the constant, so tuning it did nothing. The exact
+    figures pin the arithmetic; the retune is what ties `_verdict` to the constant, which
+    the literals alone do not -- a `_verdict` hard-coding 11/10 passes them."""
+    from helpers import ulp_sweep
     from helpers.ulp_sweep import _verdict
 
-    assert _verdict(100, "Float32") == ("ulp", math.ceil(100 * EMIT_HEADROOM))
+    assert _verdict(100, "Float32") == ("ulp", 110)  # exactly 1.1x, not float-rounded
+    assert _verdict(10, "Float32") == ("ulp", 11)
+    assert EMIT_HEADROOM == 1.1  # the figures here are written against it
+    # A measurement that fits the ceiling enrols even when the headroom would not:
+    # capped at the ceiling, with zero slack. One past it stays on tolerance.
+    assert _verdict(5, "Float16_b") == ("ulp", 6)  # 1.1x of 5 is 5.5, within the 6
+    assert _verdict(6, "Float16_b") == ("ulp", 6)  # measured at the ceiling: zero slack
+    assert _verdict(7, "Float16_b") == ("tolerance", 8)
+    assert _verdict(393216, "Float32") == ("ulp", 419430)
     # Zero is exact and stays exact: the sweep saw every value.
     assert _verdict(0, "Float32") == ("ulp", 0)
     # A block float never enrols from a sorted sweep, however small the reading.
     assert _verdict(3, "Bfp8_b") == ("block", 3)
     assert _verdict(0, "Bfp8_b") == ("block", 0)
+    monkeypatch.setattr(ulp_sweep, "EMIT_HEADROOM", 1.5)
+    assert _verdict(10, "Float32") == ("ulp", 15)
 
 
 def test_a_nonfinite_disagreement_is_reported_rather_than_only_masked_out():
@@ -289,6 +422,50 @@ def test_an_infinite_golden_on_the_singularity_point_is_not_a_nonfinite_failure(
     assert nonfinite_failures(
         MathOperation.Rsqrt, src, golden, result, fmt, fmt
     ).tolist() == [False, False, True]
+
+
+def test_the_unpack_format_bounds_which_inputs_count():
+    """A Float32 input into a Float16 output at dest_acc=No unpacks into a Float16 Dest:
+    below 2**-14 it is flushed, past 65504 it saturates. Neither lane is the op's, so
+    both masks drop them there -- and only there: at dest_acc=Yes the Dest is 32-bit.
+    A bfloat16 Dest saturates nothing: it has fp32's exponent range, so the walk's
+    largest sample (~3.392e38, past bf16's largest) reaches it as bf16's largest."""
+    fp32, fp16 = DataFormat.Float32, DataFormat.Float16
+    src = torch.tensor([1e-6, 1.0, 1e6], dtype=torch.float32)
+    golden = torch.tensor([1.0, 1.0, float("inf")], dtype=torch.float16)
+    result = torch.tensor([0.0, 1.0, 11.8], dtype=torch.float16)
+    no, yes = DestAccumulation.No, DestAccumulation.Yes
+    assert measurable_mask(src, golden, result, fp32, fp16, no).tolist() == [
+        False,
+        True,
+        False,
+    ]
+    assert measurable_mask(src, golden, result, fp32, fp16, yes)[0]
+    assert not nonfinite_failures(
+        _OP, src, golden, result, fp32, fp16, dest_acc=no
+    ).any()
+    assert nonfinite_failures(_OP, src, golden, result, fp32, fp16, dest_acc=yes)[2]
+
+    bf16 = DataFormat.Float16_b
+    largest = torch.tensor(
+        [float.fromhex("0x1.fe55920000000p+127")], dtype=torch.float32
+    )
+    assert float(largest[0]) > torch.finfo(torch.bfloat16).max
+    same = largest.to(torch.bfloat16)
+    assert measurable_mask(largest, same, same, fp32, bf16, no).tolist() == [True]
+
+
+def test_an_fp16_pack_clamp_is_a_saturated_store():
+    """The fp16 pack clamps an out-of-range value to +-65504 of its sign. A bfloat16
+    pack has the Dest's range and cannot, so a largest-finite answer there against an
+    infinite golden is still the kernel's."""
+    src = torch.tensor([5.0, 5.0], dtype=torch.bfloat16)
+    fp16 = DataFormat.Float16
+    golden = torch.tensor([float("-inf"), float("-inf")], dtype=torch.float16)
+    result = torch.tensor([-65504.0, 65504.0], dtype=torch.float16)
+    assert nonfinite_failures(
+        _OP, src, golden, result, DataFormat.Float16_b, fp16
+    ).tolist() == [False, True]
 
 
 def test_a_golden_past_the_output_range_is_not_a_nonfinite_failure():
@@ -369,8 +546,9 @@ def test_the_claim_limit_follows_what_the_stimuli_format_can_reach(op):
     """`sin(2.6e28)` is a bfloat16 value. float16 ends at 65504, inside the range the
     kernel reduces -- Sin and Cos read 1-4 steps over the whole fp16 format -- so an
     fp16 input carries no limit, and a non-finite answer at its very top is a failure.
-    Keyed on the op alone, the pi claim covered the fp16 cells too, which are the only
-    Sin/Cos cells the table step-gates."""
+    Keyed on the op alone, the pi claim covered the fp16 cells too. The format that
+    counts is the one the kernel is handed: a Float32 input into a Float16 output at
+    ``dest_acc=No`` unpacks into a Float16 Dest, so it carries no limit either."""
     fmt = DataFormat.Float16
     top = torch.tensor([65504.0, 4.0], dtype=torch.float16)
     golden = torch.tensor([-1.0, -1.0], dtype=torch.float16)
@@ -388,6 +566,25 @@ def test_the_claim_limit_follows_what_the_stimuli_format_can_reach(op):
         DataFormat.Float16_b,
         DataFormat.Float16_b,
     ).tolist() == [False, False]
+    # Float32 into a Float16 output: 4.0 is past pi, excused at a 32-bit Dest, where
+    # the kernel is handed fp32, and a failure at a 16-bit one, where it is handed fp16.
+    wide = top.to(torch.float32)
+    for dest, past_pi_excused in (
+        (DestAccumulation.Yes, True),
+        (DestAccumulation.No, False),
+    ):
+        assert (
+            nonfinite_failures(
+                op,
+                wide,
+                golden,
+                result,
+                DataFormat.Float32,
+                DataFormat.Float16,
+                dest_acc=dest,
+            ).tolist()[1]
+            is not past_pi_excused
+        ), dest
 
 
 def test_a_block_float_input_the_quantizer_flushes_is_the_flush_not_the_op():
@@ -403,8 +600,8 @@ def test_a_block_float_input_the_quantizer_flushes_is_the_flush_not_the_op():
     zero = len(below)
     assert float(src[zero]) == 0.0
 
-    as_bf16 = flushed_inputs(src, DataFormat.Float16_b)
-    as_block = flushed_inputs(src, DataFormat.Bfp8_b)
+    as_bf16 = ~_normal_input(src, DataFormat.Float16_b)
+    as_block = ~_normal_input(src, DataFormat.Bfp8_b)
     assert as_bf16.tolist() == [True] * zero + [False] + [True] * len(above)
     assert as_block.all()
 
@@ -459,6 +656,34 @@ def test_the_golden_sees_the_zero_the_kernel_receives(fmt, dest_acc, keeps_sign)
     assert torch.equal(received[2:], src[2:])
 
 
+def test_the_unary_golden_still_rounds_a_float32_output_to_a_16bit_input():
+    """#58590, pinned until it lands. UnarySFPUGolden tilizes and untilizes its Dest
+    result in the *input* format, so a bfloat16 input's Float32 golden at a 32-bit Dest
+    is rounded to bfloat16 while the kernel keeps fp32: 1.0078125**2 reads 1.015625
+    against the exact 1.0156860. Every 16-bit/block input -> Float32, ``dest: "Yes"``
+    row of the table measures that rounding rather than the kernel (the YAML header
+    says so), and nothing else would tell them apart once the golden is fixed.
+
+    So when this fails, the golden has stopped rounding there: re-emit the whole table
+    (`--ulp-emit`) on the fix, which tightens those rows, drop the header paragraph, and
+    delete this test."""
+    from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
+
+    x = 1.0 + 2.0**-7  # bf16-exact; its square is not
+    src = torch.full((1024,), x, dtype=torch.bfloat16)
+    golden = get_golden_generator(UnarySFPUGolden)(
+        MathOperation.Square,
+        src,
+        DataFormat.Float32,
+        DestAccumulation.Yes,
+        DataFormat.Float16_b,
+        [32, 32],
+    )
+    assert golden.dtype == torch.float32
+    rounded = float(torch.tensor(x * x, dtype=torch.bfloat16))
+    assert float(golden[0]) == rounded != x * x
+
+
 def test_a_block_float_lane_is_judged_where_the_quantizer_puts_it():
     """In the sorted sweep 1.0 is the last lane of the Bfp8_b block ``0x3F71..0x3F80``,
     and the shared exponent hands the golden and the kernel 0x3F7E and 0x3F7F (0.992,
@@ -492,54 +717,6 @@ def test_a_block_float_lane_is_judged_where_the_quantizer_puts_it():
     assert nonfinite_failures(
         MathOperation.Acosh, src, golden, inf, flat, out
     ).tolist() == [False] * 15 + [True]
-
-
-def test_the_reciprocal_saturation_lane_is_two_to_the_minus_16_as_received():
-    """#57215: 1/x at x = 2**-16 is 2**16, past fp16's range, and the approximate
-    reciprocal's shortfall leaves it for the store to saturate to 65504. One step above,
-    1/x is ~65028, a finite fp16 answer: an inf there is a failure on Float16_b. On
-    Bfp8_b the shared exponent hands the kernel 2**-16 itself for the two steps under it
-    and the one above, so they are the same input and excused with it.
-
-    Two blocks, aligned as the sweep aligns them: 2**-16 closes ``0x3771..0x3780``."""
-    src = _bf16_run(0x3771, 0x3790)
-    edge = int((src == 2.0**-16).nonzero())
-    above = edge + 1
-    cell = dict(approx_mode=ApproximationMode.Yes, dest_acc=DestAccumulation.Yes)
-    out = DataFormat.Float16
-    for fmt, named in (
-        (DataFormat.Float16_b, [edge]),
-        (DataFormat.Bfp8_b, [edge - 2, edge - 1, edge, above]),
-    ):
-        excused = known_nonfinite_lanes(
-            MathOperation.Reciprocal, src, fmt, out, *cell.values()
-        )
-        assert excused.nonzero().flatten().tolist() == named, fmt.name
-
-        # What silicon answers: the saturated store on the named lanes, and the golden
-        # everywhere else.
-        received = received_inputs(src, fmt).float()
-        golden = (1 / received).to(torch.float16)
-        result = torch.where(excused, 65504.0, golden.float()).to(torch.float16)
-        failures = nonfinite_failures(
-            MathOperation.Reciprocal, src, golden, result, fmt, out, **cell
-        )
-        assert not failures.any(), fmt.name
-        assert (
-            stale_excuses(
-                MathOperation.Reciprocal, src, golden, result, fmt, out, *cell.values()
-            )
-            == []
-        ), fmt.name
-
-    fmt = DataFormat.Float16_b
-    golden = (1 / src.float()).to(torch.float16)
-    assert torch.isfinite(golden[above])
-    result = golden.clone()
-    result[above] = float("inf")
-    assert nonfinite_failures(
-        MathOperation.Reciprocal, src, golden, result, fmt, out, **cell
-    ).nonzero().flatten().tolist() == [above]
 
 
 def test_a_known_nonfinite_lane_is_excused_on_its_cell_and_nowhere_else():
@@ -586,22 +763,28 @@ def test_an_entry_no_lane_of_which_disagrees_is_stale():
     fmt = DataFormat.Float16
     src = torch.tensor([65408.0, 65504.0], dtype=torch.float16)
     golden = src.clone()
-    cell = (fmt, fmt, ApproximationMode.No, DestAccumulation.No)
+    cell = dict(approx_mode=ApproximationMode.No, dest_acc=DestAccumulation.No)
     still_broken = torch.tensor([float("inf"), 65504.0], dtype=torch.float16)
-    assert stale_excuses(MathOperation.Celu, src, golden, still_broken, *cell) == []
+    assert (
+        stale_excuses(MathOperation.Celu, src, golden, still_broken, fmt, fmt, **cell)
+        == []
+    )
     fixed = golden.clone()
     assert [
-        e.issue for e in stale_excuses(MathOperation.Celu, src, golden, fixed, *cell)
+        e.issue
+        for e in stale_excuses(MathOperation.Celu, src, golden, fixed, fmt, fmt, **cell)
     ] == ["#58607"]
     # On a cell the entry does not name there is nothing to go stale.
-    other = (fmt, fmt, ApproximationMode.No, DestAccumulation.Yes)
-    assert stale_excuses(MathOperation.Celu, src, golden, fixed, *other) == []
+    other = dict(approx_mode=ApproximationMode.No, dest_acc=DestAccumulation.Yes)
+    assert (
+        stale_excuses(MathOperation.Celu, src, golden, fixed, fmt, fmt, **other) == []
+    )
     # An entry another exclusion already covers is stale too: against a NaN golden the
     # same inf answers are excused before the entry is consulted, so it buys nothing.
     nan_golden = torch.full_like(golden, float("nan"))
-    assert stale_excuses(MathOperation.Celu, src, nan_golden, still_broken, *cell) == [
-        _known_lanes()[MathOperation.Celu][0]
-    ]
+    assert stale_excuses(
+        MathOperation.Celu, src, nan_golden, still_broken, fmt, fmt, **cell
+    ) == [_known_lanes()[MathOperation.Celu][0]]
 
 
 def test_every_known_lane_entry_names_an_issue_and_a_gateable_cell():
@@ -750,12 +933,12 @@ def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch, monkeypat
     measurement would be keyed on a kernel that never ran. The promoted exponent-B ->
     Float16 `No` cells are the ones left out, and their `Yes` twins stay."""
     from helpers.test_config import TestConfig
-    from helpers.ulp_sweep import SWEEP_FORMATS, sweep_cells
+    from helpers.ulp_sweep import SWEEP_FORMATS, SWEEP_INPUT_FORMATS, sweep_cells
 
     monkeypatch.setattr(TestConfig, "CHIP_ARCH", arch)
     built_as_asked = [
         (i, o, a, d)
-        for i in SWEEP_FORMATS
+        for i in SWEEP_INPUT_FORMATS
         for o in SWEEP_FORMATS
         for a in ApproximationMode
         for d in DestAccumulation
@@ -772,9 +955,11 @@ def test_the_sweep_cells_are_the_ones_testconfig_builds_as_asked(arch, monkeypat
     promoted = {(i, o) for i, o, _, d in cells if d == DestAccumulation.No} ^ {
         (i, o) for i, o, _, d in cells if d == DestAccumulation.Yes
     }
+    # Every exponent-B input but Float32, which unpacks to Dest and is not an outlier.
     assert promoted == {
         (DataFormat.Float16_b, DataFormat.Float16),
         (DataFormat.Bfp8_b, DataFormat.Float16),
+        (DataFormat.Bfp4_b, DataFormat.Float16),
     }
 
 
@@ -802,12 +987,56 @@ def test_the_sweep_tile_count_holds_every_swept_value():
     format's values keeps only the lowest-sorted of them, and nothing else notices."""
     import test_unary_sfpu_ulp as sweep
     from helpers.golden_generators import TILE_DIMENSIONS
-    from helpers.ulp_sweep import SWEEP_FORMATS, swept_value_count
+    from helpers.ulp_sweep import SWEEP_INPUT_FORMATS, swept_value_count
 
     lanes = sweep.SWEEP_TILE_COUNT * TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
     assert sweep.SWEEP_DIMENSIONS[0] * sweep.SWEEP_DIMENSIONS[1] == lanes
-    for fmt in SWEEP_FORMATS:
+    for fmt in SWEEP_INPUT_FORMATS:
         assert swept_value_count(fmt) <= lanes, fmt.name
+
+
+#: The Float32 walk's sample count, written down independently of the code that makes
+#: it: one sample per finite bfloat16 bit pattern, 2**16 less the 256 inf/NaN ones.
+#: (65,279 distinct bf16 *values*: -0.0 and +0.0 are two cells but one value.)
+_FLOAT32_WALK_SAMPLES = 65280
+
+
+def test_the_float32_walk_is_pinned_end_to_end():
+    """`swept_value_count` enumerates at most `_SWEEP_TENSOR` lanes, so the check above
+    cannot fail for Float32 whatever `_FP32_STRIDE` is: a stride of 2**15 would stop the
+    walk near +1.2e-38, having covered only the negatives, and stay green. So the count,
+    the ends, the tensor size and what the in-cell phase buys are pinned here: one
+    sample per bfloat16 cell, the most negative one included, none of them a bfloat16
+    value, and both halves of the cell reached in every binade (a stride of 2**16 + 1
+    put a whole binade at one point of its cells)."""
+    import test_unary_sfpu_ulp as sweep
+    from helpers.golden_generators import TILE_DIMENSIONS
+    from helpers.stimuli_generator.strategies.structured import (
+        _enumerate_representable,
+    )
+    from helpers.ulp_sweep import _FP32_STRIDE, _SWEEP_TENSOR, swept_value_count
+
+    lanes = sweep.SWEEP_TILE_COUNT * TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
+    assert _SWEEP_TENSOR == lanes
+    walk = _enumerate_representable(
+        DataFormat.Float32, -math.inf, math.inf, _SWEEP_TENSOR, stride=_FP32_STRIDE
+    )
+    assert walk.numel() == _FLOAT32_WALK_SAMPLES
+    assert swept_value_count(DataFormat.Float32) == walk.numel()
+    assert float(walk.min()) == -torch.finfo(torch.float32).max
+    assert float(walk.max()) > 3.39e38
+
+    bits = walk.view(torch.int32)
+    low = bits & 0xFFFF
+    assert bool((low != 0).all()), "a sample is a bfloat16 value"
+    assert (bits >> 16).unique().numel() == walk.numel(), "two samples share a cell"
+    # Per sign and binade, the share of samples in the lower half of their cell.
+    normal = torch.isfinite(walk) & (walk.abs() >= torch.finfo(torch.float32).tiny)
+    binade = ((bits >> 23) & 0x1FF)[normal]  # sign and exponent
+    lower = (low < 0x8000)[normal].to(torch.float64)
+    for b in binade.unique().tolist():
+        share = float(lower[binade == b].mean())
+        assert 0.3 < share < 0.7, (hex(b), share)
 
 
 @pytest.mark.parametrize(

@@ -16,6 +16,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"

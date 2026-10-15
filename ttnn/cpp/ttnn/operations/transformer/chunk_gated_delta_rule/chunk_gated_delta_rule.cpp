@@ -42,7 +42,7 @@ ttnn::Tensor head_split_tile(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint
     if (t.dtype() != DataType::BFLOAT16) {
         t = ttnn::typecast(t, DataType::BFLOAT16);
     }
-    t = ttnn::permute(t, ttnn::SmallVector<int64_t>{0, 2, 1, 3});  // [B, Hh, T, D] TILE
+    t = ttnn::permute(t, ttsl::SmallVector<int64_t>{0, 2, 1, 3});  // [B, Hh, T, D] TILE
     t = ttnn::reshape(t, ttnn::Shape({B * Hh, T, D}));             // [BH, T, D] TILE
     return t;
 }
@@ -53,7 +53,7 @@ ttnn::Tensor headvec_split_tile(const ttnn::Tensor& x, uint32_t B, uint32_t T, u
     if (t.dtype() != DataType::FLOAT32) {
         t = ttnn::typecast(t, DataType::FLOAT32);
     }
-    t = ttnn::permute(t, ttnn::SmallVector<int64_t>{0, 2, 1});  // [B, Hn, T] TILE
+    t = ttnn::permute(t, ttsl::SmallVector<int64_t>{0, 2, 1});  // [B, Hn, T] TILE
     t = ttnn::reshape(t, ttnn::Shape({B * Hn, T}));             // [BH, T] TILE
     return t;
 }
@@ -149,6 +149,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& ones,
     const std::optional<ttnn::Tensor>& masks) {
     TT_FATAL(!use_qk_l2norm, "chunk_gated_delta_rule: use_qk_l2norm not yet supported; pre-normalize q/k on host");
+    ttnn::prim::validate_gdn_chunk_size(chunk_size);
 
     auto* dev = q_in.device();
     const auto& qs = q_in.logical_shape();  // [B,T,H,K]   (or flat [B,T,H*K] under OPT-A)
@@ -403,9 +404,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             t = ttnn::reshape(t, ttnn::Shape({BH, L, V}));
             t = ttnn::slice(
                 t,
-                ttnn::SmallVector<int32_t>{0, 0, 0},
-                ttnn::SmallVector<int32_t>{static_cast<int32_t>(BH), static_cast<int32_t>(T), static_cast<int32_t>(V)},
-                ttnn::SmallVector<int32_t>{1, 1, 1});
+                ttsl::SmallVector<int32_t>{0, 0, 0},
+                ttsl::SmallVector<int32_t>{static_cast<int32_t>(BH), static_cast<int32_t>(T), static_cast<int32_t>(V)},
+                ttsl::SmallVector<int32_t>{1, 1, 1});
             o = ttnn::to_layout(t, Layout::TILE);  // [BH,T,V] TILE
         }
         return {o, final_opt};
@@ -417,12 +418,12 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     if (pad > 0) {
         o = ttnn::slice(
             o,
-            ttnn::SmallVector<int32_t>{0, 0, 0},
-            ttnn::SmallVector<int32_t>{static_cast<int32_t>(BH), static_cast<int32_t>(T), static_cast<int32_t>(V)},
-            ttnn::SmallVector<int32_t>{1, 1, 1});
+            ttsl::SmallVector<int32_t>{0, 0, 0},
+            ttsl::SmallVector<int32_t>{static_cast<int32_t>(BH), static_cast<int32_t>(T), static_cast<int32_t>(V)},
+            ttsl::SmallVector<int32_t>{1, 1, 1});
     }
     o = ttnn::reshape(o, ttnn::Shape({B, HV, T, V}));
-    o = ttnn::permute(o, ttnn::SmallVector<int64_t>{0, 2, 1, 3});  // [B,T,HV,V] (ROW_MAJOR)
+    o = ttnn::permute(o, ttsl::SmallVector<int64_t>{0, 2, 1, 3});  // [B,T,HV,V] (ROW_MAJOR)
     // NOTE: returned in ROW_MAJOR. Tilizing [B,T,HV,V] with HV in the tile dim is avoided
     // here (a TILE round-trip on the small HV tile-dim was problematic); callers can tilize.
     return {o, final_opt};

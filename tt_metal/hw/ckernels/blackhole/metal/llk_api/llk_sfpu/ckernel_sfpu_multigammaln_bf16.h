@@ -3,10 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "ckernel_sfpu_bf16_core_bridge_rational.h"
-namespace sfpi {
-#include "ckernel_sfpu_bf16_mirrored_terminals.h"
-}
+#include "ckernel_sfpu_multigammaln_bf16_core_bridge_rational.h"
+#include "ckernel_sfpu_multigammaln_bf16_mirrored_terminals.h"
 #if defined(RANGE_REDUCTION_EXP) || defined(RANGE_REDUCTION_LOG) || defined(RANGE_REDUCTION_TRIG) || \
     defined(RATIONAL_DEN_PARITY_EVEN) || defined(RATIONAL_NUM_PARITY_ODD)
 #error "aggregate cannot inherit alternate numerical selectors"
@@ -15,6 +13,7 @@ namespace sfpi {
 #undef TT_TARGET_BH_BF16_SPECIAL_COMPARE_COUNT
 namespace ckernel::sfpu::MultigammalnBf16Config_source {
 using namespace sfpi;
+using namespace ::ckernel::sfpu::ttpoly;
 constexpr uint32_t NUM_DEGREE = 6, DEN_DEGREE = 4;
 constexpr uint32_t NUM_SEGMENTS = 1, LUT_SIZE = 14;
 constexpr std::array<float, LUT_SIZE> LUT_DATA = {
@@ -100,24 +99,24 @@ constexpr std::array<uint32_t, 2> TT_SELECTED_STIRLING_REFLECTION_STOCK_WINDOW_B
 // 0=NaN 1=+Inf 2=-Inf 3=+0 4=-0 5=finite_other(pass through)
 #define TT_TARGET_BH_BF16_SPECIAL_COMPARE_COUNT 2
 
-#include "ckernel_sfpu_bf16_aggregate_stirling_core.inc"
-#include "ckernel_sfpu_bf16_rational_interleaved_core.inc"
+#include "ckernel_sfpu_multigammaln_bf16_aggregate_stirling_core.inc"
+#include "ckernel_sfpu_multigammaln_bf16_rational_interleaved_core.inc"
 template <uint32_t N, uint32_t D>
 inline void eval_rational_numer_denom(const float* n, const float* d, vFloat x, vFloat& a, vFloat& b) {
     eval_rational_interleaved_numer_denom<N, D>(n, d, x, a, b);
 }
-#include "ckernel_sfpu_bf16_rational_segment_core.inc"
+#include "ckernel_sfpu_multigammaln_bf16_rational_segment_core.inc"
 inline vFloat prepare_raw_domain_input(vFloat x) { return selected_aggregate_stirling_prepare(x); }
 inline vFloat apply_output_postcompose(vFloat y, vFloat) { return y; }
-#include "ckernel_sfpu_bf16_target_special_policy.inc"
-#include "ckernel_sfpu_bf16_domain_action_coordinate.inc"
-#include "ckernel_sfpu_bf16_domain_finalize.inc"
+#include "ckernel_sfpu_multigammaln_bf16_target_special_policy.inc"
+#include "ckernel_sfpu_multigammaln_bf16_domain_action_coordinate.inc"
+#include "ckernel_sfpu_multigammaln_bf16_domain_finalize.inc"
 // Upstream LLK runs several tiles in one DEST half, so the coefficients are
 // immediates rather than rows parked past this tile.
 inline void tile() {
     constexpr uint32_t NUM_COEFFS = NUM_DEGREE + 1, COEFF_OFFSET = NUM_SEGMENTS + 1;
     const auto& lut = LUT_DATA;
-#include "ckernel_sfpu_bf16_rational_scalar_tile.inc"
+#include "ckernel_sfpu_multigammaln_bf16_rational_scalar_tile.inc"
 }
 }  // namespace ckernel::sfpu::MultigammalnBf16Config_source
 namespace ckernel::sfpu {

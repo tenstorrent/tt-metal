@@ -2063,6 +2063,14 @@ def specials_safe(
     return True
 
 
+def unpacks_to_dest(input_format: DataFormat, dest_acc: Union[bool, Enum]) -> bool:
+    """Does the unpack write *input_format* straight into Dest, rather than through
+    SrcA and the datacopy? A 32-bit input at dest_acc=Yes. One rule for the ULP sweep
+    driver's TestConfig, the sweep's input masks and :func:`negative_zero_delivered`,
+    so the three cannot drift apart."""
+    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
+
+
 def negative_zero_delivered(
     input_format: DataFormat, dest_acc: Optional[Union[bool, Enum]]
 ) -> bool:
@@ -2080,7 +2088,7 @@ def negative_zero_delivered(
     """
     if dest_acc is None:
         return True
-    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
+    return unpacks_to_dest(input_format, dest_acc)
 
 
 def nan_survives_to_l1(
