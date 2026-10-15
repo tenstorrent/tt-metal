@@ -1888,6 +1888,55 @@ TEST(MeshGraphDescriptorTests, AssignZDirectionInMeshGraph) {
     std::filesystem::remove(test_file);
 }
 
+// Per-mesh FabricConfig feature smoke test: two inter-mesh-connected meshes declaring DIFFERENT torus
+// AXES in the MGD (M_Y -> TORUS_Y, M_X -> TORUS_X) must build a MeshGraph without error, each resolving
+// to its own per-mesh config. On hardware each mesh then gets deadlock avoidance on its own ring axis
+// (see FabricContext::need_deadlock_avoidance_support); this CPU test guards the MeshGraph build path.
+TEST(MeshGraphDescriptorTests, InterMeshDifferentTorusAxesAreCompatible) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M_Y"
+          arch: BLACKHOLE
+          device_topology: { dims: [ 2, 2 ] dim_types: [ RING, LINE ] }
+          channels: { count: 2 policy: RELAXED }
+          host_topology: { dims: [ 1, 1 ] }
+          fabric_config: FABRIC_2D_TORUS_Y
+        }
+        mesh_descriptors: {
+          name: "M_X"
+          arch: BLACKHOLE
+          device_topology: { dims: [ 2, 4 ] dim_types: [ LINE, RING ] }
+          channels: { count: 2 policy: RELAXED }
+          host_topology: { dims: [ 1, 1 ] }
+          fabric_config: FABRIC_2D_TORUS_X
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M_Y" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M_X" mesh_id: 1 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M_Y" mesh_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M_X" mesh_id: 1 } }
+            channels: { count: 4 policy: RELAXED }
+          }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    const std::filesystem::path test_file =
+        std::filesystem::temp_directory_path() / "test_inter_mesh_different_torus_axes.textproto";
+    {
+        std::ofstream file(test_file);
+        file << text_proto;
+    }
+
+    EXPECT_NO_THROW(
+        tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, test_file.string()));
+
+    std::filesystem::remove(test_file);
+}
+
 TEST(MeshGraphDescriptorTests, AssignZDirectionGraphTopologyInMeshGraph) {
     // Test that assign_z_direction flag from graph topology is properly tracked in MeshGraph
     const std::string text_proto = R"proto(
