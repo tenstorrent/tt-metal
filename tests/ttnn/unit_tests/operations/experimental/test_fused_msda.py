@@ -79,7 +79,7 @@ def _offset_scale(extent: int, align_corners: bool) -> float:
 def _locations_from_offsets(reference_points, sampling_offsets, spatial_shapes, reference_mode, align_corners=False):
     """The V2 frontend, in PyTorch. (B, Q, R, 2) + (B, Q, H, L, P, 2) -> (B, Q, H, L, P, 2).
 
-    Offsets are feature-map pixels; align_corners selects the same spacing as the reader.
+    Offsets are feature-map pixels; align_corners selects the same spacing the SFPU applies.
     """
     B, Q, H, L, P, _ = sampling_offsets.shape
     R = reference_points.shape[2]
