@@ -21,7 +21,7 @@ import torch
 
 import ttnn
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
-from models.experimental.bevformer.model_config import GRID_DTYPE
+from models.experimental.bevformer.model_config import CENTERS_FIRST, GRID_DTYPE
 from models.experimental.bevformer.reference.fpn import FPN
 from models.experimental.bevformer.reference.resnet import ModulatedDeformConv2dPack, ResNet
 from models.experimental.bevformer.tt.tt_modulated_deform_conv import grid_offset_order
@@ -402,13 +402,17 @@ def create_reg_branch_parameters(reg_branches, device, dtype=DEFAULT_DTYPE):
     """The three Linears of each ``Linear-ReLU-Linear-ReLU-Linear`` branch.
 
     The decoder runs each branch once per layer: it refines its reference points with the
-    center channels of the box code and returns the whole code, which the head uses.
+    center channels of the box code and returns the whole code, which the head uses. The last
+    Linear's rows go in ``CENTERS_FIRST`` order, the code order the decoder takes.
     """
     branches = []
     for branch in reg_branches:
         # Unpacking checks the three Linears TtDetectionTransformerDecoder._reg_branch runs.
         first, second, last = (m for m in branch if isinstance(m, torch.nn.Linear))
-        branches.append([linear_params(m.weight, m.bias, device, dtype) for m in (first, second, last)])
+        branches.append(
+            [linear_params(m.weight, m.bias, device, dtype) for m in (first, second)]
+            + [linear_params(last.weight[CENTERS_FIRST], last.bias[CENTERS_FIRST], device, dtype)]
+        )
     return branches
 
 
