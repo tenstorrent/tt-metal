@@ -2,12 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared checks for SDPAProgramConfig(fp32_accumulation=True) (post-commit and nightly suites).
+"""Shared checks for SDPAProgramConfig(fp32_accumulation=True) on SDPA decode (post-commit and nightly suites).
 
-The default kernels round the running softmax sum and output accumulator through BF16 (decode) or 19-bit source
-registers (prefill) on every K chunk, so their error grows with context length. Each check runs the op with and
-without the option, compares both against an FP64 reference and requires the option to stay under a relative-L2
-bound and to beat the default by a given factor.
+The default decode kernel rounds the running softmax sum and output accumulator through BF16 at every K chunk and
+tree merge, so its error grows with context length. Each check runs the op with and without the option, compares
+both against an FP64 reference and requires the option to stay under a relative-L2 bound and to beat the default by
+a given factor.
 """
 
 import math
@@ -44,17 +44,14 @@ def program_config(device, q_chunk_size, k_chunk_size, fp32_accumulation, max_co
     )
 
 
-def reference_attention(q, k, v, ends, sink=None):
+def reference_attention(q, k, v, ends):
     """FP64 attention of q [h, rows, d] over k/v [kv_heads, s, d]; query row r sees keys [0, ends[r])."""
     heads, kv_heads, d = q.shape[0], k.shape[0], q.shape[-1]
     k, v = k.double().repeat_interleave(heads // kv_heads, 0), v.double().repeat_interleave(heads // kv_heads, 0)
     out = torch.empty(q.shape, dtype=torch.float64)
     for r, end in enumerate(ends):
         scores = torch.einsum("hd,hsd->hs", q[:, r].double(), k[:, :end]) / math.sqrt(d)
-        if sink is not None:
-            scores = torch.cat([scores, sink.double().reshape(heads, 1) / math.sqrt(d)], dim=-1)
-        probs = scores.softmax(-1)[:, :end]
-        out[:, r] = torch.einsum("hs,hsd->hd", probs, v[:, :end])
+        out[:, r] = torch.einsum("hs,hsd->hd", scores.softmax(-1), v[:, :end])
     return out
 
 
@@ -136,63 +133,4 @@ def run_unpaged_decode(device, batch, heads, kv_heads, seq, k_chunk_size, bound,
             program_config=program_config(device, 0, k_chunk_size, fp32_accumulation),
         )
         errors[fp32_accumulation] = rel_l2(ttnn.to_torch(out)[0, :, :heads], expected)
-    check(errors, bound, factor)
-
-
-def run_chunked_prefill(device, start, chunk, q_chunk_size, k_chunk_size, start_as_tensor, bound, factor):
-    heads, kv_heads, block_size = 8, 2, 32
-    capacity = 1 << (start + chunk - 1).bit_length()
-    tt_k, tt_v, tt_page_table, linear = paged_kv(device, 1, kv_heads, capacity, block_size, ttnn.bfloat8_b, 61)
-    torch.manual_seed(62)
-    q = torch.randn(1, heads, chunk, 128)
-    tt_q = ttnn.from_torch(q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    start_args = (
-        {"chunk_start_idx_tensor": ttnn.from_torch(torch.tensor([start], dtype=torch.int32), device=device)}
-        if start_as_tensor
-        else {"chunk_start_idx": start}
-    )
-    rows = torch.unique(torch.cat([torch.linspace(0, chunk - 1, 24).long(), torch.tensor([chunk - 1])]))
-    expected = reference_attention(q[0][:, rows], *linear[0], [start + int(r) + 1 for r in rows])
-    errors = {}
-    for fp32_accumulation in (False, True):
-        out = ttnn.transformer.chunked_scaled_dot_product_attention(
-            tt_q,
-            tt_k,
-            tt_v,
-            tt_page_table,
-            compute_kernel_config=compute_config(device),
-            program_config=program_config(device, q_chunk_size, k_chunk_size, fp32_accumulation),
-            **start_args,
-        )
-        errors[fp32_accumulation] = rel_l2(ttnn.to_torch(out)[0][:, rows], expected)
-    check(errors, bound, factor)
-
-
-def run_prefill(device, seq, q_chunk_size, k_chunk_size, use_sink, bound, factor):
-    torch.manual_seed(11)
-    heads, kv_heads = 8, 2
-    q = torch.randn(1, heads, seq, 128)
-    k = torch.randn(1, kv_heads, seq, 128)
-    v = torch.randn(1, kv_heads, seq, 128)
-    sink = torch.rand(1, heads, 1, 1) * 4.0 if use_sink else None
-    tt_q, tt_k, tt_v = (
-        ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, v)
-    )
-    tt_sink = ttnn.from_torch(sink, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) if use_sink else None
-    k, v = ttnn.to_torch(tt_k).float(), ttnn.to_torch(tt_v).float()
-    rows = torch.unique(torch.cat([torch.linspace(0, seq - 1, 24).long(), torch.tensor([seq - 1])]))
-    stored_sink = ttnn.to_torch(tt_sink).float() if use_sink else None
-    expected = reference_attention(q[0][:, rows], k[0], v[0], [int(r) + 1 for r in rows], stored_sink)
-    errors = {}
-    for fp32_accumulation in (False, True):
-        out = ttnn.transformer.scaled_dot_product_attention(
-            tt_q,
-            tt_k,
-            tt_v,
-            is_causal=True,
-            attention_sink=tt_sink,
-            compute_kernel_config=compute_config(device),
-            program_config=program_config(device, q_chunk_size, k_chunk_size, fp32_accumulation),
-        )
-        errors[fp32_accumulation] = rel_l2(ttnn.to_torch(out)[0][:, rows], expected)
     check(errors, bound, factor)

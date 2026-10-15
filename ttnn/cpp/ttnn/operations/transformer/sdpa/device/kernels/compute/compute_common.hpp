@@ -28,7 +28,6 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/kernel_lib/dest_helpers.hpp"
-#include "fp32_accumulation.hpp"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #endif
@@ -349,8 +348,7 @@ template <
     uint32_t scale_fp32,
     bool write_result_inplace = true,
     bool do_reduce = true,
-    VectorMode vector_mode = VectorMode::RC,
-    bool fp32_exp2 = false>
+    VectorMode vector_mode = VectorMode::RC>
 void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint32_t cols) {
     CircularBuffer cb_in0(in0_cb);
     CircularBuffer cb_in1(in1_cb);
@@ -399,20 +397,6 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
                 if constexpr (EXP_APPROX_MODE || vector_mode != VectorMode::RC) {
                     exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(
                         j, vector_mode_exp);
-#ifdef ARCH_BLACKHOLE
-                } else if constexpr (fp32_exp2) {
-                    // fp32_accumulation: scale fused into a base-2 exponential (fp32_accumulation.hpp).
-                    exp_tile_init<false, 0x3F800000, InputClamping::ClampToNegative>();
-                    MATH((ckernel::sfpu::sdpa_fp32_exp2_init()));
-                    MATH((SFPU_UNARY_CALL(
-                        DST_SYNC_MODE,
-                        DST_ACCUM_MODE,
-                        sdpa_fp32_exp2_scaled,
-                        (iterations),
-                        j,
-                        vector_mode_exp,
-                        sdpa_fp32_log2e_scale_bits(scale_fp32))));
-#endif
                 } else {
                     // Apply the full FP32 attention scale once before accurate exponentiation.
                     // The init scale 0x3F800000 is the IEEE-754 encoding of 1.0f.
@@ -866,66 +850,6 @@ void correction_block(
     cb_worker_sum_obj.pop_front(num_head_tiles);
 }
 
-namespace sdpa_fp32 {
-// correction_block for SDPAProgramConfig::fp32_accumulation (decode tree reduction): sums and correction factors
-// are FP32 and read losslessly while maxima stay BF16, so every operand gets its own unpack configuration and
-// every output its own pack configuration. The fused SFPU arithmetic is unchanged.
-template <uint32_t scale_fp32, VectorMode vector_mode = VectorMode::C>
-void correction_block(
-    uint32_t cb_worker_max,
-    uint32_t cb_worker_sum,
-    uint32_t cb_cur_max,
-    uint32_t cb_prev_max,
-    uint32_t cb_cur_sum,
-    uint32_t cb_prev_sum,
-    uint32_t cb_exp_max_diff,
-    uint32_t cb_exp_max_diff_2,
-    uint32_t num_head_tiles) {
-    CircularBuffer worker_max(cb_worker_max), worker_sum(cb_worker_sum), cur_max(cb_cur_max), prev_max(cb_prev_max),
-        cur_sum(cb_cur_sum), prev_sum(cb_prev_sum), exp_diff(cb_exp_max_diff), exp_diff_2(cb_exp_max_diff_2);
-    worker_max.wait_front(num_head_tiles);
-    worker_sum.wait_front(num_head_tiles);
-    prev_max.wait_front(num_head_tiles);
-    prev_sum.wait_front(num_head_tiles);
-    cur_max.reserve_back(num_head_tiles);
-    cur_sum.reserve_back(num_head_tiles);
-    exp_diff.reserve_back(num_head_tiles);
-    exp_diff_2.reserve_back(num_head_tiles);
-    // Same DST layout as correction_block (#56171).
-    constexpr uint32_t worker_sum_dst = (DST_ACCUM_MODE && DST_SYNC_MODE == DstSync::SyncHalf) ? 2 : 4;
-    static_assert(
-        worker_sum_dst < compute_kernel_lib::DEST_AUTO_LIMIT,
-        "correction_block DST layout exceeds DEST capacity for this sync/accum mode");
-    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
-    for (uint32_t i = 0; i < num_head_tiles; i++) {
-        tile_regs_acquire();
-        copy_to_dst(cb_prev_max, i, 0);
-        copy_to_dst(cb_worker_max, i, 1);
-        copy_to_dst(cb_prev_sum, i, 3);
-        copy_to_dst(cb_worker_sum, i, worker_sum_dst);
-        exp_tile_init<EXP_APPROX_MODE>();
-        MATH((fused_max_sub_exp_add_tile<vector_mode>(0, scale_bf16)));
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_exp_max_diff);
-        pack_tile(0, cb_exp_max_diff);
-        pack_reconfig_data_format(cb_exp_max_diff_2);
-        pack_tile(1, cb_exp_max_diff_2);
-        pack_reconfig_data_format(cb_cur_max);
-        pack_tile(2, cb_cur_max);
-        pack_reconfig_data_format(cb_cur_sum);
-        pack_tile(3, cb_cur_sum);
-        tile_regs_release();
-        cur_max.push_back(1);
-        cur_sum.push_back(1);
-        exp_diff.push_back(1);
-        exp_diff_2.push_back(1);
-    }
-    prev_sum.pop_front(num_head_tiles);
-    worker_sum.pop_front(num_head_tiles);
-}
-}  // namespace sdpa_fp32
-
 /**
  * in_cb -> out_cb
  */
@@ -957,17 +881,6 @@ void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
         cb_in.pop_front(num_tiles);
     }
 }
-
-namespace sdpa_fp32 {
-// move_block that sets both unpack and pack formats: under fp32_accumulation source and destination formats can
-// differ (BF16 maxima moved into FP32 exchange CBs, for example).
-template <bool pop_in_cb>
-void move_block_reconfig(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
-    reconfig_data_format_srca(in_cb);
-    pack_reconfig_data_format(out_cb);
-    move_block<pop_in_cb>(in_cb, out_cb, num_tiles);
-}
-}  // namespace sdpa_fp32
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     CircularBuffer cb_in(in_cb);
@@ -2029,14 +1942,8 @@ void sdpa_inner_loop(
              * Partial reduce_sum is used to push the final row_reduction within a tile
              * outside of the loop over K chunks.
              */
-            sub_exp_block_bcast_cols_inplace<
-                cb_qk_im,
-                Sq_chunk_t,
-                scale_fp32,
-                true,
-                true,
-                VectorMode::RC,
-                sdpa_fp32_accumulation>(alias_cur_max, alias_cur_sum, Sk_chunk_t);
+            sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
+                alias_cur_max, alias_cur_sum, Sk_chunk_t);
 
             // Reconfigure unpackers: srcA (context 0) = cb_v_in, srcB (context 1) = cb_qk_im (operands are swapped in
             // matmul)
@@ -2067,37 +1974,25 @@ void sdpa_inner_loop(
                  * cb_exp_max_diff = torch.exp((cb_prev_max - cb_cur_max) * scale)
                  * Scale is fused into exp again since max is the max of unscaled scores.
                  */
-                if constexpr (sdpa_fp32_accumulation) {
-                    // The PV matmul above packed the FP32 output accumulator.
-                    pack_reconfig_data_format(cb_exp_max_diff);
-                }
                 sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
                 CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);
 
-                if constexpr (sdpa_fp32_accumulation) {
-                    // Same recurrence in FP32 DEST from lossless reads (fp32_accumulation.hpp).
-                    sdpa_fp32::mul_sum_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
-                    sdpa_fp32::add_sum_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
-                    sdpa_fp32::accumulate_output<Sq_chunk_t, vDHt>(
-                        alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
-                } else {
-                    /**
-                     * cb_prev_sum *= cb_exp_max_diff
-                     * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
-                     * reduction, containing the sum of tiles in dim=-1 of QK.
-                     */
-                    mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                /**
+                 * cb_prev_sum *= cb_exp_max_diff
+                 * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
+                 * reduction, containing the sum of tiles in dim=-1 of QK.
+                 */
+                mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
-                    /* cb_cur_sum += cb_prev_sum */
-                    add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+                /* cb_cur_sum += cb_prev_sum */
+                add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
 
-                    /**
-                     * alias_mm2_cur_out += alias_mm2_prev_out * cb_exp_max_diff
-                     * This uses L1 accumulation to accumulate onto mm2_cur_out.
-                     */
-                    mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
-                        alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
-                }
+                /**
+                 * alias_mm2_cur_out += alias_mm2_prev_out * cb_exp_max_diff
+                 * This uses L1 accumulation to accumulate onto mm2_cur_out.
+                 */
+                mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
+                    alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
             }
 
             // Swap CB handles to prepare for next iteration
@@ -2136,35 +2031,18 @@ void sdpa_inner_loop(
                 alias_cur_max, alias_prev_max, true);
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
-            if constexpr (sdpa_fp32_accumulation) {
-                pack_reconfig_data_format(cb_exp_max_diff);
-            }
             sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
             CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);
 
             // 3. Rescale previous sum: prev_sum *= exp(prev_max - cur_max)
-            if constexpr (sdpa_fp32_accumulation) {
-                sdpa_fp32::mul_sum_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
-            } else {
-                mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
-            }
+            mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
             // 4. Compute exp((attention_sink - cur_max) * scale) and accumulate in cur_sum
             //    This adds the attention sink's contribution to the softmax denominator
-            sub_exp_block_bcast_cols_inplace<
-                cb_attention_sink,
-                Sq_chunk_t,
-                scale_fp32,
-                false,
-                true,
-                VectorMode::RC,
-                sdpa_fp32_accumulation>(alias_cur_max, alias_cur_sum, 1);
+            sub_exp_block_bcast_cols_inplace<cb_attention_sink, Sq_chunk_t, scale_fp32, false>(
+                alias_cur_max, alias_cur_sum, 1);
 
             // 5. Add rescaled previous sum to current sum: cur_sum += prev_sum
-            if constexpr (sdpa_fp32_accumulation) {
-                sdpa_fp32::add_sum_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
-            } else {
-                add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
-            }
+            add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
 
             // 6. Update running statistics for final normalization
             std::swap(alias_prev_sum, alias_cur_sum);
@@ -2245,11 +2123,7 @@ void sdpa_inner_loop(
 
             /* cb_out_accumulate_im *= cb_cur_sum */
             pack_reconfig_data_format(cb_out);
-            if constexpr (sdpa_fp32_accumulation) {
-                sdpa_fp32::normalize_output<Sq_chunk_t, vDHt>(alias_mm2_prev_out, alias_prev_sum, cb_out);
-            } else {
-                mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(alias_mm2_prev_out, alias_prev_sum, cb_out);
-            }
+            mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(alias_mm2_prev_out, alias_prev_sum, cb_out);
 
             // free up cb_prev_max after K chunks
             CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);

@@ -28,6 +28,7 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/operations/transformer/sdpa_decode/device/kernels/compute/fp32_accumulation.hpp"
 
 // Code size: the tree-reduction / finalize move_block calls run once per head, not per K chunk.
 // Without noclone, GCC IPA-CP emits a separate constprop clone of move_block<true> (~0.3-1.7 KB per

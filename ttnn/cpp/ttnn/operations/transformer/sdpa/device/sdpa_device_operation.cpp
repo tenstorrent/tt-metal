@@ -32,14 +32,9 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 !tensors.chunk_start_idx_tensor.has_value(),
             "output_concat_heads is supported for the plain (non-chunked, non-paged) SDPA only");
     }
-    if (attrs.program_config.has_value() && attrs.program_config->fp32_accumulation) {
-        // FP32 online-softmax state (kernels/compute/fp32_accumulation.hpp) on the standard (fp32_dest_acc_en)
-        // compute path.
-        const auto fp32_dest_acc_en =
-            std::get<2>(ttnn::get_compute_kernel_config_args(tensors.q.device()->arch(), attrs.compute_kernel_config));
-        TT_FATAL(fp32_dest_acc_en, "fp32_accumulation requires fp32_dest_acc_en in the compute kernel config");
-        TT_FATAL(!use_mla, "fp32_accumulation is not supported with multi-latent attention");
-    }
+    TT_FATAL(
+        !(attrs.program_config.has_value() && attrs.program_config->fp32_accumulation),
+        "SDPAProgramConfig.fp32_accumulation is supported by the SDPA decode ops only");
 
     const Tensor& q = tensors.q;
     const Tensor& k = tensors.k;
