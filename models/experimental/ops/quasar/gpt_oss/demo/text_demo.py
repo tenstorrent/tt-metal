@@ -25,7 +25,7 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole, is_quasar
 from models.experimental.ops.quasar.gpt_oss.tests.test_factory import TestFactory, parametrize_mesh_with_fabric
 
 # Import GPT-OSS components using our refactored patterns
@@ -483,6 +483,12 @@ def test_gpt_oss_demo(
     state_dict,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
+    # On Quasar the token embedding runs on the host (see Model.__init__). A device trace replays only
+    # device commands, so a traced step would replay without the embedding.
+    if is_quasar() and (enable_decode_trace or enable_prefill_trace):
+        logger.info("Quasar: running without device trace capture, because the token embedding runs on the host")
+        enable_decode_trace = False
+        enable_prefill_trace = False
     # ttnn logging and device trace capture are mutually exclusive: with enable_logging on, every op
     # calls ttnn.synchronize_device and the python I/O recorder reads tensors back to host, both
     # hard-fatal inside a trace region ("Event Synchronization / Reads are not supported during
