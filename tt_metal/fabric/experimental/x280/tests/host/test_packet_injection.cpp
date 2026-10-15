@@ -1731,7 +1731,7 @@ TEST(PacketInjectionMemoryProfile, ArenaExcludesImageStacksTrapsSocket) {
     // Excludes active traps [0x0811FF80, 0x08120000)
     EXPECT_LE(arena.end, 0x0811FF80ULL);
 
-    // Excludes boot/socket/protocol [0x08120000, 0x08154000)
+    // Excludes everything from 0x08120000 up: the hart protocol block and the socket layout
     EXPECT_LE(arena.end, 0x08120000ULL);
 }
 

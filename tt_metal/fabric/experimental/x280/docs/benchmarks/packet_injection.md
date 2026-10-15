@@ -411,7 +411,8 @@ The benchmark requires the opt-in `LimLayout::PacketInjection` memory profile:
 - **Image Text Bound:** Image text/rodata/data is constrained to `[0x08001000, 0x08020000)`
   (max 126,976 bytes). Linker scripts enforce `_bss_end <= 0x08020000` via `--defsym=X280_PACKET_INJECTION_LAYOUT=1`.
 - **Upper Reserved Spans:** Stacks (`0x080FFF80..0x0811FF80`), trap blocks (`0x0811FF80..0x08120000`),
-  and boot/socket/protocol reservations (`0x08120000..0x08154000`) remain completely untouched.
+  and everything above them through the socket layout's end (`0x08120000..0x08154000`, which holds the
+  runtime's reservation through the hart protocol block, ending at `0x08131B00`) remain completely untouched.
 
 Arena sizing formula:
 `F(P, T, S) = align64(align64(320 + align64(8*T) + 8*P) + 24*P) + 128*P + 128*P*S`.
