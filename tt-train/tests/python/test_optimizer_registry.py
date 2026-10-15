@@ -309,7 +309,7 @@ def test_pipeline_stage_allows_param_groups_empty_on_this_stage(expect_error, tm
     with expect_error(RuntimeError, "matches no parameters"):
         create_optimizer(model, {"training_config": {"optimizer": optimizer_cfg}})
 
-    # The training configs point training_config.multihost_config at a separate multihost YAML file...
+    # The training configs point training_config.multihost_config at a separate multihost YAML file.
     multihost_path = tmp_path / "pp_multihost.yaml"
     multihost_path.write_text(
         yaml.safe_dump({"multihost_config": {"enabled": True, "pipeline_parallel_config": {"num_blocks": 2}}})
@@ -317,13 +317,6 @@ def test_pipeline_stage_allows_param_groups_empty_on_this_stage(expect_error, tm
     opt = create_optimizer(
         model, {"training_config": {"optimizer": optimizer_cfg, "multihost_config": str(multihost_path)}}
     )
-    assert opt.get_group_lrs() == pytest.approx([1e-3, 2e-3])
-    # ...and an inline top-level multihost_config section works too.
-    pp_config = {
-        "training_config": {"optimizer": optimizer_cfg},
-        "multihost_config": {"pipeline_parallel_config": {"num_blocks": 2}},
-    }
-    opt = create_optimizer(model, pp_config)
     assert opt.get_group_lrs() == pytest.approx([1e-3, 2e-3])
     assert "allow_empty_param_groups" not in optimizer_cfg  # the caller's config is not mutated
 

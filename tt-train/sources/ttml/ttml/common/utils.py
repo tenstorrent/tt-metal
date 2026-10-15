@@ -208,17 +208,10 @@ def create_optimizer(model, yaml_config: dict):
 
 
 def _is_pipeline_parallel(yaml_config: dict) -> bool:
-    """Whether the full config enables pipeline parallelism, resolved like TransformerModelFactory does:
-    ``training_config.multihost_config`` is a path to the multihost YAML; an inline top-level ``multihost_config``
-    section is accepted too."""
-    from .config import MultiHostConfig, load_config
+    """Whether the full config enables pipeline parallelism."""
+    from .config import resolve_multihost_config
 
-    tc = yaml_config.get("training_config", {})
-    if "multihost_config" in tc:
-        multihost_config = MultiHostConfig(load_config(tc["multihost_config"]))
-    else:
-        multihost_config = MultiHostConfig(yaml_config)
-    return multihost_config.pipeline_parallel_config is not None
+    return resolve_multihost_config(yaml_config).pipeline_parallel_config is not None
 
 
 def get_loss_over_devices(loss):
