@@ -33,3 +33,19 @@ def pytest_collection_modifyitems(session, config, items):
     assert len(keep) == EXPECTED[MODE], [item.nodeid for item in keep]
     Path("generated").mkdir(exist_ok=True)
     Path("generated/flash-expert-collection.json").write_text(json.dumps([item.nodeid for item in keep], indent=2))
+
+
+def pytest_runtest_call(item):
+    import ttnn
+
+    device = item.funcargs["mesh_device"]
+    grid = device.compute_with_storage_grid_size()
+    cores = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.RISCV_0_default)
+    receipt = {
+        "nodeid": item.nodeid,
+        "grid": [grid.x, grid.y],
+        "preferred_dram_workers": [[core.x, core.y] for core in cores],
+    }
+    print("FLASH_PLACEMENT " + json.dumps(receipt, sort_keys=True), flush=True)
+    with Path("generated/flash-placement.jsonl").open("a") as stream:
+        stream.write(json.dumps(receipt, sort_keys=True) + "\n")
