@@ -74,8 +74,11 @@ constexpr bool STAGES_GEOMETRY = get_compile_time_arg_val(23);
 constexpr uint32_t FIRST_POSITION = get_compile_time_arg_val(24);
 constexpr uint32_t output_cb_index = get_compile_time_arg_val(25);
 constexpr uint32_t output_tile_nbytes = get_compile_time_arg_val(26);
+// The two halves of the core's input band: the first copy fills the first, the second the other.
+constexpr uint32_t band_a_cb_index = get_compile_time_arg_val(27);
+constexpr uint32_t band_b_cb_index = get_compile_time_arg_val(28);
 
-constexpr auto input_args = TensorAccessorArgs<27>();
+constexpr auto input_args = TensorAccessorArgs<29>();
 constexpr auto offset_mask_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<offset_mask_args.next_compile_time_args_offset()>();
 
@@ -160,6 +163,9 @@ void kernel_main() {
     const uint32_t num_blocks = get_arg_val<uint32_t>(3);
     const uint32_t num_rows = get_arg_val<uint32_t>(4);
     const uint32_t output_addr = get_arg_val<uint32_t>(5);
+    // The core's band of input pages, [band_first_page, band_first_page + band_pages).
+    const uint32_t band_first_page = get_arg_val<uint32_t>(6);
+    const uint32_t band_pages = get_arg_val<uint32_t>(7);
 
     const auto input_acc = TensorAccessor(input_args, input_addr, input_page_nbytes);
     const auto offset_mask_acc = TensorAccessor(offset_mask_args, offset_mask_addr, offset_mask_page_nbytes);
@@ -257,6 +263,28 @@ void kernel_main() {
         }
     }
 
+    // Each copy brings in its half of the band, then both wait for the whole of it.
+    const uint32_t band_half = (band_pages + 1) / 2;
+    CircularBuffer band_a_cb(band_a_cb_index);
+    CircularBuffer band_b_cb(band_b_cb_index);
+    {
+        CircularBuffer& own = FIRST_POSITION == 0 ? band_a_cb : band_b_cb;
+        const uint32_t begin = FIRST_POSITION == 0 ? 0 : band_half;
+        const uint32_t end = FIRST_POSITION == 0 ? band_half : band_pages;
+        own.reserve_back(1);
+        const uint32_t own_l1 = own.get_write_ptr();
+        for (uint32_t p = begin; p < end; ++p) {
+            CoreLocalMem<uint32_t> dst(own_l1 + (p - begin) * input_page_nbytes);
+            noc.async_read(input_acc, dst, STICK_NBYTES, {.page_id = band_first_page + p}, {.offset_bytes = 0});
+        }
+        noc.async_read_barrier();
+        own.push_back(1);
+    }
+    band_a_cb.wait_front(1);
+    band_b_cb.wait_front(1);
+    const uint32_t band_a_l1 = band_a_cb.get_read_ptr();
+    const uint32_t band_b_l1 = band_b_cb.get_read_ptr();
+
     uint32_t image_page[TILE_ROWS];  // first page of each row's image
     uint32_t page[TILE_ROWS];
     uint16_t weight[CORNERS][TILE_ROWS];
@@ -312,9 +340,18 @@ void kernel_main() {
                         zero_stick(dst_l1);
                         continue;
                     }
-                    CoreLocalMem<uint32_t> dst(dst_l1);
-                    noc.async_read(
-                        input_acc, dst, STICK_NBYTES, {.page_id = page[r] + corner_page_offset}, {.offset_bytes = 0});
+                    const uint32_t page_id = page[r] + corner_page_offset;
+                    // Unsigned, so a page before the band also falls outside it.
+                    const uint32_t in_band = page_id - band_first_page;
+                    if (in_band < band_pages) {
+                        const uint32_t src_l1 = in_band < band_half
+                                                    ? band_a_l1 + in_band * input_page_nbytes
+                                                    : band_b_l1 + (in_band - band_half) * input_page_nbytes;
+                        noc_async_read(get_noc_addr(src_l1), dst_l1, STICK_NBYTES);
+                    } else {
+                        CoreLocalMem<uint32_t> dst(dst_l1);
+                        noc.async_read(input_acc, dst, STICK_NBYTES, {.page_id = page_id}, {.offset_bytes = 0});
+                    }
                 }
             }
             noc.async_read_barrier();
