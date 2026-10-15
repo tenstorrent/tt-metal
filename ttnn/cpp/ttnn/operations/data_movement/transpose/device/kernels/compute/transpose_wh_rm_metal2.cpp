@@ -2,18 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 fork of transpose_wh_rm.cpp (see the legacy copy alongside).
-// Compute logic is unchanged; resource access uses Metal 2.0 named handles:
-//   - c_0 / c_24 / c_16 (legacy magic CB indices) -> dfb::in0 / dfb::tilize / dfb::out
-//   - Ht / Wt / HtWt (legacy CTAs 0-2)            -> named compile-time args
-//   - num_hw_blocks_per_core (legacy RTA 0)       -> named RTA
-//
-// Forked (not modified in place) because the legacy copy is also bound by
-// TransposeWHShardedRMProgramFactory, which is still on the legacy host API and compiles
-// this source with SHARDED defined. Only the non-sharded path lives here: the fork is never
-// compiled with SHARDED, so carrying that branch would be dead code referencing buffers this
-// spec does not bind. The sharded variant — including its pack_untilize narrow-row path and
-// the yolov4/PCC note explaining the use_narrow_row conditions — remains in the legacy copy.
+// Interleaved row-major WH transpose. The sharded variant, including its narrow-row pack path, is
+// transpose_wh_rm_sharded.cpp.
 
 #include <cstdint>
 

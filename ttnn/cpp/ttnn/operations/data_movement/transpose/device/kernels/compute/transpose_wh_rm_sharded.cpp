@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-// A Metal 2.0 port of this kernel's non-sharded path exists alongside it as
-// transpose_wh_rm_metal2.cpp. Ops still on the legacy host API bind this copy (the sharded
-// path below is compiled only from here); ops on Metal 2.0 bind the fork. Keep the two in
-// sync when changing the shared compute logic.
+
+// Row-major sharded WH transpose: tilize the input rows, transpose, and pack-untilize into the output
+// (or into a staging DFB the writer drains when Ht > 8 or on Quasar). The interleaved row-major path
+// is transpose_wh_rm_metal2.cpp.
 
 #include <cstdint>
 
@@ -14,6 +14,7 @@
 #include "api/compute/pack_untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 template <
     uint32_t Wt,
@@ -23,12 +24,12 @@ template <
     uint32_t row_size,
     uint32_t pack_num_pages_last_col,
     uint32_t pack_num_pages_last_row_col,
-    uint32_t dfb_out>
-ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, DataflowBuffer& dfb_out_buf) {
+    uint32_t cb_out>
+ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, DataflowBuffer& cb_out_buf) {
     uint32_t tile_idx = 0;
 
     transpose_init(cb_tilize);
-    pack_untilize_dest_init<Ht, Ht, use_narrow_row, row_size>(dfb_out);
+    pack_untilize_dest_init<Ht, Ht, use_narrow_row, row_size>(cb_out);
     for (uint32_t w = 0; w < Wt; ++w) {
         tile_regs_acquire();
         for (uint32_t h = 0; h < Ht; ++h) {
@@ -39,21 +40,21 @@ ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, DataflowBu
         tile_regs_commit();
 
         if (w == Wt - 1) {  // last row
-            dfb_out_buf.reserve_back(pack_num_pages_last_row_col);
+            cb_out_buf.reserve_back(pack_num_pages_last_row_col);
             tile_regs_wait();
-            pack_untilize_dest<Ht, Ht, false, use_narrow_row, row_size>(dfb_out);
+            pack_untilize_dest<Ht, Ht, false, use_narrow_row, row_size>(cb_out);
             tile_regs_release();
-            dfb_out_buf.push_back(pack_num_pages_last_row_col);
+            cb_out_buf.push_back(pack_num_pages_last_row_col);
         } else {
-            dfb_out_buf.reserve_back(pack_num_pages_last_col);
+            cb_out_buf.reserve_back(pack_num_pages_last_col);
             tile_regs_wait();
-            pack_untilize_dest<Ht, Ht, false, use_narrow_row, row_size>(dfb_out);
+            pack_untilize_dest<Ht, Ht, false, use_narrow_row, row_size>(cb_out);
             tile_regs_release();
-            dfb_out_buf.push_back(pack_num_pages_last_col);
+            cb_out_buf.push_back(pack_num_pages_last_col);
         }
         tile_idx = tile_idx - HtWt + 1;
     }
-    pack_untilize_uninit(dfb_out);
+    pack_untilize_uninit(cb_out);
 }
 
 // Helper constexpr function to compute num_blocks_per_col
@@ -69,17 +70,17 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
     return 1;
 }
 
-template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t dfb_out>
-ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DataflowBuffer& dfb_out_buf) {
+template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t cb_out>
+ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DataflowBuffer& cb_out_buf) {
     uint32_t tile_idx = 0;
 
     transpose_init(cb_tilize);
     constexpr uint32_t num_blocks_per_col = compute_num_blocks_per_col(Ht);
     constexpr uint32_t block_ct_dim = Ht / num_blocks_per_col;
     constexpr uint32_t full_ct_dim = Ht;
-    pack_untilize_dest_init<block_ct_dim, full_ct_dim>(dfb_out);
+    pack_untilize_dest_init<block_ct_dim, full_ct_dim>(cb_out);
     for (uint32_t w = 0; w < Wt; ++w) {
-        dfb_out_buf.reserve_back(Ht);
+        cb_out_buf.reserve_back(Ht);
         for (uint32_t b = 0; b < num_blocks_per_col; ++b) {
             tile_regs_acquire();
             for (uint32_t h = 0; h < block_ct_dim; ++h) {
@@ -89,27 +90,25 @@ ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DataflowBuffer& dfb_o
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_untilize_dest<block_ct_dim, full_ct_dim>(dfb_out, 1, b);
+            pack_untilize_dest<block_ct_dim, full_ct_dim>(cb_out, 1, b);
             tile_regs_release();
         }
-        dfb_out_buf.push_back(Ht);
+        cb_out_buf.push_back(Ht);
 
         tile_idx = tile_idx - HtWt + 1;
     }
-    pack_untilize_uninit(dfb_out);
+    pack_untilize_uninit(cb_out);
 }
 
 void kernel_main() {
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t HtWt = get_compile_time_arg_val(2);
-#ifdef SHARDED
-    constexpr uint32_t num_hw_blocks_per_core = get_compile_time_arg_val(3);
-    constexpr uint32_t last_output_row_num_datums = get_compile_time_arg_val(4);
-    constexpr uint32_t pack_num_pages = get_compile_time_arg_val(5);
-    constexpr uint32_t pack_num_pages_last_col = get_compile_time_arg_val(6);
-    constexpr uint32_t pack_num_pages_last_row = get_compile_time_arg_val(7);
-    constexpr uint32_t pack_num_pages_last_row_col = get_compile_time_arg_val(8);
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t HtWt = get_arg(args::HtWt);
+    constexpr uint32_t num_hw_blocks_per_core = get_arg(args::num_hw_blocks_per_core);
+    constexpr uint32_t last_output_row_num_datums = get_arg(args::last_output_row_num_datums);
+    constexpr uint32_t pack_num_pages_last_col = get_arg(args::pack_num_pages_last_col);
+    constexpr uint32_t pack_num_pages_last_row_col = get_arg(args::pack_num_pages_last_row_col);
+
     // In order to support full_ct_dim > block_ct_dim, we would need to change use_narrow_row and row_size conditions to
     // be:
     //
@@ -119,29 +118,19 @@ void kernel_main() {
     //
     // However, changing these conditions makes yolov4 and transpose tests fail with a PCC error. For the error to be
     // present in BH, it needs to be run in the full model sweep, but for WH_B0 it can be seen in isolation.
+#ifdef ARCH_QUASAR
+    // No narrow-row pack on Quasar: pack whole tiles into staging; the writer drops each row's padding.
+    constexpr bool use_narrow_row = false;
+#else
     constexpr bool use_narrow_row = last_output_row_num_datums < TILE_WIDTH ? true : false;
+#endif
     constexpr uint32_t row_size = last_output_row_num_datums < TILE_WIDTH ? last_output_row_num_datums : TILE_WIDTH;
 
-#else
-    uint32_t num_hw_blocks_per_core = get_arg_val<uint32_t>(0);
-#endif
+    DataflowBuffer cb_tilize_buf(dfb::cb_tilize);
+    DataflowBuffer cb_out(dfb::cb_out);
 
-#ifdef SHARDED
-    constexpr auto cb_in = tt::CBIndex::c_24;
-    constexpr auto cb_tilize = tt::CBIndex::c_25;
-    constexpr auto cb_out_idx =
-        (Ht > 8) ? tt::CBIndex::c_27 : tt::CBIndex::c_16;  // temporary fix until pack_untilize is fully fixed
-#else
-    constexpr auto cb_in = tt::CBIndex::c_0;
-    constexpr auto cb_tilize = tt::CBIndex::c_24;
-    constexpr auto cb_out_idx = tt::CBIndex::c_16;
-#endif
-
-    DataflowBuffer dfb_tilize_buf(cb_tilize);
-    DataflowBuffer dfb_out(cb_out_idx);
-
-    compute_kernel_hw_startup(cb_in, cb_out_idx);
-    copy_init(cb_in);
+    compute_kernel_hw_startup(dfb::cb_in, dfb::cb_out);
+    copy_init(dfb::cb_in);
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         // Tilize input (Ht rows × Wt tiles). Fp32Mode::Lossless keeps the full
@@ -149,17 +138,15 @@ void kernel_main() {
         // collapse it to tf32 precision before the transpose ever runs.
         compute_kernel_lib::tilize<
             Wt,
-            cb_in,
-            cb_tilize,
+            dfb::cb_in,
+            dfb::cb_tilize,
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
             compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(Ht);
 
         // transpose
-        dfb_tilize_buf.wait_front(HtWt);
-        uint32_t tile_idx = 0;
-#ifdef SHARDED
+        cb_tilize_buf.wait_front(HtWt);
         if constexpr (use_narrow_row) {
             transpose_with_pack_untilize_narrow_row<
                 Wt,
@@ -169,14 +156,11 @@ void kernel_main() {
                 row_size,
                 pack_num_pages_last_col,
                 pack_num_pages_last_row_col,
-                cb_out_idx>(cb_tilize, dfb_out);
+                dfb::cb_out>(dfb::cb_tilize, cb_out);
         } else {
-            transpose_with_pack_untilize<Wt, Ht, HtWt, cb_out_idx>(cb_tilize, dfb_out);
+            transpose_with_pack_untilize<Wt, Ht, HtWt, dfb::cb_out>(dfb::cb_tilize, cb_out);
         }
-#else
-        transpose_with_pack_untilize<Wt, Ht, HtWt, cb_out_idx>(cb_tilize, dfb_out);
-#endif
 
-        dfb_tilize_buf.pop_front(HtWt);
+        cb_tilize_buf.pop_front(HtWt);
     }
 }
