@@ -230,3 +230,29 @@ def test_hardswish_bw_runs_the_fused_program_only_where_it_applies(call, device)
     assert error is None, error
     expected = _hardswish_bw_torch_gradient(g, x)
     assert_with_pcc(expected, ttnn.to_torch(result).float(), 0.999)
+
+
+@pytest.mark.parametrize("call", ["interleaved_tiles", "height_sharded", "float32"])
+def test_hardswish_bw_matches_torch_at_the_edges(call, device):
+    """At x = -3 torch's gradient is 0 and at x = 3 it is grad: both the fused program and the composite
+    use torch's edges, so the result does not depend on which one the call takes."""
+    shape = (1, 2, 32, 64)
+    generator = torch.Generator().manual_seed(0)
+    x = torch.tensor([-3.0, 3.0, -3.0078125, -2.984375, 2.984375, 3.015625, 0.0, 1.5]).repeat(shape[-1] * 64 // 8)
+    x = x.reshape(shape).to(torch.bfloat16)
+    g = (torch.rand(shape, generator=generator) + 0.5).to(torch.bfloat16)
+    dtype = ttnn.float32 if call == "float32" else ttnn.bfloat16
+    shard = ttnn.create_sharded_memory_config(
+        shape, core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.HEIGHT
+    )
+    memory = shard if call == "height_sharded" else ttnn.DRAM_MEMORY_CONFIG
+    tt_g = ttnn.from_torch(g, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory)
+    tt_x = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory)
+
+    result = ttnn.to_torch(ttnn.hardswish_bw(tt_g, tt_x)[0]).float()
+
+    expected = _hardswish_bw_torch_gradient(g, x)
+    x32 = x.float()
+    assert torch.equal(result[x32 == -3.0], torch.zeros_like(result[x32 == -3.0]))
+    assert torch.equal(result[x32 == 3.0], g.float()[x32 == 3.0])
+    assert torch.allclose(result, expected, rtol=1e-2, atol=1e-2), (result - expected).abs().max()
