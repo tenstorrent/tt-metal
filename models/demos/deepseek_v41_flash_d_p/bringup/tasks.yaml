@@ -1934,6 +1934,14 @@ tasks:
     kind: router
     layer: 1
     stateful: false
+  frozen:
+    at: '2026-10-15T21:21:24'
+    reference: PASS
+    stub: FAIL
+    mutations: PASS
+    files:
+      models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_router.py: 1752dd5d982cfbf78fbec8dc6e1109ac5b29717e0b08204226b53f96c24d9519
+      /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden/s4096_c2048/manifest.json: f6ca6c2b3e09fc321e2db942d003ccff0eed93f15ab15e4d62e8c7d35b4ea23c
 - id: S.swa_engram.14
   title: 'swa_engram block with steps 1-14 on device (last: router)'
   step: implement
