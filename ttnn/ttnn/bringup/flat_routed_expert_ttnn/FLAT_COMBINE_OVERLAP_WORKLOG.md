@@ -1226,6 +1226,14 @@ Skew costs nothing beyond the rows themselves: every chip is within -7..+7% of b
 the worst chip is simply the one with the most rows (L11c9 c17: 4500 rows, ~830 us of compute at the balanced
 compute-only rate; light chips sit at 80-86% DRAM, the 436 us weight floor).
 
+**Kimi K3 on a 4x4 stage (896 experts, top-16, 2560 tokens: 56 experts / 2560 rows per chip; 2026-10-15).** Routing
+synthesized from the real K2.7 cells' popularity (Gumbel top-16 per token, so no expert exceeds 2560): "ratio" keeps
+K2.7's per-expert max/mean shape, "share" keeps its top-8 experts' share of all routings. Busiest chip / mean rows: L45c3
+1.37 / 1.39, L11c9 1.43 / 1.87. On device (K3 shapes, situ, E 56, default config), ms per call: even 2.395 (87.8% DRAM);
+median chips 2.25-2.39; busiest chips L45c3 2.441 / 2.452, L11c9 2.473 / 2.559 (4787 rows, 84.6% DRAM) = 1.02-1.07x
+even. 56 experts' weights (1040 MB, 2.03 ms at 512 GB/s) dominate; compute (~0.19 us per row) only matters past ~12k
+rows per chip (~4.7x the mean).
+
 ## 9. How to run (PR tree)
 ```
 cd /localdev/mstaletovic/tt-metal-pr58093
