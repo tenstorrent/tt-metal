@@ -98,6 +98,21 @@ def row_split_copies_to_host(mesh, t: ttnn.Tensor) -> list[torch.Tensor]:
     return [full[:, c * w : (c + 1) * w] for c in range(mesh.shape[1])]
 
 
+def hidden_split_to_device(mesh, x: torch.Tensor, dtype=ttnn.float32) -> ttnn.Tensor:
+    """Host [S, H] -> device [1, 1, S/SP, H/TP] per chip: rows split over axis 0, hidden columns over axis 1 (chip
+    (r, c) holds columns [c H/TP, (c+1) H/TP))."""
+    s, h = x.shape
+    assert s % mesh.shape[0] == 0 and h % mesh.shape[1] == 0, (x.shape, tuple(mesh.shape))
+    return ttnn.from_torch(
+        x.float().reshape(1, 1, s, h).contiguous(),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=_mapper(mesh, (2, 3)),
+    )
+
+
 def hidden_split_to_host(mesh, t: ttnn.Tensor) -> torch.Tensor:
     """A tensor split by rows over axis 0 and by hidden columns over axis 1 ([1, 1, S/SP, H/TP] per chip; chip (r, c)
     holds columns [c H/TP, (c+1) H/TP)) -> host [S, H]."""

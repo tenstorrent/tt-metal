@@ -154,3 +154,17 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deeps
   `tt/layout.py:hidden_split_to_host`); DEVICE_STEPS["swa"] += attn_collapse (hybrid device_model).
 - Gate: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_collapse.py`
   -> pcc_attn_collapse_L00 = 1.000000, PASS.
+
+## C.swa.attn_norm implement (attempt 1)
+- `tt/norm.py:TtDistributedRmsNorm` / `build_norm` (attn_norm, weight `layers.<i>.attn_norm.weight`, eps cfg.eps 1e-20):
+  per chip [1,1,S/SP,H/TP] fp32 -> `ttnn.bringup.mhc_pre_xing_pack(mix=x[:, :32], x, n=1)` (exact SFPU sum x^2, written
+  over column 3 of the mix copy, so x's first tile column serves as mix: no per-call constant) -> slice col 3 ->
+  `tp_sum` (all_gather axis 1 + SFPU add, K-30) -> x 1/H + eps -> rsqrt -> x * rstd ([R,1] bcast) * w ([1,H/TP] fp32
+  TILE, split over axis 1, built at load). Same split out, fp32, no host work, no CCL besides the stats gather.
+- K-12: xing40's rms_norm_pre/post_all_gather chain not used (fp32 stats junk, FPU stats at ~TF32).
+- The fp8 act quant (blocks of 32) the components entry mentions is left to the fp8 linears (q_a / kv): the step's
+  boundary is the fp32 norm output, and the reference's fp8_linear quantizes its own input. tt/quant.py does not exist yet.
+- hooks.py: `_hidden_host_fn` (harness boundary: `tt/layout.py:hidden_split_to_device` in, `hidden_split_to_host` out);
+  DEVICE_STEPS["swa"] += attn_norm.
+- Gate: pcc 0.999999; vs CPU rel 7.9e-8 (limit 6.1e-3), vs golden rel 1.7e-3; all second inputs pass; A,B,A bit-identical.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attn_norm.py`
