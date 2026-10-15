@@ -34,9 +34,15 @@ CHUNK_SIZE=5120
 GOLDEN_LEN=56320
 MAX_SEQ_LEN=256000
 REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
-# Start, the last chunk wholly inside the golden, midpoint, end. The window that the throughput probe
-# averages over runs forward from each of these, so the first three carry a rate and the last a latency.
-PROBE_CHUNKS="0,$((GOLDEN_LEN / CHUNK_SIZE - 1)),$((REAL_CHUNKS / 2 - 1)),$((REAL_CHUNKS - 1))"
+# Measured the way run_multirank_pcc.sh measures the plain Kimi legs, so the two sets of numbers compare:
+# throwaway chunks first. DFlash is traced-only, so without them every rank captures its trace when the
+# first timed chunk arrives.
+WARMUP_CHUNKS=10
+# Start, ~50k, midpoint and end: run_multirank_pcc.sh's probes over this leg's one window. The window that
+# the throughput probe averages over runs forward from each of these, so the first three carry a rate and
+# the last a latency.
+PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((REAL_CHUNKS / 2 - 1))" \
+  "$((REAL_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
 # Verifier threshold is the sibling KV leg's value for this trace and depth -- run_multirank_pcc.sh gates
 # the same cache on the same golden, so the two legs must not disagree on what a passing verifier is.
 # The drafter gate is held at that same value and never above it: an unnormalized V carries the verifier's
@@ -294,7 +300,8 @@ set +e
 # the runner above, so the producer must match them or only this leg hangs.
 # The producer pins itself to one slot rather than taking the manifest count the ranks allocate for.
 # Slot 0 is the only slot with a golden behind it, so the others would replay it for an identical PCC at
-# ~26 s a slot of PCIe readback -- 30 min at the sc4 ceiling, past the leg timeout.
+# ~26 s a slot of PCIe readback -- 30 min at the sc4 ceiling, past the leg timeout. The warmup chunks also
+# go to slot 0, and the timed request rewrites every position they wrote before the PCC check reads it.
 "${MPIRUN}" \
   --host "${PRODUCER_HOSTS}" --map-by "rankfile:file=${RANKFILE_REL}" --bind-to none --tag-output \
   --wdir "${TT_METAL_HOME}" \
@@ -309,6 +316,7 @@ set +e
     export PREFILL_NUM_USERS=1; \
     export PREFILL_PRODUCER_CHECK_PCC=1; \
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
+    export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
     export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
     export PREFILL_PRODUCER_MAX_REQUESTS=1; \
     export PREFILL_PRODUCER_MULTI_TURN_PROB=0; \
