@@ -21,6 +21,7 @@
 //   2        1 if instruction gathering was enabled for the run
 //   8 + 4c   combination c: trials where the read-modify-write, or a backlog MOP, hit the wrong bank
 //   9 + 4c   combination c: trials whose RDCFG read the wrong bank
+//   64 + 4c  combination c: the values read in trial 0 (bank 0 word, bank 1 word, RDCFG result)
 // with c = 6 * backlog + 2 * nops + sync, backlog in {0,1}, nops in {0,1,2}, sync in {0,1}.
 
 #include <cstdint>
@@ -43,6 +44,9 @@ using namespace ckernel;
 constexpr std::uint32_t RESULT_MAGIC     = 0x43464753;
 constexpr std::uint32_t WORDS_PER_THREAD = 256;
 constexpr std::uint32_t TRIALS           = 512;
+constexpr std::uint32_t COUNT_WORDS      = 8;  // 4 words per combination: rmw wrong, rdcfg wrong, reserved, reserved
+constexpr std::uint32_t RAW_WORDS        = 64; // 4 words per combination: trial-0 bank 0, bank 1, RDCFG value, reserved
+constexpr std::uint32_t WORDS_PER_COMBO  = 4;
 
 // No LLK runs on any thread in this test, so every GPR is free; 62 receives the RDCFG result.
 constexpr std::uint32_t RESULT_GPR = 62;
@@ -65,6 +69,11 @@ static_assert(PROBE_WORD < GLOBAL_CFGREG_BASE_ADDR32, "the probe word must be ba
 // Word offset of bank 1 in the RISC's view of the configuration space.
 constexpr std::uint32_t BANK1_OFFSET = CFG_STATE_SIZE * 4;
 
+constexpr std::uint32_t BANK0          = 0;
+constexpr std::uint32_t BANK1          = 1;
+constexpr std::uint32_t BACKLOG_OUTER  = 16;
+constexpr std::uint32_t BACKLOG_INNER  = 4;
+constexpr std::uint32_t BYTE_MASK      = 0xFF;
 constexpr std::uint32_t RMW_BYTE       = 0xCC;
 constexpr std::uint32_t BACKLOG_BYTE_A = 0x11;
 constexpr std::uint32_t BACKLOG_BYTE_B = 0x22;
@@ -103,8 +112,8 @@ inline void after_flip()
 template <bool BACKLOG, std::uint32_t NOPS, bool SYNC>
 inline void run_combination(volatile std::uint32_t* out)
 {
-    ckernel_template backlog_a(16, 4, TT_OP_RMWCIB1(0xFF, BACKLOG_BYTE_A, PROBE_WORD));
-    ckernel_template backlog_b(16, 4, TT_OP_RMWCIB1(0xFF, BACKLOG_BYTE_B, PROBE_WORD));
+    ckernel_template backlog_a(BACKLOG_OUTER, BACKLOG_INNER, TT_OP_RMWCIB1(BYTE_MASK /*Mask*/, BACKLOG_BYTE_A /*Data*/, PROBE_WORD));
+    ckernel_template backlog_b(BACKLOG_OUTER, BACKLOG_INNER, TT_OP_RMWCIB1(BYTE_MASK /*Mask*/, BACKLOG_BYTE_B /*Data*/, PROBE_WORD));
 
     std::uint32_t rmw_wrong   = 0;
     std::uint32_t rdcfg_wrong = 0;
@@ -116,8 +125,8 @@ inline void run_combination(volatile std::uint32_t* out)
         const std::uint32_t seed0 = 0x5A000000u | (trial << 16);
         const std::uint32_t seed1 = 0x25000000u | (trial << 16);
         seed_word(PROBE_WORD, seed0, seed1);
-        TTI_SETDMAREG(0, 0, 0, LO_16(RESULT_GPR));
-        TTI_SETDMAREG(0, 0, 0, HI_16(RESULT_GPR));
+        TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 0 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, LO_16(RESULT_GPR));
+        TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 0 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, HI_16(RESULT_GPR));
         tensix_sync();
 
         // Bank 0 is selected here. Flip to bank 1 and read-modify-write the probe word there.
@@ -126,9 +135,9 @@ inline void run_combination(volatile std::uint32_t* out)
             backlog_a.program();
             backlog_a.run();
         }
-        TTI_SETC16(CFG_STATE_ID_StateID_ADDR32, 1);
+        TTI_SETC16(CFG_STATE_ID_StateID_ADDR32, BANK1);
         after_flip<NOPS, SYNC>();
-        TTI_RMWCIB0(0xFF, RMW_BYTE, PROBE_WORD);
+        TTI_RMWCIB0(BYTE_MASK /*Mask*/, RMW_BYTE /*Data*/, PROBE_WORD);
 
         // Flip back to bank 0 and read the probe word from there.
         if constexpr (BACKLOG)
@@ -136,7 +145,7 @@ inline void run_combination(volatile std::uint32_t* out)
             backlog_b.program();
             backlog_b.run();
         }
-        TTI_SETC16(CFG_STATE_ID_StateID_ADDR32, 0);
+        TTI_SETC16(CFG_STATE_ID_StateID_ADDR32, BANK0);
         after_flip<NOPS, SYNC>();
         TTI_RDCFG(RESULT_GPR, PROBE_WORD);
 
@@ -149,10 +158,10 @@ inline void run_combination(volatile std::uint32_t* out)
 
         if (trial == 0)
         {
-            constexpr std::uint32_t c = 6 * (BACKLOG ? 1 : 0) + 2 * NOPS + (SYNC ? 1 : 0);
-            out[64 + 4 * c]           = probe_bank0;
-            out[65 + 4 * c]           = probe_bank1;
-            out[66 + 4 * c]           = read_back;
+            constexpr std::uint32_t c                = 6 * (BACKLOG ? 1 : 0) + 2 * NOPS + (SYNC ? 1 : 0);
+            out[RAW_WORDS + WORDS_PER_COMBO * c]     = probe_bank0;
+            out[RAW_WORDS + WORDS_PER_COMBO * c + 1] = probe_bank1;
+            out[RAW_WORDS + WORDS_PER_COMBO * c + 2] = read_back;
         }
         if (probe_bank0 != expect0 || probe_bank1 != expect1)
         {
@@ -164,9 +173,9 @@ inline void run_combination(volatile std::uint32_t* out)
         }
     }
 
-    constexpr std::uint32_t combination = 6 * (BACKLOG ? 1 : 0) + 2 * NOPS + (SYNC ? 1 : 0);
-    out[8 + 4 * combination]            = rmw_wrong;
-    out[9 + 4 * combination]            = rdcfg_wrong;
+    constexpr std::uint32_t combination                  = 6 * (BACKLOG ? 1 : 0) + 2 * NOPS + (SYNC ? 1 : 0);
+    out[COUNT_WORDS + WORDS_PER_COMBO * combination]     = rmw_wrong;
+    out[COUNT_WORDS + WORDS_PER_COMBO * combination + 1] = rdcfg_wrong;
 }
 
 template <bool BACKLOG, std::uint32_t NOPS>
@@ -195,7 +204,7 @@ inline void run_probe(volatile std::uint32_t* out)
     out[2] = GATHERING_ON ? 1u : 0u;
 
     // Start from a known bank.
-    TTI_SETC16(CFG_STATE_ID_StateID_ADDR32, 0);
+    TTI_SETC16(CFG_STATE_ID_StateID_ADDR32, BANK0);
     tensix_sync();
 
     if constexpr (GATHERING_ON)
@@ -209,7 +218,7 @@ inline void run_probe(volatile std::uint32_t* out)
         disable_gathering();
     }
 
-    TTI_SETC16(CFG_STATE_ID_StateID_ADDR32, 0);
+    TTI_SETC16(CFG_STATE_ID_StateID_ADDR32, BANK0);
     tensix_sync();
 }
 

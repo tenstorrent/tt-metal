@@ -11,17 +11,19 @@
 // comes back short of the programmed number of increments.
 //
 // Two shapes of MOP are used: one long enough that the no-sync read is far short of the total
-// (which shows the probe can see an unfinished MOP at all), and a single-increment MOP repeated
-// many times with the counter checked after every run (which catches a sync that returns a few
-// cycles early). Every thread runs the same probe on its own GPR file, MOP decoder and PC buffer.
+// (which shows the probe can see an unfinished MOP at all), and a short MOP of a few dozen
+// increments repeated many times with the counter checked after every run, long enough that a
+// sync returning with the last few generated instructions still in flight reads short. Every
+// thread runs the same probe on its own GPR file, MOP decoder and PC buffer.
 //
 // Result words per thread, at word offset 256 * thread (0 unpack, 1 math, 2 pack):
 //   0       magic
 //   1       increments programmed into the long MOP
 //   2..5    long MOP: counter read after arm 0..3
 //   6..9    long MOP: wall-clock cycles from the MOP run to the end of the sync, arm 0..3
-//   10..13  short MOP: trials whose read did not see the increment, arm 0..3
+//   10..13  short MOP: trials whose read did not see every increment, arm 0..3
 //   14      short MOP trials per arm
+//   15      increments per short MOP run
 // Arms: 0 = no sync, 1 = tensix_sync, 2 = mop_sync, 3 = mop_sync then tensix_sync.
 
 #include <cstdint>
@@ -47,16 +49,19 @@ constexpr std::uint32_t RESULT_MAGIC = 0x4D4F5053;
 constexpr std::uint32_t COUNTER_GPR = 62;
 
 // Loop lengths are 10-bit fields in the MOP configuration.
-constexpr std::uint32_t LONG_MOP_OUTER      = 1000;
-constexpr std::uint32_t LONG_MOP_INNER      = 1000;
-constexpr std::uint32_t LONG_MOP_INCREMENTS = LONG_MOP_OUTER * LONG_MOP_INNER;
-constexpr std::uint32_t SHORT_MOP_TRIALS    = 4096;
+constexpr std::uint32_t LONG_MOP_OUTER       = 1000;
+constexpr std::uint32_t LONG_MOP_INNER       = 1000;
+constexpr std::uint32_t LONG_MOP_INCREMENTS  = LONG_MOP_OUTER * LONG_MOP_INNER;
+constexpr std::uint32_t SHORT_MOP_OUTER      = 1;
+constexpr std::uint32_t SHORT_MOP_INNER      = 64;
+constexpr std::uint32_t SHORT_MOP_INCREMENTS = SHORT_MOP_OUTER * SHORT_MOP_INNER;
+constexpr std::uint32_t SHORT_MOP_TRIALS     = 4096;
 
 constexpr std::uint32_t WORDS_PER_THREAD = 256;
 constexpr std::uint32_t NUM_ARMS         = 4;
 
-// counter = counter + 1 on the scalar unit (operand B is the constant 1).
-constexpr std::uint32_t OP_INCREMENT_COUNTER = TT_OP_ADDDMAREG(1, COUNTER_GPR, 1, COUNTER_GPR);
+// counter = counter + 1 on the scalar unit: operand B is the immediate 1, not a register.
+constexpr std::uint32_t OP_INCREMENT_COUNTER = TT_OP_ADDDMAREG(1 /*OpBisConst*/, COUNTER_GPR, 1 /*OpBRegIndex, the immediate*/, COUNTER_GPR);
 
 inline void sync_for_arm(const std::uint32_t arm)
 {
@@ -75,8 +80,8 @@ inline void reset_counter()
     // Drain whatever the previous arm left in flight, zero the counter, and make sure the zero has
     // landed before the next MOP is pushed.
     tensix_sync();
-    TTI_SETDMAREG(0, 0, 0, LO_16(COUNTER_GPR));
-    TTI_SETDMAREG(0, 0, 0, HI_16(COUNTER_GPR));
+    TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 0 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, LO_16(COUNTER_GPR));
+    TTI_SETDMAREG(0 /*Payload_SigSelSize*/, 0 /*Payload_SigSel*/, 0 /*SetSignalsMode*/, HI_16(COUNTER_GPR));
     tensix_sync();
 }
 
@@ -94,6 +99,7 @@ inline void run_probe(volatile std::uint32_t* out)
     out[0]  = RESULT_MAGIC;
     out[1]  = LONG_MOP_INCREMENTS;
     out[14] = SHORT_MOP_TRIALS;
+    out[15] = SHORT_MOP_INCREMENTS;
 
     ckernel_template long_mop(LONG_MOP_OUTER, LONG_MOP_INNER, OP_INCREMENT_COUNTER);
     long_mop.program();
@@ -109,7 +115,7 @@ inline void run_probe(volatile std::uint32_t* out)
     }
 
     tensix_sync();
-    ckernel_template short_mop(1, 1, OP_INCREMENT_COUNTER);
+    ckernel_template short_mop(SHORT_MOP_OUTER, SHORT_MOP_INNER, OP_INCREMENT_COUNTER);
     short_mop.program();
     for (std::uint32_t arm = 0; arm < NUM_ARMS; arm++)
     {
@@ -119,7 +125,7 @@ inline void run_probe(volatile std::uint32_t* out)
         {
             short_mop.run();
             sync_for_arm(arm);
-            if (read_counter() != trial)
+            if (read_counter() != trial * SHORT_MOP_INCREMENTS)
             {
                 misses++;
             }
