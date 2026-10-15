@@ -272,8 +272,12 @@ wrap. `N_LINK` is the depth of `tx_fifo[p]` and of its link FIFO `rx[p]`;
 `N_DELIVER` is the depth of each forwarder's inbound FIFO `in[p]`.
 
 Every producer and consumer checks distance: `(wr − rd) mod 2N ≤ depth` for each
-pointer pair it reads, and `pkts[p] ≤ N_LINK` at E1. A violation fails with
-`COUNTER_DISTANCE`.
+pointer pair it reads, and `pkts[p] ≤ N_LINK` at E1. E0 and E1 also check that
+the forwarder's W2 and R1 pointers only advance from the value they last
+accepted, by at most the room E0 had granted or the headers E1 had delivered
+(`credit_pair_ok`, as packet_injection's producer checks its credit), so an
+older pointer landing after a newer one is refused rather than used. A
+violation fails with `COUNTER_DISTANCE`.
 
 ### Ordering on the NoC
 

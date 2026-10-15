@@ -259,6 +259,17 @@ private:
             !ec_ptr_distance_ok(wr, sent_[p], EC_N_LINK)) {
             return distance_fail(p, sent_[p], wr);
         }
+        if constexpr (!EC_E0_SOURCE_SELF) {
+            /* W2 only advances, and by no more than the room E0 had granted
+             * when it last read it; anything else is an older W2 landing after
+             * a newer one. */
+            uint32_t advance;
+            if (!credit_pair_ok(
+                    wr, wr_seen_[p], ec_ptr_mask(EC_N_LINK), ec_ptr_credit(wr_seen_[p], crd, EC_N_LINK), &advance)) {
+                return distance_fail(p, wr_seen_[p], wr);
+            }
+            wr_seen_[p] = wr;
+        }
         const uint32_t avail = ec_ptr_used(wr, sent_[p], EC_N_LINK);
         const uint32_t credit = ec_ptr_credit(sent_[p], crd, EC_N_LINK);
         uint32_t k = avail < credit ? avail : credit;
@@ -418,6 +429,8 @@ private:
     uint32_t forwarded_[EC_P] = {};
     uint32_t last_crd_[EC_P] = {};
     uint32_t local_crd_[EC_P] = {};
+    /* The last W2 value send() accepted. */
+    uint32_t wr_seen_[EC_P] = {};
     uint64_t last_progress_[EC_P] = {};
     uint32_t site_[EC_P] = {};
     uint32_t safety_work_ = 0u;

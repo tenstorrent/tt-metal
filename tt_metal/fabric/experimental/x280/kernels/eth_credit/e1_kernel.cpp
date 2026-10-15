@@ -184,6 +184,23 @@ private:
             fail(EC_ERROR_COUNTER_DISTANCE, p);
             return false;
         }
+        if constexpr (!EC_E1_SINK_LOCAL) {
+            /* R1 only advances, and by no more than E1 had delivered when it
+             * last read it; anything else is an older R1 landing after a newer
+             * one. */
+            uint32_t advance;
+            if (!credit_pair_ok(
+                    frd,
+                    frd_seen_[p],
+                    ec_ptr_mask(EC_N_DELIVER),
+                    ec_ptr_used(deliver_wr_[p], frd_seen_[p], EC_N_DELIVER),
+                    &advance)) {
+                result_.failure(p, 0u, 0u, EC_SITE_NONE, frd_seen_[p], frd);
+                fail(EC_ERROR_COUNTER_DISTANCE, p);
+                return false;
+            }
+            frd_seen_[p] = frd;
+        }
         const uint32_t free = ec_ptr_credit(deliver_wr_[p], frd, EC_N_DELIVER);
         uint32_t k = pkts < free ? pkts : free;
         k = k < EC_BATCH ? k : EC_BATCH;
@@ -322,6 +339,8 @@ private:
     uint32_t link_rd_[EC_P] = {};
     uint32_t deliver_wr_[EC_P] = {};
     uint32_t received_[EC_P] = {};
+    /* The last R1 value deliver() accepted. */
+    uint32_t frd_seen_[EC_P] = {};
     uint64_t last_progress_[EC_P] = {};
     uint32_t site_[EC_P] = {};
     uint32_t safety_work_ = 0u;
