@@ -277,7 +277,7 @@ class DSV41PagedStepState:
         if (
             compact_enabled()
         ):  # [P, 64] cos / sin of the rotated dims only (tt/rope_compact.py): 0.25 KiB per position instead of 2.5 KiB
-            self.rope = CompactRope(self.md, c, s)
+            self.rope = CompactRope(self.md, c, s, getattr(attn, "mesh_config", None), getattr(attn, "ccl", None))
             self.t = {}
             return
         self.rope = None
@@ -309,9 +309,7 @@ class DSV41PagedStepState:
         T, W = self.T, HEAD_DIM
         idx = ttnn.typecast(ttnn.reshape(pos, [T, 1]), ttnn.uint32)
         st = {"pos": pos}
-        st["Ch"] = self._gather("C", idx, [1, T, 1, W])
-        st["Sh"] = self._gather("S", idx, [1, T, 1, W])
-        st["nSh"] = ttnn.neg(st["Sh"])
+        posf = gi = col = None
         if self.ratio:
             r = self.ratio
             posf = ttnn.typecast(
@@ -321,10 +319,21 @@ class DSV41PagedStepState:
             gi = col(
                 ttnn.relu(ttnn.add(posf, float(1 - r))), ttnn.uint32
             )  # rope position of a freshly pooled latent: max(pos + 1 - ratio, 0)
-            st["Cg"], st["Sg"] = self._gather("C", gi, [1, 1, T, W]), self._gather("S", gi, [1, 1, T, W])
+        if self.rope is not None:
+            # compact tables: the 64-wide cos / sin rows of the step's positions (and of the pooled latents' positions) are looked up ONCE (two embeddings, or one batched lookup + an all-gather
+            # when sharded over the mesh columns) and expanded to every layout the layers read
+            rows = self.rope.lookup([idx, gi] if self.ratio else [idx])
+            G = lambda name, j, shape: self.rope.full(name, rows[j][0 if name in ("C", "iC") else 1], shape)
+        else:
+            G = lambda name, j, shape: self._gather(name, (idx, gi)[j], shape)
+        st["Ch"] = G("C", 0, [1, T, 1, W])
+        st["Sh"] = G("S", 0, [1, T, 1, W])
+        st["nSh"] = ttnn.neg(st["Sh"])
+        if self.ratio:
+            st["Cg"], st["Sg"] = G("C", 1, [1, 1, T, W]), G("S", 1, [1, 1, T, W])
             if self.with_indexer:
-                st["C"], st["S"] = self._gather("iC", idx, [T, 1, 1, 128]), self._gather("iS", idx, [T, 1, 1, 128])
-                st["iCg"], st["iSg"] = self._gather("iC", gi, [1, 1, T, 128]), self._gather("iS", gi, [1, 1, T, 128])
+                st["C"], st["S"] = G("iC", 0, [T, 1, 1, 128]), G("iS", 0, [T, 1, 1, 128])
+                st["iCg"], st["iSg"] = G("iC", 1, [1, 1, T, 128]), G("iS", 1, [1, 1, T, 128])
                 st["ent"] = ttnn.reshape(
                     col(ttnn.floor(ttnn.multiply(posf, 1.0 / r)), ttnn.int32), [T]
                 )  # entry of the group in progress

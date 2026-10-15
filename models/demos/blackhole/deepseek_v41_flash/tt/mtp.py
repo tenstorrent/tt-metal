@@ -494,6 +494,10 @@ class DraftState:
 
     def _gather(self, pos, T):
         idx = ttnn.typecast(ttnn.reshape(pos, [T, 1]), ttnn.uint32)
+        if self.rope is not None:  # compact tables: one lookup for cos and sin
+            ((c, sn),) = self.rope.lookup([idx])
+            sh = self.rope.full("S", sn, [1, T, 1, HEAD_DIM])
+            return {"Ch": self.rope.full("C", c, [1, T, 1, HEAD_DIM]), "Sh": sh, "nSh": ttnn.neg(sh)}, idx
         sh = self._rows("S", idx, [1, T, 1, HEAD_DIM])
         return {"Ch": self._rows("C", idx, [1, T, 1, HEAD_DIM]), "Sh": sh, "nSh": ttnn.neg(sh)}, idx
 
