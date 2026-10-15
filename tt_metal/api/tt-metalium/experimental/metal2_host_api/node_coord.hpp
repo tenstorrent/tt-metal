@@ -10,7 +10,8 @@
 //   1. A RISC core within a node (e.g., 5 per worker on Wormhole, 12 per cluster on Quasar)
 //   2. A NOC endpoint / block / node in the accelerator grid
 //
-// This overload becomes particularly confusing when discussing Quasar and Gen2 architectures.
+// This overload becomes particularly confusing when discussing Quasar and other 2nd-gen (2xx)
+// architectures.
 
 // We are introducing a new term: "Node".
 //   - "Core" has meaning #1

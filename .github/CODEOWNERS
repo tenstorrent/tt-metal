@@ -151,6 +151,14 @@ tt_metal/hw/firmware/src/tt-1xx/*erisc* @aliuTT @ubcheema
 tt_metal/hw/firmware/ @abhullar-tt @arikTT @jbaumanTT @nathan-TT @kstevensTT
 tt_metal/hw/inc/ @abhullar-tt @jbaumanTT @kstevensTT @nathan-TT @vvukomanovicTT @atatuzunerTT @ruizhangTT @arikTT
 tt_metal/hw/inc/api/debug/ @tenstorrent/metalium-developers-triage
+tt_metal/hw/inc/api/debug/kernel_profiler.hpp @mo-tenstorrent @akerteszTT @yusufbashiTT
+tt_metal/hw/inc/internal/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
+tt_metal/hw/inc/internal/profiler/event_metadata.hpp @sohaibnadeemTT
+tt_metal/hw/inc/internal/profiler/fabric_event_profiler.hpp @sohaibnadeemTT
+tt_metal/hw/inc/internal/profiler/noc_event_profiler.hpp @sohaibnadeemTT
+tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
+tt_metal/hw/inc/hostdev/fabric_direction_table_interface.h @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
+tt_metal/hw/inc/hostdev/fabric_routing_path_interface.h @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
 tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h @mo-tenstorrent @yusufbashiTT @abhullar-tt @jbaumanTT @kstevensTT @nathan-TT @vvukomanovicTT @atatuzunerTT @ruizhangTT @arikTT
 tt_metal/hw/inc/hostdev/streaming_profiler_common.h @mo-tenstorrent @yusufbashiTT
 tt_metal/hw/inc/internal/ethernet/ @aliuTT @ubcheema
@@ -230,9 +238,6 @@ tt_metal/tools/mem_bench @abhullar-tt # should be moved to tests micro benchmark
 tt_metal/tools/precompile_fw @abhullar-tt @ruizhangTT
 tt_metal/tools/precompile_fw/**/CMakeLists.txt @abhullar-tt @ruizhangTT @tenstorrent/metalium-developers-infra
 tt_metal/tools/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
-tt_metal/tools/profiler/event_metadata.hpp @sohaibnadeemTT
-tt_metal/tools/profiler/fabric_event_profiler.hpp @sohaibnadeemTT
-tt_metal/tools/profiler/noc_event_profiler.hpp @sohaibnadeemTT
 tt_metal/tools/profiler/noc_event_profiler_utils.hpp @sohaibnadeemTT
 tt_metal/tools/profiler/tracy_debug_categories.txt @mo-tenstorrent @akerteszTT @yusufbashiTT
 tt_metal/tools/profiler/tracy_debug_zones.hpp @mo-tenstorrent @akerteszTT @yusufbashiTT
@@ -403,6 +408,8 @@ ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/**/CMakeLists.txt @tensto
 ttnn/cpp/ttnn/operations/experimental/deepseek/ @tenstorrent/cse-developer-ttnn
 ttnn/cpp/ttnn/operations/experimental/deepseek/**/CMakeLists.txt @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/experimental_nanobind.cpp @mbezuljTT @ppetrovicTT @pavlepopovic @tenstorrent/metalium-developers-ops-leads
+ttnn/cpp/ttnn/operations/experimental/fused_msda/ @ctr-mmicic @ctr-ikasic @ctr-mdukic
+ttnn/cpp/ttnn/operations/experimental/fused_msda/**/CMakeLists.txt @ctr-mmicic @ctr-ikasic @ctr-mdukic @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/ @tenstorrent/metalium-developers-sdpa
 ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/**/CMakeLists.txt @tenstorrent/metalium-developers-sdpa @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/indexed_page_cache/ @tenstorrent/metallium-maintainers-llama-models
@@ -526,6 +533,7 @@ tests/ttnn/**/operations/pool/ @tenstorrent/metalium-developers-convolutions
 /tests/ttnn/notebook_tests/ @tenstorrent/metalium-developers-external-experience
 tests/ttnn/nightly/unit_tests/operations/eltwise/ @tenstorrent/metalium-developers-eltwise
 tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/ @tenstorrent/metalium-developers-ds-prefill
+tests/ttnn/**/operations/experimental/test_fused_msda*.py @ctr-mmicic @ctr-ikasic @ctr-mdukic
 tests/ttnn/nightly/unit_tests/operations/experimental/quasar/ @tenstorrent/metalium-developers-mmfusedreduce
 tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/nightly/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa

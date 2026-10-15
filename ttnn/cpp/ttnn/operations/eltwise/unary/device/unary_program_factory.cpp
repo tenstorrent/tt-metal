@@ -365,6 +365,14 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     const bool has_sharding = shard_specs.has_value();
     const bool src_sharded = has_sharding && input.is_sharded();
     const bool dst_sharded = has_sharding && output.is_sharded();
+    // compute_program_hash rejects a sharded tensor whose buffer is distributed differently from its TensorSpec,
+    // but the hash is not computed when the program cache is disabled. Repeat it on the miss path.
+    if (input.is_sharded()) {
+        require_buffer_distribution_matches_spec(input, "input");
+    }
+    if (tensor_args.output_tensor.has_value() && output.is_sharded()) {
+        require_buffer_distribution_matches_spec(output, "output");
+    }
 
     // For ROW_MAJOR interleaved: use tile_size CB pages and group/chunk rows.
     // For sharded ROW_MAJOR or TILE layout: CB page is always tile_size.

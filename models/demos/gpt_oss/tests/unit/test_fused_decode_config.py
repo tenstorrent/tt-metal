@@ -19,7 +19,8 @@ from models.demos.gpt_oss.tt.fused_decode.config import (
     fused_decode_supported,
 )
 
-# gpt-oss-20b on a QuietBox 2: Blackhole, mesh 1x4, TP=4, EP=1, 32 experts, batch 1, 11x10 grid, 8 DRAM banks.
+# gpt-oss-20b on a QuietBox 2: Blackhole, mesh 1x4 = the whole 4-device system, TP=4, EP=1, 32 experts, batch 1,
+# 11x10 grid, 8 DRAM banks.
 SUPPORTED = dict(
     is_blackhole=True,
     mesh_shape=(1, 4),
@@ -30,6 +31,7 @@ SUPPORTED = dict(
     tokens=1,
     grid=(11, 10),
     dram_banks=8,
+    system_devices=4,
 )
 
 
@@ -57,6 +59,8 @@ def test_minimum_grid_is_supported():
         {"grid": (FUSED_DECODE_MIN_GRID[0] - 1, 10)},
         {"grid": (11, FUSED_DECODE_MIN_GRID[1] - 1)},
         {"dram_banks": FUSED_DECODE_DRAM_BANKS - 1},
+        {"system_devices": 8},
+        {"system_devices": 32},
     ],
     ids=[
         "wormhole",
@@ -72,6 +76,8 @@ def test_minimum_grid_is_supported():
         "grid_too_narrow",
         "grid_too_short",
         "seven_dram_banks",
+        "slice_of_8_device_system",
+        "slice_of_galaxy",
     ],
 )
 def test_outside_envelope_keeps_original_path(change):

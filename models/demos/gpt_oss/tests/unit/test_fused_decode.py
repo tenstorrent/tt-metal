@@ -94,3 +94,53 @@ def test_fused_decode_matches_reference(mesh_device, device_params, reset_seeds)
         passing, pcc = comp_pcc(reference_logits[pos], logits.float(), PCC_THRESHOLD)
         logger.info(f"position {pos}: logits PCC {pcc}")
         assert passing, f"position {pos}: logits PCC {pcc} < {PCC_THRESHOLD}"
+
+
+@pytest.mark.skipif(
+    os.environ.get("CI") == "true",
+    reason="QuietBox 2 only; the CI gpt-oss-20b unit job has a 5-minute budget. Run locally on Blackhole 1x4.",
+)
+@parametrize_mesh_with_fabric([(1, 4)])
+def test_stock_logits_layout(mesh_device, device_params):
+    """DecodeTerminal.stock_logits (penalties / log-probs / grammar requests) turns the folded logits into the original
+    decode path's layout exactly: device d holds the common sampler's vocab shard d in row 0, zeros elsewhere."""
+    from types import SimpleNamespace
+
+    from models.demos.gpt_oss.tt.fused_decode.terminal import MASK, TILE, DecodeTerminal
+
+    if not is_blackhole():
+        pytest.skip("The fused decode path runs on Blackhole only")
+
+    tp, vocab_size = mesh_device.shape[1], 201088  # gpt-oss-20b
+    vd = -(-vocab_size // tp // TILE) * TILE
+    row_tiles = -(-(vd // TILE) // TILE)
+    row_len = row_tiles * TILE
+    width = 1 << (row_len - 1).bit_length()
+    t = SimpleNamespace(mesh_device=mesh_device, tp=tp, vocab_size=vocab_size, vd=vd, row_len=row_len, width=width)
+    DecodeTerminal._init_stock_layout(t, mesh_device)
+
+    # Distinct values per vocab id (bf16-exact), folded as the fused LM head writes them.
+    logits = (torch.arange(vocab_size) % 4093 - 2046).to(torch.bfloat16).float()
+    folded = torch.full((tp, 1, TILE, width), MASK)
+    for d in range(tp):
+        local = torch.full((TILE * row_len,), MASK)
+        lo, hi = d * vd, min((d + 1) * vd, vocab_size)
+        local[: hi - lo] = logits[lo:hi]
+        folded[d, 0, :, :row_len] = local.reshape(TILE, row_len)
+    tt_folded = ttnn.from_torch(
+        folded,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    out = DecodeTerminal.stock_logits(t, tt_folded)
+
+    padded = torch.zeros(tp * t.stock_width)
+    padded[:vocab_size] = logits
+    for d, shard in enumerate(ttnn.get_device_tensors(out)):
+        got = ttnn.to_torch(shard).float().reshape(TILE, t.stock_width)
+        assert torch.equal(got[0], padded[d * t.stock_width : (d + 1) * t.stock_width]), f"device {d}: shard mismatch"
+        assert not got[1:].any(), f"device {d}: rows 1..31 must be zero"

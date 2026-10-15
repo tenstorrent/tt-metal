@@ -11,7 +11,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
 #include "distributed/mesh_device_impl.hpp"
-#include "impl/metal2_host_api/semaphore_scope.hpp"
+#include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 
@@ -29,21 +29,13 @@ using test_helpers::ProgramSpecTestGen1;
 // compiles into three TRISC binaries with two writers (UNPACK and PACK), so a compute-bound
 // semaphore must resolve to COMPUTE_ATOMIC, never to a non-atomic read-modify-write.
 
-// Resolve one semaphore's scope from a spec the way BuildProgramFromSpec does: census the binders
-// against each kernel's node set, then resolve. Placement is derived from the work units, which is
-// what CollectSpecData does for kernel_node_set.
+// Resolve one semaphore's scope from a spec the way BuildProgramFromSpec does: collect the binder
+// census, then resolve.
 SemScope ResolveScopeFor(MetalEnvImpl& env, const ProgramSpec& spec, const char* semaphore_name) {
-    std::unordered_map<KernelSpecName, NodeRangeSet> kernel_node_set;
-    for (const auto& work_unit : spec.work_units) {
-        const NodeRangeSet nodes = to_node_range_set(work_unit.target_nodes);
-        for (const auto& kernel_name : work_unit.kernels) {
-            kernel_node_set[kernel_name] = kernel_node_set[kernel_name].merge(nodes);
-        }
-    }
-    const sem_solver::SemaphoreBinderCensus census = sem_solver::CollectSemaphoreBinders(spec, kernel_node_set);
+    const CollectedSpecData collected = CollectSpecData(spec);
     // Resolve against the mesh device's env, mirroring BuildProgramFromSpec; configure_mock_mode
     // in each test fixture sets that env's arch.
-    return sem_solver::ResolveSemaphoreScopes(spec, census, env).at(SemaphoreSpecName{semaphore_name});
+    return ResolveSemaphoreScopes(spec, collected.semaphore_binders, env).at(SemaphoreSpecName{semaphore_name});
 }
 
 // The headline rule: a Blackhole semaphore with a compute binder gets the atomic mechanism.

@@ -54,7 +54,7 @@ constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
 constexpr uintptr_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
 volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl* dispatch_telemetry_control =
     reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl*>(
-        dispatch_telemetry_control_addr);
+        l1_uncached_addr(dispatch_telemetry_control_addr));
 
 constexpr uint32_t worker_mcast_grid = WORKER_MCAST_GRID;
 constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
