@@ -504,6 +504,7 @@ def test_spec_resolves_the_run_box(fx):
         ({"run": {"box": "small", "mode": "half"}}, "run.mode must be"),
         ({"box": {"mesh": [1, 1]}}, "drop 'box'"),
         ({"deploy": {"box": "big", "seq": 4000, "chunk": 1024}}, "not a multiple"),
+        ({"deploy": {"box": "big", "seq": 16384, "chunk": 8192}}, "serving.max_chunk"),
     ],
 )
 def test_spec_box_errors(fx, over, needle):
@@ -523,7 +524,7 @@ def test_boxes_scale_fit_and_paths(fx):
     big, small = r["rows"]
     assert big["deploy"] and small["run"] and big["scale"] == {"sequence": 1, "heads": 1, "experts": 1}
     assert small["scale"] == {"sequence": 0.25, "heads": 0.5, "experts": 0.125}
-    assert small["context"] == {"seq": 1024, "chunk": 256, "exact": True}
+    assert small["context"] == {"seq": 1024, "chunk": 1024, "exact": True}  # F67: the chunk never scales
     # experts: 2 per chip on the 8x4 (plan path), 16 on the 2x2 (dispatch): a path that differs
     e_big, e_small = big["conditions"][0], small["conditions"][0]
     assert (e_big["per_chip"], e_big["path"], e_small["per_chip"], e_small["path"]) == (2, "plan", 16, "dispatch")
@@ -639,7 +640,7 @@ def test_scaled_spec_view(fx, tmp_path, monkeypatch):
     s, hf, _ = _scaled_setup(fx, tmp_path, monkeypatch)
     monkeypatch.setenv("BRINGUP_SCALED", "1")
     v = Spec.load(s.path)
-    assert v.scaled and (v.get("target.seq"), v.get("target.chunk")) == (1024, 256)
+    assert v.scaled and (v.get("target.seq"), v.get("target.chunk")) == (1024, 1024)
     assert [r["name"] for r in v.data["ladder"]] == ["scaled", "scaled_last"] and v.rung("scaled_last")["golden"]
     assert v.hf_dir == v.scaled_hf_dir and v.golden_root.name == "small" and "golden_scaled" in str(v.golden_root)
     assert v.tt_cache().parent.name == "2x2-scaled" and v.real_hf_dir == hf
