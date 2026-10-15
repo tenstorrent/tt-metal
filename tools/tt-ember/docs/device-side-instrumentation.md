@@ -10,7 +10,7 @@ see [`README.md`](../README.md).
 With the device profiler on, `long_matmul`'s reader/compute/writer kernels record device-side
 timestamps (`DeviceTimestampedData`), and `parser.py` converts those into host wall-clock time
 and joins them with the same run's telemetry — producing a per-core, per-kernel **wait vs.
-active vs. overhead** breakdown, plus charts in `FiguresNew/`.
+active vs. overhead** breakdown, plus charts in `kernel_figures/`.
 
 ## 2. Pipeline overview
 
@@ -26,7 +26,7 @@ auto.py (orchestrator)
 parser.py (analysis engine)
   ├── telemetry.txt + summary.txt -> program_intervals.csv + Figures/*.png
   └── with --device-profiler-csv: + profile_log_device.csv -> kernel_intervals.csv,
-      kernel_utilization.csv, FiguresNew/*.png
+      kernel_utilization.csv, kernel_figures/*.png
 ```
 
 Without `--device-profiler-csv` (or when the app didn't produce one), only the telemetry outputs
@@ -60,6 +60,11 @@ to wall-clock time itself, from each grid's printed start/end times, so
 `TT_METAL_PROFILER_SYNC` is not needed. Without the profiler the app runs as usual and writes no
 `profile_log_device.csv`; `auto.py` then skips the kernel-level analysis.
 
+Keep profiler runs and power runs separate. With the profiler on, the kernels read the timer in
+their inner loops and the profiler is read back during the first idle pause, which is where the
+base current is measured. Unset `TT_METAL_DEVICE_PROFILER` before a power sweep
+(`run_power_cases.py` and `run_all.py` pass the environment through).
+
 ## 4. `parser.py`
 
 ### 4.1 CLI arguments
@@ -88,7 +93,7 @@ Written to `<output-root>/<subdir>/` alongside the existing `program_intervals.c
   | `active_s` / `active_pct` | From `*_TRANSFER_CYCLES` or `*_COMPUTE_CYCLES` |
   | `overhead_s` / `overhead_pct` | **Derived**, not measured: `max(0, lifetime_s - wait_s - active_s)` — see §7 |
 
-- **`FiguresNew/`**:
+- **`kernel_figures/`**:
   - `reader_utilization.png`, `writer_utilization.png` — stacked bar (active/overhead/wait %) vs. grid size, averaged over cores.
   - `compute_unpack_utilization.png`, `compute_math_utilization.png`, `compute_pack_utilization.png` — same, but **one file per TRISC role** (never blended — see §6).
   - `combined_utilization_pct.png` / `combined_utilization_seconds.png` — Reader / Compute(TRISC1-math) / Writer **side by side** on one chart, active+overhead+wait stacked. The seconds version adds a 4th "Run duration" reference bar per grid (§8).
@@ -106,7 +111,7 @@ Written to `<output-root>/<subdir>/` alongside the existing `program_intervals.c
 
 ## 5. `auto.py`
 
-- `--device-profiler-csv PATH` argument (default: `<app-workdir>/generated/profiler/.logs/profile_log_device.csv`).
+- `--device-profiler-csv PATH` argument (default: `$TT_METAL_PROFILER_DIR/.logs/profile_log_device.csv`, or `<tt-metal-root>/generated/profiler/.logs/profile_log_device.csv`, which is where tt-metal writes it).
 - **Deletes** that file (if present) immediately before starting the app, so it only ever contains this run's fresh data (tt-metal itself also resets it on first `DeviceProfiler` construction, but this is a second layer of safety against stale data from a previous manual run).
 - After the app finishes, checks whether the file now exists; if so, passes it to `parser.py` via `--device-profiler-csv`. If not (e.g. `TT_METAL_DEVICE_PROFILER` wasn't set), logs a note and skips it — the rest of the pipeline still runs normally.
 
@@ -205,7 +210,7 @@ python3 auto.py \
 
 `--app-args` must be last (it consumes everything after it). Results land in
 `out/power_case_1_test/`: `program_intervals.csv` + `Figures/` (existing telemetry analysis),
-`kernel_intervals.csv` + `kernel_utilization.csv` + `FiguresNew/` (device-side analysis).
+`kernel_intervals.csv` + `kernel_utilization.csv` + `kernel_figures/` (device-side analysis).
 
 ### Re-running just the parser (no hardware needed)
 
