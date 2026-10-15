@@ -150,11 +150,11 @@ def tuned_projection_matmul_configs(
     if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8 or (output_n // ttnn.TILE_SIZE) % 4 or input_per_core_n % 3:
         return None, None
     # One output block per core: each core keeps its whole [per_core_m, input_per_core_n] block resident and
-    # streams K in 4-tile blocks (K3 at 640 rows: 2 x 33 tiles per core, 56 K blocks), the widest that fits in
-    # L1 next to the L1 output with bf16 weights. At HiFi2 the bf16 weight stream from DRAM bounds it.
+    # streams K in 8-tile blocks (K3 at 640 rows: 2 x 33 tiles per core, 28 K blocks); bfloat8_b weights halve the
+    # in1 block, so it fits next to the L1 output, and half the multicast rounds per call.
     input_projection = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
-        in0_block_w=4,
+        in0_block_w=8,
         out_subblock_h=1,
         out_subblock_w=3,
         out_block_h=per_core_m,
