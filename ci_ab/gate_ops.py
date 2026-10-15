@@ -62,7 +62,7 @@ def main():
         if MODE == "prof":
             only = os.environ.get("GATE_CASE", "")
             for batch in (1, 32, 64):
-                for sig, topk, smax in ((True, 8, False), (False, 8, True), (True, 6, False), (False, 4, True)):
+                for sig, topk, smax in ((True, 8, False), (False, 8, True), (True, 6, False), (False, 4, True), (False, 8, False)):
                     name = f"gate_b{batch}_{'sig' if sig else 'raw'}_k{topk}_{'smax' if smax else 'lin'}"
                     if only and name != only:
                         continue
