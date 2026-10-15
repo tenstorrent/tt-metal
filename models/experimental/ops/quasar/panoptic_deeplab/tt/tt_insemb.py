@@ -10,6 +10,7 @@ from models.experimental.ops.quasar.panoptic_deeplab.tt.tt_upsample import (
     BilinearUpsampleMatmulTTNN as TtBilinearUpsample,
 )
 from models.experimental.ops.quasar.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
+from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import block_float_dtype
 
 try:
     from tracy import signpost
@@ -113,7 +114,7 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             output_channels_first=True,
             mm1_program_config=final_upsample_mm_config1,
             mm2_program_config=final_upsample_mm_config2,
-            output_dtype=ttnn.bfloat8_b,
+            output_dtype=block_float_dtype(device),
         )
 
         # Initialize original output channels to None if not already set from parameters
