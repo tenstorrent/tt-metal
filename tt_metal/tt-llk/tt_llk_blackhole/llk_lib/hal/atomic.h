@@ -53,6 +53,10 @@ struct FetchIncrement
 /**
  * @brief Describe a blocking FIFO pointer update or state wait (ATINCGETPTR).
  *
+ * @note Capacity logarithms in [0, 14] support pointer updates and readiness probes.
+ *       Capacity logarithm 15 is supported only for readiness probes: its zero-width encoding does
+ *       not advance pointers in the documented model, and Blackhole behavior is unconfirmed.
+ *
  * @tparam AddressIndex: FIFOControl address GPR type index.
  * @tparam DataIndex: Pointer-result GPR type index.
  */
@@ -158,7 +162,7 @@ struct Counter
  *
  * @note Construct with fifo<CapacityLog2>(hal::gpr<Index>()) to deduce the address GPR index.
  *
- * @tparam CapacityLog2: Base-two logarithm of FIFO capacity, in [0, 15].
+ * @tparam CapacityLog2: Base-two logarithm of FIFO capacity, in [0, 15]; 15 supports readiness waits only.
  * @tparam AddressIndex: FIFOControl address GPR type index.
  */
 template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
@@ -220,7 +224,7 @@ struct Fifo
 /**
  * @brief Identify an existing FIFOControl structure, deducing the address GPR index from its operand.
  *
- * @tparam CapacityLog2: Base-two logarithm of FIFO capacity, in [0, 15].
+ * @tparam CapacityLog2: Base-two logarithm of FIFO capacity, in [0, 15]; 15 supports readiness waits only.
  * @tparam AddressIndex: Deduced FIFOControl address GPR type index.
  * @param control_address: GPR containing the FIFOControl line address; no memory or GPR is initialized.
  */
@@ -306,7 +310,9 @@ inline __attribute__((always_inline)) void assert_valid(const FifoAcquire<Addres
     LLK_ASSERT(is_valid(operation.address), "ATINCGETPTR address GPR index must be in [0, 63]");
     LLK_ASSERT(is_valid(operation.data), "ATINCGETPTR result GPR index must be in [0, 63]");
     LLK_ASSERT(is_valid(operation.pointer), "ATINCGETPTR pointer must be Read or Write");
-    LLK_ASSERT(operation.capacity_log2 <= 15u, "ATINCGETPTR FIFO capacity logarithm must be in [0, 15]");
+    LLK_ASSERT(
+        operation.capacity_log2 <= 15u && (operation.probe_only || operation.capacity_log2 < 15u),
+        "ATINCGETPTR FIFO capacity logarithm must be in [0, 14] for pointer updates or [0, 15] for readiness probes");
     LLK_ASSERT(operation.increment_log2 <= 15u, "ATINCGETPTR increment logarithm must be in [0, 15]");
     LLK_ASSERT(!operation.probe_only || operation.increment_log2 == 0u, "ATINCGETPTR readiness probes cannot increment the pointer");
 }
@@ -381,12 +387,13 @@ constexpr bool is_valid(const FetchIncrement<AddressIndex, DataIndex> operation)
            operation.counter_width <= 32u;
 }
 
-/** @brief Return whether a FIFO descriptor can be encoded without truncation. */
+/** @brief Return whether a FIFO descriptor has supported capacity, pointer-update semantics, and field values. */
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
 constexpr bool is_valid(const FifoAcquire<AddressIndex, DataIndex> operation)
 {
     return detail::is_valid(operation.address) && detail::is_valid(operation.data) && detail::is_valid(operation.pointer) && operation.capacity_log2 <= 15u &&
-           operation.increment_log2 <= 15u && (!operation.probe_only || operation.increment_log2 == 0u);
+           (operation.probe_only || operation.capacity_log2 < 15u) && operation.increment_log2 <= 15u &&
+           (!operation.probe_only || operation.increment_log2 == 0u);
 }
 
 /** @brief Return whether a compare-set descriptor can be encoded without truncation. */
@@ -604,7 +611,7 @@ inline __attribute__((always_inline)) void wait_while(const Fifo<CapacityLog2, A
  * Hardware checks only empty/nonempty; callers using an increment greater than one must
  * establish that the complete batch is available.
  *
- * @tparam FifoIdentity: Complete constexpr @ref Fifo supplied inside angle brackets.
+ * @tparam FifoIdentity: Complete constexpr @ref Fifo supplied inside angle brackets, with capacity logarithm in [0, 14].
  * @tparam IncrementLog2: Base-two logarithm of the read-pointer increment, in [0, 15]; defaults to zero for one slot.
  * @tparam ResultIndex: Index of the GPR receiving the pre-increment read pointer.
  * @note Move the payload separately; this operation updates FIFO bookkeeping only.
@@ -626,7 +633,7 @@ inline __attribute__((always_inline)) void pop(const hal::Gpr<ResultIndex>)
  * Hardware checks only empty/nonempty; callers using an increment greater than one must
  * establish that the complete batch is available.
  *
- * @tparam CapacityLog2: Base-two logarithm of FIFO capacity, in [0, 15].
+ * @tparam CapacityLog2: Base-two logarithm of FIFO capacity, in [0, 14].
  * @tparam AddressIndex: FIFOControl address GPR type index.
  * @tparam ResultIndex: Pointer-result GPR type index.
  * @param fifo: FIFO identity supplying the control line and capacity.
@@ -648,7 +655,7 @@ inline __attribute__((always_inline)) void pop(
  * Hardware checks only full/nonfull; callers using an increment greater than one must
  * establish that the complete batch fits.
  *
- * @tparam FifoIdentity: Complete constexpr @ref Fifo supplied inside angle brackets.
+ * @tparam FifoIdentity: Complete constexpr @ref Fifo supplied inside angle brackets, with capacity logarithm in [0, 14].
  * @tparam IncrementLog2: Base-two logarithm of the write-pointer increment, in [0, 15]; defaults to zero for one slot.
  * @tparam ResultIndex: Index of the GPR receiving the pre-increment write pointer.
  * @note Move the payload separately; this operation updates FIFO bookkeeping only.
@@ -670,7 +677,7 @@ inline __attribute__((always_inline)) void push(const hal::Gpr<ResultIndex>)
  * Hardware checks only full/nonfull; callers using an increment greater than one must
  * establish that the complete batch fits.
  *
- * @tparam CapacityLog2: Base-two logarithm of FIFO capacity, in [0, 15].
+ * @tparam CapacityLog2: Base-two logarithm of FIFO capacity, in [0, 14].
  * @tparam AddressIndex: FIFOControl address GPR type index.
  * @tparam ResultIndex: Pointer-result GPR type index.
  * @param fifo: FIFO identity supplying the control line and capacity.
