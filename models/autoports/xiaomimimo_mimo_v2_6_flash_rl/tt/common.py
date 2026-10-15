@@ -1,0 +1,141 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Mesh plan, CCL and weight helpers shared by the MiMo TTNN modules.
+
+Parallel plan (Blackhole Galaxy, 4x8):
+
+* TP=8 along mesh axis 1. One replica is one Galaxy row (a 1x8 submesh). Every collective in a
+  replica runs on ``cluster_axis=1``, so it stays inside the row's ring.
+* DP=4 along mesh axis 0. The four rows are independent replicas with their own weights, KV cache
+  and users (see ``tt/generator.py``). No collective crosses rows.
+
+Per chip, both attention layer types see the same shape: 8 of the 64 Q heads and 1 KV head (SWA
+layers have 8 KV heads, one per chip; global layers have 4, so chips 2i and 2i+1 both hold KV head i).
+Routed experts are tensor-parallel too: every chip holds all 256 experts with 1/8 of
+``moe_intermediate_size`` (2048 / 8 = 256), and the expert output is all-reduced across the row.
+"""
+
+import math
+import os
+
+import torch
+
+import ttnn
+
+TILE = ttnn.TILE_SIZE
+
+
+class MeshPlan:
+    """TP on ``tp_axis`` of a (sub)mesh. For a 1x8 replica ``dp == 1``; a 4x8 parent has ``dp == 4``."""
+
+    def __init__(self, mesh_device, tp_axis=1, num_links=1, topology=ttnn.Topology.Ring):
+        self.mesh_device = mesh_device
+        self.mesh_shape = tuple(mesh_device.shape)
+        self.tp_axis = tp_axis
+        self.tp = self.mesh_shape[tp_axis]
+        self.num_links = num_links
+        self.topology = topology if self.tp > 2 else ttnn.Topology.Linear
+
+    def shard(self, dim):
+        """Shard tensor ``dim`` across the TP axis, replicate across the other axis."""
+        dims = [None, None]
+        dims[self.tp_axis] = dim
+        return ttnn.ShardTensor2dMesh(self.mesh_device, dims=tuple(dims), mesh_shape=self.mesh_shape)
+
+    def replicate(self):
+        return ttnn.ReplicateTensorToMesh(self.mesh_device)
+
+    def all_reduce(self, x, memory_config=None):
+        if self.tp == 1:
+            return x
+        out = ttnn.all_reduce(
+            x,
+            cluster_axis=self.tp_axis,
+            num_links=self.num_links,
+            topology=self.topology,
+            memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+        )
+        x.deallocate(True)
+        return out
+
+    def all_gather(self, x, dim, memory_config=None):
+        if self.tp == 1:
+            return x
+        return ttnn.all_gather(
+            x,
+            dim=dim,
+            cluster_axis=self.tp_axis,
+            num_links=self.num_links,
+            topology=self.topology,
+            memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def to_torch_tp_concat(self, x, dim):
+        """Host readback of a TP-sharded tensor from the first replica row: concat the TP shards on ``dim``."""
+        shards = ttnn.get_device_tensors(x)
+        row = [ttnn.to_torch(shards[i]) for i in range(self.tp)]
+        return torch.cat(row, dim=dim)
+
+    def to_torch_replicated(self, x):
+        return ttnn.to_torch(ttnn.get_device_tensors(x)[0])
+
+
+def cache_name(cache_dir, *parts):
+    if cache_dir is None:
+        return None
+    return os.path.join(cache_dir, "_".join(str(p) for p in parts))
+
+
+def as_weight(torch_tensor, plan, mapper, dtype, cache_file, layout=ttnn.TILE_LAYOUT, memory_config=None):
+    """``ttnn.as_tensor`` that loads from the cache when ``torch_tensor`` is None and the cache is warm."""
+    return ttnn.as_tensor(
+        torch_tensor,
+        device=plan.mesh_device,
+        dtype=dtype,
+        layout=layout,
+        mesh_mapper=mapper,
+        memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+        cache_file_name=cache_file,
+    )
+
+
+def compute_config(fidelity=ttnn.MathFidelity.HiFi2, fp32_acc=True, packer_l1_acc=True):
+    # WormholeComputeKernelConfig is the compute config type for Blackhole too.
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_acc,
+        packer_l1_acc=packer_l1_acc,
+    )
+
+
+def mcast_1d_config(grid, m, n, k, in0_block_w=4, out_subblock_w=4):
+    """1D in0-mcast matmul config over ``grid`` (x, y) cores; N split across cores. Used by sparse_matmul."""
+    core_x, core_y = grid
+    num_cores = core_x * core_y
+    nt = math.ceil(n / TILE)
+    kt = math.ceil(k / TILE)
+    per_core_n = math.ceil(nt / num_cores)
+    while kt % in0_block_w:
+        in0_block_w -= 1
+    out_subblock_w = min(out_subblock_w, per_core_n)
+    while per_core_n % out_subblock_w:
+        out_subblock_w -= 1
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        out_block_h=1,
+        out_block_w=out_subblock_w,
+        per_core_M=max(TILE, m) // TILE,
+        per_core_N=per_core_n,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def pad_to(n, multiple):
+    return ((n + multiple - 1) // multiple) * multiple
