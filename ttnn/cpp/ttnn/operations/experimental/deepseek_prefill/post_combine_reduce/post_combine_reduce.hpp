@@ -56,6 +56,7 @@ ttnn::Tensor post_combine_reduce(
     const std::optional<ttnn::Tensor>& indices = std::nullopt,
     const std::optional<ttnn::Tensor>& expert_dispatch_table = std::nullopt,
     uint32_t expert_dim = 3,
-    const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config = std::nullopt,
+    uint32_t fp8_scale_block_w = 0);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce
