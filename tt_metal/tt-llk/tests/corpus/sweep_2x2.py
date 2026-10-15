@@ -555,7 +555,16 @@ ON_FLAGS = (
     # conf_lint GREEN; dg 7765/FAIL-16/0-ERROR (pin-56 baseline, conf-only
     # => +0).
     "-mtt-tensix-optimize-ims "
-    "-mtt-tensix-optimize-mve-expand"
+    "-mtt-tensix-optimize-mve-expand "
+    # Value-identical selections with small fire sets and no measured
+    # regression on the corpus: integer SFPABS and SFPNOT for the
+    # conditional-negate and all-ones-minus-x value functions, exact
+    # load-carrier counting in the dst-autoincr walks, and next-slot-stall
+    # words admitted into cross-row pairing.
+    "-mtt-tensix-optimize-int-abs "
+    "-mtt-tensix-optimize-int-not "
+    "-mtt-tensix-optimize-dst-autoincr-load-carrier "
+    "-mtt-tensix-optimize-crossrow-pairing-stall-words"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
     # its only engagement channel was the trusted TTREGION source markers in
     # the LLK headers, and trusted source annotation of the consumed library
@@ -1928,7 +1937,7 @@ KNOB_MODES = {
     "crosscall-hoist": "drop-one",
     "drain-schedule": "drop-one",
     "replay-loop-unroll": "on-plus",
-    "int-abs": "on-plus",
+    "int-abs": "drop-one",
     "lut-select-leaf-ext": "on-plus",
     "crosscall-config-prefix": "on-plus",
     "repr-prop": "on-plus",
@@ -1997,7 +2006,7 @@ KNOB_MODES = {
     # the hand arm too (see the KNOBS comment) and the delta must read
     # as the license's own effect.
     "stochrnd-store-fold": "on-plus",
-    "int-not": "on-plus",
+    "int-not": "drop-one",
     # EJ licensed reassociation: booking A/B is (reviewed-ON + license
     # tokens) vs plain reviewed-ON — the licensed fire acts on the
     # post-ON pipeline's chains, and the delta must read as the
@@ -2036,9 +2045,9 @@ KNOB_MODES = {
     # IF dst-autoincr-load-carrier: default-off Init(0) booking knob;
     # an exact-counting unlock for the dst-autoincr shadow/issue-word
     # walks (admission-widening only where whole functions previously
-    # bailed on raw-word recording shadows).  on-plus while a booking
-    # knob; promotion requires the ON-delta adjudication ceremony.
-    "dst-autoincr-load-carrier": "on-plus",
+    # bailed on raw-word recording shadows).  It is in the reviewed ON
+    # set, so its leg drops it from the full ON set.
+    "dst-autoincr-load-carrier": "drop-one",
     # IH post-autoincr-window: default-off Init(0) booking knob; a
     # formation-DEFERRAL (the same reviewed machinery runs once,
     # post-fold).  on-plus while a booking knob; promotion requires the
@@ -2194,7 +2203,7 @@ KNOB_MODES = {
     "macro-planner-analyze": "on-plus",
     "macro-planner-verify": "on-plus",
     "dump-effects": "on-plus",
-    "crossrow-pairing-stall-words": "on-plus",
+    "crossrow-pairing-stall-words": "drop-one",
     "reassoc-loop-carried": "on-plus",
     "delivery-shape-min-benefit-0": "on-plus",
     "replay-hoist-min-benefit-0": "on-plus",
