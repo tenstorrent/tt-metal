@@ -54,17 +54,7 @@ void kernel_main() {
 #endif
     // The index scratch is this reader's private page for the block of indices it is working through:
     // the NoC reads into it via the scratchpad object and the RISC reads the indices back.
-#ifdef ARCH_QUASAR
-    Scratchpad<uint32_t> index_scratch(scratch::in1);
-    // The reader re-reads a fresh block of indices into this scratch each loop iteration. get_base_address()
-    // is the CACHED L1 view, so a RISC read through it would return stale (block-0) indices on the 2nd+
-    // block. Read through the uncached alias (matching DataflowBuffer::get_write_ptr) so each block is seen;
-    // the NoC write via the scratchpad object still lands in the same SRAM.
-    uint32_t input_l1_addr = index_scratch.get_base_address() + MEM_L1_UNCACHED_BASE;
-    volatile tt_l1_ptr input_token_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr input_token_t*>(input_l1_addr);
-#else
     Scratchpad<volatile input_token_t> index_scratch(scratch::in1);
-#endif
 
     uint32_t curr_row = batch_offset;  // Number of pages/rows we have read from input so far
     uint32_t offset = weights_offset;  // Which input elem we are on (bytes offset from start of row)
@@ -79,11 +69,14 @@ void kernel_main() {
             noc.async_read_barrier();
             read_indices = false;
         }
-#ifdef ARCH_QUASAR
-        input_token_t token = input_l1_ptr[index];
-#else
-        input_token_t token = index_scratch[index];
-#endif
+        input_token_t token;
+        {
+            // The NoC rewrites this scratchpad with each new index block, so on Quasar the DM core's L2
+            // may still hold the previous block; scoped_lock invalidates the line before the read.
+            // No-op on WH/BH.
+            auto index_lock = index_scratch.scoped_lock(index, 1);
+            token = index_scratch[index];
+        }
 
         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
 #ifdef OUTPUT_SHARDED
