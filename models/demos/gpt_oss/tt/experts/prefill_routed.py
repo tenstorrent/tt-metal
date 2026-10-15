@@ -21,8 +21,8 @@ ranks, scatter, embedding) instead of deepseek_prefill.dispatch / combine: those
 a neighbour along it, which a 1xN mesh does not have.
 
 Numerics policy: LoFi, bf16 dest accumulation, bf8 activations, bf4 weights except the layers in
-GPT_OSS_ROUTED_PREFILL_BF8_LAYERS (default: layer 0), which hold bf8 weights. unified_routed_expert_moe hardcodes LoFi
-and bf16 dest (kFp32DestAccEn = false in unified_routed_expert_ffn_program_factory.cpp) and ignores
+GPT_OSS_ROUTED_PREFILL_BF8_LAYERS (default: layers 0 and 1), which hold bf8 weights. unified_routed_expert_moe hardcodes
+LoFi and bf16 dest (kFp32DestAccEn = false in unified_routed_expert_ffn_program_factory.cpp) and ignores
 compute_kernel_config, so this module does not pass one.
 
 Only one sequence per call (batch 1, leading dims all 1); anything else runs the dense prefill path.
@@ -59,8 +59,9 @@ ROUTED_CACHE_SUBDIR = "experts_routed_ep"
 ROUTED_WEIGHTS_DTYPE = ttnn.bfloat4_b
 # Layers whose routed expert weights are bfloat8_b instead of bfloat4_b ("all", "" or a comma list of layer ids).
 # bf8 holds the MXFP4 checkpoint values almost exactly (weight rel. error ~1e-4 for gate/up); bf4 shares one exponent
-# per 16 values and loses 12-16% of the weight norm (measured, layer 0).
-ROUTED_PREFILL_BF8_LAYERS_DEFAULT = "0"
+# per 16 values and loses 12-16% of the weight norm on every layer. Layers 0 and 1 are the smallest set that passes the
+# per-prompt accuracy guard (layer 0 alone does not); each bf8 layer costs ~0.2 ms TTFT at 1K, and "all" ~4 ms.
+ROUTED_PREFILL_BF8_LAYERS_DEFAULT = "0,1"
 
 
 def routed_prefill_enabled():
