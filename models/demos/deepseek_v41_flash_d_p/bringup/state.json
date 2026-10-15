@@ -1395,6 +1395,26 @@
   "started": "2026-10-15T23:50:15",
   "status": "PASS"
  },
+ "S.swa.09": {
+  "attempts": 0,
+  "duration_s": 66.1,
+  "history": [
+   {
+    "s": 66.1,
+    "status": "PASS",
+    "t": "2026-10-15T23:55:21"
+   }
+  ],
+  "last_run": "2026-10-15T23:55:21",
+  "log": "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/S.swa.09.log",
+  "metrics": {
+   "pcc_swap_out": 0.9998477708988919
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-15T23:54:14",
+  "status": "PASS"
+ },
  "SC.1": {
   "agent": {
    "defs": {
